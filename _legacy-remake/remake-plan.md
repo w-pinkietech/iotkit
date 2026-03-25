@@ -271,7 +271,168 @@ illuminance  = "builtin/passthrough"
 - axum → embassy-net への HTTP 抽象化
 - tokio 依存は RPi 専用クレートに隔離
 
-## 11. Configuration Strategy
+## 11. Directory Structure
+
+**レイヤー分離型 Cargo workspace**
+
+```
+iotkit-next/
+├── Cargo.toml              # workspace root
+├── core/
+│   └── core-domain/        # エンティティ層: ドメインモデル、trait 定義
+├── adapters/
+│   ├── provider-adapter/   # Transport/Protocol trait の共通ユーティリティ
+│   ├── bravepi-adapter/    # BravePI 固有の impl (独立 crate)
+│   └── bravejig-adapter/   # BraveJIG 固有の impl (独立 crate)
+├── services/
+│   ├── api-service/        # HTTP ハンドラー、ルーティング
+│   ├── sensor-ingest/      # センサーデータ収集・正規化
+│   ├── device-config/      # デバイス CRUD、read-model
+│   ├── device-command/     # コマンドライフサイクル
+│   ├── timeseries/         # 時系列保存・クエリ
+│   ├── notification/       # MQTT/email 通知
+│   └── ops-service/        # システム管理
+├── apps/
+│   ├── iotkit-server/      # バイナリ crate (main): DI で全層を結合
+│   └── iotkit-cli/         # CLI バイナリ crate
+├── ui/
+│   └── web/                # 静的 HTML/JS/CSS
+├── config/                 # デフォルト設定ファイル (iotkit-next.toml)
+├── transforms/             # Lua スクリプト (builtin/ + custom/)
+├── migrations/             # DB マイグレーション
+└── _legacy-remake/         # ハーネスナレッジベース
+```
+
+### crate 内ファイル構成 (標準)
+
+```
+crates/<name>/
+├── Cargo.toml
+└── src/
+    ├── lib.rs              # crate ルート (pub mod 宣言)
+    ├── domain.rs           # ドメインモデル (エンティティ、値オブジェクト)
+    ├── port.rs             # trait 定義 (Repository, 外部サービス境界)
+    ├── service.rs          # ユースケース実装
+    ├── error.rs            # crate 固有エラー型 (thiserror)
+    └── tests/              # 結合テスト
+        └── *.rs
+```
+
+mod.rs は使用しない (ファイル名 = モジュール名)。
+
+## 12. Clean Architecture
+
+### 4層分離
+
+```
+┌─────────────────────────────────────────────┐
+│  apps/ (フレームワーク・ドライバー層)           │
+│  axum, clap, rumqttc, serialport, rusqlite   │
+├─────────────────────────────────────────────┤
+│  adapters/ (インターフェースアダプター層)        │
+│  bravepi/bravejig impl, SQLite Repository    │
+├─────────────────────────────────────────────┤
+│  services/ (ユースケース層)                    │
+│  アプリケーション固有のビジネスルール            │
+├─────────────────────────────────────────────┤
+│  core/ (エンティティ層)                        │
+│  ドメインモデル, trait 定義, 外部依存ゼロ       │
+└─────────────────────────────────────────────┘
+```
+
+### 依存方向ルール (Cargo.toml で強制)
+
+- `core/` は `std` 以外の外部 crate に依存しない (`serde` のみ例外許容)
+- `services/` は `core/` の trait にのみ依存。`adapters/` や `apps/` を import しない
+- `adapters/` は `core/` の trait を実装。`services/` を import しない
+- `apps/` が DI コンテナとして全層を結合
+- 層をまたぐ逆方向の依存は **コンパイルエラー** で検出
+
+## 13. Coding Conventions
+
+### Rust 標準 (rustfmt / clippy が強制)
+
+| 対象 | スタイル | 例 |
+|------|---------|-----|
+| 型名 | PascalCase | `Device`, `SensorReading` |
+| trait 名 | PascalCase | `DeviceRepository`, `Transport` |
+| 関数/メソッド | snake_case | `find_by_id`, `encode_command` |
+| 変数 | snake_case | `device_name`, `sensor_id` |
+| 定数 | SCREAMING_SNAKE_CASE | `MAX_RETRY_COUNT`, `DEFAULT_TIMEOUT_MS` |
+| モジュール | snake_case | `device_config`, `sensor_ingest` |
+| crate 名 | kebab-case | `core-domain`, `bravepi-adapter` |
+| enum variant | PascalCase | `AccessType::Ble`, `Protocol::ModbusRtu` |
+
+### ドメイン用語の統一 (レガシーの混乱を引き継がない)
+
+| レガシー | Remake | 意味 |
+|---------|--------|------|
+| `device_number` | `hardware_id` | 物理ID |
+| `device_id` | `system_id` | システム内部ID (UUID) |
+| `device_name` | `user_label` | 人間用ラベル |
+| `access_type` | `transport` + `protocol` | 2層分離 |
+| `hysteresis_*` | `threshold_*` | 閾値 |
+
+### 型の接尾辞ルール
+
+| 接尾辞 | 用途 |
+|--------|------|
+| `*Repository` | trait のみ (永続化境界) |
+| `*Service` | ユースケース層のサービス型 |
+| `*Adapter` | 外部システムとの接続実装 |
+| `*Handler` | HTTP ハンドラー |
+| `*Command` | 書き込み操作の入力 DTO |
+| `*Query` | 読み取り操作の入力 DTO |
+| `*Response` | API レスポンス DTO |
+| `*Error` | エラー型 (thiserror) |
+| `*Config` | 設定構造体 |
+
+### エラーハンドリング
+
+- ライブラリ crate: `thiserror` で型付きエラー
+- アプリケーション層: `anyhow` でエラー集約
+
+### テスト命名
+
+```rust
+#[test]
+fn should_create_device_with_valid_config() { }
+fn should_reject_duplicate_hardware_id() { }
+fn should_timeout_after_10_seconds() { }
+// should_<期待動作>_<条件> のパターン
+```
+
+### 日本語の扱い
+
+- コード上は英語のみ
+- 日本語はドキュメント・コメント・glossary.md でのみ使用
+- 対照表を glossary.md に維持
+
+## 14. Test Strategy
+
+### 3層テスト
+
+| 層 | 対象 | ツール | 実行タイミング |
+|----|------|--------|--------------|
+| ユニットテスト | 個別関数・メソッド、ドメインロジック | `#[cfg(test)]` + mock | `cargo test` (常時) |
+| 結合テスト | Repository + SQLite 実物、サービス層 | `tests/` ディレクトリ、インメモリ SQLite | `cargo test` (常時) |
+| E2E テスト | API エンドポイント、CLI コマンド | reqwest + テストサーバー起動 | CI / 手動 |
+
+### テストルール
+
+- ユニットテスト: 外部依存を mock。core/ のテストは I/O なし
+- 結合テスト: SQLite 実物 (`:memory:`) を使用。DB mock は禁止
+- E2E テスト: 実際の HTTP リクエストで API を検証
+- テストデータ: 各テストが自前で作成、共有状態なし
+- カバレッジ目標: core 90%+、services 80%+、adapters 80%+、ui/ops 70%+
+
+### ドキュメント
+
+- pub API には doc comment 必須
+- OpenAPI spec を axum から自動生成 (utoipa crate)
+- `cargo doc --no-deps` がクリーンにビルドされること
+
+## 15. Configuration Strategy
 
 - **設定ファイル**: TOML 形式 (`iotkit-next.toml`)
 - **管理対象**: MQTT 接続、TLS 設定、ログレベル、Transform レジストリ、データ保持期間
