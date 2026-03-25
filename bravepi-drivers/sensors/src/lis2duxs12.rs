@@ -5,13 +5,13 @@
 
 use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
 
-const SENSOR_TYPE: SensorType = SensorType::Acceleration;
+fn sensor_type() -> SensorType { SensorType::Acceleration }
 
 pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
     SensorIdentity {
         manufacturer: "Braveridge",
         ic_part_number: "LIS2DUXS12",
-        sensor_type: SENSOR_TYPE,
+        sensor_type: sensor_type(),
         connection_type,
     }
 }
@@ -38,20 +38,20 @@ pub fn from_i2c_raw(data: &[u8; 6]) -> SensorReading {
     let y = i16::from_le_bytes([data[2], data[3]]) as f64 * MG_SCALE;
     let z = i16::from_le_bytes([data[4], data[5]]) as f64 * MG_SCALE;
     let mag = magnitude(x, y, z);
-    SensorReading::new(SENSOR_TYPE, vec![x / 1000.0, y / 1000.0, z / 1000.0, mag])
+    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
 /// Float32LE × 3 (mG 単位)。
 pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if data.len() < 12 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     let x = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
     let y = f32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64;
     let z = f32::from_le_bytes([data[8], data[9], data[10], data[11]]) as f64;
     let mag = magnitude(x, y, z);
-    SensorReading::new(SENSOR_TYPE, vec![x / 1000.0, y / 1000.0, z / 1000.0, mag])
+    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag])
 }
 
 #[cfg(test)]

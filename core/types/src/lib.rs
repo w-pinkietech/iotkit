@@ -1,10 +1,11 @@
 //! iotkit-core-types: ドメインのエンティティ型。
 //! core 層に属し、adapter や driver はこれに依存する（逆はない）。
+//! プロトコル固有の番号や変換ロジックは持たない。
 
 use std::fmt;
 
 /// センサータイプ。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SensorType {
     ContactInput,
     ContactOutput,
@@ -14,37 +15,7 @@ pub enum SensorType {
     Acceleration,
     DifferentialPressure,
     Illuminance,
-    Unknown(u16),
-}
-
-impl SensorType {
-    pub fn from_raw(raw: u16) -> Self {
-        match raw {
-            257 => Self::ContactInput,
-            258 => Self::ContactOutput,
-            259 => Self::Adc,
-            260 => Self::Ranging,
-            261 => Self::Temperature,
-            262 => Self::Acceleration,
-            263 => Self::DifferentialPressure,
-            264 => Self::Illuminance,
-            other => Self::Unknown(other),
-        }
-    }
-
-    pub fn to_raw(self) -> u16 {
-        match self {
-            Self::ContactInput => 257,
-            Self::ContactOutput => 258,
-            Self::Adc => 259,
-            Self::Ranging => 260,
-            Self::Temperature => 261,
-            Self::Acceleration => 262,
-            Self::DifferentialPressure => 263,
-            Self::Illuminance => 264,
-            Self::Unknown(v) => v,
-        }
-    }
+    Unknown(String),
 }
 
 impl fmt::Display for SensorType {

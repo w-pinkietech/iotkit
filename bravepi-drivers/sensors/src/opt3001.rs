@@ -5,13 +5,13 @@
 
 use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
 
-const SENSOR_TYPE: SensorType = SensorType::Illuminance;
+fn sensor_type() -> SensorType { SensorType::Illuminance }
 
 pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
     SensorIdentity {
         manufacturer: "Braveridge",
         ic_part_number: "OPT3001",
-        sensor_type: SENSOR_TYPE,
+        sensor_type: sensor_type(),
         connection_type,
     }
 }
@@ -41,17 +41,17 @@ pub fn from_i2c_raw(raw: u16) -> SensorReading {
     let exponent = (raw & 0x00F0) >> 4;
     let fractional = ((raw & 0xFF00) >> 8) + ((raw & 0x000F) << 8);
     let lux = (1u32 << exponent) as f64 * fractional as f64 * 0.01;
-    SensorReading::new(SENSOR_TYPE, vec![lux])
+    SensorReading::new(sensor_type(), vec![lux])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
 /// メインボードが変換済みの Float32LE。
 pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if data.len() < 4 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     let lux = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
-    SensorReading::new(SENSOR_TYPE, vec![lux])
+    SensorReading::new(sensor_type(), vec![lux])
 }
 
 #[cfg(test)]

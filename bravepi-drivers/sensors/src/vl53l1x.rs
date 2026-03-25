@@ -5,13 +5,13 @@
 
 use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
 
-const SENSOR_TYPE: SensorType = SensorType::Ranging;
+fn sensor_type() -> SensorType { SensorType::Ranging }
 
 pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
     SensorIdentity {
         manufacturer: "Braveridge",
         ic_part_number: "VL53L1X",
-        sensor_type: SENSOR_TYPE,
+        sensor_type: sensor_type(),
         connection_type,
     }
 }
@@ -23,22 +23,22 @@ pub const I2C_ADDRESS: u8 = 0x29;
 /// I2C 経由の測距値（mm）から変換。0 は無効値として空を返す。
 pub fn from_i2c_distance(distance_mm: u16) -> SensorReading {
     if distance_mm == 0 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     let capped = distance_mm.min(MAX_DISTANCE_MM);
-    SensorReading::new(SENSOR_TYPE, vec![capped as f64])
+    SensorReading::new(sensor_type(), vec![capped as f64])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
 pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if data.len() < 2 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     let mm = u16::from_le_bytes([data[0], data[1]]);
     if mm == 0 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
-    SensorReading::new(SENSOR_TYPE, vec![mm.min(MAX_DISTANCE_MM) as f64])
+    SensorReading::new(sensor_type(), vec![mm.min(MAX_DISTANCE_MM) as f64])
 }
 
 #[cfg(test)]

@@ -5,13 +5,13 @@
 
 use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
 
-const SENSOR_TYPE: SensorType = SensorType::DifferentialPressure;
+fn sensor_type() -> SensorType { SensorType::DifferentialPressure }
 
 pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
     SensorIdentity {
         manufacturer: "Braveridge",
         ic_part_number: "SDP810",
-        sensor_type: SENSOR_TYPE,
+        sensor_type: sensor_type(),
         connection_type,
     }
 }
@@ -44,30 +44,30 @@ pub fn crc8(data: &[u8]) -> u8 {
 pub fn from_i2c_raw(data: &[u8; 9]) -> SensorReading {
     // CRC 検証
     if crc8(&data[0..2]) != data[2] {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     if crc8(&data[6..8]) != data[8] {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
 
     let dp = i16::from_be_bytes([data[0], data[1]]) as f64;
     let scale_factor = i16::from_be_bytes([data[6], data[7]]) as f64;
 
     if scale_factor == 0.0 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
 
     let pressure = dp / scale_factor;
-    SensorReading::new(SENSOR_TYPE, vec![pressure])
+    SensorReading::new(sensor_type(), vec![pressure])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
 pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if data.len() < 4 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     let pa = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
-    SensorReading::new(SENSOR_TYPE, vec![pa])
+    SensorReading::new(sensor_type(), vec![pa])
 }
 
 #[cfg(test)]

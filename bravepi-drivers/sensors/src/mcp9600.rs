@@ -5,14 +5,14 @@
 
 use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
 
-const SENSOR_TYPE: SensorType = SensorType::Temperature;
+fn sensor_type() -> SensorType { SensorType::Temperature }
 
 /// センサーの素性を返す。hardware_id は呼び出し元が設定する。
 pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
     SensorIdentity {
         manufacturer: "Braveridge",
         ic_part_number: "MCP9600",
-        sensor_type: SENSOR_TYPE,
+        sensor_type: sensor_type(),
         connection_type,
     }
 }
@@ -43,16 +43,16 @@ pub fn config_value(tc_type: ThermocoupleType) -> u8 {
 pub fn from_i2c_raw(data: &[u8; 2]) -> SensorReading {
     let raw = i16::from_be_bytes(*data);
     let temp = raw as f64 * 0.0625;
-    SensorReading::new(SENSOR_TYPE, vec![temp])
+    SensorReading::new(sensor_type(), vec![temp])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
 pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if data.len() < 4 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     let temp = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
-    SensorReading::new(SENSOR_TYPE, vec![temp])
+    SensorReading::new(sensor_type(), vec![temp])
 }
 
 #[cfg(test)]

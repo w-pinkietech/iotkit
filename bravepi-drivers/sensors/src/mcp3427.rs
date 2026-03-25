@@ -5,13 +5,13 @@
 
 use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
 
-const SENSOR_TYPE: SensorType = SensorType::Adc;
+fn sensor_type() -> SensorType { SensorType::Adc }
 
 pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
     SensorIdentity {
         manufacturer: "Braveridge",
         ic_part_number: "MCP3427",
-        sensor_type: SENSOR_TYPE,
+        sensor_type: sensor_type(),
         connection_type,
     }
 }
@@ -21,18 +21,18 @@ pub const I2C_ADDRESSES: [u8; 3] = [0x68, 0x6B, 0x6F];
 
 /// I2C 経由の電圧値（Volt）から mV に変換。2ch 分。
 pub fn from_i2c_volts(ch1_volt: f64, ch2_volt: f64) -> SensorReading {
-    SensorReading::new(SENSOR_TYPE, vec![ch1_volt * 1000.0, ch2_volt * 1000.0])
+    SensorReading::new(sensor_type(), vec![ch1_volt * 1000.0, ch2_volt * 1000.0])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
 /// Int16LE × 2ch per sample。
 pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if data.len() < 4 {
-        return SensorReading::empty(SENSOR_TYPE);
+        return SensorReading::empty(sensor_type());
     }
     let ch1 = i16::from_le_bytes([data[0], data[1]]) as f64;
     let ch2 = i16::from_le_bytes([data[2], data[3]]) as f64;
-    SensorReading::new(SENSOR_TYPE, vec![ch1, ch2])
+    SensorReading::new(sensor_type(), vec![ch1, ch2])
 }
 
 #[cfg(test)]
