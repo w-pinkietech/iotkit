@@ -1,8 +1,9 @@
 //! BravePI PoC — adapter 相当。
 //! transport + codec + sensors を組み合わせて動作確認する。
 
+use iotkit_core_types::{SensorReading, SensorType};
 use bravepi_codec::codec::{BravePiCodec, BravePiFrame};
-use bravepi_sensors::reading::{ConnectionType, SensorReading, SensorType};
+use bravepi_sensors::reading::ConnectionType;
 use bravepi_sensors::{lis2duxs12, mcp3427, mcp9600, opt3001, sdp810, vl53l1x};
 use bravepi_transport::SerialTransport;
 

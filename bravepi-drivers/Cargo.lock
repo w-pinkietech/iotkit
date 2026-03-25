@@ -85,12 +85,16 @@ dependencies = [
  "bravepi-sensors",
  "bravepi-transport",
  "env_logger",
+ "iotkit-core-types",
  "log",
 ]
 
 [[package]]
 name = "bravepi-sensors"
 version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+]
 
 [[package]]
 name = "bravepi-transport"
@@ -159,6 +163,10 @@ dependencies = [
  "core-foundation-sys",
  "mach2",
 ]
+
+[[package]]
+name = "iotkit-core-types"
+version = "0.1.0"
 
 [[package]]
 name = "is_terminal_polyfill"
