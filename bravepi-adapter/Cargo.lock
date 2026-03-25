@@ -78,6 +78,7 @@ name = "bravepi-adapter"
 version = "0.1.0"
 dependencies = [
  "iotkit-core-types",
+ "rpi4b-transport",
 ]
 
 [[package]]
@@ -103,6 +104,12 @@ version = "0.1.0"
 dependencies = [
  "iotkit-core-types",
 ]
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "cfg-if"
@@ -153,6 +160,18 @@ dependencies = [
  "env_filter",
  "jiff",
  "log",
+]
+
+[[package]]
+name = "i2cdev"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b940f7497c4f95b863b21cd34c3737b53a67d80d94cf29055d7f7eeca6ffdb4"
+dependencies = [
+ "bitflags 2.11.0",
+ "byteorder",
+ "libc",
+ "nix",
 ]
 
 [[package]]
@@ -335,7 +354,18 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 name = "rpi4b-transport"
 version = "0.1.0"
 dependencies = [
+ "i2cdev",
+ "rppal",
  "serialport",
+]
+
+[[package]]
+name = "rppal"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ce3b019009cff02cb6b0e96e7cc2e5c5b90187dc1a490f8ef1521d0596b026"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

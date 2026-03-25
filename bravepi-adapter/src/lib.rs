@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorType};
+use rpi4b_transport::{DataBits, Parity, SerialConfig, StopBits};
 
 /// BravePI adapter 内部の型安全な接続表現。
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +46,16 @@ impl BravepiConnection {
                 ]),
             },
         }
+    }
+}
+
+/// BravePI UART 標準設定: 38400 8N1
+pub fn serial_config() -> SerialConfig {
+    SerialConfig {
+        baud_rate: 38400,
+        data_bits: DataBits::Eight,
+        parity: Parity::None,
+        stop_bits: StopBits::One,
     }
 }
 

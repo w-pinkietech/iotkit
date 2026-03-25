@@ -2,7 +2,7 @@
 //! transport + codec + sensors を組み合わせて動作確認する。
 
 use iotkit_core_types::{SensorReading, SensorType};
-use bravepi_adapter::{sensor_type_from_bravepi_raw, BravepiConnection};
+use bravepi_adapter::{self, sensor_type_from_bravepi_raw, BravepiConnection};
 use bravepi_codec::codec::{BravePiCodec, BravePiFrame};
 use bravepi_sensors::{lis2duxs12, mcp3427, mcp9600, opt3001, sdp810, vl53l1x};
 use rpi4b_transport::SerialTransport;
@@ -13,11 +13,12 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let port_path = "/dev/ttyAMA0";
+    let config = bravepi_adapter::serial_config();
 
     log::info!("BravePI Driver PoC");
-    log::info!("Opening serial port: {} (38400 8N1)", port_path);
+    log::info!("Opening serial port: {} ({} 8N1)", port_path, config.baud_rate);
 
-    let mut transport = match SerialTransport::open(port_path) {
+    let mut transport = match SerialTransport::open(port_path, &config) {
         Ok(t) => t,
         Err(e) => {
             log::error!("Failed to open serial port: {}", e);

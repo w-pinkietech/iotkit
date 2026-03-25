@@ -9,3 +9,4 @@ edition = "2024"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
+rpi4b-transport = { path = "../rpi4b-driver/transport" }
