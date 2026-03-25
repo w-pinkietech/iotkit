@@ -1,0 +1,11 @@
+[package]
+name = "bravepi-poc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bravepi-transport = { path = "../transport" }
+bravepi-codec = { path = "../codec" }
+bravepi-sensors = { path = "../sensors" }
+log = "0.4"
+env_logger = "0.11"

@@ -1,0 +1,3 @@
+[workspace]
+members = ["transport", "codec", "sensors", "poc"]
+resolver = "3"
