@@ -3,17 +3,20 @@
 //! I2C: Int16 BE × 0.0625 → ℃
 //! UART (BravePI): Float32LE → ℃
 
-use crate::reading::{BravepiConnection, SensorIdentity, SensorReading, SensorType};
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
 fn sensor_type() -> SensorType { SensorType::Temperature }
 
-/// センサーの素性を返す。hardware_id は呼び出し元が設定する。
-pub fn identity(connection: BravepiConnection) -> SensorIdentity {
+pub const MANUFACTURER: &str = "Braveridge";
+pub const IC_PART_NUMBER: &str = "MCP9600";
+
+/// センサーの素性を返す。
+pub fn identity(connection: ConnectionInfo) -> SensorIdentity {
     SensorIdentity {
-        manufacturer: "Braveridge".into(),
-        ic_part_number: "MCP9600".into(),
+        manufacturer: MANUFACTURER.into(),
+        ic_part_number: IC_PART_NUMBER.into(),
         sensor_type: sensor_type(),
-        connection: connection.to_connection_info(),
+        connection,
     }
 }
 

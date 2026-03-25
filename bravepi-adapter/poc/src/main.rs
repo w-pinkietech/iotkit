@@ -2,10 +2,10 @@
 //! transport + codec + sensors を組み合わせて動作確認する。
 
 use iotkit_core_types::{SensorReading, SensorType};
+use bravepi_adapter::{sensor_type_from_bravepi_raw, BravepiConnection};
 use bravepi_codec::codec::{BravePiCodec, BravePiFrame};
-use bravepi_sensors::reading::{sensor_type_from_bravepi_raw, BravepiConnection};
 use bravepi_sensors::{lis2duxs12, mcp3427, mcp9600, opt3001, sdp810, vl53l1x};
-use bravepi_transport::SerialTransport;
+use rpi4b_transport::SerialTransport;
 
 use std::time::Duration;
 
@@ -66,13 +66,14 @@ fn main() {
                                 }
                             };
 
+                            let conn_info = conn.to_connection_info();
                             let id = match &sensor_type {
-                                &SensorType::Temperature => Some(mcp9600::identity(conn)),
-                                &SensorType::Illuminance => Some(opt3001::identity(conn)),
-                                &SensorType::Adc => Some(mcp3427::identity(conn)),
-                                &SensorType::Ranging => Some(vl53l1x::identity(conn)),
-                                &SensorType::DifferentialPressure => Some(sdp810::identity(conn)),
-                                &SensorType::Acceleration => Some(lis2duxs12::identity(conn)),
+                                &SensorType::Temperature => Some(mcp9600::identity(conn_info)),
+                                &SensorType::Illuminance => Some(opt3001::identity(conn_info)),
+                                &SensorType::Adc => Some(mcp3427::identity(conn_info)),
+                                &SensorType::Ranging => Some(vl53l1x::identity(conn_info)),
+                                &SensorType::DifferentialPressure => Some(sdp810::identity(conn_info)),
+                                &SensorType::Acceleration => Some(lis2duxs12::identity(conn_info)),
                                 _ => None,
                             };
 

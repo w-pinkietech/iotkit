@@ -3,16 +3,19 @@
 //! I2C: 独自フォーマット（指数+仮数） → Lux
 //! UART (BravePI): Float32LE → Lux
 
-use crate::reading::{BravepiConnection, SensorIdentity, SensorReading, SensorType};
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
 fn sensor_type() -> SensorType { SensorType::Illuminance }
 
-pub fn identity(connection: BravepiConnection) -> SensorIdentity {
+pub const MANUFACTURER: &str = "Braveridge";
+pub const IC_PART_NUMBER: &str = "OPT3001";
+
+pub fn identity(connection: ConnectionInfo) -> SensorIdentity {
     SensorIdentity {
-        manufacturer: "Braveridge".into(),
-        ic_part_number: "OPT3001".into(),
+        manufacturer: MANUFACTURER.into(),
+        ic_part_number: IC_PART_NUMBER.into(),
         sensor_type: sensor_type(),
-        connection: connection.to_connection_info(),
+        connection,
     }
 }
 

@@ -3,16 +3,19 @@
 //! I2C: qwiic ライブラリ → mm (int, 0=無効, cap 2000)
 //! UART (BravePI): UInt16LE → mm
 
-use crate::reading::{BravepiConnection, SensorIdentity, SensorReading, SensorType};
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
 fn sensor_type() -> SensorType { SensorType::Ranging }
 
-pub fn identity(connection: BravepiConnection) -> SensorIdentity {
+pub const MANUFACTURER: &str = "Braveridge";
+pub const IC_PART_NUMBER: &str = "VL53L1X";
+
+pub fn identity(connection: ConnectionInfo) -> SensorIdentity {
     SensorIdentity {
-        manufacturer: "Braveridge".into(),
-        ic_part_number: "VL53L1X".into(),
+        manufacturer: MANUFACTURER.into(),
+        ic_part_number: IC_PART_NUMBER.into(),
         sensor_type: sensor_type(),
-        connection: connection.to_connection_info(),
+        connection,
     }
 }
 const MAX_DISTANCE_MM: u16 = 2000;
