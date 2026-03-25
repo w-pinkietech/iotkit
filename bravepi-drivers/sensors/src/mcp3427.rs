@@ -3,16 +3,16 @@
 //! I2C: MCP342x ライブラリ → Volt → mV (×1000)
 //! UART (BravePI): Int16LE × 2ch → mV
 
-use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
+use crate::reading::{BravepiConnection, SensorIdentity, SensorReading, SensorType};
 
 fn sensor_type() -> SensorType { SensorType::Adc }
 
-pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
+pub fn identity(connection: BravepiConnection) -> SensorIdentity {
     SensorIdentity {
-        manufacturer: "Braveridge",
-        ic_part_number: "MCP3427",
+        manufacturer: "Braveridge".into(),
+        ic_part_number: "MCP3427".into(),
         sensor_type: sensor_type(),
-        connection_type,
+        connection: connection.to_connection_info(),
     }
 }
 

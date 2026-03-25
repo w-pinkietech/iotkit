@@ -1,10 +1,56 @@
 //! adapter 層の型定義。
-//! core 型 (SensorType, SensorReading) は iotkit-core-types から re-export する。
+//! core 型は iotkit-core-types から re-export する。
 
-use std::fmt;
+use std::collections::BTreeMap;
 
-// core 型を re-export（既存コードの import を壊さないため）
-pub use iotkit_core_types::{SensorReading, SensorType};
+// core 型を re-export
+pub use iotkit_core_types::{
+    ConnectionInfo, ConnectionKind, SensorIdentity, SensorReading, SensorType,
+};
+
+/// BravePI adapter 内部の型安全な接続表現。
+#[derive(Debug, Clone, PartialEq)]
+pub enum BravepiConnection {
+    Uart {
+        port: String,
+        transmitter_id: String,
+    },
+    I2c {
+        bus: String,
+        address: u8,
+    },
+    Gpio {
+        pin: u8,
+    },
+}
+
+impl BravepiConnection {
+    /// adapter 固有の型 → core の汎用型に変換。
+    pub fn to_connection_info(&self) -> ConnectionInfo {
+        match self {
+            Self::Uart { port, transmitter_id } => ConnectionInfo {
+                kind: ConnectionKind::Uart,
+                parameters: BTreeMap::from([
+                    ("port".into(), port.clone()),
+                    ("transmitter_id".into(), transmitter_id.clone()),
+                ]),
+            },
+            Self::I2c { bus, address } => ConnectionInfo {
+                kind: ConnectionKind::I2c,
+                parameters: BTreeMap::from([
+                    ("bus".into(), bus.clone()),
+                    ("address".into(), format!("0x{:02x}", address)),
+                ]),
+            },
+            Self::Gpio { pin } => ConnectionInfo {
+                kind: ConnectionKind::Gpio,
+                parameters: BTreeMap::from([
+                    ("pin".into(), format!("BCM{}", pin)),
+                ]),
+            },
+        }
+    }
+}
 
 /// BravePI プロトコルの sensor_type 番号から core の SensorType に変換。
 pub fn sensor_type_from_bravepi_raw(raw: u16) -> SensorType {
@@ -19,45 +65,4 @@ pub fn sensor_type_from_bravepi_raw(raw: u16) -> SensorType {
         264 => SensorType::Illuminance,
         other => SensorType::Unknown(format!("bravepi:{}", other)),
     }
-}
-
-/// 接続タイプ（adapter 層の関心事）。
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConnectionType {
-    Uart {
-        port: String,
-        transmitter_id: String,
-    },
-    I2c {
-        bus: String,
-        address: u8,
-    },
-    Gpio {
-        pin: u8,
-    },
-}
-
-impl fmt::Display for ConnectionType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Uart { port, transmitter_id } => {
-                write!(f, "UART({}:{})", port, transmitter_id)
-            }
-            Self::I2c { bus, address } => {
-                write!(f, "I2C({}:0x{:02x})", bus, address)
-            }
-            Self::Gpio { pin } => {
-                write!(f, "GPIO(BCM{})", pin)
-            }
-        }
-    }
-}
-
-/// センサーの素性（adapter 層の関心事）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct SensorIdentity {
-    pub manufacturer: &'static str,
-    pub ic_part_number: &'static str,
-    pub sensor_type: SensorType,
-    pub connection_type: ConnectionType,
 }

@@ -3,7 +3,7 @@
 
 use iotkit_core_types::{SensorReading, SensorType};
 use bravepi_codec::codec::{BravePiCodec, BravePiFrame};
-use bravepi_sensors::reading::{sensor_type_from_bravepi_raw, ConnectionType};
+use bravepi_sensors::reading::{sensor_type_from_bravepi_raw, BravepiConnection};
 use bravepi_sensors::{lis2duxs12, mcp3427, mcp9600, opt3001, sdp810, vl53l1x};
 use bravepi_transport::SerialTransport;
 
@@ -41,7 +41,7 @@ fn main() {
                         BravePiFrame::Sensor(s) => {
                             // codec は生データを返す → adapter が sensor crate に振り分ける
                             let sensor_type = sensor_type_from_bravepi_raw(s.sensor_type_raw);
-                            let conn = ConnectionType::Uart {
+                            let conn = BravepiConnection::Uart {
                                 port: port_path.to_string(),
                                 transmitter_id: s.device_number.clone(),
                             };
@@ -79,7 +79,7 @@ fn main() {
                             if let Some(id) = id {
                                 log::info!(
                                     "SENSOR | manufacturer={} ic={} connection={} type={} rssi={} battery={} values={:?}",
-                                    id.manufacturer, id.ic_part_number, id.connection_type,
+                                    id.manufacturer, id.ic_part_number, id.connection,
                                     id.sensor_type, s.rssi, s.battery, reading.values,
                                 );
                             } else {

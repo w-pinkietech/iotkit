@@ -3,16 +3,16 @@
 //! I2C: Int16LE × 3 × 0.244 → mG, magnitude 計算
 //! UART (BravePI): Float32LE × 3 → mG, magnitude 計算
 
-use crate::reading::{ConnectionType, SensorIdentity, SensorReading, SensorType};
+use crate::reading::{BravepiConnection, SensorIdentity, SensorReading, SensorType};
 
 fn sensor_type() -> SensorType { SensorType::Acceleration }
 
-pub fn identity(connection_type: ConnectionType) -> SensorIdentity {
+pub fn identity(connection: BravepiConnection) -> SensorIdentity {
     SensorIdentity {
-        manufacturer: "Braveridge",
-        ic_part_number: "LIS2DUXS12",
+        manufacturer: "Braveridge".into(),
+        ic_part_number: "LIS2DUXS12".into(),
         sensor_type: sensor_type(),
-        connection_type,
+        connection: connection.to_connection_info(),
     }
 }
 
