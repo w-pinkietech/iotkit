@@ -1,0 +1,9 @@
+{
+  "gates": {
+    "onboarding": true,
+    "structural_analysis": true,
+    "remake_planning": false
+  },
+  "modules": {},
+  "updated_at": "2026-03-25"
+}

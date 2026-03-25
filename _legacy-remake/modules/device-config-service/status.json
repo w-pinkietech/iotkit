@@ -1,0 +1,9 @@
+{
+  "status": "pending",
+  "exploration": false,
+  "context_recovery": false,
+  "design_decision": false,
+  "test_generation": false,
+  "reimplementation": false,
+  "verification": false
+}

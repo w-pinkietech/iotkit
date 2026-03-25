@@ -1,0 +1,27 @@
+{
+  "project_name": "iotkit-next",
+  "legacy_repo": "/home/iotkit/iotkit/iotkit-runtime/iotkit-reverse-extracted",
+  "target_repo": "/home/iotkit/iotkit/iotkit-runtime/iotkit-next",
+  "legacy_platform": "Node-RED + Python + Swagger API (Express)",
+  "legacy_languages": ["javascript", "python", "sql"],
+  "legacy_infrastructure": ["docker", "mariadb", "influxdb", "mqtt", "raspberry-pi"],
+  "legacy_hardware": ["bravepi", "bravejig", "i2c-sensors"],
+  "target_stack": "undecided",
+  "reference_docs": {
+    "business_requirements": "docs/business-requirements.md",
+    "functional_requirements": "docs/functional-requirements.md",
+    "non_functional_requirements": "docs/non-functional-requirements.md",
+    "detailed_design": "docs/detailed-design.md",
+    "contracts": [
+      "analysis/contracts-http.md",
+      "analysis/contracts-data.md",
+      "analysis/contracts-hardware.md",
+      "analysis/contracts-ui.md",
+      "analysis/contracts-state.md"
+    ]
+  },
+  "legacy_read_ref": "/home/iotkit/iotkit/iotkit-runtime/iotkit-reverse-extracted",
+  "legacy_read_type": "separate-repo",
+  "original_runtime": "/home/iotkit/iotkit/iotkit-runtime/.node-red",
+  "created_at": "2026-03-25"
+}
