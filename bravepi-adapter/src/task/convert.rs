@@ -60,7 +60,7 @@ pub fn frame_to_event(
                         .take(s.data_count as usize)
                         .map(|&b| if b != 0 { 1.0 } else { 0.0 })
                         .collect();
-                    (SensorReading::new(sensor_type.clone(), values), None)
+                    (SensorReading::new(sensor_type.clone(), values, vec![]), None)
                 }
                 SensorType::Unknown(_) => {
                     tracing::warn!(raw = s.sensor_type_raw, "Unknown sensor type, skipping");

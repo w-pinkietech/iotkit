@@ -90,15 +90,16 @@ pub struct SensorIdentity {
 pub struct SensorReading {
     pub sensor_type: SensorType,
     pub values: Vec<f64>,
+    pub labels: Vec<&'static str>,
 }
 
 impl SensorReading {
-    pub fn new(sensor_type: SensorType, values: Vec<f64>) -> Self {
-        Self { sensor_type, values }
+    pub fn new(sensor_type: SensorType, values: Vec<f64>, labels: Vec<&'static str>) -> Self {
+        Self { sensor_type, values, labels }
     }
 
     pub fn empty(sensor_type: SensorType) -> Self {
-        Self { sensor_type, values: vec![] }
+        Self { sensor_type, values: vec![], labels: vec![] }
     }
 }
 

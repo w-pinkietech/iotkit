@@ -46,7 +46,7 @@ pub fn config_value(tc_type: ThermocoupleType) -> u8 {
 pub fn from_i2c_raw(data: &[u8; 2]) -> SensorReading {
     let raw = i16::from_be_bytes(*data);
     let temp = raw as f64 * 0.0625;
-    SensorReading::new(sensor_type(), vec![temp])
+    SensorReading::new(sensor_type(), vec![temp], vec!["celsius"])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -55,7 +55,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
         return SensorReading::empty(sensor_type());
     }
     let temp = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
-    SensorReading::new(sensor_type(), vec![temp])
+    SensorReading::new(sensor_type(), vec![temp], vec!["celsius"])
 }
 
 #[cfg(test)]
