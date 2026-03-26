@@ -70,7 +70,7 @@ event_loop から core へは `error.to_string()` で流す。
 | bytes → codec → AdapterEvent | `task::event_loop` (変更なし) | `bravepi_codec`, `iotkit_core_types` |
 | channel wiring と起動 | `task::start()` (薄くなる) | `serial_source` + `event_loop` |
 
-## Public API
+## API (全て crate 内部)
 
 ### serial_source
 
@@ -119,7 +119,7 @@ pub fn start(port_path: &str) -> Result<SerialSource, io::Error> {
 エラー送信箇所で `TransportError { message: msg }` を構築する。
 `reader.rs` は削除する。
 
-### task::start()
+### task::start() (唯一の public API)
 
 ```rust
 pub fn start(port_path: String) -> Result<AdapterHandle, io::Error> {
@@ -206,23 +206,26 @@ source.join() 完了
 
 ### 変更
 - `bravepi-adapter/src/task/handle.rs` — `start()` を薄く、`AdapterHandle` に `event_loop_handle` + `source_handle` 追加、`shutdown()` に `event_rx.close()` 追加
-- `bravepi-adapter/src/task/mod.rs` — `mod reader;` → `mod serial_source;` に置き換え
+- `bravepi-adapter/src/task/mod.rs` — `mod reader;` → `mod serial_source;` に置き換え。`pub use event_loop::event_loop;` を削除 (event_loop は pub(crate) に)
 - `bravepi-adapter/src/lib.rs` — `pub(crate) mod transport;` 追加 (crate 内部境界)
 
 ### 削除
 - `bravepi-adapter/src/task/reader.rs` — 内容は `serial_source.rs` に完全移動
 
+### 変更
+- `bravepi-adapter/src/task/event_loop.rs` — `pub async fn` → `pub(crate) async fn` に変更。シグネチャは変更なし (引数の型が alias になるだけ)
+- `bravepi-adapter/src/task/convert.rs` — `pub fn frame_to_event` → `pub(crate) fn frame_to_event` に変更 (内容は変更なし)
+
 ### 変更なし
-- `bravepi-adapter/src/task/event_loop.rs` — シグネチャ変更なし (引数の型が alias になるだけ)
-- `bravepi-adapter/src/task/convert.rs`
 - `bravepi-adapter/codec/` 全体
 - `bravepi-adapter/sensors/` 全体
 - `core/types/src/lib.rs`
 - `rpi4b-driver/`
 
 ### テスト変更
-- `event_loop_test.rs` — `Err(String)` → `Err(TransportError)` に変更。`event_rx.close()` で event_loop が抜けるテストを追加可能
-- `frame_to_event_test.rs` — 変更なし
+- `bravepi-adapter/tests/event_loop_test.rs` → `bravepi-adapter/src/task/event_loop_test.rs` に移動 (crate 内 unit test 化)。`pub(crate)` の event_loop と TransportError に直接アクセスできる。`Err(String)` → `Err(TransportError)` に変更。`event_rx.close()` で event_loop が抜けるテストを追加可能
+- `bravepi-adapter/tests/frame_to_event_test.rs` → `bravepi-adapter/src/task/convert_test.rs` に移動 (frame_to_event も pub(crate) になるため)
+- 両テストファイルは `#[cfg(test)] mod tests` ではなく `#[cfg(test)] mod <name>_test;` で隣接ファイルとして配置
 
 ### スコープ外
 - `serial_source` の単体テストは不要 (実ポートが必要なため)
