@@ -17,7 +17,7 @@ pub struct AdapterHandle {
 }
 
 impl AdapterHandle {
-    /// Send Shutdown command and wait for the reader thread to exit.
+    /// シャットダウンコマンドを送信し、reader スレッドの終了を待つ。
     pub async fn shutdown(mut self) -> Result<(), String> {
         let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
         if let Some(handle) = self.reader_thread.take() {
