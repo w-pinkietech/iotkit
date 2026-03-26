@@ -20,6 +20,21 @@ pub struct AdapterHandle {
     pub id: AdapterId,
     pub event_rx: mpsc::Receiver<AdapterEvent>,
     pub command_tx: mpsc::Sender<AdapterCommand>,
+    reader_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AdapterHandle {
+    /// Send Shutdown command and wait for the reader thread to exit.
+    pub async fn shutdown(mut self) -> Result<(), String> {
+        let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
+        if let Some(handle) = self.reader_thread.take() {
+            tokio::task::spawn_blocking(|| handle.join())
+                .await
+                .map_err(|_| "spawn_blocking failed".to_string())?
+                .map_err(|_| "Reader thread panicked".to_string())?;
+        }
+        Ok(())
+    }
 }
 
 /// BravePI adapter を起動する。
@@ -37,7 +52,7 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
     // serial read 用の専用スレッド → async task へ raw bytes (またはエラー) を送る
     let (bytes_tx, bytes_rx) = mpsc::channel::<Result<Vec<u8>, String>>(64);
     let reader_port = port_path.clone();
-    std::thread::Builder::new()
+    let join_handle = std::thread::Builder::new()
         .name(format!("bravepi-serial-{}", port_path))
         .spawn(move || serial_reader_thread(reader_port, transport, bytes_tx))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -50,6 +65,7 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
         id,
         event_rx,
         command_tx,
+        reader_thread: Some(join_handle),
     })
 }
 
