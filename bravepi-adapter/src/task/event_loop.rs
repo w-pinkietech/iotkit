@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use bravepi_codec::codec::BravePiCodec;
+use bravepi_codec::BravePiCodec;
 use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceKey};
 use tokio::sync::mpsc;
 

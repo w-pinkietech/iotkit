@@ -4,7 +4,7 @@ use iotkit_core_types::{
     AdapterEvent, DeviceKey, SensorIdentity, SensorReading, SensorType,
 };
 
-use bravepi_codec::codec::BravePiFrame;
+use bravepi_codec::BravePiFrame;
 use bravepi_sensors::{lis2duxs12, mcp3427, mcp9600, opt3001, sdp810, vl53l1x};
 
 use crate::{sensor_type_from_bravepi_raw, BravepiConnection};

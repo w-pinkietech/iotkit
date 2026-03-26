@@ -1,4 +1,4 @@
-use bravepi_codec::codec::*;
+use bravepi_codec::*;
 
 fn build_uplink_frame(device_number: u64, sensor_type: u16, rssi: i8, flag: u8, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
