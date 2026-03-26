@@ -190,6 +190,12 @@ impl BravePiCodec {
     }
 }
 
+impl Default for BravePiCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ============================================================
 // Frame decoders
 // ============================================================

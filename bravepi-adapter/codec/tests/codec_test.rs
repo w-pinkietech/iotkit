@@ -217,3 +217,10 @@ fn bravepi_frame_clone_and_eq() {
     let cloned = frame.clone();
     assert_eq!(frame, cloned);
 }
+
+#[test]
+fn codec_default_works() {
+    let mut codec = BravePiCodec::default();
+    codec.feed(&[]);
+    assert!(codec.decode().is_none());
+}
