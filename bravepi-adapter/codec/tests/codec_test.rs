@@ -152,3 +152,24 @@ fn decode_partial() {
     codec.feed(&[0x07, 0x00, 0x8b]);
     assert!(codec.decode().is_none());
 }
+
+#[test]
+fn decode_rejects_oversized_frame() {
+    let mut codec = BravePiCodec::new();
+    // payload_len = 5000 (exceeds MAX_FRAME_SIZE of 4096)
+    // frame_len = 2 + 12 + 5000 = 5014
+    let payload_len: u16 = 5000;
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&payload_len.to_le_bytes());
+    // Fill enough bytes for the codec to read the header
+    frame.extend(vec![0u8; 12 + 5000]);
+    codec.feed(&frame);
+    match codec.decode() {
+        Some(BravePiFrame::DecodeError { reason, .. }) => {
+            assert!(reason.contains("frame size exceeds maximum"), "reason was: {}", reason);
+        }
+        other => panic!("expected DecodeError, got {:?}", other),
+    }
+    // Buffer should be cleared — next decode returns None
+    assert!(codec.decode().is_none());
+}

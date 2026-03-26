@@ -55,6 +55,7 @@ pub enum DownlinkCommand {
 
 const POST_LENGTH_HEADER: usize = 12;
 const HEADER_SIZE: usize = 2 + POST_LENGTH_HEADER;
+const MAX_FRAME_SIZE: usize = 4096;
 
 pub struct BravePiCodec {
     buf: Vec<u8>,
@@ -88,6 +89,20 @@ impl BravePiCodec {
 
             let payload_len = u16::from_le_bytes([self.buf[0], self.buf[1]]) as usize;
             let frame_len = 2 + POST_LENGTH_HEADER + payload_len;
+
+            // フレームサイズ上限チェック
+            if frame_len > MAX_FRAME_SIZE {
+                self.buf.clear();
+                self.continuation = None;
+                return Some(BravePiFrame::DecodeError {
+                    device_number: "unknown".to_string(),
+                    sensor_type_raw: 0,
+                    reason: format!(
+                        "frame size exceeds maximum: {} > {}",
+                        frame_len, MAX_FRAME_SIZE
+                    ),
+                });
+            }
 
             if self.buf.len() < frame_len {
                 return None;
