@@ -4,8 +4,10 @@
 //! blocking serial I/O は専用スレッドで実行し、async 側と bytes channel で接続する。
 
 use iotkit_core_types::{
-    AdapterCommand, AdapterEvent, AdapterId, DeviceKey, SensorReading, SensorType,
+    AdapterCommand, AdapterEvent, AdapterId, ConnectionInfo, ConnectionKind,
+    DeviceKey, SensorIdentity, SensorReading, SensorType,
 };
+use std::collections::BTreeMap;
 use bravepi_codec::codec::{BravePiCodec, BravePiFrame};
 use bravepi_sensors::{lis2duxs12, mcp3427, mcp9600, opt3001, sdp810, vl53l1x};
 use rpi4b_transport::SerialTransport;
@@ -190,7 +192,7 @@ async fn event_loop(
                     Some(Ok(data)) => {
                         codec.feed(&data);
                         while let Some(frame) = codec.decode() {
-                            if let Some(event) = frame_to_event(frame) {
+                            if let Some((event, _identity)) = frame_to_event(frame, &port_path) {
                                 if event_tx.send(event).await.is_err() {
                                     tracing::warn!("Event channel closed, shutting down");
                                     return;
@@ -221,8 +223,9 @@ async fn event_loop(
 }
 
 /// BravePiFrame を AdapterEvent に変換する。
+/// SensorData フレームの場合は SensorIdentity も返す (DeviceDiscovered 用)。
 /// None を返す場合、そのフレームは core に通知する必要がない。
-pub fn frame_to_event(frame: BravePiFrame) -> Option<AdapterEvent> {
+pub fn frame_to_event(frame: BravePiFrame, port_path: &str) -> Option<(AdapterEvent, Option<SensorIdentity>)> {
     match frame {
         BravePiFrame::Sensor(s) => {
             let sensor_type = sensor_type_from_bravepi_raw(s.sensor_type_raw);
@@ -250,12 +253,32 @@ pub fn frame_to_event(frame: BravePiFrame) -> Option<AdapterEvent> {
                 }
             };
 
-            Some(AdapterEvent::SensorData {
+            let conn_info = ConnectionInfo {
+                kind: ConnectionKind::Uart,
+                parameters: BTreeMap::from([
+                    ("port".into(), port_path.to_string()),
+                    ("transmitter_id".into(), s.device_number.clone()),
+                ]),
+            };
+
+            let identity = match sensor_type {
+                SensorType::Temperature => Some(mcp9600::identity(conn_info)),
+                SensorType::Illuminance => Some(opt3001::identity(conn_info)),
+                SensorType::Adc => Some(mcp3427::identity(conn_info)),
+                SensorType::Ranging => Some(vl53l1x::identity(conn_info)),
+                SensorType::DifferentialPressure => Some(sdp810::identity(conn_info)),
+                SensorType::Acceleration => Some(lis2duxs12::identity(conn_info)),
+                _ => None,
+            };
+
+            let event = AdapterEvent::SensorData {
                 device_key,
                 reading,
                 rssi: Some(s.rssi as i16),
                 battery_pct: Some(s.battery),
-            })
+            };
+
+            Some((event, identity))
         }
         BravePiFrame::Config(cfg) => {
             tracing::info!(
@@ -270,9 +293,12 @@ pub fn frame_to_event(frame: BravePiFrame) -> Option<AdapterEvent> {
             device_number,
             sensor_type_raw,
             reason,
-        } => Some(AdapterEvent::AdapterError {
-            device_key: Some(DeviceKey(device_number)),
-            error: format!("Decode error (type={}): {}", sensor_type_raw, reason),
-        }),
+        } => Some((
+            AdapterEvent::AdapterError {
+                device_key: Some(DeviceKey(device_number)),
+                error: format!("Decode error (type={}): {}", sensor_type_raw, reason),
+            },
+            None,
+        )),
     }
 }
