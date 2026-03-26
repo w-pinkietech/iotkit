@@ -153,8 +153,8 @@ impl BravePiCodec {
         }
     }
 
-    pub fn encode_downlink(device_number_hex: &str, cmd: &DownlinkCommand) -> Vec<u8> {
-        let device_bytes = Self::hex_to_device_bytes(device_number_hex);
+    pub fn encode_downlink(device_number_hex: &str, cmd: &DownlinkCommand) -> Result<Vec<u8>, String> {
+        let device_bytes = Self::hex_to_device_bytes(device_number_hex)?;
 
         let (opcode, cmd_data, sensor_type_bytes) = match cmd {
             DownlinkCommand::ImmediateUplink { sensor_type } => {
@@ -179,13 +179,14 @@ impl BravePiCodec {
         frame.push(opcode);
         frame.push(0x00);
         frame.extend_from_slice(&cmd_data);
-        frame
+        Ok(frame)
     }
 
-    fn hex_to_device_bytes(hex: &str) -> [u8; 8] {
-        let val = u64::from_str_radix(hex, 16).unwrap_or(0);
+    fn hex_to_device_bytes(hex: &str) -> Result<[u8; 8], String> {
+        let val = u64::from_str_radix(hex, 16)
+            .map_err(|e| format!("Invalid device number hex '{}': {}", hex, e))?;
         let le = val.to_le_bytes();
-        [le[7], le[6], le[5], le[4], le[3], le[2], le[1], le[0]]
+        Ok([le[7], le[6], le[5], le[4], le[3], le[2], le[1], le[0]])
     }
 }
 

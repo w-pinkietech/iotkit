@@ -121,7 +121,7 @@ fn decode_unknown_type_still_returns_frame() {
 
 #[test]
 fn encode_immediate_uplink() {
-    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ImmediateUplink { sensor_type: 261 });
+    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ImmediateUplink { sensor_type: 261 }).unwrap();
     assert_eq!(f[0], 0x00);
     assert_eq!(f[13], 0x00);
     assert_eq!(u16::from_le_bytes([f[11], f[12]]), 261);
@@ -129,16 +129,35 @@ fn encode_immediate_uplink() {
 
 #[test]
 fn encode_parameter_get() {
-    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ParameterGet);
+    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ParameterGet).unwrap();
     assert_eq!(f[13], 0x0D);
 }
 
 #[test]
 fn encode_contact_output() {
-    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ContactOutput { signal_mode: 1, signal_out_time: 5000 });
+    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ContactOutput { signal_mode: 1, signal_out_time: 5000 }).unwrap();
     assert_eq!(f[13], 0x11);
     assert_eq!(f[15], 1);
     assert_eq!(u16::from_le_bytes([f[16], f[17]]), 5000);
+}
+
+#[test]
+fn encode_downlink_invalid_hex_returns_error() {
+    let result = BravePiCodec::encode_downlink(
+        "not_valid_hex",
+        &DownlinkCommand::ParameterGet,
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Invalid device number hex"));
+}
+
+#[test]
+fn encode_downlink_valid_hex_returns_ok() {
+    let result = BravePiCodec::encode_downlink(
+        "246880020140018b",
+        &DownlinkCommand::ParameterGet,
+    );
+    assert!(result.is_ok());
 }
 
 #[test]
