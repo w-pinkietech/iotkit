@@ -192,3 +192,28 @@ fn decode_rejects_oversized_frame() {
     // Buffer should be cleared — next decode returns None
     assert!(codec.decode().is_none());
 }
+
+#[test]
+fn sensor_frame_clone_and_eq() {
+    let frame = SensorFrame {
+        device_number: "test".to_string(),
+        sensor_type_raw: 261,
+        rssi: -60,
+        battery: 95,
+        data_count: 1,
+        value_data: vec![0x00],
+    };
+    let cloned = frame.clone();
+    assert_eq!(frame, cloned);
+}
+
+#[test]
+fn bravepi_frame_clone_and_eq() {
+    let frame = BravePiFrame::DecodeError {
+        device_number: "test".to_string(),
+        sensor_type_raw: 0,
+        reason: "test".to_string(),
+    };
+    let cloned = frame.clone();
+    assert_eq!(frame, cloned);
+}

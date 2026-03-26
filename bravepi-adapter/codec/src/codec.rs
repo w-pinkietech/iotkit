@@ -2,7 +2,7 @@
 //! フレームをバイト列から分解するだけ。sensor の知識は持たない。
 
 /// デコード済みフレーム。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BravePiFrame {
     /// センサーデータ (sensor_type != 0)
     Sensor(SensorFrame),
@@ -17,7 +17,7 @@ pub enum BravePiFrame {
 }
 
 /// センサーデータフレーム。値の解釈は呼び出し元の責務。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SensorFrame {
     pub device_number: String,
     pub sensor_type_raw: u16,
@@ -28,7 +28,7 @@ pub struct SensorFrame {
 }
 
 /// 設定レスポンスフレーム。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigFrame {
     pub device_number: String,
     pub rssi: i8,
@@ -42,7 +42,7 @@ pub struct ConfigFrame {
 }
 
 /// Downlink コマンド。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DownlinkCommand {
     ImmediateUplink { sensor_type: u16 },
     ParameterGet,
