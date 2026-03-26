@@ -4,6 +4,7 @@
 //! `task` モジュールで async task として起動し、AdapterEvent channel で core と通信する。
 
 pub mod task;
+pub(crate) mod transport;
 
 use std::collections::BTreeMap;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorType};
