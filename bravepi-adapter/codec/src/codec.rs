@@ -154,6 +154,17 @@ impl BravePiCodec {
             let (device_number, sensor_type_raw, rssi, full_payload) =
                 if let Some(mut cont) = self.continuation.take() {
                     cont.payload.extend_from_slice(payload);
+                    // 終端フレーム結合後も累積サイズを検証
+                    if cont.payload.len() > MAX_FRAME_SIZE {
+                        return Some(BravePiFrame::DecodeError {
+                            device_number: cont.device_number,
+                            sensor_type_raw: cont.sensor_type_raw,
+                            reason: format!(
+                                "continuation payload exceeds maximum: {} > {}",
+                                cont.payload.len(), MAX_FRAME_SIZE
+                            ),
+                        });
+                    }
                     (cont.device_number, cont.sensor_type_raw, cont.rssi, cont.payload)
                 } else {
                     (device_number, sensor_type_raw, rssi, payload.to_vec())

@@ -256,6 +256,27 @@ fn decode_rejects_oversized_continuation_payload() {
 }
 
 #[test]
+fn decode_rejects_oversized_continuation_with_final_frame() {
+    let mut codec = BravePiCodec::new();
+    // 継続 4 フレーム × 1000 bytes = 4000 bytes (上限以下)
+    for _ in 0..4 {
+        let frame = build_uplink_frame(DEVICE, 262, -60, 1, &vec![0u8; 1000]);
+        codec.feed(&frame);
+        assert!(codec.decode().is_none());
+    }
+    // 終端フレーム (flag=0) 200 bytes → 累積 4200 > 4096 で DecodeError
+    let final_frame = build_uplink_frame(DEVICE, 262, -60, 0, &vec![0u8; 200]);
+    codec.feed(&final_frame);
+    match codec.decode() {
+        Some(BravePiFrame::DecodeError { reason, .. }) => {
+            assert!(reason.contains("continuation payload exceeds maximum"),
+                "reason was: {}", reason);
+        }
+        other => panic!("expected DecodeError, got {:?}", other),
+    }
+}
+
+#[test]
 fn encode_downlink_device_bytes_match_wire_order() {
     // decode は u64::from_le_bytes でデバイス番号を読む。
     // encode の出力も同じ LE バイト順でなければならない。
