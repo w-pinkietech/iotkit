@@ -8,6 +8,7 @@ use iotkit_core_types::{
     DeviceKey, SensorIdentity, SensorReading, SensorType,
 };
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use bravepi_codec::codec::{BravePiCodec, BravePiFrame};
 use bravepi_sensors::{lis2duxs12, mcp3427, mcp9600, opt3001, sdp810, vl53l1x};
 use rpi4b_transport::SerialTransport;
@@ -164,7 +165,7 @@ fn serial_reader_thread(
 }
 
 /// async task: raw bytes → codec → AdapterEvent。
-async fn event_loop(
+pub async fn event_loop(
     port_path: String,
     mut bytes_rx: mpsc::Receiver<Result<Vec<u8>, String>>,
     event_tx: mpsc::Sender<AdapterEvent>,
@@ -173,6 +174,9 @@ async fn event_loop(
     tracing::info!(port = %port_path, "BravePI adapter event loop started");
 
     let mut codec = BravePiCodec::new();
+    // デバイスのライフサイクル追跡。adapter task 終了時に解放される。
+    // BravePI は物理的に固定台数のため、実運用で数十台規模に収まる。
+    let mut seen_devices: HashSet<DeviceKey> = HashSet::new();
 
     loop {
         tokio::select! {
@@ -192,7 +196,25 @@ async fn event_loop(
                     Some(Ok(data)) => {
                         codec.feed(&data);
                         while let Some(frame) = codec.decode() {
-                            if let Some((event, _identity)) = frame_to_event(frame, &port_path) {
+                            if let Some((event, identity)) = frame_to_event(frame, &port_path) {
+                                // 初回デバイスは DeviceDiscovered を先に送信
+                                if let AdapterEvent::SensorData { ref device_key, .. } = event {
+                                    // seen_devices は identity の有無に関わらず記録する。
+                                    // adapter 再起動時にリセットされるため、DeviceDiscovered は再送信される（意図通り）。
+                                    if seen_devices.insert(device_key.clone()) {
+                                        if let Some(identity) = identity {
+                                            let discovered = AdapterEvent::DeviceDiscovered {
+                                                device_key: device_key.clone(),
+                                                identity,
+                                            };
+                                            if event_tx.send(discovered).await.is_err() {
+                                                tracing::warn!("Event channel closed, shutting down");
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+
                                 if event_tx.send(event).await.is_err() {
                                     tracing::warn!("Event channel closed, shutting down");
                                     return;
