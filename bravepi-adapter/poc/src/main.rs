@@ -31,43 +31,51 @@ async fn main() {
 
     tracing::info!(adapter_id = %handle.id, "Adapter started, listening for events...");
 
-    // core 側の最小受信ループ
-    while let Some(event) = handle.event_rx.recv().await {
-        match &event {
-            AdapterEvent::SensorData {
-                device_key,
-                reading,
-                rssi,
-                battery_pct,
-            } => {
-                tracing::info!(
-                    device = %device_key,
-                    sensor_type = %reading.sensor_type,
-                    values = ?reading.values,
-                    rssi = ?rssi,
-                    battery = ?battery_pct,
-                    "SensorData"
-                );
+    // core 側の最小受信ループ (Ctrl+C で graceful shutdown)
+    loop {
+        tokio::select! {
+            biased;
+
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Ctrl+C received, shutting down...");
+                if let Err(e) = handle.shutdown().await {
+                    tracing::error!(error = %e, "Shutdown error");
+                }
+                break;
             }
-            AdapterEvent::DeviceDiscovered {
-                device_key,
-                identity,
-            } => {
-                tracing::info!(
-                    device = %device_key,
-                    manufacturer = %identity.manufacturer,
-                    ic = %identity.ic_part_number,
-                    "DeviceDiscovered"
-                );
-            }
-            AdapterEvent::DeviceLost { device_key, reason } => {
-                tracing::warn!(device = %device_key, reason = %reason, "DeviceLost");
-            }
-            AdapterEvent::AdapterError { device_key, error } => {
-                tracing::error!(device = ?device_key, error = %error, "AdapterError");
+            event = handle.event_rx.recv() => {
+                match event {
+                    Some(AdapterEvent::SensorData { device_key, reading, rssi, battery_pct }) => {
+                        tracing::info!(
+                            device = %device_key,
+                            sensor_type = %reading.sensor_type,
+                            values = ?reading.values,
+                            rssi = ?rssi,
+                            battery = ?battery_pct,
+                            "SensorData"
+                        );
+                    }
+                    Some(AdapterEvent::DeviceDiscovered { device_key, identity }) => {
+                        tracing::info!(
+                            device = %device_key,
+                            manufacturer = %identity.manufacturer,
+                            ic = %identity.ic_part_number,
+                            sensor_type = %identity.sensor_type,
+                            "DeviceDiscovered"
+                        );
+                    }
+                    Some(AdapterEvent::DeviceLost { device_key, reason }) => {
+                        tracing::warn!(device = %device_key, reason = %reason, "DeviceLost");
+                    }
+                    Some(AdapterEvent::AdapterError { device_key, error }) => {
+                        tracing::error!(device = ?device_key, error = %error, "AdapterError");
+                    }
+                    None => {
+                        tracing::info!("Event channel closed, exiting");
+                        break;
+                    }
+                }
             }
         }
     }
-
-    tracing::info!("Event channel closed, exiting");
 }
