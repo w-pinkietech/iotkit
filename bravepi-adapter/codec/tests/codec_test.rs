@@ -224,3 +224,47 @@ fn codec_default_works() {
     codec.feed(&[]);
     assert!(codec.decode().is_none());
 }
+
+#[test]
+fn decode_rejects_oversized_continuation_payload() {
+    let mut codec = BravePiCodec::new();
+    // 継続フレーム (flag=1) を繰り返し送り、累積ペイロードが MAX_FRAME_SIZE を超えることを確認
+    // 各フレームは小さい (payload=1000 bytes) ので個別フレームの上限チェックは通過する
+    let chunk_size = 1000usize;
+    for i in 0..5 {
+        let frame = build_uplink_frame(DEVICE, 262, -60, 1, &vec![0u8; chunk_size]);
+        codec.feed(&frame);
+        let result = codec.decode();
+        if i < 4 {
+            // 累積 1000..4000 → まだ上限以下
+            assert!(result.is_none(), "should be None at chunk {}, got {:?}", i, result);
+        } else {
+            // 累積 5000 → 上限超過で DecodeError
+            match result {
+                Some(BravePiFrame::DecodeError { reason, device_number, .. }) => {
+                    assert!(reason.contains("continuation payload exceeds maximum"),
+                        "reason was: {}", reason);
+                    // device_number はフレームから取得できている
+                    assert_eq!(device_number, "246880020140018b");
+                }
+                other => panic!("expected DecodeError at chunk {}, got {:?}", i, other),
+            }
+        }
+    }
+    // continuation はクリアされている → 次のデコードは None
+    assert!(codec.decode().is_none());
+}
+
+#[test]
+fn encode_downlink_device_bytes_match_wire_order() {
+    // decode は u64::from_le_bytes でデバイス番号を読む。
+    // encode の出力も同じ LE バイト順でなければならない。
+    let f = BravePiCodec::encode_downlink(
+        "246880020140018b",
+        &DownlinkCommand::ParameterGet,
+    ).unwrap();
+    // device bytes は offset 3..11 (0: direction, 1-2: length, 3-10: device)
+    let device_bytes = &f[3..11];
+    // on-wire 期待値: 0x246880020140018b の LE 表現
+    assert_eq!(device_bytes, &[0x8b, 0x01, 0x40, 0x01, 0x02, 0x80, 0x68, 0x24]);
+}

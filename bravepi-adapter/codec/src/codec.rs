@@ -124,7 +124,21 @@ impl BravePiCodec {
 
             if flag == 1 {
                 match &mut self.continuation {
-                    Some(cont) => cont.payload.extend_from_slice(payload),
+                    Some(cont) => {
+                        cont.payload.extend_from_slice(payload);
+                        // 継続ペイロードの累積サイズも上限チェック
+                        if cont.payload.len() > MAX_FRAME_SIZE {
+                            let cont = self.continuation.take().unwrap();
+                            return Some(BravePiFrame::DecodeError {
+                                device_number: cont.device_number,
+                                sensor_type_raw: cont.sensor_type_raw,
+                                reason: format!(
+                                    "continuation payload exceeds maximum: {} > {}",
+                                    cont.payload.len(), MAX_FRAME_SIZE
+                                ),
+                            });
+                        }
+                    }
                     None => {
                         self.continuation = Some(ContinuationState {
                             device_number,
@@ -185,8 +199,7 @@ impl BravePiCodec {
     fn hex_to_device_bytes(hex: &str) -> Result<[u8; 8], String> {
         let val = u64::from_str_radix(hex, 16)
             .map_err(|e| format!("Invalid device number hex '{}': {}", hex, e))?;
-        let le = val.to_le_bytes();
-        Ok([le[7], le[6], le[5], le[4], le[3], le[2], le[1], le[0]])
+        Ok(val.to_le_bytes())
     }
 }
 

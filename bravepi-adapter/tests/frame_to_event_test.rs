@@ -277,3 +277,23 @@ fn contact_input_has_no_identity() {
     let (_event, identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
     assert!(identity.is_none());
 }
+
+// ── DecodeError "unknown" → device_key: None ────
+
+#[test]
+fn decode_error_unknown_device_produces_none_key() {
+    let frame = BravePiFrame::DecodeError {
+        device_number: "unknown".to_string(),
+        sensor_type_raw: 0,
+        reason: "frame size exceeds maximum".to_string(),
+    };
+    let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
+
+    match event {
+        AdapterEvent::AdapterError { device_key, error } => {
+            assert!(device_key.is_none(), "unknown device should produce None key");
+            assert!(error.contains("frame size exceeds maximum"));
+        }
+        other => panic!("expected AdapterError, got {:?}", other),
+    }
+}

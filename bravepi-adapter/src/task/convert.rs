@@ -90,12 +90,19 @@ pub fn frame_to_event(
             device_number,
             sensor_type_raw,
             reason,
-        } => Some((
-            AdapterEvent::AdapterError {
-                device_key: Some(DeviceKey::new(device_number)),
-                error: format!("Decode error (type={}): {}", sensor_type_raw, reason),
-            },
-            None,
-        )),
+        } => {
+            let device_key = if device_number == "unknown" {
+                None
+            } else {
+                Some(DeviceKey::new(device_number))
+            };
+            Some((
+                AdapterEvent::AdapterError {
+                    device_key,
+                    error: format!("Decode error (type={}): {}", sensor_type_raw, reason),
+                },
+                None,
+            ))
+        }
     }
 }
