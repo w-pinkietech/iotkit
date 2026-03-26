@@ -6,7 +6,6 @@
 mod convert;
 pub(crate) mod event_loop;
 mod handle;
-mod reader;
 mod serial_source;
 
 pub use handle::{start, AdapterHandle};

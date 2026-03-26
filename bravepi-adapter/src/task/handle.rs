@@ -1,32 +1,41 @@
 //! AdapterHandle: adapter の起動とライフサイクル管理。
 
 use iotkit_core_types::{AdapterCommand, AdapterEvent, AdapterId};
-use rpi4b_transport::SerialTransport;
 use tokio::sync::mpsc;
 
-use crate::serial_config;
-use crate::transport::TransportError;
 use super::event_loop::event_loop;
-use super::reader::serial_reader_thread;
+use super::serial_source::{self, SerialSourceHandle};
 
 /// adapter 起動結果。core はこの handle を使って adapter と通信する。
 pub struct AdapterHandle {
     pub id: AdapterId,
     pub event_rx: mpsc::Receiver<AdapterEvent>,
     pub command_tx: mpsc::Sender<AdapterCommand>,
-    reader_thread: Option<std::thread::JoinHandle<()>>,
+    source_handle: Option<SerialSourceHandle>,
+    event_loop_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AdapterHandle {
-    /// シャットダウンコマンドを送信し、reader スレッドの終了を待つ。
+    /// シャットダウン: event_rx close → Shutdown cmd → event_loop join → reader thread join。
     pub async fn shutdown(mut self) -> Result<(), String> {
+        // 1. event_rx を close → event_loop の send() が Err で抜ける (buffer 詰まり対策)
+        self.event_rx.close();
+
+        // 2. Shutdown コマンド送信 → event_loop が select で観測して return
         let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
-        if let Some(handle) = self.reader_thread.take() {
-            tokio::task::spawn_blocking(|| handle.join())
-                .await
-                .map_err(|_| "spawn_blocking failed".to_string())?
-                .map_err(|_| "Reader thread panicked".to_string())?;
+
+        // 3. event_loop の完了を待つ
+        if let Some(handle) = self.event_loop_handle.take() {
+            handle.await.map_err(|e| format!("event_loop panicked: {}", e))?;
         }
+
+        // 4. reader thread の join
+        //    event_loop 終了 → bytes_rx drop → bytes_tx.is_closed() = true
+        //    → reader thread が次の is_closed() チェックで終了
+        if let Some(source) = self.source_handle.take() {
+            source.join().await?;
+        }
+
         Ok(())
     }
 }
@@ -36,29 +45,21 @@ impl AdapterHandle {
 /// 戻り値の `AdapterHandle` 経由で event を受信し、command を送信する。
 /// serial read は専用スレッド、フレーム処理は tokio task で動作する。
 pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
-    let config = serial_config();
-    let transport = SerialTransport::open(&port_path, &config)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let source = serial_source::start(&port_path)?;
 
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
-
-    // serial read 用の専用スレッド → async task へ raw bytes (またはエラー) を送る
-    let (bytes_tx, bytes_rx) = mpsc::channel::<Result<Vec<u8>, TransportError>>(64);
-    let reader_port = port_path.clone();
-    let join_handle = std::thread::Builder::new()
-        .name(format!("bravepi-serial-{}", port_path))
-        .spawn(move || serial_reader_thread(reader_port, transport, bytes_tx))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
     let id = AdapterId::new(format!("bravepi:{}", port_path));
 
-    tokio::spawn(event_loop(port_path, bytes_rx, event_tx, command_rx));
+    let event_loop_handle = tokio::spawn(
+        event_loop(port_path, source.bytes_rx, event_tx, command_rx)
+    );
 
     Ok(AdapterHandle {
         id,
         event_rx,
         command_tx,
-        reader_thread: Some(join_handle),
+        source_handle: Some(source.handle),
+        event_loop_handle: Some(event_loop_handle),
     })
 }
