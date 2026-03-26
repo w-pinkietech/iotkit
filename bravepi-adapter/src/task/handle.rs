@@ -5,6 +5,7 @@ use rpi4b_transport::SerialTransport;
 use tokio::sync::mpsc;
 
 use crate::serial_config;
+use crate::transport::TransportError;
 use super::event_loop::event_loop;
 use super::reader::serial_reader_thread;
 
@@ -43,7 +44,7 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
 
     // serial read 用の専用スレッド → async task へ raw bytes (またはエラー) を送る
-    let (bytes_tx, bytes_rx) = mpsc::channel::<Result<Vec<u8>, String>>(64);
+    let (bytes_tx, bytes_rx) = mpsc::channel::<Result<Vec<u8>, TransportError>>(64);
     let reader_port = port_path.clone();
     let join_handle = std::thread::Builder::new()
         .name(format!("bravepi-serial-{}", port_path))

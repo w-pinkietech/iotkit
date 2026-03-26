@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::serial_config;
+use crate::transport::TransportError;
 
 pub(crate) const MAX_RETRIES: u32 = 10;
 pub(crate) const MAX_BACKOFF_SECS: u64 = 30;
@@ -13,7 +14,7 @@ pub(crate) const MAX_BACKOFF_SECS: u64 = 30;
 pub(crate) fn serial_reader_thread(
     port_path: String,
     mut transport: SerialTransport,
-    bytes_tx: mpsc::Sender<Result<Vec<u8>, String>>,
+    bytes_tx: mpsc::Sender<Result<Vec<u8>, TransportError>>,
 ) {
     tracing::info!(port = %port_path, "Serial reader thread started");
     let mut buf = [0u8; 4096];
@@ -50,7 +51,7 @@ pub(crate) fn serial_reader_thread(
                             port_path, e, MAX_RETRIES
                         );
                         tracing::error!("{}", msg);
-                        let _ = bytes_tx.blocking_send(Err(msg));
+                        let _ = bytes_tx.blocking_send(Err(TransportError { message: msg }));
                         return;
                     }
 

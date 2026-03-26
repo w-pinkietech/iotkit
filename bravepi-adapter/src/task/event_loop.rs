@@ -7,11 +7,12 @@ use bravepi_codec::BravePiCodec;
 use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceKey};
 use tokio::sync::mpsc;
 
+use crate::transport::BytesReceiver;
 use super::convert::frame_to_event;
 
-pub async fn event_loop(
+pub(crate) async fn event_loop(
     port_path: String,
-    mut bytes_rx: mpsc::Receiver<Result<Vec<u8>, String>>,
+    mut bytes_rx: BytesReceiver,
     event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
 ) {
@@ -70,7 +71,7 @@ pub async fn event_loop(
                         tracing::error!(%error, "Serial reader reported error");
                         let _ = event_tx.send(AdapterEvent::AdapterError {
                             device_key: None,
-                            error,
+                            error: error.to_string(),
                         }).await;
                         return;
                     }
