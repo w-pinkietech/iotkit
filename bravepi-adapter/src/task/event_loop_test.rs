@@ -116,3 +116,111 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
     command_tx.send(AdapterCommand::Shutdown).await.unwrap();
     handle.await.unwrap();
 }
+
+#[tokio::test]
+async fn contact_input_produces_device_discovered() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx));
+
+    let device: u64 = 0xaabbccdd00112233;
+    let frame_bytes = build_sensor_frame_bytes(device, 257, -50, 80, 1, &[0x01]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+
+    match event_rx.recv().await.expect("should receive DeviceDiscovered") {
+        AdapterEvent::DeviceDiscovered { device_key, identity } => {
+            assert_eq!(device_key.as_str(), "bravepi:aabbccdd00112233:contact_input");
+            assert_eq!(identity.manufacturer, "Braveridge");
+            assert_eq!(identity.ic_part_number, "Contact Input Module");
+            assert_eq!(identity.sensor_type, SensorType::ContactInput);
+        }
+        other => panic!("expected DeviceDiscovered, got {:?}", other),
+    }
+
+    match event_rx.recv().await.expect("should receive SensorData") {
+        AdapterEvent::SensorData { device_key, reading, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi:aabbccdd00112233:contact_input");
+            assert_eq!(reading.sensor_type, SensorType::ContactInput);
+        }
+        other => panic!("expected SensorData, got {:?}", other),
+    }
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx));
+
+    let device: u64 = 0x246880020140018b;
+
+    // --- Temperature frame ---
+    let temp_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
+    bytes_tx.send(Ok(temp_bytes)).await.unwrap();
+
+    // DeviceDiscovered for temperature
+    match event_rx.recv().await.expect("should receive DeviceDiscovered #1") {
+        AdapterEvent::DeviceDiscovered { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+        }
+        other => panic!("expected DeviceDiscovered, got {:?}", other),
+    }
+    // SensorData for temperature
+    match event_rx.recv().await.expect("should receive SensorData #1") {
+        AdapterEvent::SensorData { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+        }
+        other => panic!("expected SensorData, got {:?}", other),
+    }
+
+    // --- ContactInput frame (same transmitter, different sensor type) ---
+    let contact_bytes = build_sensor_frame_bytes(device, 257, -55, 90, 1, &[0x01]);
+    bytes_tx.send(Ok(contact_bytes)).await.unwrap();
+
+    // DeviceDiscovered for contact_input (different logical device)
+    match event_rx.recv().await.expect("should receive DeviceDiscovered #2") {
+        AdapterEvent::DeviceDiscovered { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:contact_input");
+        }
+        other => panic!("expected DeviceDiscovered, got {:?}", other),
+    }
+    // SensorData for contact_input
+    match event_rx.recv().await.expect("should receive SensorData #2") {
+        AdapterEvent::SensorData { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:contact_input");
+        }
+        other => panic!("expected SensorData, got {:?}", other),
+    }
+
+    // --- Repeat: temperature again (no new DeviceDiscovered) ---
+    let temp_bytes2 = build_sensor_frame_bytes(device, 261, -58, 92, 1, &[0x00, 0x80, 0xb3, 0x41]);
+    bytes_tx.send(Ok(temp_bytes2)).await.unwrap();
+
+    match event_rx.recv().await.expect("should receive SensorData only") {
+        AdapterEvent::SensorData { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+        }
+        other => panic!("expected SensorData (no re-discover), got {:?}", other),
+    }
+
+    // --- Repeat: contact again (no new DeviceDiscovered) ---
+    let contact_bytes2 = build_sensor_frame_bytes(device, 257, -52, 88, 1, &[0x00]);
+    bytes_tx.send(Ok(contact_bytes2)).await.unwrap();
+
+    match event_rx.recv().await.expect("should receive SensorData only") {
+        AdapterEvent::SensorData { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:contact_input");
+        }
+        other => panic!("expected SensorData (no re-discover), got {:?}", other),
+    }
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
