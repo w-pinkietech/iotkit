@@ -144,7 +144,7 @@ fn decode_error_produces_adapter_error() {
 
     match event {
         AdapterEvent::AdapterError { device_key, error } => {
-            assert_eq!(device_key.unwrap().as_str(), "bad_device");
+            assert_eq!(device_key.unwrap().as_str(), "bravepi:bad_device:temperature");
             assert!(error.contains("Decode error"));
             assert!(error.contains("payload too short"));
         }
@@ -291,6 +291,23 @@ fn contact_output_has_module_identity() {
     assert_eq!(identity.manufacturer, "Braveridge");
     assert_eq!(identity.ic_part_number, "Contact Output Module");
     assert_eq!(identity.sensor_type, SensorType::ContactOutput);
+}
+
+#[test]
+fn decode_error_unknown_sensor_type_falls_back_to_raw_key() {
+    let frame = BravePiFrame::DecodeError {
+        device_number: "bad_device".to_string(),
+        sensor_type_raw: 9999,
+        reason: "bad payload".to_string(),
+    };
+    let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
+
+    match event {
+        AdapterEvent::AdapterError { device_key, .. } => {
+            assert_eq!(device_key.unwrap().as_str(), "bad_device");
+        }
+        other => panic!("expected AdapterError, got {:?}", other),
+    }
 }
 
 // ── DecodeError "unknown" → device_key: None ────

@@ -104,7 +104,13 @@ pub(crate) fn frame_to_event(
             let device_key = if device_number == "unknown" {
                 None
             } else {
-                Some(DeviceKey::new(device_number))
+                let sensor_type = sensor_type_from_bravepi_raw(sensor_type_raw);
+                Some(match device_key_suffix(&sensor_type) {
+                    Some(suffix) => {
+                        DeviceKey::new(format!("bravepi:{}:{}", device_number, suffix))
+                    }
+                    None => DeviceKey::new(device_number),
+                })
             };
             Some((
                 AdapterEvent::AdapterError {
