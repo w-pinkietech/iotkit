@@ -19,11 +19,21 @@ pub(crate) fn frame_to_event(
     match frame {
         BravePiFrame::Sensor(s) => {
             let sensor_type = sensor_type_from_bravepi_raw(s.sensor_type_raw);
-            let device_key = DeviceKey::new(s.device_number.clone());
+
+            let suffix = match device_key_suffix(&sensor_type) {
+                Some(suffix) => suffix,
+                None => {
+                    tracing::warn!(raw = s.sensor_type_raw, "Unknown sensor type, skipping");
+                    return None;
+                }
+            };
+
+            let transmitter_id = s.device_number.clone();
+            let device_key = DeviceKey::new(format!("bravepi:{}:{}", transmitter_id, suffix));
 
             let conn_info = BravepiConnection::Uart {
                 port: port_path.to_string(),
-                transmitter_id: s.device_number.clone(),
+                transmitter_id,
             }
             .to_connection_info();
 
@@ -62,10 +72,7 @@ pub(crate) fn frame_to_event(
                         .collect();
                     (SensorReading::new(sensor_type.clone(), values, vec![]), None)
                 }
-                SensorType::Unknown(_) => {
-                    tracing::warn!(raw = s.sensor_type_raw, "Unknown sensor type, skipping");
-                    return None;
-                }
+                SensorType::Unknown(_) => unreachable!("Unknown filtered by device_key_suffix"),
             };
 
             let event = AdapterEvent::SensorData {
@@ -104,5 +111,19 @@ pub(crate) fn frame_to_event(
                 None,
             ))
         }
+    }
+}
+
+fn device_key_suffix(sensor_type: &SensorType) -> Option<&'static str> {
+    match sensor_type {
+        SensorType::ContactInput => Some("contact_input"),
+        SensorType::ContactOutput => Some("contact_output"),
+        SensorType::Adc => Some("adc"),
+        SensorType::Ranging => Some("ranging"),
+        SensorType::Temperature => Some("temperature"),
+        SensorType::Acceleration => Some("acceleration"),
+        SensorType::DifferentialPressure => Some("differential_pressure"),
+        SensorType::Illuminance => Some("illuminance"),
+        SensorType::Unknown(_) => None,
     }
 }
