@@ -12,7 +12,7 @@ use crate::{sensor_type_from_bravepi_raw, BravepiConnection};
 /// BravePiFrame を AdapterEvent に変換する。
 /// SensorData フレームの場合は SensorIdentity も返す (DeviceDiscovered 用)。
 /// None を返す場合、そのフレームは core に通知する必要がない。
-pub fn frame_to_event(
+pub(crate) fn frame_to_event(
     frame: BravePiFrame,
     port_path: &str,
 ) -> Option<(AdapterEvent, Option<SensorIdentity>)> {

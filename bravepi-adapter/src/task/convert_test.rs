@@ -1,6 +1,7 @@
-use bravepi_adapter::task::frame_to_event;
 use bravepi_codec::{BravePiFrame, ConfigFrame, SensorFrame};
 use iotkit_core_types::{AdapterEvent, SensorType};
+
+use super::convert::frame_to_event;
 
 // ── ヘルパー ──────────────────────────────────────
 
@@ -19,8 +20,6 @@ fn make_sensor_frame(sensor_type_raw: u16, value_data: Vec<u8>) -> SensorFrame {
 
 #[test]
 fn temperature_frame_produces_sensor_data() {
-    // mcp9600 uart payload: 4 bytes, IEEE 754 float LE
-    // 0x00 0x80 0xb3 0x41 = 22.4375°C
     let frame = BravePiFrame::Sensor(make_sensor_frame(261, vec![0x00, 0x80, 0xb3, 0x41]));
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
@@ -46,8 +45,6 @@ fn temperature_frame_produces_sensor_data() {
 
 #[test]
 fn illuminance_frame_produces_sensor_data() {
-    // opt3001 uart payload: Float32LE (メインボード変換済み)
-    // 500.0f32 = 0x43fa0000
     let lux_bytes = 500.0f32.to_le_bytes().to_vec();
     let frame = BravePiFrame::Sensor(make_sensor_frame(264, lux_bytes));
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
@@ -72,7 +69,7 @@ fn contact_input_frame_maps_bytes_to_float() {
         rssi: -50,
         battery: 80,
         data_count: 3,
-        value_data: vec![0x01, 0x00, 0x01, 0xff], // 4 bytes だが data_count=3 なので 3 つだけ使う
+        value_data: vec![0x01, 0x00, 0x01, 0xff],
     });
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
@@ -159,8 +156,6 @@ fn decode_error_produces_adapter_error() {
 
 #[test]
 fn ranging_frame_produces_sensor_data() {
-    // vl53l1x uart payload: 2 bytes LE → u16 distance mm
-    // 0xE8 0x03 = 1000mm
     let frame = BravePiFrame::Sensor(make_sensor_frame(260, vec![0xe8, 0x03]));
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
@@ -177,7 +172,6 @@ fn ranging_frame_produces_sensor_data() {
 
 #[test]
 fn adc_frame_produces_sensor_data() {
-    // mcp3427 uart payload: 4 bytes IEEE 754 float LE
     let frame = BravePiFrame::Sensor(make_sensor_frame(259, vec![0x00, 0x00, 0x80, 0x3f]));
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
@@ -195,8 +189,8 @@ fn adc_frame_produces_sensor_data() {
 fn rssi_and_battery_are_propagated() {
     let frame = BravePiFrame::Sensor(SensorFrame {
         device_number: "test_device".to_string(),
-        sensor_type_raw: 257, // ContactInput
-        rssi: -128,           // i8 の最小値
+        sensor_type_raw: 257,
+        rssi: -128,
         battery: 0,
         data_count: 1,
         value_data: vec![0x01],
@@ -218,10 +212,8 @@ fn rssi_and_battery_are_propagated() {
 
 #[test]
 fn empty_value_data_does_not_panic() {
-    // Temperature (mcp9600) に空データを渡す → empty reading が返るはず
     let frame = BravePiFrame::Sensor(make_sensor_frame(261, vec![]));
     let event = frame_to_event(frame, "/dev/test");
-    // パニックしないことが目的。結果は SensorData(empty) になるはず。
     assert!(event.is_some());
 }
 
@@ -234,14 +226,13 @@ fn contact_input_data_count_exceeds_data_does_not_panic() {
         sensor_type_raw: 257,
         rssi: -50,
         battery: 50,
-        data_count: 100, // value_data より大きい
+        data_count: 100,
         value_data: vec![0x01, 0x00],
     });
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
         AdapterEvent::SensorData { reading, .. } => {
-            // take(100) but only 2 bytes → 2 values
             assert_eq!(reading.values.len(), 2);
         }
         other => panic!("expected SensorData, got {:?}", other),

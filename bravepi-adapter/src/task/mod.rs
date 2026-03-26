@@ -8,8 +8,9 @@ pub(crate) mod event_loop;
 mod handle;
 mod reader;
 
-pub use convert::frame_to_event;
 pub use handle::{start, AdapterHandle};
 
 #[cfg(test)]
 mod event_loop_test;
+#[cfg(test)]
+mod convert_test;
