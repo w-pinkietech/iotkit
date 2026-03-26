@@ -107,11 +107,21 @@ impl SensorReading {
 
 /// adapter の一意識別子。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AdapterId(pub String);
+pub struct AdapterId(String);
+
+impl AdapterId {
+    pub fn new(id: impl Into<String>) -> Self { Self(id.into()) }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
 
 /// デバイスの一意キー。adapter 内で一意であればよい。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DeviceKey(pub String);
+pub struct DeviceKey(String);
+
+impl DeviceKey {
+    pub fn new(key: impl Into<String>) -> Self { Self(key.into()) }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
 
 impl fmt::Display for AdapterId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

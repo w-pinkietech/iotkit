@@ -31,7 +31,7 @@ fn temperature_frame_produces_sensor_data() {
             rssi,
             battery_pct,
         } => {
-            assert_eq!(device_key.0, "246880020140018b");
+            assert_eq!(device_key.as_str(), "246880020140018b");
             assert_eq!(reading.sensor_type, SensorType::Temperature);
             assert_eq!(reading.values.len(), 1);
             assert!((reading.values[0] - 22.4375).abs() < 0.01);
@@ -147,7 +147,7 @@ fn decode_error_produces_adapter_error() {
 
     match event {
         AdapterEvent::AdapterError { device_key, error } => {
-            assert_eq!(device_key.unwrap().0, "bad_device");
+            assert_eq!(device_key.unwrap().as_str(), "bad_device");
             assert!(error.contains("Decode error"));
             assert!(error.contains("payload too short"));
         }

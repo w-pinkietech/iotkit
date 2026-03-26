@@ -50,7 +50,7 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
         .spawn(move || serial_reader_thread(reader_port, transport, bytes_tx))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-    let id = AdapterId(format!("bravepi:{}", port_path));
+    let id = AdapterId::new(format!("bravepi:{}", port_path));
 
     tokio::spawn(event_loop(port_path, bytes_rx, event_tx, command_rx));
 

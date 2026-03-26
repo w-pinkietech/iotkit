@@ -19,7 +19,7 @@ pub fn frame_to_event(
     match frame {
         BravePiFrame::Sensor(s) => {
             let sensor_type = sensor_type_from_bravepi_raw(s.sensor_type_raw);
-            let device_key = DeviceKey(s.device_number.clone());
+            let device_key = DeviceKey::new(s.device_number.clone());
 
             let conn_info = BravepiConnection::Uart {
                 port: port_path.to_string(),
@@ -92,7 +92,7 @@ pub fn frame_to_event(
             reason,
         } => Some((
             AdapterEvent::AdapterError {
-                device_key: Some(DeviceKey(device_number)),
+                device_key: Some(DeviceKey::new(device_number)),
                 error: format!("Decode error (type={}): {}", sensor_type_raw, reason),
             },
             None,
