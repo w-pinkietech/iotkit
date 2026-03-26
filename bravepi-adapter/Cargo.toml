@@ -8,5 +8,5 @@ iotkit-core-types = { path = "../core/types" }
 rpi4b-transport = { path = "../rpi4b-driver/transport" }
 bravepi-codec = { path = "codec" }
 bravepi-sensors = { path = "sensors" }
-tokio = { version = "1", features = ["sync", "rt", "macros"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 tracing = "0.1"

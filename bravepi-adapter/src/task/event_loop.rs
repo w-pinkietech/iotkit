@@ -1,7 +1,7 @@
 //! async task: raw bytes → codec → AdapterEvent。
 //! デバイスのライフサイクル追跡もここで行う。
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use bravepi_codec::BravePiCodec;
 use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceKey};
@@ -9,6 +9,12 @@ use tokio::sync::mpsc;
 
 use crate::transport::BytesReceiver;
 use super::convert::frame_to_event;
+
+struct DeviceState {
+    /// Populated now; read by timeout-based DeviceLost logic (future sub-project).
+    #[allow(dead_code)]
+    last_seen: tokio::time::Instant,
+}
 
 pub(crate) async fn event_loop(
     port_path: String,
@@ -21,7 +27,7 @@ pub(crate) async fn event_loop(
     let mut codec = BravePiCodec::new();
     // デバイスのライフサイクル追跡。adapter task 終了時に解放される。
     // BravePI は物理的に固定台数のため、実運用で数十台規模に収まる。
-    let mut seen_devices: HashSet<DeviceKey> = HashSet::new();
+    let mut devices: HashMap<DeviceKey, DeviceState> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -42,21 +48,34 @@ pub(crate) async fn event_loop(
                         codec.feed(&data);
                         while let Some(frame) = codec.decode() {
                             if let Some((event, identity)) = frame_to_event(frame, &port_path) {
-                                // 初回デバイスは DeviceDiscovered を先に送信
                                 if let AdapterEvent::SensorData { ref device_key, .. } = event {
-                                    // seen_devices は identity の有無に関わらず記録する。
-                                    // adapter 再起動時にリセットされるため、DeviceDiscovered は再送信される（意図通り）。
-                                    if seen_devices.insert(device_key.clone()) {
-                                        if let Some(identity) = identity {
-                                            let discovered = AdapterEvent::DeviceDiscovered {
-                                                device_key: device_key.clone(),
-                                                identity,
-                                            };
-                                            if event_tx.send(discovered).await.is_err() {
-                                                tracing::warn!("Event channel closed, shutting down");
-                                                return;
+                                    if !devices.contains_key(device_key) {
+                                        match identity {
+                                            Some(identity) => {
+                                                let discovered = AdapterEvent::DeviceDiscovered {
+                                                    device_key: device_key.clone(),
+                                                    identity,
+                                                };
+                                                if event_tx.send(discovered).await.is_err() {
+                                                    tracing::warn!("Event channel closed, shutting down");
+                                                    return;
+                                                }
+                                                devices.insert(
+                                                    device_key.clone(),
+                                                    DeviceState { last_seen: tokio::time::Instant::now() },
+                                                );
+                                            }
+                                            None => {
+                                                tracing::warn!(
+                                                    device_key = %device_key,
+                                                    "New device without identity, skipping"
+                                                );
+                                                continue;
                                             }
                                         }
+                                    } else {
+                                        devices.get_mut(device_key).unwrap().last_seen =
+                                            tokio::time::Instant::now();
                                     }
                                 }
 

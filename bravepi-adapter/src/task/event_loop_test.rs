@@ -89,7 +89,7 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
 
     match event_rx.recv().await.expect("should receive DeviceDiscovered") {
         AdapterEvent::DeviceDiscovered { device_key, identity } => {
-            assert_eq!(device_key.as_str(), "246880020140018b");
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
             assert_eq!(identity.manufacturer, "Braveridge");
             assert_eq!(identity.ic_part_number, "MCP9600");
         }
@@ -98,7 +98,7 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
 
     match event_rx.recv().await.expect("should receive SensorData") {
         AdapterEvent::SensorData { device_key, reading, .. } => {
-            assert_eq!(device_key.as_str(), "246880020140018b");
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
             assert_eq!(reading.sensor_type, SensorType::Temperature);
             assert!((reading.values[0] - 22.4375).abs() < 0.01);
         }
