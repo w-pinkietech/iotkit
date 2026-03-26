@@ -8,13 +8,36 @@
 - ESP32 対応を見据え、no_std 互換のコア層を設ける
 - 全操作は API 経由 (UI・CLI・外部連携は同一 API を叩く)
 
+### Adapter-Core 境界設計
+
+adapter と core は **mpsc channel** で通信する。adapter は独立 async task として動作し、core の内部を知らない。core も adapter の内部を知らない。
+
+```
+Core ←── AdapterEvent (mpsc) ←── bravepi-adapter (async task)
+Core ──→ AdapterCommand (mpsc) ──→   codec + sensors 内蔵
+                                      transport 直接利用
+
+Core ←── AdapterEvent (mpsc) ←── bravejig-adapter (async task)
+Core ──→ AdapterCommand (mpsc) ──→   codec + sensors 内蔵
+                                      transport 直接利用
+```
+
+- **AdapterEvent** (adapter → core): SensorData, DeviceDiscovered, DeviceLost, DeviceConfig, AdapterError
+- **AdapterCommand** (core → adapter): RequestReading, QueryConfig, DeviceCommand, Shutdown
+- **AdapterFactory trait**: 各 adapter crate が実装。起動時に channel ペア (AdapterHandle) を返す
+- **sensor crate は adapter 内に残す**: BravePI/BraveJIG は閉じたハードウェアエコシステム。専用コネクタにより他社センサーは物理的に接続不可。汎用 sensor crate は不要
+- **Transport/Protocol trait は段階的に固める**: PoC で検証してから抽象を確定。先に完璧な trait を設計しない
+
 ## 2. Tech Stack
+
+> **注記**: 以下は現時点の第一候補。PoC での検証を経て確定する。比較対象として常に候補に残す。
 
 ### Backend
 
 - **Language**: Rust (stable)
 - **HTTP**: axum (tokio ベース、軽量)
 - **Async**: tokio (RPi) / embassy (ESP32、将来)
+  - tokio::sync::mpsc を adapter-core 間通信の基盤として使用
 - **Serial/HW**: serialport + rppal (GPIO/I2C)
 - **MQTT Client**: rumqttc (TLS 対応)
 - **Script Engine**: Lua (mlua crate) — トランスフォーム用
@@ -71,7 +94,7 @@
 - `protocol`: enum (bravepi, bravejig, modbus_rtu, modbus_tcp, mqtt, http, raw, ...)
   - `protocol_config`: JSON — {device_number, unit_id, register_map, ...}
 
-Rust 側:
+Rust 側の trait 定義は段階的に固める (§1 参照)。最終的な目標:
 - `trait Transport { send/recv }` — 物理層
 - `trait Protocol { encode_command / decode_response }` — 論理層
 - 新プロトコル追加 = trait 実装のみ、テーブル変更不要
@@ -95,17 +118,17 @@ Rust 側:
 
 レガシーでは BravePI/BraveJIG のプロトコル詳細がコア全体に浸透していた (Design Defect D3-2)。
 
-**Remake**: コアシステムは Transport/Protocol trait のみを知る。
+**Remake**: コアシステムは AdapterEvent/AdapterCommand のみを知る。
 BravePI/BraveJIG は独立したアダプター crate として実装。
 コアのコード・型定義・DB スキーマに BravePI/BraveJIG 固有の記述を含めない。
 
 ```
 コアシステム (BravePI/BraveJIG を知らない)
-  │ trait 境界
+  │ AdapterEvent / AdapterCommand (mpsc channel)
   ▼
-アダプター層 (独立 crate)
-  ├── bravepi_adapter: impl Transport + Protocol
-  └── bravejig_adapter: impl Transport + Protocol
+アダプター層 (独立 crate、独立 async task)
+  ├── bravepi-adapter: codec + sensors + transport を内蔵
+  └── bravejig-adapter: codec + sensors + transport を内蔵
 ```
 
 初回リリースで BravePI/BraveJIG アダプターは提供するが、コアとは完全分離。
@@ -218,58 +241,87 @@ illuminance  = "builtin/passthrough"
 
 ## 6. Reimplementation Scope
 
-全 11 モジュール実装。
+### モジュール構成
 
 | Module | Scope |
 |--------|-------|
-| core-domain | デバイスモデル (2層 transport/protocol, 3層 ID)、projection 型、Transform trait |
-| api-service | 全操作対応 HTTP API。UI・CLI・外部連携の統一エントリポイント |
-| sensor-ingest | I2C/GPIO ポーリング、データ正規化、Transform レジストリ適用 |
-| provider-adapter | trait Transport + Protocol の実装群。bravepi/bravejig は独立 crate |
+| core-domain | デバイスモデル (2層 transport/protocol, 3層 ID)、AdapterEvent/AdapterCommand 定義、AdapterFactory trait、Transform trait |
+| bravepi-adapter | BravePI 固有の adapter crate。codec + sensors + transport を内蔵。独立 async task として動作 |
+| bravejig-adapter | BraveJIG 固有の adapter crate。codec + sensors + transport を内蔵。独立 async task として動作。現場未使用のため後回しの可能性あり |
 | device-command-orchestrator | コマンドライフサイクル (busy/timeout/retry/ACK) |
 | device-config-service | CRUD + Repository trait + read-model rebuild |
 | timeseries-service | SQLite 時系列テーブル + クエリ集計 + データ保持/パージ |
 | notification-service | MQTT パブリッシュ + email 通知 (外部ブローカー接続) |
+| api-service | 全操作対応 HTTP API。UI・CLI・外部連携の統一エントリポイント |
 | ui-web | 全画面 (Vanilla JS)、transform 後の値でリアルタイム + 履歴チャート |
 | ops-service | 時刻同期、再起動、カメラ、ストレージ |
 | deployment | SQLite スキーマ init + migration + systemd unit |
 | iotkit-cli | AI agent friendly CLI。全 API 操作対応、JSON デフォルト |
 
+### 旧 plan からの変更
+
+- **provider-adapter を廃止**: 共通 Transport/Protocol trait の独立モジュールではなく、各 adapter が transport を直接利用。共通 trait は段階的に抽出
+- **sensor-ingest を廃止**: sensor は adapter 内に閉じる。core 側のイベントループ (AdapterEvent の受信・振り分け) は core-domain またはサービス層で担う
+- **bravepi-adapter / bravejig-adapter を明示的なモジュールとして追加**: それぞれ codec + sensors + transport を内蔵する独立 crate
+
 ## 7. Quality Criteria
 
+### 最終目標
+
 - テストカバレッジ: 80%+ 全体
-  - core-domain, provider-adapter, device-config-service: 90%+
+  - core-domain, adapter crates, device-config-service: 90%+
   - ui-web, ops-service: 70%+ 許容
 - レガシー等価テスト: HTTP API / プロトコル互換性テスト
 - CI: cargo test + clippy + fmt
 - パフォーマンス: RPi4B 起動 5秒以内、メモリ 100MB 以下
 
+### Phase ごとの検証基準
+
+- **Phase 1 (channel PoC)**: adapter → core の AdapterEvent 送受信が動作。既存 codec テストが引き続きパス
+- **Phase 2 (サービス接続)**: センサーデータが adapter → core → 下流サービス (時系列 or MQTT) に一気通貫で到達
+- **Phase 3 (BraveJIG)**: 2つ目の adapter 追加時に core 側コードの変更が不要 (trait 汎用性の検証)。現場未使用のため後回しの可能性あり
+
 ## 8. Migration Strategy
 
 - **ビッグバン切替** — 全モジュール完成後に一括切替
+- 段階的な現場切替は不可能。PoC で検証を進めつつ、本番投入は一括
 - MariaDB → SQLite 変換スクリプト (スキーマ再設計に対応)
 - InfluxDB → SQLite 時系列テーブルへのデータ移行
 - 切替手順書を deployment モジュールに含める
 
 ## 9. Implementation Order
 
-1. **WS1**: core-domain — 基盤型定義 (2層/3層モデル、Transform trait)
+### 段階的検証 (Phase 1-3)
+
+全体の WS 順序に先立ち、adapter-core 境界の設計を PoC で検証する。
+
+1. **Phase 1: Channel PoC** — BravePI adapter を async task 化、AdapterEvent/AdapterCommand + mpsc channel で core に push。core は受信して表示するだけの最小ループ
+2. **Phase 2: サービス接続** — core 側に時系列保存 or MQTT publish を1つ接続。一気通貫の検証
+3. **Phase 3: BraveJIG (後回し可)** — 2つ目の adapter で AdapterFactory trait の汎用性を検証。現場で BraveJIG が使われていないため優先度を下げる可能性あり
+
+### 本実装 Workstream (Phase 検証後に見直し)
+
+Phase 1-3 の結果を踏まえて順序・粒度を見直す。現時点の暫定順序:
+
+1. **WS1**: core-domain — 基盤型定義、AdapterEvent/AdapterCommand、AdapterFactory trait
 2. **WS2**: device-config-service + deployment — 永続化層、スキーマ、マイグレーション
-3. **WS3**: provider-adapter + sensor-ingest — Transport/Protocol trait 実装、BravePI/BraveJIG アダプター
+3. **WS3**: bravepi-adapter — BravePI adapter 本実装 (Phase 1 の PoC をベースに)
 4. **WS4**: device-command-orchestrator — コマンドライフサイクル
 5. **WS5**: timeseries-service + notification-service — 時系列保存、MQTT/email 通知
 6. **WS6**: api-service — 全操作対応 HTTP API
 7. **WS7**: ui-web — フロントエンド (transform 後チャート含む)
 8. **WS8**: ops-service + iotkit-cli — 運用機能 + CLI ツール
+9. **WS9 (後回し可)**: bravejig-adapter — BraveJIG adapter (現場の需要次第)
 
 ## 10. ESP32 Portability Strategy
 
-- core-domain, provider-adapter は no_std 互換で設計
+- core-domain は no_std 互換で設計 (AdapterEvent/AdapterCommand のデータ型は std 非依存)
 - Repository trait で永続化抽象化 (SQLite / NVS)
-- Transport/Protocol trait は ESP32 でもそのまま使用
+- Transport/Protocol trait は段階的に固めるが、ESP32 でも使える形を目指す
 - Transform (Lua) は ESP32 でも動作可能
 - axum → embassy-net への HTTP 抽象化
 - tokio 依存は RPi 専用クレートに隔離
+- channel は tokio::sync::mpsc (RPi) / embassy_sync::Channel (ESP32) で差し替え
 
 ## 11. Directory Structure
 
@@ -279,14 +331,18 @@ illuminance  = "builtin/passthrough"
 iotkit-next/
 ├── Cargo.toml              # workspace root
 ├── core/
-│   └── core-domain/        # エンティティ層: ドメインモデル、trait 定義
+│   └── core-domain/        # エンティティ層: ドメインモデル、AdapterEvent/Command、trait 定義
 ├── adapters/
-│   ├── provider-adapter/   # Transport/Protocol trait の共通ユーティリティ
-│   ├── bravepi-adapter/    # BravePI 固有の impl (独立 crate)
-│   └── bravejig-adapter/   # BraveJIG 固有の impl (独立 crate)
+│   ├── bravepi-adapter/    # BravePI adapter (独立 crate)
+│   │   ├── codec/          # UART フレーム codec
+│   │   └── sensors/        # センサー IC ドライバー群
+│   └── bravejig-adapter/   # BraveJIG adapter (独立 crate、後回し可)
+│       ├── codec/
+│       └── sensors/
+├── drivers/
+│   └── rpi4b-driver/       # RPi4B 固有の transport (serial, i2c, gpio)
 ├── services/
 │   ├── api-service/        # HTTP ハンドラー、ルーティング
-│   ├── sensor-ingest/      # センサーデータ収集・正規化
 │   ├── device-config/      # デバイス CRUD、read-model
 │   ├── device-command/     # コマンドライフサイクル
 │   ├── timeseries/         # 時系列保存・クエリ
@@ -330,13 +386,14 @@ mod.rs は使用しない (ファイル名 = モジュール名)。
 │  axum, clap, rumqttc, serialport, rusqlite   │
 ├─────────────────────────────────────────────┤
 │  adapters/ (インターフェースアダプター層)        │
-│  bravepi/bravejig impl, SQLite Repository    │
+│  bravepi/bravejig adapter (async task)       │
 ├─────────────────────────────────────────────┤
 │  services/ (ユースケース層)                    │
 │  アプリケーション固有のビジネスルール            │
 ├─────────────────────────────────────────────┤
 │  core/ (エンティティ層)                        │
-│  ドメインモデル, trait 定義, 外部依存ゼロ       │
+│  ドメインモデル, AdapterEvent/Command,         │
+│  trait 定義, 外部依存ゼロ                      │
 └─────────────────────────────────────────────┘
 ```
 
@@ -344,7 +401,7 @@ mod.rs は使用しない (ファイル名 = モジュール名)。
 
 - `core/` は `std` 以外の外部 crate に依存しない (`serde` のみ例外許容)
 - `services/` は `core/` の trait にのみ依存。`adapters/` や `apps/` を import しない
-- `adapters/` は `core/` の trait を実装。`services/` を import しない
+- `adapters/` は `core/` の型 (AdapterEvent/Command) を使い、transport を直接利用
 - `apps/` が DI コンテナとして全層を結合
 - 層をまたぐ逆方向の依存は **コンパイルエラー** で検出
 
@@ -355,7 +412,7 @@ mod.rs は使用しない (ファイル名 = モジュール名)。
 | 対象 | スタイル | 例 |
 |------|---------|-----|
 | 型名 | PascalCase | `Device`, `SensorReading` |
-| trait 名 | PascalCase | `DeviceRepository`, `Transport` |
+| trait 名 | PascalCase | `DeviceRepository`, `AdapterFactory` |
 | 関数/メソッド | snake_case | `find_by_id`, `encode_command` |
 | 変数 | snake_case | `device_name`, `sensor_id` |
 | 定数 | SCREAMING_SNAKE_CASE | `MAX_RETRY_COUNT`, `DEFAULT_TIMEOUT_MS` |

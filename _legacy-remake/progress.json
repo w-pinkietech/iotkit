@@ -2,8 +2,8 @@
   "gates": {
     "onboarding": true,
     "structural_analysis": true,
-    "remake_planning": false
+    "remake_planning": true
   },
   "modules": {},
-  "updated_at": "2026-03-25"
+  "updated_at": "2026-03-26"
 }
