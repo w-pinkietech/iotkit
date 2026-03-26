@@ -259,6 +259,9 @@ fn temperature_frame_returns_identity() {
     assert_eq!(identity.manufacturer, "Braveridge");
     assert_eq!(identity.ic_part_number, "MCP9600");
     assert_eq!(identity.sensor_type, SensorType::Temperature);
+    assert_eq!(identity.connection.kind, iotkit_core_types::ConnectionKind::Uart);
+    assert_eq!(identity.connection.parameters.get("port").unwrap(), "/dev/ttyAMA0");
+    assert_eq!(identity.connection.parameters.get("transmitter_id").unwrap(), "246880020140018b");
 }
 
 #[test]

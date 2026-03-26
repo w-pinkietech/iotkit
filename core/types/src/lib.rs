@@ -125,7 +125,7 @@ impl fmt::Display for DeviceKey {
 }
 
 /// adapter → core へ送信するイベント。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AdapterEvent {
     /// センサーデータ受信。
     SensorData {
@@ -155,7 +155,7 @@ pub enum AdapterEvent {
 }
 
 /// core → adapter へ送信するコマンド。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AdapterCommand {
     /// シャットダウン要求。
     Shutdown,
