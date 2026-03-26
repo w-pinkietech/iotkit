@@ -1,7 +1,3 @@
-[workspace]
-members = ["codec", "sensors", "poc"]
-resolver = "3"
-
 [package]
 name = "bravepi-adapter"
 version = "0.1.0"
@@ -10,3 +6,7 @@ edition = "2024"
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
 rpi4b-transport = { path = "../rpi4b-driver/transport" }
+bravepi-codec = { path = "codec" }
+bravepi-sensors = { path = "sensors" }
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+tracing = "0.1"

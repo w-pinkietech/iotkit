@@ -101,3 +101,62 @@ impl SensorReading {
         Self { sensor_type, values: vec![] }
     }
 }
+
+// ── Adapter-Core 境界型 ──────────────────────────────────
+
+/// adapter の一意識別子。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AdapterId(pub String);
+
+/// デバイスの一意キー。adapter 内で一意であればよい。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeviceKey(pub String);
+
+impl fmt::Display for AdapterId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for DeviceKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// adapter → core へ送信するイベント。
+#[derive(Debug, Clone)]
+pub enum AdapterEvent {
+    /// センサーデータ受信。
+    SensorData {
+        device_key: DeviceKey,
+        reading: SensorReading,
+        rssi: Option<i16>,
+        battery_pct: Option<u8>,
+    },
+
+    /// 新しいデバイスを発見。
+    DeviceDiscovered {
+        device_key: DeviceKey,
+        identity: SensorIdentity,
+    },
+
+    /// デバイスがロスト。
+    DeviceLost {
+        device_key: DeviceKey,
+        reason: String,
+    },
+
+    /// adapter 内部エラー。
+    AdapterError {
+        device_key: Option<DeviceKey>,
+        error: String,
+    },
+}
+
+/// core → adapter へ送信するコマンド。
+#[derive(Debug, Clone)]
+pub enum AdapterCommand {
+    /// シャットダウン要求。
+    Shutdown,
+}
