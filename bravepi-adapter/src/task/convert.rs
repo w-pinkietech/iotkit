@@ -1,7 +1,7 @@
 //! BravePiFrame → AdapterEvent 変換。純粋関数、状態なし。
 
 use iotkit_core_types::{
-    AdapterEvent, DeviceKey, SensorIdentity, SensorReading, SensorType,
+    AdapterEvent, ConnectionInfo, DeviceKey, SensorIdentity, SensorReading, SensorType,
 };
 
 use bravepi_codec::BravePiFrame;
@@ -70,7 +70,10 @@ pub(crate) fn frame_to_event(
                         .take(s.data_count as usize)
                         .map(|&b| if b != 0 { 1.0 } else { 0.0 })
                         .collect();
-                    (SensorReading::new(sensor_type.clone(), values, vec![]), None)
+                    (
+                        SensorReading::new(sensor_type.clone(), values, vec![]),
+                        Some(contact_identity(&sensor_type, conn_info)),
+                    )
                 }
                 SensorType::Unknown(_) => unreachable!("Unknown filtered by device_key_suffix"),
             };
@@ -111,6 +114,19 @@ pub(crate) fn frame_to_event(
                 None,
             ))
         }
+    }
+}
+
+fn contact_identity(sensor_type: &SensorType, conn_info: ConnectionInfo) -> SensorIdentity {
+    SensorIdentity {
+        manufacturer: "Braveridge".to_string(),
+        ic_part_number: match sensor_type {
+            SensorType::ContactInput => "Contact Input Module".to_string(),
+            SensorType::ContactOutput => "Contact Output Module".to_string(),
+            _ => unreachable!("contact_identity called with non-contact sensor type"),
+        },
+        sensor_type: sensor_type.clone(),
+        connection: conn_info,
     }
 }
 

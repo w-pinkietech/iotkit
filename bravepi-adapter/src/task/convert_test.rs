@@ -256,7 +256,7 @@ fn temperature_frame_returns_identity() {
 }
 
 #[test]
-fn contact_input_has_no_identity() {
+fn contact_input_has_module_identity() {
     let frame = BravePiFrame::Sensor(SensorFrame {
         device_number: "test".to_string(),
         sensor_type_raw: 257,
@@ -266,7 +266,31 @@ fn contact_input_has_no_identity() {
         value_data: vec![0x01],
     });
     let (_event, identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
-    assert!(identity.is_none());
+
+    let identity = identity.expect("contact_input should have identity");
+    assert_eq!(identity.manufacturer, "Braveridge");
+    assert_eq!(identity.ic_part_number, "Contact Input Module");
+    assert_eq!(identity.sensor_type, SensorType::ContactInput);
+    assert_eq!(identity.connection.kind, iotkit_core_types::ConnectionKind::Uart);
+    assert_eq!(identity.connection.parameters.get("transmitter_id").unwrap(), "test");
+}
+
+#[test]
+fn contact_output_has_module_identity() {
+    let frame = BravePiFrame::Sensor(SensorFrame {
+        device_number: "1234567890abcdef".to_string(),
+        sensor_type_raw: 258,
+        rssi: -70,
+        battery: 100,
+        data_count: 1,
+        value_data: vec![0x01],
+    });
+    let (_event, identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
+
+    let identity = identity.expect("contact_output should have identity");
+    assert_eq!(identity.manufacturer, "Braveridge");
+    assert_eq!(identity.ic_part_number, "Contact Output Module");
+    assert_eq!(identity.sensor_type, SensorType::ContactOutput);
 }
 
 // ── DecodeError "unknown" → device_key: None ────
