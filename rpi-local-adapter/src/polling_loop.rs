@@ -194,6 +194,13 @@ pub(crate) async fn polling_loop(
     let mut interval = tokio::time::interval_at(start, period);
 
     loop {
+        // Check if the event consumer has been dropped, even if no events
+        // were produced in the last cycle (e.g., all targets Pending/ProbeFailed).
+        if event_tx.is_closed() {
+            tracing::warn!("Event channel closed, exiting poll loop");
+            return;
+        }
+
         tokio::select! {
             cmd = command_rx.recv() => {
                 match cmd {
@@ -468,6 +475,24 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(2), handle)
             .await
             .expect("polling_loop should exit when event channel is closed")
+            .expect("polling_loop should not panic");
+    }
+
+    #[tokio::test]
+    async fn event_channel_close_detected_without_events() {
+        // With empty targets, no events are produced per cycle.
+        // The loop should still detect the closed channel via is_closed() check.
+        let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(16);
+        let (_command_tx, command_rx) = mpsc::channel::<AdapterCommand>(16);
+
+        let handle = tokio::spawn(polling_loop(empty_config(), event_tx, command_rx));
+
+        // Drop event_rx — no DeviceCommand needed to trigger detection.
+        drop(event_rx);
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("polling_loop should exit when event channel is closed (no-event path)")
             .expect("polling_loop should not panic");
     }
 }

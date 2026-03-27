@@ -61,7 +61,7 @@ async fn run(port_path: String) {
     // RPi local adapter is optional: disabled by default, enable with RPI_LOCAL_ENABLED=1.
     // This avoids perpetual probe-failure warnings on hosts without I2C sensors.
     let rpi_local_enabled = std::env::var("RPI_LOCAL_ENABLED")
-        .map(|v| v == "1" || v == "true")
+        .map(|v| v == "1")
         .unwrap_or(false);
 
     let mut rpi_local = if rpi_local_enabled {
