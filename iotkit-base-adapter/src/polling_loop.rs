@@ -189,6 +189,42 @@ pub(crate) fn apply_outcomes(
     events
 }
 
+// ── poll_cycle ───────────────────────────────────────────
+
+pub(crate) fn poll_cycle(
+    targets: &[TargetRuntime],
+    states: &[TargetState],
+    bus_path: &str,
+) -> Vec<PollOutcome> {
+    let mut outcomes = Vec::new();
+    for (i, target) in targets.iter().enumerate() {
+        match &states[i] {
+            TargetState::Pending { .. } => {
+                match target.driver.probe(bus_path, target.address) {
+                    Ok(identity) => {
+                        let key = device_key_for(target.address, &target.key_suffix);
+                        outcomes.push(PollOutcome::Discovered { target_index: i, key, identity });
+                    }
+                    Err(msg) => {
+                        outcomes.push(PollOutcome::ProbeFailed { target_index: i, message: msg });
+                    }
+                }
+            }
+            TargetState::Active { key, .. } => {
+                match target.driver.read(bus_path, target.address) {
+                    Ok(reading) => {
+                        outcomes.push(PollOutcome::Reading { key: key.clone(), reading });
+                    }
+                    Err(msg) => {
+                        outcomes.push(PollOutcome::ReadError { target_index: i, key: key.clone(), message: msg });
+                    }
+                }
+            }
+        }
+    }
+    outcomes
+}
+
 // ── Stub polling loop ────────────────────────────────────
 
 /// Stub polling loop. Will be fleshed out in a later task.
@@ -215,7 +251,166 @@ mod tests {
     use iotkit_core_types::{
         ConnectionInfo, ConnectionKind, SensorIdentity, SensorReading, SensorType,
     };
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
+
+    // ── MockDriver ───────────────────────────────────────
+
+    struct MockDriver {
+        name: &'static str,
+        probe_results: std::sync::Mutex<VecDeque<Result<SensorIdentity, String>>>,
+        read_results: std::sync::Mutex<VecDeque<Result<SensorReading, String>>>,
+    }
+
+    impl MockDriver {
+        fn new(
+            name: &'static str,
+            probe_results: Vec<Result<SensorIdentity, String>>,
+            read_results: Vec<Result<SensorReading, String>>,
+        ) -> Self {
+            MockDriver {
+                name,
+                probe_results: std::sync::Mutex::new(VecDeque::from(probe_results)),
+                read_results: std::sync::Mutex::new(VecDeque::from(read_results)),
+            }
+        }
+    }
+
+    impl SensorDriver for MockDriver {
+        fn probe(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+            self.probe_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| panic!("no more probe results for {}", self.name))
+        }
+        fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
+            self.read_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| panic!("no more read results for {}", self.name))
+        }
+        fn ic_name(&self) -> &'static str {
+            self.name
+        }
+    }
+
+    fn make_mock_target(
+        address: u8,
+        suffix: &str,
+        probe_results: Vec<Result<SensorIdentity, String>>,
+        read_results: Vec<Result<SensorReading, String>>,
+    ) -> TargetRuntime {
+        TargetRuntime {
+            address,
+            driver: Arc::new(MockDriver::new("MOCK", probe_results, read_results)),
+            key_suffix: suffix.to_string(),
+        }
+    }
+
+    // ── poll_cycle tests ─────────────────────────────────
+
+    #[test]
+    fn pending_target_probe_success() {
+        let identity = make_identity();
+        let targets = vec![make_mock_target(
+            0x40,
+            "temperature",
+            vec![Ok(identity.clone())],
+            vec![],
+        )];
+        let states = vec![TargetState::new_pending()];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::Discovered { target_index, key, identity: id } => {
+                assert_eq!(*target_index, 0);
+                assert_eq!(key.as_str(), "i2c:0x40:temperature");
+                assert_eq!(id.ic_part_number, identity.ic_part_number);
+            }
+            _ => panic!("expected Discovered"),
+        }
+    }
+
+    #[test]
+    fn pending_target_probe_failure() {
+        let targets = vec![make_mock_target(
+            0x40,
+            "temperature",
+            vec![Err("NACK".into())],
+            vec![],
+        )];
+        let states = vec![TargetState::new_pending()];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::ProbeFailed { target_index, message } => {
+                assert_eq!(*target_index, 0);
+                assert_eq!(message, "NACK");
+            }
+            _ => panic!("expected ProbeFailed"),
+        }
+    }
+
+    #[test]
+    fn active_target_read_success() {
+        let reading = make_reading();
+        let key = device_key_for(0x40, "temperature");
+        let targets = vec![make_mock_target(
+            0x40,
+            "temperature",
+            vec![],
+            vec![Ok(reading.clone())],
+        )];
+        let states = vec![TargetState::Active {
+            key: key.clone(),
+            consecutive_read_failures: 0,
+        }];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::Reading { key: k, reading: r } => {
+                assert_eq!(k.as_str(), "i2c:0x40:temperature");
+                assert_eq!(r.values, reading.values);
+            }
+            _ => panic!("expected Reading"),
+        }
+    }
+
+    #[test]
+    fn active_target_read_failure() {
+        let key = device_key_for(0x40, "temperature");
+        let targets = vec![make_mock_target(
+            0x40,
+            "temperature",
+            vec![],
+            vec![Err("i/o timeout".into())],
+        )];
+        let states = vec![TargetState::Active {
+            key: key.clone(),
+            consecutive_read_failures: 0,
+        }];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::ReadError { target_index, key: k, message } => {
+                assert_eq!(*target_index, 0);
+                assert_eq!(k.as_str(), "i2c:0x40:temperature");
+                assert_eq!(message, "i/o timeout");
+            }
+            _ => panic!("expected ReadError"),
+        }
+    }
+
+    // ── apply_outcomes tests ─────────────────────────────
 
     /// Minimal no-op driver for tests (apply_outcomes never calls driver methods).
     struct StubDriver;
