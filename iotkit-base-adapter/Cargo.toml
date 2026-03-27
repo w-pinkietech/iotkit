@@ -1,0 +1,12 @@
+[package]
+name = "iotkit-base-adapter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iotkit-core-types = { path = "../core/types" }
+tokio = { version = "1", features = ["rt", "sync", "macros", "fs"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "sync", "macros", "fs", "rt-multi-thread"] }

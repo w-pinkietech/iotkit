@@ -9,5 +9,6 @@ members = [
     "bravepi-mainboard-adapter/poc",
     "rpi-local-adapter",
     "iotkit-gateway",
+    "iotkit-base-adapter",
 ]
 resolver = "3"

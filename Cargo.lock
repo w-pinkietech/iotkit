@@ -124,6 +124,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-base-adapter"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "iotkit-core-engine"
 version = "0.1.0"
 dependencies = [
