@@ -1,3 +1,1 @@
-[workspace]
-members = ["transport"]
-resolver = "3"
+# rpi4b-driver: workspace はトップレベル Cargo.toml に統合済み

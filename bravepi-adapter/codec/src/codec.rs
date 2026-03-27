@@ -2,7 +2,7 @@
 //! フレームをバイト列から分解するだけ。sensor の知識は持たない。
 
 /// デコード済みフレーム。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BravePiFrame {
     /// センサーデータ (sensor_type != 0)
     Sensor(SensorFrame),
@@ -17,7 +17,7 @@ pub enum BravePiFrame {
 }
 
 /// センサーデータフレーム。値の解釈は呼び出し元の責務。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SensorFrame {
     pub device_number: String,
     pub sensor_type_raw: u16,
@@ -28,7 +28,7 @@ pub struct SensorFrame {
 }
 
 /// 設定レスポンスフレーム。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigFrame {
     pub device_number: String,
     pub rssi: i8,
@@ -42,7 +42,7 @@ pub struct ConfigFrame {
 }
 
 /// Downlink コマンド。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DownlinkCommand {
     ImmediateUplink { sensor_type: u16 },
     ParameterGet,
@@ -55,6 +55,7 @@ pub enum DownlinkCommand {
 
 const POST_LENGTH_HEADER: usize = 12;
 const HEADER_SIZE: usize = 2 + POST_LENGTH_HEADER;
+const MAX_FRAME_SIZE: usize = 4096;
 
 pub struct BravePiCodec {
     buf: Vec<u8>,
@@ -89,6 +90,20 @@ impl BravePiCodec {
             let payload_len = u16::from_le_bytes([self.buf[0], self.buf[1]]) as usize;
             let frame_len = 2 + POST_LENGTH_HEADER + payload_len;
 
+            // フレームサイズ上限チェック
+            if frame_len > MAX_FRAME_SIZE {
+                self.buf.clear();
+                self.continuation = None;
+                return Some(BravePiFrame::DecodeError {
+                    device_number: "unknown".to_string(),
+                    sensor_type_raw: 0,
+                    reason: format!(
+                        "frame size exceeds maximum: {} > {}",
+                        frame_len, MAX_FRAME_SIZE
+                    ),
+                });
+            }
+
             if self.buf.len() < frame_len {
                 return None;
             }
@@ -109,7 +124,21 @@ impl BravePiCodec {
 
             if flag == 1 {
                 match &mut self.continuation {
-                    Some(cont) => cont.payload.extend_from_slice(payload),
+                    Some(cont) => {
+                        cont.payload.extend_from_slice(payload);
+                        // 継続ペイロードの累積サイズも上限チェック
+                        if cont.payload.len() > MAX_FRAME_SIZE {
+                            let cont = self.continuation.take().unwrap();
+                            return Some(BravePiFrame::DecodeError {
+                                device_number: cont.device_number,
+                                sensor_type_raw: cont.sensor_type_raw,
+                                reason: format!(
+                                    "continuation payload exceeds maximum: {} > {}",
+                                    cont.payload.len(), MAX_FRAME_SIZE
+                                ),
+                            });
+                        }
+                    }
                     None => {
                         self.continuation = Some(ContinuationState {
                             device_number,
@@ -125,6 +154,17 @@ impl BravePiCodec {
             let (device_number, sensor_type_raw, rssi, full_payload) =
                 if let Some(mut cont) = self.continuation.take() {
                     cont.payload.extend_from_slice(payload);
+                    // 終端フレーム結合後も累積サイズを検証
+                    if cont.payload.len() > MAX_FRAME_SIZE {
+                        return Some(BravePiFrame::DecodeError {
+                            device_number: cont.device_number,
+                            sensor_type_raw: cont.sensor_type_raw,
+                            reason: format!(
+                                "continuation payload exceeds maximum: {} > {}",
+                                cont.payload.len(), MAX_FRAME_SIZE
+                            ),
+                        });
+                    }
                     (cont.device_number, cont.sensor_type_raw, cont.rssi, cont.payload)
                 } else {
                     (device_number, sensor_type_raw, rssi, payload.to_vec())
@@ -138,8 +178,8 @@ impl BravePiCodec {
         }
     }
 
-    pub fn encode_downlink(device_number_hex: &str, cmd: &DownlinkCommand) -> Vec<u8> {
-        let device_bytes = Self::hex_to_device_bytes(device_number_hex);
+    pub fn encode_downlink(device_number_hex: &str, cmd: &DownlinkCommand) -> Result<Vec<u8>, String> {
+        let device_bytes = Self::hex_to_device_bytes(device_number_hex)?;
 
         let (opcode, cmd_data, sensor_type_bytes) = match cmd {
             DownlinkCommand::ImmediateUplink { sensor_type } => {
@@ -164,13 +204,19 @@ impl BravePiCodec {
         frame.push(opcode);
         frame.push(0x00);
         frame.extend_from_slice(&cmd_data);
-        frame
+        Ok(frame)
     }
 
-    fn hex_to_device_bytes(hex: &str) -> [u8; 8] {
-        let val = u64::from_str_radix(hex, 16).unwrap_or(0);
-        let le = val.to_le_bytes();
-        [le[7], le[6], le[5], le[4], le[3], le[2], le[1], le[0]]
+    fn hex_to_device_bytes(hex: &str) -> Result<[u8; 8], String> {
+        let val = u64::from_str_radix(hex, 16)
+            .map_err(|e| format!("Invalid device number hex '{}': {}", hex, e))?;
+        Ok(val.to_le_bytes())
+    }
+}
+
+impl Default for BravePiCodec {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

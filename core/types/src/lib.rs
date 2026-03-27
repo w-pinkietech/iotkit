@@ -90,14 +90,84 @@ pub struct SensorIdentity {
 pub struct SensorReading {
     pub sensor_type: SensorType,
     pub values: Vec<f64>,
+    pub labels: Vec<&'static str>,
 }
 
 impl SensorReading {
-    pub fn new(sensor_type: SensorType, values: Vec<f64>) -> Self {
-        Self { sensor_type, values }
+    pub fn new(sensor_type: SensorType, values: Vec<f64>, labels: Vec<&'static str>) -> Self {
+        Self { sensor_type, values, labels }
     }
 
     pub fn empty(sensor_type: SensorType) -> Self {
-        Self { sensor_type, values: vec![] }
+        Self { sensor_type, values: vec![], labels: vec![] }
     }
+}
+
+// ── Adapter-Core 境界型 ──────────────────────────────────
+
+/// adapter の一意識別子。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AdapterId(String);
+
+impl AdapterId {
+    pub fn new(id: impl Into<String>) -> Self { Self(id.into()) }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+/// デバイスの一意キー。adapter 内で一意であればよい。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeviceKey(String);
+
+impl DeviceKey {
+    pub fn new(key: impl Into<String>) -> Self { Self(key.into()) }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+impl fmt::Display for AdapterId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for DeviceKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// adapter → core へ送信するイベント。
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdapterEvent {
+    /// センサーデータ受信。
+    SensorData {
+        device_key: DeviceKey,
+        reading: SensorReading,
+        rssi: Option<i16>,
+        battery_pct: Option<u8>,
+    },
+
+    /// 新しいデバイスを発見。
+    DeviceDiscovered {
+        device_key: DeviceKey,
+        identity: SensorIdentity,
+    },
+
+    /// デバイスがロスト。
+    DeviceLost {
+        device_key: DeviceKey,
+        reason: String,
+    },
+
+    /// adapter 内部エラー。
+    AdapterError {
+        device_key: Option<DeviceKey>,
+        error: String,
+    },
+}
+
+/// core → adapter へ送信するコマンド。
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdapterCommand {
+    /// シャットダウン要求。
+    Shutdown,
 }

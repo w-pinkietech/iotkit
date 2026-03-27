@@ -3,7 +3,6 @@
 //! 入力ソース（I2C 生値 / UART BravePI フレーム）を問わず、
 //! 同じセンサー IC なら同じ SensorReading を返す。
 
-pub mod reading;
 pub mod opt3001;
 pub mod mcp9600;
 pub mod mcp3427;

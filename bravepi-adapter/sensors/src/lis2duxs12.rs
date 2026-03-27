@@ -41,7 +41,7 @@ pub fn from_i2c_raw(data: &[u8; 6]) -> SensorReading {
     let y = i16::from_le_bytes([data[2], data[3]]) as f64 * MG_SCALE;
     let z = i16::from_le_bytes([data[4], data[5]]) as f64 * MG_SCALE;
     let mag = magnitude(x, y, z);
-    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag])
+    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag], vec!["x_g", "y_g", "z_g", "magnitude_g"])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -54,7 +54,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let y = f32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64;
     let z = f32::from_le_bytes([data[8], data[9], data[10], data[11]]) as f64;
     let mag = magnitude(x, y, z);
-    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag])
+    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag], vec!["x_g", "y_g", "z_g", "magnitude_g"])
 }
 
 #[cfg(test)]

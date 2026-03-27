@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "core/types",
+    "rpi4b-driver/transport",
+    "bravepi-adapter",
+    "bravepi-adapter/codec",
+    "bravepi-adapter/sensors",
+    "bravepi-adapter/poc",
+]
+resolver = "3"

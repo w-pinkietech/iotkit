@@ -24,7 +24,7 @@ pub const I2C_ADDRESSES: [u8; 3] = [0x68, 0x6B, 0x6F];
 
 /// I2C 経由の電圧値（Volt）から mV に変換。2ch 分。
 pub fn from_i2c_volts(ch1_volt: f64, ch2_volt: f64) -> SensorReading {
-    SensorReading::new(sensor_type(), vec![ch1_volt * 1000.0, ch2_volt * 1000.0])
+    SensorReading::new(sensor_type(), vec![ch1_volt * 1000.0, ch2_volt * 1000.0], vec!["ch1_volt", "ch2_volt"])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -35,7 +35,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     }
     let ch1 = i16::from_le_bytes([data[0], data[1]]) as f64;
     let ch2 = i16::from_le_bytes([data[2], data[3]]) as f64;
-    SensorReading::new(sensor_type(), vec![ch1, ch2])
+    SensorReading::new(sensor_type(), vec![ch1, ch2], vec!["ch1_volt", "ch2_volt"])
 }
 
 #[cfg(test)]

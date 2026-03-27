@@ -1,5 +1,10 @@
 //! BravePI adapter — BravePI プロトコル固有の処理。
 //! rpi4b-driver の transport / sensors を使い、BravePI 特有のマッピングを行う。
+//!
+//! `task` モジュールで async task として起動し、AdapterEvent channel で core と通信する。
+
+pub mod task;
+pub(crate) mod transport;
 
 use std::collections::BTreeMap;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorType};
