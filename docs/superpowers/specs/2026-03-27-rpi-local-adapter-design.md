@@ -314,9 +314,9 @@ enum PollOutcome {
 | transport / task 内の非 target-specific error | `AdapterError { device_key: None, error }` |
 
 順序ルール:
-- 同一 cycle で Pending target が初回成功した場合、
-  `DeviceDiscovered` を先に送り、その後 `SensorData` または `AdapterError` を送る
-- `event_tx` が closed の場合は loop を抜ける
+- probe 成功時は `DeviceDiscovered` のみ送出し、first read は次の poll tick で行う
+  - OPT3001 等の single-shot sensor は init 後に conversion latency があるため
+- `event_tx` が closed の場合は loop を抜ける（`is_closed()` を loop 先頭でもチェック）
 
 state 更新と event 生成は pure に近い関数へ分離する。
 
@@ -499,7 +499,7 @@ loop {
 adapter startup policy:
 - `bravepi-mainboard-adapter` は required: start 失敗は fatal（既存動作を維持）
 - `rpi-local-adapter` は opt-in: `RPI_LOCAL_ENABLED=1` 環境変数で有効化する
-  - 有効時: start 失敗は warn、他 adapter で継続
+  - 有効時: start 失敗は fatal（config/runtime bug を見逃さないため）
   - 無効時（デフォルト）: adapter を起動しない
   - I2C センサー未接続のホストで永続的な probe 失敗 warn を避けるための措置
 
