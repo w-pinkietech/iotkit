@@ -498,7 +498,10 @@ loop {
 
 adapter startup policy:
 - `bravepi-mainboard-adapter` は required: start 失敗は fatal（既存動作を維持）
-- `rpi-local-adapter` は optional: start 失敗は warn、他 adapter で継続
+- `rpi-local-adapter` は opt-in: `RPI_LOCAL_ENABLED=1` 環境変数で有効化する
+  - 有効時: start 失敗は warn、他 adapter で継続
+  - 無効時（デフォルト）: adapter を起動しない
+  - I2C センサー未接続のホストで永続的な probe 失敗 warn を避けるための措置
 
 fan-in 終了条件:
 - 片方の adapter の `event_rx` が `None`（channel closed）になっても、

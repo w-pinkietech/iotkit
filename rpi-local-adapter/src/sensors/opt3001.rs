@@ -11,7 +11,7 @@ pub fn probe_opt3001(bus: &str, addr: u8) -> Result<SensorIdentity, String> {
 
     let mut id_buf = [0u8; 2];
     t.read_register(opt3001::REG_DEVICE_ID, &mut id_buf)
-        .map_err(|e| format!("read REG_DEVICE_ID: {}", e))?;
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: read REG_DEVICE_ID: {}", addr, bus, e))?;
 
     let device_id = u16::from_be_bytes(id_buf);
     if device_id != opt3001::DEVICE_ID {
@@ -25,7 +25,7 @@ pub fn probe_opt3001(bus: &str, addr: u8) -> Result<SensorIdentity, String> {
     // Our raw transport needs explicit LE byte order to match.
     let config_bytes = opt3001::INIT_CONFIG.to_le_bytes();
     t.write_register(opt3001::REG_CONFIG, &config_bytes)
-        .map_err(|e| format!("write REG_CONFIG: {}", e))?;
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: write REG_CONFIG: {}", addr, bus, e))?;
 
     let connection = ConnectionInfo {
         kind: ConnectionKind::I2c,
@@ -43,7 +43,7 @@ pub fn read_opt3001(bus: &str, addr: u8) -> Result<SensorReading, String> {
 
     let mut raw = [0u8; 2];
     t.read_register(opt3001::REG_RESULT, &mut raw)
-        .map_err(|e| format!("read REG_RESULT: {}", e))?;
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: read REG_RESULT: {}", addr, bus, e))?;
 
     // Normalize to SMBus byte-swapped u16 for existing parser.
     let swapped = u16::from_le_bytes(raw);

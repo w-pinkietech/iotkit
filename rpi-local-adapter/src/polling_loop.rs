@@ -203,14 +203,13 @@ pub(crate) async fn polling_loop(
                         return;
                     }
                     Some(AdapterCommand::DeviceCommand(dev_cmd)) => {
-                        // Only report with device_key if we own that device.
-                        let known = states.iter().any(|s| {
-                            matches!(s, TargetState::Active(k) if k == &dev_cmd.device_key)
-                        });
-                        let _ = event_tx.send(AdapterEvent::AdapterError {
-                            device_key: if known { Some(dev_cmd.device_key) } else { None },
+                        if event_tx.send(AdapterEvent::AdapterError {
+                            device_key: Some(dev_cmd.device_key),
                             error: "unsupported command: rpi-local-adapter v1 does not handle DeviceCommand".to_string(),
-                        }).await;
+                        }).await.is_err() {
+                            tracing::warn!("Event channel closed, exiting poll loop");
+                            return;
+                        }
                     }
                 }
             }
@@ -367,5 +366,106 @@ mod tests {
         assert!(matches!(states[1], TargetState::Pending));
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], AdapterEvent::SensorData { .. }));
+    }
+
+    // --- Async polling_loop tests (empty targets = no I2C needed) ---
+
+    use crate::config::RpiLocalConfig;
+
+    fn empty_config() -> RpiLocalConfig {
+        RpiLocalConfig {
+            bus_path: "/dev/null".to_string(),
+            poll_interval_ms: 100,
+            targets: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_command_stops_loop() {
+        let (event_tx, mut event_rx) = mpsc::channel::<AdapterEvent>(16);
+        let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(16);
+
+        let handle = tokio::spawn(polling_loop(empty_config(), event_tx, command_rx));
+
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+        // Loop should exit promptly.
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("polling_loop should exit on Shutdown")
+            .expect("polling_loop should not panic");
+
+        // No events expected from empty targets.
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn command_channel_drop_stops_loop() {
+        let (event_tx, _event_rx) = mpsc::channel::<AdapterEvent>(16);
+        let (_command_tx, command_rx) = mpsc::channel::<AdapterCommand>(16);
+
+        let handle = tokio::spawn(polling_loop(empty_config(), event_tx, command_rx));
+
+        // Drop command_tx → command_rx.recv() returns None → loop exits.
+        drop(_command_tx);
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("polling_loop should exit on command channel drop")
+            .expect("polling_loop should not panic");
+    }
+
+    #[tokio::test]
+    async fn unsupported_device_command_returns_error() {
+        let (event_tx, mut event_rx) = mpsc::channel::<AdapterEvent>(16);
+        let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(16);
+
+        let handle = tokio::spawn(polling_loop(empty_config(), event_tx, command_rx));
+
+        let dev_cmd = iotkit_core_types::DeviceCommand {
+            device_key: DeviceKey::new("test:device"),
+            payload: iotkit_core_types::DeviceCommandPayload::RequestReading,
+        };
+        command_tx.send(AdapterCommand::DeviceCommand(dev_cmd)).await.unwrap();
+
+        // Should receive an AdapterError.
+        let event = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            event_rx.recv(),
+        ).await.expect("timeout").expect("channel open");
+
+        assert!(matches!(event, AdapterEvent::AdapterError {
+            device_key: Some(_),
+            ..
+        }));
+
+        // Shutdown.
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn event_channel_close_stops_loop() {
+        let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(16);
+        let (_command_tx, command_rx) = mpsc::channel::<AdapterCommand>(16);
+
+        let handle = tokio::spawn(polling_loop(empty_config(), event_tx, command_rx));
+
+        // Drop event_rx → next event_tx.send() fails → loop exits.
+        drop(event_rx);
+
+        // Wait for a tick to trigger a send attempt (empty targets, but
+        // the loop still runs interval ticks). Actually with empty targets
+        // there's nothing to send, so we need the command path.
+        // Send a DeviceCommand to trigger a send on the closed channel.
+        let dev_cmd = iotkit_core_types::DeviceCommand {
+            device_key: DeviceKey::new("test:device"),
+            payload: iotkit_core_types::DeviceCommandPayload::RequestReading,
+        };
+        let _ = _command_tx.send(AdapterCommand::DeviceCommand(dev_cmd)).await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("polling_loop should exit when event channel is closed")
+            .expect("polling_loop should not panic");
     }
 }

@@ -15,7 +15,7 @@ pub fn probe_mcp9600(
 
     let mut id_buf = [0u8; 2];
     t.read_register(mcp9600::REG_DEVICE_ID, &mut id_buf)
-        .map_err(|e| format!("read REG_DEVICE_ID: {}", e))?;
+        .map_err(|e| format!("MCP9600 0x{:02x}@{}: read REG_DEVICE_ID: {}", addr, bus, e))?;
 
     if id_buf[0] != mcp9600::DEVICE_ID {
         return Err(format!(
@@ -26,7 +26,7 @@ pub fn probe_mcp9600(
 
     let config_val = mcp9600::config_value(thermocouple_type);
     t.write_register(mcp9600::REG_SENSOR_CONFIGURATION, &[config_val])
-        .map_err(|e| format!("write REG_SENSOR_CONFIGURATION: {}", e))?;
+        .map_err(|e| format!("MCP9600 0x{:02x}@{}: write REG_SENSOR_CONFIGURATION: {}", addr, bus, e))?;
 
     let connection = ConnectionInfo {
         kind: ConnectionKind::I2c,
@@ -44,7 +44,7 @@ pub fn read_mcp9600(bus: &str, addr: u8) -> Result<SensorReading, String> {
 
     let mut raw = [0u8; 2];
     t.read_register(mcp9600::REG_HOT_JUNCTION, &mut raw)
-        .map_err(|e| format!("read REG_HOT_JUNCTION: {}", e))?;
+        .map_err(|e| format!("MCP9600 0x{:02x}@{}: read REG_HOT_JUNCTION: {}", addr, bus, e))?;
 
     Ok(mcp9600::from_i2c_raw(&raw))
 }
