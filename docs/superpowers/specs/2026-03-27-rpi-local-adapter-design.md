@@ -116,13 +116,17 @@ pub struct SensorTarget {
 }
 
 pub enum SensorKind {
-    MCP9600,
+    MCP9600 {
+        thermocouple_type: mcp9600::ThermocoupleType,
+    },
     OPT3001,
 }
 ```
 
 config validation:
 - `poll_interval_ms == 0` は reject する
+- `targets` 内の `(address, sensor_ic_name)` 重複は reject する
+  - `DeviceKey` は `(address, sensor_ic_name)` 由来であり、重複すると engine 側の state が潰れる
 - validation は `validate_config(&RpiLocalConfig) -> Result<(), String>` に分離する
 - `start()` は runtime 不在チェックとは独立に `validate_config()` を呼ぶ
 
@@ -135,19 +139,27 @@ AdapterId::new("rpi-local:default")
 ```
 
 `rpi-local-adapter` の `DeviceKey` は adapter 内一意な logical sensor endpoint を表す。
+key は `(address, sensor_ic_name)` から生成する。`thermocouple_type` などの
+IC 固有パラメータは key に含めない（同一 address に同一 IC が物理的に 2 つ存在しないため）。
 
 ```rust
-DeviceKey::new(format!("i2c:0x{:02x}:{}", address, kind))
+DeviceKey::new(format!("i2c:0x{:02x}:{}", address, sensor_ic_name(kind)))
 ```
+
+`sensor_ic_name` は `SensorKind` の IC 名を返す:
+- `SensorKind::MCP9600 { .. }` → `"mcp9600"`
+- `SensorKind::OPT3001` → `"opt3001"`
 
 例:
 - `i2c:0x60:mcp9600`
 - `i2c:0x44:opt3001`
 
 設計ポイント:
-- address と kind の両方を含める
+- address と sensor IC 名の両方を含める
+- `thermocouple_type` 等の IC 固有設定は key に含めない
 - key 文字列は adapter 内一意であればよい
 - core は key を parse しない
+- `validate_config` の重複判定も同じ `(address, sensor_ic_name)` ベースで行う
 
 ### Discovery Flow
 
@@ -207,6 +219,12 @@ loop の責務:
 interval の扱い:
 - startup probe 直後の即時 tick を避けるため `interval_at(now + period, period)` を使う
 - `command_rx.recv()` が `None` の場合も shutdown と同様に loop を抜ける
+
+command の扱い:
+- `AdapterCommand::Shutdown` → loop を抜ける
+- `AdapterCommand::DeviceCommand(_)` → v1 では未対応。
+  `AdapterEvent::AdapterError { device_key: Some(cmd.device_key), error }` で
+  「unsupported command」を返す。silent drop はしない
 
 ### I2C Blocking I/O の扱い
 
@@ -316,16 +334,18 @@ v1 は 2 センサーのみなので、adapter 内に per-sensor の `probe_*` /
 関数を持つ。
 
 ```rust
-fn probe(kind: SensorKind, bus: &str, addr: u8) -> Result<SensorIdentity, String> {
+fn probe(kind: &SensorKind, bus: &str, addr: u8) -> Result<SensorIdentity, String> {
     match kind {
-        SensorKind::MCP9600 => probe_mcp9600(bus, addr),
+        SensorKind::MCP9600 { thermocouple_type } => {
+            probe_mcp9600(bus, addr, *thermocouple_type)
+        }
         SensorKind::OPT3001 => probe_opt3001(bus, addr),
     }
 }
 
-fn read(kind: SensorKind, bus: &str, addr: u8) -> Result<SensorReading, String> {
+fn read(kind: &SensorKind, bus: &str, addr: u8) -> Result<SensorReading, String> {
     match kind {
-        SensorKind::MCP9600 => read_mcp9600(bus, addr),
+        SensorKind::MCP9600 { .. } => read_mcp9600(bus, addr),
         SensorKind::OPT3001 => read_opt3001(bus, addr),
     }
 }
@@ -339,6 +359,7 @@ trait 化や descriptor 抽出は後続に defer する。
 - `I2cTransport::open(bus, &I2cConfig { address: addr as u16 })`
 - `mcp9600::REG_DEVICE_ID` を読む
 - `mcp9600::DEVICE_ID` と照合する
+- `mcp9600::REG_SENSOR_CONFIGURATION` に `mcp9600::config_value(thermocouple_type)` を書く
 - `mcp9600::identity(connection_info)` を返す
 
 `read_mcp9600`:
@@ -359,9 +380,15 @@ trait 化や descriptor 抽出は後続に defer する。
 - adapter 側で `u16` に正規化する
 - `opt3001::from_i2c_raw(raw_u16)` に渡す
 
-補足:
-- `opt3001::from_i2c_raw` は byte-swapped 前提の `u16` を受ける
-- そのため register read 後の byte 正規化は adapter の責務とする
+byte order の扱い:
+- `rpi4b-transport` の `read_register` / `write_register` は生バイト列を返す（SMBus word ではない）
+- OPT3001 の既存 parser (`opt3001::from_i2c_raw`) は SMBus `read_word_data` の
+  byte-swapped word を前提にしている（legacy Python 実装と同じ）
+- したがって adapter 側で `read_register` の 2 byte `[b0, b1]` を
+  `u16::from_le_bytes([b0, b1])` として swapped word に正規化してから
+  `opt3001::from_i2c_raw(raw_u16)` に渡す
+- `write_register` も同様: `INIT_CONFIG.to_le_bytes()` を書く
+- MCP9600 は生 big-endian なのでそのまま `&[u8; 2]` を渡す（swap 不要）
 
 ### AdapterHandle Contract
 
@@ -449,10 +476,16 @@ loop {
 }
 ```
 
-実装上は:
-- loop で回す
-- `recv() == None` の扱いを決める
-- 片側が閉じても他方をどう扱うかを明示する
+fan-in 終了条件:
+- 片方の adapter の `event_rx` が `None`（channel closed）になっても、
+  もう片方が生きている限り fan-in loop は継続する
+- closed になった側の branch は `select!` から外す（fuse する）
+- 全 adapter の channel が closed になったら fan-in loop を抜ける
+- gateway の shutdown は全 adapter に `shutdown()` を呼んでから自身を終了する
+
+理由:
+- adapter は独立しており、一方の障害が他方に影響すべきでない
+- v1 では adapter 間の依存関係がないため、この方針で十分
 
 ### Testing Strategy
 
