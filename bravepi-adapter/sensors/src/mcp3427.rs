@@ -4,6 +4,7 @@
 //! UART (BravePI): Int16LE × 2ch → mV
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
+use crate::UartSample;
 
 fn sensor_type() -> SensorType { SensorType::Adc }
 
@@ -37,6 +38,17 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let ch2 = i16::from_le_bytes([data[2], data[3]]) as f64;
     SensorReading::new(sensor_type(), vec![ch1, ch2], vec!["ch1_volt", "ch2_volt"])
 }
+
+fn decode_uart(sample: UartSample<'_>) -> SensorReading {
+    from_uart_payload(sample.payload)
+}
+
+pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
+    sensor_type: SensorType::Adc,
+    key_suffix: "adc",
+    identity: identity,
+    decode_uart: decode_uart,
+};
 
 #[cfg(test)]
 mod tests {

@@ -4,6 +4,7 @@
 //! UART (BravePI): Float32LE → Lux
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
+use crate::UartSample;
 
 fn sensor_type() -> SensorType { SensorType::Illuminance }
 
@@ -56,6 +57,17 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let lux = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
     SensorReading::new(sensor_type(), vec![lux], vec!["lux"])
 }
+
+fn decode_uart(sample: UartSample<'_>) -> SensorReading {
+    from_uart_payload(sample.payload)
+}
+
+pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
+    sensor_type: SensorType::Illuminance,
+    key_suffix: "illuminance",
+    identity: identity,
+    decode_uart: decode_uart,
+};
 
 #[cfg(test)]
 mod tests {

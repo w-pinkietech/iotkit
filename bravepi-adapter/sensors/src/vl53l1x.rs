@@ -4,6 +4,7 @@
 //! UART (BravePI): UInt16LE → mm
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
+use crate::UartSample;
 
 fn sensor_type() -> SensorType { SensorType::Ranging }
 
@@ -43,6 +44,17 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     }
     SensorReading::new(sensor_type(), vec![mm.min(MAX_DISTANCE_MM) as f64], vec!["distance_mm"])
 }
+
+fn decode_uart(sample: UartSample<'_>) -> SensorReading {
+    from_uart_payload(sample.payload)
+}
+
+pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
+    sensor_type: SensorType::Ranging,
+    key_suffix: "ranging",
+    identity: identity,
+    decode_uart: decode_uart,
+};
 
 #[cfg(test)]
 mod tests {

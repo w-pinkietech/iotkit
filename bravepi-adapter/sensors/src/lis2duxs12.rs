@@ -4,6 +4,7 @@
 //! UART (BravePI): Float32LE × 3 → mG, magnitude 計算
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
+use crate::UartSample;
 
 fn sensor_type() -> SensorType { SensorType::Acceleration }
 
@@ -56,6 +57,17 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let mag = magnitude(x, y, z);
     SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag], vec!["x_g", "y_g", "z_g", "magnitude_g"])
 }
+
+fn decode_uart(sample: UartSample<'_>) -> SensorReading {
+    from_uart_payload(sample.payload)
+}
+
+pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
+    sensor_type: SensorType::Acceleration,
+    key_suffix: "acceleration",
+    identity: identity,
+    decode_uart: decode_uart,
+};
 
 #[cfg(test)]
 mod tests {
