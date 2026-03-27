@@ -14,6 +14,8 @@ pub struct UartSample<'a> {
 /// センサー/endpoint の decode と identity 生成をまとめた descriptor。
 /// 各センサーモジュールが `pub const HANDLER: SensorHandler` として公開する。
 pub struct SensorHandler {
+    /// メタデータ用。decode_uart が返す SensorReading にも同じ値が入る。
+    /// registry のテストや将来のフィルタリング用途で使う。
     pub sensor_type: SensorType,
     pub key_suffix: &'static str,
     pub identity: fn(ConnectionInfo) -> SensorIdentity,

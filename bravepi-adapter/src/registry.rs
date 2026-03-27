@@ -61,4 +61,16 @@ mod tests {
         assert_eq!(lookup_handler(257).unwrap().sensor_type, SensorType::ContactInput);
         assert_eq!(lookup_handler(258).unwrap().sensor_type, SensorType::ContactOutput);
     }
+
+    #[test]
+    fn no_duplicate_raw_codes() {
+        let mut seen = std::collections::HashSet::new();
+        for entry in REGISTRY.iter() {
+            assert!(
+                seen.insert(entry.raw_sensor_type),
+                "duplicate raw code: {}",
+                entry.raw_sensor_type,
+            );
+        }
+    }
 }
