@@ -21,15 +21,15 @@ fn main() {
 async fn run(port_path: String) {
     let engine = Engine::new();
 
-    let mut handle = match bravepi_adapter::task::start(port_path) {
+    let mut handle = match bravepi_mainboard_adapter::task::start(port_path) {
         Ok(h) => h,
         Err(e) => {
-            tracing::error!(error = %e, "Failed to start BravePI adapter");
+            tracing::error!(error = %e, "Failed to start BravePI mainboard adapter");
             std::process::exit(1);
         }
     };
     let adapter_id = handle.id.clone();
-    tracing::info!(adapter_id = %adapter_id, "BravePI adapter started");
+    tracing::info!(adapter_id = %adapter_id, "BravePI mainboard adapter started");
 
     loop {
         tokio::select! {

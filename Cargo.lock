@@ -24,7 +24,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
-name = "bravepi-adapter"
+name = "bravepi-codec"
+version = "0.1.0"
+
+[[package]]
+name = "bravepi-mainboard-adapter"
 version = "0.1.0"
 dependencies = [
  "bravepi-codec",
@@ -36,14 +40,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "bravepi-codec"
-version = "0.1.0"
-
-[[package]]
 name = "bravepi-poc"
 version = "0.1.0"
 dependencies = [
- "bravepi-adapter",
+ "bravepi-mainboard-adapter",
  "iotkit-core-types",
  "tokio",
  "tracing",
@@ -140,7 +140,7 @@ version = "0.1.0"
 name = "iotkit-gateway"
 version = "0.1.0"
 dependencies = [
- "bravepi-adapter",
+ "bravepi-mainboard-adapter",
  "iotkit-core-engine",
  "iotkit-core-types",
  "tokio",

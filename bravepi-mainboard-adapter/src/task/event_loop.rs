@@ -158,7 +158,7 @@ async fn handle_config_frame(
     };
 
     let device_key = DeviceKey::new(
-        format!("bravepi:{}:{}", cfg.device_number, handler.key_suffix),
+        format!("bravepi-mainboard:{}:{}", cfg.device_number, handler.key_suffix),
     );
 
     if !devices.contains_key(&device_key) {

@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
 iotkit-core-engine = { path = "../core/engine" }
-bravepi-adapter = { path = "../bravepi-adapter" }
+bravepi-mainboard-adapter = { path = "../bravepi-mainboard-adapter" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

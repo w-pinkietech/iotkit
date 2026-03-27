@@ -3,10 +3,10 @@ members = [
     "core/types",
     "core/engine",
     "rpi4b-driver/transport",
-    "bravepi-adapter",
-    "bravepi-adapter/codec",
-    "bravepi-adapter/sensors",
-    "bravepi-adapter/poc",
+    "bravepi-mainboard-adapter",
+    "bravepi-mainboard-adapter/codec",
+    "bravepi-mainboard-adapter/sensors",
+    "bravepi-mainboard-adapter/poc",
     "iotkit-gateway",
 ]
 resolver = "3"
