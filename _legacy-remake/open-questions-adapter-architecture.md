@@ -123,6 +123,66 @@ core は adapter 固有の情報を一切持たない
 - base adapter は crate として提供？trait として提供？struct として提供？
 - マイグレーション管理はどうするか
 
+### 2.1 2026-03-27 メモ: Driver Base / Adapter Base の切り分け
+
+現状の理解:
+
+- `rpi4b-driver/transport` は protocol 非依存の I/O 層としてかなり分離できている
+- ただし `driver base` と呼べる共通 trait / factory / session 抽象はまだ薄い
+- `bravepi-adapter` は core との channel 契約 (`AdapterEvent` / `AdapterCommand`) は共有できている
+- ただし `adapter base` と呼べる共通 runtime / DB / API / registration 基盤はまだ無い
+
+要するに:
+
+- driver は「責務分離はできているが、base API はまだ小さい」
+- adapter は「boundary はあるが、base framework はまだ無い」
+
+#### Driver Base に将来入りそうな責務
+
+- resource lifecycle (`open / close / reopen / enumerate`)
+- 共通 I/O 契約 (`read / write / write_all / timeout`)
+- 共通 config と validation
+- 共通 error taxonomy (`missing / timeout / disconnected / permission denied`)
+- mock / replay / fake device を差し込むためのテスト seam
+
+Driver Base に入れない方がよいもの:
+
+- protocol codec
+- sensor decode
+- device discovery
+- adapter 側の retry policy や lifecycle state
+
+#### Adapter Base に将来入りそうな責務
+
+- adapter task の起動 / 停止 / supervision
+- 設定読込、instance registration、core との接続
+- adapter 自前 DB の bootstrap / migration / connection 管理
+- health / status / metrics / debug dump の共通 surface
+- 管理 API / UI が必要な adapter のための共通 runtime
+
+Adapter Base に入れない方がよいもの:
+
+- BravePI / BraveJIG 固有の protocol 変換
+- sensor registry や downlink encode
+- pairing / DFU / scan の具体 state machine
+- command busy / timeout / retry / ACK の業務ルール
+
+#### 抽出タイミングの目安
+
+先回りして大きい base を作るのではなく、「2つ目の concrete 実装で重複が見えた時に抜く」を原則にする。
+
+具体的には:
+
+1. 今の段階では BravePI をもう少し concrete に進める
+2. 2つ目の adapter (`BraveJIG` や直結 I2C/GPIO path) を作る
+3. 起動 / 停止 / 設定 / DB / API / 監視の重複が見えたら `adapter base` を抽出する
+4. 同じ上位ロジックが serial 以外の transport (`USB`, `TCP`, `I2C` など) を同じ形で扱いたくなったら `driver base` を trait 化する
+
+補足:
+
+- `busy / timeout / retry / ACK` は `adapter base` に混ぜず、必要なら `device-command-orchestrator` のような上位層として分離する
+- `core/types` の境界はすでに共通 contract として機能しているので、今すぐ base 化すべき最優先はそこではない
+
 ### 3. Core 側でデバイス削除したとき adapter 側はどうなるか
 
 選択肢:

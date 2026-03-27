@@ -66,16 +66,26 @@ async fn run(port_path: String) {
     };
     let bravepi_id = bravepi.id.clone();
 
-    // RPi local adapter is optional: start failure is a warning.
-    let mut rpi_local = match rpi_local_adapter::start(rpi_local_config()) {
-        Ok(h) => {
-            tracing::info!(adapter_id = %h.id, "RPi local adapter started");
-            Some(h)
+    // RPi local adapter is optional: disabled by default, enable with RPI_LOCAL_ENABLED=1.
+    // This avoids perpetual probe-failure warnings on hosts without I2C sensors.
+    let rpi_local_enabled = std::env::var("RPI_LOCAL_ENABLED")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+
+    let mut rpi_local = if rpi_local_enabled {
+        match rpi_local_adapter::start(rpi_local_config()) {
+            Ok(h) => {
+                tracing::info!(adapter_id = %h.id, "RPi local adapter started");
+                Some(h)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to start RPi local adapter, continuing without it");
+                None
+            }
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to start RPi local adapter, continuing without it");
-            None
-        }
+    } else {
+        tracing::info!("RPi local adapter disabled (set RPI_LOCAL_ENABLED=1 to enable)");
+        None
     };
 
     // Track whether each adapter's channel is still open.
@@ -85,7 +95,8 @@ async fn run(port_path: String) {
 
     loop {
         tokio::select! {
-            biased;
+            // No biased; — fair scheduling between adapter branches to prevent
+            // one adapter's traffic from starving the other.
 
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("Shutdown signal received");

@@ -203,8 +203,12 @@ pub(crate) async fn polling_loop(
                         return;
                     }
                     Some(AdapterCommand::DeviceCommand(dev_cmd)) => {
+                        // Only report with device_key if we own that device.
+                        let known = states.iter().any(|s| {
+                            matches!(s, TargetState::Active(k) if k == &dev_cmd.device_key)
+                        });
                         let _ = event_tx.send(AdapterEvent::AdapterError {
-                            device_key: Some(dev_cmd.device_key),
+                            device_key: if known { Some(dev_cmd.device_key) } else { None },
                             error: "unsupported command: rpi-local-adapter v1 does not handle DeviceCommand".to_string(),
                         }).await;
                     }
