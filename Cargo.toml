@@ -7,5 +7,6 @@ members = [
     "bravepi-adapter/codec",
     "bravepi-adapter/sensors",
     "bravepi-adapter/poc",
+    "iotkit-gateway",
 ]
 resolver = "3"
