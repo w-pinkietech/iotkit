@@ -3,6 +3,9 @@
 
 mod state;
 
+#[cfg(test)]
+mod state_test;
+
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
