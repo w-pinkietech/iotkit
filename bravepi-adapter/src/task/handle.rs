@@ -3,8 +3,6 @@
 use iotkit_core_types::{AdapterCommand, AdapterEvent, AdapterId};
 use tokio::sync::mpsc;
 
-#[allow(unused_imports)]
-use crate::transport::BytesSender;
 use super::event_loop::event_loop;
 use super::serial_source::{self, SerialSourceHandle};
 
@@ -58,7 +56,7 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
     let id = AdapterId::new(format!("bravepi:{}", port_path));
 
-    let write_tx = source.write_tx.clone();
+    let write_tx = source.write_tx;
     let event_loop_handle = runtime_handle.spawn(
         event_loop(port_path, source.bytes_rx, event_tx, command_rx, write_tx)
     );

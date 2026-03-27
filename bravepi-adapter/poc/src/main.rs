@@ -64,6 +64,13 @@ async fn main() {
                             "DeviceDiscovered"
                         );
                     }
+                    Some(AdapterEvent::DeviceConfig { device_key, config }) => {
+                        tracing::info!(
+                            device = %device_key,
+                            firmware = ?config.firmware_version,
+                            "DeviceConfig"
+                        );
+                    }
                     Some(AdapterEvent::DeviceLost { device_key, reason }) => {
                         tracing::warn!(device = %device_key, reason = %reason, "DeviceLost");
                     }
