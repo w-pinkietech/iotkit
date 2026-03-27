@@ -48,7 +48,7 @@ impl AdapterHandle {
 /// Tokio runtime 上で呼び出す必要がある。runtime が無い場合は `Err` を返す。
 pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
     let runtime_handle = tokio::runtime::Handle::try_current()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
 
     let source = serial_source::start(&port_path)?;
 
@@ -56,8 +56,9 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
     let id = AdapterId::new(format!("bravepi:{}", port_path));
 
+    let write_tx = source.write_tx;
     let event_loop_handle = runtime_handle.spawn(
-        event_loop(port_path, source.bytes_rx, event_tx, command_rx)
+        event_loop(port_path, source.bytes_rx, event_tx, command_rx, write_tx)
     );
 
     Ok(AdapterHandle {

@@ -1,19 +1,26 @@
 //! async task: raw bytes → codec → AdapterEvent。
 //! デバイスのライフサイクル追跡もここで行う。
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use bravepi_codec::BravePiCodec;
-use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceKey};
+use bravepi_codec::{BravePiCodec, DownlinkCommand};
+use iotkit_core_types::{AdapterCommand, AdapterEvent, ConfigValue, DeviceCommandPayload, DeviceConfigData, DeviceKey, SensorType};
 use tokio::sync::mpsc;
 
-use crate::transport::BytesReceiver;
+use crate::registry::lookup_handler;
+use crate::transport::{BytesReceiver, BytesSender};
 use super::convert::frame_to_event;
 
+struct DeviceTarget {
+    device_number_hex: String,
+    raw_sensor_type: u16,
+}
+
 struct DeviceState {
-    /// Populated now; read by timeout-based DeviceLost logic (future sub-project).
     #[allow(dead_code)]
     last_seen: tokio::time::Instant,
+    target: DeviceTarget,
 }
 
 pub(crate) async fn event_loop(
@@ -21,6 +28,7 @@ pub(crate) async fn event_loop(
     mut bytes_rx: BytesReceiver,
     event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
+    write_tx: BytesSender,
 ) {
     tracing::info!(port = %port_path, "BravePI adapter event loop started");
 
@@ -40,6 +48,9 @@ pub(crate) async fn event_loop(
                         tracing::info!("BravePI adapter shutting down");
                         return;
                     }
+                    Some(AdapterCommand::DeviceCommand(cmd)) => {
+                        handle_device_command(cmd, &devices, &write_tx, &event_tx).await;
+                    }
                 }
             }
             result = bytes_rx.recv() => {
@@ -47,6 +58,20 @@ pub(crate) async fn event_loop(
                     Some(Ok(data)) => {
                         codec.feed(&data);
                         while let Some(frame) = codec.decode() {
+                            // Handle ConfigFrame directly (needs devices map)
+                            if let bravepi_codec::BravePiFrame::Config(ref cfg) = frame {
+                                handle_config_frame(cfg, &devices, &event_tx).await;
+                                continue;
+                            }
+
+                            // Extract target info from Sensor frames before frame_to_event consumes the frame
+                            let target_info = match &frame {
+                                bravepi_codec::BravePiFrame::Sensor(s) => {
+                                    Some((s.device_number.clone(), s.sensor_type_raw))
+                                }
+                                _ => None,
+                            };
+
                             if let Some((event, identity)) = frame_to_event(frame, &port_path) {
                                 if let AdapterEvent::SensorData { ref device_key, .. } = event {
                                     if !devices.contains_key(device_key) {
@@ -60,9 +85,16 @@ pub(crate) async fn event_loop(
                                                     tracing::warn!("Event channel closed, shutting down");
                                                     return;
                                                 }
+                                                let target = target_info.map(|(dn, rst)| DeviceTarget {
+                                                    device_number_hex: dn,
+                                                    raw_sensor_type: rst,
+                                                }).expect("SensorData always comes from Sensor frame");
                                                 devices.insert(
                                                     device_key.clone(),
-                                                    DeviceState { last_seen: tokio::time::Instant::now() },
+                                                    DeviceState {
+                                                        last_seen: tokio::time::Instant::now(),
+                                                        target,
+                                                    },
                                                 );
                                             }
                                             None => {
@@ -104,6 +136,148 @@ pub(crate) async fn event_loop(
                     }
                 }
             }
+        }
+    }
+}
+
+async fn handle_config_frame(
+    cfg: &bravepi_codec::ConfigFrame,
+    devices: &HashMap<DeviceKey, DeviceState>,
+    event_tx: &mpsc::Sender<AdapterEvent>,
+) {
+    let handler = match lookup_handler(cfg.true_sensor_type) {
+        Some(h) => h,
+        None => {
+            tracing::warn!(
+                raw = cfg.true_sensor_type,
+                device = %cfg.device_number,
+                "ConfigFrame with unknown sensor type, dropping"
+            );
+            return;
+        }
+    };
+
+    let device_key = DeviceKey::new(
+        format!("bravepi:{}:{}", cfg.device_number, handler.key_suffix),
+    );
+
+    if !devices.contains_key(&device_key) {
+        tracing::warn!(
+            device_key = %device_key,
+            "ConfigFrame for undiscovered device, dropping"
+        );
+        return;
+    }
+
+    let config = DeviceConfigData {
+        firmware_version: Some(cfg.firmware_version.clone()),
+        uplink_interval_secs: Some(cfg.uplink_interval),
+        properties: BTreeMap::from([
+            ("timezone".into(), ConfigValue::Integer(cfg.timezone as i64)),
+            ("ble_mode".into(), ConfigValue::Integer(cfg.ble_mode as i64)),
+            ("tx_power".into(), ConfigValue::Integer(cfg.tx_power as i64)),
+            ("advertise_interval".into(), ConfigValue::Integer(cfg.advertise_interval as i64)),
+        ]),
+    };
+
+    tracing::info!(
+        device = %cfg.device_number,
+        firmware = %cfg.firmware_version,
+        "Config frame received, sending DeviceConfig event"
+    );
+
+    let _ = event_tx.send(AdapterEvent::DeviceConfig {
+        device_key,
+        config,
+    }).await;
+}
+
+async fn handle_device_command(
+    cmd: iotkit_core_types::DeviceCommand,
+    devices: &HashMap<DeviceKey, DeviceState>,
+    write_tx: &BytesSender,
+    event_tx: &mpsc::Sender<AdapterEvent>,
+) {
+    let state = match devices.get(&cmd.device_key) {
+        Some(s) => s,
+        None => {
+            let _ = event_tx.send(AdapterEvent::AdapterError {
+                device_key: Some(cmd.device_key),
+                error: "unknown device".to_string(),
+            }).await;
+            return;
+        }
+    };
+
+    let target = &state.target;
+
+    // Validate SetOutput constraints
+    if let DeviceCommandPayload::SetOutput { duration_ms, .. } = &cmd.payload {
+        if let Some(handler) = lookup_handler(target.raw_sensor_type) {
+            if handler.sensor_type != SensorType::ContactOutput {
+                let _ = event_tx.send(AdapterEvent::AdapterError {
+                    device_key: Some(cmd.device_key),
+                    error: "SetOutput sent to non-ContactOutput device".to_string(),
+                }).await;
+                return;
+            }
+        } else {
+            let _ = event_tx.send(AdapterEvent::AdapterError {
+                device_key: Some(cmd.device_key),
+                error: "SetOutput: unknown sensor type in registry".to_string(),
+            }).await;
+            return;
+        }
+
+        if let Some(ms) = duration_ms
+            && *ms > u16::MAX as u32 {
+                let _ = event_tx.send(AdapterEvent::AdapterError {
+                    device_key: Some(cmd.device_key),
+                    error: format!("duration_ms {} exceeds u16 range (max {})", ms, u16::MAX),
+                }).await;
+                return;
+            }
+    }
+
+    let downlink_cmd = match cmd.payload {
+        DeviceCommandPayload::RequestReading => {
+            DownlinkCommand::ImmediateUplink { sensor_type: target.raw_sensor_type }
+        }
+        DeviceCommandPayload::QueryConfig => {
+            DownlinkCommand::ParameterGet
+        }
+        DeviceCommandPayload::SetOutput { value, duration_ms } => {
+            DownlinkCommand::ContactOutput {
+                signal_mode: if value { 1 } else { 0 },
+                signal_out_time: duration_ms.map(|ms| ms as u16).unwrap_or(0),
+            }
+        }
+    };
+
+    let bytes = match BravePiCodec::encode_downlink(&target.device_number_hex, &downlink_cmd) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = event_tx.send(AdapterEvent::AdapterError {
+                device_key: Some(cmd.device_key),
+                error: format!("encode_downlink failed: {}", e),
+            }).await;
+            return;
+        }
+    };
+
+    match write_tx.try_send(bytes) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            let _ = event_tx.send(AdapterEvent::AdapterError {
+                device_key: Some(cmd.device_key),
+                error: "downlink queue full".to_string(),
+            }).await;
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            let _ = event_tx.send(AdapterEvent::AdapterError {
+                device_key: None,
+                error: "write channel closed (transport failure)".to_string(),
+            }).await;
         }
     }
 }

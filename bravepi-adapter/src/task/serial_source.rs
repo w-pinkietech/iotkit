@@ -7,10 +7,11 @@ use rpi4b_transport::SerialTransport;
 use tokio::sync::mpsc;
 
 use crate::serial_config;
-use crate::transport::{BytesReceiver, TransportError};
+use crate::transport::{BytesReceiver, BytesSender, TransportError};
 
 pub(crate) struct SerialSource {
     pub bytes_rx: BytesReceiver,
+    pub write_tx: BytesSender,
     pub handle: SerialSourceHandle,
 }
 
@@ -35,22 +36,84 @@ const MAX_BACKOFF_SECS: u64 = 30;
 pub(crate) fn start(port_path: &str) -> Result<SerialSource, std::io::Error> {
     let config = serial_config();
     let transport = SerialTransport::open(port_path, &config)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     let (bytes_tx, bytes_rx) = mpsc::channel(64);
+    let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(16);
     let owned_path = port_path.to_string();
     let thread_handle = std::thread::Builder::new()
         .name(format!("bravepi-serial-{}", port_path))
-        .spawn(move || serial_reader_thread(owned_path, transport, bytes_tx))?;
+        .spawn(move || serial_reader_thread(owned_path, transport, bytes_tx, write_rx))?;
     Ok(SerialSource {
         bytes_rx,
+        write_tx,
         handle: SerialSourceHandle { thread_handle },
     })
+}
+
+/// Reconnect result: either a new transport, or a terminal condition.
+enum ReconnectResult {
+    Connected(SerialTransport),
+    ChannelClosed,
+    RetriesExhausted,
+}
+
+/// Shared reconnect logic for both read and write errors.
+/// Attempts up to MAX_RETRIES with exponential backoff.
+/// Does NOT send Err(TransportError) — caller decides what to do on exhaustion.
+fn try_reconnect(
+    port_path: &str,
+    retry_count: &mut u32,
+    bytes_tx: &mpsc::Sender<Result<Vec<u8>, TransportError>>,
+) -> ReconnectResult {
+    loop {
+        *retry_count += 1;
+        if *retry_count > MAX_RETRIES {
+            return ReconnectResult::RetriesExhausted;
+        }
+
+        if bytes_tx.is_closed() {
+            tracing::info!("Bytes channel closed during retry, exiting");
+            return ReconnectResult::ChannelClosed;
+        }
+
+        let backoff_secs = (1u64 << (*retry_count).min(5)).min(MAX_BACKOFF_SECS);
+        tracing::warn!(
+            port = %port_path,
+            retry = *retry_count,
+            backoff_secs = backoff_secs,
+            "Attempting serial reconnect"
+        );
+        for _ in 0..backoff_secs {
+            if bytes_tx.is_closed() {
+                tracing::info!("Bytes channel closed during retry, exiting");
+                return ReconnectResult::ChannelClosed;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+
+        let config = serial_config();
+        match SerialTransport::open(port_path, &config) {
+            Ok(new_transport) => {
+                tracing::info!(port = %port_path, "Serial reconnected");
+                *retry_count = 0;
+                return ReconnectResult::Connected(new_transport);
+            }
+            Err(open_err) => {
+                tracing::warn!(
+                    error = %open_err,
+                    port = %port_path,
+                    "Reconnect failed"
+                );
+            }
+        }
+    }
 }
 
 fn serial_reader_thread(
     port_path: String,
     mut transport: SerialTransport,
     bytes_tx: mpsc::Sender<Result<Vec<u8>, TransportError>>,
+    mut write_rx: mpsc::Receiver<Vec<u8>>,
 ) {
     tracing::info!(port = %port_path, "Serial reader thread started");
     let mut buf = [0u8; 4096];
@@ -61,6 +124,58 @@ fn serial_reader_thread(
         if bytes_tx.is_closed() {
             tracing::info!("Bytes channel closed, reader thread exiting");
             return;
+        }
+
+        // Drain pending writes before reading.
+        // On write error, drop transport and enter reconnect.
+        // Err(TransportError) is sent only after retry exhaustion,
+        // so the adapter stays alive during reconnect attempts.
+        //
+        // NOTE: the failed write and any remaining queued writes are lost.
+        // Individual command success/failure tracking requires an orchestrator
+        // layer with request_id / timeout / retry — out of scope for Sub-project D.
+        let mut write_failed = false;
+        while let Ok(data) = write_rx.try_recv() {
+            if let Err(e) = transport.write_all(&data) {
+                tracing::error!(
+                    error = %e,
+                    port = %port_path,
+                    bytes = data.len(),
+                    "Serial write error — command bytes lost, entering reconnect"
+                );
+                write_failed = true;
+                break;
+            }
+        }
+        if write_failed {
+            // Drain and discard remaining queued writes — stale after reconnect.
+            let mut discarded = 0usize;
+            while write_rx.try_recv().is_ok() {
+                discarded += 1;
+            }
+            if discarded > 0 {
+                tracing::warn!(
+                    count = discarded,
+                    "Discarded queued downlink writes due to transport failure"
+                );
+            }
+            drop(transport);
+            match try_reconnect(&port_path, &mut retry_count, &bytes_tx) {
+                ReconnectResult::Connected(new_transport) => {
+                    transport = new_transport;
+                    continue;
+                }
+                ReconnectResult::ChannelClosed => return,
+                ReconnectResult::RetriesExhausted => {
+                    let msg = format!(
+                        "Serial write error on {} (max retries {} exceeded)",
+                        port_path, MAX_RETRIES
+                    );
+                    tracing::error!("{}", msg);
+                    let _ = bytes_tx.blocking_send(Err(TransportError { message: msg }));
+                    return;
+                }
+            }
         }
 
         match transport.read(&mut buf, timeout) {
@@ -76,10 +191,13 @@ fn serial_reader_thread(
             Err(e) => {
                 tracing::error!(error = %e, port = %port_path, "Serial read error");
                 drop(transport);
-
-                loop {
-                    retry_count += 1;
-                    if retry_count > MAX_RETRIES {
+                match try_reconnect(&port_path, &mut retry_count, &bytes_tx) {
+                    ReconnectResult::Connected(new_transport) => {
+                        transport = new_transport;
+                        // continue to main loop
+                    }
+                    ReconnectResult::ChannelClosed => return,
+                    ReconnectResult::RetriesExhausted => {
                         let msg = format!(
                             "Serial read error on {}: {} (max retries {} exceeded)",
                             port_path, e, MAX_RETRIES
@@ -87,43 +205,6 @@ fn serial_reader_thread(
                         tracing::error!("{}", msg);
                         let _ = bytes_tx.blocking_send(Err(TransportError { message: msg }));
                         return;
-                    }
-
-                    if bytes_tx.is_closed() {
-                        tracing::info!("Bytes channel closed during retry, exiting");
-                        return;
-                    }
-
-                    let backoff_secs = (1u64 << retry_count.min(5)).min(MAX_BACKOFF_SECS);
-                    tracing::warn!(
-                        port = %port_path,
-                        retry = retry_count,
-                        backoff_secs = backoff_secs,
-                        "Attempting serial reconnect"
-                    );
-                    for _ in 0..backoff_secs {
-                        if bytes_tx.is_closed() {
-                            tracing::info!("Bytes channel closed during retry, exiting");
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
-
-                    let config = serial_config();
-                    match SerialTransport::open(&port_path, &config) {
-                        Ok(new_transport) => {
-                            tracing::info!(port = %port_path, "Serial reconnected");
-                            transport = new_transport;
-                            retry_count = 0;
-                            break;
-                        }
-                        Err(open_err) => {
-                            tracing::warn!(
-                                error = %open_err,
-                                port = %port_path,
-                                "Reconnect failed"
-                            );
-                        }
                     }
                 }
             }

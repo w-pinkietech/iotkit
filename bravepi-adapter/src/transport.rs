@@ -17,3 +17,6 @@ impl fmt::Display for TransportError {
 
 /// event_loop が受け取る byte stream の型。
 pub(crate) type BytesReceiver = mpsc::Receiver<Result<Vec<u8>, TransportError>>;
+
+/// event_loop から serial_source に送る downlink byte stream の型。
+pub(crate) type BytesSender = mpsc::Sender<Vec<u8>>;

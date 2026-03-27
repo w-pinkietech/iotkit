@@ -35,7 +35,7 @@ impl SerialTransport {
     pub fn read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<usize> {
         self.port
             .set_timeout(timeout)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
 
         match self.port.read(buf) {
             Ok(n) => Ok(n),
@@ -47,5 +47,11 @@ impl SerialTransport {
     /// Write bytes to the serial port.
     pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.port.write(buf)
+    }
+
+    /// Write all bytes to the serial port, retrying on partial writes.
+    pub fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        use std::io::Write;
+        self.port.write_all(buf)
     }
 }

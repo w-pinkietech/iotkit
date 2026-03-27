@@ -43,32 +43,32 @@ impl PwmOutput {
             PwmPolarity::Inverse => Polarity::Inverse,
         };
         let pwm = Pwm::with_frequency(channel, config.frequency_hz, config.duty_cycle, polarity, true)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
         Ok(Self { pwm })
     }
 
     /// デューティ比を変更する (0.0 〜 1.0)。
     pub fn set_duty_cycle(&mut self, duty: f64) -> io::Result<()> {
         self.pwm.set_duty_cycle(duty)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(io::Error::other)
     }
 
     /// 周波数を変更する (Hz)。
     pub fn set_frequency(&mut self, freq_hz: f64) -> io::Result<()> {
         self.pwm.set_frequency(freq_hz, self.pwm.duty_cycle()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(io::Error::other)?)
+            .map_err(io::Error::other)
     }
 
     /// PWM を停止する。
     pub fn disable(&mut self) -> io::Result<()> {
         self.pwm.disable()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(io::Error::other)
     }
 
     /// PWM を再開する。
     pub fn enable(&mut self) -> io::Result<()> {
         self.pwm.enable()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(io::Error::other)
     }
 }
