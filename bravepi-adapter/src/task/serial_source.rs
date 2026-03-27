@@ -130,15 +130,35 @@ fn serial_reader_thread(
         // On write error, drop transport and enter reconnect.
         // Err(TransportError) is sent only after retry exhaustion,
         // so the adapter stays alive during reconnect attempts.
+        //
+        // NOTE: the failed write and any remaining queued writes are lost.
+        // Individual command success/failure tracking requires an orchestrator
+        // layer with request_id / timeout / retry — out of scope for Sub-project D.
         let mut write_failed = false;
         while let Ok(data) = write_rx.try_recv() {
             if let Err(e) = transport.write_all(&data) {
-                tracing::error!(error = %e, port = %port_path, "Serial write error");
+                tracing::error!(
+                    error = %e,
+                    port = %port_path,
+                    bytes = data.len(),
+                    "Serial write error — command bytes lost, entering reconnect"
+                );
                 write_failed = true;
                 break;
             }
         }
         if write_failed {
+            // Drain and discard remaining queued writes — stale after reconnect.
+            let mut discarded = 0usize;
+            while write_rx.try_recv().is_ok() {
+                discarded += 1;
+            }
+            if discarded > 0 {
+                tracing::warn!(
+                    count = discarded,
+                    "Discarded queued downlink writes due to transport failure"
+                );
+            }
             drop(transport);
             match try_reconnect(&port_path, &mut retry_count, &bytes_tx) {
                 ReconnectResult::Connected(new_transport) => {
