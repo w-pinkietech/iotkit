@@ -10,10 +10,15 @@ use tokio::sync::mpsc;
 use crate::transport::{BytesReceiver, BytesSender};
 use super::convert::frame_to_event;
 
+struct DeviceTarget {
+    device_number_hex: String,
+    raw_sensor_type: u16,
+}
+
 struct DeviceState {
-    /// Populated now; read by timeout-based DeviceLost logic (future sub-project).
     #[allow(dead_code)]
     last_seen: tokio::time::Instant,
+    target: DeviceTarget,
 }
 
 pub(crate) async fn event_loop(
@@ -52,6 +57,14 @@ pub(crate) async fn event_loop(
                     Some(Ok(data)) => {
                         codec.feed(&data);
                         while let Some(frame) = codec.decode() {
+                            // Extract target info from Sensor frames before frame_to_event consumes the frame
+                            let target_info = match &frame {
+                                bravepi_codec::BravePiFrame::Sensor(s) => {
+                                    Some((s.device_number.clone(), s.sensor_type_raw))
+                                }
+                                _ => None,
+                            };
+
                             if let Some((event, identity)) = frame_to_event(frame, &port_path) {
                                 if let AdapterEvent::SensorData { ref device_key, .. } = event {
                                     if !devices.contains_key(device_key) {
@@ -65,9 +78,16 @@ pub(crate) async fn event_loop(
                                                     tracing::warn!("Event channel closed, shutting down");
                                                     return;
                                                 }
+                                                let target = target_info.map(|(dn, rst)| DeviceTarget {
+                                                    device_number_hex: dn,
+                                                    raw_sensor_type: rst,
+                                                }).expect("SensorData always comes from Sensor frame");
                                                 devices.insert(
                                                     device_key.clone(),
-                                                    DeviceState { last_seen: tokio::time::Instant::now() },
+                                                    DeviceState {
+                                                        last_seen: tokio::time::Instant::now(),
+                                                        target,
+                                                    },
                                                 );
                                             }
                                             None => {
