@@ -120,7 +120,10 @@ struct DeviceState {
 ```
 
 - 新規 key + identity あり → DeviceDiscovered 送信 → insert
-- 新規 key + identity なし → warn、insert しない (DeviceDiscovered 未発行 = 未知デバイス扱い)
+- 新規 key + identity なし → warn、insert しない、SensorData も送信しない (early return)。
+  DeviceDiscovered 未発行のデバイスから SensorData を流すのは契約違反。
+  Sub-project B 後の BravePI では Unknown は frame_to_event() で早期 return、
+  それ以外は全て identity=Some なので、この分岐は実質到達不能だが防御として残す。
 - 既知 key → last_seen 更新のみ
 
 insert は DeviceDiscovered 成立後に行う。
@@ -146,7 +149,7 @@ insert は DeviceDiscovered 成立後に行う。
   - `HashSet<DeviceKey>` → `HashMap<DeviceKey, DeviceState>`
   - `DeviceState { last_seen: tokio::time::Instant }` 追加
   - insert 順序を DeviceDiscovered 成立後に変更
-  - identity=None の新規デバイスは warn して insert しない
+  - identity=None の新規デバイスは warn して insert しない、SensorData も送信しない (early return)
 
 ### テスト変更
 
@@ -154,7 +157,7 @@ insert は DeviceDiscovered 成立後に行う。
   - 全テストの `device_key.as_str()` アサーションを composite key に更新
   - `contact_input_has_no_identity` → identity が Some であることをテスト (反転)
   - contact 系 identity の manufacturer, ic_part_number, sensor_type, connection をアサーション
-  - DecodeError の composite key テスト追加
+  - DecodeError の composite key テスト追加 (既存の "unknown" → device_key: None ケースも維持)
 - `bravepi-adapter/src/task/event_loop_test.rs`
   - `device_key.as_str()` アサーションを composite key に更新
   - contact 系デバイスの DeviceDiscovered が出ることを確認するケース追加
