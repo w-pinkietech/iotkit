@@ -67,11 +67,74 @@ fn serial_reader_thread(
             return;
         }
 
-        // Drain pending writes before reading
+        // Drain pending writes before reading.
+        // On write error, report via bytes_tx and enter reconnect
+        // (a broken port will fail reads too).
+        let mut write_failed = false;
         while let Ok(data) = write_rx.try_recv() {
-            if let Err(e) = transport.write(&data) {
+            if let Err(e) = transport.write_all(&data) {
                 tracing::error!(error = %e, port = %port_path, "Serial write error");
+                let msg = format!("Serial write error on {}: {}", port_path, e);
+                let _ = bytes_tx.blocking_send(Err(TransportError { message: msg }));
+                write_failed = true;
+                break;
             }
+        }
+        if write_failed {
+            // Treat as terminal — same as read error.
+            // Drop transport and enter reconnect loop.
+            drop(transport);
+
+            loop {
+                retry_count += 1;
+                if retry_count > MAX_RETRIES {
+                    let msg = format!(
+                        "Serial write error on {} (max retries {} exceeded)",
+                        port_path, MAX_RETRIES
+                    );
+                    tracing::error!("{}", msg);
+                    let _ = bytes_tx.blocking_send(Err(TransportError { message: msg }));
+                    return;
+                }
+
+                if bytes_tx.is_closed() {
+                    tracing::info!("Bytes channel closed during retry, exiting");
+                    return;
+                }
+
+                let backoff_secs = (1u64 << retry_count.min(5)).min(MAX_BACKOFF_SECS);
+                tracing::warn!(
+                    port = %port_path,
+                    retry = retry_count,
+                    backoff_secs = backoff_secs,
+                    "Attempting serial reconnect after write failure"
+                );
+                for _ in 0..backoff_secs {
+                    if bytes_tx.is_closed() {
+                        tracing::info!("Bytes channel closed during retry, exiting");
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+
+                let config = serial_config();
+                match SerialTransport::open(&port_path, &config) {
+                    Ok(new_transport) => {
+                        tracing::info!(port = %port_path, "Serial reconnected after write failure");
+                        transport = new_transport;
+                        retry_count = 0;
+                        break;
+                    }
+                    Err(open_err) => {
+                        tracing::warn!(
+                            error = %open_err,
+                            port = %port_path,
+                            "Reconnect failed"
+                        );
+                    }
+                }
+            }
+            continue; // restart main loop with new transport
         }
 
         match transport.read(&mut buf, timeout) {

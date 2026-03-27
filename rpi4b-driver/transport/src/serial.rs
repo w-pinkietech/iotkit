@@ -48,4 +48,10 @@ impl SerialTransport {
     pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.port.write(buf)
     }
+
+    /// Write all bytes to the serial port, retrying on partial writes.
+    pub fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        use std::io::Write;
+        self.port.write_all(buf)
+    }
 }
