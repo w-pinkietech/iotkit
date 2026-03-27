@@ -33,10 +33,9 @@ const MAX_BACKOFF_SECS: u64 = 30;
 
 /// SerialTransport を開き、reader thread を起動する。
 /// reconnect ロジックもこの中に閉じる。
+/// 初回 open に失敗した場合は exponential backoff で retry する。
 pub(crate) fn start(port_path: &str) -> Result<SerialSource, std::io::Error> {
-    let config = serial_config();
-    let transport = SerialTransport::open(port_path, &config)
-        .map_err(std::io::Error::other)?;
+    let transport = open_with_retry(port_path)?;
     let (bytes_tx, bytes_rx) = mpsc::channel(64);
     let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(16);
     let owned_path = port_path.to_string();
@@ -48,6 +47,59 @@ pub(crate) fn start(port_path: &str) -> Result<SerialSource, std::io::Error> {
         write_tx,
         handle: SerialSourceHandle { thread_handle },
     })
+}
+
+/// Initial open with retry。起動時に port が未準備の場合に備え、
+/// exponential backoff で MAX_RETRIES 回まで retry する。
+fn open_with_retry(port_path: &str) -> Result<SerialTransport, std::io::Error> {
+    let config = serial_config();
+
+    // First attempt without delay.
+    match SerialTransport::open(port_path, &config) {
+        Ok(t) => return Ok(t),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                port = %port_path,
+                "Initial serial open failed, retrying"
+            );
+        }
+    }
+
+    for retry in 1..=MAX_RETRIES {
+        let backoff_secs = (1u64 << retry.min(5)).min(MAX_BACKOFF_SECS);
+        tracing::warn!(
+            port = %port_path,
+            retry,
+            backoff_secs,
+            "Retrying serial open"
+        );
+        std::thread::sleep(Duration::from_secs(backoff_secs));
+
+        match SerialTransport::open(port_path, &config) {
+            Ok(t) => {
+                tracing::info!(
+                    port = %port_path,
+                    retries = retry,
+                    "Serial port opened after retries"
+                );
+                return Ok(t);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    port = %port_path,
+                    retry,
+                    "Serial open retry failed"
+                );
+            }
+        }
+    }
+
+    Err(std::io::Error::other(format!(
+        "Failed to open {} after {} retries",
+        port_path, MAX_RETRIES
+    )))
 }
 
 /// Reconnect result: either a new transport, or a terminal condition.
