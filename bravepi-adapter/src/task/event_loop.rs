@@ -40,6 +40,9 @@ pub(crate) async fn event_loop(
                         tracing::info!("BravePI adapter shutting down");
                         return;
                     }
+                    Some(AdapterCommand::DeviceCommand(_)) => {
+                        tracing::warn!("DeviceCommand not yet implemented");
+                    }
                 }
             }
             result = bytes_rx.recv() => {
