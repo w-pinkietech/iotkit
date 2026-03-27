@@ -121,6 +121,8 @@ pub enum SensorKind {
     },
     OPT3001,
 }
+// ThermocoupleType is re-exported from rpi-local-adapter so that
+// gateway does not depend on bravepi-sensors directly.
 ```
 
 config validation:

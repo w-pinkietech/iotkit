@@ -265,7 +265,8 @@ Create `rpi-local-adapter/src/config.rs`:
 ```rust
 //! Adapter configuration and validation.
 
-use bravepi_sensors::mcp9600::ThermocoupleType;
+/// Re-export ThermocoupleType so users don't depend on bravepi-sensors directly.
+pub use bravepi_sensors::mcp9600::ThermocoupleType;
 
 /// Adapter configuration. Passed to `start()`.
 #[derive(Debug, Clone)]
@@ -430,7 +431,7 @@ Create `rpi-local-adapter/src/lib.rs`:
 
 pub mod config;
 
-pub use config::{RpiLocalConfig, SensorKind, SensorTarget};
+pub use config::{RpiLocalConfig, SensorKind, SensorTarget, ThermocoupleType};
 ```
 
 - [ ] **Step 4: Add workspace member**
@@ -1200,7 +1201,7 @@ pub mod config;
 mod polling_loop;
 mod sensors;
 
-pub use config::{RpiLocalConfig, SensorKind, SensorTarget};
+pub use config::{RpiLocalConfig, SensorKind, SensorTarget, ThermocoupleType};
 
 use iotkit_core_types::{AdapterCommand, AdapterEvent, AdapterId};
 use tokio::sync::mpsc;
@@ -1230,16 +1231,18 @@ impl AdapterHandle {
 
 /// Start the rpi-local-adapter.
 ///
-/// Validates config, spawns the polling loop task, returns an AdapterHandle.
-/// Requires a Tokio runtime. Returns Err on runtime absence or invalid config.
+/// Validates config first, then checks for tokio runtime, spawns the polling
+/// loop task, and returns an AdapterHandle.
 ///
 /// I2C bus open/probe/read failures are reported as AdapterEvent::AdapterError,
 /// not as start() errors.
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
+    // Validate config before runtime check so config errors are always
+    // reported as config errors, regardless of runtime presence.
+    config::validate_config(&config).map_err(std::io::Error::other)?;
+
     let runtime_handle =
         tokio::runtime::Handle::try_current().map_err(std::io::Error::other)?;
-
-    config::validate_config(&config).map_err(std::io::Error::other)?;
 
     let id = AdapterId::new("rpi-local:default");
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
@@ -1259,7 +1262,6 @@ pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bravepi_sensors::mcp9600::ThermocoupleType;
 
     /// Tokio runtime が無い状態で start() を呼ぶと panic せず Err を返す。
     /// #[tokio::test] ではなく plain #[test] で実行することで runtime 不在を保証する。
@@ -1279,17 +1281,23 @@ mod tests {
         assert!(result.is_err(), "start() should return Err without tokio runtime");
     }
 
+    /// Config validation runs before runtime check, so this test verifies
+    /// that invalid config produces a config-specific error message even
+    /// without a tokio runtime.
     #[test]
-    fn start_with_invalid_config_returns_error() {
-        // This also runs without tokio runtime, but config validation
-        // should fail before the runtime check matters.
+    fn start_with_invalid_config_returns_config_error() {
         let config = RpiLocalConfig {
             bus_path: "/dev/i2c-1".to_string(),
             poll_interval_ms: 0,
             targets: vec![],
         };
-        let result = start(config);
-        assert!(result.is_err(), "start() should return Err for invalid config");
+        let err = start(config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("poll_interval_ms"),
+            "expected config validation error, got: {}",
+            msg,
+        );
     }
 }
 ```
@@ -1332,8 +1340,7 @@ Create `rpi-local-adapter/tests/integration.rs`:
 use std::time::Duration;
 
 use iotkit_core_types::AdapterEvent;
-use rpi_local_adapter::{RpiLocalConfig, SensorKind, SensorTarget};
-use bravepi_sensors::mcp9600::ThermocoupleType;
+use rpi_local_adapter::{RpiLocalConfig, SensorKind, SensorTarget, ThermocoupleType};
 
 #[tokio::test]
 #[ignore]
@@ -1458,13 +1465,10 @@ iotkit-core-types = { path = "../core/types" }
 iotkit-core-engine = { path = "../core/engine" }
 bravepi-mainboard-adapter = { path = "../bravepi-mainboard-adapter" }
 rpi-local-adapter = { path = "../rpi-local-adapter" }
-bravepi-sensors = { path = "../bravepi-mainboard-adapter/sensors" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
-
-(`bravepi-sensors` is needed for `ThermocoupleType` in config construction.)
 
 - [ ] **Step 2: Rewrite main.rs with fan-in loop**
 
@@ -1475,7 +1479,6 @@ Replace `iotkit-gateway/src/main.rs` with:
 //! adapter を起動し、core/engine に event を渡す。
 
 use iotkit_core_engine::{Engine, EngineEvent};
-use iotkit_core_types::AdapterId;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -1492,9 +1495,14 @@ fn main() {
     rt.block_on(run(port_path));
 }
 
+/// Build rpi-local-adapter config from environment variables.
+///
+/// - RPI_LOCAL_I2C_BUS: bus path (default "/dev/i2c-1")
+/// - RPI_LOCAL_POLL_MS: poll interval in ms (default 1000)
+/// - RPI_LOCAL_TARGETS: comma-separated "addr:kind[:tc_type]"
+///   e.g. "0x60:mcp9600:K,0x44:opt3001" (default if unset)
 fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
-    use bravepi_sensors::mcp9600::ThermocoupleType;
-    use rpi_local_adapter::{SensorKind, SensorTarget};
+    use rpi_local_adapter::{SensorKind, SensorTarget, ThermocoupleType};
 
     let bus_path = std::env::var("RPI_LOCAL_I2C_BUS")
         .unwrap_or_else(|_| "/dev/i2c-1".to_string());
@@ -1504,10 +1512,9 @@ fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1000);
 
-    rpi_local_adapter::RpiLocalConfig {
-        bus_path,
-        poll_interval_ms,
-        targets: vec![
+    let targets = match std::env::var("RPI_LOCAL_TARGETS") {
+        Ok(s) => parse_targets(&s),
+        Err(_) => vec![
             SensorTarget {
                 address: 0x60,
                 kind: SensorKind::MCP9600 {
@@ -1519,7 +1526,55 @@ fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
                 kind: SensorKind::OPT3001,
             },
         ],
+    };
+
+    rpi_local_adapter::RpiLocalConfig {
+        bus_path,
+        poll_interval_ms,
+        targets,
     }
+}
+
+/// Parse target spec: "0x60:mcp9600:K,0x44:opt3001"
+fn parse_targets(s: &str) -> Vec<rpi_local_adapter::SensorTarget> {
+    use rpi_local_adapter::{SensorKind, SensorTarget, ThermocoupleType};
+
+    s.split(',')
+        .filter(|seg| !seg.is_empty())
+        .filter_map(|seg| {
+            let parts: Vec<&str> = seg.trim().split(':').collect();
+            if parts.len() < 2 {
+                tracing::warn!(segment = seg, "Ignoring malformed target spec");
+                return None;
+            }
+            let address = u8::from_str_radix(parts[0].trim_start_matches("0x"), 16).ok()?;
+            let kind = match parts[1] {
+                "mcp9600" => {
+                    let tc = match parts.get(2).copied().unwrap_or("K") {
+                        "K" => ThermocoupleType::K,
+                        "J" => ThermocoupleType::J,
+                        "T" => ThermocoupleType::T,
+                        "N" => ThermocoupleType::N,
+                        "S" => ThermocoupleType::S,
+                        "E" => ThermocoupleType::E,
+                        "B" => ThermocoupleType::B,
+                        "R" => ThermocoupleType::R,
+                        other => {
+                            tracing::warn!(tc_type = other, "Unknown thermocouple type, using K");
+                            ThermocoupleType::K
+                        }
+                    };
+                    SensorKind::MCP9600 { thermocouple_type: tc }
+                }
+                "opt3001" => SensorKind::OPT3001,
+                other => {
+                    tracing::warn!(kind = other, "Unknown sensor kind, skipping");
+                    return None;
+                }
+            };
+            Some(SensorTarget { address, kind })
+        })
+        .collect()
 }
 
 async fn run(port_path: String) {
