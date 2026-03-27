@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use iotkit_core_types::AdapterEvent;
-use rpi_local_adapter::{RpiLocalConfig, SensorKind, SensorTarget, ThermocoupleType};
+use rpi_local_adapter::{RpiLocalConfig, RpiLocalTarget, ThermocoupleType};
 
 #[tokio::test]
 #[ignore]
@@ -12,11 +12,9 @@ async fn real_i2c_discovers_and_reads_mcp9600() {
     let config = RpiLocalConfig {
         bus_path: "/dev/i2c-1".to_string(),
         poll_interval_ms: 1000,
-        targets: vec![SensorTarget {
+        targets: vec![RpiLocalTarget::MCP9600 {
             address: 0x60,
-            kind: SensorKind::MCP9600 {
-                thermocouple_type: ThermocoupleType::K,
-            },
+            thermocouple_type: ThermocoupleType::K,
         }],
     };
 
@@ -46,7 +44,7 @@ async fn real_i2c_discovers_and_reads_mcp9600() {
     );
 
     // Shutdown cleanly
-    handle.shutdown().await.expect("shutdown should succeed");
+    handle.shutdown().await;
 }
 
 #[tokio::test]
@@ -55,10 +53,7 @@ async fn real_i2c_discovers_and_reads_opt3001() {
     let config = RpiLocalConfig {
         bus_path: "/dev/i2c-1".to_string(),
         poll_interval_ms: 1000,
-        targets: vec![SensorTarget {
-            address: 0x44,
-            kind: SensorKind::OPT3001,
-        }],
+        targets: vec![RpiLocalTarget::OPT3001 { address: 0x44 }],
     };
 
     let mut handle = rpi_local_adapter::start(config).expect("start() should succeed");
@@ -85,5 +80,5 @@ async fn real_i2c_discovers_and_reads_opt3001() {
         event,
     );
 
-    handle.shutdown().await.expect("shutdown should succeed");
+    handle.shutdown().await;
 }

@@ -22,21 +22,18 @@ fn main() {
 /// All config (bus, interval, targets) is fixed in code.
 /// Config-driven setup is deferred to sub-project C (orchestrator).
 fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
-    use rpi_local_adapter::{SensorKind, SensorTarget, ThermocoupleType};
+    use rpi_local_adapter::{RpiLocalTarget, ThermocoupleType};
 
     rpi_local_adapter::RpiLocalConfig {
         bus_path: "/dev/i2c-1".to_string(),
         poll_interval_ms: 1000,
         targets: vec![
-            SensorTarget {
+            RpiLocalTarget::MCP9600 {
                 address: 0x60,
-                kind: SensorKind::MCP9600 {
-                    thermocouple_type: ThermocoupleType::K,
-                },
+                thermocouple_type: ThermocoupleType::K,
             },
-            SensorTarget {
+            RpiLocalTarget::OPT3001 {
                 address: 0x44,
-                kind: SensorKind::OPT3001,
             },
         ],
     }
@@ -149,10 +146,8 @@ async fn run(port_path: String) {
     if let Err(e) = bravepi.shutdown().await {
         tracing::error!(error = %e, "BravePI adapter shutdown error");
     }
-    if let Some(h) = rpi_local {
-        if let Err(e) = h.shutdown().await {
-            tracing::error!(error = %e, "RPi local adapter shutdown error");
-        }
+    if let Some(mut h) = rpi_local {
+        h.shutdown().await;
     }
 
     let devices = engine.devices().await;

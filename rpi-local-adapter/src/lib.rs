@@ -1,68 +1,76 @@
-//! rpi-local-adapter: RPi ローカル直結 hardware の adapter。
-//! v1 は I2C slice のみ。
+//! rpi-local-adapter: RPi local I2C sensor adapter.
+//! Thin wrapper over iotkit-base-adapter with MCP9600 and OPT3001 drivers.
 
-pub mod config;
-mod polling_loop;
-mod sensors;
+pub mod drivers;
 
-pub use config::{RpiLocalConfig, SensorKind, SensorTarget, ThermocoupleType};
+pub use bravepi_sensors::mcp9600::ThermocoupleType;
+pub use iotkit_base_adapter::AdapterHandle;
 
-use iotkit_core_types::{AdapterCommand, AdapterEvent, AdapterId};
-use tokio::sync::mpsc;
+use std::sync::Arc;
 
-/// Adapter handle. Core uses this to receive events and send commands.
-#[derive(Debug)]
-pub struct AdapterHandle {
-    pub id: AdapterId,
-    pub event_rx: mpsc::Receiver<AdapterEvent>,
-    pub command_tx: mpsc::Sender<AdapterCommand>,
-    task_handle: Option<tokio::task::JoinHandle<()>>,
+use iotkit_base_adapter::{BaseAdapterConfig, SensorTargetConfig};
+use iotkit_core_types::AdapterId;
+
+/// Adapter configuration. Passed to [`start`].
+#[derive(Debug, Clone)]
+pub struct RpiLocalConfig {
+    /// I2C bus path, e.g. "/dev/i2c-1".
+    pub bus_path: String,
+    /// Polling interval in milliseconds. Must be > 0.
+    pub poll_interval_ms: u64,
+    /// Sensor targets to probe and poll.
+    pub targets: Vec<RpiLocalTarget>,
 }
 
-impl AdapterHandle {
-    /// Cooperative shutdown: close event_rx, send Shutdown, await task completion.
-    /// Waits for any in-progress spawn_blocking (probe/poll cycle) to finish.
-    pub async fn shutdown(mut self) -> Result<(), String> {
-        self.event_rx.close();
-        let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
-        if let Some(handle) = self.task_handle.take() {
-            handle
-                .await
-                .map_err(|e| format!("polling_loop panicked: {}", e))?;
-        }
-        Ok(())
-    }
+/// A single sensor target on the I2C bus.
+#[derive(Debug, Clone)]
+pub enum RpiLocalTarget {
+    MCP9600 {
+        address: u8,
+        thermocouple_type: ThermocoupleType,
+    },
+    OPT3001 {
+        address: u8,
+    },
 }
 
 /// Start the rpi-local-adapter.
 ///
-/// Validates config first, then checks for tokio runtime, spawns the polling
-/// loop task, and returns an AdapterHandle.
-///
-/// I2C read failures and non-target-specific task errors are reported as
-/// `AdapterEvent::AdapterError`. Pending-target probe failures are logged
-/// as warnings only (no event). Neither surfaces as a `start()` error.
+/// Validates config (including per-driver validation), then delegates to
+/// `iotkit_base_adapter::start`.
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
-    // Validate config before runtime check so config errors are always
-    // reported as config errors, regardless of runtime presence.
-    config::validate_config(&config).map_err(std::io::Error::other)?;
+    let base_config = to_base_config(&config);
+    iotkit_base_adapter::start(AdapterId::new("rpi-local:default"), base_config)
+        .map_err(std::io::Error::other)
+}
 
-    let runtime_handle =
-        tokio::runtime::Handle::try_current().map_err(std::io::Error::other)?;
-
-    let id = AdapterId::new("rpi-local:default");
-    let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
-    let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
-
-    let task_handle =
-        runtime_handle.spawn(polling_loop::polling_loop(config, event_tx, command_rx));
-
-    Ok(AdapterHandle {
-        id,
-        event_rx,
-        command_tx,
-        task_handle: Some(task_handle),
-    })
+fn to_base_config(config: &RpiLocalConfig) -> BaseAdapterConfig {
+    let targets = config
+        .targets
+        .iter()
+        .map(|t| match t {
+            RpiLocalTarget::MCP9600 {
+                address,
+                thermocouple_type,
+            } => SensorTargetConfig {
+                address: *address,
+                driver: Arc::new(drivers::mcp9600::Mcp9600Driver {
+                    thermocouple_type: *thermocouple_type,
+                }),
+                key_suffix: None,
+            },
+            RpiLocalTarget::OPT3001 { address } => SensorTargetConfig {
+                address: *address,
+                driver: Arc::new(drivers::opt3001::Opt3001Driver),
+                key_suffix: None,
+            },
+        })
+        .collect();
+    BaseAdapterConfig {
+        bus_path: config.bus_path.clone(),
+        poll_interval_ms: config.poll_interval_ms,
+        targets,
+    }
 }
 
 #[cfg(test)]
@@ -70,21 +78,21 @@ mod tests {
     use super::*;
 
     /// Tokio runtime が無い状態で start() を呼ぶと panic せず Err を返す。
-    /// #[tokio::test] ではなく plain #[test] で実行することで runtime 不在を保証する。
     #[test]
     fn start_without_runtime_returns_error() {
         let config = RpiLocalConfig {
             bus_path: "/dev/i2c-1".to_string(),
             poll_interval_ms: 1000,
-            targets: vec![SensorTarget {
+            targets: vec![RpiLocalTarget::MCP9600 {
                 address: 0x60,
-                kind: SensorKind::MCP9600 {
-                    thermocouple_type: ThermocoupleType::K,
-                },
+                thermocouple_type: ThermocoupleType::K,
             }],
         };
         let result = start(config);
-        assert!(result.is_err(), "start() should return Err without tokio runtime");
+        assert!(
+            result.is_err(),
+            "start() should return Err without tokio runtime"
+        );
     }
 
     /// Config validation runs before runtime check, so this test verifies
@@ -102,6 +110,23 @@ mod tests {
         assert!(
             msg.contains("poll_interval_ms"),
             "expected config validation error, got: {}",
+            msg,
+        );
+    }
+
+    /// OPT3001 driver rejects poll intervals shorter than 200ms.
+    #[test]
+    fn opt3001_rejects_short_poll_interval() {
+        let config = RpiLocalConfig {
+            bus_path: "/dev/i2c-1".to_string(),
+            poll_interval_ms: 50,
+            targets: vec![RpiLocalTarget::OPT3001 { address: 0x44 }],
+        };
+        let err = start(config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("OPT3001"),
+            "expected OPT3001 validation error, got: {}",
             msg,
         );
     }

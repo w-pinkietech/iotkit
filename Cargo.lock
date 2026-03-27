@@ -350,6 +350,7 @@ name = "rpi-local-adapter"
 version = "0.1.0"
 dependencies = [
  "bravepi-sensors",
+ "iotkit-base-adapter",
  "iotkit-core-types",
  "rpi4b-transport",
  "tokio",
