@@ -1,4 +1,4 @@
-use iotkit_core_types::{AdapterCommand, AdapterEvent, SensorType};
+use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceCommand, DeviceCommandPayload, DeviceKey, SensorType};
 use tokio::sync::mpsc;
 
 use crate::transport::TransportError;
@@ -225,6 +225,155 @@ async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
             assert_eq!(device_key.as_str(), "bravepi:246880020140018b:contact_input");
         }
         other => panic!("expected SensorData (no re-discover), got {:?}", other),
+    }
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn device_command_request_reading_produces_downlink_bytes() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Discover a temperature device
+    let device: u64 = 0x246880020140018b;
+    let frame_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+
+    // Drain DeviceDiscovered + SensorData
+    let _discovered = event_rx.recv().await.unwrap();
+    let _sensor_data = event_rx.recv().await.unwrap();
+
+    // Send RequestReading command
+    command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
+        device_key: DeviceKey::new("bravepi:246880020140018b:temperature"),
+        payload: DeviceCommandPayload::RequestReading,
+    })).await.unwrap();
+
+    // Assert bytes appear on write_rx
+    let bytes = tokio::time::timeout(std::time::Duration::from_secs(1), write_rx.recv())
+        .await
+        .expect("timed out waiting for downlink bytes")
+        .expect("write_rx closed");
+    assert_eq!(bytes[0], 0x00, "first byte should be 0x00 (downlink direction marker)");
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn device_command_unknown_device_produces_adapter_error() {
+    let (_bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Send command to unknown device (no discovery)
+    command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
+        device_key: DeviceKey::new("bravepi:unknown:temperature"),
+        payload: DeviceCommandPayload::RequestReading,
+    })).await.unwrap();
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+        .await
+        .expect("timed out waiting for error event")
+        .expect("event_rx closed");
+
+    match event {
+        AdapterEvent::AdapterError { device_key, error } => {
+            assert_eq!(device_key, Some(DeviceKey::new("bravepi:unknown:temperature")));
+            assert!(error.contains("unknown device"), "error should contain 'unknown device', got: {}", error);
+        }
+        other => panic!("expected AdapterError, got {:?}", other),
+    }
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_output_to_non_contact_device_produces_adapter_error() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Discover a temperature device
+    let device: u64 = 0x246880020140018b;
+    let frame_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+
+    // Drain DeviceDiscovered + SensorData
+    let _discovered = event_rx.recv().await.unwrap();
+    let _sensor_data = event_rx.recv().await.unwrap();
+
+    // Send SetOutput to a temperature device (not ContactOutput)
+    command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
+        device_key: DeviceKey::new("bravepi:246880020140018b:temperature"),
+        payload: DeviceCommandPayload::SetOutput { value: true, duration_ms: Some(1000) },
+    })).await.unwrap();
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+        .await
+        .expect("timed out waiting for error event")
+        .expect("event_rx closed");
+
+    match event {
+        AdapterEvent::AdapterError { device_key, error } => {
+            assert!(device_key.is_some());
+            assert!(error.contains("ContactOutput"), "error should contain 'ContactOutput', got: {}", error);
+        }
+        other => panic!("expected AdapterError, got {:?}", other),
+    }
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_output_duration_exceeds_u16_max_produces_adapter_error() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Discover a contact_output device
+    let device: u64 = 0x1234567890abcdef;
+    let frame_bytes = build_sensor_frame_bytes(device, 258, -50, 80, 1, &[0x01]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+
+    // Drain DeviceDiscovered + SensorData
+    let _discovered = event_rx.recv().await.unwrap();
+    let _sensor_data = event_rx.recv().await.unwrap();
+
+    // Send SetOutput with duration_ms > u16::MAX
+    command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
+        device_key: DeviceKey::new("bravepi:1234567890abcdef:contact_output"),
+        payload: DeviceCommandPayload::SetOutput { value: true, duration_ms: Some(70000) },
+    })).await.unwrap();
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+        .await
+        .expect("timed out waiting for error event")
+        .expect("event_rx closed");
+
+    match event {
+        AdapterEvent::AdapterError { device_key, error } => {
+            assert!(device_key.is_some());
+            assert!(error.contains("duration_ms"), "error should contain 'duration_ms', got: {}", error);
+        }
+        other => panic!("expected AdapterError, got {:?}", other),
     }
 
     command_tx.send(AdapterCommand::Shutdown).await.unwrap();
