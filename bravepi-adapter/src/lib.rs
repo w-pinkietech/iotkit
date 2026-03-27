@@ -64,4 +64,3 @@ pub fn serial_config() -> SerialConfig {
         stop_bits: StopBits::One,
     }
 }
-

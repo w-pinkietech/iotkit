@@ -46,8 +46,8 @@ fn decode_uart(sample: UartSample<'_>) -> SensorReading {
 pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
     sensor_type: SensorType::Adc,
     key_suffix: "adc",
-    identity: identity,
-    decode_uart: decode_uart,
+    identity,
+    decode_uart,
 };
 
 #[cfg(test)]

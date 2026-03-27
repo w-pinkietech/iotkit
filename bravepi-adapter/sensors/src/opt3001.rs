@@ -36,8 +36,8 @@ pub const INIT_CONFIG: u16 = 0x10CC;
 /// OPT3001 の Result レジスタは 16bit:
 /// - bit[15:12] = exponent
 /// - bit[11:0]  = fractional
-/// ただし smbus2 の word_data はバイトスワップされて返るため、
-/// Python コードでは独自のビット抽出をしている。
+///   ただし smbus2 の word_data はバイトスワップされて返るため、
+///   Python コードでは独自のビット抽出をしている。
 pub fn from_i2c_raw(raw: u16) -> SensorReading {
     // Python: exponent = (raw & 0x00F0) >> 4
     //         fractional = ((raw & 0xFF00) >> 8) + ((raw & 0x000F) << 8)
@@ -65,8 +65,8 @@ fn decode_uart(sample: UartSample<'_>) -> SensorReading {
 pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
     sensor_type: SensorType::Illuminance,
     key_suffix: "illuminance",
-    identity: identity,
-    decode_uart: decode_uart,
+    identity,
+    decode_uart,
 };
 
 #[cfg(test)]
