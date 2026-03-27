@@ -105,11 +105,8 @@ pub(crate) fn frame_to_event(
                 None
             } else {
                 let sensor_type = sensor_type_from_bravepi_raw(sensor_type_raw);
-                Some(match device_key_suffix(&sensor_type) {
-                    Some(suffix) => {
-                        DeviceKey::new(format!("bravepi:{}:{}", device_number, suffix))
-                    }
-                    None => DeviceKey::new(device_number),
+                device_key_suffix(&sensor_type).map(|suffix| {
+                    DeviceKey::new(format!("bravepi:{}:{}", device_number, suffix))
                 })
             };
             Some((

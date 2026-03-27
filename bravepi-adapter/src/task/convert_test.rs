@@ -294,7 +294,7 @@ fn contact_output_has_module_identity() {
 }
 
 #[test]
-fn decode_error_unknown_sensor_type_falls_back_to_raw_key() {
+fn decode_error_unknown_sensor_type_produces_none_key() {
     let frame = BravePiFrame::DecodeError {
         device_number: "bad_device".to_string(),
         sensor_type_raw: 9999,
@@ -303,8 +303,9 @@ fn decode_error_unknown_sensor_type_falls_back_to_raw_key() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::AdapterError { device_key, .. } => {
-            assert_eq!(device_key.unwrap().as_str(), "bad_device");
+        AdapterEvent::AdapterError { device_key, error } => {
+            assert!(device_key.is_none(), "unknown sensor type should produce None key");
+            assert!(error.contains("bad payload"));
         }
         other => panic!("expected AdapterError, got {:?}", other),
     }
