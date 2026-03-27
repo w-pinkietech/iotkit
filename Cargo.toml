@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "core/types",
+    "core/engine",
     "rpi4b-driver/transport",
     "bravepi-adapter",
     "bravepi-adapter/codec",

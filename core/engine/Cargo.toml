@@ -1,0 +1,9 @@
+[package]
+name = "iotkit-core-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iotkit-core-types = { path = "../types" }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+tracing = "0.1"
