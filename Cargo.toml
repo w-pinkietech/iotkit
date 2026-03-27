@@ -1,10 +1,12 @@
 [workspace]
 members = [
     "core/types",
+    "core/engine",
     "rpi4b-driver/transport",
     "bravepi-adapter",
     "bravepi-adapter/codec",
     "bravepi-adapter/sensors",
     "bravepi-adapter/poc",
+    "iotkit-gateway",
 ]
 resolver = "3"
