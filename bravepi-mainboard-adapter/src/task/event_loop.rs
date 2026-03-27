@@ -39,9 +39,6 @@ pub(crate) async fn event_loop(
 
     loop {
         tokio::select! {
-            // Shutdown コマンドを優先処理する
-            biased;
-
             cmd = command_rx.recv() => {
                 match cmd {
                     Some(AdapterCommand::Shutdown) | None => {
@@ -49,7 +46,10 @@ pub(crate) async fn event_loop(
                         return;
                     }
                     Some(AdapterCommand::DeviceCommand(cmd)) => {
-                        handle_device_command(cmd, &devices, &write_tx, &event_tx).await;
+                        if handle_device_command(cmd, &devices, &write_tx, &event_tx).await {
+                            tracing::warn!("Event channel closed during device command handling");
+                            return;
+                        }
                     }
                 }
             }
@@ -60,7 +60,10 @@ pub(crate) async fn event_loop(
                         while let Some(frame) = codec.decode() {
                             // Handle ConfigFrame directly (needs devices map)
                             if let bravepi_codec::BravePiFrame::Config(ref cfg) = frame {
-                                handle_config_frame(cfg, &devices, &event_tx).await;
+                                if handle_config_frame(cfg, &devices, &event_tx).await {
+                                    tracing::warn!("Event channel closed during config frame handling");
+                                    return;
+                                }
                                 continue;
                             }
 
@@ -140,11 +143,12 @@ pub(crate) async fn event_loop(
     }
 }
 
+/// Returns true if the event channel is closed.
 async fn handle_config_frame(
     cfg: &bravepi_codec::ConfigFrame,
     devices: &HashMap<DeviceKey, DeviceState>,
     event_tx: &mpsc::Sender<AdapterEvent>,
-) {
+) -> bool {
     let handler = match lookup_handler(cfg.true_sensor_type) {
         Some(h) => h,
         None => {
@@ -153,7 +157,7 @@ async fn handle_config_frame(
                 device = %cfg.device_number,
                 "ConfigFrame with unknown sensor type, dropping"
             );
-            return;
+            return false;
         }
     };
 
@@ -166,7 +170,7 @@ async fn handle_config_frame(
             device_key = %device_key,
             "ConfigFrame for undiscovered device, dropping"
         );
-        return;
+        return false;
     }
 
     let config = DeviceConfigData {
@@ -186,26 +190,26 @@ async fn handle_config_frame(
         "Config frame received, sending DeviceConfig event"
     );
 
-    let _ = event_tx.send(AdapterEvent::DeviceConfig {
+    event_tx.send(AdapterEvent::DeviceConfig {
         device_key,
         config,
-    }).await;
+    }).await.is_err()
 }
 
+/// Returns true if the event channel is closed.
 async fn handle_device_command(
     cmd: iotkit_core_types::DeviceCommand,
     devices: &HashMap<DeviceKey, DeviceState>,
     write_tx: &BytesSender,
     event_tx: &mpsc::Sender<AdapterEvent>,
-) {
+) -> bool {
     let state = match devices.get(&cmd.device_key) {
         Some(s) => s,
         None => {
-            let _ = event_tx.send(AdapterEvent::AdapterError {
+            return event_tx.send(AdapterEvent::AdapterError {
                 device_key: Some(cmd.device_key),
                 error: "unknown device".to_string(),
-            }).await;
-            return;
+            }).await.is_err();
         }
     };
 
@@ -215,27 +219,24 @@ async fn handle_device_command(
     if let DeviceCommandPayload::SetOutput { duration_ms, .. } = &cmd.payload {
         if let Some(handler) = lookup_handler(target.raw_sensor_type) {
             if handler.sensor_type != SensorType::ContactOutput {
-                let _ = event_tx.send(AdapterEvent::AdapterError {
+                return event_tx.send(AdapterEvent::AdapterError {
                     device_key: Some(cmd.device_key),
                     error: "SetOutput sent to non-ContactOutput device".to_string(),
-                }).await;
-                return;
+                }).await.is_err();
             }
         } else {
-            let _ = event_tx.send(AdapterEvent::AdapterError {
+            return event_tx.send(AdapterEvent::AdapterError {
                 device_key: Some(cmd.device_key),
                 error: "SetOutput: unknown sensor type in registry".to_string(),
-            }).await;
-            return;
+            }).await.is_err();
         }
 
         if let Some(ms) = duration_ms
             && *ms > u16::MAX as u32 {
-                let _ = event_tx.send(AdapterEvent::AdapterError {
+                return event_tx.send(AdapterEvent::AdapterError {
                     device_key: Some(cmd.device_key),
                     error: format!("duration_ms {} exceeds u16 range (max {})", ms, u16::MAX),
-                }).await;
-                return;
+                }).await.is_err();
             }
     }
 
@@ -257,27 +258,26 @@ async fn handle_device_command(
     let bytes = match BravePiCodec::encode_downlink(&target.device_number_hex, &downlink_cmd) {
         Ok(b) => b,
         Err(e) => {
-            let _ = event_tx.send(AdapterEvent::AdapterError {
+            return event_tx.send(AdapterEvent::AdapterError {
                 device_key: Some(cmd.device_key),
                 error: format!("encode_downlink failed: {}", e),
-            }).await;
-            return;
+            }).await.is_err();
         }
     };
 
     match write_tx.try_send(bytes) {
-        Ok(()) => {}
+        Ok(()) => false,
         Err(mpsc::error::TrySendError::Full(_)) => {
-            let _ = event_tx.send(AdapterEvent::AdapterError {
+            event_tx.send(AdapterEvent::AdapterError {
                 device_key: Some(cmd.device_key),
                 error: "downlink queue full".to_string(),
-            }).await;
+            }).await.is_err()
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
-            let _ = event_tx.send(AdapterEvent::AdapterError {
+            event_tx.send(AdapterEvent::AdapterError {
                 device_key: None,
                 error: "write channel closed (transport failure)".to_string(),
-            }).await;
+            }).await.is_err()
         }
     }
 }
