@@ -27,8 +27,9 @@ async fn shutdown_command_exits_event_loop() {
     let (_bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);
     let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx));
+    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx));
 
     command_tx.send(AdapterCommand::Shutdown).await.unwrap();
     handle.await.unwrap();
@@ -41,8 +42,9 @@ async fn bytes_channel_error_produces_adapter_error() {
     let (bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);
     let (_command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx));
+    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx));
 
     bytes_tx.send(Err(TransportError { message: "serial port disconnected".to_string() })).await.unwrap();
     handle.await.unwrap();
@@ -61,8 +63,9 @@ async fn bytes_channel_close_produces_adapter_error() {
     let (bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);
     let (_command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx));
+    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx));
 
     drop(bytes_tx);
     handle.await.unwrap();
@@ -80,8 +83,9 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
     let (bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);
     let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
 
     let device: u64 = 0x246880020140018b;
     let frame_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
@@ -122,8 +126,9 @@ async fn contact_input_produces_device_discovered() {
     let (bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);
     let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
 
     let device: u64 = 0xaabbccdd00112233;
     let frame_bytes = build_sensor_frame_bytes(device, 257, -50, 80, 1, &[0x01]);
@@ -156,8 +161,9 @@ async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
     let (bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);
     let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
 
     let device: u64 = 0x246880020140018b;
 

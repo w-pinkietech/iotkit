@@ -7,10 +7,11 @@ use rpi4b_transport::SerialTransport;
 use tokio::sync::mpsc;
 
 use crate::serial_config;
-use crate::transport::{BytesReceiver, TransportError};
+use crate::transport::{BytesReceiver, BytesSender, TransportError};
 
 pub(crate) struct SerialSource {
     pub bytes_rx: BytesReceiver,
+    pub write_tx: BytesSender,
     pub handle: SerialSourceHandle,
 }
 
@@ -37,12 +38,14 @@ pub(crate) fn start(port_path: &str) -> Result<SerialSource, std::io::Error> {
     let transport = SerialTransport::open(port_path, &config)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let (bytes_tx, bytes_rx) = mpsc::channel(64);
+    let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(16);
     let owned_path = port_path.to_string();
     let thread_handle = std::thread::Builder::new()
         .name(format!("bravepi-serial-{}", port_path))
-        .spawn(move || serial_reader_thread(owned_path, transport, bytes_tx))?;
+        .spawn(move || serial_reader_thread(owned_path, transport, bytes_tx, write_rx))?;
     Ok(SerialSource {
         bytes_rx,
+        write_tx,
         handle: SerialSourceHandle { thread_handle },
     })
 }
@@ -51,6 +54,7 @@ fn serial_reader_thread(
     port_path: String,
     mut transport: SerialTransport,
     bytes_tx: mpsc::Sender<Result<Vec<u8>, TransportError>>,
+    mut write_rx: mpsc::Receiver<Vec<u8>>,
 ) {
     tracing::info!(port = %port_path, "Serial reader thread started");
     let mut buf = [0u8; 4096];
@@ -61,6 +65,13 @@ fn serial_reader_thread(
         if bytes_tx.is_closed() {
             tracing::info!("Bytes channel closed, reader thread exiting");
             return;
+        }
+
+        // Drain pending writes before reading
+        while let Ok(data) = write_rx.try_recv() {
+            if let Err(e) = transport.write(&data) {
+                tracing::error!(error = %e, port = %port_path, "Serial write error");
+            }
         }
 
         match transport.read(&mut buf, timeout) {

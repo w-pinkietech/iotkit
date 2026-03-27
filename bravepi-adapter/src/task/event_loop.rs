@@ -7,7 +7,7 @@ use bravepi_codec::BravePiCodec;
 use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceKey};
 use tokio::sync::mpsc;
 
-use crate::transport::BytesReceiver;
+use crate::transport::{BytesReceiver, BytesSender};
 use super::convert::frame_to_event;
 
 struct DeviceState {
@@ -21,7 +21,9 @@ pub(crate) async fn event_loop(
     mut bytes_rx: BytesReceiver,
     event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
+    write_tx: BytesSender,
 ) {
+    let _ = write_tx;
     tracing::info!(port = %port_path, "BravePI adapter event loop started");
 
     let mut codec = BravePiCodec::new();
