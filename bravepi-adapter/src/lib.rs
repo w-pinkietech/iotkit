@@ -4,10 +4,11 @@
 //! `task` モジュールで async task として起動し、AdapterEvent channel で core と通信する。
 
 pub mod task;
+pub(crate) mod registry;
 pub(crate) mod transport;
 
 use std::collections::BTreeMap;
-use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorType};
+use iotkit_core_types::{ConnectionInfo, ConnectionKind};
 use rpi4b_transport::{DataBits, Parity, SerialConfig, StopBits};
 
 /// BravePI adapter 内部の型安全な接続表現。
@@ -64,17 +65,3 @@ pub fn serial_config() -> SerialConfig {
     }
 }
 
-/// BravePI プロトコルの sensor_type 番号から core の SensorType に変換。
-pub fn sensor_type_from_bravepi_raw(raw: u16) -> SensorType {
-    match raw {
-        257 => SensorType::ContactInput,
-        258 => SensorType::ContactOutput,
-        259 => SensorType::Adc,
-        260 => SensorType::Ranging,
-        261 => SensorType::Temperature,
-        262 => SensorType::Acceleration,
-        263 => SensorType::DifferentialPressure,
-        264 => SensorType::Illuminance,
-        other => SensorType::Unknown(format!("bravepi:{}", other)),
-    }
-}
