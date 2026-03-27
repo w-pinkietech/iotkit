@@ -2,6 +2,7 @@
 //! v1 は I2C slice のみ。
 
 pub mod config;
+mod polling_loop;
 mod sensors;
 
 pub use config::{RpiLocalConfig, SensorKind, SensorTarget, ThermocoupleType};
