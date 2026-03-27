@@ -195,7 +195,6 @@ pub(crate) async fn polling_loop(
 
     loop {
         tokio::select! {
-            biased;
             cmd = command_rx.recv() => {
                 match cmd {
                     Some(AdapterCommand::Shutdown) | None => {
@@ -229,10 +228,13 @@ pub(crate) async fn polling_loop(
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Poll cycle spawn_blocking failed");
-                        let _ = event_tx.send(AdapterEvent::AdapterError {
+                        if event_tx.send(AdapterEvent::AdapterError {
                             device_key: None,
                             error: format!("poll cycle failed: {}", e),
-                        }).await;
+                        }).await.is_err() {
+                            tracing::warn!("Event channel closed, exiting poll loop");
+                            return;
+                        }
                     }
                 }
             }

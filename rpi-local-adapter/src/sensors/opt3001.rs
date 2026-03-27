@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 pub fn probe_opt3001(bus: &str, addr: u8) -> Result<SensorIdentity, String> {
     let mut t = I2cTransport::open(bus, &I2cConfig { address: addr as u16 })
-        .map_err(|e| format!("I2C open 0x{:02x}: {}", addr, e))?;
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", addr, bus, e))?;
 
     let mut id_buf = [0u8; 2];
     t.read_register(opt3001::REG_DEVICE_ID, &mut id_buf)
@@ -16,8 +16,8 @@ pub fn probe_opt3001(bus: &str, addr: u8) -> Result<SensorIdentity, String> {
     let device_id = u16::from_be_bytes(id_buf);
     if device_id != opt3001::DEVICE_ID {
         return Err(format!(
-            "OPT3001 device ID mismatch: expected 0x{:04x}, got 0x{:04x}",
-            opt3001::DEVICE_ID, device_id,
+            "OPT3001 0x{:02x}@{}: device ID mismatch: expected 0x{:04x}, got 0x{:04x}",
+            addr, bus, opt3001::DEVICE_ID, device_id,
         ));
     }
 
@@ -39,7 +39,7 @@ pub fn probe_opt3001(bus: &str, addr: u8) -> Result<SensorIdentity, String> {
 
 pub fn read_opt3001(bus: &str, addr: u8) -> Result<SensorReading, String> {
     let mut t = I2cTransport::open(bus, &I2cConfig { address: addr as u16 })
-        .map_err(|e| format!("I2C open 0x{:02x}: {}", addr, e))?;
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", addr, bus, e))?;
 
     let mut raw = [0u8; 2];
     t.read_register(opt3001::REG_RESULT, &mut raw)

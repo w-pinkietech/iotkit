@@ -18,23 +18,15 @@ fn main() {
     rt.block_on(run(port_path));
 }
 
-/// Hardcoded rpi-local-adapter config for v1.
-/// Env vars for bus path and poll interval only — no target parsing DSL.
-/// Config-driven target list is deferred to sub-project C (orchestrator).
+/// Fully hardcoded rpi-local-adapter config for v1.
+/// All config (bus, interval, targets) is fixed in code.
+/// Config-driven setup is deferred to sub-project C (orchestrator).
 fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
     use rpi_local_adapter::{SensorKind, SensorTarget, ThermocoupleType};
 
-    let bus_path = std::env::var("RPI_LOCAL_I2C_BUS")
-        .unwrap_or_else(|_| "/dev/i2c-1".to_string());
-
-    let poll_interval_ms: u64 = std::env::var("RPI_LOCAL_POLL_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1000);
-
     rpi_local_adapter::RpiLocalConfig {
-        bus_path,
-        poll_interval_ms,
+        bus_path: "/dev/i2c-1".to_string(),
+        poll_interval_ms: 1000,
         targets: vec![
             SensorTarget {
                 address: 0x60,

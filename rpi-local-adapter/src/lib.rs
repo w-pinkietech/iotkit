@@ -39,8 +39,9 @@ impl AdapterHandle {
 /// Validates config first, then checks for tokio runtime, spawns the polling
 /// loop task, and returns an AdapterHandle.
 ///
-/// I2C bus open/probe/read failures are reported as AdapterEvent::AdapterError,
-/// not as start() errors.
+/// I2C read failures and non-target-specific task errors are reported as
+/// `AdapterEvent::AdapterError`. Pending-target probe failures are logged
+/// as warnings only (no event). Neither surfaces as a `start()` error.
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
     // Validate config before runtime check so config errors are always
     // reported as config errors, regardless of runtime presence.

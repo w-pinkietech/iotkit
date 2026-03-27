@@ -11,7 +11,7 @@ pub fn probe_mcp9600(
     thermocouple_type: ThermocoupleType,
 ) -> Result<SensorIdentity, String> {
     let mut t = I2cTransport::open(bus, &I2cConfig { address: addr as u16 })
-        .map_err(|e| format!("I2C open 0x{:02x}: {}", addr, e))?;
+        .map_err(|e| format!("MCP9600 0x{:02x}@{}: I2C open: {}", addr, bus, e))?;
 
     let mut id_buf = [0u8; 2];
     t.read_register(mcp9600::REG_DEVICE_ID, &mut id_buf)
@@ -19,8 +19,8 @@ pub fn probe_mcp9600(
 
     if id_buf[0] != mcp9600::DEVICE_ID {
         return Err(format!(
-            "MCP9600 device ID mismatch: expected 0x{:02x}, got 0x{:02x}",
-            mcp9600::DEVICE_ID, id_buf[0],
+            "MCP9600 0x{:02x}@{}: device ID mismatch: expected 0x{:02x}, got 0x{:02x}",
+            addr, bus, mcp9600::DEVICE_ID, id_buf[0],
         ));
     }
 
@@ -40,7 +40,7 @@ pub fn probe_mcp9600(
 
 pub fn read_mcp9600(bus: &str, addr: u8) -> Result<SensorReading, String> {
     let mut t = I2cTransport::open(bus, &I2cConfig { address: addr as u16 })
-        .map_err(|e| format!("I2C open 0x{:02x}: {}", addr, e))?;
+        .map_err(|e| format!("MCP9600 0x{:02x}@{}: I2C open: {}", addr, bus, e))?;
 
     let mut raw = [0u8; 2];
     t.read_register(mcp9600::REG_HOT_JUNCTION, &mut raw)
