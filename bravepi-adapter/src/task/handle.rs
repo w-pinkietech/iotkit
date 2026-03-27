@@ -45,7 +45,8 @@ impl AdapterHandle {
 /// 戻り値の `AdapterHandle` 経由で event を受信し、command を送信する。
 /// serial read は専用スレッド、フレーム処理は tokio task で動作する。
 ///
-/// Tokio runtime 上で呼び出す必要がある。runtime が無い場合は `Err` を返す。
+/// Tokio runtime 上で呼び出す必要がある。runtime が無い場合は `Err` を返す
+/// (panic しない)。
 pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
     let runtime_handle = tokio::runtime::Handle::try_current()
         .map_err(std::io::Error::other)?;
@@ -68,4 +69,17 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
         source_handle: Some(source.handle),
         event_loop_handle: Some(event_loop_handle),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tokio runtime が無い状態で start() を呼ぶと panic せず Err を返す。
+    /// #[tokio::test] ではなく plain #[test] で実行することで runtime 不在を保証する。
+    #[test]
+    fn start_without_runtime_returns_error() {
+        let result = start("/dev/null".to_string());
+        assert!(result.is_err(), "start() should return Err without tokio runtime");
+    }
 }
