@@ -4,6 +4,7 @@
 //! UART (BravePI): Float32LE → ℃
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
+use crate::UartSample;
 
 fn sensor_type() -> SensorType { SensorType::Temperature }
 
@@ -57,6 +58,17 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let temp = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
     SensorReading::new(sensor_type(), vec![temp], vec!["celsius"])
 }
+
+fn decode_uart(sample: UartSample<'_>) -> SensorReading {
+    from_uart_payload(sample.payload)
+}
+
+pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
+    sensor_type: SensorType::Temperature,
+    key_suffix: "temperature",
+    identity,
+    decode_uart,
+};
 
 #[cfg(test)]
 mod tests {

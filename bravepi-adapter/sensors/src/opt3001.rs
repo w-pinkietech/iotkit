@@ -4,6 +4,7 @@
 //! UART (BravePI): Float32LE → Lux
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
+use crate::UartSample;
 
 fn sensor_type() -> SensorType { SensorType::Illuminance }
 
@@ -35,8 +36,8 @@ pub const INIT_CONFIG: u16 = 0x10CC;
 /// OPT3001 の Result レジスタは 16bit:
 /// - bit[15:12] = exponent
 /// - bit[11:0]  = fractional
-/// ただし smbus2 の word_data はバイトスワップされて返るため、
-/// Python コードでは独自のビット抽出をしている。
+///   ただし smbus2 の word_data はバイトスワップされて返るため、
+///   Python コードでは独自のビット抽出をしている。
 pub fn from_i2c_raw(raw: u16) -> SensorReading {
     // Python: exponent = (raw & 0x00F0) >> 4
     //         fractional = ((raw & 0xFF00) >> 8) + ((raw & 0x000F) << 8)
@@ -56,6 +57,17 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let lux = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
     SensorReading::new(sensor_type(), vec![lux], vec!["lux"])
 }
+
+fn decode_uart(sample: UartSample<'_>) -> SensorReading {
+    from_uart_payload(sample.payload)
+}
+
+pub const HANDLER: crate::SensorHandler = crate::SensorHandler {
+    sensor_type: SensorType::Illuminance,
+    key_suffix: "illuminance",
+    identity,
+    decode_uart,
+};
 
 #[cfg(test)]
 mod tests {
