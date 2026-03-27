@@ -54,6 +54,8 @@
 - Rename: `bravepi-adapter/` → `bravepi-mainboard-adapter/`
 - Modify: `bravepi-mainboard-adapter/Cargo.toml`
 - Modify: `bravepi-mainboard-adapter/src/task/handle.rs:58`
+- Modify: `bravepi-mainboard-adapter/src/task/convert.rs:27,70`
+- Modify: `bravepi-mainboard-adapter/src/task/event_loop.rs:161`
 - Modify: `bravepi-mainboard-adapter/poc/Cargo.toml`
 - Modify: `Cargo.toml` (workspace root)
 - Modify: `iotkit-gateway/Cargo.toml`
@@ -90,6 +92,23 @@ In `bravepi-mainboard-adapter/src/task/handle.rs`, change line 58:
 
 ```rust
     let id = AdapterId::new(format!("bravepi-mainboard:{}", port_path));
+```
+
+- [ ] **Step 3b: Update DeviceKey prefix in convert.rs and event_loop.rs**
+
+In `bravepi-mainboard-adapter/src/task/convert.rs`, change `"bravepi:"` to `"bravepi-mainboard:"` in all `format!` calls that generate DeviceKey strings:
+
+```rust
+// convert.rs:27
+format!("bravepi-mainboard:{}:{}", transmitter_id, handler.key_suffix)
+// convert.rs:70
+DeviceKey::new(format!("bravepi-mainboard:{}:{}", device_number, h.key_suffix))
+```
+
+In `bravepi-mainboard-adapter/src/task/event_loop.rs:161`:
+
+```rust
+format!("bravepi-mainboard:{}:{}", cfg.device_number, handler.key_suffix)
 ```
 
 - [ ] **Step 4: Update poc/Cargo.toml dependency path**
@@ -245,6 +264,7 @@ rpi-local-adapter as a second concrete adapter.
 
 - Rename crate directory and package name
 - Update AdapterId to bravepi-mainboard:{port_path}
+- Update DeviceKey prefix from bravepi: to bravepi-mainboard:
 - Update workspace members and gateway dependency"
 ```
 
@@ -306,20 +326,26 @@ pub fn sensor_ic_name(kind: &SensorKind) -> &'static str {
 }
 
 /// Validates config before starting the adapter.
-/// Checks: poll_interval_ms > 0, no duplicate (address, sensor_ic_name) targets.
 pub fn validate_config(config: &RpiLocalConfig) -> Result<(), String> {
+    if config.bus_path.is_empty() {
+        return Err("bus_path must not be empty".to_string());
+    }
     if config.poll_interval_ms == 0 {
         return Err("poll_interval_ms must be > 0".to_string());
     }
 
-    let mut seen = std::collections::HashSet::new();
+    let mut seen_addresses = std::collections::HashSet::new();
     for target in &config.targets {
-        let key = (target.address, sensor_ic_name(&target.kind));
-        if !seen.insert(key) {
+        if !(0x08..=0x77).contains(&target.address) {
             return Err(format!(
-                "duplicate target: address=0x{:02x}, kind={}",
+                "address 0x{:02x} outside valid 7-bit I2C range (0x08..=0x77)",
                 target.address,
-                sensor_ic_name(&target.kind),
+            ));
+        }
+        if !seen_addresses.insert(target.address) {
+            return Err(format!(
+                "duplicate address 0x{:02x}: same bus cannot have two devices at one address",
+                target.address,
             ));
         }
     }
@@ -364,34 +390,30 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_target_is_rejected() {
+    fn duplicate_address_is_rejected() {
         let mut config = valid_config();
         config.targets.push(SensorTarget {
             address: 0x60,
-            kind: SensorKind::MCP9600 {
-                thermocouple_type: ThermocoupleType::J,
-            },
+            kind: SensorKind::OPT3001,
         });
         let err = validate_config(&config).unwrap_err();
         assert!(err.contains("duplicate"), "error: {}", err);
     }
 
     #[test]
-    fn same_address_different_ic_is_allowed() {
+    fn address_out_of_range_is_rejected() {
         let mut config = valid_config();
-        config.targets = vec![
-            SensorTarget {
-                address: 0x60,
-                kind: SensorKind::MCP9600 {
-                    thermocouple_type: ThermocoupleType::K,
-                },
-            },
-            SensorTarget {
-                address: 0x60,
-                kind: SensorKind::OPT3001,
-            },
-        ];
-        assert!(validate_config(&config).is_ok());
+        config.targets[0].address = 0x80;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.contains("outside valid"), "error: {}", err);
+    }
+
+    #[test]
+    fn empty_bus_path_is_rejected() {
+        let mut config = valid_config();
+        config.bus_path = String::new();
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.contains("bus_path"), "error: {}", err);
     }
 
     #[test]
@@ -460,7 +482,7 @@ resolver = "3"
 cargo test -p rpi-local-adapter 2>&1
 ```
 
-Expected: 5 tests pass (valid_config_passes, zero_poll_interval_is_rejected, duplicate_target_is_rejected, same_address_different_ic_is_allowed, empty_targets_is_valid).
+Expected: 6 tests pass (valid_config_passes, zero_poll_interval_is_rejected, duplicate_address_is_rejected, address_out_of_range_is_rejected, empty_bus_path_is_rejected, empty_targets_is_valid).
 
 - [ ] **Step 6: Commit**
 
@@ -863,27 +885,20 @@ mod tests {
     }
 
     #[test]
-    fn discovered_then_read_in_same_cycle() {
+    fn discovered_only_emits_discovered_no_read_in_same_cycle() {
         let mut states = vec![TargetState::Pending];
         let key = DeviceKey::new("i2c:0x60:mcp9600");
-        let outcomes = vec![
-            PollOutcome::Discovered {
-                target_index: 0,
-                key: key.clone(),
-                identity: test_identity(),
-            },
-            PollOutcome::Reading {
-                key: key.clone(),
-                reading: test_reading(),
-            },
-        ];
+        let outcomes = vec![PollOutcome::Discovered {
+            target_index: 0,
+            key: key.clone(),
+            identity: test_identity(),
+        }];
 
         let events = apply_outcomes(outcomes, &mut states);
 
         assert!(matches!(states[0], TargetState::Active(_)));
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
         assert!(matches!(events[0], AdapterEvent::DeviceDiscovered { .. }));
-        assert!(matches!(events[1], AdapterEvent::SensorData { .. }));
     }
 
     #[test]
@@ -936,7 +951,7 @@ pub use config::{RpiLocalConfig, SensorKind, SensorTarget};
 cargo test -p rpi-local-adapter 2>&1
 ```
 
-Expected: 12 tests pass (5 config + 7 polling_loop).
+Expected: 12 tests pass (6 config + 6 polling_loop).
 
 - [ ] **Step 4: Commit**
 
@@ -964,7 +979,7 @@ Add to `rpi-local-adapter/src/polling_loop.rs`, above the `#[cfg(test)]` block:
 
 ```rust
 /// Executes one poll cycle synchronously (called inside spawn_blocking).
-/// For each target: Active → read, Pending → probe (+ read on success).
+/// For each target: Active → read, Pending → probe only (first read is next tick).
 pub(crate) fn poll_cycle(
     targets: &[SensorTarget],
     states: &[TargetState],
@@ -980,18 +995,12 @@ pub(crate) fn poll_cycle(
                         let key = device_key_for(target);
                         outcomes.push(PollOutcome::Discovered {
                             target_index: i,
-                            key: key.clone(),
+                            key,
                             identity,
                         });
-                        // Immediately read after successful discovery.
-                        match crate::sensors::read(&target.kind, bus_path, target.address) {
-                            Ok(reading) => {
-                                outcomes.push(PollOutcome::Reading { key, reading });
-                            }
-                            Err(msg) => {
-                                outcomes.push(PollOutcome::ReadError { key, message: msg });
-                            }
-                        }
+                        // Do NOT read in the same cycle — sensors like OPT3001
+                        // need conversion latency after init. First read happens
+                        // on the next poll tick.
                     }
                     Err(msg) => {
                         outcomes.push(PollOutcome::ProbeFailed {
@@ -1308,7 +1317,7 @@ mod tests {
 cargo test -p rpi-local-adapter 2>&1
 ```
 
-Expected: 14 tests pass (5 config + 7 polling_loop + 2 lib).
+Expected: 14 tests pass (6 config + 6 polling_loop + 2 lib).
 
 - [ ] **Step 3: Commit**
 
@@ -1369,7 +1378,8 @@ async fn real_i2c_discovers_and_reads_mcp9600() {
         event,
     );
 
-    // Next event should be SensorData (from startup probe read)
+    // SensorData arrives on next poll tick (not same cycle as probe,
+    // because sensors may need conversion latency after init).
     let event = tokio::time::timeout(Duration::from_secs(5), handle.event_rx.recv())
         .await
         .expect("timeout waiting for SensorData")
@@ -1398,6 +1408,7 @@ async fn real_i2c_discovers_and_reads_opt3001() {
 
     let mut handle = rpi_local_adapter::start(config).expect("start() should succeed");
 
+    // DeviceDiscovered from startup probe.
     let event = tokio::time::timeout(Duration::from_secs(5), handle.event_rx.recv())
         .await
         .expect("timeout waiting for DeviceDiscovered")
@@ -1408,6 +1419,7 @@ async fn real_i2c_discovers_and_reads_opt3001() {
         event,
     );
 
+    // SensorData arrives on next poll tick (conversion latency).
     let event = tokio::time::timeout(Duration::from_secs(5), handle.event_rx.recv())
         .await
         .expect("timeout waiting for SensorData")
@@ -1495,12 +1507,9 @@ fn main() {
     rt.block_on(run(port_path));
 }
 
-/// Build rpi-local-adapter config from environment variables.
-///
-/// - RPI_LOCAL_I2C_BUS: bus path (default "/dev/i2c-1")
-/// - RPI_LOCAL_POLL_MS: poll interval in ms (default 1000)
-/// - RPI_LOCAL_TARGETS: comma-separated "addr:kind[:tc_type]"
-///   e.g. "0x60:mcp9600:K,0x44:opt3001" (default if unset)
+/// Hardcoded rpi-local-adapter config for v1.
+/// Env vars for bus path and poll interval only — no target parsing DSL.
+/// Config-driven target list is deferred to sub-project C (orchestrator).
 fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
     use rpi_local_adapter::{SensorKind, SensorTarget, ThermocoupleType};
 
@@ -1512,9 +1521,10 @@ fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1000);
 
-    let targets = match std::env::var("RPI_LOCAL_TARGETS") {
-        Ok(s) => parse_targets(&s),
-        Err(_) => vec![
+    rpi_local_adapter::RpiLocalConfig {
+        bus_path,
+        poll_interval_ms,
+        targets: vec![
             SensorTarget {
                 address: 0x60,
                 kind: SensorKind::MCP9600 {
@@ -1526,88 +1536,41 @@ fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
                 kind: SensorKind::OPT3001,
             },
         ],
-    };
-
-    rpi_local_adapter::RpiLocalConfig {
-        bus_path,
-        poll_interval_ms,
-        targets,
     }
-}
-
-/// Parse target spec: "0x60:mcp9600:K,0x44:opt3001"
-fn parse_targets(s: &str) -> Vec<rpi_local_adapter::SensorTarget> {
-    use rpi_local_adapter::{SensorKind, SensorTarget, ThermocoupleType};
-
-    s.split(',')
-        .filter(|seg| !seg.is_empty())
-        .filter_map(|seg| {
-            let parts: Vec<&str> = seg.trim().split(':').collect();
-            if parts.len() < 2 {
-                tracing::warn!(segment = seg, "Ignoring malformed target spec");
-                return None;
-            }
-            let address = u8::from_str_radix(parts[0].trim_start_matches("0x"), 16).ok()?;
-            let kind = match parts[1] {
-                "mcp9600" => {
-                    let tc = match parts.get(2).copied().unwrap_or("K") {
-                        "K" => ThermocoupleType::K,
-                        "J" => ThermocoupleType::J,
-                        "T" => ThermocoupleType::T,
-                        "N" => ThermocoupleType::N,
-                        "S" => ThermocoupleType::S,
-                        "E" => ThermocoupleType::E,
-                        "B" => ThermocoupleType::B,
-                        "R" => ThermocoupleType::R,
-                        other => {
-                            tracing::warn!(tc_type = other, "Unknown thermocouple type, using K");
-                            ThermocoupleType::K
-                        }
-                    };
-                    SensorKind::MCP9600 { thermocouple_type: tc }
-                }
-                "opt3001" => SensorKind::OPT3001,
-                other => {
-                    tracing::warn!(kind = other, "Unknown sensor kind, skipping");
-                    return None;
-                }
-            };
-            Some(SensorTarget { address, kind })
-        })
-        .collect()
 }
 
 async fn run(port_path: String) {
     let engine = Engine::new();
 
-    // Start BravePI mainboard adapter.
+    // BravePI mainboard adapter is required: start failure is fatal.
     let mut bravepi = match bravepi_mainboard_adapter::task::start(port_path) {
         Ok(h) => {
             tracing::info!(adapter_id = %h.id, "BravePI mainboard adapter started");
-            Some(h)
+            h
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to start BravePI mainboard adapter");
-            None
+            std::process::exit(1);
         }
     };
+    let bravepi_id = bravepi.id.clone();
 
-    // Start RPi local adapter.
+    // RPi local adapter is optional: start failure is a warning.
     let mut rpi_local = match rpi_local_adapter::start(rpi_local_config()) {
         Ok(h) => {
             tracing::info!(adapter_id = %h.id, "RPi local adapter started");
             Some(h)
         }
         Err(e) => {
-            tracing::error!(error = %e, "Failed to start RPi local adapter");
+            tracing::warn!(error = %e, "Failed to start RPi local adapter, continuing without it");
             None
         }
     };
 
-    if bravepi.is_none() && rpi_local.is_none() {
-        tracing::error!("No adapters started, exiting");
-        return;
-    }
+    // Track whether each adapter's channel is still open.
+    // Handles are kept even after channel close for shutdown cleanup.
+    let mut bravepi_open = true;
+    let mut rpi_local_open = rpi_local.is_some();
 
     loop {
         tokio::select! {
@@ -1618,25 +1581,19 @@ async fn run(port_path: String) {
                 break;
             }
 
-            event = async {
-                match bravepi.as_mut() {
-                    Some(h) => h.event_rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
+            event = bravepi.event_rx.recv(), if bravepi_open => {
                 match event {
                     Some(ev) => {
-                        let adapter_id = bravepi.as_ref().unwrap().id.clone();
-                        tracing::debug!(adapter = %adapter_id, event = ?ev, "BravePI event");
+                        tracing::debug!(adapter = %bravepi_id, event = ?ev, "BravePI event");
                         engine.apply(EngineEvent {
-                            adapter_id,
+                            adapter_id: bravepi_id.clone(),
                             event: ev,
                         }).await;
                     }
                     None => {
                         tracing::info!("BravePI adapter channel closed");
-                        bravepi = None;
-                        if rpi_local.is_none() {
+                        bravepi_open = false;
+                        if !rpi_local_open {
                             tracing::info!("All adapter channels closed, exiting");
                             break;
                         }
@@ -1649,7 +1606,7 @@ async fn run(port_path: String) {
                     Some(h) => h.event_rx.recv().await,
                     None => std::future::pending().await,
                 }
-            } => {
+            }, if rpi_local_open => {
                 match event {
                     Some(ev) => {
                         let adapter_id = rpi_local.as_ref().unwrap().id.clone();
@@ -1661,8 +1618,8 @@ async fn run(port_path: String) {
                     }
                     None => {
                         tracing::info!("RPi local adapter channel closed");
-                        rpi_local = None;
-                        if bravepi.is_none() {
+                        rpi_local_open = false;
+                        if !bravepi_open {
                             tracing::info!("All adapter channels closed, exiting");
                             break;
                         }
@@ -1672,11 +1629,9 @@ async fn run(port_path: String) {
         }
     }
 
-    // Shutdown adapters.
-    if let Some(h) = bravepi {
-        if let Err(e) = h.shutdown().await {
-            tracing::error!(error = %e, "BravePI adapter shutdown error");
-        }
+    // Shutdown all adapters (handles kept even after channel close).
+    if let Err(e) = bravepi.shutdown().await {
+        tracing::error!(error = %e, "BravePI adapter shutdown error");
     }
     if let Some(h) = rpi_local {
         if let Err(e) = h.shutdown().await {
@@ -1711,11 +1666,11 @@ Expected: all tests pass. Integration tests skipped (marked `#[ignore]`).
 git add iotkit-gateway/
 git commit -m "feat(gateway): integrate rpi-local-adapter with fan-in loop
 
-- Start both bravepi-mainboard and rpi-local adapters
+- bravepi-mainboard is required (fatal on failure), rpi-local is optional
 - Fan-in loop: continue when one adapter closes, exit when all close
-- Fuse closed channels via Option + std::future::pending()
-- Config from env vars: RPI_LOCAL_I2C_BUS, RPI_LOCAL_POLL_MS
-- Graceful shutdown for all running adapters on ctrl-c"
+- Fuse closed channels via bool flag, keep handles for shutdown cleanup
+- Hardcoded target list for v1, env vars for bus_path and poll_interval only
+- Graceful shutdown for all adapters on ctrl-c"
 ```
 
 ---

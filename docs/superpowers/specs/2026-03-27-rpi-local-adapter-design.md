@@ -28,6 +28,9 @@ rename の内容:
 - workspace member path を更新する
 - `iotkit-gateway` の依存先を更新する
 - `AdapterId` は `bravepi-mainboard:{port_path}` に変更する
+- `DeviceKey` prefix は `bravepi:` → `bravepi-mainboard:` に変更する
+  - `convert.rs`, `event_loop.rs` の `format!("bravepi:{}:{}", ...)` を更新
+  - まだ外部消費者がいないため breaking change のリスクはない
 
 `rpi-local-adapter` v1 の境界:
 - RPi に直結している local hardware 全体を表す adapter とする
@@ -81,6 +84,10 @@ digraph dependencies {
 - `bravepi-sensors` は shared sensor crate として両 adapter から使う
 - ただし本 sub-project では workspace root への抽出は行わない
 - `bravepi-sensors` の物理配置は rename 後の adapter tree 配下のままにする
+- transitional coupling: `bravepi-sensors` は現時点で UART 固有の `UartSample` /
+  `SensorHandler` / `decode_uart` を含む。`rpi-local-adapter` はこれらを使わず、
+  I2C 向けの `from_i2c_raw` / `identity` / 定数のみを参照する。
+  crate 分割は本 sub-project では行わない
 
 ### v1 スコープ
 
@@ -127,10 +134,12 @@ pub enum SensorKind {
 
 config validation:
 - `poll_interval_ms == 0` は reject する
-- `targets` 内の `(address, sensor_ic_name)` 重複は reject する
-  - `DeviceKey` は `(address, sensor_ic_name)` 由来であり、重複すると engine 側の state が潰れる
+- `bus_path` が空文字列なら reject する
+- `address` は 7-bit I2C address 範囲 (`0x08..=0x77`) に限定する
+- `targets` 内の `address` 重複は reject する
+  - 同一 bus 上で同一 address に複数デバイスは物理的に不可能
 - validation は `validate_config(&RpiLocalConfig) -> Result<(), String>` に分離する
-- `start()` は runtime 不在チェックとは独立に `validate_config()` を呼ぶ
+- `start()` は config validation を runtime チェックより先に実行する
 
 ### AdapterId / DeviceKey
 
@@ -161,7 +170,8 @@ DeviceKey::new(format!("i2c:0x{:02x}:{}", address, sensor_ic_name(kind)))
 - `thermocouple_type` 等の IC 固有設定は key に含めない
 - key 文字列は adapter 内一意であればよい
 - core は key を parse しない
-- `validate_config` の重複判定も同じ `(address, sensor_ic_name)` ベースで行う
+- `validate_config` の重複判定は `address` 単独で行う
+  - 同一 bus 上で同一 address に異なる IC は物理的に共存できない
 
 ### Discovery Flow
 
@@ -178,13 +188,15 @@ startup probe
   ↓
 periodic polling
   ├─ Active  → read → SensorData / AdapterError
-  └─ Pending → probe → 成功なら DeviceDiscovered、state = Active、その後 read
+  └─ Pending → probe → 成功なら DeviceDiscovered、state = Active（read は次 tick から）
 ```
 
 ルール:
 - `DeviceDiscovered` は 1 device につき 1 回だけ送出する
 - 起動時に未発見の target は inventory に載せない
 - Pending target は各 tick で再 probe する
+- probe 成功時は DeviceDiscovered のみ送出し、first read は次の poll tick で行う
+  - OPT3001 等の single-shot sensor は init 後に conversion latency があるため
 - v1 では backoff を入れない
 - `DeviceLost` は出さない
 
@@ -391,6 +403,9 @@ byte order の扱い:
   `opt3001::from_i2c_raw(raw_u16)` に渡す
 - `write_register` も同様: `INIT_CONFIG.to_le_bytes()` を書く
 - MCP9600 は生 big-endian なのでそのまま `&[u8; 2]` を渡す（swap 不要）
+- write byte order は legacy Python (`opt3001.py` の `write_word_data(addr, REG_CONFIG, 0x10CC)`)
+  に準拠する。SMBus `write_word_data` は LSB first なので `to_le_bytes()` と一致する。
+  ただし legacy が正しい保証はないため、実装時に datasheet との突合を行う
 
 ### AdapterHandle Contract
 
@@ -460,6 +475,9 @@ impl AdapterHandle {
 - reader thread がないため shutdown は 3 段階で完結する
 - 進行中の `spawn_blocking` が終わるまで shutdown は待つ
   - v1 では協調停止で十分とする
+- 運用リスク: I2C bus または kernel driver が wedge した場合、`spawn_blocking` が
+  返らず shutdown が無期限に待つ可能性がある。v1 では許容し、
+  transport-level timeout の導入は後続 sub-project で検討する
 
 ### Gateway Integration
 
@@ -478,10 +496,16 @@ loop {
 }
 ```
 
+adapter startup policy:
+- `bravepi-mainboard-adapter` は required: start 失敗は fatal（既存動作を維持）
+- `rpi-local-adapter` は optional: start 失敗は warn、他 adapter で継続
+
 fan-in 終了条件:
 - 片方の adapter の `event_rx` が `None`（channel closed）になっても、
   もう片方が生きている限り fan-in loop は継続する
 - closed になった側の branch は `select!` から外す（fuse する）
+- channel が closed になった adapter の handle は破棄せず保持し、
+  shutdown 時に `shutdown()` を呼んで join/cleanup を実行する
 - 全 adapter の channel が closed になったら fan-in loop を抜ける
 - gateway の shutdown は全 adapter に `shutdown()` を呼んでから自身を終了する
 
