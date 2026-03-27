@@ -100,15 +100,11 @@ pub(crate) fn apply_outcomes(
             PollOutcome::Reading { key, reading } => {
                 // Reset read failure counter for matching Active state.
                 for state in states.iter_mut() {
-                    if let &mut TargetState::Active {
-                        key: ref k,
-                        ref mut consecutive_read_failures,
-                    } = state
+                    if let TargetState::Active { key: k, consecutive_read_failures } = state
+                        && k.as_str() == key.as_str()
                     {
-                        if k.as_str() == key.as_str() {
-                            *consecutive_read_failures = 0;
-                            break;
-                        }
+                        *consecutive_read_failures = 0;
+                        break;
                     }
                 }
                 events.push(AdapterEvent::SensorData {
