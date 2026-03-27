@@ -446,6 +446,81 @@ async fn config_frame_produces_device_config_event() {
 }
 
 #[tokio::test]
+async fn set_output_to_contact_output_device_produces_downlink_bytes() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Discover a contact_output device
+    let device: u64 = 0x1234567890abcdef;
+    let frame_bytes = build_sensor_frame_bytes(device, 258, -70, 100, 2, &[0x00, 0x01]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+    let _ = event_rx.recv().await.unwrap(); // DeviceDiscovered
+    let _ = event_rx.recv().await.unwrap(); // SensorData
+
+    // Send SetOutput command
+    command_tx.send(AdapterCommand::DeviceCommand(
+        iotkit_core_types::DeviceCommand {
+            device_key: iotkit_core_types::DeviceKey::new("bravepi:1234567890abcdef:contact_output"),
+            payload: iotkit_core_types::DeviceCommandPayload::SetOutput {
+                value: true,
+                duration_ms: Some(5000),
+            },
+        }
+    )).await.unwrap();
+
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        write_rx.recv(),
+    ).await.expect("should receive within timeout").expect("write channel should have data");
+
+    assert!(!bytes.is_empty());
+    assert_eq!(bytes[0], 0x00); // downlink direction
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn query_config_produces_downlink_bytes() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Discover a device
+    let device: u64 = 0x246880020140018b;
+    let frame_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+    let _ = event_rx.recv().await.unwrap(); // DeviceDiscovered
+    let _ = event_rx.recv().await.unwrap(); // SensorData
+
+    // Send QueryConfig command
+    command_tx.send(AdapterCommand::DeviceCommand(
+        iotkit_core_types::DeviceCommand {
+            device_key: iotkit_core_types::DeviceKey::new("bravepi:246880020140018b:temperature"),
+            payload: iotkit_core_types::DeviceCommandPayload::QueryConfig,
+        }
+    )).await.unwrap();
+
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        write_rx.recv(),
+    ).await.expect("should receive within timeout").expect("write channel should have data");
+
+    assert!(!bytes.is_empty());
+    assert_eq!(bytes[0], 0x00); // downlink direction
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
 async fn config_frame_for_undiscovered_device_is_dropped() {
     let (bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);

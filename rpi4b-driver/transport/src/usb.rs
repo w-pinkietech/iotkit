@@ -22,7 +22,7 @@ pub struct UsbSerialInfo {
 /// 接続中の USB シリアルデバイスを列挙する。
 pub fn list_usb_serial_devices() -> io::Result<Vec<UsbSerialInfo>> {
     let ports = serialport::available_ports()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
     let mut devices = Vec::new();
     for port in ports {
@@ -50,7 +50,7 @@ impl UsbSerialTransport {
     /// デバイスパス（例: /dev/ttyUSB0）と設定でオープン。
     pub fn open(path: &str, config: &SerialConfig) -> io::Result<Self> {
         let inner = SerialTransport::open(path, config)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
         Ok(Self { inner })
     }
 

@@ -36,7 +36,7 @@ const MAX_BACKOFF_SECS: u64 = 30;
 pub(crate) fn start(port_path: &str) -> Result<SerialSource, std::io::Error> {
     let config = serial_config();
     let transport = SerialTransport::open(port_path, &config)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     let (bytes_tx, bytes_rx) = mpsc::channel(64);
     let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(16);
     let owned_path = port_path.to_string();

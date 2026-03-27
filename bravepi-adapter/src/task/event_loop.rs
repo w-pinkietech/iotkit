@@ -229,15 +229,14 @@ async fn handle_device_command(
             return;
         }
 
-        if let Some(ms) = duration_ms {
-            if *ms > u16::MAX as u32 {
+        if let Some(ms) = duration_ms
+            && *ms > u16::MAX as u32 {
                 let _ = event_tx.send(AdapterEvent::AdapterError {
                     device_key: Some(cmd.device_key),
                     error: format!("duration_ms {} exceeds u16 range (max {})", ms, u16::MAX),
                 }).await;
                 return;
             }
-        }
     }
 
     let downlink_cmd = match cmd.payload {

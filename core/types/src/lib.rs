@@ -282,7 +282,7 @@ mod tests {
     fn config_value_variants() {
         assert_eq!(ConfigValue::String("hello".into()), ConfigValue::String("hello".into()));
         assert_eq!(ConfigValue::Integer(42), ConfigValue::Integer(42));
-        assert_eq!(ConfigValue::Float(3.14), ConfigValue::Float(3.14));
+        assert_eq!(ConfigValue::Float(1.5_f64), ConfigValue::Float(1.5_f64));
         assert_eq!(ConfigValue::Bool(true), ConfigValue::Bool(true));
     }
 

@@ -50,7 +50,7 @@ impl AdapterHandle {
 /// Tokio runtime 上で呼び出す必要がある。runtime が無い場合は `Err` を返す。
 pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
     let runtime_handle = tokio::runtime::Handle::try_current()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
 
     let source = serial_source::start(&port_path)?;
 

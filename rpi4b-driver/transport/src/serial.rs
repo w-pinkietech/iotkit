@@ -35,7 +35,7 @@ impl SerialTransport {
     pub fn read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<usize> {
         self.port
             .set_timeout(timeout)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
 
         match self.port.read(buf) {
             Ok(n) => Ok(n),
