@@ -115,16 +115,8 @@ pub fn start(id: AdapterId, config: BaseAdapterConfig) -> Result<AdapterHandle, 
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
 
-    let targets: Vec<(u8, Arc<dyn SensorDriver>, Option<String>)> = config
-        .targets
-        .into_iter()
-        .map(|t| (t.address, t.driver, t.key_suffix))
-        .collect();
-
     let task_handle = tokio::spawn(polling_loop::polling_loop(
-        config.bus_path,
-        targets,
-        config.poll_interval_ms,
+        config,
         event_tx,
         command_rx,
     ));

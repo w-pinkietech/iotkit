@@ -5,7 +5,7 @@ use iotkit_core_types::{
     AdapterCommand, AdapterEvent, DeviceKey, SensorIdentity, SensorReading,
 };
 
-use crate::SensorDriver;
+use crate::{BaseAdapterConfig, SensorDriver};
 
 // ── Internal failure threshold constants ─────────────────
 
@@ -225,20 +225,145 @@ pub(crate) fn poll_cycle(
     outcomes
 }
 
-// ── Stub polling loop ────────────────────────────────────
+// ── polling_loop ─────────────────────────────────────────
 
-/// Stub polling loop. Will be fleshed out in a later task.
 pub(crate) async fn polling_loop(
-    _bus_path: String,
-    _targets: Vec<(u8, Arc<dyn SensorDriver>, Option<String>)>,
-    _poll_interval_ms: u64,
-    _event_tx: mpsc::Sender<AdapterEvent>,
+    config: BaseAdapterConfig,
+    event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
 ) {
-    // Wait for shutdown or channel close.
-    while let Some(cmd) = command_rx.recv().await {
-        if matches!(cmd, AdapterCommand::Shutdown) {
-            break;
+    use std::time::Duration;
+    use tokio::time::{interval_at, Instant, MissedTickBehavior};
+
+    let bus_path = config.bus_path;
+    let poll_interval_ms = config.poll_interval_ms;
+    let period = Duration::from_millis(poll_interval_ms);
+
+    // Build Arc<Vec<TargetRuntime>> from config.
+    let targets: Arc<Vec<TargetRuntime>> = Arc::new(
+        config
+            .targets
+            .into_iter()
+            .map(|t| {
+                let key_suffix = t
+                    .key_suffix
+                    .unwrap_or_else(|| t.driver.ic_name().to_string());
+                TargetRuntime {
+                    address: t.address,
+                    driver: t.driver,
+                    key_suffix,
+                }
+            })
+            .collect(),
+    );
+
+    let mut states: Vec<TargetState> = targets.iter().map(|_| TargetState::new_pending()).collect();
+
+    // ── Startup probe ────────────────────────────────────
+    if !targets.is_empty() {
+        let t = Arc::clone(&targets);
+        let bp = bus_path.clone();
+        let s_snap: Vec<TargetState> = states.iter().map(|st| match st {
+            TargetState::Pending { consecutive_probe_failures, escalation_emitted } => {
+                TargetState::Pending { consecutive_probe_failures: *consecutive_probe_failures, escalation_emitted: *escalation_emitted }
+            }
+            TargetState::Active { key, consecutive_read_failures } => {
+                TargetState::Active { key: key.clone(), consecutive_read_failures: *consecutive_read_failures }
+            }
+        }).collect();
+
+        let outcomes = tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp))
+            .await
+            .expect("spawn_blocking panicked");
+
+        let all_failed = !outcomes.is_empty()
+            && outcomes.iter().all(|o| {
+                matches!(o, PollOutcome::ProbeFailed { .. })
+            });
+
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+
+        for event in events {
+            if event_tx.send(event).await.is_err() {
+                tracing::warn!("event channel closed during startup probe");
+                return;
+            }
+        }
+
+        if all_failed {
+            let event = AdapterEvent::AdapterError {
+                device_key: None,
+                error: "all targets failed startup probe".into(),
+            };
+            if event_tx.send(event).await.is_err() {
+                tracing::warn!("event channel closed during startup probe");
+                return;
+            }
+        }
+    }
+
+    // ── Timer ────────────────────────────────────────────
+    let now = Instant::now();
+    let mut ticker = interval_at(now + period, period);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    // ── Main loop ────────────────────────────────────────
+    loop {
+        if event_tx.is_closed() {
+            tracing::warn!("event channel closed, exiting polling loop");
+            return;
+        }
+
+        tokio::select! {
+            cmd_opt = command_rx.recv() => {
+                match cmd_opt {
+                    Some(AdapterCommand::Shutdown) | None => return,
+                    Some(AdapterCommand::DeviceCommand(cmd)) => {
+                        let event = AdapterEvent::AdapterError {
+                            device_key: Some(cmd.device_key),
+                            error: "unsupported: I2C polling adapter v1 does not handle DeviceCommand".into(),
+                        };
+                        if event_tx.send(event).await.is_err() {
+                            tracing::warn!("event channel closed while sending DeviceCommand rejection");
+                            return;
+                        }
+                    }
+                }
+            }
+            _ = ticker.tick() => {
+                let t = Arc::clone(&targets);
+                let bp = bus_path.clone();
+                let s_snap: Vec<TargetState> = states.iter().map(|st| match st {
+                    TargetState::Pending { consecutive_probe_failures, escalation_emitted } => {
+                        TargetState::Pending { consecutive_probe_failures: *consecutive_probe_failures, escalation_emitted: *escalation_emitted }
+                    }
+                    TargetState::Active { key, consecutive_read_failures } => {
+                        TargetState::Active { key: key.clone(), consecutive_read_failures: *consecutive_read_failures }
+                    }
+                }).collect();
+
+                let cycle_start = Instant::now();
+                let outcomes = tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp))
+                    .await
+                    .expect("spawn_blocking panicked");
+                let cycle_duration = cycle_start.elapsed();
+
+                if cycle_duration > period {
+                    tracing::warn!(
+                        cycle_ms = cycle_duration.as_millis() as u64,
+                        poll_interval_ms,
+                        "poll cycle exceeded interval"
+                    );
+                }
+
+                let events = apply_outcomes(outcomes, &mut states, &targets);
+                for event in events {
+                    if event_tx.send(event).await.is_err() {
+                        tracing::warn!("event channel closed during poll cycle");
+                        return;
+                    }
+                }
+            }
         }
     }
 }
@@ -306,6 +431,249 @@ mod tests {
             driver: Arc::new(MockDriver::new("MOCK", probe_results, read_results)),
             key_suffix: suffix.to_string(),
         }
+    }
+
+    use crate::{BaseAdapterConfig, SensorTargetConfig};
+    use std::time::Duration;
+
+    fn make_config(targets: Vec<SensorTargetConfig>) -> BaseAdapterConfig {
+        BaseAdapterConfig {
+            bus_path: "/dev/i2c-1".into(),
+            poll_interval_ms: 50,
+            targets,
+        }
+    }
+
+    fn make_sensor_target(
+        address: u8,
+        key_suffix: Option<String>,
+        probe_results: Vec<Result<SensorIdentity, String>>,
+        read_results: Vec<Result<SensorReading, String>>,
+    ) -> SensorTargetConfig {
+        SensorTargetConfig {
+            address,
+            driver: Arc::new(MockDriver::new("MOCK", probe_results, read_results)),
+            key_suffix,
+        }
+    }
+
+    // ── async polling_loop tests ────────────────────────
+
+    #[tokio::test]
+    async fn shutdown_command_stops_loop() {
+        let config = make_config(vec![]);
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+    }
+
+    #[tokio::test]
+    async fn command_channel_drop_stops_loop() {
+        let config = make_config(vec![]);
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        drop(command_tx);
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+    }
+
+    #[tokio::test]
+    async fn event_channel_close_detected_with_events() {
+        let config = make_config(vec![]);
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        drop(event_rx);
+
+        // Send a DeviceCommand to trigger a send on the closed event channel.
+        let _ = command_tx
+            .send(AdapterCommand::DeviceCommand(
+                iotkit_core_types::DeviceCommand {
+                    device_key: DeviceKey::new("test"),
+                    payload: iotkit_core_types::DeviceCommandPayload::QueryConfig,
+                },
+            ))
+            .await;
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+    }
+
+    #[tokio::test]
+    async fn event_channel_close_detected_without_events() {
+        let config = make_config(vec![]);
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (_command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        drop(event_rx);
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+    }
+
+    #[tokio::test]
+    async fn device_command_rejection_preserves_device_key() {
+        let config = make_config(vec![]);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        command_tx
+            .send(AdapterCommand::DeviceCommand(
+                iotkit_core_types::DeviceCommand {
+                    device_key: DeviceKey::new("i2c:0x40:temperature"),
+                    payload: iotkit_core_types::DeviceCommandPayload::QueryConfig,
+                },
+            ))
+            .await
+            .unwrap();
+
+        let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        match event {
+            AdapterEvent::AdapterError { device_key, error } => {
+                assert_eq!(
+                    device_key.as_ref().unwrap().as_str(),
+                    "i2c:0x40:temperature"
+                );
+                assert!(error.contains("unsupported"));
+            }
+            other => panic!("expected AdapterError, got {other:?}"),
+        }
+
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+    }
+
+    #[tokio::test]
+    async fn mock_probe_discovery_then_read() {
+        let identity = make_identity();
+        let reading = make_reading();
+        let target = make_sensor_target(
+            0x40,
+            Some("temperature".into()),
+            vec![Ok(identity.clone())],
+            vec![Ok(reading.clone())],
+        );
+        let config = make_config(vec![target]);
+
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        // First event: DeviceDiscovered from startup probe.
+        let ev1 = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        assert!(
+            matches!(ev1, AdapterEvent::DeviceDiscovered { .. }),
+            "expected DeviceDiscovered, got {ev1:?}"
+        );
+
+        // Second event: SensorData from first tick read.
+        let ev2 = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        assert!(
+            matches!(ev2, AdapterEvent::SensorData { .. }),
+            "expected SensorData, got {ev2:?}"
+        );
+
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+    }
+
+    #[tokio::test]
+    async fn empty_targets_no_startup_error() {
+        let config = make_config(vec![]);
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+
+        // No events should have been emitted.
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn all_targets_fail_startup_emits_immediate_error() {
+        let target = make_sensor_target(
+            0x40,
+            Some("temperature".into()),
+            vec![Err("NACK".into())],
+            vec![],
+        );
+        let config = make_config(vec![target]);
+
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+
+        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+
+        // Should receive an immediate AdapterError for all-targets-failed.
+        let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        match event {
+            AdapterEvent::AdapterError { device_key, error } => {
+                assert!(device_key.is_none());
+                assert!(
+                    error.contains("all targets failed startup probe"),
+                    "unexpected error: {error}"
+                );
+            }
+            other => panic!("expected AdapterError, got {other:?}"),
+        }
+
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
     }
 
     // ── poll_cycle tests ─────────────────────────────────

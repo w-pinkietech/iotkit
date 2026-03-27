@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
-tokio = { version = "1", features = ["rt", "sync", "macros", "fs"] }
+tokio = { version = "1", features = ["rt", "sync", "macros", "fs", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "sync", "macros", "fs", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt", "sync", "macros", "fs", "rt-multi-thread", "time"] }
