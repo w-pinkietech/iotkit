@@ -101,16 +101,16 @@ pub fn validate_config(config: &BaseAdapterConfig) -> Result<(), String> {
 // ── start ─────────────────────────────────────────────────
 
 /// Start the adapter. Must be called from within a Tokio runtime.
-pub fn start(id: AdapterId, config: BaseAdapterConfig) -> Result<AdapterHandle, String> {
-    validate_config(&config)?;
+pub fn start(id: AdapterId, config: BaseAdapterConfig) -> Result<AdapterHandle, std::io::Error> {
+    validate_config(&config).map_err(std::io::Error::other)?;
 
     // Ensure we are inside a Tokio runtime.
-    let _handle = Handle::try_current()
-        .map_err(|_| "start() must be called from within a Tokio runtime".to_string())?;
+    let _handle = Handle::try_current().map_err(std::io::Error::other)?;
 
     // Fail fast: verify the bus path is accessible.
-    std::fs::File::open(&config.bus_path)
-        .map_err(|e| format!("cannot open bus_path '{}': {}", config.bus_path, e))?;
+    std::fs::File::open(&config.bus_path).map_err(|e| {
+        std::io::Error::other(format!("cannot open bus_path '{}': {}", config.bus_path, e))
+    })?;
 
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
@@ -281,7 +281,8 @@ mod tests {
         // No Tokio runtime active on this thread.
         let cfg = stub_config();
         let err = start(AdapterId::new("test"), cfg).unwrap_err();
-        assert!(err.contains("runtime"), "unexpected error: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("no reactor") || msg.contains("runtime"), "unexpected error: {msg}");
     }
 
     #[tokio::test]
@@ -296,6 +297,7 @@ mod tests {
             }],
         };
         let err = start(AdapterId::new("test"), cfg).unwrap_err();
-        assert!(err.contains("cannot open bus_path"), "unexpected error: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("cannot open bus_path"), "unexpected error: {msg}");
     }
 }

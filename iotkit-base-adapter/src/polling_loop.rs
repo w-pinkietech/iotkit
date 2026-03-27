@@ -287,9 +287,13 @@ pub(crate) async fn polling_loop(
         }
 
         if all_failed {
+            let addrs: Vec<String> = targets.iter().map(|t| format!("0x{:02x}", t.address)).collect();
             let event = AdapterEvent::AdapterError {
                 device_key: None,
-                error: "all targets failed startup probe".into(),
+                error: format!(
+                    "all targets failed startup probe on bus {}: [{}]",
+                    bus_path, addrs.join(", "),
+                ),
             };
             if event_tx.send(event).await.is_err() {
                 tracing::warn!("event channel closed during startup probe");

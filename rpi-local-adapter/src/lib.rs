@@ -41,7 +41,6 @@ pub enum RpiLocalTarget {
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
     let base_config = to_base_config(&config);
     iotkit_base_adapter::start(AdapterId::new("rpi-local:default"), base_config)
-        .map_err(std::io::Error::other)
 }
 
 fn to_base_config(config: &RpiLocalConfig) -> BaseAdapterConfig {
