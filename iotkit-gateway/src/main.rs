@@ -71,8 +71,10 @@ async fn run(port_path: String) {
                 Some(h)
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to start RPi local adapter, continuing without it");
-                None
+                // When explicitly enabled, start failure is fatal — it indicates a
+                // config/code bug, not transient hardware absence.
+                tracing::error!(error = %e, "Failed to start RPi local adapter (enabled but failed)");
+                std::process::exit(1);
             }
         }
     } else {

@@ -123,18 +123,18 @@ pub(crate) async fn event_loop(
                     }
                     Some(Err(error)) => {
                         tracing::error!(%error, "Serial reader reported error");
-                        let _ = event_tx.send(AdapterEvent::AdapterError {
+                        let _closed = event_tx.send(AdapterEvent::AdapterError {
                             device_key: None,
                             error: error.to_string(),
-                        }).await;
+                        }).await.is_err();
                         return;
                     }
                     None => {
                         tracing::warn!("Serial reader thread exited without error report");
-                        let _ = event_tx.send(AdapterEvent::AdapterError {
+                        let _closed = event_tx.send(AdapterEvent::AdapterError {
                             device_key: None,
                             error: format!("Serial reader thread for {} exited unexpectedly", port_path),
-                        }).await;
+                        }).await.is_err();
                         return;
                     }
                 }

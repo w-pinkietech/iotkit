@@ -174,10 +174,11 @@ pub(crate) async fn polling_loop(
             }
             Err(e) => {
                 tracing::error!(error = %e, "Startup probe spawn_blocking failed");
-                let _ = event_tx.send(AdapterEvent::AdapterError {
+                // Best-effort send before returning — channel may already be closed.
+                let _closed = event_tx.send(AdapterEvent::AdapterError {
                     device_key: None,
                     error: format!("startup probe failed: {}", e),
-                }).await;
+                }).await.is_err();
                 return;
             }
         }
@@ -192,6 +193,9 @@ pub(crate) async fn polling_loop(
     // Use interval_at to avoid immediate first tick after startup probe.
     let start = tokio::time::Instant::now() + period;
     let mut interval = tokio::time::interval_at(start, period);
+    // Skip missed ticks instead of bursting — avoids clustered I2C reads
+    // after a stalled spawn_blocking or runtime pause.
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         // Check if the event consumer has been dropped, even if no events

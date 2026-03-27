@@ -65,6 +65,16 @@ pub fn validate_config(config: &RpiLocalConfig) -> Result<(), String> {
         }
     }
 
+    // OPT3001 single-shot conversion takes ~100ms. Ensure poll interval
+    // is long enough that the first read after probe has a valid sample.
+    let has_opt3001 = config.targets.iter().any(|t| matches!(t.kind, SensorKind::OPT3001));
+    if has_opt3001 && config.poll_interval_ms < 200 {
+        return Err(format!(
+            "poll_interval_ms {} too short for OPT3001 (minimum 200ms for conversion latency)",
+            config.poll_interval_ms,
+        ));
+    }
+
     Ok(())
 }
 
@@ -135,6 +145,29 @@ mod tests {
     fn empty_targets_is_valid() {
         let mut config = valid_config();
         config.targets.clear();
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn opt3001_rejects_short_poll_interval() {
+        let mut config = valid_config();
+        config.poll_interval_ms = 50; // too short for OPT3001 conversion
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.contains("OPT3001"), "error: {}", err);
+    }
+
+    #[test]
+    fn mcp9600_only_allows_short_poll_interval() {
+        let config = RpiLocalConfig {
+            bus_path: "/dev/i2c-1".to_string(),
+            poll_interval_ms: 50,
+            targets: vec![SensorTarget {
+                address: 0x60,
+                kind: SensorKind::MCP9600 {
+                    thermocouple_type: ThermocoupleType::K,
+                },
+            }],
+        };
         assert!(validate_config(&config).is_ok());
     }
 }
