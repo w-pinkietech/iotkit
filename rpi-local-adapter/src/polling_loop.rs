@@ -1,8 +1,9 @@
 //! Polling loop internals: state management, outcome processing, and the async loop.
 
-use iotkit_core_types::{AdapterEvent, DeviceKey, SensorIdentity, SensorReading};
+use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceKey, SensorIdentity, SensorReading};
+use tokio::sync::mpsc;
 
-use crate::config::{sensor_ic_name, SensorTarget};
+use crate::config::{sensor_ic_name, RpiLocalConfig, SensorTarget};
 
 /// Per-target discovery state.
 #[derive(Debug, Clone)]
@@ -141,6 +142,99 @@ pub(crate) fn poll_cycle(
     }
 
     outcomes
+}
+
+/// The main async polling loop. Runs as a spawned tokio task.
+pub(crate) async fn polling_loop(
+    config: RpiLocalConfig,
+    event_tx: mpsc::Sender<AdapterEvent>,
+    mut command_rx: mpsc::Receiver<AdapterCommand>,
+) {
+    let period = std::time::Duration::from_millis(config.poll_interval_ms);
+    let bus_path = config.bus_path.clone();
+    let targets = config.targets.clone();
+
+    // Initialize all targets as Pending.
+    let mut states: Vec<TargetState> = vec![TargetState::Pending; targets.len()];
+
+    // Startup probe: one spawn_blocking call for all targets.
+    {
+        let bus = bus_path.clone();
+        let tgts = targets.clone();
+        let st = states.clone();
+        match tokio::task::spawn_blocking(move || poll_cycle(&tgts, &st, &bus)).await {
+            Ok(outcomes) => {
+                let events = apply_outcomes(outcomes, &mut states);
+                for event in events {
+                    if event_tx.send(event).await.is_err() {
+                        tracing::warn!("Event channel closed during startup probe");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Startup probe spawn_blocking failed");
+                let _ = event_tx.send(AdapterEvent::AdapterError {
+                    device_key: None,
+                    error: format!("startup probe failed: {}", e),
+                }).await;
+                return;
+            }
+        }
+    }
+
+    tracing::info!(
+        active = states.iter().filter(|s| matches!(s, TargetState::Active(_))).count(),
+        pending = states.iter().filter(|s| matches!(s, TargetState::Pending)).count(),
+        "Startup probe complete, entering poll loop",
+    );
+
+    // Use interval_at to avoid immediate first tick after startup probe.
+    let start = tokio::time::Instant::now() + period;
+    let mut interval = tokio::time::interval_at(start, period);
+
+    loop {
+        tokio::select! {
+            biased;
+            cmd = command_rx.recv() => {
+                match cmd {
+                    Some(AdapterCommand::Shutdown) | None => {
+                        tracing::info!("rpi-local-adapter shutting down");
+                        return;
+                    }
+                    Some(AdapterCommand::DeviceCommand(dev_cmd)) => {
+                        let _ = event_tx.send(AdapterEvent::AdapterError {
+                            device_key: Some(dev_cmd.device_key),
+                            error: "unsupported command: rpi-local-adapter v1 does not handle DeviceCommand".to_string(),
+                        }).await;
+                    }
+                }
+            }
+            _ = interval.tick() => {
+                let bus = bus_path.clone();
+                let tgts = targets.clone();
+                let st = states.clone();
+                match tokio::task::spawn_blocking(move || poll_cycle(&tgts, &st, &bus)).await {
+                    Ok(outcomes) => {
+                        let events = apply_outcomes(outcomes, &mut states);
+                        for event in events {
+                            if event_tx.send(event).await.is_err() {
+                                tracing::warn!("Event channel closed, exiting poll loop");
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Poll cycle spawn_blocking failed");
+                        let _ = event_tx.send(AdapterEvent::AdapterError {
+                            device_key: None,
+                            error: format!("poll cycle failed: {}", e),
+                        }).await;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
