@@ -89,6 +89,60 @@ pub(crate) fn apply_outcomes(
     events
 }
 
+/// Executes one poll cycle synchronously (called inside spawn_blocking).
+/// For each target: Active → read, Pending → probe only (first read is next tick).
+pub(crate) fn poll_cycle(
+    targets: &[SensorTarget],
+    states: &[TargetState],
+    bus_path: &str,
+) -> Vec<PollOutcome> {
+    let mut outcomes = Vec::new();
+
+    for (i, target) in targets.iter().enumerate() {
+        match &states[i] {
+            TargetState::Pending => {
+                match crate::sensors::probe(&target.kind, bus_path, target.address) {
+                    Ok(identity) => {
+                        let key = device_key_for(target);
+                        outcomes.push(PollOutcome::Discovered {
+                            target_index: i,
+                            key,
+                            identity,
+                        });
+                        // Do NOT read in the same cycle — sensors like OPT3001
+                        // need conversion latency after init. First read happens
+                        // on the next poll tick.
+                    }
+                    Err(msg) => {
+                        outcomes.push(PollOutcome::ProbeFailed {
+                            target_index: i,
+                            message: msg,
+                        });
+                    }
+                }
+            }
+            TargetState::Active(key) => {
+                match crate::sensors::read(&target.kind, bus_path, target.address) {
+                    Ok(reading) => {
+                        outcomes.push(PollOutcome::Reading {
+                            key: key.clone(),
+                            reading,
+                        });
+                    }
+                    Err(msg) => {
+                        outcomes.push(PollOutcome::ReadError {
+                            key: key.clone(),
+                            message: msg,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    outcomes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
