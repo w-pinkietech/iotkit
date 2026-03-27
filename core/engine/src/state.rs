@@ -51,8 +51,64 @@ impl State {
                     }
                 }
             }
-            _ => {
-                // Remaining variants handled in Task 3
+            AdapterEvent::DeviceConfig { device_key, config } => {
+                let key = EngineDeviceKey {
+                    adapter_id,
+                    device_key: device_key.clone(),
+                };
+                match self.devices.get_mut(&key) {
+                    Some(ds) => {
+                        ds.view.config = Some(config);
+                        ds.last_seen = Instant::now();
+                    }
+                    None => {
+                        tracing::warn!(
+                            device_key = %device_key,
+                            "DeviceConfig for unknown device, ignoring"
+                        );
+                    }
+                }
+            }
+            AdapterEvent::DeviceLost { device_key, reason } => {
+                let key = EngineDeviceKey {
+                    adapter_id,
+                    device_key: device_key.clone(),
+                };
+                if self.devices.remove(&key).is_none() {
+                    tracing::debug!(
+                        device_key = %device_key,
+                        reason = %reason,
+                        "DeviceLost for unknown device, ignoring"
+                    );
+                }
+            }
+            AdapterEvent::AdapterError { device_key, error } => {
+                match device_key {
+                    Some(dk) => {
+                        let key = EngineDeviceKey {
+                            adapter_id,
+                            device_key: dk.clone(),
+                        };
+                        match self.devices.get_mut(&key) {
+                            Some(ds) => {
+                                ds.view.last_error = Some(error);
+                            }
+                            None => {
+                                tracing::warn!(
+                                    device_key = %dk,
+                                    error = %error,
+                                    "AdapterError for unknown device, ignoring"
+                                );
+                            }
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            error = %error,
+                            "Adapter-level error"
+                        );
+                    }
+                }
             }
         }
     }
