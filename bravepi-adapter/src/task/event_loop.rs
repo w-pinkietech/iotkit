@@ -1,10 +1,11 @@
 //! async task: raw bytes → codec → AdapterEvent。
 //! デバイスのライフサイクル追跡もここで行う。
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use bravepi_codec::{BravePiCodec, DownlinkCommand};
-use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceCommandPayload, DeviceKey, SensorType};
+use iotkit_core_types::{AdapterCommand, AdapterEvent, ConfigValue, DeviceCommandPayload, DeviceConfigData, DeviceKey, SensorType};
 use tokio::sync::mpsc;
 
 use crate::registry::lookup_handler;
@@ -57,6 +58,12 @@ pub(crate) async fn event_loop(
                     Some(Ok(data)) => {
                         codec.feed(&data);
                         while let Some(frame) = codec.decode() {
+                            // Handle ConfigFrame directly (needs devices map)
+                            if let bravepi_codec::BravePiFrame::Config(ref cfg) = frame {
+                                handle_config_frame(cfg, &devices, &event_tx).await;
+                                continue;
+                            }
+
                             // Extract target info from Sensor frames before frame_to_event consumes the frame
                             let target_info = match &frame {
                                 bravepi_codec::BravePiFrame::Sensor(s) => {
@@ -131,6 +138,58 @@ pub(crate) async fn event_loop(
             }
         }
     }
+}
+
+async fn handle_config_frame(
+    cfg: &bravepi_codec::ConfigFrame,
+    devices: &HashMap<DeviceKey, DeviceState>,
+    event_tx: &mpsc::Sender<AdapterEvent>,
+) {
+    let handler = match lookup_handler(cfg.true_sensor_type) {
+        Some(h) => h,
+        None => {
+            tracing::warn!(
+                raw = cfg.true_sensor_type,
+                device = %cfg.device_number,
+                "ConfigFrame with unknown sensor type, dropping"
+            );
+            return;
+        }
+    };
+
+    let device_key = DeviceKey::new(
+        format!("bravepi:{}:{}", cfg.device_number, handler.key_suffix),
+    );
+
+    if !devices.contains_key(&device_key) {
+        tracing::warn!(
+            device_key = %device_key,
+            "ConfigFrame for undiscovered device, dropping"
+        );
+        return;
+    }
+
+    let config = DeviceConfigData {
+        firmware_version: Some(cfg.firmware_version.clone()),
+        uplink_interval_secs: Some(cfg.uplink_interval),
+        properties: BTreeMap::from([
+            ("timezone".into(), ConfigValue::Integer(cfg.timezone as i64)),
+            ("ble_mode".into(), ConfigValue::Integer(cfg.ble_mode as i64)),
+            ("tx_power".into(), ConfigValue::Integer(cfg.tx_power as i64)),
+            ("advertise_interval".into(), ConfigValue::Integer(cfg.advertise_interval as i64)),
+        ]),
+    };
+
+    tracing::info!(
+        device = %cfg.device_number,
+        firmware = %cfg.firmware_version,
+        "Config frame received, sending DeviceConfig event"
+    );
+
+    let _ = event_tx.send(AdapterEvent::DeviceConfig {
+        device_key,
+        config,
+    }).await;
 }
 
 async fn handle_device_command(

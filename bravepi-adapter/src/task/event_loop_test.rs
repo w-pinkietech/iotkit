@@ -1,8 +1,31 @@
-use iotkit_core_types::{AdapterCommand, AdapterEvent, DeviceCommand, DeviceCommandPayload, DeviceKey, SensorType};
+use iotkit_core_types::{AdapterCommand, AdapterEvent, ConfigValue, DeviceCommand, DeviceCommandPayload, DeviceKey, SensorType};
 use tokio::sync::mpsc;
 
 use crate::transport::TransportError;
 use super::event_loop::event_loop;
+
+/// Build raw frame bytes for a BravePI config frame.
+/// sensor_type=0 in the header signals a config frame.
+fn build_config_frame_bytes(device_number: u64, true_sensor_type: u16) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&true_sensor_type.to_le_bytes());
+    payload.extend_from_slice(&[1, 2, 3]); // firmware "1.2.3"
+    payload.push(9);   // timezone
+    payload.push(1);   // ble_mode
+    payload.push(4);   // tx_power
+    payload.extend_from_slice(&1000u16.to_le_bytes()); // advertise_interval
+    payload.extend_from_slice(&60u32.to_le_bytes());   // uplink_interval
+
+    let payload_len = payload.len() as u16;
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&payload_len.to_le_bytes());
+    frame.extend_from_slice(&device_number.to_le_bytes());
+    frame.extend_from_slice(&0u16.to_le_bytes()); // sensor_type = 0 means config
+    frame.push((-50i8) as u8); // rssi
+    frame.push(0x00); // flag
+    frame.extend_from_slice(&payload);
+    frame
+}
 
 /// Build raw frame bytes for the BravePI codec.
 /// Format: [payload_len:u16 LE][device_number:u64 LE][sensor_type:u16 LE][rssi:i8][flag:u8][payload...]
@@ -378,4 +401,68 @@ async fn set_output_duration_exceeds_u16_max_produces_adapter_error() {
 
     command_tx.send(AdapterCommand::Shutdown).await.unwrap();
     handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn config_frame_produces_device_config_event() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Discover a temperature device (0x246880020140018b, sensor_type 261)
+    let device: u64 = 0x246880020140018b;
+    let sensor_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
+    bytes_tx.send(Ok(sensor_bytes)).await.unwrap();
+
+    // Drain DeviceDiscovered + SensorData
+    let _discovered = event_rx.recv().await.unwrap();
+    let _sensor_data = event_rx.recv().await.unwrap();
+
+    // Send config frame for the same device (true_sensor_type 261)
+    let config_bytes = build_config_frame_bytes(device, 261);
+    bytes_tx.send(Ok(config_bytes)).await.unwrap();
+
+    // Assert: AdapterEvent::DeviceConfig received
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+        .await
+        .expect("timed out waiting for DeviceConfig event")
+        .expect("event_rx closed");
+
+    match event {
+        AdapterEvent::DeviceConfig { device_key, config } => {
+            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+            assert_eq!(config.firmware_version, Some("1.2.3".to_string()));
+            assert_eq!(config.uplink_interval_secs, Some(60));
+            assert_eq!(config.properties.get("timezone"), Some(&ConfigValue::Integer(9)));
+        }
+        other => panic!("expected DeviceConfig, got {:?}", other),
+    }
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn config_frame_for_undiscovered_device_is_dropped() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+
+    // Send config frame WITHOUT any prior discovery
+    let device: u64 = 0x246880020140018b;
+    let config_bytes = build_config_frame_bytes(device, 261);
+    bytes_tx.send(Ok(config_bytes)).await.unwrap();
+
+    // Send Shutdown
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+
+    // Assert: no events received
+    assert!(event_rx.recv().await.is_none());
 }
