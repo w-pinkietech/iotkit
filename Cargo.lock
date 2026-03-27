@@ -124,8 +124,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-core-engine"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "iotkit-core-types"
 version = "0.1.0"
+
+[[package]]
+name = "iotkit-gateway"
+version = "0.1.0"
+dependencies = [
+ "bravepi-adapter",
+ "iotkit-core-engine",
+ "iotkit-core-types",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "lazy_static"
