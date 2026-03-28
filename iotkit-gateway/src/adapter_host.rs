@@ -49,7 +49,7 @@ impl AdapterHost {
             + Send
             + 'static,
     ) -> Result<(), String> {
-        if self.streams.contains_key(&id) {
+        if self.streams.contains_key(&id) || self.adapters.iter().any(|a| a.id == id) {
             return Err(format!("duplicate adapter ID: {id}"));
         }
         let stream = WrappedStream {
@@ -297,5 +297,55 @@ mod tests {
         host.shutdown_all().await;
         assert!(early_called.load(Ordering::SeqCst));
         assert!(alive_called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn duplicate_id_after_close_rejected() {
+        let mut host = AdapterHost::new();
+        let (tx, rx) = mpsc::channel::<AdapterEvent>(1);
+        host.register(AdapterId::new("r"), rx, || Box::pin(async { Ok(()) })).unwrap();
+
+        // Adapter closes
+        drop(tx);
+        let ev = host.next_event().await;
+        assert!(matches!(ev, Some(AdapterHostEvent::AdapterClosed(_))));
+
+        // Re-registering the same ID should be rejected (shutdown closure still exists)
+        let (_tx2, rx2) = mpsc::channel::<AdapterEvent>(1);
+        let result = host.register(AdapterId::new("r"), rx2, || Box::pin(async { Ok(()) }));
+        assert!(result.is_err(), "should reject duplicate ID even after adapter closed");
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_unblocks_buffered_sender() {
+        let mut host = AdapterHost::new();
+
+        // Capacity-1 channel: fill it, then block a sender
+        let (tx, rx) = mpsc::channel::<AdapterEvent>(1);
+        tx.send(stub_event()).await.unwrap(); // fills the buffer
+
+        host.register(
+            AdapterId::new("buf"),
+            rx,
+            || Box::pin(async { Ok(()) }),
+        ).unwrap();
+
+        // Spawn a sender that will block on the full channel
+        let sender = tokio::spawn(async move {
+            // This send will block until the receiver is dropped
+            let _ = tx.send(stub_event()).await;
+        });
+
+        // Give the sender a moment to block
+        tokio::task::yield_now().await;
+
+        // shutdown_all removes the stream (drops receiver), which unblocks the sender
+        host.shutdown_all().await;
+
+        // The blocked sender task should complete without hanging
+        tokio::time::timeout(std::time::Duration::from_secs(1), sender)
+            .await
+            .expect("sender should complete within timeout")
+            .expect("sender task should not panic");
     }
 }

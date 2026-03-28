@@ -118,6 +118,9 @@ async fn run(port_path: String) {
                         engine.apply(ev).await;
                     }
                     Some(AdapterHostEvent::AdapterClosed(id)) => {
+                        // During normal operation, an adapter closing is unexpected.
+                        // During shutdown (after loop break), closures are expected
+                        // and handled by shutdown_all().
                         tracing::warn!(
                             adapter = %id,
                             "Adapter channel closed unexpectedly"

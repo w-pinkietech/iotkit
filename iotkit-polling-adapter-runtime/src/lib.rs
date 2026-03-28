@@ -385,7 +385,11 @@ mod tests {
         let received = event_rx.recv().await;
         assert!(received.is_some(), "event_rx should receive the sent event");
 
-        parts.shutdown.shutdown().await.ok();
+        parts
+            .shutdown
+            .shutdown()
+            .await
+            .expect("shutdown should succeed");
         let cmd = command_rx.recv().await;
         assert!(
             matches!(cmd, Some(AdapterCommand::Shutdown)),
