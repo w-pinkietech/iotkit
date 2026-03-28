@@ -27,8 +27,8 @@ pub trait SensorDriver: Send + Sync {
 
 // ── Config types ──────────────────────────────────────────
 
-/// Configuration for a base adapter instance.
-pub struct BaseAdapterConfig {
+/// Configuration for a polling adapter instance.
+pub struct PollingAdapterConfig {
     pub bus_path: String,
     pub poll_interval_ms: u64,
     pub targets: Vec<SensorTargetConfig>,
@@ -72,8 +72,8 @@ impl AdapterHandle {
 
 // ── validate_config ───────────────────────────────────────
 
-/// Validate a [`BaseAdapterConfig`], returning `Err` on the first problem.
-pub fn validate_config(config: &BaseAdapterConfig) -> Result<(), String> {
+/// Validate a [`PollingAdapterConfig`], returning `Err` on the first problem.
+pub fn validate_config(config: &PollingAdapterConfig) -> Result<(), String> {
     if config.bus_path.is_empty() {
         return Err("bus_path must not be empty".into());
     }
@@ -101,7 +101,7 @@ pub fn validate_config(config: &BaseAdapterConfig) -> Result<(), String> {
 // ── start ─────────────────────────────────────────────────
 
 /// Start the adapter. Must be called from within a Tokio runtime.
-pub fn start(id: AdapterId, config: BaseAdapterConfig) -> Result<AdapterHandle, std::io::Error> {
+pub fn start(id: AdapterId, config: PollingAdapterConfig) -> Result<AdapterHandle, std::io::Error> {
     validate_config(&config).map_err(std::io::Error::other)?;
 
     // Ensure we are inside a Tokio runtime.
@@ -196,8 +196,8 @@ mod tests {
         }
     }
 
-    fn stub_config() -> BaseAdapterConfig {
-        BaseAdapterConfig {
+    fn stub_config() -> PollingAdapterConfig {
+        PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 1000,
             targets: vec![SensorTargetConfig {
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn address_out_of_range_rejected() {
         for bad_addr in [0x00, 0x07, 0x78, 0xFF] {
-            let cfg = BaseAdapterConfig {
+            let cfg = PollingAdapterConfig {
                 bus_path: "/dev/i2c-1".into(),
                 poll_interval_ms: 1000,
                 targets: vec![SensorTargetConfig {
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn driver_validate_called() {
-        let cfg = BaseAdapterConfig {
+        let cfg = PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 50,
             targets: vec![SensorTargetConfig {
@@ -287,7 +287,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_with_bad_bus_path() {
-        let cfg = BaseAdapterConfig {
+        let cfg = PollingAdapterConfig {
             bus_path: "/tmp/iotkit-nonexistent-bus-path-test".into(),
             poll_interval_ms: 1000,
             targets: vec![SensorTargetConfig {

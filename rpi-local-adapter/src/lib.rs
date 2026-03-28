@@ -8,7 +8,7 @@ pub use iotkit_polling_adapter_runtime::AdapterHandle;
 
 use std::sync::Arc;
 
-use iotkit_polling_adapter_runtime::{BaseAdapterConfig, SensorTargetConfig};
+use iotkit_polling_adapter_runtime::{PollingAdapterConfig, SensorTargetConfig};
 use iotkit_core_types::AdapterId;
 
 /// Adapter configuration. Passed to [`start`].
@@ -39,11 +39,11 @@ pub enum RpiLocalTarget {
 /// Validates config (including per-driver validation), then delegates to
 /// `iotkit_polling_adapter_runtime::start`.
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
-    let base_config = to_base_config(&config);
-    iotkit_polling_adapter_runtime::start(AdapterId::new("rpi-local:default"), base_config)
+    let polling_config = to_polling_config(&config);
+    iotkit_polling_adapter_runtime::start(AdapterId::new("rpi-local:default"), polling_config)
 }
 
-fn to_base_config(config: &RpiLocalConfig) -> BaseAdapterConfig {
+fn to_polling_config(config: &RpiLocalConfig) -> PollingAdapterConfig {
     let targets = config
         .targets
         .iter()
@@ -65,7 +65,7 @@ fn to_base_config(config: &RpiLocalConfig) -> BaseAdapterConfig {
             },
         })
         .collect();
-    BaseAdapterConfig {
+    PollingAdapterConfig {
         bus_path: config.bus_path.clone(),
         poll_interval_ms: config.poll_interval_ms,
         targets,

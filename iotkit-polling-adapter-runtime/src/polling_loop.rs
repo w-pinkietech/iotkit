@@ -5,7 +5,7 @@ use iotkit_core_types::{
     AdapterCommand, AdapterEvent, DeviceKey, SensorIdentity, SensorReading,
 };
 
-use crate::{BaseAdapterConfig, SensorDriver};
+use crate::{PollingAdapterConfig, SensorDriver};
 
 // ── Internal failure threshold constants ─────────────────
 
@@ -224,7 +224,7 @@ pub(crate) fn poll_cycle(
 // ── polling_loop ─────────────────────────────────────────
 
 pub(crate) async fn polling_loop(
-    config: BaseAdapterConfig,
+    config: PollingAdapterConfig,
     event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
 ) {
@@ -433,11 +433,11 @@ mod tests {
         }
     }
 
-    use crate::{BaseAdapterConfig, SensorTargetConfig};
+    use crate::{PollingAdapterConfig, SensorTargetConfig};
     use std::time::Duration;
 
-    fn make_config(targets: Vec<SensorTargetConfig>) -> BaseAdapterConfig {
-        BaseAdapterConfig {
+    fn make_config(targets: Vec<SensorTargetConfig>) -> PollingAdapterConfig {
+        PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 50,
             targets,
