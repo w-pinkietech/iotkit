@@ -334,9 +334,18 @@ pub(crate) async fn polling_loop(
             }
         }).collect();
 
-        let outcomes = tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp))
-            .await
-            .expect("spawn_blocking panicked");
+        let outcomes = match tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp)).await {
+            Ok(outcomes) => outcomes,
+            Err(e) => {
+                tracing::error!("startup probe spawn_blocking failed: {e}");
+                let event = AdapterEvent::AdapterError {
+                    device_key: None,
+                    error: format!("fatal: startup probe task failed: {e}"),
+                };
+                let _ = event_tx.send(event).await;
+                return;
+            }
+        };
 
         let all_failed = !outcomes.is_empty()
             && outcomes.iter().all(|o| {
@@ -409,9 +418,18 @@ pub(crate) async fn polling_loop(
                 }).collect();
 
                 let cycle_start = Instant::now();
-                let outcomes = tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp))
-                    .await
-                    .expect("spawn_blocking panicked");
+                let outcomes = match tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp)).await {
+                    Ok(outcomes) => outcomes,
+                    Err(e) => {
+                        tracing::error!("poll cycle spawn_blocking failed: {e}");
+                        let event = AdapterEvent::AdapterError {
+                            device_key: None,
+                            error: format!("fatal: poll cycle task failed: {e}"),
+                        };
+                        let _ = event_tx.send(event).await;
+                        return;
+                    }
+                };
                 let cycle_duration = cycle_start.elapsed();
 
                 if cycle_duration > period {
