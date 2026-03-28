@@ -177,6 +177,83 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
+// ── Pipeline: resolve ──────────────────────────────────
+
+/// Resolve a `RawConfig` into a validated `GatewayConfig`.
+///
+/// Applies defaults to `None` fields, validates constraints,
+/// and returns `Err(ConfigError::Validation)` on invalid values.
+pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, ConfigError> {
+    let db_path = raw.gateway.db_path.unwrap_or_else(|| "iotkit.db".to_string());
+    if db_path.is_empty() {
+        return Err(ConfigError::Validation("db_path must not be empty".to_string()));
+    }
+
+    // BravePI: enabled by default
+    let bravepi = {
+        let (enabled, port) = match raw.adapters.bravepi {
+            Some(bp) => (
+                bp.enabled.unwrap_or(true),
+                bp.port.unwrap_or_else(|| "/dev/ttyAMA0".to_string()),
+            ),
+            None => (true, "/dev/ttyAMA0".to_string()),
+        };
+        if enabled {
+            if port.is_empty() {
+                return Err(ConfigError::Validation(
+                    "adapters.bravepi.port must not be empty".to_string(),
+                ));
+            }
+            Some(BravepiConfig { port })
+        } else {
+            None
+        }
+    };
+
+    // RPi local: disabled by default
+    let rpi_local = {
+        let (enabled, bus_path, poll_interval_ms) = match raw.adapters.rpi_local {
+            Some(rpi) => (
+                rpi.enabled.unwrap_or(false),
+                rpi.bus_path.unwrap_or_else(|| "/dev/i2c-1".to_string()),
+                rpi.poll_interval_ms.unwrap_or(1000),
+            ),
+            None => (false, "/dev/i2c-1".to_string(), 1000),
+        };
+        if enabled {
+            if bus_path.is_empty() {
+                return Err(ConfigError::Validation(
+                    "adapters.rpi_local.bus_path must not be empty".to_string(),
+                ));
+            }
+            if poll_interval_ms == 0 {
+                return Err(ConfigError::Validation(
+                    "adapters.rpi_local.poll_interval_ms must be > 0".to_string(),
+                ));
+            }
+            Some(RpiLocalResolvedConfig {
+                bus_path,
+                poll_interval_ms,
+            })
+        } else {
+            None
+        }
+    };
+
+    if bravepi.is_none() && rpi_local.is_none() {
+        return Err(ConfigError::Validation(
+            "at least one adapter must be enabled".to_string(),
+        ));
+    }
+
+    Ok(GatewayConfig {
+        config_source: source,
+        db_path,
+        bravepi,
+        rpi_local,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +489,135 @@ poll_interval_ms = 500
             assert!(msg.contains("BRAVEPI_ENABLED"), "error should name the var: {msg}");
             assert!(msg.contains("yes"), "error should include raw value: {msg}");
         });
+    }
+
+    // ── resolve tests ──────────────────────────────────
+
+    fn raw_with_defaults() -> RawConfig {
+        RawConfig::default()
+    }
+
+    #[test]
+    fn resolve_all_defaults() {
+        let raw = raw_with_defaults();
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(config.db_path, "iotkit.db");
+        // bravepi enabled by default
+        let bp = config.bravepi.as_ref().unwrap();
+        assert_eq!(bp.port, "/dev/ttyAMA0");
+        // rpi_local disabled by default
+        assert!(config.rpi_local.is_none());
+    }
+
+    #[test]
+    fn resolve_bravepi_disabled() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.bravepi = Some(RawBravepiConfig {
+            enabled: Some(false),
+            port: None,
+        });
+        // rpi_local must be enabled since both can't be disabled
+        raw.adapters.rpi_local = Some(RawRpiLocalConfig {
+            enabled: Some(true),
+            bus_path: None,
+            poll_interval_ms: None,
+        });
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert!(config.bravepi.is_none());
+    }
+
+    #[test]
+    fn resolve_rpi_local_enabled() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.rpi_local = Some(RawRpiLocalConfig {
+            enabled: Some(true),
+            bus_path: Some("/dev/i2c-1".to_string()),
+            poll_interval_ms: Some(500),
+        });
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        let rpi = config.rpi_local.as_ref().unwrap();
+        assert_eq!(rpi.bus_path, "/dev/i2c-1");
+        assert_eq!(rpi.poll_interval_ms, 500);
+    }
+
+    #[test]
+    fn resolve_rpi_local_enabled_uses_defaults_for_missing_fields() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.rpi_local = Some(RawRpiLocalConfig {
+            enabled: Some(true),
+            bus_path: None,
+            poll_interval_ms: None,
+        });
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        let rpi = config.rpi_local.as_ref().unwrap();
+        assert_eq!(rpi.bus_path, "/dev/i2c-1");
+        assert_eq!(rpi.poll_interval_ms, 1000);
+    }
+
+    #[test]
+    fn resolve_rejects_empty_db_path() {
+        let mut raw = raw_with_defaults();
+        raw.gateway.db_path = Some(String::new());
+        let result = resolve(raw, ConfigSource::DefaultsOnly);
+        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("db_path")));
+    }
+
+    #[test]
+    fn resolve_rejects_empty_bus_path() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.rpi_local = Some(RawRpiLocalConfig {
+            enabled: Some(true),
+            bus_path: Some(String::new()),
+            poll_interval_ms: Some(1000),
+        });
+        let result = resolve(raw, ConfigSource::DefaultsOnly);
+        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("bus_path")));
+    }
+
+    #[test]
+    fn resolve_rejects_zero_poll_interval() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.rpi_local = Some(RawRpiLocalConfig {
+            enabled: Some(true),
+            bus_path: Some("/dev/i2c-1".to_string()),
+            poll_interval_ms: Some(0),
+        });
+        let result = resolve(raw, ConfigSource::DefaultsOnly);
+        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("poll_interval_ms")));
+    }
+
+    #[test]
+    fn resolve_rejects_empty_bravepi_port() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.bravepi = Some(RawBravepiConfig {
+            enabled: Some(true),
+            port: Some(String::new()),
+        });
+        let result = resolve(raw, ConfigSource::DefaultsOnly);
+        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("port")));
+    }
+
+    #[test]
+    fn resolve_rpi_local_disabled_explicit() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.rpi_local = Some(RawRpiLocalConfig {
+            enabled: Some(false),
+            bus_path: Some("/dev/i2c-1".to_string()),
+            poll_interval_ms: Some(500),
+        });
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert!(config.rpi_local.is_none());
+    }
+
+    #[test]
+    fn resolve_rejects_all_adapters_disabled() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.bravepi = Some(RawBravepiConfig {
+            enabled: Some(false),
+            port: None,
+        });
+        // rpi_local defaults to disabled
+        let result = resolve(raw, ConfigSource::DefaultsOnly);
+        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter")));
     }
 }
