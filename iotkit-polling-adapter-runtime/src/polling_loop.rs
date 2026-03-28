@@ -169,7 +169,17 @@ pub(crate) fn apply_outcomes(
                     *consecutive_probe_failures += 1;
                     let n = *consecutive_probe_failures;
 
-                    if is_panic || (n >= MAX_PROBE_FAILURES && !*escalation_emitted) {
+                    if is_panic {
+                        // Panic: emit immediately but do NOT consume escalation_emitted,
+                        // so the normal threshold path still fires later if needed.
+                        let addr = targets[target_index].address;
+                        events.push(AdapterEvent::AdapterError {
+                            device_key: None,
+                            error: format!(
+                                "target 0x{addr:02x} probe failed (driver panic): {message}"
+                            ),
+                        });
+                    } else if n >= MAX_PROBE_FAILURES && !*escalation_emitted {
                         let addr = targets[target_index].address;
                         events.push(AdapterEvent::AdapterError {
                             device_key: None,
@@ -1336,6 +1346,52 @@ mod tests {
         match &events[0] {
             AdapterEvent::AdapterError { error, .. } => {
                 assert!(error.contains("probe failed"), "expected probe failed in error: {error}");
+            }
+            other => panic!("expected AdapterError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn panic_does_not_consume_escalation_emitted() {
+        // After a panic probe, subsequent non-panic probe failures should
+        // still escalate at the threshold (escalation_emitted must NOT be set by panic path).
+        let targets = vec![make_target(0x40, "temperature")];
+        let mut states = vec![TargetState::new_pending()];
+
+        // 1. Panic probe — should emit immediately
+        let outcomes = vec![PollOutcome::ProbeFailed {
+            target_index: 0,
+            message: "driver panic".into(),
+            is_panic: true,
+        }];
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+        assert_eq!(events.len(), 1, "panic should emit immediate AdapterError");
+
+        // 2. Simulate MAX_PROBE_FAILURES - 1 more normal failures (already at 1 from panic)
+        for _ in 0..(MAX_PROBE_FAILURES - 2) {
+            let outcomes = vec![PollOutcome::ProbeFailed {
+                target_index: 0,
+                message: "NACK".into(),
+                is_panic: false,
+            }];
+            let events = apply_outcomes(outcomes, &mut states, &targets);
+            assert!(events.is_empty(), "below threshold, no event expected");
+        }
+
+        // 3. One more normal failure should hit threshold and emit
+        let outcomes = vec![PollOutcome::ProbeFailed {
+            target_index: 0,
+            message: "NACK".into(),
+            is_panic: false,
+        }];
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+        assert_eq!(events.len(), 1, "threshold reached, should emit AdapterError");
+        match &events[0] {
+            AdapterEvent::AdapterError { error, .. } => {
+                assert!(
+                    error.contains("consecutive times"),
+                    "expected threshold error, got: {error}"
+                );
             }
             other => panic!("expected AdapterError, got {other:?}"),
         }
