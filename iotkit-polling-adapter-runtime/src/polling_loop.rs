@@ -117,6 +117,7 @@ pub(crate) fn apply_outcomes(
                     reading,
                     rssi: None,
                     battery_pct: None,
+                    ingested_at: std::time::SystemTime::now(),
                 });
             }
 
@@ -969,6 +970,7 @@ mod tests {
                 reading,
                 rssi,
                 battery_pct,
+                ..
             } => {
                 assert_eq!(device_key.as_str(), "i2c:0x40:temperature");
                 assert_eq!(reading.values, vec![25.0]);
