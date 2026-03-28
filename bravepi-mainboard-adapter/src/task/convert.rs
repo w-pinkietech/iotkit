@@ -24,7 +24,7 @@ pub(crate) fn frame_to_event(
 
             let transmitter_id = s.device_number.clone();
             let device_key = DeviceKey::new(
-                format!("bravepi:{}:{}", transmitter_id, handler.key_suffix),
+                format!("bravepi-mainboard:{}:{}", transmitter_id, handler.key_suffix),
             );
 
             let conn_info = BravepiConnection::Uart {
@@ -67,7 +67,7 @@ pub(crate) fn frame_to_event(
                 None
             } else {
                 lookup_handler(sensor_type_raw).map(|h| {
-                    DeviceKey::new(format!("bravepi:{}:{}", device_number, h.key_suffix))
+                    DeviceKey::new(format!("bravepi-mainboard:{}:{}", device_number, h.key_suffix))
                 })
             };
             Some((

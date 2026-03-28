@@ -116,7 +116,7 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
 
     match event_rx.recv().await.expect("should receive DeviceDiscovered") {
         AdapterEvent::DeviceDiscovered { device_key, identity } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
             assert_eq!(identity.manufacturer, "Braveridge");
             assert_eq!(identity.ic_part_number, "MCP9600");
         }
@@ -125,7 +125,7 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
 
     match event_rx.recv().await.expect("should receive SensorData") {
         AdapterEvent::SensorData { device_key, reading, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
             assert_eq!(reading.sensor_type, SensorType::Temperature);
             assert!((reading.values[0] - 22.4375).abs() < 0.01);
         }
@@ -159,7 +159,7 @@ async fn contact_input_produces_device_discovered() {
 
     match event_rx.recv().await.expect("should receive DeviceDiscovered") {
         AdapterEvent::DeviceDiscovered { device_key, identity } => {
-            assert_eq!(device_key.as_str(), "bravepi:aabbccdd00112233:contact_input");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:aabbccdd00112233:contact_input");
             assert_eq!(identity.manufacturer, "Braveridge");
             assert_eq!(identity.ic_part_number, "Contact Input Module");
             assert_eq!(identity.sensor_type, SensorType::ContactInput);
@@ -169,7 +169,7 @@ async fn contact_input_produces_device_discovered() {
 
     match event_rx.recv().await.expect("should receive SensorData") {
         AdapterEvent::SensorData { device_key, reading, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:aabbccdd00112233:contact_input");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:aabbccdd00112233:contact_input");
             assert_eq!(reading.sensor_type, SensorType::ContactInput);
         }
         other => panic!("expected SensorData, got {:?}", other),
@@ -197,14 +197,14 @@ async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
     // DeviceDiscovered for temperature
     match event_rx.recv().await.expect("should receive DeviceDiscovered #1") {
         AdapterEvent::DeviceDiscovered { device_key, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
         }
         other => panic!("expected DeviceDiscovered, got {:?}", other),
     }
     // SensorData for temperature
     match event_rx.recv().await.expect("should receive SensorData #1") {
         AdapterEvent::SensorData { device_key, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
         }
         other => panic!("expected SensorData, got {:?}", other),
     }
@@ -216,14 +216,14 @@ async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
     // DeviceDiscovered for contact_input (different logical device)
     match event_rx.recv().await.expect("should receive DeviceDiscovered #2") {
         AdapterEvent::DeviceDiscovered { device_key, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:contact_input");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:contact_input");
         }
         other => panic!("expected DeviceDiscovered, got {:?}", other),
     }
     // SensorData for contact_input
     match event_rx.recv().await.expect("should receive SensorData #2") {
         AdapterEvent::SensorData { device_key, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:contact_input");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:contact_input");
         }
         other => panic!("expected SensorData, got {:?}", other),
     }
@@ -234,7 +234,7 @@ async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
 
     match event_rx.recv().await.expect("should receive SensorData only") {
         AdapterEvent::SensorData { device_key, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
         }
         other => panic!("expected SensorData (no re-discover), got {:?}", other),
     }
@@ -245,7 +245,7 @@ async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
 
     match event_rx.recv().await.expect("should receive SensorData only") {
         AdapterEvent::SensorData { device_key, .. } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:contact_input");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:contact_input");
         }
         other => panic!("expected SensorData (no re-discover), got {:?}", other),
     }
@@ -274,7 +274,7 @@ async fn device_command_request_reading_produces_downlink_bytes() {
 
     // Send RequestReading command
     command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
-        device_key: DeviceKey::new("bravepi:246880020140018b:temperature"),
+        device_key: DeviceKey::new("bravepi-mainboard:246880020140018b:temperature"),
         payload: DeviceCommandPayload::RequestReading,
     })).await.unwrap();
 
@@ -300,7 +300,7 @@ async fn device_command_unknown_device_produces_adapter_error() {
 
     // Send command to unknown device (no discovery)
     command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
-        device_key: DeviceKey::new("bravepi:unknown:temperature"),
+        device_key: DeviceKey::new("bravepi-mainboard:unknown:temperature"),
         payload: DeviceCommandPayload::RequestReading,
     })).await.unwrap();
 
@@ -311,7 +311,7 @@ async fn device_command_unknown_device_produces_adapter_error() {
 
     match event {
         AdapterEvent::AdapterError { device_key, error } => {
-            assert_eq!(device_key, Some(DeviceKey::new("bravepi:unknown:temperature")));
+            assert_eq!(device_key, Some(DeviceKey::new("bravepi-mainboard:unknown:temperature")));
             assert!(error.contains("unknown device"), "error should contain 'unknown device', got: {}", error);
         }
         other => panic!("expected AdapterError, got {:?}", other),
@@ -341,7 +341,7 @@ async fn set_output_to_non_contact_device_produces_adapter_error() {
 
     // Send SetOutput to a temperature device (not ContactOutput)
     command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
-        device_key: DeviceKey::new("bravepi:246880020140018b:temperature"),
+        device_key: DeviceKey::new("bravepi-mainboard:246880020140018b:temperature"),
         payload: DeviceCommandPayload::SetOutput { value: true, duration_ms: Some(1000) },
     })).await.unwrap();
 
@@ -382,7 +382,7 @@ async fn set_output_duration_exceeds_u16_max_produces_adapter_error() {
 
     // Send SetOutput with duration_ms > u16::MAX
     command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
-        device_key: DeviceKey::new("bravepi:1234567890abcdef:contact_output"),
+        device_key: DeviceKey::new("bravepi-mainboard:1234567890abcdef:contact_output"),
         payload: DeviceCommandPayload::SetOutput { value: true, duration_ms: Some(70000) },
     })).await.unwrap();
 
@@ -433,7 +433,7 @@ async fn config_frame_produces_device_config_event() {
 
     match event {
         AdapterEvent::DeviceConfig { device_key, config } => {
-            assert_eq!(device_key.as_str(), "bravepi:246880020140018b:temperature");
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
             assert_eq!(config.firmware_version, Some("1.2.3".to_string()));
             assert_eq!(config.uplink_interval_secs, Some(60));
             assert_eq!(config.properties.get("timezone"), Some(&ConfigValue::Integer(9)));
@@ -464,7 +464,7 @@ async fn set_output_to_contact_output_device_produces_downlink_bytes() {
     // Send SetOutput command
     command_tx.send(AdapterCommand::DeviceCommand(
         iotkit_core_types::DeviceCommand {
-            device_key: iotkit_core_types::DeviceKey::new("bravepi:1234567890abcdef:contact_output"),
+            device_key: iotkit_core_types::DeviceKey::new("bravepi-mainboard:1234567890abcdef:contact_output"),
             payload: iotkit_core_types::DeviceCommandPayload::SetOutput {
                 value: true,
                 duration_ms: Some(5000),
@@ -503,7 +503,7 @@ async fn query_config_produces_downlink_bytes() {
     // Send QueryConfig command
     command_tx.send(AdapterCommand::DeviceCommand(
         iotkit_core_types::DeviceCommand {
-            device_key: iotkit_core_types::DeviceKey::new("bravepi:246880020140018b:temperature"),
+            device_key: iotkit_core_types::DeviceKey::new("bravepi-mainboard:246880020140018b:temperature"),
             payload: iotkit_core_types::DeviceCommandPayload::QueryConfig,
         }
     )).await.unwrap();

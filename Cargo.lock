@@ -24,7 +24,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
-name = "bravepi-adapter"
+name = "bravepi-codec"
+version = "0.1.0"
+
+[[package]]
+name = "bravepi-mainboard-adapter"
 version = "0.1.0"
 dependencies = [
  "bravepi-codec",
@@ -36,14 +40,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "bravepi-codec"
-version = "0.1.0"
-
-[[package]]
 name = "bravepi-poc"
 version = "0.1.0"
 dependencies = [
- "bravepi-adapter",
+ "bravepi-mainboard-adapter",
  "iotkit-core-types",
  "tokio",
  "tracing",
@@ -140,12 +140,22 @@ version = "0.1.0"
 name = "iotkit-gateway"
 version = "0.1.0"
 dependencies = [
- "bravepi-adapter",
+ "bravepi-mainboard-adapter",
  "iotkit-core-engine",
  "iotkit-core-types",
+ "rpi-local-adapter",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iotkit-polling-adapter-runtime"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -334,6 +344,18 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "rpi-local-adapter"
+version = "0.1.0"
+dependencies = [
+ "bravepi-sensors",
+ "iotkit-core-types",
+ "iotkit-polling-adapter-runtime",
+ "rpi4b-transport",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "rpi4b-transport"

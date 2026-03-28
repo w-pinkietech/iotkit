@@ -1,12 +1,12 @@
 [package]
-name = "bravepi-adapter"
+name = "rpi-local-adapter"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
+iotkit-polling-adapter-runtime = { path = "../iotkit-polling-adapter-runtime" }
 rpi4b-transport = { path = "../rpi4b-driver/transport" }
-bravepi-codec = { path = "codec" }
-bravepi-sensors = { path = "sensors" }
+bravepi-sensors = { path = "../bravepi-mainboard-adapter/sensors" }
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 tracing = "0.1"

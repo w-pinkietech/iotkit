@@ -55,7 +55,7 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
 
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
-    let id = AdapterId::new(format!("bravepi:{}", port_path));
+    let id = AdapterId::new(format!("bravepi-mainboard:{}", port_path));
 
     let write_tx = source.write_tx;
     let event_loop_handle = runtime_handle.spawn(

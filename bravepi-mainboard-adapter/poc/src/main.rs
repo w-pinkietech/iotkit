@@ -3,7 +3,7 @@
 //! BravePI adapter を async task として起動し、
 //! core 側は AdapterEvent を受信して表示するだけの最小ループ。
 
-use bravepi_adapter::task;
+use bravepi_mainboard_adapter::task;
 use iotkit_core_types::AdapterEvent;
 
 #[tokio::main]
