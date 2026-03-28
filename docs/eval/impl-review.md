@@ -1,19 +1,33 @@
-# iotkit-next Coding Review Checklist
+# iotkit-next Implementation Review Guide
 
-`iotkit-next` の実装レベル、コードレベルのレビュー観点メモ。
-Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
+impl 評価時に Codex プロンプトへ注入する。
+Active Watchpoints を先に読み、次に Baseline Checklist を適用する。
 
-関連:
-- [checklist-architecture.md](./checklist-architecture.md)
+## Active Watchpoints
 
-## 使い方
+最近のレビューで観測されたプロジェクト固有の盲点。
+max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-- まず public API と hot path を見る。
-- 次に error path、境界条件、並行処理を見る。
-- 最後にテストとログで「壊れたときに追えるか」を確認する。
-- 指摘は「バグ」「将来壊れやすいコード」「既存方針からの逸脱」の順で出す。
+- Added: 2026-03-27
+  Revalidate by: 2026-06-27
+  Watchpoint: Every I2C error message must include bus path and address for field debugging on multi-bus/multi-sensor systems. Generic "read failed" messages are untriageable.
+  Observed in: rpi-local-adapter sensor modules.
 
-## API と責務
+- Added: 2026-03-27
+  Revalidate by: 2026-06-27
+  Watchpoint: `let _ = channel.send()` in some branches but `if send().is_err() { return }` in others creates inconsistent shutdown behavior. All send paths in a loop must handle closed channels the same way.
+  Observed in: rpi-local-adapter polling_loop.
+
+- Added: 2026-03-28
+  Revalidate by: 2026-06-28
+  Watchpoint: Timestamps must be captured at the point of observation (e.g. successful I2C read), not at event construction time. Batch-collect-then-emit patterns can introduce seconds of skew on degraded buses.
+  Observed in: timestamp-provenance design review.
+
+## Baseline Checklist
+
+安定的なコーディングレビュー基準。ポリシー変更時のみ更新する。
+
+### API と責務
 
 - [ ] public 関数や public 型は、その crate の責務に見合う最小範囲か。
 - [ ] private にできる実装詳細を `pub` にしていないか。
@@ -21,7 +35,7 @@ Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 - [ ] domain 変換が codec や transport に紛れ込んでいないか。
 - [ ] 追加変更で `match` や `if` の集中点が肥大化していないか。
 
-## データ検証
+### データ検証
 
 - [ ] 長さチェック前に payload を読んでいないか。
 - [ ] `data_count`、payload 長、実際の decode 結果の整合が取れているか。
@@ -29,7 +43,7 @@ Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 - [ ] unknown 値を握りつぶして誤った既知データにしていないか。
 - [ ] placeholder 値を本物の `DeviceKey` や identity に変換していないか。
 
-## エラーハンドリング
+### エラーハンドリング
 
 - [ ] runtime path に `unwrap`、`expect`、panic 前提コードがないか。
 - [ ] 返す error が port、device、sensor_type など追跡に必要な文脈を持っているか。
@@ -37,7 +51,7 @@ Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 - [ ] recoverable error と fatal error が区別されているか。
 - [ ] `std::io::ErrorKind::Other` の手組みより `std::io::Error::other` が使える場所で使っているか。
 
-## async / thread / channel
+### async / thread / channel
 
 - [ ] bounded channel のサイズに意図があるか。
 - [ ] `send().await` の失敗時に task をどう終わらせるか明確か。
@@ -46,14 +60,14 @@ Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 - [ ] event の送信順序に意味がある場合、その順序がコード上で保証されているか。
 - [ ] 再接続時に state を引き継ぐべきものと捨てるべきものが整理されているか。
 
-## メモリと割り当て
+### メモリと割り当て
 
 - [ ] hot path で不要な `clone()`、`to_vec()`、`String` 生成を繰り返していないか。
 - [ ] 上限のない buffer growth がないか。
 - [ ] 攻撃的または壊れた入力でメモリが増え続けないか。
 - [ ] 長寿命 state がデバイス数や入力量に応じて無制限に伸びないか。
 
-## Rust らしさ
+### Rust らしさ
 
 - [ ] `Result`、`Option`、enum を使うべきところで文字列フラグや sentinel 値に逃げていないか。
 - [ ] 所有権の都合だけで不自然な clone を増やしていないか。
@@ -61,14 +75,14 @@ Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 - [ ] `Default`、`From`、`TryFrom`、newtype などを使うと読みやすくなる場面を逃していないか。
 - [ ] 命名が役割を正しく表しているか。`reader`、`convert`、`handle` が本当にその責務だけか。
 
-## ログと観測可能性
+### ログと観測可能性
 
 - [ ] `tracing` の field が文字列連結ではなく構造化されているか。
 - [ ] 異常系で必要な field が抜けていないか。
 - [ ] 同じ障害が繰り返されたとき、ログだけで時系列を追えるか。
 - [ ] warning と error の使い分けに一貫性があるか。
 
-## テスト
+### テスト
 
 - [ ] 変更した分岐に対応するテストが追加されているか。
 - [ ] バグ修正なら再発防止テストがあるか。
@@ -77,14 +91,7 @@ Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 - [ ] テストが実装詳細ではなく契約を見ているか。
 - [ ] 新しいテスト自体が lint failure を増やしていないか。
 
-## ドキュメントと保守性
-
-- [ ] コメントは必要な理由や制約を書いていて、コードの逐語説明になっていないか。
-- [ ] README や設計メモと実装の前提がズレていないか。
-- [ ] magic number はプロトコル仕様か、意味のある定数名に切り出せるか。
-- [ ] 将来の reviewer が「なぜこうしたか」を追える形になっているか。
-
-## レビュー時の定番質問
+### 定番質問
 
 - この関数はどこまでが責務で、どこから先は別層の責務か。
 - 壊れた入力を 1 発入れたとき、state はきれいに戻るか。
@@ -93,10 +100,16 @@ Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 - clone や allocation は必要最小限か。
 - テストは今回の不具合経路を本当に踏んでいるか。
 
-## レビューで特に危ないサイン
+### 危ないサイン
 
 - エラー時だけ sentinel 文字列を入れて後段で特別扱いしている。
 - decode、convert、state 管理、event 発火が1つの関数に固まっている。
 - 境界条件テストがなく、正常系のサンプルだけで安心している。
 - ログ文はあるが field が無く、後から機械的に追えない。
 - `clone` を増やしてその場をしのいでいる。
+
+## Maintenance
+
+- 期限切れの watchpoint は明示的に更新されない限り削除する。
+- 繰り返し出現する watchpoint は Baseline Checklist に昇格する。
+- Active Watchpoints が空の場合は `(none currently)` と記載する。

@@ -1,19 +1,33 @@
-# iotkit-next Architecture Review Checklist
+# iotkit-next Spec Review Guide
 
-`iotkit-next` をアーキテクチャレベルでレビューするときの観点メモ。
-PoC、日常レビュー、PRレビューで共通利用する想定。
+spec/design 評価時に Codex プロンプトへ注入する。
+Active Watchpoints を先に読み、次に Baseline Checklist を適用する。
 
-関連:
-- [checklist-coding.md](./checklist-coding.md)
+## Active Watchpoints
 
-## 使い方
+最近のレビューで観測されたプロジェクト固有の盲点。
+max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-- まず依存方向と公開契約を見る。
-- 次にデバイスライフサイクルと障害系を見る。
-- 最後に拡張時の変更点を数える。
-- 1項目でも「説明できない」があれば、その変更は構造上の負債候補。
+- Added: 2026-03-27
+  Revalidate by: 2026-06-27
+  Watchpoint: `biased` in `tokio::select!` creates starvation risk when one channel has sustained traffic — applies to any fan-in or adapter loop.
+  Observed in: rpi-local-adapter impl review.
 
-## 依存と境界
+- Added: 2026-03-27
+  Revalidate by: 2026-06-27
+  Watchpoint: Partial config surfaces (some env vars, some hardcoded) create an awkward middle ground that invites silent misconfiguration. Either fully hardcode or fully expose.
+  Observed in: rpi-local-adapter gateway integration.
+
+- Added: 2026-03-28
+  Revalidate by: 2026-06-28
+  Watchpoint: When a runtime claims "sensor-specific logic only / zero boilerplate," verify that transport-level metadata (ConnectionInfo, bus/address parameters) is constructed by the runtime, not repeated in each driver.
+  Observed in: polling-adapter-runtime config rename review.
+
+## Baseline Checklist
+
+安定的なアーキテクチャレビュー基準。ポリシー変更時のみ更新する。
+
+### 依存と境界
 
 - [ ] `core/types` に adapter、transport、protocol の詳細が逆流していないか。
 - [ ] crate 依存が一方向になっているか。
@@ -23,7 +37,7 @@ PoC、日常レビュー、PRレビューで共通利用する想定。
 - [ ] codec はフレーム分解の責務に留まり、意味解釈を抱え込みすぎていないか。
 - [ ] adapter と runtime composition root が分離されているか。
 
-## ライフサイクル
+### ライフサイクル
 
 - [ ] `discover`、`update`、`lost`、`error` の発火条件が揃っているか。
 - [ ] 型だけ存在して実装経路のない概念が残っていないか。
@@ -32,7 +46,7 @@ PoC、日常レビュー、PRレビューで共通利用する想定。
 - [ ] shutdown と reader 再試行が競合しても破綻しないか。
 - [ ] partial frame、duplicate frame、unknown device で状態管理が崩れないか。
 
-## センサー抽象
+### センサー抽象
 
 - [ ] sensor driver が入力ソース差を吸収できているか。
 - [ ] I2C、UART、GPIO の差分が adapter 側の巨大 `match` に漏れていないか。
@@ -40,7 +54,7 @@ PoC、日常レビュー、PRレビューで共通利用する想定。
 - [ ] sensor 追加時の変更箇所が増えすぎていないか。
 - [ ] sensor identity の生成責務が一箇所に寄っているか。
 
-## 拡張性
+### 拡張性
 
 - [ ] 新しい sensor type を足すとき、変更箇所を明確に列挙できるか。
 - [ ] 新しい adapter を足すとき、共通基盤を再利用できるか。
@@ -49,7 +63,7 @@ PoC、日常レビュー、PRレビューで共通利用する想定。
 - [ ] 将来の pair、scan、DFU、delete-sync をどこに置くか方針があるか。
 - [ ] `AdapterCommand` が adapter 固有コマンドの寄せ集めになる兆候がないか。
 
-## 障害と運用
+### 障害と運用
 
 - [ ] 全体障害と個別デバイス障害が区別できるか。
 - [ ] `device_key: None` にすべきケースと、特定デバイスに紐づくケースが混ざっていないか。
@@ -57,13 +71,13 @@ PoC、日常レビュー、PRレビューで共通利用する想定。
 - [ ] reader thread 異常終了時の扱いが定義されているか。
 - [ ] oversized frame や malformed payload が adapter 全体を汚染しないか。
 
-## UI と API
+### UI と API
 
 - [ ] core が adapter 固有 UI を直接知る設計になっていないか。
 - [ ] adapter 管理 API の置き場が先に崩れていないか。
 - [ ] core の `/adapters` と adapter 固有画面の責務分離が説明できるか。
 
-## レビュー時の定番質問
+### 定番質問
 
 - この変更で新しい sensor type を足すと、どのファイルを何箇所触るか。
 - この変更で新しい adapter を足すと、どこまで共通化が効くか。
@@ -71,9 +85,15 @@ PoC、日常レビュー、PRレビューで共通利用する想定。
 - reader が落ちて復帰したとき、discover や state は二重化しないか。
 - protocol 詳細を消したあとでも、core の型は意味を保てるか。
 
-## レビューで特に危ないサイン
+### 危ないサイン
 
 - 設計メモでは抽象化されているのに、実装の本当の拡張点が別の場所にある。
 - adapter が protocol 解釈だけでなく、起動、監視、thread 管理、永続化まで抱え込んでいる。
 - event contract にある概念が、正常系の一部でしか流れていない。
 - 追加変更のたびに `match` が増え続ける。
+
+## Maintenance
+
+- 期限切れの watchpoint は明示的に更新されない限り削除する。
+- 繰り返し出現する watchpoint は Baseline Checklist に昇格する。
+- Active Watchpoints が空の場合は `(none currently)` と記載する。

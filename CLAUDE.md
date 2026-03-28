@@ -19,12 +19,9 @@ cargo test -p <crate-name>
 
 | Topic | Path |
 |---|---|
-| Architecture review checklist | [docs/eval/checklist-architecture.md](docs/eval/checklist-architecture.md) |
-| Coding review checklist | [docs/eval/checklist-coding.md](docs/eval/checklist-coding.md) |
-| Plan review checklist | [docs/eval/checklist-plan.md](docs/eval/checklist-plan.md) |
-| Eval perspectives (spec) | [docs/eval/perspectives-spec.md](docs/eval/perspectives-spec.md) |
-| Eval perspectives (plan) | [docs/eval/perspectives-plan.md](docs/eval/perspectives-plan.md) |
-| Eval perspectives (impl) | [docs/eval/perspectives-impl.md](docs/eval/perspectives-impl.md) |
+| Spec review guide | [docs/eval/spec-review.md](docs/eval/spec-review.md) |
+| Plan review guide | [docs/eval/plan-review.md](docs/eval/plan-review.md) |
+| Impl review guide | [docs/eval/impl-review.md](docs/eval/impl-review.md) |
 | Codex review history | [codex-review.md](codex-review.md) |
 | Agent instructions | [AGENTS.md](AGENTS.md) |
 
