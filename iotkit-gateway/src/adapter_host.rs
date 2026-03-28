@@ -25,11 +25,11 @@ pub struct AdapterHost {
     adapters: Vec<ManagedAdapter>,
 }
 
+type ShutdownFn = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>;
+
 struct ManagedAdapter {
     id: AdapterId,
-    shutdown_fn: Option<
-        Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>,
-    >,
+    shutdown_fn: Option<ShutdownFn>,
 }
 
 impl AdapterHost {
@@ -85,13 +85,13 @@ impl AdapterHost {
     pub async fn shutdown_all(&mut self) {
         for adapter in self.adapters.iter_mut().rev() {
             self.streams.remove(&adapter.id);
-            if let Some(shutdown_fn) = adapter.shutdown_fn.take() {
-                if let Err(e) = shutdown_fn().await {
-                    tracing::error!(
-                        adapter = %adapter.id, error = %e,
-                        "Adapter shutdown error"
-                    );
-                }
+            if let Some(shutdown_fn) = adapter.shutdown_fn.take()
+                && let Err(e) = shutdown_fn().await
+            {
+                tracing::error!(
+                    adapter = %adapter.id, error = %e,
+                    "Adapter shutdown error"
+                );
             }
         }
     }
