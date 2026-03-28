@@ -272,13 +272,15 @@ For the shutdown-command send in `AdapterHandle::shutdown()`: best-effort `let _
 
 ### Driver panic policy
 
-If a `SensorDriver` method panics inside `spawn_blocking`, the `JoinHandle` returns `Err(JoinError)`. The polling runtime treats this as a fatal error for the affected target in that cycle:
-- The panicking target's outcome is treated as `ProbeFailed` or `ReadError` (depending on the current state), incrementing the failure counter normally
+If a `SensorDriver` method panics inside `poll_cycle`, the polling runtime catches it per-target using `catch_unwind(AssertUnwindSafe(...))`:
+- The panicking target's outcome is treated as `ProbeFailed` or `ReadError` (depending on the current state), with the panic message and bus/address included
+- For probe panics, an `AdapterError` is emitted **immediately** (bypasses the normal probe failure threshold)
 - The adapter loop itself does **not** abort — other targets continue operating
-- An `AdapterError` is emitted with the panic message (if recoverable from `JoinError`)
-- If the panic is unrecoverable (poisoned state), the entire polling loop terminates and the `AdapterHandle` task completes
+- The same driver instance is reused on subsequent cycles
 
-> **Note for AI driver authors:** `SensorDriver` implementations should return `Err(String)` for all expected failures. Panics indicate bugs, not I2C errors.
+> **Panic safety contract:** `SensorDriver` implementations must be safe to call again after a panic. Stateless drivers (the common case) satisfy this trivially. Drivers with interior mutable state must ensure that state cannot be left inconsistent after an unwind.
+>
+> **Note for AI driver authors:** Always return `Err(String)` for expected failures. Panics indicate bugs, not I2C errors.
 
 ### Startup probe: partial failure behavior
 

@@ -15,6 +15,14 @@ use iotkit_core_types::{
 // ── SensorDriver trait ────────────────────────────────────
 
 /// Trait implemented by each IC driver (e.g. SDP810, VL53L1X).
+///
+/// # Panic safety
+///
+/// The polling runtime catches panics from `probe()` and `read()` per-target
+/// using `catch_unwind`. After a panic, the same driver instance will be called
+/// again on subsequent poll cycles. Implementations must therefore be safe to
+/// reuse after a panic — avoid interior mutable state that could be left in an
+/// inconsistent state. Stateless drivers (the common case) satisfy this trivially.
 pub trait SensorDriver: Send + Sync {
     fn probe(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String>;
     fn read(&self, bus_path: &str, address: u8) -> Result<SensorReading, String>;
