@@ -103,6 +103,9 @@ pub fn validate_config(config: &PollingAdapterConfig) -> Result<(), String> {
     if config.poll_interval_ms == 0 {
         return Err("poll_interval_ms must be > 0".into());
     }
+    if config.targets.is_empty() {
+        return Err("targets must not be empty".into());
+    }
 
     let mut seen = HashSet::new();
     for target in &config.targets {
@@ -242,6 +245,14 @@ mod tests {
         cfg.bus_path = String::new();
         let err = validate_config(&cfg).unwrap_err();
         assert!(err.contains("bus_path"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn empty_targets_rejected() {
+        let mut cfg = stub_config();
+        cfg.targets.clear();
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(err.contains("targets"), "unexpected error: {err}");
     }
 
     #[test]
