@@ -135,7 +135,7 @@ Each `spawn_blocking` call clones the `Arc<[TargetRuntime]>` (cheap Arc bump). D
 
 ### Why `String` errors (not a custom Error type)
 
-Polling adapters surface I2C errors as `AdapterEvent::AdapterError { error: String }`. A typed error hierarchy would add complexity without benefit: the consumer (core engine) only logs the string. The polling runtime wraps driver errors with bus path and address context if the driver omits them (belt-and-suspenders).
+Polling adapters surface I2C errors as `AdapterEvent::AdapterError { error: String }`. A typed error hierarchy would add complexity without benefit: the consumer (core engine) only logs the string. Driver implementations are responsible for including bus path and address context in their error messages (see learned perspective: every I2C error message must include bus/address for field debugging). The polling runtime adds bus/address context only for panic-caught errors, not for normal `Err(String)` returns from drivers.
 
 ## 4. PollingAdapterConfig
 

@@ -1,3 +1,4 @@
+use std::panic;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -185,6 +186,18 @@ pub(crate) fn apply_outcomes(
     events
 }
 
+// ── panic_message ────────────────────────────────────────
+
+fn panic_message(val: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = val.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = val.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
 // ── poll_cycle ───────────────────────────────────────────
 
 pub(crate) fn poll_cycle(
@@ -196,23 +209,58 @@ pub(crate) fn poll_cycle(
     for (i, target) in targets.iter().enumerate() {
         match &states[i] {
             TargetState::Pending { .. } => {
-                match target.driver.probe(bus_path, target.address) {
-                    Ok(identity) => {
+                match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    target.driver.probe(bus_path, target.address)
+                })) {
+                    Ok(Ok(identity)) => {
                         let key = device_key_for(target.address, &target.key_suffix);
                         outcomes.push(PollOutcome::Discovered { target_index: i, key, identity });
                     }
-                    Err(msg) => {
+                    Ok(Err(msg)) => {
                         outcomes.push(PollOutcome::ProbeFailed { target_index: i, message: msg });
+                    }
+                    Err(panic_val) => {
+                        let msg = panic_message(&panic_val);
+                        tracing::error!(
+                            address = format_args!("0x{:02x}", target.address),
+                            bus_path,
+                            "driver panicked during probe: {msg}",
+                        );
+                        outcomes.push(PollOutcome::ProbeFailed {
+                            target_index: i,
+                            message: format!(
+                                "driver panic during probe 0x{:02x}@{}: {}",
+                                target.address, bus_path, msg,
+                            ),
+                        });
                     }
                 }
             }
             TargetState::Active { key, .. } => {
-                match target.driver.read(bus_path, target.address) {
-                    Ok(reading) => {
+                match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    target.driver.read(bus_path, target.address)
+                })) {
+                    Ok(Ok(reading)) => {
                         outcomes.push(PollOutcome::Reading { key: key.clone(), reading });
                     }
-                    Err(msg) => {
+                    Ok(Err(msg)) => {
                         outcomes.push(PollOutcome::ReadError { target_index: i, key: key.clone(), message: msg });
+                    }
+                    Err(panic_val) => {
+                        let msg = panic_message(&panic_val);
+                        tracing::error!(
+                            address = format_args!("0x{:02x}", target.address),
+                            bus_path,
+                            "driver panicked during read: {msg}",
+                        );
+                        outcomes.push(PollOutcome::ReadError {
+                            target_index: i,
+                            key: key.clone(),
+                            message: format!(
+                                "driver panic during read 0x{:02x}@{}: {}",
+                                target.address, bus_path, msg,
+                            ),
+                        });
                     }
                 }
             }
