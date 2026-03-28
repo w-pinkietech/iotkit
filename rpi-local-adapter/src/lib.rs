@@ -43,6 +43,16 @@ pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
     iotkit_polling_adapter_runtime::start(AdapterId::new("rpi-local:default"), polling_config)
 }
 
+/// Validate an `RpiLocalConfig` without starting the adapter.
+///
+/// Converts to `PollingAdapterConfig` internally and delegates to
+/// `iotkit_polling_adapter_runtime::validate_config()`. Used for
+/// preflight validation in the gateway before `start()`.
+pub fn validate(config: &RpiLocalConfig) -> Result<(), String> {
+    let polling_config = to_polling_config(config);
+    iotkit_polling_adapter_runtime::validate_config(&polling_config)
+}
+
 fn to_polling_config(config: &RpiLocalConfig) -> PollingAdapterConfig {
     let targets = config
         .targets
@@ -111,6 +121,30 @@ mod tests {
             "expected config validation error, got: {}",
             msg,
         );
+    }
+
+    #[test]
+    fn validate_rejects_short_poll_interval_for_opt3001() {
+        let cfg = RpiLocalConfig {
+            bus_path: "/dev/i2c-1".into(),
+            poll_interval_ms: 50,
+            targets: vec![RpiLocalTarget::OPT3001 { address: 0x44 }],
+        };
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.contains("poll_interval_ms"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_valid_config() {
+        let cfg = RpiLocalConfig {
+            bus_path: "/dev/i2c-1".into(),
+            poll_interval_ms: 1000,
+            targets: vec![
+                RpiLocalTarget::MCP9600 { address: 0x60, thermocouple_type: ThermocoupleType::K },
+                RpiLocalTarget::OPT3001 { address: 0x44 },
+            ],
+        };
+        assert!(validate(&cfg).is_ok());
     }
 
     /// OPT3001 driver rejects poll intervals shorter than 200ms.
