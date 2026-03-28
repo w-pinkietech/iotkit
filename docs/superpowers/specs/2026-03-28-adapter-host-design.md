@@ -17,36 +17,50 @@ Gateway がアダプターの内部実装（polling / streaming）を知らず�
 - `iotkit-gateway/src/main.rs` — AdapterHost を使うようにリファクタ
 - `tokio-stream` 依存を `iotkit-gateway/Cargo.toml` に追加
 
-**Minimal adapter changes (public API addition only, no internal logic change):**
-- `iotkit-polling-adapter-runtime`: `AdapterHandle::into_parts()` を追加
-- `bravepi-mainboard-adapter`: `AdapterHandle::into_parts()` を追加
-- 両アダプターの既存 `shutdown()` ロジックを `ShutdownHandle` に移動（中身は同一）
+**Minimal adapter changes (public API addition only):**
+- `iotkit-polling-adapter-runtime`: `AdapterHandle::into_parts()` を追加、既存 `shutdown()` はそのまま残す
+- `bravepi-mainboard-adapter`: `AdapterHandle::into_parts()` を追加、既存 `shutdown()` はそのまま残す
 
 **Out:**
 - 新クレートは作らない
 - `core/` への変更なし
 - adapter の runtime failure policy（`FatalOnExit` / `Optional`）は将来スコープ
+- command routing API は将来スコープ
+- gateway config 統一は将来スコープ
 
 ## Design
 
 ### Fan-in: StreamMap 方式
 
-forwarder タスク + merged channel ではなく、`tokio_stream::StreamMap` で各アダプターの `event_rx` を直接 multiplex する。
+`tokio_stream::StreamMap` で各アダプターの `event_rx` を直接 multiplex する。
 
 **なぜ StreamMap か:**
 - 余分な forwarder タスクと中間チャネルが不要
-- all_closed 検出が自然（StreamMap が空になると `poll_next` が `None` を返す）
 - backpressure が各アダプターの元のチャネルに直接かかる（中間バッファによる公平性問題なし）
-- shutdown 時の deadlock リスクなし（forwarder が中間チャネルで詰まる問題が存在しない）
+- shutdown 時の deadlock リスクなし
+
+**スケーラビリティについて:** StreamMap は Vec-backed で少数のストリーム向け。現在のアダプター数（2-5）では十分。アダプター数が大幅に増える場合は shared-channel fan-in に移行する。
+
+### AdapterHostEvent
+
+```rust
+pub enum AdapterHostEvent {
+    Event(EngineEvent),
+    AdapterClosed(AdapterId),
+}
+```
+
+`next_event()` はデータイベントだけでなくアダプターのライフサイクルイベントも返す。これにより：
+- gateway が個別アダプターの終了を検知・ログできる（現 main.rs の「BravePI channel closed」と同等）
+- 将来の runtime failure policy（`FatalOnExit` / `Optional`）の土台になる
 
 ### AdapterHost struct
 
 ```rust
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamMap;
 
 pub struct AdapterHost {
-    streams: StreamMap<AdapterId, ReceiverStream<AdapterEvent>>,
+    streams: StreamMap<AdapterId, WrappedStream>,
     adapters: Vec<ManagedAdapter>,
 }
 
@@ -56,7 +70,27 @@ struct ManagedAdapter {
 }
 ```
 
-`command_tx` は v1 では AdapterHost に保持しない。コマンドルーティングが必要になったタイミングで `send_command(adapter_id, cmd)` API とともに追加する。
+v1 では `command_tx` を AdapterHost に保持しない。コマンドルーティングが必要になったタイミングで追加する。
+
+### WrappedStream（終了検知付き）
+
+素の `ReceiverStream` は終了時に StreamMap から暗黙的に消え、個別アダプターの死亡が見えなくなる。これを防ぐため、ストリーム終了時に `AdapterClosed` イベントを1回 yield するラッパーを使う。
+
+```rust
+/// ReceiverStream をラップし、内部ストリーム終了後に None ではなく
+/// sentinel 値を1回 yield してからストリーム終了する。
+struct WrappedStream {
+    inner: ReceiverStream<AdapterEvent>,
+    closed_yielded: bool,
+}
+```
+
+`WrappedStream` は `Stream<Item = WrappedItem>` を実装：
+- inner が `Some(event)` → `WrappedItem::Event(event)` を yield
+- inner が `None`（終了）かつ `!closed_yielded` → `WrappedItem::Closed` を yield、`closed_yielded = true`
+- inner が `None` かつ `closed_yielded` → `None`（ストリーム終了、StreamMap から除去）
+
+`next_event()` は `WrappedItem` を `AdapterHostEvent` に変換する。
 
 ### register メソッド
 
@@ -69,18 +103,23 @@ impl AdapterHost {
         id: AdapterId,
         event_rx: mpsc::Receiver<AdapterEvent>,
         shutdown_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
-    )
+    ) -> Result<(), String>
 ```
 
-`event_rx` を `ReceiverStream` でラップし、`StreamMap` に `(id, stream)` として挿入する。shutdown クロージャは `ManagedAdapter` に保存。
+- `event_rx` を `WrappedStream` でラップし、`StreamMap` に `(id, stream)` として挿入
+- shutdown クロージャを `ManagedAdapter` に保存
+- **duplicate AdapterId を reject**: 既に同じ ID が登録されていれば `Err` を返す
 
 ### next_event メソッド
 
 ```rust
-    pub async fn next_event(&mut self) -> Option<EngineEvent>
+    pub async fn next_event(&mut self) -> Option<AdapterHostEvent>
 ```
 
-`StreamMap::next()` を呼び、`(adapter_id, event)` を `EngineEvent { adapter_id, event }` に包んで返す。全ストリームが終了したら `None` を返す。
+`StreamMap::next()` を呼び、`WrappedItem` に応じて：
+- `WrappedItem::Event(event)` → `Some(AdapterHostEvent::Event(EngineEvent { adapter_id, event }))`
+- `WrappedItem::Closed` → `Some(AdapterHostEvent::AdapterClosed(adapter_id))`
+- StreamMap が空 → `None`（全アダプター終了）
 
 ### shutdown_all メソッド
 
@@ -88,60 +127,39 @@ impl AdapterHost {
     pub async fn shutdown_all(&mut self)
 ```
 
-登録の逆順で各アダプターの shutdown クロージャを呼び出す。
+**Shutdown シーケンス（shutdown_all が全責任を持つ）:**
 
-**Shutdown シーケンス:**
-1. shutdown クロージャ内で、各アダプター固有の shutdown 処理を実行（receiver close → Shutdown cmd → task join）
-2. StreamMap のストリームは、アダプターの event_tx がドロップされた時点で自然に終了する
+登録の逆順で、各アダプターに対して：
+1. `streams.remove(&id)` で StreamMap からストリームを除去 → ReceiverStream ドロップ → receiver close
+2. `shutdown_fn` を呼び出し（Shutdown cmd → task/thread join）
+3. 結果を per-adapter でログ出力
 
-各 shutdown クロージャの結果は per-adapter でログ出力する。1つのアダプターの shutdown 失敗が他のアダプターの shutdown をブロックしないようにする。
+1つのアダプターの shutdown 失敗が他のアダプターをブロックしないよう、エラーはログして続行する。
 
-### all_closed 検出
-
-`next_event()` が `None` を返す = StreamMap 内の全ストリームが終了 = 全アダプターのチャネルが閉じた。forwarder + merged channel 方式と違い、AdapterHost 自身が sender を保持する問題がない。
+shutdown 順序は `shutdown_all` にエンコードされ、呼び出し側がコメント規約に依存しない。
 
 ## Handle 分解: into_parts()
 
-register は `event_rx` を引き取り、shutdown クロージャは残りの Handle 部品を所有する。現状の Handle は private フィールドを含むため、部分 move ができない。
+### 方針
 
-**解決策:** 両アダプターに `into_parts()` を追加する。
+- `into_parts()` を追加 API として両アダプターに追加
+- 既存の `AdapterHandle::shutdown()` はそのまま残す（後方互換）
+- `into_parts()` は `{id, event_rx, shutdown_handle}` の3つに分解
+- `command_tx` は v1 の into_parts には含めない（AdapterHost が使わないため）
+
+### ShutdownHandle
+
+ShutdownHandle は receiver close を行わない。その責務は AdapterHost にある。ShutdownHandle は「Shutdown cmd 送信 → task/thread join」のみ。
 
 ```rust
 // bravepi-mainboard-adapter
-pub struct AdapterParts {
-    pub id: AdapterId,
-    pub event_rx: mpsc::Receiver<AdapterEvent>,
-    pub command_tx: mpsc::Sender<AdapterCommand>,
-    pub shutdown: ShutdownHandle,
-}
-
 pub struct ShutdownHandle {
-    event_rx_close: mpsc::Receiver<AdapterEvent>,  // ← 不要、後述
+    command_tx: mpsc::Sender<AdapterCommand>,
     source_handle: Option<SerialSourceHandle>,
     event_loop_handle: Option<JoinHandle<()>>,
-    command_tx: mpsc::Sender<AdapterCommand>,
 }
-```
 
-**Shutdown と receiver-close の問題:**
-
-現在の bravepi `shutdown()` は `event_rx.close()` を最初に呼ぶ。これは event_loop の `event_tx.send()` を即座に失敗させ、バッファ詰まりによる shutdown hang を防ぐ。
-
-`into_parts()` で `event_rx` を AdapterHost に渡した後は、ShutdownHandle が `event_rx` を持たない。しかし StreamMap 方式では問題にならない：
-- StreamMap は `event_rx` をラップした ReceiverStream を所有
-- shutdown 時に `AdapterHost` が StreamMap からストリームを remove すれば、ReceiverStream がドロップされ、内部の Receiver が close される
-- これは従来の `event_rx.close()` と同じ効果
-
-**Shutdown シーケンス（per-adapter）:**
-1. AdapterHost が StreamMap から該当ストリームを remove（= receiver close）
-2. ShutdownHandle が Shutdown コマンド送信
-3. ShutdownHandle がタスク/スレッドの join を await
-
-```rust
-// bravepi-mainboard-adapter
 impl ShutdownHandle {
-    /// Shutdown the adapter. Caller must close the event receiver first
-    /// (e.g. by dropping the ReceiverStream).
     pub async fn shutdown(mut self) -> Result<(), String> {
         let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
         if let Some(handle) = self.event_loop_handle.take() {
@@ -153,8 +171,15 @@ impl ShutdownHandle {
         Ok(())
     }
 }
+```
 
+```rust
 // iotkit-polling-adapter-runtime
+pub struct ShutdownHandle {
+    command_tx: mpsc::Sender<AdapterCommand>,
+    task_handle: Option<JoinHandle<()>>,
+}
+
 impl ShutdownHandle {
     pub async fn shutdown(mut self) {
         let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
@@ -165,29 +190,31 @@ impl ShutdownHandle {
 }
 ```
 
-### into_parts の具体シグネチャ
+### into_parts シグネチャ
 
 ```rust
-// bravepi-mainboard-adapter
-impl AdapterHandle {
-    pub fn into_parts(self) -> AdapterParts {
-        AdapterParts {
-            id: self.id,
-            event_rx: self.event_rx,
-            command_tx: self.command_tx.clone(),
-            shutdown: ShutdownHandle {
-                source_handle: self.source_handle,
-                event_loop_handle: self.event_loop_handle,
-                command_tx: self.command_tx,
-            },
-        }
-    }
+// 両アダプター共通パターン
+pub struct AdapterParts {
+    pub id: AdapterId,
+    pub event_rx: mpsc::Receiver<AdapterEvent>,
+    pub shutdown: ShutdownHandle,
 }
 
-// iotkit-polling-adapter-runtime — 同様のパターン
+impl AdapterHandle {
+    /// Decompose the handle for use with AdapterHost.
+    /// Existing AdapterHandle::shutdown() remains available for direct use.
+    pub fn into_parts(self) -> AdapterParts { ... }
+}
 ```
 
-`command_tx` は shutdown にも必要なため、clone して両方に渡す。
+`command_tx` は ShutdownHandle 内に move される（shutdown cmd 送信に必要）。into_parts 後に command を送りたい場合は、into_parts 前に `command_tx.clone()` しておく。
+
+### 既存 shutdown() との関係
+
+`AdapterHandle::shutdown()` は既存コードのまま残す。into_parts() は additive API。
+
+- gateway の新コード: `into_parts()` → AdapterHost に登録
+- テストや直接利用: 従来通り `handle.shutdown().await`
 
 ## gateway main.rs の変更
 
@@ -204,14 +231,14 @@ async fn run(port_path: String) {
         bravepi_parts.id,
         bravepi_parts.event_rx,
         {
-            let mut sh = bravepi_parts.shutdown;
+            let sh = bravepi_parts.shutdown;
             move || Box::pin(async move {
                 if let Err(e) = sh.shutdown().await {
                     tracing::error!(error = %e, "BravePI shutdown error");
                 }
             })
         },
-    );
+    ).expect("Failed to register BravePI adapter");
 
     // RPi local — optional
     let rpi_local_enabled = std::env::var("RPI_LOCAL_ENABLED")
@@ -226,10 +253,10 @@ async fn run(port_path: String) {
             rpi_parts.id,
             rpi_parts.event_rx,
             {
-                let mut sh = rpi_parts.shutdown;
+                let sh = rpi_parts.shutdown;
                 move || Box::pin(async move { sh.shutdown().await; })
             },
-        );
+        ).expect("Failed to register RPi local adapter");
     }
 
     // Unified fan-in loop
@@ -241,7 +268,12 @@ async fn run(port_path: String) {
             }
             event = host.next_event() => {
                 match event {
-                    Some(ev) => engine.apply(ev).await,
+                    Some(AdapterHostEvent::Event(ev)) => {
+                        engine.apply(ev).await;
+                    }
+                    Some(AdapterHostEvent::AdapterClosed(id)) => {
+                        tracing::info!(adapter = %id, "Adapter channel closed");
+                    }
                     None => {
                         tracing::info!("All adapter channels closed");
                         break;
@@ -264,20 +296,24 @@ async fn run(port_path: String) {
 
 StubAdapter（`mpsc::channel` で即座に N 個のイベントを送って close する）を使う：
 
-- **single_adapter_events** — 1つの adapter 登録 → next_event で全イベント受信 → None で all_closed
-- **multiple_adapters_interleaved** — 2つの adapter 登録 → 両方のイベントが受信される（順序は非決定的）
-- **all_closed_detection** — 全 adapter の sender ドロップ後に next_event が None を返す
+- **single_adapter_events** — 1 adapter 登録 → next_event で全イベント受信 → AdapterClosed → None
+- **multiple_adapters_interleaved** — 2 adapter 登録 → 両方のイベントが受信される
+- **adapter_closed_notification** — adapter の sender ドロップ後に AdapterClosed(id) が返る
+- **all_closed_returns_none** — 全 adapter 終了後に next_event が None を返す
 - **shutdown_all_calls_closures** — shutdown クロージャが呼ばれたことを AtomicBool で確認
-- **shutdown_order_is_reverse** — 登録逆順で shutdown されることを Vec<usize> の記録で確認
+- **shutdown_order_is_reverse** — 登録逆順で shutdown されることを記録で確認
+- **duplicate_id_rejected** — 同じ AdapterId で2回 register すると Err
+- **shutdown_all_after_early_adapter_exit** — 1つが先に死んでも shutdown_all が残りを正常停止
+- **ctrl_c_with_buffered_events** — イベントがバッファにある状態で shutdown_all が詰まらない
 
 ### into_parts tests（各アダプタークレート内）
 
 - **into_parts_preserves_id** — parts.id が元の handle.id と一致
-- **shutdown_handle_works** — ShutdownHandle.shutdown() が正常に完了（tokio::test で stub transport を使用）
+- **original_shutdown_still_works** — into_parts() 追加後も従来の handle.shutdown() が動く
 
 ### 既存テスト
 
-- 両アダプターの既存テストは変更不要（`into_parts()` は追加 API）
+- 両アダプターの既存テストは変更不要（into_parts は追加 API、shutdown は互換維持）
 - `cargo test --workspace` が全通することを確認
 
 ## Adapter Taxonomy との関係
@@ -287,4 +323,4 @@ StubAdapter（`mpsc::channel` で即座に N 個のイベントを送って clos
 - `liveness_owner` の違い（adapter / orchestrator）も AdapterHost の関心外
 - AdapterHost が知るのは「`AdapterEvent` ストリームを出し、shutdown できるもの」だけ
 
-将来 orchestrator 層が追加された場合も、orchestrator → AdapterHost → Engine の階層で自然に組み合わせられる。
+将来 orchestrator 層が追加された場合も、orchestrator → AdapterHost → Engine の階層で自然に組み合わせられる。`AdapterHostEvent::AdapterClosed` は orchestrator の判断材料になる。
