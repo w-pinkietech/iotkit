@@ -93,6 +93,52 @@ impl AdapterHandle {
     }
 }
 
+/// Parts returned by [`AdapterHandle::into_parts`].
+pub struct AdapterParts {
+    pub id: AdapterId,
+    pub event_rx: mpsc::Receiver<AdapterEvent>,
+    pub shutdown: ShutdownHandle,
+}
+
+/// Opaque handle for shutting down a polling adapter.
+///
+/// Does NOT close the event receiver — that is the caller's responsibility
+/// (e.g. by dropping the `event_rx` or the stream wrapping it).
+/// ShutdownHandle only sends `Shutdown` and awaits the background task.
+pub struct ShutdownHandle {
+    command_tx: mpsc::Sender<AdapterCommand>,
+    task_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ShutdownHandle {
+    pub async fn shutdown(mut self) -> Result<(), String> {
+        let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
+        if let Some(handle) = self.task_handle.take() {
+            handle
+                .await
+                .map_err(|e| format!("polling task panicked: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
+impl AdapterHandle {
+    /// Decompose this handle into parts for use with an adapter host.
+    ///
+    /// The existing [`AdapterHandle::shutdown`] method remains available
+    /// for direct use — `into_parts` is an additive API.
+    pub fn into_parts(self) -> AdapterParts {
+        AdapterParts {
+            id: self.id,
+            event_rx: self.event_rx,
+            shutdown: ShutdownHandle {
+                command_tx: self.command_tx,
+                task_handle: self.task_handle,
+            },
+        }
+    }
+}
+
 // ── validate_config ───────────────────────────────────────
 
 /// Validate a [`PollingAdapterConfig`], returning `Err` on the first problem.
@@ -308,6 +354,47 @@ mod tests {
         };
         let err = validate_config(&cfg).unwrap_err();
         assert!(err.contains("too short"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn into_parts_preserves_id_and_channels() {
+        use iotkit_core_types::SensorType;
+
+        let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(1);
+        let (command_tx, mut command_rx) = mpsc::channel::<AdapterCommand>(1);
+        let handle = AdapterHandle {
+            id: AdapterId::new("test:into-parts"),
+            event_rx,
+            command_tx,
+            task_handle: None,
+        };
+        let parts = handle.into_parts();
+
+        assert_eq!(parts.id.as_str(), "test:into-parts");
+
+        let mut event_rx = parts.event_rx;
+        event_tx
+            .send(AdapterEvent::SensorData {
+                device_key: iotkit_core_types::DeviceKey::new("test:0"),
+                reading: SensorReading::empty(SensorType::Temperature),
+                rssi: None,
+                battery_pct: None,
+            })
+            .await
+            .unwrap();
+        let received = event_rx.recv().await;
+        assert!(received.is_some(), "event_rx should receive the sent event");
+
+        parts
+            .shutdown
+            .shutdown()
+            .await
+            .expect("shutdown should succeed");
+        let cmd = command_rx.recv().await;
+        assert!(
+            matches!(cmd, Some(AdapterCommand::Shutdown)),
+            "shutdown should send Shutdown command"
+        );
     }
 
     #[test]
