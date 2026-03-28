@@ -19,12 +19,12 @@ cargo test -p <crate-name>
 
 | Topic | Path |
 |---|---|
-| Architecture review criteria | [docs/architecture-review-checklist.md](docs/architecture-review-checklist.md) |
-| Coding review criteria | [docs/coding-review-checklist.md](docs/coding-review-checklist.md) |
-| Plan review criteria | [docs/plan-review-checklist.md](docs/plan-review-checklist.md) |
-| Eval perspectives (spec) | [docs/superpowers/eval-perspectives-spec.md](docs/superpowers/eval-perspectives-spec.md) |
-| Eval perspectives (plan) | [docs/superpowers/eval-perspectives-plan.md](docs/superpowers/eval-perspectives-plan.md) |
-| Eval perspectives (impl) | [docs/superpowers/eval-perspectives-impl.md](docs/superpowers/eval-perspectives-impl.md) |
+| Architecture review checklist | [docs/eval/checklist-architecture.md](docs/eval/checklist-architecture.md) |
+| Coding review checklist | [docs/eval/checklist-coding.md](docs/eval/checklist-coding.md) |
+| Plan review checklist | [docs/eval/checklist-plan.md](docs/eval/checklist-plan.md) |
+| Eval perspectives (spec) | [docs/eval/perspectives-spec.md](docs/eval/perspectives-spec.md) |
+| Eval perspectives (plan) | [docs/eval/perspectives-plan.md](docs/eval/perspectives-plan.md) |
+| Eval perspectives (impl) | [docs/eval/perspectives-impl.md](docs/eval/perspectives-impl.md) |
 | Codex review history | [codex-review.md](codex-review.md) |
 | Agent instructions | [AGENTS.md](AGENTS.md) |
 

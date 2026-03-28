@@ -4,7 +4,7 @@
 PoC、日常レビュー、PRレビューで共通利用する想定。
 
 関連:
-- [coding-review-checklist.md](./coding-review-checklist.md)
+- [checklist-coding.md](./checklist-coding.md)
 
 ## 使い方
 

@@ -4,7 +4,7 @@
 Rust 実装、codec、event loop、driver/adapter 周辺を主対象にする。
 
 関連:
-- [architecture-review-checklist.md](./architecture-review-checklist.md)
+- [checklist-architecture.md](./checklist-architecture.md)
 
 ## 使い方
 

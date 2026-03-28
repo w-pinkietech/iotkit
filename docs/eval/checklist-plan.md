@@ -4,8 +4,8 @@
 spec から plan を書いたあと、実装に入る前に確認する。
 
 関連:
-- [architecture-review-checklist.md](./architecture-review-checklist.md)
-- [coding-review-checklist.md](./coding-review-checklist.md)
+- [checklist-architecture.md](./checklist-architecture.md)
+- [checklist-coding.md](./checklist-coding.md)
 
 ## 使い方
 
