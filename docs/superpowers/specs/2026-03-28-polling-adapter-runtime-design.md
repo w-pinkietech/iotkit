@@ -122,7 +122,7 @@ SensorTargetConfig {
 
 ### Runtime ownership model
 
-The polling loop stores targets as `Arc<[TargetRuntime]>` where:
+The polling loop stores targets as `Arc<Vec<TargetRuntime>>` where:
 ```rust
 struct TargetRuntime {
     address: u8,
@@ -131,7 +131,7 @@ struct TargetRuntime {
 }
 ```
 
-Each `spawn_blocking` call clones the `Arc<[TargetRuntime]>` (cheap Arc bump). Driver trait objects are shared via Arc, never moved or deep-cloned. This is the same pattern used by tokio's own service layers.
+Each `spawn_blocking` call clones the `Arc<Vec<TargetRuntime>>` (cheap Arc bump). Driver trait objects are shared via Arc, never moved or deep-cloned. This is the same pattern used by tokio's own service layers.
 
 ### Why `String` errors (not a custom Error type)
 
@@ -169,7 +169,6 @@ To avoid the partial-config anti-pattern, failure thresholds are internal consta
 
 - `MAX_READ_FAILURES: u32 = 5` — consecutive read failures before Active → Pending transition
 - `MAX_PROBE_FAILURES: u32 = 10` — consecutive probe failures before escalation error
-- `PROBE_FAILURE_THRESHOLD_DISABLED: u32 = 0` — sentinel for "never escalate" (not exposed)
 
 These become configurable only when an operator-facing config surface exists (sub-project C orchestrator). Until then, they are documented constants that the concrete adapter can override by forking or by a future API addition.
 
@@ -307,7 +306,7 @@ loop {
             }
         }
         _ = interval.tick() => {
-            spawn_blocking(poll_cycle)  // clones Arc<[TargetRuntime]>
+            spawn_blocking(poll_cycle)  // clones Arc<Vec<TargetRuntime>>
             apply_outcomes → send events (check each send)
         }
     }
@@ -383,13 +382,9 @@ Shutdown choreography:
 rpi-local-adapter's `start()` becomes a thin wrapper:
 
 ```rust
-pub fn start(config: RpiLocalConfig) -> Result<base_adapter::AdapterHandle, std::io::Error> {
-    validate_rpi_local_config(&config)?;
-    let polling_config = to_polling_config(config);
-    iotkit_polling_adapter_runtime::start(
-        AdapterId::new("rpi-local:default"),
-        polling_config,
-    )
+pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
+    let polling_config = to_polling_config(&config);
+    iotkit_polling_adapter_runtime::start(AdapterId::new("rpi-local:default"), polling_config)
 }
 ```
 
