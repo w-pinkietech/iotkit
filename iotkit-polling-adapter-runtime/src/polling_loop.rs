@@ -45,6 +45,7 @@ pub(crate) struct TargetRuntime {
 
 // ── PollOutcome ──────────────────────────────────────────
 
+#[derive(Debug)]
 pub(crate) enum PollOutcome {
     Discovered {
         target_index: usize,
@@ -1201,5 +1202,103 @@ mod tests {
             } => assert_eq!(*consecutive_probe_failures, 1),
             _ => panic!("expected Pending state for target B"),
         }
+    }
+
+    // ── Panic isolation tests ────────────────────────────
+
+    /// A driver that panics on probe and/or read.
+    struct PanickingDriver {
+        panic_on_probe: bool,
+        panic_on_read: bool,
+    }
+
+    impl SensorDriver for PanickingDriver {
+        fn probe(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+            if self.panic_on_probe {
+                panic!("intentional probe panic");
+            }
+            Ok(make_identity())
+        }
+        fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
+            if self.panic_on_read {
+                panic!("intentional read panic");
+            }
+            Ok(make_reading())
+        }
+        fn ic_name(&self) -> &'static str {
+            "PANICKER"
+        }
+    }
+
+    #[test]
+    fn probe_panic_becomes_probe_failed() {
+        let targets = vec![TargetRuntime {
+            address: 0x40,
+            driver: Arc::new(PanickingDriver { panic_on_probe: true, panic_on_read: false }),
+            key_suffix: "panic".to_string(),
+        }];
+        let states = vec![TargetState::new_pending()];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::ProbeFailed { target_index, message } => {
+                assert_eq!(*target_index, 0);
+                assert!(message.contains("panic"), "expected panic in message: {message}");
+                assert!(message.contains("0x40"), "expected address in message: {message}");
+            }
+            other => panic!("expected ProbeFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_panic_becomes_read_error() {
+        let targets = vec![TargetRuntime {
+            address: 0x44,
+            driver: Arc::new(PanickingDriver { panic_on_probe: false, panic_on_read: true }),
+            key_suffix: "panic".to_string(),
+        }];
+        let states = vec![TargetState::Active {
+            key: DeviceKey::new("i2c-0x44-panic"),
+            consecutive_read_failures: 0,
+        }];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::ReadError { target_index, message, .. } => {
+                assert_eq!(*target_index, 0);
+                assert!(message.contains("panic"), "expected panic in message: {message}");
+                assert!(message.contains("0x44"), "expected address in message: {message}");
+            }
+            other => panic!("expected ReadError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn panic_in_one_target_does_not_affect_sibling() {
+        let targets = vec![
+            TargetRuntime {
+                address: 0x40,
+                driver: Arc::new(PanickingDriver { panic_on_probe: true, panic_on_read: false }),
+                key_suffix: "panicker".to_string(),
+            },
+            TargetRuntime {
+                address: 0x44,
+                driver: Arc::new(PanickingDriver { panic_on_probe: false, panic_on_read: false }),
+                key_suffix: "healthy".to_string(),
+            },
+        ];
+        let states = vec![TargetState::new_pending(), TargetState::new_pending()];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 2);
+        // First target panicked → ProbeFailed
+        assert!(matches!(&outcomes[0], PollOutcome::ProbeFailed { target_index: 0, .. }));
+        // Second target succeeded → Discovered
+        assert!(matches!(&outcomes[1], PollOutcome::Discovered { target_index: 1, .. }));
     }
 }
