@@ -1,17 +1,19 @@
-# Base Adapter Design Spec
+# I2C Polling Adapter Runtime Design Spec
+
+> **Terminology:** This document uses "polling runtime" to refer to the `iotkit-polling-adapter-runtime` crate. The historical name "base adapter" may appear in git history and older discussions but is no longer canonical.
 
 ## 1. Purpose and Motivation
 
-iotkit currently supports only Braveridge sensors. The goal of the base adapter is to make it trivially easy for **AI agents** to create new adapters for I2C polling sensors on Raspberry Pi. The base adapter serves as a "jig" (治具): AI reads the trait definition + documentation, implements sensor-specific logic only, and gets a working adapter with zero boilerplate.
+iotkit currently supports only Braveridge sensors. The goal of the polling runtime is to make it trivially easy for **AI agents** to create new adapters for I2C polling sensors on Raspberry Pi. The polling runtime serves as a "jig" (治具): AI reads the trait definition + documentation, implements sensor-specific logic only, and gets a working adapter with zero boilerplate.
 
-**Key concern addressed:** Sensor IC decode logic (bytes → physical values) currently lives in `bravepi-sensors`. Transport-specific I/O (I2C probe/read) lives inside each adapter. Without a base adapter, every new adapter must re-implement: channel wiring, polling loop, shutdown choreography, state machine, and event production. The base adapter extracts these into a reusable module.
+**Key concern addressed:** Sensor IC decode logic (bytes → physical values) currently lives in `bravepi-sensors`. Transport-specific I/O (I2C probe/read) lives inside each adapter. Without the polling runtime, every new polling adapter must re-implement: channel wiring, polling loop, shutdown choreography, state machine, and event production. The polling runtime extracts these into a reusable module.
 
-**Explicit scope boundary:** v1 is an **I2C polling** base adapter only. It does not attempt to generalize across transports (UART, SPI, GPIO). If a second transport needs a polling base in the future, the common patterns can be extracted then — not prematurely.
+**Explicit scope boundary:** v1 is an **I2C polling** runtime only. It does not attempt to generalize across transports (UART, SPI, GPIO). If a second transport needs a polling runtime in the future, the common patterns can be extracted then — not prematurely.
 
 ### What changes and what doesn't
 
 - **bravepi-mainboard-adapter** stays as-is. Its UART streaming architecture is fundamentally different from the polling model.
-- **rpi-local-adapter** is refactored to use the base adapter. It becomes a thin crate: config + `SensorDriver` implementations for MCP9600 and OPT3001.
+- **rpi-local-adapter** is refactored to use the polling runtime. It becomes a thin crate: config + `SensorDriver` implementations for MCP9600 and OPT3001.
 - **bravepi-sensors** rename is **deferred**. The crate still contains BravePI-specific types (`UartSample`, `SensorHandler`). The rename happens in a future sub-project when a cleaner boundary emerges.
 - **iotkit-gateway** changes minimally: rpi-local-adapter's public API (`start()` → `AdapterHandle`) stays the same.
 
@@ -22,12 +24,12 @@ iotkit currently supports only Braveridge sensors. The goal of the base adapter 
 1. `iotkit-polling-adapter-runtime` crate (workspace-internal, not published): reusable I2C polling loop, AdapterHandle, channel wiring, shutdown, state machine, recovery logic
 2. `SensorDriver` trait: the minimal interface an AI implements per I2C sensor
 3. `BaseAdapterConfig` struct: I2C bus path, poll interval, sensor targets
-4. Refactor rpi-local-adapter to use the base adapter
+4. Refactor rpi-local-adapter to use the polling runtime
 5. Documentation for AI consumption (trait contract, examples, error expectations)
 
 ### Out of scope
 
-- UART/streaming base adapter (bravepi-mainboard stays independent)
+- UART/streaming adapter runtime (bravepi-mainboard stays independent)
 - Transport generalization beyond I2C
 - bravepi-sensors rename (deferred)
 - Gateway-level adapter registry / dynamic loading
@@ -44,7 +46,7 @@ v1 targets sensors where one I2C address = one logical device = one `SensorReadi
 
 - **Max recommended targets per adapter**: 8 (at ~5s probe wall-clock per stalled target, worst-case poll cycle = ~40s for 8 all-stalled probes)
 - **Recommended poll interval**: ≥ 200ms per target for sensors requiring conversion latency; ≥ 1000ms for typical deployments
-- If `actual poll cycle duration > poll_interval_ms`, the base adapter logs a warning at startup (potential cycle overrun, soft limit, not fatal)
+- If an actual poll cycle takes longer than `poll_interval_ms`, the polling runtime logs a warning at runtime (cycle overrun, soft limit, not fatal). `MissedTickBehavior::Skip` ensures overruns do not cause tick pileup.
 
 ## 3. SensorDriver Trait
 
@@ -52,7 +54,7 @@ The core abstraction. AI implements this per I2C sensor IC.
 
 ```rust
 /// Trait for sensor-specific I2C probe and read logic.
-/// The base adapter calls these inside `spawn_blocking`.
+/// The polling runtime calls these inside `spawn_blocking`.
 ///
 /// Implementations MUST be `Send + Sync` (called from blocking threads).
 /// All I/O errors MUST be returned as `Err(String)` with bus path and
@@ -66,9 +68,11 @@ pub trait SensorDriver: Send + Sync {
     /// Probe the sensor: open I2C, verify device ID, write init config.
     /// Returns identity on success. Called for Pending targets each poll cycle.
     ///
-    /// MUST complete within ~5s wall-clock time total per call.
-    /// Each I2C transaction has a ~1s kernel timeout, and a typical probe
-    /// may involve 2-4 transactions (open, device ID read, config write).
+    /// SHOULD complete within ~5s wall-clock time (advisory, not enforced
+    /// by the runtime). Each I2C transaction has a ~1s kernel timeout, and
+    /// a typical probe involves 2-4 transactions (open, device ID read,
+    /// config write). The runtime cannot preempt a blocking ioctl; these
+    /// bounds depend on kernel-level I2C timeouts.
     /// Drivers MUST NOT disable or extend kernel timeouts.
     /// If a driver needs longer init sequences, split across poll cycles.
     fn probe(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String>;
@@ -76,8 +80,9 @@ pub trait SensorDriver: Send + Sync {
     /// Read the sensor: open I2C, read register(s), decode to SensorReading.
     /// Called for Active targets each poll cycle.
     ///
-    /// MUST complete within ~3s wall-clock time total per call.
-    /// A typical read involves 1-2 I2C transactions.
+    /// SHOULD complete within ~3s wall-clock time (advisory, not enforced
+    /// by the runtime). A typical read involves 1-2 I2C transactions.
+    /// Same kernel-timeout dependency as `probe()`.
     fn read(&self, bus_path: &str, address: u8) -> Result<SensorReading, String>;
 
     /// IC name for DeviceKey generation (e.g., "mcp9600", "opt3001").
@@ -130,12 +135,12 @@ Each `spawn_blocking` call clones the `Arc<[TargetRuntime]>` (cheap Arc bump). D
 
 ### Why `String` errors (not a custom Error type)
 
-Polling adapters surface I2C errors as `AdapterEvent::AdapterError { error: String }`. A typed error hierarchy would add complexity without benefit: the consumer (core engine) only logs the string. The base adapter wraps driver errors with bus path and address context if the driver omits them (belt-and-suspenders).
+Polling adapters surface I2C errors as `AdapterEvent::AdapterError { error: String }`. A typed error hierarchy would add complexity without benefit: the consumer (core engine) only logs the string. The polling runtime wraps driver errors with bus path and address context if the driver omits them (belt-and-suspenders).
 
 ## 4. BaseAdapterConfig
 
 ```rust
-/// Config for an I2C polling adapter built on the base adapter.
+/// Config for an I2C polling adapter built on the polling runtime.
 pub struct BaseAdapterConfig {
     /// I2C bus path (e.g., "/dev/i2c-1").
     pub bus_path: String,
@@ -173,25 +178,25 @@ These become configurable only when an operator-facing config surface exists (su
 `validate_config()` checks:
 1. `bus_path` non-empty
 2. `poll_interval_ms > 0`
-3. Each address in valid 7-bit I2C range (0x08..=0x77)
+3. Each address in valid 7-bit I2C range `0x08..=0x77` (excludes reserved addresses 0x00–0x07 and 0x78–0x7F; 10-bit addressing is not supported)
 4. No duplicate addresses
 5. Soft warning if `actual poll cycle duration > poll_interval_ms` (runtime warning when poll cycle takes longer than poll interval)
 6. Call `driver.validate(poll_interval_ms)` for each target (driver-specific constraints)
 
-The `validate()` hook on `SensorDriver` replaces the previous approach of putting per-sensor validation only in the concrete adapter crate. This keeps the validation in the base adapter's `validate_config()` path so AI-generated adapters that call `start()` directly still get full validation.
+The `validate()` hook on `SensorDriver` replaces the previous approach of putting per-sensor validation only in the concrete adapter crate. This keeps the validation in the polling runtime's `validate_config()` path so AI-generated adapters that call `start()` directly still get full validation.
 
 ### Bus validation at startup
 
-`start()` attempts to open the I2C bus path as a file once before spawning the polling loop:
-- If the path does not exist or cannot be opened → `start()` returns `Err` (fail fast)
-- This catches: typos (`/dev/i2c-99`), permission errors, missing kernel modules
-- **Guarantee scope:** "bus path is openable as a file." This does NOT prove the file is a valid I2C bus device. Full I2C-level validation happens on the first probe, which uses the real transport driver (`rpi4b-driver`)
+`start()` attempts to open the I2C bus path as a file (read mode) once before spawning the polling loop:
+- If the path does not exist or cannot be opened for reading → `start()` returns `Err` (fail fast)
+- This catches: typos (`/dev/i2c-99`), missing device nodes, missing kernel modules
+- **Guarantee scope:** "bus path exists and is readable as a file." This does NOT prove the file is a valid I2C bus device, nor that the process has the access mode the transport actually uses (e.g. read-write ioctl). Full I2C-level validation happens on the first probe, which uses the real transport driver (`rpi4b-driver`)
 - The bus handle is not kept open; each probe/read opens its own handle (matching existing behavior)
 - If the bus disappears after startup (hot-unplug), drivers surface errors via the normal probe/read failure path
 
-## 5. Polling Loop (provided by base adapter)
+## 5. Polling Loop (provided by polling runtime)
 
-The base adapter provides the entire async polling loop. This is the core value: new adapters get battle-tested polling behavior for free.
+The polling runtime provides the entire async polling loop. This is the core value: new adapters get battle-tested polling behavior for free.
 
 ### State machine
 
@@ -218,7 +223,7 @@ enum TargetState {
 When a target accumulates `MAX_READ_FAILURES` (default: 5) consecutive `ReadError` outcomes:
 1. Emit `AdapterError` with the final I2C error (bus path + address)
 2. Then emit `DeviceLost { device_key, reason }` where reason = `"consecutive read failures ({n}): {last_error}"`
-3. The base adapter logs this at `info` level for operator visibility
+3. The polling runtime logs this at `info` level for operator visibility
 4. State transitions to `Pending { consecutive_probe_failures: 0, escalation_emitted: false }`
 5. On the next poll cycle, the target is reprobed
 6. If reprobe succeeds, `DeviceDiscovered` is emitted (new session)
@@ -265,6 +270,20 @@ When a Pending target hits `MAX_PROBE_FAILURES`:
 
 For the shutdown-command send in `AdapterHandle::shutdown()`: best-effort `let _ = send()` is acceptable because shutdown already has a backup path (event_rx.close() forces the loop to exit on the next send attempt).
 
+### Driver panic policy
+
+If a `SensorDriver` method panics inside `spawn_blocking`, the `JoinHandle` returns `Err(JoinError)`. The polling runtime treats this as a fatal error for the affected target in that cycle:
+- The panicking target's outcome is treated as `ProbeFailed` or `ReadError` (depending on the current state), incrementing the failure counter normally
+- The adapter loop itself does **not** abort — other targets continue operating
+- An `AdapterError` is emitted with the panic message (if recoverable from `JoinError`)
+- If the panic is unrecoverable (poisoned state), the entire polling loop terminates and the `AdapterHandle` task completes
+
+> **Note for AI driver authors:** `SensorDriver` implementations should return `Err(String)` for all expected failures. Panics indicate bugs, not I2C errors.
+
+### Startup probe: partial failure behavior
+
+When some (but not all) targets fail the startup probe, the runtime continues with the successful targets. Failed targets enter `Pending` state and are reprobed on subsequent cycles. Currently, per-target startup failures are logged but do **not** emit individual `AdapterError` events — only the all-fail case emits an immediate error. This is a known gap; a future improvement may emit per-target startup errors for better field diagnostics.
+
 ### Async loop
 
 ```
@@ -295,7 +314,7 @@ loop {
 
 ### DeviceCommand handling
 
-v1 contract: the base adapter **always rejects** `DeviceCommand` with:
+v1 contract: the polling runtime **always rejects** `DeviceCommand` with:
 ```rust
 AdapterError {
     device_key: Some(cmd.device_key),  // preserve device attribution
@@ -321,7 +340,7 @@ Mitigation:
 
 ## 6. AdapterHandle and start()
 
-The base adapter provides a generic `start()` function:
+The polling runtime provides a generic `start()` function:
 
 ```rust
 /// Start an I2C polling adapter.
@@ -388,7 +407,7 @@ rpi-local-adapter/
     integration.rs  — real I2C tests (unchanged)
 ```
 
-**Removed from rpi-local-adapter** (moved to base adapter):
+**Removed from rpi-local-adapter** (moved to polling runtime):
 - `polling_loop.rs` (entire file)
 - `config.rs` core types (`SensorTarget`, `SensorKind` → replaced by `BaseAdapterConfig` + `SensorTargetConfig`)
 - `AdapterHandle` struct and `shutdown()`
@@ -402,9 +421,9 @@ rpi-local-adapter/
 
 ## 8. Gateway Impact
 
-Minimal. The gateway calls `rpi_local_adapter::start()` which now returns `iotkit_polling_adapter_runtime::AdapterHandle`. The gateway accesses `.id`, `.event_rx`, `.command_tx` and calls `.shutdown()` — all present on the base adapter's AdapterHandle.
+Minimal. The gateway calls `rpi_local_adapter::start()` which now returns `iotkit_polling_adapter_runtime::AdapterHandle`. The gateway accesses `.id`, `.event_rx`, `.command_tx` and calls `.shutdown()` — all present on the polling runtime's AdapterHandle.
 
-rpi-local-adapter re-exports `AdapterHandle` from the base adapter, so the gateway's import path doesn't need to change.
+rpi-local-adapter re-exports `AdapterHandle` from the polling runtime, so the gateway's import path doesn't need to change.
 
 ## 9. Testing Strategy
 
@@ -483,7 +502,7 @@ graph BT
 
 `iotkit-polling-adapter-runtime` does NOT depend on `bravepi-sensors`. Sensor IC decode logic is referenced only by the concrete adapter (rpi-local-adapter).
 
-## 11. AI Consumption: How to Add a New I2C Sensor
+## 11. AI Consumption: How to Add a New I2C Polling Sensor
 
 An AI agent creating a new I2C sensor adapter follows these steps:
 
@@ -493,7 +512,7 @@ An AI agent creating a new I2C sensor adapter follows these steps:
 
 3. **Call `iotkit_polling_adapter_runtime::start()`**: Pass adapter ID and config.
 
-4. **Done.** The base adapter handles: channel wiring, polling loop, state machine, shutdown, event production, failure recovery.
+4. **Done.** The polling runtime handles: channel wiring, polling loop, state machine, shutdown, event production, failure recovery.
 
 Example for a hypothetical BME280 temperature/humidity sensor:
 
@@ -543,17 +562,30 @@ All adapters share the gateway boundary contract: `AdapterEvent`, `AdapterComman
 |------|--------|---------|
 | `runtime_model` | `polling` \| `stream_ingress` | How the adapter acquires sensor data |
 | `liveness_owner` | `adapter` \| `orchestrator` | Who decides a device is lost |
+| `device_cardinality` | `single_endpoint` \| `multi_endpoint` | One I2C address = one logical device, or one transport = many logical devices |
+
+> **Note on `liveness_owner`:** This is the *current* classification of each adapter, not a permanent architectural constraint. Future adapters may mix models (e.g., a polling adapter with orchestrator-owned liveness, or a streaming adapter with protocol-level heartbeats). When that happens, `liveness_owner` may become a runtime policy rather than a fixed axis.
 
 ### Current Adapters
 
-| Adapter | runtime_model | liveness_owner | Notes |
-|---------|--------------|----------------|-------|
-| rpi-local-adapter | polling | adapter | I2C register polling; emits `DeviceLost` after MAX_READ_FAILURES consecutive read failures |
-| bravepi-mainboard-adapter | stream_ingress | orchestrator | UART byte-stream/codec loop; discovers on first sensor frame; never infers loss from silence |
+| Adapter | runtime_model | liveness_owner | device_cardinality | Notes |
+|---------|--------------|----------------|-------------------|-------|
+| rpi-local-adapter | polling | adapter | single_endpoint | I2C register polling; emits `DeviceLost` after MAX_READ_FAILURES |
+| bravepi-mainboard-adapter | stream_ingress | orchestrator | multi_endpoint | UART byte-stream/codec loop; discovers on first sensor frame; never infers loss from silence |
+
+### Applicability Rule for `iotkit-polling-adapter-runtime`
+
+Use the polling runtime **only when all four conditions hold**:
+1. `runtime_model = polling` (adapter pulls data on a timer)
+2. `device_cardinality = single_endpoint` (one I2C address = one logical device)
+3. `liveness_owner = adapter` (the runtime hardcodes adapter-emitted `DeviceLost` on repeated read failure)
+4. `DeviceCommand` handling = reject-only (v1 limitation)
+
+If any condition does not hold, the adapter needs its own runtime (like bravepi-mainboard-adapter).
 
 ### Liveness Rule
 
-**Only adapters with `liveness_owner = adapter` may emit `DeviceLost` based on transport/read failure.** Streaming adapters may emit transport errors (e.g. serial port disconnected), but silence-based device loss belongs in the orchestrator layer, using `uplink_interval_secs` plus shared `last_seen` timestamps.
+**Only adapters with `liveness_owner = adapter` may emit `DeviceLost` based on transport/read failure.** Streaming adapters may emit transport errors (e.g. serial port disconnected), but silence-based device loss belongs in the orchestrator layer. The orchestrator's liveness mechanism (`uplink_interval_secs`, shared `last_seen` timestamps) is defined in sub-project C (orchestrator); this spec only constrains the adapter side of the boundary.
 
 ### Naming Convention
 
