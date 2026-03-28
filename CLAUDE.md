@@ -13,7 +13,8 @@ cargo test -p <crate-name>
 
 - **Main agent は実装禁止。** 対話/spec/Codex eval dispatch のみ。実装は agent team (lead → dev subagent)。
 - **Codex eval は全段階で必須。** spec → plan → per-task impl → final impl。dev subagent も自分で `codex exec` を実行する。
-- Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → agent team → codex-eval-impl → PR
+- Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → agent-team → PR
+- **Watchpoint curation は Main agent の責務。** Lead/Reviewer の結果を受けて eval-perspectives-curator で review guide の Active Watchpoints を更新する。
 
 ## Reference Docs (read on demand)
 
