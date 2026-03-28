@@ -15,85 +15,179 @@ Gateway がアダプターの内部実装（polling / streaming）を知らず�
 **In:**
 - `iotkit-gateway/src/adapter_host.rs` — 新規モジュール（gateway 内部のみ）
 - `iotkit-gateway/src/main.rs` — AdapterHost を使うようにリファクタ
-
-**Out:**
-- 新クレートは作らない
-- `core/` への変更なし
+- `tokio-stream` 依存を `iotkit-gateway/Cargo.toml` に追加
 
 **Minimal adapter changes (public API addition only, no internal logic change):**
 - `iotkit-polling-adapter-runtime`: `AdapterHandle::into_parts()` を追加
 - `bravepi-mainboard-adapter`: `AdapterHandle::into_parts()` を追加
 - 両アダプターの既存 `shutdown()` ロジックを `ShutdownHandle` に移動（中身は同一）
 
+**Out:**
+- 新クレートは作らない
+- `core/` への変更なし
+- adapter の runtime failure policy（`FatalOnExit` / `Optional`）は将来スコープ
+
 ## Design
+
+### Fan-in: StreamMap 方式
+
+forwarder タスク + merged channel ではなく、`tokio_stream::StreamMap` で各アダプターの `event_rx` を直接 multiplex する。
+
+**なぜ StreamMap か:**
+- 余分な forwarder タスクと中間チャネルが不要
+- all_closed 検出が自然（StreamMap が空になると `poll_next` が `None` を返す）
+- backpressure が各アダプターの元のチャネルに直接かかる（中間バッファによる公平性問題なし）
+- shutdown 時の deadlock リスクなし（forwarder が中間チャネルで詰まる問題が存在しない）
 
 ### AdapterHost struct
 
 ```rust
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamMap;
+
 pub struct AdapterHost {
-    merged_tx: mpsc::Sender<EngineEvent>,
-    merged_rx: mpsc::Receiver<EngineEvent>,
+    streams: StreamMap<AdapterId, ReceiverStream<AdapterEvent>>,
     adapters: Vec<ManagedAdapter>,
 }
-```
 
-`AdapterHost` は登録されたアダプターの forwarder タスクを管理し、全アダプターの `AdapterEvent` を `EngineEvent` に包んで1本の `merged_rx` に集約する。
-
-### ManagedAdapter
-
-```rust
 struct ManagedAdapter {
     id: AdapterId,
-    command_tx: mpsc::Sender<AdapterCommand>,
     shutdown_fn: Option<Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>>,
-    forwarder_handle: JoinHandle<()>,
 }
 ```
 
-各アダプターの shutdown 方法を型消去したクロージャで保持する。これにより：
-- bravepi の `shutdown(mut self) -> Result<(), String>`（consume）
-- polling-runtime の `shutdown(&mut self)`（borrow）
-
-という異なるシグネチャを統一的に扱える。
+`command_tx` は v1 では AdapterHost に保持しない。コマンドルーティングが必要になったタイミングで `send_command(adapter_id, cmd)` API とともに追加する。
 
 ### register メソッド
 
 ```rust
 impl AdapterHost {
+    pub fn new() -> Self { ... }
+
     pub fn register(
         &mut self,
         id: AdapterId,
         event_rx: mpsc::Receiver<AdapterEvent>,
-        command_tx: mpsc::Sender<AdapterCommand>,
         shutdown_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
     )
 ```
 
-register 時に forwarder タスクを spawn する。forwarder は：
-1. `event_rx.recv()` でアダプターからイベントを受信
-2. `EngineEvent { adapter_id, event }` に包む
-3. `merged_tx.send()` で共通チャネルに転送
-4. `event_rx` が閉じたら（adapter 終了 or チャネルドロップ）forwarder も終了し、自身が持つ `merged_tx` clone をドロップする
+`event_rx` を `ReceiverStream` でラップし、`StreamMap` に `(id, stream)` として挿入する。shutdown クロージャは `ManagedAdapter` に保存。
 
-### event_rx アクセス
+### next_event メソッド
 
 ```rust
-    pub fn event_rx(&mut self) -> &mut mpsc::Receiver<EngineEvent>
+    pub async fn next_event(&mut self) -> Option<EngineEvent>
 ```
 
-gateway の main loop が `select!` で使う唯一のイベントソース。
+`StreamMap::next()` を呼び、`(adapter_id, event)` を `EngineEvent { adapter_id, event }` に包んで返す。全ストリームが終了したら `None` を返す。
 
-### shutdown_all
+### shutdown_all メソッド
 
 ```rust
     pub async fn shutdown_all(&mut self)
 ```
 
-全アダプターの shutdown クロージャを呼び出し、forwarder タスクの完了を await する。順序は登録の逆順（後から登録したものを先に停止）。
+登録の逆順で各アダプターの shutdown クロージャを呼び出す。
+
+**Shutdown シーケンス:**
+1. shutdown クロージャ内で、各アダプター固有の shutdown 処理を実行（receiver close → Shutdown cmd → task join）
+2. StreamMap のストリームは、アダプターの event_tx がドロップされた時点で自然に終了する
+
+各 shutdown クロージャの結果は per-adapter でログ出力する。1つのアダプターの shutdown 失敗が他のアダプターの shutdown をブロックしないようにする。
 
 ### all_closed 検出
 
-全 forwarder タスクが終了すると `merged_tx` の全 sender がドロップされ、`merged_rx.recv()` が `None` を返す。gateway はこれで「全アダプターが閉じた」ことを検出できる。
+`next_event()` が `None` を返す = StreamMap 内の全ストリームが終了 = 全アダプターのチャネルが閉じた。forwarder + merged channel 方式と違い、AdapterHost 自身が sender を保持する問題がない。
+
+## Handle 分解: into_parts()
+
+register は `event_rx` を引き取り、shutdown クロージャは残りの Handle 部品を所有する。現状の Handle は private フィールドを含むため、部分 move ができない。
+
+**解決策:** 両アダプターに `into_parts()` を追加する。
+
+```rust
+// bravepi-mainboard-adapter
+pub struct AdapterParts {
+    pub id: AdapterId,
+    pub event_rx: mpsc::Receiver<AdapterEvent>,
+    pub command_tx: mpsc::Sender<AdapterCommand>,
+    pub shutdown: ShutdownHandle,
+}
+
+pub struct ShutdownHandle {
+    event_rx_close: mpsc::Receiver<AdapterEvent>,  // ← 不要、後述
+    source_handle: Option<SerialSourceHandle>,
+    event_loop_handle: Option<JoinHandle<()>>,
+    command_tx: mpsc::Sender<AdapterCommand>,
+}
+```
+
+**Shutdown と receiver-close の問題:**
+
+現在の bravepi `shutdown()` は `event_rx.close()` を最初に呼ぶ。これは event_loop の `event_tx.send()` を即座に失敗させ、バッファ詰まりによる shutdown hang を防ぐ。
+
+`into_parts()` で `event_rx` を AdapterHost に渡した後は、ShutdownHandle が `event_rx` を持たない。しかし StreamMap 方式では問題にならない：
+- StreamMap は `event_rx` をラップした ReceiverStream を所有
+- shutdown 時に `AdapterHost` が StreamMap からストリームを remove すれば、ReceiverStream がドロップされ、内部の Receiver が close される
+- これは従来の `event_rx.close()` と同じ効果
+
+**Shutdown シーケンス（per-adapter）:**
+1. AdapterHost が StreamMap から該当ストリームを remove（= receiver close）
+2. ShutdownHandle が Shutdown コマンド送信
+3. ShutdownHandle がタスク/スレッドの join を await
+
+```rust
+// bravepi-mainboard-adapter
+impl ShutdownHandle {
+    /// Shutdown the adapter. Caller must close the event receiver first
+    /// (e.g. by dropping the ReceiverStream).
+    pub async fn shutdown(mut self) -> Result<(), String> {
+        let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
+        if let Some(handle) = self.event_loop_handle.take() {
+            handle.await.map_err(|e| format!("event_loop panicked: {e}"))?;
+        }
+        if let Some(source) = self.source_handle.take() {
+            source.join().await?;
+        }
+        Ok(())
+    }
+}
+
+// iotkit-polling-adapter-runtime
+impl ShutdownHandle {
+    pub async fn shutdown(mut self) {
+        let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
+        if let Some(handle) = self.task_handle.take() {
+            let _ = handle.await;
+        }
+    }
+}
+```
+
+### into_parts の具体シグネチャ
+
+```rust
+// bravepi-mainboard-adapter
+impl AdapterHandle {
+    pub fn into_parts(self) -> AdapterParts {
+        AdapterParts {
+            id: self.id,
+            event_rx: self.event_rx,
+            command_tx: self.command_tx.clone(),
+            shutdown: ShutdownHandle {
+                source_handle: self.source_handle,
+                event_loop_handle: self.event_loop_handle,
+                command_tx: self.command_tx,
+            },
+        }
+    }
+}
+
+// iotkit-polling-adapter-runtime — 同様のパターン
+```
+
+`command_tx` は shutdown にも必要なため、clone して両方に渡す。
 
 ## gateway main.rs の変更
 
@@ -103,29 +197,49 @@ async fn run(port_path: String) {
     let mut host = AdapterHost::new();
 
     // BravePI — required
-    let bravepi = bravepi_mainboard_adapter::task::start(port_path)?;
-    host.register(bravepi.id, bravepi.event_rx, bravepi.command_tx, {
-        // bravepi.shutdown() consumes self → move into closure
-        move || Box::pin(async move {
-            if let Err(e) = bravepi_handle.shutdown().await {
-                tracing::error!(error = %e, "BravePI shutdown error");
-            }
-        })
-    });
+    let bravepi = bravepi_mainboard_adapter::task::start(port_path)
+        .expect("Failed to start BravePI adapter");
+    let bravepi_parts = bravepi.into_parts();
+    host.register(
+        bravepi_parts.id,
+        bravepi_parts.event_rx,
+        {
+            let mut sh = bravepi_parts.shutdown;
+            move || Box::pin(async move {
+                if let Err(e) = sh.shutdown().await {
+                    tracing::error!(error = %e, "BravePI shutdown error");
+                }
+            })
+        },
+    );
 
     // RPi local — optional
+    let rpi_local_enabled = std::env::var("RPI_LOCAL_ENABLED")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
     if rpi_local_enabled {
-        let rpi = rpi_local_adapter::start(config)?;
-        host.register(rpi.id, rpi.event_rx, rpi.command_tx, {
-            move || Box::pin(async move { rpi_handle.shutdown().await; })
-        });
+        let rpi = rpi_local_adapter::start(rpi_local_config())
+            .expect("Failed to start RPi local adapter");
+        let rpi_parts = rpi.into_parts();
+        host.register(
+            rpi_parts.id,
+            rpi_parts.event_rx,
+            {
+                let mut sh = rpi_parts.shutdown;
+                move || Box::pin(async move { sh.shutdown().await; })
+            },
+        );
     }
 
     // Unified fan-in loop
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            event = host.event_rx().recv() => {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Shutdown signal received");
+                break;
+            }
+            event = host.next_event() => {
                 match event {
                     Some(ev) => engine.apply(ev).await,
                     None => {
@@ -138,47 +252,39 @@ async fn run(port_path: String) {
     }
 
     host.shutdown_all().await;
+
+    let devices = engine.devices().await;
+    tracing::info!(device_count = devices.len(), "Engine state at shutdown");
 }
 ```
 
-## register 時の Handle 分解
-
-register は `event_rx` と `command_tx` を引き取る。残りの Handle フィールド（bravepi の `source_handle` + `event_loop_handle`、polling の `task_handle`）は shutdown クロージャに move される。
-
-つまり、register の呼び出し側で Handle を分解する必要がある。現状の Handle は `event_rx` と `command_tx` が `pub` フィールドなので、構造体から直接取り出せる。ただし bravepi の private フィールド（`source_handle`, `event_loop_handle`）は shutdown クロージャ内でのみ使われるため、Handle ごとクロージャに move する形になる。
-
-具体的には：
-- **bravepi**: `event_rx` と `command_tx` を取り出した後、残りの Handle を shutdown クロージャに move。ただし現状の Handle は部分 move を許さない構造のため、`into_parts()` メソッドを追加するか、Handle ごと move して shutdown クロージャ内で `event_rx` / `command_tx` の重複を避ける設計が必要。
-- **polling-runtime**: 同様の問題。`event_rx` と `command_tx` は pub だが、`task_handle` は private。
-
-**解決策:** 両アダプターに `into_parts()` を追加して、Handle を `(AdapterId, Receiver, Sender, ShutdownHandle)` に分解可能にする。`ShutdownHandle` はアダプター固有の型で、`async fn shutdown(self)` を持つ。
-
-```rust
-// bravepi-mainboard-adapter
-pub struct ShutdownHandle { source_handle, event_loop_handle }
-impl ShutdownHandle { pub async fn shutdown(self) -> Result<(), String> { ... } }
-
-// iotkit-polling-adapter-runtime
-pub struct ShutdownHandle { task_handle }
-impl ShutdownHandle { pub async fn shutdown(self) { ... } }
-```
-
-これは「アダプター内部の変更」に見えるが、public API の追加のみで内部ロジックの変更はない。既存の `shutdown()` メソッドの中身を `ShutdownHandle` に移すだけ。
-
 ## Testing
 
-- **adapter_host unit tests**: StubAdapter（即座に N 個のイベントを送って閉じる）を使って：
-  - 単一アダプター登録 → イベント受信 → all_closed 検出
-  - 複数アダプター登録 → イベントが interleave される
-  - shutdown_all → 全 forwarder 停止
-- **既存テスト**: 変更なし（アダプター内部は触らないため）
-- **gateway 統合**: main.rs のリファクタ後に `cargo test --workspace` が通ること
+### adapter_host unit tests
+
+StubAdapter（`mpsc::channel` で即座に N 個のイベントを送って close する）を使う：
+
+- **single_adapter_events** — 1つの adapter 登録 → next_event で全イベント受信 → None で all_closed
+- **multiple_adapters_interleaved** — 2つの adapter 登録 → 両方のイベントが受信される（順序は非決定的）
+- **all_closed_detection** — 全 adapter の sender ドロップ後に next_event が None を返す
+- **shutdown_all_calls_closures** — shutdown クロージャが呼ばれたことを AtomicBool で確認
+- **shutdown_order_is_reverse** — 登録逆順で shutdown されることを Vec<usize> の記録で確認
+
+### into_parts tests（各アダプタークレート内）
+
+- **into_parts_preserves_id** — parts.id が元の handle.id と一致
+- **shutdown_handle_works** — ShutdownHandle.shutdown() が正常に完了（tokio::test で stub transport を使用）
+
+### 既存テスト
+
+- 両アダプターの既存テストは変更不要（`into_parts()` は追加 API）
+- `cargo test --workspace` が全通することを確認
 
 ## Adapter Taxonomy との関係
 
 この設計は polling-adapter-runtime-design.md Section 12 の adapter taxonomy と整合する：
 - `runtime_model` の違い（polling / stream_ingress）は AdapterHost の関心外
 - `liveness_owner` の違い（adapter / orchestrator）も AdapterHost の関心外
-- AdapterHost が知るのは「`AdapterEvent` を出し、`AdapterCommand` を受け、shutdown できるもの」だけ
+- AdapterHost が知るのは「`AdapterEvent` ストリームを出し、shutdown できるもの」だけ
 
 将来 orchestrator 層が追加された場合も、orchestrator → AdapterHost → Engine の階層で自然に組み合わせられる。
