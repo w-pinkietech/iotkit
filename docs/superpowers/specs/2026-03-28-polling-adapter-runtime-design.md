@@ -427,7 +427,7 @@ rpi-local-adapter re-exports `AdapterHandle` from the polling runtime, so the ga
 
 ## 9. Testing Strategy
 
-### Base adapter unit tests
+### Polling runtime unit tests
 
 Migrated and extended from current rpi-local-adapter polling_loop.rs tests:
 

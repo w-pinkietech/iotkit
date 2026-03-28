@@ -1,14 +1,14 @@
-# Base Adapter Implementation Plan
+# Polling Adapter Runtime Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extract a reusable I2C polling base adapter from rpi-local-adapter so AI agents can create new sensor adapters by implementing only a SensorDriver trait.
+**Goal:** Extract a reusable I2C polling adapter runtime from rpi-local-adapter so AI agents can create new sensor adapters by implementing only a SensorDriver trait.
 
 **Architecture:** New `iotkit-polling-adapter-runtime` crate provides SensorDriver trait, PollingAdapterConfig, polling loop, state machine, AdapterHandle, and shutdown. rpi-local-adapter is refactored to a thin wrapper: RpiLocalConfig + MCP9600/OPT3001 driver implementations. bravepi-mainboard-adapter is untouched except trivial re-export adjustments.
 
 **Tech Stack:** Rust, tokio (async runtime), tracing (diagnostics), iotkit-core-types (shared domain types)
 
-**Spec:** `docs/superpowers/specs/2026-03-28-base-adapter-design.md`
+**Spec:** `docs/superpowers/specs/2026-03-28-polling-adapter-runtime-design.md`
 
 ---
 
@@ -28,7 +28,7 @@
 |------|--------|
 | `Cargo.toml` (workspace) | Add `iotkit-polling-adapter-runtime` to members |
 | `rpi-local-adapter/Cargo.toml` | Add `iotkit-polling-adapter-runtime` dependency |
-| `rpi-local-adapter/src/lib.rs` | Replace AdapterHandle/start/shutdown with thin wrapper delegating to base adapter |
+| `rpi-local-adapter/src/lib.rs` | Replace AdapterHandle/start/shutdown with thin wrapper delegating to polling runtime |
 | `rpi-local-adapter/src/drivers/mod.rs` | New: module declarations for mcp9600 and opt3001 drivers |
 | `rpi-local-adapter/src/drivers/mcp9600.rs` | New: Mcp9600Driver implementing SensorDriver |
 | `rpi-local-adapter/src/drivers/opt3001.rs` | New: Opt3001Driver implementing SensorDriver |
@@ -38,8 +38,8 @@
 
 | File | Reason |
 |------|--------|
-| `rpi-local-adapter/src/polling_loop.rs` | Moved to base adapter |
-| `rpi-local-adapter/src/config.rs` | Merged into lib.rs (RpiLocalConfig) + base adapter (PollingAdapterConfig) |
+| `rpi-local-adapter/src/polling_loop.rs` | Moved to polling runtime |
+| `rpi-local-adapter/src/config.rs` | Merged into lib.rs (RpiLocalConfig) + polling runtime (PollingAdapterConfig) |
 | `rpi-local-adapter/src/sensors/mod.rs` | Replaced by trait dispatch |
 | `rpi-local-adapter/src/sensors/mcp9600.rs` | Replaced by drivers/mcp9600.rs |
 | `rpi-local-adapter/src/sensors/opt3001.rs` | Replaced by drivers/opt3001.rs |
@@ -79,7 +79,7 @@ In `Cargo.toml` (workspace root), add `"iotkit-polling-adapter-runtime"` to the 
 //! iotkit-polling-adapter-runtime: reusable I2C polling adapter skeleton.
 //!
 //! AI agents implement `SensorDriver` per sensor IC.
-//! The base adapter provides: polling loop, channel wiring,
+//! The polling runtime provides: polling loop, channel wiring,
 //! AdapterHandle, shutdown, state machine, failure recovery.
 
 mod polling_loop;
@@ -90,7 +90,7 @@ use tokio::sync::mpsc;
 
 /// Trait for sensor-specific I2C probe and read logic.
 ///
-/// The base adapter calls these inside `spawn_blocking`.
+/// The polling runtime calls these inside `spawn_blocking`.
 ///
 /// Implementations MUST be `Send + Sync`.
 /// All I/O errors MUST be returned as `Err(String)` with bus path and
@@ -850,7 +850,7 @@ feat(rpi-local-adapter): add MCP9600 and OPT3001 SensorDriver implementations
 
 ---
 
-### Task 6: Refactor rpi-local-adapter to use base adapter
+### Task 6: Refactor rpi-local-adapter to use polling runtime
 
 **Files:**
 - Modify: `rpi-local-adapter/Cargo.toml`
@@ -1068,7 +1068,7 @@ Verify all tests pass. Count total tests and compare to previous (should be roug
 - [ ] **Step 3: Commit any clippy fixes**
 
 ```
-fix: address clippy warnings after base adapter refactor
+fix: address clippy warnings after polling runtime refactor
 ```
 
 ---
@@ -1076,7 +1076,7 @@ fix: address clippy warnings after base adapter refactor
 ### Task 9: Sync spec and commit final state
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-03-28-base-adapter-design.md` (if any spec drift during implementation)
+- Modify: `docs/superpowers/specs/2026-03-28-polling-adapter-runtime-design.md` (if any spec drift during implementation)
 
 - [ ] **Step 1: Review spec against implementation for any drift**
 
@@ -1085,5 +1085,5 @@ Check that the implemented code matches the spec. Note any intentional deviation
 - [ ] **Step 2: Commit spec sync if needed**
 
 ```
-docs: sync base adapter spec with implementation
+docs: sync polling runtime spec with implementation
 ```
