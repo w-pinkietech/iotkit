@@ -4,7 +4,7 @@
 
 **Goal:** Extract a reusable I2C polling base adapter from rpi-local-adapter so AI agents can create new sensor adapters by implementing only a SensorDriver trait.
 
-**Architecture:** New `iotkit-polling-adapter-runtime` crate provides SensorDriver trait, BaseAdapterConfig, polling loop, state machine, AdapterHandle, and shutdown. rpi-local-adapter is refactored to a thin wrapper: RpiLocalConfig + MCP9600/OPT3001 driver implementations. bravepi-mainboard-adapter is untouched except trivial re-export adjustments.
+**Architecture:** New `iotkit-polling-adapter-runtime` crate provides SensorDriver trait, PollingAdapterConfig, polling loop, state machine, AdapterHandle, and shutdown. rpi-local-adapter is refactored to a thin wrapper: RpiLocalConfig + MCP9600/OPT3001 driver implementations. bravepi-mainboard-adapter is untouched except trivial re-export adjustments.
 
 **Tech Stack:** Rust, tokio (async runtime), tracing (diagnostics), iotkit-core-types (shared domain types)
 
@@ -19,7 +19,7 @@
 | File | Responsibility |
 |------|---------------|
 | `iotkit-polling-adapter-runtime/Cargo.toml` | Crate manifest |
-| `iotkit-polling-adapter-runtime/src/lib.rs` | Public API: SensorDriver trait, BaseAdapterConfig, SensorTargetConfig, AdapterHandle, start(), validate_config(), re-exports |
+| `iotkit-polling-adapter-runtime/src/lib.rs` | Public API: SensorDriver trait, PollingAdapterConfig, SensorTargetConfig, AdapterHandle, start(), validate_config(), re-exports |
 | `iotkit-polling-adapter-runtime/src/polling_loop.rs` | TargetState, TargetRuntime, PollOutcome, apply_outcomes(), poll_cycle(), polling_loop() async fn |
 
 ### Modified files
@@ -39,7 +39,7 @@
 | File | Reason |
 |------|--------|
 | `rpi-local-adapter/src/polling_loop.rs` | Moved to base adapter |
-| `rpi-local-adapter/src/config.rs` | Merged into lib.rs (RpiLocalConfig) + base adapter (BaseAdapterConfig) |
+| `rpi-local-adapter/src/config.rs` | Merged into lib.rs (RpiLocalConfig) + base adapter (PollingAdapterConfig) |
 | `rpi-local-adapter/src/sensors/mod.rs` | Replaced by trait dispatch |
 | `rpi-local-adapter/src/sensors/mcp9600.rs` | Replaced by drivers/mcp9600.rs |
 | `rpi-local-adapter/src/sensors/opt3001.rs` | Replaced by drivers/opt3001.rs |
@@ -119,7 +119,7 @@ pub trait SensorDriver: Send + Sync {
 }
 
 /// Config for an I2C polling adapter.
-pub struct BaseAdapterConfig {
+pub struct PollingAdapterConfig {
     /// I2C bus path (e.g., "/dev/i2c-1").
     pub bus_path: String,
     /// Polling interval in milliseconds. Must be > 0.
@@ -160,7 +160,7 @@ impl AdapterHandle {
 }
 
 /// Validate config before starting the adapter.
-pub fn validate_config(config: &BaseAdapterConfig) -> Result<(), String> {
+pub fn validate_config(config: &PollingAdapterConfig) -> Result<(), String> {
     if config.bus_path.is_empty() {
         return Err("bus_path must not be empty".to_string());
     }
@@ -195,7 +195,7 @@ pub fn validate_config(config: &BaseAdapterConfig) -> Result<(), String> {
 /// runtime, spawns the polling loop task, and returns an AdapterHandle.
 pub fn start(
     adapter_id: AdapterId,
-    config: BaseAdapterConfig,
+    config: PollingAdapterConfig,
 ) -> Result<AdapterHandle, std::io::Error> {
     validate_config(&config).map_err(std::io::Error::other)?;
 
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn valid_config_passes() {
-        let config = BaseAdapterConfig {
+        let config = PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 1000,
             targets: vec![SensorTargetConfig {
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn empty_bus_path_rejected() {
-        let config = BaseAdapterConfig {
+        let config = PollingAdapterConfig {
             bus_path: String::new(),
             poll_interval_ms: 1000,
             targets: vec![],
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn zero_poll_interval_rejected() {
-        let config = BaseAdapterConfig {
+        let config = PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 0,
             targets: vec![],
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn duplicate_address_rejected() {
-        let config = BaseAdapterConfig {
+        let config = PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 1000,
             targets: vec![
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn address_out_of_range_rejected() {
-        let config = BaseAdapterConfig {
+        let config = PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 1000,
             targets: vec![SensorTargetConfig {
@@ -323,7 +323,7 @@ mod tests {
                 }
             }
         }
-        let config = BaseAdapterConfig {
+        let config = PollingAdapterConfig {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 50,
             targets: vec![SensorTargetConfig {
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn start_without_runtime_returns_error() {
-        let config = BaseAdapterConfig {
+        let config = PollingAdapterConfig {
             bus_path: "/dev/null".into(),
             poll_interval_ms: 1000,
             targets: vec![],
@@ -367,10 +367,10 @@ mod tests {
 
 use iotkit_core_types::{AdapterCommand, AdapterEvent};
 use tokio::sync::mpsc;
-use crate::BaseAdapterConfig;
+use crate::PollingAdapterConfig;
 
 pub(crate) async fn polling_loop(
-    _config: BaseAdapterConfig,
+    _config: PollingAdapterConfig,
     _event_tx: mpsc::Sender<AdapterEvent>,
     _command_rx: mpsc::Receiver<AdapterCommand>,
 ) {
@@ -880,7 +880,7 @@ pub use iotkit_polling_adapter_runtime::AdapterHandle;
 pub use bravepi_sensors::mcp9600::ThermocoupleType;
 
 use std::sync::Arc;
-use iotkit_polling_adapter_runtime::{BaseAdapterConfig, SensorTargetConfig};
+use iotkit_polling_adapter_runtime::{PollingAdapterConfig, SensorTargetConfig};
 use iotkit_core_types::AdapterId;
 
 /// RPi-local-specific config.
@@ -900,14 +900,14 @@ pub enum RpiLocalTarget {
 
 /// Start the rpi-local adapter.
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
-    let base_config = to_base_config(&config);
+    let polling_config = to_polling_config(&config);
     iotkit_polling_adapter_runtime::start(
         AdapterId::new("rpi-local:default"),
-        base_config,
+        polling_config,
     )
 }
 
-fn to_base_config(config: &RpiLocalConfig) -> BaseAdapterConfig {
+fn to_polling_config(config: &RpiLocalConfig) -> PollingAdapterConfig {
     let targets = config.targets.iter().map(|t| match t {
         RpiLocalTarget::MCP9600 { address, thermocouple_type } => SensorTargetConfig {
             address: *address,
@@ -923,7 +923,7 @@ fn to_base_config(config: &RpiLocalConfig) -> BaseAdapterConfig {
         },
     }).collect();
 
-    BaseAdapterConfig {
+    PollingAdapterConfig {
         bus_path: config.bus_path.clone(),
         poll_interval_ms: config.poll_interval_ms,
         targets,

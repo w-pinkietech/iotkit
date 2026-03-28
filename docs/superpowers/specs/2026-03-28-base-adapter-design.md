@@ -23,7 +23,7 @@ iotkit currently supports only Braveridge sensors. The goal of the polling runti
 
 1. `iotkit-polling-adapter-runtime` crate (workspace-internal, not published): reusable I2C polling loop, AdapterHandle, channel wiring, shutdown, state machine, recovery logic
 2. `SensorDriver` trait: the minimal interface an AI implements per I2C sensor
-3. `BaseAdapterConfig` struct: I2C bus path, poll interval, sensor targets
+3. `PollingAdapterConfig` struct: I2C bus path, poll interval, sensor targets
 4. Refactor rpi-local-adapter to use the polling runtime
 5. Documentation for AI consumption (trait contract, examples, error expectations)
 
@@ -137,11 +137,11 @@ Each `spawn_blocking` call clones the `Arc<[TargetRuntime]>` (cheap Arc bump). D
 
 Polling adapters surface I2C errors as `AdapterEvent::AdapterError { error: String }`. A typed error hierarchy would add complexity without benefit: the consumer (core engine) only logs the string. The polling runtime wraps driver errors with bus path and address context if the driver omits them (belt-and-suspenders).
 
-## 4. BaseAdapterConfig
+## 4. PollingAdapterConfig
 
 ```rust
 /// Config for an I2C polling adapter built on the polling runtime.
-pub struct BaseAdapterConfig {
+pub struct PollingAdapterConfig {
     /// I2C bus path (e.g., "/dev/i2c-1").
     pub bus_path: String,
     /// Polling interval in milliseconds. Must be > 0.
@@ -357,7 +357,7 @@ The polling runtime provides a generic `start()` function:
 /// bus device. Full I2C validation happens on the first probe cycle.
 pub fn start(
     adapter_id: AdapterId,
-    config: BaseAdapterConfig,
+    config: PollingAdapterConfig,
 ) -> Result<AdapterHandle, std::io::Error>
 ```
 
@@ -383,10 +383,10 @@ rpi-local-adapter's `start()` becomes a thin wrapper:
 ```rust
 pub fn start(config: RpiLocalConfig) -> Result<base_adapter::AdapterHandle, std::io::Error> {
     validate_rpi_local_config(&config)?;
-    let base_config = to_base_config(config);
+    let polling_config = to_polling_config(config);
     iotkit_polling_adapter_runtime::start(
         AdapterId::new("rpi-local:default"),
-        base_config,
+        polling_config,
     )
 }
 ```
@@ -398,7 +398,7 @@ After refactoring:
 ```
 rpi-local-adapter/
   src/
-    lib.rs          — start() wrapper, RpiLocalConfig, validation, to_base_config()
+    lib.rs          — start() wrapper, RpiLocalConfig, validation, to_polling_config()
     drivers/
       mod.rs        — module declarations
       mcp9600.rs    — impl SensorDriver for Mcp9600Driver
@@ -409,14 +409,14 @@ rpi-local-adapter/
 
 **Removed from rpi-local-adapter** (moved to polling runtime):
 - `polling_loop.rs` (entire file)
-- `config.rs` core types (`SensorTarget`, `SensorKind` → replaced by `BaseAdapterConfig` + `SensorTargetConfig`)
+- `config.rs` core types (`SensorTarget`, `SensorKind` → replaced by `PollingAdapterConfig` + `SensorTargetConfig`)
 - `AdapterHandle` struct and `shutdown()`
 - `sensors/mod.rs` dispatch (replaced by trait dispatch)
 
 **Kept in rpi-local-adapter:**
 - `RpiLocalConfig` (rpi-local-specific: thermocouple type, OPT3001 min interval)
 - `Mcp9600Driver` / `Opt3001Driver` (SensorDriver trait implementations)
-- `to_base_config()` conversion
+- `to_polling_config()` conversion
 - Integration tests
 
 ## 8. Gateway Impact
@@ -508,7 +508,7 @@ An AI agent creating a new I2C sensor adapter follows these steps:
 
 1. **Implement `SensorDriver`**: Write `probe()` and `read()` for the target IC. Reuse `bravepi_sensors::mcp9600` (or similar) for IC decode logic if the sensor IC is already supported. Otherwise, add a new module to `bravepi-sensors`.
 
-2. **Create config**: Build a `BaseAdapterConfig` with sensor targets, each owning a driver instance via `Arc` with per-sensor config.
+2. **Create config**: Build a `PollingAdapterConfig` with sensor targets, each owning a driver instance via `Arc` with per-sensor config.
 
 3. **Call `iotkit_polling_adapter_runtime::start()`**: Pass adapter ID and config.
 
@@ -517,7 +517,7 @@ An AI agent creating a new I2C sensor adapter follows these steps:
 Example for a hypothetical BME280 temperature/humidity sensor:
 
 ```rust
-use iotkit_polling_adapter_runtime::{BaseAdapterConfig, SensorTargetConfig, SensorDriver, AdapterHandle};
+use iotkit_polling_adapter_runtime::{PollingAdapterConfig, SensorTargetConfig, SensorDriver, AdapterHandle};
 use iotkit_core_types::{AdapterId, SensorIdentity, SensorReading};
 use std::sync::Arc;
 
@@ -537,7 +537,7 @@ impl SensorDriver for Bme280Driver {
 }
 
 pub fn start() -> Result<AdapterHandle, std::io::Error> {
-    let config = BaseAdapterConfig {
+    let config = PollingAdapterConfig {
         bus_path: "/dev/i2c-1".to_string(),
         poll_interval_ms: 2000,
         targets: vec![SensorTargetConfig {
