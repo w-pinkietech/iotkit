@@ -60,10 +60,13 @@ pub(crate) enum PollOutcome {
         target_index: usize,
         key: DeviceKey,
         message: String,
+        #[allow(dead_code)]
+        is_panic: bool,
     },
     ProbeFailed {
         target_index: usize,
         message: String,
+        is_panic: bool,
     },
 }
 
@@ -121,6 +124,7 @@ pub(crate) fn apply_outcomes(
                 target_index,
                 key,
                 message,
+                is_panic: _,
             } => {
                 if let TargetState::Active {
                     ref mut consecutive_read_failures,
@@ -155,6 +159,7 @@ pub(crate) fn apply_outcomes(
             PollOutcome::ProbeFailed {
                 target_index,
                 message,
+                is_panic,
             } => {
                 if let TargetState::Pending {
                     ref mut consecutive_probe_failures,
@@ -164,7 +169,7 @@ pub(crate) fn apply_outcomes(
                     *consecutive_probe_failures += 1;
                     let n = *consecutive_probe_failures;
 
-                    if n >= MAX_PROBE_FAILURES && !*escalation_emitted {
+                    if is_panic || (n >= MAX_PROBE_FAILURES && !*escalation_emitted) {
                         let addr = targets[target_index].address;
                         events.push(AdapterEvent::AdapterError {
                             device_key: None,
@@ -218,7 +223,7 @@ pub(crate) fn poll_cycle(
                         outcomes.push(PollOutcome::Discovered { target_index: i, key, identity });
                     }
                     Ok(Err(msg)) => {
-                        outcomes.push(PollOutcome::ProbeFailed { target_index: i, message: msg });
+                        outcomes.push(PollOutcome::ProbeFailed { target_index: i, message: msg, is_panic: false });
                     }
                     Err(panic_val) => {
                         let msg = panic_message(&panic_val);
@@ -233,6 +238,7 @@ pub(crate) fn poll_cycle(
                                 "driver panic during probe 0x{:02x}@{}: {}",
                                 target.address, bus_path, msg,
                             ),
+                            is_panic: true,
                         });
                     }
                 }
@@ -245,7 +251,7 @@ pub(crate) fn poll_cycle(
                         outcomes.push(PollOutcome::Reading { key: key.clone(), reading });
                     }
                     Ok(Err(msg)) => {
-                        outcomes.push(PollOutcome::ReadError { target_index: i, key: key.clone(), message: msg });
+                        outcomes.push(PollOutcome::ReadError { target_index: i, key: key.clone(), message: msg, is_panic: false });
                     }
                     Err(panic_val) => {
                         let msg = panic_message(&panic_val);
@@ -261,6 +267,7 @@ pub(crate) fn poll_cycle(
                                 "driver panic during read 0x{:02x}@{}: {}",
                                 target.address, bus_path, msg,
                             ),
+                            is_panic: true,
                         });
                     }
                 }
@@ -765,7 +772,7 @@ mod tests {
 
         assert_eq!(outcomes.len(), 1);
         match &outcomes[0] {
-            PollOutcome::ProbeFailed { target_index, message } => {
+            PollOutcome::ProbeFailed { target_index, message, .. } => {
                 assert_eq!(*target_index, 0);
                 assert_eq!(message, "NACK");
             }
@@ -818,7 +825,7 @@ mod tests {
 
         assert_eq!(outcomes.len(), 1);
         match &outcomes[0] {
-            PollOutcome::ReadError { target_index, key: k, message } => {
+            PollOutcome::ReadError { target_index, key: k, message, .. } => {
                 assert_eq!(*target_index, 0);
                 assert_eq!(k.as_str(), "i2c:0x40:temperature");
                 assert_eq!(message, "i/o timeout");
@@ -962,6 +969,7 @@ mod tests {
             target_index: 0,
             key: key.clone(),
             message: "i/o timeout".into(),
+            is_panic: false,
         }];
 
         let events = apply_outcomes(outcomes, &mut states, &targets);
@@ -1000,6 +1008,7 @@ mod tests {
             target_index: 0,
             key: key.clone(),
             message: "NACK".into(),
+            is_panic: false,
         }];
 
         let events = apply_outcomes(outcomes, &mut states, &targets);
@@ -1040,6 +1049,7 @@ mod tests {
         let outcomes = vec![PollOutcome::ProbeFailed {
             target_index: 0,
             message: "NACK".into(),
+            is_panic: false,
         }];
 
         let events = apply_outcomes(outcomes, &mut states, &targets);
@@ -1069,6 +1079,7 @@ mod tests {
         let outcomes = vec![PollOutcome::ProbeFailed {
             target_index: 0,
             message: "device not found".into(),
+            is_panic: false,
         }];
 
         let events = apply_outcomes(outcomes, &mut states, &targets);
@@ -1098,6 +1109,7 @@ mod tests {
         let outcomes2 = vec![PollOutcome::ProbeFailed {
             target_index: 0,
             message: "device not found".into(),
+            is_panic: false,
         }];
         let events2 = apply_outcomes(outcomes2, &mut states, &targets);
         assert!(events2.is_empty());
@@ -1176,6 +1188,7 @@ mod tests {
             PollOutcome::ProbeFailed {
                 target_index: 1,
                 message: "NACK".into(),
+                is_panic: false,
             },
         ];
 
@@ -1243,10 +1256,11 @@ mod tests {
 
         assert_eq!(outcomes.len(), 1);
         match &outcomes[0] {
-            PollOutcome::ProbeFailed { target_index, message } => {
+            PollOutcome::ProbeFailed { target_index, message, is_panic } => {
                 assert_eq!(*target_index, 0);
                 assert!(message.contains("panic"), "expected panic in message: {message}");
                 assert!(message.contains("0x40"), "expected address in message: {message}");
+                assert!(*is_panic, "expected is_panic=true for panicking driver");
             }
             other => panic!("expected ProbeFailed, got {other:?}"),
         }
@@ -1300,5 +1314,30 @@ mod tests {
         assert!(matches!(&outcomes[0], PollOutcome::ProbeFailed { target_index: 0, .. }));
         // Second target succeeded → Discovered
         assert!(matches!(&outcomes[1], PollOutcome::Discovered { target_index: 1, .. }));
+    }
+
+    #[test]
+    fn probe_panic_emits_immediate_adapter_error() {
+        // A panic during probe should emit AdapterError on the FIRST failure,
+        // not wait for MAX_PROBE_FAILURES threshold.
+        let targets = vec![make_target(0x40, "temperature")];
+        let mut states = vec![TargetState::new_pending()];
+
+        let outcomes = vec![PollOutcome::ProbeFailed {
+            target_index: 0,
+            message: "driver panic during probe 0x40@/dev/i2c-1: boom".into(),
+            is_panic: true,
+        }];
+
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+
+        // Should emit AdapterError immediately despite consecutive_probe_failures == 1
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            AdapterEvent::AdapterError { error, .. } => {
+                assert!(error.contains("probe failed"), "expected probe failed in error: {error}");
+            }
+            other => panic!("expected AdapterError, got {other:?}"),
+        }
     }
 }
