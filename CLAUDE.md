@@ -21,7 +21,8 @@ cargo test -p <crate-name>
 |---|---|
 | Spec review guide | [docs/eval/spec-review.md](docs/eval/spec-review.md) |
 | Plan review guide | [docs/eval/plan-review.md](docs/eval/plan-review.md) |
-| Impl review guide | [docs/eval/impl-review.md](docs/eval/impl-review.md) |
+| Impl spec compliance review | [docs/eval/impl-spec-review.md](docs/eval/impl-spec-review.md) |
+| Impl quality review | [docs/eval/impl-quality-review.md](docs/eval/impl-quality-review.md) |
 | Codex review history | [codex-review.md](codex-review.md) |
 | Agent instructions | [AGENTS.md](AGENTS.md) |
 

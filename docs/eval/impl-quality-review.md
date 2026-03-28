@@ -1,11 +1,12 @@
-# iotkit-next Implementation Review Guide
+# iotkit-next Implementation Quality Review Guide
 
-impl 評価時に Codex プロンプトへ注入する。
+コード品質を評価する。
+Codex プロンプトへ注入し、code quality reviewer subagent が使用する。
+
 Active Watchpoints を先に読み、次に Baseline Checklist を適用する。
 
 ## Active Watchpoints
 
-最近のレビューで観測されたプロジェクト固有の盲点。
 max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
 - Added: 2026-03-27
@@ -24,16 +25,6 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
   Observed in: timestamp-provenance design review.
 
 ## Baseline Checklist
-
-安定的なコーディングレビュー基準。ポリシー変更時のみ更新する。
-
-### API と責務
-
-- [ ] public 関数や public 型は、その crate の責務に見合う最小範囲か。
-- [ ] private にできる実装詳細を `pub` にしていないか。
-- [ ] protocol 固有の数値やバイト列解釈が core 側に漏れていないか。
-- [ ] domain 変換が codec や transport に紛れ込んでいないか。
-- [ ] 追加変更で `match` や `if` の集中点が肥大化していないか。
 
 ### データ検証
 
@@ -82,7 +73,7 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - [ ] 同じ障害が繰り返されたとき、ログだけで時系列を追えるか。
 - [ ] warning と error の使い分けに一貫性があるか。
 
-### テスト
+### テスト品質
 
 - [ ] 変更した分岐に対応するテストが追加されているか。
 - [ ] バグ修正なら再発防止テストがあるか。
