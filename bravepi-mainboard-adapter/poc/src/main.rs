@@ -45,7 +45,7 @@ async fn main() {
             }
             event = handle.event_rx.recv() => {
                 match event {
-                    Some(AdapterEvent::SensorData { device_key, reading, rssi, battery_pct }) => {
+                    Some(AdapterEvent::SensorData { device_key, reading, rssi, battery_pct, .. }) => {
                         tracing::info!(
                             device = %device_key,
                             sensor_type = %reading.sensor_type,
@@ -64,7 +64,7 @@ async fn main() {
                             "DeviceDiscovered"
                         );
                     }
-                    Some(AdapterEvent::DeviceConfig { device_key, config }) => {
+                    Some(AdapterEvent::DeviceConfig { device_key, config, .. }) => {
                         tracing::info!(
                             device = %device_key,
                             firmware = ?config.firmware_version,
