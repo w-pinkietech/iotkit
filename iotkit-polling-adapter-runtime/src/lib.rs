@@ -53,6 +53,11 @@ pub struct PollingAdapterConfig {
 }
 
 /// One sensor target on the bus.
+///
+/// Each target should own a **distinct** driver instance. Do not share a single
+/// `Arc<dyn SensorDriver>` across multiple targets — a panic in one target's
+/// driver could leave shared interior state inconsistent, weakening per-target
+/// isolation.
 pub struct SensorTargetConfig {
     pub address: u8,
     pub driver: Arc<dyn SensorDriver>,
