@@ -37,7 +37,7 @@ Gateway がアダプターの内部実装（polling / streaming）を知らず�
 **なぜ StreamMap か:**
 - 余分な forwarder タスクと中間チャネルが不要
 - backpressure が各アダプターの元のチャネルに直接かかる（中間バッファによる公平性問題なし）
-- shutdown 時の deadlock リスクなし
+- forwarder タスクが中間チャネルで詰まる deadlock パターンを排除（ただし adapter 側の task/thread join は依然として unbounded await — shutdown timeout は将来スコープ）
 
 **スケーラビリティについて:** StreamMap は Vec-backed で少数のストリーム向け。現在のアダプター数（2-5）では十分。アダプター数が大幅に増える場合は shared-channel fan-in に移行する。
 
@@ -66,11 +66,11 @@ pub struct AdapterHost {
 
 struct ManagedAdapter {
     id: AdapterId,
-    shutdown_fn: Option<Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>>,
+    shutdown_fn: Option<Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>>,
 }
 ```
 
-v1 では `command_tx` を AdapterHost に保持しない。コマンドルーティングが必要になったタイミングで追加する。
+v1 では `command_tx` を AdapterHost に保持しない。コマンドルーティングが必要になったタイミングで追加する。**v1 では `into_parts()` 後の外部 `command_tx` 利用は未サポート。** command を送る必要がある場合は `into_parts()` を使わず従来の `AdapterHandle` を直接操作すること。
 
 ### WrappedStream（終了検知付き）
 
@@ -102,7 +102,7 @@ impl AdapterHost {
         &mut self,
         id: AdapterId,
         event_rx: mpsc::Receiver<AdapterEvent>,
-        shutdown_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
+        shutdown_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + 'static,
     ) -> Result<(), String>
 ```
 
@@ -132,11 +132,23 @@ impl AdapterHost {
 登録の逆順で、各アダプターに対して：
 1. `streams.remove(&id)` で StreamMap からストリームを除去 → ReceiverStream ドロップ → receiver close
 2. `shutdown_fn` を呼び出し（Shutdown cmd → task/thread join）
-3. 結果を per-adapter でログ出力
+3. 結果を per-adapter でログ出力（`Result<(), String>` を統一的に処理）
 
 1つのアダプターの shutdown 失敗が他のアダプターをブロックしないよう、エラーはログして続行する。
 
 shutdown 順序は `shutdown_all` にエンコードされ、呼び出し側がコメント規約に依存しない。
+
+**注意:** adapter 側の task/thread join は unbounded await。shutdown timeout/abort は将来スコープ。
+
+### Adapter-Host Contract
+
+AdapterHost は以下の契約をアダプターに要求する：
+
+1. **receiver close → producer 停止**: `event_rx` がドロップされたら、アダプターの event 送信側は速やかに停止すること（`send()` が `Err` を返したら loop を抜ける）
+2. **Shutdown コマンド → clean exit**: `AdapterCommand::Shutdown` を受信したら、アダプターのタスク/スレッドは速やかに終了すること
+3. **send 失敗は terminal**: event channel への send 失敗は、アダプターのループ終了条件であること
+
+現在の両アダプター（bravepi-mainboard-adapter、iotkit-polling-adapter-runtime）はこの契約を満たしている。将来のアダプターも `into_parts()` + AdapterHost を使う場合はこの契約に従うこと。
 
 ## Handle 分解: into_parts()
 
@@ -181,11 +193,12 @@ pub struct ShutdownHandle {
 }
 
 impl ShutdownHandle {
-    pub async fn shutdown(mut self) {
+    pub async fn shutdown(mut self) -> Result<(), String> {
         let _ = self.command_tx.send(AdapterCommand::Shutdown).await;
         if let Some(handle) = self.task_handle.take() {
-            let _ = handle.await;
+            handle.await.map_err(|e| format!("polling task panicked: {e}"))?;
         }
+        Ok(())
     }
 }
 ```
@@ -207,7 +220,7 @@ impl AdapterHandle {
 }
 ```
 
-`command_tx` は ShutdownHandle 内に move される（shutdown cmd 送信に必要）。into_parts 後に command を送りたい場合は、into_parts 前に `command_tx.clone()` しておく。
+`command_tx` は ShutdownHandle 内に move される（shutdown cmd 送信に必要）。v1 では into_parts 後の外部 command 送信は未サポート。
 
 ### 既存 shutdown() との関係
 
@@ -222,41 +235,55 @@ impl AdapterHandle {
 async fn run(port_path: String) {
     let engine = Engine::new();
     let mut host = AdapterHost::new();
+    let mut shutting_down = false;
 
-    // BravePI — required
-    let bravepi = bravepi_mainboard_adapter::task::start(port_path)
-        .expect("Failed to start BravePI adapter");
+    // BravePI mainboard adapter — required: start failure is fatal.
+    let bravepi = match bravepi_mainboard_adapter::task::start(port_path) {
+        Ok(h) => {
+            tracing::info!(adapter_id = %h.id, "BravePI mainboard adapter started");
+            h
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to start BravePI mainboard adapter");
+            std::process::exit(1);
+        }
+    };
     let bravepi_parts = bravepi.into_parts();
     host.register(
         bravepi_parts.id,
         bravepi_parts.event_rx,
         {
             let sh = bravepi_parts.shutdown;
-            move || Box::pin(async move {
-                if let Err(e) = sh.shutdown().await {
-                    tracing::error!(error = %e, "BravePI shutdown error");
-                }
-            })
+            move || Box::pin(async move { sh.shutdown().await })
         },
-    ).expect("Failed to register BravePI adapter");
+    ).expect("duplicate adapter ID");
 
-    // RPi local — optional
+    // RPi local adapter — optional: disabled by default.
     let rpi_local_enabled = std::env::var("RPI_LOCAL_ENABLED")
         .map(|v| v == "1")
         .unwrap_or(false);
 
     if rpi_local_enabled {
-        let rpi = rpi_local_adapter::start(rpi_local_config())
-            .expect("Failed to start RPi local adapter");
-        let rpi_parts = rpi.into_parts();
-        host.register(
-            rpi_parts.id,
-            rpi_parts.event_rx,
-            {
-                let sh = rpi_parts.shutdown;
-                move || Box::pin(async move { sh.shutdown().await; })
-            },
-        ).expect("Failed to register RPi local adapter");
+        match rpi_local_adapter::start(rpi_local_config()) {
+            Ok(rpi) => {
+                tracing::info!(adapter_id = %rpi.id, "RPi local adapter started");
+                let rpi_parts = rpi.into_parts();
+                host.register(
+                    rpi_parts.id,
+                    rpi_parts.event_rx,
+                    {
+                        let sh = rpi_parts.shutdown;
+                        move || Box::pin(async move { sh.shutdown().await })
+                    },
+                ).expect("duplicate adapter ID");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to start RPi local adapter");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        tracing::info!("RPi local adapter disabled (set RPI_LOCAL_ENABLED=1 to enable)");
     }
 
     // Unified fan-in loop
@@ -272,7 +299,11 @@ async fn run(port_path: String) {
                         engine.apply(ev).await;
                     }
                     Some(AdapterHostEvent::AdapterClosed(id)) => {
-                        tracing::info!(adapter = %id, "Adapter channel closed");
+                        if shutting_down {
+                            tracing::info!(adapter = %id, "Adapter stopped");
+                        } else {
+                            tracing::warn!(adapter = %id, "Adapter channel closed unexpectedly");
+                        }
                     }
                     None => {
                         tracing::info!("All adapter channels closed");
@@ -283,12 +314,15 @@ async fn run(port_path: String) {
         }
     }
 
+    shutting_down = true;
     host.shutdown_all().await;
 
     let devices = engine.devices().await;
     tracing::info!(device_count = devices.len(), "Engine state at shutdown");
 }
 ```
+
+**注意:** `shutting_down` フラグにより、shutdown 中の expected な AdapterClosed と、稼働中の unexpected な AdapterClosed を区別してログレベルを変える（warn vs info）。
 
 ## Testing
 
