@@ -254,6 +254,64 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
     })
 }
 
+// ── Pipeline: load (public entry point) ────────────────
+
+/// Load gateway config from TOML file + ENV overrides.
+///
+/// Config source resolution order:
+/// 1. `--config <path>` CLI arg -> must exist
+/// 2. `IOTKIT_CONFIG_PATH` ENV -> must exist
+/// 3. `./iotkit.toml` -> optional (silently skipped if absent)
+/// 4. No file -> all defaults
+pub fn load(args: &[String]) -> Result<GatewayConfig, ConfigError> {
+    enum Found {
+        CliArg(PathBuf),
+        EnvVar(PathBuf),
+        ImplicitFile(PathBuf),
+        DefaultsOnly,
+    }
+
+    let found = if let Some(cli_path) = parse_config_arg(args)? {
+        Found::CliArg(PathBuf::from(cli_path))
+    } else if let Ok(env_path) = std::env::var("IOTKIT_CONFIG_PATH") {
+        Found::EnvVar(PathBuf::from(env_path))
+    } else {
+        let implicit = PathBuf::from("iotkit.toml");
+        match implicit.try_exists() {
+            Ok(true) => Found::ImplicitFile(implicit),
+            Ok(false) => Found::DefaultsOnly,
+            Err(e) => return Err(ConfigError::Io(e)),
+        }
+    };
+
+    let (path_buf, explicit, source) = match &found {
+        Found::CliArg(p) => (Some(p.clone()), true, ConfigSource::CliArg(p.clone())),
+        Found::EnvVar(p) => (Some(p.clone()), true, ConfigSource::EnvVar(p.clone())),
+        Found::ImplicitFile(p) => (Some(p.clone()), false, ConfigSource::ImplicitFile(p.clone())),
+        Found::DefaultsOnly => (None, false, ConfigSource::DefaultsOnly),
+    };
+
+    let mut raw = load_raw(path_buf.as_deref(), explicit)?;
+    apply_env(&mut raw)?;
+    resolve(raw, source)
+}
+
+/// Parse `--config <path>` from CLI args.
+fn parse_config_arg<'a>(args: &'a [String]) -> Result<Option<&'a str>, ConfigError> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--config" {
+            return match iter.next() {
+                Some(path) => Ok(Some(path.as_str())),
+                None => Err(ConfigError::Validation(
+                    "--config requires a file path argument".to_string(),
+                )),
+            };
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,5 +677,167 @@ poll_interval_ms = 500
         // rpi_local defaults to disabled
         let result = resolve(raw, ConfigSource::DefaultsOnly);
         assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter")));
+    }
+
+    // ── load tests ─────────────────────────────────────
+
+    #[test]
+    fn load_with_explicit_missing_file_errors() {
+        with_env_vars(&[], || {
+            let args = vec!["gateway".to_string(), "--config".to_string(), "/tmp/no-such-file.toml".to_string()];
+            let result = load(&args);
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn load_with_config_flag_but_no_path_errors() {
+        with_env_vars(&[], || {
+            let args = vec!["gateway".to_string(), "--config".to_string()];
+            let result = load(&args);
+            assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("--config")));
+        });
+    }
+
+    /// RAII guard that restores the working directory on drop (including on panic).
+    struct CwdGuard {
+        prev: PathBuf,
+    }
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.prev);
+        }
+    }
+
+    #[test]
+    fn load_with_no_args_and_no_env_uses_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _cwd_guard = CwdGuard { prev: std::env::current_dir().unwrap() };
+        std::env::set_current_dir(tmp.path()).unwrap();
+        with_env_vars(&[], || {
+            let args = vec!["gateway".to_string()];
+            let config = load(&args).unwrap();
+            assert_eq!(config.db_path, "iotkit.db");
+        });
+    }
+
+    #[test]
+    fn load_with_env_config_path_missing_file_errors() {
+        with_env_vars(
+            &[("IOTKIT_CONFIG_PATH", "/tmp/nonexistent-config.toml")],
+            || {
+                let args = vec!["gateway".to_string()];
+                let result = load(&args);
+                assert!(result.is_err());
+            },
+        );
+    }
+
+    #[test]
+    fn load_with_valid_file() {
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        write!(tmpfile, r#"
+[gateway]
+db_path = "loaded.db"
+
+[adapters.bravepi]
+port = "/dev/ttyUSB0"
+"#).unwrap();
+        with_env_vars(&[], || {
+            let args = vec![
+                "gateway".to_string(),
+                "--config".to_string(),
+                tmpfile.path().to_str().unwrap().to_string(),
+            ];
+            let config = load(&args).unwrap();
+            assert_eq!(config.db_path, "loaded.db");
+            let bp = config.bravepi.as_ref().unwrap();
+            assert_eq!(bp.port, "/dev/ttyUSB0");
+            assert!(matches!(config.config_source, ConfigSource::CliArg(_)));
+        });
+    }
+
+    #[test]
+    fn load_integration_full_toml() {
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        write!(tmpfile, r#"
+[gateway]
+db_path = "integration.db"
+
+[adapters.bravepi]
+enabled = true
+port = "/dev/ttyUSB1"
+
+[adapters.rpi_local]
+enabled = true
+bus_path = "/dev/i2c-3"
+poll_interval_ms = 750
+"#).unwrap();
+        with_env_vars(&[], || {
+            let args = vec![
+                "gateway".to_string(),
+                "--config".to_string(),
+                tmpfile.path().to_str().unwrap().to_string(),
+            ];
+            let config = load(&args).unwrap();
+            assert_eq!(config.db_path, "integration.db");
+            let bp = config.bravepi.as_ref().unwrap();
+            assert_eq!(bp.port, "/dev/ttyUSB1");
+            let rpi = config.rpi_local.as_ref().unwrap();
+            assert_eq!(rpi.bus_path, "/dev/i2c-3");
+            assert_eq!(rpi.poll_interval_ms, 750);
+            assert!(matches!(config.config_source, ConfigSource::CliArg(_)));
+        });
+    }
+
+    #[test]
+    fn load_with_env_config_path_valid_file() {
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        write!(tmpfile, "[gateway]\ndb_path = \"env-path.db\"").unwrap();
+        with_env_vars(
+            &[("IOTKIT_CONFIG_PATH", tmpfile.path().to_str().unwrap())],
+            || {
+                let args = vec!["gateway".to_string()];
+                let config = load(&args).unwrap();
+                assert_eq!(config.db_path, "env-path.db");
+                assert!(matches!(config.config_source, ConfigSource::EnvVar(_)));
+            },
+        );
+    }
+
+    #[test]
+    fn load_with_implicit_iotkit_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let toml_path = tmp.path().join("iotkit.toml");
+        std::fs::write(&toml_path, "[gateway]\ndb_path = \"implicit.db\"").unwrap();
+        let _cwd_guard = CwdGuard { prev: std::env::current_dir().unwrap() };
+        std::env::set_current_dir(tmp.path()).unwrap();
+        with_env_vars(&[], || {
+            let args = vec!["gateway".to_string()];
+            let config = load(&args).unwrap();
+            assert_eq!(config.db_path, "implicit.db");
+            assert!(matches!(config.config_source, ConfigSource::ImplicitFile(_)));
+        });
+    }
+
+    #[test]
+    fn load_cli_arg_takes_precedence_over_env() {
+        let mut cli_file = tempfile::NamedTempFile::new().unwrap();
+        write!(cli_file, "[gateway]\ndb_path = \"from-cli.db\"").unwrap();
+        let mut env_file = tempfile::NamedTempFile::new().unwrap();
+        write!(env_file, "[gateway]\ndb_path = \"from-env.db\"").unwrap();
+        with_env_vars(
+            &[("IOTKIT_CONFIG_PATH", env_file.path().to_str().unwrap())],
+            || {
+                let args = vec![
+                    "gateway".to_string(),
+                    "--config".to_string(),
+                    cli_file.path().to_str().unwrap().to_string(),
+                ];
+                let config = load(&args).unwrap();
+                assert_eq!(config.db_path, "from-cli.db");
+                assert!(matches!(config.config_source, ConfigSource::CliArg(_)));
+            },
+        );
     }
 }
