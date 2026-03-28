@@ -8,7 +8,7 @@ pub(crate) mod event_loop;
 mod handle;
 mod serial_source;
 
-pub use handle::{start, AdapterHandle};
+pub use handle::{start, AdapterHandle, AdapterParts, ShutdownHandle};
 
 #[cfg(test)]
 mod event_loop_test;
