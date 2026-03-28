@@ -55,6 +55,7 @@ pub(crate) enum PollOutcome {
     Reading {
         key: DeviceKey,
         reading: SensorReading,
+        observed_at: std::time::SystemTime,
     },
     ReadError {
         target_index: usize,
@@ -102,7 +103,7 @@ pub(crate) fn apply_outcomes(
                 });
             }
 
-            PollOutcome::Reading { key, reading } => {
+            PollOutcome::Reading { key, reading, observed_at } => {
                 // Reset read failure counter for matching Active state.
                 for state in states.iter_mut() {
                     if let TargetState::Active { key: k, consecutive_read_failures } = state
@@ -117,7 +118,7 @@ pub(crate) fn apply_outcomes(
                     reading,
                     rssi: None,
                     battery_pct: None,
-                    ingested_at: std::time::SystemTime::now(),
+                    ingested_at: observed_at,
                 });
             }
 
@@ -259,7 +260,7 @@ pub(crate) fn poll_cycle(
                     target.driver.read(bus_path, target.address)
                 })) {
                     Ok(Ok(reading)) => {
-                        outcomes.push(PollOutcome::Reading { key: key.clone(), reading });
+                        outcomes.push(PollOutcome::Reading { key: key.clone(), reading, observed_at: std::time::SystemTime::now() });
                     }
                     Ok(Err(msg)) => {
                         outcomes.push(PollOutcome::ReadError { target_index: i, key: key.clone(), message: msg, is_panic: false });
@@ -832,7 +833,7 @@ mod tests {
 
         assert_eq!(outcomes.len(), 1);
         match &outcomes[0] {
-            PollOutcome::Reading { key: k, reading: r } => {
+            PollOutcome::Reading { key: k, reading: r, .. } => {
                 assert_eq!(k.as_str(), "i2c:0x40:temperature");
                 assert_eq!(r.values, reading.values);
             }
@@ -959,6 +960,7 @@ mod tests {
         let outcomes = vec![PollOutcome::Reading {
             key: key.clone(),
             reading: make_reading(),
+            observed_at: std::time::SystemTime::now(),
         }];
 
         let events = apply_outcomes(outcomes, &mut states, &targets);
@@ -1218,6 +1220,7 @@ mod tests {
             PollOutcome::Reading {
                 key: key_a.clone(),
                 reading: make_reading(),
+                observed_at: std::time::SystemTime::now(),
             },
             PollOutcome::ProbeFailed {
                 target_index: 1,

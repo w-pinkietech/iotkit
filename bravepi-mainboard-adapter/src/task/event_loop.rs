@@ -193,7 +193,6 @@ async fn handle_config_frame(
     event_tx.send(AdapterEvent::DeviceConfig {
         device_key,
         config,
-        ingested_at: std::time::SystemTime::now(),
     }).await.is_err()
 }
 

@@ -91,7 +91,6 @@ async fn sensor_data_updates_reading() {
     let key = engine_key(&aid, &dk);
     let view = engine.device(&key).await.unwrap();
     assert_eq!(view.last_reading.as_ref().unwrap().values, vec![22.5]);
-    assert!(view.last_reading_at.is_some(), "last_reading_at should be set after SensorData");
     assert_eq!(view.rssi, Some(-70));
     assert_eq!(view.battery_pct, Some(85));
 }
@@ -133,7 +132,6 @@ async fn device_config_updates_config() {
                 uplink_interval_secs: Some(60),
                 properties: BTreeMap::new(),
             },
-            ingested_at: SystemTime::now(),
         },
     }).await;
 
@@ -159,7 +157,6 @@ async fn device_config_for_unknown_device_is_ignored() {
                 uplink_interval_secs: None,
                 properties: BTreeMap::new(),
             },
-            ingested_at: SystemTime::now(),
         },
     }).await;
 

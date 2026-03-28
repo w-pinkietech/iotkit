@@ -169,7 +169,6 @@ pub enum AdapterEvent {
     DeviceConfig {
         device_key: DeviceKey,
         config: DeviceConfigData,
-        ingested_at: std::time::SystemTime,
     },
 }
 
@@ -297,10 +296,9 @@ mod tests {
                 uplink_interval_secs: None,
                 properties: BTreeMap::new(),
             },
-            ingested_at: std::time::SystemTime::now(),
         };
         match event {
-            AdapterEvent::DeviceConfig { device_key, config, ingested_at: _ } => {
+            AdapterEvent::DeviceConfig { device_key, config } => {
                 assert_eq!(device_key.as_str(), "bravepi:abc:temperature");
                 assert_eq!(config.firmware_version.as_deref(), Some("1.0.0"));
             }
