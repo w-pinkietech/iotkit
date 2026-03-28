@@ -31,7 +31,7 @@ impl State {
             AdapterEvent::DeviceDiscovered { device_key, identity } => {
                 self.apply_discovered(adapter_id, device_key, identity);
             }
-            AdapterEvent::SensorData { device_key, reading, rssi, battery_pct } => {
+            AdapterEvent::SensorData { device_key, reading, rssi, battery_pct, ingested_at } => {
                 let key = EngineDeviceKey {
                     adapter_id,
                     device_key: device_key.clone(),
@@ -39,6 +39,7 @@ impl State {
                 match self.devices.get_mut(&key) {
                     Some(ds) => {
                         ds.view.last_reading = Some(reading);
+                        ds.view.last_reading_at = Some(ingested_at);
                         ds.view.rssi = rssi;
                         ds.view.battery_pct = battery_pct;
                         ds.last_seen = Instant::now();
@@ -51,7 +52,7 @@ impl State {
                     }
                 }
             }
-            AdapterEvent::DeviceConfig { device_key, config } => {
+            AdapterEvent::DeviceConfig { device_key, config, ingested_at: _ } => {
                 let key = EngineDeviceKey {
                     adapter_id,
                     device_key: device_key.clone(),
@@ -135,6 +136,7 @@ impl State {
                         key,
                         identity,
                         last_reading: None,
+                        last_reading_at: None,
                         rssi: None,
                         battery_pct: None,
                         config: None,

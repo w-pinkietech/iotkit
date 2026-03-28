@@ -1,6 +1,7 @@
 //! Tests for State apply logic.
 
 use std::collections::BTreeMap;
+use std::time::SystemTime;
 use iotkit_core_types::*;
 use crate::*;
 
@@ -83,12 +84,14 @@ async fn sensor_data_updates_reading() {
             reading: sample_reading(),
             rssi: Some(-70),
             battery_pct: Some(85),
+            ingested_at: SystemTime::now(),
         },
     }).await;
 
     let key = engine_key(&aid, &dk);
     let view = engine.device(&key).await.unwrap();
     assert_eq!(view.last_reading.as_ref().unwrap().values, vec![22.5]);
+    assert!(view.last_reading_at.is_some(), "last_reading_at should be set after SensorData");
     assert_eq!(view.rssi, Some(-70));
     assert_eq!(view.battery_pct, Some(85));
 }
@@ -107,6 +110,7 @@ async fn sensor_data_for_unknown_device_is_ignored() {
             reading: sample_reading(),
             rssi: None,
             battery_pct: None,
+            ingested_at: SystemTime::now(),
         },
     }).await;
 
@@ -129,6 +133,7 @@ async fn device_config_updates_config() {
                 uplink_interval_secs: Some(60),
                 properties: BTreeMap::new(),
             },
+            ingested_at: SystemTime::now(),
         },
     }).await;
 
@@ -154,6 +159,7 @@ async fn device_config_for_unknown_device_is_ignored() {
                 uplink_interval_secs: None,
                 properties: BTreeMap::new(),
             },
+            ingested_at: SystemTime::now(),
         },
     }).await;
 
@@ -197,6 +203,7 @@ async fn device_lost_then_rediscovered_is_new_insert() {
             reading: sample_reading(),
             rssi: Some(-50),
             battery_pct: Some(100),
+            ingested_at: SystemTime::now(),
         },
     }).await;
     engine.apply(EngineEvent {
@@ -307,6 +314,7 @@ async fn device_discovered_resend_updates_identity_keeps_reading() {
             reading: sample_reading(),
             rssi: Some(-60),
             battery_pct: Some(90),
+            ingested_at: SystemTime::now(),
         },
     }).await;
 

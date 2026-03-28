@@ -43,6 +43,7 @@ pub struct DeviceView {
     pub key: EngineDeviceKey,
     pub identity: SensorIdentity,
     pub last_reading: Option<SensorReading>,
+    pub last_reading_at: Option<std::time::SystemTime>,
     pub rssi: Option<i16>,
     pub battery_pct: Option<u8>,
     pub config: Option<DeviceConfigData>,
