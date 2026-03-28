@@ -10,7 +10,7 @@ use rpi4b_transport::{I2cConfig, I2cTransport};
 pub struct Opt3001Driver;
 
 impl SensorDriver for Opt3001Driver {
-    fn probe(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String> {
+    fn detect(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String> {
         let mut t = I2cTransport::open(bus_path, &I2cConfig { address: address as u16 })
             .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
 
@@ -31,8 +31,20 @@ impl SensorDriver for Opt3001Driver {
             ));
         }
 
-        // Write init config. Legacy Python uses smbus2 write_word_data which sends LSB first.
-        // Our raw transport needs explicit LE byte order to match.
+        let connection = ConnectionInfo {
+            kind: ConnectionKind::I2c,
+            parameters: BTreeMap::from([
+                ("bus".into(), bus_path.to_string()),
+                ("address".into(), format!("0x{:02x}", address)),
+            ]),
+        };
+        Ok(opt3001::identity(connection))
+    }
+
+    fn init(&self, bus_path: &str, address: u8) -> Result<(), String> {
+        let mut t = I2cTransport::open(bus_path, &I2cConfig { address: address as u16 })
+            .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
+
         let config_bytes = opt3001::INIT_CONFIG.to_le_bytes();
         t.write_register(opt3001::REG_CONFIG, &config_bytes)
             .map_err(|e| {
@@ -42,14 +54,7 @@ impl SensorDriver for Opt3001Driver {
                 )
             })?;
 
-        let connection = ConnectionInfo {
-            kind: ConnectionKind::I2c,
-            parameters: BTreeMap::from([
-                ("bus".into(), bus_path.to_string()),
-                ("address".into(), format!("0x{:02x}", address)),
-            ]),
-        };
-        Ok(opt3001::identity(connection))
+        Ok(())
     }
 
     fn read(&self, bus_path: &str, address: u8) -> Result<SensorReading, String> {

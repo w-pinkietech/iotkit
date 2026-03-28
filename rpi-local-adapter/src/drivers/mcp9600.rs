@@ -12,7 +12,7 @@ pub struct Mcp9600Driver {
 }
 
 impl SensorDriver for Mcp9600Driver {
-    fn probe(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String> {
+    fn detect(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String> {
         let mut t = I2cTransport::open(bus_path, &I2cConfig { address: address as u16 })
             .map_err(|e| format!("MCP9600 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
 
@@ -35,6 +35,20 @@ impl SensorDriver for Mcp9600Driver {
             ));
         }
 
+        let connection = ConnectionInfo {
+            kind: ConnectionKind::I2c,
+            parameters: BTreeMap::from([
+                ("bus".into(), bus_path.to_string()),
+                ("address".into(), format!("0x{:02x}", address)),
+            ]),
+        };
+        Ok(mcp9600::identity(connection))
+    }
+
+    fn init(&self, bus_path: &str, address: u8) -> Result<(), String> {
+        let mut t = I2cTransport::open(bus_path, &I2cConfig { address: address as u16 })
+            .map_err(|e| format!("MCP9600 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
+
         let config_val = mcp9600::config_value(self.thermocouple_type);
         t.write_register(mcp9600::REG_SENSOR_CONFIGURATION, &[config_val])
             .map_err(|e| {
@@ -44,14 +58,7 @@ impl SensorDriver for Mcp9600Driver {
                 )
             })?;
 
-        let connection = ConnectionInfo {
-            kind: ConnectionKind::I2c,
-            parameters: BTreeMap::from([
-                ("bus".into(), bus_path.to_string()),
-                ("address".into(), format!("0x{:02x}", address)),
-            ]),
-        };
-        Ok(mcp9600::identity(connection))
+        Ok(())
     }
 
     fn read(&self, bus_path: &str, address: u8) -> Result<SensorReading, String> {
