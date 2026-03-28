@@ -2,6 +2,7 @@
 //! adapter を起動し、core/engine に event を渡す。
 
 mod adapter_host;
+mod config;
 
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
