@@ -462,28 +462,23 @@ Unchanged. No import path changes (rename deferred).
 
 ## 10. Crate Dependency Graph
 
-```
-iotkit-core-types (no deps)
-    ↑
-bravepi-sensors (depends on iotkit-core-types)
-    ↑                    ↑
-iotkit-base-adapter      bravepi-mainboard-adapter
-(depends on:             (depends on:
-  iotkit-core-types       iotkit-core-types
-  tokio, tracing)         bravepi-sensors
-                          rpi4b-driver, tokio, tracing)
-    ↑
-rpi-local-adapter
-(depends on:
-  iotkit-base-adapter
-  bravepi-sensors
-  rpi4b-driver)
-    ↑                    ↑
-iotkit-gateway
-(depends on:
-  rpi-local-adapter
-  bravepi-mainboard-adapter
-  iotkit-core-engine)
+```mermaid
+graph BT
+    core-types["iotkit-core-types"]
+    sensors["bravepi-sensors"]
+    base["iotkit-base-adapter"]
+    bravepi["bravepi-mainboard-adapter"]
+    rpi["rpi-local-adapter"]
+    gateway["iotkit-gateway"]
+
+    sensors --> core-types
+    base --> core-types
+    bravepi --> core-types
+    bravepi --> sensors
+    rpi --> base
+    rpi --> sensors
+    gateway --> rpi
+    gateway --> bravepi
 ```
 
 `iotkit-base-adapter` does NOT depend on `bravepi-sensors`. Sensor IC decode logic is referenced only by the concrete adapter (rpi-local-adapter).
