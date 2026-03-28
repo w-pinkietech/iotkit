@@ -11,14 +11,20 @@ use crate::{PollingAdapterConfig, SensorDriver};
 // ── Internal failure threshold constants ─────────────────
 
 const MAX_READ_FAILURES: u32 = 5;
-const MAX_PROBE_FAILURES: u32 = 10;
+const MAX_DETECT_FAILURES: u32 = 10;
+const MAX_INIT_FAILURES: u32 = 5;
 
 // ── TargetState ──────────────────────────────────────────
 
+#[derive(Clone, Debug)]
 pub(crate) enum TargetState {
     Pending {
-        consecutive_probe_failures: u32,
+        consecutive_detect_failures: u32,
         escalation_emitted: bool,
+    },
+    Detected {
+        identity: SensorIdentity,
+        consecutive_init_failures: u32,
     },
     Active {
         key: DeviceKey,
@@ -29,7 +35,7 @@ pub(crate) enum TargetState {
 impl TargetState {
     pub(crate) fn new_pending() -> Self {
         TargetState::Pending {
-            consecutive_probe_failures: 0,
+            consecutive_detect_failures: 0,
             escalation_emitted: false,
         }
     }
@@ -47,16 +53,27 @@ pub(crate) struct TargetRuntime {
 
 #[derive(Debug)]
 pub(crate) enum PollOutcome {
+    /// detect() + init() both succeeded. Emit DeviceDiscovered.
     Discovered {
         target_index: usize,
         key: DeviceKey,
         identity: SensorIdentity,
     },
+    /// detect() succeeded but init() failed. Enter/maintain Detected state.
+    InitFailed {
+        target_index: usize,
+        identity: SensorIdentity,
+        message: String,
+        #[allow(dead_code)]
+        is_panic: bool,
+    },
+    /// Successful sensor reading.
     Reading {
         key: DeviceKey,
         reading: SensorReading,
         observed_at: std::time::SystemTime,
     },
+    /// read() failed.
     ReadError {
         target_index: usize,
         key: DeviceKey,
@@ -64,7 +81,8 @@ pub(crate) enum PollOutcome {
         #[allow(dead_code)]
         is_panic: bool,
     },
-    ProbeFailed {
+    /// detect() failed.
+    DetectFailed {
         target_index: usize,
         message: String,
         is_panic: bool,
@@ -103,6 +121,38 @@ pub(crate) fn apply_outcomes(
                 });
             }
 
+            PollOutcome::InitFailed {
+                target_index,
+                identity,
+                message,
+                ..
+            } => {
+                let new_failures = match &states[target_index] {
+                    TargetState::Detected { consecutive_init_failures, .. } => {
+                        consecutive_init_failures + 1
+                    }
+                    _ => 1, // First init failure (from Pending same-cycle)
+                };
+
+                if new_failures >= MAX_INIT_FAILURES {
+                    // Too many init failures — return to Pending for fresh detect
+                    states[target_index] = TargetState::new_pending();
+                } else {
+                    states[target_index] = TargetState::Detected {
+                        identity,
+                        consecutive_init_failures: new_failures,
+                    };
+                }
+
+                events.push(AdapterEvent::AdapterError {
+                    device_key: None,
+                    error: format!(
+                        "init failed ({}/{}): {}",
+                        new_failures, MAX_INIT_FAILURES, message,
+                    ),
+                });
+            }
+
             PollOutcome::Reading { key, reading, observed_at } => {
                 // Reset read failure counter for matching Active state.
                 for state in states.iter_mut() {
@@ -126,7 +176,7 @@ pub(crate) fn apply_outcomes(
                 target_index,
                 key,
                 message,
-                is_panic: _,
+                ..
             } => {
                 if let TargetState::Active {
                     ref mut consecutive_read_failures,
@@ -158,42 +208,43 @@ pub(crate) fn apply_outcomes(
                 }
             }
 
-            PollOutcome::ProbeFailed {
+            PollOutcome::DetectFailed {
                 target_index,
                 message,
                 is_panic,
             } => {
                 if let TargetState::Pending {
-                    ref mut consecutive_probe_failures,
+                    ref mut consecutive_detect_failures,
                     ref mut escalation_emitted,
                 } = states[target_index]
                 {
-                    *consecutive_probe_failures += 1;
-                    let n = *consecutive_probe_failures;
+                    *consecutive_detect_failures += 1;
+                    let n = *consecutive_detect_failures;
 
                     if is_panic {
                         // Panic: emit immediately but do NOT consume escalation_emitted,
                         // so the normal threshold path still fires later if needed.
+                        // (Preserves current probe panic behavior.)
                         let addr = targets[target_index].address;
                         events.push(AdapterEvent::AdapterError {
                             device_key: None,
                             error: format!(
-                                "target 0x{addr:02x} probe failed (driver panic): {message}"
+                                "target 0x{addr:02x} detect failed (driver panic): {message}"
                             ),
                         });
-                    } else if n >= MAX_PROBE_FAILURES && !*escalation_emitted {
+                    } else if n >= MAX_DETECT_FAILURES && !*escalation_emitted {
                         let addr = targets[target_index].address;
                         events.push(AdapterEvent::AdapterError {
                             device_key: None,
                             error: format!(
-                                "target 0x{addr:02x} probe failed {n} consecutive times: {message}"
+                                "target 0x{addr:02x} detect failed {n} consecutive times: {message}"
                             ),
                         });
                         *escalation_emitted = true;
                     } else {
                         tracing::warn!(
                             target_index,
-                            "probe failed: {message}"
+                            "detect failed: {message}"
                         );
                     }
                 }
@@ -227,27 +278,112 @@ pub(crate) fn poll_cycle(
     for (i, target) in targets.iter().enumerate() {
         match &states[i] {
             TargetState::Pending { .. } => {
-                match panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                    target.driver.probe(bus_path, target.address)
-                })) {
+                // Phase 1: detect (read-only)
+                let detect_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    target.driver.detect(bus_path, target.address)
+                }));
+
+                match detect_result {
                     Ok(Ok(identity)) => {
-                        let key = device_key_for(target.address, &target.key_suffix);
-                        outcomes.push(PollOutcome::Discovered { target_index: i, key, identity });
+                        // detect succeeded — immediately try init (same cycle)
+                        let init_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                            target.driver.init(bus_path, target.address)
+                        }));
+                        match init_result {
+                            Ok(Ok(())) => {
+                                let key = device_key_for(target.address, &target.key_suffix);
+                                outcomes.push(PollOutcome::Discovered {
+                                    target_index: i,
+                                    key,
+                                    identity,
+                                });
+                            }
+                            Ok(Err(msg)) => {
+                                outcomes.push(PollOutcome::InitFailed {
+                                    target_index: i,
+                                    identity,
+                                    message: msg,
+                                    is_panic: false,
+                                });
+                            }
+                            Err(panic_val) => {
+                                let msg = panic_message(&panic_val);
+                                tracing::error!(
+                                    address = format_args!("0x{:02x}", target.address),
+                                    bus_path,
+                                    "driver panicked during init: {msg}",
+                                );
+                                outcomes.push(PollOutcome::InitFailed {
+                                    target_index: i,
+                                    identity,
+                                    message: format!(
+                                        "driver panic during init 0x{:02x}@{}: {}",
+                                        target.address, bus_path, msg,
+                                    ),
+                                    is_panic: true,
+                                });
+                            }
+                        }
                     }
                     Ok(Err(msg)) => {
-                        outcomes.push(PollOutcome::ProbeFailed { target_index: i, message: msg, is_panic: false });
+                        outcomes.push(PollOutcome::DetectFailed {
+                            target_index: i,
+                            message: msg,
+                            is_panic: false,
+                        });
                     }
                     Err(panic_val) => {
                         let msg = panic_message(&panic_val);
                         tracing::error!(
                             address = format_args!("0x{:02x}", target.address),
                             bus_path,
-                            "driver panicked during probe: {msg}",
+                            "driver panicked during detect: {msg}",
                         );
-                        outcomes.push(PollOutcome::ProbeFailed {
+                        outcomes.push(PollOutcome::DetectFailed {
                             target_index: i,
                             message: format!(
-                                "driver panic during probe 0x{:02x}@{}: {}",
+                                "driver panic during detect 0x{:02x}@{}: {}",
+                                target.address, bus_path, msg,
+                            ),
+                            is_panic: true,
+                        });
+                    }
+                }
+            }
+            TargetState::Detected { identity, .. } => {
+                // Phase 2: init retry (from previous failed init)
+                let init_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    target.driver.init(bus_path, target.address)
+                }));
+                match init_result {
+                    Ok(Ok(())) => {
+                        let key = device_key_for(target.address, &target.key_suffix);
+                        outcomes.push(PollOutcome::Discovered {
+                            target_index: i,
+                            key,
+                            identity: identity.clone(),
+                        });
+                    }
+                    Ok(Err(msg)) => {
+                        outcomes.push(PollOutcome::InitFailed {
+                            target_index: i,
+                            identity: identity.clone(),
+                            message: msg,
+                            is_panic: false,
+                        });
+                    }
+                    Err(panic_val) => {
+                        let msg = panic_message(&panic_val);
+                        tracing::error!(
+                            address = format_args!("0x{:02x}", target.address),
+                            bus_path,
+                            "driver panicked during init: {msg}",
+                        );
+                        outcomes.push(PollOutcome::InitFailed {
+                            target_index: i,
+                            identity: identity.clone(),
+                            message: format!(
+                                "driver panic during init 0x{:02x}@{}: {}",
                                 target.address, bus_path, msg,
                             ),
                             is_panic: true,
@@ -256,14 +392,24 @@ pub(crate) fn poll_cycle(
                 }
             }
             TargetState::Active { key, .. } => {
+                // Phase 3: read (unchanged logic)
                 match panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     target.driver.read(bus_path, target.address)
                 })) {
                     Ok(Ok(reading)) => {
-                        outcomes.push(PollOutcome::Reading { key: key.clone(), reading, observed_at: std::time::SystemTime::now() });
+                        outcomes.push(PollOutcome::Reading {
+                            key: key.clone(),
+                            reading,
+                            observed_at: std::time::SystemTime::now(),
+                        });
                     }
                     Ok(Err(msg)) => {
-                        outcomes.push(PollOutcome::ReadError { target_index: i, key: key.clone(), message: msg, is_panic: false });
+                        outcomes.push(PollOutcome::ReadError {
+                            target_index: i,
+                            key: key.clone(),
+                            message: msg,
+                            is_panic: false,
+                        });
                     }
                     Err(panic_val) => {
                         let msg = panic_message(&panic_val);
@@ -327,14 +473,7 @@ pub(crate) async fn polling_loop(
     if !targets.is_empty() {
         let t = Arc::clone(&targets);
         let bp = bus_path.clone();
-        let s_snap: Vec<TargetState> = states.iter().map(|st| match st {
-            TargetState::Pending { consecutive_probe_failures, escalation_emitted } => {
-                TargetState::Pending { consecutive_probe_failures: *consecutive_probe_failures, escalation_emitted: *escalation_emitted }
-            }
-            TargetState::Active { key, consecutive_read_failures } => {
-                TargetState::Active { key: key.clone(), consecutive_read_failures: *consecutive_read_failures }
-            }
-        }).collect();
+        let s_snap: Vec<TargetState> = states.iter().cloned().collect();
 
         let outcomes = match tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp)).await {
             Ok(outcomes) => outcomes,
@@ -353,7 +492,7 @@ pub(crate) async fn polling_loop(
 
         let all_failed = !outcomes.is_empty()
             && outcomes.iter().all(|o| {
-                matches!(o, PollOutcome::ProbeFailed { .. })
+                matches!(o, PollOutcome::DetectFailed { .. } | PollOutcome::InitFailed { .. })
             });
 
         let events = apply_outcomes(outcomes, &mut states, &targets);
@@ -412,14 +551,7 @@ pub(crate) async fn polling_loop(
             _ = ticker.tick() => {
                 let t = Arc::clone(&targets);
                 let bp = bus_path.clone();
-                let s_snap: Vec<TargetState> = states.iter().map(|st| match st {
-                    TargetState::Pending { consecutive_probe_failures, escalation_emitted } => {
-                        TargetState::Pending { consecutive_probe_failures: *consecutive_probe_failures, escalation_emitted: *escalation_emitted }
-                    }
-                    TargetState::Active { key, consecutive_read_failures } => {
-                        TargetState::Active { key: key.clone(), consecutive_read_failures: *consecutive_read_failures }
-                    }
-                }).collect();
+                let s_snap: Vec<TargetState> = states.iter().cloned().collect();
 
                 let cycle_start = Instant::now();
                 let outcomes = match tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp)).await {
@@ -472,31 +604,41 @@ mod tests {
 
     struct MockDriver {
         name: &'static str,
-        probe_results: std::sync::Mutex<VecDeque<Result<SensorIdentity, String>>>,
+        detect_results: std::sync::Mutex<VecDeque<Result<SensorIdentity, String>>>,
+        init_results: std::sync::Mutex<VecDeque<Result<(), String>>>,
         read_results: std::sync::Mutex<VecDeque<Result<SensorReading, String>>>,
     }
 
     impl MockDriver {
         fn new(
             name: &'static str,
-            probe_results: Vec<Result<SensorIdentity, String>>,
+            detect_results: Vec<Result<SensorIdentity, String>>,
+            init_results: Vec<Result<(), String>>,
             read_results: Vec<Result<SensorReading, String>>,
         ) -> Self {
             MockDriver {
                 name,
-                probe_results: std::sync::Mutex::new(VecDeque::from(probe_results)),
+                detect_results: std::sync::Mutex::new(VecDeque::from(detect_results)),
+                init_results: std::sync::Mutex::new(VecDeque::from(init_results)),
                 read_results: std::sync::Mutex::new(VecDeque::from(read_results)),
             }
         }
     }
 
     impl SensorDriver for MockDriver {
-        fn probe(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
-            self.probe_results
+        fn detect(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+            self.detect_results
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| panic!("no more probe results for {}", self.name))
+                .unwrap_or_else(|| panic!("no more detect results for {}", self.name))
+        }
+        fn init(&self, _bus_path: &str, _address: u8) -> Result<(), String> {
+            self.init_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| panic!("no more init results for {}", self.name))
         }
         fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
             self.read_results
@@ -513,12 +655,13 @@ mod tests {
     fn make_mock_target(
         address: u8,
         suffix: &str,
-        probe_results: Vec<Result<SensorIdentity, String>>,
+        detect_results: Vec<Result<SensorIdentity, String>>,
+        init_results: Vec<Result<(), String>>,
         read_results: Vec<Result<SensorReading, String>>,
     ) -> TargetRuntime {
         TargetRuntime {
             address,
-            driver: Arc::new(MockDriver::new("MOCK", probe_results, read_results)),
+            driver: Arc::new(MockDriver::new("MOCK", detect_results, init_results, read_results)),
             key_suffix: suffix.to_string(),
         }
     }
@@ -537,12 +680,13 @@ mod tests {
     fn make_sensor_target(
         address: u8,
         key_suffix: Option<String>,
-        probe_results: Vec<Result<SensorIdentity, String>>,
+        detect_results: Vec<Result<SensorIdentity, String>>,
+        init_results: Vec<Result<(), String>>,
         read_results: Vec<Result<SensorReading, String>>,
     ) -> SensorTargetConfig {
         SensorTargetConfig {
             address,
-            driver: Arc::new(MockDriver::new("MOCK", probe_results, read_results)),
+            driver: Arc::new(MockDriver::new("MOCK", detect_results, init_results, read_results)),
             key_suffix,
         }
     }
@@ -672,6 +816,7 @@ mod tests {
             0x40,
             Some("temperature".into()),
             vec![Ok(identity.clone())],
+            vec![Ok(())],
             vec![Ok(reading.clone())],
         );
         let config = make_config(vec![target]);
@@ -734,6 +879,7 @@ mod tests {
             Some("temperature".into()),
             vec![Err("NACK".into())],
             vec![],
+            vec![],
         );
         let config = make_config(vec![target]);
 
@@ -769,12 +915,13 @@ mod tests {
     // ── poll_cycle tests ─────────────────────────────────
 
     #[test]
-    fn pending_target_probe_success() {
+    fn pending_target_detect_init_success() {
         let identity = make_identity();
         let targets = vec![make_mock_target(
             0x40,
             "temperature",
             vec![Ok(identity.clone())],
+            vec![Ok(())],
             vec![],
         )];
         let states = vec![TargetState::new_pending()];
@@ -793,11 +940,12 @@ mod tests {
     }
 
     #[test]
-    fn pending_target_probe_failure() {
+    fn pending_target_detect_failure() {
         let targets = vec![make_mock_target(
             0x40,
             "temperature",
             vec![Err("NACK".into())],
+            vec![],
             vec![],
         )];
         let states = vec![TargetState::new_pending()];
@@ -806,11 +954,11 @@ mod tests {
 
         assert_eq!(outcomes.len(), 1);
         match &outcomes[0] {
-            PollOutcome::ProbeFailed { target_index, message, .. } => {
+            PollOutcome::DetectFailed { target_index, message, .. } => {
                 assert_eq!(*target_index, 0);
                 assert_eq!(message, "NACK");
             }
-            _ => panic!("expected ProbeFailed"),
+            _ => panic!("expected DetectFailed"),
         }
     }
 
@@ -821,6 +969,7 @@ mod tests {
         let targets = vec![make_mock_target(
             0x40,
             "temperature",
+            vec![],
             vec![],
             vec![Ok(reading.clone())],
         )];
@@ -848,6 +997,7 @@ mod tests {
             0x40,
             "temperature",
             vec![],
+            vec![],
             vec![Err("i/o timeout".into())],
         )];
         let states = vec![TargetState::Active {
@@ -874,7 +1024,10 @@ mod tests {
     struct StubDriver;
 
     impl SensorDriver for StubDriver {
-        fn probe(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+        fn detect(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+            unimplemented!("not called by apply_outcomes")
+        }
+        fn init(&self, _bus_path: &str, _address: u8) -> Result<(), String> {
             unimplemented!("not called by apply_outcomes")
         }
         fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
@@ -1067,10 +1220,10 @@ mod tests {
         // State should be Pending.
         match &states[0] {
             TargetState::Pending {
-                consecutive_probe_failures,
+                consecutive_detect_failures,
                 escalation_emitted,
             } => {
-                assert_eq!(*consecutive_probe_failures, 0);
+                assert_eq!(*consecutive_detect_failures, 0);
                 assert!(!*escalation_emitted);
             }
             _ => panic!("expected Pending state"),
@@ -1078,11 +1231,11 @@ mod tests {
     }
 
     #[test]
-    fn probe_failure_below_threshold_emits_no_event() {
+    fn detect_failure_below_threshold_emits_no_event() {
         let targets = vec![make_target(0x40, "temperature")];
         let mut states = vec![TargetState::new_pending()];
 
-        let outcomes = vec![PollOutcome::ProbeFailed {
+        let outcomes = vec![PollOutcome::DetectFailed {
             target_index: 0,
             message: "NACK".into(),
             is_panic: false,
@@ -1094,10 +1247,10 @@ mod tests {
 
         match &states[0] {
             TargetState::Pending {
-                consecutive_probe_failures,
+                consecutive_detect_failures,
                 escalation_emitted,
             } => {
-                assert_eq!(*consecutive_probe_failures, 1);
+                assert_eq!(*consecutive_detect_failures, 1);
                 assert!(!*escalation_emitted);
             }
             _ => panic!("expected Pending state"),
@@ -1105,14 +1258,14 @@ mod tests {
     }
 
     #[test]
-    fn probe_failure_at_threshold_emits_one_error() {
+    fn detect_failure_at_threshold_emits_one_error() {
         let targets = vec![make_target(0x40, "temperature")];
         let mut states = vec![TargetState::Pending {
-            consecutive_probe_failures: MAX_PROBE_FAILURES - 1,
+            consecutive_detect_failures: MAX_DETECT_FAILURES - 1,
             escalation_emitted: false,
         }];
 
-        let outcomes = vec![PollOutcome::ProbeFailed {
+        let outcomes = vec![PollOutcome::DetectFailed {
             target_index: 0,
             message: "device not found".into(),
             is_panic: false,
@@ -1127,7 +1280,7 @@ mod tests {
                 error,
             } => {
                 assert!(device_key.is_none());
-                assert!(error.contains("target 0x40 probe failed 10 consecutive times"));
+                assert!(error.contains("target 0x40 detect failed 10 consecutive times"));
                 assert!(error.contains("device not found"));
             }
             other => panic!("expected AdapterError, got {other:?}"),
@@ -1141,8 +1294,8 @@ mod tests {
             _ => panic!("expected Pending state"),
         }
 
-        // A second probe failure should NOT emit another event.
-        let outcomes2 = vec![PollOutcome::ProbeFailed {
+        // A second detect failure should NOT emit another event.
+        let outcomes2 = vec![PollOutcome::DetectFailed {
             target_index: 0,
             message: "device not found".into(),
             is_panic: false,
@@ -1152,10 +1305,10 @@ mod tests {
     }
 
     #[test]
-    fn probe_success_after_escalation_resets_counter_and_flag() {
+    fn detect_init_success_after_escalation_resets() {
         let targets = vec![make_target(0x40, "temperature")];
         let mut states = vec![TargetState::Pending {
-            consecutive_probe_failures: 15,
+            consecutive_detect_failures: 15,
             escalation_emitted: true,
         }];
 
@@ -1222,7 +1375,7 @@ mod tests {
                 reading: make_reading(),
                 observed_at: std::time::SystemTime::now(),
             },
-            PollOutcome::ProbeFailed {
+            PollOutcome::DetectFailed {
                 target_index: 1,
                 message: "NACK".into(),
                 is_panic: false,
@@ -1244,30 +1397,37 @@ mod tests {
             _ => panic!("expected Active state for target A"),
         }
 
-        // Target B: still Pending with incremented probe failures.
+        // Target B: still Pending with incremented detect failures.
         match &states[1] {
             TargetState::Pending {
-                consecutive_probe_failures,
+                consecutive_detect_failures,
                 ..
-            } => assert_eq!(*consecutive_probe_failures, 1),
+            } => assert_eq!(*consecutive_detect_failures, 1),
             _ => panic!("expected Pending state for target B"),
         }
     }
 
     // ── Panic isolation tests ────────────────────────────
 
-    /// A driver that panics on probe and/or read.
+    /// A driver that panics on detect, init, and/or read.
     struct PanickingDriver {
-        panic_on_probe: bool,
+        panic_on_detect: bool,
+        panic_on_init: bool,
         panic_on_read: bool,
     }
 
     impl SensorDriver for PanickingDriver {
-        fn probe(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
-            if self.panic_on_probe {
-                panic!("intentional probe panic");
+        fn detect(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+            if self.panic_on_detect {
+                panic!("intentional detect panic");
             }
             Ok(make_identity())
+        }
+        fn init(&self, _bus_path: &str, _address: u8) -> Result<(), String> {
+            if self.panic_on_init {
+                panic!("intentional init panic");
+            }
+            Ok(())
         }
         fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
             if self.panic_on_read {
@@ -1281,10 +1441,10 @@ mod tests {
     }
 
     #[test]
-    fn probe_panic_becomes_probe_failed() {
+    fn detect_panic_becomes_detect_failed() {
         let targets = vec![TargetRuntime {
             address: 0x40,
-            driver: Arc::new(PanickingDriver { panic_on_probe: true, panic_on_read: false }),
+            driver: Arc::new(PanickingDriver { panic_on_detect: true, panic_on_init: false, panic_on_read: false }),
             key_suffix: "panic".to_string(),
         }];
         let states = vec![TargetState::new_pending()];
@@ -1293,13 +1453,13 @@ mod tests {
 
         assert_eq!(outcomes.len(), 1);
         match &outcomes[0] {
-            PollOutcome::ProbeFailed { target_index, message, is_panic } => {
+            PollOutcome::DetectFailed { target_index, message, is_panic } => {
                 assert_eq!(*target_index, 0);
                 assert!(message.contains("panic"), "expected panic in message: {message}");
                 assert!(message.contains("0x40"), "expected address in message: {message}");
                 assert!(*is_panic, "expected is_panic=true for panicking driver");
             }
-            other => panic!("expected ProbeFailed, got {other:?}"),
+            other => panic!("expected DetectFailed, got {other:?}"),
         }
     }
 
@@ -1307,7 +1467,7 @@ mod tests {
     fn read_panic_becomes_read_error() {
         let targets = vec![TargetRuntime {
             address: 0x44,
-            driver: Arc::new(PanickingDriver { panic_on_probe: false, panic_on_read: true }),
+            driver: Arc::new(PanickingDriver { panic_on_detect: false, panic_on_init: false, panic_on_read: true }),
             key_suffix: "panic".to_string(),
         }];
         let states = vec![TargetState::Active {
@@ -1333,12 +1493,12 @@ mod tests {
         let targets = vec![
             TargetRuntime {
                 address: 0x40,
-                driver: Arc::new(PanickingDriver { panic_on_probe: true, panic_on_read: false }),
+                driver: Arc::new(PanickingDriver { panic_on_detect: true, panic_on_init: false, panic_on_read: false }),
                 key_suffix: "panicker".to_string(),
             },
             TargetRuntime {
                 address: 0x44,
-                driver: Arc::new(PanickingDriver { panic_on_probe: false, panic_on_read: false }),
+                driver: Arc::new(PanickingDriver { panic_on_detect: false, panic_on_init: false, panic_on_read: false }),
                 key_suffix: "healthy".to_string(),
             },
         ];
@@ -1347,46 +1507,46 @@ mod tests {
         let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
 
         assert_eq!(outcomes.len(), 2);
-        // First target panicked → ProbeFailed
-        assert!(matches!(&outcomes[0], PollOutcome::ProbeFailed { target_index: 0, .. }));
-        // Second target succeeded → Discovered
+        // First target panicked → DetectFailed
+        assert!(matches!(&outcomes[0], PollOutcome::DetectFailed { target_index: 0, .. }));
+        // Second target succeeded → Discovered (detect+init same cycle)
         assert!(matches!(&outcomes[1], PollOutcome::Discovered { target_index: 1, .. }));
     }
 
     #[test]
-    fn probe_panic_emits_immediate_adapter_error() {
-        // A panic during probe should emit AdapterError on the FIRST failure,
-        // not wait for MAX_PROBE_FAILURES threshold.
+    fn detect_panic_emits_immediate_adapter_error() {
+        // A panic during detect should emit AdapterError on the FIRST failure,
+        // not wait for MAX_DETECT_FAILURES threshold.
         let targets = vec![make_target(0x40, "temperature")];
         let mut states = vec![TargetState::new_pending()];
 
-        let outcomes = vec![PollOutcome::ProbeFailed {
+        let outcomes = vec![PollOutcome::DetectFailed {
             target_index: 0,
-            message: "driver panic during probe 0x40@/dev/i2c-1: boom".into(),
+            message: "driver panic during detect 0x40@/dev/i2c-1: boom".into(),
             is_panic: true,
         }];
 
         let events = apply_outcomes(outcomes, &mut states, &targets);
 
-        // Should emit AdapterError immediately despite consecutive_probe_failures == 1
+        // Should emit AdapterError immediately despite consecutive_detect_failures == 1
         assert_eq!(events.len(), 1);
         match &events[0] {
             AdapterEvent::AdapterError { error, .. } => {
-                assert!(error.contains("probe failed"), "expected probe failed in error: {error}");
+                assert!(error.contains("detect failed"), "expected detect failed in error: {error}");
             }
             other => panic!("expected AdapterError, got {other:?}"),
         }
     }
 
     #[test]
-    fn panic_does_not_consume_escalation_emitted() {
-        // After a panic probe, subsequent non-panic probe failures should
+    fn detect_panic_does_not_consume_escalation() {
+        // After a panic detect, subsequent non-panic detect failures should
         // still escalate at the threshold (escalation_emitted must NOT be set by panic path).
         let targets = vec![make_target(0x40, "temperature")];
         let mut states = vec![TargetState::new_pending()];
 
-        // 1. Panic probe — should emit immediately
-        let outcomes = vec![PollOutcome::ProbeFailed {
+        // 1. Panic detect — should emit immediately
+        let outcomes = vec![PollOutcome::DetectFailed {
             target_index: 0,
             message: "driver panic".into(),
             is_panic: true,
@@ -1394,9 +1554,9 @@ mod tests {
         let events = apply_outcomes(outcomes, &mut states, &targets);
         assert_eq!(events.len(), 1, "panic should emit immediate AdapterError");
 
-        // 2. Simulate MAX_PROBE_FAILURES - 1 more normal failures (already at 1 from panic)
-        for _ in 0..(MAX_PROBE_FAILURES - 2) {
-            let outcomes = vec![PollOutcome::ProbeFailed {
+        // 2. Simulate MAX_DETECT_FAILURES - 1 more normal failures (already at 1 from panic)
+        for _ in 0..(MAX_DETECT_FAILURES - 2) {
+            let outcomes = vec![PollOutcome::DetectFailed {
                 target_index: 0,
                 message: "NACK".into(),
                 is_panic: false,
@@ -1406,7 +1566,7 @@ mod tests {
         }
 
         // 3. One more normal failure should hit threshold and emit
-        let outcomes = vec![PollOutcome::ProbeFailed {
+        let outcomes = vec![PollOutcome::DetectFailed {
             target_index: 0,
             message: "NACK".into(),
             is_panic: false,
@@ -1422,5 +1582,263 @@ mod tests {
             }
             other => panic!("expected AdapterError, got {other:?}"),
         }
+    }
+
+    // ── Init failure tests ──────────────────────────────
+
+    /// A driver that succeeds detect but fails init.
+    struct DetectOnlyDriver;
+
+    impl SensorDriver for DetectOnlyDriver {
+        fn detect(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+            Ok(make_identity())
+        }
+        fn init(&self, _bus_path: &str, address: u8) -> Result<(), String> {
+            Err(format!("init failed for 0x{:02x}: config write error", address))
+        }
+        fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
+            unimplemented!("should not be called")
+        }
+        fn ic_name(&self) -> &'static str {
+            "DETECT_ONLY"
+        }
+    }
+
+    #[test]
+    fn detect_success_init_failure_enters_detected_state() {
+        let targets = vec![TargetRuntime {
+            address: 0x40,
+            driver: Arc::new(DetectOnlyDriver),
+            key_suffix: "temperature".to_string(),
+        }];
+        let states = vec![TargetState::new_pending()];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::InitFailed { target_index, identity, message, is_panic } => {
+                assert_eq!(*target_index, 0);
+                assert_eq!(identity.ic_part_number, "STUB");
+                assert!(message.contains("init failed"), "expected init error: {message}");
+                assert!(!*is_panic);
+            }
+            other => panic!("expected InitFailed, got {other:?}"),
+        }
+
+        // Apply outcomes
+        let mut states = vec![TargetState::new_pending()];
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+
+        // State should be Detected with 1 init failure
+        match &states[0] {
+            TargetState::Detected { identity, consecutive_init_failures } => {
+                assert_eq!(identity.ic_part_number, "STUB");
+                assert_eq!(*consecutive_init_failures, 1);
+            }
+            other => panic!("expected Detected state, got: {other:?}"),
+        }
+
+        // Should have emitted AdapterError
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            AdapterEvent::AdapterError { device_key, error } => {
+                assert!(device_key.is_none());
+                assert!(error.contains("init failed (1/5)"), "unexpected error: {error}");
+            }
+            other => panic!("expected AdapterError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detected_state_retries_init_and_succeeds() {
+        let identity = make_identity();
+        let targets = vec![make_mock_target(
+            0x40,
+            "temperature",
+            vec![], // detect not called for Detected state
+            vec![Ok(())],
+            vec![],
+        )];
+        let states = vec![TargetState::Detected {
+            identity: identity.clone(),
+            consecutive_init_failures: 1,
+        }];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::Discovered { target_index, key, identity: id } => {
+                assert_eq!(*target_index, 0);
+                assert_eq!(key.as_str(), "i2c:0x40:temperature");
+                assert_eq!(id.ic_part_number, identity.ic_part_number);
+            }
+            other => panic!("expected Discovered, got {other:?}"),
+        }
+
+        // Apply outcomes
+        let mut states = vec![TargetState::Detected {
+            identity: identity.clone(),
+            consecutive_init_failures: 1,
+        }];
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+
+        // State should be Active
+        match &states[0] {
+            TargetState::Active { key, consecutive_read_failures } => {
+                assert_eq!(key.as_str(), "i2c:0x40:temperature");
+                assert_eq!(*consecutive_read_failures, 0);
+            }
+            other => panic!("expected Active state, got: {other:?}"),
+        }
+
+        // Should emit DeviceDiscovered
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], AdapterEvent::DeviceDiscovered { .. }));
+    }
+
+    #[test]
+    fn max_init_failures_returns_to_pending() {
+        let targets = vec![make_target(0x40, "temperature")];
+        let identity = make_identity();
+        let mut states = vec![TargetState::Detected {
+            identity: identity.clone(),
+            consecutive_init_failures: MAX_INIT_FAILURES - 1,
+        }];
+
+        let outcomes = vec![PollOutcome::InitFailed {
+            target_index: 0,
+            identity,
+            message: "config write error".into(),
+            is_panic: false,
+        }];
+
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+
+        // State should return to Pending
+        match &states[0] {
+            TargetState::Pending { consecutive_detect_failures, escalation_emitted } => {
+                assert_eq!(*consecutive_detect_failures, 0);
+                assert!(!*escalation_emitted);
+            }
+            other => panic!("expected Pending state, got: {other:?}"),
+        }
+
+        // Should emit AdapterError
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            AdapterEvent::AdapterError { error, .. } => {
+                assert!(error.contains("init failed (5/5)"), "unexpected error: {error}");
+            }
+            other => panic!("expected AdapterError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn same_cycle_detect_init_success_emits_discovered() {
+        let identity = make_identity();
+        let targets = vec![make_mock_target(
+            0x40,
+            "temperature",
+            vec![Ok(identity.clone())],
+            vec![Ok(())],
+            vec![],
+        )];
+        let states = vec![TargetState::new_pending()];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        // Exactly 1 outcome: Discovered (not two separate outcomes)
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(&outcomes[0], PollOutcome::Discovered { .. }));
+
+        // Apply and verify single DeviceDiscovered event
+        let mut states = vec![TargetState::new_pending()];
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], AdapterEvent::DeviceDiscovered { .. }));
+    }
+
+    #[test]
+    fn init_panic_becomes_init_failed() {
+        let identity = make_identity();
+        let targets = vec![TargetRuntime {
+            address: 0x40,
+            driver: Arc::new(PanickingDriver { panic_on_detect: false, panic_on_init: true, panic_on_read: false }),
+            key_suffix: "temperature".to_string(),
+        }];
+        let states = vec![TargetState::Detected {
+            identity: identity.clone(),
+            consecutive_init_failures: 0,
+        }];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::InitFailed { target_index, is_panic, message, .. } => {
+                assert_eq!(*target_index, 0);
+                assert!(*is_panic, "expected is_panic=true");
+                assert!(message.contains("panic"), "expected panic in message: {message}");
+            }
+            other => panic!("expected InitFailed, got {other:?}"),
+        }
+
+        // Apply outcomes
+        let mut states = vec![TargetState::Detected {
+            identity,
+            consecutive_init_failures: 0,
+        }];
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+
+        // State should be Detected with incremented failure count
+        match &states[0] {
+            TargetState::Detected { consecutive_init_failures, .. } => {
+                assert_eq!(*consecutive_init_failures, 1);
+            }
+            other => panic!("expected Detected state, got: {other:?}"),
+        }
+
+        // Should emit AdapterError
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], AdapterEvent::AdapterError { .. }));
+    }
+
+    #[test]
+    fn init_panic_from_pending_same_cycle() {
+        // detect succeeds, init panics in same cycle from Pending
+        let targets = vec![TargetRuntime {
+            address: 0x40,
+            driver: Arc::new(PanickingDriver { panic_on_detect: false, panic_on_init: true, panic_on_read: false }),
+            key_suffix: "temperature".to_string(),
+        }];
+        let states = vec![TargetState::new_pending()];
+
+        let outcomes = poll_cycle(&targets, &states, "/dev/i2c-1");
+
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            PollOutcome::InitFailed { target_index, is_panic, .. } => {
+                assert_eq!(*target_index, 0);
+                assert!(*is_panic, "expected is_panic=true");
+            }
+            other => panic!("expected InitFailed, got {other:?}"),
+        }
+
+        // Apply outcomes
+        let mut states = vec![TargetState::new_pending()];
+        let events = apply_outcomes(outcomes, &mut states, &targets);
+
+        // State should be Detected (not Pending, not Active)
+        match &states[0] {
+            TargetState::Detected { consecutive_init_failures, .. } => {
+                assert_eq!(*consecutive_init_failures, 1);
+            }
+            other => panic!("expected Detected state, got: {other:?}"),
+        }
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], AdapterEvent::AdapterError { .. }));
     }
 }

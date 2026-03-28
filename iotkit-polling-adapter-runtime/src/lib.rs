@@ -18,17 +18,24 @@ use iotkit_core_types::{
 ///
 /// # Panic safety
 ///
-/// The polling runtime catches panics from `probe()` and `read()` per-target
-/// using `catch_unwind`. After a panic, the same driver instance will be called
-/// again on subsequent poll cycles. Implementations must therefore be safe to
-/// reuse after a panic — avoid interior mutable state that could be left in an
-/// inconsistent state. Stateless drivers (the common case) satisfy this trivially.
+/// The polling runtime catches panics from `detect()`, `init()`, and `read()`
+/// per-target using `catch_unwind`. After a panic, the same driver instance will
+/// be called again on subsequent poll cycles. Implementations must therefore be
+/// safe to reuse after a panic — avoid interior mutable state that could be left
+/// in an inconsistent state. Stateless drivers (the common case) satisfy this
+/// trivially.
 pub trait SensorDriver: Send + Sync {
-    /// Probe the sensor at the given I2C address. Returns identity on success.
+    /// Read-only detection. Must NOT write to hardware.
+    /// Reads device ID registers and returns identity on match.
     ///
-    /// Error strings **must** include the bus path and address for field debugging,
-    /// e.g. `format!("MCP9600 0x{:02x}@{}: read failed: {}", address, bus_path, e)`.
-    fn probe(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String>;
+    /// Error strings **must** include the bus path and address for field debugging.
+    fn detect(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String>;
+
+    /// Initialize hardware by writing config registers.
+    /// Called only after detect() succeeds. Must be idempotent.
+    ///
+    /// Error strings **must** include the bus path and address for field debugging.
+    fn init(&self, bus_path: &str, address: u8) -> Result<(), String>;
 
     /// Read the sensor at the given I2C address. Returns a reading on success.
     ///
@@ -215,7 +222,7 @@ mod tests {
     struct StubDriver;
 
     impl SensorDriver for StubDriver {
-        fn probe(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+        fn detect(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
             Ok(SensorIdentity {
                 manufacturer: "Test".into(),
                 ic_part_number: "STUB".into(),
@@ -225,6 +232,9 @@ mod tests {
                     parameters: BTreeMap::new(),
                 },
             })
+        }
+        fn init(&self, _bus_path: &str, _address: u8) -> Result<(), String> {
+            Ok(())
         }
         fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
             Ok(SensorReading::empty(SensorType::Temperature))
@@ -240,7 +250,7 @@ mod tests {
     }
 
     impl SensorDriver for StrictDriver {
-        fn probe(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
+        fn detect(&self, _bus_path: &str, _address: u8) -> Result<SensorIdentity, String> {
             Ok(SensorIdentity {
                 manufacturer: "Test".into(),
                 ic_part_number: "STRICT".into(),
@@ -250,6 +260,9 @@ mod tests {
                     parameters: BTreeMap::new(),
                 },
             })
+        }
+        fn init(&self, _bus_path: &str, _address: u8) -> Result<(), String> {
+            Ok(())
         }
         fn read(&self, _bus_path: &str, _address: u8) -> Result<SensorReading, String> {
             Ok(SensorReading::empty(SensorType::Temperature))
