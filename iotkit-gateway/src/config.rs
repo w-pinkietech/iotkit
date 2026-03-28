@@ -84,6 +84,30 @@ pub struct RpiLocalResolvedConfig {
     pub poll_interval_ms: u64,
 }
 
+// ── Pipeline: load_raw ─────────────────────────────────
+
+/// Load and parse a TOML config file.
+///
+/// If `path` is `Some` and `explicit` is true, the file MUST exist (error on missing).
+/// If `path` is `Some` and `explicit` is false, a missing file silently returns defaults.
+/// If `path` is `None`, returns defaults.
+pub fn load_raw(path: Option<&Path>, explicit: bool) -> Result<RawConfig, ConfigError> {
+    let Some(path) = path else {
+        return Ok(RawConfig::default());
+    };
+
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let raw: RawConfig = toml::from_str(&contents)?;
+            Ok(raw)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => {
+            Ok(RawConfig::default())
+        }
+        Err(e) => Err(ConfigError::Io(e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +157,43 @@ poll_interval_ms = 500
         let result: Result<RawConfig, _> =
             toml::from_str("[adapters.nonexistent]\nfoo = \"bar\"");
         assert!(result.is_err());
+    }
+
+    // ── load_raw tests ─────────────────────────────────
+
+    use std::io::Write as _;
+
+    #[test]
+    fn load_raw_missing_implicit_returns_defaults() {
+        let raw = load_raw(Some(Path::new("/tmp/does-not-exist.toml")), false).unwrap();
+        assert!(raw.gateway.db_path.is_none());
+    }
+
+    #[test]
+    fn load_raw_missing_explicit_returns_error() {
+        let result = load_raw(Some(Path::new("/tmp/does-not-exist.toml")), true);
+        assert!(matches!(result, Err(ConfigError::Io(_))));
+    }
+
+    #[test]
+    fn load_raw_valid_file() {
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        write!(tmpfile, "[gateway]\ndb_path = \"from-file.db\"").unwrap();
+        let raw = load_raw(Some(tmpfile.path()), true).unwrap();
+        assert_eq!(raw.gateway.db_path.as_deref(), Some("from-file.db"));
+    }
+
+    #[test]
+    fn load_raw_invalid_toml_returns_error() {
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        write!(tmpfile, "not valid {{{{ toml").unwrap();
+        let result = load_raw(Some(tmpfile.path()), true);
+        assert!(matches!(result, Err(ConfigError::Toml(_))));
+    }
+
+    #[test]
+    fn load_raw_none_path_returns_defaults() {
+        let raw = load_raw(None, false).unwrap();
+        assert!(raw.gateway.db_path.is_none());
     }
 }
