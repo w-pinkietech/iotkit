@@ -342,7 +342,9 @@ pub(crate) async fn polling_loop(
                     device_key: None,
                     error: format!("fatal: startup probe task failed: {e}"),
                 };
-                let _ = event_tx.send(event).await;
+                if event_tx.send(event).await.is_err() {
+                    tracing::warn!("event channel closed while sending fatal startup error");
+                }
                 return;
             }
         };
@@ -426,7 +428,9 @@ pub(crate) async fn polling_loop(
                             device_key: None,
                             error: format!("fatal: poll cycle task failed: {e}"),
                         };
-                        let _ = event_tx.send(event).await;
+                        if event_tx.send(event).await.is_err() {
+                            tracing::warn!("event channel closed while sending fatal poll cycle error");
+                        }
                         return;
                     }
                 };

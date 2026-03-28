@@ -346,13 +346,13 @@ The polling runtime provides a generic `start()` function:
 ```rust
 /// Start an I2C polling adapter.
 ///
-/// Validates config, opens bus path to verify access, checks for tokio
-/// runtime, spawns the polling loop task, and returns an AdapterHandle.
+/// Validates config, checks for tokio runtime, opens bus path to verify
+/// access, spawns the polling loop task, and returns an AdapterHandle.
 ///
 /// Fails immediately if:
 /// - Config is invalid (empty bus path, bad addresses, driver validation)
-/// - Bus path cannot be opened as a file (missing path, permissions)
 /// - No tokio runtime available
+/// - Bus path cannot be opened as a file (missing path, permissions)
 ///
 /// Note: file-open check does NOT validate that the path is a real I2C
 /// bus device. Full I2C validation happens on the first probe cycle.
