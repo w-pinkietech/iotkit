@@ -139,6 +139,7 @@ mod tests {
             reading: SensorReading::empty(SensorType::Temperature),
             rssi: None,
             battery_pct: None,
+            ingested_at: std::time::SystemTime::now(),
         }
     }
 

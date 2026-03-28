@@ -1,6 +1,7 @@
 //! Tests for State apply logic.
 
 use std::collections::BTreeMap;
+use std::time::SystemTime;
 use iotkit_core_types::*;
 use crate::*;
 
@@ -83,6 +84,7 @@ async fn sensor_data_updates_reading() {
             reading: sample_reading(),
             rssi: Some(-70),
             battery_pct: Some(85),
+            ingested_at: SystemTime::now(),
         },
     }).await;
 
@@ -107,6 +109,7 @@ async fn sensor_data_for_unknown_device_is_ignored() {
             reading: sample_reading(),
             rssi: None,
             battery_pct: None,
+            ingested_at: SystemTime::now(),
         },
     }).await;
 
@@ -197,6 +200,7 @@ async fn device_lost_then_rediscovered_is_new_insert() {
             reading: sample_reading(),
             rssi: Some(-50),
             battery_pct: Some(100),
+            ingested_at: SystemTime::now(),
         },
     }).await;
     engine.apply(EngineEvent {
@@ -307,6 +311,7 @@ async fn device_discovered_resend_updates_identity_keeps_reading() {
             reading: sample_reading(),
             rssi: Some(-60),
             battery_pct: Some(90),
+            ingested_at: SystemTime::now(),
         },
     }).await;
 

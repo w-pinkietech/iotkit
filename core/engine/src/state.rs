@@ -31,7 +31,7 @@ impl State {
             AdapterEvent::DeviceDiscovered { device_key, identity } => {
                 self.apply_discovered(adapter_id, device_key, identity);
             }
-            AdapterEvent::SensorData { device_key, reading, rssi, battery_pct } => {
+            AdapterEvent::SensorData { device_key, reading, rssi, battery_pct, ingested_at: _ } => {
                 let key = EngineDeviceKey {
                     adapter_id,
                     device_key: device_key.clone(),

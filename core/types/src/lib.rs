@@ -144,6 +144,7 @@ pub enum AdapterEvent {
         reading: SensorReading,
         rssi: Option<i16>,
         battery_pct: Option<u8>,
+        ingested_at: std::time::SystemTime,
     },
 
     /// 新しいデバイスを発見。
