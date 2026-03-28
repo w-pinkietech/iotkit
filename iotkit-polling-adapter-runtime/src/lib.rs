@@ -1,4 +1,4 @@
-//! iotkit-base-adapter: shared scaffolding for I2C-bus sensor adapters.
+//! iotkit-polling-adapter-runtime: shared scaffolding for I2C-bus polling sensor adapters.
 
 mod polling_loop;
 

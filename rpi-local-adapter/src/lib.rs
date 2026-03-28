@@ -1,14 +1,14 @@
 //! rpi-local-adapter: RPi local I2C sensor adapter.
-//! Thin wrapper over iotkit-base-adapter with MCP9600 and OPT3001 drivers.
+//! Thin wrapper over iotkit-polling-adapter-runtime with MCP9600 and OPT3001 drivers.
 
 pub mod drivers;
 
 pub use bravepi_sensors::mcp9600::ThermocoupleType;
-pub use iotkit_base_adapter::AdapterHandle;
+pub use iotkit_polling_adapter_runtime::AdapterHandle;
 
 use std::sync::Arc;
 
-use iotkit_base_adapter::{BaseAdapterConfig, SensorTargetConfig};
+use iotkit_polling_adapter_runtime::{BaseAdapterConfig, SensorTargetConfig};
 use iotkit_core_types::AdapterId;
 
 /// Adapter configuration. Passed to [`start`].
@@ -37,10 +37,10 @@ pub enum RpiLocalTarget {
 /// Start the rpi-local-adapter.
 ///
 /// Validates config (including per-driver validation), then delegates to
-/// `iotkit_base_adapter::start`.
+/// `iotkit_polling_adapter_runtime::start`.
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
     let base_config = to_base_config(&config);
-    iotkit_base_adapter::start(AdapterId::new("rpi-local:default"), base_config)
+    iotkit_polling_adapter_runtime::start(AdapterId::new("rpi-local:default"), base_config)
 }
 
 fn to_base_config(config: &RpiLocalConfig) -> BaseAdapterConfig {

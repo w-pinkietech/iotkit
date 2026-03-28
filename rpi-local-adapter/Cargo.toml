@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
-iotkit-base-adapter = { path = "../iotkit-base-adapter" }
+iotkit-polling-adapter-runtime = { path = "../iotkit-polling-adapter-runtime" }
 rpi4b-transport = { path = "../rpi4b-driver/transport" }
 bravepi-sensors = { path = "../bravepi-mainboard-adapter/sensors" }
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }

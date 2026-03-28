@@ -4,7 +4,7 @@
 
 **Goal:** Extract a reusable I2C polling base adapter from rpi-local-adapter so AI agents can create new sensor adapters by implementing only a SensorDriver trait.
 
-**Architecture:** New `iotkit-base-adapter` crate provides SensorDriver trait, BaseAdapterConfig, polling loop, state machine, AdapterHandle, and shutdown. rpi-local-adapter is refactored to a thin wrapper: RpiLocalConfig + MCP9600/OPT3001 driver implementations. bravepi-mainboard-adapter is untouched except trivial re-export adjustments.
+**Architecture:** New `iotkit-polling-adapter-runtime` crate provides SensorDriver trait, BaseAdapterConfig, polling loop, state machine, AdapterHandle, and shutdown. rpi-local-adapter is refactored to a thin wrapper: RpiLocalConfig + MCP9600/OPT3001 driver implementations. bravepi-mainboard-adapter is untouched except trivial re-export adjustments.
 
 **Tech Stack:** Rust, tokio (async runtime), tracing (diagnostics), iotkit-core-types (shared domain types)
 
@@ -14,20 +14,20 @@
 
 ## File Structure
 
-### New files (iotkit-base-adapter crate)
+### New files (iotkit-polling-adapter-runtime crate)
 
 | File | Responsibility |
 |------|---------------|
-| `iotkit-base-adapter/Cargo.toml` | Crate manifest |
-| `iotkit-base-adapter/src/lib.rs` | Public API: SensorDriver trait, BaseAdapterConfig, SensorTargetConfig, AdapterHandle, start(), validate_config(), re-exports |
-| `iotkit-base-adapter/src/polling_loop.rs` | TargetState, TargetRuntime, PollOutcome, apply_outcomes(), poll_cycle(), polling_loop() async fn |
+| `iotkit-polling-adapter-runtime/Cargo.toml` | Crate manifest |
+| `iotkit-polling-adapter-runtime/src/lib.rs` | Public API: SensorDriver trait, BaseAdapterConfig, SensorTargetConfig, AdapterHandle, start(), validate_config(), re-exports |
+| `iotkit-polling-adapter-runtime/src/polling_loop.rs` | TargetState, TargetRuntime, PollOutcome, apply_outcomes(), poll_cycle(), polling_loop() async fn |
 
 ### Modified files
 
 | File | Change |
 |------|--------|
-| `Cargo.toml` (workspace) | Add `iotkit-base-adapter` to members |
-| `rpi-local-adapter/Cargo.toml` | Add `iotkit-base-adapter` dependency |
+| `Cargo.toml` (workspace) | Add `iotkit-polling-adapter-runtime` to members |
+| `rpi-local-adapter/Cargo.toml` | Add `iotkit-polling-adapter-runtime` dependency |
 | `rpi-local-adapter/src/lib.rs` | Replace AdapterHandle/start/shutdown with thin wrapper delegating to base adapter |
 | `rpi-local-adapter/src/drivers/mod.rs` | New: module declarations for mcp9600 and opt3001 drivers |
 | `rpi-local-adapter/src/drivers/mcp9600.rs` | New: Mcp9600Driver implementing SensorDriver |
@@ -46,19 +46,19 @@
 
 ---
 
-### Task 1: Create iotkit-base-adapter crate skeleton with SensorDriver trait and config
+### Task 1: Create iotkit-polling-adapter-runtime crate skeleton with SensorDriver trait and config
 
 **Files:**
-- Create: `iotkit-base-adapter/Cargo.toml`
-- Create: `iotkit-base-adapter/src/lib.rs`
+- Create: `iotkit-polling-adapter-runtime/Cargo.toml`
+- Create: `iotkit-polling-adapter-runtime/src/lib.rs`
 - Modify: `Cargo.toml` (workspace root)
 
 - [ ] **Step 1: Create crate directory and Cargo.toml**
 
 ```toml
-# iotkit-base-adapter/Cargo.toml
+# iotkit-polling-adapter-runtime/Cargo.toml
 [package]
-name = "iotkit-base-adapter"
+name = "iotkit-polling-adapter-runtime"
 version = "0.1.0"
 edition = "2021"
 
@@ -70,13 +70,13 @@ tracing = "0.1"
 
 - [ ] **Step 2: Add to workspace members**
 
-In `Cargo.toml` (workspace root), add `"iotkit-base-adapter"` to the `members` array.
+In `Cargo.toml` (workspace root), add `"iotkit-polling-adapter-runtime"` to the `members` array.
 
 - [ ] **Step 3: Write lib.rs with SensorDriver trait, config types, and validate_config**
 
 ```rust
-// iotkit-base-adapter/src/lib.rs
-//! iotkit-base-adapter: reusable I2C polling adapter skeleton.
+// iotkit-polling-adapter-runtime/src/lib.rs
+//! iotkit-polling-adapter-runtime: reusable I2C polling adapter skeleton.
 //!
 //! AI agents implement `SensorDriver` per sensor IC.
 //! The base adapter provides: polling loop, channel wiring,
@@ -362,7 +362,7 @@ mod tests {
 - [ ] **Step 4: Create empty polling_loop.rs stub**
 
 ```rust
-// iotkit-base-adapter/src/polling_loop.rs
+// iotkit-polling-adapter-runtime/src/polling_loop.rs
 //! Polling loop internals: state management, outcome processing, async loop.
 
 use iotkit_core_types::{AdapterCommand, AdapterEvent};
@@ -378,14 +378,14 @@ pub(crate) async fn polling_loop(
 }
 ```
 
-- [ ] **Step 5: Run `cargo check -p iotkit-base-adapter` and `cargo test -p iotkit-base-adapter`**
+- [ ] **Step 5: Run `cargo check -p iotkit-polling-adapter-runtime` and `cargo test -p iotkit-polling-adapter-runtime`**
 
 Expected: check passes, all tests pass (7 config tests + start tests).
 
 - [ ] **Step 6: Commit**
 
 ```
-feat(iotkit-base-adapter): add crate skeleton with SensorDriver trait and config validation
+feat(iotkit-polling-adapter-runtime): add crate skeleton with SensorDriver trait and config validation
 ```
 
 ---
@@ -393,7 +393,7 @@ feat(iotkit-base-adapter): add crate skeleton with SensorDriver trait and config
 ### Task 2: Implement PollOutcome, TargetState, apply_outcomes pure function
 
 **Files:**
-- Modify: `iotkit-base-adapter/src/polling_loop.rs`
+- Modify: `iotkit-polling-adapter-runtime/src/polling_loop.rs`
 
 This is the pure state-transition logic. No async code, no I/O.
 
@@ -562,14 +562,14 @@ Add `#[cfg(test)] mod tests` at bottom of `polling_loop.rs` with tests:
 
 Each test creates `TargetState` + `TargetRuntime` + `PollOutcome`, calls `apply_outcomes`, asserts events and state changes. Use a minimal `MockRuntime` helper for `TargetRuntime`.
 
-- [ ] **Step 3: Run `cargo test -p iotkit-base-adapter`**
+- [ ] **Step 3: Run `cargo test -p iotkit-polling-adapter-runtime`**
 
 Expected: all apply_outcomes tests pass.
 
 - [ ] **Step 4: Commit**
 
 ```
-feat(iotkit-base-adapter): add PollOutcome, TargetState, apply_outcomes pure function
+feat(iotkit-polling-adapter-runtime): add PollOutcome, TargetState, apply_outcomes pure function
 ```
 
 ---
@@ -577,7 +577,7 @@ feat(iotkit-base-adapter): add PollOutcome, TargetState, apply_outcomes pure fun
 ### Task 3: Implement poll_cycle blocking function
 
 **Files:**
-- Modify: `iotkit-base-adapter/src/polling_loop.rs`
+- Modify: `iotkit-polling-adapter-runtime/src/polling_loop.rs`
 
 - [ ] **Step 1: Implement poll_cycle**
 
@@ -643,12 +643,12 @@ Test cases:
 - Active target with successful read → Reading outcome
 - Active target with failed read → ReadError outcome
 
-- [ ] **Step 3: Run `cargo test -p iotkit-base-adapter`**
+- [ ] **Step 3: Run `cargo test -p iotkit-polling-adapter-runtime`**
 
 - [ ] **Step 4: Commit**
 
 ```
-feat(iotkit-base-adapter): add poll_cycle blocking function
+feat(iotkit-polling-adapter-runtime): add poll_cycle blocking function
 ```
 
 ---
@@ -656,7 +656,7 @@ feat(iotkit-base-adapter): add poll_cycle blocking function
 ### Task 4: Implement async polling_loop
 
 **Files:**
-- Modify: `iotkit-base-adapter/src/polling_loop.rs`
+- Modify: `iotkit-polling-adapter-runtime/src/polling_loop.rs`
 
 - [ ] **Step 1: Implement the full async polling_loop**
 
@@ -686,14 +686,14 @@ Test cases using MockDriver:
 
 Each test: create channels + MockDriver, spawn polling_loop, assert events via event_rx.
 
-- [ ] **Step 3: Run `cargo test -p iotkit-base-adapter`**
+- [ ] **Step 3: Run `cargo test -p iotkit-polling-adapter-runtime`**
 
 Expected: all tests pass.
 
 - [ ] **Step 4: Commit**
 
 ```
-feat(iotkit-base-adapter): add async polling_loop with recovery and escalation
+feat(iotkit-polling-adapter-runtime): add async polling_loop with recovery and escalation
 ```
 
 ---
@@ -720,7 +720,7 @@ pub mod opt3001;
 ```rust
 // rpi-local-adapter/src/drivers/mcp9600.rs
 use std::collections::BTreeMap;
-use iotkit_base_adapter::SensorDriver;
+use iotkit_polling_adapter_runtime::SensorDriver;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorIdentity, SensorReading};
 pub use bravepi_sensors::mcp9600::ThermocoupleType;
 
@@ -777,7 +777,7 @@ impl SensorDriver for Mcp9600Driver {
 ```rust
 // rpi-local-adapter/src/drivers/opt3001.rs
 use std::collections::BTreeMap;
-use iotkit_base_adapter::SensorDriver;
+use iotkit_polling_adapter_runtime::SensorDriver;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorIdentity, SensorReading};
 
 pub struct Opt3001Driver;
@@ -863,24 +863,24 @@ feat(rpi-local-adapter): add MCP9600 and OPT3001 SensorDriver implementations
 
 - [ ] **Step 1: Update Cargo.toml**
 
-Add `iotkit-base-adapter` dependency:
+Add `iotkit-polling-adapter-runtime` dependency:
 ```toml
-iotkit-base-adapter = { path = "../iotkit-base-adapter" }
+iotkit-polling-adapter-runtime = { path = "../iotkit-polling-adapter-runtime" }
 ```
 
 - [ ] **Step 2: Rewrite lib.rs**
 
 ```rust
 //! rpi-local-adapter: RPi local I2C sensor adapter.
-//! Thin wrapper over iotkit-base-adapter with MCP9600 and OPT3001 drivers.
+//! Thin wrapper over iotkit-polling-adapter-runtime with MCP9600 and OPT3001 drivers.
 
 pub mod drivers;
 
-pub use iotkit_base_adapter::AdapterHandle;
+pub use iotkit_polling_adapter_runtime::AdapterHandle;
 pub use bravepi_sensors::mcp9600::ThermocoupleType;
 
 use std::sync::Arc;
-use iotkit_base_adapter::{BaseAdapterConfig, SensorTargetConfig};
+use iotkit_polling_adapter_runtime::{BaseAdapterConfig, SensorTargetConfig};
 use iotkit_core_types::AdapterId;
 
 /// RPi-local-specific config.
@@ -901,7 +901,7 @@ pub enum RpiLocalTarget {
 /// Start the rpi-local adapter.
 pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
     let base_config = to_base_config(&config);
-    iotkit_base_adapter::start(
+    iotkit_polling_adapter_runtime::start(
         AdapterId::new("rpi-local:default"),
         base_config,
     )
@@ -980,14 +980,14 @@ rm rpi-local-adapter/src/config.rs
 rm -r rpi-local-adapter/src/sensors/
 ```
 
-- [ ] **Step 4: Run `cargo test -p rpi-local-adapter` and `cargo test -p iotkit-base-adapter`**
+- [ ] **Step 4: Run `cargo test -p rpi-local-adapter` and `cargo test -p iotkit-polling-adapter-runtime`**
 
 Expected: all tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```
-refactor(rpi-local-adapter): use iotkit-base-adapter, remove polling_loop and config
+refactor(rpi-local-adapter): use iotkit-polling-adapter-runtime, remove polling_loop and config
 ```
 
 ---
@@ -1023,7 +1023,7 @@ fn rpi_local_config() -> rpi_local_adapter::RpiLocalConfig {
 
 - [ ] **Step 2: Update gateway AdapterHandle type**
 
-The gateway uses `rpi_local_adapter::start()` which returns `iotkit_base_adapter::AdapterHandle` (re-exported). Update type references if needed. The gateway accesses `.id`, `.event_rx`, `.command_tx`, `.shutdown()` — all present.
+The gateway uses `rpi_local_adapter::start()` which returns `iotkit_polling_adapter_runtime::AdapterHandle` (re-exported). Update type references if needed. The gateway accesses `.id`, `.event_rx`, `.command_tx`, `.shutdown()` — all present.
 
 - [ ] **Step 3: Update integration tests**
 

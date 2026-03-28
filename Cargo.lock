@@ -124,15 +124,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iotkit-base-adapter"
-version = "0.1.0"
-dependencies = [
- "iotkit-core-types",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "iotkit-core-engine"
 version = "0.1.0"
 dependencies = [
@@ -156,6 +147,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iotkit-polling-adapter-runtime"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -350,8 +350,8 @@ name = "rpi-local-adapter"
 version = "0.1.0"
 dependencies = [
  "bravepi-sensors",
- "iotkit-base-adapter",
  "iotkit-core-types",
+ "iotkit-polling-adapter-runtime",
  "rpi4b-transport",
  "tokio",
  "tracing",

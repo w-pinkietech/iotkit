@@ -19,7 +19,7 @@ iotkit currently supports only Braveridge sensors. The goal of the base adapter 
 
 ### In scope
 
-1. `iotkit-base-adapter` crate (workspace-internal, not published): reusable I2C polling loop, AdapterHandle, channel wiring, shutdown, state machine, recovery logic
+1. `iotkit-polling-adapter-runtime` crate (workspace-internal, not published): reusable I2C polling loop, AdapterHandle, channel wiring, shutdown, state machine, recovery logic
 2. `SensorDriver` trait: the minimal interface an AI implements per I2C sensor
 3. `BaseAdapterConfig` struct: I2C bus path, poll interval, sensor targets
 4. Refactor rpi-local-adapter to use the base adapter
@@ -160,7 +160,7 @@ pub struct SensorTargetConfig {
 
 ### Failure thresholds (internal constants, not config)
 
-To avoid the partial-config anti-pattern, failure thresholds are internal constants in `iotkit-base-adapter`, not public config fields:
+To avoid the partial-config anti-pattern, failure thresholds are internal constants in `iotkit-polling-adapter-runtime`, not public config fields:
 
 - `MAX_READ_FAILURES: u32 = 5` — consecutive read failures before Active → Pending transition
 - `MAX_PROBE_FAILURES: u32 = 10` — consecutive probe failures before escalation error
@@ -365,7 +365,7 @@ rpi-local-adapter's `start()` becomes a thin wrapper:
 pub fn start(config: RpiLocalConfig) -> Result<base_adapter::AdapterHandle, std::io::Error> {
     validate_rpi_local_config(&config)?;
     let base_config = to_base_config(config);
-    iotkit_base_adapter::start(
+    iotkit_polling_adapter_runtime::start(
         AdapterId::new("rpi-local:default"),
         base_config,
     )
@@ -402,7 +402,7 @@ rpi-local-adapter/
 
 ## 8. Gateway Impact
 
-Minimal. The gateway calls `rpi_local_adapter::start()` which now returns `iotkit_base_adapter::AdapterHandle`. The gateway accesses `.id`, `.event_rx`, `.command_tx` and calls `.shutdown()` — all present on the base adapter's AdapterHandle.
+Minimal. The gateway calls `rpi_local_adapter::start()` which now returns `iotkit_polling_adapter_runtime::AdapterHandle`. The gateway accesses `.id`, `.event_rx`, `.command_tx` and calls `.shutdown()` — all present on the base adapter's AdapterHandle.
 
 rpi-local-adapter re-exports `AdapterHandle` from the base adapter, so the gateway's import path doesn't need to change.
 
@@ -466,22 +466,22 @@ Unchanged. No import path changes (rename deferred).
 graph BT
     core-types["iotkit-core-types"]
     sensors["bravepi-sensors"]
-    base["iotkit-base-adapter"]
+    polling-rt["iotkit-polling-adapter-runtime"]
     bravepi["bravepi-mainboard-adapter"]
     rpi["rpi-local-adapter"]
     gateway["iotkit-gateway"]
 
     sensors --> core-types
-    base --> core-types
+    polling-rt --> core-types
     bravepi --> core-types
     bravepi --> sensors
-    rpi --> base
+    rpi --> polling-rt
     rpi --> sensors
     gateway --> rpi
     gateway --> bravepi
 ```
 
-`iotkit-base-adapter` does NOT depend on `bravepi-sensors`. Sensor IC decode logic is referenced only by the concrete adapter (rpi-local-adapter).
+`iotkit-polling-adapter-runtime` does NOT depend on `bravepi-sensors`. Sensor IC decode logic is referenced only by the concrete adapter (rpi-local-adapter).
 
 ## 11. AI Consumption: How to Add a New I2C Sensor
 
@@ -491,14 +491,14 @@ An AI agent creating a new I2C sensor adapter follows these steps:
 
 2. **Create config**: Build a `BaseAdapterConfig` with sensor targets, each owning a driver instance via `Arc` with per-sensor config.
 
-3. **Call `iotkit_base_adapter::start()`**: Pass adapter ID and config.
+3. **Call `iotkit_polling_adapter_runtime::start()`**: Pass adapter ID and config.
 
 4. **Done.** The base adapter handles: channel wiring, polling loop, state machine, shutdown, event production, failure recovery.
 
 Example for a hypothetical BME280 temperature/humidity sensor:
 
 ```rust
-use iotkit_base_adapter::{BaseAdapterConfig, SensorTargetConfig, SensorDriver, AdapterHandle};
+use iotkit_polling_adapter_runtime::{BaseAdapterConfig, SensorTargetConfig, SensorDriver, AdapterHandle};
 use iotkit_core_types::{AdapterId, SensorIdentity, SensorReading};
 use std::sync::Arc;
 
@@ -527,8 +527,36 @@ pub fn start() -> Result<AdapterHandle, std::io::Error> {
             key_suffix: None,  // uses ic_name() = "bme280"
         }],
     };
-    iotkit_base_adapter::start(AdapterId::new("bme280:default"), config)
+    iotkit_polling_adapter_runtime::start(AdapterId::new("bme280:default"), config)
 }
 ```
 
-Total sensor-specific code: ~50 lines. Everything else is provided by the base adapter.
+Total sensor-specific code: ~50 lines. Everything else is provided by the polling adapter runtime.
+
+## 12. Adapter Taxonomy
+
+All adapters share the gateway boundary contract: `AdapterEvent`, `AdapterCommand`, and the `AdapterHandle` shape that the gateway fans into the engine. What differs is the **runtime model** inside each adapter.
+
+### Classification Axes
+
+| Axis | Values | Meaning |
+|------|--------|---------|
+| `runtime_model` | `polling` \| `stream_ingress` | How the adapter acquires sensor data |
+| `liveness_owner` | `adapter` \| `orchestrator` | Who decides a device is lost |
+
+### Current Adapters
+
+| Adapter | runtime_model | liveness_owner | Notes |
+|---------|--------------|----------------|-------|
+| rpi-local-adapter | polling | adapter | I2C register polling; emits `DeviceLost` after MAX_READ_FAILURES consecutive read failures |
+| bravepi-mainboard-adapter | stream_ingress | orchestrator | UART byte-stream/codec loop; discovers on first sensor frame; never infers loss from silence |
+
+### Liveness Rule
+
+**Only adapters with `liveness_owner = adapter` may emit `DeviceLost` based on transport/read failure.** Streaming adapters may emit transport errors (e.g. serial port disconnected), but silence-based device loss belongs in the orchestrator layer, using `uplink_interval_secs` plus shared `last_seen` timestamps.
+
+### Naming Convention
+
+- `iotkit-polling-adapter-runtime`: the reusable runtime for polling-type adapters (this crate)
+- Concrete polling adapters (e.g. `rpi-local-adapter`): thin wrappers that provide `SensorDriver` implementations
+- Streaming adapters (e.g. `bravepi-mainboard-adapter`): self-contained, no shared runtime yet — extract a streaming base only when a second streaming adapter emerges

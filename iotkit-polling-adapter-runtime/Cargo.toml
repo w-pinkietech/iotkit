@@ -1,5 +1,5 @@
 [package]
-name = "iotkit-base-adapter"
+name = "iotkit-polling-adapter-runtime"
 version = "0.1.0"
 edition = "2024"
 
