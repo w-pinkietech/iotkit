@@ -1,6 +1,8 @@
 //! iotkit-gateway: composition root。
 //! adapter を起動し、core/engine に event を渡す。
 
+mod adapter_host;
+
 use iotkit_core_engine::{Engine, EngineEvent};
 use tracing_subscriber::EnvFilter;
 

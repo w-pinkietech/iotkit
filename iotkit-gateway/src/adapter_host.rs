@@ -1,0 +1,301 @@
+//! AdapterHost: unified fan-in and lifecycle management for adapters.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt, StreamMap};
+
+use iotkit_core_engine::EngineEvent;
+use iotkit_core_types::{AdapterEvent, AdapterId};
+
+/// Event yielded by [`AdapterHost::next_event`].
+pub enum AdapterHostEvent {
+    /// A data event from an adapter.
+    Event(EngineEvent),
+    /// An adapter's event stream has closed.
+    AdapterClosed(AdapterId),
+}
+
+/// Unified fan-in and lifecycle manager for adapters.
+pub struct AdapterHost {
+    streams: StreamMap<AdapterId, WrappedStream>,
+    adapters: Vec<ManagedAdapter>,
+}
+
+struct ManagedAdapter {
+    id: AdapterId,
+    shutdown_fn: Option<
+        Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>,
+    >,
+}
+
+impl AdapterHost {
+    pub fn new() -> Self {
+        Self {
+            streams: StreamMap::new(),
+            adapters: Vec::new(),
+        }
+    }
+
+    /// Register an adapter. Returns `Err` if the adapter ID is already registered.
+    pub fn register(
+        &mut self,
+        id: AdapterId,
+        event_rx: mpsc::Receiver<AdapterEvent>,
+        shutdown_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
+            + Send
+            + 'static,
+    ) -> Result<(), String> {
+        if self.streams.contains_key(&id) {
+            return Err(format!("duplicate adapter ID: {id}"));
+        }
+        let stream = WrappedStream {
+            inner: ReceiverStream::new(event_rx),
+            closed_yielded: false,
+        };
+        self.streams.insert(id.clone(), stream);
+        self.adapters.push(ManagedAdapter {
+            id,
+            shutdown_fn: Some(Box::new(shutdown_fn)),
+        });
+        Ok(())
+    }
+
+    /// Returns the next event from any registered adapter, or `None` if all
+    /// adapters have closed.
+    pub async fn next_event(&mut self) -> Option<AdapterHostEvent> {
+        let (id, item) = self.streams.next().await?;
+        match item {
+            WrappedItem::Event(event) => Some(AdapterHostEvent::Event(EngineEvent {
+                adapter_id: id,
+                event,
+            })),
+            WrappedItem::Closed => Some(AdapterHostEvent::AdapterClosed(id)),
+        }
+    }
+
+    /// Shut down all adapters in reverse registration order.
+    ///
+    /// For each adapter: removes its stream (closing the receiver), then
+    /// invokes its shutdown closure, before moving to the next adapter.
+    /// Errors are logged, not propagated.
+    pub async fn shutdown_all(&mut self) {
+        for adapter in self.adapters.iter_mut().rev() {
+            self.streams.remove(&adapter.id);
+            if let Some(shutdown_fn) = adapter.shutdown_fn.take() {
+                if let Err(e) = shutdown_fn().await {
+                    tracing::error!(
+                        adapter = %adapter.id, error = %e,
+                        "Adapter shutdown error"
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ── WrappedStream ────────────────────────────────────────
+
+enum WrappedItem {
+    Event(AdapterEvent),
+    Closed,
+}
+
+struct WrappedStream {
+    inner: ReceiverStream<AdapterEvent>,
+    closed_yielded: bool,
+}
+
+impl Stream for WrappedStream {
+    type Item = WrappedItem;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.closed_yielded {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(event)) => Poll::Ready(Some(WrappedItem::Event(event))),
+            Poll::Ready(None) => {
+                this.closed_yielded = true;
+                Poll::Ready(Some(WrappedItem::Closed))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iotkit_core_types::{DeviceKey, SensorReading, SensorType};
+
+    fn stub_event() -> AdapterEvent {
+        AdapterEvent::SensorData {
+            device_key: DeviceKey::new("test:0"),
+            reading: SensorReading::empty(SensorType::Temperature),
+            rssi: None,
+            battery_pct: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn single_adapter_events() {
+        let mut host = AdapterHost::new();
+        let (tx, rx) = mpsc::channel(16);
+        host.register(
+            AdapterId::new("a"),
+            rx,
+            || Box::pin(async { Ok(()) }),
+        ).unwrap();
+
+        tx.send(stub_event()).await.unwrap();
+        tx.send(stub_event()).await.unwrap();
+        drop(tx);
+
+        let e1 = host.next_event().await;
+        assert!(matches!(e1, Some(AdapterHostEvent::Event(_))));
+        let e2 = host.next_event().await;
+        assert!(matches!(e2, Some(AdapterHostEvent::Event(_))));
+        let closed = host.next_event().await;
+        assert!(matches!(closed, Some(AdapterHostEvent::AdapterClosed(id)) if id.as_str() == "a"));
+        let done = host.next_event().await;
+        assert!(done.is_none());
+    }
+
+    #[tokio::test]
+    async fn multiple_adapters_interleaved() {
+        let mut host = AdapterHost::new();
+        let (tx_a, rx_a) = mpsc::channel(16);
+        let (tx_b, rx_b) = mpsc::channel(16);
+        host.register(AdapterId::new("a"), rx_a, || Box::pin(async { Ok(()) })).unwrap();
+        host.register(AdapterId::new("b"), rx_b, || Box::pin(async { Ok(()) })).unwrap();
+
+        tx_a.send(stub_event()).await.unwrap();
+        tx_b.send(stub_event()).await.unwrap();
+        drop(tx_a);
+        drop(tx_b);
+
+        let mut event_count = 0;
+        let mut closed_count = 0;
+        while let Some(ev) = host.next_event().await {
+            match ev {
+                AdapterHostEvent::Event(_) => event_count += 1,
+                AdapterHostEvent::AdapterClosed(_) => closed_count += 1,
+            }
+        }
+        assert_eq!(event_count, 2);
+        assert_eq!(closed_count, 2);
+    }
+
+    #[tokio::test]
+    async fn adapter_closed_notification() {
+        let mut host = AdapterHost::new();
+        let (tx, rx) = mpsc::channel(16);
+        host.register(AdapterId::new("x"), rx, || Box::pin(async { Ok(()) })).unwrap();
+        drop(tx);
+
+        let ev = host.next_event().await;
+        assert!(matches!(ev, Some(AdapterHostEvent::AdapterClosed(id)) if id.as_str() == "x"));
+        assert!(host.next_event().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn all_closed_returns_none() {
+        let mut host = AdapterHost::new();
+        assert!(host.next_event().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn duplicate_id_rejected() {
+        let mut host = AdapterHost::new();
+        let (_tx1, rx1) = mpsc::channel::<AdapterEvent>(1);
+        let (_tx2, rx2) = mpsc::channel::<AdapterEvent>(1);
+        host.register(AdapterId::new("dup"), rx1, || Box::pin(async { Ok(()) })).unwrap();
+        let result = host.register(AdapterId::new("dup"), rx2, || Box::pin(async { Ok(()) }));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_calls_closures() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let mut host = AdapterHost::new();
+        let (tx, rx) = mpsc::channel(1);
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+        host.register(
+            AdapterId::new("s"),
+            rx,
+            move || Box::pin(async move { called_clone.store(true, Ordering::SeqCst); Ok(()) }),
+        ).unwrap();
+        drop(tx);
+
+        host.shutdown_all().await;
+        assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn shutdown_order_is_reverse() {
+        use std::sync::{Arc, Mutex};
+
+        let mut host = AdapterHost::new();
+        let order = Arc::new(Mutex::new(Vec::new()));
+
+        for name in ["first", "second", "third"] {
+            let (_tx, rx) = mpsc::channel::<AdapterEvent>(1);
+            let order_clone = order.clone();
+            let name_owned = name.to_string();
+            host.register(
+                AdapterId::new(name),
+                rx,
+                move || Box::pin(async move {
+                    order_clone.lock().unwrap().push(name_owned);
+                    Ok(())
+                }),
+            ).unwrap();
+        }
+
+        host.shutdown_all().await;
+        let recorded = order.lock().unwrap().clone();
+        assert_eq!(recorded, vec!["third", "second", "first"]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_after_early_adapter_exit() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let mut host = AdapterHost::new();
+
+        let (tx_early, rx_early) = mpsc::channel(1);
+        drop(tx_early);
+        let early_called = Arc::new(AtomicBool::new(false));
+        let early_clone = early_called.clone();
+        host.register(
+            AdapterId::new("early"),
+            rx_early,
+            move || Box::pin(async move { early_clone.store(true, Ordering::SeqCst); Ok(()) }),
+        ).unwrap();
+
+        let (_tx_alive, rx_alive) = mpsc::channel(1);
+        let alive_called = Arc::new(AtomicBool::new(false));
+        let alive_clone = alive_called.clone();
+        host.register(
+            AdapterId::new("alive"),
+            rx_alive,
+            move || Box::pin(async move { alive_clone.store(true, Ordering::SeqCst); Ok(()) }),
+        ).unwrap();
+
+        let ev = host.next_event().await;
+        assert!(matches!(ev, Some(AdapterHostEvent::AdapterClosed(id)) if id.as_str() == "early"));
+
+        host.shutdown_all().await;
+        assert!(early_called.load(Ordering::SeqCst));
+        assert!(alive_called.load(Ordering::SeqCst));
+    }
+}

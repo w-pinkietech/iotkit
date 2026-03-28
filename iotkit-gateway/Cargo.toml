@@ -8,6 +8,7 @@ iotkit-core-types = { path = "../core/types" }
 iotkit-core-engine = { path = "../core/engine" }
 bravepi-mainboard-adapter = { path = "../bravepi-mainboard-adapter" }
 rpi-local-adapter = { path = "../rpi-local-adapter" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
