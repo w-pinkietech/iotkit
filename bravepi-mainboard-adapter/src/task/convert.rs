@@ -45,6 +45,7 @@ pub(crate) fn frame_to_event(
                 reading,
                 rssi: Some(s.rssi as i16),
                 battery_pct: Some(s.battery),
+                ingested_at: std::time::SystemTime::now(),
             };
 
             Some((event, Some(identity)))

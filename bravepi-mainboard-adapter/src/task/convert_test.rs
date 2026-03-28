@@ -29,6 +29,7 @@ fn temperature_frame_produces_sensor_data() {
             reading,
             rssi,
             battery_pct,
+            ..
         } => {
             assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
             assert_eq!(reading.sensor_type, SensorType::Temperature);

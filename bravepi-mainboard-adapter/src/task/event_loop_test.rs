@@ -432,7 +432,7 @@ async fn config_frame_produces_device_config_event() {
         .expect("event_rx closed");
 
     match event {
-        AdapterEvent::DeviceConfig { device_key, config } => {
+        AdapterEvent::DeviceConfig { device_key, config, .. } => {
             assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
             assert_eq!(config.firmware_version, Some("1.2.3".to_string()));
             assert_eq!(config.uplink_interval_secs, Some(60));
