@@ -108,6 +108,75 @@ pub fn load_raw(path: Option<&Path>, explicit: bool) -> Result<RawConfig, Config
     }
 }
 
+// ── Pipeline: apply_env ────────────────────────────────
+
+fn parse_bool_env(var: &str, val: &str) -> Result<bool, ConfigError> {
+    match val {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        _ => Err(ConfigError::Validation(format!(
+            "invalid value for {var}: '{val}' (expected true/false/1/0)"
+        ))),
+    }
+}
+
+fn parse_u64_env(var: &str, val: &str) -> Result<u64, ConfigError> {
+    val.parse::<u64>().map_err(|_| {
+        ConfigError::Validation(format!(
+            "invalid value for {var}: '{val}' (expected integer)"
+        ))
+    })
+}
+
+/// Apply ENV overrides to a `RawConfig`. Returns error on parse failure.
+pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
+    if let Ok(val) = std::env::var("IOTKIT_DB_PATH") {
+        raw.gateway.db_path = Some(val);
+    }
+
+    if let Ok(val) = std::env::var("BRAVEPI_ENABLED") {
+        let bp = raw.adapters.bravepi.get_or_insert(RawBravepiConfig {
+            enabled: None,
+            port: None,
+        });
+        bp.enabled = Some(parse_bool_env("BRAVEPI_ENABLED", &val)?);
+    }
+    if let Ok(val) = std::env::var("BRAVEPI_PORT") {
+        let bp = raw.adapters.bravepi.get_or_insert(RawBravepiConfig {
+            enabled: None,
+            port: None,
+        });
+        bp.port = Some(val);
+    }
+
+    if let Ok(val) = std::env::var("RPI_LOCAL_ENABLED") {
+        let rpi = raw.adapters.rpi_local.get_or_insert(RawRpiLocalConfig {
+            enabled: None,
+            bus_path: None,
+            poll_interval_ms: None,
+        });
+        rpi.enabled = Some(parse_bool_env("RPI_LOCAL_ENABLED", &val)?);
+    }
+    if let Ok(val) = std::env::var("RPI_LOCAL_BUS_PATH") {
+        let rpi = raw.adapters.rpi_local.get_or_insert(RawRpiLocalConfig {
+            enabled: None,
+            bus_path: None,
+            poll_interval_ms: None,
+        });
+        rpi.bus_path = Some(val);
+    }
+    if let Ok(val) = std::env::var("RPI_LOCAL_POLL_INTERVAL_MS") {
+        let rpi = raw.adapters.rpi_local.get_or_insert(RawRpiLocalConfig {
+            enabled: None,
+            bus_path: None,
+            poll_interval_ms: None,
+        });
+        rpi.poll_interval_ms = Some(parse_u64_env("RPI_LOCAL_POLL_INTERVAL_MS", &val)?);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +264,153 @@ poll_interval_ms = 500
     fn load_raw_none_path_returns_defaults() {
         let raw = load_raw(None, false).unwrap();
         assert!(raw.gateway.db_path.is_none());
+    }
+
+    // ── apply_env tests ────────────────────────────────
+
+    /// All ENV vars that `apply_env()` and `load()` read.
+    const CONFIG_ENV_KEYS: &[&str] = &[
+        "IOTKIT_DB_PATH", "BRAVEPI_ENABLED", "BRAVEPI_PORT",
+        "RPI_LOCAL_ENABLED", "RPI_LOCAL_BUS_PATH", "RPI_LOCAL_POLL_INTERVAL_MS",
+        "IOTKIT_CONFIG_PATH",
+    ];
+
+    /// RAII guard that restores env vars on drop (including on panic/unwind).
+    struct EnvGuard {
+        prior: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, old) in &self.prior {
+                // SAFETY: tests run single-threaded (--test-threads=1).
+                match old {
+                    Some(v) => unsafe { std::env::set_var(k, v) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
+            }
+        }
+    }
+
+    /// Helper: clear ALL config-related env vars, set the given vars,
+    /// run the closure, then restore all prior values (even on panic).
+    fn with_env_vars<F: FnOnce()>(vars: &[(&str, &str)], f: F) {
+        let prior: Vec<(&'static str, Option<String>)> = CONFIG_ENV_KEYS
+            .iter()
+            .map(|k| (*k, std::env::var(k).ok()))
+            .collect();
+        let _guard = EnvGuard { prior };
+        for k in CONFIG_ENV_KEYS {
+            // SAFETY: tests run single-threaded (--test-threads=1).
+            unsafe { std::env::remove_var(k); }
+        }
+        for (k, v) in vars {
+            // SAFETY: tests run single-threaded (--test-threads=1).
+            unsafe { std::env::set_var(k, v); }
+        }
+        f();
+    }
+
+    #[test]
+    fn apply_env_overrides_db_path() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("IOTKIT_DB_PATH", "env.db")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        assert_eq!(raw.gateway.db_path.as_deref(), Some("env.db"));
+    }
+
+    #[test]
+    fn apply_env_overrides_bravepi_port() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("BRAVEPI_PORT", "/dev/ttyUSB1")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        let bp = raw.adapters.bravepi.as_ref().unwrap();
+        assert_eq!(bp.port.as_deref(), Some("/dev/ttyUSB1"));
+    }
+
+    #[test]
+    fn apply_env_overrides_rpi_local_enabled() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("RPI_LOCAL_ENABLED", "1")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        let rpi = raw.adapters.rpi_local.as_ref().unwrap();
+        assert_eq!(rpi.enabled, Some(true));
+    }
+
+    #[test]
+    fn apply_env_overrides_rpi_local_enabled_false() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("RPI_LOCAL_ENABLED", "false")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        let rpi = raw.adapters.rpi_local.as_ref().unwrap();
+        assert_eq!(rpi.enabled, Some(false));
+    }
+
+    #[test]
+    fn apply_env_overrides_bravepi_enabled() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("BRAVEPI_ENABLED", "0")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        let bp = raw.adapters.bravepi.as_ref().unwrap();
+        assert_eq!(bp.enabled, Some(false));
+    }
+
+    #[test]
+    fn apply_env_overrides_rpi_local_bus_path() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("RPI_LOCAL_BUS_PATH", "/dev/i2c-3")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        let rpi = raw.adapters.rpi_local.as_ref().unwrap();
+        assert_eq!(rpi.bus_path.as_deref(), Some("/dev/i2c-3"));
+    }
+
+    #[test]
+    fn apply_env_overrides_poll_interval() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("RPI_LOCAL_POLL_INTERVAL_MS", "2000")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        let rpi = raw.adapters.rpi_local.as_ref().unwrap();
+        assert_eq!(rpi.poll_interval_ms, Some(2000));
+    }
+
+    #[test]
+    fn apply_env_invalid_poll_interval_returns_error() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("RPI_LOCAL_POLL_INTERVAL_MS", "abc")], || {
+            let result = apply_env(&mut raw);
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(msg.contains("RPI_LOCAL_POLL_INTERVAL_MS"), "error should name the var: {msg}");
+            assert!(msg.contains("abc"), "error should include raw value: {msg}");
+        });
+    }
+
+    #[test]
+    fn apply_env_overrides_toml_value() {
+        let mut raw: RawConfig = toml::from_str("[gateway]\ndb_path = \"from-toml.db\"").unwrap();
+        assert_eq!(raw.gateway.db_path.as_deref(), Some("from-toml.db"));
+        with_env_vars(&[("IOTKIT_DB_PATH", "from-env.db")], || {
+            apply_env(&mut raw).unwrap();
+        });
+        assert_eq!(raw.gateway.db_path.as_deref(), Some("from-env.db"));
+    }
+
+    #[test]
+    fn apply_env_invalid_bool_returns_error() {
+        let mut raw = RawConfig::default();
+        with_env_vars(&[("BRAVEPI_ENABLED", "yes")], || {
+            let result = apply_env(&mut raw);
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(msg.contains("BRAVEPI_ENABLED"), "error should name the var: {msg}");
+            assert!(msg.contains("yes"), "error should include raw value: {msg}");
+        });
     }
 }
