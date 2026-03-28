@@ -18,7 +18,7 @@
 |--------|------|----------------|
 | Create | `iotkit-gateway/src/adapter_host.rs` | AdapterHost, WrappedStream, AdapterHostEvent |
 | Modify | `iotkit-gateway/src/main.rs` | Use AdapterHost instead of manual select! |
-| Modify | `iotkit-gateway/Cargo.toml` | Add tokio-stream dependency |
+| Modify | `iotkit-gateway/Cargo.toml` | Add tokio-stream dependency, enable tokio sync feature |
 | Modify | `iotkit-polling-adapter-runtime/src/lib.rs` | Add ShutdownHandle, AdapterParts, into_parts() |
 | Modify | `bravepi-mainboard-adapter/src/task/handle.rs` | Add ShutdownHandle, AdapterParts, into_parts() |
 
@@ -34,12 +34,12 @@
 Add to the existing `#[cfg(test)] mod tests` block in `iotkit-polling-adapter-runtime/src/lib.rs`:
 
 ```rust
-#[test]
-fn into_parts_preserves_id() {
-    // Cannot call start() without runtime+bus, so test the type structure
-    // by constructing an AdapterHandle directly in test.
+#[tokio::test]
+async fn into_parts_preserves_id_and_channels() {
+    use iotkit_core_types::SensorType;
+
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(1);
-    let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(1);
+    let (command_tx, mut command_rx) = mpsc::channel::<AdapterCommand>(1);
     let handle = AdapterHandle {
         id: AdapterId::new("test:into-parts"),
         event_rx,
@@ -47,18 +47,37 @@ fn into_parts_preserves_id() {
         task_handle: None,
     };
     let parts = handle.into_parts();
+
+    // ID preserved
     assert_eq!(parts.id.as_str(), "test:into-parts");
-    // Verify event_rx is functional
-    drop(event_tx);
-    // Verify shutdown handle exists
-    drop(parts.shutdown);
-    drop(command_rx);
+
+    // event_rx works: send an event, receive it from parts.event_rx
+    let mut event_rx = parts.event_rx;
+    event_tx
+        .send(AdapterEvent::SensorData {
+            device_key: iotkit_core_types::DeviceKey::new("test:0"),
+            reading: SensorReading::empty(SensorType::Temperature),
+            rssi: None,
+            battery_pct: None,
+        })
+        .await
+        .unwrap();
+    let received = event_rx.recv().await;
+    assert!(received.is_some(), "event_rx should receive the sent event");
+
+    // ShutdownHandle sends Shutdown command via command_tx
+    parts.shutdown.shutdown().await.ok();
+    let cmd = command_rx.recv().await;
+    assert!(
+        matches!(cmd, Some(AdapterCommand::Shutdown)),
+        "shutdown should send Shutdown command"
+    );
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p iotkit-polling-adapter-runtime into_parts_preserves_id`
+Run: `cargo test -p iotkit-polling-adapter-runtime into_parts_preserves_id_and_channels`
 Expected: FAIL — `into_parts` method not found, `AdapterParts` / `ShutdownHandle` not defined
 
 - [ ] **Step 3: Implement ShutdownHandle, AdapterParts, into_parts()**
@@ -115,7 +134,7 @@ impl AdapterHandle {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p iotkit-polling-adapter-runtime into_parts_preserves_id`
+Run: `cargo test -p iotkit-polling-adapter-runtime into_parts_preserves_id_and_channels`
 Expected: PASS
 
 - [ ] **Step 5: Run full crate tests to verify no regression**
@@ -143,10 +162,12 @@ git commit -m "feat(polling-adapter-runtime): add into_parts() and ShutdownHandl
 Add to the existing `#[cfg(test)] mod tests` block in `bravepi-mainboard-adapter/src/task/handle.rs`:
 
 ```rust
-#[test]
-fn into_parts_preserves_id() {
-    let (_event_tx, event_rx) = mpsc::channel::<AdapterEvent>(1);
-    let (command_tx, _command_rx) = mpsc::channel::<AdapterCommand>(1);
+#[tokio::test]
+async fn into_parts_preserves_id_and_channels() {
+    use iotkit_core_types::{DeviceKey, SensorReading, SensorType};
+
+    let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(1);
+    let (command_tx, mut command_rx) = mpsc::channel::<AdapterCommand>(1);
     let handle = AdapterHandle {
         id: AdapterId::new("test:into-parts"),
         event_rx,
@@ -155,14 +176,37 @@ fn into_parts_preserves_id() {
         event_loop_handle: None,
     };
     let parts = handle.into_parts();
+
+    // ID preserved
     assert_eq!(parts.id.as_str(), "test:into-parts");
-    drop(parts.shutdown);
+
+    // event_rx works
+    let mut event_rx = parts.event_rx;
+    event_tx
+        .send(AdapterEvent::SensorData {
+            device_key: DeviceKey::new("test:0"),
+            reading: SensorReading::empty(SensorType::Temperature),
+            rssi: None,
+            battery_pct: None,
+        })
+        .await
+        .unwrap();
+    let received = event_rx.recv().await;
+    assert!(received.is_some(), "event_rx should receive the sent event");
+
+    // ShutdownHandle sends Shutdown command
+    parts.shutdown.shutdown().await.ok();
+    let cmd = command_rx.recv().await;
+    assert!(
+        matches!(cmd, Some(AdapterCommand::Shutdown)),
+        "shutdown should send Shutdown command"
+    );
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p bravepi-mainboard-adapter into_parts_preserves_id`
+Run: `cargo test -p bravepi-mainboard-adapter into_parts_preserves_id_and_channels`
 Expected: FAIL — `into_parts` method not found, `AdapterParts` / `ShutdownHandle` not defined
 
 - [ ] **Step 3: Implement ShutdownHandle, AdapterParts, into_parts()**
@@ -232,7 +276,7 @@ pub use handle::{start, AdapterHandle, AdapterParts, ShutdownHandle};
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p bravepi-mainboard-adapter into_parts_preserves_id`
+Run: `cargo test -p bravepi-mainboard-adapter into_parts_preserves_id_and_channels`
 Expected: PASS
 
 - [ ] **Step 6: Run full crate tests**
@@ -254,14 +298,18 @@ git commit -m "feat(bravepi-mainboard-adapter): add into_parts() and ShutdownHan
 **Files:**
 - Create: `iotkit-gateway/src/adapter_host.rs`
 - Modify: `iotkit-gateway/Cargo.toml`
+- Modify: `iotkit-gateway/src/main.rs` (add module declaration)
 
 - [ ] **Step 1: Add tokio-stream dependency**
 
-Add to `iotkit-gateway/Cargo.toml` under `[dependencies]`:
+Update `iotkit-gateway/Cargo.toml` `[dependencies]`:
 
 ```toml
-tokio-stream = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 ```
+
+The `sync` feature on tokio is needed for `mpsc` in adapter_host. The `sync` feature on tokio-stream is needed for `ReceiverStream`.
 
 - [ ] **Step 2: Write failing tests**
 
@@ -460,12 +508,22 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 3: Add module declaration to main.rs**
+
+Add at the top of `iotkit-gateway/src/main.rs` (before the existing `use` statements):
+
+```rust
+mod adapter_host;
+```
+
+This is needed BEFORE running tests so that the test file is actually compiled.
+
+- [ ] **Step 4: Run tests to verify they fail**
 
 Run: `cargo test -p iotkit-gateway`
-Expected: FAIL — `AdapterHost`, `AdapterHostEvent`, etc. not defined
+Expected: FAIL — `AdapterHost`, `AdapterHostEvent`, etc. not defined (the module exists but types are not yet implemented)
 
-- [ ] **Step 4: Implement AdapterHost**
+- [ ] **Step 5: Implement AdapterHost**
 
 Add the implementation above the `#[cfg(test)]` block in `adapter_host.rs`:
 
@@ -538,22 +596,21 @@ impl AdapterHost {
 
     /// Shut down all adapters in reverse registration order.
     ///
-    /// For each adapter: removes the stream (closing the receiver), then
-    /// invokes the shutdown closure. Errors are logged, not propagated.
+    /// For each adapter: removes its stream (closing the receiver), then
+    /// invokes its shutdown closure, before moving to the next adapter.
+    /// Errors are logged, not propagated.
     pub async fn shutdown_all(&mut self) {
-        // Reverse order
-        let ids: Vec<AdapterId> = self.adapters.iter().rev().map(|a| a.id.clone()).collect();
-        for id in &ids {
+        // Per-adapter: remove stream then shutdown, in reverse order.
+        for adapter in self.adapters.iter_mut().rev() {
             // Remove stream → drops ReceiverStream → closes receiver
-            self.streams.remove(id);
-        }
-        // Call shutdown closures in reverse order
-        for id in &ids {
-            if let Some(adapter) = self.adapters.iter_mut().find(|a| &a.id == id) {
-                if let Some(shutdown_fn) = adapter.shutdown_fn.take() {
-                    if let Err(e) = shutdown_fn().await {
-                        tracing::error!(adapter = %id, error = %e, "Adapter shutdown error");
-                    }
+            self.streams.remove(&adapter.id);
+            // Invoke shutdown closure (Shutdown cmd → task/thread join)
+            if let Some(shutdown_fn) = adapter.shutdown_fn.take() {
+                if let Err(e) = shutdown_fn().await {
+                    tracing::error!(
+                        adapter = %adapter.id, error = %e,
+                        "Adapter shutdown error"
+                    );
                 }
             }
         }
@@ -595,14 +652,6 @@ impl Stream for WrappedStream {
         }
     }
 }
-```
-
-- [ ] **Step 5: Add module declaration to main.rs**
-
-Add at the top of `iotkit-gateway/src/main.rs`:
-
-```rust
-mod adapter_host;
 ```
 
 - [ ] **Step 6: Run tests to verify they pass**
