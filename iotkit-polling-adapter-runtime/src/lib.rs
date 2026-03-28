@@ -24,8 +24,18 @@ use iotkit_core_types::{
 /// reuse after a panic — avoid interior mutable state that could be left in an
 /// inconsistent state. Stateless drivers (the common case) satisfy this trivially.
 pub trait SensorDriver: Send + Sync {
+    /// Probe the sensor at the given I2C address. Returns identity on success.
+    ///
+    /// Error strings **must** include the bus path and address for field debugging,
+    /// e.g. `format!("MCP9600 0x{:02x}@{}: read failed: {}", address, bus_path, e)`.
     fn probe(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String>;
+
+    /// Read the sensor at the given I2C address. Returns a reading on success.
+    ///
+    /// Error strings **must** include the bus path and address for field debugging.
     fn read(&self, bus_path: &str, address: u8) -> Result<SensorReading, String>;
+
+    /// Return the IC part name (e.g. "opt3001", "mcp9600").
     fn ic_name(&self) -> &'static str;
     fn validate(&self, poll_interval_ms: u64) -> Result<(), String> {
         let _ = poll_interval_ms;
