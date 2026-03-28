@@ -313,6 +313,9 @@ fn parse_config_arg<'a>(args: &'a [String]) -> Result<Option<&'a str>, ConfigErr
 }
 
 #[cfg(test)]
+// SAFETY: Tests in this module mutate process-global state (env vars, cwd).
+// They MUST be run with `--test-threads=1` to avoid data races.
+// CI: `cargo test -p iotkit-gateway -- --test-threads=1`
 mod tests {
     use super::*;
 

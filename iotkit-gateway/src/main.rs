@@ -28,12 +28,15 @@ fn main() {
     tracing::info!(
         db_path = %config.db_path,
         bravepi_enabled = config.bravepi.is_some(),
-        bravepi_port = config.bravepi.as_ref().map(|b| b.port.as_str()).unwrap_or("N/A"),
         rpi_local_enabled = config.rpi_local.is_some(),
-        rpi_local_bus_path = config.rpi_local.as_ref().map(|r| r.bus_path.as_str()).unwrap_or("N/A"),
-        rpi_local_poll_interval_ms = config.rpi_local.as_ref().map(|r| r.poll_interval_ms).unwrap_or(0),
         "effective config"
     );
+    if let Some(bp) = &config.bravepi {
+        tracing::info!(port = %bp.port, "bravepi config");
+    }
+    if let Some(rpi) = &config.rpi_local {
+        tracing::info!(bus_path = %rpi.bus_path, poll_interval_ms = rpi.poll_interval_ms, "rpi_local config");
+    }
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     rt.block_on(run(config));
@@ -84,7 +87,7 @@ async fn run(config: config::GatewayConfig) {
         };
         // Preflight: catch driver-level validation before spawning background tasks
         if let Err(e) = rpi_local_adapter::validate(&adapter_config) {
-            tracing::error!(error = %e, "RPi local adapter config validation failed");
+            tracing::error!(error = %e, bus_path = %rpi.bus_path, "RPi local adapter config validation failed");
             std::process::exit(1);
         }
         match rpi_local_adapter::start(adapter_config) {
