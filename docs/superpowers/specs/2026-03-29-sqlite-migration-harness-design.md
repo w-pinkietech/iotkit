@@ -349,11 +349,9 @@ Unit tests in `core/storage`:
 5. **with_conn async works** — `#[tokio::test]`, simple query through `with_conn`
 6. **with_conn_sync works** — simple query through `with_conn_sync`
 7. **PRAGMA verification** — file-backed tempfile DB, verify `journal_mode = wal`, `synchronous = 2` (FULL), `foreign_keys = 1` after `init_db`
-8. **with_conn async works** — `#[tokio::test]`, simple query through `with_conn`
-9. **with_conn_sync works** — simple query through `with_conn_sync`
-10. **MIGRATIONS array invariants** — versions are unique, strictly increasing, and contiguous starting at 1
-11. **Same-handle same-thread reentry panics** — `with_conn_sync` nested inside `with_conn_sync` on the same handle triggers panic, not deadlock (`#[should_panic]`)
-12. **Cross-thread sync contention waits** — two threads calling `with_conn_sync` on the same handle both succeed (one waits, both return correct results)
-13. **Concurrent async contention succeeds** — `#[tokio::test]`, two concurrent `with_conn` calls on the same handle both succeed with serialized execution
+8. **MIGRATIONS array invariants** — versions are unique, strictly increasing, and contiguous starting at 1
+9. **Same-handle same-thread reentry panics** — `with_conn_sync` nested inside `with_conn_sync` on the same handle triggers panic, not deadlock (`#[should_panic]`)
+10. **Cross-thread sync contention waits** — two threads calling `with_conn_sync` on the same handle both succeed (one waits, both return correct results)
+11. **Concurrent async contention succeeds** — `#[tokio::test]`, two concurrent `with_conn` calls on the same handle both succeed with serialized execution
 
 No gateway-level integration test in #21 — storage is tested at the crate level. Gateway integration (config → init_db → adapters) is validated when #22/#23 add actual DB consumers.
