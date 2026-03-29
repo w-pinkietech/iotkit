@@ -109,12 +109,35 @@ fn main() {
         let parts = handle.into_parts();
 
         // Start runner in a background task (blocks until event_rx closes)
-        let runner_handle = tokio::spawn(
+        let mut runner_handle = tokio::spawn(
             iotkit_adapter_runner::run(adapter_id, mqtt_config, parts.event_rx),
         );
 
-        // Wait for shutdown signal
-        wait_for_shutdown_signal().await;
+        // Wait for shutdown signal or early runner exit (fail-fast)
+        tokio::select! {
+            _ = wait_for_shutdown_signal() => {
+                tracing::info!("shutdown signal received");
+            }
+            result = &mut runner_handle => {
+                match result {
+                    Ok(Ok(())) => tracing::info!("runner exited normally"),
+                    Ok(Err(e)) => {
+                        tracing::error!(error = %e, "adapter runner failed");
+                        if let Err(e) = parts.shutdown.shutdown().await {
+                            tracing::warn!(error = %e, "adapter shutdown error");
+                        }
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "runner task panicked");
+                        std::process::exit(1);
+                    }
+                }
+                // Runner already exited, skip normal shutdown sequence
+                tracing::info!("shutdown complete");
+                return;
+            }
+        }
 
         // 1. Shutdown adapter first (stops producing events, closes event_rx)
         if let Err(e) = parts.shutdown.shutdown().await {

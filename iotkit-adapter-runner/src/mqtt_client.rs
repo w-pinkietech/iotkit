@@ -12,9 +12,8 @@ pub(crate) fn connect(
 ) -> Result<(AsyncClient, EventLoop), RunnerError> {
     let client_id = config.client_id.clone().unwrap_or_else(|| {
         format!(
-            "iotkit-{}-{}",
-            adapter_id.as_str().replace(':', "-"),
-            &uuid_short()
+            "iotkit-{}",
+            adapter_id.as_str().replace(':', "-").replace('/', "-")
         )
     });
 
@@ -117,15 +116,6 @@ fn parse_broker_url(broker_url: &str) -> Result<(String, u16), RunnerError> {
     let port = parsed.port().unwrap_or(default_port);
 
     Ok((host, port))
-}
-
-fn uuid_short() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{:08x}", (n & 0xFFFF_FFFF) as u32)
 }
 
 #[cfg(test)]

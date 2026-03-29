@@ -153,10 +153,11 @@ pub async fn run(
         .await;
     let _ = client.disconnect().await;
 
-    // Give eventloop time to flush the outgoing queue
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // Abort eventloop task
+    // Grace period for eventloop to flush offline status and disconnect.
+    // rumqttc's eventloop has no clean stop mechanism, so we abort after a
+    // generous timeout. 2 seconds is sufficient for local brokers; remote
+    // brokers over slow networks may not fully drain, which is acceptable for v1.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     eventloop_handle.abort();
 
     Ok(())

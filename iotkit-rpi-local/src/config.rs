@@ -33,7 +33,7 @@ pub enum TargetToml {
     #[serde(rename = "mcp9600")]
     Mcp9600 {
         address: u8,
-        thermocouple_type: Option<String>,
+        thermocouple_type: String,
     },
     #[serde(rename = "opt3001")]
     Opt3001 { address: u8 },
@@ -69,10 +69,10 @@ impl StandaloneConfig {
         if self.adapter.targets.is_empty() {
             return Err("adapter.targets must not be empty".into());
         }
-        // Validate thermocouple types (Codex fix #7)
+        // Validate thermocouple types
         for target in &self.adapter.targets {
             if let TargetToml::Mcp9600 {
-                thermocouple_type: Some(tc),
+                thermocouple_type: tc,
                 ..
             } = target
             {
@@ -103,10 +103,7 @@ impl StandaloneConfig {
                     address,
                     thermocouple_type,
                 } => {
-                    let tc = match thermocouple_type.as_deref() {
-                        Some(s) => parse_thermocouple_type(s)?,
-                        None => ThermocoupleType::K, // default
-                    };
+                    let tc = parse_thermocouple_type(thermocouple_type)?;
                     Ok(RpiLocalTarget::MCP9600 {
                         address: *address,
                         thermocouple_type: tc,
@@ -265,7 +262,7 @@ thermocouple_type = "X"
     }
 
     #[test]
-    fn to_rpi_local_config_default_thermocouple() {
+    fn mcp9600_missing_thermocouple_type_rejected() {
         let toml_str = r#"
 adapter_id = "test"
 [mqtt]
@@ -277,16 +274,9 @@ poll_interval_ms = 1000
 driver = "mcp9600"
 address = 96
 "#;
-        let config: StandaloneConfig = toml::from_str(toml_str).unwrap();
-        let rpi_config = config.to_rpi_local_config().unwrap();
-        match &rpi_config.targets[0] {
-            RpiLocalTarget::MCP9600 {
-                thermocouple_type, ..
-            } => {
-                assert_eq!(*thermocouple_type, ThermocoupleType::K);
-            }
-            _ => panic!("expected MCP9600"),
-        }
+        // Missing thermocouple_type should fail at deserialization
+        let result: Result<StandaloneConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "mcp9600 without thermocouple_type should be rejected");
     }
 
     #[test]
