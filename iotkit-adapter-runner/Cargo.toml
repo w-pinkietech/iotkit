@@ -1,0 +1,12 @@
+[package]
+name = "iotkit-adapter-runner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iotkit-core-types = { path = "../core/types" }
+iotkit-core-mqtt-contract = { path = "../core/mqtt-contract" }
+rumqttc = "0.24"
+tokio = { version = "1", features = ["rt", "sync", "signal", "macros", "time"] }
+tracing = "0.1"
+rand = "0.8"
