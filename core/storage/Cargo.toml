@@ -1,0 +1,16 @@
+[package]
+name = "iotkit-core-storage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["rt"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+tempfile = "3"
+
+[features]
+test-util = []

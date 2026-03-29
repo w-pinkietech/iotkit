@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
 iotkit-core-engine = { path = "../core/engine" }
+iotkit-core-storage = { path = "../core/storage" }
 bravepi-mainboard-adapter = { path = "../bravepi-mainboard-adapter" }
 rpi-local-adapter = { path = "../rpi-local-adapter" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }

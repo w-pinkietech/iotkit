@@ -38,11 +38,20 @@ fn main() {
         tracing::info!(bus_path = %rpi.bus_path, poll_interval_ms = rpi.poll_interval_ms, "rpi_local config");
     }
 
+    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path)) {
+        Ok(handle) => handle,
+        Err(e) => {
+            tracing::error!(error = %e, db_path = %config.db_path, "failed to initialize database");
+            std::process::exit(1);
+        }
+    };
+    tracing::info!(db_path = %config.db_path, "database initialized");
+
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(run(config));
+    rt.block_on(run(config, db));
 }
 
-async fn run(config: config::GatewayConfig) {
+async fn run(config: config::GatewayConfig, _db: iotkit_core_storage::DbHandle) {
     let engine = Engine::new();
     let mut host = AdapterHost::new();
 
