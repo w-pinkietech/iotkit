@@ -69,8 +69,8 @@ iotkit/v1/{adapter_id}/inventory/{device_key}  # per-device discovery (retained)
 }
 ```
 
-- `v`: envelope version。将来の互換性のため。consumer は未知の `v` を無視する。
-- `ts`: envelope 生成時刻 (unix ms)。telemetry の `ingested_at` とは別。
+- `v`: envelope version。将来の互換性のため。consumer は未知の `v` を `DecodeError` として reject する。
+- `ts`: envelope 生成時刻 (unix ms, non-negative)。telemetry の `ingested_at` とは別。decode 時に負値は `DecodeError` として reject する。
 
 #### Telemetry
 
@@ -210,54 +210,108 @@ Dependencies: `core/types`, `serde`, `serde_json`.
 
 ## 2. Standalone Adapter Runner (iotkit-adapter-runner)
 
-### Responsibilities
+### Runner State Machine
 
-1. MQTT client lifecycle: connect, reconnect (exponential backoff 1s→30s, jitter), keepalive
-2. LWT 設定: broker 接続時に offline status を LWT として登録
-3. 起動時に online status publish (retained, QoS 1)
-4. event_rx → mqtt-contract::encode_event → MQTT publish (QoS 1)
-5. DeviceDiscovered → inventory topic に retained publish。DeviceLost → inventory topic の retained message を削除（empty retained publish）
-6. MQTT reconnect 時: 全 active device の discovery を inventory topic に再 publish
-7. Signal handling: SIGTERM/SIGINT → offline status publish → MQTT disconnect → process exit
-8. Connection loss handling: reconnect loop、再接続中は event を drop して warn! ログ
+```dot
+digraph RunnerLifecycle {
+  rankdir=LR;
+  node [shape=box fontname="monospace"];
+  edge [fontname="monospace" fontsize=10];
 
-### Concurrency Model
+  start [shape=circle label="start"];
+  validating [label="ValidatingConfig\nparse URL (structured parser)\nvalidate explicit --config\nvalidate TLS cross-fields\nderive stable client_id"];
+  starting [label="Starting\nspawn adapter\nspawn publisher\nspawn eventloop\ninstall task supervision"];
+  reconnecting [label="Reconnecting\nkeep desired_inventory\nkeep pending_retained_ops\nbuffer outbound events (bounded 1000)\ndo NOT retire ops on enqueue"];
+  online [label="Online\nentered ONLY on ConnAck\nentry actions:\n1. publish retained online=true\n2. reconcile retained inventory\n3. replay pending tombstones\n4. replay buffered telemetry (fair)"];
+  shutdown [label="Shutdown\n1. stop adapter (producer停止)\n2. drain pending ops (timeout 2s)\n3. publish retained online=false\n4. grace eventloop (2s)\n5. disconnect"];
+  exit_ok [shape=doublecircle label="Exit 0"];
+  exit_fail [shape=doublecircle label="Exit != 0"];
 
-rumqttc は `AsyncClient` (publish 用) と `EventLoop` (MQTT protocol pump) の 2つを返す。EventLoop は定期的に poll しないと keepalive や PUBACK が処理されない。
+  start -> validating;
+  validating -> exit_fail [label="invalid config"];
+  validating -> starting [label="ok"];
+  starting -> exit_fail [label="adapter/task spawn fail"];
+  starting -> reconnecting [label="tasks running\n(initial state before first ConnAck)"];
+  reconnecting -> reconnecting [label="AdapterEvent →\nupdate desired_inventory +\nbuffer telemetry"];
+  reconnecting -> online [label="ConnAck"];
+  online -> online [label="AdapterEvent →\nupdate desired_inventory +\npublish immediately"];
+  online -> reconnecting [label="session lost"];
+  online -> shutdown [label="SIGINT | SIGTERM |\ncritical task exit"];
+  reconnecting -> shutdown [label="SIGINT | SIGTERM |\ncritical task exit"];
+  shutdown -> exit_ok [label="signal + drain ok"];
+  shutdown -> exit_fail [label="critical failure |\ndrain timeout"];
+}
+```
+
+### Local State Model
+
+Runner は以下の3つの独立した状態を管理する:
+
+| State | 内容 | Disconnect 時 | ConnAck 時 |
+|-------|------|-------------|-----------|
+| `desired_inventory` | 現在 active な device の最新 discovery payload | 保持。DeviceDiscovered/DeviceLost で更新し続ける | 全件 retained publish で broker と reconcile |
+| `pending_retained_ops` | broker に送達確認できていない retained upsert/tombstone | 保持。enqueue 成功では retire しない | 全件再送。session が変わったので前回の enqueue は無効 |
+| `outbound_buffer` | telemetry/error の bounded deque (1000件) | buffer に追加。溢れたら oldest drop (warn!) | fair replay: 10件 flush → yield → 10件 flush... |
+
+**重要:** `AsyncClient::publish().await` の Ok は「rumqttc 内部キューに入った」を意味し、「broker に届いた」ではない。したがって `pending_retained_ops` からの retire は ConnAck 後の reconcile 成功時のみ。
+
+### Event Classes and Disconnect Policy
+
+| Event class | 例 | Disconnect 時 | 理由 |
+|-------------|---|-------------|------|
+| Retained state ops | inventory upsert, tombstone, status | **MUST NOT drop。** desired_inventory + pending_retained_ops に記録 | broker 上の retained message と整合を取る必要がある |
+| Lossy telemetry | SensorData, AdapterError | bounded buffer (1000件)。溢れたら oldest drop | 古い telemetry より最新値の方が価値が高い |
+
+### Shutdown Sequence (ordered)
 
 ```
-tokio::spawn(mqtt_eventloop_task)  ← EventLoop.poll() を無限ループ
-tokio::spawn(publish_task)         ← event_rx → encode → client.publish()
-main task: tokio::signal::ctrl_c() を待機
+1. Stop adapter (producer 停止 → event_rx close)
+2. Drain: publish_task が残りの outbound_buffer + pending_retained_ops を送信 (timeout 2s)
+3. Publish retained online=false (with real timestamp, NOT ts=0)
+4. Grace period: eventloop に 2s の flush 時間を与える
+5. Disconnect → eventloop abort
+6. Exit code: signal 起因 = 0, critical failure 起因 = non-zero
 ```
 
-**publish_task と mqtt_eventloop_task は独立した tokio task として実行する。** `tokio::select!` で 1つの task に混ぜない。これにより:
-- telemetry の burst が eventloop の poll を starve しない
-- eventloop の処理遅延が event_rx の drain を block しない
-- signal handling は main task で独立して動く
+**LWT (Last Will) の `online=false` は `ts=0`**（設定時刻不明）。graceful shutdown の `online=false` は `now_ms()`。subscriber はこの差で crash vs clean shutdown を区別可能。
 
-reconnect は eventloop task 内で処理。publish_task は `client.publish()` が Err を返したら warn! + drop。
+### Task Supervision
+
+```
+main task: signal 待ち + runner_handle + adapter 監視
+  ├── tokio::spawn(eventloop_task)  ← EventLoop.poll() 無限ループ
+  └── tokio::spawn(publish_task)    ← event_rx → encode → publish
+```
+
+**Critical task exit:** eventloop_task または publish_task が予期せず終了した場合、main は即座に Shutdown に遷移し、exit non-zero。main は `tokio::select!` で signal, runner_handle の両方を監視する。
+
+**publish_task と eventloop_task は独立 tokio task。** `select!` で混ぜない。starvation 防止。
 
 ### Config
 
 ```rust
 pub struct MqttConfig {
-    pub broker_url: String,         // mqtt:// or mqtts://
-    pub client_id: Option<String>,  // auto-generated if None: "iotkit-{adapter_id}-{random}"
-    pub keepalive_secs: u32,        // default: 30
+    pub broker_url: String,         // mqtt:// or mqtts://、url crate で parse
+    pub client_id: Option<String>,  // None → "iotkit-<percent_encoded(adapter_id)>"（deterministic, reversible）
+    pub keepalive_secs: Option<u32>, // default: 30
     pub ca_path: Option<PathBuf>,   // TLS CA cert
-    pub client_cert_path: Option<PathBuf>,  // mTLS client cert
-    pub client_key_path: Option<PathBuf>,   // mTLS client key
+    pub client_cert_path: Option<PathBuf>,  // mTLS client cert (client_key_path と同時必須)
+    pub client_key_path: Option<PathBuf>,   // mTLS client key (client_cert_path と同時必須)
 }
 ```
+
+### Config Validation Rules (cross-field)
+
+- `broker_url`: `url` crate で parse。`mqtt://` or `mqtts://` のみ。IPv6 bracket notation 対応。
+- `mqtt://` + TLS 設定 (ca_path, client_cert_path, client_key_path) → **error。** TLS は `mqtts://` 必須。
+- `mqtts://` + ca_path なし → **error。**
+- `client_cert_path` と `client_key_path` は同時に設定するか、両方なし。片方だけ → **error。**
+- `client_id` 省略 → `iotkit-<percent_encoded(adapter_id)>`。deterministic、reversible、restart-stable。
+- IPv6 host: `Url::host_str()` の bracket を strip してから rumqttc に渡す（rustls が bracket を reject するため）。
 
 ### Public API
 
 ```rust
-// iotkit-adapter-runner/src/lib.rs
-
-/// Run the adapter event loop: receive events, publish to MQTT
-/// Blocks until signal received or fatal error.
 pub async fn run(
     adapter_id: AdapterId,
     mqtt_config: MqttConfig,
@@ -265,22 +319,31 @@ pub async fn run(
 ) -> Result<(), RunnerError>;
 ```
 
-Dependencies: `core/mqtt-contract`, `core/types`, `rumqttc`, `tokio`, `tracing`.
+Dependencies: `core/mqtt-contract`, `core/types`, `rumqttc`, `url`, `tokio`, `tracing`.
 
 ### Design Decisions
 
-**なぜ event drop on disconnect か:** adapter は sensor polling を止めない（データは engine の live state にも使われうる）。MQTT が切れている間の event をバッファすると OOM リスクがある。RPi Zero 2W (512MB) で 10 sensors × 1Hz × 30s disconnect = 300 events ≈ 60KB なので小さいが、長時間 disconnect では危険。Drop + warn! が最も安全。将来のバージョンで bounded buffer (1000 events) を追加可能。
+**なぜ bounded buffer (1000件) か:** RPi Zero 2W (512MB) で 10 sensors × 1Hz × 1000件 = 100s分 ≈ 200KB。OOM リスクなし。unbounded は長時間 disconnect で危険。local disk buffer は SD カード寿命に影響。
 
-**Rejected: local disk buffer:** ファイルへの書き出しは I/O 負荷が増え、RPi Zero 2W の SD カード寿命に影響する。MQTT QoS 1 + gateway の idempotent write で十分。
+**なぜ exponential backoff with jitter か:** 複数 adapter が同時に reconnect すると broker に thundering herd。jitter で分散。初回 1s、最大 30s、jitter ±30%。
 
-**なぜ exponential backoff with jitter か:** 複数 adapter が同時に reconnect すると broker に thundering herd が発生する。jitter で分散。初回 1s、最大 30s、jitter ±30%。
+**なぜ fair replay か:** reconnect 後にバッファを一気に flush すると、live event の処理が止まる。10件 flush → yield → 10件 flush で interleave。
 
-### Error Handling
+**Rejected: PUBACK tracking for retire:** rumqttc の PUBACK を個別メッセージに紐づけるのは複雑。v1 では ConnAck 単位の reconcile で十分。
 
-- MQTT connect failure → exponential backoff retry、tracing::warn!
-- MQTT publish failure → warn! + drop event (QoS 1 なので rumqttc が内部 retry するが、persistent failure は drop)
-- TLS cert load failure → 起動時に即 error exit
-- event_rx closed (adapter crashed) → offline publish → exit
+### Required Automated Tests
+
+- adapter task exit → runner が Shutdown に遷移し exit non-zero
+- disconnect 中の DeviceDiscovered → desired_inventory に記録 → ConnAck 後に retained publish
+- disconnect 中の DeviceLost → tombstone 記録 → ConnAck 後に empty retained publish
+- ConnAck → 全 inventory republish
+- graceful shutdown → adapter 停止 → drain → offline publish → exit 0
+- explicit --config bad path → error exit
+- half-configured TLS (cert without key) → error exit
+- TLS settings on mqtt:// → error exit
+- IPv6 broker URL → host bracket strip
+- deterministic client_id → percent_encoded(adapter_id)
+- negative timestamp in envelope → DecodeError
 
 ## 3. rpi-local Standalone Binary (iotkit-rpi-local)
 
@@ -335,10 +398,18 @@ fn main() {
 ### Config Validation
 
 - `adapter_id`: non-empty
-- `mqtt.broker_url`: non-empty, starts with `mqtt://` or `mqtts://`
-- `mqtt.keepalive_secs`: > 0 (if specified)
-- `adapter.*`: delegated to `rpi_local_adapter::validate()`
-- TLS: if `mqtts://`, at least `ca_path` must be specified
+- `mqtt.*`: MqttConfig cross-field validation に委譲（Section 2 参照）
+- `adapter.*`: `rpi_local_adapter::validate()` に委譲
+- `adapter.targets[].thermocouple_type` (MCP9600): **必須フィールド**。省略は parse error。不正な値は validation error。サイレント K fallback 禁止。
+- `--config` パス: 明示指定の場合、ファイルが存在しなければ即 error exit。デフォルトパス (`./iotkit-rpi-local.toml` → `/etc/iotkit/iotkit-rpi-local.toml`) の fallback は `--config` 省略時のみ。
+
+### Exit Code Contract
+
+- Config validation failure → exit 1
+- Adapter start failure → exit 1
+- Runner early failure (MQTT connect 等) → exit 1（main が runner_handle を select! で監視）
+- Signal (SIGINT/SIGTERM) + clean shutdown → exit 0
+- Critical task unexpected exit → exit 1
 
 ### CLI
 
