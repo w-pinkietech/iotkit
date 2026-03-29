@@ -26,6 +26,13 @@ pub(crate) fn connect(
     );
     opts.set_keep_alive(keepalive);
 
+    // Validate mTLS: both cert and key must be provided, or neither
+    if config.client_cert_path.is_some() != config.client_key_path.is_some() {
+        return Err(RunnerError::Config(
+            "both client_cert_path and client_key_path must be set for mTLS, or neither".into(),
+        ));
+    }
+
     // TLS configuration
     if config.broker_url.starts_with("mqtts://") {
         let ca = config
@@ -133,5 +140,46 @@ mod tests {
     #[test]
     fn parse_invalid_url() {
         assert!(parse_host("http://localhost").is_err());
+    }
+
+    #[test]
+    fn half_configured_mtls_cert_only_rejected() {
+        let config = MqttConfig {
+            broker_url: "mqtt://localhost:1883".into(),
+            client_id: None,
+            keepalive_secs: None,
+            ca_path: None,
+            client_cert_path: Some("/tmp/cert.pem".into()),
+            client_key_path: None,
+        };
+        let adapter_id = iotkit_core_types::AdapterId::new("test");
+        match connect(&adapter_id, &config) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("client_cert_path"), "error = {msg}");
+                assert!(msg.contains("client_key_path"), "error = {msg}");
+            }
+            Ok(_) => panic!("expected error for half-configured mTLS"),
+        }
+    }
+
+    #[test]
+    fn half_configured_mtls_key_only_rejected() {
+        let config = MqttConfig {
+            broker_url: "mqtt://localhost:1883".into(),
+            client_id: None,
+            keepalive_secs: None,
+            ca_path: None,
+            client_cert_path: None,
+            client_key_path: Some("/tmp/key.pem".into()),
+        };
+        let adapter_id = iotkit_core_types::AdapterId::new("test");
+        match connect(&adapter_id, &config) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("client_cert_path"), "error = {msg}");
+            }
+            Ok(_) => panic!("expected error for half-configured mTLS"),
+        }
     }
 }

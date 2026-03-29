@@ -13,8 +13,8 @@ use tracing_subscriber::EnvFilter;
 )]
 struct Cli {
     /// Path to TOML config file
-    #[arg(short, long, default_value = "iotkit-rpi-local.toml")]
-    config: PathBuf,
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 }
 
 fn main() {
@@ -26,19 +26,24 @@ fn main() {
 
     let cli = Cli::parse();
 
-    // Resolve config path: only fall back to /etc/iotkit/ if the user did NOT
-    // explicitly pass --config (i.e., using the default value).
-    let is_default_config = cli.config == PathBuf::from("iotkit-rpi-local.toml");
-    let config_path = if cli.config.exists() {
-        cli.config
-    } else if is_default_config && PathBuf::from("/etc/iotkit/iotkit-rpi-local.toml").exists() {
-        PathBuf::from("/etc/iotkit/iotkit-rpi-local.toml")
-    } else {
-        if !is_default_config {
-            tracing::error!(path = %cli.config.display(), "explicit config file not found");
+    // Resolve config path: if explicitly provided via --config, use it as-is.
+    // Otherwise try ./iotkit-rpi-local.toml, then /etc/iotkit/iotkit-rpi-local.toml.
+    let config_path = if let Some(explicit) = cli.config {
+        if !explicit.exists() {
+            tracing::error!(path = %explicit.display(), "explicit config file not found");
             std::process::exit(1);
         }
-        cli.config // will produce a clear error in load()
+        explicit
+    } else {
+        let local = PathBuf::from("iotkit-rpi-local.toml");
+        let system = PathBuf::from("/etc/iotkit/iotkit-rpi-local.toml");
+        if local.exists() {
+            local
+        } else if system.exists() {
+            system
+        } else {
+            local // will produce a clear error in load()
+        }
     };
 
     let config = match config::StandaloneConfig::load(&config_path) {
