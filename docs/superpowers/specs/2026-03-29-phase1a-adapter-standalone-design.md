@@ -35,7 +35,7 @@ rpi-local-adapter を独立バイナリとしてパッケージングし、I2C �
 | Crate | Type | 責務 |
 |-------|------|------|
 | `core/mqtt-contract` | lib | MQTT topic schema + JSON envelope DTOs + AdapterEvent 変換 |
-| `iotkit-adapter-runner` | lib | 共通 edge runtime: MQTT client, LWT, signal handling, event publish loop |
+| `iotkit-adapter-runner` | lib | 共通 edge runtime: MQTT client, LWT, event publish loop (no signal handling — signals are the binary's responsibility) |
 | `iotkit-rpi-local` | bin | rpi-local-adapter を standalone 実行する composition root |
 
 依存関係: `iotkit-rpi-local` → `iotkit-adapter-runner` → `core/mqtt-contract` → `core/types`
@@ -87,7 +87,7 @@ The `encode_topic_segment` function (Section 1.8) implements this transformation
 | Raw value | Encoded |
 |---|---|
 | `bravepi:0` | `bravepi%3A0` |
-| `i2c/1/0x44` | `i2c%2F1%2F0x44` |
+| `i2c:0x44:sht31` | `i2c%3A0x44%3Asht31` |
 | `sensor+type` | `sensor%2Btype` |
 | `100%` | `100%25` |
 
@@ -112,12 +112,12 @@ Additional fields:
 | Field | JSON type | Nullable | Description |
 |---|---|---|---|
 | `device_key` | string | No | Opaque device identifier. Raw value. |
-| `sensor_type` | string | No | Sensor type string (e.g. `"SHT31"`, `"BME280"`). |
+| `sensor_type` | string | No | Sensor type string using `SensorType::as_db_str()` values (e.g. `"temperature"`, `"illuminance"`, `"differential_pressure"`). |
 | `ingested_at` | integer | No | Unix timestamp in milliseconds when the reading was ingested by the adapter. Must be >= 0. |
-| `values` | array of number | No | Sensor reading values. Same length as `labels`. |
-| `labels` | array of string | No | Names for each value in `values`. Same length as `values`. |
+| `values` | array of number | No | Sensor reading values (JSON numbers, decoded as `f64`). **Must** be the same length as `labels`; mismatch produces `DecodeError::InvalidPayload`. |
+| `labels` | array of string | No | Names for each value in `values`. **Must** be the same length as `values`; mismatch produces `DecodeError::InvalidPayload`. |
 | `rssi` | integer or null | Yes | Received signal strength in dBm, if available. |
-| `battery_pct` | number or null | Yes | Battery level as a percentage [0.0, 100.0], if available. |
+| `battery_pct` | integer or null | Yes | Battery level as a raw value in the range [0, 255] (`u8`), if available. Interpretation is device-specific. |
 
 **Complete JSON example:**
 
@@ -126,8 +126,8 @@ Additional fields:
   "v": 1,
   "adapter_id": "bravepi:0",
   "ts": 1743206400000,
-  "device_key": "i2c/1/0x44",
-  "sensor_type": "SHT31",
+  "device_key": "i2c:0x44:sht31",
+  "sensor_type": "temperature",
   "ingested_at": 1743206399850,
   "values": [23.4, 61.2],
   "labels": ["temperature_c", "humidity_pct"],
@@ -151,16 +151,16 @@ Additional fields:
 
 | Field | JSON type | Nullable | Description |
 |---|---|---|---|
-| `manufacturer` | string or null | Yes | Manufacturer name, if known. |
-| `ic_part_number` | string or null | Yes | IC part number or model identifier, if known. |
-| `sensor_type` | string | No | Sensor type string. |
+| `manufacturer` | string | No | Manufacturer name. Empty string `""` if unknown. Matches `SensorIdentity.manufacturer: String` (non-nullable). |
+| `ic_part_number` | string | No | IC part number or model identifier. Empty string `""` if unknown. Matches `SensorIdentity.ic_part_number: String` (non-nullable). |
+| `sensor_type` | string | No | Sensor type string using `SensorType::as_db_str()` values (e.g. `"temperature"`, `"illuminance"`). |
 | `connection` | object | No | Connection descriptor (see below). |
 
 `identity.connection` object fields:
 
 | Field | JSON type | Nullable | Description |
 |---|---|---|---|
-| `kind` | string | No | Connection kind identifier (e.g. `"i2c"`, `"spi"`, `"ble"`, `"serial"`). |
+| `kind` | string | No | Connection kind identifier using `ConnectionKind::as_str()` values: `"i2c"`, `"uart"`, `"gpio"`, `"modbus"`, or a custom string for `Other(s)`. |
 | `parameters` | object | No | Freeform key-value map of connection parameters specific to `kind`. String values only. An empty object `{}` is valid. |
 
 **Complete JSON example:**
@@ -170,11 +170,11 @@ Additional fields:
   "v": 1,
   "adapter_id": "bravepi:0",
   "ts": 1743206400000,
-  "device_key": "i2c/1/0x44",
+  "device_key": "i2c:0x44:sht31",
   "identity": {
     "manufacturer": "Sensirion",
     "ic_part_number": "SHT31-DIS",
-    "sensor_type": "SHT31",
+    "sensor_type": "temperature",
     "connection": {
       "kind": "i2c",
       "parameters": {
@@ -204,7 +204,7 @@ Additional fields:
   "v": 1,
   "adapter_id": "bravepi:0",
   "ts": 1743206500000,
-  "device_key": "i2c/1/0x44",
+  "device_key": "i2c:0x44:sht31",
   "reason": "timeout after 30s without response"
 }
 ```
@@ -227,7 +227,7 @@ Additional fields:
   "v": 1,
   "adapter_id": "bravepi:0",
   "ts": 1743206600000,
-  "device_key": "i2c/1/0x44",
+  "device_key": "i2c:0x44:sht31",
   "error": "CRC mismatch reading SHT31 measurement register"
 }
 ```
@@ -383,19 +383,21 @@ impl ConnectionKind {
     /// Returns the canonical lowercase string identifier for this variant.
     /// Used when serializing the `connection.kind` field in Discovery envelopes.
     ///
-    /// | Variant      | Return value |
-    /// |-------------|--------------|
-    /// | I2c         | `"i2c"`      |
-    /// | Spi         | `"spi"`      |
-    /// | Ble         | `"ble"`      |
-    /// | Serial      | `"serial"`   |
-    pub fn as_str(&self) -> &'static str;
+    /// | Variant      | Return value     |
+    /// |-------------|------------------|
+    /// | Uart        | `"uart"`         |
+    /// | I2c         | `"i2c"`          |
+    /// | Gpio        | `"gpio"`         |
+    /// | Modbus      | `"modbus"`       |
+    /// | Other(s)    | `s` (passthrough)|
+    pub fn as_str(&self) -> &str;
 
     /// Parse a `ConnectionKind` from its canonical string identifier.
-    /// Case-sensitive. Returns `None` for unrecognised strings.
+    /// Case-sensitive. Returns `Other(s.to_string())` for unrecognised strings
+    /// (never fails — unknown kinds are captured via `Other`).
     ///
-    /// This is the inverse of `as_str()`: `ConnectionKind::from_str(k.as_str()) == Some(k)`.
-    pub fn from_str(s: &str) -> Option<Self>;
+    /// Round-trip: `ConnectionKind::from_str(k.as_str()) == k` for all values.
+    pub fn from_str(s: &str) -> Self;
 }
 ```
 
@@ -447,7 +449,7 @@ pub fn topic(adapter_id: &AdapterId, event_type: EventType) -> String;
 /// Build the per-device inventory topic.
 ///
 /// Example: `inventory_topic(&adapter_id, &device_key)`
-///   -> `"iotkit/v1/bravepi%3A0/inventory/i2c%2F1%2F0x44"`
+///   -> `"iotkit/v1/bravepi%3A0/inventory/i2c%3A0x44%3Asht31"`
 pub fn inventory_topic(adapter_id: &AdapterId, device_key: &DeviceKey) -> String;
 
 /// Percent-encode a single topic segment value.
@@ -511,12 +513,16 @@ pub fn decode_event(
 
 /// Decode a status payload.
 ///
-/// Returns `(adapter_id, online)` on success.
-/// `ts = 0` is accepted (LWT sentinel). Other negative `ts` values are rejected.
+/// Returns `(adapter_id, online, ts)` on success.
+/// `ts` is the Unix timestamp in milliseconds. `ts = 0` is accepted (LWT sentinel).
+/// Other negative `ts` values are rejected.
+///
+/// The caller needs `ts` to distinguish LWT offline (ts=0) from graceful offline (ts>0)
+/// and to record when the adapter went online/offline.
 ///
 /// MUST be called for payloads received on the `.../status` topic.
 /// MUST NOT be used for other event types.
-pub fn decode_status(payload: &[u8]) -> Result<(AdapterId, bool), DecodeError>;
+pub fn decode_status(payload: &[u8]) -> Result<(AdapterId, bool, i64), DecodeError>;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -595,56 +601,123 @@ Keeping `mqtt-contract` free of transport and runtime dependencies means:
 
 ### 2.1 Runner State Machine
 
+The runner (`adapter_runner::run()`) does NOT own the adapter or handle signals. It receives `event_rx` and processes events until the channel closes. The **binary** (main.rs) owns the adapter `ShutdownHandle`, signal handlers, and the decision of when to shutdown.
+
+#### 2.1.1 Runner States (internal to `run()`)
+
 ```dot
 digraph runner_states {
     rankdir=TB;
     node [shape=box, style=rounded, fontname="monospace"];
     edge [fontname="monospace", fontsize=10];
 
-    ValidatingConfig [label="ValidatingConfig"];
-    Starting [label="Starting"];
-    Reconnecting [label="Reconnecting"];
-    Online [label="Online"];
-    Shutdown [label="Shutdown"];
-    ExitSuccess [label="Exit(0)", shape=doubleoctagon];
-    ExitFailure [label="Exit(1)", shape=doubleoctagon];
+    Connecting [label="Connecting\n(MQTT client init)"];
+    Reconnecting [label="Reconnecting\n(waiting for ConnAck)"];
+    Online [label="Online\n(publishing events)"];
+    Draining [label="Draining\n(event_rx closed,\nflushing buffer)"];
+    Done [label="Done", shape=doubleoctagon];
+    Failed [label="Failed", shape=doubleoctagon];
 
-    ValidatingConfig -> Starting [label="config valid\n/ create tokio runtime"];
-    ValidatingConfig -> ExitFailure [label="config invalid\n/ log error"];
+    Connecting -> Reconnecting [label="MQTT client created,\neventloop_task spawned\n/ enter event loop"];
+    Connecting -> Failed [label="MQTT client creation fails\n/ return Err"];
 
-    Starting -> Reconnecting [label="MQTT client created,\neventloop_task spawned,\nadapter started,\npublish_task spawned\n/ enter main select! loop"];
-    Starting -> ExitFailure [label="MQTT client creation fails\nOR adapter start fails\n/ log error"];
+    Reconnecting -> Online [label="ConnAck received\n/ connack_notify,\nconnected.store(true)"];
+    Reconnecting -> Draining [label="event_rx closed\n/ begin drain"];
+    Reconnecting -> Failed [label="eventloop_task exits\nunexpectedly\n/ return Err"];
 
-    Reconnecting -> Online [label="eventloop_task detects ConnAck\n/ connack_notify.notify_one(),\nconnected.store(true)"];
-    Reconnecting -> Shutdown [label="signal received\nOR task unexpected exit\nOR adapter crash\n/ set shutdown_initiated"];
-    Reconnecting -> ExitFailure [label="(via Shutdown)"];
+    Online -> Reconnecting [label="Disconnect detected\n/ connected.store(false)"];
+    Online -> Draining [label="event_rx closed\n/ begin drain"];
+    Online -> Failed [label="eventloop_task exits\nunexpectedly\n/ return Err"];
 
-    Online -> Reconnecting [label="eventloop_task detects Disconnect\n/ connected.store(false)"];
-    Online -> Shutdown [label="signal received\nOR task unexpected exit\nOR adapter crash\n/ set shutdown_initiated"];
-
-    Shutdown -> ExitSuccess [label="shutdown_initiated=true\nAND drain completes\nAND offline status published"];
-    Shutdown -> ExitFailure [label="drain timeout exceeded\nOR 2nd signal received\nOR task panic during shutdown"];
+    Draining -> Done [label="drain completes\n+ offline status published\n/ return Ok"];
+    Draining -> Done [label="drain timeout (2s)\n/ return Ok (best-effort)"];
 }
 ```
 
-#### Transition Table
+The runner NEVER initiates shutdown. The runner NEVER knows about signals. It simply processes events until `event_rx` closes, then drains its buffer and publishes offline status.
+
+#### 2.1.2 Binary States (main.rs lifecycle)
+
+```dot
+digraph binary_states {
+    rankdir=TB;
+    node [shape=box, style=rounded, fontname="monospace"];
+    edge [fontname="monospace", fontsize=10];
+
+    ValidatingConfig [label="ValidatingConfig"];
+    Starting [label="Starting\n(adapter + runner)"];
+    Running [label="Running\n(adapter producing,\nrunner consuming)"];
+    ShuttingDown [label="ShuttingDown\n(adapter stopping,\nwaiting for runner)"];
+    Exit0 [label="Exit(0)", shape=doubleoctagon];
+    Exit1 [label="Exit(1)", shape=doubleoctagon];
+
+    ValidatingConfig -> Starting [label="config valid"];
+    ValidatingConfig -> Exit1 [label="config invalid\n/ log error"];
+
+    Starting -> Running [label="adapter started\n+ runner spawned"];
+    Starting -> Exit1 [label="adapter start fails\nOR MQTT init fails\n/ log error"];
+
+    Running -> ShuttingDown [label="SIGINT/SIGTERM received\n/ call adapter.shutdown()"];
+    Running -> Exit1 [label="runner returns Err\n(MQTT fatal error)"];
+
+    ShuttingDown -> Exit0 [label="runner returns Ok\n(clean drain)"];
+    ShuttingDown -> Exit1 [label="adapter shutdown timeout (5s)\nOR 2nd signal\nOR runner returns Err"];
+}
+```
+
+#### 2.1.3 Ownership Boundary Summary
+
+| Component | Binary (main.rs) owns | Runner (`run()`) owns |
+|---|---|---|
+| Adapter ShutdownHandle | YES | NO |
+| Signal handlers (SIGINT/SIGTERM) | YES | NO |
+| Shutdown decision | YES | NO |
+| MQTT client lifecycle | NO | YES |
+| event_rx consumption | NO | YES |
+| Inventory tracking | NO | YES |
+| Buffer management | NO | YES |
+| Offline status publish | NO | YES (on drain) |
+
+#### 2.1.4 Shutdown Flow
+
+1. Binary catches SIGINT/SIGTERM.
+2. Binary calls `adapter_handle.shutdown().await` with a 5-second timeout. This stops the adapter producer and drops `event_tx`, causing `event_rx` to close.
+3. Runner detects `event_rx` closure (recv returns None) -> enters Draining state -> flushes buffer -> publishes offline status -> returns `Ok(())`.
+4. Binary checks runner result -> exit 0 on Ok, exit 1 on Err.
+5. If adapter shutdown hangs beyond 5 seconds, binary aborts and exits 1.
+6. If a 2nd signal arrives during shutdown, binary calls `std::process::exit(1)` immediately.
+
+#### Transition Table (Runner)
+
+| From | To | Trigger | Actions |
+|---|---|---|---|
+| Connecting | Reconnecting | MQTT client + eventloop created | Spawn eventloop_task, spawn publish_task, enter event loop |
+| Connecting | Failed | MQTT client creation fails | Return `Err(RunnerError::MqttInit(...))` |
+| Reconnecting | Online | ConnAck received by eventloop_task | `connack_notify.notify_one()`, `connected.store(true, Release)` |
+| Online | Reconnecting | Disconnect detected by eventloop_task | `connected.store(false, Release)` |
+| Reconnecting/Online | Draining | `event_rx` closes (recv returns None) | publish_task exits recv loop, begins drain |
+| Reconnecting/Online | Failed | eventloop_task exits unexpectedly | Return `Err(RunnerError::EventLoopDied)` |
+| Draining | Done | Drain completes + offline status published | Return `Ok(())` |
+| Draining | Done | Drain timeout (2s) exceeded | Return `Ok(())` (best-effort; LWT serves as fallback) |
+
+#### Transition Table (Binary)
 
 | From | To | Trigger | Actions |
 |---|---|---|---|
 | ValidatingConfig | Starting | Config valid | Create tokio runtime, construct MQTT client with LWT |
 | ValidatingConfig | Exit(1) | Config invalid | Log validation error |
-| Starting | Reconnecting | All init steps succeed | Spawn eventloop_task, start adapter, spawn publish_task, enter main select! loop |
+| Starting | Running | Adapter started + runner spawned | Enter signal wait loop |
 | Starting | Exit(1) | Any init step fails | Log error, exit |
-| Reconnecting | Online | ConnAck received by eventloop_task | `connack_notify.notify_one()`, `connected.store(true, Release)` |
-| Online | Reconnecting | Disconnect detected by eventloop_task | `connected.store(false, Release)` |
-| Reconnecting | Shutdown | Signal / task exit / adapter crash | Set `shutdown_initiated = true`, begin shutdown sequence |
-| Online | Shutdown | Signal / task exit / adapter crash | Set `shutdown_initiated = true`, begin shutdown sequence |
-| Shutdown | Exit(0) | Clean drain + offline status published | Process exits 0 |
-| Shutdown | Exit(1) | Drain timeout / 2nd signal / panic | Process exits 1 |
+| Running | ShuttingDown | 1st SIGINT/SIGTERM | Call `adapter_handle.shutdown()` with 5s timeout |
+| Running | Exit(1) | Runner returns Err (before signal) | Log error, exit |
+| ShuttingDown | Exit(0) | Runner returns Ok | Clean exit |
+| ShuttingDown | Exit(1) | Adapter shutdown timeout (5s) / 2nd signal / runner Err | Exit immediately |
 
 ### 2.2 Task Model and State Ownership
 
-Three tasks execute concurrently. Each task has **exclusive ownership** of its state. No `Mutex` or `RwLock` exists. Cross-task coordination uses only `Arc<AtomicBool>` and `Arc<Notify>`.
+The runner spawns two internal tasks. Each task has **exclusive ownership** of its state. No `Mutex` or `RwLock` exists. Cross-task coordination uses only `Arc<AtomicBool>` and `Arc<Notify>`.
+
+**Important:** The runner does NOT spawn signal handlers or own the adapter's ShutdownHandle. Signal handling and adapter lifecycle are the binary's responsibility (see Section 2.1.2).
 
 #### 2.2.1 eventloop_task (spawned tokio task)
 
@@ -662,24 +735,25 @@ Three tasks execute concurrently. Each task has **exclusive ownership** of its s
 - On `Event::Incoming(Packet::ConnAck(_))`: stores `connected = true` (Release), calls `connack_notify.notify_one()`.
 - On connection error or disconnect: stores `connected = false` (Release).
 - rumqttc handles reconnection internally; this task does not exit on transient disconnects.
-- Task exits only when: (a) `EventLoop` is dropped/aborted from main, or (b) an unrecoverable internal error.
+- Task exits only when: (a) `EventLoop` is dropped/aborted by the runner on cleanup, or (b) an unrecoverable internal error.
 
-**Return type:** `Result<(), EventLoopError>` -- main inspects this on join.
+**Return type:** `Result<(), EventLoopError>` -- runner inspects this on join.
 
 #### 2.2.2 publish_task (spawned tokio task)
 
 **Owns (exclusive, moved in):**
 - `event_rx: mpsc::Receiver<AdapterEvent>` -- receives adapter events
-- `desired_inventory: HashMap<DeviceKey, SensorIdentity>` -- desired state for retained inventory topics
-- `pending_retained_ops: Vec<RetainedOp>` -- queue of retained MQTT operations waiting for connectivity
+- `desired_inventory: HashMap<String, Option<Vec<u8>>>` -- sole inventory model (see Section 3.8)
 - `outbound_buffer: VecDeque<PublishItem>` -- buffered publishes for when disconnected
 - `client: rumqttc::AsyncClient` (clone) -- used for `publish()` / `publish_bytes()` calls
+
+**Thread safety of `desired_inventory`:** This HashMap is exclusively owned by publish_task. No sharing, no Mutex needed.
 
 **Reads (shared atomic):**
 - `connected: Arc<AtomicBool>` -- checks before attempting publish
 
 **Awaits:**
-- `connack_notify: Arc<Notify>` -- waits for connectivity to flush pending retained ops and outbound buffer
+- `connack_notify: Arc<Notify>` -- waits for connectivity to flush inventory and outbound buffer
 
 **Behavior loop:**
 ```
@@ -691,41 +765,53 @@ loop {
                 None => break,                   // channel closed, exit task
             }
         }
-        _ = connack_notify.notified(), if !pending_retained_ops.is_empty()
+        _ = connack_notify.notified(), if !desired_inventory.is_empty()
                                          || !outbound_buffer.is_empty() => {
             flush_pending();
         }
     }
 }
-// After loop: drain phase (during shutdown)
+// After loop: drain phase
 drain_remaining();
 ```
 
 - When `connected.load(Acquire)` is `false`: enqueue publishes to `outbound_buffer`.
-- When `connected` is `true` and `connack_notify` fires: flush `pending_retained_ops` first (identity topics, retained), then `outbound_buffer` (telemetry).
-- On `event_rx` closed (`recv()` returns `None`): exit the loop. This is the normal shutdown signal from main.
+- When `connected` is `true` and `connack_notify` fires: replay everything in `desired_inventory` first (retained), then drain `outbound_buffer` (telemetry).
+- On `event_rx` closed (`recv()` returns `None`): exit the loop. This is the shutdown signal propagated from the binary via the adapter stopping.
 
-**Return type:** `Result<(), PublishTaskError>` -- main inspects on join.
+**Drain timeout:** The drain phase has an internal 2-second timeout. If drain takes longer, it returns anyway (best-effort). The LWT serves as fallback for offline notification.
 
-#### 2.2.3 main task (the async fn that owns the select! loop)
+**What if ConnAck arrives during drain?** Ignored. Once in drain mode, the publish_task does not re-enter the select! loop. It flushes what it can and exits.
+
+**Return type:** `Result<(), PublishTaskError>` -- runner inspects on join.
+
+#### 2.2.3 runner main task (the `run()` async fn)
 
 **Owns (exclusive):**
-- `signal_stream` -- `tokio::signal::unix::Signal` for SIGTERM + SIGINT
-- `shutdown_handle: ShutdownHandle` -- adapter's shutdown handle (calls adapter stop + joins adapter tasks)
 - `eventloop_join: JoinHandle<Result<(), EventLoopError>>` -- eventloop_task handle
 - `publish_join: JoinHandle<Result<(), PublishTaskError>>` -- publish_task handle
-- `shutdown_initiated: bool` -- local flag, not shared
 - `client: rumqttc::AsyncClient` (clone) -- for offline status publish during shutdown
+
+**Does NOT own:**
+- Signal handlers (binary's responsibility)
+- Adapter ShutdownHandle (binary's responsibility)
+- `shutdown_initiated` flag (not needed -- runner simply processes until event_rx closes)
 
 **Behavior:**
 ```
-loop {
-    tokio::select! {
-        sig = signal_stream.recv() => { ... }
-        result = &mut eventloop_join => { ... }
-        result = &mut publish_join => { ... }
-    }
-}
+// Wait for publish_task to complete (it exits when event_rx closes)
+let publish_result = publish_join.await;
+
+// Publish offline status
+client.publish(status_topic, QoS1, retained=true, offline_payload).await;
+client.disconnect().await;
+
+// Grace period: let eventloop transmit the above
+timeout(2s, eventloop_join).await;
+// If eventloop didn't finish, abort it
+eventloop_join.abort();
+
+// Return Ok or Err based on publish_result
 ```
 
 #### 2.2.4 Shared State Summary
@@ -737,157 +823,200 @@ loop {
 
 No other shared mutable state exists. `AsyncClient` is cloned (rumqttc's `AsyncClient` is backed by an internal channel and is `Clone + Send`); each clone is independently owned.
 
+`desired_inventory` is exclusively owned by publish_task -- no sharing needed.
+
 ### 2.3 Task Supervision
 
-The main task monitors all failure sources via `tokio::select!`:
+#### 2.3.1 Runner-Internal Task Monitoring
 
-#### 2.3.1 Monitored Sources
+The runner's `run()` function monitors its two internal tasks:
 
-| Source | select! branch | Condition |
+| Source | Monitoring method | Condition |
 |---|---|---|
-| Signal (SIGINT/SIGTERM) | `signal_stream.recv()` | Any signal received |
-| publish_task exit | `&mut publish_join` | JoinHandle resolves |
-| eventloop_task exit | `&mut eventloop_join` | JoinHandle resolves |
+| publish_task exit | `publish_join.await` | JoinHandle resolves (normal: event_rx closed) |
+| eventloop_task exit | `eventloop_join.await` (after publish_task) | JoinHandle resolves |
 
-#### 2.3.2 Decision Matrix
+The runner does NOT monitor signals. Signal handling is the binary's responsibility.
 
-| Event | shutdown_initiated | Action | Exit code |
-|---|---|---|---|
-| 1st signal | false | Set `shutdown_initiated = true`, begin shutdown sequence (Section 2.5) | 0 (if clean) |
-| 2nd signal | true (shutdown in progress) | `std::process::exit(1)` immediately | 1 |
-| publish_task exits Ok | true | Expected (part of shutdown drain) | -- |
-| publish_task exits Ok | false | Unexpected -- set `shutdown_initiated = true`, begin shutdown, exit 1 | 1 |
-| publish_task exits Err/panic | any | Log error, set `shutdown_initiated = true`, begin shutdown, exit 1 | 1 |
-| eventloop_task exits Ok | true | Expected (part of shutdown) | -- |
-| eventloop_task exits Ok | false | Unexpected -- set `shutdown_initiated = true`, begin shutdown, exit 1 | 1 |
-| eventloop_task exits Err/panic | any | Log error, set `shutdown_initiated = true`, begin shutdown, exit 1 | 1 |
-| event_rx closes (publish_task reports via its return) | true | Clean: adapter stopped by us | 0 (if drain succeeds) |
-| event_rx closes (publish_task reports via its return) | false | Adapter crash: set `shutdown_initiated = true`, begin shutdown, exit 1 | 1 |
+#### 2.3.2 Runner Return Values
 
-#### 2.3.3 Panic Propagation
+| Event | Runner action | Return value |
+|---|---|---|
+| publish_task exits Ok (event_rx closed) | Publish offline status, gracefully stop eventloop | `Ok(())` |
+| publish_task exits Err/panic | Log error, abort eventloop | `Err(RunnerError::PublishTaskFailed)` |
+| eventloop_task exits unexpectedly (before publish_task) | publish_task will detect via publish failures | `Err(RunnerError::EventLoopDied)` |
 
-Both spawned tasks use `JoinHandle`. If a task panics, `JoinHandle::await` returns `Err(JoinError)` where `JoinError::is_panic() == true`. Main logs the panic payload and exits 1. Panics are never caught or restarted.
+#### 2.3.3 Binary-Level Supervision
+
+The binary monitors both the runner and signals:
+
+| Event | Binary action | Exit code |
+|---|---|---|
+| 1st signal (SIGINT/SIGTERM) | Call `adapter_handle.shutdown()` with 5s timeout; wait for runner to return | 0 if runner Ok |
+| 2nd signal during shutdown | `std::process::exit(1)` immediately | 1 |
+| Adapter shutdown timeout (5s) | Abort runner task, exit | 1 |
+| Runner returns Ok (before signal) | Unexpected -- adapter died; exit | 1 |
+| Runner returns Err (before signal) | Log error, exit | 1 |
+| Runner returns Ok (after signal) | Clean shutdown | 0 |
+| Runner returns Err (after signal) | Log error, exit | 1 |
+
+#### 2.3.4 Panic Propagation
+
+Both runner-internal tasks use `JoinHandle`. If a task panics, `JoinHandle::await` returns `Err(JoinError)` where `JoinError::is_panic() == true`. The runner logs the panic payload and returns `Err`. Panics are never caught or restarted.
 
 ### 2.4 Startup Sequence
 
-Each step is numbered. Failure at any step prevents subsequent steps.
+Startup is split between the binary and the runner. The binary handles steps 1-5 (config, runtime, adapter); the runner handles steps 6-8 (MQTT, tasks).
+
+#### 2.4.1 Binary Startup (main.rs)
 
 ```
 (1) Config load + validate
         |
-        v  [fail: log error, exit 1]
+        v  [fail: log error, exit 1 (EX_CONFIG=78)]
 (2) Create tokio runtime (Runtime::new())
         |
         v  [fail: panic -- unrecoverable, no runtime to log]
-(3) Create MQTT client + EventLoop
-    - MqttOptions with LWT: topic=`{prefix}/status`, payload=`{"status":"offline","ts":0}`, retain=true, QoS 1
-    - AsyncClient::new(options, cap=256)
+(3) Install signal handlers (SIGINT, SIGTERM)
+        |
+        v  [fail: panic -- unrecoverable]
+(4) Start adapter
+    - Call adapter's start() function, obtain event_rx and ShutdownHandle
+    - For polling adapters: validates bus_path accessibility
         |
         v  [fail: log error, exit 1]
-(4) Spawn eventloop_task
+(5) Spawn runner: tokio::spawn(adapter_runner::run(adapter_id, mqtt_config, event_rx))
+        |
+        v
+(6) Enter binary event loop: select! on { signal, runner_join }
+```
+
+#### 2.4.2 Runner Startup (inside `run()`)
+
+```
+(1) Create MQTT client + EventLoop
+    - MqttOptions with LWT: topic=`{prefix}/status`, payload=`{"v":1,"adapter_id":"...","ts":0,"online":false}`, retain=true, QoS 1
+    - AsyncClient::new(options, cap=256)
+        |
+        v  [fail: return Err(RunnerError::MqttInit(...))]
+(2) Spawn eventloop_task
     - tokio::spawn(eventloop_run(eventloop, connected, connack_notify))
     - Returns JoinHandle
         |
         v  [fail: impossible -- spawn does not fail]
-(5) Start adapter
-    - Call adapter's start() function, obtain event_rx and ShutdownHandle
-    - For polling adapters: validates bus_path accessibility
-        |
-        v  [fail: log error, abort eventloop_task, exit 1]
-(6) Spawn publish_task
+(3) Spawn publish_task
     - tokio::spawn(publish_run(event_rx, client.clone(), connected, connack_notify, ...))
     - Returns JoinHandle
         |
         v  [fail: impossible -- spawn does not fail]
-(7) Enter main select! loop
+(4) Await publish_task completion (event_rx closure or error)
     - State: Reconnecting (waiting for first ConnAck)
 ```
 
-**Step 5 failure cleanup:** If adapter start fails after eventloop_task is already spawned:
-1. `eventloop_join.abort()` -- cancel the eventloop task.
-2. Log the adapter start error.
-3. Exit 1.
-
-No publish_task exists yet, so no publish cleanup is needed.
+**Runner init failure:** If MQTT client creation fails, `run()` returns `Err` immediately. The binary receives this, logs the error, shuts down the adapter, and exits 1.
 
 ### 2.5 Shutdown Sequence
 
-Triggered when main sets `shutdown_initiated = true` (via signal or unexpected task exit).
+Shutdown is a coordinated sequence between the binary and the runner.
+
+#### 2.5.1 Binary-Side Shutdown (triggered by signal)
 
 ```
-(1) Adapter shutdown: stop producer, close event_rx
-    - shutdown_handle.shutdown().await
-    - This sends AdapterCommand::Shutdown to the adapter, joins adapter tasks
-    - After this, adapter stops sending to event_tx
-    - event_tx is dropped by adapter -> event_rx yields None in publish_task
+(1) Signal received (SIGINT or SIGTERM)
     |
-    | timeout: adapter-specific (not controlled by runner)
     v
-(2) publish_task drains buffer + pending retained ops
-    - publish_task sees event_rx return None, exits its recv loop
-    - Enters drain phase: flushes outbound_buffer and pending_retained_ops
-    - If connected: publishes immediately
+(2) Binary calls adapter_handle.shutdown() with 5s timeout
+    - This sends AdapterCommand::Shutdown to the adapter
+    - Adapter stops producing events, drops event_tx
+    - event_rx yields None in runner's publish_task
+    |
+    | timeout: 5 seconds
+    v  [timeout: abort runner task, exit 1]
+(3) Binary awaits runner_join (runner::run() returning)
+    |
+    v  [Ok -> exit 0, Err -> exit 1]
+```
+
+#### 2.5.2 Runner-Side Shutdown (triggered by event_rx closure)
+
+The runner never initiates shutdown. It reacts to `event_rx` closing:
+
+```
+(1) publish_task detects event_rx.recv() == None
+    |
+    v
+(2) Drain phase: flush outbound_buffer
+    - If connected: publish remaining buffered events
     - If disconnected: skip (data loss accepted on shutdown while disconnected)
     |
-    | timeout: 2 seconds (tokio::time::timeout on publish_join)
+    | internal timeout: 2 seconds
     v
 (3) Offline status publish
-    - main publishes retained status message: {"status":"offline","ts":<real_unix_ms>}
+    - runner publishes retained status: {"v":1,"adapter_id":"...","ts":<real_unix_ms>,"online":false}
     - Topic: {prefix}/status, QoS 1, retain=true
-    - Uses main's client clone
     - This overwrites the LWT's ts=0 with a real timestamp
     |
-    | within the same 2s window as step 2 (no additional timeout)
     v
-(4) Eventloop grace period
-    - Allow eventloop 2 seconds to flush the offline status and any remaining
-      in-flight publishes through the MQTT connection
+(4) Disconnect
+    - client.disconnect().await (best effort)
     |
-    | timeout: 2 seconds (tokio::time::timeout on eventloop_join)
     v
-(5) Disconnect
-    - client.disconnect().await (best effort, no timeout -- rumqttc sends DISCONNECT packet)
+(5) Eventloop grace period (2 seconds)
+    - Allow eventloop to flush offline status + DISCONNECT to TCP
     |
+    | timeout: 2 seconds
     v
 (6) Eventloop abort
     - If eventloop_join has not completed: eventloop_join.abort()
-    - Ensures process does not hang on unresponsive broker
     |
     v
-    Exit
+(7) Return Ok(()) to binary
 ```
+
+**Can runner return Ok vs Err?**
+- `Ok(())` = event_rx closed cleanly, drain completed (or timed out, best-effort).
+- `Err(RunnerError)` = MQTT fatal error at startup, or eventloop/publish_task panicked.
+
+**What happens to eventloop_task when runner returns?** The runner aborts it in step 6. The binary does not need to manage it.
 
 #### Timeout Budget
 
-| Phase | Max duration |
-|---|---|
-| (1) Adapter shutdown | Adapter-dependent (not bounded by runner) |
-| (2) Publish drain | 2 seconds |
-| (3) Offline status | Within phase 2's window |
-| (4) Eventloop grace | 2 seconds |
-| (5) Disconnect | ~0 (best effort) |
-| (6) Abort | ~0 (immediate) |
-| **Total after adapter shutdown** | **4 seconds** |
+| Phase | Owner | Max duration |
+|---|---|---|
+| Adapter shutdown | Binary | 5 seconds |
+| Publish drain | Runner | 2 seconds |
+| Offline status + disconnect | Runner | Within drain window |
+| Eventloop grace | Runner | 2 seconds |
+| Eventloop abort | Runner | ~0 (immediate) |
+| **Total maximum** | | **5 + 4 = 9 seconds** |
 
-Total maximum wall time: adapter shutdown latency + 4 seconds.
+Note: The binary's 5s adapter timeout runs concurrently with (not before) the runner's drain. In practice, once the adapter drops event_tx, the runner begins draining immediately, so the actual wall time is typically 5s + small overlap.
 
-#### 2nd Signal During Shutdown
+#### 2.5.3 2nd Signal During Shutdown
 
-If a second SIGINT or SIGTERM arrives while the shutdown sequence is in progress, main calls `std::process::exit(1)` immediately. This bypasses all remaining drain/flush steps. The LWT (with ts=0) will inform subscribers of the ungraceful exit.
+If a second SIGINT or SIGTERM arrives while the binary's shutdown sequence is in progress, the binary calls `std::process::exit(1)` immediately. This bypasses all remaining drain/flush steps. The LWT (with ts=0) will inform subscribers of the ungraceful exit.
+
+#### 2.5.4 Adapter Shutdown Hangs
+
+If `adapter_handle.shutdown()` does not complete within 5 seconds, the binary:
+1. Logs a warning: "adapter shutdown timed out after 5s"
+2. Aborts the runner task.
+3. Exits with code 1.
+
+The LWT fires after the broker's keepalive timeout (default 30s), providing eventual offline notification.
 
 ### 2.6 Exit Code Contract
 
 | Scenario | Exit code | Rationale |
 |---|---|---|
-| Config validation failure | 1 | Cannot run with invalid config |
-| MQTT client creation failure | 1 | Cannot connect to broker |
+| Config validation failure | 1 (78 EX_CONFIG) | Cannot run with invalid config |
 | Adapter start failure | 1 | No data source |
-| eventloop_task unexpected exit | 1 | Critical infrastructure gone |
-| publish_task unexpected exit | 1 | Critical infrastructure gone |
-| Task panic (any) | 1 | Unrecoverable |
-| Signal + clean shutdown (drain completes, offline published) | 0 | Graceful |
-| Signal + drain timeout exceeded | 1 | Incomplete shutdown |
-| Adapter crash (event_rx close without shutdown_initiated) | 1 | Data source died |
+| Runner returns Err (MQTT init failure) | 1 | Cannot connect to broker |
+| Runner returns Err (task panic/crash) | 1 | Critical infrastructure gone |
+| Signal + runner returns Ok (clean drain) | 0 | Graceful shutdown |
+| Signal + adapter shutdown timeout (5s) | 1 | Adapter hung |
+| 2nd signal during shutdown | 1 | Forced exit |
+| Runner returns Ok before signal (adapter died) | 1 | Data source died unexpectedly |
 
 Implementation: main returns `ExitCode` (or calls `std::process::exit`). The `fn main()` signature is:
 
@@ -916,74 +1045,87 @@ fn main() -> ExitCode {
 
 | Failure | Detection point | Action |
 |---|---|---|
-| Config error | Step 1 (before runtime) | Log, exit 1 |
-| Adapter start failure | Step 5 | Log, abort eventloop, exit 1 |
-| eventloop_task exit (unexpected) | main select!, JoinHandle resolves | Log, shutdown sequence, exit 1 |
-| publish_task exit (unexpected) | main select!, JoinHandle resolves | Log, shutdown sequence, exit 1 |
-| Task panic | main select!, JoinError::is_panic() | Log panic payload, shutdown sequence, exit 1 |
+| Config error | Binary step 1 (before runtime) | Log, exit 1 |
+| Adapter start failure | Binary step 4 | Log, exit 1 |
+| MQTT client init failure | Runner step 1 | Runner returns Err, binary logs + exits 1 |
+| eventloop_task exit (unexpected) | Runner detects via publish failures | Runner returns Err, binary logs + exits 1 |
+| publish_task panic | Runner detects via JoinError | Runner returns Err, binary logs + exits 1 |
+| Adapter crash (event_rx closes without signal) | Runner returns Ok, binary detects no signal preceded it | Binary logs + exits 1 |
 
 Process-fatal failures are never retried. The process exits and the service manager (systemd) is responsible for restart policy.
 
 ### 2.8 event_rx Closure Semantics
 
-The `event_rx` channel (from adapter to publish_task) can close in two scenarios. The main task distinguishes them via a local `shutdown_initiated: bool` flag.
+The `event_rx` channel (from adapter to publish_task) can close in two scenarios. The **binary** distinguishes them via a local `shutdown_initiated: bool` flag. The runner does not distinguish -- it always drains and returns Ok.
 
-#### 2.8.1 State Tracking
+#### 2.8.1 Binary State Tracking
 
 ```rust
-// In main task, before select! loop:
+// In binary main, before signal loop:
 let mut shutdown_initiated = false;
 ```
 
 `shutdown_initiated` is set to `true` **only** when:
-- A signal is received and main begins the shutdown sequence (Section 2.5, step 1).
-- A task unexpectedly exits and main begins the shutdown sequence.
+- A signal is received and the binary calls `adapter_handle.shutdown()`.
 
-It is never set to `true` by the publish_task or eventloop_task. It is a main-local variable, not shared.
+It is never set by the runner. It is a binary-local variable.
 
 #### 2.8.2 Clean Shutdown Path
 
 ```
 signal received
-  -> main sets shutdown_initiated = true
-  -> main calls shutdown_handle.shutdown().await (adapter stops, drops event_tx)
-  -> event_rx.recv() returns None in publish_task
-  -> publish_task enters drain phase, returns Ok(())
-  -> publish_join resolves with Ok(Ok(()))
-  -> main continues shutdown steps 3-6
-  -> exit 0
+  -> binary sets shutdown_initiated = true
+  -> binary calls adapter_handle.shutdown().await (adapter stops, drops event_tx)
+  -> event_rx.recv() returns None in runner's publish_task
+  -> publish_task enters drain phase
+  -> runner publishes offline status, cleans up eventloop
+  -> runner returns Ok(())
+  -> binary checks: shutdown_initiated == true, runner Ok -> exit 0
 ```
 
 #### 2.8.3 Adapter Crash Path
 
 ```
 adapter panics / drops event_tx unexpectedly
-  -> event_rx.recv() returns None in publish_task
-  -> publish_task returns Ok(AdapterClosed) or Err(...)
-  -> publish_join resolves in main's select!
-  -> main checks: shutdown_initiated == false
-  -> main logs "adapter crash: event_rx closed without shutdown"
-  -> main sets shutdown_initiated = true, begins shutdown (steps 3-6, skip step 1)
-  -> exit 1
+  -> event_rx.recv() returns None in runner's publish_task
+  -> publish_task enters drain phase
+  -> runner publishes offline status, cleans up eventloop
+  -> runner returns Ok(())
+  -> binary checks: shutdown_initiated == false
+  -> binary logs "adapter crash: event_rx closed without shutdown signal"
+  -> binary exits 1
 ```
 
-#### 2.8.4 publish_task Return Type Encoding
+#### 2.8.4 Runner Return Type
+
+The runner always returns `Ok(())` when event_rx closes (regardless of whether closure was clean or a crash). The runner returns `Err` only for internal failures (MQTT init, task panic). The binary decides the exit code based on `shutdown_initiated`:
 
 ```rust
-enum PublishTaskExit {
-    /// event_rx closed (normal channel close). Main decides if this is
-    /// clean (shutdown_initiated) or crash (!shutdown_initiated).
-    ChannelClosed,
-    /// A publish-side error that the task cannot recover from.
-    Error(PublishTaskError),
+// Binary logic (simplified):
+match runner_result {
+    Ok(()) if shutdown_initiated => ExitCode::SUCCESS,  // clean shutdown
+    Ok(()) => { error!("adapter died unexpectedly"); ExitCode::FAILURE },  // crash
+    Err(e) => { error!("runner error: {e}"); ExitCode::FAILURE },
 }
 ```
-
-The publish_task does **not** decide whether channel closure is clean or a crash. It returns `ChannelClosed` in both cases. Main owns the `shutdown_initiated` flag and makes the determination. This keeps the decision in a single location and avoids sharing the flag across tasks.
 
 ### 2.9 Public API
 
 ```rust
+/// Run the MQTT adapter runner until event_rx closes.
+///
+/// The runner creates an MQTT client, spawns internal tasks (eventloop, publish),
+/// and processes events from event_rx until the channel closes. On closure,
+/// it drains buffered events, publishes offline status, and returns.
+///
+/// The runner does NOT handle signals or own the adapter. The caller (binary)
+/// is responsible for:
+/// - Installing signal handlers
+/// - Calling adapter shutdown (which closes event_rx)
+/// - Interpreting the return value for exit code decisions
+///
+/// Returns Ok(()) on clean event_rx closure (drain completed).
+/// Returns Err on MQTT init failure or internal task crash.
 pub async fn run(
     adapter_id: AdapterId,
     mqtt_config: MqttConfig,
@@ -992,6 +1134,8 @@ pub async fn run(
 ```
 
 Dependencies: `core/mqtt-contract`, `core/types`, `rumqttc`, `url`, `tokio`, `tracing`.
+
+Note: `tokio::signal` is NOT a dependency of the runner crate. Signal handling lives in the binary.
 
 ---
 
@@ -1005,7 +1149,7 @@ The runner considers itself **connected** if and only if a `ConnAck` packet has 
 - `eventloop.poll()` returning `Ok` for any packet other than `ConnAck`
 - Successful DNS resolution
 
-The connection state is tracked via a shared `AtomicBool` (`connected`), stored with `Ordering::Relaxed`. This is safe because the only consequence of a stale read is a brief period where the publish loop either buffers unnecessarily or attempts a publish that will be enqueued to rumqttc's internal queue (which handles disconnection internally).
+The connection state is tracked via a shared `AtomicBool` (`connected`), written with `Ordering::Release` and read with `Ordering::Acquire`. This ensures the publish_task sees a consistent view of the connection state relative to any prior ConnAck processing. In practice, the only consequence of a stale read is a brief period where the publish loop either buffers unnecessarily or attempts a publish that will be enqueued to rumqttc's internal queue (which handles disconnection internally).
 
 ### 3.2 Session Model
 
@@ -1040,18 +1184,18 @@ digraph connection_lifecycle {
 
 On every `ConnAck`, the following sequence executes **in order**:
 
-1. `connected.store(true, Relaxed)`
+1. `connected.store(true, Release)`
 2. `reconnect_attempt = 0`
 3. **Re-publish online status** -- `encode_status(adapter_id, true, now_ms())` to `iotkit/v1/{adapter_id}/status`, QoS 1, retained.
 4. **Notify publish_task** via `reconnect_notify.notify_one()`.
 
 The publish_task, upon receiving the notification, executes:
 
-5. **Inventory reconcile** -- `inventory.republish_all(&client)` (see Section 3.8).
-6. **Buffer replay** -- drain `pending_events` in FIFO order (see Section 3.7).
-7. **Resume live event processing**.
+5. **Inventory reconcile** -- replay all entries in `desired_inventory` as retained publishes (see Section 3.8).
+6. **Buffer replay** -- replay up to 10 items from `outbound_buffer` in FIFO order, then return to `select!` loop (see Section 3.7.5).
+7. **Resume live event processing** -- the `select!` loop naturally interleaves further buffer replay batches with live events.
 
-Steps 5-6-7 are serialized within the publish_task's `tokio::select!` loop. Live events arriving during steps 5-6 are queued in the `mpsc` channel and processed after step 6 completes (or interleaved during yield points in step 6).
+Steps 5-6-7 are handled within the publish_task's `tokio::select!` loop. Inventory reconcile runs in full (bounded by device count). Buffer replay is batched (max 10 per iteration) to interleave with live events from `event_rx`.
 
 ### 3.5 Reconnect Backoff
 
@@ -1072,7 +1216,7 @@ The backoff is implemented in the eventloop pump task. rumqttc's built-in reconn
 
 There is **no maximum reconnect count** and **no timeout** after which the runner gives up. The runner reconnects forever until:
 
-- The process receives SIGTERM/SIGINT (handled by the caller, which closes the adapter's `event_rx`).
+- The binary receives SIGTERM/SIGINT, shuts down the adapter, which closes `event_rx`, causing the runner to drain and exit.
 - A fatal configuration error prevents even TCP connect attempts (invalid hostname -- rumqttc will still retry).
 
 During extended disconnection:
@@ -1103,9 +1247,9 @@ Events are classified into two categories based on their MQTT retain semantics a
 
 When the buffer is full and a new transient event arrives:
 
-1. `pending_events.pop_front()` -- discard oldest.
+1. `outbound_buffer.pop_front()` -- discard oldest.
 2. `warn!("pending event buffer full, dropping oldest event")` -- exactly one log line per drop.
-3. `pending_events.push_back((event_type, payload))` -- enqueue new event.
+3. `outbound_buffer.push_back((event_type, payload))` -- enqueue new event.
 
 **Buffer capacity constant:**
 
@@ -1120,7 +1264,7 @@ This is a compile-time constant. There is no runtime configuration for buffer si
 When disconnected, for each incoming `AdapterEvent`:
 
 1. **Always:** `inventory.track_event(&event)` -- updates `desired_inventory` HashMap locally.
-2. **Then:** `buffer_event(adapter_id, &event, &mut pending_events)` -- encodes the event and pushes to `pending_events` VecDeque.
+2. **Then:** `buffer_event(adapter_id, &event, &mut outbound_buffer)` -- encodes the event and pushes to `outbound_buffer` VecDeque.
 
 Both paths execute regardless of event type. Inventory events are tracked in step 1 AND buffered in step 2. On reconnect, inventory is reconciled via `desired_inventory` (step 5 of ConnAck processing), and buffered events are replayed separately (step 6). This means discovery/loss events may be published twice on reconnect (once as retained inventory, once as non-retained event replay). This is acceptable -- consumers must be idempotent.
 
@@ -1131,7 +1275,7 @@ On `reconnect_notify.notified()`, the publish_task executes in strict order:
 ```
 (1) Online status        -- published by eventloop task in ConnAck handler, BEFORE notify
 (2) Inventory reconcile  -- inventory.republish_all(&client)
-(3) Buffer replay        -- drain pending_events FIFO
+(3) Buffer replay        -- replay max 10 items from outbound_buffer FIFO per select! iteration
 (4) Live events          -- resume normal select! loop processing
 ```
 
@@ -1139,42 +1283,67 @@ Step (1) is executed by the eventloop pump task, not the publish_task. Steps (2)
 
 #### 3.7.5 Buffer Replay Mechanics
 
+On ConnAck notification, the publish_task replays **at most 10 items** from the buffer, then returns to the main `select!` loop. This ensures live events from `event_rx` are not starved during replay.
+
 ```
-while pending_events.front().is_some():
-    topic = topic(adapter_id, event_type)
-    result = client.publish(topic, QoS1, retain=false, payload).await
-    if result is Err:
-        warn!("flush publish failed, keeping remaining buffer")
-        break                          // <- stop replay, keep remaining
-    pending_events.pop_front()         // <- remove only after successful enqueue
-    flushed += 1
-    if flushed % 10 == 0:
-        yield_now()                    // <- fair interleave with live events
+// Inside the connack_notify branch of the select! loop:
+fn flush_pending():
+    let batch_size = min(outbound_buffer.len(), 10)
+    for _ in 0..batch_size:
+        let (event_type, payload) = outbound_buffer.front()
+        topic = topic(adapter_id, event_type)
+        result = client.publish(topic, QoS1, retain=false, payload).await
+        if result is Err:
+            warn!("flush publish failed, keeping remaining buffer")
+            return                     // <- stop replay, keep remaining
+        outbound_buffer.pop_front()    // <- remove only after successful enqueue
+    // After batch: return to select! loop
+    // If outbound_buffer is still non-empty, the next select! iteration
+    // will process more (either via another connack_notify or via the
+    // guard condition !outbound_buffer.is_empty())
 ```
+
+The `select!` loop naturally interleaves buffer replay with live event processing:
+
+```
+loop {
+    tokio::select! {
+        event = event_rx.recv() => { ... }
+        _ = connack_notify.notified(), if !desired_inventory.is_empty()
+                                         || !outbound_buffer.is_empty() => {
+            replay_inventory();   // full inventory replay (small, bounded by device count)
+            flush_pending();      // max 10 items from outbound_buffer
+        }
+    }
+}
+```
+
+If the buffer still has items after a batch of 10, the `select!` guard `!outbound_buffer.is_empty()` ensures the connack branch is re-entered on the next iteration, alternating with any live events on `event_rx`. This avoids the `yield_now()` problem where yielding within a `select!` arm does not re-enter the `select!` macro.
 
 Key behaviors:
 
 - **FIFO order preserved.** Events are replayed in the exact order they were buffered.
-- **Yield every 10 items.** After every 10 successful publishes, `tokio::task::yield_now().await` gives the `tokio::select!` loop a chance to process live events from `event_rx`. This prevents replay starvation of live events.
+- **Batch of 10, then return to select!.** This is a cooperative interleave with live events from `event_rx`, handled naturally by the `select!` macro.
 - **Break on failure.** If `client.publish().await` returns `Err`, replay stops immediately. Remaining events stay in the buffer. They will be retried on the **next** `ConnAck` (not immediately).
 - **No partial retry.** There is no retry loop within a single replay pass. A publish failure during replay means the connection is likely broken; the eventloop will detect this and transition to Disconnected.
 
 ### 3.8 Retained Inventory Semantics
 
-#### 3.8.1 Data Model
+#### 3.8.1 Data Model — Single `desired_inventory`
+
+There is ONE inventory model. No separate `pending_retained_ops`. All inventory state lives in a single HashMap:
 
 ```rust
-struct InventoryTracker {
-    adapter_id: AdapterId,
-    /// device_key (String) -> Some(payload) for active, None for tombstone
-    active_devices: HashMap<String, Option<Vec<u8>>>,
-}
+/// device_key (String) -> Some(payload) for active, None for tombstone
+desired_inventory: HashMap<String, Option<Vec<u8>>>
 ```
 
-This HashMap is the **sole source of truth** for device inventory. The broker's retained message store is treated as a cache that is unconditionally overwritten on every reconnect.
+This HashMap is the **sole source of truth** for device inventory. It is exclusively owned by publish_task (no sharing, no Mutex). The broker's retained message store is treated as a cache that is unconditionally overwritten on every reconnect.
 
-| `active_devices` value | Meaning | MQTT action on publish/reconcile |
-|------------------------|---------|----------------------------------|
+On ConnAck, replay **everything** in `desired_inventory`. This is simple and correct.
+
+| `desired_inventory` value | Meaning | MQTT action on publish/reconcile |
+|---------------------------|---------|----------------------------------|
 | `Some(payload)` | Device is active | Publish `payload` to `inventory/{device_key}`, QoS 1, **retained** |
 | `None` | Device was lost (tombstone) | Publish **empty payload** (`Vec::new()`) to `inventory/{device_key}`, QoS 1, **retained** |
 | Key absent | Device never seen or process restarted | No action |
@@ -1184,24 +1353,24 @@ This HashMap is the **sole source of truth** for device inventory. The broker's 
 **`DeviceDiscovered`:**
 
 1. Encode event via `encode_event(adapter_id, event)` to get payload bytes.
-2. `active_devices.insert(device_key_str, Some(payload))`.
+2. `desired_inventory.insert(device_key_str, Some(payload))`.
 3. If connected: publish `payload` to `iotkit/v1/{adapter_id}/inventory/{device_key}`, QoS 1, retained.
 
 **`DeviceLost`:**
 
-1. `active_devices.insert(device_key_str, None)` -- overwrites any previous `Some(payload)`.
+1. `desired_inventory.insert(device_key_str, None)` -- overwrites any previous `Some(payload)`.
 2. If connected: publish **empty bytes** to `iotkit/v1/{adapter_id}/inventory/{device_key}`, QoS 1, retained. This clears the broker's retained message for that topic.
 
 **All other events:** No inventory tracking. `track_event` returns `false`.
 
 #### 3.8.3 Reconnect Reconciliation
 
-On every `ConnAck`, `republish_all(&client)` iterates **all entries** in `active_devices`:
+On every `ConnAck`, the publish_task iterates **all entries** in `desired_inventory`:
 
 ```
-for (device_key_str, maybe_payload) in active_devices:
+for (device_key_str, maybe_payload) in &desired_inventory:
     topic = inventory_topic(adapter_id, device_key)
-    payload = maybe_payload.unwrap_or(Vec::new())  // Some -> data, None -> empty
+    payload = maybe_payload.clone().unwrap_or(Vec::new())  // Some -> data, None -> empty
     client.publish(topic, QoS1, retained=true, payload).await
 ```
 
@@ -1214,10 +1383,10 @@ This is an **unconditional full overwrite** of the broker's retained inventory s
 **Scenario: Device lost, then rediscovered, while disconnected.**
 
 ```
-t=0: Connected. active_devices = {"sensor-a": Some(p1)}
+t=0: Connected. desired_inventory = {"sensor-a": Some(p1)}
 t=1: Disconnected.
-t=2: DeviceLost{sensor-a}   -> active_devices = {"sensor-a": None}
-t=3: DeviceDiscovered{sensor-a, p2} -> active_devices = {"sensor-a": Some(p2)}
+t=2: DeviceLost{sensor-a}   -> desired_inventory = {"sensor-a": None}
+t=3: DeviceDiscovered{sensor-a, p2} -> desired_inventory = {"sensor-a": Some(p2)}
 t=4: ConnAck -> republish_all publishes Some(p2) as retained.
 ```
 
@@ -1226,10 +1395,10 @@ The intermediate tombstone (`None` at t=2) is overwritten by the rediscovery (`S
 **Scenario: Device discovered while disconnected, then lost while still disconnected.**
 
 ```
-t=0: Connected. active_devices = {}
+t=0: Connected. desired_inventory = {}
 t=1: Disconnected.
-t=2: DeviceDiscovered{sensor-b, p1} -> active_devices = {"sensor-b": Some(p1)}
-t=3: DeviceLost{sensor-b}           -> active_devices = {"sensor-b": None}
+t=2: DeviceDiscovered{sensor-b, p1} -> desired_inventory = {"sensor-b": Some(p1)}
+t=3: DeviceLost{sensor-b}           -> desired_inventory = {"sensor-b": None}
 t=4: ConnAck -> republish_all publishes None (empty retained) for sensor-b.
 ```
 
@@ -1237,11 +1406,11 @@ The broker gets an empty retained message, which effectively clears any stale re
 
 #### 3.8.5 Tombstone Lifetime
 
-Tombstones (`None` entries) persist in `active_devices` for the **entire process lifetime**. They are:
+Tombstones (`None` entries) persist in `desired_inventory` for the **entire process lifetime**. They are:
 
 - **Re-sent on every `ConnAck`.** Each reconnect publishes an empty retained message to clear the broker.
 - **Never removed** from the HashMap during normal operation.
-- **Cleared on process restart.** When the adapter process starts fresh, `active_devices` is empty. The adapter will re-discover devices, populating `active_devices` with fresh `Some(payload)` entries. Devices that no longer exist simply won't appear.
+- **Cleared on process restart.** When the adapter process starts fresh, `desired_inventory` is empty. The adapter will re-discover devices, populating `desired_inventory` with fresh `Some(payload)` entries. Devices that no longer exist simply won't appear.
 
 **Why keep tombstones forever:** A tombstone publish (`empty retained`) may have been enqueued to rumqttc but never delivered (the connection dropped before TCP write). Without per-message delivery confirmation, the only safe strategy is to re-send tombstones on every reconnect.
 
@@ -1261,7 +1430,7 @@ On crash or SIGKILL:
 
 1. **LWT fires:** Broker publishes offline status with `ts=0` (timestamp unknown at LWT registration time). The LWT payload is `encode_status(adapter_id, false, 0)`.
 2. **Inventory stays stale:** Retained inventory messages remain on the broker with the last-known payloads. No tombstones are published.
-3. **On restart:** The new process starts with empty `active_devices`. As the adapter re-discovers devices, `republish_all` on the first `ConnAck` publishes only the currently-active devices. Devices that no longer exist will have stale retained messages on the broker **until the broker retains them indefinitely or another mechanism clears them**.
+3. **On restart:** The new process starts with empty `desired_inventory`. As the adapter re-discovers devices, `republish_all` on the first `ConnAck` publishes only the currently-active devices. Devices that no longer exist will have stale retained messages on the broker **until the broker retains them indefinitely or another mechanism clears them**.
 
 **Known limitation:** Stale retained inventory for devices that existed before the crash but do not exist after restart will persist on the broker indefinitely. This is acceptable for v1. A future version may implement a "full inventory sync" protocol where the runner publishes a manifest and a separate garbage collector clears orphaned retained messages.
 
@@ -1306,16 +1475,19 @@ Transient events (telemetry, errors) use fire-and-forget semantics:
 
 #### 3.9.4 Graceful Offline Publish -- Eventloop Grace Period
 
-On graceful shutdown, after the publish_task exits:
+On event_rx closure, the runner (not the binary) publishes offline status and gracefully stops:
 
 ```rust
+// Runner's cleanup after publish_task exits:
 // Publish offline status
 client.publish(status_topic, QoS1, retained=true, offline_payload).await?;
 client.disconnect().await;
 
 // Grace period: let eventloop actually transmit the above
-tokio::time::sleep(Duration::from_secs(2)).await;
-eventloop_handle.abort();
+match timeout(Duration::from_secs(2), eventloop_join).await {
+    Ok(_) => {},  // eventloop exited cleanly
+    Err(_) => eventloop_join.abort(),  // timed out, abort
+}
 ```
 
 The 2-second grace period exists because:
@@ -1349,7 +1521,7 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 | Broker sends DISCONNECT | Connected | Next `poll()` returns Err | Disconnected | Handled via Err path |
 | TCP RST from broker | Connected | Next `poll()` returns Err | Disconnected | Handled via Err path |
 | DNS resolution fails | Disconnected | `poll()` returns Err | Disconnected | Backoff continues |
-| `event_rx` closed (adapter shutdown) | Any | publish_task exits; offline status published; 2s grace; eventloop aborted | Terminated | Graceful shutdown complete |
+| `event_rx` closed (adapter stopped by binary) | Any | publish_task exits; runner drains buffer, publishes offline status; 2s grace; eventloop aborted; runner returns Ok | Terminated | Runner exits cleanly; binary decides exit code |
 
 #### 3.10.2 Publish and Buffer
 
@@ -1367,16 +1539,16 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 
 | Trigger | State | Action | Result | Observable effect |
 |---------|-------|--------|--------|-------------------|
-| `DeviceDiscovered` while connected | active_devices[k] = any | Insert `Some(payload)` + retained publish | Broker has current inventory | Device visible to consumers |
-| `DeviceDiscovered` while disconnected | active_devices[k] = any | Insert `Some(payload)` only | Local tracking updated | No broker publish; reconciled on ConnAck |
-| `DeviceLost` while connected | active_devices[k] = Some | Insert `None` + empty retained publish | Broker inventory cleared | Device no longer visible |
-| `DeviceLost` while disconnected | active_devices[k] = Some | Insert `None` only | Local tracking updated | Tombstone sent on ConnAck |
-| `DeviceLost` for unknown device | active_devices[k] absent | Insert `None` | Tombstone created | Defensive; empty retained on ConnAck clears any stale data |
+| `DeviceDiscovered` while connected | desired_inventory[k] = any | Insert `Some(payload)` + retained publish | Broker has current inventory | Device visible to consumers |
+| `DeviceDiscovered` while disconnected | desired_inventory[k] = any | Insert `Some(payload)` only | Local tracking updated | No broker publish; reconciled on ConnAck |
+| `DeviceLost` while connected | desired_inventory[k] = Some | Insert `None` + empty retained publish | Broker inventory cleared | Device no longer visible |
+| `DeviceLost` while disconnected | desired_inventory[k] = Some | Insert `None` only | Local tracking updated | Tombstone sent on ConnAck |
+| `DeviceLost` for unknown device | desired_inventory[k] absent | Insert `None` | Tombstone created | Defensive; empty retained on ConnAck clears any stale data |
 | Reconnect (ConnAck) | N active, M tombstones | Publish all N as retained + all M as empty retained | Broker state = local state | Full reconcile; `info!` log with counts |
-| `republish_all` publish fails for one device | Iterating active_devices | `warn!` log, continue to next device | Partial reconcile | Failed device retried on next ConnAck |
+| `republish_all` publish fails for one device | Iterating desired_inventory | `warn!` log, continue to next device | Partial reconcile | Failed device retried on next ConnAck |
 | Graceful shutdown | N active devices | Publish offline status only; inventory unchanged | Broker retains last inventory | Consumers see offline status + stale inventory |
 | Crash / SIGKILL | N active devices | LWT publishes offline (ts=0); inventory unchanged | Broker retains last inventory | Consumers see offline (ts=0) + stale inventory |
-| Process restart after crash | Empty active_devices | Re-discover devices; first ConnAck reconciles | Broker gets fresh inventory | Previously-lost devices have stale retained (known limitation) |
+| Process restart after crash | Empty desired_inventory | Re-discover devices; first ConnAck reconciles | Broker gets fresh inventory | Previously-lost devices have stale retained (known limitation) |
 
 #### 3.10.4 Delivery
 
@@ -1434,16 +1606,17 @@ digraph mqtt_protocol {
     }
 
     subgraph cluster_shutdown {
-        label="Shutdown Sequence";
+        label="Runner Drain Sequence\n(triggered by event_rx closure)";
         style=dashed;
-        S1 [label="Caller closes event_rx"];
-        S2 [label="Publish task exits"];
+        S1 [label="event_rx closed\n(adapter stopped by binary)"];
+        S2 [label="Publish task drains buffer\n(2s timeout)"];
         S3 [label="Publish offline status\n(enqueue)"];
         S4 [label="client.disconnect()\n(enqueue)"];
-        S5 [label="sleep(2s) grace"];
+        S5 [label="Eventloop grace (2s)"];
         S6 [label="Abort eventloop"];
+        S7 [label="Runner returns Ok(())"];
 
-        S1 -> S2 -> S3 -> S4 -> S5 -> S6;
+        S1 -> S2 -> S3 -> S4 -> S5 -> S6 -> S7;
     }
 }
 ```
@@ -1459,7 +1632,7 @@ digraph mqtt_protocol {
 | Backoff jitter | +/- 30% | `lib.rs` (`backoff_with_jitter`) | No (compile-time) |
 | Graceful shutdown grace period | 2000 ms | `lib.rs` (`run`) | No (compile-time) |
 | Keepalive | 30 s (default) | `mqtt_client.rs` | Yes (`MqttConfig.keepalive_secs`) |
-| Replay yield interval | Every 10 items | `publish_loop.rs` | No (compile-time) |
+| Replay batch size | 10 items per select! iteration | `publish_loop.rs` | No (compile-time) |
 | `clean_session` | `true` | rumqttc default | No |
 | QoS | `AtLeastOnce` (1) | All publishes | No |
 | LWT timestamp | `0` (unknown) | `mqtt_client.rs` | No |
@@ -1680,14 +1853,6 @@ Per-target validation (index is 0-based):
 |---|---|
 | Two targets share the same `address` value | `config error: adapter.targets: duplicate I2C address 0x<hex> at indices <i> and <j>` |
 
-#### 4.2.10 Edge Case Clarifications
-
-**Unknown TOML fields:** The deserializer MUST ignore unknown fields (do NOT use `#[serde(deny_unknown_fields)]`). This provides forward compatibility -- a config file written for a newer version of the binary can be loaded by an older binary without error. Unknown fields are silently discarded after deserialization.
-
-**MQTT wildcard characters in adapter_id:** If `adapter_id` contains MQTT wildcard characters (`+`, `#`), they are percent-encoded when used in MQTT topics (via `encode_topic_segment`). This makes them safe for topic construction. The raw `adapter_id` string itself may contain any UTF-8 characters; the encoding layer handles sanitization. No validation rejects `+` or `#` in `adapter_id`.
-
-**TOML integer overflow for address:** The `address` field is typed as `u8` in the Rust struct. If the TOML file contains an integer value outside the `u8` range (0-255), `toml::from_str` will return a deserialization error before `Config::validate` is called. This is inherent to serde's integer deserialization and requires no additional validation code. The error message comes from serde/toml, not from our validation layer. Example: `address = 256` -> `toml parse error: ... invalid value: integer 256, expected u8`.
-
 ### 4.3 Identity Derivation
 
 #### 4.3.1 adapter_id
@@ -1775,13 +1940,26 @@ fn main() -> ExitCode {
     // 5. Validate adapter config (rpi_local_adapter::validate)
     // 6. Create tokio runtime
     // 7. rt.block_on(async {
-    //      Start adapter (rpi_local_adapter::start) -> Handle with event_rx
-    //      Run adapter_runner::run(adapter_id, mqtt_config, event_rx)
+    //      a. Install signal handlers (SIGINT, SIGTERM)
+    //      b. Start adapter (rpi_local_adapter::start) -> ShutdownHandle + event_rx
+    //      c. Spawn runner: tokio::spawn(adapter_runner::run(adapter_id, mqtt_config, event_rx))
+    //      d. select! {
+    //           signal => {
+    //             shutdown_initiated = true;
+    //             timeout(5s, adapter_handle.shutdown()).await;
+    //             runner_join.await -> Ok => exit 0, Err => exit 1
+    //           }
+    //           runner_result = runner_join => {
+    //             if !shutdown_initiated { log "adapter died"; exit 1 }
+    //             match runner_result { Ok => exit 0, Err => exit 1 }
+    //           }
+    //         }
     //    })
-    // 8. On return: shutdown adapter handle
 }
 // Note: rpi_local_adapter::start() requires a live tokio runtime,
 // so runtime creation MUST precede adapter start.
+// Note: The binary owns signal handlers and adapter ShutdownHandle.
+// The runner NEVER handles signals.
 ```
 
 CLI:
@@ -1890,14 +2068,6 @@ usermod -aG i2c iotkit
 The binary at `/opt/iotkit/bin/iotkit-rpi-local` is owned `root:root`, mode `0755`. It does not run as root.
 
 For multiple adapter instances (see Section 4.10), each instance uses a separate config file and a separate systemd unit, but shares the same binary and `iotkit` user.
-
-#### 4.7.1 Deploy Edge Case Clarifications
-
-**`/opt/iotkit/data` directory creation:** The systemd unit specifies `ReadWritePaths=/opt/iotkit/data`. If this directory does not exist, systemd's `ProtectSystem=strict` will prevent the binary from creating it. The directory MUST be created during installation (by the install script or manually). The binary does NOT create it at startup. Using `StateDirectory=iotkit` in the systemd unit is an alternative (systemd creates `/var/lib/iotkit` automatically), but we use `/opt/iotkit/data` for consistency with the deploy layout. Installation step: `install -d -m 0750 -o root -g iotkit /opt/iotkit/data`.
-
-**`iotkit` user/group creation:** The system user and group are created by the operator or an install script, NOT by the binary at runtime. The binary assumes the user exists when systemd launches it. If the user does not exist, `systemctl start` will fail with a clear systemd error (`Failed to determine user credentials`). Documented install commands are provided in Section 4.7 (`useradd`, `usermod`).
-
-**Two instances using the same I2C bus:** If two `iotkit-rpi-local` processes are configured with the same `bus_path`, the result is undefined hardware behavior -- I2C transactions from both processes may interleave, causing corrupted reads and unpredictable sensor responses. This is the operator's responsibility to prevent via distinct `bus_path` values in each config file. The binary does not acquire a file lock on the bus device. See Section 4.10.3 (Uniqueness Invariants).
 
 ### 4.8 Sensitive Value Redaction
 
@@ -2072,7 +2242,7 @@ ExecStart=/opt/iotkit/bin/iotkit-rpi-local --config /opt/iotkit/etc/iotkit-rpi-l
 DeviceAllow=/dev/i2c-%i rw
 ```
 
-The `%i` in `DeviceAllow` expands to the systemd instance name (e.g. `i2c1` -> `/dev/i2c-i2c1`). If the instance naming convention does not map directly to device paths, the operator should use a systemd drop-in override (`systemctl edit iotkit-rpi-local@i2c1.service`) to set the correct `DeviceAllow` for that instance.
+The `%i` in `DeviceAllow` is expanded by systemd to the instance name (e.g. `i2c1` -> `/dev/i2c-i2c1`). For numeric instance names like `1`, `3`, this produces `/dev/i2c-1`, `/dev/i2c-3`. Choose instance names accordingly (e.g. `iotkit-rpi-local@1.service` for `/dev/i2c-1`).
 
 **Config files:**
 
@@ -2131,47 +2301,31 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **Negative timestamp:** `ts: -1` -> `DecodeError::InvalidTimestamp(-1)`.
 - **Negative ingested_at:** Telemetry with `ingested_at: -1` -> `DecodeError::InvalidTimestamp(-1)`.
 - **Label/value length mismatch:** `labels: ["a"]`, `values: [1.0, 2.0]` -> `DecodeError::InvalidPayload`.
-- **Status encode/decode round-trip:** `encode_status` -> `decode_status` for online=true, online=false, ts=0 (LWT).
+- **Status encode/decode round-trip:** `encode_status` -> `decode_status` for online=true, online=false, ts=0 (LWT). Verify returned `(adapter_id, online, ts)` triple matches input.
 - **Status via decode_event:** Passing a status payload to `decode_event` -> `DecodeError::InvalidPayload`.
 - **DeviceConfig encoding:** `encode_event` with `DeviceConfig` -> `EncodeError::UnsupportedEvent`.
 - **Unknown fields ignored:** Envelope with extra fields decodes successfully (forward compatibility).
-- **ConnectionKind as_str/from_str symmetry:** `ConnectionKind::from_str(k.as_str()) == Some(k)` for all variants.
+- **ConnectionKind as_str/from_str symmetry:** `ConnectionKind::from_str(k.as_str()) == k` for all variants (including `Other`).
 
 ### 6.2 `iotkit-adapter-runner` Tests
 
-- **Adapter task exit -> shutdown:** Adapter drops `event_tx` unexpectedly -> runner transitions to Shutdown and exits non-zero.
+- **Adapter task exit -> runner exits:** Adapter drops `event_tx` unexpectedly -> runner drains, publishes offline, returns Ok. (Binary decides exit code based on shutdown_initiated.)
 - **Disconnect + DeviceDiscovered -> inventory tracking:** Device discovered while disconnected -> `desired_inventory` updated -> on ConnAck, retained publish occurs.
 - **Disconnect + DeviceLost -> tombstone:** Device lost while disconnected -> tombstone recorded -> on ConnAck, empty retained publish.
 - **ConnAck -> full inventory republish:** After ConnAck, all entries in `desired_inventory` are published as retained.
 - **Buffer overflow:** Generate > 1000 events while disconnected -> oldest events dropped, newest retained, no panic.
 - **Buffer replay FIFO order:** Buffer 5 events while disconnected -> reconnect -> verify they are replayed in original order.
-- **Buffer replay yield fairness:** Buffer 30 events -> reconnect -> verify `yield_now` is called after every 10 events (can be verified via task interleaving in a test harness).
-- **Graceful shutdown sequence:** Signal received -> adapter stopped -> buffer drained -> offline status published -> exit 0.
+- **Buffer replay batch fairness:** Buffer 30 events -> reconnect -> verify only 10 are replayed per select! iteration, with live events interleaved between batches.
+- **Graceful shutdown sequence:** Binary receives signal -> adapter stopped (closes event_rx) -> runner drains buffer -> runner publishes offline status -> runner returns Ok -> binary exits 0.
 - **Offline status timestamp:** Graceful offline status has `ts > 0`. LWT has `ts = 0`.
-- **2nd signal -> immediate exit:** Second signal during shutdown -> `std::process::exit(1)`.
-- **publish_task unexpected exit -> runner exit 1:** Simulate publish_task returning unexpectedly -> main sets shutdown_initiated, exits 1.
-- **eventloop_task unexpected exit -> runner exit 1:** Simulate eventloop_task returning unexpectedly -> main sets shutdown_initiated, exits 1.
+- **2nd signal -> immediate exit:** Second signal during shutdown -> binary calls `std::process::exit(1)`.
+- **publish_task panic -> runner returns Err:** Simulate publish_task panicking -> runner returns Err(RunnerError::PublishTaskFailed).
+- **eventloop_task unexpected exit -> runner returns Err:** Simulate eventloop_task returning unexpectedly -> runner returns Err(RunnerError::EventLoopDied).
 - **Backoff calculation:** Verify exponential growth with jitter: attempt 0 -> ~1s, attempt 5 -> ~32s (capped at 30s), jitter within +/-30%.
 - **Reconnect counter reset:** ConnAck resets attempt counter to 0.
 - **Device lost then rediscovered while disconnected:** `desired_inventory` reflects latest state (rediscovered); intermediate tombstone not published.
-- **Adapter shutdown hangs (binary timeout):** If `shutdown_handle.shutdown().await` does not complete within adapter-specific timeout, the binary must still proceed to exit (the binary owns the timeout budget, not the runner). Verify the process does not hang indefinitely on an unresponsive adapter shutdown.
-- **Runner drain timeout:** publish_task does not complete drain within 2 seconds -> main proceeds with eventloop grace, exit 1.
-- **ConnAck during drain:** If `connack_notify` fires while publish_task is draining (after `event_rx` closed), the drain should NOT restart inventory reconcile. The drain is a terminal phase -- it flushes remaining buffer and exits. Verify no infinite loop.
-- **event_rx closure -> runner return -> binary exit code:** When `event_rx` closes and `shutdown_initiated == false` (adapter crash), runner returns exit 1. When `shutdown_initiated == true` (clean shutdown), runner returns exit 0. Verify both paths with mock channel.
-- **Buffer overflow (1001st event):** Push 1001 events into buffer while disconnected -> verify buffer length is exactly 1000, the oldest event is gone, the newest is present, and exactly one `warn!` log was emitted for the drop.
-- **DeviceLost during disconnect -> tombstone survives in desired_inventory:** Device active, disconnect, DeviceLost -> `active_devices[k] == None`. On ConnAck, empty retained publish sent for that device key.
-- **DeviceLost then DeviceDiscovered during disconnect -> tombstone overwritten:** Device active, disconnect, DeviceLost, then DeviceDiscovered with new payload -> `active_devices[k] == Some(new_payload)`. On ConnAck, the new payload is published as retained (not the tombstone).
-- **Graceful offline publish failure -> LWT takes over:** Simulate `client.publish` error for the offline status message during shutdown -> verify runner still exits (does not hang), and document that the LWT (ts=0) serves as fallback.
-- **IPv6 broker with TLS:** Config with `mqtts://[::1]:8883` + valid ca_path -> host extracted as `::1` (no brackets), port 8883, TLS enabled.
-- **Duplicate adapter_id across processes:** Two runner instances with the same `adapter_id` -> both derive the same MQTT `client_id` -> the broker disconnects the first client when the second connects (MQTT 3.1.1 spec section 3.1.4). Document this as expected broker behavior; the runner does not detect or prevent it.
 
-### 6.4 Testability Notes
-
-- **Unit-testable without a real MQTT broker:** `core/mqtt-contract` tests are pure encode/decode with no I/O. `iotkit-adapter-runner` tests mock `event_rx` via `mpsc::channel()` and mock the MQTT client by injecting a fake `AsyncClient` or by testing only the publish_task logic in isolation (buffer, inventory tracking, state transitions). No live broker required.
-- **Integration tests with broker:** Optional integration tests against a local Mosquitto instance verify end-to-end publish/subscribe behavior. These tests are gated behind a `#[cfg(feature = "integration")]` flag or an environment variable (`IOTKIT_TEST_MQTT_BROKER_URL`). CI may skip these if no broker is available.
-- **Signal handling tests:** Testing SIGTERM/SIGINT behavior in `tokio::test` is fragile (requires sending real Unix signals to the test process). Accept signal handling as a **manual test procedure** with documented steps: (1) start binary, (2) send SIGTERM, (3) verify clean exit code 0 and offline status published. Alternatively, extract the signal-handling logic into a testable function that takes a `tokio::sync::watch::Receiver<bool>` instead of a real signal stream, allowing unit tests to simulate signals via channel sends.
-
-### 6.5 `iotkit-rpi-local` Config Tests
+### 6.3 `iotkit-rpi-local` Config Tests
 
 - **Valid TOML parse:** Well-formed config -> `ValidatedConfig` with all fields populated.
 - **Empty adapter_id:** -> `config error: adapter_id: must not be empty`.
