@@ -255,15 +255,15 @@ All fields from Section 1.3.2, plus:
 | Field | JSON type | Nullable | Description |
 |---|---|---|---|
 | `session_id` | string | No | Runner session identifier (see Section 1.3.7). Allows subscribers to distinguish current vs stale retained inventory. |
-| `first_seen_at` | integer | No | Unix timestamp in milliseconds when this device was **first discovered** by the adapter. This value is set at discovery time and never changes across reconnects or inventory reconcile cycles. Must be >= 0. |
+| `first_seen_at` | integer | No | Unix timestamp in milliseconds when this device's **current active epoch** began (i.e., the most recent `DeviceDiscovered` event). Reset on each rediscovery after a loss. Must be >= 0. |
 
 Note: The non-retained `discovery` topic (Section 1.3.2) does NOT include `session_id` or `first_seen_at`. Only the retained `inventory/{device_key}` topic includes both fields.
 
 **Timestamp semantics for inventory:**
 - `ts`: The time at which this inventory payload was encoded and published. Refreshed on every reconnect reconcile. Use `ts` for **message freshness** (e.g., "how recently was this inventory message published?").
-- `first_seen_at`: The original discovery time. Never changes for a given device within a process lifetime. Use `first_seen_at` for **device freshness** (e.g., "how long has this device been known to the adapter?").
+- `first_seen_at`: The start of the device's current active epoch (most recent `DeviceDiscovered`). Reset on each rediscovery after a loss. Use `first_seen_at` for **device uptime** (e.g., "how long has this device been continuously active?").
 
-Consumers use `first_seen_at` for device freshness and `ts` for message freshness.
+Consumers use `first_seen_at` for device uptime (current active epoch) and `ts` for message freshness.
 
 **Complete JSON example (inventory):**
 
@@ -1175,17 +1175,25 @@ The runner never initiates shutdown. It reacts to `event_rx` closing:
 
 **What happens to eventloop_task when runner returns?** The runner aborts it in step 6. The binary does not need to manage it.
 
+#### Queued Events During Shutdown
+
+After the binary calls `adapter_handle.shutdown()`, the adapter stops producing new events and drops `event_tx`. However, events already in the `event_rx` channel buffer are still available for `recv()`. The publish_task continues processing these queued events normally (publish if connected, drop if disconnected) until `recv()` returns `None`.
+
+The binary's 5-second adapter shutdown timeout bounds this drain implicitly: if the adapter shutdown + queued event processing exceeds 5 seconds, the binary aborts everything. There is no separate drain timeout because the binary's timeout already covers it.
+
+**Policy:** Queued events are processed, not dropped. This is safe because the event_rx channel capacity is bounded (set by the adapter, typically 256). At 5ms per publish (local broker), 256 events drain in ~1.3 seconds. If the broker is slow or disconnected, publishes time out at 5s each, but the binary's 5s timeout will abort before more than one stalls.
+
 #### Timeout Budget
 
 | Phase | Owner | Max duration |
 |---|---|---|
-| Adapter shutdown | Binary | 5 seconds |
+| Adapter shutdown + queued event drain | Binary | 5 seconds (combined) |
 | Offline status publish | Runner | 5 seconds (timeout) |
 | Disconnect + eventloop grace | Runner | 2 seconds |
 | Eventloop abort | Runner | ~0 (immediate) |
 | **Total maximum** | | **5 + 7 = 12 seconds** |
 
-Note: The binary's 5s adapter timeout runs concurrently with (not before) the runner's shutdown sequence. In practice, once the adapter drops event_tx, the runner begins shutdown immediately, so the actual wall time is typically 5s + small overlap.
+Note: The binary's 5s timeout covers both adapter shutdown and any queued event processing. Once event_rx yields None, the runner proceeds to offline status publish (up to 5s) and eventloop grace (2s). In practice, queued event drain is fast (< 2s for 256 events on local broker).
 
 #### 2.5.3 2nd Signal During Shutdown
 
@@ -1511,7 +1519,7 @@ Where `InventoryData` is a struct containing the identity fields needed to re-en
 struct InventoryData {
     device_key: String,
     identity: SensorIdentity,  // manufacturer, ic_part_number, sensor_type, connection
-    first_seen_at: i64,        // Unix ms timestamp; set at discovery time, never changes
+    first_seen_at: i64,        // Unix ms; start of current active epoch (reset on rediscovery after loss)
 }
 ```
 
@@ -1531,7 +1539,7 @@ On ConnAck, replay **everything** in `desired_inventory`. This is simple and cor
 
 **`DeviceDiscovered`:**
 
-1. Extract identity data from the event into an `InventoryData` struct. Set `first_seen_at = now_ms()` at this moment (first discovery). If the device was previously in `desired_inventory` as `Some(data)` (re-discovery), preserve the original `data.first_seen_at` rather than resetting it to `now_ms()`.
+1. Extract identity data from the event into an `InventoryData` struct. Set `first_seen_at = now_ms()`. This always reflects the start of the current active epoch. If the device was previously lost (tombstone `None`) and is rediscovered, `first_seen_at` resets to the rediscovery time. If the device was already `Some(data)` (re-discovery without loss), preserve `data.first_seen_at` (the epoch hasn't restarted).
 2. `desired_inventory.insert(device_key_str, Some(inventory_data))`.
 3. If connected: encode with current `session_id` + `ts = now_ms()`, publish to `iotkit/v1/{adapter_id}/inventory/{device_key}`, QoS 1, retained.
 
@@ -2498,7 +2506,7 @@ Across all running instances on a single host:
 | Property | Must be unique | Enforced by |
 |---|---|---|
 | `adapter_id` | YES | Operator config discipline (not enforced at runtime) |
-| MQTT `client_id` | YES | Follows from unique `adapter_id` via Section 4.3.2 |
+| MQTT `client_id` | YES | Follows from unique `adapter_id` when using default derivation (Section 4.3.2). When `mqtt.client_id` is explicitly set, operator must ensure uniqueness across all instances. |
 | `bus_path` | YES | Operator config discipline |
 | systemd unit name | YES | Follows from unique instance name |
 
@@ -2540,7 +2548,7 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **Inventory payload includes session_id:** `encode_inventory` with a session_id -> `decode_inventory` -> `session_id` field matches.
 - **Inventory decode returns session_id:** `decode_inventory` returns `(adapter_id, event, session_id, first_seen_at)` tuple; `session_id` matches the encoded value.
 - **Inventory decode returns first_seen_at:** `decode_inventory` returns the encoded `first_seen_at` value unchanged.
-- **Inventory first_seen_at preserved across reconnect:** On re-discovery of an already-tracked device, `desired_inventory` retains the original `first_seen_at`; reconcile payload includes the original value (not `now_ms()`).
+- **Inventory first_seen_at semantics:** On re-discovery of an already-active device (Some → Some), `first_seen_at` is preserved. On re-discovery after loss (None → Some), `first_seen_at` resets to `now_ms()` (new active epoch).
 - **Session_id in status payload:** `encode_status` with a session_id -> decode -> `session_id` field matches for online, offline, and LWT variants.
 
 ### 6.2 `iotkit-adapter-runner` Tests
