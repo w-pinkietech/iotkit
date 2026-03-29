@@ -246,9 +246,41 @@ Additional fields:
 
 #### 1.3.5 Inventory Topic
 
-The `iotkit/v1/{adapter_id}/inventory/{device_key}` topic carries the same payload as a Discovery envelope (Section 1.3.2). No additional fields. The payload is identical to what was published to the non-retained `discovery` topic for that device.
+The `iotkit/v1/{adapter_id}/inventory/{device_key}` topic carries a Discovery-like payload with an additional `session_id` field (see below). A DeviceLost event triggers an inventory tombstone: an empty retained payload (`b""`) published to the device's inventory topic, clearing the retained message.
 
-When a DeviceLost event is processed, the broker-side retained message for the device's inventory topic is cleared by publishing an empty payload (`b""`) with `retain = true` to that topic.
+**Inventory payload fields** (same as Discovery envelope, plus `session_id`):
+
+All fields from Section 1.3.2, plus:
+
+| Field | JSON type | Nullable | Description |
+|---|---|---|---|
+| `session_id` | string | No | Runner session identifier (see Section 1.3.7). Allows subscribers to distinguish current vs stale retained inventory. |
+
+Note: The non-retained `discovery` topic (Section 1.3.2) does NOT include `session_id`. Only the retained `inventory/{device_key}` and `status` topics include it.
+
+**Complete JSON example (inventory):**
+
+```json
+{
+  "v": 1,
+  "adapter_id": "bravepi:0",
+  "ts": 1743206400000,
+  "session_id": "a1b2c3d4e5f67890fedcba0987654321",
+  "device_key": "i2c:0x44:sht31",
+  "identity": {
+    "manufacturer": "Sensirion",
+    "ic_part_number": "SHT31-DIS",
+    "sensor_type": "temperature",
+    "connection": {
+      "kind": "i2c",
+      "parameters": {
+        "bus": "1",
+        "address": "0x44"
+      }
+    }
+  }
+}
+```
 
 #### 1.3.6 Status Envelope
 
@@ -259,12 +291,15 @@ Additional fields:
 | Field | JSON type | Nullable | Description |
 |---|---|---|---|
 | `online` | boolean | No | `true` when the adapter comes online; `false` when it goes offline. |
+| `session_id` | string | No | Runner session identifier (see Section 1.3.7). |
 
 **Timestamp semantics:**
 
 - **Graceful offline** (adapter shutting down cleanly): `ts = now_ms()` at the moment of shutdown.
 - **LWT (Last Will and Testament)** — abnormal disconnect: `ts = 0`. The broker publishes this on the adapter's behalf. The `ts = 0` sentinel allows consumers to distinguish a broker-injected LWT from a gracefully sent offline message.
 - **Online**: `ts = now_ms()` at startup.
+
+**LWT and session_id:** The LWT payload is pre-registered at connection time and includes the current `session_id`. This is correct -- the LWT fires for the session that registered it.
 
 Status messages MUST be decoded with `decode_status()`, not `decode_event()`. `decode_event()` returns `DecodeError::InvalidPayload` if called with a status payload.
 
@@ -275,7 +310,8 @@ Status messages MUST be decoded with `decode_status()`, not `decode_event()`. `d
   "v": 1,
   "adapter_id": "bravepi:0",
   "ts": 1743206000000,
-  "online": true
+  "online": true,
+  "session_id": "a1b2c3d4e5f67890fedcba0987654321"
 }
 ```
 
@@ -286,7 +322,8 @@ Status messages MUST be decoded with `decode_status()`, not `decode_event()`. `d
   "v": 1,
   "adapter_id": "bravepi:0",
   "ts": 1743209600000,
-  "online": false
+  "online": false,
+  "session_id": "a1b2c3d4e5f67890fedcba0987654321"
 }
 ```
 
@@ -297,9 +334,29 @@ Status messages MUST be decoded with `decode_status()`, not `decode_event()`. `d
   "v": 1,
   "adapter_id": "bravepi:0",
   "ts": 0,
-  "online": false
+  "online": false,
+  "session_id": "a1b2c3d4e5f67890fedcba0987654321"
 }
 ```
+
+#### 1.3.7 Session ID
+
+The `session_id` is a 32-character lowercase hex string generated once at runner startup and included in all retained messages (`status` and `inventory/{device_key}`). It uniquely identifies a runner process lifetime.
+
+**Generation:** `format!("{:016x}{:016x}", high, low)` where `high = SystemTime::now().duration_since(UNIX_EPOCH).as_nanos() as u64` and `low = std::process::id() as u64 ^ (high.wrapping_mul(0x517cc1b727220a95))`. No external UUID crate is needed. Collisions are astronomically unlikely given nanosecond-precision timestamps combined with process IDs.
+
+**Stability:** The `session_id` is constant for the entire process lifetime. It does NOT change on MQTT reconnect. It changes only on process restart.
+
+**Subscriber protocol for stale inventory detection:**
+
+1. Subscriber receives `status` message with `online: true`. Note the `session_id`.
+2. All `inventory/{device_key}` messages with matching `session_id` are current.
+3. All `inventory/{device_key}` messages with a different `session_id` (or missing `session_id`) are stale and SHOULD be discarded by the subscriber.
+4. On process restart, the new `session_id` in the `status` message invalidates all previously-retained inventory. The subscriber discards old inventory and rebuilds from the new session's inventory messages.
+
+**Why session_id instead of timestamp-based staleness windows:** A fixed 30-second staleness window is fragile -- it breaks if inventory reconcile is delayed (slow broker, many devices, network congestion). The `session_id` provides a definitive current/stale classification with zero timing assumptions.
+
+**Non-retained topics do NOT include `session_id`.** The `telemetry`, `discovery`, `loss`, and `error` topics are non-retained live streams. Late subscribers miss them by design. Adding `session_id` to transient messages would add payload overhead with no benefit.
 
 ### 1.4 Validation Rules for Decode
 
@@ -328,6 +385,16 @@ All decode functions MUST apply these validation rules in the order listed. The 
 #### 1.4.5 Unknown Fields
 
 Unknown fields in the JSON object MUST be silently ignored (`#[serde(deny_unknown_fields)]` MUST NOT be used). This preserves forward compatibility when new optional fields are added in future minor revisions.
+
+#### 1.4.6 Topic/Payload Identity Consistency
+
+The `adapter_id` and `device_key` values appear in both the MQTT topic (percent-encoded) and the JSON payload (raw). The following rule governs mismatches:
+
+**Payload is authoritative. Topic is for routing only.** If a consumer decodes a message from topic `iotkit/v1/X/telemetry` and the payload contains `adapter_id: Y` where `X != percent_decode(Y)`, the payload's `adapter_id` is authoritative. The same rule applies to `device_key` in inventory topics.
+
+**However, the runner MUST always publish with consistent topic/payload identity.** The runner constructs both the topic and the payload from the same `adapter_id` and `device_key` values, guaranteeing consistency by construction. A topic/payload mismatch in production is a bug in the runner, not a protocol feature.
+
+**No runtime validation in decode functions.** The `decode_event()` and `decode_status()` functions do not accept a topic parameter and do not validate topic/payload consistency. This keeps the decode API simple. Consistency is enforced at the publisher side (runner), not the consumer side.
 
 ### 1.5 Adapter Event Mapping
 
@@ -487,7 +554,24 @@ pub fn encode_event(
 /// `online`: `true` = adapter online, `false` = adapter offline.
 ///
 /// Always returns a `Vec<u8>` (infallible; status payloads are statically structured).
-pub fn encode_status(adapter_id: &AdapterId, online: bool, ts: i64) -> Vec<u8>;
+pub fn encode_status(adapter_id: &AdapterId, online: bool, ts: i64, session_id: &str) -> Vec<u8>;
+
+/// Encode an inventory payload for a retained `inventory/{device_key}` topic.
+///
+/// This is separate from `encode_event` because inventory payloads include `session_id`
+/// and are re-encoded at publish time (not at event-receipt time).
+///
+/// `data`: The identity data for the device.
+/// `session_id`: The runner's session identifier (constant per process lifetime).
+/// `ts`: Unix milliseconds at the time of publish.
+///
+/// Always returns a `Vec<u8>` (infallible; inventory payloads are statically structured).
+pub fn encode_inventory(
+    adapter_id: &AdapterId,
+    data: &InventoryData,
+    session_id: &str,
+    ts: i64,
+) -> Vec<u8>;
 
 // ---------------------------------------------------------------------------
 // Decode
@@ -513,16 +597,19 @@ pub fn decode_event(
 
 /// Decode a status payload.
 ///
-/// Returns `(adapter_id, online, ts)` on success.
+/// Returns `(adapter_id, online, ts, session_id)` on success.
 /// `ts` is the Unix timestamp in milliseconds. `ts = 0` is accepted (LWT sentinel).
 /// Other negative `ts` values are rejected.
+/// `session_id` is the runner's session identifier (32-char hex string).
 ///
 /// The caller needs `ts` to distinguish LWT offline (ts=0) from graceful offline (ts>0)
-/// and to record when the adapter went online/offline.
+/// and to record when the adapter went online/offline. The caller uses `session_id`
+/// to correlate inventory messages with the current session (Section 1.3.7).
 ///
 /// MUST be called for payloads received on the `.../status` topic.
 /// MUST NOT be used for other event types.
-pub fn decode_status(payload: &[u8]) -> Result<(AdapterId, bool, i64), DecodeError>;
+pub fn decode_status(payload: &[u8]) -> Result<(AdapterId, bool, i64, String), DecodeError>;
+// Returns (adapter_id, online, ts, session_id)
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -743,7 +830,8 @@ The runner spawns two internal tasks. Each task has **exclusive ownership** of i
 
 **Owns (exclusive, moved in):**
 - `event_rx: mpsc::Receiver<AdapterEvent>` -- receives adapter events
-- `desired_inventory: HashMap<String, Option<Vec<u8>>>` -- sole inventory model (see Section 3.8)
+- `desired_inventory: HashMap<String, Option<InventoryData>>` -- sole inventory model (see Section 3.8)
+- `session_id: String` -- 32-char hex string generated at runner startup (see Section 1.3.7), constant for process lifetime
 - `outbound_buffer: VecDeque<PublishItem>` -- buffered publishes for when disconnected
 - `client: rumqttc::AsyncClient` (clone) -- used for `publish()` / `publish_bytes()` calls
 
@@ -757,32 +845,42 @@ The runner spawns two internal tasks. Each task has **exclusive ownership** of i
 
 **Behavior loop:**
 ```
+let mut reconciled = false;  // true after ConnAck reconcile completes
+
 loop {
-    // Determine if there are buffered items to drain while connected
-    let has_buffered = connected.load(Acquire)
+    // Determine if there are buffered items to drain while connected AND reconciled
+    let can_drain = connected.load(Acquire)
+        && reconciled
         && !outbound_buffer.is_empty();
 
     tokio::select! {
         // Live events from adapter
         event = event_rx.recv() => {
             match event {
-                Some(ev) => process_event(ev),  // buffer or publish
+                Some(ev) => {
+                    if connected.load(Acquire) && reconciled {
+                        process_event_live(ev);   // track inventory + publish immediately
+                    } else {
+                        process_event_buffer(ev); // track inventory + buffer for later
+                    }
+                }
                 None => break,                   // channel closed, exit task
             }
         }
 
-        // ConnAck notification — reconcile inventory + publish online status
+        // ConnAck notification — explicit reconcile phase
         _ = connack_notify.notified() => {
-            // Publish online status (was NOT done by eventloop_task)
+            reconciled = false;  // entering reconcile phase
+            // (1) Publish online status (with session_id)
             publish_online_status();
-            // Replay all desired_inventory as retained publishes
+            // (2) Replay all desired_inventory as retained publishes (with session_id)
             replay_inventory();
-            // Buffer drain is handled by the drain branch below,
-            // NOT here. This avoids the edge-triggered Notify problem.
+            // (3) Reconcile complete — resume normal operations
+            reconciled = true;
         }
 
-        // Drain buffered items when connected (always eligible when has_buffered)
-        _ = std::future::ready(()), if has_buffered => {
+        // Drain buffered items (only when connected AND reconciled)
+        _ = std::future::ready(()), if can_drain => {
             // Pop and publish up to 10 items from outbound_buffer
             drain_buffer_batch(10);
         }
@@ -792,20 +890,31 @@ loop {
 drain_remaining();
 ```
 
-**Why `std::future::ready(())` instead of `connack_notify.notified()`:** `Notify` is edge-triggered. After one ConnAck, the publish_task would replay 10 items and return to `select!`. The `!outbound_buffer.is_empty()` guard does not make the `notified()` future ready again — items 11+ would sit forever until another ConnAck. By using `std::future::ready(())` with the `has_buffered` guard, the drain branch is **always eligible** whenever the runner is connected and the buffer is non-empty. `select!` is fair by default (random branch selection), so live events from `event_rx` are not starved.
+**Reconcile phase semantics:** Between ConnAck and reconcile completion, the publish_task is in a "reconnected but not yet reconciled" state. During this phase:
+
+- **Live events are buffered**, not published directly. This ensures status and inventory are published to the broker BEFORE any live telemetry or discovery events.
+- **Buffer drain is paused** (the `can_drain` guard requires `reconciled`).
+- The reconcile executes synchronously within the `connack_notify` arm: publish online status, then replay all inventory, then set `reconciled = true`. No `select!` interleaving occurs during reconcile.
+
+**Reconcile failure (disconnect mid-reconcile):** If MQTT disconnects during steps (1) or (2), `client.publish().await` returns `Err`. The reconcile aborts (does not set `reconciled = true`). Meanwhile, eventloop_task sets `connected = false`. On the next ConnAck, the `connack_notify` branch fires again and reconcile restarts from scratch. This is safe because reconcile is idempotent -- it republishes the full `desired_inventory` every time.
+
+**Reconcile duration:** For typical deployments (< 100 devices), reconcile takes < 100ms. During this brief window, live events from `event_rx` are buffered. The `event_rx` channel has bounded capacity set by the adapter, providing natural backpressure.
+
+**Why `std::future::ready(())` instead of `connack_notify.notified()`:** `Notify` is edge-triggered. After one ConnAck, the publish_task would replay 10 items and return to `select!`. The `!outbound_buffer.is_empty()` guard does not make the `notified()` future ready again — items 11+ would sit forever until another ConnAck. By using `std::future::ready(())` with the `can_drain` guard, the drain branch is **always eligible** whenever the runner is connected, reconciled, and the buffer is non-empty. `select!` is fair by default (random branch selection), so live events from `event_rx` are not starved.
 
 **Why ConnAck notification only does inventory reconcile:** All publish operations (online status, inventory reconcile) happen in publish_task after receiving the `connack_notify` signal. The eventloop_task MUST NOT call `client.publish()` — see Section 3.4.1 for the deadlock rationale.
 
 - When `connected.load(Acquire)` is `false`: enqueue publishes to `outbound_buffer`.
-- When `connected` is `true`: the drain branch is always eligible if the buffer is non-empty, interleaving with live events naturally via `select!` fairness.
-- When `connack_notify` fires: publish online status and replay `desired_inventory` (retained). Buffer drain is handled separately by the always-eligible drain branch.
+- When `connected` is `true` but `reconciled` is `false`: enqueue publishes to `outbound_buffer` (reconcile in progress).
+- When `connected` is `true` and `reconciled` is `true`: the drain branch is always eligible if the buffer is non-empty, interleaving with live events naturally via `select!` fairness.
+- When `connack_notify` fires: set `reconciled = false`, publish online status, replay `desired_inventory` (retained), set `reconciled = true`. Buffer drain resumes in subsequent iterations.
 - On `event_rx` closed (`recv()` returns `None`): exit the loop. This is the shutdown signal propagated from the binary via the adapter stopping.
 
 **Fairness:** `tokio::select!` picks a random ready branch by default. When both `event_rx` and the drain branch are ready, each has ~50% chance of being selected per iteration. This prevents either live events or buffer replay from starving the other.
 
 **Notify coalescing:** If multiple ConnAck events fire before publish_task processes the notification, `Notify` coalesces them into one wakeup. This is fine — inventory reconcile is idempotent (publishes the full `desired_inventory` every time).
 
-**Message ordering on reconnect:** On ConnAck, publish_task first publishes online status and reconciles inventory (retained), then the drain branch resumes replaying buffered events. Subscribers may see a brief re-publish of already-known inventory before telemetry resumes. This is harmless and expected.
+**Message ordering on reconnect:** On ConnAck, publish_task first publishes online status and reconciles inventory (retained) within a single `select!` arm. Only after `reconciled = true` can the drain branch or live event processing publish to the broker. This guarantees strict ordering: status -> inventory -> buffered events -> live events.
 
 **Drain timeout:** The drain phase has an internal 2-second timeout. If drain takes longer, it returns anyway (best-effort). The LWT serves as fallback for offline notification.
 
@@ -943,7 +1052,7 @@ Startup is split between the binary and the runner. The binary handles steps 1-5
 
 ```
 (1) Create MQTT client + EventLoop
-    - MqttOptions with LWT: topic=`{prefix}/status`, payload=`{"v":1,"adapter_id":"...","ts":0,"online":false}`, retain=true, QoS 1
+    - MqttOptions with LWT: topic=`{prefix}/status`, payload=`{"v":1,"adapter_id":"...","ts":0,"online":false,"session_id":"..."}`, retain=true, QoS 1
     - AsyncClient::new(options, cap=256)
         |
         v  [fail: return Err(RunnerError::MqttInit(...))]
@@ -1243,14 +1352,16 @@ On every `ConnAck`, the following sequence executes **in order**:
 
 **eventloop_task does NOT call `client.publish()`.** See Section 3.4.1 for deadlock rationale.
 
-**publish_task** (steps 4-7, after receiving notification):
+**publish_task** (steps 4-8, after receiving notification):
 
-4. **Publish online status** -- `encode_status(adapter_id, true, now_ms())` to `iotkit/v1/{adapter_id}/status`, QoS 1, retained.
-5. **Inventory reconcile** -- replay all entries in `desired_inventory` as retained publishes (see Section 3.8).
-6. **Buffer replay** -- handled by the always-eligible drain branch in the `select!` loop (see Section 3.7.5). NOT triggered by `connack_notify`.
-7. **Resume live event processing** -- the `select!` loop naturally interleaves buffer drain batches with live events.
+4. **Set `reconciled = false`** -- enters reconcile phase. During this phase, live events from `event_rx` are buffered (not published) and the drain branch is paused.
+5. **Publish online status** -- `encode_status(adapter_id, true, now_ms(), session_id)` to `iotkit/v1/{adapter_id}/status`, QoS 1, retained.
+6. **Inventory reconcile** -- replay all entries in `desired_inventory` as retained publishes with current `session_id` + fresh `ts` (see Section 3.8).
+7. **Set `reconciled = true`** -- reconcile phase complete. Normal operations resume.
+8. **Buffer replay** -- handled by the always-eligible drain branch in the `select!` loop (see Section 3.7.5). NOT triggered by `connack_notify`.
+9. **Resume live event processing** -- the `select!` loop naturally interleaves buffer drain batches with live events.
 
-Steps 4-5 run synchronously within the `connack_notify` branch of the `select!` loop. Step 6 runs in subsequent iterations via the drain branch (guarded by `has_buffered`). Inventory reconcile runs in full (bounded by device count). Buffer replay is batched (max 10 per iteration) to interleave with live events from `event_rx`.
+Steps 4-7 run synchronously within the `connack_notify` branch of the `select!` loop. Steps 8-9 run in subsequent iterations via the drain branch (guarded by `connected && reconciled && !buffer.is_empty()`). Inventory reconcile runs in full (bounded by device count). Buffer replay is batched (max 10 per iteration) to interleave with live events from `event_rx`.
 
 #### 3.4.1 Deadlock Prevention: eventloop_task Must Not Publish
 
@@ -1338,13 +1449,15 @@ Both paths execute regardless of event type. Inventory events are tracked in ste
 On `connack_notify.notified()`, the publish_task executes in strict order:
 
 ```
-(1) Online status        -- published by publish_task in the connack_notify branch
-(2) Inventory reconcile  -- inventory.republish_all(&client)
-(3) Buffer replay        -- handled by the always-eligible drain branch (max 10 items per iteration)
-(4) Live events          -- resume normal select! loop processing
+(0) Set reconciled = false  -- pause buffer drain + buffer live events
+(1) Online status           -- published by publish_task in the connack_notify branch (includes session_id)
+(2) Inventory reconcile     -- inventory.republish_all(&client, session_id) (includes session_id)
+(3) Set reconciled = true   -- resume normal operations
+(4) Buffer replay           -- handled by the always-eligible drain branch (max 10 items per iteration)
+(5) Live events             -- resume normal select! loop processing
 ```
 
-All four steps execute in the publish_task. Steps (1)-(2) run synchronously in the `connack_notify` branch. Steps (3)-(4) run in subsequent `select!` iterations via the drain branch and `event_rx` branch respectively.
+All steps execute in the publish_task. Steps (0)-(3) run synchronously in the `connack_notify` branch. Steps (4)-(5) run in subsequent `select!` iterations via the drain branch and `event_rx` branch respectively. The `reconciled` flag guarantees steps (4) and (5) cannot execute until steps (1)-(2) are complete.
 
 #### 3.7.5 Buffer Replay Mechanics
 
@@ -1368,27 +1481,36 @@ The `select!` loop uses `std::future::ready(())` with a guard for buffer drain:
 
 ```
 loop {
-    let has_buffered = connected.load(Acquire)
+    let can_drain = connected.load(Acquire)
+        && reconciled
         && !outbound_buffer.is_empty();
 
     tokio::select! {
-        event = event_rx.recv() => { ... }
+        event = event_rx.recv() => {
+            if connected.load(Acquire) && reconciled {
+                process_event_live(ev);   // track inventory + publish immediately
+            } else {
+                process_event_buffer(ev); // track inventory + buffer for later
+            }
+        }
 
         _ = connack_notify.notified() => {
-            publish_online_status();  // online status publish
-            replay_inventory();       // full inventory replay (bounded by device count)
+            reconciled = false;
+            publish_online_status();  // online status publish (with session_id)
+            replay_inventory();       // full inventory replay (with session_id)
+            reconciled = true;
             // Buffer drain is NOT done here — the drain branch handles it
         }
 
-        // Always eligible when connected + buffer non-empty
-        _ = std::future::ready(()), if has_buffered => {
+        // Always eligible when connected + reconciled + buffer non-empty
+        _ = std::future::ready(()), if can_drain => {
             drain_buffer_batch(10);   // max 10 items per iteration
         }
     }
 }
 ```
 
-**Why this works:** `std::future::ready(())` is immediately ready, so whenever `has_buffered` is true, the drain branch is eligible in `select!`. After draining up to 10 items, control returns to the top of the loop, `has_buffered` is re-evaluated, and if the buffer is still non-empty, the drain branch is eligible again. `tokio::select!` randomly picks among ready branches, so live events from `event_rx` are naturally interleaved.
+**Why this works:** `std::future::ready(())` is immediately ready, so whenever `can_drain` is true, the drain branch is eligible in `select!`. After draining up to 10 items, control returns to the top of the loop, `can_drain` is re-evaluated, and if the buffer is still non-empty, the drain branch is eligible again. `tokio::select!` randomly picks among ready branches, so live events from `event_rx` are naturally interleaved.
 
 **Why NOT use `connack_notify` for buffer drain:** `Notify` is edge-triggered. After one `ConnAck`, the publish_task would drain 10 items and return to `select!`. The `notified()` future would NOT become ready again (no new `notify_one()` call), so items 11+ would sit in the buffer forever until another `ConnAck`. The always-eligible drain branch avoids this entirely.
 
@@ -1406,9 +1528,20 @@ Key behaviors:
 There is ONE inventory model. No separate `pending_retained_ops`. All inventory state lives in a single HashMap:
 
 ```rust
-/// device_key (String) -> Some(payload) for active, None for tombstone
-desired_inventory: HashMap<String, Option<Vec<u8>>>
+/// device_key (String) -> Some(identity_data) for active, None for tombstone
+desired_inventory: HashMap<String, Option<InventoryData>>
 ```
+
+Where `InventoryData` is a struct containing the identity fields needed to re-encode the inventory payload at publish time:
+
+```rust
+struct InventoryData {
+    device_key: String,
+    identity: SensorIdentity,  // manufacturer, ic_part_number, sensor_type, connection
+}
+```
+
+**Why store structured data instead of pre-encoded bytes:** The `session_id` and `ts` fields must be set at publish time, not at event-receipt time. If `desired_inventory` stored pre-encoded `Vec<u8>`, `republish_all` would publish payloads with stale timestamps and (after a restart) wrong `session_id`. By storing the identity data, encoding happens at publish time with the current `session_id` (runner-level constant) and a fresh `ts = now_ms()`.
 
 This HashMap is the **sole source of truth** for device inventory. It is exclusively owned by publish_task (no sharing, no Mutex). The broker's retained message store is treated as a cache that is unconditionally overwritten on every reconnect.
 
@@ -1416,7 +1549,7 @@ On ConnAck, replay **everything** in `desired_inventory`. This is simple and cor
 
 | `desired_inventory` value | Meaning | MQTT action on publish/reconcile |
 |---------------------------|---------|----------------------------------|
-| `Some(payload)` | Device is active | Publish `payload` to `inventory/{device_key}`, QoS 1, **retained** |
+| `Some(data)` | Device is active | Encode `data` with current `session_id` + `ts = now_ms()`, publish to `inventory/{device_key}`, QoS 1, **retained** |
 | `None` | Device was lost (tombstone) | Publish **empty payload** (`Vec::new()`) to `inventory/{device_key}`, QoS 1, **retained** |
 | Key absent | Device never seen or process restarted | No action |
 
@@ -1424,13 +1557,13 @@ On ConnAck, replay **everything** in `desired_inventory`. This is simple and cor
 
 **`DeviceDiscovered`:**
 
-1. Encode event via `encode_event(adapter_id, event)` to get payload bytes.
-2. `desired_inventory.insert(device_key_str, Some(payload))`.
-3. If connected: publish `payload` to `iotkit/v1/{adapter_id}/inventory/{device_key}`, QoS 1, retained.
+1. Extract identity data from the event into an `InventoryData` struct.
+2. `desired_inventory.insert(device_key_str, Some(inventory_data))`.
+3. If connected: encode with current `session_id` + `ts = now_ms()`, publish to `iotkit/v1/{adapter_id}/inventory/{device_key}`, QoS 1, retained.
 
 **`DeviceLost`:**
 
-1. `desired_inventory.insert(device_key_str, None)` -- overwrites any previous `Some(payload)`.
+1. `desired_inventory.insert(device_key_str, None)` -- overwrites any previous `Some(data)`.
 2. If connected: publish **empty bytes** to `iotkit/v1/{adapter_id}/inventory/{device_key}`, QoS 1, retained. This clears the broker's retained message for that topic.
 
 **All other events:** No inventory tracking. `track_event` returns `false`.
@@ -1440,15 +1573,21 @@ On ConnAck, replay **everything** in `desired_inventory`. This is simple and cor
 On every `ConnAck`, the publish_task iterates **all entries** in `desired_inventory`:
 
 ```
-for (device_key_str, maybe_payload) in &desired_inventory:
-    topic = inventory_topic(adapter_id, device_key)
-    payload = maybe_payload.clone().unwrap_or(Vec::new())  // Some -> data, None -> empty
-    client.publish(topic, QoS1, retained=true, payload).await
+for (device_key_str, maybe_data) in &desired_inventory:
+    topic = inventory_topic(adapter_id, device_key_str)
+    match maybe_data:
+        Some(data) =>
+            payload = encode_inventory(adapter_id, data, session_id, now_ms())
+            client.publish(topic, QoS1, retained=true, payload).await
+        None =>
+            client.publish(topic, QoS1, retained=true, Vec::new()).await
 ```
 
-This is an **unconditional full overwrite** of the broker's retained inventory state. There is no diffing, no checking what the broker currently holds. Every active device gets its payload re-published. Every tombstone gets an empty retained publish.
+This is an **unconditional full overwrite** of the broker's retained inventory state. There is no diffing, no checking what the broker currently holds. Every active device gets a freshly-encoded payload (with the current `session_id` and `ts = now_ms()`). Every tombstone gets an empty retained publish.
 
 **Why unconditional overwrite:** With `clean_session=true`, the runner cannot know which QoS 1 publishes were actually delivered before the previous disconnection. A retained message may have been enqueued to rumqttc but never transmitted. The only safe strategy is to republish everything.
+
+**Why re-encode on every reconcile:** The `session_id` is constant per process, but `ts` must reflect the actual publish time. Re-encoding ensures subscribers see a fresh timestamp on every reconnect, making it easy to identify the most recent reconciliation.
 
 #### 3.8.4 Offline State Transitions
 
@@ -1482,7 +1621,7 @@ Tombstones (`None` entries) persist in `desired_inventory` for the **entire proc
 
 - **Re-sent on every `ConnAck`.** Each reconnect publishes an empty retained message to clear the broker.
 - **Never removed** from the HashMap during normal operation.
-- **Cleared on process restart.** When the adapter process starts fresh, `desired_inventory` is empty. The adapter will re-discover devices, populating `desired_inventory` with fresh `Some(payload)` entries. Devices that no longer exist simply won't appear.
+- **Cleared on process restart.** When the adapter process starts fresh, `desired_inventory` is empty. A new `session_id` is generated. The adapter will re-discover devices, populating `desired_inventory` with fresh `Some(data)` entries. Devices that no longer exist simply won't appear. Subscribers use the new `session_id` to discard stale inventory from the previous session.
 
 **Why keep tombstones forever:** A tombstone publish (`empty retained`) may have been enqueued to rumqttc but never delivered (the connection dropped before TCP write). Without per-message delivery confirmation, the only safe strategy is to re-send tombstones on every reconnect.
 
@@ -1491,7 +1630,7 @@ Tombstones (`None` entries) persist in `desired_inventory` for the **entire proc
 On graceful shutdown (adapter closes `event_rx`, publish_task exits):
 
 1. **Inventory is NOT cleared.** No tombstone publishes for active devices. Retained inventory messages remain on the broker.
-2. **Only status changes:** Offline status is published (`encode_status(adapter_id, false, now_ms())`).
+2. **Only status changes:** Offline status is published (`encode_status(adapter_id, false, now_ms(), session_id)`).
 3. Devices may still be visible to consumers via retained inventory topics.
 
 **Rationale:** In a multi-adapter deployment, other adapters may be publishing to the same broker. Clearing inventory on shutdown would create a false "all devices gone" signal. The offline status is sufficient for consumers to know this adapter is no longer active.
@@ -1500,19 +1639,19 @@ On graceful shutdown (adapter closes `event_rx`, publish_task exits):
 
 On crash or SIGKILL:
 
-1. **LWT fires:** Broker publishes offline status with `ts=0` (timestamp unknown at LWT registration time). The LWT payload is `encode_status(adapter_id, false, 0)`.
+1. **LWT fires:** Broker publishes offline status with `ts=0` (timestamp unknown at LWT registration time). The LWT payload is `encode_status(adapter_id, false, 0, session_id)`. The `session_id` is the one from the current process -- this is correct because the LWT fires for the session that registered it.
 2. **Inventory stays stale:** Retained inventory messages remain on the broker with the last-known payloads. No tombstones are published.
 3. **On restart:** The new process starts with empty `desired_inventory`. As the adapter re-discovers devices, `republish_all` on the first `ConnAck` publishes only the currently-active devices. Devices that no longer exist will have stale retained messages on the broker **until the broker retains them indefinitely or another mechanism clears them**.
 
-**Stale inventory cleanup after restart is the subscriber's responsibility.** The adapter runner publishes full `desired_inventory` on every ConnAck. Subscribers SHOULD treat inventory not refreshed within 30 seconds of an online status (`online: true`) as stale and remove it.
+**Stale inventory cleanup after restart uses `session_id` (Section 1.3.7).** The adapter runner includes a `session_id` in every retained message (status + inventory). On process restart, a new `session_id` is generated. Subscribers use this to definitively classify inventory as current or stale:
 
 The expected protocol:
-1. Subscriber receives `status` message with `online: true`.
-2. Subscriber starts a 30-second timer.
-3. Adapter publishes full inventory via retained `inventory/{device_key}` topics (happens immediately on ConnAck in publish_task).
-4. After 30 seconds, any inventory topic NOT refreshed during this window is considered stale. The subscriber removes it from its local state.
+1. Subscriber receives `status` message with `online: true`. Notes the `session_id`.
+2. All `inventory/{device_key}` messages with matching `session_id` are current.
+3. All `inventory/{device_key}` messages with a different or missing `session_id` are stale. The subscriber removes them from its local state.
+4. On MQTT reconnect (same process), the `session_id` does not change. Inventory reconcile re-publishes all entries with the same `session_id` and fresh timestamps. Subscribers see refreshed timestamps but the same session, confirming continuity.
 
-This avoids adding session/epoch complexity to the adapter runner. The adapter runner's only responsibility is to publish complete inventory on every ConnAck, which it already does (Section 3.8.3). The 30-second window provides ample margin for inventory reconcile to complete (typically < 1 second for < 100 devices).
+**Why session_id instead of a timing window:** A fixed staleness window (e.g. 30 seconds) is fragile -- it breaks if inventory reconcile is delayed by a slow broker, many devices, or network congestion. The `session_id` provides a definitive current/stale classification with zero timing assumptions. The cost is one additional 32-byte field in retained messages only (non-retained messages are unaffected).
 
 ### 3.9 Delivery Semantics
 
@@ -1607,11 +1746,12 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 
 | Trigger | Current state | Action | Next state | Observable effect |
 |---------|--------------|--------|------------|-------------------|
-| `AdapterEvent` received | Connected | `track_event` + `publish_event` (inventory) + `publish_event` (non-retained) | Connected | Event published to broker (enqueued) |
+| `AdapterEvent` received | Connected + reconciled | `track_event` + `publish_event` (inventory w/ session_id) + `publish_event` (non-retained) | Connected | Event published to broker (enqueued) |
+| `AdapterEvent` received | Connected + NOT reconciled | `track_event` + `buffer_event` | Connected (reconciling) | Event tracked locally; buffered until reconcile completes |
 | `AdapterEvent` received | Disconnected | `track_event` + `buffer_event` | Disconnected | Event tracked locally; buffered if transient |
 | Buffer overflow (len >= 1000) | Disconnected | `pop_front` oldest + `push_back` new | Disconnected | `warn!` log; oldest event lost |
-| `connack_notify` received | publish_task | Publish online status + `republish_all` inventory | Connected (processing) | Online status published; inventory reconciled |
-| Buffer drain branch eligible | publish_task (connected + buffer non-empty) | `drain_buffer_batch(10)` | Connected (draining) | Up to 10 buffered items published per iteration |
+| `connack_notify` received | publish_task | Set reconciled=false; publish online status (w/ session_id); `republish_all` inventory (w/ session_id); set reconciled=true | Connected (reconciled) | Online status published; inventory reconciled; buffer drain + live events resume |
+| Buffer drain branch eligible | publish_task (connected + reconciled + buffer non-empty) | `drain_buffer_batch(10)` | Connected (draining) | Up to 10 buffered items published per iteration |
 | `client.publish` fails during replay | Buffer draining | `break` from drain loop | Disconnected (pending re-notify) | Remaining buffer preserved; `warn!` log |
 | `client.publish` fails for live event | Connected | Log `warn!`, drop the single event | Connected | Event lost; non-retained events are best-effort |
 | `event_rx` closed | Any | Exit publish_task loop | Terminated | Publish_task returns |
@@ -1620,8 +1760,8 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 
 | Trigger | State | Action | Result | Observable effect |
 |---------|-------|--------|--------|-------------------|
-| `DeviceDiscovered` while connected | desired_inventory[k] = any | Insert `Some(payload)` + retained publish | Broker has current inventory | Device visible to consumers |
-| `DeviceDiscovered` while disconnected | desired_inventory[k] = any | Insert `Some(payload)` only | Local tracking updated | No broker publish; reconciled on ConnAck |
+| `DeviceDiscovered` while connected | desired_inventory[k] = any | Insert `Some(data)` + encode w/ session_id + retained publish | Broker has current inventory | Device visible to consumers |
+| `DeviceDiscovered` while disconnected | desired_inventory[k] = any | Insert `Some(data)` only | Local tracking updated | No broker publish; reconciled on ConnAck |
 | `DeviceLost` while connected | desired_inventory[k] = Some | Insert `None` + empty retained publish | Broker inventory cleared | Device no longer visible |
 | `DeviceLost` while disconnected | desired_inventory[k] = Some | Insert `None` only | Local tracking updated | Tombstone sent on ConnAck |
 | `DeviceLost` for unknown device | desired_inventory[k] absent | Insert `None` | Tombstone created | Defensive; empty retained on ConnAck clears any stale data |
@@ -1671,17 +1811,17 @@ digraph mqtt_protocol {
     subgraph cluster_publish {
         label="Publish Task";
         style=dashed;
-        PT_Select [label="select! {\n  event_rx.recv()\n  connack_notify\n  drain (if has_buffered)\n}"];
-        PT_Event_Connected [label="Connected path:\n1. track_event\n2. publish inventory\n3. publish event"];
-        PT_Event_Disconnected [label="Disconnected path:\n1. track_event\n2. buffer_event"];
-        PT_Reconnect [label="ConnAck path:\n1. publish online status\n2. republish_all inventory"];
+        PT_Select [label="select! {\n  event_rx.recv()\n  connack_notify\n  drain (if can_drain)\n}"];
+        PT_Event_Connected [label="Connected+reconciled path:\n1. track_event\n2. publish inventory (w/ session_id)\n3. publish event"];
+        PT_Event_Disconnected [label="Disconnected/not-reconciled path:\n1. track_event\n2. buffer_event"];
+        PT_Reconnect [label="ConnAck path:\n0. reconciled=false\n1. publish online status (w/ session_id)\n2. republish_all inventory (w/ session_id)\n3. reconciled=true"];
         PT_Drain [label="Drain path:\n1. drain max 10 from buffer"];
         PT_Exit [label="event_rx closed\n-> exit"];
 
-        PT_Select -> PT_Event_Connected [label="event + connected=true"];
-        PT_Select -> PT_Event_Disconnected [label="event + connected=false"];
+        PT_Select -> PT_Event_Connected [label="event + connected + reconciled"];
+        PT_Select -> PT_Event_Disconnected [label="event + !connected or !reconciled"];
         PT_Select -> PT_Reconnect [label="connack_notify"];
-        PT_Select -> PT_Drain [label="has_buffered=true"];
+        PT_Select -> PT_Drain [label="can_drain=true"];
         PT_Select -> PT_Exit [label="recv() = None"];
         PT_Event_Connected -> PT_Select;
         PT_Event_Disconnected -> PT_Select;
@@ -1720,6 +1860,7 @@ digraph mqtt_protocol {
 | `clean_session` | `true` | rumqttc default | No |
 | QoS | `AtLeastOnce` (1) | All publishes | No |
 | LWT timestamp | `0` (unknown) | `mqtt_client.rs` | No |
+| `CLIENT_ID_WARN_LEN` | 128 characters | `config.rs` | No (compile-time) |
 
 ---
 
@@ -1852,12 +1993,15 @@ All validation beyond deserialization is performed in a `Config::validate(&self)
 
 ### 4.2 Config Cross-Field Validation Rules
 
-Config validation uses a **two-phase approach**:
+Config validation uses a **three-phase approach**. All three phases run before any I/O starts (no MQTT connection, no I2C bus access). No config error can occur after startup begins.
 
 - **Phase 1: TOML parse** (`toml::from_str`) -- fails fast on the first syntax error, type mismatch, or missing required field. serde does not support collecting multiple parse errors. If Phase 1 fails, a single error message is printed and the process exits with code 78 (EX_CONFIG).
 - **Phase 2: Cross-field validation** (`Config::validate()`) -- runs only after Phase 1 succeeds. This phase CAN collect multiple errors (e.g., `mqtt://` + `ca_path` present AND empty `adapter_id` AND `keepalive_secs = 0`). All errors are collected and printed to stderr before exiting with code 78.
+- **Phase 3: Adapter/driver validation** (`rpi_local_adapter::validate(&config)`) -- runs only after Phase 2 succeeds. This phase validates driver-specific constraints that cannot be expressed as cross-field rules (e.g., OPT3001 minimum poll interval of 800ms, MCP9600 minimum conversion time). If any driver-level validation fails, errors are collected and printed to stderr before exiting with code 78.
 
 The process exits with code 78 (EX_CONFIG) after printing all errors from whichever phase fails.
+
+**Pre-flight guarantee:** All three validation phases complete before the adapter starts, before the MQTT client connects, and before any hardware I/O occurs. If the process starts its main loop, the config is fully validated. Runtime config errors are impossible by construction (barring external state changes like a TLS certificate expiring or a broker going offline, which are not config errors).
 
 Error messages use the format: `config error: <field-path>: <reason>`
 
@@ -1909,6 +2053,8 @@ File existence checks (only when scheme is mqtts://):
 | Condition | Error message |
 |---|---|
 | `client_id` is `Some("")` (explicitly set to empty string) | `config error: mqtt.client_id: must not be empty if specified` |
+
+**Length warning (not an error):** After deriving or accepting the final `client_id`, if `client_id.len() > 128`, emit `warn!("MQTT client_id exceeds 128 characters ({len}); some brokers may reject this")`. This is a warning, not a validation error -- the process continues normally.
 
 #### 4.2.6 adapter.bus_path
 
@@ -1978,6 +2124,10 @@ client_id = "iotkit-" + percent_encode(adapter_id)
 **Override:** If `mqtt.client_id` is explicitly set in the TOML (non-empty string), that value is used verbatim. No encoding is applied to the override value; the operator is responsible for its validity.
 
 **Stability guarantee:** The derived `client_id` is identical across every restart of the same binary with the same config file. Random suffixes are never appended. Using random suffixes would create multiple simultaneous MQTT sessions (split-brain) during rapid restart cycles, causing persistent session data to accumulate on the broker.
+
+**Portability note (MQTT 3.1.1 compliance):** The MQTT 3.1.1 specification (Section 3.1.3.1) states that conforming brokers MUST accept client IDs of 1-23 characters containing only `[0-9a-zA-Z]`. Brokers MAY accept longer IDs and IDs containing other characters (e.g. `%`). The default derived `client_id` (e.g. `iotkit-rpi%2Dlocal%3Adefault`, 29 characters) exceeds the 23-character minimum and contains `%` characters. This works with Mosquitto, HiveMQ, AWS IoT, and other modern brokers that accept extended client IDs. For strict MQTT 3.1.1 compliance with a broker that enforces the 23-character alphanumeric limit, operators MUST set `mqtt.client_id` explicitly to a compliant value.
+
+**Length warning:** If the final `client_id` (derived or explicit) exceeds 128 characters, the binary logs a `warn!` at startup: `"MQTT client_id exceeds 128 characters ({len}); some brokers may reject this"`. There is no hard rejection -- modern brokers handle long IDs, and the warning alerts operators to potential compatibility issues.
 
 ### 4.4 Config Path Resolution
 
@@ -2407,23 +2557,30 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **Negative timestamp:** `ts: -1` -> `DecodeError::InvalidTimestamp(-1)`.
 - **Negative ingested_at:** Telemetry with `ingested_at: -1` -> `DecodeError::InvalidTimestamp(-1)`.
 - **Label/value length mismatch:** `labels: ["a"]`, `values: [1.0, 2.0]` -> `DecodeError::InvalidPayload`.
-- **Status encode/decode round-trip:** `encode_status` -> `decode_status` for online=true, online=false, ts=0 (LWT). Verify returned `(adapter_id, online, ts)` triple matches input.
+- **Status encode/decode round-trip:** `encode_status` -> `decode_status` for online=true, online=false, ts=0 (LWT). Verify returned `(adapter_id, online, ts, session_id)` tuple matches input.
 - **Status via decode_event:** Passing a status payload to `decode_event` -> `DecodeError::InvalidPayload`.
 - **DeviceConfig encoding:** `encode_event` with `DeviceConfig` -> `EncodeError::UnsupportedEvent`.
 - **Unknown fields ignored:** Envelope with extra fields decodes successfully (forward compatibility).
 - **ConnectionKind as_str/from_str symmetry:** `ConnectionKind::from_str(k.as_str()) == k` for all variants (including `Other`).
+- **Inventory payload includes session_id:** `encode_inventory` with a session_id -> decode -> `session_id` field matches.
+- **Session_id in status payload:** `encode_status` with a session_id -> decode -> `session_id` field matches for online, offline, and LWT variants.
 
 ### 6.2 `iotkit-adapter-runner` Tests
 
 - **Adapter task exit -> runner exits:** Adapter drops `event_tx` unexpectedly -> runner drains, publishes offline, returns Ok. (Binary decides exit code based on shutdown_initiated.)
 - **Disconnect + DeviceDiscovered -> inventory tracking:** Device discovered while disconnected -> `desired_inventory` updated -> on ConnAck, retained publish occurs.
 - **Disconnect + DeviceLost -> tombstone:** Device lost while disconnected -> tombstone recorded -> on ConnAck, empty retained publish.
-- **ConnAck -> full inventory republish:** After ConnAck, all entries in `desired_inventory` are published as retained.
+- **ConnAck -> full inventory republish:** After ConnAck, all entries in `desired_inventory` are published as retained with current `session_id`.
+- **Inventory republish re-encodes with fresh ts:** After ConnAck, inventory payloads have `ts` reflecting the reconnect time, not the original discovery time.
+- **Session_id consistency:** All retained messages (status + inventory) from the same process share the same `session_id`.
+- **Reconcile flag blocks live publish:** During reconcile (between ConnAck notification and reconcile completion), live events from `event_rx` are buffered, not published directly.
+- **Reconcile flag blocks buffer drain:** During reconcile, the drain branch is not eligible.
+- **Reconcile failure restarts on next ConnAck:** If MQTT disconnects mid-reconcile, `reconciled` stays false. Next ConnAck restarts reconcile from scratch.
 - **Buffer overflow:** Generate > 1000 events while disconnected -> oldest events dropped, newest retained, no panic.
 - **Buffer replay FIFO order:** Buffer 5 events while disconnected -> reconnect -> verify they are replayed in original order.
 - **Buffer replay batch fairness:** Buffer 30 events -> reconnect -> verify only 10 are replayed per select! iteration, with live events interleaved between batches.
 - **Graceful shutdown sequence:** Binary receives signal -> adapter stopped (closes event_rx) -> runner drains buffer -> runner publishes offline status -> runner returns Ok -> binary exits 0.
-- **Offline status timestamp:** Graceful offline status has `ts > 0`. LWT has `ts = 0`.
+- **Offline status timestamp:** Graceful offline status has `ts > 0`. LWT has `ts = 0`. Both include `session_id`.
 - **2nd signal -> immediate exit:** Second signal during shutdown -> binary calls `std::process::exit(1)`.
 - **publish_task panic -> runner returns Err:** Simulate publish_task panicking -> runner returns Err(RunnerError::PublishTaskFailed).
 - **eventloop_task unexpected exit -> runner returns Err:** Simulate eventloop_task returning unexpectedly -> runner returns Err(RunnerError::EventLoopDied).
@@ -2459,6 +2616,7 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **Default config search:** Neither `./iotkit-rpi-local.toml` nor `/etc/iotkit/iotkit-rpi-local.toml` exists -> error with hint.
 - **IPv6 broker URL:** `mqtt://[::1]:1883` -> host extracted without brackets.
 - **Deterministic client_id:** `adapter_id = "rpi-local:default"` -> `client_id = "iotkit-rpi%2Dlocal%3Adefault"`.
+- **Long client_id warning:** `client_id` with > 128 characters -> `warn!` log emitted at startup, but config validation succeeds.
 - **Default port resolution:** `mqtt://localhost` -> port 1883. `mqtts://localhost` -> port 8883.
 - **Phase 1 fail-fast:** Config with missing required field (e.g., `adapter_id` absent) -> single serde parse error, process exits.
 - **Phase 2 collect-all-errors:** Config that parses successfully but has multiple cross-field validation errors (e.g., `mqtt://` + `ca_path` AND `keepalive_secs = 0`) -> all validation errors reported in single output.
