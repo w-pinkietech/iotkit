@@ -23,6 +23,16 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
   Watchpoint: When a runtime claims "sensor-specific logic only / zero boilerplate," verify that transport-level metadata (ConnectionInfo, bus/address parameters) is constructed by the runtime, not repeated in each driver.
   Observed in: polling-adapter-runtime config rename review.
 
+- Added: 2026-03-29
+  Revalidate by: 2026-06-29
+  Watchpoint: Stateful components (MQTT connection, command orchestrator, device lifecycle) MUST include a Graphviz state transition diagram in the spec. Each state must list: (1) valid transitions, (2) failure modes, (3) what happens to in-flight data. Without this, implementation produces happy-path-only code that takes 4+ Codex review rounds to fix edge cases.
+  Observed in: Phase 1A adapter-runner — 5 rounds of Codex review for MQTT reconnect/disconnect edge cases.
+
+- Added: 2026-03-29
+  Revalidate by: 2026-06-29
+  Watchpoint: Partial or ambiguous configuration must fail fast, never silently fall back. Applies to: TLS half-config (cert without key), config file path fallback, unknown enum values mapping to defaults. Every config field must be either required or explicitly optional with documented default.
+  Observed in: Phase 1A — silent mTLS fallback, config path fallback, thermocouple type silent K default.
+
 ## Baseline Checklist
 
 安定的なアーキテクチャレビュー基準。ポリシー変更時のみ更新する。
@@ -36,6 +46,14 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - [ ] transport は open、read、write などの I/O 責務に留まっているか。
 - [ ] codec はフレーム分解の責務に留まり、意味解釈を抱え込みすぎていないか。
 - [ ] adapter と runtime composition root が分離されているか。
+
+### 状態遷移と failure mode
+
+- [ ] 状態を持つコンポーネントに Graphviz 状態遷移図があるか。
+- [ ] 各状態で「起きうる failure」と「その時のデータの扱い」が定義されているか。
+- [ ] 状態遷移の全ペア（正常 + 異常）が網羅されているか。
+- [ ] 切断/再接続時にバッファ、retained message、in-flight data がどうなるか明記されているか。
+- [ ] graceful shutdown 時に全ての enqueue 済みデータが flush されるか、明記されているか。
 
 ### ライフサイクル
 

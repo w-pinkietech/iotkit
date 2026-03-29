@@ -8,7 +8,15 @@ Active Watchpoints を先に読み、次に Baseline Checklist を適用する�
 最近のレビューで観測されたプロジェクト固有の盲点。
 max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-(none currently)
+- Added: 2026-03-29
+  Revalidate by: 2026-06-29
+  Watchpoint: If the spec contains a state transition diagram, verify that every state + failure mode has a corresponding task/step and test. Missing states in the plan = missing implementation = Codex review will catch it later at higher cost.
+  Observed in: Phase 1A — reconnect/disconnect states were in spec prose but not decomposed into plan tasks, leading to 5 rounds of implementation fixes.
+
+- Added: 2026-03-29
+  Revalidate by: 2026-06-29
+  Watchpoint: Config validation must be tested for every reject path (empty values, partial TLS, invalid URLs, unknown enum variants). "Validate config" as a single step is too coarse — each reject case needs its own test assertion.
+  Observed in: Phase 1A — silent fallbacks and half-configured mTLS found repeatedly in review.
 
 ## Baseline Checklist
 
@@ -36,6 +44,12 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - [ ] テストが「コンパイル通過」だけでなく、振る舞いを検証しているか。
 - [ ] commit メッセージの粒度が適切か（1タスク1コミットが原則）。
 - [ ] 変更対象ファイルのパスが正確か（存在するファイルか、新規作成か）。
+
+### 状態遷移カバレッジ
+
+- [ ] spec に状態遷移図がある場合、全状態が plan のいずれかのタスクで実装されているか。
+- [ ] 各状態の failure mode に対応するテストがタスク内に存在するか。
+- [ ] 切断/再接続/shutdown の各パスが独立したステップとして分解されているか（「reconnect を実装する」は粒度不足）。
 
 ### テスト方針
 
