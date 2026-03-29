@@ -298,6 +298,7 @@ version = "0.1.0"
 dependencies = [
  "bravepi-mainboard-adapter",
  "iotkit-core-engine",
+ "iotkit-core-storage",
  "iotkit-core-types",
  "rpi-local-adapter",
  "serde",
