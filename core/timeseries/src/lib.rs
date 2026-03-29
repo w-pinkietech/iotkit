@@ -56,23 +56,34 @@ pub async fn insert_reading(
     let device_key_str = device_key.as_str().to_string();
     let sensor_type_str = sensor_type.as_db_str().to_string();
 
-    db.with_conn(move |conn| {
-        conn.execute(
-            "INSERT INTO sensor_readings (adapter_id, device_key, ingested_at, sensor_type, values_json, rssi, battery_pct)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                adapter_id_str,
-                device_key_str,
-                millis,
-                sensor_type_str,
-                values_json,
-                rssi,
-                battery_pct.map(|b| b as i32),
-            ],
-        )?;
-        Ok(())
-    })
-    .await?;
+    let inserted = db
+        .with_conn(move |conn| {
+            let changed = conn.execute(
+                "INSERT OR IGNORE INTO sensor_readings (adapter_id, device_key, ingested_at, sensor_type, values_json, rssi, battery_pct)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    adapter_id_str,
+                    device_key_str,
+                    millis,
+                    sensor_type_str,
+                    values_json,
+                    rssi,
+                    battery_pct.map(|b| b as i32),
+                ],
+            )?;
+            Ok(changed > 0)
+        })
+        .await?;
+
+    if !inserted {
+        tracing::debug!(
+            adapter_id = adapter_id.as_str(),
+            device_key = device_key.as_str(),
+            ingested_at = millis,
+            sensor_type = sensor_type.as_db_str(),
+            "duplicate reading ignored"
+        );
+    }
 
     Ok(())
 }
@@ -437,12 +448,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_pk_surfaces_as_error() {
+    async fn duplicate_pk_is_silently_ignored() {
         let db = test_db();
         let t = ts(1000);
         insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Temperature, &[25.0], None, None).await.unwrap();
-        let result = insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Temperature, &[26.0], None, None).await;
-        assert!(matches!(result, Err(TimeseriesError::Storage(_))), "duplicate PK must surface as error, got {result:?}");
+        // Second insert with same PK succeeds (OR IGNORE) but does not overwrite
+        insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Temperature, &[99.0], None, None).await.unwrap();
+
+        // Original value is preserved
+        let rows = query_readings(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), None, TimeRange { start: ts(0), end: ts(2000) }, 100).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].values, vec![25.0]);
     }
 
     #[tokio::test]

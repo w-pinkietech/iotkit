@@ -192,7 +192,7 @@ CREATE TABLE sensor_readings (
 - **values_json as JSON text**: Human-readable via `sqlite3` CLI on headless RPi. Write throughput difference vs BLOB is negligible (bottleneck is WAL fsync, not serialization).
 - **No labels per-row**: Labels are a property of `SensorType`, not per-reading. Stored once in application code (or future #23 device-config-service).
 - **No secondary indexes**: PK prefix covers the primary query pattern. Add indexes when profiling shows need.
-- **INSERT policy**: Plain INSERT. UNIQUE violation surfaces as `StorageError::Sqlite`. At 1Hz polling, same-millisecond same-sensor-type collisions indicate an adapter bug and should be visible.
+- **INSERT policy**: `INSERT OR IGNORE`. Duplicate readings (same PK) are silently dropped and logged at DEBUG level. This is defensive against at-least-once delivery scenarios (e.g., adapter reconnect replaying recent frames). The first-write-wins semantics preserve the original reading. At 1Hz polling with ~100ms between events, same-millisecond same-sensor-type collisions are rare and indicate either adapter replay or a genuine bug — both are better handled by ignoring the duplicate and counting, rather than failing the write path. **Rejected alternative:** Plain `INSERT` that surfaces `UNIQUE` violation as error. Rejected because reconnect/replay paths in adapters (e.g., BravePI UART reconnect, rpi-local I2C bus reset) can legitimately re-send recent readings, and failing the entire write path for an expected edge case is not defensive.
 
 ---
 
