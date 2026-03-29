@@ -10,11 +10,23 @@ use rusqlite::Connection;
 
 pub use error::StorageError;
 pub use handle::DbHandle;
+pub use migrate::{Migration, MIGRATIONS, run_migrations};
+
+/// Configure SQLite pragmas for production use.
+fn configure_pragmas(conn: &Connection) -> Result<(), StorageError> {
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = FULL;
+         PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;
+         PRAGMA cache_size = -8000;",
+    )?;
+    Ok(())
+}
 
 /// Open (or create) the database, configure pragmas, run migrations.
-/// Sole public entry point for obtaining a DbHandle.
 /// Synchronous -- call before entering the async runtime.
-pub fn init_db(db_path: &Path) -> Result<DbHandle, StorageError> {
+pub fn init_db(db_path: &Path, migrations: &[Migration]) -> Result<DbHandle, StorageError> {
     // Check parent directory exists -- surface as StorageError::Io, not Sqlite.
     if let Some(parent) = db_path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -28,25 +40,18 @@ pub fn init_db(db_path: &Path) -> Result<DbHandle, StorageError> {
         }
     }
     let conn = Connection::open(db_path)?;
-    configure_and_migrate(conn)
+    configure_pragmas(&conn)?;
+    run_migrations(&conn, migrations)?;
+    Ok(DbHandle::new(conn))
 }
 
 /// Open an in-memory database with all migrations applied.
 /// For tests only.
 #[cfg(any(test, feature = "test-util"))]
-pub fn init_db_memory() -> Result<DbHandle, StorageError> {
+pub fn init_db_memory(migrations: &[Migration]) -> Result<DbHandle, StorageError> {
     let conn = Connection::open_in_memory()?;
-    configure_and_migrate(conn)
-}
-
-fn configure_and_migrate(conn: Connection) -> Result<DbHandle, StorageError> {
-    conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         PRAGMA synchronous = FULL;
-         PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;",
-    )?;
-    migrate::run_migrations(&conn)?;
+    configure_pragmas(&conn)?;
+    run_migrations(&conn, migrations)?;
     Ok(DbHandle::new(conn))
 }
 
@@ -58,7 +63,7 @@ mod tests {
     fn init_db_creates_and_migrates() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db = init_db(&db_path).unwrap();
+        let db = init_db(&db_path, MIGRATIONS).unwrap();
 
         db.with_conn_sync(|conn| {
             let version: u32 = conn
@@ -78,16 +83,16 @@ mod tests {
     fn init_db_idempotent_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let _db1 = init_db(&db_path).unwrap();
+        let _db1 = init_db(&db_path, MIGRATIONS).unwrap();
         drop(_db1);
-        let _db2 = init_db(&db_path).unwrap();
+        let _db2 = init_db(&db_path, MIGRATIONS).unwrap();
     }
 
     #[test]
     fn init_db_missing_parent_returns_io_error() {
         let dir = tempfile::tempdir().unwrap();
         let bad_path = dir.path().join("nonexistent_subdir").join("test.db");
-        let result = init_db(&bad_path);
+        let result = init_db(&bad_path, MIGRATIONS);
         assert!(
             matches!(result, Err(StorageError::Io(_))),
             "expected StorageError::Io for missing parent, got {result:?}"
@@ -96,7 +101,7 @@ mod tests {
 
     #[test]
     fn init_db_memory_succeeds() {
-        let db = init_db_memory().unwrap();
+        let db = init_db_memory(MIGRATIONS).unwrap();
         db.with_conn_sync(|conn| {
             let version: u32 = conn
                 .query_row(
@@ -115,7 +120,7 @@ mod tests {
     fn pragma_verification_file_backed() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db = init_db(&db_path).unwrap();
+        let db = init_db(&db_path, MIGRATIONS).unwrap();
 
         db.with_conn_sync(|conn| {
             let journal_mode: String =
@@ -133,6 +138,10 @@ mod tests {
             let busy_timeout: i32 =
                 conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0)).unwrap();
             assert_eq!(busy_timeout, 5000);
+
+            let cache_size: i32 =
+                conn.query_row("PRAGMA cache_size", [], |row| row.get(0)).unwrap();
+            assert_eq!(cache_size, -8000);
 
             Ok(())
         })

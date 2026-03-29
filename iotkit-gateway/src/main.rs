@@ -38,7 +38,7 @@ fn main() {
         tracing::info!(bus_path = %rpi.bus_path, poll_interval_ms = rpi.poll_interval_ms, "rpi_local config");
     }
 
-    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path)) {
+    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path), iotkit_core_storage::MIGRATIONS) {
         Ok(handle) => handle,
         Err(e) => {
             tracing::error!(error = %e, db_path = %config.db_path, "failed to initialize database");
