@@ -8,7 +8,7 @@ use rumqttc::{Event, Incoming, QoS};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 /// MQTT broker connection configuration.
 #[derive(Debug, Clone)]
@@ -69,6 +69,7 @@ pub async fn run(
     let (client, mut eventloop) = mqtt_client::connect(&adapter_id, &mqtt_config)?;
 
     let connected = Arc::new(AtomicBool::new(false));
+    let reconnect_notify = Arc::new(Notify::new());
     let inventory = inventory::InventoryTracker::new(adapter_id.clone());
 
     // Publish online status (retained) - will be sent once connected
@@ -82,14 +83,12 @@ pub async fn run(
 
     // Spawn MQTT eventloop pump with exponential backoff reconnect
     let connected_el = connected.clone();
+    let reconnect_notify_el = reconnect_notify.clone();
     let client_el = client.clone();
     let adapter_id_el = adapter_id.clone();
     let eventloop_handle = tokio::spawn(async move {
         let mut reconnect_attempt: u32 = 0;
 
-        // We need inventory access for republish_all on reconnect.
-        // Since inventory is owned by publish_loop, we track reconnects
-        // via a channel to signal the publish loop.
         loop {
             match eventloop.poll().await {
                 Ok(Event::Incoming(Incoming::ConnAck(_))) => {
@@ -108,6 +107,9 @@ pub async fn run(
                             online_payload,
                         )
                         .await;
+
+                    // Signal publish_loop to republish inventory
+                    reconnect_notify_el.notify_one();
                 }
                 Ok(_) => {} // PUBACK, PINGRESP, etc.
                 Err(e) => {
@@ -128,15 +130,16 @@ pub async fn run(
     });
 
     // Spawn publish loop as dedicated task
-    let publish_handle = tokio::spawn(publish_loop::run(
+    let mut publish_handle = tokio::spawn(publish_loop::run(
         adapter_id.clone(),
         client.clone(),
         event_rx,
         inventory,
         connected,
+        reconnect_notify,
     ));
 
-    // Wait for SIGTERM or SIGINT (Codex fix #4)
+    // Wait for SIGTERM, SIGINT, or publish_loop exit (adapter event stream closed)
     let mut sigterm =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to register SIGTERM handler");
@@ -147,6 +150,9 @@ pub async fn run(
         }
         _ = sigterm.recv() => {
             tracing::info!("SIGTERM received, shutting down");
+        }
+        _ = &mut publish_handle => {
+            tracing::info!("publish loop exited (adapter event stream closed), shutting down");
         }
     }
 

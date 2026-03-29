@@ -18,12 +18,31 @@ impl InventoryTracker {
         }
     }
 
-    /// Process an event and publish retained inventory if needed.
+    /// Track an event in the local inventory (no MQTT publish).
     /// Returns true if inventory was updated.
-    pub async fn process_event(&mut self, event: &AdapterEvent, client: &AsyncClient) -> bool {
+    pub fn track_event(&mut self, event: &AdapterEvent) -> bool {
         match event {
             AdapterEvent::DeviceDiscovered { device_key, .. } => {
                 if let Ok((_, payload)) = encode_event(&self.adapter_id, event) {
+                    self.active_devices
+                        .insert(device_key.as_str().to_string(), payload);
+                }
+                true
+            }
+            AdapterEvent::DeviceLost { device_key, .. } => {
+                self.active_devices.remove(device_key.as_str());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Publish retained inventory for a single event to MQTT.
+    /// Call only when MQTT is connected.
+    pub async fn publish_event(&self, event: &AdapterEvent, client: &AsyncClient) {
+        match event {
+            AdapterEvent::DeviceDiscovered { device_key, .. } => {
+                if let Some(payload) = self.active_devices.get(device_key.as_str()) {
                     let topic = inventory_topic(&self.adapter_id, device_key);
                     if let Err(e) = client
                         .publish(&topic, QoS::AtLeastOnce, true, payload.clone())
@@ -33,10 +52,7 @@ impl InventoryTracker {
                     } else {
                         tracing::debug!(device = device_key.as_str(), "published retained inventory");
                     }
-                    self.active_devices
-                        .insert(device_key.as_str().to_string(), payload);
                 }
-                true
             }
             AdapterEvent::DeviceLost { device_key, .. } => {
                 let topic = inventory_topic(&self.adapter_id, device_key);
@@ -48,15 +64,12 @@ impl InventoryTracker {
                 } else {
                     tracing::debug!(device = device_key.as_str(), "cleared retained inventory");
                 }
-                self.active_devices.remove(device_key.as_str());
-                true
             }
-            _ => false,
+            _ => {}
         }
     }
 
     /// Re-publish all active device inventory (called on MQTT reconnect).
-    #[allow(dead_code)] // Will be wired up when reconnect notification is added
     pub async fn republish_all(&self, client: &AsyncClient) {
         for (device_key_str, payload) in &self.active_devices {
             let dk = DeviceKey::new(device_key_str.clone());

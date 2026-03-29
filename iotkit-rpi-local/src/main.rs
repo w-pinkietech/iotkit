@@ -26,12 +26,18 @@ fn main() {
 
     let cli = Cli::parse();
 
-    // Try default paths if specified file doesn't exist
+    // Resolve config path: only fall back to /etc/iotkit/ if the user did NOT
+    // explicitly pass --config (i.e., using the default value).
+    let is_default_config = cli.config == PathBuf::from("iotkit-rpi-local.toml");
     let config_path = if cli.config.exists() {
         cli.config
-    } else if PathBuf::from("/etc/iotkit/iotkit-rpi-local.toml").exists() {
+    } else if is_default_config && PathBuf::from("/etc/iotkit/iotkit-rpi-local.toml").exists() {
         PathBuf::from("/etc/iotkit/iotkit-rpi-local.toml")
     } else {
+        if !is_default_config {
+            tracing::error!(path = %cli.config.display(), "explicit config file not found");
+            std::process::exit(1);
+        }
         cli.config // will produce a clear error in load()
     };
 
