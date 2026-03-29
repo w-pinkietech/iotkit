@@ -100,6 +100,11 @@ fn main() {
             iotkit_adapter_runner::run(adapter_id, mqtt_config, parts.event_rx).await
         {
             tracing::error!(error = %e, "adapter runner failed");
+            // Shutdown adapter before exiting
+            if let Err(e) = parts.shutdown.shutdown().await {
+                tracing::warn!(error = %e, "adapter shutdown error");
+            }
+            std::process::exit(1);
         }
 
         // Shutdown adapter
