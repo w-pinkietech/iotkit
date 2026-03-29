@@ -71,8 +71,9 @@ impl InventoryTracker {
                     tracing::warn!(error = %e, device = device_key.as_str(), "failed to clear retained inventory");
                 } else {
                     tracing::debug!(device = device_key.as_str(), "cleared retained inventory");
-                    // Successfully published delete — remove tombstone
-                    self.active_devices.remove(device_key.as_str());
+                    // Tombstones are kept for the session lifetime to ensure
+                    // the broker delete is retried on every reconnect.
+                    // Cleaned up on process restart.
                 }
             }
             _ => {}
@@ -81,10 +82,13 @@ impl InventoryTracker {
 
     /// Re-publish all active device inventory (called on MQTT reconnect).
     /// Active devices get their payload re-published; tombstones get an
-    /// empty retained message to clear the broker, then are removed.
+    /// empty retained message to clear the broker.
+    ///
+    /// Tombstones are kept for the session lifetime to ensure the broker
+    /// delete is retried on every reconnect. Cleaned up on process restart.
     pub async fn republish_all(&mut self, client: &AsyncClient) {
         let mut published = 0u32;
-        let mut tombstones_cleared = Vec::new();
+        let mut tombstones_sent = 0u32;
 
         for (device_key_str, maybe_payload) in &self.active_devices {
             let dk = DeviceKey::new(device_key_str.clone());
@@ -103,20 +107,15 @@ impl InventoryTracker {
             } else {
                 published += 1;
                 if maybe_payload.is_none() {
-                    tombstones_cleared.push(device_key_str.clone());
+                    tombstones_sent += 1;
                 }
             }
         }
 
-        // Remove successfully-published tombstones
-        for key in &tombstones_cleared {
-            self.active_devices.remove(key);
-        }
-
-        if published > 0 || !tombstones_cleared.is_empty() {
+        if published > 0 || tombstones_sent > 0 {
             tracing::info!(
-                active = published.saturating_sub(tombstones_cleared.len() as u32),
-                tombstones = tombstones_cleared.len(),
+                active = published.saturating_sub(tombstones_sent),
+                tombstones = tombstones_sent,
                 "republished inventory on reconnect"
             );
         }

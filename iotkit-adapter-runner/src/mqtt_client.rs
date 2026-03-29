@@ -3,6 +3,7 @@ use iotkit_core_mqtt_contract::{encode_status, topic, EventType};
 use iotkit_core_types::AdapterId;
 use rumqttc::{AsyncClient, EventLoop, MqttOptions, QoS, Transport};
 use std::time::Duration;
+use url::Url;
 
 /// Create and configure an MQTT client with LWT.
 pub(crate) fn connect(
@@ -19,11 +20,8 @@ pub(crate) fn connect(
 
     let keepalive = Duration::from_secs(config.keepalive_secs.unwrap_or(30) as u64);
 
-    let mut opts = MqttOptions::new(
-        &client_id,
-        parse_host(&config.broker_url)?,
-        parse_port(&config.broker_url)?,
-    );
+    let (host, port) = parse_broker_url(&config.broker_url)?;
+    let mut opts = MqttOptions::new(&client_id, host, port);
     opts.set_keep_alive(keepalive);
 
     // Validate mTLS: both cert and key must be provided, or neither
@@ -79,34 +77,34 @@ pub(crate) fn connect(
     Ok((client, eventloop))
 }
 
-fn parse_host(url: &str) -> Result<String, RunnerError> {
-    let stripped = url
-        .strip_prefix("mqtt://")
-        .or_else(|| url.strip_prefix("mqtts://"))
-        .ok_or_else(|| {
-            RunnerError::Config("broker_url must start with mqtt:// or mqtts://".into())
-        })?;
-    let host = stripped.split(':').next().unwrap_or(stripped);
-    Ok(host.to_string())
-}
+fn parse_broker_url(broker_url: &str) -> Result<(String, u16), RunnerError> {
+    // Replace mqtt:// with http:// for url crate compatibility
+    let normalized = broker_url
+        .replacen("mqtt://", "http://", 1)
+        .replacen("mqtts://", "https://", 1);
 
-fn parse_port(url: &str) -> Result<u16, RunnerError> {
-    let stripped = url
-        .strip_prefix("mqtt://")
-        .or_else(|| url.strip_prefix("mqtts://"))
-        .ok_or_else(|| {
-            RunnerError::Config("broker_url must start with mqtt:// or mqtts://".into())
-        })?;
-    let parts: Vec<&str> = stripped.split(':').collect();
-    if parts.len() >= 2 {
-        parts[1]
-            .parse()
-            .map_err(|_| RunnerError::Config(format!("invalid port in broker_url: {}", parts[1])))
-    } else if url.starts_with("mqtts://") {
-        Ok(8883)
-    } else {
-        Ok(1883)
+    if normalized == broker_url {
+        return Err(RunnerError::Config(
+            "broker_url must start with mqtt:// or mqtts://".into(),
+        ));
     }
+
+    let parsed = Url::parse(&normalized)
+        .map_err(|e| RunnerError::Config(format!("invalid broker_url: {e}")))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| RunnerError::Config("broker_url has no host".into()))?
+        .to_string();
+
+    let default_port = if broker_url.starts_with("mqtts://") {
+        8883
+    } else {
+        1883
+    };
+    let port = parsed.port().unwrap_or(default_port);
+
+    Ok((host, port))
 }
 
 fn uuid_short() -> String {
@@ -124,22 +122,35 @@ mod tests {
 
     #[test]
     fn parse_mqtt_url() {
-        assert_eq!(parse_host("mqtt://localhost:1883").unwrap(), "localhost");
-        assert_eq!(parse_port("mqtt://localhost:1883").unwrap(), 1883);
+        let (host, port) = parse_broker_url("mqtt://localhost:1883").unwrap();
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 1883);
     }
 
     #[test]
     fn parse_mqtts_url_default_port() {
-        assert_eq!(
-            parse_host("mqtts://broker.example.com").unwrap(),
-            "broker.example.com"
-        );
-        assert_eq!(parse_port("mqtts://broker.example.com").unwrap(), 8883);
+        let (host, port) = parse_broker_url("mqtts://broker.example.com").unwrap();
+        assert_eq!(host, "broker.example.com");
+        assert_eq!(port, 8883);
     }
 
     #[test]
     fn parse_invalid_url() {
-        assert!(parse_host("http://localhost").is_err());
+        assert!(parse_broker_url("http://localhost").is_err());
+    }
+
+    #[test]
+    fn parse_ipv6_url() {
+        let (host, port) = parse_broker_url("mqtt://[fd00::1]:1883").unwrap();
+        assert_eq!(host, "[fd00::1]");
+        assert_eq!(port, 1883);
+    }
+
+    #[test]
+    fn parse_mqtt_default_port() {
+        let (host, port) = parse_broker_url("mqtt://localhost").unwrap();
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 1883);
     }
 
     #[test]
