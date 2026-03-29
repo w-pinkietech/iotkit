@@ -30,7 +30,7 @@ pub fn from_i2c_distance(distance_mm: u16) -> SensorReading {
         return SensorReading::empty(sensor_type());
     }
     let capped = distance_mm.min(MAX_DISTANCE_MM);
-    SensorReading::new(sensor_type(), vec![capped as f64], vec!["distance_mm"])
+    SensorReading::new(sensor_type(), vec![capped as f64], vec!["distance_mm".into()])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -42,7 +42,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if mm == 0 {
         return SensorReading::empty(sensor_type());
     }
-    SensorReading::new(sensor_type(), vec![mm.min(MAX_DISTANCE_MM) as f64], vec!["distance_mm"])
+    SensorReading::new(sensor_type(), vec![mm.min(MAX_DISTANCE_MM) as f64], vec!["distance_mm".into()])
 }
 
 fn decode_uart(sample: UartSample<'_>) -> SensorReading {

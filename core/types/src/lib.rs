@@ -122,11 +122,11 @@ pub struct SensorIdentity {
 pub struct SensorReading {
     pub sensor_type: SensorType,
     pub values: Vec<f64>,
-    pub labels: Vec<&'static str>,
+    pub labels: Vec<String>,
 }
 
 impl SensorReading {
-    pub fn new(sensor_type: SensorType, values: Vec<f64>, labels: Vec<&'static str>) -> Self {
+    pub fn new(sensor_type: SensorType, values: Vec<f64>, labels: Vec<String>) -> Self {
         Self { sensor_type, values, labels }
     }
 
