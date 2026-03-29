@@ -59,8 +59,9 @@ pub async fn insert_reading(
     let inserted = db
         .with_conn(move |conn| {
             let changed = conn.execute(
-                "INSERT OR IGNORE INTO sensor_readings (adapter_id, device_key, ingested_at, sensor_type, values_json, rssi, battery_pct)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO sensor_readings (adapter_id, device_key, ingested_at, sensor_type, values_json, rssi, battery_pct)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(adapter_id, device_key, ingested_at, sensor_type) DO NOTHING",
                 rusqlite::params![
                     adapter_id_str,
                     device_key_str,
@@ -76,12 +77,12 @@ pub async fn insert_reading(
         .await?;
 
     if !inserted {
-        tracing::debug!(
+        tracing::warn!(
             adapter_id = adapter_id.as_str(),
             device_key = device_key.as_str(),
             ingested_at = millis,
             sensor_type = sensor_type.as_db_str(),
-            "duplicate reading ignored"
+            "duplicate reading ignored (first-write-wins)"
         );
     }
 
