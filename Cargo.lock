@@ -279,11 +279,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-core-mqtt-contract"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "iotkit-core-storage"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
  "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "iotkit-core-timeseries"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-storage",
+ "iotkit-core-types",
+ "rusqlite",
+ "serde_json",
  "tokio",
  "tracing",
 ]
@@ -299,6 +321,7 @@ dependencies = [
  "bravepi-mainboard-adapter",
  "iotkit-core-engine",
  "iotkit-core-storage",
+ "iotkit-core-timeseries",
  "iotkit-core-types",
  "rpi-local-adapter",
  "serde",
@@ -479,6 +502,12 @@ dependencies = [
  "smallvec",
  "windows-link",
 ]
+
+[[package]]
+name = "percent-encoding"
+version = "2.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pin-project-lite"
