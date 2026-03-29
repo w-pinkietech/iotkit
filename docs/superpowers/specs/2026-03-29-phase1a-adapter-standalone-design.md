@@ -40,7 +40,7 @@ rpi-local-adapter を独立バイナリとしてパッケージングし、I2C �
 
 依存関係: `iotkit-rpi-local` → `iotkit-adapter-runner` → `core/mqtt-contract` → `core/types`
 
-既存 crate (`iotkit-polling-adapter-runtime`, `core/types`, `iotkit-gateway`) は変更しない。`rpi-local-adapter` は adapter_id を外部から受け取れるよう `start()` の signature を拡張する（後述）。
+既存 crate (`iotkit-polling-adapter-runtime`, `iotkit-gateway`) は変更しない。`rpi-local-adapter` は adapter_id を外部から受け取れるよう `start()` の signature を拡張する（後述）。`core/types` は `SensorReading.labels` を `Vec<&'static str>` → `Vec<String>` に変更する（MQTT decode で owned string が必要なため）。
 
 ## 1. MQTT Event Envelope (core/mqtt-contract)
 

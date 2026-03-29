@@ -4,9 +4,35 @@
 
 **Goal:** Package rpi-local-adapter as a standalone binary that reads I2C sensors and publishes to MQTT end-to-end.
 
-**Architecture:** Three new crates layered bottom-up: `core/mqtt-contract` (DTOs + topic builder + encode/decode), `iotkit-adapter-runner` (MQTT client lifecycle + event publish loop), `iotkit-rpi-local` (binary composition root). One minor change to `rpi-local-adapter` to accept external `adapter_id`. Deploy assets (systemd unit, example config) in `deploy/`.
+**Architecture:** Three new crates layered bottom-up: `core/mqtt-contract` (DTOs + topic builder + encode/decode), `iotkit-adapter-runner` (MQTT client lifecycle + event publish loop), `iotkit-rpi-local` (binary composition root). Minor changes to `rpi-local-adapter` (accept external `adapter_id`) and `core/types` (`SensorReading.labels` → `Vec<String>` for owned decode). Deploy assets (systemd unit, example config) in `deploy/`.
+
+**Codex eval fixes applied:** labels owned String, Cargo path fixes (../core/), reconnect with exponential backoff + jitter + inventory republish, SIGTERM via unix signal, encode_status split (LWT vs graceful), ThermocoupleType re-export, unknown thermocouple validation error.
 
 **Tech Stack:** Rust 2024 edition, rumqttc (MQTT 3.1.1), serde/serde_json, percent-encoding, clap, toml, tokio, tracing.
+
+---
+
+## Codex Eval Fixes (MUST apply during implementation)
+
+The following issues were identified by Codex plan review. Dev subagents MUST incorporate these fixes:
+
+1. **`SensorReading.labels` must become `Vec<String>`** — Add a new Task 0 before Task 1: change `core/types/src/lib.rs` `SensorReading.labels` from `Vec<&'static str>` to `Vec<String>`, update `SensorReading::new()` and `SensorReading::empty()`, fix all call sites across workspace. This eliminates the Box::leak memory leak in decode.
+
+2. **Cargo.toml path fixes** — `iotkit-adapter-runner/Cargo.toml` must use `path = "../core/types"` and `path = "../core/mqtt-contract"` (not `path = "core/types"`).
+
+3. **Runner reconnect** — Task 5 eventloop_task must implement exponential backoff (1s→30s, ±30% jitter), track connected/disconnected state via `AtomicBool`, and call `inventory.republish_all()` on `ConnAck`. Publish_task must check connected state and drop events with `warn!` when disconnected.
+
+4. **SIGTERM handling** — Task 5 `run()` must use `tokio::signal::unix::signal(SignalKind::terminate())` in addition to `ctrl_c()`, combining both with `tokio::select!`.
+
+5. **encode_status ts fix** — `encode_status()` must take a `ts: i64` parameter. LWT uses `ts: 0`. Graceful offline uses `now_ms()`. Online uses `now_ms()`.
+
+6. **ThermocoupleType import** — Task 6 config.rs must import `ThermocoupleType` from `rpi_local_adapter` (which re-exports it), NOT from `bravepi_sensors` directly.
+
+7. **Unknown thermocouple_type validation** — Task 6 config.rs must return a validation error for unknown thermocouple type strings, not silently default to K.
+
+8. **Task 3 test** — Must verify that the custom adapter_id is preserved in the returned handle's `.id` field (requires a live tokio runtime in the test via `#[tokio::test]`).
+
+9. **End-to-end test step** — Task 8 must include the manual Mosquitto end-to-end verification steps from the spec.
 
 ---
 
