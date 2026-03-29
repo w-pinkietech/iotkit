@@ -24,6 +24,18 @@ pub(crate) fn connect(
     let mut opts = MqttOptions::new(&client_id, host, port);
     opts.set_keep_alive(keepalive);
 
+    // Reject TLS settings on plain mqtt:// URLs
+    if !config.broker_url.starts_with("mqtts://") {
+        if config.ca_path.is_some()
+            || config.client_cert_path.is_some()
+            || config.client_key_path.is_some()
+        {
+            return Err(RunnerError::Config(
+                "TLS settings (ca_path, client_cert_path, client_key_path) require mqtts:// broker URL".into(),
+            ));
+        }
+    }
+
     // Validate mTLS: both cert and key must be provided, or neither
     if config.client_cert_path.is_some() != config.client_key_path.is_some() {
         return Err(RunnerError::Config(
@@ -154,12 +166,52 @@ mod tests {
     }
 
     #[test]
-    fn half_configured_mtls_cert_only_rejected() {
+    fn tls_settings_rejected_on_plain_mqtt() {
+        let config = MqttConfig {
+            broker_url: "mqtt://localhost:1883".into(),
+            client_id: None,
+            keepalive_secs: None,
+            ca_path: Some("/tmp/ca.pem".into()),
+            client_cert_path: None,
+            client_key_path: None,
+        };
+        let adapter_id = iotkit_core_types::AdapterId::new("test");
+        match connect(&adapter_id, &config) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("mqtts://"), "error = {msg}");
+            }
+            Ok(_) => panic!("expected error for TLS settings on mqtt://"),
+        }
+    }
+
+    #[test]
+    fn client_cert_on_plain_mqtt_rejected() {
         let config = MqttConfig {
             broker_url: "mqtt://localhost:1883".into(),
             client_id: None,
             keepalive_secs: None,
             ca_path: None,
+            client_cert_path: Some("/tmp/cert.pem".into()),
+            client_key_path: None,
+        };
+        let adapter_id = iotkit_core_types::AdapterId::new("test");
+        match connect(&adapter_id, &config) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("mqtts://"), "error = {msg}");
+            }
+            Ok(_) => panic!("expected error for TLS settings on mqtt://"),
+        }
+    }
+
+    #[test]
+    fn half_configured_mtls_cert_only_rejected() {
+        let config = MqttConfig {
+            broker_url: "mqtts://localhost:8883".into(),
+            client_id: None,
+            keepalive_secs: None,
+            ca_path: Some("/tmp/ca.pem".into()),
             client_cert_path: Some("/tmp/cert.pem".into()),
             client_key_path: None,
         };
@@ -177,10 +229,10 @@ mod tests {
     #[test]
     fn half_configured_mtls_key_only_rejected() {
         let config = MqttConfig {
-            broker_url: "mqtt://localhost:1883".into(),
+            broker_url: "mqtts://localhost:8883".into(),
             client_id: None,
             keepalive_secs: None,
-            ca_path: None,
+            ca_path: Some("/tmp/ca.pem".into()),
             client_cert_path: None,
             client_key_path: Some("/tmp/key.pem".into()),
         };

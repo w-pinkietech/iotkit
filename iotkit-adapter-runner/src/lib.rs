@@ -130,7 +130,7 @@ pub async fn run(
     });
 
     // Spawn publish loop as dedicated task
-    let mut publish_handle = tokio::spawn(publish_loop::run(
+    let publish_handle = tokio::spawn(publish_loop::run(
         adapter_id.clone(),
         client.clone(),
         event_rx,
@@ -139,22 +139,12 @@ pub async fn run(
         reconnect_notify,
     ));
 
-    // Wait for SIGTERM, SIGINT, or publish_loop exit (adapter event stream closed)
-    let mut sigterm =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to register SIGTERM handler");
-
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("SIGINT received, shutting down");
-        }
-        _ = sigterm.recv() => {
-            tracing::info!("SIGTERM received, shutting down");
-        }
-        _ = &mut publish_handle => {
-            tracing::info!("publish loop exited (adapter event stream closed), shutting down");
-        }
-    }
+    // Wait for publish_loop to exit (happens when event_rx is closed by adapter shutdown).
+    // Signal handling is the caller's responsibility — the caller shuts down the adapter
+    // (closing event_rx) before dropping the runner, ensuring no events are emitted
+    // after offline status is published.
+    let _ = publish_handle.await;
+    tracing::info!("publish loop exited, publishing offline status");
 
     // Publish offline status with current timestamp (graceful shutdown)
     let offline_payload = encode_status(&adapter_id, false, now_ms());
@@ -166,9 +156,8 @@ pub async fn run(
     // Give eventloop time to flush the outgoing queue
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    // Abort tasks
+    // Abort eventloop task
     eventloop_handle.abort();
-    publish_handle.abort();
 
     Ok(())
 }

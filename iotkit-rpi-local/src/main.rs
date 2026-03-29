@@ -17,6 +17,19 @@ struct Cli {
     config: Option<PathBuf>,
 }
 
+async fn wait_for_shutdown_signal() {
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to register SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("SIGINT received, shutting down");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("SIGTERM received, shutting down");
+        }
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -95,21 +108,33 @@ fn main() {
 
         let parts = handle.into_parts();
 
-        // Run adapter runner (blocks until signal)
-        if let Err(e) =
-            iotkit_adapter_runner::run(adapter_id, mqtt_config, parts.event_rx).await
-        {
-            tracing::error!(error = %e, "adapter runner failed");
-            // Shutdown adapter before exiting
-            if let Err(e) = parts.shutdown.shutdown().await {
-                tracing::warn!(error = %e, "adapter shutdown error");
-            }
-            std::process::exit(1);
-        }
+        // Start runner in a background task (blocks until event_rx closes)
+        let runner_handle = tokio::spawn(
+            iotkit_adapter_runner::run(adapter_id, mqtt_config, parts.event_rx),
+        );
 
-        // Shutdown adapter
+        // Wait for shutdown signal
+        wait_for_shutdown_signal().await;
+
+        // 1. Shutdown adapter first (stops producing events, closes event_rx)
         if let Err(e) = parts.shutdown.shutdown().await {
             tracing::warn!(error = %e, "adapter shutdown error");
+        }
+
+        // 2. Small delay for in-flight events to flush through the publish loop
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // 3. Runner detects closed event_rx, publishes offline status, then exits
+        match runner_handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "adapter runner failed");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "runner task panicked");
+                std::process::exit(1);
+            }
         }
 
         tracing::info!("shutdown complete");

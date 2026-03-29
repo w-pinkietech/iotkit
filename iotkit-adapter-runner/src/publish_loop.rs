@@ -50,11 +50,12 @@ pub(crate) async fn run(
                 tracing::info!("MQTT reconnected, republishing inventory");
                 inventory.republish_all(&client).await;
 
-                // Flush buffered events
+                // Flush buffered events in batches, interleaving with live events
                 let count = pending_events.len();
                 if count > 0 {
                     tracing::info!(count, "flushing buffered events after reconnect");
                 }
+                let mut flushed = 0u32;
                 while let Some((event_type, payload)) = pending_events.front() {
                     let t = topic(&adapter_id, *event_type);
                     if let Err(e) = client.publish(&t, QoS::AtLeastOnce, false, payload.clone()).await {
@@ -65,6 +66,11 @@ pub(crate) async fn run(
                         break;
                     }
                     pending_events.pop_front();
+                    flushed += 1;
+                    if flushed % 10 == 0 {
+                        // Yield to let live events drain
+                        tokio::task::yield_now().await;
+                    }
                 }
             }
         }
