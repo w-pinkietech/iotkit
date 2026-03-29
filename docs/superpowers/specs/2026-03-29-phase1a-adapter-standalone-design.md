@@ -1680,6 +1680,14 @@ Per-target validation (index is 0-based):
 |---|---|
 | Two targets share the same `address` value | `config error: adapter.targets: duplicate I2C address 0x<hex> at indices <i> and <j>` |
 
+#### 4.2.10 Edge Case Clarifications
+
+**Unknown TOML fields:** The deserializer MUST ignore unknown fields (do NOT use `#[serde(deny_unknown_fields)]`). This provides forward compatibility -- a config file written for a newer version of the binary can be loaded by an older binary without error. Unknown fields are silently discarded after deserialization.
+
+**MQTT wildcard characters in adapter_id:** If `adapter_id` contains MQTT wildcard characters (`+`, `#`), they are percent-encoded when used in MQTT topics (via `encode_topic_segment`). This makes them safe for topic construction. The raw `adapter_id` string itself may contain any UTF-8 characters; the encoding layer handles sanitization. No validation rejects `+` or `#` in `adapter_id`.
+
+**TOML integer overflow for address:** The `address` field is typed as `u8` in the Rust struct. If the TOML file contains an integer value outside the `u8` range (0-255), `toml::from_str` will return a deserialization error before `Config::validate` is called. This is inherent to serde's integer deserialization and requires no additional validation code. The error message comes from serde/toml, not from our validation layer. Example: `address = 256` -> `toml parse error: ... invalid value: integer 256, expected u8`.
+
 ### 4.3 Identity Derivation
 
 #### 4.3.1 adapter_id
@@ -1861,7 +1869,7 @@ Username and password, if present in the URL, are extracted from `parsed.usernam
 │   └── certs/
 │       ├── ca.pem                # CA certificate, mode 0640, owner root:iotkit
 │       ├── client.pem            # client certificate, mode 0640, owner root:iotkit
-│       └── client.key            # client private key, mode 0600, owner root:iotkit
+│       └── client.key            # client private key, mode 0640, owner root:iotkit
 └── data/                         # reserved for future persistent state, mode 0750
 ```
 
@@ -1882,6 +1890,14 @@ usermod -aG i2c iotkit
 The binary at `/opt/iotkit/bin/iotkit-rpi-local` is owned `root:root`, mode `0755`. It does not run as root.
 
 For multiple adapter instances (see Section 4.10), each instance uses a separate config file and a separate systemd unit, but shares the same binary and `iotkit` user.
+
+#### 4.7.1 Deploy Edge Case Clarifications
+
+**`/opt/iotkit/data` directory creation:** The systemd unit specifies `ReadWritePaths=/opt/iotkit/data`. If this directory does not exist, systemd's `ProtectSystem=strict` will prevent the binary from creating it. The directory MUST be created during installation (by the install script or manually). The binary does NOT create it at startup. Using `StateDirectory=iotkit` in the systemd unit is an alternative (systemd creates `/var/lib/iotkit` automatically), but we use `/opt/iotkit/data` for consistency with the deploy layout. Installation step: `install -d -m 0750 -o root -g iotkit /opt/iotkit/data`.
+
+**`iotkit` user/group creation:** The system user and group are created by the operator or an install script, NOT by the binary at runtime. The binary assumes the user exists when systemd launches it. If the user does not exist, `systemctl start` will fail with a clear systemd error (`Failed to determine user credentials`). Documented install commands are provided in Section 4.7 (`useradd`, `usermod`).
+
+**Two instances using the same I2C bus:** If two `iotkit-rpi-local` processes are configured with the same `bus_path`, the result is undefined hardware behavior -- I2C transactions from both processes may interleave, causing corrupted reads and unpredictable sensor responses. This is the operator's responsibility to prevent via distinct `bus_path` values in each config file. The binary does not acquire a file lock on the bus device. See Section 4.10.3 (Uniqueness Invariants).
 
 ### 4.8 Sensitive Value Redaction
 
@@ -2049,11 +2065,14 @@ Recommended naming convention using systemd template units:
 
 **Unit file:** `/etc/systemd/system/iotkit-rpi-local@.service`
 
-Replace the `ExecStart` line with:
+Replace the `ExecStart` and `DeviceAllow` lines with:
 
 ```ini
 ExecStart=/opt/iotkit/bin/iotkit-rpi-local --config /opt/iotkit/etc/iotkit-rpi-local-%i.toml
+DeviceAllow=/dev/i2c-%i rw
 ```
+
+The `%i` in `DeviceAllow` expands to the systemd instance name (e.g. `i2c1` -> `/dev/i2c-i2c1`). If the instance naming convention does not map directly to device paths, the operator should use a systemd drop-in override (`systemctl edit iotkit-rpi-local@i2c1.service`) to set the correct `DeviceAllow` for that instance.
 
 **Config files:**
 
@@ -2135,8 +2154,24 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **Backoff calculation:** Verify exponential growth with jitter: attempt 0 -> ~1s, attempt 5 -> ~32s (capped at 30s), jitter within +/-30%.
 - **Reconnect counter reset:** ConnAck resets attempt counter to 0.
 - **Device lost then rediscovered while disconnected:** `desired_inventory` reflects latest state (rediscovered); intermediate tombstone not published.
+- **Adapter shutdown hangs (binary timeout):** If `shutdown_handle.shutdown().await` does not complete within adapter-specific timeout, the binary must still proceed to exit (the binary owns the timeout budget, not the runner). Verify the process does not hang indefinitely on an unresponsive adapter shutdown.
+- **Runner drain timeout:** publish_task does not complete drain within 2 seconds -> main proceeds with eventloop grace, exit 1.
+- **ConnAck during drain:** If `connack_notify` fires while publish_task is draining (after `event_rx` closed), the drain should NOT restart inventory reconcile. The drain is a terminal phase -- it flushes remaining buffer and exits. Verify no infinite loop.
+- **event_rx closure -> runner return -> binary exit code:** When `event_rx` closes and `shutdown_initiated == false` (adapter crash), runner returns exit 1. When `shutdown_initiated == true` (clean shutdown), runner returns exit 0. Verify both paths with mock channel.
+- **Buffer overflow (1001st event):** Push 1001 events into buffer while disconnected -> verify buffer length is exactly 1000, the oldest event is gone, the newest is present, and exactly one `warn!` log was emitted for the drop.
+- **DeviceLost during disconnect -> tombstone survives in desired_inventory:** Device active, disconnect, DeviceLost -> `active_devices[k] == None`. On ConnAck, empty retained publish sent for that device key.
+- **DeviceLost then DeviceDiscovered during disconnect -> tombstone overwritten:** Device active, disconnect, DeviceLost, then DeviceDiscovered with new payload -> `active_devices[k] == Some(new_payload)`. On ConnAck, the new payload is published as retained (not the tombstone).
+- **Graceful offline publish failure -> LWT takes over:** Simulate `client.publish` error for the offline status message during shutdown -> verify runner still exits (does not hang), and document that the LWT (ts=0) serves as fallback.
+- **IPv6 broker with TLS:** Config with `mqtts://[::1]:8883` + valid ca_path -> host extracted as `::1` (no brackets), port 8883, TLS enabled.
+- **Duplicate adapter_id across processes:** Two runner instances with the same `adapter_id` -> both derive the same MQTT `client_id` -> the broker disconnects the first client when the second connects (MQTT 3.1.1 spec section 3.1.4). Document this as expected broker behavior; the runner does not detect or prevent it.
 
-### 6.3 `iotkit-rpi-local` Config Tests
+### 6.4 Testability Notes
+
+- **Unit-testable without a real MQTT broker:** `core/mqtt-contract` tests are pure encode/decode with no I/O. `iotkit-adapter-runner` tests mock `event_rx` via `mpsc::channel()` and mock the MQTT client by injecting a fake `AsyncClient` or by testing only the publish_task logic in isolation (buffer, inventory tracking, state transitions). No live broker required.
+- **Integration tests with broker:** Optional integration tests against a local Mosquitto instance verify end-to-end publish/subscribe behavior. These tests are gated behind a `#[cfg(feature = "integration")]` flag or an environment variable (`IOTKIT_TEST_MQTT_BROKER_URL`). CI may skip these if no broker is available.
+- **Signal handling tests:** Testing SIGTERM/SIGINT behavior in `tokio::test` is fragile (requires sending real Unix signals to the test process). Accept signal handling as a **manual test procedure** with documented steps: (1) start binary, (2) send SIGTERM, (3) verify clean exit code 0 and offline status published. Alternatively, extract the signal-handling logic into a testable function that takes a `tokio::sync::watch::Receiver<bool>` instead of a real signal stream, allowing unit tests to simulate signals via channel sends.
+
+### 6.5 `iotkit-rpi-local` Config Tests
 
 - **Valid TOML parse:** Well-formed config -> `ValidatedConfig` with all fields populated.
 - **Empty adapter_id:** -> `config error: adapter_id: must not be empty`.
