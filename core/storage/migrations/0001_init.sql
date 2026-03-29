@@ -1,0 +1,2 @@
+-- Baseline migration for iotkit-core-storage.
+-- Application tables are added by downstream issues (#22, #23).

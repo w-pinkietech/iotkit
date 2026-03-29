@@ -2,6 +2,7 @@
 
 mod error;
 mod handle;
+mod migrate;
 
 pub use error::StorageError;
 pub use handle::DbHandle;
