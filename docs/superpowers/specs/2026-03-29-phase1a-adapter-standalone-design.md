@@ -138,7 +138,7 @@ Additional fields:
 
 #### 1.3.2 Discovery Envelope (`DeviceDiscovered`)
 
-Published to `iotkit/v1/{adapter_id}/discovery` (non-retained) AND to `iotkit/v1/{adapter_id}/inventory/{device_key}` (retained). Both publications carry the identical JSON payload.
+Published to `iotkit/v1/{adapter_id}/discovery` (non-retained). A separate inventory payload (Section 1.3.5) is published to `iotkit/v1/{adapter_id}/inventory/{device_key}` (retained). The two payloads differ: the inventory payload includes `session_id`, while the discovery notification does not.
 
 Additional fields:
 
@@ -380,7 +380,7 @@ All decode functions MUST apply these validation rules in the order listed. The 
 #### 1.4.4 Routing Rules
 
 7. **Status via wrong function** -- `decode_event()` MUST NOT be called on status payloads. Since status payloads lack the fields required for any `AdapterEvent` variant, the JSON parse step will produce `DecodeError::InvalidPayload`. Callers are responsible for routing by topic; the API does not auto-detect payload type.
-8. **`EventType::Inventory`** -- `decode_event(EventType::Inventory, payload)` is equivalent to `decode_event(EventType::Discovery, payload)`. The `Inventory` variant exists for topic construction only; it does not change decode behavior.
+8. **Inventory via wrong function** -- `decode_event()` MUST NOT be called on inventory payloads. Inventory payloads include `session_id` which is not present in discovery payloads. Use `decode_inventory()` for `inventory/{device_key}` topics. `decode_event(EventType::Discovery, ...)` is for non-retained discovery notifications only.
 
 #### 1.4.5 Unknown Fields
 
@@ -403,7 +403,7 @@ This table defines how each `AdapterEvent` variant is handled by `encode_event()
 | `AdapterEvent` variant | `encode_event()` output | `EventType` | Caller side effects |
 |---|---|---|---|
 | `SensorData` | Encoded | `Telemetry` | Publish to `telemetry` topic (non-retained). |
-| `DeviceDiscovered` | Encoded | `Discovery` | Publish to `discovery` topic (non-retained). Also publish the same payload to `inventory/{device_key}` (retained). |
+| `DeviceDiscovered` | Encoded | `Discovery` | Publish to `discovery` topic (non-retained). Also publish a separate inventory payload (via `encode_inventory()`) to `inventory/{device_key}` (retained). The inventory payload includes `session_id`; the discovery notification does not. |
 | `DeviceLost` | Encoded | `Loss` | Publish to `loss` topic (non-retained). Also publish empty payload `b""` to `inventory/{device_key}` (retained) to clear the tombstone. |
 | `AdapterError` | Encoded | `Error` | Publish to `error` topic (non-retained). `device_key` field is nullable. |
 | `DeviceConfig` | Dropped | -- | `encode_event()` returns `Err(EncodeError::UnsupportedEvent("DeviceConfig"))`. Caller MUST log this at `debug` level and discard. No MQTT publish is performed. Rationale: output/actuator device configuration is out of scope for this version; `DeviceConfig` events carry no telemetry and have no defined MQTT representation. |
@@ -459,11 +459,17 @@ impl ConnectionKind {
     /// | Other(s)    | `s` (passthrough)|
     pub fn as_str(&self) -> &str;
 
-    /// Parse a `ConnectionKind` from its canonical string identifier.
+    /// Parse a `ConnectionKind` from its string identifier.
     /// Case-sensitive. Returns `Other(s.to_string())` for unrecognised strings
     /// (never fails — unknown kinds are captured via `Other`).
     ///
-    /// Round-trip: `ConnectionKind::from_str(k.as_str()) == k` for all values.
+    /// **Normalization, not strict round-trip:** `from_str("i2c")` returns `I2c`,
+    /// while `Other("i2c")` cannot exist in practice because `from_str` normalizes
+    /// known strings to their typed variants. The round-trip property holds for
+    /// canonical values: `ConnectionKind::from_str(k.as_str()) == k` for all `k`.
+    /// However, `ConnectionKind::from_str("i2c").as_str() == "i2c"` regardless of
+    /// whether the input was `I2c` or `Other("i2c")` — known strings are always
+    /// normalized to the typed variant.
     pub fn from_str(s: &str) -> Self;
 }
 ```
@@ -577,10 +583,10 @@ pub fn encode_inventory(
 // Decode
 // ---------------------------------------------------------------------------
 
-/// Decode a non-status event payload.
+/// Decode a non-status, non-inventory event payload.
 ///
-/// `event_type`: The type inferred from the MQTT topic. MUST NOT be `EventType::Status`.
-///               `EventType::Inventory` is treated identically to `EventType::Discovery`.
+/// `event_type`: The type inferred from the MQTT topic. MUST NOT be `EventType::Status`
+///               or `EventType::Inventory`. Use `decode_inventory()` for inventory payloads.
 ///
 /// Returns `(adapter_id, adapter_event)` on success.
 ///
@@ -610,6 +616,25 @@ pub fn decode_event(
 /// MUST NOT be used for other event types.
 pub fn decode_status(payload: &[u8]) -> Result<(AdapterId, bool, i64, String), DecodeError>;
 // Returns (adapter_id, online, ts, session_id)
+
+/// Decode an inventory payload from a retained `inventory/{device_key}` topic.
+///
+/// Returns `(adapter_id, adapter_event, session_id)` on success.
+/// The `adapter_event` is an `AdapterEvent::DeviceDiscovered` variant.
+/// The `session_id` is the runner's session identifier (32-char hex string),
+/// used by subscribers to distinguish current vs stale retained inventory
+/// (Section 1.3.7).
+///
+/// MUST be called for payloads received on `.../inventory/{device_key}` topics.
+/// MUST NOT be used for non-retained discovery payloads (use `decode_event` instead).
+///
+/// Returns `DecodeError` if:
+/// - The payload is not valid UTF-8 JSON.
+/// - The `v` field is not `1`.
+/// - Any required field (including `session_id`) is missing or has the wrong type.
+/// - `ts < 0`.
+pub fn decode_inventory(payload: &[u8]) -> Result<(AdapterId, AdapterEvent, String), DecodeError>;
+// Returns (adapter_id, device_discovered_event, session_id)
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -701,27 +726,25 @@ digraph runner_states {
     Connecting [label="Connecting\n(MQTT client init)"];
     Reconnecting [label="Reconnecting\n(waiting for ConnAck)"];
     Online [label="Online\n(publishing events)"];
-    Draining [label="Draining\n(event_rx closed,\nflushing buffer)"];
     Done [label="Done", shape=doubleoctagon];
     Failed [label="Failed", shape=doubleoctagon];
 
     Connecting -> Reconnecting [label="MQTT client created,\neventloop_task spawned\n/ enter event loop"];
     Connecting -> Failed [label="MQTT client creation fails\n/ return Err"];
 
-    Reconnecting -> Online [label="ConnAck received\n/ connack_notify,\nconnected.store(true)"];
-    Reconnecting -> Draining [label="event_rx closed\n/ begin drain"];
+    Reconnecting -> Online [label="ConnAck received\n/ conn_tx.send(Connected)"];
+    Reconnecting -> Done [label="event_rx closed\n/ publish offline + return Ok"];
     Reconnecting -> Failed [label="eventloop_task exits\nunexpectedly\n/ return Err"];
 
-    Online -> Reconnecting [label="Disconnect detected\n/ connected.store(false)"];
-    Online -> Draining [label="event_rx closed\n/ begin drain"];
+    Online -> Reconnecting [label="Disconnect detected\n/ conn_tx.send(Disconnected)"];
+    Online -> Done [label="event_rx closed\n/ publish offline + return Ok"];
     Online -> Failed [label="eventloop_task exits\nunexpectedly\n/ return Err"];
 
-    Draining -> Done [label="drain completes\n+ offline status published\n/ return Ok"];
-    Draining -> Done [label="drain timeout (2s)\n/ return Ok (best-effort)"];
+    Done [label="Done\n(offline status published)", shape=doubleoctagon];
 }
 ```
 
-The runner NEVER initiates shutdown. The runner NEVER knows about signals. It simply processes events until `event_rx` closes, then drains its buffer and publishes offline status.
+The runner NEVER initiates shutdown. The runner NEVER knows about signals. It simply processes events until `event_rx` closes, then publishes offline status.
 
 #### 2.1.2 Binary States (main.rs lifecycle)
 
@@ -747,7 +770,7 @@ digraph binary_states {
     Running -> ShuttingDown [label="SIGINT/SIGTERM received\n/ call adapter.shutdown()"];
     Running -> Exit1 [label="runner returns Err\n(MQTT fatal error)"];
 
-    ShuttingDown -> Exit0 [label="runner returns Ok\n(clean drain)"];
+    ShuttingDown -> Exit0 [label="runner returns Ok\n(clean shutdown)"];
     ShuttingDown -> Exit1 [label="adapter shutdown timeout (5s)\nOR 2nd signal\nOR runner returns Err"];
 }
 ```
@@ -762,14 +785,13 @@ digraph binary_states {
 | MQTT client lifecycle | NO | YES |
 | event_rx consumption | NO | YES |
 | Inventory tracking | NO | YES |
-| Buffer management | NO | YES |
-| Offline status publish | NO | YES (on drain) |
+| Offline status publish | NO | YES (on event_rx close) |
 
 #### 2.1.4 Shutdown Flow
 
 1. Binary catches SIGINT/SIGTERM.
 2. Binary calls `adapter_handle.shutdown().await` with a 5-second timeout. This stops the adapter producer and drops `event_tx`, causing `event_rx` to close.
-3. Runner detects `event_rx` closure (recv returns None) -> enters Draining state -> flushes buffer -> publishes offline status -> returns `Ok(())`.
+3. Runner detects `event_rx` closure (recv returns None) -> publish_task breaks loop -> runner publishes offline status -> grace period -> returns `Ok(())`.
 4. Binary checks runner result -> exit 0 on Ok, exit 1 on Err.
 5. If adapter shutdown hangs beyond 5 seconds, binary aborts and exits 1.
 6. If a 2nd signal arrives during shutdown, binary calls `std::process::exit(1)` immediately.
@@ -780,12 +802,10 @@ digraph binary_states {
 |---|---|---|---|
 | Connecting | Reconnecting | MQTT client + eventloop created | Spawn eventloop_task, spawn publish_task, enter event loop |
 | Connecting | Failed | MQTT client creation fails | Return `Err(RunnerError::MqttInit(...))` |
-| Reconnecting | Online | ConnAck received by eventloop_task | `connack_notify.notify_one()`, `connected.store(true, Release)` |
-| Online | Reconnecting | Disconnect detected by eventloop_task | `connected.store(false, Release)` |
-| Reconnecting/Online | Draining | `event_rx` closes (recv returns None) | publish_task exits recv loop, begins drain |
+| Reconnecting | Online | ConnAck received by eventloop_task | `conn_tx.send(Connected)` |
+| Online | Reconnecting | Disconnect detected by eventloop_task | `conn_tx.send(Disconnected)` |
+| Reconnecting/Online | Done | `event_rx` closes (recv returns None) | publish_task exits loop; runner publishes offline status, grace period, return `Ok(())` |
 | Reconnecting/Online | Failed | eventloop_task exits unexpectedly (detected via `select!` on `eventloop_join`) | Abort publish_task; return `Err(RunnerError::EventLoopDied)` |
-| Draining | Done | Drain completes + offline status published | Return `Ok(())` |
-| Draining | Done | Drain timeout (2s) exceeded | Return `Ok(())` (best-effort; LWT serves as fallback) |
 
 #### Transition Table (Binary)
 
@@ -802,129 +822,115 @@ digraph binary_states {
 
 ### 2.2 Task Model and State Ownership
 
-The runner spawns two internal tasks. Each task has **exclusive ownership** of its state. No `Mutex` or `RwLock` exists. Cross-task coordination uses only `Arc<AtomicBool>` and `Arc<Notify>`.
+The runner spawns two internal tasks. Each task has **exclusive ownership** of its state. No `Mutex` or `RwLock` exists. Cross-task coordination uses a single `tokio::sync::watch` channel for connection state.
 
 **Important:** The runner does NOT spawn signal handlers or own the adapter's ShutdownHandle. Signal handling and adapter lifecycle are the binary's responsibility (see Section 2.1.2).
 
-#### 2.2.1 eventloop_task (spawned tokio task)
+#### 2.2.1 Connection State Coordination
+
+Connection state is communicated via a `tokio::sync::watch` channel, replacing the previous `AtomicBool + Notify` split:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConnectionState { Disconnected, Connected }
+
+let (conn_tx, conn_rx) = tokio::sync::watch::channel(ConnectionState::Disconnected);
+```
+
+**Why watch instead of AtomicBool + Notify:** `watch` is **level-triggered**: the receiver always sees the latest state. This eliminates the race condition where `AtomicBool` could be stale relative to `Notify` wakeups. If eventloop_task sends `Connected` then immediately `Disconnected`, publish_task sees `Disconnected` and does not reconcile. With `AtomicBool + Notify`, the publish_task would wake on the `Notify`, read `AtomicBool = false`, and silently miss the brief connection.
+
+#### 2.2.2 eventloop_task (spawned tokio task)
 
 **Owns:**
 - `rumqttc::EventLoop` (the MQTT event loop instance)
-
-**Writes (shared atomic):**
-- `connected: Arc<AtomicBool>` -- sets `true` on ConnAck, `false` on disconnect/error
-
-**Signals:**
-- `connack_notify: Arc<Notify>` -- calls `notify_one()` on each ConnAck
+- `conn_tx: watch::Sender<ConnectionState>` -- sends connection state changes
 
 **Behavior:**
 - Runs `eventloop.poll().await` in a loop.
-- On `Event::Incoming(Packet::ConnAck(_))`: stores `connected = true` (Release), calls `connack_notify.notify_one()`. **Does NOT call `client.publish()`.** All publish operations happen in publish_task to avoid deadlock (see Section 3.4.1).
-- On connection error or disconnect: stores `connected = false` (Release).
+- On `Event::Incoming(Packet::ConnAck(_))`: calls `conn_tx.send(Connected)`. **Does NOT call `client.publish()`.** All publish operations happen in publish_task to avoid deadlock (see Section 3.4.1).
+- On connection error or disconnect: calls `conn_tx.send(Disconnected)`.
 - rumqttc handles reconnection internally; this task does not exit on transient disconnects.
 - Task exits only when: (a) `EventLoop` is dropped/aborted by the runner on cleanup, or (b) an unrecoverable internal error.
 
 **Return type:** `Result<(), EventLoopError>` -- runner inspects this on join.
 
-#### 2.2.2 publish_task (spawned tokio task)
+#### 2.2.3 publish_task (spawned tokio task)
 
 **Owns (exclusive, moved in):**
 - `event_rx: mpsc::Receiver<AdapterEvent>` -- receives adapter events
 - `desired_inventory: HashMap<String, Option<InventoryData>>` -- sole inventory model (see Section 3.8)
 - `session_id: String` -- 32-char hex string generated at runner startup (see Section 1.3.7), constant for process lifetime
-- `outbound_buffer: VecDeque<PublishItem>` -- buffered publishes for when disconnected
+- `conn_rx: watch::Receiver<ConnectionState>` -- receives connection state changes
 - `client: rumqttc::AsyncClient` (clone) -- used for `publish()` / `publish_bytes()` calls
 
 **Thread safety of `desired_inventory`:** This HashMap is exclusively owned by publish_task. No sharing, no Mutex needed.
 
-**Reads (shared atomic):**
-- `connected: Arc<AtomicBool>` -- checks before attempting publish
+**No outbound buffer.** Non-retained events (telemetry, discovery notification, loss notification, error) are dropped when disconnected. Retained state (status, inventory) is tracked in `desired_inventory` and reconciled on every ConnAck.
 
-**Awaits:**
-- `connack_notify: Arc<Notify>` -- waits for connectivity to flush inventory and outbound buffer
+**Disconnect policy:**
+- **Retained ops (status, inventory):** Tracked in `desired_inventory`. Reconciled on every ConnAck. MUST NOT lose state.
+- **Non-retained events (telemetry, discovery notification, loss notification, error):** Drop when disconnected. Emit `warn!` log per dropped event. No buffer.
+
+**Telemetry loss tradeoff:** At 10 sensors x 1Hz and a typical 30-second disconnect, approximately 300 telemetry readings are lost. This is acceptable because: (a) the gateway maintains timeseries history for longer analysis, (b) telemetry is time-series data with diminishing value when stale, (c) eliminating the outbound buffer removes significant complexity (buffer management, replay fairness, drain phase, backpressure, ordering races).
 
 **Behavior loop:**
 ```
-let mut reconciled = false;  // true after ConnAck reconcile completes
-
 loop {
-    // Determine if there are buffered items to drain while connected AND reconciled
-    let can_drain = connected.load(Acquire)
-        && reconciled
-        && !outbound_buffer.is_empty();
-
     tokio::select! {
-        // Live events from adapter
         event = event_rx.recv() => {
             match event {
                 Some(ev) => {
-                    if connected.load(Acquire) && reconciled {
-                        process_event_live(ev);   // track inventory + publish immediately
+                    // Always track inventory for lifecycle events
+                    track_inventory(&ev);
+
+                    if *conn_rx.borrow() == Connected {
+                        // Encode + publish with timeout
+                        publish_event_with_timeout(&ev);
                     } else {
-                        process_event_buffer(ev); // track inventory + buffer for later
+                        // Non-retained: drop with warn log
+                        // Retained (inventory): already tracked above, will reconcile on ConnAck
+                        warn!("disconnected, dropping non-retained event");
                     }
                 }
-                None => break,                   // channel closed, exit task
+                None => break, // event_rx closed, exit task
             }
         }
 
-        // ConnAck notification — explicit reconcile phase
-        _ = connack_notify.notified() => {
-            reconciled = false;  // entering reconcile phase
-            // (1) Publish online status (with session_id)
-            publish_online_status();
-            // (2) Replay all desired_inventory as retained publishes (with session_id)
-            replay_inventory();
-            // (3) Reconcile complete — resume normal operations
-            reconciled = true;
-        }
-
-        // Drain buffered items (only when connected AND reconciled)
-        _ = std::future::ready(()), if can_drain => {
-            // Pop and publish up to 10 items from outbound_buffer
-            drain_buffer_batch(10);
+        _ = conn_rx.changed() => {
+            if *conn_rx.borrow() == Connected {
+                // Reconcile: publish online status + all desired_inventory
+                reconcile_all();
+            }
+            // If Disconnected: no action needed. Next event_rx.recv() will
+            // check conn_rx.borrow() and drop non-retained events.
         }
     }
 }
-// After loop: drain phase
-drain_remaining();
 ```
 
-**Reconcile phase semantics:** Between ConnAck and reconcile completion, the publish_task is in a "reconnected but not yet reconciled" state. During this phase:
+**Reconcile on ConnAck:** When `conn_rx.changed()` delivers `Connected`, the publish_task publishes online status followed by the full `desired_inventory`. This is the only path that publishes retained state. Steps:
 
-- **Live events are buffered**, not published directly. This ensures status and inventory are published to the broker BEFORE any live telemetry or discovery events.
-- **Buffer drain is paused** (the `can_drain` guard requires `reconciled`).
-- The reconcile executes synchronously within the `connack_notify` arm: publish online status, then replay all inventory, then set `reconciled = true`. No `select!` interleaving occurs during reconcile.
+1. Publish online status (`encode_status(adapter_id, true, now_ms(), session_id)`, retained).
+2. For each entry in `desired_inventory`: publish retained inventory (see Section 3.8.3).
+3. Resume normal event processing.
 
-**Reconcile failure (disconnect mid-reconcile):** If MQTT disconnects during steps (1) or (2), `client.publish().await` returns `Err`. The reconcile aborts (does not set `reconciled = true`). Meanwhile, eventloop_task sets `connected = false`. On the next ConnAck, the `connack_notify` branch fires again and reconcile restarts from scratch. This is safe because reconcile is idempotent -- it republishes the full `desired_inventory` every time.
+Each publish call uses a 5-second timeout (see Section 3.7.2). Failures are warned and skipped; the next ConnAck will retry everything.
 
-**Reconcile duration:** For typical deployments (< 100 devices), reconcile takes < 100ms. During this brief window, live events from `event_rx` are buffered. The `event_rx` channel has bounded capacity set by the adapter, providing natural backpressure.
+**Reconcile is best-effort.** Each publish within the reconcile loop is independent. If one fails (timeout or error), it is warned and skipped. The remaining entries continue. There is no partial reconcile flag -- `desired_inventory` is always fully reconciled on the next ConnAck. This is safe because reconcile is idempotent.
 
-**Why `std::future::ready(())` instead of `connack_notify.notified()`:** `Notify` is edge-triggered. After one ConnAck, the publish_task would replay 10 items and return to `select!`. The `!outbound_buffer.is_empty()` guard does not make the `notified()` future ready again — items 11+ would sit forever until another ConnAck. By using `std::future::ready(())` with the `can_drain` guard, the drain branch is **always eligible** whenever the runner is connected, reconciled, and the buffer is non-empty. `select!` is fair by default (random branch selection), so live events from `event_rx` are not starved.
+**Reconcile failure (disconnect mid-reconcile):** If MQTT disconnects during reconcile, `conn_rx.changed()` will deliver `Disconnected` on the next iteration. Meanwhile, individual publish timeouts will fire (5s), logging warnings. On the next ConnAck, reconcile restarts from scratch.
 
-**Why ConnAck notification only does inventory reconcile:** All publish operations (online status, inventory reconcile) happen in publish_task after receiving the `connack_notify` signal. The eventloop_task MUST NOT call `client.publish()` — see Section 3.4.1 for the deadlock rationale.
+**Reconcile duration:** For typical deployments (< 100 devices), reconcile takes < 100ms (bounded by device count, not buffer size).
 
-- When `connected.load(Acquire)` is `false`: enqueue publishes to `outbound_buffer`.
-- When `connected` is `true` but `reconciled` is `false`: enqueue publishes to `outbound_buffer` (reconcile in progress).
-- When `connected` is `true` and `reconciled` is `true`: the drain branch is always eligible if the buffer is non-empty, interleaving with live events naturally via `select!` fairness.
-- When `connack_notify` fires: set `reconciled = false`, publish online status, replay `desired_inventory` (retained), set `reconciled = true`. Buffer drain resumes in subsequent iterations.
-- On `event_rx` closed (`recv()` returns `None`): exit the loop. This is the shutdown signal propagated from the binary via the adapter stopping.
+**watch channel coalescing:** If eventloop_task sends `Connected` then immediately `Disconnected` before publish_task reads, `conn_rx.changed()` delivers the latest (`Disconnected`). The publish_task does not reconcile. This is correct behavior.
 
-**Fairness:** `tokio::select!` picks a random ready branch by default. When both `event_rx` and the drain branch are ready, each has ~50% chance of being selected per iteration. This prevents either live events or buffer replay from starving the other.
-
-**Notify coalescing:** If multiple ConnAck events fire before publish_task processes the notification, `Notify` coalesces them into one wakeup. This is fine — inventory reconcile is idempotent (publishes the full `desired_inventory` every time).
-
-**Message ordering on reconnect:** On ConnAck, publish_task first publishes online status and reconciles inventory (retained) within a single `select!` arm. Only after `reconciled = true` can the drain branch or live event processing publish to the broker. This guarantees strict ordering: status -> inventory -> buffered events -> live events.
-
-**Drain timeout:** The drain phase has an internal 2-second timeout. If drain takes longer, it returns anyway (best-effort). The LWT serves as fallback for offline notification.
-
-**What if ConnAck arrives during drain?** Ignored. Once in drain mode, the publish_task does not re-enter the select! loop. It flushes what it can and exits.
+**Message ordering on reconnect:** On ConnAck, publish_task publishes online status first, then inventory. Both are retained and represent current state. No ordering guarantee is needed relative to non-retained events (they are not buffered).
 
 **Return type:** `Result<(), PublishTaskError>` -- runner inspects on join.
 
 **`event_rx` channel capacity:** The `event_rx` channel is created by the adapter (not the runner). The adapter uses `tokio::sync::mpsc::channel(capacity)` with a bounded capacity. The runner does not specify or constrain this capacity. If the adapter fills the channel (e.g., publish_task is slow), the adapter's `send().await` will backpressure naturally. The adapter is responsible for choosing an appropriate capacity for its production rate.
 
-#### 2.2.3 runner main task (the `run()` async fn)
+#### 2.2.4 runner main task (the `run()` async fn)
 
 **Owns (exclusive):**
 - `eventloop_join: JoinHandle<Result<(), EventLoopError>>` -- eventloop_task handle
@@ -955,8 +961,11 @@ tokio::select! {
 }
 
 // Normal path: publish_task exited first (event_rx closed).
-// Publish offline status
-client.publish(status_topic, QoS1, retained=true, offline_payload).await;
+// Publish offline status with timeout
+match timeout(5s, client.publish(status_topic, QoS1, retained=true, offline_payload)).await {
+    Ok(Ok(())) => {},
+    _ => warn!("failed to publish offline status, LWT will fire as fallback"),
+}
 client.disconnect().await;
 
 // Grace period: let eventloop transmit the above
@@ -969,12 +978,11 @@ eventloop_join.abort();
 
 **Why select! on both handles:** If the runner only awaited `publish_join`, and the eventloop died while no adapter events were arriving, publish_task would block on `event_rx.recv()` indefinitely. The runner would hang. By selecting on both handles, the runner detects eventloop death immediately and returns `Err(RunnerError::EventLoopDied)`. The binary then logs the error and exits 1.
 
-#### 2.2.4 Shared State Summary
+#### 2.2.5 Shared State Summary
 
 | Item | Type | Writer | Reader(s) |
 |---|---|---|---|
-| `connected` | `Arc<AtomicBool>` | eventloop_task | publish_task |
-| `connack_notify` | `Arc<Notify>` | eventloop_task | publish_task |
+| `conn_tx` / `conn_rx` | `watch::Sender<ConnectionState>` / `watch::Receiver<ConnectionState>` | eventloop_task (`conn_tx`) | publish_task (`conn_rx`) |
 
 No other shared mutable state exists. `AsyncClient` is cloned (rumqttc's `AsyncClient` is backed by an internal channel and is `Clone + Send`); each clone is independently owned.
 
@@ -999,7 +1007,7 @@ The runner does NOT monitor signals. Signal handling is the binary's responsibil
 
 | Event | Runner action | Return value |
 |---|---|---|
-| publish_task exits Ok (event_rx closed) | Publish offline status, gracefully stop eventloop | `Ok(())` |
+| publish_task exits Ok (event_rx closed) | Publish offline status with timeout, gracefully stop eventloop | `Ok(())` |
 | publish_task exits Err/panic | Log error, abort eventloop | `Err(RunnerError::PublishTaskFailed)` |
 | eventloop_task exits unexpectedly (before publish_task) | Runner detects immediately via `select!` on `eventloop_join`; aborts publish_task | `Err(RunnerError::EventLoopDied)` |
 
@@ -1057,12 +1065,12 @@ Startup is split between the binary and the runner. The binary handles steps 1-5
         |
         v  [fail: return Err(RunnerError::MqttInit(...))]
 (2) Spawn eventloop_task
-    - tokio::spawn(eventloop_run(eventloop, connected, connack_notify))
+    - tokio::spawn(eventloop_run(eventloop, conn_tx))
     - Returns JoinHandle
         |
         v  [fail: impossible -- spawn does not fail]
 (3) Spawn publish_task
-    - tokio::spawn(publish_run(event_rx, client.clone(), connected, connack_notify, ...))
+    - tokio::spawn(publish_run(event_rx, client.clone(), conn_rx, ...))
     - Returns JoinHandle
         |
         v  [fail: impossible -- spawn does not fail]
@@ -1105,16 +1113,14 @@ The runner never initiates shutdown. It reacts to `event_rx` closing:
 (1) publish_task detects event_rx.recv() == None
     |
     v
-(2) Drain phase: flush outbound_buffer
-    - If connected: publish remaining buffered events
-    - If disconnected: skip (data loss accepted on shutdown while disconnected)
+(2) publish_task exits loop, returns Ok(())
     |
-    | internal timeout: 2 seconds
     v
-(3) Offline status publish
-    - runner publishes retained status: {"v":1,"adapter_id":"...","ts":<real_unix_ms>,"online":false}
+(3) Offline status publish (with 5s timeout)
+    - runner publishes retained status: {"v":1,"adapter_id":"...","ts":<real_unix_ms>,"online":false,"session_id":"..."}
     - Topic: {prefix}/status, QoS 1, retain=true
     - This overwrites the LWT's ts=0 with a real timestamp
+    - If timeout fires: warn log, proceed (LWT serves as fallback)
     |
     v
 (4) Disconnect
@@ -1134,7 +1140,7 @@ The runner never initiates shutdown. It reacts to `event_rx` closing:
 ```
 
 **Can runner return Ok vs Err?**
-- `Ok(())` = event_rx closed cleanly, drain completed (or timed out, best-effort).
+- `Ok(())` = event_rx closed cleanly, offline status published (or timed out, best-effort).
 - `Err(RunnerError)` = MQTT fatal error at startup, or eventloop/publish_task panicked.
 
 **What happens to eventloop_task when runner returns?** The runner aborts it in step 6. The binary does not need to manage it.
@@ -1144,17 +1150,16 @@ The runner never initiates shutdown. It reacts to `event_rx` closing:
 | Phase | Owner | Max duration |
 |---|---|---|
 | Adapter shutdown | Binary | 5 seconds |
-| Publish drain | Runner | 2 seconds |
-| Offline status + disconnect | Runner | Within drain window |
-| Eventloop grace | Runner | 2 seconds |
+| Offline status publish | Runner | 5 seconds (timeout) |
+| Disconnect + eventloop grace | Runner | 2 seconds |
 | Eventloop abort | Runner | ~0 (immediate) |
-| **Total maximum** | | **5 + 4 = 9 seconds** |
+| **Total maximum** | | **5 + 7 = 12 seconds** |
 
-Note: The binary's 5s adapter timeout runs concurrently with (not before) the runner's drain. In practice, once the adapter drops event_tx, the runner begins draining immediately, so the actual wall time is typically 5s + small overlap.
+Note: The binary's 5s adapter timeout runs concurrently with (not before) the runner's shutdown sequence. In practice, once the adapter drops event_tx, the runner begins shutdown immediately, so the actual wall time is typically 5s + small overlap.
 
 #### 2.5.3 2nd Signal During Shutdown
 
-If a second SIGINT or SIGTERM arrives while the binary's shutdown sequence is in progress, the binary calls `std::process::exit(1)` immediately. This bypasses all remaining drain/flush steps. The LWT (with ts=0) will inform subscribers of the ungraceful exit.
+If a second SIGINT or SIGTERM arrives while the binary's shutdown sequence is in progress, the binary calls `std::process::exit(1)` immediately. This bypasses the offline status publish and eventloop grace period. The LWT (with ts=0) will inform subscribers of the ungraceful exit.
 
 #### 2.5.4 Adapter Shutdown Hangs
 
@@ -1173,7 +1178,7 @@ The LWT fires after the broker's keepalive timeout (default 30s), providing even
 | Adapter start failure | 1 | No data source |
 | Runner returns Err (MQTT init failure) | 1 | Cannot connect to broker |
 | Runner returns Err (task panic/crash) | 1 | Critical infrastructure gone |
-| Signal + runner returns Ok (clean drain) | 0 | Graceful shutdown |
+| Signal + runner returns Ok (clean shutdown) | 0 | Graceful shutdown |
 | Signal + adapter shutdown timeout (5s) | 1 | Adapter hung |
 | 2nd signal during shutdown | 1 | Forced exit |
 | Runner returns Ok before signal (adapter died) | 1 | Data source died unexpectedly |
@@ -1191,8 +1196,8 @@ fn main() -> ExitCode {
 #### 2.7.1 Recoverable: MQTT disconnect
 
 - **Detection:** eventloop_task observes connection error from `eventloop.poll()`.
-- **Action:** `connected.store(false, Release)`. rumqttc reconnects automatically with exponential backoff.
-- **publish_task behavior:** Stops publishing, buffers to `outbound_buffer`. Waits on `connack_notify`.
+- **Action:** `conn_tx.send(Disconnected)`. rumqttc reconnects automatically with exponential backoff.
+- **publish_task behavior:** Stops publishing non-retained events (drops with warn log). Continues tracking inventory in `desired_inventory`. Waits on `conn_rx.changed()` for reconnection.
 - **No task exits.** No supervision intervention. The runner remains in `Reconnecting` state.
 
 #### 2.7.2 Per-device: sensor read failure
@@ -1237,8 +1242,8 @@ signal received
   -> binary sets shutdown_initiated = true
   -> binary calls adapter_handle.shutdown().await (adapter stops, drops event_tx)
   -> event_rx.recv() returns None in runner's publish_task
-  -> publish_task enters drain phase
-  -> runner publishes offline status, cleans up eventloop
+  -> publish_task exits loop
+  -> runner publishes offline status (with timeout), cleans up eventloop
   -> runner returns Ok(())
   -> binary checks: shutdown_initiated == true, runner Ok -> exit 0
 ```
@@ -1248,8 +1253,8 @@ signal received
 ```
 adapter panics / drops event_tx unexpectedly
   -> event_rx.recv() returns None in runner's publish_task
-  -> publish_task enters drain phase
-  -> runner publishes offline status, cleans up eventloop
+  -> publish_task exits loop
+  -> runner publishes offline status (with timeout), cleans up eventloop
   -> runner returns Ok(())
   -> binary checks: shutdown_initiated == false
   -> binary logs "adapter crash: event_rx closed without shutdown signal"
@@ -1276,7 +1281,7 @@ match runner_result {
 ///
 /// The runner creates an MQTT client, spawns internal tasks (eventloop, publish),
 /// and processes events from event_rx until the channel closes. On closure,
-/// it drains buffered events, publishes offline status, and returns.
+/// it publishes offline status and returns.
 ///
 /// The runner does NOT handle signals or own the adapter. The caller (binary)
 /// is responsible for:
@@ -1284,7 +1289,7 @@ match runner_result {
 /// - Calling adapter shutdown (which closes event_rx)
 /// - Interpreting the return value for exit code decisions
 ///
-/// Returns Ok(()) on clean event_rx closure (drain completed).
+/// Returns Ok(()) on clean event_rx closure.
 /// Returns Err on MQTT init failure or internal task crash.
 pub async fn run(
     adapter_id: AdapterId,
@@ -1309,7 +1314,7 @@ The runner considers itself **connected** if and only if a `ConnAck` packet has 
 - `eventloop.poll()` returning `Ok` for any packet other than `ConnAck`
 - Successful DNS resolution
 
-The connection state is tracked via a shared `AtomicBool` (`connected`), written with `Ordering::Release` and read with `Ordering::Acquire`. This ensures the publish_task sees a consistent view of the connection state relative to any prior ConnAck processing. In practice, the only consequence of a stale read is a brief period where the publish loop either buffers unnecessarily or attempts a publish that will be enqueued to rumqttc's internal queue (which handles disconnection internally).
+The connection state is tracked via a `tokio::sync::watch` channel (see Section 2.2.1). The eventloop_task sends `ConnectionState::Connected` on ConnAck and `ConnectionState::Disconnected` on error/disconnect. The publish_task reads the latest state via `conn_rx.borrow()` and receives change notifications via `conn_rx.changed()`. Because `watch` is level-triggered, the publish_task always sees the latest state -- there is no race between state update and notification delivery.
 
 ### 3.2 Session Model
 
@@ -1330,13 +1335,13 @@ digraph connection_lifecycle {
     rankdir=LR;
     node [shape=box, style=rounded];
 
-    Disconnected [label="Disconnected\n(AtomicBool=false)"];
-    Connected [label="Connected\n(AtomicBool=true)"];
+    Disconnected [label="Disconnected\n(watch=Disconnected)"];
+    Connected [label="Connected\n(watch=Connected)"];
 
     Disconnected -> Disconnected [label="poll() -> Err\n(backoff sleep)"];
-    Disconnected -> Connected [label="poll() -> ConnAck\n-> store(true)\n-> reset attempt=0\n-> notify publish_task"];
+    Disconnected -> Connected [label="poll() -> ConnAck\n-> conn_tx.send(Connected)\n-> reset attempt=0"];
     Connected -> Connected [label="poll() -> Ok(non-ConnAck)\n(PUBACK, PINGRESP, etc.)"];
-    Connected -> Disconnected [label="poll() -> Err\n-> store(false)\n-> increment attempt\n-> backoff sleep"];
+    Connected -> Disconnected [label="poll() -> Err\n-> conn_tx.send(Disconnected)\n-> increment attempt\n-> backoff sleep"];
 }
 ```
 
@@ -1344,34 +1349,29 @@ digraph connection_lifecycle {
 
 On every `ConnAck`, the following sequence executes **in order**:
 
-**eventloop_task** (steps 1-3):
+**eventloop_task** (steps 1-2):
 
-1. `connected.store(true, Release)`
+1. `conn_tx.send(Connected)`
 2. `reconnect_attempt = 0`
-3. **Notify publish_task** via `connack_notify.notify_one()`.
 
 **eventloop_task does NOT call `client.publish()`.** See Section 3.4.1 for deadlock rationale.
 
-**publish_task** (steps 4-8, after receiving notification):
+**publish_task** (steps 3-5, after `conn_rx.changed()` delivers `Connected`):
 
-4. **Set `reconciled = false`** -- enters reconcile phase. During this phase, live events from `event_rx` are buffered (not published) and the drain branch is paused.
-5. **Publish online status** -- `encode_status(adapter_id, true, now_ms(), session_id)` to `iotkit/v1/{adapter_id}/status`, QoS 1, retained.
-6. **Inventory reconcile** -- replay all entries in `desired_inventory` as retained publishes with current `session_id` + fresh `ts` (see Section 3.8).
-7. **Set `reconciled = true`** -- reconcile phase complete. Normal operations resume.
-8. **Buffer replay** -- handled by the always-eligible drain branch in the `select!` loop (see Section 3.7.5). NOT triggered by `connack_notify`.
-9. **Resume live event processing** -- the `select!` loop naturally interleaves buffer drain batches with live events.
+3. **Publish online status** -- `timeout(5s, encode_status(adapter_id, true, now_ms(), session_id))` to `iotkit/v1/{adapter_id}/status`, QoS 1, retained. Timeout -> warn + skip.
+4. **Inventory reconcile** -- for each entry in `desired_inventory`, publish retained inventory with current `session_id` + fresh `ts` (see Section 3.8). Each publish has a 5-second timeout. Failures are warned and skipped; the entry will be retried on the next ConnAck.
+5. **Resume live event processing** -- the `select!` loop continues normally. Incoming events from `event_rx` are published immediately (while connected).
 
-Steps 4-7 run synchronously within the `connack_notify` branch of the `select!` loop. Steps 8-9 run in subsequent iterations via the drain branch (guarded by `connected && reconciled && !buffer.is_empty()`). Inventory reconcile runs in full (bounded by device count). Buffer replay is batched (max 10 per iteration) to interleave with live events from `event_rx`.
+All reconcile steps run synchronously within the `conn_rx.changed()` branch of the `select!` loop. Reconcile is bounded by device count (not buffer size). For typical deployments (< 100 devices), reconcile takes < 100ms.
 
 #### 3.4.1 Deadlock Prevention: eventloop_task Must Not Publish
 
 **Problem:** If eventloop_task calls `AsyncClient::publish().await` inside the ConnAck handler, and rumqttc's internal channel is full (capacity 100), the `publish()` call blocks waiting for the eventloop to drain the channel. But eventloop IS the blocked task — deadlock.
 
 **Solution:** eventloop_task MUST NOT call `client.publish()`. It ONLY:
-1. Updates `AtomicBool connected` state.
-2. Calls `connack_notify.notify_one()`.
+1. Sends connection state via `conn_tx.send(Connected)` or `conn_tx.send(Disconnected)`.
 
-All publish operations (online status, inventory reconcile, buffer replay) happen in publish_task after receiving the notification. Since publish_task and eventloop_task are separate tokio tasks, `publish_task`'s `publish().await` enqueues to the channel while eventloop_task independently polls and drains it. No deadlock is possible.
+All publish operations (online status, inventory reconcile, live events) happen in publish_task. Since publish_task and eventloop_task are separate tokio tasks, `publish_task`'s `publish().await` enqueues to the channel while eventloop_task independently polls and drains it. No deadlock is possible.
 
 ### 3.5 Reconnect Backoff
 
@@ -1392,15 +1392,15 @@ The backoff is implemented in the eventloop pump task. rumqttc's built-in reconn
 
 There is **no maximum reconnect count** and **no timeout** after which the runner gives up. The runner reconnects forever until:
 
-- The binary receives SIGTERM/SIGINT, shuts down the adapter, which closes `event_rx`, causing the runner to drain and exit.
+- The binary receives SIGTERM/SIGINT, shuts down the adapter, which closes `event_rx`, causing the runner to publish offline status and exit.
 - A fatal configuration error prevents even TCP connect attempts (invalid hostname -- rumqttc will still retry).
 
 During extended disconnection:
 - The adapter continues producing events into `event_rx`.
-- The publish_task continues consuming from `event_rx`, tracking inventory locally, and buffering non-retained events (subject to the 1000-event cap).
+- The publish_task continues consuming from `event_rx`, tracking inventory locally in `desired_inventory`, and dropping non-retained events (with warn log).
 - The eventloop pump task continues calling `poll()` with backoff sleeps.
 
-### 3.7 Publish, Buffer, and Replay Policy
+### 3.7 Publish Policy
 
 #### 3.7.1 Definition of "Publish Succeeded"
 
@@ -1412,114 +1412,57 @@ During extended disconnection:
 
 This is a fundamental constraint of rumqttc's API. The runner **must not** treat enqueue success as delivery confirmation for any correctness-critical operation.
 
-#### 3.7.2 Disconnect Buffering Policy by Event Class
+**rumqttc backpressure model:** `AsyncClient::publish().await` **blocks** (does not return an error) when rumqttc's internal channel is full (capacity 100). The eventloop_task must be polling to drain this channel. If the eventloop is healthy, blocking resolves quickly. If the eventloop is stuck, the publish call blocks indefinitely.
+
+**Mandatory publish timeout:** ALL `client.publish()` calls in publish_task and the runner MUST be wrapped with a 5-second timeout:
+
+```rust
+match tokio::time::timeout(Duration::from_secs(5), client.publish(...)).await {
+    Ok(Ok(())) => { /* enqueued successfully */ }
+    Ok(Err(e)) => { warn!("publish error: {e}"); /* skip */ }
+    Err(_) => { warn!("publish timed out after 5s"); /* skip */ }
+}
+```
+
+Timeout or error -> warn + skip (not fatal). For retained operations, the next ConnAck will reconcile. For non-retained events, the data is lost (accepted).
+
+#### 3.7.2 Disconnect Policy by Event Class
 
 Events are classified into two categories based on their MQTT retain semantics and recoverability:
 
 | Event class | Events | Retained? | Disconnect policy | Rationale |
 |-------------|--------|-----------|-------------------|-----------|
-| **Inventory/Status (recoverable)** | `DeviceDiscovered`, `DeviceLost`, status online/offline | Yes | MUST NOT drop. Tracked in `desired_inventory` (HashMap). Re-published on every ConnAck. | These represent current device state. Dropping would leave broker state inconsistent. Local tracking makes them fully recoverable. |
-| **Transient (non-recoverable)** | `SensorData` (telemetry), `AdapterError`, non-retained copies of discovery/loss events | No | Bounded buffer (`outbound_buffer`), capacity 1000. Drop oldest on overflow. | Telemetry is time-series data; stale readings have diminishing value. Bounded buffer prevents OOM on extended disconnects. |
+| **Inventory/Status (recoverable)** | `DeviceDiscovered`, `DeviceLost`, status online/offline | Yes | MUST NOT lose state. Tracked in `desired_inventory` (HashMap). Re-published on every ConnAck. | These represent current device state. Local tracking makes them fully recoverable. |
+| **Transient (non-recoverable)** | `SensorData` (telemetry), `AdapterError`, non-retained copies of discovery/loss events | No | **Drop immediately.** Emit `warn!` log. No buffer. | Telemetry is time-series data; stale readings have diminishing value. Dropping eliminates buffer/replay complexity entirely. |
 
-When the buffer is full and a new transient event arrives:
+**No outbound buffer exists.** This is a deliberate simplification. The previous design included a bounded `VecDeque<PublishItem>` buffer with replay, fairness, and drain logic. This has been removed because:
 
-1. `outbound_buffer.pop_front()` -- discard oldest.
-2. `warn!("pending event buffer full, dropping oldest event")` -- exactly one log line per drop.
-3. `outbound_buffer.push_back((event_type, payload))` -- enqueue new event.
+1. Retained state (inventory, status) is fully recoverable via `desired_inventory` + ConnAck reconcile.
+2. Non-retained events have diminishing value when stale.
+3. The buffer was the source of nearly all complexity: replay fairness, ordering, backpressure, reconcile ordering race, drain phase.
+4. Quantitative impact: 10 sensors x 1Hz x 30s disconnect = 300 readings lost. The gateway has timeseries history for longer analysis. Brief disconnects (100ms) lose only a few readings.
 
-**Buffer capacity constant:**
-
-```rust
-const PENDING_BUFFER_CAP: usize = 1000;
-```
-
-This is a compile-time constant. There is no runtime configuration for buffer size in v1.
-
-#### 3.7.3 What Gets Buffered vs. What Gets Tracked
+#### 3.7.3 What Happens When Disconnected
 
 When disconnected, for each incoming `AdapterEvent`:
 
-1. **Always:** `inventory.track_event(&event)` -- updates `desired_inventory` HashMap locally.
-2. **Then:** `buffer_event(adapter_id, &event, &mut outbound_buffer)` -- encodes the event and pushes to `outbound_buffer` VecDeque.
+1. **Always:** `track_inventory(&event)` -- updates `desired_inventory` HashMap for `DeviceDiscovered` and `DeviceLost` events. No-op for other events.
+2. **Non-retained events:** Drop with `warn!` log. No buffering.
+3. **Retained inventory updates:** Already tracked in step 1. Will be published on next ConnAck.
 
-Both paths execute regardless of event type. Inventory events are tracked in step 1 AND buffered in step 2. On reconnect, inventory is reconciled via `desired_inventory` (step 5 of ConnAck processing), and buffered events are replayed separately (step 6). This means discovery/loss events may be published twice on reconnect (once as retained inventory, once as non-retained event replay). This is acceptable -- consumers must be idempotent.
+Discovery/loss events are NOT published to their non-retained topics during disconnect. Only the retained inventory state in `desired_inventory` is preserved. On reconnect, inventory is reconciled but the non-retained discovery/loss notifications are not replayed (subscribers get the current inventory state via retained topics, which is sufficient).
 
-#### 3.7.4 ConnAck Replay Order
+#### 3.7.4 ConnAck Reconcile Order
 
-On `connack_notify.notified()`, the publish_task executes in strict order:
-
-```
-(0) Set reconciled = false  -- pause buffer drain + buffer live events
-(1) Online status           -- published by publish_task in the connack_notify branch (includes session_id)
-(2) Inventory reconcile     -- inventory.republish_all(&client, session_id) (includes session_id)
-(3) Set reconciled = true   -- resume normal operations
-(4) Buffer replay           -- handled by the always-eligible drain branch (max 10 items per iteration)
-(5) Live events             -- resume normal select! loop processing
-```
-
-All steps execute in the publish_task. Steps (0)-(3) run synchronously in the `connack_notify` branch. Steps (4)-(5) run in subsequent `select!` iterations via the drain branch and `event_rx` branch respectively. The `reconciled` flag guarantees steps (4) and (5) cannot execute until steps (1)-(2) are complete.
-
-#### 3.7.5 Buffer Replay Mechanics
-
-Buffer replay is handled by an **always-eligible drain branch** in the `select!` loop, NOT by the `connack_notify` branch. This avoids the edge-triggered `Notify` problem (see Section 2.2.2).
+On `conn_rx.changed()` delivering `Connected`, the publish_task executes in strict order:
 
 ```
-fn drain_buffer_batch(max: usize):
-    let batch_size = min(outbound_buffer.len(), max)
-    for _ in 0..batch_size:
-        let (event_type, payload) = outbound_buffer.front()
-        topic = topic(adapter_id, event_type)
-        result = client.publish(topic, QoS1, retain=false, payload).await
-        if result is Err:
-            warn!("flush publish failed, keeping remaining buffer")
-            return                     // <- stop replay, keep remaining
-        outbound_buffer.pop_front()    // <- remove only after successful enqueue
-    // After batch: return to select! loop
+(1) Online status   -- publish_task publishes encode_status(..., online=true, ...) (retained, with session_id)
+(2) Inventory reconcile -- for each entry in desired_inventory: publish retained inventory (with session_id)
+(3) Resume           -- select! loop continues, events published normally
 ```
 
-The `select!` loop uses `std::future::ready(())` with a guard for buffer drain:
-
-```
-loop {
-    let can_drain = connected.load(Acquire)
-        && reconciled
-        && !outbound_buffer.is_empty();
-
-    tokio::select! {
-        event = event_rx.recv() => {
-            if connected.load(Acquire) && reconciled {
-                process_event_live(ev);   // track inventory + publish immediately
-            } else {
-                process_event_buffer(ev); // track inventory + buffer for later
-            }
-        }
-
-        _ = connack_notify.notified() => {
-            reconciled = false;
-            publish_online_status();  // online status publish (with session_id)
-            replay_inventory();       // full inventory replay (with session_id)
-            reconciled = true;
-            // Buffer drain is NOT done here — the drain branch handles it
-        }
-
-        // Always eligible when connected + reconciled + buffer non-empty
-        _ = std::future::ready(()), if can_drain => {
-            drain_buffer_batch(10);   // max 10 items per iteration
-        }
-    }
-}
-```
-
-**Why this works:** `std::future::ready(())` is immediately ready, so whenever `can_drain` is true, the drain branch is eligible in `select!`. After draining up to 10 items, control returns to the top of the loop, `can_drain` is re-evaluated, and if the buffer is still non-empty, the drain branch is eligible again. `tokio::select!` randomly picks among ready branches, so live events from `event_rx` are naturally interleaved.
-
-**Why NOT use `connack_notify` for buffer drain:** `Notify` is edge-triggered. After one `ConnAck`, the publish_task would drain 10 items and return to `select!`. The `notified()` future would NOT become ready again (no new `notify_one()` call), so items 11+ would sit in the buffer forever until another `ConnAck`. The always-eligible drain branch avoids this entirely.
-
-Key behaviors:
-
-- **FIFO order preserved.** Events are replayed in the exact order they were buffered.
-- **Batch of 10, then return to select!.** `select!` fairness (random branch selection) ensures live events from `event_rx` are interleaved with buffer drain batches.
-- **Break on failure.** If `client.publish().await` returns `Err`, replay stops immediately. Remaining events stay in the buffer. They will be retried on the **next** `ConnAck` (not immediately — the connection is likely broken).
-- **No partial retry.** There is no retry loop within a single replay pass. A publish failure during replay means the connection is likely broken; the eventloop will detect this and transition to Disconnected.
+All steps execute synchronously within the `conn_rx.changed()` branch. Each publish call uses a 5-second timeout. Failures are warned and skipped; the entry will be retried on the next ConnAck.
 
 ### 3.8 Retained Inventory Semantics
 
@@ -1633,6 +1576,8 @@ On graceful shutdown (adapter closes `event_rx`, publish_task exits):
 2. **Only status changes:** Offline status is published (`encode_status(adapter_id, false, now_ms(), session_id)`).
 3. Devices may still be visible to consumers via retained inventory topics.
 
+**Normative rule for consumers:** When `status=offline`, inventory represents last-known state. Consumers SHOULD display devices as "last seen" with the inventory's `ts` timestamp. Consumers MUST NOT assume devices are currently reachable when the adapter is offline.
+
 **Rationale:** In a multi-adapter deployment, other adapters may be publishing to the same broker. Clearing inventory on shutdown would create a false "all devices gone" signal. The offline status is sufficient for consumers to know this adapter is no longer active.
 
 #### 3.8.7 Crash (Ungraceful Shutdown)
@@ -1688,8 +1633,8 @@ Because enqueue success does not guarantee delivery:
 
 Transient events (telemetry, errors) use fire-and-forget semantics:
 
-- If `client.publish().await` returns `Ok`, the event is considered "best-effort sent". No retry.
-- If `client.publish().await` returns `Err`, the event is logged and dropped (when connected) or the replay loop breaks (during buffer flush).
+- When connected: publish with 5-second timeout. If `Ok`, considered "best-effort sent". No retry. If timeout or error, logged and dropped.
+- When disconnected: dropped immediately with `warn!` log. No buffer.
 - There is **no application-level acknowledgment** for transient events. Data loss is possible and accepted.
 
 #### 3.9.4 Graceful Offline Publish -- Eventloop Grace Period
@@ -1698,8 +1643,11 @@ On event_rx closure, the runner (not the binary) publishes offline status and gr
 
 ```rust
 // Runner's cleanup after publish_task exits:
-// Publish offline status
-client.publish(status_topic, QoS1, retained=true, offline_payload).await?;
+// Publish offline status (with timeout)
+match timeout(Duration::from_secs(5), client.publish(status_topic, QoS1, retained=true, offline_payload)).await {
+    Ok(Ok(())) => {},
+    _ => warn!("failed to publish offline status, LWT will fire as fallback"),
+}
 client.disconnect().await;
 
 // Grace period: let eventloop actually transmit the above
@@ -1730,30 +1678,27 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 
 | Trigger | Current state | Action | Next state | Observable effect |
 |---------|--------------|--------|------------|-------------------|
-| `poll()` returns `ConnAck` | Disconnected | store(true), reset attempt, notify publish_task | Connected | publish_task publishes online status + reconciles inventory; buffer drained by drain branch |
-| `poll()` returns `ConnAck` | Connected | store(true), reset attempt, notify publish_task | Connected | Duplicate ConnAck (unusual but safe); full reconcile re-runs |
-| `poll()` returns `Err(ConnectionError)` | Connected | store(false), increment attempt, sleep(backoff) | Disconnected | `warn!` log; publish_task starts buffering |
-| `poll()` returns `Err(Timeout)` | Connected | store(false), increment attempt, sleep(backoff) | Disconnected | Same as ConnectionError |
+| `poll()` returns `ConnAck` | Disconnected | `conn_tx.send(Connected)`, reset attempt | Connected | publish_task publishes online status + reconciles inventory |
+| `poll()` returns `ConnAck` | Connected | `conn_tx.send(Connected)`, reset attempt | Connected | Duplicate ConnAck (unusual but safe); full reconcile re-runs |
+| `poll()` returns `Err(ConnectionError)` | Connected | `conn_tx.send(Disconnected)`, increment attempt, sleep(backoff) | Disconnected | `warn!` log; publish_task starts dropping non-retained events |
+| `poll()` returns `Err(Timeout)` | Connected | `conn_tx.send(Disconnected)`, increment attempt, sleep(backoff) | Disconnected | Same as ConnectionError |
 | `poll()` returns `Err` | Disconnected | increment attempt, sleep(backoff) | Disconnected | `warn!` log; backoff grows |
 | `poll()` returns `Ok(PubAck)` | Connected | no-op | Connected | rumqttc retires internal pending |
 | `poll()` returns `Ok(PingResp)` | Connected | no-op | Connected | Keepalive confirmed |
 | Broker sends DISCONNECT | Connected | Next `poll()` returns Err | Disconnected | Handled via Err path |
 | TCP RST from broker | Connected | Next `poll()` returns Err | Disconnected | Handled via Err path |
 | DNS resolution fails | Disconnected | `poll()` returns Err | Disconnected | Backoff continues |
-| `event_rx` closed (adapter stopped by binary) | Any | publish_task exits; runner drains buffer, publishes offline status; 2s grace; eventloop aborted; runner returns Ok | Terminated | Runner exits cleanly; binary decides exit code |
+| `event_rx` closed (adapter stopped by binary) | Any | publish_task exits loop; runner publishes offline status (5s timeout); 2s grace; eventloop aborted; runner returns Ok | Terminated | Runner exits cleanly; binary decides exit code |
 
-#### 3.10.2 Publish and Buffer
+#### 3.10.2 Publish
 
 | Trigger | Current state | Action | Next state | Observable effect |
 |---------|--------------|--------|------------|-------------------|
-| `AdapterEvent` received | Connected + reconciled | `track_event` + `publish_event` (inventory w/ session_id) + `publish_event` (non-retained) | Connected | Event published to broker (enqueued) |
-| `AdapterEvent` received | Connected + NOT reconciled | `track_event` + `buffer_event` | Connected (reconciling) | Event tracked locally; buffered until reconcile completes |
-| `AdapterEvent` received | Disconnected | `track_event` + `buffer_event` | Disconnected | Event tracked locally; buffered if transient |
-| Buffer overflow (len >= 1000) | Disconnected | `pop_front` oldest + `push_back` new | Disconnected | `warn!` log; oldest event lost |
-| `connack_notify` received | publish_task | Set reconciled=false; publish online status (w/ session_id); `republish_all` inventory (w/ session_id); set reconciled=true | Connected (reconciled) | Online status published; inventory reconciled; buffer drain + live events resume |
-| Buffer drain branch eligible | publish_task (connected + reconciled + buffer non-empty) | `drain_buffer_batch(10)` | Connected (draining) | Up to 10 buffered items published per iteration |
-| `client.publish` fails during replay | Buffer draining | `break` from drain loop | Disconnected (pending re-notify) | Remaining buffer preserved; `warn!` log |
-| `client.publish` fails for live event | Connected | Log `warn!`, drop the single event | Connected | Event lost; non-retained events are best-effort |
+| `AdapterEvent` received | Connected | `track_inventory` + publish with 5s timeout (inventory retained w/ session_id + non-retained) | Connected | Event published to broker (enqueued) |
+| `AdapterEvent` received | Disconnected | `track_inventory` + drop non-retained with `warn!` | Disconnected | Inventory tracked locally; non-retained events lost |
+| `conn_rx.changed()` -> Connected | publish_task | Publish online status (w/ session_id, 5s timeout); for each `desired_inventory` entry: publish retained (5s timeout each) | Connected | Online status published; inventory reconciled |
+| `client.publish` timeout/error during reconcile | Reconciling | `warn!` + skip entry, continue to next | Connected | Skipped entry retried on next ConnAck |
+| `client.publish` timeout/error for live event | Connected | Log `warn!`, drop the single event | Connected | Event lost; non-retained events are best-effort |
 | `event_rx` closed | Any | Exit publish_task loop | Terminated | Publish_task returns |
 
 #### 3.10.3 Inventory
@@ -1766,7 +1711,7 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 | `DeviceLost` while disconnected | desired_inventory[k] = Some | Insert `None` only | Local tracking updated | Tombstone sent on ConnAck |
 | `DeviceLost` for unknown device | desired_inventory[k] absent | Insert `None` | Tombstone created | Defensive; empty retained on ConnAck clears any stale data |
 | Reconnect (ConnAck) | N active, M tombstones | Publish all N as retained + all M as empty retained | Broker state = local state | Full reconcile; `info!` log with counts |
-| `republish_all` publish fails for one device | Iterating desired_inventory | `warn!` log, continue to next device | Partial reconcile | Failed device retried on next ConnAck |
+| `republish_all` publish fails for one device | Iterating desired_inventory | `warn!` log, skip and continue to next device | Best-effort reconcile | Failed device retried on next ConnAck; no partial reconcile flag needed |
 | Graceful shutdown | N active devices | Publish offline status only; inventory unchanged | Broker retains last inventory | Consumers see offline status + stale inventory |
 | Crash / SIGKILL | N active devices | LWT publishes offline (ts=0); inventory unchanged | Broker retains last inventory | Consumers see offline (ts=0) + stale inventory |
 | Process restart after crash | Empty desired_inventory | Re-discover devices; first ConnAck reconciles | Broker gets fresh inventory | Previously-lost devices have stale retained (known limitation) |
@@ -1776,9 +1721,9 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 | Trigger | Action | Outcome | Recovery |
 |---------|--------|---------|----------|
 | `client.publish().await` returns `Ok` | Message enqueued to rumqttc channel | May or may not reach broker | For retained ops: replayed on next ConnAck. For transient: no retry. |
-| `client.publish().await` returns `Err(ClientError::Request)` | rumqttc internal channel full (100 items) | Message not enqueued | For live events: logged + dropped. For replay: break + retry on next ConnAck. |
+| `client.publish().await` times out (5s) | rumqttc internal channel full or eventloop stalled | Message not enqueued | For live events: logged + dropped. For reconcile: warn + skip, retried on next ConnAck. |
 | `client.publish().await` returns `Err(ClientError::TrySend)` | rumqttc internal channel closed | EventLoop has been dropped/aborted | Fatal -- process is shutting down. |
-| Connection drops after enqueue, before TCP write | eventloop detects on next poll | QoS 1 messages in rumqttc's internal pending queue are lost (clean_session=true, no broker-side session) | Retained ops: replayed on next ConnAck from `desired_inventory`. Transient: lost. |
+| Connection drops after enqueue, before TCP write | eventloop detects on next poll | QoS 1 messages in rumqttc's internal pending queue are lost (clean_session=true, no broker-side session) | Retained ops: reconciled on next ConnAck from `desired_inventory`. Transient: lost (no buffer). |
 | PUBACK not received within rumqttc timeout | rumqttc retransmits internally | Eventually succeeds or connection declared broken | Transparent to runner; handled by rumqttc. |
 | Graceful shutdown: eventloop aborted before 2s flush | Offline status enqueued but not transmitted | LWT fires after keepalive expiry (30s default) | LWT provides eventual offline status (ts=0). |
 | Graceful shutdown: eventloop flushes within 2s | Offline status transmitted + DISCONNECT sent | Broker immediately knows adapter is offline with accurate timestamp | Clean shutdown. |
@@ -1796,8 +1741,8 @@ digraph mqtt_protocol {
         label="Eventloop Pump Task (NO publish calls)";
         style=dashed;
         EL_Poll [label="poll()"];
-        EL_ConnAck [label="ConnAck received\n1. store(true)\n2. reset attempt\n3. notify publish_task\n(NO publish here)"];
-        EL_Err [label="Error received\n1. store(false)\n2. increment attempt\n3. sleep(backoff)"];
+        EL_ConnAck [label="ConnAck received\n1. conn_tx.send(Connected)\n2. reset attempt\n(NO publish here)"];
+        EL_Err [label="Error received\n1. conn_tx.send(Disconnected)\n2. increment attempt\n3. sleep(backoff)"];
         EL_Ok [label="Other Ok\n(no-op)"];
 
         EL_Poll -> EL_ConnAck [label="ConnAck"];
@@ -1809,38 +1754,34 @@ digraph mqtt_protocol {
     }
 
     subgraph cluster_publish {
-        label="Publish Task";
+        label="Publish Task (no outbound buffer)";
         style=dashed;
-        PT_Select [label="select! {\n  event_rx.recv()\n  connack_notify\n  drain (if can_drain)\n}"];
-        PT_Event_Connected [label="Connected+reconciled path:\n1. track_event\n2. publish inventory (w/ session_id)\n3. publish event"];
-        PT_Event_Disconnected [label="Disconnected/not-reconciled path:\n1. track_event\n2. buffer_event"];
-        PT_Reconnect [label="ConnAck path:\n0. reconciled=false\n1. publish online status (w/ session_id)\n2. republish_all inventory (w/ session_id)\n3. reconciled=true"];
-        PT_Drain [label="Drain path:\n1. drain max 10 from buffer"];
+        PT_Select [label="select! {\n  event_rx.recv()\n  conn_rx.changed()\n}"];
+        PT_Event_Connected [label="Connected path:\n1. track_inventory\n2. publish event (5s timeout)"];
+        PT_Event_Disconnected [label="Disconnected path:\n1. track_inventory\n2. drop non-retained (warn)"];
+        PT_Reconnect [label="ConnAck path:\n1. publish online status (5s timeout)\n2. reconcile all inventory (5s timeout each)"];
         PT_Exit [label="event_rx closed\n-> exit"];
 
-        PT_Select -> PT_Event_Connected [label="event + connected + reconciled"];
-        PT_Select -> PT_Event_Disconnected [label="event + !connected or !reconciled"];
-        PT_Select -> PT_Reconnect [label="connack_notify"];
-        PT_Select -> PT_Drain [label="can_drain=true"];
+        PT_Select -> PT_Event_Connected [label="event + connected"];
+        PT_Select -> PT_Event_Disconnected [label="event + disconnected"];
+        PT_Select -> PT_Reconnect [label="conn_rx -> Connected"];
         PT_Select -> PT_Exit [label="recv() = None"];
         PT_Event_Connected -> PT_Select;
         PT_Event_Disconnected -> PT_Select;
         PT_Reconnect -> PT_Select;
-        PT_Drain -> PT_Select;
     }
 
     subgraph cluster_shutdown {
-        label="Runner Drain Sequence\n(triggered by event_rx closure)";
+        label="Runner Shutdown Sequence\n(triggered by event_rx closure)";
         style=dashed;
         S1 [label="event_rx closed\n(adapter stopped by binary)"];
-        S2 [label="Publish task drains buffer\n(2s timeout)"];
-        S3 [label="Publish offline status\n(enqueue)"];
-        S4 [label="client.disconnect()\n(enqueue)"];
-        S5 [label="Eventloop grace (2s)"];
-        S6 [label="Abort eventloop"];
-        S7 [label="Runner returns Ok(())"];
+        S2 [label="Publish offline status\n(5s timeout)"];
+        S3 [label="client.disconnect()\n(enqueue)"];
+        S4 [label="Eventloop grace (2s)"];
+        S5 [label="Abort eventloop"];
+        S6 [label="Runner returns Ok(())"];
 
-        S1 -> S2 -> S3 -> S4 -> S5 -> S6 -> S7;
+        S1 -> S2 -> S3 -> S4 -> S5 -> S6;
     }
 }
 ```
@@ -1849,14 +1790,13 @@ digraph mqtt_protocol {
 
 | Constant | Value | Location | Configurable? |
 |----------|-------|----------|---------------|
-| `PENDING_BUFFER_CAP` | 1000 | `publish_loop.rs` | No (compile-time) |
 | rumqttc channel capacity | 100 | `mqtt_client.rs` (`AsyncClient::new(opts, 100)`) | No (compile-time) |
+| Publish timeout | 5000 ms | `publish_loop.rs` | No (compile-time) |
 | Backoff base | 1000 ms | `lib.rs` (`backoff_with_jitter`) | No (compile-time) |
 | Backoff max | 30000 ms | `lib.rs` (`backoff_with_jitter`) | No (compile-time) |
 | Backoff jitter | +/- 30% | `lib.rs` (`backoff_with_jitter`) | No (compile-time) |
 | Graceful shutdown grace period | 2000 ms | `lib.rs` (`run`) | No (compile-time) |
 | Keepalive | 30 s (default) | `mqtt_client.rs` | Yes (`MqttConfig.keepalive_secs`) |
-| Replay batch size | 10 items per select! iteration | `publish_loop.rs` | No (compile-time) |
 | `clean_session` | `true` | rumqttc default | No |
 | QoS | `AtLeastOnce` (1) | All publishes | No |
 | LWT timestamp | `0` (unknown) | `mqtt_client.rs` | No |
@@ -2562,24 +2502,25 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **DeviceConfig encoding:** `encode_event` with `DeviceConfig` -> `EncodeError::UnsupportedEvent`.
 - **Unknown fields ignored:** Envelope with extra fields decodes successfully (forward compatibility).
 - **ConnectionKind as_str/from_str symmetry:** `ConnectionKind::from_str(k.as_str()) == k` for all variants (including `Other`).
-- **Inventory payload includes session_id:** `encode_inventory` with a session_id -> decode -> `session_id` field matches.
+- **ConnectionKind from_str normalization:** `ConnectionKind::from_str("i2c")` returns `I2c` (not `Other("i2c")`). Known strings are always normalized to their typed variants.
+- **Inventory payload does NOT equal discovery payload:** `encode_event` for `DeviceDiscovered` produces a payload without `session_id`; `encode_inventory` produces a payload with `session_id`. The two are structurally different.
+- **Inventory payload includes session_id:** `encode_inventory` with a session_id -> `decode_inventory` -> `session_id` field matches.
+- **Inventory decode returns session_id:** `decode_inventory` returns `(adapter_id, event, session_id)` tuple; `session_id` matches the encoded value.
 - **Session_id in status payload:** `encode_status` with a session_id -> decode -> `session_id` field matches for online, offline, and LWT variants.
 
 ### 6.2 `iotkit-adapter-runner` Tests
 
-- **Adapter task exit -> runner exits:** Adapter drops `event_tx` unexpectedly -> runner drains, publishes offline, returns Ok. (Binary decides exit code based on shutdown_initiated.)
+- **Adapter task exit -> runner exits:** Adapter drops `event_tx` unexpectedly -> runner publishes offline (with timeout), returns Ok. (Binary decides exit code based on shutdown_initiated.)
 - **Disconnect + DeviceDiscovered -> inventory tracking:** Device discovered while disconnected -> `desired_inventory` updated -> on ConnAck, retained publish occurs.
 - **Disconnect + DeviceLost -> tombstone:** Device lost while disconnected -> tombstone recorded -> on ConnAck, empty retained publish.
+- **Disconnect drops telemetry:** Telemetry events while disconnected -> dropped with warn log, not buffered.
+- **Disconnect drops non-retained discovery/loss notifications:** Non-retained copies of discovery/loss events are dropped during disconnect; only retained inventory is tracked.
 - **ConnAck -> full inventory republish:** After ConnAck, all entries in `desired_inventory` are published as retained with current `session_id`.
 - **Inventory republish re-encodes with fresh ts:** After ConnAck, inventory payloads have `ts` reflecting the reconnect time, not the original discovery time.
 - **Session_id consistency:** All retained messages (status + inventory) from the same process share the same `session_id`.
-- **Reconcile flag blocks live publish:** During reconcile (between ConnAck notification and reconcile completion), live events from `event_rx` are buffered, not published directly.
-- **Reconcile flag blocks buffer drain:** During reconcile, the drain branch is not eligible.
-- **Reconcile failure restarts on next ConnAck:** If MQTT disconnects mid-reconcile, `reconciled` stays false. Next ConnAck restarts reconcile from scratch.
-- **Buffer overflow:** Generate > 1000 events while disconnected -> oldest events dropped, newest retained, no panic.
-- **Buffer replay FIFO order:** Buffer 5 events while disconnected -> reconnect -> verify they are replayed in original order.
-- **Buffer replay batch fairness:** Buffer 30 events -> reconnect -> verify only 10 are replayed per select! iteration, with live events interleaved between batches.
-- **Graceful shutdown sequence:** Binary receives signal -> adapter stopped (closes event_rx) -> runner drains buffer -> runner publishes offline status -> runner returns Ok -> binary exits 0.
+- **Reconcile failure skips and continues:** If one inventory publish times out during reconcile, remaining entries are still published. Next ConnAck retries everything.
+- **Publish timeout:** A publish that blocks for > 5s is timed out and skipped (warn log).
+- **Graceful shutdown sequence:** Binary receives signal -> adapter stopped (closes event_rx) -> runner publishes offline status (with timeout) -> runner returns Ok -> binary exits 0.
 - **Offline status timestamp:** Graceful offline status has `ts > 0`. LWT has `ts = 0`. Both include `session_id`.
 - **2nd signal -> immediate exit:** Second signal during shutdown -> binary calls `std::process::exit(1)`.
 - **publish_task panic -> runner returns Err:** Simulate publish_task panicking -> runner returns Err(RunnerError::PublishTaskFailed).
@@ -2587,6 +2528,7 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **Backoff calculation:** Verify exponential growth with jitter: attempt 0 -> ~1s, attempt 5 -> ~32s (capped at 30s), jitter within +/-30%.
 - **Reconnect counter reset:** ConnAck resets attempt counter to 0.
 - **Device lost then rediscovered while disconnected:** `desired_inventory` reflects latest state (rediscovered); intermediate tombstone not published.
+- **watch channel rapid state change:** eventloop sends Connected then immediately Disconnected -> publish_task sees Disconnected, does not reconcile.
 
 ### 6.3 `iotkit-rpi-local` Config Tests
 
@@ -2630,10 +2572,53 @@ The following items are explicitly excluded from Phase 1A:
 - **Inbound MQTT commands** -- No subscribe-side logic. The runner is publish-only. Command handling (e.g. `DeviceConfig` writes, actuator control) is deferred to Phase 2 command bridge (#46).
 - **Hot reload** -- Config changes require a process restart. There is no file watcher, no SIGHUP handler, and no runtime reconfiguration mechanism.
 - **Health API endpoints** -- No HTTP health check endpoint. Liveness is observed via the retained `status` MQTT topic. A future version may expose a local socket for systemd `Type=notify` or an HTTP `/healthz` endpoint.
-- **Persistence / local disk buffer** -- The `outbound_buffer` is in-memory only. On process restart, all buffered events are lost. Local disk persistence (e.g. SQLite WAL, append-only log) is deferred due to SD card write amplification concerns on Raspberry Pi.
+- **Outbound buffer / local disk buffer** -- Non-retained events are dropped during MQTT disconnect. There is no in-memory buffer or local disk persistence. Retained state (inventory) is tracked in `desired_inventory` and reconciled on every ConnAck. Local disk persistence (e.g. SQLite WAL, append-only log) is deferred due to SD card write amplification concerns on Raspberry Pi.
 - **MQTT v5** -- The runner uses MQTT v3.1.1 exclusively. MQTT v5 features (user properties, shared subscriptions, topic aliases, message expiry) are not used. rumqttc supports MQTT v5 but enabling it would require protocol-level testing against all target brokers.
 - **Gateway MQTT subscriber** (#45) -- Phase 2.
 - **DeviceKey bus identity change** (#33) -- Phase 2. Current `i2c:0x{addr}:{suffix}` format is preserved.
 - **Transform layer** (#43, #44) -- Phase 1B.
 - **BravePI standalone adapter** (#46) -- Phase 2.
 - **Auto-detection** (#35) -- Phase 2.
+
+---
+
+## 8. Design Tradeoffs and Predicted Concerns
+
+### 8.1 No Outbound Buffer — Telemetry Loss During Disconnect
+
+**Concern:** Without a buffer, telemetry during MQTT disconnect is permanently lost.
+
+**Quantitative impact:** 10 sensors x 1Hz x 30-second disconnect = 300 readings lost. For a 100ms disconnect (e.g., brief network glitch), only ~1 reading per sensor is lost.
+
+**Why this is acceptable:**
+1. The gateway maintains timeseries history. A 30-second gap in a continuous stream is tolerable for monitoring and alerting use cases.
+2. Telemetry is time-series data with diminishing value when stale. A 30-second-old temperature reading is less useful than a fresh one.
+3. The adapter has idempotent write semantics on the gateway side (ON CONFLICT DO NOTHING), so duplicate delivery is harmless but stale delivery adds no value.
+4. The eliminated complexity is significant: outbound buffer management, replay fairness, drain phase, backpressure coordination, reconcile ordering races.
+
+**If buffer is needed in the future:** Add it as a separate `BufferedPublisher` wrapper around the publish path. The current design's clean separation (track inventory vs. publish immediately) makes this straightforward to add without restructuring the core state machine.
+
+### 8.2 Brief Disconnects (100ms)
+
+**Concern:** What if the disconnect is very brief (100ms)? Is dropping telemetry wasteful?
+
+**Answer:** Still drop. The reconnect reconcile happens on ConnAck regardless. A few telemetry points lost during a 100ms glitch is acceptable. The alternative (buffering even for brief disconnects) reintroduces all the buffer complexity for marginal gain.
+
+### 8.3 watch Channel Rapid State Changes
+
+**Concern:** What if eventloop sends `Connected` then immediately `Disconnected` before publish_task reads?
+
+**Answer:** `watch` delivers the **latest** state. The publish_task sees `Disconnected` and does not reconcile. This is correct behavior — the connection was too brief to be useful. The next stable `Connected` state will trigger reconcile normally.
+
+### 8.4 Shutdown Without Drain Phase
+
+**Concern:** Without a drain phase, what happens to in-flight events at shutdown?
+
+**Shutdown sequence:**
+1. Binary stops adapter -> `event_rx` closes.
+2. publish_task breaks out of the event loop (no more events to process).
+3. Runner publishes offline status with 5-second timeout.
+4. Grace period (2s) for eventloop to flush.
+5. Return `Ok(())`.
+
+There is nothing to drain because there is no buffer. Events that were already enqueued to rumqttc's internal channel (capacity 100) will be flushed during the grace period if the connection is active. Events that were dropped during disconnect are already lost — no drain would recover them.
