@@ -1536,7 +1536,22 @@ Expected: Compiles with no errors.
 Run: `cargo test --workspace`
 Expected: All tests pass.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Gateway runtime smoke test (manual, if hardware available)**
+
+If running on hardware or with a config file available:
+
+```bash
+# Start gateway and verify sensor_readings table is created
+cargo run -p iotkit-gateway -- --config /path/to/config.toml &
+sleep 2
+sqlite3 /path/to/db "SELECT name FROM sqlite_master WHERE type='table' AND name='sensor_readings';"
+# Expected: sensor_readings
+kill %1
+```
+
+If no hardware: skip this step. The spec marks it as "manual / CI" verification.
+
+- [ ] **Step 9: Commit**
 
 ```bash
 git add iotkit-gateway/Cargo.toml iotkit-gateway/src/main.rs
