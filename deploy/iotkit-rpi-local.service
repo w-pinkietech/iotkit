@@ -1,0 +1,27 @@
+[Unit]
+Description=iotkit rpi-local I2C sensor adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/iotkit/bin/iotkit-rpi-local --config /opt/iotkit/etc/iotkit-rpi-local.toml
+Restart=on-failure
+RestartSec=5
+User=iotkit
+Group=iotkit
+WorkingDirectory=/opt/iotkit/data
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+ProtectSystem=strict
+ReadWritePaths=/opt/iotkit/data
+NoNewPrivileges=true
+ProtectHome=true
+
+# I2C access
+SupplementaryGroups=i2c
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+# Configuration for iotkit-rpi-local standalone I2C sensor adapter.
+# Copy to /opt/iotkit/etc/iotkit-rpi-local.toml and edit.
+
+# Unique identifier for this adapter instance.
+adapter_id = "rpi-local:default"
+
+[mqtt]
+# MQTT broker URL. Use mqtt:// for plain TCP, mqtts:// for TLS.
+broker_url = "mqtt://localhost:1883"
+
+# Optional: explicit client ID (auto-generated if omitted)
+# client_id = "iotkit-rpi-local-01"
+
+# Optional: keepalive interval in seconds (default: 30)
+# keepalive_secs = 30
+
+# TLS settings (required for mqtts://)
+# ca_path = "/opt/iotkit/etc/certs/ca.pem"
+# client_cert_path = "/opt/iotkit/etc/certs/client.pem"
+# client_key_path = "/opt/iotkit/etc/certs/client.key"
+
+[adapter]
+# I2C bus device path
+bus_path = "/dev/i2c-1"
+
+# Sensor polling interval in milliseconds
+poll_interval_ms = 1000
+
+# Sensor targets - add one [[adapter.targets]] block per sensor
+
+[[adapter.targets]]
+driver = "mcp9600"
+address = 0x60
+thermocouple_type = "K"  # K, J, T, N, S, E, B, R
+
+[[adapter.targets]]
+driver = "opt3001"
+address = 0x44
