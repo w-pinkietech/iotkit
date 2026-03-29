@@ -12,6 +12,8 @@ pub enum StorageError {
     },
     /// On-disk schema is newer than this binary knows about.
     SchemaVersionAhead { on_disk: u32, latest_known: u32 },
+    /// Migration versions are not strictly ascending.
+    InvalidMigrationOrder { first: u32, second: u32 },
 }
 
 impl std::fmt::Display for StorageError {
@@ -31,6 +33,12 @@ impl std::fmt::Display for StorageError {
                     "schema version {on_disk} is ahead of latest known {latest_known}; upgrade the binary"
                 )
             }
+            Self::InvalidMigrationOrder { first, second } => {
+                write!(
+                    f,
+                    "migration versions not strictly ascending: v{first} >= v{second}"
+                )
+            }
         }
     }
 }
@@ -42,6 +50,7 @@ impl std::error::Error for StorageError {
             Self::Io(e) => Some(e),
             Self::MigrationFailed { source, .. } => Some(source.as_ref()),
             Self::SchemaVersionAhead { .. } => None,
+            Self::InvalidMigrationOrder { .. } => None,
         }
     }
 }
