@@ -15,7 +15,7 @@
 | Crate | Role | Dependencies |
 |---|---|---|
 | `core/storage` | Domain-agnostic SQLite infrastructure: DbHandle, migration runner, StorageError | rusqlite, tokio, tracing |
-| `core/timeseries` | **NEW.** Timeseries INSERT/query/delete + migration SQL | core/types, core/storage |
+| `core/timeseries` | **NEW.** Timeseries INSERT/query/delete + migration SQL | core/types, core/storage, serde_json |
 | `iotkit-gateway` | Composition root. Assembles migrations, wires event loop | core/engine, core/storage, core/timeseries, adapters |
 
 ### Dependency graph
@@ -37,6 +37,7 @@ core/timeseries/
   src/
     lib.rs              -- public API: insert_reading, query_readings, latest_reading, delete_before
     model.rs            -- ReadingRow, TimeRange
+    error.rs            -- TimeseriesError (InvalidReading, Storage)
   migrations/
     0002_timeseries.sql -- table DDL
 
@@ -44,7 +45,7 @@ core/storage/
   src/
     lib.rs              -- init_db/init_db_memory signatures change (accept &[Migration])
     migrate.rs          -- Migration struct becomes pub, run_migrations becomes pub
-    error.rs            -- adds InvalidReading, InvalidMigrationOrder variants
+    error.rs            -- adds InvalidMigrationOrder variant
     handle.rs           -- unchanged
   migrations/
     0001_init.sql       -- unchanged
@@ -60,6 +61,7 @@ core/storage/
 // core/storage/src/migrate.rs
 
 /// A single schema migration step.
+#[derive(Clone, Copy)]
 pub struct Migration {
     pub version: u32,
     pub label: &'static str,
@@ -140,16 +142,16 @@ pub enum StorageError {
     Io(std::io::Error),
     MigrationFailed { version: u32, source: Box<StorageError> },
     SchemaVersionAhead { on_disk: u32, latest_known: u32 },
-    InvalidReading(String),             // NEW
     InvalidMigrationOrder { first: u32, second: u32 },  // NEW
 }
 ```
 
 Display implementations:
-- `InvalidReading(msg)` → `"invalid reading: {msg}"`
 - `InvalidMigrationOrder { first, second }` → `"migration versions not strictly ascending: v{first} >= v{second}"`
 
-Both return `None` from `source()`.
+Returns `None` from `source()`.
+
+**Note:** `InvalidReading` is **not** added to `StorageError`. Domain-specific validation errors belong in `core/timeseries`, not in domain-agnostic storage infrastructure. See Section 5 for `TimeseriesError`.
 
 ---
 
@@ -177,7 +179,7 @@ CREATE TABLE sensor_readings (
 | `adapter_id` | TEXT | `EngineEvent.adapter_id.as_str()` | Adapter identity |
 | `device_key` | TEXT | `AdapterEvent::SensorData.device_key.as_str()` | Device identity within adapter |
 | `ingested_at` | INTEGER | `SystemTime` → unix milliseconds | `duration_since(UNIX_EPOCH).as_millis() as i64` |
-| `sensor_type` | TEXT | `SensorType::as_db_str()` | e.g. `"temperature"`, `"acceleration"`, `"unknown:custom"` |
+| `sensor_type` | TEXT | `SensorType::as_db_str()` | e.g. `"temperature"`, `"acceleration"`, `"custom_xyz"` (Unknown raw string) |
 | `values_json` | TEXT | `&[f64]` → JSON array | e.g. `"[25.3]"` or `"[0.1,-0.3,9.8]"` |
 | `rssi` | INTEGER | `Option<i16>` | NULL if not available |
 | `battery_pct` | INTEGER | `Option<u8>` | NULL if not available |
@@ -186,7 +188,7 @@ CREATE TABLE sensor_readings (
 
 - **WITHOUT ROWID**: Composite PK is the B-tree key directly. Range scans on `(adapter_id, device_key, time_range)` are single B-tree seeks with no rowid indirection.
 - **sensor_type in PK**: Prevents collision when one device produces multiple sensor types in the same millisecond (e.g., BravePI burst frames).
-- **sensor_type as TEXT**: `SensorType::Unknown(String)` variant cannot round-trip through INTEGER. TEXT stores the variant name directly.
+- **sensor_type as TEXT**: `SensorType::Unknown(String)` variant cannot round-trip through INTEGER. TEXT stores the variant name directly. **Collision note:** `Unknown("temperature")` would round-trip as `Temperature` via `from_db_str`. This is acceptable: `Unknown` is only produced by adapters for truly unrecognized sensor types, and adapter authors must not construct `Unknown` with a known variant's db string. Adding an enum variant is a code change, and existing `Unknown` rows with the new name will naturally promote to the known variant — a feature, not a bug.
 - **values_json as JSON text**: Human-readable via `sqlite3` CLI on headless RPi. Write throughput difference vs BLOB is negligible (bottleneck is WAL fsync, not serialization).
 - **No labels per-row**: Labels are a property of `SensorType`, not per-reading. Stored once in application code (or future #23 device-config-service).
 - **No secondary indexes**: PK prefix covers the primary query pattern. Add indexes when profiling shows need.
@@ -236,6 +238,24 @@ impl SensorType {
 
 ## 5. Rust API (core/timeseries)
 
+### Error type
+
+`core/timeseries` defines its own error type to keep `core/storage` domain-agnostic:
+
+```rust
+/// Errors from timeseries operations.
+pub enum TimeseriesError {
+    /// Invalid reading data (NaN, Inf, pre-epoch timestamp, etc.)
+    InvalidReading(String),
+    /// Underlying storage error.
+    Storage(StorageError),
+}
+```
+
+Display: `InvalidReading(msg)` → `"invalid reading: {msg}"`, `Storage(e)` → forwards to `StorageError`.
+
+`From<StorageError>` impl provided for ergonomic `?` usage.
+
 ### Public types
 
 ```rust
@@ -270,12 +290,12 @@ pub async fn insert_reading(
     values: &[f64],
     rssi: Option<i16>,
     battery_pct: Option<u8>,
-) -> Result<(), StorageError>
+) -> Result<(), TimeseriesError>
 ```
 
 Behavior:
-1. Validate `values`: if any element is NaN or Infinity, return `StorageError::InvalidReading("NaN/Inf in values at index {i}")`.
-2. Convert `ingested_at` to unix millis (`i64`).
+1. Validate `values`: if any element is NaN or Infinity, return `TimeseriesError::InvalidReading("NaN/Inf in values at index {i}")`.
+2. Convert `ingested_at` to unix millis (`i64`). If `ingested_at` is before UNIX_EPOCH, return `TimeseriesError::InvalidReading("timestamp before epoch")`.
 3. Serialize `values` to JSON array string.
 4. `db.with_conn(move |conn| { conn.execute("INSERT INTO sensor_readings ...") })`.
 
@@ -286,12 +306,21 @@ pub async fn query_readings(
     db: &DbHandle,
     adapter_id: &AdapterId,
     device_key: &DeviceKey,
+    sensor_type: Option<&SensorType>,
     range: TimeRange,
     limit: u32,
-) -> Result<Vec<ReadingRow>, StorageError>
+) -> Result<Vec<ReadingRow>, TimeseriesError>
 ```
 
-SQL: `SELECT ... WHERE adapter_id = ? AND device_key = ? AND ingested_at >= ? AND ingested_at < ? ORDER BY ingested_at DESC LIMIT ?`
+Validates `range.start < range.end`; returns `TimeseriesError::InvalidReading("start >= end in time range")` otherwise.
+
+When `sensor_type` is `Some`, adds `AND sensor_type = ?` to the WHERE clause. When `None`, returns readings across all sensor types.
+
+SQL (with sensor_type): `SELECT ... WHERE adapter_id = ? AND device_key = ? AND sensor_type = ? AND ingested_at >= ? AND ingested_at < ? ORDER BY ingested_at DESC, sensor_type ASC LIMIT ?`
+
+SQL (without): `SELECT ... WHERE adapter_id = ? AND device_key = ? AND ingested_at >= ? AND ingested_at < ? ORDER BY ingested_at DESC, sensor_type ASC LIMIT ?`
+
+**Deterministic ordering:** `sensor_type ASC` as secondary sort key ensures stable, repeatable results when multiple sensor types share the same `ingested_at` value. This makes pagination safe across timestamp boundaries.
 
 `limit` is mandatory to prevent OOM on RPi for large time ranges.
 
@@ -302,10 +331,17 @@ pub async fn latest_reading(
     db: &DbHandle,
     adapter_id: &AdapterId,
     device_key: &DeviceKey,
-) -> Result<Option<ReadingRow>, StorageError>
+    sensor_type: Option<&SensorType>,
+) -> Result<Option<ReadingRow>, TimeseriesError>
 ```
 
-SQL: `SELECT ... WHERE adapter_id = ? AND device_key = ? ORDER BY ingested_at DESC LIMIT 1`
+When `sensor_type` is `Some`, filters by sensor type. When `None`, returns the most recent reading across all sensor types for the device.
+
+SQL (with sensor_type): `SELECT ... WHERE adapter_id = ? AND device_key = ? AND sensor_type = ? ORDER BY ingested_at DESC LIMIT 1`
+
+SQL (without): `SELECT ... WHERE adapter_id = ? AND device_key = ? ORDER BY ingested_at DESC, sensor_type ASC LIMIT 1`
+
+**Tie-breaking:** When multiple sensor types share the same `ingested_at` value, the `None` variant deterministically returns the alphabetically-first sensor_type. Callers needing per-sensor latest should pass `sensor_type = Some(...)`.
 
 ### delete_before
 
@@ -313,12 +349,14 @@ SQL: `SELECT ... WHERE adapter_id = ? AND device_key = ? ORDER BY ingested_at DE
 pub async fn delete_before(
     db: &DbHandle,
     cutoff: SystemTime,
-) -> Result<u64, StorageError>
+) -> Result<u64, TimeseriesError>
 ```
 
 SQL: `DELETE FROM sensor_readings WHERE ingested_at < ?`
 
 Returns the number of rows deleted. The actual retention scheduling (timer, cron) is **out of scope** for #22. This API is a building block.
+
+**Performance note:** The PK is `(adapter_id, device_key, ingested_at, sensor_type)`, so a global `ingested_at < ?` delete requires a full table scan. At the expected v1 scale (~2.6M rows/month, ~100MB), this completes in seconds and runs infrequently (daily/weekly retention). If scale increases significantly, add a secondary index on `ingested_at` or switch to a batched per-device delete strategy.
 
 ### Migrations constant
 
@@ -385,10 +423,11 @@ loop {
                             &db, &adapter_id, &device_key, ingested_at, &sensor_type, &values, rssi, battery_pct,
                         ).await {
                             ts_write_errors += 1;
-                            if last_ts_err_log.elapsed() > Duration::from_secs(30) {
+                            // Log immediately on first failure, then rate-limit subsequent errors
+                            if ts_write_errors == 1 || last_ts_err_log.elapsed() > Duration::from_secs(30) {
                                 tracing::error!(
                                     error = %e,
-                                    suppressed = ts_write_errors,
+                                    suppressed = ts_write_errors.saturating_sub(1),
                                     "timeseries write failed"
                                 );
                                 ts_write_errors = 0;
@@ -412,6 +451,7 @@ loop {
 - **No background task**: gateway currently has zero async background tasks beyond the event loop. Adding one introduces shutdown coordination complexity.
 - **No backpressure concern**: at 10 sensors x 1Hz, `DbHandle.with_conn()` (spawn_blocking) takes 1-5ms per INSERT. 100ms between events provides ample headroom.
 - **Migration to Option C** (channel-decoupled background writer) is a one-file refactor when throughput demands it. No public API changes needed.
+- **Best-effort persistence**: DB write failures are logged but do not block the engine event loop. In-memory engine state may advance while durable state lags during DB errors. This is an acceptable degradation for v1 — the engine provides real-time state for active consumers, while the DB provides historical persistence. On restart, only the DB-persisted state survives. Persistent DB failures will be visible via rate-limited error logging.
 
 ---
 
@@ -435,6 +475,7 @@ loop {
 |---|---|
 | `insert_and_query_single` | Insert one reading, query it back, verify all fields |
 | `insert_multiple_sensor_types_same_timestamp` | Same device, same ms, different sensor_type → no collision |
+| `query_with_sensor_type_filter` | Insert multiple types, query with sensor_type filter returns only matching type |
 | `query_time_range` | Multiple readings, query subset by time range |
 | `query_respects_limit` | Insert N readings, query with limit < N, verify count |
 | `query_returns_newest_first` | Verify ORDER BY ingested_at DESC |
@@ -442,8 +483,11 @@ loop {
 | `latest_reading_empty` | No data → returns None |
 | `delete_before_removes_old` | Insert old + new, delete_before cutoff, verify only new remain |
 | `delete_before_returns_count` | Verify returned u64 matches deleted rows |
-| `reject_nan_in_values` | Insert with NaN → InvalidReading error |
-| `reject_infinity_in_values` | Insert with Inf → InvalidReading error |
+| `reject_nan_in_values` | Insert with NaN → TimeseriesError::InvalidReading |
+| `reject_infinity_in_values` | Insert with Inf → TimeseriesError::InvalidReading |
+| `reject_pre_epoch_timestamp` | Insert with pre-epoch SystemTime → TimeseriesError::InvalidReading |
+| `query_rejects_invalid_range` | Query with start >= end → TimeseriesError::InvalidReading |
+| `latest_reading_with_sensor_type_filter` | Insert multiple types, latest with filter returns correct type |
 | `values_json_round_trip` | Insert [0.1, -0.3, 9.8], query back, verify exact equality |
 
 ### core/storage migration tests (additions)
@@ -460,6 +504,10 @@ loop {
 |---|---|
 | `sensor_type_db_str_round_trip` | All known variants survive as_db_str → from_db_str |
 | `sensor_type_unknown_round_trip` | Unknown("custom") → "custom" → Unknown("custom") |
+
+### Note on in-memory test databases
+
+`init_db_memory()` uses `:memory:` databases. SQLite silently ignores `PRAGMA journal_mode = WAL` for in-memory databases (returns `"memory"` instead of `"wal"`). This is acceptable: WAL mode affects durability and concurrency on disk, neither of which applies to single-connection in-memory test databases. The existing pragma verification test only runs against file-backed databases.
 
 ### Gateway integration (manual / CI)
 
