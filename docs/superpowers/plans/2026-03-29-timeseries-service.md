@@ -8,7 +8,9 @@
 
 **Tech Stack:** Rust 2024, rusqlite 0.32 (bundled), serde_json 1, tokio 1.x, tracing 0.1
 
-**Task ordering:** Sequential: 1 → 2 → 3 → 4 → 5 → 6. Inner-to-outer: storage refactor → types extension → new timeseries crate → gateway integration.
+**Task ordering:** 1 and 2 are parallelizable (independent inner-layer changes). 3 depends on both 1 and 2. Then 4 → 5 → 6 sequential. Inner-to-outer: storage refactor + types extension → new timeseries crate → gateway integration.
+
+**Important:** Task 1 changes `init_db`/`init_db_memory` signatures. The gateway caller (`iotkit-gateway/src/main.rs`) must be updated in the same task to keep `cargo test --workspace` passing at every intermediate step.
 
 ---
 
@@ -19,6 +21,7 @@
 | Modify | `core/storage/src/error.rs` | Add `InvalidMigrationOrder` variant |
 | Modify | `core/storage/src/migrate.rs` | Make `Migration` pub with `Clone, Copy`, `run_migrations` pub with validation, accept `&[Migration]` |
 | Modify | `core/storage/src/lib.rs` | Change `init_db`/`init_db_memory` signatures, add re-exports, add `configure_pragmas` + `cache_size` PRAGMA |
+| Modify | `iotkit-gateway/src/main.rs` | (Task 1) Update `init_db` call for new signature |
 | Modify | `core/types/src/lib.rs` | Add `SensorType::as_db_str()` and `from_db_str()` methods |
 | Create | `core/timeseries/Cargo.toml` | Crate manifest |
 | Create | `core/timeseries/src/error.rs` | `TimeseriesError` enum |
@@ -37,6 +40,7 @@
 - Modify: `core/storage/src/error.rs`
 - Modify: `core/storage/src/migrate.rs`
 - Modify: `core/storage/src/lib.rs`
+- Modify: `iotkit-gateway/src/main.rs` (update `init_db` call for new signature)
 
 - [ ] **Step 1: Add `InvalidMigrationOrder` to `StorageError`**
 
@@ -381,7 +385,29 @@ Add these tests to the existing `#[cfg(test)] mod tests` in `core/storage/src/mi
     }
 ```
 
-- [ ] **Step 7: Update existing `test_migrations_array_invariants` test**
+- [ ] **Step 7: Update gateway caller for new `init_db` signature**
+
+In `iotkit-gateway/src/main.rs`, change:
+
+```rust
+// FROM:
+    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path)) {
+
+// TO:
+    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path), iotkit_core_storage::MIGRATIONS) {
+```
+
+This is a temporary call using only storage MIGRATIONS. Task 6 will change it to the full combined list.
+
+- [ ] **Step 8: Scan workspace for other callers**
+
+Run: `grep -rn "init_db\|init_db_memory" --include="*.rs" .`
+
+Verify all callers have been updated to pass the `migrations` parameter. The only callers should be:
+- `core/storage/src/lib.rs` (tests — already updated in Step 5)
+- `iotkit-gateway/src/main.rs` (updated in Step 7)
+
+- [ ] **Step 9: Update existing `test_migrations_array_invariants` test**
 
 The existing test directly accesses `m.version` which now works since the field is `pub`. No changes needed.
 
@@ -401,15 +427,15 @@ However, the existing `run_migrations(&conn)` calls in tests that use the old si
 
 The `migration_failure_rolls_back` test uses `run_migrations_with` which is unchanged.
 
-- [ ] **Step 8: Run tests**
+- [ ] **Step 10: Run workspace tests**
 
-Run: `cargo test -p iotkit-core-storage`
-Expected: All tests pass, including new migration validation tests and updated pragma verification (cache_size).
+Run: `cargo test --workspace`
+Expected: All tests pass, including gateway compilation with updated `init_db` signature.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add core/storage/src/error.rs core/storage/src/migrate.rs core/storage/src/lib.rs
+git add core/storage/src/error.rs core/storage/src/migrate.rs core/storage/src/lib.rs iotkit-gateway/src/main.rs
 git commit -m "refactor(core/storage): make Migration pub, accept external migrations
 
 - Migration struct is now pub with Clone, Copy and pub fields
@@ -543,11 +569,12 @@ edition = "2024"
 
 [dependencies]
 iotkit-core-types = { path = "../types" }
-iotkit-core-storage = { path = "../storage", features = ["test-util"] }
+iotkit-core-storage = { path = "../storage" }
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"
-tracing = "0.1"
 
 [dev-dependencies]
+iotkit-core-storage = { path = "../storage", features = ["test-util"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 ```
 
@@ -1048,6 +1075,42 @@ Add to the `tests` module in `core/timeseries/src/lib.rs`:
     }
 
     #[tokio::test]
+    async fn duplicate_pk_surfaces_as_error() {
+        let db = test_db();
+        let t = ts(1000);
+        insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Temperature, &[25.0], None, None).await.unwrap();
+        let result = insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Temperature, &[26.0], None, None).await;
+        assert!(matches!(result, Err(TimeseriesError::Storage(_))), "duplicate PK must surface as error, got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn query_deterministic_ordering_same_timestamp() {
+        let db = test_db();
+        let t = ts(1000);
+        // Insert in reverse alphabetical order
+        insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Temperature, &[25.0], None, None).await.unwrap();
+        insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Acceleration, &[0.1], None, None).await.unwrap();
+
+        let rows = query_readings(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), None, TimeRange { start: ts(0), end: ts(2000) }, 100).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        // sensor_type ASC: acceleration < temperature
+        assert_eq!(rows[0].sensor_type, SensorType::Acceleration);
+        assert_eq!(rows[1].sensor_type, SensorType::Temperature);
+    }
+
+    #[tokio::test]
+    async fn latest_reading_tiebreak_deterministic() {
+        let db = test_db();
+        let t = ts(1000);
+        insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Temperature, &[25.0], None, None).await.unwrap();
+        insert_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), t, &SensorType::Acceleration, &[0.1], None, None).await.unwrap();
+
+        let row = latest_reading(&db, &AdapterId::new("a1"), &DeviceKey::new("d1"), None).await.unwrap().unwrap();
+        // Alphabetically first: acceleration < temperature
+        assert_eq!(row.sensor_type, SensorType::Acceleration);
+    }
+
+    #[tokio::test]
     async fn values_json_round_trip() {
         let db = test_db();
         let values = vec![0.1, -0.3, 9.8];
@@ -1143,7 +1206,7 @@ Expected: FAIL — `query_readings`, `latest_reading`, `delete_before` not imple
 
 - [ ] **Step 5: Implement `query_readings`**
 
-Add to `core/timeseries/src/lib.rs`:
+Add a shared row-parsing helper and `query_readings` to `core/timeseries/src/lib.rs`:
 
 ```rust
 /// Helper: parse a row from sensor_readings into ReadingRow.
@@ -1157,7 +1220,8 @@ fn row_to_reading(row: &rusqlite::Row<'_>) -> Result<ReadingRow, rusqlite::Error
     let battery_pct: Option<i32> = row.get(6)?;
 
     let sensor_type = SensorType::from_db_str(&sensor_type_str);
-    let values: Vec<f64> = serde_json::from_str(&values_json).unwrap_or_default();
+    let values: Vec<f64> = serde_json::from_str(&values_json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
 
     Ok(ReadingRow {
         adapter_id,
@@ -1170,69 +1234,6 @@ fn row_to_reading(row: &rusqlite::Row<'_>) -> Result<ReadingRow, rusqlite::Error
     })
 }
 
-pub async fn query_readings(
-    db: &DbHandle,
-    adapter_id: &AdapterId,
-    device_key: &DeviceKey,
-    sensor_type: Option<&SensorType>,
-    range: TimeRange,
-    limit: u32,
-) -> Result<Vec<ReadingRow>, TimeseriesError> {
-    // Validate range
-    if range.start >= range.end {
-        return Err(TimeseriesError::InvalidReading(
-            "start >= end in time range".to_string(),
-        ));
-    }
-
-    let start_millis = system_time_to_millis(range.start)?;
-    let end_millis = system_time_to_millis(range.end)?;
-    let adapter_id_str = adapter_id.as_str().to_string();
-    let device_key_str = device_key.as_str().to_string();
-    let sensor_type_str = sensor_type.map(|st| st.as_db_str().to_string());
-
-    db.with_conn(move |conn| {
-        let rows = if let Some(ref st) = sensor_type_str {
-            let mut stmt = conn.prepare(
-                "SELECT adapter_id, device_key, ingested_at, sensor_type, values_json, rssi, battery_pct
-                 FROM sensor_readings
-                 WHERE adapter_id = ?1 AND device_key = ?2 AND sensor_type = ?3
-                   AND ingested_at >= ?4 AND ingested_at < ?5
-                 ORDER BY ingested_at DESC, sensor_type ASC
-                 LIMIT ?6",
-            )?;
-            stmt.query_map(
-                rusqlite::params![adapter_id_str, device_key_str, st, start_millis, end_millis, limit],
-                row_to_reading,
-            )?
-            .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let mut stmt = conn.prepare(
-                "SELECT adapter_id, device_key, ingested_at, sensor_type, values_json, rssi, battery_pct
-                 FROM sensor_readings
-                 WHERE adapter_id = ?1 AND device_key = ?2
-                   AND ingested_at >= ?3 AND ingested_at < ?4
-                 ORDER BY ingested_at DESC, sensor_type ASC
-                 LIMIT ?5",
-            )?;
-            stmt.query_map(
-                rusqlite::params![adapter_id_str, device_key_str, start_millis, end_millis, limit],
-                row_to_reading,
-            )?
-            .collect::<Result<Vec<_>, _>>()?
-        };
-        Ok(rows)
-    })
-    .await?;
-
-    // Need to return the result — fix the above:
-    unreachable!()
-}
-```
-
-Wait, the `with_conn` returns `Result<Vec<ReadingRow>, StorageError>`, which then converts via `From<StorageError>`. Let me fix this properly:
-
-```rust
 pub async fn query_readings(
     db: &DbHandle,
     adapter_id: &AdapterId,
