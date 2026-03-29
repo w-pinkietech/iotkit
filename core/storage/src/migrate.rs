@@ -2,13 +2,15 @@ use rusqlite::Connection;
 
 use crate::StorageError;
 
-pub(crate) struct Migration {
-    version: u32,
-    label: &'static str,
-    sql: &'static str,
+/// A single schema migration step.
+#[derive(Clone, Copy)]
+pub struct Migration {
+    pub version: u32,
+    pub label: &'static str,
+    pub sql: &'static str,
 }
 
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
+pub const MIGRATIONS: &[Migration] = &[Migration {
     version: 1,
     label: "init",
     sql: include_str!("../migrations/0001_init.sql"),
@@ -105,9 +107,19 @@ fn run_migrations_inner<M: MigrationEntry>(
     Ok(())
 }
 
-/// Production entry point: runs MIGRATIONS through the shared inner runner.
-pub(crate) fn run_migrations(conn: &Connection) -> Result<(), StorageError> {
-    run_migrations_inner(conn, MIGRATIONS)
+/// Run a list of migrations on the given connection.
+/// Validates that versions are strictly ascending before applying.
+pub fn run_migrations(conn: &Connection, migrations: &[Migration]) -> Result<(), StorageError> {
+    // Validate: versions must be strictly ascending
+    for window in migrations.windows(2) {
+        if window[0].version >= window[1].version {
+            return Err(StorageError::InvalidMigrationOrder {
+                first: window[0].version,
+                second: window[1].version,
+            });
+        }
+    }
+    run_migrations_inner(conn, migrations)
 }
 
 /// Test helper: runs a custom migration list through the same inner runner.
@@ -159,7 +171,7 @@ mod tests {
     #[test]
     fn fresh_db_gets_migrated() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
+        run_migrations(&conn, MIGRATIONS).unwrap();
 
         let version: u32 = conn
             .query_row(
@@ -179,8 +191,8 @@ mod tests {
     #[test]
     fn already_migrated_is_noop() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        run_migrations(&conn).unwrap();
+        run_migrations(&conn, MIGRATIONS).unwrap();
+        run_migrations(&conn, MIGRATIONS).unwrap();
 
         let count: u32 = conn
             .query_row("SELECT COUNT(*) FROM _schema_version", [], |row| row.get(0))
@@ -201,7 +213,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = run_migrations(&conn);
+        let result = run_migrations(&conn, MIGRATIONS);
         assert!(
             matches!(
                 result,
@@ -212,6 +224,77 @@ mod tests {
             ),
             "expected SchemaVersionAhead, got {result:?}"
         );
+    }
+
+    #[test]
+    fn migration_order_validation_rejects_out_of_order() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let bad_migrations = &[
+            Migration { version: 2, label: "second", sql: "SELECT 1;" },
+            Migration { version: 1, label: "first", sql: "SELECT 1;" },
+        ];
+        let result = run_migrations(&conn, bad_migrations);
+        assert!(
+            matches!(
+                result,
+                Err(StorageError::InvalidMigrationOrder { first: 2, second: 1 })
+            ),
+            "expected InvalidMigrationOrder, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn migration_duplicate_version_rejected() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let bad_migrations = &[
+            Migration { version: 1, label: "first", sql: "SELECT 1;" },
+            Migration { version: 1, label: "also-first", sql: "SELECT 1;" },
+        ];
+        let result = run_migrations(&conn, bad_migrations);
+        assert!(
+            matches!(
+                result,
+                Err(StorageError::InvalidMigrationOrder { first: 1, second: 1 })
+            ),
+            "expected InvalidMigrationOrder, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn external_migrations_applied() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let combined = &[
+            Migration {
+                version: 1,
+                label: "init",
+                sql: include_str!("../migrations/0001_init.sql"),
+            },
+            Migration {
+                version: 2,
+                label: "extra",
+                sql: "CREATE TABLE extra_table (id INTEGER PRIMARY KEY);",
+            },
+        ];
+        run_migrations(&conn, combined).unwrap();
+
+        let version: u32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 2);
+
+        // Verify extra_table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='extra_table'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_exists, "extra_table should exist after migration v2");
     }
 
     #[test]

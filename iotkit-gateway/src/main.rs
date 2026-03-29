@@ -4,8 +4,11 @@
 mod adapter_host;
 mod config;
 
+use std::time::{Duration, Instant};
+
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
+use iotkit_core_types::AdapterEvent;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -38,7 +41,9 @@ fn main() {
         tracing::info!(bus_path = %rpi.bus_path, poll_interval_ms = rpi.poll_interval_ms, "rpi_local config");
     }
 
-    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path)) {
+    let mut all_migrations = Vec::from(iotkit_core_storage::MIGRATIONS);
+    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path), &all_migrations) {
         Ok(handle) => handle,
         Err(e) => {
             tracing::error!(error = %e, db_path = %config.db_path, "failed to initialize database");
@@ -51,7 +56,7 @@ fn main() {
     rt.block_on(run(config, db));
 }
 
-async fn run(config: config::GatewayConfig, _db: iotkit_core_storage::DbHandle) {
+async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
     let engine = Engine::new();
     let mut host = AdapterHost::new();
 
@@ -126,6 +131,10 @@ async fn run(config: config::GatewayConfig, _db: iotkit_core_storage::DbHandle) 
         tracing::info!("RPi local adapter disabled");
     }
 
+    // State for rate-limited error logging
+    let mut ts_write_errors: u64 = 0;
+    let mut last_ts_err_log = Instant::now();
+
     // Unified fan-in loop
     loop {
         tokio::select! {
@@ -141,7 +150,42 @@ async fn run(config: config::GatewayConfig, _db: iotkit_core_storage::DbHandle) 
                             event = ?ev.event,
                             "Adapter event"
                         );
+
+                        // Extract timeseries fields BEFORE engine consumes the event
+                        let ts_data = match &ev.event {
+                            AdapterEvent::SensorData {
+                                device_key, reading, rssi, battery_pct, ingested_at,
+                            } => Some((
+                                ev.adapter_id.clone(),
+                                device_key.clone(),
+                                *ingested_at,
+                                reading.sensor_type.clone(),
+                                reading.values.clone(),
+                                *rssi,
+                                *battery_pct,
+                            )),
+                            _ => None,
+                        };
+
                         engine.apply(ev).await;
+
+                        if let Some((adapter_id, device_key, ingested_at, sensor_type, values, rssi, battery_pct)) = ts_data {
+                            if let Err(e) = iotkit_core_timeseries::insert_reading(
+                                &db, &adapter_id, &device_key, ingested_at, &sensor_type, &values, rssi, battery_pct,
+                            ).await {
+                                ts_write_errors += 1;
+                                // Log immediately on first failure, then rate-limit subsequent errors
+                                if ts_write_errors == 1 || last_ts_err_log.elapsed() > Duration::from_secs(30) {
+                                    tracing::error!(
+                                        error = %e,
+                                        suppressed = ts_write_errors.saturating_sub(1),
+                                        "timeseries write failed"
+                                    );
+                                    ts_write_errors = 0;
+                                    last_ts_err_log = Instant::now();
+                                }
+                            }
+                        }
                     }
                     Some(AdapterHostEvent::AdapterClosed(id)) => {
                         tracing::warn!(

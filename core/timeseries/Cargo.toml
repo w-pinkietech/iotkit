@@ -1,0 +1,15 @@
+[package]
+name = "iotkit-core-timeseries"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iotkit-core-types = { path = "../types" }
+iotkit-core-storage = { path = "../storage" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+iotkit-core-storage = { path = "../storage", features = ["test-util"] }
+tokio = { version = "1", features = ["rt", "macros"] }
