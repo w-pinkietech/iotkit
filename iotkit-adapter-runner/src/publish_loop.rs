@@ -55,15 +55,16 @@ pub(crate) async fn run(
                 if count > 0 {
                     tracing::info!(count, "flushing buffered events after reconnect");
                 }
-                while let Some((event_type, payload)) = pending_events.pop_front() {
-                    let t = topic(&adapter_id, event_type);
-                    if let Err(e) = client.publish(&t, QoS::AtLeastOnce, false, payload).await {
+                while let Some((event_type, payload)) = pending_events.front() {
+                    let t = topic(&adapter_id, *event_type);
+                    if let Err(e) = client.publish(&t, QoS::AtLeastOnce, false, payload.clone()).await {
                         tracing::warn!(
                             error = %e,
-                            event_type = ?event_type,
-                            "MQTT publish failed during flush, dropping event"
+                            "flush publish failed, keeping remaining buffer"
                         );
+                        break;
                     }
+                    pending_events.pop_front();
                 }
             }
         }

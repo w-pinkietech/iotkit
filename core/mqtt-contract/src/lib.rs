@@ -153,6 +153,13 @@ mod tests {
     }
 
     #[test]
+    fn decode_negative_timestamp_returns_error() {
+        let json = br#"{"v":1,"adapter_id":"test","ts":0,"device_key":"k","sensor_type":"temperature","ingested_at":-1,"values":[],"labels":[],"rssi":null,"battery_pct":null}"#;
+        let result = decode_event(EventType::Telemetry, json);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn decode_unknown_version_returns_error() {
         let json = br#"{"v":99,"adapter_id":"test","ts":0,"device_key":"k","sensor_type":"temperature","ingested_at":0,"values":[],"labels":[],"rssi":null,"battery_pct":null}"#;
         let result = decode_event(EventType::Telemetry, json);

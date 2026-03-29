@@ -163,6 +163,9 @@ pub async fn run(
         .await;
     let _ = client.disconnect().await;
 
+    // Give eventloop time to flush the outgoing queue
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
     // Abort tasks
     eventloop_handle.abort();
     publish_handle.abort();

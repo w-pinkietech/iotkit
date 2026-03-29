@@ -14,8 +14,13 @@ fn check_version(payload: &[u8]) -> Result<(), DecodeError> {
     Ok(())
 }
 
-fn ms_to_system_time(ms: i64) -> std::time::SystemTime {
-    UNIX_EPOCH + Duration::from_millis(ms as u64)
+fn ms_to_system_time(ms: i64) -> Result<std::time::SystemTime, DecodeError> {
+    if ms < 0 {
+        return Err(DecodeError::Json(
+            serde_json::from_str::<()>("\"negative timestamp\"").unwrap_err(),
+        ));
+    }
+    Ok(UNIX_EPOCH + Duration::from_millis(ms as u64))
 }
 
 /// Decode MQTT payload back to (AdapterId, AdapterEvent).
@@ -37,7 +42,7 @@ pub fn decode_event(
                 ),
                 rssi: env.rssi,
                 battery_pct: env.battery_pct,
-                ingested_at: ms_to_system_time(env.ingested_at),
+                ingested_at: ms_to_system_time(env.ingested_at)?,
             };
             Ok((AdapterId::new(env.adapter_id), event))
         }
