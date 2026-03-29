@@ -89,6 +89,28 @@ impl fmt::Display for ConnectionKind {
     }
 }
 
+impl ConnectionKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Uart => "uart",
+            Self::I2c => "i2c",
+            Self::Gpio => "gpio",
+            Self::Modbus => "modbus",
+            Self::Other(s) => s.as_str(),
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "uart" => Self::Uart,
+            "i2c" => Self::I2c,
+            "gpio" => Self::Gpio,
+            "modbus" => Self::Modbus,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
 /// 接続の詳細情報。大分類 + キーバリューのパラメータ。
 /// adapter が型安全な内部表現からこの形式に変換して core に渡す。
 #[derive(Debug, Clone, PartialEq, Eq)]
