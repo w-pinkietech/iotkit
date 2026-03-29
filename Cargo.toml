@@ -14,5 +14,6 @@ members = [
     "iotkit-gateway",
     "iotkit-polling-adapter-runtime",
     "iotkit-adapter-runner",
+    "iotkit-rpi-local",
 ]
 resolver = "3"
