@@ -55,6 +55,16 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - [ ] 切断/再接続時にバッファ、retained message、in-flight data がどうなるか明記されているか。
 - [ ] graceful shutdown 時に全ての enqueue 済みデータが flush されるか、明記されているか。
 
+各状態遷移に対して以下を強制回答させること:
+
+| Question | 回答が必要 |
+|----------|-----------|
+| In-flight data はどうなるか？ | buffer / drop / retry のいずれか明記 |
+| バッファの上限と溢れ時の挙動は？ | 上限数 + oldest drop / backpressure 明記 |
+| retained message は broker 上でどうなるか？ | 残る / 上書き / empty publish で削除 |
+| プロセスが crash したら？ | LWT / orphan data / recovery 手段を明記 |
+| side-effect (publish/write) が途中で失敗したら？ | retry / tombstone / データ状態を明記 |
+
 ### ライフサイクル
 
 - [ ] `discover`、`update`、`lost`、`error` の発火条件が揃っているか。
@@ -103,12 +113,60 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - reader が落ちて復帰したとき、discover や state は二重化しないか。
 - protocol 詳細を消したあとでも、core の型は意味を保てるか。
 
-### 危ないサイン
+### 危ない実装パターン (Anti-Patterns)
+
+以下のパターンが spec/plan に潜んでいたら指摘すること。
+
+**AP-1: Remove before confirm**
+collection.remove() してから side-effect (publish/write/delete) する設計。
+side-effect が失敗するとデータが永久ロスト。正しくは peek → side-effect 成功 → remove。
+例: inventory tombstone を pop_front してから publish → publish 失敗でデータ消失。
+
+**AP-2: Async enqueue ≠ delivery**
+async client.publish().await の Ok を「送信完了」と扱う設計。
+rumqttc 等の async MQTT client は内部キューに入れるだけで、EventLoop が poll するまでブローカーに届かない。abort/disconnect が先に来ると送信されない。
+正しくは flush 用 grace period、または delivery confirmation (PUBACK) を待つ。
+例: offline status publish → 即 eventloop abort → ブローカーに届かない。
+
+**AP-3: Silent config fallback**
+設定値が無効/欠落時にデフォルトにサイレント fallback する設計。
+設定ミスが検出されず、間違った環境で動作する。
+正しくは不正な設定は即 error exit。fallback は明示的 default_value のみ許可。
+例: unknown thermocouple_type → K、cert だけ設定して key なし → 認証なし。
+
+**AP-4: Lossy encoding in identifiers**
+topic/path に使う identifier を非可逆変換 (`:` → `-` 等) でエスケープする設計。
+元の値を復元できず、異なる入力が同じ出力に衝突する。
+正しくは percent-encoding 等の可逆変換。
+例: adapter_id の `:` と `/` を両方 `-` に変換 → 衝突。
+
+### 危ないサイン（構造）
 
 - 設計メモでは抽象化されているのに、実装の本当の拡張点が別の場所にある。
 - adapter が protocol 解釈だけでなく、起動、監視、thread 管理、永続化まで抱え込んでいる。
 - event contract にある概念が、正常系の一部でしか流れていない。
 - 追加変更のたびに `match` が増え続ける。
+
+### Library Pitfalls
+
+プロジェクトで使用しているライブラリの既知の罠。
+
+**rumqttc:**
+- `AsyncClient::publish()` は内部キューに入れるだけ。`EventLoop::poll()` しないと送信されない。
+- `EventLoop` を poll しないと keepalive も送信されず、broker が切断する。
+- reconnect は `EventLoop` 内部で自動処理。`ConnAck` の検知は caller 責務。
+
+**tokio:**
+- `select!` はデフォルトでランダム選択。`biased` だと starvation リスク。どちらも問題を起こしうる。独立 task 分離が最も安全。
+- `signal::ctrl_c()` は SIGINT のみ。SIGTERM は `unix::signal(SignalKind::terminate())` が必要。
+- `abort()` は即座に task を停止。cleanup コードは実行されない。grace period が必要。
+
+**rusqlite:**
+- `INSERT OR IGNORE` は PK 衝突以外の constraint 違反も無視する。`ON CONFLICT(...) DO NOTHING` で限定すること。
+
+**serde:**
+- `#[serde(default)]` は missing field を受け入れるが、invalid value (型不一致) は reject。混同しやすい。
+- `i64` → `u64` キャストは負値で overflow/panic。外部 JSON の decode では必ず range check。
 
 ## Maintenance
 

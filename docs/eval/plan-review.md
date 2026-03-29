@@ -50,6 +50,16 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - [ ] spec に状態遷移図がある場合、全状態が plan のいずれかのタスクで実装されているか。
 - [ ] 各状態の failure mode に対応するテストがタスク内に存在するか。
 - [ ] 切断/再接続/shutdown の各パスが独立したステップとして分解されているか（「reconnect を実装する」は粒度不足）。
+- [ ] spec の failure mode テンプレート（in-flight data、バッファ溢れ、crash recovery 等）の各回答に対応するコードとテストがあるか。
+
+### Anti-Pattern チェック
+
+plan のコードスニペットに以下のパターンが含まれていないか確認:
+
+- [ ] **AP-1 (Remove before confirm):** collection から remove してから side-effect を実行していないか。peek → 成功 → remove の順か。
+- [ ] **AP-2 (Async enqueue ≠ delivery):** async publish/write の Ok を「完了」と扱っていないか。flush/grace period/confirmation が必要か。
+- [ ] **AP-3 (Silent config fallback):** 不正な設定値をデフォルトに fallback していないか。error exit すべきか。
+- [ ] **AP-4 (Lossy identifier encoding):** identifier のエスケープが非可逆でないか。衝突リスクがないか。
 
 ### テスト方針
 
