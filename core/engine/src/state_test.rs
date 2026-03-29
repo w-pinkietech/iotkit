@@ -33,7 +33,7 @@ fn sample_identity() -> SensorIdentity {
 }
 
 fn sample_reading() -> SensorReading {
-    SensorReading::new(SensorType::Temperature, vec![22.5], vec!["temperature_c"])
+    SensorReading::new(SensorType::Temperature, vec![22.5], vec!["temperature_c".into()])
 }
 
 fn discovered_event(adapter_id: &AdapterId, device_key: &DeviceKey) -> EngineEvent {

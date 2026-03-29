@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     fn make_reading() -> SensorReading {
-        SensorReading::new(SensorType::Temperature, vec![25.0], vec!["temp_c"])
+        SensorReading::new(SensorType::Temperature, vec![25.0], vec!["temp_c".into()])
     }
 
     #[test]

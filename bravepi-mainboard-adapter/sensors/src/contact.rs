@@ -15,11 +15,11 @@ fn decode_values(sample: &UartSample<'_>) -> Vec<f64> {
 }
 
 fn decode_contact_input(sample: UartSample<'_>) -> SensorReading {
-    SensorReading::new(SensorType::ContactInput, decode_values(&sample), vec![])
+    SensorReading::new(SensorType::ContactInput, decode_values(&sample), Vec::<String>::new())
 }
 
 fn decode_contact_output(sample: UartSample<'_>) -> SensorReading {
-    SensorReading::new(SensorType::ContactOutput, decode_values(&sample), vec![])
+    SensorReading::new(SensorType::ContactOutput, decode_values(&sample), Vec::<String>::new())
 }
 
 fn contact_input_identity(connection: ConnectionInfo) -> SensorIdentity {
