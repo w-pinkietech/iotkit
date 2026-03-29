@@ -248,15 +248,22 @@ Additional fields:
 
 The `iotkit/v1/{adapter_id}/inventory/{device_key}` topic carries a Discovery-like payload with an additional `session_id` field (see below). A DeviceLost event triggers an inventory tombstone: an empty retained payload (`b""`) published to the device's inventory topic, clearing the retained message.
 
-**Inventory payload fields** (same as Discovery envelope, plus `session_id`):
+**Inventory payload fields** (same as Discovery envelope, plus `session_id` and `first_seen_at`):
 
 All fields from Section 1.3.2, plus:
 
 | Field | JSON type | Nullable | Description |
 |---|---|---|---|
 | `session_id` | string | No | Runner session identifier (see Section 1.3.7). Allows subscribers to distinguish current vs stale retained inventory. |
+| `first_seen_at` | integer | No | Unix timestamp in milliseconds when this device was **first discovered** by the adapter. This value is set at discovery time and never changes across reconnects or inventory reconcile cycles. Must be >= 0. |
 
-Note: The non-retained `discovery` topic (Section 1.3.2) does NOT include `session_id`. Only the retained `inventory/{device_key}` and `status` topics include it.
+Note: The non-retained `discovery` topic (Section 1.3.2) does NOT include `session_id` or `first_seen_at`. Only the retained `inventory/{device_key}` topic includes both fields.
+
+**Timestamp semantics for inventory:**
+- `ts`: The time at which this inventory payload was encoded and published. Refreshed on every reconnect reconcile. Use `ts` for **message freshness** (e.g., "how recently was this inventory message published?").
+- `first_seen_at`: The original discovery time. Never changes for a given device within a process lifetime. Use `first_seen_at` for **device freshness** (e.g., "how long has this device been known to the adapter?").
+
+Consumers use `first_seen_at` for device freshness and `ts` for message freshness.
 
 **Complete JSON example (inventory):**
 
@@ -267,6 +274,7 @@ Note: The non-retained `discovery` topic (Section 1.3.2) does NOT include `sessi
   "ts": 1743206400000,
   "session_id": "a1b2c3d4e5f67890fedcba0987654321",
   "device_key": "i2c:0x44:sht31",
+  "first_seen_at": 1743206300000,
   "identity": {
     "manufacturer": "Sensirion",
     "ic_part_number": "SHT31-DIS",
@@ -357,6 +365,19 @@ The `session_id` is a 32-character lowercase hex string generated once at runner
 **Why session_id instead of timestamp-based staleness windows:** A fixed 30-second staleness window is fragile -- it breaks if inventory reconcile is delayed (slow broker, many devices, network congestion). The `session_id` provides a definitive current/stale classification with zero timing assumptions.
 
 **Non-retained topics do NOT include `session_id`.** The `telemetry`, `discovery`, `loss`, and `error` topics are non-retained live streams. Late subscribers miss them by design. Adding `session_id` to transient messages would add payload overhead with no benefit.
+
+#### 1.3.8 Subscriber Bootstrap Protocol
+
+MQTT does not guarantee retained message delivery order. A subscriber may receive `inventory/{device_key}` messages before the `status` message for the same adapter. The following protocol handles this correctly:
+
+1. Subscribe to `iotkit/v1/+/status` and `iotkit/v1/+/inventory/+`.
+2. Buffer received inventory messages per `adapter_id` (keyed by `device_key`).
+3. When a `status` message is received for an `adapter_id`, use its `session_id` to filter the buffered inventory:
+   - Inventory with matching `session_id` → current; accept and apply to local state.
+   - Inventory with different or missing `session_id` → stale; discard.
+4. If a `status` message is not received within 10 seconds for a buffered `adapter_id`, treat all buffered inventory for that adapter as stale and discard it.
+5. If the received `status` has `online = false`, inventory messages with a matching `session_id` represent the adapter's **last-known state** before it went offline. These may be accepted and displayed as "last seen" (see Section 3.8.6).
+6. If no `status` message exists for an adapter (never published, or broker cleared its retained state), discard all buffered inventory for that adapter. Do not apply inventory without a corresponding authoritative `session_id`.
 
 ### 1.4 Validation Rules for Decode
 
@@ -567,9 +588,10 @@ pub fn encode_status(adapter_id: &AdapterId, online: bool, ts: i64, session_id: 
 /// This is separate from `encode_event` because inventory payloads include `session_id`
 /// and are re-encoded at publish time (not at event-receipt time).
 ///
-/// `data`: The identity data for the device.
+/// `data`: The identity data for the device. `data.first_seen_at` is included verbatim
+///         in the payload (original discovery time; must not be refreshed on reconnect).
 /// `session_id`: The runner's session identifier (constant per process lifetime).
-/// `ts`: Unix milliseconds at the time of publish.
+/// `ts`: Unix milliseconds at the time of publish (refreshed on every reconnect).
 ///
 /// Always returns a `Vec<u8>` (infallible; inventory payloads are statically structured).
 pub fn encode_inventory(
@@ -619,11 +641,13 @@ pub fn decode_status(payload: &[u8]) -> Result<(AdapterId, bool, i64, String), D
 
 /// Decode an inventory payload from a retained `inventory/{device_key}` topic.
 ///
-/// Returns `(adapter_id, adapter_event, session_id)` on success.
+/// Returns `(adapter_id, adapter_event, session_id, first_seen_at)` on success.
 /// The `adapter_event` is an `AdapterEvent::DeviceDiscovered` variant.
 /// The `session_id` is the runner's session identifier (32-char hex string),
 /// used by subscribers to distinguish current vs stale retained inventory
 /// (Section 1.3.7).
+/// The `first_seen_at` is the original discovery time in Unix milliseconds
+/// (Section 1.3.5). Use it for device freshness; use `ts` for message freshness.
 ///
 /// MUST be called for payloads received on `.../inventory/{device_key}` topics.
 /// MUST NOT be used for non-retained discovery payloads (use `decode_event` instead).
@@ -631,10 +655,10 @@ pub fn decode_status(payload: &[u8]) -> Result<(AdapterId, bool, i64, String), D
 /// Returns `DecodeError` if:
 /// - The payload is not valid UTF-8 JSON.
 /// - The `v` field is not `1`.
-/// - Any required field (including `session_id`) is missing or has the wrong type.
-/// - `ts < 0`.
-pub fn decode_inventory(payload: &[u8]) -> Result<(AdapterId, AdapterEvent, String), DecodeError>;
-// Returns (adapter_id, device_discovered_event, session_id)
+/// - Any required field (including `session_id`, `first_seen_at`) is missing or has the wrong type.
+/// - `ts < 0` or `first_seen_at < 0`.
+pub fn decode_inventory(payload: &[u8]) -> Result<(AdapterId, AdapterEvent, String, i64), DecodeError>;
+// Returns (adapter_id, device_discovered_event, session_id, first_seen_at)
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -914,11 +938,17 @@ loop {
 2. For each entry in `desired_inventory`: publish retained inventory (see Section 3.8.3).
 3. Resume normal event processing.
 
-Each publish call uses a 5-second timeout (see Section 3.7.2). Failures are warned and skipped; the next ConnAck will retry everything.
+Each publish call uses a 5-second timeout (see Section 3.7.2).
 
-**Reconcile is best-effort.** Each publish within the reconcile loop is independent. If one fails (timeout or error), it is warned and skipped. The remaining entries continue. There is no partial reconcile flag -- `desired_inventory` is always fully reconciled on the next ConnAck. This is safe because reconcile is idempotent.
+**Reconcile is fail-fast.** If any publish during the reconcile loop fails (timeout or error):
+- Log a `warn!` with the count of remaining unreconciled entries.
+- Stop reconcile immediately (do not continue to the next entry).
+- Stay in the connected state (do not transition to Disconnected; the eventloop handles disconnect detection independently).
+- The next `ConnAck` will retry full reconcile from scratch.
 
-**Reconcile failure (disconnect mid-reconcile):** If MQTT disconnects during reconcile, `conn_rx.changed()` will deliver `Disconnected` on the next iteration. Meanwhile, individual publish timeouts will fire (5s), logging warnings. On the next ConnAck, reconcile restarts from scratch.
+**Rationale for fail-fast:** A best-effort reconcile that skips failures can stall for `N × 5s` (up to `100 × 5s = 500s`) on a half-broken connection where publishes time out individually. Fail-fast limits the stall to one 5-second timeout and yields back to the `select!` loop, allowing event processing to resume and eventloop disconnect detection to fire promptly.
+
+**Reconcile failure (disconnect mid-reconcile):** If MQTT disconnects during reconcile, the first publish timeout (5s) triggers fail-fast exit. `conn_rx.changed()` will deliver `Disconnected` on the next `select!` iteration. On the next `ConnAck`, reconcile restarts from scratch.
 
 **Reconcile duration:** For typical deployments (< 100 devices), reconcile takes < 100ms (bounded by device count, not buffer size).
 
@@ -1038,7 +1068,7 @@ Startup is split between the binary and the runner. The binary handles steps 1-5
 ```
 (1) Config load + validate
         |
-        v  [fail: log error, exit 1 (EX_CONFIG=78)]
+        v  [fail: log error, exit 1]
 (2) Create tokio runtime (Runtime::new())
         |
         v  [fail: panic -- unrecoverable, no runtime to log]
@@ -1061,7 +1091,7 @@ Startup is split between the binary and the runner. The binary handles steps 1-5
 ```
 (1) Create MQTT client + EventLoop
     - MqttOptions with LWT: topic=`{prefix}/status`, payload=`{"v":1,"adapter_id":"...","ts":0,"online":false,"session_id":"..."}`, retain=true, QoS 1
-    - AsyncClient::new(options, cap=256)
+    - AsyncClient::new(options, cap=100)
         |
         v  [fail: return Err(RunnerError::MqttInit(...))]
 (2) Spawn eventloop_task
@@ -1174,7 +1204,7 @@ The LWT fires after the broker's keepalive timeout (default 30s), providing even
 
 | Scenario | Exit code | Rationale |
 |---|---|---|
-| Config validation failure | 1 (78 EX_CONFIG) | Cannot run with invalid config |
+| Config validation failure | 1 | Cannot run with invalid config |
 | Adapter start failure | 1 | No data source |
 | Runner returns Err (MQTT init failure) | 1 | Cannot connect to broker |
 | Runner returns Err (task panic/crash) | 1 | Critical infrastructure gone |
@@ -1462,7 +1492,7 @@ On `conn_rx.changed()` delivering `Connected`, the publish_task executes in stri
 (3) Resume           -- select! loop continues, events published normally
 ```
 
-All steps execute synchronously within the `conn_rx.changed()` branch. Each publish call uses a 5-second timeout. Failures are warned and skipped; the entry will be retried on the next ConnAck.
+All steps execute synchronously within the `conn_rx.changed()` branch. Each publish call uses a 5-second timeout. Reconcile is fail-fast: the first publish failure (timeout or error) stops reconcile immediately, logs the count of remaining unreconciled entries, and returns control to the `select!` loop. All entries are retried on the next ConnAck.
 
 ### 3.8 Retained Inventory Semantics
 
@@ -1481,6 +1511,7 @@ Where `InventoryData` is a struct containing the identity fields needed to re-en
 struct InventoryData {
     device_key: String,
     identity: SensorIdentity,  // manufacturer, ic_part_number, sensor_type, connection
+    first_seen_at: i64,        // Unix ms timestamp; set at discovery time, never changes
 }
 ```
 
@@ -1500,7 +1531,7 @@ On ConnAck, replay **everything** in `desired_inventory`. This is simple and cor
 
 **`DeviceDiscovered`:**
 
-1. Extract identity data from the event into an `InventoryData` struct.
+1. Extract identity data from the event into an `InventoryData` struct. Set `first_seen_at = now_ms()` at this moment (first discovery). If the device was previously in `desired_inventory` as `Some(data)` (re-discovery), preserve the original `data.first_seen_at` rather than resetting it to `now_ms()`.
 2. `desired_inventory.insert(device_key_str, Some(inventory_data))`.
 3. If connected: encode with current `session_id` + `ts = now_ms()`, publish to `iotkit/v1/{adapter_id}/inventory/{device_key}`, QoS 1, retained.
 
@@ -1576,7 +1607,9 @@ On graceful shutdown (adapter closes `event_rx`, publish_task exits):
 2. **Only status changes:** Offline status is published (`encode_status(adapter_id, false, now_ms(), session_id)`).
 3. Devices may still be visible to consumers via retained inventory topics.
 
-**Normative rule for consumers:** When `status=offline`, inventory represents last-known state. Consumers SHOULD display devices as "last seen" with the inventory's `ts` timestamp. Consumers MUST NOT assume devices are currently reachable when the adapter is offline.
+**Normative rule for consumers:** When `status=offline`, inventory represents last-known state. Consumers SHOULD display devices as "last seen". Consumers MUST NOT assume devices are currently reachable when the adapter is offline.
+
+Consumers use `first_seen_at` for device freshness (when was this device originally discovered?) and `ts` for message freshness (when was this inventory message last published?).
 
 **Rationale:** In a multi-adapter deployment, other adapters may be publishing to the same broker. Clearing inventory on shutdown would create a false "all devices gone" signal. The offline status is sufficient for consumers to know this adapter is no longer active.
 
@@ -1697,7 +1730,7 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 | `AdapterEvent` received | Connected | `track_inventory` + publish with 5s timeout (inventory retained w/ session_id + non-retained) | Connected | Event published to broker (enqueued) |
 | `AdapterEvent` received | Disconnected | `track_inventory` + drop non-retained with `warn!` | Disconnected | Inventory tracked locally; non-retained events lost |
 | `conn_rx.changed()` -> Connected | publish_task | Publish online status (w/ session_id, 5s timeout); for each `desired_inventory` entry: publish retained (5s timeout each) | Connected | Online status published; inventory reconciled |
-| `client.publish` timeout/error during reconcile | Reconciling | `warn!` + skip entry, continue to next | Connected | Skipped entry retried on next ConnAck |
+| `client.publish` timeout/error during reconcile | Reconciling | `warn!` with remaining count + stop reconcile immediately | Connected | All unreconciled entries retried on next ConnAck |
 | `client.publish` timeout/error for live event | Connected | Log `warn!`, drop the single event | Connected | Event lost; non-retained events are best-effort |
 | `event_rx` closed | Any | Exit publish_task loop | Terminated | Publish_task returns |
 
@@ -1711,7 +1744,7 @@ The 2-second value is a pragmatic choice for v1, optimized for the primary deplo
 | `DeviceLost` while disconnected | desired_inventory[k] = Some | Insert `None` only | Local tracking updated | Tombstone sent on ConnAck |
 | `DeviceLost` for unknown device | desired_inventory[k] absent | Insert `None` | Tombstone created | Defensive; empty retained on ConnAck clears any stale data |
 | Reconnect (ConnAck) | N active, M tombstones | Publish all N as retained + all M as empty retained | Broker state = local state | Full reconcile; `info!` log with counts |
-| `republish_all` publish fails for one device | Iterating desired_inventory | `warn!` log, skip and continue to next device | Best-effort reconcile | Failed device retried on next ConnAck; no partial reconcile flag needed |
+| `republish_all` publish fails for one device | Iterating desired_inventory | `warn!` log with remaining count, stop reconcile immediately | Fail-fast reconcile | All unreconciled entries retried on next ConnAck |
 | Graceful shutdown | N active devices | Publish offline status only; inventory unchanged | Broker retains last inventory | Consumers see offline status + stale inventory |
 | Crash / SIGKILL | N active devices | LWT publishes offline (ts=0); inventory unchanged | Broker retains last inventory | Consumers see offline (ts=0) + stale inventory |
 | Process restart after crash | Empty desired_inventory | Re-discover devices; first ConnAck reconciles | Broker gets fresh inventory | Previously-lost devices have stale retained (known limitation) |
@@ -1935,11 +1968,11 @@ All validation beyond deserialization is performed in a `Config::validate(&self)
 
 Config validation uses a **three-phase approach**. All three phases run before any I/O starts (no MQTT connection, no I2C bus access). No config error can occur after startup begins.
 
-- **Phase 1: TOML parse** (`toml::from_str`) -- fails fast on the first syntax error, type mismatch, or missing required field. serde does not support collecting multiple parse errors. If Phase 1 fails, a single error message is printed and the process exits with code 78 (EX_CONFIG).
-- **Phase 2: Cross-field validation** (`Config::validate()`) -- runs only after Phase 1 succeeds. This phase CAN collect multiple errors (e.g., `mqtt://` + `ca_path` present AND empty `adapter_id` AND `keepalive_secs = 0`). All errors are collected and printed to stderr before exiting with code 78.
-- **Phase 3: Adapter/driver validation** (`rpi_local_adapter::validate(&config)`) -- runs only after Phase 2 succeeds. This phase validates driver-specific constraints that cannot be expressed as cross-field rules (e.g., OPT3001 minimum poll interval of 800ms, MCP9600 minimum conversion time). If any driver-level validation fails, errors are collected and printed to stderr before exiting with code 78.
+- **Phase 1: TOML parse** (`toml::from_str`) -- fails fast on the first syntax error, type mismatch, or missing required field. serde does not support collecting multiple parse errors. If Phase 1 fails, a single error message is printed and the process exits with code 1.
+- **Phase 2: Cross-field validation** (`Config::validate()`) -- runs only after Phase 1 succeeds. This phase CAN collect multiple errors (e.g., `mqtt://` + `ca_path` present AND empty `adapter_id` AND `keepalive_secs = 0`). All errors are collected and printed to stderr before exiting with code 1.
+- **Phase 3: Adapter/driver validation** (`rpi_local_adapter::validate(&config)`) -- runs only after Phase 2 succeeds. This phase validates driver-specific constraints that cannot be expressed as cross-field rules (e.g., OPT3001 minimum poll interval of 800ms, MCP9600 minimum conversion time). If any driver-level validation fails, errors are collected and printed to stderr before exiting with code 1.
 
-The process exits with code 78 (EX_CONFIG) after printing all errors from whichever phase fails.
+The process exits with code 1 after printing all errors from whichever phase fails.
 
 **Pre-flight guarantee:** All three validation phases complete before the adapter starts, before the MQTT client connects, and before any hardware I/O occurs. If the process starts its main loop, the config is fully validated. Runtime config errors are impossible by construction (barring external state changes like a TLS certificate expiring or a broker going offline, which are not config errors).
 
@@ -2081,7 +2114,7 @@ If the file does not exist or is not readable:
 ```
 error: config file not found: "<path>"
 ```
-Exit with code 78 (EX_CONFIG).
+Exit with code 1.
 
 #### 4.4.2 Default Search (`--config` omitted)
 
@@ -2094,7 +2127,7 @@ For each path: attempt to open the file. If it opens successfully, use it and st
 ```
 error: failed to read config file "<path>": <os-error>
 ```
-Exit with code 78.
+Exit with code 1.
 
 If neither candidate exists:
 ```
@@ -2103,7 +2136,7 @@ error: no config file found; tried:
   /etc/iotkit/iotkit-rpi-local.toml
 hint: use --config <path> to specify a config file explicitly
 ```
-Exit with code 78.
+Exit with code 1.
 
 The resolved path is logged at INFO level on startup:
 ```
@@ -2505,7 +2538,9 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **ConnectionKind from_str normalization:** `ConnectionKind::from_str("i2c")` returns `I2c` (not `Other("i2c")`). Known strings are always normalized to their typed variants.
 - **Inventory payload does NOT equal discovery payload:** `encode_event` for `DeviceDiscovered` produces a payload without `session_id`; `encode_inventory` produces a payload with `session_id`. The two are structurally different.
 - **Inventory payload includes session_id:** `encode_inventory` with a session_id -> `decode_inventory` -> `session_id` field matches.
-- **Inventory decode returns session_id:** `decode_inventory` returns `(adapter_id, event, session_id)` tuple; `session_id` matches the encoded value.
+- **Inventory decode returns session_id:** `decode_inventory` returns `(adapter_id, event, session_id, first_seen_at)` tuple; `session_id` matches the encoded value.
+- **Inventory decode returns first_seen_at:** `decode_inventory` returns the encoded `first_seen_at` value unchanged.
+- **Inventory first_seen_at preserved across reconnect:** On re-discovery of an already-tracked device, `desired_inventory` retains the original `first_seen_at`; reconcile payload includes the original value (not `now_ms()`).
 - **Session_id in status payload:** `encode_status` with a session_id -> decode -> `session_id` field matches for online, offline, and LWT variants.
 
 ### 6.2 `iotkit-adapter-runner` Tests
@@ -2518,7 +2553,7 @@ No runtime locking mechanism prevents two processes from using the same `adapter
 - **ConnAck -> full inventory republish:** After ConnAck, all entries in `desired_inventory` are published as retained with current `session_id`.
 - **Inventory republish re-encodes with fresh ts:** After ConnAck, inventory payloads have `ts` reflecting the reconnect time, not the original discovery time.
 - **Session_id consistency:** All retained messages (status + inventory) from the same process share the same `session_id`.
-- **Reconcile failure skips and continues:** If one inventory publish times out during reconcile, remaining entries are still published. Next ConnAck retries everything.
+- **Reconcile fail-fast:** If one inventory publish times out during reconcile, reconcile stops immediately (warn log with remaining count); remaining entries are NOT published in this round. Next ConnAck retries everything from scratch.
 - **Publish timeout:** A publish that blocks for > 5s is timed out and skipped (warn log).
 - **Graceful shutdown sequence:** Binary receives signal -> adapter stopped (closes event_rx) -> runner publishes offline status (with timeout) -> runner returns Ok -> binary exits 0.
 - **Offline status timestamp:** Graceful offline status has `ts > 0`. LWT has `ts = 0`. Both include `session_id`.
