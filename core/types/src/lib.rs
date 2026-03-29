@@ -35,6 +35,38 @@ impl fmt::Display for SensorType {
     }
 }
 
+impl SensorType {
+    /// Convert to the string stored in SQLite sensor_type column.
+    pub fn as_db_str(&self) -> &str {
+        match self {
+            Self::ContactInput => "contact_input",
+            Self::ContactOutput => "contact_output",
+            Self::Adc => "adc",
+            Self::Ranging => "ranging",
+            Self::Temperature => "temperature",
+            Self::Acceleration => "acceleration",
+            Self::DifferentialPressure => "differential_pressure",
+            Self::Illuminance => "illuminance",
+            Self::Unknown(s) => s.as_str(),
+        }
+    }
+
+    /// Parse from the string stored in SQLite sensor_type column.
+    pub fn from_db_str(s: &str) -> Self {
+        match s {
+            "contact_input" => Self::ContactInput,
+            "contact_output" => Self::ContactOutput,
+            "adc" => Self::Adc,
+            "ranging" => Self::Ranging,
+            "temperature" => Self::Temperature,
+            "acceleration" => Self::Acceleration,
+            "differential_pressure" => Self::DifferentialPressure,
+            "illuminance" => Self::Illuminance,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
 /// 接続方式の大分類。コアは「種類」を知るが「詳細」は知らない。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConnectionKind {
@@ -285,6 +317,34 @@ mod tests {
         assert_eq!(ConfigValue::Integer(42), ConfigValue::Integer(42));
         assert_eq!(ConfigValue::Float(1.5_f64), ConfigValue::Float(1.5_f64));
         assert_eq!(ConfigValue::Bool(true), ConfigValue::Bool(true));
+    }
+
+    #[test]
+    fn sensor_type_db_str_round_trip() {
+        let variants: Vec<SensorType> = vec![
+            SensorType::ContactInput,
+            SensorType::ContactOutput,
+            SensorType::Adc,
+            SensorType::Ranging,
+            SensorType::Temperature,
+            SensorType::Acceleration,
+            SensorType::DifferentialPressure,
+            SensorType::Illuminance,
+        ];
+        for v in variants {
+            let db_str = v.as_db_str();
+            let round_tripped = SensorType::from_db_str(db_str);
+            assert_eq!(v, round_tripped, "round-trip failed for {v:?} -> {db_str:?}");
+        }
+    }
+
+    #[test]
+    fn sensor_type_unknown_round_trip() {
+        let original = SensorType::Unknown("custom_xyz".to_string());
+        let db_str = original.as_db_str();
+        assert_eq!(db_str, "custom_xyz");
+        let round_tripped = SensorType::from_db_str(db_str);
+        assert_eq!(round_tripped, SensorType::Unknown("custom_xyz".to_string()));
     }
 
     #[test]
