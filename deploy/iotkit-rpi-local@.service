@@ -1,5 +1,5 @@
 [Unit]
-Description=IoTKit Raspberry Pi Local Adapter
+Description=IoTKit Raspberry Pi Local Adapter (bus %i)
 Documentation=https://github.com/iotkit/iotkit-next
 After=network-online.target
 Wants=network-online.target
@@ -10,7 +10,7 @@ User=iotkit
 Group=iotkit
 SupplementaryGroups=i2c
 
-ExecStart=/opt/iotkit/bin/iotkit-rpi-local --config /opt/iotkit/etc/iotkit-rpi-local.toml
+ExecStart=/opt/iotkit/bin/iotkit-rpi-local --config /opt/iotkit/etc/iotkit-rpi-local-%i.toml
 
 Restart=on-failure
 RestartSec=5s
@@ -24,7 +24,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/iotkit/data
-DeviceAllow=/dev/i2c-1 rw
+DeviceAllow=/dev/i2c-%i rw
 DevicePolicy=closed
 PrivateTmp=true
 SystemCallFilter=@system-service @network-io
