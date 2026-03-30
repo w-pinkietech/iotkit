@@ -641,4 +641,92 @@ thermocouple_type = "K"
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("ca_path"));
     }
+
+    /// Issue 14: Missing host in broker_url → error mentioning "host"
+    #[test]
+    fn missing_host_rejected() {
+        let toml = VALID_TOML.replace("mqtt://localhost:1883", "mqtt://");
+        let result = parse_and_validate(&toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_lowercase().contains("host"),
+            "error should mention host: {err}"
+        );
+    }
+
+    /// Issue 15: Empty client_id → error mentioning "client_id"
+    #[test]
+    fn empty_client_id_rejected() {
+        let toml = VALID_TOML.replace("[mqtt]", "[mqtt]\nclient_id = \"\"");
+        let result = parse_and_validate(&toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("client_id"),
+            "error should mention client_id: {err}"
+        );
+    }
+
+    /// Issue 16: Invalid thermocouple_type → error mentioning valid values
+    #[test]
+    fn invalid_thermocouple_type_rejected() {
+        let toml = VALID_TOML.replace("thermocouple_type = \"K\"", "thermocouple_type = \"X\"");
+        let result = parse_and_validate(&toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("thermocouple_type"),
+            "error should mention thermocouple_type: {err}"
+        );
+        // Should list valid values
+        assert!(
+            err.contains("K") && err.contains("J") && err.contains("T"),
+            "error should mention valid values: {err}"
+        );
+    }
+
+    /// Issue 17: Long client_id (>128 chars) — parse_and_validate succeeds
+    /// (warning is runtime, not validation-time)
+    #[test]
+    fn long_client_id_accepted() {
+        let long_adapter_id = "a".repeat(200);
+        let toml = VALID_TOML.replace("rpi-local:default", &long_adapter_id);
+        let config = parse_and_validate(&toml).unwrap();
+        let mqtt = config.to_mqtt_config();
+        // client_id is auto-generated from adapter_id and will be >128 chars
+        assert!(
+            mqtt.client_id.as_ref().unwrap().len() > 128,
+            "client_id should be >128 chars: {}",
+            mqtt.client_id.as_ref().unwrap().len()
+        );
+    }
+
+    /// Issue 18: Phase 1 fail-fast — malformed TOML (missing required field) gives
+    /// a single serde error, not collect-all-errors
+    #[test]
+    fn malformed_toml_fail_fast() {
+        // Missing [adapter] section entirely — serde should fail first
+        let toml = r#"
+adapter_id = "test"
+[mqtt]
+broker_url = "mqtt://localhost"
+"#;
+        let result = parse_and_validate(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Should be a single serde error (Phase 1 fail-fast), not multiple Phase 2 errors.
+        // The serde error message itself may contain newlines (TOML position info),
+        // but there should be exactly one "config error:" prefix (not multiple collected errors).
+        let error_count = err.matches("config error:").count();
+        assert_eq!(
+            error_count, 1,
+            "should be a single error (Phase 1 fail-fast), got {error_count} errors: {err}"
+        );
+        // Should mention the missing field, not a Phase 2 validation error
+        assert!(
+            err.contains("missing field"),
+            "should be a serde missing-field error: {err}"
+        );
+    }
 }
