@@ -1,7 +1,119 @@
 # iotkit-next Plan Review Guide
 
 plan 評価時に Codex プロンプトへ注入する。
-Active Watchpoints を先に読み、次に Baseline Checklist を適用する。
+**plan 著者も書き始める前にこのドキュメント全体を読むこと。**
+Active Watchpoints を先に読み、次に Plan Authoring Discipline、最後に Baseline Checklist を適用する。
+
+## Plan Authoring Discipline
+
+plan を書く前に守るべき規律。ここに書いてある粒度を守らないと、実装エージェントが曖昧なステップを自己判断で埋め、Codex review が発散する。
+
+### 1. 1ステップ = 1アクション（2-5分）
+
+以下はそれぞれ**別のステップ**。1つにまとめない。
+
+```
+- [ ] Step 1: failing test を書く（コードブロック必須）
+- [ ] Step 2: テストを実行して失敗を確認（コマンド + 期待される失敗メッセージ）
+- [ ] Step 3: 最小限の実装を書く（コードブロック必須）
+- [ ] Step 4: テストを実行して成功を確認（コマンド + PASS）
+- [ ] Step 5: commit（git add + git commit コマンド）
+```
+
+**粒度の判定基準:** 実装者がそのステップを読んで「何を打てばいいか」が即座にわかるか？ 考える余地があるなら分割が足りない。
+
+### 2. プレースホルダー禁止
+
+以下は全て **plan の欠陥**。1つでもあったら修正する。
+
+| 禁止パターン | なぜダメか |
+|-------------|-----------|
+| `// TODO: implement` | 実装者が自己判断する余地を作る |
+| `適切なエラーハンドリングを追加` | 「適切」が定義されていない |
+| `同様に Task N と同じ` | 実装者は Task N を読み返さないかもしれない。コードを繰り返せ |
+| `テストを書く`（コードなし） | テストの内容が spec と一致する保証がない |
+| `必要に応じて更新` | 必要かどうかの判断を実装者に委ねている |
+| `TBD` / `後で決める` | 決めてから plan を書け |
+
+**ルール:** コードを変更するステップには必ずコードブロックを含める。コマンドを実行するステップには必ず実行コマンドと期待出力を含める。
+
+### 3. spec の状態遷移 → plan のタスクへの展開
+
+spec に状態遷移図がある場合、以下のマッピングが必要:
+
+```
+spec の各状態 → plan に「その状態に入る実装」+「その状態のテスト」
+spec の各遷移 → plan に「遷移トリガーの実装」+「遷移のテスト」
+spec の各 failure mode → plan に「failure 処理の実装」+「failure のテスト」
+```
+
+「reconnect を実装する」は 1 タスクとしては粗すぎる。正しくは:
+
+```
+Task N: Reconnecting 状態の遷移
+  Step 1: EventLoop error → Reconnecting のテスト
+  Step 2: テスト実行、失敗確認
+  Step 3: eventloop_task に Disconnected イベント処理を実装
+  Step 4: テスト実行、成功確認
+  Step 5: commit
+
+Task N+1: Reconnecting → Online の復帰
+  Step 1: ConnAck 受信 → Online + reconcile のテスト
+  Step 2: ...
+```
+
+### 4. 型名・関数名の一貫性チェック
+
+plan 完成後に以下を自己チェックする:
+
+- Task 3 で定義した `fn clear_layers()` を Task 7 で `fn clear_full_layers()` と書いていないか
+- spec の型名と plan のコード内の型名が完全一致しているか
+- `pub` / `pub(crate)` の可視性が全タスク通して一貫しているか
+
+**1つでも食い違いがあれば、実装エージェントがどちらを信じるか不定になる。**
+
+### 5. 各タスクの自己完結性
+
+実装者は**そのタスクだけを読んで作業する**前提で書く。
+
+- 前のタスクで定義した型を参照するなら、import パスを明記する
+- 前のタスクのコードに依存するなら、何に依存しているか書く（「Task 3 で作った `MqttState` enum を使う」）
+- 共通の前提知識（crate 構成、既存の型）はタスクの冒頭に書く
+
+### 6. テストが振る舞いを検証している
+
+**悪い例:**
+```rust
+#[test]
+fn test_config_loads() {
+    let config = Config::from_str(TOML);
+    assert!(config.is_ok()); // コンパイルが通るだけ
+}
+```
+
+**良い例:**
+```rust
+#[test]
+fn test_config_rejects_cert_without_key() {
+    let toml = r#"
+        [mqtt.tls]
+        ca_cert = "/path/to/ca.pem"
+        client_cert = "/path/to/cert.pem"
+        # client_key is missing
+    "#;
+    let err = Config::from_str(toml).unwrap_err();
+    assert!(err.to_string().contains("client_key is required when client_cert is set"));
+}
+```
+
+テストは「何が起きるべきか」を assert する。「エラーにならない」だけでは振る舞いの検証ではない。
+
+### 7. 中間ステップで cargo test が通る
+
+全てのタスクの commit 時点で `cargo test --workspace` が通らなければならない。
+Task 3 の時点でコンパイルエラーが出て、Task 5 で初めて治る、という plan は不可。
+
+これは依存順序の設計問題。inner crate (types) → outer crate (adapter) → binary の順に作る。
 
 ## Active Watchpoints
 

@@ -1,7 +1,102 @@
 # iotkit-next Spec Review Guide
 
 spec/design 評価時に Codex プロンプトへ注入する。
-Active Watchpoints を先に読み、次に Baseline Checklist を適用する。
+**spec 著者も書き始める前にこのドキュメント全体を読むこと。**
+Active Watchpoints を先に読み、次に Spec Authoring Discipline、最後に Baseline Checklist を適用する。
+
+## Spec Authoring Discipline
+
+spec を書く前に守るべき規律。これを守らないと Codex review が 5+ ラウンド収束しない。
+
+### 1. 状態遷移図ファースト
+
+文章を書く前に Graphviz の状態遷移図を描く。図が先、文章は図の補足。
+
+- 全ての状態を列挙する（正常状態だけでなく、エラー状態・中間状態も）
+- 全ての遷移に **トリガー**（何が起きたら）、**ガード条件**（どういう条件で）、**副作用**（何をするか）を書く
+- 遷移が存在しないペアも意識する（「Online から直接 Done に行けるか？」→ 行けないなら理由を書く）
+- 複数コンポーネントがある場合、それぞれ独立した状態遷移図を描く
+
+**悪い例:** 「接続が切れたら再接続する」
+**良い例:** `Online --(EventLoop returns Err / ConnReset)--> Reconnecting [副作用: desired_inventory 保持、publish_task は watch で Reconnecting を検知し publish 停止]`
+
+### 2. 各状態遷移に failure mode を網羅
+
+遷移ごとに以下の 5 質問に全て回答する。「該当しない」も回答として許可するが、理由を書く。
+
+| # | Question | 回答例 |
+|---|----------|--------|
+| 1 | この遷移の途中でプロセスがクラッシュしたら？ | LWT が broker に online=false を通知。retained inventory は session_id で stale 判定可能 |
+| 2 | この遷移がタイムアウトしたら？ | 5s timeout → Reconnecting に遷移、retry は EventLoop 内部の backoff |
+| 3 | 副作用が部分的に完了したら？ | reconcile 中に publish 失敗 → fail-fast で中断、次の ConnAck で全件再試行 |
+| 4 | この遷移と並行して別の遷移/イベントが起きたら？ | publish_task が publish 中に Disconnected → watch で検知、publish 停止 |
+| 5 | リソース（メモリ、FD、broker 上の retained msg）がリークしないか？ | tombstone は empty publish で broker から削除。desired_inventory は HashMap なので上限は adapter の discover 数に比例 |
+
+### 3. ライブラリの実際の挙動を仕様に組み込む
+
+API のシグネチャではなく**実際のセマンティクス**を調べて spec に書く。
+
+- `publish().await` が `Ok` を返す ≠ broker に届いた（内部キューに入っただけ）
+- `EventLoop` を poll しないと keepalive も送信されない（broker が切断する）
+- `tokio::select!` のランダム選択 vs `biased` の starvation — どちらを選んだか理由付きで書く
+- `signal::ctrl_c()` は SIGINT のみ、SIGTERM は別途必要
+
+**ルール:** 使うライブラリの「見た目と実際のギャップ」を 1 つでも発見したら、spec の該当箇所に Warning として明記する。
+
+### 4. 並行性プリミティブの選択を正当化する
+
+channel / 同期プリミティブを使う箇所では、**なぜそれを選んだか**を書く。
+
+| プリミティブ | セマンティクス | 適用場面 |
+|-------------|--------------|----------|
+| `tokio::sync::watch` | level-triggered、最新値のみ保持、receiver は常に最新を読める | 状態通知（接続状態など）。読み落としても最新値で追いつける |
+| `tokio::sync::mpsc` | edge-triggered、全メッセージ順序保証 | イベントストリーム。1 件も落とせない場合 |
+| `AtomicBool + Notify` | edge-triggered、通知と値の更新が非アトミック | **使わない**。watch で代替可能で race condition のリスクがない |
+| `CancellationToken` | 一度だけ発火、broadcast | shutdown signal |
+
+**悪い例:** 「AtomicBool で接続状態を管理する」（race condition: 値の更新と通知がずれる）
+**良い例:** 「watch channel で接続状態を通知する。level-triggered なので、publish_task が一瞬 Disconnected を見逃しても次の changed().await で最新状態を取得できる」
+
+### 5. 定量的な閾値を全て明記
+
+曖昧な表現を禁止する。具体的な数値と、その根拠を書く。
+
+| 禁止表現 | 正しい書き方 |
+|----------|-------------|
+| 「余裕がある」 | 「publish timeout 30s（rumqttc デフォルト）」 |
+| 「適切なバッファサイズ」 | 「mpsc channel capacity 64（adapter 最大デバイス数 × 2 の余裕）」 |
+| 「しばらく待つ」 | 「reconnect backoff: 1s → 2s → 4s → ... → 60s cap」 |
+| 「十分な長さ」 | 「session_id: 32 文字 hex（128bit、衝突確率 < 2^-64）」 |
+
+### 6. rejected alternatives を全ての非自明な選択に書く
+
+「なぜ A ではなく B にしたか」を書く。これがないと Codex が毎ラウンド「A ではだめか？」と聞いてくる。
+
+```markdown
+### なぜ outbound buffer を持たないか
+
+**Rejected:** offline 中のイベントをバッファして reconnect 後に replay する設計。
+**理由:**
+- replay 順序の公平性問題（古いイベント vs 新しい状態）
+- batched replay 中の disconnect でバッファ二重化
+- drain timeout と shutdown timeout の競合
+- 設計上、非 retained イベントは「今の値」なので、古い値を replay する意味がない
+
+**採用:** retained message は desired_inventory で管理し、ConnAck ごとに全件 reconcile。
+非 retained イベントは offline 中 drop。シンプルで正しい。
+```
+
+### 7. 複雑性スパイラルの検知
+
+1 つの設計判断が 3 つ以上のサブ問題を生んだら、**その判断自体を疑う**。
+
+例: outbound buffer → replay 順序 + drain timeout + 二重化防止 + backpressure → **buffer をやめる** → 問題が全て消える。
+
+spec を書いている途中で「これの例外処理が…」「これとこれが競合するから…」と 3 つ以上の注釈が必要になったら、一歩引いてその設計判断を見直す。
+
+### 8. 「v1 scope 外」禁止
+
+設計判断の先送りに「v1 scope 外」「将来対応」を使わない。spec に書くなら全ての質問に回答する。回答できないなら scope から外す（中途半端に触れない）。
 
 ## Active Watchpoints
 

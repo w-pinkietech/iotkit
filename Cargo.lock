@@ -543,8 +543,11 @@ version = "0.1.0"
 dependencies = [
  "iotkit-core-mqtt-contract",
  "iotkit-core-types",
+ "percent-encoding",
  "rand",
  "rumqttc",
+ "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "url",
@@ -567,6 +570,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -631,12 +635,14 @@ dependencies = [
  "clap",
  "iotkit-adapter-runner",
  "iotkit-core-types",
+ "percent-encoding",
  "rpi-local-adapter",
  "serde",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
