@@ -29,7 +29,7 @@ pub(crate) fn connect(
             || config.client_cert_path.is_some()
             || config.client_key_path.is_some()
         {
-            return Err(RunnerError::Config(
+            return Err(RunnerError::MqttInit(
                 "TLS settings (ca_path, client_cert_path, client_key_path) require mqtts:// broker URL".into(),
             ));
         }
@@ -37,7 +37,7 @@ pub(crate) fn connect(
 
     // Validate mTLS: both cert and key must be provided, or neither
     if config.client_cert_path.is_some() != config.client_key_path.is_some() {
-        return Err(RunnerError::Config(
+        return Err(RunnerError::MqttInit(
             "both client_cert_path and client_key_path must be set for mTLS, or neither".into(),
         ));
     }
@@ -47,17 +47,17 @@ pub(crate) fn connect(
         let ca = config
             .ca_path
             .as_ref()
-            .ok_or_else(|| RunnerError::Config("mqtts:// requires ca_path".into()))?;
+            .ok_or_else(|| RunnerError::MqttInit("mqtts:// requires ca_path".into()))?;
         let ca_bytes = std::fs::read(ca)
-            .map_err(|e| RunnerError::Config(format!("failed to read CA cert: {e}")))?;
+            .map_err(|e| RunnerError::MqttInit(format!("failed to read CA cert: {e}")))?;
 
         let transport = if let (Some(cert_path), Some(key_path)) =
             (&config.client_cert_path, &config.client_key_path)
         {
             let cert = std::fs::read(cert_path)
-                .map_err(|e| RunnerError::Config(format!("failed to read client cert: {e}")))?;
+                .map_err(|e| RunnerError::MqttInit(format!("failed to read client cert: {e}")))?;
             let key = std::fs::read(key_path)
-                .map_err(|e| RunnerError::Config(format!("failed to read client key: {e}")))?;
+                .map_err(|e| RunnerError::MqttInit(format!("failed to read client key: {e}")))?;
             rumqttc::TlsConfiguration::Simple {
                 ca: ca_bytes,
                 alpn: None,
@@ -95,17 +95,17 @@ fn parse_broker_url(broker_url: &str) -> Result<(String, u16), RunnerError> {
         .replacen("mqtts://", "https://", 1);
 
     if normalized == broker_url {
-        return Err(RunnerError::Config(
+        return Err(RunnerError::MqttInit(
             "broker_url must start with mqtt:// or mqtts://".into(),
         ));
     }
 
     let parsed = Url::parse(&normalized)
-        .map_err(|e| RunnerError::Config(format!("invalid broker_url: {e}")))?;
+        .map_err(|e| RunnerError::MqttInit(format!("invalid broker_url: {e}")))?;
 
     let host = parsed
         .host_str()
-        .ok_or_else(|| RunnerError::Config("broker_url has no host".into()))?
+        .ok_or_else(|| RunnerError::MqttInit("broker_url has no host".into()))?
         .to_string();
 
     let default_port = if broker_url.starts_with("mqtts://") {

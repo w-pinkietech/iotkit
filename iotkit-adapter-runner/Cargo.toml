@@ -11,3 +11,6 @@ tokio = { version = "1", features = ["rt", "sync", "signal", "macros", "time"] }
 tracing = "0.1"
 rand = "0.8"
 url = "2"
+percent-encoding = "2"
+thiserror = "2"
+serde_json = "1"

@@ -14,7 +14,7 @@ pub struct StandaloneConfig {
 pub struct MqttToml {
     pub broker_url: String,
     pub client_id: Option<String>,
-    pub keepalive_secs: Option<u32>,
+    pub keepalive_secs: Option<u16>,
     pub ca_path: Option<String>,
     pub client_cert_path: Option<String>,
     pub client_key_path: Option<String>,
