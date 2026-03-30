@@ -59,7 +59,7 @@ fn main() {
         }
     };
 
-    let config = match config::StandaloneConfig::load(&config_path) {
+    let config = match config::ValidatedConfig::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, path = %config_path.display(), "failed to load config");
