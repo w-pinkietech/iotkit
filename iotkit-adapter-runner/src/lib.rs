@@ -91,13 +91,11 @@ pub async fn run(
     }
 
     // Normal path: publish_task exited first.
-    const EVENTLOOP_WATCH_SENTINEL: &str = "eventloop_task watch sender dropped";
-
     match publish_result {
         Ok(Ok(())) => {
             debug!("publish_task exited cleanly (event_rx closed)");
         }
-        Ok(Err(ref e)) if e == EVENTLOOP_WATCH_SENTINEL => {
+        Ok(Err(publish_task::PublishError::WatchSenderDropped)) => {
             error!("eventloop_task died (detected via watch sender drop)");
             eventloop_join.abort();
             return Err(RunnerError::EventLoopDied);
@@ -105,7 +103,7 @@ pub async fn run(
         Ok(Err(e)) => {
             error!("publish_task error: {e}");
             eventloop_join.abort();
-            return Err(RunnerError::PublishTaskFailed(e));
+            return Err(RunnerError::PublishTaskFailed(e.to_string()));
         }
         Err(join_err) => {
             error!("publish_task panicked: {join_err}");

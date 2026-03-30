@@ -11,6 +11,26 @@ use tracing::{debug, info, warn};
 
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Error type for publish_run, replacing magic string sentinels.
+#[derive(Debug)]
+pub(crate) enum PublishError {
+    /// The eventloop task's watch sender was dropped (eventloop died).
+    WatchSenderDropped,
+    /// Any other error.
+    Other(String),
+}
+
+impl std::fmt::Display for PublishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PublishError::WatchSenderDropped => {
+                write!(f, "eventloop_task watch sender dropped")
+            }
+            PublishError::Other(s) => write!(f, "{s}"),
+        }
+    }
+}
+
 /// Publish a message with a 5-second timeout. Returns true on success.
 async fn publish_with_timeout(
     client: &AsyncClient,
@@ -87,7 +107,7 @@ pub(crate) async fn publish_run(
     mut conn_rx: watch::Receiver<ConnectionState>,
     adapter_id: AdapterId,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), PublishError> {
     let mut inventory = Inventory::new();
 
     loop {
@@ -117,7 +137,7 @@ pub(crate) async fn publish_run(
                     // watch sender dropped -- eventloop_task exited unexpectedly.
                     // Return error so run() can classify this as EventLoopDied.
                     warn!("conn_rx sender dropped -- eventloop_task died");
-                    return Err("eventloop_task watch sender dropped".to_string());
+                    return Err(PublishError::WatchSenderDropped);
                 }
                 if *conn_rx.borrow() == ConnectionState::Connected {
                     reconcile(&client, &adapter_id, &session_id, &inventory).await;
@@ -323,7 +343,10 @@ mod tests {
 
         let result = join.await.unwrap();
         assert!(result.is_err(), "should return Err when watch sender dropped");
-        assert!(result.unwrap_err().contains("watch sender dropped"));
+        assert!(
+            matches!(result.unwrap_err(), PublishError::WatchSenderDropped),
+            "should be WatchSenderDropped variant"
+        );
     }
 
     #[tokio::test]
