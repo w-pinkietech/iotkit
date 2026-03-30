@@ -42,6 +42,11 @@ pub struct ValidatedConfig {
     pub tls: bool,
 }
 
+/// Parse broker URL for config validation.
+///
+/// Note: similar logic exists in `iotkit_adapter_runner::mqtt_client::parse_broker_url`.
+/// This version performs stricter validation (rejects path/query/fragment) because it runs
+/// at config-load time. The runner version is only used for MQTT connection setup.
 pub fn parse_broker_url(raw: &str) -> Result<(String, u16, bool), String> {
     let (substituted, default_port, tls) = if let Some(rest) = raw.strip_prefix("mqtts://") {
         (format!("https://{rest}"), 8883u16, true)
