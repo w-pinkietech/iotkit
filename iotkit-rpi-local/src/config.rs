@@ -334,7 +334,8 @@ impl ValidatedConfig {
         for target in &self.adapter.targets {
             let t = match target.driver.as_str() {
                 "mcp9600" => {
-                    let tc_str = target.thermocouple_type.as_ref().unwrap();
+                    let tc_str = target.thermocouple_type.as_ref()
+                        .ok_or_else(|| format!("adapter.targets: mcp9600 missing thermocouple_type"))?;
                     let tc = parse_thermocouple_type(tc_str)
                         .ok_or_else(|| format!("invalid thermocouple type: {tc_str}"))?;
                     rpi_local_adapter::RpiLocalTarget::MCP9600 {

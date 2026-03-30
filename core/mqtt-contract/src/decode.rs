@@ -37,8 +37,15 @@ fn identity_from_payload(p: IdentityPayload) -> SensorIdentity {
 /// over serde field-missing errors (spec section 1.4).
 fn precheck(payload: &[u8]) -> Result<serde_json::Value, DecodeError> {
     let val: serde_json::Value = serde_json::from_slice(payload)?;
-    if let Some(v) = val.get("v").and_then(|v| v.as_u64()) {
-        check_version(v as u32)?;
+    if let Some(v_val) = val.get("v") {
+        match v_val.as_u64() {
+            Some(v) => check_version(v as u32)?,
+            None => {
+                return Err(DecodeError::InvalidPayload(
+                    "v must be an integer".to_string(),
+                ))
+            }
+        }
     }
     if let Some(ts) = val.get("ts").and_then(|v| v.as_i64()) {
         check_ts(ts)?;

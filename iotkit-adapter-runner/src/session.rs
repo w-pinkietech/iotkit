@@ -1,14 +1,10 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use rand::Rng;
 
-/// Generate a 32-character lowercase hex session ID.
-/// Unique per process lifetime. Uses nanosecond timestamp + PID scramble.
+/// Generate a 32-character lowercase hex session ID using cryptographic randomness.
 pub fn generate_session_id() -> String {
-    let high = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let low = std::process::id() as u64 ^ high.wrapping_mul(0x517cc1b727220a95);
-    format!("{high:016x}{low:016x}")
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 16] = rng.r#gen();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -29,7 +25,6 @@ mod tests {
     #[test]
     fn session_ids_are_unique() {
         let id1 = generate_session_id();
-        std::thread::sleep(std::time::Duration::from_millis(1));
         let id2 = generate_session_id();
         assert_ne!(id1, id2, "consecutive session_ids must differ");
     }

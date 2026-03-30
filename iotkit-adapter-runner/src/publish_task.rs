@@ -101,7 +101,7 @@ pub(crate) async fn publish_run(
                         if *conn_rx.borrow() == ConnectionState::Connected {
                             publish_event(&client, &adapter_id, &ev, &session_id, &inventory).await;
                         } else {
-                            debug!("disconnected, dropping non-retained event");
+                            warn!("disconnected, dropping non-retained event");
                         }
                     }
                     None => {
