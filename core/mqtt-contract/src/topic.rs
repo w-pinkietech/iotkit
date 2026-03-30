@@ -1,3 +1,4 @@
+use crate::error::DecodeError;
 use iotkit_core_types::{AdapterId, DeviceKey};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
@@ -40,8 +41,39 @@ impl EventType {
     }
 }
 
+/// Decode a percent-encoded topic segment back to its original value.
+pub fn decode_topic_segment(s: &str) -> Result<String, DecodeError> {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hi = chars.next().ok_or_else(|| {
+                DecodeError::InvalidPayload(format!("truncated percent sequence in {s:?}"))
+            })?;
+            let lo = chars.next().ok_or_else(|| {
+                DecodeError::InvalidPayload(format!("truncated percent sequence in {s:?}"))
+            })?;
+            let hex = format!("{hi}{lo}");
+            let byte = u8::from_str_radix(&hex, 16).map_err(|_| {
+                DecodeError::InvalidPayload(format!("invalid percent sequence %{hex} in {s:?}"))
+            })?;
+            result.push(byte as char);
+        } else {
+            result.push(c);
+        }
+    }
+    Ok(result)
+}
+
 /// Build the MQTT topic for a given adapter and event type.
+///
+/// # Panics
+/// Panics if `event_type` is `EventType::Inventory`. Use `inventory_topic()` instead.
 pub fn topic(adapter_id: &AdapterId, event_type: EventType) -> String {
+    assert!(
+        event_type != EventType::Inventory,
+        "use inventory_topic() for EventType::Inventory"
+    );
     let encoded = encode_topic_segment(adapter_id.as_str());
     format!("iotkit/v1/{encoded}/{}", event_type.as_str())
 }
@@ -108,5 +140,36 @@ mod tests {
             .decode_utf8()
             .unwrap();
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn decode_topic_segment_roundtrip() {
+        let cases = [
+            "rpi-local:default",
+            "i2c:0x44:sht31",
+            "sensor+type",
+            "100%",
+            "",
+            "no-special-chars",
+            "all:special:/+#%",
+        ];
+        for original in cases {
+            let encoded = encode_topic_segment(original);
+            let decoded = decode_topic_segment(&encoded).unwrap();
+            assert_eq!(decoded, original, "roundtrip failed for {original:?}");
+        }
+    }
+
+    #[test]
+    fn decode_topic_segment_malformed_percent() {
+        let result = decode_topic_segment("abc%2");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn topic_panics_on_inventory() {
+        let id = AdapterId::new("test");
+        let result = std::panic::catch_unwind(|| topic(&id, EventType::Inventory));
+        assert!(result.is_err(), "topic() must panic when called with Inventory");
     }
 }

@@ -7,7 +7,7 @@ mod topic;
 pub use decode::{decode_event, decode_status};
 pub use encode::{encode_event, encode_status, now_ms};
 pub use error::{DecodeError, EncodeError};
-pub use topic::{encode_topic_segment, inventory_topic, topic, EventType};
+pub use topic::{decode_topic_segment, encode_topic_segment, inventory_topic, topic, EventType};
 
 
 #[cfg(test)]
