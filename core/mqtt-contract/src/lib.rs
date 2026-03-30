@@ -289,4 +289,104 @@ mod tests {
         let result = decode_event(EventType::Loss, json);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn connectionkind_as_str_from_str_symmetry() {
+        let variants = [
+            ConnectionKind::Uart,
+            ConnectionKind::I2c,
+            ConnectionKind::Gpio,
+            ConnectionKind::Modbus,
+            ConnectionKind::Other("custom".to_string()),
+        ];
+        for v in &variants {
+            let s = v.as_str();
+            let round_tripped = ConnectionKind::from_str(s);
+            assert_eq!(&round_tripped, v, "round-trip failed for {v:?}");
+        }
+    }
+
+    #[test]
+    fn connectionkind_from_str_normalizes_known() {
+        let result = ConnectionKind::from_str("i2c");
+        assert_eq!(result, ConnectionKind::I2c);
+    }
+
+    #[test]
+    fn encode_event_discovery_has_no_session_id() {
+        let aid = sample_adapter_id();
+        let event = AdapterEvent::DeviceDiscovered {
+            device_key: DeviceKey::new("test"),
+            identity: SensorIdentity {
+                manufacturer: "Test".into(),
+                ic_part_number: "T1".into(),
+                sensor_type: SensorType::Temperature,
+                connection: ConnectionInfo {
+                    kind: ConnectionKind::I2c,
+                    parameters: BTreeMap::new(),
+                },
+            },
+        };
+        let (_, bytes) = encode_event(&aid, &event).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json.get("session_id").is_none(), "discovery notification must NOT include session_id");
+    }
+
+    #[test]
+    fn inventory_payload_includes_session_id() {
+        let aid = sample_adapter_id();
+        let data = InventoryData {
+            device_key: DeviceKey::new("test"),
+            identity: SensorIdentity {
+                manufacturer: "Test".into(),
+                ic_part_number: "T1".into(),
+                sensor_type: SensorType::Temperature,
+                connection: ConnectionInfo {
+                    kind: ConnectionKind::I2c,
+                    parameters: BTreeMap::new(),
+                },
+            },
+            first_seen_at: 1000,
+        };
+        let bytes = encode_inventory(&aid, &data, "sess1234sess1234sess1234sess1234", 2000);
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json.get("session_id").is_some(), "inventory must include session_id");
+    }
+
+    #[test]
+    fn status_decode_rejects_negative_ts() {
+        let json = br#"{"v":1,"adapter_id":"test","ts":-1,"online":false,"session_id":"abcd1234abcd1234abcd1234abcd1234"}"#;
+        let result = decode_status(json);
+        assert!(matches!(result, Err(DecodeError::InvalidTimestamp(-1))));
+    }
+
+    #[test]
+    fn decode_event_rejects_status_type() {
+        let status_json = br#"{"v":1,"adapter_id":"test","ts":0,"online":true,"session_id":"x"}"#;
+        let result = decode_event(EventType::Status, status_json);
+        assert!(matches!(result, Err(DecodeError::InvalidPayload(_))));
+    }
+
+    #[test]
+    fn decode_event_rejects_inventory_type() {
+        let result = decode_event(EventType::Inventory, b"{}");
+        assert!(matches!(result, Err(DecodeError::InvalidPayload(_))));
+    }
+
+    #[test]
+    fn segment_encode_roundtrip_all_specials() {
+        let input = "a:b/c+d#e%f";
+        let encoded = encode_topic_segment(input);
+        assert_eq!(encoded, "a%3Ab%2Fc%2Bd%23e%25f");
+        let decoded = decode_topic_segment(&encoded).unwrap();
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn segment_encode_empty_string() {
+        let encoded = encode_topic_segment("");
+        assert_eq!(encoded, "");
+        let decoded = decode_topic_segment(&encoded).unwrap();
+        assert_eq!(decoded, "");
+    }
 }
