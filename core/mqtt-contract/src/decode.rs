@@ -16,9 +16,7 @@ fn check_version(payload: &[u8]) -> Result<(), DecodeError> {
 
 fn ms_to_system_time(ms: i64) -> Result<std::time::SystemTime, DecodeError> {
     if ms < 0 {
-        return Err(DecodeError::Json(
-            serde_json::from_str::<()>("\"negative timestamp\"").unwrap_err(),
-        ));
+        return Err(DecodeError::InvalidTimestamp(ms));
     }
     Ok(UNIX_EPOCH + Duration::from_millis(ms as u64))
 }
@@ -79,7 +77,10 @@ pub fn decode_event(
             Ok((AdapterId::new(env.adapter_id), event))
         }
         EventType::Status => {
-            Err(DecodeError::Json(serde_json::from_str::<()>("\"use decode_status for status messages\"").unwrap_err()))
+            Err(DecodeError::InvalidPayload("use decode_status for status messages".into()))
+        }
+        EventType::Inventory => {
+            Err(DecodeError::InvalidPayload("use decode_inventory for inventory messages".into()))
         }
     }
 }

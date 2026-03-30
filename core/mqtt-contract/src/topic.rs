@@ -24,16 +24,18 @@ pub enum EventType {
     Loss,
     Error,
     Status,
+    Inventory,
 }
 
 impl EventType {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Telemetry => "telemetry",
             Self::Discovery => "discovery",
             Self::Loss => "loss",
             Self::Error => "error",
             Self::Status => "status",
+            Self::Inventory => "inventory",
         }
     }
 }

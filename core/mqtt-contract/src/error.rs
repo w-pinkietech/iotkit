@@ -1,47 +1,23 @@
-use std::fmt;
-
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum EncodeError {
-    /// Event type not supported for MQTT encoding (e.g. DeviceConfig)
+    #[error("unsupported event variant: {0}")]
     UnsupportedEvent(String),
-    /// JSON serialization failed
-    Json(serde_json::Error),
+
+    #[error("json encode error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
-impl fmt::Display for EncodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnsupportedEvent(msg) => write!(f, "unsupported event: {msg}"),
-            Self::Json(e) => write!(f, "json encode: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for EncodeError {}
-
-impl From<serde_json::Error> for EncodeError {
-    fn from(e: serde_json::Error) -> Self { Self::Json(e) }
-}
-
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
-    /// JSON deserialization failed
-    Json(serde_json::Error),
-    /// Unknown or unsupported envelope version
+    #[error("json decode error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("unknown envelope version: {0}")]
     UnknownVersion(u32),
-}
 
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Json(e) => write!(f, "json decode: {e}"),
-            Self::UnknownVersion(v) => write!(f, "unknown envelope version: {v}"),
-        }
-    }
-}
+    #[error("invalid timestamp: {0}")]
+    InvalidTimestamp(i64),
 
-impl std::error::Error for DecodeError {}
-
-impl From<serde_json::Error> for DecodeError {
-    fn from(e: serde_json::Error) -> Self { Self::Json(e) }
+    #[error("invalid payload: {0}")]
+    InvalidPayload(String),
 }

@@ -9,6 +9,7 @@ pub use encode::{encode_event, encode_status, now_ms};
 pub use error::{DecodeError, EncodeError};
 pub use topic::{encode_topic_segment, inventory_topic, topic, EventType};
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
