@@ -74,7 +74,7 @@ pub async fn run(
 
     // Publish online status (retained) - will be sent once connected
     let status_topic = topic(&adapter_id, EventType::Status);
-    let online_payload = encode_status(&adapter_id, true, now_ms());
+    let online_payload = encode_status(&adapter_id, true, now_ms(), "");
     client
         .publish(&status_topic, QoS::AtLeastOnce, true, online_payload)
         .await
@@ -98,7 +98,7 @@ pub async fn run(
 
                     // Re-publish online status on reconnect
                     let online_payload =
-                        encode_status(&adapter_id_el, true, now_ms());
+                        encode_status(&adapter_id_el, true, now_ms(), "");
                     let _ = client_el
                         .publish(
                             &topic(&adapter_id_el, EventType::Status),
@@ -147,7 +147,7 @@ pub async fn run(
     tracing::info!("publish loop exited, publishing offline status");
 
     // Publish offline status with current timestamp (graceful shutdown)
-    let offline_payload = encode_status(&adapter_id, false, now_ms());
+    let offline_payload = encode_status(&adapter_id, false, now_ms(), "");
     let _ = client
         .publish(&status_topic, QoS::AtLeastOnce, true, offline_payload)
         .await;

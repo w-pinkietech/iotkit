@@ -76,7 +76,7 @@ pub(crate) fn connect(
 
     // Last Will and Testament - offline status with ts=0 (LWT time unknown)
     let lwt_topic = topic(adapter_id, EventType::Status);
-    let lwt_payload = encode_status(adapter_id, false, 0);
+    let lwt_payload = encode_status(adapter_id, false, 0, "");
     opts.set_last_will(rumqttc::LastWill::new(
         &lwt_topic,
         lwt_payload,

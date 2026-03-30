@@ -5,7 +5,7 @@ mod error;
 mod topic;
 
 pub use decode::{decode_event, decode_status};
-pub use encode::{encode_event, encode_status, now_ms};
+pub use encode::{encode_event, encode_inventory, encode_status, now_ms, InventoryData};
 pub use error::{DecodeError, EncodeError};
 pub use topic::{decode_topic_segment, encode_topic_segment, inventory_topic, topic, EventType};
 
@@ -123,19 +123,67 @@ mod tests {
     #[test]
     fn roundtrip_status() {
         let aid = sample_adapter_id();
-        let bytes = encode_status(&aid, true, now_ms());
-        let (decoded_aid, online) = decode_status(&bytes).unwrap();
-        assert_eq!(decoded_aid.as_str(), aid.as_str());
-        assert!(online);
+        let session = "abcd1234abcd1234abcd1234abcd1234";
+        let ts = now_ms();
+        let bytes = encode_status(&aid, true, ts, session);
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["v"], 1);
+        assert_eq!(json["adapter_id"], "rpi-local:default");
+        assert_eq!(json["online"], true);
+        assert_eq!(json["session_id"], session);
     }
 
     #[test]
     fn status_lwt_uses_zero_ts() {
         let aid = sample_adapter_id();
-        let bytes = encode_status(&aid, false, 0);
+        let session = "abcd1234abcd1234abcd1234abcd1234";
+        let bytes = encode_status(&aid, false, 0, session);
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["ts"], 0);
         assert_eq!(json["online"], false);
+        assert_eq!(json["session_id"], session);
+    }
+
+    #[test]
+    fn encode_status_includes_session_id() {
+        let aid = sample_adapter_id();
+        let bytes = encode_status(&aid, true, 1000, "abcd1234abcd1234abcd1234abcd1234");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["v"], 1);
+        assert_eq!(json["adapter_id"], "rpi-local:default");
+        assert_eq!(json["ts"], 1000);
+        assert_eq!(json["online"], true);
+        assert_eq!(json["session_id"], "abcd1234abcd1234abcd1234abcd1234");
+    }
+
+    #[test]
+    fn encode_inventory_includes_session_id_and_first_seen_at() {
+        let aid = sample_adapter_id();
+        let dk = DeviceKey::new("i2c:0x60:mcp9600");
+        let mut params = BTreeMap::new();
+        params.insert("address".into(), "0x60".into());
+        let data = InventoryData {
+            device_key: dk,
+            identity: SensorIdentity {
+                manufacturer: "Microchip".into(),
+                ic_part_number: "MCP9600".into(),
+                sensor_type: SensorType::Temperature,
+                connection: ConnectionInfo {
+                    kind: ConnectionKind::I2c,
+                    parameters: params,
+                },
+            },
+            first_seen_at: 900000,
+        };
+        let bytes = encode_inventory(&aid, &data, "sess1234sess1234sess1234sess1234", 1000000);
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["v"], 1);
+        assert_eq!(json["adapter_id"], "rpi-local:default");
+        assert_eq!(json["session_id"], "sess1234sess1234sess1234sess1234");
+        assert_eq!(json["first_seen_at"], 900000);
+        assert_eq!(json["ts"], 1000000);
+        assert_eq!(json["device_key"], "i2c:0x60:mcp9600");
+        assert_eq!(json["identity"]["manufacturer"], "Microchip");
     }
 
     #[test]

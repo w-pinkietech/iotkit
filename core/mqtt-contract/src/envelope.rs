@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelemetryEnvelope {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TelemetryEnvelope {
     pub v: u32,
     pub adapter_id: String,
     pub ts: i64,
@@ -15,22 +15,8 @@ pub struct TelemetryEnvelope {
     pub battery_pct: Option<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IdentityPayload {
-    pub manufacturer: String,
-    pub ic_part_number: String,
-    pub sensor_type: String,
-    pub connection: ConnectionPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectionPayload {
-    pub kind: String,
-    pub parameters: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveryEnvelope {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct DiscoveryEnvelope {
     pub v: u32,
     pub adapter_id: String,
     pub ts: i64,
@@ -38,8 +24,19 @@ pub struct DiscoveryEnvelope {
     pub identity: IdentityPayload,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LossEnvelope {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct InventoryEnvelope {
+    pub v: u32,
+    pub adapter_id: String,
+    pub ts: i64,
+    pub session_id: String,
+    pub device_key: String,
+    pub first_seen_at: i64,
+    pub identity: IdentityPayload,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct LossEnvelope {
     pub v: u32,
     pub adapter_id: String,
     pub ts: i64,
@@ -47,8 +44,8 @@ pub struct LossEnvelope {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorEnvelope {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ErrorEnvelope {
     pub v: u32,
     pub adapter_id: String,
     pub ts: i64,
@@ -56,12 +53,27 @@ pub struct ErrorEnvelope {
     pub error: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusEnvelope {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct StatusEnvelope {
     pub v: u32,
     pub adapter_id: String,
     pub ts: i64,
     pub online: bool,
+    pub session_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct IdentityPayload {
+    pub manufacturer: String,
+    pub ic_part_number: String,
+    pub sensor_type: String,
+    pub connection: ConnectionPayload,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct ConnectionPayload {
+    pub kind: String,
+    pub parameters: BTreeMap<String, String>,
 }
 
 /// Used only for version check during decode.
