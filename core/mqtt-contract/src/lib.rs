@@ -4,7 +4,7 @@ mod envelope;
 mod error;
 mod topic;
 
-pub use decode::{decode_event, decode_status};
+pub use decode::{decode_event, decode_inventory, decode_status};
 pub use encode::{encode_event, encode_inventory, encode_status, now_ms, InventoryData};
 pub use error::{DecodeError, EncodeError};
 pub use topic::{decode_topic_segment, encode_topic_segment, inventory_topic, topic, EventType};
@@ -213,5 +213,80 @@ mod tests {
         let json = br#"{"v":99,"adapter_id":"test","ts":0,"device_key":"k","sensor_type":"temperature","ingested_at":0,"values":[],"labels":[],"rssi":null,"battery_pct":null}"#;
         let result = decode_event(EventType::Telemetry, json);
         assert!(matches!(result, Err(DecodeError::UnknownVersion(99))));
+    }
+
+    #[test]
+    fn decode_status_returns_session_id() {
+        let aid = sample_adapter_id();
+        let session = "abcd1234abcd1234abcd1234abcd1234";
+        let bytes = encode_status(&aid, true, 5000, session);
+        let (decoded_aid, online, ts, decoded_session) = decode_status(&bytes).unwrap();
+        assert_eq!(decoded_aid.as_str(), "rpi-local:default");
+        assert!(online);
+        assert_eq!(ts, 5000);
+        assert_eq!(decoded_session, session);
+    }
+
+    #[test]
+    fn decode_status_lwt_ts_zero_accepted() {
+        let aid = sample_adapter_id();
+        let session = "abcd1234abcd1234abcd1234abcd1234";
+        let bytes = encode_status(&aid, false, 0, session);
+        let (_, online, ts, _) = decode_status(&bytes).unwrap();
+        assert!(!online);
+        assert_eq!(ts, 0);
+    }
+
+    #[test]
+    fn decode_inventory_returns_session_and_first_seen() {
+        let aid = sample_adapter_id();
+        let dk = DeviceKey::new("i2c:0x60:mcp9600");
+        let mut params = BTreeMap::new();
+        params.insert("address".into(), "0x60".into());
+        let data = InventoryData {
+            device_key: dk,
+            identity: SensorIdentity {
+                manufacturer: "Microchip".into(),
+                ic_part_number: "MCP9600".into(),
+                sensor_type: SensorType::Temperature,
+                connection: ConnectionInfo {
+                    kind: ConnectionKind::I2c,
+                    parameters: params,
+                },
+            },
+            first_seen_at: 900000,
+        };
+        let bytes = encode_inventory(&aid, &data, "sess1234sess1234sess1234sess1234", 1000000);
+        let (decoded_aid, event, session_id, first_seen_at) = decode_inventory(&bytes).unwrap();
+        assert_eq!(decoded_aid.as_str(), "rpi-local:default");
+        assert_eq!(session_id, "sess1234sess1234sess1234sess1234");
+        assert_eq!(first_seen_at, 900000);
+        if let AdapterEvent::DeviceDiscovered { device_key, identity } = event {
+            assert_eq!(device_key.as_str(), "i2c:0x60:mcp9600");
+            assert_eq!(identity.manufacturer, "Microchip");
+        } else {
+            panic!("expected DeviceDiscovered");
+        }
+    }
+
+    #[test]
+    fn decode_telemetry_label_value_mismatch() {
+        let json = br#"{"v":1,"adapter_id":"test","ts":1000,"device_key":"k","sensor_type":"temperature","ingested_at":999,"values":[1.0,2.0],"labels":["a"],"rssi":null,"battery_pct":null}"#;
+        let result = decode_event(EventType::Telemetry, json);
+        assert!(matches!(result, Err(DecodeError::InvalidPayload(_))));
+    }
+
+    #[test]
+    fn decode_negative_ts_rejected() {
+        let json = br#"{"v":1,"adapter_id":"test","ts":-5,"device_key":"k","reason":"lost"}"#;
+        let result = decode_event(EventType::Loss, json);
+        assert!(matches!(result, Err(DecodeError::InvalidTimestamp(-5))));
+    }
+
+    #[test]
+    fn decode_unknown_fields_ignored() {
+        let json = br#"{"v":1,"adapter_id":"test","ts":1000,"device_key":"k","reason":"lost","future_field":"hello"}"#;
+        let result = decode_event(EventType::Loss, json);
+        assert!(result.is_ok());
     }
 }
