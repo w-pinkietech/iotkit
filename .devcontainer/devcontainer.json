@@ -1,0 +1,34 @@
+{
+  "name": "iotkit-next",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "remoteUser": "vscode",
+  "workspaceFolder": "/workspaces/iotkit-next",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb"
+      ],
+      "settings": {
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.cargo.allTargets": true
+      }
+    }
+  },
+  "containerEnv": {
+    "RUST_BACKTRACE": "1"
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,readonly,consistency=cached",
+    "source=iotkit-next-cargo-registry,target=/usr/local/cargo/registry,type=volume",
+    "source=iotkit-next-target,target=${containerWorkspaceFolder}/target,type=volume"
+  ],
+  "postCreateCommand": "cargo fetch",
+  "runArgs": [
+    "--init"
+  ]
+}
