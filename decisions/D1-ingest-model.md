@@ -183,6 +183,10 @@ measurement_keyの文法(文字集合・ドット名前空間・**コロン禁�
   検疫理由の可視化として `ItemStatus::Stored` に任意フィールド `quarantine_reason`
   (out_of_range / unknown_key / undeclared_channel / device_quarantined。D6判別表と1:1)を追加する
   (契約へはadditive。実装はレジストリ実装と同時)。
+- **Rejectedの適用範囲の精密化(2026-07-03、実装レビュー反映)**: `rejected` は**決定的な契約違反**
+  (文法違反・値型不一致・認可違反・バッチ上限超過等、再送しても結果が変わらないもの)にのみ使う。
+  **ストレージ起因の失敗(コミット失敗を含む)ではackを一切返さない**——ackなし=未耐久のシグナルであり、
+  送信側はタイムアウト後の再送で回復する(rejectedは終端=spool除去のため、未耐久データに使うと無音損失になる)。
 - **time_qualityはエンベロープに載せない(2026-07-03、同上)**: R18の時刻品質(synced/holdover/unsynced)は
   **受信側(ゲートウェイ)が自分の時計状態を評価して刻む**受信時メタデータであり、送信者は主張できない。
   readings v3に `time_quality` 列を持つ(Wave 0は固定値 `unsynced`=品質を過大主張しない保守既定。
