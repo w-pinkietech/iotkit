@@ -337,6 +337,7 @@ dependencies = [
 name = "iotkit-core-timeseries"
 version = "0.1.0"
 dependencies = [
+ "iotkit-core-ledger",
  "iotkit-core-storage",
  "iotkit-core-types",
  "rusqlite",
