@@ -2292,6 +2292,20 @@ git commit -m "feat(gateway): adapter restart supervision with exponential backo
 - [ ] 適合シナリオ6件(Task 6)が仕様どおり: durable ack / duplicate / staged / 部分受理 / subject_hint必須 / バッチ上限
 - [ ] git log がタスク単位のコミットになっている
 
+## 最終ブランチレビューの記録(2026-07-03)
+
+修正済み: Critical 1件(ロールバック後のResolutionCache汚染=幻のseries_id)、dedup日和見パージ(72h)、
+コレクタ死のfail-fast(systemd再起動に委譲)、旧SAFETYコメント3箇所。
+
+**意識的な持ち越し**(レビュー裁定済み):
+- **BravePIデータは承認CLI(計画4)までstaged_readingsリング(1000件/hardware_id)に留まる**。
+  現場配備は計画4(gatewayctl device approve)着地後——これはWave 0の段取り上の前提であり本計画の欠陥ではない
+- **T8監督の2限界**: 再起動sleepがfan-inループを最大~61秒ブロック(Ctrl-C含む)/rpi-local再start失敗時は
+  予算未消化で永久停止。一号現場では稀事象のため計画3/4でタイマーメッセージ化(FuturesUnordered)により解消する
+- 台帳のcheck-then-insert並行競合は計画4(CLI=第2の書き込み主体の導入)で再訪必須
+- quarantine_reasonフィールド・未知キー検疫series実体化・series単位検疫は計画2(レジストリ)で実装
+- 構造化ログ強化・item-level reject可視化はR12(計画4)
+
 ## 明示的スコープ外(後続計画へ)
 
 - 現場レジストリ実装・受理判別表の完全化(D6決定4/6/7)→ **計画2**(RegistryPolicyの差し替え)
