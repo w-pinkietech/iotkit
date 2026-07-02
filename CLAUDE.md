@@ -8,7 +8,7 @@ Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- `core/engine` <- adap
   (用語集・責務台帳R1-R23・決定文書D1〜D6)。現状privateのためアクセスがない場合はリポジトリオーナーに要請。
 - ローカル開発ではこのリポジトリの親ディレクトリに設計リポジトリをチェックアウトする配置を推奨
   (例: `~/dev/iot/docs/redesign/` と `~/dev/iot/iotkit-next/`)。本文書内の設計参照はこの配置を前提とした相対位置。
-- monojoh-authorityのADRを参照する前に、必ず `/home/kenta/dev/iot/docs/redesign/adr-inventory.md`
+- monojoh-authorityのADRを参照する前に、必ず設計正本リポジトリの `docs/redesign/adr-inventory.md`
   (生死棚卸し表)を確認する。要改訂21本・廃止1本があり、単体で読むと逆方向(host-agent広域・mTLS等)に実装する危険がある。
 - 移行期間中、旧語彙(AdapterEvent)と新契約(Envelope)の変換はゲートウェイ内ブリッジ1ファイルに限定。
   新規コードはAdapterEventへの依存を増やさない(D4)。
