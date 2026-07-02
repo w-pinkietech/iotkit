@@ -46,14 +46,19 @@ impl Collector {
                 let result = db
                     .with_conn(move |conn| {
                         let mut c = taken;
-                        let ack = process_envelope(conn, &mut c, policy.as_ref(), &envelope);
-                        Ok((ack, c))
+                        let outcome = process_envelope(conn, &mut c, policy.as_ref(), &envelope);
+                        Ok((outcome, c))
                     })
                     .await;
                 match result {
-                    Ok((ack, c)) => {
+                    Ok((Ok(ack), c)) => {
                         cache = c;
                         let _ = req.ack_tx.send(ack);
+                    }
+                    Ok((Err(e), c)) => {
+                        tracing::error!(error = %e, "collector: storage failure (envelope aborted)");
+                        cache = c; // キャッシュ自体はDB変異と無関係なので保全してよい
+                        // ack_tx をドロップ = 送信側はタイムアウトで再送(ackなし=未耐久、D1と整合)
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "collector: storage failure");
@@ -83,43 +88,42 @@ fn now_ms() -> i64 {
 }
 
 /// 1エンベロープの受理。**全体が単一トランザクション**(dedup+全item書き込み=ack耐久点、D1)。
+///
+/// ストレージ起因の失敗(Err)はack終端(Rejected)を作らない。rejected=送信側spool除去なので、
+/// 未耐久データにRejectedを返すと無音損失になる(D1)。呼び出し元はErrに対してack_txを
+/// ドロップし、送信側の再送に委ねる。トランザクションはコミットせずに終わるため自動ロールバック
+/// される(部分コミットしない)。
 fn process_envelope(
     conn: &rusqlite::Connection,
     cache: &mut ResolutionCache,
     policy: &dyn RegistryPolicy,
     envelope: &Envelope,
-) -> EnvelopeAck {
+) -> Result<EnvelopeAck, String> {
     let eid = envelope.envelope_id.clone();
     if envelope.items.len() > MAX_ITEMS_PER_ENVELOPE {
-        return EnvelopeAck {
+        // 決定的な契約違反(サイズ超過はDBに触れる前に判定できる) → 終端Rejectedを維持
+        return Ok(EnvelopeAck {
             envelope_id: eid,
             status: AckStatus::Rejected {
                 reason_code: ReasonCode::BatchTooLarge,
                 message: format!("items {} > {}", envelope.items.len(), MAX_ITEMS_PER_ENVELOPE),
             },
-        };
+        });
     }
-    let tx = match conn.unchecked_transaction() {
-        Ok(t) => t,
-        Err(e) => return internal_reject(eid, &e.to_string()),
-    };
-    match ts::try_claim_envelope(&tx, &envelope.source, &envelope.envelope_id) {
-        Ok(true) => {}
-        Ok(false) => {
-            drop(tx); // dedup判定のみ・書き込みなし
-            return EnvelopeAck { envelope_id: eid, status: AckStatus::Duplicate };
-        }
-        Err(e) => return internal_reject(eid, &e.to_string()),
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let claimed = ts::try_claim_envelope(&tx, &envelope.source, &envelope.envelope_id)
+        .map_err(|e| e.to_string())?;
+    if !claimed {
+        drop(tx); // dedup判定のみ・書き込みなし
+        return Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Duplicate });
     }
     let received_at = now_ms();
     let mut item_statuses = Vec::with_capacity(envelope.items.len());
     for item in &envelope.items {
-        item_statuses.push(process_item(&tx, cache, policy, envelope, item, received_at));
+        item_statuses.push(process_item(&tx, cache, policy, envelope, item, received_at)?);
     }
-    if let Err(e) = tx.commit() {
-        return internal_reject(eid, &e.to_string());
-    }
-    EnvelopeAck { envelope_id: eid, status: AckStatus::Accepted { items: item_statuses } }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Accepted { items: item_statuses } })
 }
 
 fn process_item(
@@ -129,46 +133,37 @@ fn process_item(
     envelope: &Envelope,
     item: &ReadingItem,
     received_at: i64,
-) -> ItemStatus {
-    // 1) レジストリ検証(文法。計画2で値域・未知キー判定に拡張)
+) -> Result<ItemStatus, String> {
+    // 1) レジストリ検証(文法。計画2で値域・未知キー判定に拡張)。決定的な契約違反 → ItemRejected
     let quarantine = match policy.evaluate(item) {
         RegistryVerdict::Accept { quarantine } => quarantine,
         RegistryVerdict::RejectItem { reason_code, message } => {
-            return ItemStatus::ItemRejected { reason_code, message };
+            return Ok(ItemStatus::ItemRejected { reason_code, message });
         }
     };
-    // 2) subject解決(D5決定1: 送信者+subject_hint→台帳)
+    // 2) subject解決(D5決定1: 送信者+subject_hint→台帳)。hint欠如も決定的な契約違反
     let Some(hw) = item.subject_hint.as_deref() else {
-        return ItemStatus::ItemRejected {
+        return Ok(ItemStatus::ItemRejected {
             reason_code: ReasonCode::UnknownSubject,
             message: "subject_hint required for multi-subject sender".into(),
-        };
+        });
     };
     let resolved = match cache.devices.get(hw) {
         Some(hit) => Some(*hit),
-        None => match ledger::find_alive_by_hardware_id(conn, hw) {
-            Ok(Some(row)) => {
+        None => match ledger::find_alive_by_hardware_id(conn, hw).map_err(|e| e.to_string())? {
+            Some(row) => {
                 cache.devices.insert(hw.to_string(), (row.system_id, row.state));
                 Some((row.system_id, row.state))
             }
-            Ok(None) => None,
-            Err(e) => {
-                return ItemStatus::ItemRejected {
-                    reason_code: ReasonCode::Internal, message: e.to_string(),
-                };
-            }
+            None => None,
         },
     };
     let Some((system_id, state)) = resolved else {
-        // 3) 未知subject → 目撃ステージング(D5決定4経路A、ack=staged)
+        // 3) 未知subject → 目撃ステージング(D5決定4経路A、ack=staged)。ストレージ失敗は上へ伝播
         let payload = serde_json::to_string(item).unwrap_or_else(|_| "{}".into());
-        if let Err(e) = ledger::record_sighting(conn, hw, &envelope.source)
-            .map_err(|e| e.to_string())
-            .and_then(|_| ts::insert_staged_reading(conn, hw, received_at, &payload).map_err(|e| e.to_string()))
-        {
-            return ItemStatus::ItemRejected { reason_code: ReasonCode::Internal, message: e };
-        }
-        return ItemStatus::Stored { disposition: Disposition::Staged };
+        ledger::record_sighting(conn, hw, &envelope.source).map_err(|e| e.to_string())?;
+        ts::insert_staged_reading(conn, hw, received_at, &payload).map_err(|e| e.to_string())?;
+        return Ok(ItemStatus::Stored { disposition: Disposition::Staged });
     };
     // 4) series解決(検疫デバイスのデータは検疫行として保存=D1オンボーディング)
     let device_quarantined = state == ledger::DeviceState::Quarantined;
@@ -177,14 +172,12 @@ fn process_item(
     let skey = (system_id, item.measurement_key.clone(), channel, variant.clone());
     let series_id = match cache.series.get(&skey) {
         Some(id) => *id,
-        None => match ledger::ensure_series(conn, &system_id, &item.measurement_key, channel, &variant, false) {
-            Ok(id) => { cache.series.insert(skey, id); id }
-            Err(e) => {
-                return ItemStatus::ItemRejected {
-                    reason_code: ReasonCode::Internal, message: e.to_string(),
-                };
-            }
-        },
+        None => {
+            let id = ledger::ensure_series(conn, &system_id, &item.measurement_key, channel, &variant, false)
+                .map_err(|e| e.to_string())?;
+            cache.series.insert(skey, id);
+            id
+        }
     };
     // 5) 書き込み
     let row_quarantined = quarantine || device_quarantined;
@@ -202,22 +195,10 @@ fn process_item(
         battery_pct: item.battery_pct,
         quarantined: row_quarantined,
     };
-    match ts::insert_reading_v3(conn, &new) {
-        Ok(_seq) => ItemStatus::Stored {
-            disposition: if row_quarantined { Disposition::Quarantined } else { Disposition::Durable },
-        },
-        Err(e) => ItemStatus::ItemRejected { reason_code: ReasonCode::Internal, message: e.to_string() },
-    }
-}
-
-fn internal_reject(envelope_id: String, msg: &str) -> EnvelopeAck {
-    EnvelopeAck {
-        envelope_id,
-        status: AckStatus::Rejected {
-            reason_code: ReasonCode::Internal,
-            message: msg.to_string(),
-        },
-    }
+    ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
+    Ok(ItemStatus::Stored {
+        disposition: if row_quarantined { Disposition::Quarantined } else { Disposition::Durable },
+    })
 }
 
 #[cfg(test)]
@@ -339,6 +320,22 @@ mod tests {
         let AckStatus::Accepted { items } = ack.status else { panic!("expected Accepted") };
         assert!(matches!(items[0],
             ItemStatus::ItemRejected { reason_code: ReasonCode::UnknownSubject, .. }));
+    }
+
+    #[tokio::test]
+    async fn storage_failure_produces_no_ack() {
+        // ストレージ起因の失敗(コミット不能)はRejected終端ではなくack自体を返さない(D1)。
+        // query_only=ON で以降の書き込みを強制失敗させ、submit()がCollectorClosed(=ackなし、
+        // ack_txドロップ)を返すことを確認する。
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        db.with_conn_sync(|conn| {
+            conn.execute_batch("PRAGMA query_only = ON;")?;
+            Ok(())
+        }).unwrap();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let result = collector.submit(env("e-6", "ble:aa", "temperature_c")).await;
+        assert!(matches!(result, Err(CollectorClosed)));
     }
 
     #[tokio::test]
