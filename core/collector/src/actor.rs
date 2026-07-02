@@ -9,6 +9,12 @@ use tokio::sync::{mpsc, oneshot};
 
 pub const MAX_ITEMS_PER_ENVELOPE: usize = 256;
 
+/// `ingest_dedup` の保持TTL(D1: sender_id+envelope_idキーはTTL+サイズ上限で有界)。
+pub const DEDUP_TTL_MS: i64 = 72 * 60 * 60 * 1000;
+
+/// 日和見パージの既定発火間隔。本番はこの値、テストは`spawn_with_purge_interval`で0を注入する。
+pub const DEFAULT_PURGE_INTERVAL_MS: i64 = 60 * 60 * 1000;
+
 pub struct IngestRequest {
     pub envelope: Envelope,
     pub ack_tx: oneshot::Sender<EnvelopeAck>,
@@ -36,9 +42,21 @@ impl Collector {
         policy: Arc<dyn RegistryPolicy>,
         queue_cap: usize,
     ) -> (Collector, tokio::task::JoinHandle<()>) {
+        Self::spawn_with_purge_interval(db, policy, queue_cap, DEFAULT_PURGE_INTERVAL_MS)
+    }
+
+    /// `spawn`と同じだが、日和見dedupパージの発火間隔を注入できる(テスト用: 0を渡すと
+    /// 処理成功のたびに毎回パージ判定が真になり、パージ経路をアクター経由で検証できる)。
+    pub fn spawn_with_purge_interval(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+        purge_interval_ms: i64,
+    ) -> (Collector, tokio::task::JoinHandle<()>) {
         let (tx, mut rx) = mpsc::channel::<IngestRequest>(queue_cap);
         let handle = tokio::spawn(async move {
             let mut cache = ResolutionCache::default();
+            let mut last_purge_ms = now_ms();
             while let Some(req) = rx.recv().await {
                 let taken = std::mem::take(&mut cache);
                 let policy = Arc::clone(&policy);
@@ -54,6 +72,9 @@ impl Collector {
                     Ok((Ok(ack), c)) => {
                         cache = c;
                         let _ = req.ack_tx.send(ack);
+                        // 計画4のTTL/保持ワイヤリング着地までの日和見パージ(受理トランザクション
+                        // の外・別途with_connで実行。ack耐久性には影響しない)。
+                        maybe_purge_dedup(&db, purge_interval_ms, &mut last_purge_ms).await;
                     }
                     Ok((Err(e), _c)) => {
                         tracing::error!(error = %e, "collector: storage failure (envelope aborted)");
@@ -90,6 +111,30 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// 日和見dedupパージ: 最終パージから`purge_interval_ms`超過していれば
+/// `purge_dedup_before(now - DEDUP_TTL_MS)`を実行する。受理トランザクションの外(別途with_conn)
+/// で行うため、ack耐久点(D1)には影響しない。パージ自体の失敗は致命的ではないのでログのみ。
+async fn maybe_purge_dedup(db: &DbHandle, purge_interval_ms: i64, last_purge_ms: &mut i64) {
+    let now = now_ms();
+    if now.saturating_sub(*last_purge_ms) < purge_interval_ms {
+        return;
+    }
+    *last_purge_ms = now;
+    let cutoff = now - DEDUP_TTL_MS;
+    let result = db
+        .with_conn(move |conn| Ok(ts::purge_dedup_before(conn, cutoff).map_err(|e| e.to_string())))
+        .await;
+    match result {
+        Ok(Ok(deleted)) => {
+            if deleted > 0 {
+                tracing::info!(deleted, cutoff_ms = cutoff, "collector: opportunistic ingest_dedup purge");
+            }
+        }
+        Ok(Err(e)) => tracing::error!(error = %e, "collector: dedup purge failed"),
+        Err(e) => tracing::error!(error = %e, "collector: dedup purge failed (db)"),
+    }
 }
 
 /// 1エンベロープの受理。**全体が単一トランザクション**(dedup+全item書き込み=ack耐久点、D1)。
@@ -341,6 +386,52 @@ mod tests {
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let result = collector.submit(env("e-6", "ble:aa", "temperature_c")).await;
         assert!(matches!(result, Err(CollectorClosed)));
+    }
+
+    #[tokio::test]
+    async fn opportunistic_purge_fires_through_actor_and_respects_ttl() {
+        // purge_dedup_before自体は別途ユニットテスト済み。ここではアクター経由で発火することを
+        // 検証する: purge_interval_ms=0を注入し、処理成功のたびに必ずパージ判定が真になるように
+        // する(本番はDEFAULT_PURGE_INTERVAL_MS=1h)。
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let old_at = now - 100 * 60 * 60 * 1000; // 100h前 > 72h TTL → パージ対象
+        let keep_at = now - 60 * 60 * 1000; // 1h前 < 72h TTL → 残る
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ingest_dedup (sender_id, envelope_id, received_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params!["old-sender", "old-env", old_at],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO ingest_dedup (sender_id, envelope_id, received_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params!["keep-sender", "keep-env", keep_at],
+            ).unwrap();
+            Ok(())
+        }).unwrap();
+
+        let (collector, _h) =
+            Collector::spawn_with_purge_interval(db.clone(), Arc::new(PermissiveRegistry), 16, 0);
+        // 1件目: 処理成功→パージ判定発火(非同期に開始)。2件目のackが返る頃には、アクターは
+        // 単一タスクで逐次処理するため1件目の(purge awaitを含む)イテレーションは完了している。
+        collector.submit(env("e-purge-1", "ble:aa", "temperature_c")).await.unwrap();
+        collector.submit(env("e-purge-2", "ble:aa", "humidity_pct")).await.unwrap();
+
+        let (old_count, keep_count): (i64, i64) = db.with_conn_sync(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'old-sender'", [], |r| r.get(0),
+                ).unwrap(),
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'keep-sender'", [], |r| r.get(0),
+                ).unwrap(),
+            ))
+        }).unwrap();
+        assert_eq!(old_count, 0, "row older than 72h TTL must be purged");
+        assert_eq!(keep_count, 1, "row within 72h TTL must be kept");
     }
 
     #[tokio::test]
