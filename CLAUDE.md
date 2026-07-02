@@ -2,6 +2,14 @@
 
 Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- `core/engine` <- adapters <- `iotkit-gateway`.
 
+## Design Authority
+
+- **設計正本は `/home/kenta/dev/iot/docs/redesign/`**(用語集・責務台帳R1-R23・決定文書D1〜D6)。
+- monojoh-authorityのADRを参照する前に、必ず `/home/kenta/dev/iot/docs/redesign/adr-inventory.md`
+  (生死棚卸し表)を確認する。要改訂21本・廃止1本があり、単体で読むと逆方向(host-agent広域・mTLS等)に実装する危険がある。
+- 移行期間中、旧語彙(AdapterEvent)と新契約(Envelope)の変換はゲートウェイ内ブリッジ1ファイルに限定。
+  新規コードはAdapterEventへの依存を増やさない(D4)。
+
 ## Build & Test
 
 ```bash
