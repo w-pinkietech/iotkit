@@ -62,7 +62,7 @@ pub fn from_i2c_raw(data: &[u8; 9]) -> SensorReading {
     }
 
     let pressure = dp / scale_factor;
-    SensorReading::new(sensor_type(), vec![pressure], vec!["pascal"])
+    SensorReading::new(sensor_type(), vec![pressure], vec!["pascal".to_string()])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -71,7 +71,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
         return SensorReading::empty(sensor_type());
     }
     let pa = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
-    SensorReading::new(sensor_type(), vec![pa], vec!["pascal"])
+    SensorReading::new(sensor_type(), vec![pa], vec!["pascal".to_string()])
 }
 
 fn decode_uart(sample: UartSample<'_>) -> SensorReading {
