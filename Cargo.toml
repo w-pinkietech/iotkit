@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "iotkit-ingest-contract",
     "core/types",
     "core/engine",
     "core/storage",

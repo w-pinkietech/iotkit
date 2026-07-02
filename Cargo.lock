@@ -355,6 +355,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-ingest-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "iotkit-polling-adapter-runtime"
 version = "0.1.0"
 dependencies = [
