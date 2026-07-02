@@ -423,7 +423,8 @@ poll_interval_ms = 500
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             for (k, old) in &self.prior {
-                // SAFETY: tests run single-threaded (--test-threads=1).
+                // SAFETY: env-var mutation is exclusive because these tests are
+                // serialized via #[serial] (see the module-level comment above).
                 match old {
                     Some(v) => unsafe { std::env::set_var(k, v) },
                     None => unsafe { std::env::remove_var(k) },
@@ -441,11 +442,13 @@ poll_interval_ms = 500
             .collect();
         let _guard = EnvGuard { prior };
         for k in CONFIG_ENV_KEYS {
-            // SAFETY: tests run single-threaded (--test-threads=1).
+            // SAFETY: env-var mutation is exclusive because these tests are
+            // serialized via #[serial] (see the module-level comment above).
             unsafe { std::env::remove_var(k); }
         }
         for (k, v) in vars {
-            // SAFETY: tests run single-threaded (--test-threads=1).
+            // SAFETY: env-var mutation is exclusive because these tests are
+            // serialized via #[serial] (see the module-level comment above).
             unsafe { std::env::set_var(k, v); }
         }
         f();
