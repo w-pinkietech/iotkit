@@ -314,10 +314,12 @@ fn parse_config_arg<'a>(args: &'a [String]) -> Result<Option<&'a str>, ConfigErr
 
 #[cfg(test)]
 // SAFETY: Tests in this module mutate process-global state (env vars, cwd).
-// They MUST be run with `--test-threads=1` to avoid data races.
-// CI: `cargo test -p iotkit-gateway -- --test-threads=1`
+// Tests that use `with_env_vars` or `CwdGuard` are annotated `#[serial]`
+// (via the `serial_test` crate) so they run one-at-a-time even under the
+// default parallel test runner.
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn parse_full_toml() {
@@ -450,6 +452,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_db_path() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("IOTKIT_DB_PATH", "env.db")], || {
@@ -459,6 +462,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_bravepi_port() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("BRAVEPI_PORT", "/dev/ttyUSB1")], || {
@@ -469,6 +473,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_rpi_local_enabled() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("RPI_LOCAL_ENABLED", "1")], || {
@@ -479,6 +484,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_rpi_local_enabled_false() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("RPI_LOCAL_ENABLED", "false")], || {
@@ -489,6 +495,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_bravepi_enabled() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("BRAVEPI_ENABLED", "0")], || {
@@ -499,6 +506,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_rpi_local_bus_path() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("RPI_LOCAL_BUS_PATH", "/dev/i2c-3")], || {
@@ -509,6 +517,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_poll_interval() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("RPI_LOCAL_POLL_INTERVAL_MS", "2000")], || {
@@ -519,6 +528,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_invalid_poll_interval_returns_error() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("RPI_LOCAL_POLL_INTERVAL_MS", "abc")], || {
@@ -531,6 +541,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_toml_value() {
         let mut raw: RawConfig = toml::from_str("[gateway]\ndb_path = \"from-toml.db\"").unwrap();
         assert_eq!(raw.gateway.db_path.as_deref(), Some("from-toml.db"));
@@ -541,6 +552,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn apply_env_invalid_bool_returns_error() {
         let mut raw = RawConfig::default();
         with_env_vars(&[("BRAVEPI_ENABLED", "yes")], || {
@@ -685,6 +697,7 @@ poll_interval_ms = 500
     // ── load tests ─────────────────────────────────────
 
     #[test]
+    #[serial]
     fn load_with_explicit_missing_file_errors() {
         with_env_vars(&[], || {
             let args = vec!["gateway".to_string(), "--config".to_string(), "/tmp/no-such-file.toml".to_string()];
@@ -694,6 +707,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn load_with_config_flag_but_no_path_errors() {
         with_env_vars(&[], || {
             let args = vec!["gateway".to_string(), "--config".to_string()];
@@ -713,6 +727,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn load_with_no_args_and_no_env_uses_defaults() {
         let tmp = tempfile::tempdir().unwrap();
         let _cwd_guard = CwdGuard { prev: std::env::current_dir().unwrap() };
@@ -725,6 +740,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn load_with_env_config_path_missing_file_errors() {
         with_env_vars(
             &[("IOTKIT_CONFIG_PATH", "/tmp/nonexistent-config.toml")],
@@ -737,6 +753,7 @@ poll_interval_ms = 500
     }
 
     #[test]
+    #[serial]
     fn load_with_valid_file() {
         let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
         write!(tmpfile, r#"
@@ -761,6 +778,7 @@ port = "/dev/ttyUSB0"
     }
 
     #[test]
+    #[serial]
     fn load_integration_full_toml() {
         let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
         write!(tmpfile, r#"
@@ -794,6 +812,7 @@ poll_interval_ms = 750
     }
 
     #[test]
+    #[serial]
     fn load_with_env_config_path_valid_file() {
         let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
         write!(tmpfile, "[gateway]\ndb_path = \"env-path.db\"").unwrap();
@@ -809,6 +828,7 @@ poll_interval_ms = 750
     }
 
     #[test]
+    #[serial]
     fn load_with_implicit_iotkit_toml() {
         let tmp = tempfile::tempdir().unwrap();
         let toml_path = tmp.path().join("iotkit.toml");
@@ -824,6 +844,7 @@ poll_interval_ms = 750
     }
 
     #[test]
+    #[serial]
     fn load_cli_arg_takes_precedence_over_env() {
         let mut cli_file = tempfile::NamedTempFile::new().unwrap();
         write!(cli_file, "[gateway]\ndb_path = \"from-cli.db\"").unwrap();
