@@ -1059,6 +1059,8 @@ CREATE TABLE readings (
     received_at    INTEGER NOT NULL,                   -- コレクタが必ず付与(D1)
     device_time    INTEGER,                            -- デバイス申告時刻(任意)
     time_source    TEXT NOT NULL,
+    time_quality   TEXT NOT NULL DEFAULT 'unsynced',   -- R18受信側刻印。Wave 0は既定値固定(D3境界の明文化・
+                                                       -- 外部レビュー第2回反映。NTP状態評価はWave 1、列だけ初日から)
     values_json    TEXT NOT NULL,
     rssi           INTEGER,
     battery_pct    INTEGER,
