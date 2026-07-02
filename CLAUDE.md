@@ -4,8 +4,8 @@ Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- `core/engine` <- adap
 
 ## Design Authority
 
-- **設計正本は [cycling777/iotkit-redesign](https://github.com/cycling777/iotkit-redesign) の `docs/redesign/`**
-  (用語集・責務台帳R1-R23・決定文書D1〜D6)。現状privateのためアクセスがない場合はリポジトリオーナーに要請。
+- **設計正本は [w-pinkietech/iotkit-redesign](https://github.com/w-pinkietech/iotkit-redesign) の `docs/redesign/`**
+  (用語集・責務台帳R1-R23・決定文書D1〜D6)。
 - ローカル開発ではこのリポジトリの親ディレクトリに設計リポジトリをチェックアウトする配置を推奨
   (例: `~/dev/iot/docs/redesign/` と `~/dev/iot/iotkit-next/`)。本文書内の設計参照はこの配置を前提とした相対位置。
 - monojoh-authorityのADRを参照する前に、必ず設計正本リポジトリの `docs/redesign/adr-inventory.md`
