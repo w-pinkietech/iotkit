@@ -1,0 +1,13 @@
+[package]
+name = "iotkit-core-ledger"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iotkit-core-storage = { path = "../storage" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v7"] }
+tracing = "0.1"
+
+[dev-dependencies]
+iotkit-core-storage = { path = "../storage", features = ["test-util"] }
