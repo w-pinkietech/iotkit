@@ -55,9 +55,14 @@ impl Collector {
                         cache = c;
                         let _ = req.ack_tx.send(ack);
                     }
-                    Ok((Err(e), c)) => {
+                    Ok((Err(e), _c)) => {
                         tracing::error!(error = %e, "collector: storage failure (envelope aborted)");
-                        cache = c; // キャッシュ自体はDB変異と無関係なので保全してよい
+                        // ロールバックでキャッシュ済みseries_id(・devices)が無効化されうるため
+                        // 全捨てが安全。process_itemはensure_seriesのINSERT直後(コミット前)に
+                        // cache.seriesへ書くので、部分ロールバックされたcが持つseries_idはDBに
+                        // 実在しない可能性がある。保全すると幻のseries_idが残り、以降の同キー
+                        // envelopeがFK違反→ackなしの無限ループになる(再送で回復しない=D1違反)。
+                        cache = ResolutionCache::default();
                         // ack_tx をドロップ = 送信側はタイムアウトで再送(ackなし=未耐久、D1と整合)
                     }
                     Err(e) => {
@@ -336,6 +341,72 @@ mod tests {
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let result = collector.submit(env("e-6", "ble:aa", "temperature_c")).await;
         assert!(matches!(result, Err(CollectorClosed)));
+    }
+
+    #[tokio::test]
+    async fn cache_is_reset_after_storage_failure() {
+        // 回帰テスト: process_itemはensure_seriesのINSERT直後(コミット前)にcache.seriesへ
+        // 書き込む。同一envelope内の後続itemがストレージ失敗すると全体がロールバックされ、
+        // series行はDBから消えるが、修正前はcacheに幻のseries_idが残っていた。次のenvelopeが
+        // 同キーを使うとFK違反→ackなしの無限ループ(再送しても回復しない=D1違反)になる。
+        //
+        // f64::NANはserde_json経由だとnullになってしまうため、ReadingItemを直接構築して
+        // serdeを迂回し、insert_reading_v3の非有限値チェックで2番目のitemを確実に失敗させる。
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+
+        let make_item = |value: f64| ReadingItem {
+            subject_hint: Some("ble:aa".into()),
+            measurement_key: "temp_a".into(),
+            channel_index: None,
+            series_variant: None,
+            values: vec![value],
+            device_time_ms: None,
+            time_source: TimeSource::Gateway,
+            age_ms: None,
+            rssi: None,
+            battery_pct: None,
+        };
+
+        // 1件目: 新規series(=temp_a)を作成しキャッシュに載せる。2件目: NaNで書き込み失敗。
+        // envelope全体がロールバックされる = series行は消えるがキャッシュには残る(修正前)。
+        let poison = Envelope {
+            envelope_id: "e-poison".into(),
+            source: "test-adapter".into(),
+            declaration_version: None,
+            items: vec![make_item(1.0), make_item(f64::NAN)],
+        };
+        let result = collector.submit(poison).await;
+        assert!(matches!(result, Err(CollectorClosed)), "storage failure must not produce an ack");
+
+        // series行は存在しないはず(ロールバック済み)
+        let series_count: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM series", [], |r| r.get(0)).unwrap())
+            })
+            .unwrap();
+        assert_eq!(series_count, 0, "series insert must have been rolled back");
+
+        // 再送(同キー、正常値)。修正前はキャッシュの幻series_idでFK違反 → ackなしのまま。
+        // 修正後はキャッシュがリセットされているのでensure_seriesが再実行され、Acceptedになる。
+        let retry = Envelope {
+            envelope_id: "e-retry".into(),
+            source: "test-adapter".into(),
+            declaration_version: None,
+            items: vec![make_item(2.0)],
+        };
+        let ack = collector.submit(retry).await.expect("retry must be accepted after cache reset");
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable })));
+
+        let n: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
+            })
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[tokio::test]
