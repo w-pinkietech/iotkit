@@ -1751,6 +1751,18 @@ pub use actor::{Collector, CollectorClosed, IngestRequest, MAX_ITEMS_PER_ENVELOP
 pub use registry_policy::{PermissiveRegistry, RegistryPolicy, RegistryVerdict};
 ```
 
+**修正(2026-07-03、Task 6レビュー反映——本文コードより優先)**: ストレージ起因の失敗で
+`Rejected{Internal}` を返してはならない(D1: rejectedは終端=spool除去。未耐久データの無音損失経路になる)。
+- `process_envelope` は `Result<EnvelopeAck, String>` を返す。`unchecked_transaction` 失敗・
+  `try_claim_envelope` のErr・`tx.commit()` 失敗は全て `Err`(=actorはack_txをドロップ、ackなし)
+- `process_item` 内のledger/timeseriesのErr(ストレージ起因)も `Err` で上へ伝播させ、
+  エンベロープ全体を中断(部分コミットしない)。`ItemRejected` は決定的な契約違反
+  (MalformedMeasurementKey / UnknownSubject=hint欠如 / ValueTypeMismatch)専用
+- `internal_reject` ヘルパと `ReasonCode::Internal` の使用箇所を削除(BatchTooLargeのRejectedは
+  決定的違反なので維持)
+- 追加テスト(7本目): `storage_failure_produces_no_ack` —— `PRAGMA query_only=ON` で書き込みを
+  失敗させ、`submit()` が `Err(CollectorClosed)`(=ackなし)を返し、`Rejected` ackが**返らない**ことを検証
+
 実装ノート:
 - **Deferredはこのコレクタからは決して返さない**(D1: プロセス内バインディングではmpscの
   `send().await` 自体が逆圧であり、`Deferred` はHTTP/UDSバインディング(Wave 1)専用の意味論。
