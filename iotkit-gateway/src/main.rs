@@ -4,10 +4,13 @@
 mod adapter_host;
 mod bridge;
 mod config;
+mod supervision;
+
+use std::collections::HashMap;
 
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
-use iotkit_core_types::AdapterEvent;
+use iotkit_core_types::{AdapterEvent, AdapterId};
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -16,6 +19,9 @@ fn main() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    // R20: パニックしたタスクのbacktraceを確実にログへ残す(D1)。
+    supervision::install_panic_hook();
 
     let args: Vec<String> = std::env::args().collect();
     let config = match config::load(&args) {
@@ -100,21 +106,15 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
         }).await.expect("positional device registration");
     }
 
+    // R20: 再起動可能な公式アダプタ(BravePI/rpi-local)のみを記録する(D4: 再起動権限は形態①のみ)。
+    // 他のAdapterClosedはログのみで再起動しない。
+    let mut restart_specs: HashMap<AdapterId, RestartSpec> = HashMap::new();
+
     // BravePI mainboard adapter
     if let Some(bp) = &config.bravepi {
-        match bravepi_mainboard_adapter::task::start(bp.port.clone()) {
-            Ok(h) => {
-                tracing::info!(adapter_id = %h.id, port = %bp.port, "BravePI mainboard adapter started");
-                let parts = h.into_parts();
-                host.register(
-                    parts.id,
-                    parts.event_rx,
-                    {
-                        let sh = parts.shutdown;
-                        move || Box::pin(async move { sh.shutdown().await })
-                    },
-                )
-                .expect("duplicate adapter ID");
+        match start_bravepi(&mut host, &bp.port) {
+            Ok(id) => {
+                restart_specs.insert(id, RestartSpec::BravePi { port: bp.port.clone() });
             }
             Err(e) => {
                 tracing::error!(error = %e, port = %bp.port, "Failed to start BravePI mainboard adapter");
@@ -139,37 +139,21 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
             poll_interval_ms: rpi.poll_interval_ms,
             targets,
         };
-        // Preflight: catch driver-level validation before spawning background tasks
-        if let Err(e) = rpi_local_adapter::validate(&adapter_config) {
-            tracing::error!(error = %e, bus_path = %rpi.bus_path, "RPi local adapter config validation failed");
-            std::process::exit(1);
-        }
-        match rpi_local_adapter::start(adapter_config) {
-            Ok(rpi_handle) => {
-                tracing::info!(adapter_id = %rpi_handle.id, "RPi local adapter started");
-                let parts = rpi_handle.into_parts();
-                host.register(
-                    parts.id,
-                    parts.event_rx,
-                    {
-                        let sh = parts.shutdown;
-                        move || Box::pin(async move { sh.shutdown().await })
-                    },
-                )
-                .expect("duplicate adapter ID");
+        match start_rpi_local(&mut host, adapter_config.clone()) {
+            Ok(id) => {
+                restart_specs.insert(id, RestartSpec::RpiLocal { config: adapter_config });
             }
             Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    bus_path = %rpi.bus_path,
-                    "Failed to start RPi local adapter"
-                );
+                tracing::error!(error = %e, bus_path = %rpi.bus_path, "Failed to start RPi local adapter");
                 std::process::exit(1);
             }
         }
     } else {
         tracing::info!("RPi local adapter disabled");
     }
+
+    // R20: アプリレベル監督(責務台帳)。プロセスレベルはsystemdに委譲。
+    let mut tracker = supervision::RestartTracker::new(supervision::RestartPolicy::default());
 
     // Unified fan-in loop
     loop {
@@ -205,6 +189,9 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
                         engine.apply(ev).await;
 
                         if let Some((adapter_id, device_key, reading, rssi, battery_pct)) = sensor_data {
+                            // R20: 正常受信のたびに再起動カウンタをリセットする(簡略化: HashMap::removeは冪等で安価)。
+                            tracker.note_healthy(&adapter_id);
+
                             if let Some(envelope) = bridge::adapter_event_to_envelope(&adapter_id, &device_key, &reading, rssi, battery_pct) {
                                 match tokio::time::timeout(std::time::Duration::from_secs(5), collector.submit(envelope)).await {
                                     Ok(Ok(ack)) => {
@@ -221,10 +208,58 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
                         }
                     }
                     Some(AdapterHostEvent::AdapterClosed(id)) => {
-                        tracing::warn!(
-                            adapter = %id,
-                            "Adapter channel closed unexpectedly"
-                        );
+                        // Closed済みアダプタをまず登録簿から除去する(除去しないと同一IDでの
+                        // 再registerがadapter_host::registerの重複拒否に阻まれる)。
+                        host.deregister(&id);
+
+                        match restart_specs.get(&id).cloned() {
+                            Some(spec) => match tracker.next_delay(&id) {
+                                Some(delay) => {
+                                    // ジッタ: 同時再送ストーム対策(D1)。単一プロセス内では
+                                    // プロセスIDから導く決定的オフセットで簡易に足りる。
+                                    let jitter = std::time::Duration::from_millis(
+                                        u64::from(std::process::id() % 1000),
+                                    );
+                                    let sleep_for = delay + jitter;
+                                    tracing::warn!(
+                                        adapter = %id,
+                                        delay_ms = sleep_for.as_millis() as u64,
+                                        "Adapter channel closed, restarting after backoff"
+                                    );
+                                    tokio::time::sleep(sleep_for).await;
+
+                                    let restart_result = match &spec {
+                                        RestartSpec::BravePi { port } => start_bravepi(&mut host, port),
+                                        RestartSpec::RpiLocal { config } => {
+                                            start_rpi_local(&mut host, config.clone())
+                                        }
+                                    };
+                                    match restart_result {
+                                        Ok(new_id) => {
+                                            tracing::info!(adapter = %new_id, "Adapter restarted successfully");
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                adapter = %id, error = %e,
+                                                "Adapter restart attempt failed"
+                                            );
+                                        }
+                                    }
+                                }
+                                None => {
+                                    tracing::error!(
+                                        adapter = %id,
+                                        "Adapter permanently degraded (restart budget exhausted)"
+                                    );
+                                }
+                            },
+                            None => {
+                                tracing::warn!(
+                                    adapter = %id,
+                                    "Adapter channel closed unexpectedly (not eligible for restart)"
+                                );
+                            }
+                        }
                     }
                     None => {
                         tracing::info!("All adapter channels closed");
@@ -239,6 +274,58 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
 
     let devices = engine.devices().await;
     tracing::info!(device_count = devices.len(), "Engine state at shutdown");
+}
+
+/// R20: 再起動を許可される公式アダプタ(D4: 再起動権限は形態①のみ)の起動パラメータ。
+/// AdapterClosed時、host.deregister後にこのspecから同じ起動パスを再実行する。
+#[derive(Clone)]
+enum RestartSpec {
+    BravePi { port: String },
+    RpiLocal { config: rpi_local_adapter::RpiLocalConfig },
+}
+
+/// BravePI mainboard adapterを起動し、hostへ登録する。
+/// 起動時と再起動時の両方から呼ばれる共用コードパス。
+fn start_bravepi(host: &mut AdapterHost, port: &str) -> Result<AdapterId, String> {
+    let handle = bravepi_mainboard_adapter::task::start(port.to_string())
+        .map_err(|e| format!("Failed to start BravePI mainboard adapter on {port}: {e}"))?;
+    tracing::info!(adapter_id = %handle.id, port = %port, "BravePI mainboard adapter started");
+    let parts = handle.into_parts();
+    let id = parts.id.clone();
+    host.register(
+        parts.id,
+        parts.event_rx,
+        {
+            let sh = parts.shutdown;
+            move || Box::pin(async move { sh.shutdown().await })
+        },
+    )?;
+    Ok(id)
+}
+
+/// RPi local I2C adapterを検証・起動し、hostへ登録する。
+/// 起動時と再起動時の両方から呼ばれる共用コードパス。
+fn start_rpi_local(
+    host: &mut AdapterHost,
+    adapter_config: rpi_local_adapter::RpiLocalConfig,
+) -> Result<AdapterId, String> {
+    // Preflight: catch driver-level validation before spawning background tasks
+    rpi_local_adapter::validate(&adapter_config)
+        .map_err(|e| format!("RPi local adapter config validation failed: {e}"))?;
+    let handle = rpi_local_adapter::start(adapter_config)
+        .map_err(|e| format!("Failed to start RPi local adapter: {e}"))?;
+    tracing::info!(adapter_id = %handle.id, "RPi local adapter started");
+    let parts = handle.into_parts();
+    let id = parts.id.clone();
+    host.register(
+        parts.id,
+        parts.event_rx,
+        {
+            let sh = parts.shutdown;
+            move || Box::pin(async move { sh.shutdown().await })
+        },
+    )?;
+    Ok(id)
 }
 
 /// Hardcoded sensor targets for the v1 RPi4B hardware profile.

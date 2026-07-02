@@ -64,6 +64,15 @@ impl AdapterHost {
         Ok(())
     }
 
+    /// Closed済みアダプタを登録簿から除去し、同一IDでの再registerを可能にする。
+    /// 戻り値: 除去したらtrue。streamsに残っていれば併せて除去する。
+    pub fn deregister(&mut self, id: &AdapterId) -> bool {
+        self.streams.remove(id);
+        let before = self.adapters.len();
+        self.adapters.retain(|a| a.id != *id);
+        before != self.adapters.len()
+    }
+
     /// Returns the next event from any registered adapter, or `None` if all
     /// adapters have closed.
     pub async fn next_event(&mut self) -> Option<AdapterHostEvent> {
@@ -315,6 +324,31 @@ mod tests {
         let (_tx2, rx2) = mpsc::channel::<AdapterEvent>(1);
         let result = host.register(AdapterId::new("r"), rx2, || Box::pin(async { Ok(()) }));
         assert!(result.is_err(), "should reject duplicate ID even after adapter closed");
+    }
+
+    #[tokio::test]
+    async fn deregister_allows_reregistration_of_same_id() {
+        let mut host = AdapterHost::new();
+        let (tx, rx) = mpsc::channel::<AdapterEvent>(4);
+        host.register(AdapterId::new("a"), rx, || Box::pin(async { Ok(()) })).unwrap();
+        drop(tx); // チャネルを閉じる
+
+        // AdapterClosedを消費
+        while let Some(ev) = host.next_event().await {
+            if matches!(ev, AdapterHostEvent::AdapterClosed(_)) {
+                break;
+            }
+        }
+
+        assert!(host.deregister(&AdapterId::new("a")));
+        let (_tx2, rx2) = mpsc::channel::<AdapterEvent>(4);
+        assert!(host.register(AdapterId::new("a"), rx2, || Box::pin(async { Ok(()) })).is_ok());
+    }
+
+    #[tokio::test]
+    async fn deregister_unknown_id_returns_false() {
+        let mut host = AdapterHost::new();
+        assert!(!host.deregister(&AdapterId::new("nonexistent")));
     }
 
     #[tokio::test]
