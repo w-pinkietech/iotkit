@@ -347,6 +347,94 @@ mod tests {
     }
 
     #[test]
+    fn retired_hardware_id_becomes_reusable() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let hardware_id = "ble:retire01";
+            let sid1 = insert_device(conn, &NewDevice {
+                hardware_id: hardware_id.into(),
+                user_label: None,
+                parent: None,
+                kind: DeviceKind::Individual,
+                initial_state: DeviceState::Active,
+            }).unwrap();
+
+            // retiredへ直接遷移(アプリ層のretire APIが未実装のためraw SQLで模擬)
+            conn.execute(
+                "UPDATE devices SET state = 'retired', retired_at = ?1 WHERE system_id = ?2",
+                params![now_ms(), sid1.as_bytes().to_vec()],
+            )
+            .unwrap();
+
+            // partial unique index はstate != 'retired'のみ対象のため、同一hardware_idの再登録が成功するはず
+            let sid2 = insert_device(conn, &NewDevice {
+                hardware_id: hardware_id.into(),
+                user_label: None,
+                parent: None,
+                kind: DeviceKind::Individual,
+                initial_state: DeviceState::Active,
+            }).unwrap();
+            assert_ne!(sid1, sid2);
+
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM devices WHERE hardware_id = ?1",
+                    params![hardware_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 2, "retired行と新規active行がDB上に共存するはず");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn db_level_unique_constraint_rejects_alive_duplicate() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let hardware_id = "ble:dbunique01";
+            insert_device(conn, &NewDevice {
+                hardware_id: hardware_id.into(),
+                user_label: None,
+                parent: None,
+                kind: DeviceKind::Individual,
+                initial_state: DeviceState::Active,
+            }).unwrap();
+
+            // アプリ層の事前チェック(find_alive_by_hardware_id)をバイパスし、
+            // DB側のpartial unique index (idx_devices_hardware_alive) 単独で
+            // alive重複を弾けることを検証する。
+            let other_sid = SystemId::generate();
+            let err = conn
+                .execute(
+                    "INSERT INTO devices (system_id, hardware_id, user_label, parent_system_id, kind, state, created_at)
+                     VALUES (?1, ?2, NULL, NULL, ?3, 'active', ?4)",
+                    params![
+                        other_sid.as_bytes().to_vec(),
+                        hardware_id,
+                        DeviceKind::Individual.as_db(),
+                        now_ms()
+                    ],
+                )
+                .expect_err("DB-level partial unique indexがalive重複を拒否するはず");
+
+            match err {
+                rusqlite::Error::SqliteFailure(e, _) => {
+                    assert_eq!(
+                        e.code,
+                        rusqlite::ErrorCode::ConstraintViolation,
+                        "unique制約違反であるはず: {e:?}"
+                    );
+                }
+                other => panic!("unique制約違反(SqliteFailure)を期待したが別のエラー: {other:?}"),
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn ledger_epoch_is_generated_once_and_stable() {
         let db = test_db();
         db.with_conn_sync(|conn| {
