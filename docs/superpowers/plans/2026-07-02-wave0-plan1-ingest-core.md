@@ -20,7 +20,8 @@
 - channel_index の'na'はDB内では**番兵値-1**(D5決定3)。system_idはDB内BLOB16/API境界TEXT36
 - readings のカーソルは **AUTOINCREMENT単調seq**(rowid直用禁止、D5決定3)
 - `panic = "abort"` 禁止(D1)。テストは `cargo test --workspace` 全緑を維持
-- コミット規約: `feat(crate):` / `fix(crate):` 等 + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`(リポジトリCLAUDE.md)
+- コミット規約: `feat(crate):` / `fix(crate):` 等 + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`(リポジトリCLAUDE.md)。
+  **計画中の `git commit -m "..."` 例は簡略表記**——実際のコミットは必ず上記trailerを2つ目の `-m` で付けること
 - 実行体制: タスクごとに新しいdevサブエージェント(Sonnet)+TDD。各タスク完了時に `codex exec` によるeval(リポジトリCLAUDE.mdの規律)
 
 ---
@@ -413,9 +414,11 @@ git commit -m "feat(ingest-contract): add envelope/ack contract types, measureme
 
 **Files:**
 - Modify: `core/types/src/lib.rs:121-136`(SensorReading定義)
-- Modify: `bravepi-mainboard-adapter/sensors/src/` 配下の全ドライバ(decode_uart実装のlabels構築)
-- Modify: `rpi-local-adapter/src/drivers/{mcp9600,opt3001}.rs`
-- Modify: 上記を参照する全テスト
+- Modify: `bravepi-mainboard-adapter/sensors/src/` 配下の全ドライバ(decode_uart/from_i2c_raw実装のlabels構築。
+  rpi-local-adapterのドライバは `bravepi_sensors::{mcp9600,opt3001}::from_i2c_raw` へ委譲しているため
+  **bravepi-sensors側の修正で足りる**——rpi-local側にlabels構築はない)
+- Modify: `core/engine/src/state_test.rs`(`SensorReading::new(..., vec!["temperature_c"])` 等の呼び出し実在)
+- Modify: 上記を参照する全テスト(Step 2のコンパイルエラー列挙が正)
 
 **Interfaces:**
 - Consumes: なし
@@ -1747,6 +1750,9 @@ pub use registry_policy::{PermissiveRegistry, RegistryPolicy, RegistryVerdict};
 ```
 
 実装ノート:
+- **Deferredはこのコレクタからは決して返さない**(D1: プロセス内バインディングではmpscの
+  `send().await` 自体が逆圧であり、`Deferred` はHTTP/UDSバインディング(Wave 1)専用の意味論。
+  契約型に存在するのはワイヤ契約の完全性のため)。queue fullで待つのは正しい挙動。
 - `unchecked_transaction` は `&Connection` からトランザクションを作るrusqlite API(DbHandleがConnectionを`&`でしか貸さないため)。
 - Duplicateのとき `drop(tx)` はロールバックだが書き込みゼロなので正しい。dedup行自体は**最初のaccepted時のトランザクション内**で入っている。
 - item単位rejectはトランザクションをロールバックしない(部分受理=D1のall-or-nothing禁止をitemレベルに適用)。
@@ -1791,12 +1797,13 @@ mod tests {
     #[test]
     fn bravepi_key_maps_to_ble_hardware_id_and_d6_key() {
         let e = adapter_event_to_envelope(
-            &AdapterId::new("bravepi-mainboard"),
+            &AdapterId::new("bravepi-mainboard:/dev/ttyAMA0"),
             &DeviceKey::new("bravepi-mainboard:00000000000000ab:temperature"),
             &SensorReading::new(SensorType::Temperature, vec![21.5], vec!["temp".into()]),
             Some(-60), Some(90),
         ).unwrap();
-        assert_eq!(e.source, "bravepi-mainboard");
+        // 実物のBravePI AdapterIdは "bravepi-mainboard:{port_path}"(handle.rs:109)
+        assert_eq!(e.source, "bravepi-mainboard:/dev/ttyAMA0");
         assert_eq!(e.items.len(), 1);
         let item = &e.items[0];
         assert_eq!(item.subject_hint.as_deref(), Some("ble:00000000000000ab"));
@@ -1821,7 +1828,7 @@ mod tests {
     #[test]
     fn multi_value_reading_becomes_per_channel_items() {
         let e = adapter_event_to_envelope(
-            &AdapterId::new("bravepi-mainboard"),
+            &AdapterId::new("bravepi-mainboard:/dev/ttyAMA0"),
             &DeviceKey::new("bravepi-mainboard:00000000000000cc:acceleration"),
             &SensorReading::new(SensorType::Acceleration, vec![1.0, 2.0, 3.0],
                 vec!["x".into(), "y".into(), "z".into()]),
@@ -2031,7 +2038,7 @@ async fn bridge_output_flows_through_collector_to_readings() {
     let (collector, _h) = iotkit_core_collector::Collector::spawn(
         db.clone(), std::sync::Arc::new(iotkit_core_collector::PermissiveRegistry), 16);
     let e = adapter_event_to_envelope(
-        &iotkit_core_types::AdapterId::new("bravepi-mainboard"),
+        &iotkit_core_types::AdapterId::new("bravepi-mainboard:/dev/ttyAMA0"),
         &iotkit_core_types::DeviceKey::new("bravepi-mainboard:00000000000000ab:temperature"),
         &iotkit_core_types::SensorReading::new(
             iotkit_core_types::SensorType::Temperature, vec![21.5], vec!["temp".into()]),
@@ -2066,6 +2073,8 @@ git commit -m "feat(gateway): route sensor data through ingest collector via tra
 
 **Files:**
 - Modify: `iotkit-gateway/src/main.rs`(panicフック設置、AdapterClosed時の再起動ポリシー)
+- Modify: `iotkit-gateway/src/adapter_host.rs`(**deregister APIの追加**——現行の `register`(adapter_host.rs:44)は
+  `streams` だけでなく `adapters` Vec内の既存IDも重複拒否するため、Closed後に除去しないと再登録が失敗する)
 - Create: `iotkit-gateway/src/supervision.rs`
 
 **Interfaces:**
@@ -2094,7 +2103,7 @@ mod tests {
             max_backoff: Duration::from_secs(4),
         };
         let mut t = RestartTracker::new(policy);
-        let id = AdapterId::new("bravepi-mainboard");
+        let id = AdapterId::new("bravepi-mainboard:/dev/ttyAMA0");
         assert_eq!(t.next_delay(&id), Some(Duration::from_secs(1)));
         assert_eq!(t.next_delay(&id), Some(Duration::from_secs(2)));
         assert_eq!(t.next_delay(&id), Some(Duration::from_secs(4))); // cap
@@ -2183,11 +2192,53 @@ pub fn install_panic_hook() {
 Run: `cargo test -p iotkit-gateway supervision`
 Expected: PASS
 
-- [ ] **Step 3: main.rsへ配線**
+- [ ] **Step 3: AdapterHostにderegisterを追加(失敗テスト→実装)**
+
+`iotkit-gateway/src/adapter_host.rs` に追加(テスト先行。既存テストモジュールの流儀に合わせる):
+
+```rust
+/// Closed済みアダプタを登録簿から除去し、同一IDでの再registerを可能にする。
+/// 戻り値: 除去したらtrue。streamsに残っていれば併せて除去する。
+pub fn deregister(&mut self, id: &AdapterId) -> bool {
+    self.streams.remove(id);
+    let before = self.adapters.len();
+    self.adapters.retain(|a| a.id() != *id);
+    before != self.adapters.len()
+}
+```
+
+(ManagedAdapterのid取得方法は実物のフィールド構造に従う——`a.id` フィールド直参照ならそれで良い)
+
+テスト(adapter_host.rsの既存 `#[cfg(test)]` 内):
+
+```rust
+#[tokio::test]
+async fn deregister_allows_reregistration_of_same_id() {
+    let mut host = AdapterHost::new();
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    host.register(AdapterId::new("a"), rx, Box::new(|| Box::pin(async { Ok(()) }))).unwrap();
+    drop(tx); // チャネルを閉じる
+    // AdapterClosedを消費
+    while let Some(ev) = host.next_event().await {
+        if matches!(ev, AdapterHostEvent::AdapterClosed(_)) { break; }
+    }
+    assert!(host.deregister(&AdapterId::new("a")));
+    let (_tx2, rx2) = tokio::sync::mpsc::channel(4);
+    assert!(host.register(AdapterId::new("a"), rx2, Box::new(|| Box::pin(async { Ok(()) }))).is_ok());
+}
+```
+
+(registerの正確なシグネチャ・戻り値は実物(adapter_host.rs:44)に合わせて調整)
+
+Run: `cargo test -p iotkit-gateway adapter_host`
+Expected: 追加テストがderegister未実装でFAIL→実装後PASS
+
+- [ ] **Step 3b: main.rsへ配線**
 
 `main.rs` の変更:
 - `main()` 冒頭(tracing初期化直後)に `supervision::install_panic_hook();`
-- `run()` に `RestartTracker` を持たせ、`AdapterHostEvent::AdapterClosed(id)` の分岐で:
+- `run()` に `RestartTracker` を持たせ、`AdapterHostEvent::AdapterClosed(id)` の分岐で
+  **まず `host.deregister(&id)` を呼んでから**:
   - BravePI/rpi-localの**公式アダプタのみ**(D4: 再起動権限は形態①のみ)、`tracker.next_delay(&id)` が `Some(d)` なら `tokio::time::sleep(d).await` 後に該当アダプタの `start()`+`host.register()` を再実行(起動時と同じコードパスを`fn start_bravepi(...)`/`fn start_rpi_local(...)`に関数抽出して共用)
   - `None` なら `tracing::error!(adapter = %id, "adapter permanently degraded")` を出して再起動しない(プロセスは他アダプタのために生き続ける)
   - 正常受信イベントを一定回数観測したら `note_healthy`(実装簡略化: SensorData受信のたびに呼んでよい——HashMap::removeは冪等で安価)
