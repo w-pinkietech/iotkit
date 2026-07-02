@@ -173,6 +173,20 @@ measurement_keyの文法(文字集合・ドット名前空間・**コロン禁�
   (quarantined=未知measurement_key等の検疫受理。受理判別表はD6決定6)。reason_codeに
   `value_type_mismatch` / `malformed_measurement_key` を追加。measurement_key文法(D6決定2)を
   上記安定意図リストに追加済み。
+- **送信者アイデンティティの正準化(2026-07-03、外部レビュー第2回反映)**: dedup・subjectスコープ認可の
+  送信者IDは常に**認証主体**から導出する(HTTP/MQTT=トークンが指すdevice_id、プロセス内=source申告が主体)。
+  `Envelope.source` は診断用の自己記述。認証付きバインディングで認証主体とsourceが不一致の場合は
+  **エンベロープ単位でrejected+侵害シグナル監査**(なりすまし・設定ミスの早期可視化。実装はWave 1のHTTP ingress)。
+- **dispositionの直列性(2026-07-03、同上)**: `staged` と `quarantined` は**同時に成立しない**——
+  subject解決が常に先であり、未知subjectのitemはレジストリ判定前にstagedへ入る(レジストリ判定は
+  承認時の本流化で実施)。優先順位: staged(subject未承認)> quarantined(series/行検疫)> durable。
+  検疫理由の可視化として `ItemStatus::Stored` に任意フィールド `quarantine_reason`
+  (out_of_range / unknown_key / undeclared_channel / device_quarantined。D6判別表と1:1)を追加する
+  (契約へはadditive。実装はレジストリ実装と同時)。
+- **time_qualityはエンベロープに載せない(2026-07-03、同上)**: R18の時刻品質(synced/holdover/unsynced)は
+  **受信側(ゲートウェイ)が自分の時計状態を評価して刻む**受信時メタデータであり、送信者は主張できない。
+  readings v3に `time_quality` 列を持つ(Wave 0は固定値 `unsynced`=品質を過大主張しない保守既定。
+  NTP状態評価の実装はWave 1)。デバイス側の時刻申告は既存の time_source / age_ms / device_time で表現する。
 
 ## 後回しでよいもの
 
