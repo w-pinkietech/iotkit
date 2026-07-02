@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IoTKit 再設計 図解</title>
+<style>
+  body{font-family:"Hiragino Sans","Noto Sans JP",sans-serif;max-width:1150px;margin:28px auto;padding:0 18px;line-height:1.65;color:#1a202c;background:#fff}
+  h2{margin:0 0 4px;font-size:22px}
+  h3{font-size:16px;margin:0 0 4px}
+  .subtitle{color:#555;font-size:14px;margin:0 0 8px}
+  .label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+  .section{margin:16px 0}
+  pre{font-family:ui-monospace,Menlo,Consolas,monospace}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em;background:rgba(128,128,128,.12);border-radius:4px;padding:0 4px}
+  p{margin:6px 0}
+</style>
+</head>
+<body>
+<h2>AIオペレーターはどうやってゲートウェイに触るのか</h2>
+<p class="subtitle">3つの接続パターン。共通原則は「ゲートウェイはインターネットからの着信(inbound)を一切受けない」こと。</p>
+
+<div style="border:1px solid rgba(128,128,128,.4);border-radius:8px;padding:10px 14px;margin:12px 0;font-size:13px">
+  <b>まず前提: 「AIオペレーター」は2つの部品でできている</b><br>
+  <span style="display:inline-block;margin-top:6px">
+  ① <b>ハーネス</b> = エージェントの実行環境(runbook、ゲートウェイAPIを叩くツール群、認証情報、エージェントループ)。<b>キットの一部として提供する</b>。<br>
+  ② <b>LLM</b> = ハーネスの後ろにいる頭脳。<b>差し替え可能</b>(ローカルモデルでもクラウドAPIでも)。<br>
+  ゲートウェイから見えるのは常に「①ハーネスからの認証済みHTTP呼び出し」だけ。LLMがどこにいるかをゲートウェイは知らないし、知る必要がない。
+  </span>
+</div>
+
+<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">
+
+  <!-- パターンA -->
+  <div style="flex:1;min-width:280px;border:2px solid #16a34a;border-radius:10px;padding:12px 14px">
+    <div class="label" style="color:#16a34a">パターンA: 完全オフライン工場(第一波)</div>
+    <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
+┌─ 工場の中 ────────────────┐
+│ [3] 工場サーバー           │
+│  ┌─────────┐ ┌─────────┐ │
+│  │ ハーネス │→│ローカルLLM││
+│  └────┬────┘ └─────────┘ │
+│       │ LAN内HTTPS         │
+│       │ (自己署名+ピン留め)│
+│       ▼ +operatorトークン  │
+│ [2] ゲートウェイ           │
+│  制御プレーン(LAN待受)     │
+└───────── 外に出る線なし ──┘</pre>
+    <p style="font-size:12.5px;margin:6px 0 0">インターネット接続ゼロで成立。データも診断内容も工場から出ない。LLMの品質は積むモデル次第。</p>
+  </div>
+
+  <!-- パターンB1 -->
+  <div style="flex:1;min-width:280px;border:2px solid #2563eb;border-radius:10px;padding:12px 14px">
+    <div class="label" style="color:#2563eb">パターンB1: ハーネスは工場、頭脳はクラウド(第一波・推奨構成)</div>
+    <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
+┌─ 工場の中 ────────────────┐
+│ [3] 工場サーバー           │
+│  ┌─────────┐              │
+│  │ ハーネス │──────────────┼──→ [4] LLM API
+│  └────┬────┘  APIキーで   │    (Claude等)
+│       │       outboundのみ │
+│       │ LAN内HTTPS         │
+│       │ (自己署名+ピン留め)│
+│       ▼ +operatorトークン  │
+│ [2] ゲートウェイ           │
+│  制御プレーン(LAN待受)     │
+└─── inboundは開けない ─────┘</pre>
+    <p style="font-size:12.5px;margin:6px 0 0">外に出る線は「ハーネス→LLM API」の一本だけ(発信のみ)。ゲートウェイの姿はパターンAと完全に同一。LLMに送る情報(インシデントバンドル等)はハーネスが統制=データガバナンスの制御点が工場側にある。</p>
+  </div>
+
+  <!-- パターンB2 -->
+  <div style="flex:1;min-width:280px;border:2px dashed #9333ea;border-radius:10px;padding:12px 14px">
+    <div class="label" style="color:#9333ea">パターンB2: 完全リモート運用(第二波)</div>
+    <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
+[4] クラウド/支援者側
+ ┌─────────┐ ┌─────┐
+ │ ハーネス │→│ LLM │
+ └────▲────┘ └─────┘
+      │ 中継サーバー(relay)
+      ▲
+      │ ゲートウェイが自分から
+      │ outboundで張る常時接続
+┌─────┴─ 工場の中 ──────────┐
+│ [2] ゲートウェイ           │
+└───────────────────────────┘</pre>
+    <p style="font-size:12.5px;margin:6px 0 0">支援機関やSIerが30現場を一元運用する形。この場合も<b>工場側にポートは開けない</b>——ゲートウェイが自分から外の中継点に発信して接続を維持し、その中を制御が通る(AWS IoTのsecure tunnelingと同じ発想)。工場サーバー[3]すら不要になるが、中継インフラが要るので第二波。なお全パターン共通で、<b>AIのoperatorトークンは物理アクション権限に昇格不可</b>(プロンプトインジェクション対策)。</p>
+  </div>
+</div>
+
+<div class="section" style="margin-top:18px">
+  <h3>全パターン共通の安全装置(ゲートウェイ側 R14/R19)</h3>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;font-size:13px">
+    <div style="flex:1;min-width:230px;border-left:4px solid #2563eb;padding:8px 12px;background:rgba(37,99,235,.06);border-radius:6px">
+      <b>操作主体の識別</b><br>ハーネスは「ai-operator@現場名」という運用者アイデンティティを持つ。全操作が監査ログに残る(操作者がLLMだからこそ、人間運用より厳格に)
+    </div>
+    <div style="flex:1;min-width:230px;border-left:4px solid #2563eb;padding:8px 12px;background:rgba(37,99,235,.06);border-radius:6px">
+      <b>権限の段階</b><br>①読取診断=常時可 ②可逆操作(再起動・再接続)=AI自律可 ③不可逆操作(設定変更・更新)=dry-run必須+人間承認(スマホで「はい」)
+    </div>
+    <div style="flex:1;min-width:230px;border-left:4px solid #2563eb;padding:8px 12px;background:rgba(37,99,235,.06);border-radius:6px">
+      <b>AIが暴れても壊れない</b><br>操作カタログ外のことはそもそもできない(シェルは存在しない)。レート制限。悪い設定はR15が検証で弾き、通っても自動ロールバック
+    </div>
+    <div style="flex:1;min-width:230px;border-left:4px solid #2563eb;padding:8px 12px;background:rgba(37,99,235,.06);border-radius:6px">
+      <b>AIに届かない障害への備え</b><br>ネットワーク自体が死んだらAIは無力 → だからルールベース自己修復(R20)とローカル表示(R23)と「現場の人に電源再投入を頼む」導線が下の層にある
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:14px;font-size:13px;opacity:.9">
+  <b>「SSHなしで直せる」の正確な意味:</b> これは<b>直し方の話(型付きAPI vs 生シェル)</b>であって、<b>届くかどうかの話ではありません</b>。AIが直せるのは制御プレーンに到達できる障害まで。到達できない障害(ネットワーク全断、電源、物理)は、①ゲートウェイ自身の決定的自己修復、②現場の人への平易な指示(「白い箱のコンセントを抜き挿ししてください」)、の2層が受け持ちます。この3層(AI遠隔修復/自己修復/現場の人)の役割分担こそが運用設計の本体です。
+</div>
+</body>
+</html>

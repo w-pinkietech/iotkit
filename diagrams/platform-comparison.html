@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IoTKit 再設計 図解</title>
+<style>
+  body{font-family:"Hiragino Sans","Noto Sans JP",sans-serif;max-width:1150px;margin:28px auto;padding:0 18px;line-height:1.65;color:#1a202c;background:#fff}
+  h2{margin:0 0 4px;font-size:22px}
+  h3{font-size:16px;margin:0 0 4px}
+  .subtitle{color:#555;font-size:14px;margin:0 0 8px}
+  .label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+  .section{margin:16px 0}
+  pre{font-family:ui-monospace,Menlo,Consolas,monospace}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em;background:rgba(128,128,128,.12);border-radius:4px;padding:0 4px}
+  p{margin:6px 0}
+</style>
+</head>
+<body>
+<h2>他のIoTゲートウェイとの比較</h2>
+<p class="subtitle">今回の設計(IoTKit)が業界標準と「同じところ」「違うところ」「独自なところ」。青列が今回の設計です。</p>
+
+<style>
+  .cmp{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:12px}
+  .cmp th,.cmp td{border:1px solid rgba(128,128,128,.35);padding:7px 9px;vertical-align:top;text-align:left}
+  .cmp th{font-size:12px}
+  .cmp td:first-child,.cmp th:first-child{font-weight:700;min-width:110px}
+  .iot{background:rgba(37,99,235,.10)}
+  .cmp th.iot{background:rgba(37,99,235,.22)}
+  .tag{display:inline-block;border-radius:8px;padding:0 7px;font-size:10.5px;font-weight:700;color:#fff}
+  .same{background:#16a34a}.diff{background:#d97706}.uniq{background:#9333ea}
+</style>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin:10px 0;font-size:12.5px">
+  <span><span class="tag same">標準</span> 業界の定石と同じ発想</span>
+  <span><span class="tag diff">選択</span> 各社割れており、意図的にどちらかを選んだ</span>
+  <span><span class="tag uniq">独自</span> 他にない設計要素</span>
+</div>
+
+<table class="cmp">
+  <tr>
+    <th></th>
+    <th class="iot">IoTKit(今回の設計)</th>
+    <th>AWS Greengrass</th>
+    <th>Azure IoT Edge</th>
+    <th>EdgeX Foundry</th>
+    <th>ThingsBoard Edge</th>
+    <th>Home Assistant</th>
+  </tr>
+  <tr>
+    <td>性格</td>
+    <td class="iot">工場向けOSS。無人運用が主目的</td>
+    <td>AWSクラウドの出先機関</td>
+    <td>Azureの出先機関</td>
+    <td>OSSの[2]相当基盤(産業向け)</td>
+    <td>ThingsBoardサーバー([3]/[4])の出先</td>
+    <td>宅内ハブOSS</td>
+  </tr>
+  <tr>
+    <td>デバイス接続の拡張方式 <span class="tag same">標準</span></td>
+    <td class="iot">アダプタ=契約に適合する部品(in-tree Rust)。外部プロセスは取り込み(北向き)のみ現状契約あり。コマンド/監督(南向き)契約は設計中</td>
+    <td>コンポーネント+IPC SDK</td>
+    <td>モジュール(コンテナ)</td>
+    <td>Device Service SDK(Go/C)が唯一の入口</td>
+    <td>Integration/Converter</td>
+    <td>Integration(Python)</td>
+  </tr>
+  <tr>
+    <td>正規化の場所 <span class="tag same">標準</span></td>
+    <td class="iot">つなぐ側(アダプタ/デバイス作者)。中央変換エンジンなし</td>
+    <td>コンポーネント内(アプリ任せ)</td>
+    <td>モジュール内</td>
+    <td>Device Service内+Device Profileが正規形を定義</td>
+    <td>Converterで中央変換(JSライクなスクリプト)</td>
+    <td>Integration内+device classが語彙</td>
+  </tr>
+  <tr>
+    <td>測定語彙の権威 <span class="tag same">標準</span></td>
+    <td class="iot">測定レジストリ(R6)を版管理</td>
+    <td>なし(アプリ任せ)</td>
+    <td>DTDL/Plug and Play</td>
+    <td>Device Profile</td>
+    <td>弱い(キー任せ)</td>
+    <td>device class+単位の統制語彙</td>
+  </tr>
+  <tr>
+    <td>断線時の保全 <span class="tag same">標準</span></td>
+    <td class="iot">outbox+消費者別カーソル、at-least-once、長期オフライン前提(上限はR17劣化契約で規定)</td>
+    <td>Stream Manager(spool)</td>
+    <td>store &amp; forward(edgeHub)</td>
+    <td>App Serviceのbatch/retry</td>
+    <td>[2]相当側キュー+再同期</td>
+    <td>そもそもローカル完結</td>
+  </tr>
+  <tr>
+    <td>デバイス台帳の権威 <span class="tag diff">選択</span></td>
+    <td class="iot"><b>ゲートウェイ</b>(オフライン工場で閉じるため)。フリート集約は外部</td>
+    <td>クラウド(AWS IoT registry)</td>
+    <td>クラウド(IoT Hub)</td>
+    <td>[2]相当(core-metadata)</td>
+    <td>自社サーバー側が主、[2]相当に複製</td>
+    <td>[2]相当(device registry)</td>
+  </tr>
+  <tr>
+    <td>設定管理 <span class="tag same">標準</span></td>
+    <td class="iot">desired/reported調停(R15)+検証・dry-run・自動ロールバック</td>
+    <td>shadow(desired/reported)</td>
+    <td>module twin(desired/reported)</td>
+    <td>弱い(設定API)</td>
+    <td>attributes(client/shared/server)</td>
+    <td>config entries(調停なし)</td>
+  </tr>
+  <tr>
+    <td>ローカルルール/オフライン自律 <span class="tag diff">選択</span></td>
+    <td class="iot">有界な型付きルールのみ(閾値→アクション)。自由グラフは拒否</td>
+    <td>コンポーネントで任意(=自由)</td>
+    <td>Stream Analytics等(=自由)</td>
+    <td>eKuiper(SQLルール)</td>
+    <td>ルールチェーン(グラフ、Node-RED的)</td>
+    <td>automation(YAML、事実上グラフ)</td>
+  </tr>
+  <tr>
+    <td>遠隔運用・診断面 <span class="tag uniq">独自</span></td>
+    <td class="iot"><b>AI運用を一級要件化</b>: 因果つきヘルスモデル、インシデントバンドル、dry-run付き操作カタログ、全操作監査。「SSHなしで直せる」が判定基準</td>
+    <td>クラウドコンソール+ログ転送(人間前提)</td>
+    <td>クラウドポータル(人間前提)</td>
+    <td>メトリクス/API(組み立ては利用者)</td>
+    <td>自社サーバーUI(人間前提)</td>
+    <td>UI+ログ(現地の人間前提)</td>
+  </tr>
+  <tr>
+    <td>更新方式 <span class="tag diff">選択</span></td>
+    <td class="iot">単一バイナリ+既知良好状態へのロールバック。配布編成は外部</td>
+    <td>クラウドからdeployment</td>
+    <td>コンテナをクラウドから配布</td>
+    <td>利用者任せ</td>
+    <td>自社サーバーから配布</td>
+    <td>OS(HAOS)ごと更新</td>
+  </tr>
+  <tr>
+    <td>実行形態・重さ <span class="tag diff">選択</span></td>
+    <td class="iot"><b>単一Rustバイナリ+systemd</b>(host-agentのみ別プロセス)。コンテナ不要</td>
+    <td>Java/Greengrass nucleus+コンポーネント群</td>
+    <td>Dockerランタイム必須</td>
+    <td>10+のマイクロサービス(Docker Compose)</td>
+    <td>Java(重め)</td>
+    <td>Python monolith(+アドオンはコンテナ)</td>
+  </tr>
+  <tr>
+    <td>クラウド依存/ロックイン <span class="tag uniq">独自</span></td>
+    <td class="iot"><b>依存ゼロが成立条件</b>。[3][4]は全部オプション。出口契約に特権消費者なし</td>
+    <td>AWS必須</td>
+    <td>Azure必須</td>
+    <td>なし(OSS)</td>
+    <td>ThingsBoardサーバー必須</td>
+    <td>なし(OSS)</td>
+  </tr>
+  <tr>
+    <td>想定運用者 <span class="tag uniq">独自</span></td>
+    <td class="iot"><b>現場に専門家ゼロ</b>+リモートAI+「電源を入れ直せる人」</td>
+    <td>クラウドエンジニア</td>
+    <td>クラウドエンジニア</td>
+    <td>SIer/開発者</td>
+    <td>SIer</td>
+    <td>ホビイスト本人</td>
+  </tr>
+</table>
+
+<div class="section" style="margin-top:20px">
+  <h3>この表から言えること</h3>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
+    <div style="flex:1;min-width:250px;border-left:4px solid #16a34a;padding:8px 12px;background:rgba(22,163,74,.07);border-radius:6px;font-size:13px">
+      <b>発明していない部分(安心材料)</b><br>
+      outbox/store-and-forward、desired/reported、アダプタSDK、測定語彙のレジストリ——データプレーンの機構は全部業界の定石。EdgeXのDevice Profile、AzureのtwinはR6/R15とほぼ同型。奇抜なことはしていない。
+    </div>
+    <div style="flex:1;min-width:250px;border-left:4px solid #d97706;padding:8px 12px;background:rgba(217,119,6,.07);border-radius:6px;font-size:13px">
+      <b>意図的に張った側(設計判断)</b><br>
+      台帳の権威をゲートウェイに(EdgeX/HA側、AWS/Azureの逆)。単一バイナリでコンテナ拒否(全社の逆)。ルールは型付き有界のみ(自由グラフ勢の逆)。すべて「無人・オフライン・専門家ゼロ」から逆算した選択。
+    </div>
+    <div style="flex:1;min-width:250px;border-left:4px solid #9333ea;padding:8px 12px;background:rgba(147,51,234,.07);border-radius:6px;font-size:13px">
+      <b>どこにもない部分(勝負どころ)</b><br>
+      「AIが運用者」を前提にした制御プレーン(インシデントバンドル、dry-run操作カタログ、因果つきヘルス)は全プラットフォームが持っていない。全社とも遠隔運用は「クラウドコンソールを見る人間」前提。ここが差別化の核。
+    </div>
+  </div>
+</div>
+</body>
+</html>
