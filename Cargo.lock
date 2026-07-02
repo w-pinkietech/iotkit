@@ -369,11 +369,15 @@ name = "iotkit-gateway"
 version = "0.1.0"
 dependencies = [
  "bravepi-mainboard-adapter",
+ "iotkit-core-collector",
  "iotkit-core-engine",
+ "iotkit-core-ledger",
  "iotkit-core-storage",
  "iotkit-core-timeseries",
  "iotkit-core-types",
+ "iotkit-ingest-contract",
  "rpi-local-adapter",
+ "rusqlite",
  "serde",
  "serial_test",
  "tempfile",
@@ -383,6 +387,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -8,16 +8,22 @@ iotkit-core-types = { path = "../core/types" }
 iotkit-core-engine = { path = "../core/engine" }
 iotkit-core-storage = { path = "../core/storage" }
 iotkit-core-timeseries = { path = "../core/timeseries" }
+iotkit-ingest-contract = { path = "../iotkit-ingest-contract" }
+iotkit-core-collector = { path = "../core/collector" }
+iotkit-core-ledger = { path = "../core/ledger" }
 bravepi-mainboard-adapter = { path = "../bravepi-mainboard-adapter" }
 rpi-local-adapter = { path = "../rpi-local-adapter" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"
+iotkit-core-storage = { path = "../core/storage", features = ["test-util"] }
