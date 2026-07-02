@@ -8,7 +8,10 @@ Active Watchpoints を先に読み、次に Baseline Checklist を適用する�
 最近のレビューで観測されたプロジェクト固有の盲点。
 max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-(none currently)
+- 再起動・再登録経路の整合(added 2026-07-02, TTL 3ヶ月): AdapterHost等の登録APIは重複IDを拒否する。
+  再起動/再接続を計画するタスクは「除去(deregister)手順」が実在APIと整合するか実物を照合すること。
+- 実在IDの形式(added 2026-07-02, TTL 3ヶ月): AdapterId等の実行時識別子はポートパス等を含む合成形式
+  (例: `bravepi-mainboard:/dev/ttyAMA0`)。テストの期待値は生成箇所の実コードから取ること。
 
 ## Baseline Checklist
 
