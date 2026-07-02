@@ -33,7 +33,7 @@
 
   <!-- パターンA -->
   <div style="flex:1;min-width:280px;border:2px solid #16a34a;border-radius:10px;padding:12px 14px">
-    <div class="label" style="color:#16a34a">パターンA: 完全オフライン工場(第一波)</div>
+    <div class="label" style="color:#16a34a">パターンA: 完全オフライン工場 — Wave 1(AIハーネス開発時に実証)</div>
     <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
 ┌─ 工場の中 ────────────────┐
 │ [3] 工場サーバー           │
@@ -51,7 +51,7 @@
 
   <!-- パターンB1 -->
   <div style="flex:1;min-width:280px;border:2px solid #2563eb;border-radius:10px;padding:12px 14px">
-    <div class="label" style="color:#2563eb">パターンB1: ハーネスは工場、頭脳はクラウド(第一波・推奨構成)</div>
+    <div class="label" style="color:#2563eb">パターンB1: ハーネスは工場、頭脳はクラウド — Wave 1(AIハーネス開発時に実証)・推奨構成</div>
     <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
 ┌─ 工場の中 ────────────────┐
 │ [3] 工場サーバー           │
@@ -70,7 +70,7 @@
 
   <!-- パターンB2 -->
   <div style="flex:1;min-width:280px;border:2px dashed #9333ea;border-radius:10px;padding:12px 14px">
-    <div class="label" style="color:#9333ea">パターンB2: 完全リモート運用(第二波)</div>
+    <div class="label" style="color:#9333ea">パターンB2: 完全リモート運用 — Wave 2</div>
     <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
 [4] クラウド/支援者側
  ┌─────────┐ ┌─────┐
@@ -83,9 +83,11 @@
 ┌─────┴─ 工場の中 ──────────┐
 │ [2] ゲートウェイ           │
 └───────────────────────────┘</pre>
-    <p style="font-size:12.5px;margin:6px 0 0">支援機関やSIerが30現場を一元運用する形。この場合も<b>工場側にポートは開けない</b>——ゲートウェイが自分から外の中継点に発信して接続を維持し、その中を制御が通る(AWS IoTのsecure tunnelingと同じ発想)。工場サーバー[3]すら不要になるが、中継インフラが要るので第二波。なお全パターン共通で、<b>AIのoperatorトークンは物理アクション権限に昇格不可</b>(プロンプトインジェクション対策)。</p>
+    <p style="font-size:12.5px;margin:6px 0 0">支援機関やSIerが30現場を一元運用する形。この場合も<b>工場側にポートは開けない</b>——ゲートウェイが自分から外の中継点に発信して接続を維持し、その中を制御が通る(AWS IoTのsecure tunnelingと同じ発想)。工場サーバー[3]すら不要になるが、中継インフラが要るのでWave 2。なお全パターン共通で、<b>AIのoperatorトークンは物理アクション権限に昇格不可</b>(プロンプトインジェクション対策)。</p>
   </div>
 </div>
+
+<p style="font-size:12px;opacity:.8;margin:8px 0 0">※Wave表記はD3のWave 0/1/2体系に従う。Wave 0にAIハーネスは含まれない——柱3の価値検証は、Wave 1でAIハーネスを開発する際にWave 0稼働中の自社現場ゲートウェイに対して行う(D3決定4)。</p>
 
 <div class="section" style="margin-top:18px">
   <h3>全パターン共通の安全装置(ゲートウェイ側 R14/R19)</h3>

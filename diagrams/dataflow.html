@@ -37,7 +37,7 @@
     </div>
     <div style="flex:1;min-width:260px;border:1px solid rgba(22,163,74,.4);border-radius:8px;padding:10px 12px">
       <strong>Ⓑ 自作デバイス (ESP32など)</strong>
-      <p style="margin:6px 0 0;font-size:13px"><b>作った本人がデバイス側で正規形に変換</b>(=「正規化はつなぐ側」の原則)。<code>{"温度": 23.4, series: "..."}</code> をHTTPSまたはMQTTで送る。</p>
+      <p style="margin:6px 0 0;font-size:13px"><b>作った本人がデバイス側で正規形に変換</b>(=「正規化はつなぐ側」の原則)。<code>{"measurement": "temperature_c", "channel": 0, "value": 23.4}</code> をHTTPSまたはMQTTで送る。<b>series_keyは送らない</b>——デバイスは自分のseriesを知らなくてよく、コレクタが台帳から解決する(D5)。</p>
     </div>
   </div>
 </div>
@@ -55,17 +55,17 @@
       <div style="font-size:12px;font-weight:700;opacity:.7;margin-bottom:6px">公式アダプタ経路(プロセス内)</div>
       <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin-bottom:6px">
         <b>① 物理I/O適合</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R1</span>
-        <p style="margin:4px 0 0;font-size:13px">UARTからフレームを受信(BravePIアダプタの入口)</p>
+        <p style="margin:4px 0 0;font-size:13px">UARTからフレームを受信(BravePIアダプタの入口)。<i>担当部品: ドライバ(D4)</i></p>
       </div>
       <div style="text-align:center;line-height:1">↓</div>
       <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin:6px 0">
         <b>② 正規化</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R3</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R18</span>
-        <p style="margin:4px 0 0;font-size:13px">アダプタ内でバイト列→<b>「温度23.4℃」</b>へ変換(測定レジストリ<span style="background:#2563eb;color:#fff;border-radius:10px;padding:0 6px;font-size:10px">R6</span>の定義に従う)。時刻品質タグ(synced/holdover/unsynced)と品質マーキングを付与</p>
+        <p style="margin:4px 0 0;font-size:13px">バイト列→<b>「温度23.4℃」</b>へのデコード(データシートの数学)=<i>ドライバ</i>。測定レジストリ<span style="background:#2563eb;color:#fff;border-radius:10px;padding:0 6px;font-size:10px">R6</span>のキー(measurement_key+channel)への写像とスケジューリング=<i>アダプタランタイム</i>(series解決はここではしない——④コレクタの仕事、D5)。時刻品質タグ(synced/holdover/unsynced)と品質マーキングを付与</p>
       </div>
       <div style="text-align:center;line-height:1">↓</div>
       <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin-top:6px">
         <b>③ エンベロープ化→プロセス内バインディング</b>
-        <p style="margin:4px 0 0;font-size:13px">安定ID(envelope_id)を付けてメモリ内チャネルでコレクタへ。エンベロープは単発またはバッチ(単発=長さ1のバッチ)</p>
+        <p style="margin:4px 0 0;font-size:13px">安定ID(envelope_id)を付けてメモリ内チャネルでコレクタへ。エンベロープは単発またはバッチ(単発=長さ1のバッチ)。<i>担当部品: 取り込みクライアント(D4で新設)</i></p>
       </div>
     </div>
     <!-- 右列: 自作デバイス -->
@@ -73,17 +73,17 @@
       <div style="font-size:12px;font-weight:700;opacity:.7;margin-bottom:6px">自作デバイス経路(ネットワーク)</div>
       <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin-bottom:6px">
         <b>① ネットワーク入口</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R2</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R19</span>
-        <p style="margin:4px 0 0;font-size:13px">認証=<b>per-deviceトークン</b>(共有キー禁止)+<b>seriesスコープ認可</b>(トークンに書き込み可能なseries集合をバインド)。TLSデフォルト(自己署名証明書+ピン留め)。レート制限・悪意入力への防御</p>
+        <p style="margin:4px 0 0;font-size:13px">認証=<b>per-deviceトークン</b>(共有キー禁止。書き込み可能な<b>subject集合</b>をバインド——series粒度はsubjectから導出。解決先が許可集合内かは④コレクタが検査=D5)+TLS(自己署名証明書+ピン留め)+レート制限・悪意入力への防御</p>
       </div>
       <div style="text-align:center;line-height:1">↓</div>
       <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin:6px 0">
-        <b>② 契約検証</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R6</span>
-        <p style="margin:4px 0 0;font-size:13px">測定レジストリと照合し3分岐(黙って捨てない): <b>スキーマ不一致</b>=rejected(理由コード+近い候補を提示)/ <b>未登録測定キー</b>=検疫で受けてUIで後付けマッピング / <b>値域外</b>=検疫フラグ付き保存(下流に流さない)</p>
+        <b>② 入口の仕事はここまで(R2の実体=TLS終端・認証・レート制限)</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R2</span>
+        <p style="margin:4px 0 0;font-size:13px"><b>契約検証(R6)は入口では行わない</b>——④コレクタで合流後に、公式アダプタのデータも含め全経路共通で実行する(3分岐は④参照)</p>
       </div>
       <div style="text-align:center;line-height:1">↓</div>
       <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin-top:6px">
         <b>③ 同じエンベロープがHTTP/MQTTバインディングで届く</b>
-        <p style="margin:4px 0 0;font-size:13px">HTTPバインディング(c)、または<b>MQTTバインディング(d)=ingest専用MQTTリスナー</b>(フルブローカーではない。QoS1のPUBACK=ack。Tasmota/ESPHomeがファーム無改造で接続可)。中身の論理契約は左列と完全に同一</p>
+        <p style="margin:4px 0 0;font-size:13px">HTTPバインディング(c)、または<b>MQTTバインディング(d)=契約トピック専用MQTTリスナー</b>(フルブローカーではない。デバイス間pub/subなし——南向きトピックの追加余地はあり。QoS1の<b>PUBACK=ack</b>はaccepted経路。rejected詳細は<code>ack/{device_id}</code>トピックで補完。Tasmota/ESPHomeがファーム無改造で接続可)。中身の論理契約は左列と完全に同一</p>
       </div>
     </div>
   </div>
@@ -92,16 +92,17 @@
   <div style="text-align:center;margin:10px 0 4px;font-size:13px"><b>⤵ 合流 ⤹</b> — <i>ここから先、公式か自作かの区別は存在しない(柱2)</i></div>
 
   <div style="border:2px solid #2563eb;border-radius:8px;padding:10px 14px;margin:6px 0">
-    <b>④ コレクタ = 受理の権威+耐久点</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R8</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R16</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R17</span>
-    <p style="margin:4px 0 0;font-size:13px"><b>dedup</b>(dedupキー=(認証済み送信者, envelope_id)。再送時にIDは不変 → <b>再送しても二重登録されない</b>)→ <b>received_at</b>を必ず付与(時刻は二本立て: デバイス申告時刻はオプショナル+time_sourceタグ)→ <b>SQLiteに同一トランザクションでコミット</b>: <b>現在状態</b>(最新値)+<b>直近履歴</b>(時系列)+<b>outbox</b>(配送待ち)。電源断があっても壊れない書き方。</p>
-    <p style="margin:6px 0 0;font-size:13px"><b>コミット完了後にのみack返却</b>(ack=耐久点): accepted / duplicate / rejected / deferred。ackはエンベロープ単位のステータス配列(バッチの部分受理)。送信側の保持・再送は<b>SHOULD</b>(fire-and-forgetの軽量プロファイルも許容。ゲートウェイ側の重複排除は常に保証)。<b>deferredは一時的過負荷専用</b>。持続的逼迫はゲートウェイ側retention(R17劣化契約: 保持期間とディスク水位を管理し、古いものから間引き→パージ)で吸収</p>
+    <b>④ コレクタ = 受理の権威+耐久点</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R8</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R6</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R16</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R17</span>
+    <p style="margin:4px 0 0;font-size:13px"><b>台帳解決チェーンをコミット前に実行</b>(D5): 送信者+subject_hint → 台帳(R7) → system_id → <b>series_id</b>。デバイスはseriesを知らない——解決はコレクタの仕事であり、台帳の変異(replace-hardware等)も必ずコレクタ経由。続いて<b>契約検証</b>で3分岐(黙って捨てない): <b>スキーマ不一致</b>=rejected(理由コード+近い候補を提示)/ <b>未知measurement_key</b>=<b>検疫seriesを自動実体化</b>して受理(UIで後付けマッピング)/ <b>値域外</b>=検疫フラグ付き保存(下流に流さない)</p>
+    <p style="margin:6px 0 0;font-size:13px">→ <b>dedup</b>(dedupキー=(認証済み送信者, envelope_id)。再送時にIDは不変 → <b>再送しても二重登録されない</b>)→ <b>received_at</b>を必ず付与(時刻は二本立て: デバイス申告時刻はオプショナル+time_sourceタグ)→ <b>SQLiteに同一トランザクションでコミット</b>: <b>現在状態</b>(最新値)+<b>直近履歴</b>(時系列)+<b>outbox</b>(配送待ち)。電源断があっても壊れない書き方。</p>
+    <p style="margin:6px 0 0;font-size:13px"><b>コミット完了後にのみack返却</b>(ack=耐久点): accepted / duplicate / rejected / deferred。ackはエンベロープ単位のステータス配列(バッチの部分受理。<b>未承認subject宛はdisposition: staged</b>=承認までの有界保持、⑤参照)。送信側の保持・再送は<b>SHOULD</b>(fire-and-forgetの軽量プロファイルも許容。ゲートウェイ側の重複排除は常に保証)。<b>deferredは一時的過負荷専用</b>。持続的逼迫はゲートウェイ側retention(R17劣化契約: 保持期間とディスク水位を管理し、古いものから間引き→パージ)で吸収</p>
   </div>
 
   <div style="text-align:center;margin:8px 0 4px;font-size:12.5px;opacity:.8">↓ <i>ここから下は<b>ack後の非同期後段処理</b>(ackはこれらを待たない)</i></div>
 
   <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin:6px 0">
-    <b>⑤ デバイス台帳と照合(非同期)</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R7</span>
-    <p style="margin:4px 0 0;font-size:13px">「この系列は誰か」を照合し死活を更新。未登録デバイスはオンボーディング承認待ちへ</p>
+    <b>⑤ 死活更新+目撃(sighting)ステージング振り分け(非同期)</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R7</span>
+    <p style="margin:4px 0 0;font-size:13px">デバイスの死活を更新(series解決は④でコミット前に完了済み)。<b>未知hardware_id</b>は<b>目撃(sighting)ステージング</b>へ振り分け——有界・hardware_id仮キーでデータを保持し、<b>人間承認の瞬間に採番</b>(system_id発行)→検疫→active(D5)</p>
   </div>
   <div style="text-align:center;line-height:1">↓</div>
   <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin:6px 0">
@@ -152,7 +153,7 @@
 </div>
 
 <div class="section" style="margin-top:20px;font-size:13px;opacity:.85">
-  <b>読み方のポイント:</b> ①〜③が「論点1」で確定した部分です。左右どちらの経路でも、③の時点で<b>同じエンベロープ</b>になっており(=論理契約は一つ)、運び方だけが違います(=バインディングは複数: プロセス内チャネル/UDS/HTTP/MQTT)。正規化(②)は左では公式アダプタの中、右ではデバイス作者の手元で行われ、コア(④以降)は生バイト列を一切受け取りません。契約の心臓部は④: <b>ack=耐久点</b>(SQLiteコミット完了後にのみaccepted)であり、⑤以降はackを遅らせない非同期の後段処理です。
+  <b>読み方のポイント:</b> ①〜③が「論点1」で確定した部分です。左右どちらの経路でも、③の時点で<b>同じエンベロープ</b>になっており(=論理契約は一つ)、運び方だけが違います(=バインディングは複数: プロセス内チャネル/UDS/HTTP/MQTT)。正規化は左では公式アダプタの中(②)、右ではデバイス作者の手元(Ⓑ)で行われ、コア(④以降)は生バイト列を一切受け取りません。契約の心臓部は④: <b>台帳解決(series解決)と契約検証をコミット前に実行</b>し(D5)、<b>ack=耐久点</b>(SQLiteコミット完了後にのみaccepted)。⑤以降はackを遅らせない非同期の後段処理です。
 </div>
 </body>
 </html>
