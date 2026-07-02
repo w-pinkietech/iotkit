@@ -60,7 +60,12 @@ fn main() {
     tracing::info!(db_path = %config.db_path, "database initialized");
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(run(config, db));
+    let collector_alive = rt.block_on(run(config, db));
+    if !collector_alive {
+        // R20コメントと同じ方針: プロセスレベルの再起動はsystemdの責務。ここでは非ゼロexitで
+        // 「死んでいる」ことを伝えるだけ(正常なctrl_c終了はexit 0のまま区別する)。
+        std::process::exit(1);
+    }
 }
 
 /// ledger::LedgerError → StorageError の橋渡し(gateway起動シーケンス専用ヘルパ)。
@@ -72,7 +77,10 @@ fn ledger_to_storage_err(e: iotkit_core_ledger::LedgerError) -> iotkit_core_stor
     iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
 }
 
-async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
+/// フォールインループを実行する。戻り値は「コレクタタスクが生きたまま終了したか」
+/// (true=正常終了・ctrl_c/全アダプタclose、false=コレクタ死亡によるfail-fast終了)。
+/// `main`はfalseを非ゼロexitに変換し、systemdのプロセス再起動に委ねる(R20と同じ設計方針)。
+async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -> bool {
     let engine = Engine::new();
     let mut host = AdapterHost::new();
 
@@ -155,6 +163,11 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
     // R20: アプリレベル監督(責務台帳)。プロセスレベルはsystemdに委譲。
     let mut tracker = supervision::RestartTracker::new(supervision::RestartPolicy::default());
 
+    // コレクタタスク死亡時、fan-inループをbreakした後にfalseを返して非ゼロexitへ導くフラグ
+    // (正常終了=ctrl_c/全アダプタclose はtrueのまま=exit 0)。プロセスレベルの再起動は
+    // systemdの責務(R20コメント参照)であり、ここでは「健康でないまま動き続けない」ことだけ担保する。
+    let mut collector_alive = true;
+
     // Unified fan-in loop
     loop {
         tokio::select! {
@@ -201,7 +214,15 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
                                             tracing::warn!(?ack.status, "ingest not accepted");
                                         }
                                     }
-                                    Ok(Err(_)) => tracing::error!("collector closed"),
+                                    Ok(Err(_)) => {
+                                        // コレクタタスクが死んでいる = 取り込み全損。プロセスを
+                                        // 「健康」なまま動かし続けるとサイレントにデータを失い続ける
+                                        // ので、fan-inループをbreakして非ゼロexitへ倒す(プロセス
+                                        // レベルの再起動はsystemdの責務)。
+                                        tracing::error!("collector closed; aborting fan-in loop for process restart (systemd)");
+                                        collector_alive = false;
+                                        break;
+                                    }
                                     Err(_) => tracing::error!("collector ack timeout (5s)"), // D1: ackタイムアウト必須
                                 }
                             }
@@ -274,6 +295,8 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) {
 
     let devices = engine.devices().await;
     tracing::info!(device_count = devices.len(), "Engine state at shutdown");
+
+    collector_alive
 }
 
 /// R20: 再起動を許可される公式アダプタ(D4: 再起動権限は形態①のみ)の起動パラメータ。
