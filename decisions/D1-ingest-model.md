@@ -163,6 +163,12 @@ measurement_keyの文法(文字集合・ドット名前空間・**コロン禁�
 - **dedupの物理表現の一本化**(D5波及 2026-07-02): `ingest_dedup` テーブルに一本化
   (バッチ対応のため測定テーブル直UNIQUEは不成立)。ingest_dedup挿入と測定書き込みは
   同一トランザクション(耐久点性質を維持)。本文「envelope_idと重複排除」節は修正済み。
+- **ack構造の2階層明記(2026-07-02、外部レビュー指摘反映)**: 「ackはエンベロープ単位のステータス配列」の
+  精密化——ackは**2階層**である。(1) バッチ(=エンベロープの配列)へのackは**エンベロープ単位**の
+  ステータス配列(dedup・終端判定の単位=エンベロープ)。(2) acceptedされたエンベロープの内部は
+  **item単位**のステータス配列で部分受理を表現し、**入力itemsと同数・同順(位置整列)**とする。
+  明示的な `item_index` フィールドは採らない(同数・同順の契約で十分、冗長フィールドは不整合の温床)。
+  規範表現は `iotkit-ingest-contract` クレートの `EnvelopeAck`/`AckStatus::Accepted{items}`/`ItemStatus`。
 - **D6波及(2026-07-02)**: ack dispositionを `durable | staged | quarantined` の3値に拡張
   (quarantined=未知measurement_key等の検疫受理。受理判別表はD6決定6)。reason_codeに
   `value_type_mismatch` / `malformed_measurement_key` を追加。measurement_key文法(D6決定2)を
