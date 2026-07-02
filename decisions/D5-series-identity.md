@@ -187,10 +187,19 @@ append-onlyイベント行。確認UI・ワンタップ差し戻し・R14カタ�
   CLI承認 `gatewayctl device approve`)。検疫遷移は**時限自動失効+CLI解除のみ**(承認UIはWave 1)。
   replace-hardwareは上記CLI版ガードレールで実装する。
 
-## 宿題(未決)
+## 宿題
 
-- **BravePI device_numberは焼き込み固有か設定可能値か**を実機/仕様で確認(逆抽出資料では設定フィールドに
-  見える)。設定可能なら「設定複製による明示操作バイパス」「親交換で子20台が未知化」の分岐が変わる——
-  攻撃2・5の分岐点であり、BravePI実装前に要確定(D3課題キュー0に登録済み 2026-07-02)。
-- R6(測定レジストリ)の構造化値型サポート(spectrogram移行の前提)。
+- **BravePI device_number: 解決(2026-07-02、文書証拠による確定)** — 実機確認は不可のため、
+  メーカー公式ソフトウェア仕様書(BVPMB-01, Rev 1.3)の逆抽出分析
+  (iotkit-reverse-extracted/analysis/bravepi-protocol-analysis.md)で判断: **焼き込み固有値**。
+  根拠: (1) メインボードのdevice numberはBLE characteristic 0x4002で**読み取り専用**
+  (書き込み可能なのはName 0x1001のみ)、(2) 送信機のdevice numberは工場出荷時からNFCタグ(NDEF)に
+  埋め込まれ、登録操作(0x2001)は「既存の固有値を指定して台帳に載せる」操作、(3) 全BLEサービスに
+  device number書き込み用characteristicが存在しない。
+  帰結: `ble:{device_number}` は**個体識別型hardware_id**で確定。攻撃2(設定複製による明示操作
+  バイパス)は不成立。親(メインボード)交換時も子送信機のdevice_numberは不変のため子は未知化しない
+  (親自身のみreplace-hardware対象。ガードレール5の一括replaceは「子の再ペアリング作業」の
+  メンテナンスウィンドウとして残す)。実機・新ファームで反証が出た場合のみ再訪。
+- **R6構造化値型: 解決(2026-07-02)** — D6決定10で値型体系v1にrecord型を含め、
+  `vibration_spectrum` を契約予約(実装第二波)とした。
 - R22エポックフェンス(スプリットブレイン対策)の具体設計。

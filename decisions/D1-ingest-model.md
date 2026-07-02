@@ -133,7 +133,8 @@ AdapterHost/StreamMapの骨格は温存。
 ackの意味(耐久点)と4語彙、rejected/deferredの送信側義務、envelope_id不変性とdedupキーのスコープ、
 dedupウィンドウの存在、バッチのワイヤ形式と部分ack、順序無保証、時刻二本立て+time_source、
 subjectスコープ認可(トークンに書き込み可能なsubject集合をバインド。series粒度はsubjectから導出=D5)、
-エンベロープ必須フィールドの命名(CloudEventsに寄せるか検討)。
+エンベロープ必須フィールドの命名(CloudEventsに寄せるか検討)、
+measurement_keyの文法(文字集合・ドット名前空間・**コロン禁止**・長さ上限=D6決定2)。
 
 ## 監査追記(2026-07-02 厳格レビュー反映)
 
@@ -162,6 +163,10 @@ subjectスコープ認可(トークンに書き込み可能なsubject集合を�
 - **dedupの物理表現の一本化**(D5波及 2026-07-02): `ingest_dedup` テーブルに一本化
   (バッチ対応のため測定テーブル直UNIQUEは不成立)。ingest_dedup挿入と測定書き込みは
   同一トランザクション(耐久点性質を維持)。本文「envelope_idと重複排除」節は修正済み。
+- **D6波及(2026-07-02)**: ack dispositionを `durable | staged | quarantined` の3値に拡張
+  (quarantined=未知measurement_key等の検疫受理。受理判別表はD6決定6)。reason_codeに
+  `value_type_mismatch` / `malformed_measurement_key` を追加。measurement_key文法(D6決定2)を
+  上記安定意図リストに追加済み。
 
 ## 後回しでよいもの
 

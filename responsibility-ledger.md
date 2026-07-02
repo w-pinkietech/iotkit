@@ -21,7 +21,7 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 
 | # | 責務 | 内容 | 出自 |
 |---|---|---|---|
-| R6 | 測定レジストリ | 測定種別・単位・型の語彙を定義・版管理。正規化と受理判定の基準 | 新規(業界+レガシー) |
+| R6 | 測定レジストリ | 測定種別・単位・型の語彙を定義・版管理。正規化と受理判定の基準。**二層**(標準語彙カタログ+現場レジストリ)=D6 | 新規(業界+レガシー) |
 | R7 | デバイス台帳と死活 | 識別・オンボーディング承認・ライフサイクル。死活の権威はここに一元化 | 旧(c)明確化 |
 | R8 | 受理の権威(コレクタ) | 重複排除・確認応答・逆圧(ストレージ水位と連動)・**台帳解決(series解決)**: 送信者アイデンティティ+subject_hint→台帳→system_id→series_id(D5) | 旧(d)維持+D5 |
 | R9 | 派生値・ローカルルール評価 | オフセット/倍率/累積カウント+有界な閾値評価→ローカルアクション。オフライン自律の最小ループ。Node-RED式自由グラフは不採用、型付き設定のみ | 新規(レガシー+業界) |
@@ -123,4 +123,5 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 - データ正本・配置・運用開始/復旧: **合意** — [decisions/D2-data-authority-topology-operations.md](decisions/D2-data-authority-topology-operations.md)
 - アダプタ解剖学: **確定** — [decisions/D4-adapter-anatomy.md](decisions/D4-adapter-anatomy.md)
 - series識別モデル: **確定** — [decisions/D5-series-identity.md](decisions/D5-series-identity.md)(3レンズ+8次元整合レビュー済み)
+- 測定レジストリ: **確定** — [decisions/D6-measurement-registry.md](decisions/D6-measurement-registry.md)(Fable 6レンズ精密レビュー反映。Wave 0設計ブロッカー全解除)
 - 論点2(次): 南向き契約(コマンド/ヘルス/ライフサイクル)。入力=D4引き継ぎ節+D5(能力宣言・redescribe・親子ルーティング)。あわせてコンポーネント境界の確定(iotkit-nextクレート再編)
