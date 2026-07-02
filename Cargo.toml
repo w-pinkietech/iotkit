@@ -6,6 +6,7 @@ members = [
     "core/storage",
     "core/ledger",
     "core/timeseries",
+    "core/collector",
     "rpi4b-driver/transport",
     "bravepi-mainboard-adapter",
     "bravepi-mainboard-adapter/codec",

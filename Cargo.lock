@@ -305,6 +305,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-core-collector"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-ledger",
+ "iotkit-core-storage",
+ "iotkit-core-timeseries",
+ "iotkit-ingest-contract",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "iotkit-core-engine"
 version = "0.1.0"
 dependencies = [
