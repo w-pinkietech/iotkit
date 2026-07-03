@@ -98,7 +98,10 @@ impl AdapterHandle {
 ///
 /// Tokio runtime 上で呼び出す必要がある。runtime が無い場合は `Err` を返す
 /// (panic しない)。
-pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
+pub fn start(
+    port_path: String,
+    ingest: Option<iotkit_ingest_client::IngestClient>,
+) -> Result<AdapterHandle, std::io::Error> {
     let runtime_handle = tokio::runtime::Handle::try_current()
         .map_err(std::io::Error::other)?;
 
@@ -110,7 +113,7 @@ pub fn start(port_path: String) -> Result<AdapterHandle, std::io::Error> {
 
     let write_tx = source.write_tx;
     let event_loop_handle = runtime_handle.spawn(
-        event_loop(port_path, source.bytes_rx, event_tx, command_rx, write_tx)
+        event_loop(port_path, source.bytes_rx, event_tx, command_rx, write_tx, ingest)
     );
 
     Ok(AdapterHandle {
@@ -130,7 +133,7 @@ mod tests {
     /// #[tokio::test] ではなく plain #[test] で実行することで runtime 不在を保証する。
     #[test]
     fn start_without_runtime_returns_error() {
-        let result = start("/dev/null".to_string());
+        let result = start("/dev/null".to_string(), None);
         assert!(result.is_err(), "start() should return Err without tokio runtime");
     }
 

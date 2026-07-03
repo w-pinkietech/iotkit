@@ -316,7 +316,7 @@ enum RestartSpec {
 /// BravePI mainboard adapterを起動し、hostへ登録する。
 /// 起動時と再起動時の両方から呼ばれる共用コードパス。
 fn start_bravepi(host: &mut AdapterHost, port: &str) -> Result<AdapterId, String> {
-    let handle = bravepi_mainboard_adapter::task::start(port.to_string())
+    let handle = bravepi_mainboard_adapter::task::start(port.to_string(), None)
         .map_err(|e| format!("Failed to start BravePI mainboard adapter on {port}: {e}"))?;
     tracing::info!(adapter_id = %handle.id, port = %port, "BravePI mainboard adapter started");
     let parts = handle.into_parts();

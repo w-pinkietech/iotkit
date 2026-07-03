@@ -1,4 +1,5 @@
 use iotkit_core_types::{AdapterCommand, AdapterEvent, ConfigValue, DeviceCommand, DeviceCommandPayload, DeviceKey, SensorType};
+use iotkit_ingest_client::channel_for_test;
 use tokio::sync::mpsc;
 
 use crate::transport::TransportError;
@@ -52,7 +53,7 @@ async fn shutdown_command_exits_event_loop() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     command_tx.send(AdapterCommand::Shutdown).await.unwrap();
     handle.await.unwrap();
@@ -67,7 +68,7 @@ async fn bytes_channel_error_produces_adapter_error() {
     let (_command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     bytes_tx.send(Err(TransportError { message: "serial port disconnected".to_string() })).await.unwrap();
     handle.await.unwrap();
@@ -88,7 +89,7 @@ async fn bytes_channel_close_produces_adapter_error() {
     let (_command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     drop(bytes_tx);
     handle.await.unwrap();
@@ -108,7 +109,7 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     let device: u64 = 0x246880020140018b;
     let frame_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
@@ -145,13 +146,87 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
 }
 
 #[tokio::test]
+async fn sensor_data_submits_ingest_envelope_before_adapter_event() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+    let (ingest, mut ingest_rx) = channel_for_test(16);
+
+    let handle = tokio::spawn(event_loop(
+        "/dev/test".into(),
+        bytes_rx,
+        event_tx,
+        command_rx,
+        write_tx,
+        Some(ingest),
+    ));
+
+    let device: u64 = 0x246880020140018b;
+    let frame_bytes = build_sensor_frame_bytes(device, 261, -60, 95, 1, &[0x00, 0x80, 0xb3, 0x41]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+
+    let envelope = tokio::time::timeout(std::time::Duration::from_secs(1), ingest_rx.recv())
+        .await
+        .expect("timed out waiting for ingest envelope")
+        .expect("ingest receiver closed");
+    assert_eq!(envelope.source, "bravepi-mainboard:/dev/test");
+    assert_eq!(envelope.items.len(), 1);
+    assert_eq!(envelope.items[0].subject_hint.as_deref(), Some("ble:246880020140018b"));
+    assert_eq!(envelope.items[0].measurement_key, "temperature_c");
+
+    match event_rx.recv().await.expect("should receive DeviceDiscovered") {
+        AdapterEvent::DeviceDiscovered { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
+        }
+        other => panic!("expected DeviceDiscovered, got {:?}", other),
+    }
+    match event_rx.recv().await.expect("should receive SensorData") {
+        AdapterEvent::SensorData { device_key, .. } => {
+            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
+        }
+        other => panic!("expected SensorData, got {:?}", other),
+    }
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn unknown_raw_sensor_type_does_not_submit_ingest_envelope() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, _event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+    let (ingest, mut ingest_rx) = channel_for_test(16);
+
+    let handle = tokio::spawn(event_loop(
+        "/dev/test".into(),
+        bytes_rx,
+        event_tx,
+        command_rx,
+        write_tx,
+        Some(ingest),
+    ));
+
+    let frame_bytes = build_sensor_frame_bytes(0x0123456789abcdef, 9999, -60, 95, 1, &[0x01]);
+    bytes_tx.send(Ok(frame_bytes)).await.unwrap();
+
+    let received = tokio::time::timeout(std::time::Duration::from_millis(50), ingest_rx.recv()).await;
+    assert!(received.is_err(), "unknown raw sensor type should not submit an envelope");
+
+    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
 async fn contact_input_produces_device_discovered() {
     let (bytes_tx, bytes_rx) = mpsc::channel(16);
     let (event_tx, mut event_rx) = mpsc::channel(16);
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     let device: u64 = 0xaabbccdd00112233;
     let frame_bytes = build_sensor_frame_bytes(device, 257, -50, 80, 1, &[0x01]);
@@ -186,7 +261,7 @@ async fn same_transmitter_different_sensor_type_produces_two_discoveries() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     let device: u64 = 0x246880020140018b;
 
@@ -261,7 +336,7 @@ async fn device_command_request_reading_produces_downlink_bytes() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Discover a temperature device
     let device: u64 = 0x246880020140018b;
@@ -296,7 +371,7 @@ async fn device_command_unknown_device_produces_adapter_error() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Send command to unknown device (no discovery)
     command_tx.send(AdapterCommand::DeviceCommand(DeviceCommand {
@@ -328,7 +403,7 @@ async fn set_output_to_non_contact_device_produces_adapter_error() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Discover a temperature device
     let device: u64 = 0x246880020140018b;
@@ -369,7 +444,7 @@ async fn set_output_duration_exceeds_u16_max_produces_adapter_error() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Discover a contact_output device
     let device: u64 = 0x1234567890abcdef;
@@ -410,7 +485,7 @@ async fn config_frame_produces_device_config_event() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Discover a temperature device (0x246880020140018b, sensor_type 261)
     let device: u64 = 0x246880020140018b;
@@ -452,7 +527,7 @@ async fn set_output_to_contact_output_device_produces_downlink_bytes() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Discover a contact_output device
     let device: u64 = 0x1234567890abcdef;
@@ -491,7 +566,7 @@ async fn query_config_produces_downlink_bytes() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Discover a device
     let device: u64 = 0x246880020140018b;
@@ -527,7 +602,7 @@ async fn config_frame_for_undiscovered_device_is_dropped() {
     let (command_tx, command_rx) = mpsc::channel(16);
     let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx));
+    let handle = tokio::spawn(event_loop("/dev/test".into(), bytes_rx, event_tx, command_rx, write_tx, None));
 
     // Send config frame WITHOUT any prior discovery
     let device: u64 = 0x246880020140018b;

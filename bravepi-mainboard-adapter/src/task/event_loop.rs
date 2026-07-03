@@ -29,9 +29,11 @@ pub(crate) async fn event_loop(
     event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
     write_tx: BytesSender,
+    ingest: Option<iotkit_ingest_client::IngestClient>,
 ) {
     tracing::info!(port = %port_path, "BravePI adapter event loop started");
 
+    let adapter_id = format!("bravepi-mainboard:{}", port_path);
     let mut codec = BravePiCodec::new();
     // デバイスのライフサイクル追跡。adapter task 終了時に解放される。
     // BravePI は物理的に固定台数のため、実運用で数十台規模に収まる。
@@ -111,6 +113,28 @@ pub(crate) async fn event_loop(
                                     } else {
                                         devices.get_mut(device_key).unwrap().last_seen =
                                             tokio::time::Instant::now();
+                                    }
+                                }
+
+                                if let Some(client) = &ingest {
+                                    if let AdapterEvent::SensorData {
+                                        device_key, reading, rssi, battery_pct, ..
+                                    } = &event {
+                                        match super::ingest_map::to_items(device_key, reading, *rssi, *battery_pct) {
+                                            Some(items) => {
+                                                let envelope = iotkit_ingest_client::new_envelope(
+                                                    adapter_id.as_str(),
+                                                    items,
+                                                );
+                                                if client.try_submit(envelope).is_err() {
+                                                    tracing::warn!("ingest queue full; dropping reading");
+                                                }
+                                            }
+                                            None => tracing::warn!(
+                                                device_key = %device_key,
+                                                "no measurement mapping; reading not ingested"
+                                            ),
+                                        }
                                     }
                                 }
 

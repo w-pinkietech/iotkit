@@ -61,6 +61,8 @@ dependencies = [
  "bravepi-codec",
  "bravepi-sensors",
  "iotkit-core-types",
+ "iotkit-ingest-client",
+ "iotkit-ingest-contract",
  "rpi4b-transport",
  "tokio",
  "tracing",
