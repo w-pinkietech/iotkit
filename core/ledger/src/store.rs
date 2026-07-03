@@ -1,6 +1,6 @@
 use crate::ids::SystemId;
 use iotkit_core_storage::StorageError;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 #[derive(Debug)]
 pub enum LedgerError {
@@ -13,7 +13,9 @@ pub enum LedgerError {
 impl std::fmt::Display for LedgerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::HardwareIdInUse(h) => write!(f, "hardware_id already in use by a live entry: {h}"),
+            Self::HardwareIdInUse(h) => {
+                write!(f, "hardware_id already in use by a live entry: {h}")
+            }
             Self::NotFound(w) => write!(f, "not found: {w}"),
             Self::InvalidId(s) => write!(f, "invalid system_id text: {s}"),
             Self::Storage(e) => write!(f, "storage error: {e}"),
@@ -92,6 +94,11 @@ pub struct NewDevice {
     pub initial_state: DeviceState,
 }
 
+/// チャネル正規化の一箇所(CLAUDE.md変換境界規律): channel_indexなしの番兵値と既定variant。
+/// collectorとregistryの両方がこの定数を使う(重複定義禁止)。
+pub const CHANNEL_NA: i32 = -1;
+pub const DEFAULT_VARIANT: &str = "primary";
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -99,7 +106,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn audit(
+/// append-only監査イベント(R13最小下地)への行追記。registryクレート等の外部呼び出し用公開面。
+pub fn record_event(
     conn: &Connection,
     kind: &str,
     system_id: Option<&SystemId>,
@@ -107,7 +115,12 @@ fn audit(
 ) -> Result<(), LedgerError> {
     conn.execute(
         "INSERT INTO ledger_events (at, kind, system_id, detail) VALUES (?1, ?2, ?3, ?4)",
-        params![now_ms(), kind, system_id.map(|s| s.as_bytes().to_vec()), detail],
+        params![
+            now_ms(),
+            kind,
+            system_id.map(|s| s.as_bytes().to_vec()),
+            detail
+        ],
     )?;
     Ok(())
 }
@@ -126,7 +139,7 @@ pub fn insert_device(conn: &Connection, new: &NewDevice) -> Result<SystemId, Led
             new.kind.as_db(), new.initial_state.as_db(), now_ms()
         ],
     )?;
-    audit(conn, "device_registered", Some(&sid), &new.hardware_id)?;
+    record_event(conn, "device_registered", Some(&sid), &new.hardware_id)?;
     Ok(sid)
 }
 
@@ -163,12 +176,18 @@ pub fn ensure_series(
     channel_index: i32,
     variant: &str,
     quarantined: bool,
+    quarantine_reason: Option<&str>,
 ) -> Result<i64, LedgerError> {
     if let Some(id) = conn
         .query_row(
             "SELECT series_id FROM series
          WHERE system_id = ?1 AND measurement_key = ?2 AND channel_index = ?3 AND variant = ?4",
-            params![system_id.as_bytes().to_vec(), measurement_key, channel_index, variant],
+            params![
+                system_id.as_bytes().to_vec(),
+                measurement_key,
+                channel_index,
+                variant
+            ],
             |row| row.get::<_, i64>(0),
         )
         .optional()?
@@ -176,14 +195,98 @@ pub fn ensure_series(
         return Ok(id);
     }
     conn.execute(
-        "INSERT INTO series (system_id, measurement_key, channel_index, variant, quarantined, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![system_id.as_bytes().to_vec(), measurement_key, channel_index, variant, quarantined as i32, now_ms()],
+        "INSERT INTO series (system_id, measurement_key, channel_index, variant, quarantined, quarantine_reason, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![system_id.as_bytes().to_vec(), measurement_key, channel_index, variant,
+            quarantined as i32, quarantine_reason, now_ms()],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
-pub fn record_sighting(conn: &Connection, hardware_id: &str, source: &str) -> Result<(), LedgerError> {
+#[derive(Debug, Clone)]
+pub struct SeriesMeta {
+    pub series_id: i64,
+    pub quarantined: bool,
+    pub quarantine_reason: Option<String>,
+    pub range_min: Option<f64>,
+    pub range_max: Option<f64>,
+}
+
+pub fn find_series_meta(
+    conn: &Connection,
+    system_id: &SystemId,
+    measurement_key: &str,
+    channel_index: i32,
+    variant: &str,
+) -> Result<Option<SeriesMeta>, LedgerError> {
+    conn.query_row(
+        "SELECT series_id, quarantined, quarantine_reason, range_min, range_max FROM series
+         WHERE system_id = ?1 AND measurement_key = ?2 AND channel_index = ?3 AND variant = ?4",
+        params![
+            system_id.as_bytes().to_vec(),
+            measurement_key,
+            channel_index,
+            variant
+        ],
+        |row| {
+            Ok(SeriesMeta {
+                series_id: row.get(0)?,
+                quarantined: row.get::<_, i32>(1)? != 0,
+                quarantine_reason: row.get(2)?,
+                range_min: row.get(3)?,
+                range_max: row.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(LedgerError::from)
+}
+
+/// D6決定3(a): 当該subjectで申告キーのseriesが(channel/variant不問で)実体化済みか。
+pub fn series_exists_for_key(
+    conn: &Connection,
+    system_id: &SystemId,
+    measurement_key: &str,
+) -> Result<bool, LedgerError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM series WHERE system_id = ?1 AND measurement_key = ?2",
+        params![system_id.as_bytes().to_vec(), measurement_key],
+        |row| row.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// エイリアス確立時の検疫解除(D6決定3(a)): 申告キーのまま実体化済みの検疫seriesに
+/// canonical定義がバインドされたため、series級検疫を解く。過去の検疫行(readings)は
+/// 履歴としてそのまま(保存済みデータの解釈を遡って変えない)。解除対象は
+/// `quarantine_reason` が一致するseriesのみ(undeclared_channel等はエイリアスでは解決しない)。
+pub fn release_series_quarantine_for_key(
+    conn: &Connection,
+    measurement_key: &str,
+    reason: &str,
+) -> Result<Vec<i64>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT series_id FROM series
+         WHERE measurement_key = ?1 AND quarantined = 1 AND quarantine_reason = ?2",
+    )?;
+    let ids: Vec<i64> = stmt
+        .query_map(params![measurement_key, reason], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    if !ids.is_empty() {
+        conn.execute(
+            "UPDATE series SET quarantined = 0, quarantine_reason = NULL
+             WHERE measurement_key = ?1 AND quarantined = 1 AND quarantine_reason = ?2",
+            params![measurement_key, reason],
+        )?;
+    }
+    Ok(ids)
+}
+
+pub fn record_sighting(
+    conn: &Connection,
+    hardware_id: &str,
+    source: &str,
+) -> Result<(), LedgerError> {
     conn.execute(
         "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
          VALUES (?1, ?2, ?3, ?3, 1)
@@ -220,8 +323,11 @@ pub fn approve_sighting(
             initial_state: DeviceState::Quarantined, // D5経路A: 承認→検疫→active
         },
     )?;
-    conn.execute("DELETE FROM sightings WHERE hardware_id = ?1", params![hardware_id])?;
-    audit(conn, "sighting_approved", Some(&sid), hardware_id)?;
+    conn.execute(
+        "DELETE FROM sightings WHERE hardware_id = ?1",
+        params![hardware_id],
+    )?;
+    record_event(conn, "sighting_approved", Some(&sid), hardware_id)?;
     Ok(sid)
 }
 
@@ -236,7 +342,7 @@ pub fn activate_device(conn: &Connection, system_id: &SystemId) -> Result<(), Le
             system_id.to_text()
         )));
     }
-    audit(conn, "device_activated", Some(system_id), "")?;
+    record_event(conn, "device_activated", Some(system_id), "")?;
     Ok(())
 }
 
@@ -253,7 +359,10 @@ pub fn ledger_epoch(conn: &Connection) -> Result<String, LedgerError> {
         return Ok(v);
     }
     let epoch = uuid::Uuid::now_v7().to_string();
-    conn.execute("INSERT INTO ledger_meta (key, value) VALUES ('epoch', ?1)", params![epoch])?;
+    conn.execute(
+        "INSERT INTO ledger_meta (key, value) VALUES ('epoch', ?1)",
+        params![epoch],
+    )?;
     Ok(epoch)
 }
 
@@ -272,14 +381,20 @@ mod tests {
     fn insert_and_resolve_device_by_hardware_id() {
         let db = test_db();
         db.with_conn_sync(|conn| {
-            let sid = insert_device(conn, &NewDevice {
-                hardware_id: "ble:00000000000000ab".into(),
-                user_label: Some("炉1温度".into()),
-                parent: None,
-                kind: DeviceKind::Individual,
-                initial_state: DeviceState::Active,
-            }).unwrap();
-            let row = find_alive_by_hardware_id(conn, "ble:00000000000000ab").unwrap().unwrap();
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:00000000000000ab".into(),
+                    user_label: Some("炉1温度".into()),
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let row = find_alive_by_hardware_id(conn, "ble:00000000000000ab")
+                .unwrap()
+                .unwrap();
             assert_eq!(row.system_id, sid);
             assert_eq!(row.kind, DeviceKind::Individual);
             Ok(())
@@ -299,7 +414,10 @@ mod tests {
                 initial_state: DeviceState::Active,
             };
             insert_device(conn, &nd).unwrap();
-            assert!(matches!(insert_device(conn, &nd), Err(LedgerError::HardwareIdInUse(_))));
+            assert!(matches!(
+                insert_device(conn, &nd),
+                Err(LedgerError::HardwareIdInUse(_))
+            ));
             Ok(())
         })
         .unwrap();
@@ -309,18 +427,227 @@ mod tests {
     fn ensure_series_is_idempotent_and_monotonic() {
         let db = test_db();
         db.with_conn_sync(|conn| {
-            let sid = insert_device(conn, &NewDevice {
-                hardware_id: "ble:cc".into(),
-                user_label: None,
-                parent: None,
-                kind: DeviceKind::Individual,
-                initial_state: DeviceState::Active,
-            }).unwrap();
-            let s1 = ensure_series(conn, &sid, "temperature_c", -1, "primary", false).unwrap();
-            let s2 = ensure_series(conn, &sid, "temperature_c", -1, "primary", false).unwrap();
-            let s3 = ensure_series(conn, &sid, "voltage_mv", 0, "primary", false).unwrap();
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:cc".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let s1 = ensure_series(
+                conn,
+                &sid,
+                "temperature_c",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
+            let s2 = ensure_series(
+                conn,
+                &sid,
+                "temperature_c",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
+            let s3 =
+                ensure_series(conn, &sid, "voltage_mv", 0, DEFAULT_VARIANT, false, None).unwrap();
             assert_eq!(s1, s2);
             assert!(s3 > s1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn ensure_series_stores_quarantine_reason() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:qr".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let id = ensure_series(
+                conn,
+                &sid,
+                "custom.mystery",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+            let meta = find_series_meta(conn, &sid, "custom.mystery", CHANNEL_NA, DEFAULT_VARIANT)
+                .unwrap()
+                .unwrap();
+            assert_eq!(meta.series_id, id);
+            assert!(meta.quarantined);
+            assert_eq!(meta.quarantine_reason.as_deref(), Some("unknown_key"));
+            assert_eq!(meta.range_min, None);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn series_exists_for_key_ignores_channel_and_variant() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:ex".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            assert!(!series_exists_for_key(conn, &sid, "temp_old").unwrap());
+            ensure_series(conn, &sid, "temp_old", 2, "count", false, None).unwrap();
+            assert!(series_exists_for_key(conn, &sid, "temp_old").unwrap());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn record_event_appends_to_ledger_events() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            record_event(
+                conn,
+                "registry_entry_enabled",
+                None,
+                r#"{"key":"temperature_c"}"#,
+            )
+            .unwrap();
+            let (kind, detail): (String, String) = conn
+                .query_row(
+                    "SELECT kind, detail FROM ledger_events ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(kind, "registry_entry_enabled");
+            assert!(detail.contains("temperature_c"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn release_series_quarantine_clears_matching_reason_only() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:rel".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let a = ensure_series(
+                conn,
+                &sid,
+                "temp_old",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+            ensure_series(
+                conn,
+                &sid,
+                "other_key",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                true,
+                Some("undeclared_channel"),
+            )
+            .unwrap();
+            let released =
+                release_series_quarantine_for_key(conn, "temp_old", "unknown_key").unwrap();
+            assert_eq!(released, vec![a]);
+            let meta = find_series_meta(conn, &sid, "temp_old", CHANNEL_NA, DEFAULT_VARIANT)
+                .unwrap()
+                .unwrap();
+            assert!(!meta.quarantined);
+            assert_eq!(meta.quarantine_reason, None);
+            // キーも理由も異なるseriesは対象外
+            let other = find_series_meta(conn, &sid, "other_key", CHANNEL_NA, DEFAULT_VARIANT)
+                .unwrap()
+                .unwrap();
+            assert!(other.quarantined);
+            // 対象なしの冪等呼び出し
+            assert!(
+                release_series_quarantine_for_key(conn, "temp_old", "unknown_key")
+                    .unwrap()
+                    .is_empty()
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn find_series_meta_returns_range_override() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:rng".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            ensure_series(
+                conn,
+                &sid,
+                "temperature_c",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
+            // Wave 0にはseries値域の設定APIがない(R14=計画4)ため、直接SQLで個別上書きを模擬
+            conn.execute(
+                "UPDATE series SET range_min = -10.0, range_max = 50.0
+                 WHERE system_id = ?1 AND measurement_key = 'temperature_c'",
+                params![sid.as_bytes().to_vec()],
+            )
+            .unwrap();
+            let meta = find_series_meta(conn, &sid, "temperature_c", CHANNEL_NA, DEFAULT_VARIANT)
+                .unwrap()
+                .unwrap();
+            assert_eq!(meta.range_min, Some(-10.0));
+            assert_eq!(meta.range_max, Some(50.0));
             Ok(())
         })
         .unwrap();
@@ -332,13 +659,17 @@ mod tests {
         db.with_conn_sync(|conn| {
             record_sighting(conn, "ble:ff", "bravepi-mainboard").unwrap();
             record_sighting(conn, "ble:ff", "bravepi-mainboard").unwrap();
-            let sid = approve_sighting(conn, "ble:ff", Some("新センサー"), DeviceKind::Individual).unwrap();
+            let sid = approve_sighting(conn, "ble:ff", Some("新センサー"), DeviceKind::Individual)
+                .unwrap();
             let row = find_alive_by_hardware_id(conn, "ble:ff").unwrap().unwrap();
             assert_eq!(row.system_id, sid);
             assert_eq!(row.state, DeviceState::Quarantined);
             activate_device(conn, &sid).unwrap();
             assert_eq!(
-                find_alive_by_hardware_id(conn, "ble:ff").unwrap().unwrap().state,
+                find_alive_by_hardware_id(conn, "ble:ff")
+                    .unwrap()
+                    .unwrap()
+                    .state,
                 DeviceState::Active
             );
             Ok(())
@@ -351,13 +682,17 @@ mod tests {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let hardware_id = "ble:retire01";
-            let sid1 = insert_device(conn, &NewDevice {
-                hardware_id: hardware_id.into(),
-                user_label: None,
-                parent: None,
-                kind: DeviceKind::Individual,
-                initial_state: DeviceState::Active,
-            }).unwrap();
+            let sid1 = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: hardware_id.into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
 
             // retiredへ直接遷移(アプリ層のretire APIが未実装のためraw SQLで模擬)
             conn.execute(
@@ -367,13 +702,17 @@ mod tests {
             .unwrap();
 
             // partial unique index はstate != 'retired'のみ対象のため、同一hardware_idの再登録が成功するはず
-            let sid2 = insert_device(conn, &NewDevice {
-                hardware_id: hardware_id.into(),
-                user_label: None,
-                parent: None,
-                kind: DeviceKind::Individual,
-                initial_state: DeviceState::Active,
-            }).unwrap();
+            let sid2 = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: hardware_id.into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
             assert_ne!(sid1, sid2);
 
             let count: i64 = conn

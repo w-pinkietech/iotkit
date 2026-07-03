@@ -1,4 +1,4 @@
-use crate::registry_policy::{RegistryPolicy, RegistryVerdict};
+use crate::registry_policy::{is_series_level, RegistryPolicy, RegistryVerdict};
 use iotkit_core_ledger as ledger;
 use iotkit_core_storage::DbHandle;
 use iotkit_core_timeseries as ts;
@@ -25,8 +25,14 @@ pub struct Collector {
     tx: mpsc::Sender<IngestRequest>,
 }
 
-#[derive(Debug)]
-pub struct CollectorClosed;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitError {
+    /// ackなし=未耐久(ストレージ失敗等)。コレクタは生存しており、同一envelope_idの再送で
+    /// 回復可能(D1)。再送/スプールは送信側(計画3のアダプタ内クライアント)の責務。
+    NoAck,
+    /// コレクタタスク死亡(キュー閉鎖)。送信を継続しても回復しない。
+    Closed,
+}
 
 /// タスク所有キャッシュ(D5: 起動時全ロードはWave 0では行数が小さいため遅延ロードで開始し、
 /// ミス時にDBを引く。台帳変異は必ずコレクタ経由なので無効化漏れは構造上起きない)
@@ -96,13 +102,15 @@ impl Collector {
         (Collector { tx }, handle)
     }
 
-    pub async fn submit(&self, envelope: Envelope) -> Result<EnvelopeAck, CollectorClosed> {
+    pub async fn submit(&self, envelope: Envelope) -> Result<EnvelopeAck, SubmitError> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .send(IngestRequest { envelope, ack_tx })
             .await
-            .map_err(|_| CollectorClosed)?;
-        ack_rx.await.map_err(|_| CollectorClosed)
+            .map_err(|_| SubmitError::Closed)?;
+        // ack_txドロップ(ストレージ失敗)はNoAck。コレクタ死亡による中途ドロップも
+        // 保守的にNoAckとする(次のsubmitがClosedを返す)。
+        ack_rx.await.map_err(|_| SubmitError::NoAck)
     }
 }
 
@@ -184,13 +192,13 @@ fn process_item(
     item: &ReadingItem,
     received_at: i64,
 ) -> Result<ItemStatus, String> {
-    // 1) レジストリ検証(文法。計画2で値域・未知キー判定に拡張)。決定的な契約違反 → ItemRejected
-    let quarantine = match policy.evaluate(item) {
-        RegistryVerdict::Accept { quarantine } => quarantine,
-        RegistryVerdict::RejectItem { reason_code, message } => {
-            return Ok(ItemStatus::ItemRejected { reason_code, message });
-        }
-    };
+    // 1) 文法検査(決定的契約違反。レジストリにもDBにも触れず判定できるためprecheck)
+    if let Err(e) = validate_measurement_key(&item.measurement_key) {
+        return Ok(ItemStatus::ItemRejected {
+            reason_code: ReasonCode::MalformedMeasurementKey,
+            message: e.to_string(),
+        });
+    }
     // 2) subject解決(D5決定1: 送信者+subject_hint→台帳)。hint欠如も決定的な契約違反
     let Some(hw) = item.subject_hint.as_deref() else {
         return Ok(ItemStatus::ItemRejected {
@@ -209,28 +217,54 @@ fn process_item(
         },
     };
     let Some((system_id, state)) = resolved else {
-        // 3) 未知subject → 目撃ステージング(D5決定4経路A、ack=staged)。ストレージ失敗は上へ伝播
+        // 3) 未知subject → 目撃ステージング(D5決定4経路A、ack=staged)。レジストリ評価はしない
         let payload = serde_json::to_string(item).unwrap_or_else(|_| "{}".into());
         ledger::record_sighting(conn, hw, &envelope.source).map_err(|e| e.to_string())?;
         ts::insert_staged_reading(conn, hw, received_at, &payload).map_err(|e| e.to_string())?;
-        return Ok(ItemStatus::Stored { disposition: Disposition::Staged });
+        return Ok(ItemStatus::Stored {
+            disposition: Disposition::Staged,
+            quarantine_reason: None, // stagedとquarantinedは直列に成立しない(D1: subject解決が常に先)
+        });
     };
-    // 4) series解決(検疫デバイスのデータは検疫行として保存=D1オンボーディング)
+    // 4) レジストリ評価(D6判別表)。Errはストレージ失敗=ackなしへ伝播(D1)
+    let (resolved_key, channel, registry_quarantine) =
+        match policy.evaluate(conn, &system_id, item)? {
+            RegistryVerdict::Accept { resolved_key, channel_index, quarantine } => {
+                (resolved_key, channel_index, quarantine)
+            }
+            RegistryVerdict::RejectItem { reason_code, message } => {
+                return Ok(ItemStatus::ItemRejected { reason_code, message });
+            }
+        };
+    // 5) series解決(検疫デバイスのデータは検疫行として保存=D1オンボーディング)。
+    //    チャネルは評価器が返した正準値をそのまま使う(再計算しない=Global Constraints)
     let device_quarantined = state == ledger::DeviceState::Quarantined;
-    let channel: i32 = item.channel_index.map(i32::from).unwrap_or(-1);
-    let variant = item.series_variant.as_deref().unwrap_or("primary").to_string();
-    let skey = (system_id, item.measurement_key.clone(), channel, variant.clone());
+    let variant = item
+        .series_variant
+        .as_deref()
+        .unwrap_or(ledger::DEFAULT_VARIANT)
+        .to_string();
+    let series_quarantined = registry_quarantine.map_or(false, is_series_level);
+    let skey = (system_id, resolved_key.clone(), channel, variant.clone());
     let series_id = match cache.series.get(&skey) {
         Some(id) => *id,
         None => {
-            let id = ledger::ensure_series(conn, &system_id, &item.measurement_key, channel, &variant, false)
-                .map_err(|e| e.to_string())?;
+            let reason = registry_quarantine
+                .filter(|q| is_series_level(*q))
+                .map(|q| q.as_str());
+            let id = ledger::ensure_series(
+                conn, &system_id, &resolved_key, channel, &variant, series_quarantined, reason,
+            )
+            .map_err(|e| e.to_string())?;
             cache.series.insert(skey, id);
             id
         }
     };
-    // 5) 書き込み
-    let row_quarantined = quarantine || device_quarantined;
+    // 6) 書き込み+ackへの検疫理由可視化(D1追補)。レジストリ起因の理由が具体的なので優先し、
+    //    無ければデバイス検疫を報告する
+    let row_quarantined = registry_quarantine.is_some() || device_quarantined;
+    let wire_reason = registry_quarantine
+        .or_else(|| device_quarantined.then_some(QuarantineReason::DeviceQuarantined));
     let time_source = match item.time_source {
         TimeSource::DeviceNtp => "device_ntp", TimeSource::DeviceRtc => "device_rtc",
         TimeSource::Gateway => "gateway", TimeSource::GatewayAdjusted => "gateway_adjusted",
@@ -248,6 +282,7 @@ fn process_item(
     ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
     Ok(ItemStatus::Stored {
         disposition: if row_quarantined { Disposition::Quarantined } else { Disposition::Durable },
+        quarantine_reason: if row_quarantined { wire_reason } else { None },
     })
 }
 
@@ -295,6 +330,57 @@ mod tests {
         }).unwrap();
     }
 
+    fn raw_channel(item: &ReadingItem) -> i32 {
+        item.channel_index.map(i32::from).unwrap_or(ledger::CHANNEL_NA)
+    }
+
+    /// 検疫理由付きのスタブポリシー(コレクタがverdictをseries/行/ackへ正しく写像するかの検証用)
+    struct QuarantiningStub(QuarantineReason);
+    impl crate::registry_policy::RegistryPolicy for QuarantiningStub {
+        fn evaluate(
+            &self,
+            _conn: &rusqlite::Connection,
+            _system_id: &ledger::SystemId,
+            item: &ReadingItem,
+        ) -> Result<crate::registry_policy::RegistryVerdict, String> {
+            Ok(crate::registry_policy::RegistryVerdict::Accept {
+                resolved_key: item.measurement_key.clone(),
+                channel_index: raw_channel(item),
+                quarantine: Some(self.0),
+            })
+        }
+    }
+
+    /// キーとチャネルを書き換えるスタブ(verdictの写像がseries実体化に反映されるかの検証用)
+    struct RenamingStub;
+    impl crate::registry_policy::RegistryPolicy for RenamingStub {
+        fn evaluate(
+            &self,
+            _conn: &rusqlite::Connection,
+            _system_id: &ledger::SystemId,
+            _item: &ReadingItem,
+        ) -> Result<crate::registry_policy::RegistryVerdict, String> {
+            Ok(crate::registry_policy::RegistryVerdict::Accept {
+                resolved_key: "temperature_c".into(),
+                channel_index: 7, // コレクタが自前計算せずverdictの値を使うことの検証
+                quarantine: None,
+            })
+        }
+    }
+
+    /// Errを返すスタブ(ストレージ失敗の伝播=ackなしの検証用)
+    struct FailingPolicy;
+    impl crate::registry_policy::RegistryPolicy for FailingPolicy {
+        fn evaluate(
+            &self,
+            _conn: &rusqlite::Connection,
+            _system_id: &ledger::SystemId,
+            _item: &ReadingItem,
+        ) -> Result<crate::registry_policy::RegistryVerdict, String> {
+            Err("simulated registry storage failure".into())
+        }
+    }
+
     #[tokio::test]
     async fn known_subject_is_accepted_durable_and_row_exists_before_ack_returns() {
         let db = test_db();
@@ -303,12 +389,118 @@ mod tests {
         let ack = collector.submit(env("e-1", "ble:aa", "temperature_c")).await.unwrap();
         assert!(matches!(ack.status,
             AckStatus::Accepted { ref items }
-            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable })));
+            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable, .. })));
         // ack = 耐久点: ackが返った時点で行が存在する(D1)
         let n: i64 = db.with_conn_sync(|conn| {
             Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
         }).unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_key_quarantine_marks_series_row_and_ack_reason() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(
+            db.clone(), Arc::new(QuarantiningStub(QuarantineReason::UnknownKey)), 16);
+        let ack = collector.submit(env("e-q1", "ble:aa", "custom.mystery")).await.unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored {
+                disposition: Disposition::Quarantined,
+                quarantine_reason: Some(QuarantineReason::UnknownKey),
+            })), "ackに検疫理由が可視化される(D1追補)");
+        let (s_q, s_reason, r_q): (i64, Option<String>, i64) = db.with_conn_sync(|conn| {
+            Ok((
+                conn.query_row("SELECT quarantined FROM series", [], |r| r.get(0)).unwrap(),
+                conn.query_row("SELECT quarantine_reason FROM series", [], |r| r.get(0)).unwrap(),
+                conn.query_row("SELECT quarantined FROM readings", [], |r| r.get(0)).unwrap(),
+            ))
+        }).unwrap();
+        assert_eq!(s_q, 1, "unknown keyはseries級検疫");
+        assert_eq!(s_reason.as_deref(), Some("unknown_key"));
+        assert_eq!(r_q, 1);
+    }
+
+    #[tokio::test]
+    async fn out_of_range_quarantines_row_but_not_series() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(
+            db.clone(), Arc::new(QuarantiningStub(QuarantineReason::OutOfRange)), 16);
+        let ack = collector.submit(env("e-q2", "ble:aa", "temperature_c")).await.unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored {
+                disposition: Disposition::Quarantined,
+                quarantine_reason: Some(QuarantineReason::OutOfRange),
+            })));
+        let (s_q, s_reason, r_q): (i64, Option<String>, i64) = db.with_conn_sync(|conn| {
+            Ok((
+                conn.query_row("SELECT quarantined FROM series", [], |r| r.get(0)).unwrap(),
+                conn.query_row("SELECT quarantine_reason FROM series", [], |r| r.get(0)).unwrap(),
+                conn.query_row("SELECT quarantined FROM readings", [], |r| r.get(0)).unwrap(),
+            ))
+        }).unwrap();
+        assert_eq!(s_q, 0, "値域外はseriesを汚さない(行級のみ)");
+        assert_eq!(s_reason, None);
+        assert_eq!(r_q, 1);
+    }
+
+    #[tokio::test]
+    async fn device_quarantine_is_visible_as_ack_reason() {
+        // 検疫状態デバイス(D5経路A: 承認→検疫→active の途中)のデータは行検疫+理由device_quarantined
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            ledger::record_sighting(conn, "ble:q", "test-adapter").unwrap();
+            ledger::approve_sighting(conn, "ble:q", None, ledger::DeviceKind::Individual).unwrap();
+            Ok(())
+        }).unwrap();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let ack = collector.submit(env("e-dq", "ble:q", "temperature_c")).await.unwrap();
+        let AckStatus::Accepted { items } = ack.status else { panic!("expected Accepted") };
+        assert!(matches!(items[0], ItemStatus::Stored {
+            disposition: Disposition::Quarantined,
+            quarantine_reason: Some(QuarantineReason::DeviceQuarantined),
+        }));
+    }
+
+    #[tokio::test]
+    async fn verdict_resolved_key_and_channel_are_used_for_series() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(RenamingStub), 16);
+        collector.submit(env("e-alias", "ble:aa", "temp_old")).await.unwrap();
+        let (key, ch): (String, i32) = db.with_conn_sync(|conn| {
+            Ok(conn.query_row(
+                "SELECT measurement_key, channel_index FROM series", [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ).unwrap())
+        }).unwrap();
+        assert_eq!(key, "temperature_c", "series実体化はresolved_keyを使う");
+        assert_eq!(ch, 7, "コレクタはチャネルを再計算せずverdictのchannel_indexを使う");
+    }
+
+    #[tokio::test]
+    async fn policy_storage_failure_produces_no_ack() {
+        // レジストリ評価のErrはRejectedではなくackなし(D1。計画1 T6教訓の踏襲)
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(FailingPolicy), 16);
+        let result = collector.submit(env("e-fail", "ble:aa", "temperature_c")).await;
+        assert!(matches!(result, Err(SubmitError::NoAck)));
+        let n: i64 = db.with_conn_sync(|conn| {
+            Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
+        }).unwrap();
+        assert_eq!(n, 0, "エンベロープ全体がロールバックされる");
+    }
+
+    #[test]
+    fn series_level_quarantine_reason_classification_matches_d6() {
+        assert!(is_series_level(QuarantineReason::UnknownKey));
+        assert!(is_series_level(QuarantineReason::UndeclaredChannel));
+        assert!(!is_series_level(QuarantineReason::OutOfRange));
+        assert!(!is_series_level(QuarantineReason::DeviceQuarantined));
     }
 
     #[tokio::test]
@@ -334,7 +526,7 @@ mod tests {
         let ack = collector.submit(env("e-2", "ble:unknown", "temperature_c")).await.unwrap();
         assert!(matches!(ack.status,
             AckStatus::Accepted { ref items }
-            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Staged })));
+            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Staged, .. })));
         let (sightings, staged): (i64, i64) = db.with_conn_sync(|conn| {
             Ok((
                 conn.query_row("SELECT COUNT(*) FROM sightings", [], |r| r.get(0)).unwrap(),
@@ -375,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn storage_failure_produces_no_ack() {
         // ストレージ起因の失敗(コミット不能)はRejected終端ではなくack自体を返さない(D1)。
-        // query_only=ON で以降の書き込みを強制失敗させ、submit()がCollectorClosed(=ackなし、
+        // query_only=ON で以降の書き込みを強制失敗させ、submit()がSubmitError::NoAck(=ackなし、
         // ack_txドロップ)を返すことを確認する。
         let db = test_db();
         register_active(&db, "ble:aa");
@@ -385,7 +577,7 @@ mod tests {
         }).unwrap();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let result = collector.submit(env("e-6", "ble:aa", "temperature_c")).await;
-        assert!(matches!(result, Err(CollectorClosed)));
+        assert!(matches!(result, Err(SubmitError::NoAck)));
     }
 
     #[tokio::test]
@@ -469,7 +661,7 @@ mod tests {
             items: vec![make_item(1.0), make_item(f64::NAN)],
         };
         let result = collector.submit(poison).await;
-        assert!(matches!(result, Err(CollectorClosed)), "storage failure must not produce an ack");
+        assert!(matches!(result, Err(SubmitError::NoAck)), "storage failure must not produce an ack");
 
         // series行は存在しないはず(ロールバック済み)
         let series_count: i64 = db
@@ -490,7 +682,7 @@ mod tests {
         let ack = collector.submit(retry).await.expect("retry must be accepted after cache reset");
         assert!(matches!(ack.status,
             AckStatus::Accepted { ref items }
-            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable })));
+            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable, .. })));
 
         let n: i64 = db
             .with_conn_sync(|conn| {

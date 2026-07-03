@@ -1,6 +1,6 @@
 //! VL53L1X 測距センサー (sensor_type = 260)
 //!
-//! I2C: qwiic ライブラリ → mm (int, 0=無効, cap 2000)
+//! I2C: qwiic ライブラリ → mm (int, 0=無効)
 //! UART (BravePI): UInt16LE → mm
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
@@ -19,7 +19,8 @@ pub fn identity(connection: ConnectionInfo) -> SensorIdentity {
         connection,
     }
 }
-const MAX_DISTANCE_MM: u16 = 2000;
+// 値域のcapはしない: ドライバはデータシートの数学のみ(R3①)。値域判定はR8/カタログ物理限界
+// (distance_mm: 0..4000)の仕事(D6決定8)。旧cap(2000)は実測3mを2mに改変する実データ破壊だった。
 
 /// I2C のアドレス
 pub const I2C_ADDRESS: u8 = 0x29;
@@ -29,8 +30,7 @@ pub fn from_i2c_distance(distance_mm: u16) -> SensorReading {
     if distance_mm == 0 {
         return SensorReading::empty(sensor_type());
     }
-    let capped = distance_mm.min(MAX_DISTANCE_MM);
-    SensorReading::new(sensor_type(), vec![capped as f64], vec!["distance_mm".to_string()])
+    SensorReading::new(sensor_type(), vec![distance_mm as f64], vec!["distance_mm".to_string()])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -42,7 +42,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if mm == 0 {
         return SensorReading::empty(sensor_type());
     }
-    SensorReading::new(sensor_type(), vec![mm.min(MAX_DISTANCE_MM) as f64], vec!["distance_mm".to_string()])
+    SensorReading::new(sensor_type(), vec![mm as f64], vec!["distance_mm".to_string()])
 }
 
 fn decode_uart(sample: UartSample<'_>) -> SensorReading {
@@ -67,9 +67,11 @@ mod tests {
     }
 
     #[test]
-    fn i2c_cap_at_2000() {
+    fn i2c_long_range_is_preserved_not_capped() {
+        // 旧実装は2000mmでcapし実測3mを改変していた(codex最終レビュー指摘)。
+        // 値域判定はレジストリ(カタログ物理限界0..4000)の仕事。
         let reading = from_i2c_distance(3000);
-        assert!((reading.values[0] - 2000.0).abs() < 0.1);
+        assert!((reading.values[0] - 3000.0).abs() < 0.1);
     }
 
     #[test]

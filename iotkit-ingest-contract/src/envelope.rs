@@ -83,7 +83,10 @@ mod tests {
         let ack = EnvelopeAck {
             envelope_id: "gw-1-1".into(),
             status: AckStatus::Accepted {
-                items: vec![ItemStatus::Stored { disposition: Disposition::Quarantined }],
+                items: vec![ItemStatus::Stored {
+                    disposition: Disposition::Quarantined,
+                    quarantine_reason: None,
+                }],
             },
         };
         let json = serde_json::to_string(&ack).unwrap();

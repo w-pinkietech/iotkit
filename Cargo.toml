@@ -7,6 +7,7 @@ members = [
     "core/ledger",
     "core/timeseries",
     "core/collector",
+    "core/registry",
     "rpi4b-driver/transport",
     "bravepi-mainboard-adapter",
     "bravepi-mainboard-adapter/codec",

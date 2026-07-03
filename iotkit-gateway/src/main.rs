@@ -47,9 +47,10 @@ fn main() {
     }
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
-    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3
+    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v2, v4
-    all_migrations.sort_by_key(|m| m.version); // 1,2,3,4
+    all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
+    all_migrations.sort_by_key(|m| m.version); // 1,2,3,4,5,6
     let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path), &all_migrations) {
         Ok(handle) => handle,
         Err(e) => {
@@ -85,9 +86,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     let mut host = AdapterHost::new();
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
+    // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
     let (collector, _collector_handle) = iotkit_core_collector::Collector::spawn(
         db.clone(),
-        std::sync::Arc::new(iotkit_core_collector::PermissiveRegistry),
+        std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
         256,
     );
 
@@ -214,11 +216,15 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                                             tracing::warn!(?ack.status, "ingest not accepted");
                                         }
                                     }
-                                    Ok(Err(_)) => {
-                                        // コレクタタスクが死んでいる = 取り込み全損。プロセスを
-                                        // 「健康」なまま動かし続けるとサイレントにデータを失い続ける
-                                        // ので、fan-inループをbreakして非ゼロexitへ倒す(プロセス
-                                        // レベルの再起動はsystemdの責務)。
+                                    Ok(Err(iotkit_core_collector::SubmitError::NoAck)) => {
+                                        // ストレージ失敗=ackなし(D1)。コレクタは生存しており
+                                        // プロセスを落とす理由はない。このサンプルは失われる
+                                        // (ブリッジにspoolはない=計画3で解消)。
+                                        tracing::error!("ingest storage failure (no ack); sample lost until plan-3 adapter spool");
+                                    }
+                                    Ok(Err(iotkit_core_collector::SubmitError::Closed)) => {
+                                        // コレクタタスク死亡 = 取り込み全損。fan-inループをbreakして
+                                        // 非ゼロexitへ倒す(プロセスレベルの再起動はsystemdの責務)。
                                         tracing::error!("collector closed; aborting fan-in loop for process restart (systemd)");
                                         collector_alive = false;
                                         break;
