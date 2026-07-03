@@ -487,6 +487,8 @@ name = "iotkit-polling-adapter-runtime"
 version = "0.1.0"
 dependencies = [
  "iotkit-core-types",
+ "iotkit-ingest-client",
+ "iotkit-ingest-contract",
  "tokio",
  "tracing",
 ]
@@ -740,6 +742,7 @@ version = "0.1.0"
 dependencies = [
  "bravepi-sensors",
  "iotkit-core-types",
+ "iotkit-ingest-client",
  "iotkit-polling-adapter-runtime",
  "rpi4b-transport",
  "tokio",

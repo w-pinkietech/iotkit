@@ -1,5 +1,6 @@
 //! iotkit-polling-adapter-runtime: shared scaffolding for I2C-bus polling sensor adapters.
 
+mod ingest_map;
 mod polling_loop;
 
 use std::collections::HashSet;
@@ -180,7 +181,11 @@ pub fn validate_config(config: &PollingAdapterConfig) -> Result<(), String> {
 // ── start ─────────────────────────────────────────────────
 
 /// Start the adapter. Must be called from within a Tokio runtime.
-pub fn start(id: AdapterId, config: PollingAdapterConfig) -> Result<AdapterHandle, std::io::Error> {
+pub fn start(
+    id: AdapterId,
+    config: PollingAdapterConfig,
+    ingest: Option<iotkit_ingest_client::IngestClient>,
+) -> Result<AdapterHandle, std::io::Error> {
     validate_config(&config).map_err(std::io::Error::other)?;
 
     // Ensure we are inside a Tokio runtime.
@@ -195,6 +200,8 @@ pub fn start(id: AdapterId, config: PollingAdapterConfig) -> Result<AdapterHandl
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
 
     let task_handle = tokio::spawn(polling_loop::polling_loop(
+        id.clone(),
+        ingest,
         config,
         event_tx,
         command_rx,
@@ -415,7 +422,7 @@ mod tests {
     fn start_without_runtime_returns_error() {
         // No Tokio runtime active on this thread.
         let cfg = stub_config();
-        let err = start(AdapterId::new("test"), cfg).unwrap_err();
+        let err = start(AdapterId::new("test"), cfg, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("no reactor") || msg.contains("runtime"), "unexpected error: {msg}");
     }
@@ -431,7 +438,7 @@ mod tests {
                 key_suffix: None,
             }],
         };
-        let err = start(AdapterId::new("test"), cfg).unwrap_err();
+        let err = start(AdapterId::new("test"), cfg, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("cannot open bus_path"), "unexpected error: {msg}");
     }

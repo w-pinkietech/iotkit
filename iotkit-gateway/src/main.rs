@@ -341,7 +341,7 @@ fn start_rpi_local(
     // Preflight: catch driver-level validation before spawning background tasks
     rpi_local_adapter::validate(&adapter_config)
         .map_err(|e| format!("RPi local adapter config validation failed: {e}"))?;
-    let handle = rpi_local_adapter::start(adapter_config)
+    let handle = rpi_local_adapter::start(adapter_config, None)
         .map_err(|e| format!("Failed to start RPi local adapter: {e}"))?;
     tracing::info!(adapter_id = %handle.id, "RPi local adapter started");
     let parts = handle.into_parts();
