@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+iotkit-core-ledger = { path = "../ledger" }
+iotkit-core-storage = { path = "../storage" }
 iotkit-ingest-contract = { path = "../../iotkit-ingest-contract" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

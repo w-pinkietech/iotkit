@@ -687,7 +687,8 @@ mod v3_tests {
             kind: ledger::DeviceKind::Individual,
             initial_state: ledger::DeviceState::Active,
         }).unwrap();
-        ledger::ensure_series(conn, &sid, "temperature_c", -1, "primary", false).unwrap()
+        ledger::ensure_series(conn, &sid, "temperature_c", ledger::CHANNEL_NA, ledger::DEFAULT_VARIANT, false, None)
+            .unwrap()
     }
 
     #[test]

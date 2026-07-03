@@ -223,7 +223,7 @@ fn process_item(
     let series_id = match cache.series.get(&skey) {
         Some(id) => *id,
         None => {
-            let id = ledger::ensure_series(conn, &system_id, &item.measurement_key, channel, &variant, false)
+            let id = ledger::ensure_series(conn, &system_id, &item.measurement_key, channel, &variant, false, None)
                 .map_err(|e| e.to_string())?;
             cache.series.insert(skey, id);
             id
