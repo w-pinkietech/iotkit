@@ -5,9 +5,10 @@ pub use ids::SystemId;
 pub use store::{
     CHANNEL_NA, DEFAULT_VARIANT, DeviceKind, DeviceRow, DeviceState, EventRow, LedgerError,
     NewDevice, SeriesMeta, SeriesRow, SightingRow, activate_device, approve_sighting,
-    ensure_series, find_alive_by_hardware_id, find_series_meta, get_device, insert_device,
-    ledger_epoch, list_devices, list_recent_events, list_series_for_device, list_sightings,
-    record_event, record_sighting, release_series_quarantine_for_key, series_exists_for_key,
+    bump_generation, current_generation, ensure_series, find_alive_by_hardware_id,
+    find_series_meta, get_device, insert_device, ledger_epoch, list_devices, list_recent_events,
+    list_series_for_device, list_sightings, record_event, record_sighting,
+    release_series_quarantine_for_key, retire_device, series_exists_for_key,
 };
 
 use iotkit_core_storage::Migration;

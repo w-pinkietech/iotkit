@@ -480,6 +480,44 @@ pub fn activate_device(conn: &Connection, system_id: &SystemId) -> Result<(), Le
     Ok(())
 }
 
+/// retire(墓標): 行は消さない。system_id再利用は永久禁止(D5決定4)。
+pub fn retire_device(conn: &Connection, system_id: &SystemId) -> Result<(), LedgerError> {
+    let n = conn.execute(
+        "UPDATE devices SET state = 'retired', retired_at = ?1
+         WHERE system_id = ?2 AND state != 'retired'",
+        params![now_ms(), system_id.as_bytes().to_vec()],
+    )?;
+    if n == 0 {
+        return Err(LedgerError::NotFound(format!(
+            "non-retired device {}",
+            system_id.to_text()
+        )));
+    }
+    record_event(conn, "device_retired", Some(system_id), "")?;
+    Ok(())
+}
+
+/// D5決定3 generation counter共有: 台帳変異の世代番号。CLI変異Txの最終手順で必ず呼ぶ。
+pub fn bump_generation(conn: &Connection) -> Result<i64, LedgerError> {
+    conn.execute(
+        "INSERT INTO ledger_meta (key, value) VALUES ('generation', '1')
+         ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+        [],
+    )?;
+    current_generation(conn)
+}
+
+pub fn current_generation(conn: &Connection) -> Result<i64, LedgerError> {
+    conn.query_row(
+        "SELECT CAST(value AS INTEGER) FROM ledger_meta WHERE key = 'generation'",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+    .map(|v| v.unwrap_or(0))
+    .map_err(LedgerError::from)
+}
+
 /// 台帳エポック(D5決定3の複合カーソル (epoch, seq) の前半)。初回に生成し永続化。
 pub fn ledger_epoch(conn: &Connection) -> Result<String, LedgerError> {
     if let Some(v) = conn
@@ -866,12 +904,7 @@ mod tests {
             )
             .unwrap();
 
-            // retiredへ直接遷移(アプリ層のretire APIが未実装のためraw SQLで模擬)
-            conn.execute(
-                "UPDATE devices SET state = 'retired', retired_at = ?1 WHERE system_id = ?2",
-                params![now_ms(), sid1.as_bytes().to_vec()],
-            )
-            .unwrap();
+            retire_device(conn, &sid1).unwrap();
 
             // partial unique index はstate != 'retired'のみ対象のため、同一hardware_idの再登録が成功するはず
             let sid2 = insert_device(
@@ -898,6 +931,84 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn retire_device_marks_tombstone_and_records_event() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = insert_device(conn, &NewDevice {
+                hardware_id: "ble:tombstone".into(),
+                user_label: None,
+                parent: None,
+                kind: DeviceKind::Individual,
+                initial_state: DeviceState::Active,
+            }).unwrap();
+
+            retire_device(conn, &sid).unwrap();
+
+            let row = get_device(conn, &sid).unwrap().unwrap();
+            assert_eq!(row.state, DeviceState::Retired);
+            let retired_at: Option<i64> = conn
+                .query_row(
+                    "SELECT retired_at FROM devices WHERE system_id = ?1",
+                    params![sid.as_bytes().to_vec()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(retired_at.is_some());
+            assert!(find_alive_by_hardware_id(conn, "ble:tombstone").unwrap().is_none());
+
+            let (kind, event_sid): (String, Vec<u8>) = conn
+                .query_row(
+                    "SELECT kind, system_id FROM ledger_events ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(kind, "device_retired");
+            assert_eq!(event_sid, sid.as_bytes().to_vec());
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn retire_device_returns_not_found_for_missing_or_already_retired_device() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let missing = SystemId::generate();
+            assert!(matches!(
+                retire_device(conn, &missing),
+                Err(LedgerError::NotFound(_))
+            ));
+
+            let sid = insert_device(conn, &NewDevice {
+                hardware_id: "ble:already-retired".into(),
+                user_label: None,
+                parent: None,
+                kind: DeviceKind::Individual,
+                initial_state: DeviceState::Active,
+            }).unwrap();
+            retire_device(conn, &sid).unwrap();
+            assert!(matches!(
+                retire_device(conn, &sid),
+                Err(LedgerError::NotFound(_))
+            ));
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn generation_counter_defaults_to_zero_and_bumps_monotonically() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            assert_eq!(current_generation(conn).unwrap(), 0);
+            assert_eq!(bump_generation(conn).unwrap(), 1);
+            assert_eq!(current_generation(conn).unwrap(), 1);
+            assert_eq!(bump_generation(conn).unwrap(), 2);
+            assert_eq!(current_generation(conn).unwrap(), 2);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
