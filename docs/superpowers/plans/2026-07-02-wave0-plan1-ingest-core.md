@@ -2297,6 +2297,15 @@ git commit -m "feat(gateway): adapter restart supervision with exponential backo
 修正済み: Critical 1件(ロールバック後のResolutionCache汚染=幻のseries_id)、dedup日和見パージ(72h)、
 コレクタ死のfail-fast(systemd再起動に委譲)、旧SAFETYコメント3箇所。
 
+**codex最終実装レビュー(2026-07-03、gpt-5.5 xhigh)の裁定**:
+- [中]加速度単位1000倍ずれ+magnitude第4チャネル誤分類 → **修正済み**(ブリッジでg→mG変換+派生値破棄)
+- [中]マイグレーション部分適用穴(MAX水位方式) → **修正済み**(集合差方式+ギャップ充填テスト)
+- [高]ブリッジのno-ack経路(タイムアウト/ストレージ失敗時にイベント消費のみ) → **持ち越し**:
+  D1の軽量プロファイル(fire-and-forget一級市民)として契約内。公式経路の再送責任の正規解は
+  **計画3のiotkit-ingest-client(spool+再送+バックオフ)**であり、暫定ブリッジには実装しない
+- [中]コレクタJoinHandle無監視(idle中の死を未検知) → **持ち越し**: 死は次のsubmitで検知され
+  fail-fastする。未検知窓は次ポーリング周期(~1s)まで=実害軽微
+
 **意識的な持ち越し**(レビュー裁定済み):
 - **BravePIデータは承認CLI(計画4)までstaged_readingsリング(1000件/hardware_id)に留まる**。
   現場配備は計画4(gatewayctl device approve)着地後——これはWave 0の段取り上の前提であり本計画の欠陥ではない

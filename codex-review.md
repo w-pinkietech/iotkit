@@ -246,3 +246,18 @@ digraph dependencies {
 - GPIO slice の内部監視方式
 
 これらは `bravepi-mainboard-adapter` / `rpi-local-adapter` という命名と、上記の v1 前提を固定した後に詰めれば十分である。
+
+## 2026-07-03 Wave 0 Plan 1 final impl review (PR #48)
+
+実行: codex exec / gpt-5.5 / reasoning effort xhigh / read-only。対象: master...feature/wave0-plan1-ingest-core。
+
+| 指摘 | 裁定 | 対処 |
+|---|---|---|
+| [高] ブリッジのno-ack経路がretry/spoolせずイベント消費 | 持ち越し(計画3) | D1軽量プロファイルとして契約内。正規解はiotkit-ingest-clientのspool+再送。plan末尾に記録 |
+| [中] コレクタJoinHandle無監視(idle中の死) | 持ち越し | 次submit(~1s後)でfail-fast検知。実害軽微 |
+| [中] マイグレーションのMAX水位方式で部分適用DBに穴 | 修正 | 集合差方式へ(fix(storage)) + ギャップ充填テスト |
+| [中] 加速度: ドライバはg単位+派生magnitudeをブリッジが無変換でmG扱い | 修正 | ブリッジでg→mG(×1000)+派生値破棄(fix(gateway)) + テスト2本 |
+
+良い判断として引用: 単一トランザクション+commit後ack、Rejected/no-ackの使い分け、マイグレーション合成。
+教訓: 加速度単位はClaude系レビュー4層(タスク×2+最終+再)が全て見逃し、別ベンダーの実コード照合が捕捉した。
+ドライバ出力単位とD6正準単位の対応表検証を計画3(写像移設)のレビュー観点に追加すること。
