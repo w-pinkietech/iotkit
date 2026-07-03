@@ -221,7 +221,7 @@ async fn auto_enable_failure_produces_no_ack_and_retry_recovers_consistently() {
     let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
     let e = env_with("e-8", "ble:aa", "temperature_c", None, vec![21.5]);
     let result = collector.submit(e.clone()).await;
-    assert!(matches!(result, Err(iotkit_core_collector::CollectorClosed)),
+    assert!(matches!(result, Err(iotkit_core_collector::SubmitError::NoAck)),
         "auto-enable失敗はRejectedではなくackなし(D1)");
     let (dedup, entries, events, readings): (i64, i64, i64, i64) = db.with_conn_sync(|conn| {
         conn.execute_batch("DROP TRIGGER fail_enable;")?;

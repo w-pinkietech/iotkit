@@ -25,8 +25,14 @@ pub struct Collector {
     tx: mpsc::Sender<IngestRequest>,
 }
 
-#[derive(Debug)]
-pub struct CollectorClosed;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitError {
+    /// ackなし=未耐久(ストレージ失敗等)。コレクタは生存しており、同一envelope_idの再送で
+    /// 回復可能(D1)。再送/スプールは送信側(計画3のアダプタ内クライアント)の責務。
+    NoAck,
+    /// コレクタタスク死亡(キュー閉鎖)。送信を継続しても回復しない。
+    Closed,
+}
 
 /// タスク所有キャッシュ(D5: 起動時全ロードはWave 0では行数が小さいため遅延ロードで開始し、
 /// ミス時にDBを引く。台帳変異は必ずコレクタ経由なので無効化漏れは構造上起きない)
@@ -96,13 +102,15 @@ impl Collector {
         (Collector { tx }, handle)
     }
 
-    pub async fn submit(&self, envelope: Envelope) -> Result<EnvelopeAck, CollectorClosed> {
+    pub async fn submit(&self, envelope: Envelope) -> Result<EnvelopeAck, SubmitError> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .send(IngestRequest { envelope, ack_tx })
             .await
-            .map_err(|_| CollectorClosed)?;
-        ack_rx.await.map_err(|_| CollectorClosed)
+            .map_err(|_| SubmitError::Closed)?;
+        // ack_txドロップ(ストレージ失敗)はNoAck。コレクタ死亡による中途ドロップも
+        // 保守的にNoAckとする(次のsubmitがClosedを返す)。
+        ack_rx.await.map_err(|_| SubmitError::NoAck)
     }
 }
 
@@ -480,7 +488,7 @@ mod tests {
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(FailingPolicy), 16);
         let result = collector.submit(env("e-fail", "ble:aa", "temperature_c")).await;
-        assert!(matches!(result, Err(CollectorClosed)));
+        assert!(matches!(result, Err(SubmitError::NoAck)));
         let n: i64 = db.with_conn_sync(|conn| {
             Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
         }).unwrap();
@@ -559,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn storage_failure_produces_no_ack() {
         // ストレージ起因の失敗(コミット不能)はRejected終端ではなくack自体を返さない(D1)。
-        // query_only=ON で以降の書き込みを強制失敗させ、submit()がCollectorClosed(=ackなし、
+        // query_only=ON で以降の書き込みを強制失敗させ、submit()がSubmitError::NoAck(=ackなし、
         // ack_txドロップ)を返すことを確認する。
         let db = test_db();
         register_active(&db, "ble:aa");
@@ -569,7 +577,7 @@ mod tests {
         }).unwrap();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let result = collector.submit(env("e-6", "ble:aa", "temperature_c")).await;
-        assert!(matches!(result, Err(CollectorClosed)));
+        assert!(matches!(result, Err(SubmitError::NoAck)));
     }
 
     #[tokio::test]
@@ -653,7 +661,7 @@ mod tests {
             items: vec![make_item(1.0), make_item(f64::NAN)],
         };
         let result = collector.submit(poison).await;
-        assert!(matches!(result, Err(CollectorClosed)), "storage failure must not produce an ack");
+        assert!(matches!(result, Err(SubmitError::NoAck)), "storage failure must not produce an ack");
 
         // series行は存在しないはず(ロールバック済み)
         let series_count: i64 = db

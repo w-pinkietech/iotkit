@@ -216,11 +216,15 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                                             tracing::warn!(?ack.status, "ingest not accepted");
                                         }
                                     }
-                                    Ok(Err(_)) => {
-                                        // コレクタタスクが死んでいる = 取り込み全損。プロセスを
-                                        // 「健康」なまま動かし続けるとサイレントにデータを失い続ける
-                                        // ので、fan-inループをbreakして非ゼロexitへ倒す(プロセス
-                                        // レベルの再起動はsystemdの責務)。
+                                    Ok(Err(iotkit_core_collector::SubmitError::NoAck)) => {
+                                        // ストレージ失敗=ackなし(D1)。コレクタは生存しており
+                                        // プロセスを落とす理由はない。このサンプルは失われる
+                                        // (ブリッジにspoolはない=計画3で解消)。
+                                        tracing::error!("ingest storage failure (no ack); sample lost until plan-3 adapter spool");
+                                    }
+                                    Ok(Err(iotkit_core_collector::SubmitError::Closed)) => {
+                                        // コレクタタスク死亡 = 取り込み全損。fan-inループをbreakして
+                                        // 非ゼロexitへ倒す(プロセスレベルの再起動はsystemdの責務)。
                                         tracing::error!("collector closed; aborting fan-in loop for process restart (systemd)");
                                         collector_alive = false;
                                         break;
