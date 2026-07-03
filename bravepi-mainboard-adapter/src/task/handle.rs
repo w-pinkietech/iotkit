@@ -110,10 +110,11 @@ pub fn start(
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
     let id = AdapterId::new(format!("bravepi-mainboard:{}", port_path));
+    let adapter_id = id.as_str().to_string();
 
     let write_tx = source.write_tx;
     let event_loop_handle = runtime_handle.spawn(
-        event_loop(port_path, source.bytes_rx, event_tx, command_rx, write_tx, ingest)
+        event_loop(adapter_id, port_path, source.bytes_rx, event_tx, command_rx, write_tx, ingest)
     );
 
     Ok(AdapterHandle {

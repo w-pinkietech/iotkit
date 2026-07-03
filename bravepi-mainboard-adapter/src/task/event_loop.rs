@@ -24,6 +24,7 @@ struct DeviceState {
 }
 
 pub(crate) async fn event_loop(
+    adapter_id: String,
     port_path: String,
     mut bytes_rx: BytesReceiver,
     event_tx: mpsc::Sender<AdapterEvent>,
@@ -33,7 +34,6 @@ pub(crate) async fn event_loop(
 ) {
     tracing::info!(port = %port_path, "BravePI adapter event loop started");
 
-    let adapter_id = format!("bravepi-mainboard:{}", port_path);
     let mut codec = BravePiCodec::new();
     // デバイスのライフサイクル追跡。adapter task 終了時に解放される。
     // BravePI は物理的に固定台数のため、実運用で数十台規模に収まる。
