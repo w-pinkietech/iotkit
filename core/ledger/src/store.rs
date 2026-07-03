@@ -7,6 +7,7 @@ pub enum LedgerError {
     HardwareIdInUse(String),
     NotFound(String),
     InvalidId(String),
+    InvalidReplace(String),
     Storage(StorageError),
     Sqlite(rusqlite::Error),
 }
@@ -18,6 +19,7 @@ impl std::fmt::Display for LedgerError {
             }
             Self::NotFound(w) => write!(f, "not found: {w}"),
             Self::InvalidId(s) => write!(f, "invalid system_id text: {s}"),
+            Self::InvalidReplace(s) => write!(f, "invalid replace: {s}"),
             Self::Storage(e) => write!(f, "storage error: {e}"),
             Self::Sqlite(e) => write!(f, "sqlite error: {e}"),
         }
@@ -126,6 +128,13 @@ pub struct NewDevice {
     pub parent: Option<SystemId>,
     pub kind: DeviceKind,
     pub initial_state: DeviceState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaceOutcome {
+    pub replaced: SystemId,
+    pub old_hardware_id: String,
+    pub retired_candidates: Vec<SystemId>,
 }
 
 /// チャネル正規化の一箇所(CLAUDE.md変換境界規律): channel_indexなしの番兵値と既定variant。
@@ -377,6 +386,75 @@ pub fn release_series_quarantine_for_key(
         )?;
     }
     Ok(ids)
+}
+
+pub fn set_calibration_review(
+    conn: &Connection,
+    system_id: &SystemId,
+    flag: bool,
+) -> Result<usize, LedgerError> {
+    conn.execute(
+        "UPDATE series SET calibration_review = ?1 WHERE system_id = ?2",
+        params![flag as i32, system_id.as_bytes().to_vec()],
+    )
+    .map_err(LedgerError::from)
+}
+
+pub fn replace_hardware(
+    conn: &Connection,
+    system_id: &SystemId,
+    new_hardware_id: &str,
+) -> Result<ReplaceOutcome, LedgerError> {
+    let target = get_device(conn, system_id)?
+        .filter(|row| row.state != DeviceState::Retired)
+        .ok_or_else(|| {
+            LedgerError::NotFound(format!("non-retired device {}", system_id.to_text()))
+        })?;
+    if target.hardware_id == new_hardware_id {
+        return Err(LedgerError::InvalidReplace(format!(
+            "new hardware_id is the same as current hardware_id: {new_hardware_id}"
+        )));
+    }
+    let old_hardware_id = target.hardware_id;
+    let now = now_ms();
+    let mut retired_candidates = Vec::new();
+
+    if let Some(candidate) = find_alive_by_hardware_id(conn, new_hardware_id)?
+        && candidate.system_id != *system_id
+    {
+        conn.execute(
+            "UPDATE devices SET state = 'retired', retired_at = ?1, superseded_by = ?2
+             WHERE system_id = ?3 AND state != 'retired'",
+            params![
+                now,
+                system_id.as_bytes().to_vec(),
+                candidate.system_id.as_bytes().to_vec()
+            ],
+        )?;
+        retired_candidates.push(candidate.system_id);
+    }
+
+    conn.execute(
+        "UPDATE devices SET hardware_id = ?1 WHERE system_id = ?2 AND state != 'retired'",
+        params![new_hardware_id, system_id.as_bytes().to_vec()],
+    )?;
+    set_calibration_review(conn, system_id, true)?;
+    let detail = serde_json::json!({
+        "old_hw": old_hardware_id,
+        "new_hw": new_hardware_id,
+        "at": now,
+    });
+    record_event(
+        conn,
+        "hardware_replaced",
+        Some(system_id),
+        &detail.to_string(),
+    )?;
+    Ok(ReplaceOutcome {
+        replaced: *system_id,
+        old_hardware_id,
+        retired_candidates,
+    })
 }
 
 pub fn record_sighting(
@@ -996,6 +1074,126 @@ mod tests {
             ));
             Ok(())
         }).unwrap();
+    }
+
+    #[test]
+    fn replace_hardware_retires_candidate_before_rebinding_and_records_event() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let target = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:old".into(),
+                    user_label: Some("target".into()),
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let candidate = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:new".into(),
+                    user_label: Some("candidate".into()),
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Quarantined,
+                },
+            )
+            .unwrap();
+            ensure_series(
+                conn,
+                &target,
+                "temperature_c",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
+            ensure_series(conn, &target, "voltage_mv", 0, DEFAULT_VARIANT, false, None).unwrap();
+
+            let outcome = replace_hardware(conn, &target, "ble:new").unwrap();
+
+            assert_eq!(outcome.replaced, target);
+            assert_eq!(outcome.old_hardware_id, "ble:old");
+            assert_eq!(outcome.retired_candidates, vec![candidate]);
+
+            let target_row = get_device(conn, &target).unwrap().unwrap();
+            assert_eq!(target_row.hardware_id, "ble:new");
+            assert_eq!(target_row.state, DeviceState::Active);
+
+            let candidate_row = get_device(conn, &candidate).unwrap().unwrap();
+            assert_eq!(candidate_row.state, DeviceState::Retired);
+            let (superseded_by, retired_at): (Vec<u8>, Option<i64>) = conn
+                .query_row(
+                    "SELECT superseded_by, retired_at FROM devices WHERE system_id = ?1",
+                    params![candidate.as_bytes().to_vec()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(superseded_by, target.as_bytes().to_vec());
+            assert!(retired_at.is_some());
+
+            assert!(
+                list_series_for_device(conn, &target)
+                    .unwrap()
+                    .iter()
+                    .all(|series| series.calibration_review)
+            );
+
+            let (kind, event_sid, detail): (String, Vec<u8>, String) = conn
+                .query_row(
+                    "SELECT kind, system_id, detail FROM ledger_events ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(kind, "hardware_replaced");
+            assert_eq!(event_sid, target.as_bytes().to_vec());
+            let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+            assert_eq!(detail["old_hw"], "ble:old");
+            assert_eq!(detail["new_hw"], "ble:new");
+            assert!(detail["at"].as_i64().is_some());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn replace_hardware_rejects_same_hardware_id_without_recording_event() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let target = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:same".into(),
+                    user_label: Some("target".into()),
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+
+            assert!(matches!(
+                replace_hardware(conn, &target, "ble:same"),
+                Err(LedgerError::InvalidReplace(_))
+            ));
+            let row = get_device(conn, &target).unwrap().unwrap();
+            assert_eq!(row.hardware_id, "ble:same");
+            let events: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ledger_events WHERE kind = 'hardware_replaced'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(events, 0);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

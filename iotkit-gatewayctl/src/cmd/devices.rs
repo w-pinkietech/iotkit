@@ -79,7 +79,7 @@ fn kind_label(kind: ledger::DeviceKind) -> &'static str {
     }
 }
 
-fn mutate<T, F>(conn: &Connection, f: F) -> AppResult<T>
+pub(crate) fn mutate<T, F>(conn: &Connection, f: F) -> AppResult<T>
 where
     F: FnOnce(&rusqlite::Transaction<'_>) -> AppResult<T>,
 {

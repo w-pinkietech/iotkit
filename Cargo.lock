@@ -480,6 +480,7 @@ version = "0.1.0"
 dependencies = [
  "iotkit-core-storage",
  "rusqlite",
+ "serde_json",
  "tracing",
  "uuid",
 ]
@@ -561,6 +562,7 @@ dependencies = [
  "iotkit-core-registry",
  "iotkit-core-storage",
  "iotkit-core-timeseries",
+ "iotkit-ingest-contract",
  "rusqlite",
  "serde_json",
  "tempfile",

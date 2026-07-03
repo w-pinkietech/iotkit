@@ -1,6 +1,7 @@
 mod cmd {
     pub mod devices;
     pub mod query;
+    pub mod replace;
 }
 
 use clap::{Parser, Subcommand};
@@ -49,6 +50,8 @@ enum DeviceCommand {
     Approve(cmd::devices::ApproveArgs),
     Activate(cmd::devices::SystemIdArgs),
     Retire(cmd::devices::RetireArgs),
+    Replace(cmd::replace::ReplaceArgs),
+    ReplaceUndo(cmd::replace::ReplaceUndoArgs),
 }
 
 #[derive(Subcommand)]
@@ -101,6 +104,8 @@ fn dispatch(conn: &rusqlite::Connection, command: Command) -> AppResult<()> {
             DeviceCommand::Approve(args) => cmd::devices::run_approve_device(conn, args),
             DeviceCommand::Activate(args) => cmd::devices::run_activate_device(conn, args),
             DeviceCommand::Retire(args) => cmd::devices::run_retire_device(conn, args),
+            DeviceCommand::Replace(args) => cmd::replace::run_replace(conn, args),
+            DeviceCommand::ReplaceUndo(args) => cmd::replace::run_replace_undo(conn, args),
         },
         Command::Events { command } => match command {
             EventsCommand::Tail(args) => cmd::devices::run_tail_events(conn, args),

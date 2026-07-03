@@ -3,7 +3,7 @@ use iotkit_core_timeseries::{
     insert_staged_reading,
     query::{
         aggregate_readings_v3, export_csv, latest_by_series, list_staged_for_hardware,
-        query_readings_v3,
+        mark_readings_quarantined, query_readings_v3,
     },
 };
 use rusqlite::params;
@@ -215,6 +215,62 @@ fn list_staged_for_hardware_returns_newest_rows_for_that_hardware() {
 
         let rows = list_staged_for_hardware(conn, "ble:target", 1).unwrap();
         assert_eq!(rows, vec![(2000, r#"{"v":2}"#.to_string())]);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn mark_readings_quarantined_uses_received_at_range_for_multiple_series() {
+    let db = test_db();
+    db.with_conn_sync(|conn| {
+        let first = seed_series(conn);
+        let sid = iotkit_core_ledger::insert_device(
+            conn,
+            &iotkit_core_ledger::NewDevice {
+                hardware_id: "ble:q2".into(),
+                user_label: None,
+                parent: None,
+                kind: iotkit_core_ledger::DeviceKind::Individual,
+                initial_state: iotkit_core_ledger::DeviceState::Active,
+            },
+        )
+        .unwrap();
+        let second = iotkit_core_ledger::ensure_series(
+            conn,
+            &sid,
+            "voltage_mv",
+            0,
+            iotkit_core_ledger::DEFAULT_VARIANT,
+            false,
+            None,
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO readings
+                (seq, series_id, received_at, device_time, time_source, time_quality,
+                 event_time, event_time_source, values_json, rssi, battery_pct, quarantined)
+             VALUES
+                (1, ?1, 5000, 1000, 'device_ntp', 'unsynced', 1000, 'device', '[1.0]', NULL, NULL, 0),
+                (2, ?1, 3500, 9000, 'device_ntp', 'unsynced', 9000, 'device', '[2.0]', NULL, NULL, 0),
+                (3, ?2, 7000, 1100, 'device_ntp', 'unsynced', 1100, 'device', '[3.0]', NULL, NULL, 0),
+                (4, ?2, 9000, 1200, 'device_ntp', 'unsynced', 1200, 'device', '[4.0]', NULL, NULL, 0)",
+            params![first, second],
+        )
+        .unwrap();
+
+        let updated = mark_readings_quarantined(conn, &[first, second], 4000, 8000).unwrap();
+
+        assert_eq!(updated, 2);
+        let rows: Vec<(i64, i64)> = conn
+            .prepare("SELECT seq, quarantined FROM readings ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, vec![(1, 1), (2, 0), (3, 1), (4, 0)]);
         Ok(())
     })
     .unwrap();

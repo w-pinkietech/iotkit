@@ -1,5 +1,6 @@
 use crate::TimeseriesError;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use std::borrow::Cow;
 
 pub struct ReadingRowV3 {
@@ -235,5 +236,29 @@ pub fn list_staged_for_hardware(
         )?;
     stmt.query_map(params![hardware_id, limit], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<Vec<_>, _>>()
+        .map_err(TimeseriesError::from)
+}
+
+pub fn mark_readings_quarantined(
+    conn: &Connection,
+    series_ids: &[i64],
+    from_received_ms: i64,
+    to_received_ms: i64,
+) -> Result<u64, TimeseriesError> {
+    if series_ids.is_empty() {
+        return Ok(0);
+    }
+    let vars = std::iter::repeat_n("?", series_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "UPDATE readings SET quarantined = 1
+         WHERE series_id IN ({vars}) AND received_at >= ? AND received_at <= ?"
+    );
+    let mut values: Vec<Value> = series_ids.iter().copied().map(Value::from).collect();
+    values.push(Value::from(from_received_ms));
+    values.push(Value::from(to_received_ms));
+    conn.execute(&sql, params_from_iter(values))
+        .map(|n| n as u64)
         .map_err(TimeseriesError::from)
 }
