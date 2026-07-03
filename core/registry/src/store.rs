@@ -276,9 +276,8 @@ pub fn define_alias(
     if alias_exists(conn, alias)? {
         return Err(RegistryError::AliasExists(alias.to_string()));
     }
-    if get_entry(conn, target_key)?.is_none() {
-        return Err(RegistryError::TargetNotFound(target_key.to_string()));
-    }
+    let target = get_entry(conn, target_key)?
+        .ok_or_else(|| RegistryError::TargetNotFound(target_key.to_string()))?;
     conn.execute(
         "INSERT INTO registry_aliases (alias, measurement_key, alias_kind, created_at)
          VALUES (?1, ?2, ?3, ?4)",
@@ -286,11 +285,24 @@ pub fn define_alias(
     )?;
     // D6決定3(a): 申告キー(=alias名)のまま実体化済みのunknown_key検疫seriesへcanonical定義が
     // バインドされた → series級検疫を解除(series_keyは不変=履歴を切らない)。
-    // undeclared_channel等の検疫はエイリアスでは解決しないため対象外。
-    let released = ledger::release_series_quarantine_for_key(conn, alias, "unknown_key")?;
-    if !released.is_empty() {
+    // canonicalのchannel定義に合わないunknown_key検疫はundeclared_channelへ張り替えて維持する。
+    let channel_ok = |channel_index: i32| match target.channel_mode {
+        ChannelMode::Single => channel_index == ledger::CHANNEL_NA || channel_index == 0,
+        ChannelMode::Fixed => {
+            channel_index >= 0 && (channel_index as usize) < target.channel_roles.len()
+        }
+        ChannelMode::Generic => true,
+    };
+    let (released, mismatch) = ledger::release_series_quarantine_for_key_checked(
+        conn,
+        alias,
+        "unknown_key",
+        &channel_ok,
+    )?;
+    if !released.is_empty() || !mismatch.is_empty() {
         let detail = serde_json::json!({
             "alias": alias, "canonical": target_key, "series_ids": released,
+            "channel_mismatch_ids": mismatch,
         })
         .to_string();
         ledger::record_event(conn, "series_quarantine_released", None, &detail)?;
@@ -533,6 +545,177 @@ mod tests {
                 )
                 .unwrap();
             assert!(detail.contains("temp_old") && detail.contains("temperature_c"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn define_alias_keeps_channel_mismatched_unknown_key_series_quarantined() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let cat = standard_catalog();
+            enable_entry(
+                conn,
+                cat.find("temperature_c").unwrap(),
+                &cat.catalog_version,
+                "auto",
+            )
+            .unwrap();
+            let sid = iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:mix".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let good = iotkit_core_ledger::ensure_series(
+                conn,
+                &sid,
+                "temp_old",
+                iotkit_core_ledger::CHANNEL_NA,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+            let bad = iotkit_core_ledger::ensure_series(
+                conn,
+                &sid,
+                "temp_old",
+                1,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+
+            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+
+            let released = iotkit_core_ledger::find_series_meta(
+                conn,
+                &sid,
+                "temp_old",
+                iotkit_core_ledger::CHANNEL_NA,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(!released.quarantined);
+            let mismatched = iotkit_core_ledger::find_series_meta(
+                conn,
+                &sid,
+                "temp_old",
+                1,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(mismatched.quarantined);
+            assert_eq!(
+                mismatched.quarantine_reason.as_deref(),
+                Some("undeclared_channel")
+            );
+            let detail: String = conn
+                .query_row(
+                    "SELECT detail FROM ledger_events WHERE kind='series_quarantine_released'
+                 ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(detail.contains(&format!("\"series_ids\":[{good}]")), "{detail}");
+            assert!(detail.contains(&format!("\"channel_mismatch_ids\":[{bad}]")), "{detail}");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn define_alias_releases_single_zero_channel_unknown_key_series() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let cat = standard_catalog();
+            enable_entry(
+                conn,
+                cat.find("temperature_c").unwrap(),
+                &cat.catalog_version,
+                "auto",
+            )
+            .unwrap();
+            let sid = iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:zero".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let zero = iotkit_core_ledger::ensure_series(
+                conn,
+                &sid,
+                "temp_old",
+                0,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+            let bad = iotkit_core_ledger::ensure_series(
+                conn,
+                &sid,
+                "temp_old",
+                5,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+
+            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+
+            let released = iotkit_core_ledger::find_series_meta(
+                conn,
+                &sid,
+                "temp_old",
+                0,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(!released.quarantined, "single channel=0 は検疫解除対象");
+            assert_eq!(released.quarantine_reason, None);
+            let mismatched = iotkit_core_ledger::find_series_meta(
+                conn,
+                &sid,
+                "temp_old",
+                5,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(mismatched.quarantined);
+            assert_eq!(
+                mismatched.quarantine_reason.as_deref(),
+                Some("undeclared_channel")
+            );
+            let detail: String = conn
+                .query_row(
+                    "SELECT detail FROM ledger_events WHERE kind='series_quarantine_released'
+                 ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(detail.contains(&format!("\"series_ids\":[{zero}]")), "{detail}");
+            assert!(detail.contains(&format!("\"channel_mismatch_ids\":[{bad}]")), "{detail}");
             Ok(())
         })
         .unwrap();

@@ -8,8 +8,8 @@ pub use store::{
     approve_sighting, bump_generation, current_generation, ensure_series, find_alive_by_hardware_id,
     find_series_meta, get_device, insert_device, ledger_epoch, list_devices, list_recent_events,
     list_series_for_device, list_sightings, record_event, record_sighting,
-    release_series_quarantine_for_key, replace_hardware, retire_device, series_exists_for_key,
-    set_calibration_review,
+    release_series_quarantine_for_key_checked, replace_hardware, retire_device,
+    series_exists_for_key, set_calibration_review,
 };
 
 use iotkit_core_storage::Migration;

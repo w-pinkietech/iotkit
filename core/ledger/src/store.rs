@@ -365,27 +365,46 @@ pub fn series_exists_for_key(
 /// エイリアス確立時の検疫解除(D6決定3(a)): 申告キーのまま実体化済みの検疫seriesに
 /// canonical定義がバインドされたため、series級検疫を解く。過去の検疫行(readings)は
 /// 履歴としてそのまま(保存済みデータの解釈を遡って変えない)。解除対象は
-/// `quarantine_reason` が一致するseriesのみ(undeclared_channel等はエイリアスでは解決しない)。
-pub fn release_series_quarantine_for_key(
+/// `quarantine_reason` が一致し、canonicalのchannel定義にも適合するseriesのみ。
+pub fn release_series_quarantine_for_key_checked(
     conn: &Connection,
     measurement_key: &str,
     reason: &str,
-) -> Result<Vec<i64>, LedgerError> {
+    channel_ok: &dyn Fn(i32) -> bool,
+) -> Result<(Vec<i64>, Vec<i64>), LedgerError> {
     let mut stmt = conn.prepare(
-        "SELECT series_id FROM series
+        "SELECT series_id, channel_index FROM series
          WHERE measurement_key = ?1 AND quarantined = 1 AND quarantine_reason = ?2",
     )?;
-    let ids: Vec<i64> = stmt
-        .query_map(params![measurement_key, reason], |row| row.get(0))?
+    let rows: Vec<(i64, i32)> = stmt
+        .query_map(params![measurement_key, reason], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
         .collect::<Result<_, _>>()?;
-    if !ids.is_empty() {
+    let mut released = Vec::new();
+    let mut mismatch = Vec::new();
+    for (series_id, channel_index) in rows {
+        if channel_ok(channel_index) {
+            released.push(series_id);
+        } else {
+            mismatch.push(series_id);
+        }
+    }
+    for series_id in &released {
         conn.execute(
             "UPDATE series SET quarantined = 0, quarantine_reason = NULL
-             WHERE measurement_key = ?1 AND quarantined = 1 AND quarantine_reason = ?2",
-            params![measurement_key, reason],
+             WHERE series_id = ?1",
+            params![series_id],
         )?;
     }
-    Ok(ids)
+    for series_id in &mismatch {
+        conn.execute(
+            "UPDATE series SET quarantine_reason = 'undeclared_channel'
+             WHERE series_id = ?1",
+            params![series_id],
+        )?;
+    }
+    Ok((released, mismatch))
 }
 
 pub fn set_calibration_review(
@@ -841,7 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn release_series_quarantine_clears_matching_reason_only() {
+    fn release_series_quarantine_checked_clears_matching_channels_and_relabels_mismatches() {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let sid = insert_device(
@@ -865,6 +884,16 @@ mod tests {
                 Some("unknown_key"),
             )
             .unwrap();
+            let bad = ensure_series(
+                conn,
+                &sid,
+                "temp_old",
+                3,
+                DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
             ensure_series(
                 conn,
                 &sid,
@@ -875,25 +904,36 @@ mod tests {
                 Some("undeclared_channel"),
             )
             .unwrap();
-            let released =
-                release_series_quarantine_for_key(conn, "temp_old", "unknown_key").unwrap();
+            let (released, mismatch) =
+                release_series_quarantine_for_key_checked(conn, "temp_old", "unknown_key", &|ch| {
+                    ch == CHANNEL_NA
+                })
+                .unwrap();
             assert_eq!(released, vec![a]);
+            assert_eq!(mismatch, vec![bad]);
             let meta = find_series_meta(conn, &sid, "temp_old", CHANNEL_NA, DEFAULT_VARIANT)
                 .unwrap()
                 .unwrap();
             assert!(!meta.quarantined);
             assert_eq!(meta.quarantine_reason, None);
+            let bad_meta = find_series_meta(conn, &sid, "temp_old", 3, DEFAULT_VARIANT)
+                .unwrap()
+                .unwrap();
+            assert!(bad_meta.quarantined);
+            assert_eq!(bad_meta.quarantine_reason.as_deref(), Some("undeclared_channel"));
             // キーも理由も異なるseriesは対象外
             let other = find_series_meta(conn, &sid, "other_key", CHANNEL_NA, DEFAULT_VARIANT)
                 .unwrap()
                 .unwrap();
             assert!(other.quarantined);
             // 対象なしの冪等呼び出し
-            assert!(
-                release_series_quarantine_for_key(conn, "temp_old", "unknown_key")
-                    .unwrap()
-                    .is_empty()
-            );
+            let (released2, mismatch2) =
+                release_series_quarantine_for_key_checked(conn, "temp_old", "unknown_key", &|_| {
+                    true
+                })
+                .unwrap();
+            assert!(released2.is_empty());
+            assert!(mismatch2.is_empty());
             Ok(())
         })
         .unwrap();

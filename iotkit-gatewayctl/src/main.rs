@@ -1,6 +1,7 @@
 mod cmd {
     pub mod devices;
     pub mod query;
+    pub mod registry;
     pub mod replace;
 }
 
@@ -36,6 +37,14 @@ enum Command {
         #[command(subcommand)]
         command: ReadingsCommand,
     },
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommand,
+    },
+    Series {
+        #[command(subcommand)]
+        command: SeriesCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -64,6 +73,18 @@ enum ReadingsCommand {
     Query(cmd::query::QueryArgs),
     Aggregate(cmd::query::AggregateArgs),
     Export(cmd::query::ExportArgs),
+}
+
+#[derive(Subcommand)]
+enum RegistryCommand {
+    List(cmd::registry::RegistryListArgs),
+    Enable(cmd::registry::RegistryEnableArgs),
+    Alias(cmd::registry::RegistryAliasArgs),
+}
+
+#[derive(Subcommand)]
+enum SeriesCommand {
+    List(cmd::registry::SeriesListArgs),
 }
 
 fn main() {
@@ -114,6 +135,14 @@ fn dispatch(conn: &rusqlite::Connection, command: Command) -> AppResult<()> {
             ReadingsCommand::Query(args) => cmd::query::run_query(conn, args),
             ReadingsCommand::Aggregate(args) => cmd::query::run_aggregate(conn, args),
             ReadingsCommand::Export(args) => cmd::query::run_export(conn, args),
+        },
+        Command::Registry { command } => match command {
+            RegistryCommand::List(args) => cmd::registry::run_registry_list(conn, args),
+            RegistryCommand::Enable(args) => cmd::registry::run_registry_enable(conn, args),
+            RegistryCommand::Alias(args) => cmd::registry::run_registry_alias(conn, args),
+        },
+        Command::Series { command } => match command {
+            SeriesCommand::List(args) => cmd::registry::run_series_list(conn, args),
         },
     }
 }

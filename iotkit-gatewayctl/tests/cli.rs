@@ -186,6 +186,67 @@ fn device_lifecycle_commands_round_trip_and_bump_generation() {
 }
 
 #[test]
+fn registry_and_series_commands_round_trip_and_bump_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let sid = db
+        .with_conn_sync(|conn| {
+            let sid = iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:series".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            iotkit_core_ledger::ensure_series(
+                conn,
+                &sid,
+                "distance_mm",
+                iotkit_core_ledger::CHANNEL_NA,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
+            Ok(sid.to_text())
+        })
+        .unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    assert_success(run(&["--db", db_arg, "registry", "enable", "distance_mm"]));
+    let entries = assert_success(run(&["--db", db_arg, "registry", "list"]));
+    assert!(entries.contains("distance_mm"));
+    assert!(entries.contains("single"));
+
+    assert_success(run(&[
+        "--db",
+        db_arg,
+        "registry",
+        "alias",
+        "range_mm",
+        "distance_mm",
+    ]));
+    let aliases = assert_success(run(&["--db", db_arg, "registry", "list", "--aliases"]));
+    assert!(aliases.contains("range_mm"));
+    assert!(aliases.contains("distance_mm"));
+
+    let series = assert_success(run(&["--db", db_arg, "series", "list", &sid]));
+    assert!(series.contains("distance_mm"));
+    assert!(series.contains("-1"));
+
+    db.with_conn_sync(|conn| {
+        assert_eq!(iotkit_core_ledger::current_generation(conn).unwrap(), 2);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn replace_hardware_allows_exact_observed_profile_from_staged_readings() {
     let (_dir, db_path, sid) = prepare_replace_db();
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
