@@ -50,7 +50,7 @@ Date: 2026-07-02
 | 測定レジストリ | measurement registry | 測定種別・単位・型の語彙の定義と版管理(R6)。正規化の目標形を定める権威。**二層構造**: 命名の典拠=標準語彙カタログ、受理の正本=現場レジストリ(D6) |
 | 標準語彙カタログ | standard vocabulary catalog | measurement_keyの命名・正準単位(UCUM)・値型・意味論クラス・物理限界値域・チャネル役割を定めるリポジトリ資産(ゲートウェイバイナリに同梱)。契約仕様書の一部として公開=柱2の実体。受理判定には直接使われない(診断・候補提示のみ)(D6決定1) |
 | 現場レジストリ | site registry | ゲートウェイDB内の測定レジストリ正本(D2)。カタログから有効化(copy-on-enable=コピーして固定)したエントリ+現場カスタム定義(`custom.`名前空間)+エイリアス表の合成。R8受理判定の唯一の参照先(D6) |
-| 出口契約 | egress contract | ゲートウェイ→消費者へのデータ公開契約(R10)。複数消費者・消費者別カーソル・at-least-once |
+| 出口契約 | egress contract | ゲートウェイ→[3]/[4]の消費者へのデータ公開契約(R10、**上流向き**——「北向き」はD1側の語であり出口には使わない)。複数消費者・消費者別カーソル・at-least-once。本体はD7 |
 | 消費者 | consumer | 出口契約でデータを受け取る側。YokaKitは特権なしの一消費者 |
 | パブリッシャ | publisher | 出口契約の送信側実装(ゲートウェイ内、outboxから配送する部品) |
 | outbox | outbox | 配送待ちデータの永続バッファ。停電・長期断線を跨ぐ。上限と劣化契約を持つ(R17) |
@@ -82,7 +82,16 @@ Date: 2026-07-02
 | 衛星アダプタ | satellite adapter | ゲートウェイと別筐体で動かすアダプタランタイム。HTTPバインディングでコレクタに送る(D2 §4) |
 | 接続状態機械 | connection state machine | 上流接続のonline/offline/degraded遷移管理。R10(再送)とR12(状態公開)に属する |
 | time_source | — | 時刻の**出所**タグ: device_ntp / device_rtc / gateway / gateway_adjusted(D1)。時刻品質(確度: synced/holdover/unsynced、R18)とは直交する別タグ |
-| publication_id | — | 出口契約の配送単位ID(消費者側の冪等キー)。詳細は出口契約設計で確定 |
+| publication_id | — | 出口契約の**バッチ再送の冪等キー**(消費者側dedup用)。レコード同一性ではない——同一性は `(epoch, seq)`(D7決定4) |
+| record family | — | 出口ストリームのレコード種別タグ+スキーマ版。初版はmeasurement/annotationの2族、予約=文字列観測・時系列ブロック/波形・合成テスト。未知familyの読み飛ばしはoptional familyに限る(D7決定2) |
+| publication log | — | 出口ストリームの採番権威。全record familyが共有する単調増加seq((epoch, seq)カーソルの実体)。readingsの内部挿入順とは別——検疫行は解除まで採番されない(D7決定4) |
+| publication snapshot | — | 消費者再構築用の現在状態スナップショット(対応するseq水位を刻印)。R22スナップショット(高機密資産・readings非含有)とは**別語・別物**(D7決定8) |
+| event_time | — | 出口レコードの正準イベント時刻。導出規則=device_time→age_ms復元(gateway_adjusted)→received_at、妥当窓検査は未来方向のみ(D7決定3)。観測時刻であり単調ではない——順序・カーソルには使わない(D7決定4) |
+| event_time_source | — | event_timeにどの候補を採用したか+未来方向降格の有無を表す出口レコードのフィールド。time_source(入力の事実)とは別の、導出結果の表示(D7決定3) |
+| target / target registry | — | 出口配送先の登録単位とその台帳。配送状態(カーソル・ack)はtarget単位で分離。登録・変更はR14型付き操作(D7決定6) |
+| 購読フィルタ | subscription filter | targetが受け取るシリーズの選択(実体化series_keyで照合)。解釈ではなく選択。アーカイブ責任targetには適用しない(D7決定7) |
+| 保管対象ポリシー | custody scope policy | アーカイブ責任消費者に託して長期保存するシリーズ範囲の台帳宣言(既定=全量)。対象外シリーズはcustodyの約束自体がなく、retention窓超過でcustody_lostにならず期限失効する(D7決定7) |
+| 配送制御通知 | delivery control notice | 特定targetの配送状態についての通知(gap/cursor_expired等)。ストリームレコードではなくpushバッチのメタデータ(帯域外)で運び、カーソルを消費しない。全target共有のannotation族とは別レイヤ(D7決定2・6) |
 | 目撃ステージング | sighting (staging) | 未知hardware_idの観測を有界・パージ可能に保持する登録前状態(hardware_id仮キーでデータ保持)。人間承認の瞬間に採番→検疫→active(D5決定4)。ステージング中のackは `disposition: staged`(D1監査追記) |
 | retire(墓標) | retire / tombstone | 台帳エントリの削除に相当する終端状態。行は消さず、system_id再利用は永久禁止(D5決定4) |
 | superseded_by | — | retire済みエントリから後継エントリへの参照。replace-hardware確定時に旧候補へ付与(D5ガードレール4) |

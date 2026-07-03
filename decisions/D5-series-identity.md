@@ -79,6 +79,9 @@ subject_id = system_id(確定。ADR 0013で未定だった粒度の解決)
   遅着を取りこぼす。挿入順のみが両立する。ただしカーソルは**rowid直用ではなく**(レビュー反映 2026-07-02:
   rowidはVACUUM・行削除で再利用されパージ運用と両立しない)、**単調保証付きシーケンス**
   (AUTOINCREMENT相当。VACUUM/全行削除で巻き戻らない)+**台帳エポック**の複合 `(epoch, seq)` とする。
+  **seqの実体は出口publication logの採番**(D7決定4で確定 2026-07-03: measurement/annotationの
+  全familyが同一採番空間を共有。readings内部の挿入順seqとは別——検疫行は解除までpublication logに
+  採番されない)。
   エポック不一致時は消費者にreplay/backfill再交渉を強制する(箱交換=R22を跨ぐ無音の配送ギャップ防止)。
 - **未知measurement_keyの検疫実体化**(レビュー反映 2026-07-02): subject解決成功+未知measurement_keyは
   **検疫状態のseriesを自動実体化**する(series_keyは申告キーのまま。後のマッピングは下記進化規則どおり
