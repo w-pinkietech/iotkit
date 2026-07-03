@@ -261,3 +261,20 @@ digraph dependencies {
 良い判断として引用: 単一トランザクション+commit後ack、Rejected/no-ackの使い分け、マイグレーション合成。
 教訓: 加速度単位はClaude系レビュー4層(タスク×2+最終+再)が全て見逃し、別ベンダーの実コード照合が捕捉した。
 ドライバ出力単位とD6正準単位の対応表検証を計画3(写像移設)のレビュー観点に追加すること。
+
+## 2026-07-03 Wave 0 Plan 2 final impl review (measurement registry branch)
+
+実行: codex exec / gpt-5.5 / xhigh / read-only。対象: master...feature/wave0-plan2-measurement-registry。
+並行してFableブランチレビューも実施(Ready to merge判定、Critical/Important 0)。
+
+| 指摘 | 裁定 | 対処 |
+|---|---|---|
+| [高] VL53L1Xドライバの2000mmクランプ vs カタログ物理限界4000mm(実測3m→2mに改変、レジストリで検出不能) | 修正 | クランプ除去(fix(sensors))。値域判定はR8の仕事、ドライバはデータシートの数学のみ(R3①/D6決定8) |
+| [中] エイリアス確立時の検疫解除がtargetのchannel_mode検証なし | 持ち越し(計画4) | define_aliasはWave 0実行系から未呼出(R14 CLI=計画4)のため露出ゼロ。計画4で解除時channel検証を入れる |
+| [中] ゲートウェイがNoAck(ストレージ失敗)をコレクタ死亡と混同→プロセス再起動 | 修正 | SubmitError::NoAck/Closed分離(fix(collector,gateway))。再送スプール自体は計画3の既定路線 |
+
+Fable側採用分: 非有限値(NaN/Inf)の評価器素通り→ackなし恒久再送ループ → 終端拒否へ修正(fix(registry))。
+
+教訓(2連続で確定): **カタログ/設計の物理値とドライバ実装の実出力の突合**は、計画1(加速度g/mG)に続き
+計画2(測距2000mmキャップ)でも実データ破壊を検出した唯一の観点。ドライバ・写像・カタログ値域に触れる
+全計画で必須レビュー観点とする(plan-review.md Active Watchpointに登録済み)。

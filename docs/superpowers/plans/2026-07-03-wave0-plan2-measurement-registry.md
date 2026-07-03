@@ -2965,3 +2965,20 @@ git commit -m "feat(gateway): wire SqliteRegistry (D6 admission) into the compos
 | エイリアスがカタログキーを無音遮蔽(D6決定3「明示解決を要求」のシグナル欠落) | Fable MINOR | 採用。Wave 0はwarnログで可視化(T5) |
 | auto-enable失敗テストが実際は手前のdedup INSERTで落ちる+ロールバック後の再送整合が未検証 | codex MINOR + Fable MINOR | 採用。トリガー注入方式に変更し再送整合検証を統合(T6) |
 | マイグレーションテスト名の過大表示/テスト数の記載誤り | codex MINOR + Fable MINOR | 採用。記述修正 |
+
+## 最終ブランチレビューの記録(2026-07-03、実装完了後)
+
+実装は全6タスクcodex(gpt-5.5)、タスクレビュー6回Fable全Approved。最終はFableブランチレビュー
+(Ready to merge)+codex xhigh最終実装レビューの二重検査。裁定と修正波(3コミット):
+
+| 指摘 | 出典 | 裁定 |
+|---|---|---|
+| VL53L1Xドライバ2000mmクランプがカタログ物理限界0..4000と矛盾(実測3m→2m改変) | codex[高] | **修正済み**(fix(sensors)): クランプ除去。値域判定はR8の仕事(D6決定8) |
+| 非有限値(NaN/Inf)が評価器素通り→insert失敗→ackなし恒久再送ループ | Fable(持ち越しd) | **修正済み**(fix(registry)): 終端拒否value_type_mismatch(D1決定的違反) |
+| ゲートウェイがNoAckをコレクタ死亡と混同→プロセス再起動 | codex[中] | **修正済み**(fix(collector,gateway)): SubmitError::NoAck/Closed分離。再送スプールは計画3 |
+| エイリアス解除がtargetのchannel_mode未検証(無効チャネルseriesまで解除) | codex[中] | **計画4へ持ち越し**: define_aliasはWave 0実行系から未呼出(R14 CLI=計画4)で露出ゼロ。計画4で解除時channel検証を実装すること |
+| 未知キー期にSome(0)実体化されたseriesがエイリアス後に正準化(-1)で分裂 | Fable Minor | 後続。D6 3(a)「履歴を切らない」との軽微な緊張として記録 |
+| record型(vibration_spectrum)の拒否時auto-enable | Fable Minor | 意図通りと裁定(キーの有効化=定義コピーは観測の受理と別問題)。対応不要 |
+
+教訓: カタログ/設計値とドライバ実出力の突合が2計画連続で実データ破壊を検出
+(plan-review.md Active Watchpointに昇格済み)。
