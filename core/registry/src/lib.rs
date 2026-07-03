@@ -1,8 +1,13 @@
 //! iotkit-core-registry: D6測定レジストリ(標準語彙カタログ+現場レジストリ)。
 //! 正本文書: docs/redesign/decisions/D6-measurement-registry.md
 pub mod catalog;
+pub mod store;
 
 pub use catalog::{Catalog, CatalogEntry, ChannelMode, Range, ValueType, standard_catalog};
+pub use store::{
+    AliasKind, EntryRow, LEGACY_SENSOR_MAP, RegistryError, Resolution, define_alias, enable_entry,
+    find_resolution, get_entry, lookup_legacy, seed_legacy_sensor_map,
+};
 
 use iotkit_core_storage::Migration;
 
