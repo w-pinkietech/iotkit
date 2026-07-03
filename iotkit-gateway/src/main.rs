@@ -47,9 +47,10 @@ fn main() {
     }
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
-    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3
+    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v2, v4
-    all_migrations.sort_by_key(|m| m.version); // 1,2,3,4
+    all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
+    all_migrations.sort_by_key(|m| m.version); // 1,2,3,4,5,6
     let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path), &all_migrations) {
         Ok(handle) => handle,
         Err(e) => {
@@ -85,9 +86,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     let mut host = AdapterHost::new();
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
+    // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
     let (collector, _collector_handle) = iotkit_core_collector::Collector::spawn(
         db.clone(),
-        std::sync::Arc::new(iotkit_core_collector::PermissiveRegistry),
+        std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
         256,
     );
 

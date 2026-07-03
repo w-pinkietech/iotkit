@@ -16,4 +16,6 @@ toml = "0.8"
 tracing = "0.1"
 
 [dev-dependencies]
+iotkit-core-timeseries = { path = "../timeseries" }
 iotkit-core-storage = { path = "../storage", features = ["test-util"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "rt-multi-thread"] }

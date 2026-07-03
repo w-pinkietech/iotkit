@@ -162,6 +162,7 @@ mod tests {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
         all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
         all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
         all.sort_by_key(|m| m.version);
         let db = iotkit_core_storage::init_db_memory(&all).unwrap();
         db.with_conn_sync(|conn| {
@@ -174,7 +175,7 @@ mod tests {
             Ok(())
         }).unwrap();
         let (collector, _h) = iotkit_core_collector::Collector::spawn(
-            db.clone(), std::sync::Arc::new(iotkit_core_collector::PermissiveRegistry), 16);
+            db.clone(), std::sync::Arc::new(iotkit_core_registry::SqliteRegistry), 16);
         let e = adapter_event_to_envelope(
             &iotkit_core_types::AdapterId::new("bravepi-mainboard:/dev/ttyAMA0"),
             &iotkit_core_types::DeviceKey::new("bravepi-mainboard:00000000000000ab:temperature"),
