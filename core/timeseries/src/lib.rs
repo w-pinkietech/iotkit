@@ -1,6 +1,7 @@
 //! iotkit-core-timeseries: readings persistence.
 
 mod error;
+pub mod query;
 
 pub use error::TimeseriesError;
 

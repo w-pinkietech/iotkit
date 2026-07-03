@@ -60,6 +60,13 @@ pub struct EntryRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct AliasRow {
+    pub alias: String,
+    pub measurement_key: String,
+    pub alias_kind: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum Resolution {
     Entry(EntryRow),
     Alias {
@@ -152,6 +159,31 @@ pub fn get_entry(conn: &Connection, key: &str) -> Result<Option<EntryRow>, Regis
         row_to_entry,
     )
     .optional()
+    .map_err(RegistryError::from)
+}
+
+pub fn list_entries(conn: &Connection) -> Result<Vec<EntryRow>, RegistryError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ENTRY_COLS} FROM registry_entries ORDER BY measurement_key ASC"
+    ))?;
+    stmt.query_map([], row_to_entry)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(RegistryError::from)
+}
+
+pub fn list_aliases(conn: &Connection) -> Result<Vec<AliasRow>, RegistryError> {
+    let mut stmt = conn.prepare(
+        "SELECT alias, measurement_key, alias_kind
+         FROM registry_aliases ORDER BY alias ASC",
+    )?;
+    stmt.query_map([], |row| {
+        Ok(AliasRow {
+            alias: row.get(0)?,
+            measurement_key: row.get(1)?,
+            alias_kind: row.get(2)?,
+        })
+    })?
+    .collect::<Result<Vec<_>, _>>()
     .map_err(RegistryError::from)
 }
 
@@ -553,6 +585,35 @@ mod tests {
             assert_eq!(lookup_legacy(conn, 9999).unwrap(), None);
             // 冪等
             assert_eq!(seed_legacy_sensor_map(conn).unwrap(), 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn list_entries_and_aliases_return_inserted_rows() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let cat = standard_catalog();
+            enable_entry(
+                conn,
+                cat.find("temperature_c").unwrap(),
+                &cat.catalog_version,
+                "test",
+            )
+            .unwrap();
+            define_alias(conn, "temp_old", "temperature_c", AliasKind::Rename).unwrap();
+
+            let entries = list_entries(conn).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].measurement_key, "temperature_c");
+            assert_eq!(entries[0].unit_ucum.as_deref(), Some("Cel"));
+
+            let aliases = list_aliases(conn).unwrap();
+            assert_eq!(aliases.len(), 1);
+            assert_eq!(aliases[0].alias, "temp_old");
+            assert_eq!(aliases[0].measurement_key, "temperature_c");
+            assert_eq!(aliases[0].alias_kind, "rename");
             Ok(())
         })
         .unwrap();

@@ -32,3 +32,9 @@ impl From<StorageError> for TimeseriesError {
         Self::Storage(e)
     }
 }
+
+impl From<rusqlite::Error> for TimeseriesError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Storage(StorageError::Sqlite(e))
+    }
+}

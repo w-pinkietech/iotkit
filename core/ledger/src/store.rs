@@ -86,6 +86,40 @@ pub struct DeviceRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct SeriesRow {
+    pub series_id: i64,
+    pub system_id: SystemId,
+    pub measurement_key: String,
+    pub channel_index: i32,
+    pub variant: String,
+    pub quarantined: bool,
+    pub quarantine_reason: Option<String>,
+    pub value_semantics: String,
+    pub unit: Option<String>,
+    pub range_min: Option<f64>,
+    pub range_max: Option<f64>,
+    pub calibration_review: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SightingRow {
+    pub hardware_id: String,
+    pub source: String,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    pub observations: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct EventRow {
+    pub event_id: i64,
+    pub at: i64,
+    pub kind: String,
+    pub system_id: Option<SystemId>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewDevice {
     pub hardware_id: String,
     pub user_label: Option<String>,
@@ -105,6 +139,27 @@ fn now_ms() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+fn system_id_from_blob(bytes: Vec<u8>, label: &str) -> SystemId {
+    SystemId::from_bytes(bytes.try_into().unwrap_or_else(|_| panic!("16-byte {label}")))
+}
+
+fn row_to_device(row: &rusqlite::Row<'_>) -> Result<DeviceRow, rusqlite::Error> {
+    let sid: Vec<u8> = row.get(0)?;
+    let parent: Option<Vec<u8>> = row.get(3)?;
+    Ok(DeviceRow {
+        system_id: system_id_from_blob(sid, "system_id"),
+        hardware_id: row.get(1)?,
+        user_label: row.get(2)?,
+        parent: parent.map(|p| system_id_from_blob(p, "parent id")),
+        kind: DeviceKind::from_db(&row.get::<_, String>(4)?),
+        state: DeviceState::from_db(&row.get::<_, String>(5)?),
+        declaration_version: row.get(6)?,
+    })
+}
+
+const DEVICE_COLS: &str =
+    "system_id, hardware_id, user_label, parent_system_id, kind, state, declaration_version";
 
 /// append-only監査イベント(R13最小下地)への行追記。registryクレート等の外部呼び出し用公開面。
 pub fn record_event(
@@ -148,22 +203,34 @@ pub fn find_alive_by_hardware_id(
     hardware_id: &str,
 ) -> Result<Option<DeviceRow>, LedgerError> {
     conn.query_row(
-        "SELECT system_id, hardware_id, user_label, parent_system_id, kind, state, declaration_version
-         FROM devices WHERE hardware_id = ?1 AND state != 'retired'",
+        &format!("SELECT {DEVICE_COLS} FROM devices WHERE hardware_id = ?1 AND state != 'retired'"),
         params![hardware_id],
-        |row| {
-            let sid: Vec<u8> = row.get(0)?;
-            let parent: Option<Vec<u8>> = row.get(3)?;
-            Ok(DeviceRow {
-                system_id: SystemId::from_bytes(sid.try_into().expect("16-byte system_id")),
-                hardware_id: row.get(1)?,
-                user_label: row.get(2)?,
-                parent: parent.map(|p| SystemId::from_bytes(p.try_into().expect("16-byte parent id"))),
-                kind: DeviceKind::from_db(&row.get::<_, String>(4)?),
-                state: DeviceState::from_db(&row.get::<_, String>(5)?),
-                declaration_version: row.get(6)?,
-            })
-        },
+        row_to_device,
+    )
+    .optional()
+    .map_err(LedgerError::from)
+}
+
+pub fn list_devices(conn: &Connection, include_retired: bool) -> Result<Vec<DeviceRow>, LedgerError> {
+    let sql = if include_retired {
+        format!("SELECT {DEVICE_COLS} FROM devices ORDER BY created_at ASC, hardware_id ASC")
+    } else {
+        format!(
+            "SELECT {DEVICE_COLS} FROM devices
+             WHERE state != 'retired' ORDER BY created_at ASC, hardware_id ASC"
+        )
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    stmt.query_map([], row_to_device)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(LedgerError::from)
+}
+
+pub fn get_device(conn: &Connection, system_id: &SystemId) -> Result<Option<DeviceRow>, LedgerError> {
+    conn.query_row(
+        &format!("SELECT {DEVICE_COLS} FROM devices WHERE system_id = ?1"),
+        params![system_id.as_bytes().to_vec()],
+        row_to_device,
     )
     .optional()
     .map_err(LedgerError::from)
@@ -242,6 +309,36 @@ pub fn find_series_meta(
     .map_err(LedgerError::from)
 }
 
+pub fn list_series_for_device(
+    conn: &Connection,
+    system_id: &SystemId,
+) -> Result<Vec<SeriesRow>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT series_id, system_id, measurement_key, channel_index, variant, quarantined,
+            quarantine_reason, value_semantics, unit, range_min, range_max, calibration_review
+         FROM series WHERE system_id = ?1 ORDER BY series_id ASC",
+    )?;
+    stmt.query_map(params![system_id.as_bytes().to_vec()], |row| {
+        let sid: Vec<u8> = row.get(1)?;
+        Ok(SeriesRow {
+            series_id: row.get(0)?,
+            system_id: system_id_from_blob(sid, "series.system_id"),
+            measurement_key: row.get(2)?,
+            channel_index: row.get(3)?,
+            variant: row.get(4)?,
+            quarantined: row.get::<_, i32>(5)? != 0,
+            quarantine_reason: row.get(6)?,
+            value_semantics: row.get(7)?,
+            unit: row.get(8)?,
+            range_min: row.get(9)?,
+            range_max: row.get(10)?,
+            calibration_review: row.get::<_, i32>(11)? != 0,
+        })
+    })?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(LedgerError::from)
+}
+
 /// D6決定3(a): 当該subjectで申告キーのseriesが(channel/variant不問で)実体化済みか。
 pub fn series_exists_for_key(
     conn: &Connection,
@@ -294,6 +391,43 @@ pub fn record_sighting(
         params![hardware_id, source, now_ms()],
     )?;
     Ok(())
+}
+
+pub fn list_sightings(conn: &Connection) -> Result<Vec<SightingRow>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT hardware_id, source, first_seen, last_seen, observations
+         FROM sightings ORDER BY last_seen DESC, hardware_id ASC",
+    )?;
+    stmt.query_map([], |row| {
+        Ok(SightingRow {
+            hardware_id: row.get(0)?,
+            source: row.get(1)?,
+            first_seen: row.get(2)?,
+            last_seen: row.get(3)?,
+            observations: row.get(4)?,
+        })
+    })?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(LedgerError::from)
+}
+
+pub fn list_recent_events(conn: &Connection, limit: u32) -> Result<Vec<EventRow>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT event_id, at, kind, system_id, detail
+         FROM ledger_events ORDER BY event_id DESC LIMIT ?1",
+    )?;
+    stmt.query_map(params![limit], |row| {
+        let sid: Option<Vec<u8>> = row.get(3)?;
+        Ok(EventRow {
+            event_id: row.get(0)?,
+            at: row.get(1)?,
+            kind: row.get(2)?,
+            system_id: sid.map(|b| system_id_from_blob(b, "event.system_id")),
+            detail: row.get(4)?,
+        })
+    })?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(LedgerError::from)
 }
 
 pub fn approve_sighting(
@@ -819,6 +953,115 @@ mod tests {
             let e2 = ledger_epoch(conn).unwrap();
             assert_eq!(e1, e2);
             assert!(!e1.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn listing_apis_return_inserted_devices_series_sightings_and_events() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let parent = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:parent".into(),
+                    user_label: Some("parent".into()),
+                    parent: None,
+                    kind: DeviceKind::Positional,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let child = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:child".into(),
+                    user_label: Some("child".into()),
+                    parent: Some(parent),
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let retired = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:retired".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE devices SET state = 'retired' WHERE system_id = ?1",
+                params![retired.as_bytes().to_vec()],
+            )
+            .unwrap();
+
+            let child_row = get_device(conn, &child).unwrap().unwrap();
+            assert_eq!(child_row.hardware_id, "ble:child");
+            assert_eq!(child_row.parent, Some(parent));
+            let parent_row = get_device(conn, &parent).unwrap().unwrap();
+            assert_eq!(parent_row.hardware_id, "ble:parent");
+            assert_eq!(parent_row.parent, None);
+
+            let alive = list_devices(conn, false).unwrap();
+            assert_eq!(alive.len(), 2);
+            assert!(alive.iter().all(|d| d.state != DeviceState::Retired));
+            let all = list_devices(conn, true).unwrap();
+            assert_eq!(all.len(), 3);
+            let listed_parent = all.iter().find(|d| d.system_id == parent).unwrap();
+            assert_eq!(listed_parent.parent, None);
+
+            let series_id = ensure_series(
+                conn,
+                &child,
+                "temperature_c",
+                7,
+                "backup",
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE series SET unit = 'Cel', range_min = -10.0, range_max = 50.0,
+                    calibration_review = 1 WHERE series_id = ?1",
+                params![series_id],
+            )
+            .unwrap();
+            let series = list_series_for_device(conn, &child).unwrap();
+            assert_eq!(series.len(), 1);
+            assert_eq!(series[0].series_id, series_id);
+            assert_eq!(series[0].system_id, child);
+            assert_eq!(series[0].measurement_key, "temperature_c");
+            assert_eq!(series[0].channel_index, 7);
+            assert_eq!(series[0].variant, "backup");
+            assert!(series[0].quarantined);
+            assert_eq!(series[0].quarantine_reason.as_deref(), Some("unknown_key"));
+            assert_eq!(series[0].value_semantics, "calibrated");
+            assert_eq!(series[0].unit.as_deref(), Some("Cel"));
+            assert_eq!(series[0].range_min, Some(-10.0));
+            assert_eq!(series[0].range_max, Some(50.0));
+            assert!(series[0].calibration_review);
+
+            record_sighting(conn, "ble:seen", "adapter-a").unwrap();
+            let sightings = list_sightings(conn).unwrap();
+            assert_eq!(sightings.len(), 1);
+            assert_eq!(sightings[0].hardware_id, "ble:seen");
+            assert_eq!(sightings[0].source, "adapter-a");
+            assert_eq!(sightings[0].observations, 1);
+
+            record_event(conn, "manual", Some(&child), r#"{"ok":true}"#).unwrap();
+            record_event(conn, "system_note", None, r#"{"ok":false}"#).unwrap();
+            let events = list_recent_events(conn, 2).unwrap();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].kind, "system_note");
+            assert_eq!(events[0].system_id, None);
+            assert_eq!(events[1].kind, "manual");
+            assert_eq!(events[1].system_id, Some(child));
             Ok(())
         })
         .unwrap();
