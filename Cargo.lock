@@ -458,6 +458,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-ingest-client"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-collector",
+ "iotkit-core-ledger",
+ "iotkit-core-registry",
+ "iotkit-core-storage",
+ "iotkit-core-timeseries",
+ "iotkit-ingest-contract",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "iotkit-ingest-contract"
 version = "0.1.0"
 dependencies = [
