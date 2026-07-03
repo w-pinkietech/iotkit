@@ -1,0 +1,514 @@
+use crate::registry_policy::{RegistryPolicy, RegistryVerdict};
+use iotkit_core_ledger as ledger;
+use iotkit_core_storage::DbHandle;
+use iotkit_core_timeseries as ts;
+use iotkit_ingest_contract::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
+
+pub const MAX_ITEMS_PER_ENVELOPE: usize = 256;
+
+/// `ingest_dedup` の保持TTL(D1: sender_id+envelope_idキーはTTL+サイズ上限で有界)。
+pub const DEDUP_TTL_MS: i64 = 72 * 60 * 60 * 1000;
+
+/// 日和見パージの既定発火間隔。本番はこの値、テストは`spawn_with_purge_interval`で0を注入する。
+pub const DEFAULT_PURGE_INTERVAL_MS: i64 = 60 * 60 * 1000;
+
+pub struct IngestRequest {
+    pub envelope: Envelope,
+    pub ack_tx: oneshot::Sender<EnvelopeAck>,
+}
+
+#[derive(Clone)]
+pub struct Collector {
+    tx: mpsc::Sender<IngestRequest>,
+}
+
+#[derive(Debug)]
+pub struct CollectorClosed;
+
+/// タスク所有キャッシュ(D5: 起動時全ロードはWave 0では行数が小さいため遅延ロードで開始し、
+/// ミス時にDBを引く。台帳変異は必ずコレクタ経由なので無効化漏れは構造上起きない)
+#[derive(Default)]
+struct ResolutionCache {
+    devices: HashMap<String, (ledger::SystemId, ledger::DeviceState)>, // hardware_id →
+    series: HashMap<(ledger::SystemId, String, i32, String), i64>,
+}
+
+impl Collector {
+    pub fn spawn(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+    ) -> (Collector, tokio::task::JoinHandle<()>) {
+        Self::spawn_with_purge_interval(db, policy, queue_cap, DEFAULT_PURGE_INTERVAL_MS)
+    }
+
+    /// `spawn`と同じだが、日和見dedupパージの発火間隔を注入できる(テスト用: 0を渡すと
+    /// 処理成功のたびに毎回パージ判定が真になり、パージ経路をアクター経由で検証できる)。
+    pub fn spawn_with_purge_interval(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+        purge_interval_ms: i64,
+    ) -> (Collector, tokio::task::JoinHandle<()>) {
+        let (tx, mut rx) = mpsc::channel::<IngestRequest>(queue_cap);
+        let handle = tokio::spawn(async move {
+            let mut cache = ResolutionCache::default();
+            let mut last_purge_ms = now_ms();
+            while let Some(req) = rx.recv().await {
+                let taken = std::mem::take(&mut cache);
+                let policy = Arc::clone(&policy);
+                let envelope = req.envelope;
+                let result = db
+                    .with_conn(move |conn| {
+                        let mut c = taken;
+                        let outcome = process_envelope(conn, &mut c, policy.as_ref(), &envelope);
+                        Ok((outcome, c))
+                    })
+                    .await;
+                match result {
+                    Ok((Ok(ack), c)) => {
+                        cache = c;
+                        let _ = req.ack_tx.send(ack);
+                        // 計画4のTTL/保持ワイヤリング着地までの日和見パージ(受理トランザクション
+                        // の外・別途with_connで実行。ack耐久性には影響しない)。
+                        maybe_purge_dedup(&db, purge_interval_ms, &mut last_purge_ms).await;
+                    }
+                    Ok((Err(e), _c)) => {
+                        tracing::error!(error = %e, "collector: storage failure (envelope aborted)");
+                        // ロールバックでキャッシュ済みseries_id(・devices)が無効化されうるため
+                        // 全捨てが安全。process_itemはensure_seriesのINSERT直後(コミット前)に
+                        // cache.seriesへ書くので、部分ロールバックされたcが持つseries_idはDBに
+                        // 実在しない可能性がある。保全すると幻のseries_idが残り、以降の同キー
+                        // envelopeがFK違反→ackなしの無限ループになる(再送で回復しない=D1違反)。
+                        cache = ResolutionCache::default();
+                        // ack_tx をドロップ = 送信側はタイムアウトで再送(ackなし=未耐久、D1と整合)
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "collector: storage failure");
+                        // ack_tx をドロップ = 送信側はタイムアウトで再送(ackなし=未耐久、D1と整合)
+                    }
+                }
+            }
+        });
+        (Collector { tx }, handle)
+    }
+
+    pub async fn submit(&self, envelope: Envelope) -> Result<EnvelopeAck, CollectorClosed> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.tx
+            .send(IngestRequest { envelope, ack_tx })
+            .await
+            .map_err(|_| CollectorClosed)?;
+        ack_rx.await.map_err(|_| CollectorClosed)
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 日和見dedupパージ: 最終パージから`purge_interval_ms`超過していれば
+/// `purge_dedup_before(now - DEDUP_TTL_MS)`を実行する。受理トランザクションの外(別途with_conn)
+/// で行うため、ack耐久点(D1)には影響しない。パージ自体の失敗は致命的ではないのでログのみ。
+async fn maybe_purge_dedup(db: &DbHandle, purge_interval_ms: i64, last_purge_ms: &mut i64) {
+    let now = now_ms();
+    if now.saturating_sub(*last_purge_ms) < purge_interval_ms {
+        return;
+    }
+    *last_purge_ms = now;
+    let cutoff = now - DEDUP_TTL_MS;
+    let result = db
+        .with_conn(move |conn| Ok(ts::purge_dedup_before(conn, cutoff).map_err(|e| e.to_string())))
+        .await;
+    match result {
+        Ok(Ok(deleted)) => {
+            if deleted > 0 {
+                tracing::info!(deleted, cutoff_ms = cutoff, "collector: opportunistic ingest_dedup purge");
+            }
+        }
+        Ok(Err(e)) => tracing::error!(error = %e, "collector: dedup purge failed"),
+        Err(e) => tracing::error!(error = %e, "collector: dedup purge failed (db)"),
+    }
+}
+
+/// 1エンベロープの受理。**全体が単一トランザクション**(dedup+全item書き込み=ack耐久点、D1)。
+///
+/// ストレージ起因の失敗(Err)はack終端(Rejected)を作らない。rejected=送信側spool除去なので、
+/// 未耐久データにRejectedを返すと無音損失になる(D1)。呼び出し元はErrに対してack_txを
+/// ドロップし、送信側の再送に委ねる。トランザクションはコミットせずに終わるため自動ロールバック
+/// される(部分コミットしない)。
+fn process_envelope(
+    conn: &rusqlite::Connection,
+    cache: &mut ResolutionCache,
+    policy: &dyn RegistryPolicy,
+    envelope: &Envelope,
+) -> Result<EnvelopeAck, String> {
+    let eid = envelope.envelope_id.clone();
+    if envelope.items.len() > MAX_ITEMS_PER_ENVELOPE {
+        // 決定的な契約違反(サイズ超過はDBに触れる前に判定できる) → 終端Rejectedを維持
+        return Ok(EnvelopeAck {
+            envelope_id: eid,
+            status: AckStatus::Rejected {
+                reason_code: ReasonCode::BatchTooLarge,
+                message: format!("items {} > {}", envelope.items.len(), MAX_ITEMS_PER_ENVELOPE),
+            },
+        });
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let claimed = ts::try_claim_envelope(&tx, &envelope.source, &envelope.envelope_id)
+        .map_err(|e| e.to_string())?;
+    if !claimed {
+        drop(tx); // dedup判定のみ・書き込みなし
+        return Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Duplicate });
+    }
+    let received_at = now_ms();
+    let mut item_statuses = Vec::with_capacity(envelope.items.len());
+    for item in &envelope.items {
+        item_statuses.push(process_item(&tx, cache, policy, envelope, item, received_at)?);
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Accepted { items: item_statuses } })
+}
+
+fn process_item(
+    conn: &rusqlite::Connection,
+    cache: &mut ResolutionCache,
+    policy: &dyn RegistryPolicy,
+    envelope: &Envelope,
+    item: &ReadingItem,
+    received_at: i64,
+) -> Result<ItemStatus, String> {
+    // 1) レジストリ検証(文法。計画2で値域・未知キー判定に拡張)。決定的な契約違反 → ItemRejected
+    let quarantine = match policy.evaluate(item) {
+        RegistryVerdict::Accept { quarantine } => quarantine,
+        RegistryVerdict::RejectItem { reason_code, message } => {
+            return Ok(ItemStatus::ItemRejected { reason_code, message });
+        }
+    };
+    // 2) subject解決(D5決定1: 送信者+subject_hint→台帳)。hint欠如も決定的な契約違反
+    let Some(hw) = item.subject_hint.as_deref() else {
+        return Ok(ItemStatus::ItemRejected {
+            reason_code: ReasonCode::UnknownSubject,
+            message: "subject_hint required for multi-subject sender".into(),
+        });
+    };
+    let resolved = match cache.devices.get(hw) {
+        Some(hit) => Some(*hit),
+        None => match ledger::find_alive_by_hardware_id(conn, hw).map_err(|e| e.to_string())? {
+            Some(row) => {
+                cache.devices.insert(hw.to_string(), (row.system_id, row.state));
+                Some((row.system_id, row.state))
+            }
+            None => None,
+        },
+    };
+    let Some((system_id, state)) = resolved else {
+        // 3) 未知subject → 目撃ステージング(D5決定4経路A、ack=staged)。ストレージ失敗は上へ伝播
+        let payload = serde_json::to_string(item).unwrap_or_else(|_| "{}".into());
+        ledger::record_sighting(conn, hw, &envelope.source).map_err(|e| e.to_string())?;
+        ts::insert_staged_reading(conn, hw, received_at, &payload).map_err(|e| e.to_string())?;
+        return Ok(ItemStatus::Stored { disposition: Disposition::Staged });
+    };
+    // 4) series解決(検疫デバイスのデータは検疫行として保存=D1オンボーディング)
+    let device_quarantined = state == ledger::DeviceState::Quarantined;
+    let channel: i32 = item.channel_index.map(i32::from).unwrap_or(-1);
+    let variant = item.series_variant.as_deref().unwrap_or("primary").to_string();
+    let skey = (system_id, item.measurement_key.clone(), channel, variant.clone());
+    let series_id = match cache.series.get(&skey) {
+        Some(id) => *id,
+        None => {
+            let id = ledger::ensure_series(conn, &system_id, &item.measurement_key, channel, &variant, false)
+                .map_err(|e| e.to_string())?;
+            cache.series.insert(skey, id);
+            id
+        }
+    };
+    // 5) 書き込み
+    let row_quarantined = quarantine || device_quarantined;
+    let time_source = match item.time_source {
+        TimeSource::DeviceNtp => "device_ntp", TimeSource::DeviceRtc => "device_rtc",
+        TimeSource::Gateway => "gateway", TimeSource::GatewayAdjusted => "gateway_adjusted",
+    };
+    let new = ts::NewReading {
+        series_id,
+        received_at_ms: received_at,
+        device_time_ms: item.device_time_ms,
+        time_source: time_source.to_string(),
+        values: item.values.clone(),
+        rssi: item.rssi,
+        battery_pct: item.battery_pct,
+        quarantined: row_quarantined,
+    };
+    ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
+    Ok(ItemStatus::Stored {
+        disposition: if row_quarantined { Disposition::Quarantined } else { Disposition::Durable },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry_policy::PermissiveRegistry;
+    use iotkit_core_ledger as ledger;
+    use std::sync::Arc;
+
+    fn test_db() -> iotkit_core_storage::DbHandle {
+        let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
+        all.extend_from_slice(ledger::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+        all.sort_by_key(|m| m.version);
+        iotkit_core_storage::init_db_memory(&all).unwrap()
+    }
+
+    fn env(id: &str, hw: &str, key: &str) -> Envelope {
+        Envelope {
+            envelope_id: id.into(),
+            source: "test-adapter".into(),
+            declaration_version: None,
+            items: vec![ReadingItem {
+                subject_hint: Some(hw.into()),
+                measurement_key: key.into(),
+                channel_index: None,
+                series_variant: None,
+                values: vec![1.0],
+                device_time_ms: None,
+                time_source: TimeSource::Gateway,
+                age_ms: None, rssi: None, battery_pct: None,
+            }],
+        }
+    }
+
+    fn register_active(db: &iotkit_core_storage::DbHandle, hw: &str) {
+        db.with_conn_sync(|conn| {
+            ledger::insert_device(conn, &ledger::NewDevice {
+                hardware_id: hw.into(), user_label: None, parent: None,
+                kind: ledger::DeviceKind::Individual,
+                initial_state: ledger::DeviceState::Active,
+            }).unwrap();
+            Ok(())
+        }).unwrap();
+    }
+
+    #[tokio::test]
+    async fn known_subject_is_accepted_durable_and_row_exists_before_ack_returns() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let ack = collector.submit(env("e-1", "ble:aa", "temperature_c")).await.unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable })));
+        // ack = 耐久点: ackが返った時点で行が存在する(D1)
+        let n: i64 = db.with_conn_sync(|conn| {
+            Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
+        }).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn duplicate_envelope_is_reported_and_not_written_twice() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let e = env("e-dup", "ble:aa", "temperature_c");
+        let a1 = collector.submit(e.clone()).await.unwrap();
+        let a2 = collector.submit(e).await.unwrap();
+        assert!(matches!(a1.status, AckStatus::Accepted { .. }));
+        assert!(matches!(a2.status, AckStatus::Duplicate));
+        let n: i64 = db.with_conn_sync(|conn| {
+            Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
+        }).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_subject_goes_to_sighting_staging_with_staged_disposition() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let ack = collector.submit(env("e-2", "ble:unknown", "temperature_c")).await.unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Staged })));
+        let (sightings, staged): (i64, i64) = db.with_conn_sync(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM sightings", [], |r| r.get(0)).unwrap(),
+                conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |r| r.get(0)).unwrap(),
+            ))
+        }).unwrap();
+        assert_eq!((sightings, staged), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn malformed_measurement_key_rejects_item_but_stores_valid_sibling() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut e = env("e-3", "ble:aa", "temperature_c");
+        let mut bad = e.items[0].clone();
+        bad.measurement_key = "Bad:Key".into();
+        e.items.push(bad);
+        let ack = collector.submit(e).await.unwrap();
+        let AckStatus::Accepted { items } = ack.status else { panic!("expected Accepted") };
+        assert!(matches!(items[0], ItemStatus::Stored { .. }));
+        assert!(matches!(items[1],
+            ItemStatus::ItemRejected { reason_code: ReasonCode::MalformedMeasurementKey, .. }));
+    }
+
+    #[tokio::test]
+    async fn missing_subject_hint_is_rejected() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut e = env("e-4", "ble:aa", "temperature_c");
+        e.items[0].subject_hint = None; // ブリッジは多subject送信者なのでhint必須(D5決定1)
+        let ack = collector.submit(e).await.unwrap();
+        let AckStatus::Accepted { items } = ack.status else { panic!("expected Accepted") };
+        assert!(matches!(items[0],
+            ItemStatus::ItemRejected { reason_code: ReasonCode::UnknownSubject, .. }));
+    }
+
+    #[tokio::test]
+    async fn storage_failure_produces_no_ack() {
+        // ストレージ起因の失敗(コミット不能)はRejected終端ではなくack自体を返さない(D1)。
+        // query_only=ON で以降の書き込みを強制失敗させ、submit()がCollectorClosed(=ackなし、
+        // ack_txドロップ)を返すことを確認する。
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        db.with_conn_sync(|conn| {
+            conn.execute_batch("PRAGMA query_only = ON;")?;
+            Ok(())
+        }).unwrap();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let result = collector.submit(env("e-6", "ble:aa", "temperature_c")).await;
+        assert!(matches!(result, Err(CollectorClosed)));
+    }
+
+    #[tokio::test]
+    async fn opportunistic_purge_fires_through_actor_and_respects_ttl() {
+        // purge_dedup_before自体は別途ユニットテスト済み。ここではアクター経由で発火することを
+        // 検証する: purge_interval_ms=0を注入し、処理成功のたびに必ずパージ判定が真になるように
+        // する(本番はDEFAULT_PURGE_INTERVAL_MS=1h)。
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let old_at = now - 100 * 60 * 60 * 1000; // 100h前 > 72h TTL → パージ対象
+        let keep_at = now - 60 * 60 * 1000; // 1h前 < 72h TTL → 残る
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ingest_dedup (sender_id, envelope_id, received_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params!["old-sender", "old-env", old_at],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO ingest_dedup (sender_id, envelope_id, received_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params!["keep-sender", "keep-env", keep_at],
+            ).unwrap();
+            Ok(())
+        }).unwrap();
+
+        let (collector, _h) =
+            Collector::spawn_with_purge_interval(db.clone(), Arc::new(PermissiveRegistry), 16, 0);
+        // 1件目: 処理成功→パージ判定発火(非同期に開始)。2件目のackが返る頃には、アクターは
+        // 単一タスクで逐次処理するため1件目の(purge awaitを含む)イテレーションは完了している。
+        collector.submit(env("e-purge-1", "ble:aa", "temperature_c")).await.unwrap();
+        collector.submit(env("e-purge-2", "ble:aa", "humidity_pct")).await.unwrap();
+
+        let (old_count, keep_count): (i64, i64) = db.with_conn_sync(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'old-sender'", [], |r| r.get(0),
+                ).unwrap(),
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'keep-sender'", [], |r| r.get(0),
+                ).unwrap(),
+            ))
+        }).unwrap();
+        assert_eq!(old_count, 0, "row older than 72h TTL must be purged");
+        assert_eq!(keep_count, 1, "row within 72h TTL must be kept");
+    }
+
+    #[tokio::test]
+    async fn cache_is_reset_after_storage_failure() {
+        // 回帰テスト: process_itemはensure_seriesのINSERT直後(コミット前)にcache.seriesへ
+        // 書き込む。同一envelope内の後続itemがストレージ失敗すると全体がロールバックされ、
+        // series行はDBから消えるが、修正前はcacheに幻のseries_idが残っていた。次のenvelopeが
+        // 同キーを使うとFK違反→ackなしの無限ループ(再送しても回復しない=D1違反)になる。
+        //
+        // f64::NANはserde_json経由だとnullになってしまうため、ReadingItemを直接構築して
+        // serdeを迂回し、insert_reading_v3の非有限値チェックで2番目のitemを確実に失敗させる。
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+
+        let make_item = |value: f64| ReadingItem {
+            subject_hint: Some("ble:aa".into()),
+            measurement_key: "temp_a".into(),
+            channel_index: None,
+            series_variant: None,
+            values: vec![value],
+            device_time_ms: None,
+            time_source: TimeSource::Gateway,
+            age_ms: None,
+            rssi: None,
+            battery_pct: None,
+        };
+
+        // 1件目: 新規series(=temp_a)を作成しキャッシュに載せる。2件目: NaNで書き込み失敗。
+        // envelope全体がロールバックされる = series行は消えるがキャッシュには残る(修正前)。
+        let poison = Envelope {
+            envelope_id: "e-poison".into(),
+            source: "test-adapter".into(),
+            declaration_version: None,
+            items: vec![make_item(1.0), make_item(f64::NAN)],
+        };
+        let result = collector.submit(poison).await;
+        assert!(matches!(result, Err(CollectorClosed)), "storage failure must not produce an ack");
+
+        // series行は存在しないはず(ロールバック済み)
+        let series_count: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM series", [], |r| r.get(0)).unwrap())
+            })
+            .unwrap();
+        assert_eq!(series_count, 0, "series insert must have been rolled back");
+
+        // 再送(同キー、正常値)。修正前はキャッシュの幻series_idでFK違反 → ackなしのまま。
+        // 修正後はキャッシュがリセットされているのでensure_seriesが再実行され、Acceptedになる。
+        let retry = Envelope {
+            envelope_id: "e-retry".into(),
+            source: "test-adapter".into(),
+            declaration_version: None,
+            items: vec![make_item(2.0)],
+        };
+        let ack = collector.submit(retry).await.expect("retry must be accepted after cache reset");
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable })));
+
+        let n: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
+            })
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn oversized_envelope_is_rejected_whole() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut e = env("e-5", "ble:aa", "temperature_c");
+        let item = e.items[0].clone();
+        e.items = std::iter::repeat_with(|| item.clone()).take(MAX_ITEMS_PER_ENVELOPE + 1).collect();
+        let ack = collector.submit(e).await.unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Rejected { reason_code: ReasonCode::BatchTooLarge, .. }));
+    }
+}

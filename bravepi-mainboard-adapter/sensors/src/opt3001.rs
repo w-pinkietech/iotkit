@@ -45,7 +45,7 @@ pub fn from_i2c_raw(raw: u16) -> SensorReading {
     let exponent = (raw & 0x00F0) >> 4;
     let fractional = ((raw & 0xFF00) >> 8) + ((raw & 0x000F) << 8);
     let lux = (1u32 << exponent) as f64 * fractional as f64 * 0.01;
-    SensorReading::new(sensor_type(), vec![lux], vec!["lux"])
+    SensorReading::new(sensor_type(), vec![lux], vec!["lux".to_string()])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -55,7 +55,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
         return SensorReading::empty(sensor_type());
     }
     let lux = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
-    SensorReading::new(sensor_type(), vec![lux], vec!["lux"])
+    SensorReading::new(sensor_type(), vec![lux], vec!["lux".to_string()])
 }
 
 fn decode_uart(sample: UartSample<'_>) -> SensorReading {

@@ -52,11 +52,13 @@ fn run_migrations_inner<M: MigrationEntry>(
         );",
     )?;
 
-    let current_version: u32 = conn.query_row(
-        "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
-        [],
-        |row| row.get(0),
-    )?;
+    // 適用済みversionの集合。分割マイグレーション(storage/ledger/timeseriesが各自のconstを持つ)では
+    // 部分セットで初期化されたDBが存在しうるため、MAX(version)水位ではなく集合差で未適用を判定する。
+    let applied: std::collections::HashSet<u32> = conn
+        .prepare("SELECT version FROM _schema_version")?
+        .query_map([], |row| row.get::<_, u32>(0))?
+        .collect::<Result<_, _>>()?;
+    let current_version: u32 = applied.iter().copied().max().unwrap_or(0);
 
     // Schema-ahead guard
     let latest_known = migrations.last().map_or(0, |m| m.version());
@@ -67,8 +69,8 @@ fn run_migrations_inner<M: MigrationEntry>(
         });
     }
 
-    // Apply each pending migration in its own transaction
-    for m in migrations.iter().filter(|m| m.version() > current_version) {
+    // Apply each pending (= not yet applied) migration in its own transaction
+    for m in migrations.iter().filter(|m| !applied.contains(&m.version())) {
         tracing::info!(
             version = m.version(),
             label = m.label(),
@@ -295,6 +297,33 @@ mod tests {
             )
             .unwrap();
         assert!(table_exists, "extra_table should exist after migration v2");
+    }
+
+    #[test]
+    fn missing_middle_migration_is_applied_on_rerun() {
+        // 部分セット[1,2,4]で初期化されたDB(分割マイグレーションの誤用シナリオ)に
+        // 完全セット[1,2,3,4]を渡すと、水位方式ではv3が永久スキップされる——集合差方式の検証
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let v1 = Migration { version: 1, label: "init", sql: include_str!("../migrations/0001_init.sql") };
+        let v2 = Migration { version: 2, label: "a", sql: "CREATE TABLE t2 (id INTEGER PRIMARY KEY);" };
+        let v3 = Migration { version: 3, label: "b", sql: "CREATE TABLE t3 (id INTEGER PRIMARY KEY);" };
+        let v4 = Migration { version: 4, label: "c", sql: "CREATE TABLE t4 (id INTEGER PRIMARY KEY);" };
+
+        run_migrations(&conn, &[v1, v2, v4]).unwrap(); // 部分適用(1,2,4は昇順なので通る)
+        run_migrations(&conn, &[v1, v2, v3, v4]).unwrap(); // 完全セットでv3が埋まる
+
+        let t3_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='t3'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(t3_exists, "v3 must be applied on rerun with the full set");
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM _schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 4, "no duplicate rows for already-applied versions");
     }
 
     #[test]
