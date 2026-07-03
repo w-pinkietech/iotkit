@@ -93,6 +93,14 @@ fn evaluate_item(
         });
     }
     let value = item.values[0];
+    if !value.is_finite() {
+        // NaN/Infは値域比較を素通りする。決定的に解釈不能=終端拒否(D1)。
+        // 素通りさせるとinsert_reading_v3の非有限チェックで失敗→ackなし→恒久再送ループになる。
+        return Ok(RegistryVerdict::RejectItem {
+            reason_code: ReasonCode::ValueTypeMismatch,
+            message: format!("non-finite value {value} is structurally uninterpretable"),
+        });
+    }
     match entry.value_type {
         ValueType::Bool if value != 0.0 && value != 1.0 => {
             return Ok(RegistryVerdict::RejectItem {
@@ -475,6 +483,21 @@ mod tests {
             let v = eval(conn, &sid, &item("custom.x", Some(9), vec![1e18]));
             assert!(matches!(v,
                 RegistryVerdict::Accept { quarantine: Some(QuarantineReason::UnknownKey), .. }));
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn non_finite_values_are_terminally_rejected() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = device(conn);
+            for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let verdict = eval(conn, &sid, &item("temperature_c", None, vec![v]));
+                assert!(matches!(verdict,
+                    RegistryVerdict::RejectItem { reason_code: ReasonCode::ValueTypeMismatch, .. }),
+                    "{v} must be terminally rejected, not quarantined or accepted");
+            }
             Ok(())
         }).unwrap();
     }
