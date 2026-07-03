@@ -26,6 +26,7 @@ cargo test -p <crate-name>
 - **Codex eval は全段階で必須。** spec → plan → per-task impl → final impl。dev subagent も自分で `codex exec` を実行する。
 - Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → agent-team → PR
 - **Watchpoint curation は Main agent の責務。** Lead/Reviewer の結果を受けて eval-perspectives-curator で review guide の Active Watchpoints を更新する。
+- **計画作成時は設計追補を全掃引する。** 対象決定文書の監査追記・追補節(「実装と同時」等の指示を含む)を計画の Global Constraints に反映してから書く(D1 quarantine_reason 追補の見落とし再発防止)。
 
 ## Reference Docs (read on demand)
 
