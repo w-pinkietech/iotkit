@@ -21,7 +21,7 @@ async fn main() {
 
     tracing::info!(port = %port_path, "Phase 1 PoC: channel-based adapter-core boundary");
 
-    let mut handle = match task::start(port_path) {
+    let mut handle = match task::start(port_path, None) {
         Ok(h) => h,
         Err(e) => {
             tracing::error!(error = %e, "Failed to start BravePI adapter");

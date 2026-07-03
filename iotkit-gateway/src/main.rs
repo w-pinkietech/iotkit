@@ -2,7 +2,6 @@
 //! adapter を起動し、core/engine に event を渡す。
 
 mod adapter_host;
-mod bridge;
 mod config;
 mod supervision;
 
@@ -11,6 +10,7 @@ use std::collections::HashMap;
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
 use iotkit_core_types::{AdapterEvent, AdapterId};
+use iotkit_ingest_client::IngestClient;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -92,6 +92,13 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
         256,
     );
+    // 取り込みクライアント(D4の第3部品、inproc)。アダプタが直接Envelopeを送る。
+    // AdapterEventはengine/監督用のfrozen vocabularyとして並走(D4)。
+    let (ingest_client, ingest_client_handle) = iotkit_ingest_client::spawn_inproc(
+        collector.clone(),
+        iotkit_ingest_client::DEFAULT_QUEUE_CAP,
+        iotkit_ingest_client::DEFAULT_SPOOL_CAP,
+    );
 
     // rpi_local有効時、位置型デバイスを起動時に登録する(D5経路B: 定義=登録)。
     // hardcoded_rpi_local_targets()と同じ2アドレス(0x60, 0x44)。冪等: 既にalive登録済みならスキップ。
@@ -122,7 +129,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
 
     // BravePI mainboard adapter
     if let Some(bp) = &config.bravepi {
-        match start_bravepi(&mut host, &bp.port) {
+        match start_bravepi(&mut host, &bp.port, Some(ingest_client.clone())) {
             Ok(id) => {
                 restart_specs.insert(id, RestartSpec::BravePi { port: bp.port.clone() });
             }
@@ -149,7 +156,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
             poll_interval_ms: rpi.poll_interval_ms,
             targets,
         };
-        match start_rpi_local(&mut host, adapter_config.clone()) {
+        match start_rpi_local(&mut host, adapter_config.clone(), Some(ingest_client.clone())) {
             Ok(id) => {
                 restart_specs.insert(id, RestartSpec::RpiLocal { config: adapter_config });
             }
@@ -169,12 +176,19 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     // (正常終了=ctrl_c/全アダプタclose はtrueのまま=exit 0)。プロセスレベルの再起動は
     // systemdの責務(R20コメント参照)であり、ここでは「健康でないまま動き続けない」ことだけ担保する。
     let mut collector_alive = true;
+    let mut ingest_client_pinned = ingest_client_handle;
 
     // Unified fan-in loop
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("Shutdown signal received");
+                break;
+            }
+            _ = &mut ingest_client_pinned => {
+                // クライアントタスク退出=コレクタ死亡(Closed)。取り込み全損なのでfail-fast
+                tracing::error!("ingest client exited (collector closed); aborting fan-in loop");
+                collector_alive = false;
                 break;
             }
             event = host.next_event() => {
@@ -186,52 +200,18 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                             "Adapter event"
                         );
 
-                        // Extract sensor data BEFORE engine consumes the event
-                        let sensor_data = match &ev.event {
-                            AdapterEvent::SensorData {
-                                device_key, reading, rssi, battery_pct, ..
-                            } => Some((
-                                ev.adapter_id.clone(),
-                                device_key.clone(),
-                                reading.clone(),
-                                *rssi,
-                                *battery_pct,
-                            )),
+                        // Extract sensor health BEFORE engine consumes the event.
+                        let healthy_adapter = match &ev.event {
+                            AdapterEvent::SensorData { .. } => Some(ev.adapter_id.clone()),
                             _ => None,
                         };
 
                         // engine.apply(ev) は従来どおり(projectionは旧語彙のまま=D5「engineはWave 0無改修」)
                         engine.apply(ev).await;
 
-                        if let Some((adapter_id, device_key, reading, rssi, battery_pct)) = sensor_data {
+                        if let Some(adapter_id) = healthy_adapter {
                             // R20: 正常受信のたびに再起動カウンタをリセットする(簡略化: HashMap::removeは冪等で安価)。
                             tracker.note_healthy(&adapter_id);
-
-                            if let Some(envelope) = bridge::adapter_event_to_envelope(&adapter_id, &device_key, &reading, rssi, battery_pct) {
-                                match tokio::time::timeout(std::time::Duration::from_secs(5), collector.submit(envelope)).await {
-                                    Ok(Ok(ack)) => {
-                                        if !matches!(ack.status, iotkit_ingest_contract::AckStatus::Accepted { .. }
-                                            | iotkit_ingest_contract::AckStatus::Duplicate)
-                                        {
-                                            tracing::warn!(?ack.status, "ingest not accepted");
-                                        }
-                                    }
-                                    Ok(Err(iotkit_core_collector::SubmitError::NoAck)) => {
-                                        // ストレージ失敗=ackなし(D1)。コレクタは生存しており
-                                        // プロセスを落とす理由はない。このサンプルは失われる
-                                        // (ブリッジにspoolはない=計画3で解消)。
-                                        tracing::error!("ingest storage failure (no ack); sample lost until plan-3 adapter spool");
-                                    }
-                                    Ok(Err(iotkit_core_collector::SubmitError::Closed)) => {
-                                        // コレクタタスク死亡 = 取り込み全損。fan-inループをbreakして
-                                        // 非ゼロexitへ倒す(プロセスレベルの再起動はsystemdの責務)。
-                                        tracing::error!("collector closed; aborting fan-in loop for process restart (systemd)");
-                                        collector_alive = false;
-                                        break;
-                                    }
-                                    Err(_) => tracing::error!("collector ack timeout (5s)"), // D1: ackタイムアウト必須
-                                }
-                            }
                         }
                     }
                     Some(AdapterHostEvent::AdapterClosed(id)) => {
@@ -256,9 +236,15 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                                     tokio::time::sleep(sleep_for).await;
 
                                     let restart_result = match &spec {
-                                        RestartSpec::BravePi { port } => start_bravepi(&mut host, port),
+                                        RestartSpec::BravePi { port } => {
+                                            start_bravepi(&mut host, port, Some(ingest_client.clone()))
+                                        }
                                         RestartSpec::RpiLocal { config } => {
-                                            start_rpi_local(&mut host, config.clone())
+                                            start_rpi_local(
+                                                &mut host,
+                                                config.clone(),
+                                                Some(ingest_client.clone()),
+                                            )
                                         }
                                     };
                                     match restart_result {
@@ -315,8 +301,12 @@ enum RestartSpec {
 
 /// BravePI mainboard adapterを起動し、hostへ登録する。
 /// 起動時と再起動時の両方から呼ばれる共用コードパス。
-fn start_bravepi(host: &mut AdapterHost, port: &str) -> Result<AdapterId, String> {
-    let handle = bravepi_mainboard_adapter::task::start(port.to_string())
+fn start_bravepi(
+    host: &mut AdapterHost,
+    port: &str,
+    ingest: Option<IngestClient>,
+) -> Result<AdapterId, String> {
+    let handle = bravepi_mainboard_adapter::task::start(port.to_string(), ingest)
         .map_err(|e| format!("Failed to start BravePI mainboard adapter on {port}: {e}"))?;
     tracing::info!(adapter_id = %handle.id, port = %port, "BravePI mainboard adapter started");
     let parts = handle.into_parts();
@@ -337,11 +327,12 @@ fn start_bravepi(host: &mut AdapterHost, port: &str) -> Result<AdapterId, String
 fn start_rpi_local(
     host: &mut AdapterHost,
     adapter_config: rpi_local_adapter::RpiLocalConfig,
+    ingest: Option<IngestClient>,
 ) -> Result<AdapterId, String> {
     // Preflight: catch driver-level validation before spawning background tasks
     rpi_local_adapter::validate(&adapter_config)
         .map_err(|e| format!("RPi local adapter config validation failed: {e}"))?;
-    let handle = rpi_local_adapter::start(adapter_config)
+    let handle = rpi_local_adapter::start(adapter_config, ingest)
         .map_err(|e| format!("Failed to start RPi local adapter: {e}"))?;
     tracing::info!(adapter_id = %handle.id, "RPi local adapter started");
     let parts = handle.into_parts();

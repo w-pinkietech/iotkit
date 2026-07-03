@@ -61,6 +61,8 @@ dependencies = [
  "bravepi-codec",
  "bravepi-sensors",
  "iotkit-core-types",
+ "iotkit-ingest-client",
+ "iotkit-ingest-contract",
  "rpi4b-transport",
  "tokio",
  "tracing",
@@ -442,7 +444,7 @@ dependencies = [
  "iotkit-core-storage",
  "iotkit-core-timeseries",
  "iotkit-core-types",
- "iotkit-ingest-contract",
+ "iotkit-ingest-client",
  "rpi-local-adapter",
  "rusqlite",
  "serde",
@@ -454,6 +456,20 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iotkit-ingest-client"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-collector",
+ "iotkit-core-ledger",
+ "iotkit-core-registry",
+ "iotkit-core-storage",
+ "iotkit-core-timeseries",
+ "iotkit-ingest-contract",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -470,6 +486,8 @@ name = "iotkit-polling-adapter-runtime"
 version = "0.1.0"
 dependencies = [
  "iotkit-core-types",
+ "iotkit-ingest-client",
+ "iotkit-ingest-contract",
  "tokio",
  "tracing",
 ]
@@ -723,6 +741,7 @@ version = "0.1.0"
 dependencies = [
  "bravepi-sensors",
  "iotkit-core-types",
+ "iotkit-ingest-client",
  "iotkit-polling-adapter-runtime",
  "rpi4b-transport",
  "tokio",

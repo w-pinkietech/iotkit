@@ -6,6 +6,7 @@
 mod convert;
 pub(crate) mod event_loop;
 mod handle;
+pub(crate) mod ingest_map;
 mod serial_source;
 
 pub use handle::{start, AdapterHandle, AdapterParts, ShutdownHandle};

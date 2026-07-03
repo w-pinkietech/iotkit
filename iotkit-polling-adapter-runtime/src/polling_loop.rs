@@ -3,8 +3,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use iotkit_core_types::{
-    AdapterCommand, AdapterEvent, DeviceKey, SensorIdentity, SensorReading,
+    AdapterCommand, AdapterEvent, AdapterId, DeviceKey, SensorIdentity, SensorReading,
 };
+use iotkit_ingest_client::IngestClient;
 
 use crate::{PollingAdapterConfig, SensorDriver};
 
@@ -438,6 +439,8 @@ pub(crate) fn poll_cycle(
 // ── polling_loop ─────────────────────────────────────────
 
 pub(crate) async fn polling_loop(
+    adapter_id: AdapterId,
+    ingest: Option<IngestClient>,
     config: PollingAdapterConfig,
     event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
@@ -498,6 +501,7 @@ pub(crate) async fn polling_loop(
         let events = apply_outcomes(outcomes, &mut states, &targets);
 
         for event in events {
+            submit_ingest(&adapter_id, &ingest, &event);
             if event_tx.send(event).await.is_err() {
                 tracing::warn!("event channel closed during startup probe");
                 return;
@@ -580,12 +584,32 @@ pub(crate) async fn polling_loop(
 
                 let events = apply_outcomes(outcomes, &mut states, &targets);
                 for event in events {
+                    submit_ingest(&adapter_id, &ingest, &event);
                     if event_tx.send(event).await.is_err() {
                         tracing::warn!("event channel closed during poll cycle");
                         return;
                     }
                 }
             }
+        }
+    }
+}
+
+fn submit_ingest(adapter_id: &AdapterId, ingest: &Option<IngestClient>, event: &AdapterEvent) {
+    if let (Some(client), AdapterEvent::SensorData { device_key, reading, .. }) =
+        (ingest, event)
+    {
+        match crate::ingest_map::to_items(adapter_id, device_key, reading) {
+            Some(items) => {
+                let envelope = iotkit_ingest_client::new_envelope(adapter_id.as_str(), items);
+                if client.try_submit(envelope).is_err() {
+                    tracing::warn!("ingest queue full; dropping reading");
+                }
+            }
+            None => tracing::warn!(
+                device_key = device_key.as_str(),
+                "no measurement mapping; reading not ingested"
+            ),
         }
     }
 }
@@ -699,7 +723,13 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         command_tx.send(AdapterCommand::Shutdown).await.unwrap();
 
@@ -715,7 +745,13 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         drop(command_tx);
 
@@ -731,7 +767,13 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         drop(event_rx);
 
@@ -757,7 +799,13 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel(16);
         let (_command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         drop(event_rx);
 
@@ -773,7 +821,13 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         command_tx
             .send(AdapterCommand::DeviceCommand(
@@ -824,7 +878,13 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         // First event: DeviceDiscovered from startup probe.
         let ev1 = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
@@ -854,12 +914,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sensor_data_is_submitted_to_ingest_client() {
+        let identity = make_identity();
+        let reading = make_reading();
+        let target = make_sensor_target(
+            0x40,
+            Some("temperature".into()),
+            vec![Ok(identity.clone())],
+            vec![Ok(())],
+            vec![Ok(reading.clone())],
+        );
+        let config = make_config(vec![target]);
+
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let (command_tx, command_rx) = mpsc::channel(16);
+        let (ingest, mut ingest_rx) = iotkit_ingest_client::channel_for_test(4);
+
+        let handle = tokio::spawn(super::polling_loop(
+            iotkit_core_types::AdapterId::new("rpi-local:default"),
+            Some(ingest),
+            config,
+            event_tx,
+            command_rx,
+        ));
+
+        let _ = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        assert!(
+            matches!(event, AdapterEvent::SensorData { .. }),
+            "expected SensorData, got {event:?}"
+        );
+
+        let envelope = tokio::time::timeout(Duration::from_secs(2), ingest_rx.recv())
+            .await
+            .expect("timeout waiting for ingest envelope")
+            .expect("ingest channel closed");
+        assert_eq!(envelope.source, "rpi-local:default");
+        assert_eq!(envelope.items.len(), 1);
+        assert_eq!(
+            envelope.items[0].subject_hint.as_deref(),
+            Some("rpi-local:default:i2c:0x40")
+        );
+        assert_eq!(envelope.items[0].measurement_key, "temperature_c");
+        assert_eq!(envelope.items[0].values, reading.values);
+
+        command_tx.send(AdapterCommand::Shutdown).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("timeout")
+            .expect("task panicked");
+    }
+
+    #[tokio::test]
     async fn empty_targets_no_startup_error() {
         let config = make_config(vec![]);
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         command_tx.send(AdapterCommand::Shutdown).await.unwrap();
 
@@ -886,7 +1010,13 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
 
-        let handle = tokio::spawn(super::polling_loop(config, event_tx, command_rx));
+        let handle = tokio::spawn(super::polling_loop(
+            AdapterId::new("test"),
+            None,
+            config,
+            event_tx,
+            command_rx,
+        ));
 
         // Should receive an immediate AdapterError for all-targets-failed.
         let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())

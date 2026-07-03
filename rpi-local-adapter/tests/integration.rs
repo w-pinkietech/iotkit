@@ -18,7 +18,7 @@ async fn real_i2c_discovers_and_reads_mcp9600() {
         }],
     };
 
-    let mut handle = rpi_local_adapter::start(config).expect("start() should succeed");
+    let mut handle = rpi_local_adapter::start(config, None).expect("start() should succeed");
 
     // First event should be DeviceDiscovered
     let event = tokio::time::timeout(Duration::from_secs(5), handle.event_rx.recv())
@@ -56,7 +56,7 @@ async fn real_i2c_discovers_and_reads_opt3001() {
         targets: vec![RpiLocalTarget::OPT3001 { address: 0x44 }],
     };
 
-    let mut handle = rpi_local_adapter::start(config).expect("start() should succeed");
+    let mut handle = rpi_local_adapter::start(config, None).expect("start() should succeed");
 
     // DeviceDiscovered from startup probe.
     let event = tokio::time::timeout(Duration::from_secs(5), handle.event_rx.recv())

@@ -8,6 +8,7 @@ pub use iotkit_polling_adapter_runtime::AdapterHandle;
 
 use std::sync::Arc;
 
+use iotkit_ingest_client::IngestClient;
 use iotkit_polling_adapter_runtime::{PollingAdapterConfig, SensorTargetConfig};
 use iotkit_core_types::AdapterId;
 
@@ -38,9 +39,13 @@ pub enum RpiLocalTarget {
 ///
 /// Validates config (including per-driver validation), then delegates to
 /// `iotkit_polling_adapter_runtime::start`.
-pub fn start(config: RpiLocalConfig) -> Result<AdapterHandle, std::io::Error> {
+pub fn start(config: RpiLocalConfig, ingest: Option<IngestClient>) -> Result<AdapterHandle, std::io::Error> {
     let polling_config = to_polling_config(&config);
-    iotkit_polling_adapter_runtime::start(AdapterId::new("rpi-local:default"), polling_config)
+    iotkit_polling_adapter_runtime::start(
+        AdapterId::new("rpi-local:default"),
+        polling_config,
+        ingest,
+    )
 }
 
 /// Validate an `RpiLocalConfig` without starting the adapter.
@@ -97,7 +102,7 @@ mod tests {
                 thermocouple_type: ThermocoupleType::K,
             }],
         };
-        let result = start(config);
+        let result = start(config, None);
         assert!(
             result.is_err(),
             "start() should return Err without tokio runtime"
@@ -114,7 +119,7 @@ mod tests {
             poll_interval_ms: 0,
             targets: vec![],
         };
-        let err = start(config).unwrap_err();
+        let err = start(config, None).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("poll_interval_ms"),
@@ -155,7 +160,7 @@ mod tests {
             poll_interval_ms: 50,
             targets: vec![RpiLocalTarget::OPT3001 { address: 0x44 }],
         };
-        let err = start(config).unwrap_err();
+        let err = start(config, None).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("OPT3001"),
