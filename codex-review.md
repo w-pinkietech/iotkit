@@ -278,3 +278,17 @@ Fable側採用分: 非有限値(NaN/Inf)の評価器素通り→ackなし恒久�
 教訓(2連続で確定): **カタログ/設計の物理値とドライバ実装の実出力の突合**は、計画1(加速度g/mG)に続き
 計画2(測距2000mmキャップ)でも実データ破壊を検出した唯一の観点。ドライバ・写像・カタログ値域に触れる
 全計画で必須レビュー観点とする(plan-review.md Active Watchpointに登録済み)。
+
+## 2026-07-03 Wave 0 Plan 3 final impl review (adapter ingest client branch)
+
+実行: codex exec / gpt-5.5 / xhigh / read-only。対象: master...feature/wave0-plan3-adapter-ingest-client。
+並行Fableブランチレビューも実施。**両者ともCritical/Importantゼロ——3計画で初の修正波なし**。
+
+- codex: 指摘なし。単位対応表vs全ドライバ実出力の突合(計画1・2で実データ破壊を2連続検出した観点)が
+  全ドライバで噛み合いを確認して通過。envelope_id不変再送・ジッタ・再起動経路・contact時系列分割の非退行も個別確認。
+- Fable: Ready to merge。新規Minor 3件(contact 256サンプル超の理論的BatchTooLarge全損/try_submitのClosed誤ラベル/
+  空values itemの送出)と持ち越し4件は全て後続クリーンアップへ。
+
+教訓: **単位対応表を宣言必須成果物にしたD4規律(2026-07-03監査追記)が、検出器の仕事を予防に変えた**。
+計画段階の二重レビュー(BLOCKER 2件を事前捕捉)+差分再検証の効果も含め、
+「計画で潰す→実装は転写→レビューはゼロ指摘」の形が初めて成立した。
