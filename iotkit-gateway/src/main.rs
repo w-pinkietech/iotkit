@@ -47,10 +47,10 @@ fn main() {
     }
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
-    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5
-    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7
+    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5, v9
+    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7
+    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9
     let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path), &all_migrations) {
         Ok(handle) => handle,
         Err(e) => {

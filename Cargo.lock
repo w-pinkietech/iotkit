@@ -421,11 +421,8 @@ version = "0.1.0"
 dependencies = [
  "iotkit-core-ledger",
  "iotkit-core-storage",
- "iotkit-core-types",
  "rusqlite",
  "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]

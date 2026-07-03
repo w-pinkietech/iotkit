@@ -22,4 +22,9 @@ pub const MIGRATIONS: &[Migration] = &[
         label: "series_quarantine_reason",
         sql: include_str!("../migrations/0005_series_quarantine_reason.sql"),
     },
+    Migration {
+        version: 9,
+        label: "calibration_review",
+        sql: include_str!("../migrations/0009_calibration_review.sql"),
+    },
 ];

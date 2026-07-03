@@ -505,6 +505,44 @@ mod tests {
     }
 
     #[test]
+    fn series_calibration_review_defaults_to_zero() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:cal".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let series_id = ensure_series(
+                conn,
+                &sid,
+                "temperature_c",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
+            let calibration_review: i64 = conn
+                .query_row(
+                    "SELECT calibration_review FROM series WHERE series_id = ?1",
+                    params![series_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(calibration_review, 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn series_exists_for_key_ignores_channel_and_variant() {
         let db = test_db();
         db.with_conn_sync(|conn| {
