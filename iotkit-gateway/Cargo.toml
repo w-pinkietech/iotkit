@@ -8,7 +8,7 @@ iotkit-core-types = { path = "../core/types" }
 iotkit-core-engine = { path = "../core/engine" }
 iotkit-core-storage = { path = "../core/storage" }
 iotkit-core-timeseries = { path = "../core/timeseries" }
-iotkit-ingest-contract = { path = "../iotkit-ingest-contract" }
+iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"] }
 iotkit-core-collector = { path = "../core/collector" }
 iotkit-core-ledger = { path = "../core/ledger" }
 iotkit-core-registry = { path = "../core/registry" }
@@ -22,7 +22,6 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -444,7 +444,7 @@ dependencies = [
  "iotkit-core-storage",
  "iotkit-core-timeseries",
  "iotkit-core-types",
- "iotkit-ingest-contract",
+ "iotkit-ingest-client",
  "rpi-local-adapter",
  "rusqlite",
  "serde",
@@ -456,7 +456,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
