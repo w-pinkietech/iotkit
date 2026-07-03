@@ -389,6 +389,7 @@ dependencies = [
 name = "iotkit-core-registry"
 version = "0.1.0"
 dependencies = [
+ "iotkit-core-collector",
  "iotkit-core-ledger",
  "iotkit-core-storage",
  "iotkit-ingest-contract",
