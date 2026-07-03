@@ -40,8 +40,16 @@ pub fn adapter_event_to_envelope(
 ) -> Option<Envelope> {
     let key = measurement_key_for(&reading.sensor_type)?;
     let hw = hardware_id_for(adapter_id, device_key)?;
-    let items: Vec<ReadingItem> = if reading.values.len() > 1 {
-        reading.values.iter().enumerate().map(|(i, v)| ReadingItem {
+    // 加速度の正準化: ドライバはg単位でx/y/z+派生値magnitudeの4値を出す(lis2duxs12.rs)。
+    // D6の正準は acceleration_mg(mG、チャネルはx/y/zの3本固定)なので、先頭3値をg→mG変換し
+    // 派生値は破棄する(派生値はR9/消費者側で導出。ブリッジは正準チャネルのみを運ぶ)。
+    let canonical_values: Vec<f64> = if reading.sensor_type == SensorType::Acceleration {
+        reading.values.iter().take(3).map(|v| v * 1000.0).collect()
+    } else {
+        reading.values.clone()
+    };
+    let items: Vec<ReadingItem> = if canonical_values.len() > 1 {
+        canonical_values.iter().enumerate().map(|(i, v)| ReadingItem {
             subject_hint: Some(hw.clone()),
             measurement_key: key.to_string(),
             channel_index: Some(i as u16),
@@ -57,7 +65,7 @@ pub fn adapter_event_to_envelope(
             measurement_key: key.to_string(),
             channel_index: None,
             series_variant: None,
-            values: reading.values.clone(),
+            values: canonical_values.clone(),
             device_time_ms: None,
             time_source: TimeSource::Gateway,
             age_ms: None, rssi, battery_pct,
@@ -109,18 +117,36 @@ mod tests {
 
     #[test]
     fn multi_value_reading_becomes_per_channel_items() {
+        // ドライバの加速度はg単位(lis2duxs12.rs)——ブリッジがD6正準のmGへ変換する
         let e = adapter_event_to_envelope(
             &AdapterId::new("bravepi-mainboard:/dev/ttyAMA0"),
             &DeviceKey::new("bravepi-mainboard:00000000000000cc:acceleration"),
             &SensorReading::new(SensorType::Acceleration, vec![1.0, 2.0, 3.0],
-                vec!["x".into(), "y".into(), "z".into()]),
+                vec!["x_g".into(), "y_g".into(), "z_g".into()]),
             Some(-55), Some(80),
         ).unwrap();
         assert_eq!(e.items.len(), 3);
         assert_eq!(e.items[0].channel_index, Some(0));
+        assert_eq!(e.items[0].values, vec![1000.0]);
         assert_eq!(e.items[2].channel_index, Some(2));
-        assert_eq!(e.items[2].values, vec![3.0]);
+        assert_eq!(e.items[2].values, vec![3000.0]);
         assert_eq!(e.items[2].measurement_key, "acceleration_mg");
+    }
+
+    #[test]
+    fn acceleration_derived_magnitude_channel_is_dropped() {
+        // ドライバはx/y/z(g)+派生値magnitudeの4値を出す——正準チャネルは3本のみ(D6)
+        let e = adapter_event_to_envelope(
+            &AdapterId::new("bravepi-mainboard:/dev/ttyAMA0"),
+            &DeviceKey::new("bravepi-mainboard:00000000000000cc:acceleration"),
+            &SensorReading::new(SensorType::Acceleration, vec![0.1, 0.2, 0.3, 0.99],
+                vec!["x_g".into(), "y_g".into(), "z_g".into(), "magnitude_g".into()]),
+            None, None,
+        ).unwrap();
+        assert_eq!(e.items.len(), 3);
+        assert!((e.items[0].values[0] - 100.0).abs() < 1e-9);
+        assert!((e.items[1].values[0] - 200.0).abs() < 1e-9);
+        assert!((e.items[2].values[0] - 300.0).abs() < 1e-9);
     }
 
     #[test]
