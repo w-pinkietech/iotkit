@@ -1,0 +1,89 @@
+# IoTKit 標準語彙カタログ v1(D6決定11)。契約仕様書の一部として公開される資産。
+# 変更規律: additive(追加)/corrective(互換修正)/breaking(禁止: 新キー+superseded_byのみ)=D6決定4/5
+catalog_version = "1.0.0"
+
+[[measurement]]
+key = "contact_state"
+unit_ucum = "1"
+value_type = "bool"
+semantic_class = "sensor"
+channel_mode = "generic"
+
+[[measurement]]
+key = "contact_output_state"
+unit_ucum = "1"
+value_type = "bool"
+semantic_class = "actuator_state"
+channel_mode = "generic"
+
+[[measurement]]
+key = "voltage_mv"
+unit_ucum = "mV"
+unit_display = "mV"
+value_type = "float"
+semantic_class = "sensor"
+channel_mode = "generic"
+# 物理限界はADC仕様がプロバイダごとに異なるため未定義(必要になればcorrective追加=D6決定4)
+
+[[measurement]]
+key = "distance_mm"
+unit_ucum = "mm"
+unit_display = "mm"
+value_type = "float"
+semantic_class = "sensor"
+channel_mode = "single"
+physical_range = { min = 0.0, max = 4000.0 } # ToF測距センサー(VL53L1X系)の最大測距4m
+
+[[measurement]]
+key = "temperature_c"
+unit_ucum = "Cel"
+unit_display = "℃"
+value_type = "float"
+semantic_class = "sensor"
+channel_mode = "single"
+physical_range = { min = -200.0, max = 1372.0 } # K型熱電対の規格測定範囲
+
+[[measurement]]
+key = "acceleration_mg"
+unit_ucum = "m[G]"
+unit_display = "mG"
+value_type = "float"
+semantic_class = "sensor"
+channel_mode = "fixed"
+channel_roles = ["x", "y", "z"]
+physical_range = { min = -16000.0, max = 16000.0 } # ±16g(LIS2DUXS12の最大レンジ)
+
+[[measurement]]
+key = "differential_pressure_pa"
+unit_ucum = "Pa"
+unit_display = "Pa"
+value_type = "float"
+semantic_class = "sensor"
+channel_mode = "single"
+physical_range = { min = -500.0, max = 500.0 } # SDP810-500Pa系の測定範囲
+
+[[measurement]]
+key = "illuminance_lux"
+unit_ucum = "lx"
+unit_display = "lx"
+value_type = "float"
+semantic_class = "sensor"
+channel_mode = "single"
+physical_range = { min = 0.0, max = 88000.0 } # OPT3001の最大測定照度(83k lux+余裕)
+
+[[measurement]]
+key = "current_ma"
+unit_ucum = "mA"
+unit_display = "mA"
+value_type = "float"
+semantic_class = "sensor"
+channel_mode = "generic"
+physical_range = { min = 0.0, max = 25.0 } # 4-20mAカレントループ(断線/過電流検知の余裕含む)
+
+[[measurement]]
+key = "vibration_spectrum"
+value_type = "record"
+semantic_class = "sensor"
+channel_mode = "single"
+# 契約予約のみ(D6決定10)。record型のワイヤ表現は第二波の契約追補で定義する。
+# Wave 0で受信した場合はf64配列として構造的に解釈不能 → value_type_mismatch で拒否。
