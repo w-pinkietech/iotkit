@@ -1,7 +1,7 @@
 //! LIS2DUXS12 加速度センサー (sensor_type = 262)
 //!
-//! I2C: Int16LE × 3 × 0.244 → mG, magnitude 計算
-//! UART (BravePI): Float32LE × 3 → mG, magnitude 計算
+//! I2C: Int16LE × 3 × 0.244 → mG
+//! UART (BravePI): Float32LE × 3 → mG
 
 use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 use crate::UartSample;
@@ -30,19 +30,12 @@ pub const REG_OUT: u8 = 0x28;
 /// WHO_AM_I の期待値
 pub const WHO_AM_I_VALUE: u8 = 0x47;
 
-/// magnitude 計算: |sqrt(x² + y² + z²) - 1000| / 1000
-/// x, y, z は mG 単位
-fn magnitude(x: f64, y: f64, z: f64) -> f64 {
-    ((x * x + y * y + z * z).sqrt() - 1000.0).abs() / 1000.0
-}
-
-/// I2C 生レジスタ値（6 bytes, Int16LE × 3）から mG + magnitude に変換。
+/// I2C 生レジスタ値（6 bytes, Int16LE × 3）から mG に変換。
 pub fn from_i2c_raw(data: &[u8; 6]) -> SensorReading {
     let x = i16::from_le_bytes([data[0], data[1]]) as f64 * MG_SCALE;
     let y = i16::from_le_bytes([data[2], data[3]]) as f64 * MG_SCALE;
     let z = i16::from_le_bytes([data[4], data[5]]) as f64 * MG_SCALE;
-    let mag = magnitude(x, y, z);
-    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag], vec!["x_g".to_string(), "y_g".to_string(), "z_g".to_string(), "magnitude_g".to_string()])
+    SensorReading::new(sensor_type(), vec![x, y, z], vec!["x_mg".to_string(), "y_mg".to_string(), "z_mg".to_string()])
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -54,8 +47,7 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let x = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
     let y = f32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64;
     let z = f32::from_le_bytes([data[8], data[9], data[10], data[11]]) as f64;
-    let mag = magnitude(x, y, z);
-    SensorReading::new(sensor_type(), vec![x / 1000.0, y / 1000.0, z / 1000.0, mag], vec!["x_g".to_string(), "y_g".to_string(), "z_g".to_string(), "magnitude_g".to_string()])
+    SensorReading::new(sensor_type(), vec![x, y, z], vec!["x_mg".to_string(), "y_mg".to_string(), "z_mg".to_string()])
 }
 
 fn decode_uart(sample: UartSample<'_>) -> SensorReading {
@@ -74,33 +66,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn i2c_raw_1g_z_axis() {
-        // 1G on Z axis ≈ 4098 raw (4098 * 0.244 ≈ 1000 mG)
-        let raw_z = 4098i16;
+    fn i2c_values_are_passed_through_in_mg() {
+        // ワイヤはInt16LE×3×0.244(mG)。ドライバは単位変換せず素通しする。
+        let raw_x = 50i16;
+        let raw_y = -100i16;
+        let raw_z = 4090i16;
         let data = [
-            0, 0,  // X = 0
-            0, 0,  // Y = 0
-            raw_z.to_le_bytes()[0], raw_z.to_le_bytes()[1],  // Z ≈ 1000 mG
+            raw_x.to_le_bytes()[0], raw_x.to_le_bytes()[1],
+            raw_y.to_le_bytes()[0], raw_y.to_le_bytes()[1],
+            raw_z.to_le_bytes()[0], raw_z.to_le_bytes()[1],
         ];
         let reading = from_i2c_raw(&data);
-        assert_eq!(reading.values.len(), 4);
-        // Z should be ≈ 1.0 (G)
-        assert!((reading.values[2] - 1.0).abs() < 0.01);
-        // magnitude should be ≈ 0.0 (sitting still at 1G)
-        assert!(reading.values[3] < 0.01);
+        assert_eq!(reading.values.len(), 3, "派生値はワイヤに乗せない(D6決定11)");
+        assert!((reading.values[0] - 12.2).abs() < 1e-3);
+        assert!((reading.values[1] - (-24.4)).abs() < 1e-3);
+        assert!((reading.values[2] - 997.96).abs() < 1e-3);
+        assert_eq!(reading.labels, vec!["x_mg", "y_mg", "z_mg"]);
     }
 
     #[test]
-    fn uart_payload() {
-        let mut data = Vec::new();
-        data.extend_from_slice(&100.0f32.to_le_bytes());  // X = 100 mG
-        data.extend_from_slice(&200.0f32.to_le_bytes());  // Y = 200 mG
-        data.extend_from_slice(&950.0f32.to_le_bytes());  // Z = 950 mG
-        let reading = from_uart_payload(&data);
-        assert_eq!(reading.values.len(), 4);
-        assert!((reading.values[0] - 0.1).abs() < 0.01);   // X in G
-        assert!((reading.values[1] - 0.2).abs() < 0.01);   // Y in G
-        assert!((reading.values[2] - 0.95).abs() < 0.01);  // Z in G
+    fn uart_values_are_passed_through_in_mg() {
+        // ワイヤはFloat32LE×3(mG)。ドライバは単位変換せず素通しする(D4: データシートの数学のみ)。
+        // 旧実装は÷1000でg化し旧ブリッジが×1000で戻す往復変換をしていた(計画3で解消)。
+        let mut payload = Vec::new();
+        for v in [12.0f32, -34.0, 998.0] {
+            payload.extend_from_slice(&v.to_le_bytes());
+        }
+        let reading = from_uart_payload(&payload);
+        assert_eq!(reading.values.len(), 3, "派生値はワイヤに乗せない(D6決定11)");
+        assert!((reading.values[0] - 12.0).abs() < 1e-3);
+        assert!((reading.values[2] - 998.0).abs() < 1e-3);
+        assert_eq!(reading.labels, vec!["x_mg", "y_mg", "z_mg"]);
     }
 
     #[test]
