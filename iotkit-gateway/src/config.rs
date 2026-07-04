@@ -31,6 +31,10 @@ pub struct RawConfig {
 #[serde(deny_unknown_fields)]
 pub struct RawGatewayConfig {
     pub db_path: Option<String>,
+    pub retention_days: Option<u64>,
+    pub quarantine_ttl_days: Option<u64>,
+    pub health_json_path: Option<String>,
+    pub disk_high_watermark_pct: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -61,6 +65,10 @@ pub struct RawRpiLocalConfig {
 pub struct GatewayConfig {
     pub config_source: ConfigSource,
     pub db_path: String,
+    pub retention_days: u64,
+    pub quarantine_ttl_days: u64,
+    pub health_json_path: PathBuf,
+    pub disk_high_watermark_pct: u64,
     pub bravepi: Option<BravepiConfig>,
     pub rpi_local: Option<RpiLocalResolvedConfig>,
 }
@@ -101,9 +109,7 @@ pub fn load_raw(path: Option<&Path>, explicit: bool) -> Result<RawConfig, Config
             let raw: RawConfig = toml::from_str(&contents)?;
             Ok(raw)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => {
-            Ok(RawConfig::default())
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(RawConfig::default()),
         Err(e) => Err(ConfigError::Io(e)),
     }
 }
@@ -132,6 +138,19 @@ fn parse_u64_env(var: &str, val: &str) -> Result<u64, ConfigError> {
 pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
     if let Ok(val) = std::env::var("IOTKIT_DB_PATH") {
         raw.gateway.db_path = Some(val);
+    }
+    if let Ok(val) = std::env::var("IOTKIT_RETENTION_DAYS") {
+        raw.gateway.retention_days = Some(parse_u64_env("IOTKIT_RETENTION_DAYS", &val)?);
+    }
+    if let Ok(val) = std::env::var("IOTKIT_QUARANTINE_TTL_DAYS") {
+        raw.gateway.quarantine_ttl_days = Some(parse_u64_env("IOTKIT_QUARANTINE_TTL_DAYS", &val)?);
+    }
+    if let Ok(val) = std::env::var("IOTKIT_HEALTH_JSON_PATH") {
+        raw.gateway.health_json_path = Some(val);
+    }
+    if let Ok(val) = std::env::var("IOTKIT_DISK_HIGH_WATERMARK_PCT") {
+        raw.gateway.disk_high_watermark_pct =
+            Some(parse_u64_env("IOTKIT_DISK_HIGH_WATERMARK_PCT", &val)?);
     }
 
     if let Ok(val) = std::env::var("BRAVEPI_ENABLED") {
@@ -184,10 +203,23 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
 /// Applies defaults to `None` fields, validates constraints,
 /// and returns `Err(ConfigError::Validation)` on invalid values.
 pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, ConfigError> {
-    let db_path = raw.gateway.db_path.unwrap_or_else(|| "iotkit.db".to_string());
+    let db_path = raw
+        .gateway
+        .db_path
+        .unwrap_or_else(|| "iotkit.db".to_string());
     if db_path.is_empty() {
-        return Err(ConfigError::Validation("db_path must not be empty".to_string()));
+        return Err(ConfigError::Validation(
+            "db_path must not be empty".to_string(),
+        ));
     }
+    let retention_days = raw.gateway.retention_days.unwrap_or(90).max(7);
+    let quarantine_ttl_days = raw.gateway.quarantine_ttl_days.unwrap_or(7);
+    let disk_high_watermark_pct = raw.gateway.disk_high_watermark_pct.unwrap_or(90);
+    let health_json_path = raw
+        .gateway
+        .health_json_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_health_json_path(&db_path));
 
     // BravePI: enabled by default
     let bravepi = {
@@ -249,9 +281,21 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
     Ok(GatewayConfig {
         config_source: source,
         db_path,
+        retention_days,
+        quarantine_ttl_days,
+        health_json_path,
+        disk_high_watermark_pct,
         bravepi,
         rpi_local,
     })
+}
+
+pub fn default_health_json_path(db_path: &str) -> PathBuf {
+    let db_path = Path::new(db_path);
+    match db_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join("health.json"),
+        _ => PathBuf::from("health.json"),
+    }
 }
 
 // ── Pipeline: load (public entry point) ────────────────
@@ -287,7 +331,11 @@ pub fn load(args: &[String]) -> Result<GatewayConfig, ConfigError> {
     let (path_buf, explicit, source) = match &found {
         Found::CliArg(p) => (Some(p.clone()), true, ConfigSource::CliArg(p.clone())),
         Found::EnvVar(p) => (Some(p.clone()), true, ConfigSource::EnvVar(p.clone())),
-        Found::ImplicitFile(p) => (Some(p.clone()), false, ConfigSource::ImplicitFile(p.clone())),
+        Found::ImplicitFile(p) => (
+            Some(p.clone()),
+            false,
+            ConfigSource::ImplicitFile(p.clone()),
+        ),
         Found::DefaultsOnly => (None, false, ConfigSource::DefaultsOnly),
     };
 
@@ -363,8 +411,7 @@ poll_interval_ms = 500
 
     #[test]
     fn unknown_adapter_rejected() {
-        let result: Result<RawConfig, _> =
-            toml::from_str("[adapters.nonexistent]\nfoo = \"bar\"");
+        let result: Result<RawConfig, _> = toml::from_str("[adapters.nonexistent]\nfoo = \"bar\"");
         assert!(result.is_err());
     }
 
@@ -410,8 +457,16 @@ poll_interval_ms = 500
 
     /// All ENV vars that `apply_env()` and `load()` read.
     const CONFIG_ENV_KEYS: &[&str] = &[
-        "IOTKIT_DB_PATH", "BRAVEPI_ENABLED", "BRAVEPI_PORT",
-        "RPI_LOCAL_ENABLED", "RPI_LOCAL_BUS_PATH", "RPI_LOCAL_POLL_INTERVAL_MS",
+        "IOTKIT_DB_PATH",
+        "BRAVEPI_ENABLED",
+        "BRAVEPI_PORT",
+        "RPI_LOCAL_ENABLED",
+        "RPI_LOCAL_BUS_PATH",
+        "RPI_LOCAL_POLL_INTERVAL_MS",
+        "IOTKIT_RETENTION_DAYS",
+        "IOTKIT_QUARANTINE_TTL_DAYS",
+        "IOTKIT_HEALTH_JSON_PATH",
+        "IOTKIT_DISK_HIGH_WATERMARK_PCT",
         "IOTKIT_CONFIG_PATH",
     ];
 
@@ -444,12 +499,16 @@ poll_interval_ms = 500
         for k in CONFIG_ENV_KEYS {
             // SAFETY: env-var mutation is exclusive because these tests are
             // serialized via #[serial] (see the module-level comment above).
-            unsafe { std::env::remove_var(k); }
+            unsafe {
+                std::env::remove_var(k);
+            }
         }
         for (k, v) in vars {
             // SAFETY: env-var mutation is exclusive because these tests are
             // serialized via #[serial] (see the module-level comment above).
-            unsafe { std::env::set_var(k, v); }
+            unsafe {
+                std::env::set_var(k, v);
+            }
         }
         f();
     }
@@ -538,7 +597,10 @@ poll_interval_ms = 500
             let result = apply_env(&mut raw);
             assert!(result.is_err());
             let msg = result.unwrap_err().to_string();
-            assert!(msg.contains("RPI_LOCAL_POLL_INTERVAL_MS"), "error should name the var: {msg}");
+            assert!(
+                msg.contains("RPI_LOCAL_POLL_INTERVAL_MS"),
+                "error should name the var: {msg}"
+            );
             assert!(msg.contains("abc"), "error should include raw value: {msg}");
         });
     }
@@ -562,7 +624,10 @@ poll_interval_ms = 500
             let result = apply_env(&mut raw);
             assert!(result.is_err());
             let msg = result.unwrap_err().to_string();
-            assert!(msg.contains("BRAVEPI_ENABLED"), "error should name the var: {msg}");
+            assert!(
+                msg.contains("BRAVEPI_ENABLED"),
+                "error should name the var: {msg}"
+            );
             assert!(msg.contains("yes"), "error should include raw value: {msg}");
         });
     }
@@ -578,11 +643,56 @@ poll_interval_ms = 500
         let raw = raw_with_defaults();
         let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
         assert_eq!(config.db_path, "iotkit.db");
+        assert_eq!(config.retention_days, 90);
+        assert_eq!(config.quarantine_ttl_days, 7);
+        assert_eq!(config.health_json_path, PathBuf::from("health.json"));
+        assert_eq!(config.disk_high_watermark_pct, 90);
         // bravepi enabled by default
         let bp = config.bravepi.as_ref().unwrap();
         assert_eq!(bp.port, "/dev/ttyAMA0");
         // rpi_local disabled by default
         assert!(config.rpi_local.is_none());
+    }
+
+    #[test]
+    fn resolve_health_json_path_defaults_to_db_parent() {
+        let mut raw = raw_with_defaults();
+        raw.gateway.db_path = Some("var/lib/iotkit/iotkit.db".to_string());
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(
+            config.health_json_path,
+            PathBuf::from("var/lib/iotkit/health.json")
+        );
+    }
+
+    #[test]
+    fn resolve_retention_days_clamps_to_minimum_seven() {
+        let mut raw = raw_with_defaults();
+        raw.gateway.retention_days = Some(3);
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(config.retention_days, 7);
+    }
+
+    #[test]
+    #[serial]
+    fn apply_env_overrides_retention_health_and_watermark_fields() {
+        let mut raw = RawConfig::default();
+        with_env_vars(
+            &[
+                ("IOTKIT_RETENTION_DAYS", "120"),
+                ("IOTKIT_QUARANTINE_TTL_DAYS", "14"),
+                ("IOTKIT_HEALTH_JSON_PATH", "/tmp/iotkit-health.json"),
+                ("IOTKIT_DISK_HIGH_WATERMARK_PCT", "85"),
+            ],
+            || apply_env(&mut raw).unwrap(),
+        );
+        assert_eq!(raw.gateway.retention_days, Some(120));
+        assert_eq!(raw.gateway.quarantine_ttl_days, Some(14));
+        assert_eq!(
+            raw.gateway.health_json_path.as_deref(),
+            Some("/tmp/iotkit-health.json")
+        );
+        assert_eq!(raw.gateway.disk_high_watermark_pct, Some(85));
     }
 
     #[test]
@@ -659,7 +769,9 @@ poll_interval_ms = 500
             poll_interval_ms: Some(0),
         });
         let result = resolve(raw, ConfigSource::DefaultsOnly);
-        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("poll_interval_ms")));
+        assert!(
+            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("poll_interval_ms"))
+        );
     }
 
     #[test]
@@ -694,7 +806,9 @@ poll_interval_ms = 500
         });
         // rpi_local defaults to disabled
         let result = resolve(raw, ConfigSource::DefaultsOnly);
-        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter")));
+        assert!(
+            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter"))
+        );
     }
 
     // ── load tests ─────────────────────────────────────
@@ -703,7 +817,11 @@ poll_interval_ms = 500
     #[serial]
     fn load_with_explicit_missing_file_errors() {
         with_env_vars(&[], || {
-            let args = vec!["gateway".to_string(), "--config".to_string(), "/tmp/no-such-file.toml".to_string()];
+            let args = vec![
+                "gateway".to_string(),
+                "--config".to_string(),
+                "/tmp/no-such-file.toml".to_string(),
+            ];
             let result = load(&args);
             assert!(result.is_err());
         });
@@ -715,7 +833,9 @@ poll_interval_ms = 500
         with_env_vars(&[], || {
             let args = vec!["gateway".to_string(), "--config".to_string()];
             let result = load(&args);
-            assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("--config")));
+            assert!(
+                matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("--config"))
+            );
         });
     }
 
@@ -733,7 +853,9 @@ poll_interval_ms = 500
     #[serial]
     fn load_with_no_args_and_no_env_uses_defaults() {
         let tmp = tempfile::tempdir().unwrap();
-        let _cwd_guard = CwdGuard { prev: std::env::current_dir().unwrap() };
+        let _cwd_guard = CwdGuard {
+            prev: std::env::current_dir().unwrap(),
+        };
         std::env::set_current_dir(tmp.path()).unwrap();
         with_env_vars(&[], || {
             let args = vec!["gateway".to_string()];
@@ -759,13 +881,17 @@ poll_interval_ms = 500
     #[serial]
     fn load_with_valid_file() {
         let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        write!(tmpfile, r#"
+        write!(
+            tmpfile,
+            r#"
 [gateway]
 db_path = "loaded.db"
 
 [adapters.bravepi]
 port = "/dev/ttyUSB0"
-"#).unwrap();
+"#
+        )
+        .unwrap();
         with_env_vars(&[], || {
             let args = vec![
                 "gateway".to_string(),
@@ -784,7 +910,9 @@ port = "/dev/ttyUSB0"
     #[serial]
     fn load_integration_full_toml() {
         let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        write!(tmpfile, r#"
+        write!(
+            tmpfile,
+            r#"
 [gateway]
 db_path = "integration.db"
 
@@ -796,7 +924,9 @@ port = "/dev/ttyUSB1"
 enabled = true
 bus_path = "/dev/i2c-3"
 poll_interval_ms = 750
-"#).unwrap();
+"#
+        )
+        .unwrap();
         with_env_vars(&[], || {
             let args = vec![
                 "gateway".to_string(),
@@ -836,13 +966,18 @@ poll_interval_ms = 750
         let tmp = tempfile::tempdir().unwrap();
         let toml_path = tmp.path().join("iotkit.toml");
         std::fs::write(&toml_path, "[gateway]\ndb_path = \"implicit.db\"").unwrap();
-        let _cwd_guard = CwdGuard { prev: std::env::current_dir().unwrap() };
+        let _cwd_guard = CwdGuard {
+            prev: std::env::current_dir().unwrap(),
+        };
         std::env::set_current_dir(tmp.path()).unwrap();
         with_env_vars(&[], || {
             let args = vec!["gateway".to_string()];
             let config = load(&args).unwrap();
             assert_eq!(config.db_path, "implicit.db");
-            assert!(matches!(config.config_source, ConfigSource::ImplicitFile(_)));
+            assert!(matches!(
+                config.config_source,
+                ConfigSource::ImplicitFile(_)
+            ));
         });
     }
 

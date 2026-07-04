@@ -45,6 +45,7 @@ enum Command {
         #[command(subcommand)]
         command: SeriesCommand,
     },
+    Health(cmd::query::HealthArgs),
 }
 
 #[derive(Subcommand)]
@@ -111,10 +112,14 @@ fn run() -> AppResult<()> {
     all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
-    db.with_conn_sync(|conn| Ok(dispatch(conn, cli.command)))?
+    db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))?
 }
 
-fn dispatch(conn: &rusqlite::Connection, command: Command) -> AppResult<()> {
+fn dispatch(
+    conn: &rusqlite::Connection,
+    db_path: &std::path::Path,
+    command: Command,
+) -> AppResult<()> {
     match command {
         Command::Sightings { command } => match command {
             SightingsCommand::List => cmd::devices::run_list_sightings(conn),
@@ -144,5 +149,6 @@ fn dispatch(conn: &rusqlite::Connection, command: Command) -> AppResult<()> {
         Command::Series { command } => match command {
             SeriesCommand::List(args) => cmd::registry::run_series_list(conn, args),
         },
+        Command::Health(args) => cmd::query::run_health(db_path, args),
     }
 }

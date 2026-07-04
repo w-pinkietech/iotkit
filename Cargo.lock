@@ -540,6 +540,7 @@ dependencies = [
  "iotkit-core-timeseries",
  "iotkit-core-types",
  "iotkit-ingest-client",
+ "libc",
  "rpi-local-adapter",
  "rusqlite",
  "serde",

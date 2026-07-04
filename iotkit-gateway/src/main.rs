@@ -3,9 +3,13 @@
 
 mod adapter_host;
 mod config;
+mod health;
+mod retention;
 mod supervision;
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
@@ -35,6 +39,10 @@ fn main() {
     tracing::info!(source = ?config.config_source, "config loaded");
     tracing::info!(
         db_path = %config.db_path,
+        retention_days = config.retention_days,
+        quarantine_ttl_days = config.quarantine_ttl_days,
+        health_json_path = %config.health_json_path.display(),
+        disk_high_watermark_pct = config.disk_high_watermark_pct,
         bravepi_enabled = config.bravepi.is_some(),
         rpi_local_enabled = config.rpi_local.is_some(),
         "effective config"
@@ -51,7 +59,10 @@ fn main() {
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
     all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9
-    let db = match iotkit_core_storage::init_db(std::path::Path::new(&config.db_path), &all_migrations) {
+    let db = match iotkit_core_storage::init_db(
+        std::path::Path::new(&config.db_path),
+        &all_migrations,
+    ) {
         Ok(handle) => handle,
         Err(e) => {
             tracing::error!(error = %e, db_path = %config.db_path, "failed to initialize database");
@@ -84,6 +95,35 @@ fn ledger_to_storage_err(e: iotkit_core_ledger::LedgerError) -> iotkit_core_stor
 async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -> bool {
     let engine = Engine::new();
     let mut host = AdapterHost::new();
+    let db_path = std::path::PathBuf::from(&config.db_path);
+    let health_state = Arc::new(Mutex::new(health::HealthState::new(config.retention_days)));
+    let epoch = db
+        .with_conn(|conn| {
+            iotkit_core_ledger::ledger_epoch(conn).map_err(|e| {
+                iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                    Box::new(e),
+                ))
+            })
+        })
+        .await
+        .expect("ledger epoch");
+    let _retention_task = retention::spawn_retention_task(
+        db.clone(),
+        db_path.clone(),
+        retention::RetentionConfig {
+            retention_days: config.retention_days,
+            quarantine_ttl_days: config.quarantine_ttl_days,
+            disk_high_watermark_pct: config.disk_high_watermark_pct,
+        },
+        health_state.clone(),
+        Duration::from_secs(24 * 60 * 60),
+    );
+    let _health_task = health::spawn_health_writer(
+        config.health_json_path.clone(),
+        epoch,
+        health_state.clone(),
+        Duration::from_secs(60),
+    );
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
     // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
@@ -104,23 +144,32 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     // hardcoded_rpi_local_targets()と同じ2アドレス(0x60, 0x44)。冪等: 既にalive登録済みならスキップ。
     if config.rpi_local.is_some() {
         db.with_conn(|conn| {
-            for (addr, label) in [(0x60u8, "MCP9600 thermocouple"), (0x44u8, "OPT3001 illuminance")] {
+            for (addr, label) in [
+                (0x60u8, "MCP9600 thermocouple"),
+                (0x44u8, "OPT3001 illuminance"),
+            ] {
                 let hw = format!("rpi-local:default:i2c:0x{addr:02x}");
                 if iotkit_core_ledger::find_alive_by_hardware_id(conn, &hw)
                     .map_err(ledger_to_storage_err)?
                     .is_none()
                 {
-                    iotkit_core_ledger::insert_device(conn, &iotkit_core_ledger::NewDevice {
-                        hardware_id: hw,
-                        user_label: Some(label.to_string()),
-                        parent: None,
-                        kind: iotkit_core_ledger::DeviceKind::Positional,
-                        initial_state: iotkit_core_ledger::DeviceState::Active,
-                    }).map_err(ledger_to_storage_err)?;
+                    iotkit_core_ledger::insert_device(
+                        conn,
+                        &iotkit_core_ledger::NewDevice {
+                            hardware_id: hw,
+                            user_label: Some(label.to_string()),
+                            parent: None,
+                            kind: iotkit_core_ledger::DeviceKind::Positional,
+                            initial_state: iotkit_core_ledger::DeviceState::Active,
+                        },
+                    )
+                    .map_err(ledger_to_storage_err)?;
                 }
             }
             Ok(())
-        }).await.expect("positional device registration");
+        })
+        .await
+        .expect("positional device registration");
     }
 
     // R20: 再起動可能な公式アダプタ(BravePI/rpi-local)のみを記録する(D4: 再起動権限は形態①のみ)。
@@ -131,7 +180,12 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     if let Some(bp) = &config.bravepi {
         match start_bravepi(&mut host, &bp.port, Some(ingest_client.clone())) {
             Ok(id) => {
-                restart_specs.insert(id, RestartSpec::BravePi { port: bp.port.clone() });
+                restart_specs.insert(
+                    id,
+                    RestartSpec::BravePi {
+                        port: bp.port.clone(),
+                    },
+                );
             }
             Err(e) => {
                 tracing::error!(error = %e, port = %bp.port, "Failed to start BravePI mainboard adapter");
@@ -156,9 +210,18 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
             poll_interval_ms: rpi.poll_interval_ms,
             targets,
         };
-        match start_rpi_local(&mut host, adapter_config.clone(), Some(ingest_client.clone())) {
+        match start_rpi_local(
+            &mut host,
+            adapter_config.clone(),
+            Some(ingest_client.clone()),
+        ) {
             Ok(id) => {
-                restart_specs.insert(id, RestartSpec::RpiLocal { config: adapter_config });
+                restart_specs.insert(
+                    id,
+                    RestartSpec::RpiLocal {
+                        config: adapter_config,
+                    },
+                );
             }
             Err(e) => {
                 tracing::error!(error = %e, bus_path = %rpi.bus_path, "Failed to start RPi local adapter");
@@ -189,6 +252,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                 // クライアントタスク退出=コレクタ死亡(Closed)。取り込み全損なのでfail-fast
                 tracing::error!("ingest client exited (collector closed); aborting fan-in loop");
                 collector_alive = false;
+                health_state
+                    .lock()
+                    .expect("health state mutex poisoned")
+                    .collector_alive = false;
                 break;
             }
             event = host.next_event() => {
@@ -212,9 +279,17 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                         if let Some(adapter_id) = healthy_adapter {
                             // R20: 正常受信のたびに再起動カウンタをリセットする(簡略化: HashMap::removeは冪等で安価)。
                             tracker.note_healthy(&adapter_id);
+                            health_state
+                                .lock()
+                                .expect("health state mutex poisoned")
+                                .note_adapter_event(&adapter_id.to_string(), health::now_ms());
                         }
                     }
                     Some(AdapterHostEvent::AdapterClosed(id)) => {
+                        health_state
+                            .lock()
+                            .expect("health state mutex poisoned")
+                            .note_adapter_closed(&id.to_string());
                         // Closed済みアダプタをまず登録簿から除去する(除去しないと同一IDでの
                         // 再registerがadapter_host::registerの重複拒否に阻まれる)。
                         host.deregister(&id);
@@ -284,6 +359,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     }
 
     host.shutdown_all().await;
+    health_state
+        .lock()
+        .expect("health state mutex poisoned")
+        .collector_alive = collector_alive;
 
     let devices = engine.devices().await;
     tracing::info!(device_count = devices.len(), "Engine state at shutdown");
@@ -295,8 +374,12 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
 /// AdapterClosed時、host.deregister後にこのspecから同じ起動パスを再実行する。
 #[derive(Clone)]
 enum RestartSpec {
-    BravePi { port: String },
-    RpiLocal { config: rpi_local_adapter::RpiLocalConfig },
+    BravePi {
+        port: String,
+    },
+    RpiLocal {
+        config: rpi_local_adapter::RpiLocalConfig,
+    },
 }
 
 /// BravePI mainboard adapterを起動し、hostへ登録する。
@@ -311,14 +394,10 @@ fn start_bravepi(
     tracing::info!(adapter_id = %handle.id, port = %port, "BravePI mainboard adapter started");
     let parts = handle.into_parts();
     let id = parts.id.clone();
-    host.register(
-        parts.id,
-        parts.event_rx,
-        {
-            let sh = parts.shutdown;
-            move || Box::pin(async move { sh.shutdown().await })
-        },
-    )?;
+    host.register(parts.id, parts.event_rx, {
+        let sh = parts.shutdown;
+        move || Box::pin(async move { sh.shutdown().await })
+    })?;
     Ok(id)
 }
 
@@ -337,14 +416,10 @@ fn start_rpi_local(
     tracing::info!(adapter_id = %handle.id, "RPi local adapter started");
     let parts = handle.into_parts();
     let id = parts.id.clone();
-    host.register(
-        parts.id,
-        parts.event_rx,
-        {
-            let sh = parts.shutdown;
-            move || Box::pin(async move { sh.shutdown().await })
-        },
-    )?;
+    host.register(parts.id, parts.event_rx, {
+        let sh = parts.shutdown;
+        move || Box::pin(async move { sh.shutdown().await })
+    })?;
     Ok(id)
 }
 
@@ -359,8 +434,6 @@ fn hardcoded_rpi_local_targets() -> Vec<rpi_local_adapter::RpiLocalTarget> {
             address: 0x60,
             thermocouple_type: ThermocoupleType::K,
         },
-        rpi_local_adapter::RpiLocalTarget::OPT3001 {
-            address: 0x44,
-        },
+        rpi_local_adapter::RpiLocalTarget::OPT3001 { address: 0x44 },
     ]
 }

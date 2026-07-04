@@ -1,7 +1,7 @@
 use clap::Args;
 use iotkit_core_timeseries::query as ts_query;
 use rusqlite::Connection;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -38,6 +38,12 @@ pub struct ExportArgs {
     pub to: i64,
     #[arg(long)]
     pub out: PathBuf,
+}
+
+#[derive(Args)]
+pub struct HealthArgs {
+    #[arg(long)]
+    pub path: Option<PathBuf>,
 }
 
 pub fn run_query(conn: &Connection, args: QueryArgs) -> AppResult<()> {
@@ -81,8 +87,60 @@ pub fn run_aggregate(conn: &Connection, args: AggregateArgs) -> AppResult<()> {
 }
 
 pub fn run_export(conn: &Connection, args: ExportArgs) -> AppResult<()> {
-    let rows = ts_query::query_readings_v3(conn, args.series_id, args.from, args.to, u32::MAX, false)?;
+    let rows =
+        ts_query::query_readings_v3(conn, args.series_id, args.from, args.to, u32::MAX, false)?;
     let mut out = std::fs::File::create(args.out)?;
     ts_query::export_csv(&mut out, &rows)?;
     Ok(())
+}
+
+pub fn run_health(db_path: &Path, args: HealthArgs) -> AppResult<()> {
+    let path = args
+        .path
+        .unwrap_or_else(|| default_health_json_path(db_path));
+    let text = std::fs::read_to_string(&path)?;
+    let json: serde_json::Value = serde_json::from_str(&text)?;
+    let written_at = json["written_at"].as_i64().unwrap_or(0);
+    let age_ms = now_ms().saturating_sub(written_at);
+    if age_ms > 5 * 60 * 1000 {
+        println!("STALE (daemon down?)");
+    } else {
+        println!("OK");
+    }
+    println!("path={}", path.display());
+    println!("epoch={}", json["epoch"].as_str().unwrap_or(""));
+    println!(
+        "collector_alive={}",
+        json["collector_alive"].as_bool().unwrap_or(false)
+    );
+    println!(
+        "db size_bytes={} disk_available_bytes={} watermark_exceeded={}",
+        json["db"]["size_bytes"].as_u64().unwrap_or(0),
+        json["db"]["disk_available_bytes"].as_u64().unwrap_or(0),
+        json["db"]["watermark_exceeded"].as_bool().unwrap_or(false)
+    );
+    println!(
+        "retention days={} last_purge_at={} last_purged_rows={}",
+        json["retention"]["days"].as_u64().unwrap_or(0),
+        json["retention"]["last_purge_at"]
+            .as_i64()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "null".to_string()),
+        json["retention"]["last_purged_rows"].as_u64().unwrap_or(0)
+    );
+    Ok(())
+}
+
+fn default_health_json_path(db_path: &Path) -> PathBuf {
+    match db_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join("health.json"),
+        _ => PathBuf::from("health.json"),
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }

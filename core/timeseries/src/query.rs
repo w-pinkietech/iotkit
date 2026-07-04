@@ -1,6 +1,6 @@
 use crate::TimeseriesError;
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use std::borrow::Cow;
 
 pub struct ReadingRowV3 {
@@ -29,11 +29,7 @@ pub struct Bucket {
 fn row_to_reading(row: &rusqlite::Row<'_>) -> Result<ReadingRowV3, rusqlite::Error> {
     let values_json: String = row.get(8)?;
     let values = serde_json::from_str(&values_json).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            8,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        )
+        rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
     })?;
     Ok(ReadingRowV3 {
         seq: row.get(0)?,
@@ -76,9 +72,12 @@ pub fn query_readings_v3(
         )
     };
     let mut stmt = conn.prepare(&sql)?;
-    stmt.query_map(params![series_id, from_event_ms, to_event_ms, limit], row_to_reading)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(TimeseriesError::from)
+    stmt.query_map(
+        params![series_id, from_event_ms, to_event_ms, limit],
+        row_to_reading,
+    )?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(TimeseriesError::from)
 }
 
 pub fn aggregate_readings_v3(
@@ -229,14 +228,15 @@ pub fn list_staged_for_hardware(
     hardware_id: &str,
     limit: u32,
 ) -> Result<Vec<(i64, String)>, TimeseriesError> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT received_at, payload_json FROM staged_readings
+    let mut stmt = conn.prepare(
+        "SELECT received_at, payload_json FROM staged_readings
              WHERE hardware_id = ?1 ORDER BY id DESC LIMIT ?2",
-        )?;
-    stmt.query_map(params![hardware_id, limit], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(TimeseriesError::from)
+    )?;
+    stmt.query_map(params![hardware_id, limit], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(TimeseriesError::from)
 }
 
 pub fn mark_readings_quarantined(
@@ -261,4 +261,27 @@ pub fn mark_readings_quarantined(
     conn.execute(&sql, params_from_iter(values))
         .map(|n| n as u64)
         .map_err(TimeseriesError::from)
+}
+
+/// Retention purge by insert/receipt time. Deletes in bounded batches so a
+/// first large purge does not monopolize the shared gateway connection.
+pub fn purge_readings_before(
+    conn: &Connection,
+    cutoff_received_ms: i64,
+) -> Result<u64, TimeseriesError> {
+    let mut total = 0_u64;
+    loop {
+        let deleted = conn.execute(
+            "DELETE FROM readings
+             WHERE seq IN (
+                 SELECT seq FROM readings WHERE received_at < ?1 ORDER BY received_at ASC LIMIT 10000
+             )",
+            params![cutoff_received_ms],
+        )?;
+        if deleted == 0 {
+            break;
+        }
+        total += deleted as u64;
+    }
+    Ok(total)
 }

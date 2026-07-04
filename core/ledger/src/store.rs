@@ -150,7 +150,11 @@ fn now_ms() -> i64 {
 }
 
 fn system_id_from_blob(bytes: Vec<u8>, label: &str) -> SystemId {
-    SystemId::from_bytes(bytes.try_into().unwrap_or_else(|_| panic!("16-byte {label}")))
+    SystemId::from_bytes(
+        bytes
+            .try_into()
+            .unwrap_or_else(|_| panic!("16-byte {label}")),
+    )
 }
 
 fn row_to_device(row: &rusqlite::Row<'_>) -> Result<DeviceRow, rusqlite::Error> {
@@ -220,7 +224,10 @@ pub fn find_alive_by_hardware_id(
     .map_err(LedgerError::from)
 }
 
-pub fn list_devices(conn: &Connection, include_retired: bool) -> Result<Vec<DeviceRow>, LedgerError> {
+pub fn list_devices(
+    conn: &Connection,
+    include_retired: bool,
+) -> Result<Vec<DeviceRow>, LedgerError> {
     let sql = if include_retired {
         format!("SELECT {DEVICE_COLS} FROM devices ORDER BY created_at ASC, hardware_id ASC")
     } else {
@@ -235,7 +242,10 @@ pub fn list_devices(conn: &Connection, include_retired: bool) -> Result<Vec<Devi
         .map_err(LedgerError::from)
 }
 
-pub fn get_device(conn: &Connection, system_id: &SystemId) -> Result<Option<DeviceRow>, LedgerError> {
+pub fn get_device(
+    conn: &Connection,
+    system_id: &SystemId,
+) -> Result<Option<DeviceRow>, LedgerError> {
     conn.query_row(
         &format!("SELECT {DEVICE_COLS} FROM devices WHERE system_id = ?1"),
         params![system_id.as_bytes().to_vec()],
@@ -575,6 +585,38 @@ pub fn activate_device(conn: &Connection, system_id: &SystemId) -> Result<(), Le
     }
     record_event(conn, "device_activated", Some(system_id), "")?;
     Ok(())
+}
+
+/// Activate quarantined devices whose quarantine TTL has elapsed.
+pub fn expire_quarantined_devices(
+    conn: &Connection,
+    ttl_ms: i64,
+) -> Result<Vec<SystemId>, LedgerError> {
+    let cutoff = now_ms().saturating_sub(ttl_ms);
+    let mut stmt = conn.prepare(
+        "SELECT system_id FROM devices
+         WHERE state = 'quarantined' AND created_at < ?1
+         ORDER BY created_at ASC, hardware_id ASC",
+    )?;
+    let expired: Vec<SystemId> = stmt
+        .query_map(params![cutoff], |row| {
+            let sid: Vec<u8> = row.get(0)?;
+            Ok(system_id_from_blob(sid, "expired device system_id"))
+        })?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+
+    for sid in &expired {
+        conn.execute(
+            "UPDATE devices SET state = 'active'
+             WHERE system_id = ?1 AND state = 'quarantined'",
+            params![sid.as_bytes().to_vec()],
+        )?;
+        let detail = serde_json::json!({ "ttl_ms": ttl_ms });
+        record_event(conn, "quarantine_expired", Some(sid), &detail.to_string())?;
+    }
+
+    Ok(expired)
 }
 
 /// retire(墓標): 行は消さない。system_id再利用は永久禁止(D5決定4)。
@@ -920,7 +962,10 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert!(bad_meta.quarantined);
-            assert_eq!(bad_meta.quarantine_reason.as_deref(), Some("undeclared_channel"));
+            assert_eq!(
+                bad_meta.quarantine_reason.as_deref(),
+                Some("undeclared_channel")
+            );
             // キーも理由も異なるseriesは対象外
             let other = find_series_meta(conn, &sid, "other_key", CHANNEL_NA, DEFAULT_VARIANT)
                 .unwrap()
@@ -1055,13 +1100,17 @@ mod tests {
     fn retire_device_marks_tombstone_and_records_event() {
         let db = test_db();
         db.with_conn_sync(|conn| {
-            let sid = insert_device(conn, &NewDevice {
-                hardware_id: "ble:tombstone".into(),
-                user_label: None,
-                parent: None,
-                kind: DeviceKind::Individual,
-                initial_state: DeviceState::Active,
-            }).unwrap();
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:tombstone".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
 
             retire_device(conn, &sid).unwrap();
 
@@ -1075,7 +1124,11 @@ mod tests {
                 )
                 .unwrap();
             assert!(retired_at.is_some());
-            assert!(find_alive_by_hardware_id(conn, "ble:tombstone").unwrap().is_none());
+            assert!(
+                find_alive_by_hardware_id(conn, "ble:tombstone")
+                    .unwrap()
+                    .is_none()
+            );
 
             let (kind, event_sid): (String, Vec<u8>) = conn
                 .query_row(
@@ -1087,7 +1140,8 @@ mod tests {
             assert_eq!(kind, "device_retired");
             assert_eq!(event_sid, sid.as_bytes().to_vec());
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -1100,20 +1154,108 @@ mod tests {
                 Err(LedgerError::NotFound(_))
             ));
 
-            let sid = insert_device(conn, &NewDevice {
-                hardware_id: "ble:already-retired".into(),
-                user_label: None,
-                parent: None,
-                kind: DeviceKind::Individual,
-                initial_state: DeviceState::Active,
-            }).unwrap();
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:already-retired".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
             retire_device(conn, &sid).unwrap();
             assert!(matches!(
                 retire_device(conn, &sid),
                 Err(LedgerError::NotFound(_))
             ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn expire_quarantined_devices_activates_only_ttl_expired_rows_and_records_events() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let expired = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:expired".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Quarantined,
+                },
+            )
+            .unwrap();
+            let fresh = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:fresh".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Quarantined,
+                },
+            )
+            .unwrap();
+            let active = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "ble:active".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE devices SET created_at = 0 WHERE system_id = ?1",
+                params![expired.as_bytes().to_vec()],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE devices SET created_at = ?1 WHERE system_id IN (?2, ?3)",
+                params![
+                    i64::MAX / 2,
+                    fresh.as_bytes().to_vec(),
+                    active.as_bytes().to_vec()
+                ],
+            )
+            .unwrap();
+
+            let expired_ids = expire_quarantined_devices(conn, 1).unwrap();
+
+            assert_eq!(expired_ids, vec![expired]);
+            assert_eq!(
+                get_device(conn, &expired).unwrap().unwrap().state,
+                DeviceState::Active
+            );
+            assert_eq!(
+                get_device(conn, &fresh).unwrap().unwrap().state,
+                DeviceState::Quarantined
+            );
+            assert_eq!(
+                get_device(conn, &active).unwrap().unwrap().state,
+                DeviceState::Active
+            );
+            let (kind, event_sid): (String, Vec<u8>) = conn
+                .query_row(
+                    "SELECT kind, system_id FROM ledger_events
+                     WHERE kind = 'quarantine_expired'
+                     ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(kind, "quarantine_expired");
+            assert_eq!(event_sid, expired.as_bytes().to_vec());
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -1246,7 +1388,8 @@ mod tests {
             assert_eq!(bump_generation(conn).unwrap(), 2);
             assert_eq!(current_generation(conn).unwrap(), 2);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]

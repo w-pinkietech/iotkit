@@ -103,6 +103,37 @@ fn prepare_replace_db() -> (tempfile::TempDir, std::path::PathBuf, String) {
 }
 
 #[test]
+fn health_command_reads_default_health_json_next_to_db_and_marks_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let health_path = dir.path().join("health.json");
+    let stale_written_at = 1_i64;
+    std::fs::write(
+        &health_path,
+        format!(
+            r#"{{
+                "schema":1,
+                "written_at":{stale_written_at},
+                "epoch":"epoch-1",
+                "uptime_s":12,
+                "collector_alive":true,
+                "adapters":[],
+                "db":{{"size_bytes":10,"disk_available_bytes":20,"watermark_exceeded":false}},
+                "retention":{{"days":90,"last_purge_at":null,"last_purged_rows":0}}
+            }}"#
+        ),
+    )
+    .unwrap();
+
+    let out = assert_success(run(&["--db", db_path.to_str().unwrap(), "health"]));
+
+    assert!(out.contains("STALE (daemon down?)"), "stdout:\n{out}");
+    assert!(out.contains("epoch-1"), "stdout:\n{out}");
+    assert!(out.contains("collector_alive=true"), "stdout:\n{out}");
+}
+
+#[test]
 fn missing_db_path_is_error_and_does_not_create_empty_db() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("missing.db");
@@ -289,13 +320,8 @@ fn replace_hardware_normalizes_single_channel_zero_in_observed_profile() {
     db.with_conn_sync(|conn| {
         let catalog = iotkit_core_registry::standard_catalog();
         let temperature = catalog.find("temperature_c").unwrap();
-        iotkit_core_registry::enable_entry(
-            conn,
-            temperature,
-            &catalog.catalog_version,
-            "test",
-        )
-        .unwrap();
+        iotkit_core_registry::enable_entry(conn, temperature, &catalog.catalog_version, "test")
+            .unwrap();
         stage_item(conn, "ble:new", "temperature_c", Some(0));
         stage_item(conn, "ble:new", "voltage_mv", Some(0));
         Ok(())
