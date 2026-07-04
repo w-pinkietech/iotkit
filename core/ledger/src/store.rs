@@ -677,6 +677,26 @@ pub fn ledger_epoch(conn: &Connection) -> Result<String, LedgerError> {
     Ok(epoch)
 }
 
+/// 復元後の新世代化: 格納済みepochを新UUIDv7で置換し、旧値を監査イベントに記録する。
+pub fn renew_epoch(conn: &Connection) -> Result<String, LedgerError> {
+    let old_epoch = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'epoch'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let new_epoch = uuid::Uuid::now_v7().to_string();
+    conn.execute(
+        "INSERT INTO ledger_meta (key, value) VALUES ('epoch', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![new_epoch],
+    )?;
+    let detail = serde_json::json!({ "old_epoch": old_epoch });
+    record_event(conn, "epoch_renewed", None, &detail.to_string())?;
+    Ok(new_epoch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1445,6 +1465,44 @@ mod tests {
             let e2 = ledger_epoch(conn).unwrap();
             assert_eq!(e1, e2);
             assert!(!e1.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn renew_epoch_replaces_or_inserts_epoch_and_records_old_epoch() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let fresh = renew_epoch(conn).unwrap();
+            assert_eq!(ledger_epoch(conn).unwrap(), fresh);
+            let first_detail: String = conn
+                .query_row(
+                    "SELECT detail FROM ledger_events WHERE kind = 'epoch_renewed'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&first_detail).unwrap()["old_epoch"],
+                serde_json::Value::Null
+            );
+
+            let renewed = renew_epoch(conn).unwrap();
+            assert_ne!(renewed, fresh);
+            assert_eq!(ledger_epoch(conn).unwrap(), renewed);
+            let latest_detail: String = conn
+                .query_row(
+                    "SELECT detail FROM ledger_events
+                     WHERE kind = 'epoch_renewed' ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&latest_detail).unwrap()["old_epoch"],
+                fresh
+            );
             Ok(())
         })
         .unwrap();

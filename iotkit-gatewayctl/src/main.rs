@@ -3,6 +3,7 @@ mod cmd {
     pub mod query;
     pub mod registry;
     pub mod replace;
+    pub mod snapshot;
 }
 
 use clap::{Parser, Subcommand};
@@ -44,6 +45,10 @@ enum Command {
     Series {
         #[command(subcommand)]
         command: SeriesCommand,
+    },
+    Snapshot {
+        #[command(subcommand)]
+        command: cmd::snapshot::SnapshotCommand,
     },
     Health(cmd::query::HealthArgs),
 }
@@ -97,11 +102,23 @@ fn main() {
 
 fn run() -> AppResult<()> {
     let cli = Cli::parse();
-    let db_path = cli
-        .db
+    let restore_target = match &cli.command {
+        Command::Snapshot {
+            command: cmd::snapshot::SnapshotCommand::Restore(args),
+        } => Some(args.db.clone()),
+        _ => None,
+    };
+    let allow_missing_db = matches!(
+        &cli.command,
+        Command::Snapshot {
+            command: cmd::snapshot::SnapshotCommand::Restore(args),
+        } if args.create
+    );
+    let db_path = restore_target
+        .or(cli.db)
         .or_else(|| std::env::var_os("IOTKIT_DB_PATH").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("./iotkit.db"));
-    if !db_path.exists() {
+    if !db_path.exists() && !allow_missing_db {
         return Err(format!("database file does not exist: {}", db_path.display()).into());
     }
 
@@ -148,6 +165,10 @@ fn dispatch(
         },
         Command::Series { command } => match command {
             SeriesCommand::List(args) => cmd::registry::run_series_list(conn, args),
+        },
+        Command::Snapshot { command } => match command {
+            cmd::snapshot::SnapshotCommand::Export(args) => cmd::snapshot::run_export(conn, args),
+            cmd::snapshot::SnapshotCommand::Restore(args) => cmd::snapshot::run_restore(conn, args),
         },
         Command::Health(args) => cmd::query::run_health(db_path, args),
     }

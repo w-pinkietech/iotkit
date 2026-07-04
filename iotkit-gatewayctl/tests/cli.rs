@@ -1,6 +1,7 @@
 use std::process::{Command, Output};
 
-use rusqlite::params;
+use rusqlite::{params, types::ValueRef};
+use serde_json::{Map, Value};
 
 fn gatewayctl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_iotkit-gatewayctl"))
@@ -38,6 +39,50 @@ fn assert_failure(output: Output) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stderr).unwrap()
+}
+
+fn json_rows(conn: &rusqlite::Connection, table: &str, order_by: &str) -> Vec<Value> {
+    let mut stmt = conn
+        .prepare(&format!("SELECT * FROM {table} ORDER BY {order_by}"))
+        .unwrap();
+    let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    stmt.query_map([], |row| {
+        let mut object = Map::new();
+        for (idx, name) in names.iter().enumerate() {
+            let value = match row.get_ref(idx)? {
+                ValueRef::Null => Value::Null,
+                ValueRef::Integer(v) => Value::from(v),
+                ValueRef::Real(v) => Value::from(v),
+                ValueRef::Text(v) => Value::from(String::from_utf8_lossy(v).into_owned()),
+                ValueRef::Blob(v) => {
+                    Value::from(v.iter().map(|b| format!("{b:02x}")).collect::<String>())
+                }
+            };
+            object.insert(name.clone(), value);
+        }
+        Ok(Value::Object(object))
+    })
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
+}
+
+fn snapshot_sections(conn: &rusqlite::Connection) -> Map<String, Value> {
+    [
+        ("devices", "created_at, hardware_id"),
+        ("series", "series_id"),
+        ("registry_entries", "measurement_key"),
+        ("registry_aliases", "alias"),
+        ("legacy_sensor_type_map", "sensor_type"),
+    ]
+    .into_iter()
+    .map(|(table, order)| {
+        (
+            table.to_string(),
+            Value::Array(json_rows(conn, table, order)),
+        )
+    })
+    .collect()
 }
 
 fn seed_replace_target(conn: &rusqlite::Connection) -> iotkit_core_ledger::SystemId {
@@ -871,4 +916,364 @@ fn replace_undo_allows_since_before_replace_event() {
         "--since",
         "500",
     ]));
+}
+
+#[test]
+fn snapshot_export_restore_round_trips_full_columns_and_renews_epoch() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_db_path = dir.path().join("source.db");
+    let restore_db_path = dir.path().join("restore.db");
+    let snapshot_path = dir.path().join("snapshot.json");
+    let db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    let source_epoch = db
+        .with_conn_sync(|conn| {
+            let parent = iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:parent".into(),
+                    user_label: Some("Parent".into()),
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Positional,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let target = iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:target".into(),
+                    user_label: Some("Target".into()),
+                    parent: Some(parent),
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let candidate = iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:new".into(),
+                    user_label: Some("Retired Candidate".into()),
+                    parent: Some(parent),
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Quarantined,
+                },
+            )
+            .unwrap();
+            for sid in [target, candidate] {
+                iotkit_core_ledger::ensure_series(
+                    conn,
+                    &sid,
+                    "temperature_c",
+                    iotkit_core_ledger::CHANNEL_NA,
+                    iotkit_core_ledger::DEFAULT_VARIANT,
+                    false,
+                    None,
+                )
+                .unwrap();
+                iotkit_core_ledger::ensure_series(
+                    conn,
+                    &sid,
+                    "voltage_mv",
+                    0,
+                    iotkit_core_ledger::DEFAULT_VARIANT,
+                    true,
+                    Some("unknown_key"),
+                )
+                .unwrap();
+            }
+            iotkit_core_ledger::replace_hardware(conn, &target, "ble:new").unwrap();
+            conn.execute(
+                "UPDATE series
+                 SET unit = 'degC', range_min = -10.5, range_max = 85.25, legacy_sensor_type = 42,
+                     calibration_review = 1
+                 WHERE measurement_key = 'temperature_c'",
+                [],
+            )
+            .unwrap();
+            let catalog = iotkit_core_registry::standard_catalog();
+            let temperature = catalog.find("temperature_c").unwrap();
+            iotkit_core_registry::enable_entry(
+                conn,
+                temperature,
+                &catalog.catalog_version,
+                "snapshot-test",
+            )
+            .unwrap();
+            iotkit_core_registry::define_alias(
+                conn,
+                "temp_old",
+                "temperature_c",
+                iotkit_core_registry::AliasKind::SiteMapping,
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO legacy_sensor_type_map (sensor_type, measurement_key, created_at)
+                 VALUES (42, 'temperature_c', 123456)",
+                [],
+            )
+            .unwrap();
+            Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap())
+        })
+        .unwrap();
+
+    let source_sections = db
+        .with_conn_sync(|conn| Ok(snapshot_sections(conn)))
+        .unwrap();
+
+    assert_success(run(&[
+        "--db",
+        source_db_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+    let snapshot: Value = serde_json::from_slice(&std::fs::read(&snapshot_path).unwrap()).unwrap();
+    assert_eq!(snapshot["manifest"]["format_version"], 1);
+    assert_eq!(snapshot["manifest"]["epoch"], source_epoch);
+    assert_eq!(
+        snapshot["manifest"]["sections"],
+        serde_json::json!([
+            "devices",
+            "series",
+            "registry_entries",
+            "registry_aliases",
+            "legacy_sensor_type_map"
+        ])
+    );
+    assert!(snapshot["secrets"].is_null());
+    assert!(snapshot["calibration"].is_null());
+    assert!(snapshot["desired_config"].is_null());
+    assert!(
+        snapshot["devices"][0]["system_id"]
+            .as_str()
+            .unwrap()
+            .contains('-')
+    );
+
+    assert_success(run(&[
+        "snapshot",
+        "restore",
+        snapshot_path.to_str().unwrap(),
+        "--db",
+        restore_db_path.to_str().unwrap(),
+        "--create",
+        "--yes",
+    ]));
+
+    let restored_db = iotkit_core_storage::init_db(&restore_db_path, &all_migrations()).unwrap();
+    restored_db
+        .with_conn_sync(|conn| {
+            assert_eq!(snapshot_sections(conn), source_sections);
+            let restored_epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            assert_ne!(restored_epoch, source_epoch);
+            let (kind, detail): (String, String) = conn
+                .query_row(
+                    "SELECT kind, detail FROM ledger_events ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(kind, "epoch_renewed");
+            let detail: Value = serde_json::from_str(&detail).unwrap();
+            assert!(detail["old_epoch"].is_null());
+            let blob_columns: Vec<(String, String)> = conn
+                .prepare(
+                    "SELECT 'devices.system_id', typeof(system_id) FROM devices
+                     UNION ALL SELECT 'devices.parent_system_id', typeof(parent_system_id)
+                         FROM devices WHERE parent_system_id IS NOT NULL
+                     UNION ALL SELECT 'devices.superseded_by', typeof(superseded_by)
+                         FROM devices WHERE superseded_by IS NOT NULL
+                     UNION ALL SELECT 'series.system_id', typeof(system_id) FROM series",
+                )
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert!(!blob_columns.is_empty());
+            assert!(
+                blob_columns.iter().all(|(_, typ)| typ == "blob"),
+                "{blob_columns:?}"
+            );
+            let broken_refs: i64 = conn
+                .query_row(
+                    "SELECT
+                        (SELECT COUNT(*) FROM devices d
+                         WHERE d.parent_system_id IS NOT NULL
+                           AND NOT EXISTS (SELECT 1 FROM devices p WHERE p.system_id = d.parent_system_id))
+                      + (SELECT COUNT(*) FROM devices d
+                         WHERE d.superseded_by IS NOT NULL
+                           AND NOT EXISTS (SELECT 1 FROM devices s WHERE s.system_id = d.superseded_by))
+                      + (SELECT COUNT(*) FROM series s
+                         WHERE NOT EXISTS (SELECT 1 FROM devices d WHERE d.system_id = s.system_id))",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(broken_refs, 0);
+            let next_series_id = conn
+                .execute(
+                    "INSERT INTO series
+                        (system_id, measurement_key, channel_index, variant, quarantined,
+                         value_semantics, created_at)
+                     SELECT system_id, 'after_restore_key', -1, 'primary', 0, 'calibrated', 999999
+                     FROM devices ORDER BY created_at LIMIT 1",
+                    [],
+                )
+                .unwrap();
+            assert_eq!(next_series_id, 1);
+            let (max_existing, inserted): (i64, i64) = conn
+                .query_row(
+                    "SELECT
+                        (SELECT MAX(series_id) FROM series WHERE measurement_key != 'after_restore_key'),
+                        (SELECT series_id FROM series WHERE measurement_key = 'after_restore_key')",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(inserted, max_existing + 1);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn snapshot_restore_rejects_non_empty_device_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_db_path = dir.path().join("source.db");
+    let target_db_path = dir.path().join("target.db");
+    let snapshot_path = dir.path().join("snapshot.json");
+    let source_db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    source_db
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:source".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_success(run(&[
+        "--db",
+        source_db_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    let target_db = iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+    target_db
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:existing".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+    let stderr = assert_failure(run(&[
+        "snapshot",
+        "restore",
+        snapshot_path.to_str().unwrap(),
+        "--db",
+        target_db_path.to_str().unwrap(),
+        "--yes",
+    ]));
+    assert!(
+        stderr.contains("restore target is not empty"),
+        "stderr did not explain non-empty target:\n{stderr}"
+    );
+    target_db
+        .with_conn_sync(|conn| {
+            let devices: i64 = conn
+                .query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(devices, 1);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn snapshot_restore_rejects_unknown_columns_before_insert() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_db_path = dir.path().join("source.db");
+    let target_db_path = dir.path().join("target.db");
+    let snapshot_path = dir.path().join("snapshot.json");
+    let source_db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    source_db
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:source".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_success(run(&[
+        "--db",
+        source_db_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    let mut snapshot: Value =
+        serde_json::from_slice(&std::fs::read(&snapshot_path).unwrap()).unwrap();
+    snapshot["devices"][0]["unknown_snapshot_column"] = Value::from("blocked");
+    std::fs::write(
+        &snapshot_path,
+        serde_json::to_vec_pretty(&snapshot).unwrap(),
+    )
+    .unwrap();
+    iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+
+    let stderr = assert_failure(run(&[
+        "snapshot",
+        "restore",
+        snapshot_path.to_str().unwrap(),
+        "--db",
+        target_db_path.to_str().unwrap(),
+        "--yes",
+    ]));
+    assert!(
+        stderr.contains("unknown snapshot column: devices.unknown_snapshot_column"),
+        "stderr did not explain unknown column:\n{stderr}"
+    );
+
+    let target_db = iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+    target_db
+        .with_conn_sync(|conn| {
+            let devices: i64 = conn
+                .query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(devices, 0);
+            Ok(())
+        })
+        .unwrap();
 }
