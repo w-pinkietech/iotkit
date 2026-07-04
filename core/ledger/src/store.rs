@@ -45,10 +45,17 @@ impl DeviceKind {
         }
     }
     fn from_db(s: &str) -> Self {
-        if s == "positional" {
-            Self::Positional
-        } else {
-            Self::Individual
+        match s {
+            "positional" => Self::Positional,
+            "individual" => Self::Individual,
+            other => {
+                tracing::warn!(
+                    value = other,
+                    fallback = "individual",
+                    "unknown device kind in ledger row"
+                );
+                Self::Individual
+            }
         }
     }
 }

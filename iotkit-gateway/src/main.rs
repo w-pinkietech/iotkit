@@ -135,7 +135,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     // 取り込みクライアント(D4の第3部品、inproc)。アダプタが直接Envelopeを送る。
     // AdapterEventはengine/監督用のfrozen vocabularyとして並走(D4)。
     let (ingest_client, ingest_client_handle) = iotkit_ingest_client::spawn_inproc(
-        collector.clone(),
+        collector,
         iotkit_ingest_client::DEFAULT_QUEUE_CAP,
         iotkit_ingest_client::DEFAULT_SPOOL_CAP,
     );
@@ -240,9 +240,16 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     // systemdの責務(R20コメント参照)であり、ここでは「健康でないまま動き続けない」ことだけ担保する。
     let mut collector_alive = true;
     let mut ingest_client_pinned = ingest_client_handle;
+    let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
+    let mut pending_restart_count = 0usize;
 
     // Unified fan-in loop
     loop {
+        if host.is_empty() && should_stop_after_all_adapter_streams_closed(pending_restart_count) {
+            tracing::info!("All adapter channels closed");
+            break;
+        }
+
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("Shutdown signal received");
@@ -258,7 +265,40 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                     .collector_alive = false;
                 break;
             }
-            event = host.next_event() => {
+            Some(id) = rx_restart.recv() => {
+                pending_restart_count = pending_restart_count.saturating_sub(1);
+                let Some(spec) = restart_specs.get(&id).cloned() else {
+                    tracing::warn!(
+                        adapter = %id,
+                        "Restart timer fired for adapter without restart spec"
+                    );
+                    continue;
+                };
+                let restart_result = match &spec {
+                    RestartSpec::BravePi { port } => {
+                        start_bravepi(&mut host, port, Some(ingest_client.clone()))
+                    }
+                    RestartSpec::RpiLocal { config } => {
+                        start_rpi_local(
+                            &mut host,
+                            config.clone(),
+                            Some(ingest_client.clone()),
+                        )
+                    }
+                };
+                match restart_result {
+                    Ok(new_id) => {
+                        tracing::info!(adapter = %new_id, "Adapter restarted successfully");
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            adapter = %id, error = %e,
+                            "Adapter restart attempt failed"
+                        );
+                    }
+                }
+            }
+            event = host.next_event(), if !host.is_empty() => {
                 match event {
                     Some(AdapterHostEvent::Event(ev)) => {
                         tracing::debug!(
@@ -295,7 +335,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                         host.deregister(&id);
 
                         match restart_specs.get(&id).cloned() {
-                            Some(spec) => match tracker.next_delay(&id) {
+                            Some(_) => match tracker.next_delay(&id) {
                                 Some(delay) => {
                                     // ジッタ: 同時再送ストーム対策(D1)。単一プロセス内では
                                     // プロセスIDから導く決定的オフセットで簡易に足りる。
@@ -308,31 +348,12 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                                         delay_ms = sleep_for.as_millis() as u64,
                                         "Adapter channel closed, restarting after backoff"
                                     );
-                                    tokio::time::sleep(sleep_for).await;
-
-                                    let restart_result = match &spec {
-                                        RestartSpec::BravePi { port } => {
-                                            start_bravepi(&mut host, port, Some(ingest_client.clone()))
-                                        }
-                                        RestartSpec::RpiLocal { config } => {
-                                            start_rpi_local(
-                                                &mut host,
-                                                config.clone(),
-                                                Some(ingest_client.clone()),
-                                            )
-                                        }
-                                    };
-                                    match restart_result {
-                                        Ok(new_id) => {
-                                            tracing::info!(adapter = %new_id, "Adapter restarted successfully");
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                adapter = %id, error = %e,
-                                                "Adapter restart attempt failed"
-                                            );
-                                        }
-                                    }
+                                    pending_restart_count = pending_restart_count.saturating_add(1);
+                                    supervision::schedule_restart_notification(
+                                        id,
+                                        sleep_for,
+                                        tx_restart.clone(),
+                                    );
                                 }
                                 None => {
                                     tracing::error!(
@@ -350,8 +371,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                         }
                     }
                     None => {
-                        tracing::info!("All adapter channels closed");
-                        break;
+                        if should_stop_after_all_adapter_streams_closed(pending_restart_count) {
+                            tracing::info!("All adapter channels closed");
+                            break;
+                        }
                     }
                 }
             }
@@ -423,6 +446,10 @@ fn start_rpi_local(
     Ok(id)
 }
 
+fn should_stop_after_all_adapter_streams_closed(pending_restart_count: usize) -> bool {
+    pending_restart_count == 0
+}
+
 /// Hardcoded sensor targets for the v1 RPi4B hardware profile.
 ///
 /// Deployment inventory -- lives in the gateway composition root, not the
@@ -436,4 +463,21 @@ fn hardcoded_rpi_local_targets() -> Vec<rpi_local_adapter::RpiLocalTarget> {
         },
         rpi_local_adapter::RpiLocalTarget::OPT3001 { address: 0x44 },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fan_in_continues_while_restart_notification_is_pending() {
+        assert!(
+            !should_stop_after_all_adapter_streams_closed(1),
+            "pending restart timers must keep the fan-in loop alive"
+        );
+        assert!(
+            should_stop_after_all_adapter_streams_closed(0),
+            "the fan-in loop may stop only when no restart is pending"
+        );
+    }
 }

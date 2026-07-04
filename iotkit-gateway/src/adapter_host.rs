@@ -25,7 +25,8 @@ pub struct AdapterHost {
     adapters: Vec<ManagedAdapter>,
 }
 
-type ShutdownFn = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>;
+type ShutdownFn =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>;
 
 struct ManagedAdapter {
     id: AdapterId,
@@ -46,8 +47,8 @@ impl AdapterHost {
         id: AdapterId,
         event_rx: mpsc::Receiver<AdapterEvent>,
         shutdown_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
-            + Send
-            + 'static,
+        + Send
+        + 'static,
     ) -> Result<(), String> {
         if self.streams.contains_key(&id) || self.adapters.iter().any(|a| a.id == id) {
             return Err(format!("duplicate adapter ID: {id}"));
@@ -71,6 +72,10 @@ impl AdapterHost {
         let before = self.adapters.len();
         self.adapters.retain(|a| a.id != *id);
         before != self.adapters.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.streams.is_empty()
     }
 
     /// Returns the next event from any registered adapter, or `None` if all
@@ -156,11 +161,8 @@ mod tests {
     async fn single_adapter_events() {
         let mut host = AdapterHost::new();
         let (tx, rx) = mpsc::channel(16);
-        host.register(
-            AdapterId::new("a"),
-            rx,
-            || Box::pin(async { Ok(()) }),
-        ).unwrap();
+        host.register(AdapterId::new("a"), rx, || Box::pin(async { Ok(()) }))
+            .unwrap();
 
         tx.send(stub_event()).await.unwrap();
         tx.send(stub_event()).await.unwrap();
@@ -181,8 +183,10 @@ mod tests {
         let mut host = AdapterHost::new();
         let (tx_a, rx_a) = mpsc::channel(16);
         let (tx_b, rx_b) = mpsc::channel(16);
-        host.register(AdapterId::new("a"), rx_a, || Box::pin(async { Ok(()) })).unwrap();
-        host.register(AdapterId::new("b"), rx_b, || Box::pin(async { Ok(()) })).unwrap();
+        host.register(AdapterId::new("a"), rx_a, || Box::pin(async { Ok(()) }))
+            .unwrap();
+        host.register(AdapterId::new("b"), rx_b, || Box::pin(async { Ok(()) }))
+            .unwrap();
 
         tx_a.send(stub_event()).await.unwrap();
         tx_b.send(stub_event()).await.unwrap();
@@ -205,7 +209,8 @@ mod tests {
     async fn adapter_closed_notification() {
         let mut host = AdapterHost::new();
         let (tx, rx) = mpsc::channel(16);
-        host.register(AdapterId::new("x"), rx, || Box::pin(async { Ok(()) })).unwrap();
+        host.register(AdapterId::new("x"), rx, || Box::pin(async { Ok(()) }))
+            .unwrap();
         drop(tx);
 
         let ev = host.next_event().await;
@@ -224,25 +229,28 @@ mod tests {
         let mut host = AdapterHost::new();
         let (_tx1, rx1) = mpsc::channel::<AdapterEvent>(1);
         let (_tx2, rx2) = mpsc::channel::<AdapterEvent>(1);
-        host.register(AdapterId::new("dup"), rx1, || Box::pin(async { Ok(()) })).unwrap();
+        host.register(AdapterId::new("dup"), rx1, || Box::pin(async { Ok(()) }))
+            .unwrap();
         let result = host.register(AdapterId::new("dup"), rx2, || Box::pin(async { Ok(()) }));
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn shutdown_all_calls_closures() {
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let mut host = AdapterHost::new();
         let (tx, rx) = mpsc::channel(1);
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
-        host.register(
-            AdapterId::new("s"),
-            rx,
-            move || Box::pin(async move { called_clone.store(true, Ordering::SeqCst); Ok(()) }),
-        ).unwrap();
+        host.register(AdapterId::new("s"), rx, move || {
+            Box::pin(async move {
+                called_clone.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        })
+        .unwrap();
         drop(tx);
 
         host.shutdown_all().await;
@@ -260,14 +268,13 @@ mod tests {
             let (_tx, rx) = mpsc::channel::<AdapterEvent>(1);
             let order_clone = order.clone();
             let name_owned = name.to_string();
-            host.register(
-                AdapterId::new(name),
-                rx,
-                move || Box::pin(async move {
+            host.register(AdapterId::new(name), rx, move || {
+                Box::pin(async move {
                     order_clone.lock().unwrap().push(name_owned);
                     Ok(())
-                }),
-            ).unwrap();
+                })
+            })
+            .unwrap();
         }
 
         host.shutdown_all().await;
@@ -277,8 +284,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_all_after_early_adapter_exit() {
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let mut host = AdapterHost::new();
 
@@ -286,20 +293,24 @@ mod tests {
         drop(tx_early);
         let early_called = Arc::new(AtomicBool::new(false));
         let early_clone = early_called.clone();
-        host.register(
-            AdapterId::new("early"),
-            rx_early,
-            move || Box::pin(async move { early_clone.store(true, Ordering::SeqCst); Ok(()) }),
-        ).unwrap();
+        host.register(AdapterId::new("early"), rx_early, move || {
+            Box::pin(async move {
+                early_clone.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        })
+        .unwrap();
 
         let (_tx_alive, rx_alive) = mpsc::channel(1);
         let alive_called = Arc::new(AtomicBool::new(false));
         let alive_clone = alive_called.clone();
-        host.register(
-            AdapterId::new("alive"),
-            rx_alive,
-            move || Box::pin(async move { alive_clone.store(true, Ordering::SeqCst); Ok(()) }),
-        ).unwrap();
+        host.register(AdapterId::new("alive"), rx_alive, move || {
+            Box::pin(async move {
+                alive_clone.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        })
+        .unwrap();
 
         let ev = host.next_event().await;
         assert!(matches!(ev, Some(AdapterHostEvent::AdapterClosed(id)) if id.as_str() == "early"));
@@ -313,7 +324,8 @@ mod tests {
     async fn duplicate_id_after_close_rejected() {
         let mut host = AdapterHost::new();
         let (tx, rx) = mpsc::channel::<AdapterEvent>(1);
-        host.register(AdapterId::new("r"), rx, || Box::pin(async { Ok(()) })).unwrap();
+        host.register(AdapterId::new("r"), rx, || Box::pin(async { Ok(()) }))
+            .unwrap();
 
         // Adapter closes
         drop(tx);
@@ -323,14 +335,18 @@ mod tests {
         // Re-registering the same ID should be rejected (shutdown closure still exists)
         let (_tx2, rx2) = mpsc::channel::<AdapterEvent>(1);
         let result = host.register(AdapterId::new("r"), rx2, || Box::pin(async { Ok(()) }));
-        assert!(result.is_err(), "should reject duplicate ID even after adapter closed");
+        assert!(
+            result.is_err(),
+            "should reject duplicate ID even after adapter closed"
+        );
     }
 
     #[tokio::test]
     async fn deregister_allows_reregistration_of_same_id() {
         let mut host = AdapterHost::new();
         let (tx, rx) = mpsc::channel::<AdapterEvent>(4);
-        host.register(AdapterId::new("a"), rx, || Box::pin(async { Ok(()) })).unwrap();
+        host.register(AdapterId::new("a"), rx, || Box::pin(async { Ok(()) }))
+            .unwrap();
         drop(tx); // チャネルを閉じる
 
         // AdapterClosedを消費
@@ -342,7 +358,10 @@ mod tests {
 
         assert!(host.deregister(&AdapterId::new("a")));
         let (_tx2, rx2) = mpsc::channel::<AdapterEvent>(4);
-        assert!(host.register(AdapterId::new("a"), rx2, || Box::pin(async { Ok(()) })).is_ok());
+        assert!(
+            host.register(AdapterId::new("a"), rx2, || Box::pin(async { Ok(()) }))
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -359,11 +378,8 @@ mod tests {
         let (tx, rx) = mpsc::channel::<AdapterEvent>(1);
         tx.send(stub_event()).await.unwrap(); // fills the buffer
 
-        host.register(
-            AdapterId::new("buf"),
-            rx,
-            || Box::pin(async { Ok(()) }),
-        ).unwrap();
+        host.register(AdapterId::new("buf"), rx, || Box::pin(async { Ok(()) }))
+            .unwrap();
 
         // Spawn a sender that will block on the full channel
         let sender = tokio::spawn(async move {

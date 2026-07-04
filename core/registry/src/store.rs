@@ -1,7 +1,7 @@
 //! 現場レジストリの書き込み層(D6決定3/4)。受理判定(R8)の唯一の参照先。
 use crate::catalog::{CatalogEntry, ChannelMode, ValueType};
 use iotkit_core_ledger as ledger;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 #[derive(Debug)]
 pub enum RegistryError {
@@ -128,7 +128,17 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<EntryRow, rusqlite::Error> {
     let roles_json: Option<String> = row.get(9)?;
     let channel_roles: Vec<String> = roles_json
         .as_deref()
-        .map(|j| serde_json::from_str(j).unwrap_or_default())
+        .map(|j| match serde_json::from_str(j) {
+            Ok(roles) => roles,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    channel_roles_json = j,
+                    "invalid channel_roles_json in registry row; using empty roles"
+                );
+                Vec::new()
+            }
+        })
         .unwrap_or_default();
     Ok(EntryRow {
         measurement_key: row.get(0)?,
@@ -293,12 +303,8 @@ pub fn define_alias(
         }
         ChannelMode::Generic => true,
     };
-    let (released, mismatch) = ledger::release_series_quarantine_for_key_checked(
-        conn,
-        alias,
-        "unknown_key",
-        &channel_ok,
-    )?;
+    let (released, mismatch) =
+        ledger::release_series_quarantine_for_key_checked(conn, alias, "unknown_key", &channel_ok)?;
     if !released.is_empty() || !mismatch.is_empty() {
         let detail = serde_json::json!({
             "alias": alias, "canonical": target_key, "series_ids": released,
@@ -628,8 +634,14 @@ mod tests {
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert!(detail.contains(&format!("\"series_ids\":[{good}]")), "{detail}");
-            assert!(detail.contains(&format!("\"channel_mismatch_ids\":[{bad}]")), "{detail}");
+            assert!(
+                detail.contains(&format!("\"series_ids\":[{good}]")),
+                "{detail}"
+            );
+            assert!(
+                detail.contains(&format!("\"channel_mismatch_ids\":[{bad}]")),
+                "{detail}"
+            );
             Ok(())
         })
         .unwrap();
@@ -714,8 +726,14 @@ mod tests {
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert!(detail.contains(&format!("\"series_ids\":[{zero}]")), "{detail}");
-            assert!(detail.contains(&format!("\"channel_mismatch_ids\":[{bad}]")), "{detail}");
+            assert!(
+                detail.contains(&format!("\"series_ids\":[{zero}]")),
+                "{detail}"
+            );
+            assert!(
+                detail.contains(&format!("\"channel_mismatch_ids\":[{bad}]")),
+                "{detail}"
+            );
             Ok(())
         })
         .unwrap();
