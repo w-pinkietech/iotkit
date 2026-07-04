@@ -256,10 +256,14 @@ pub fn run_restore(conn: &Connection, args: RestoreArgs) -> AppResult<()> {
     }
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     tx.execute("PRAGMA defer_foreign_keys = ON", [])?;
-    let existing_devices: i64 =
-        tx.query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))?;
-    if existing_devices > 0 {
-        return Err("restore target is not empty: devices table has rows".into());
+    for table in SECTIONS {
+        let existing_rows: i64 =
+            tx.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })?;
+        if existing_rows > 0 {
+            return Err(format!("restore target is not empty: {table} table has rows").into());
+        }
     }
     for table in SECTIONS {
         restore_table(&tx, table, section_rows(&snapshot, table)?)?;

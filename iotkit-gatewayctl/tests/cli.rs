@@ -20,6 +20,15 @@ fn run(args: &[&str]) -> Output {
     gatewayctl().args(args).output().expect("run gatewayctl")
 }
 
+fn run_in_dir_without_db_env(args: &[&str], cwd: &std::path::Path) -> Output {
+    gatewayctl()
+        .args(args)
+        .current_dir(cwd)
+        .env_remove("IOTKIT_DB_PATH")
+        .output()
+        .expect("run gatewayctl")
+}
+
 fn assert_success(output: Output) -> String {
     assert!(
         output.status.success(),
@@ -189,6 +198,25 @@ fn missing_db_path_is_error_and_does_not_create_empty_db() {
     assert!(!db_path.exists());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("database file does not exist"),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn mutate_command_without_db_argument_or_env_is_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let fallback_path = dir.path().join("iotkit.db");
+
+    let output = run_in_dir_without_db_env(
+        &["device", "add", "--hardware-id", "ble:no-db"],
+        dir.path(),
+    );
+
+    assert!(!output.status.success());
+    assert!(!fallback_path.exists());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no database specified"),
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -1206,6 +1234,81 @@ fn snapshot_restore_rejects_non_empty_device_table() {
                 .query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))
                 .unwrap();
             assert_eq!(devices, 1);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn snapshot_restore_rejects_non_empty_registry_entries_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_db_path = dir.path().join("source.db");
+    let target_db_path = dir.path().join("target.db");
+    let snapshot_path = dir.path().join("snapshot.json");
+    let source_db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    source_db
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:source".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_success(run(&[
+        "--db",
+        source_db_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    let target_db = iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+    target_db
+        .with_conn_sync(|conn| {
+            let catalog = iotkit_core_registry::standard_catalog();
+            let entry = catalog.find("temperature_c").unwrap();
+            iotkit_core_registry::enable_entry(
+                conn,
+                entry,
+                &catalog.catalog_version,
+                "restore-test",
+            )
+            .unwrap();
+            let devices: i64 = conn
+                .query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(devices, 0);
+            Ok(())
+        })
+        .unwrap();
+
+    let stderr = assert_failure(run(&[
+        "snapshot",
+        "restore",
+        snapshot_path.to_str().unwrap(),
+        "--db",
+        target_db_path.to_str().unwrap(),
+        "--yes",
+    ]));
+    assert!(
+        stderr.contains("restore target is not empty"),
+        "stderr did not explain non-empty target:\n{stderr}"
+    );
+    target_db
+        .with_conn_sync(|conn| {
+            let registry_entries: i64 = conn
+                .query_row("SELECT COUNT(*) FROM registry_entries", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(registry_entries, 1);
             Ok(())
         })
         .unwrap();

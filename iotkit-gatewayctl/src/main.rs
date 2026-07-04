@@ -116,8 +116,10 @@ fn run() -> AppResult<()> {
     );
     let db_path = restore_target
         .or(cli.db)
-        .or_else(|| std::env::var_os("IOTKIT_DB_PATH").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("./iotkit.db"));
+        .or_else(|| std::env::var_os("IOTKIT_DB_PATH").map(PathBuf::from));
+    let Some(db_path) = db_path else {
+        return Err("no database specified: pass --db or set IOTKIT_DB_PATH".into());
+    };
     if !db_path.exists() && !allow_missing_db {
         return Err(format!("database file does not exist: {}", db_path.display()).into());
     }

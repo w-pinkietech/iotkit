@@ -1,6 +1,6 @@
 use crate::ids::SystemId;
 use iotkit_core_storage::StorageError;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, types::Type};
 
 #[derive(Debug)]
 pub enum LedgerError {
@@ -156,22 +156,31 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn system_id_from_blob(bytes: Vec<u8>, label: &str) -> SystemId {
-    SystemId::from_bytes(
-        bytes
-            .try_into()
-            .unwrap_or_else(|_| panic!("16-byte {label}")),
-    )
+fn system_id_from_blob(bytes: Vec<u8>, label: &str) -> Result<SystemId, rusqlite::Error> {
+    let len = bytes.len();
+    let bytes: [u8; 16] = bytes.try_into().map_err(|_| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            Type::Blob,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{label} must be a 16-byte UUID blob, got {len} bytes"),
+            )),
+        )
+    })?;
+    Ok(SystemId::from_bytes(bytes))
 }
 
 fn row_to_device(row: &rusqlite::Row<'_>) -> Result<DeviceRow, rusqlite::Error> {
     let sid: Vec<u8> = row.get(0)?;
     let parent: Option<Vec<u8>> = row.get(3)?;
     Ok(DeviceRow {
-        system_id: system_id_from_blob(sid, "system_id"),
+        system_id: system_id_from_blob(sid, "system_id")?,
         hardware_id: row.get(1)?,
         user_label: row.get(2)?,
-        parent: parent.map(|p| system_id_from_blob(p, "parent id")),
+        parent: parent
+            .map(|p| system_id_from_blob(p, "parent id"))
+            .transpose()?,
         kind: DeviceKind::from_db(&row.get::<_, String>(4)?),
         state: DeviceState::from_db(&row.get::<_, String>(5)?),
         declaration_version: row.get(6)?,
@@ -348,7 +357,7 @@ pub fn list_series_for_device(
         let sid: Vec<u8> = row.get(1)?;
         Ok(SeriesRow {
             series_id: row.get(0)?,
-            system_id: system_id_from_blob(sid, "series.system_id"),
+            system_id: system_id_from_blob(sid, "series.system_id")?,
             measurement_key: row.get(2)?,
             channel_index: row.get(3)?,
             variant: row.get(4)?,
@@ -536,7 +545,9 @@ pub fn list_recent_events(conn: &Connection, limit: u32) -> Result<Vec<EventRow>
             event_id: row.get(0)?,
             at: row.get(1)?,
             kind: row.get(2)?,
-            system_id: sid.map(|b| system_id_from_blob(b, "event.system_id")),
+            system_id: sid
+                .map(|b| system_id_from_blob(b, "event.system_id"))
+                .transpose()?,
             detail: row.get(4)?,
         })
     })?
@@ -608,7 +619,7 @@ pub fn expire_quarantined_devices(
     let expired: Vec<SystemId> = stmt
         .query_map(params![cutoff], |row| {
             let sid: Vec<u8> = row.get(0)?;
-            Ok(system_id_from_blob(sid, "expired device system_id"))
+            system_id_from_blob(sid, "expired device system_id")
         })?
         .collect::<Result<_, _>>()?;
     drop(stmt);
@@ -1619,6 +1630,28 @@ mod tests {
             assert_eq!(events[0].system_id, None);
             assert_eq!(events[1].kind, "manual");
             assert_eq!(events[1].system_id, Some(child));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn invalid_system_id_blob_returns_error_instead_of_panicking() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO devices (system_id, hardware_id, kind, state, created_at)
+                 VALUES (?1, 'ble:bad-system-id', 'individual', 'active', 1)",
+                params![vec![1_u8, 2, 3]],
+            )
+            .unwrap();
+
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                list_devices(conn, true)
+            }));
+
+            assert!(result.is_ok(), "invalid blob length should not panic");
+            assert!(result.unwrap().is_err());
             Ok(())
         })
         .unwrap();
