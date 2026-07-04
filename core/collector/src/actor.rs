@@ -35,9 +35,10 @@ pub enum SubmitError {
 }
 
 /// タスク所有キャッシュ(D5: 起動時全ロードはWave 0では行数が小さいため遅延ロードで開始し、
-/// ミス時にDBを引く。台帳変異は必ずコレクタ経由なので無効化漏れは構造上起きない)
+/// ミス時にDBを引く。gatewayctl(別プロセス)変異はgeneration counterで無効化する(T4、D5決定3))
 #[derive(Default)]
 struct ResolutionCache {
+    generation: i64,
     devices: HashMap<String, (ledger::SystemId, ledger::DeviceState)>, // hardware_id →
     series: HashMap<(ledger::SystemId, String, i32, String), i64>,
 }
@@ -168,7 +169,17 @@ fn process_envelope(
             },
         });
     }
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let tx = rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    )
+    .map_err(|e| e.to_string())?;
+    let generation = ledger::current_generation(&tx).map_err(|e| e.to_string())?;
+    if generation != cache.generation {
+        cache.devices.clear();
+        cache.series.clear();
+        cache.generation = generation;
+    }
     let claimed = ts::try_claim_envelope(&tx, &envelope.source, &envelope.envelope_id)
         .map_err(|e| e.to_string())?;
     if !claimed {
@@ -182,6 +193,23 @@ fn process_envelope(
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Accepted { items: item_statuses } })
+}
+
+fn restore_device_time(
+    received_at: i64,
+    device_time_ms: Option<i64>,
+    age_ms: Option<u64>,
+    declared: TimeSource,
+) -> (Option<i64>, TimeSource) {
+    match (device_time_ms, age_ms) {
+        (Some(dt), _) => (Some(dt), declared),
+        (None, Some(age)) => match i64::try_from(age).ok().and_then(|a| received_at.checked_sub(a))
+        {
+            Some(dt) => (Some(dt), TimeSource::GatewayAdjusted),
+            None => (None, declared),
+        },
+        (None, None) => (None, declared),
+    }
 }
 
 fn process_item(
@@ -265,14 +293,18 @@ fn process_item(
     let row_quarantined = registry_quarantine.is_some() || device_quarantined;
     let wire_reason = registry_quarantine
         .or_else(|| device_quarantined.then_some(QuarantineReason::DeviceQuarantined));
-    let time_source = match item.time_source {
+    // D1: RTCなしデバイスのage_ms → received_at - age_ms で復元(time_source=gateway_adjusted)。
+    // item.device_time_msが既にあればそれが優先(申告時刻>復元時刻)。
+    let (device_time_ms, time_source) =
+        restore_device_time(received_at, item.device_time_ms, item.age_ms, item.time_source);
+    let time_source = match time_source {
         TimeSource::DeviceNtp => "device_ntp", TimeSource::DeviceRtc => "device_rtc",
         TimeSource::Gateway => "gateway", TimeSource::GatewayAdjusted => "gateway_adjusted",
     };
     let new = ts::NewReading {
         series_id,
         received_at_ms: received_at,
-        device_time_ms: item.device_time_ms,
+        device_time_ms,
         time_source: time_source.to_string(),
         values: item.values.clone(),
         rssi: item.rssi,
@@ -299,6 +331,14 @@ mod tests {
         all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
         all.sort_by_key(|m| m.version);
         iotkit_core_storage::init_db_memory(&all).unwrap()
+    }
+
+    fn migration_set() -> Vec<iotkit_core_storage::Migration> {
+        let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
+        all.extend_from_slice(ledger::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+        all.sort_by_key(|m| m.version);
+        all
     }
 
     fn env(id: &str, hw: &str, key: &str) -> Envelope {
@@ -466,6 +506,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolution_cache_invalidated_on_generation_bump() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("iotkit.db");
+        let migrations = migration_set();
+        let db = iotkit_core_storage::init_db(&db_path, &migrations).unwrap();
+        let ctl_db = iotkit_core_storage::init_db(&db_path, &migrations).unwrap();
+
+        let system_id = ctl_db.with_conn_sync(|conn| {
+            ledger::record_sighting(conn, "ble:gen", "test-adapter").unwrap();
+            let sid = ledger::approve_sighting(
+                conn,
+                "ble:gen",
+                Some("generation test"),
+                ledger::DeviceKind::Individual,
+            ).unwrap();
+            Ok(sid)
+        }).unwrap();
+
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let first = collector.submit(env("e-gen-1", "ble:gen", "temperature_c")).await.unwrap();
+        assert!(matches!(first.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored {
+                disposition: Disposition::Quarantined,
+                quarantine_reason: Some(QuarantineReason::DeviceQuarantined),
+            })));
+
+        ctl_db.with_conn_sync(move |conn| {
+            let tx = rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            ).unwrap();
+            ledger::activate_device(&tx, &system_id).unwrap();
+            ledger::bump_generation(&tx).unwrap();
+            tx.commit().unwrap();
+            Ok(())
+        }).unwrap();
+
+        let second = collector.submit(env("e-gen-2", "ble:gen", "temperature_c")).await.unwrap();
+        assert!(matches!(second.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored {
+                disposition: Disposition::Durable,
+                quarantine_reason: None,
+            })), "generation bump must clear cached quarantined device state");
+    }
+
+    #[tokio::test]
     async fn verdict_resolved_key_and_channel_are_used_for_series() {
         let db = test_db();
         register_active(&db, "ble:aa");
@@ -479,6 +567,63 @@ mod tests {
         }).unwrap();
         assert_eq!(key, "temperature_c", "series実体化はresolved_keyを使う");
         assert_eq!(ch, 7, "コレクタはチャネルを再計算せずverdictのchannel_indexを使う");
+    }
+
+    #[tokio::test]
+    async fn age_ms_restores_gateway_adjusted_device_time() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut e = env("e-age", "ble:aa", "temperature_c");
+        e.items[0].age_ms = Some(5000);
+        e.items[0].time_source = TimeSource::Gateway;
+        e.items[0].device_time_ms = None;
+        collector.submit(e).await.unwrap();
+
+        let (received_at, device_time, time_source, event_time, event_time_source):
+            (i64, i64, String, i64, String) = db.with_conn_sync(|conn| {
+            Ok(conn.query_row(
+                "SELECT received_at, device_time, time_source, event_time, event_time_source FROM readings",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            ).unwrap())
+        }).unwrap();
+        assert_eq!(device_time, received_at - 5000);
+        assert_eq!(time_source, "gateway_adjusted");
+        assert_eq!(event_time, received_at - 5000);
+        assert_eq!(event_time_source, "gateway_adjusted");
+    }
+
+    #[test]
+    fn restore_device_time_ignores_unrepresentable_age_ms() {
+        let (device_time, source) =
+            restore_device_time(10_000, None, Some(i64::MAX as u64 + 1), TimeSource::Gateway);
+        assert_eq!(device_time, None);
+        assert_eq!(source, TimeSource::Gateway);
+    }
+
+    #[test]
+    fn restore_device_time_ignores_age_ms_that_would_underflow() {
+        let (device_time, source) =
+            restore_device_time(i64::MIN, None, Some(1), TimeSource::Gateway);
+        assert_eq!(device_time, None);
+        assert_eq!(source, TimeSource::Gateway);
+    }
+
+    #[test]
+    fn restore_device_time_age_zero_returns_received_at() {
+        let (device_time, source) =
+            restore_device_time(10_000, None, Some(0), TimeSource::Gateway);
+        assert_eq!(device_time, Some(10_000));
+        assert_eq!(source, TimeSource::GatewayAdjusted);
+    }
+
+    #[test]
+    fn restore_device_time_prefers_declared_device_time() {
+        let (device_time, source) =
+            restore_device_time(10_000, Some(9000), Some(5000), TimeSource::DeviceNtp);
+        assert_eq!(device_time, Some(9000));
+        assert_eq!(source, TimeSource::DeviceNtp);
     }
 
     #[tokio::test]

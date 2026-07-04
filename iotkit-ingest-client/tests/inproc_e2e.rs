@@ -5,7 +5,7 @@
 use iotkit_core_collector::Collector;
 use iotkit_core_ledger as ledger;
 use iotkit_core_registry::SqliteRegistry;
-use iotkit_ingest_client::{new_envelope, spawn_inproc};
+use iotkit_ingest_client::{IngestClientEvent, new_envelope, spawn_inproc, spawn_inproc_observed};
 use iotkit_ingest_contract::*;
 use std::sync::Arc;
 
@@ -20,13 +20,20 @@ fn full_db() -> iotkit_core_storage::DbHandle {
 
 fn register_active(db: &iotkit_core_storage::DbHandle, hw: &str) {
     db.with_conn_sync(|conn| {
-        ledger::insert_device(conn, &ledger::NewDevice {
-            hardware_id: hw.into(), user_label: None, parent: None,
-            kind: ledger::DeviceKind::Individual,
-            initial_state: ledger::DeviceState::Active,
-        }).unwrap();
+        ledger::insert_device(
+            conn,
+            &ledger::NewDevice {
+                hardware_id: hw.into(),
+                user_label: None,
+                parent: None,
+                kind: ledger::DeviceKind::Individual,
+                initial_state: ledger::DeviceState::Active,
+            },
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 fn item(hw: &str, key: &str, value: f64) -> ReadingItem {
@@ -38,23 +45,45 @@ fn item(hw: &str, key: &str, value: f64) -> ReadingItem {
         values: vec![value],
         device_time_ms: None,
         time_source: TimeSource::Gateway,
-        age_ms: None, rssi: None, battery_pct: None,
+        age_ms: None,
+        rssi: None,
+        battery_pct: None,
     }
 }
 
 async fn readings_count(db: &iotkit_core_storage::DbHandle) -> i64 {
     db.with_conn_sync(|conn| {
-        Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
-    }).unwrap()
+        Ok(conn
+            .query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0))
+            .unwrap())
+    })
+    .unwrap()
 }
 
 /// クライアントの完了を能動的に待つ(ポーリング。テスト専用)
 async fn wait_for_readings(db: &iotkit_core_storage::DbHandle, n: i64) {
     for _ in 0..200 {
-        if readings_count(db).await >= n { return; }
+        if readings_count(db).await >= n {
+            return;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     panic!("timed out waiting for {n} readings");
+}
+
+async fn wait_for_ingest_event(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<IngestClientEvent>,
+    expected: IngestClientEvent,
+) {
+    loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for ingest client event")
+            .expect("ingest client event channel closed");
+        if event == expected {
+            return;
+        }
+    }
 }
 
 #[tokio::test]
@@ -63,8 +92,10 @@ async fn accepted_envelope_reaches_readings() {
     register_active(&db, "ble:aa");
     let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
     let (client, _h) = spawn_inproc(collector, 16, 64);
-    let e = new_envelope("bravepi-mainboard:/dev/ttyAMA0",
-        vec![item("ble:aa", "temperature_c", 21.5)]);
+    let e = new_envelope(
+        "bravepi-mainboard:/dev/ttyAMA0",
+        vec![item("ble:aa", "temperature_c", 21.5)],
+    );
     client.try_submit(e).unwrap();
     wait_for_readings(&db, 1).await;
 }
@@ -98,23 +129,35 @@ async fn noack_is_retried_with_same_envelope_until_recovery() {
              BEGIN SELECT RAISE(ABORT, 'simulated'); END;",
         )?;
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let (client, _h) = spawn_inproc(collector, 16, 64);
+    let (obs_tx, mut obs_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (client, _h) = spawn_inproc_observed(collector, 16, 64, obs_tx);
     let e = new_envelope("test-adapter", vec![item("ble:aa", "temperature_c", 21.5)]);
     client.try_submit(e).unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await; // 数回のNoAck再送を経過させる
+    wait_for_ingest_event(&mut obs_rx, IngestClientEvent::SubmitNoAck).await;
     assert_eq!(readings_count(&db).await, 0, "障害中は未耐久のまま");
-    db.with_conn_sync(|conn| { conn.execute_batch("DROP TRIGGER fail_enable;")?; Ok(()) }).unwrap();
+    db.with_conn_sync(|conn| {
+        conn.execute_batch("DROP TRIGGER fail_enable;")?;
+        Ok(())
+    })
+    .unwrap();
     wait_for_readings(&db, 1).await; // 再送で回復。entryも監査イベントも1つずつ
-    let (entries, events): (i64, i64) = db.with_conn_sync(|conn| {
-        Ok((
-            conn.query_row("SELECT COUNT(*) FROM registry_entries", [], |r| r.get(0)).unwrap(),
-            conn.query_row(
-                "SELECT COUNT(*) FROM ledger_events WHERE kind='registry_entry_enabled'",
-                [], |r| r.get(0)).unwrap(),
-        ))
-    }).unwrap();
+    let (entries, events): (i64, i64) = db
+        .with_conn_sync(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM registry_entries", [], |r| r.get(0))
+                    .unwrap(),
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ledger_events WHERE kind='registry_entry_enabled'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!((entries, events), (1, 1));
 }
 
@@ -125,10 +168,18 @@ async fn terminal_rejection_is_not_retried() {
     register_active(&db, "ble:aa");
     let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
     let (client, _h) = spawn_inproc(collector, 16, 64);
-    client.try_submit(new_envelope("test-adapter",
-        vec![item("ble:aa", "Bad:Key", 1.0)])).unwrap();
-    client.try_submit(new_envelope("test-adapter",
-        vec![item("ble:aa", "temperature_c", 21.5)])).unwrap();
+    client
+        .try_submit(new_envelope(
+            "test-adapter",
+            vec![item("ble:aa", "Bad:Key", 1.0)],
+        ))
+        .unwrap();
+    client
+        .try_submit(new_envelope(
+            "test-adapter",
+            vec![item("ble:aa", "temperature_c", 21.5)],
+        ))
+        .unwrap();
     wait_for_readings(&db, 1).await; // 2通目が届く=1通目で停滞していない
     assert_eq!(readings_count(&db).await, 1);
 }
@@ -146,28 +197,44 @@ async fn spool_overflow_drops_oldest_and_keeps_newest() {
              BEGIN SELECT RAISE(ABORT, 'down'); END;",
         )?;
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let (client, _h) = spawn_inproc(collector, 64, 4); // queue_cap=64: 入力側では落ちない
+    let (obs_tx, mut obs_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (client, _h) = spawn_inproc_observed(collector, 64, 4, obs_tx); // queue_cap=64: 入力側では落ちない
     for i in 0..12 {
-        let e = new_envelope("test-adapter",
-            vec![item("ble:aa", "temperature_c", 20.0 + i as f64)]);
+        let e = new_envelope(
+            "test-adapter",
+            vec![item("ble:aa", "temperature_c", 20.0 + i as f64)],
+        );
         client.try_submit(e).unwrap();
     }
     // 全量がspoolへ排出されdrop-oldestが起きるまで待つ(障害中は未耐久のまま)
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    for _ in 0..8 {
+        wait_for_ingest_event(&mut obs_rx, IngestClientEvent::SpoolOverflow).await;
+    }
     assert_eq!(readings_count(&db).await, 0, "障害中は未耐久");
-    db.with_conn_sync(|conn| { conn.execute_batch("DROP TRIGGER fail_all;")?; Ok(()) }).unwrap();
+    db.with_conn_sync(|conn| {
+        conn.execute_batch("DROP TRIGGER fail_all;")?;
+        Ok(())
+    })
+    .unwrap();
     wait_for_readings(&db, 1).await;
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    wait_for_readings(&db, 4).await;
     let n = readings_count(&db).await;
     assert!((1..=5).contains(&n), "有界spool(cap=4+送信中1): n={n}");
     // drop-oldestの証拠: 最新エンベロープ(値31.0)が生き残る
-    let max: f64 = db.with_conn_sync(|conn| {
-        Ok(conn.query_row(
-            "SELECT MAX(CAST(json_extract(values_json, '$[0]') AS REAL)) FROM readings",
-            [], |r| r.get(0)).unwrap())
-    }).unwrap();
+    let max: f64 = db
+        .with_conn_sync(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT MAX(CAST(json_extract(values_json, '$[0]') AS REAL)) FROM readings",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap())
+        })
+        .unwrap();
     assert_eq!(max, 31.0, "最新エンベロープはドロップされない(drop-oldest)");
 }
 
@@ -179,8 +246,10 @@ async fn collector_death_exits_client_task() {
     let (collector, collector_handle) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
     let (client, client_handle) = spawn_inproc(collector, 16, 64);
     collector_handle.abort();
-    let _ = client.try_submit(new_envelope("test-adapter",
-        vec![item("ble:aa", "temperature_c", 21.5)]));
+    let _ = client.try_submit(new_envelope(
+        "test-adapter",
+        vec![item("ble:aa", "temperature_c", 21.5)],
+    ));
     // クライアントタスクはClosed検知で終了する(ゲートウェイのfail-fast検知点)
     tokio::time::timeout(std::time::Duration::from_secs(5), client_handle)
         .await

@@ -24,6 +24,9 @@ pub(crate) fn to_items(
     reading: &SensorReading,
 ) -> Option<Vec<ReadingItem>> {
     let key = measurement_key_for(&reading.sensor_type)?;
+    if reading.values.is_empty() {
+        return None;
+    }
     let parts: Vec<&str> = device_key.as_str().split(':').collect();
     let hw = match parts.as_slice() {
         ["i2c", addr, _suffix] => format!("{}:i2c:{addr}", adapter_id.as_str()),
@@ -53,23 +56,47 @@ mod tests {
             &AdapterId::new("rpi-local:default"),
             &DeviceKey::new("i2c:0x44:illuminance"),
             &SensorReading::new(SensorType::Illuminance, vec![512.0], vec!["lux".into()]),
-        ).unwrap();
-        assert_eq!(items[0].subject_hint.as_deref(), Some("rpi-local:default:i2c:0x44"));
+        )
+        .unwrap();
+        assert_eq!(
+            items[0].subject_hint.as_deref(),
+            Some("rpi-local:default:i2c:0x44")
+        );
         assert_eq!(items[0].measurement_key, "illuminance_lux");
         assert_eq!(items[0].channel_index, None);
     }
 
     #[test]
     fn undeclared_sensor_type_and_foreign_key_form_are_not_emitted() {
-        assert!(to_items(
-            &AdapterId::new("rpi-local:default"),
-            &DeviceKey::new("i2c:0x29:ranging"),
-            &SensorReading::new(SensorType::Ranging, vec![100.0], vec![]),
-        ).is_none(), "対応表未宣言の型は送出しない(単位対応表の更新を強制)");
-        assert!(to_items(
-            &AdapterId::new("rpi-local:default"),
-            &DeviceKey::new("bravepi-mainboard:aa:temperature"),
-            &SensorReading::new(SensorType::Temperature, vec![21.5], vec![]),
-        ).is_none(), "非polling形式キーはこの写像の担当外");
+        assert!(
+            to_items(
+                &AdapterId::new("rpi-local:default"),
+                &DeviceKey::new("i2c:0x29:ranging"),
+                &SensorReading::new(SensorType::Ranging, vec![100.0], vec![]),
+            )
+            .is_none(),
+            "対応表未宣言の型は送出しない(単位対応表の更新を強制)"
+        );
+        assert!(
+            to_items(
+                &AdapterId::new("rpi-local:default"),
+                &DeviceKey::new("bravepi-mainboard:aa:temperature"),
+                &SensorReading::new(SensorType::Temperature, vec![21.5], vec![]),
+            )
+            .is_none(),
+            "非polling形式キーはこの写像の担当外"
+        );
+    }
+
+    #[test]
+    fn empty_values_are_not_emitted() {
+        assert!(
+            to_items(
+                &AdapterId::new("rpi-local:default"),
+                &DeviceKey::new("i2c:0x44:illuminance"),
+                &SensorReading::new(SensorType::Illuminance, vec![], vec!["lux".into()]),
+            )
+            .is_none()
+        );
     }
 }

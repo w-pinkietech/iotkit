@@ -47,10 +47,18 @@ impl ValueType {
     }
     pub fn from_db(s: &str) -> Self {
         match s {
+            "float" => Self::Float,
             "int" => Self::Int,
             "bool" => Self::Bool,
             "record" => Self::Record,
-            _ => Self::Float,
+            other => {
+                tracing::warn!(
+                    value = other,
+                    fallback = "float",
+                    "unknown registry value_type in row"
+                );
+                Self::Float
+            }
         }
     }
 }
@@ -76,9 +84,17 @@ impl ChannelMode {
     }
     pub fn from_db(s: &str) -> Self {
         match s {
+            "single" => Self::Single,
             "generic" => Self::Generic,
             "fixed" => Self::Fixed,
-            _ => Self::Single,
+            other => {
+                tracing::warn!(
+                    value = other,
+                    fallback = "single",
+                    "unknown registry channel_mode in row"
+                );
+                Self::Single
+            }
         }
     }
 }

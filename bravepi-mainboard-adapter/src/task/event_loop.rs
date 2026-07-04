@@ -5,12 +5,15 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use bravepi_codec::{BravePiCodec, DownlinkCommand};
-use iotkit_core_types::{AdapterCommand, AdapterEvent, ConfigValue, DeviceCommandPayload, DeviceConfigData, DeviceKey, SensorType};
+use iotkit_core_types::{
+    AdapterCommand, AdapterEvent, ConfigValue, DeviceCommandPayload, DeviceConfigData, DeviceKey,
+    SensorType,
+};
 use tokio::sync::mpsc;
 
+use super::convert::frame_to_event;
 use crate::registry::lookup_handler;
 use crate::transport::{BytesReceiver, BytesSender};
-use super::convert::frame_to_event;
 
 struct DeviceTarget {
     device_number_hex: String,
@@ -122,12 +125,21 @@ pub(crate) async fn event_loop(
                                     } = &event {
                                         match super::ingest_map::to_items(device_key, reading, *rssi, *battery_pct) {
                                             Some(items) => {
-                                                let envelope = iotkit_ingest_client::new_envelope(
-                                                    adapter_id.as_str(),
-                                                    items,
-                                                );
-                                                if client.try_submit(envelope).is_err() {
-                                                    tracing::warn!("ingest queue full; dropping reading");
+                                                for chunk in items.chunks(super::ingest_map::MAX_ITEMS_PER_ENVELOPE) {
+                                                    let envelope = iotkit_ingest_client::new_envelope(
+                                                        adapter_id.as_str(),
+                                                        chunk.to_vec(),
+                                                    );
+                                                    if let Err(e) = client.try_submit(envelope) {
+                                                        match e {
+                                                            iotkit_ingest_client::IngestClientError::Full => {
+                                                                tracing::warn!("ingest queue full; dropping reading");
+                                                            }
+                                                            iotkit_ingest_client::IngestClientError::Closed => {
+                                                                tracing::warn!("ingest client closed; dropping reading");
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                             None => tracing::warn!(
@@ -185,9 +197,10 @@ async fn handle_config_frame(
         }
     };
 
-    let device_key = DeviceKey::new(
-        format!("bravepi-mainboard:{}:{}", cfg.device_number, handler.key_suffix),
-    );
+    let device_key = DeviceKey::new(format!(
+        "bravepi-mainboard:{}:{}",
+        cfg.device_number, handler.key_suffix
+    ));
 
     if !devices.contains_key(&device_key) {
         tracing::warn!(
@@ -204,7 +217,10 @@ async fn handle_config_frame(
             ("timezone".into(), ConfigValue::Integer(cfg.timezone as i64)),
             ("ble_mode".into(), ConfigValue::Integer(cfg.ble_mode as i64)),
             ("tx_power".into(), ConfigValue::Integer(cfg.tx_power as i64)),
-            ("advertise_interval".into(), ConfigValue::Integer(cfg.advertise_interval as i64)),
+            (
+                "advertise_interval".into(),
+                ConfigValue::Integer(cfg.advertise_interval as i64),
+            ),
         ]),
     };
 
@@ -214,10 +230,10 @@ async fn handle_config_frame(
         "Config frame received, sending DeviceConfig event"
     );
 
-    event_tx.send(AdapterEvent::DeviceConfig {
-        device_key,
-        config,
-    }).await.is_err()
+    event_tx
+        .send(AdapterEvent::DeviceConfig { device_key, config })
+        .await
+        .is_err()
 }
 
 /// Returns true if the event channel is closed.
@@ -230,10 +246,13 @@ async fn handle_device_command(
     let state = match devices.get(&cmd.device_key) {
         Some(s) => s,
         None => {
-            return event_tx.send(AdapterEvent::AdapterError {
-                device_key: Some(cmd.device_key),
-                error: "unknown device".to_string(),
-            }).await.is_err();
+            return event_tx
+                .send(AdapterEvent::AdapterError {
+                    device_key: Some(cmd.device_key),
+                    error: "unknown device".to_string(),
+                })
+                .await
+                .is_err();
         }
     };
 
@@ -243,65 +262,76 @@ async fn handle_device_command(
     if let DeviceCommandPayload::SetOutput { duration_ms, .. } = &cmd.payload {
         if let Some(handler) = lookup_handler(target.raw_sensor_type) {
             if handler.sensor_type != SensorType::ContactOutput {
-                return event_tx.send(AdapterEvent::AdapterError {
-                    device_key: Some(cmd.device_key),
-                    error: "SetOutput sent to non-ContactOutput device".to_string(),
-                }).await.is_err();
+                return event_tx
+                    .send(AdapterEvent::AdapterError {
+                        device_key: Some(cmd.device_key),
+                        error: "SetOutput sent to non-ContactOutput device".to_string(),
+                    })
+                    .await
+                    .is_err();
             }
         } else {
-            return event_tx.send(AdapterEvent::AdapterError {
-                device_key: Some(cmd.device_key),
-                error: "SetOutput: unknown sensor type in registry".to_string(),
-            }).await.is_err();
+            return event_tx
+                .send(AdapterEvent::AdapterError {
+                    device_key: Some(cmd.device_key),
+                    error: "SetOutput: unknown sensor type in registry".to_string(),
+                })
+                .await
+                .is_err();
         }
 
         if let Some(ms) = duration_ms
-            && *ms > u16::MAX as u32 {
-                return event_tx.send(AdapterEvent::AdapterError {
+            && *ms > u16::MAX as u32
+        {
+            return event_tx
+                .send(AdapterEvent::AdapterError {
                     device_key: Some(cmd.device_key),
                     error: format!("duration_ms {} exceeds u16 range (max {})", ms, u16::MAX),
-                }).await.is_err();
-            }
+                })
+                .await
+                .is_err();
+        }
     }
 
     let downlink_cmd = match cmd.payload {
-        DeviceCommandPayload::RequestReading => {
-            DownlinkCommand::ImmediateUplink { sensor_type: target.raw_sensor_type }
-        }
-        DeviceCommandPayload::QueryConfig => {
-            DownlinkCommand::ParameterGet
-        }
-        DeviceCommandPayload::SetOutput { value, duration_ms } => {
-            DownlinkCommand::ContactOutput {
-                signal_mode: if value { 1 } else { 0 },
-                signal_out_time: duration_ms.map(|ms| ms as u16).unwrap_or(0),
-            }
-        }
+        DeviceCommandPayload::RequestReading => DownlinkCommand::ImmediateUplink {
+            sensor_type: target.raw_sensor_type,
+        },
+        DeviceCommandPayload::QueryConfig => DownlinkCommand::ParameterGet,
+        DeviceCommandPayload::SetOutput { value, duration_ms } => DownlinkCommand::ContactOutput {
+            signal_mode: if value { 1 } else { 0 },
+            signal_out_time: duration_ms.map(|ms| ms as u16).unwrap_or(0),
+        },
     };
 
     let bytes = match BravePiCodec::encode_downlink(&target.device_number_hex, &downlink_cmd) {
         Ok(b) => b,
         Err(e) => {
-            return event_tx.send(AdapterEvent::AdapterError {
-                device_key: Some(cmd.device_key),
-                error: format!("encode_downlink failed: {}", e),
-            }).await.is_err();
+            return event_tx
+                .send(AdapterEvent::AdapterError {
+                    device_key: Some(cmd.device_key),
+                    error: format!("encode_downlink failed: {}", e),
+                })
+                .await
+                .is_err();
         }
     };
 
     match write_tx.try_send(bytes) {
         Ok(()) => false,
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            event_tx.send(AdapterEvent::AdapterError {
+        Err(mpsc::error::TrySendError::Full(_)) => event_tx
+            .send(AdapterEvent::AdapterError {
                 device_key: Some(cmd.device_key),
                 error: "downlink queue full".to_string(),
-            }).await.is_err()
-        }
-        Err(mpsc::error::TrySendError::Closed(_)) => {
-            event_tx.send(AdapterEvent::AdapterError {
+            })
+            .await
+            .is_err(),
+        Err(mpsc::error::TrySendError::Closed(_)) => event_tx
+            .send(AdapterEvent::AdapterError {
                 device_key: None,
                 error: "write channel closed (transport failure)".to_string(),
-            }).await.is_err()
-        }
+            })
+            .await
+            .is_err(),
     }
 }

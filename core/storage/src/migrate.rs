@@ -327,6 +327,58 @@ mod tests {
     }
 
     #[test]
+    fn migration_set_difference_tolerates_gap() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let migrations = &[
+            TestMigration {
+                version: 1,
+                label: "init",
+                sql: "CREATE TABLE readings (id INTEGER PRIMARY KEY, value TEXT NOT NULL);",
+            },
+            TestMigration {
+                version: 3,
+                label: "readings_insert",
+                sql: "INSERT INTO readings (value) VALUES ('kept');",
+            },
+            TestMigration {
+                version: 4,
+                label: "readings_index",
+                sql: "CREATE INDEX idx_readings_value ON readings(value);",
+            },
+            TestMigration {
+                version: 5,
+                label: "ledger_extra",
+                sql: "CREATE TABLE ledger_extra (id INTEGER PRIMARY KEY);",
+            },
+            TestMigration {
+                version: 6,
+                label: "registry_extra",
+                sql: "CREATE TABLE registry_extra (id INTEGER PRIMARY KEY);",
+            },
+            TestMigration {
+                version: 7,
+                label: "drop_legacy",
+                sql: "DROP TABLE IF EXISTS sensor_readings;",
+            },
+        ];
+
+        run_migrations_with(&conn, migrations).unwrap();
+
+        let versions: Vec<u32> = conn
+            .prepare("SELECT version FROM _schema_version ORDER BY version")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(versions, vec![1, 3, 4, 5, 6, 7]);
+        let value: String = conn
+            .query_row("SELECT value FROM readings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "kept");
+    }
+
+    #[test]
     fn migration_failure_rolls_back() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let test_migrations = &[

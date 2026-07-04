@@ -117,11 +117,48 @@ fn evaluate_item(
         _ => {}
     }
 
-    // 3) チャネル検査+正準化(D6決定6/12)。single modeは Some(0) も番兵-1へ寄せ、
-    //    None/Some(0)で同一測定が別seriesに分裂するのを防ぐ
+    let variant = item.series_variant.as_deref().unwrap_or(ledger::DEFAULT_VARIANT);
+
+    // 3) チャネル検査+正準化(D6決定6/12)。single modeのNone/Some(0)は
+    //    既存seriesのchannel形を尊重しつつ、新規は番兵-1へ寄せる。
     let (channel, undeclared_channel) = match entry.channel_mode {
         ChannelMode::Single => match item.channel_index {
-            None | Some(0) => (ledger::CHANNEL_NA, false),
+            None | Some(0) => {
+                let na_meta = ledger::find_series_meta(
+                    conn,
+                    system_id,
+                    &resolved_key,
+                    ledger::CHANNEL_NA,
+                    variant,
+                )
+                .map_err(|e| e.to_string())?;
+                let zero_meta =
+                    ledger::find_series_meta(conn, system_id, &resolved_key, 0, variant)
+                        .map_err(|e| e.to_string())?;
+                if na_meta.is_some() {
+                    if zero_meta.is_some() {
+                        let detail = serde_json::json!({
+                            "measurement_key": &resolved_key,
+                            "variant": variant,
+                            "preferred_channel": ledger::CHANNEL_NA,
+                            "legacy_channel": 0,
+                        })
+                        .to_string();
+                        ledger::record_event(
+                            conn,
+                            "channel_form_conflict",
+                            Some(system_id),
+                            &detail,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                    (ledger::CHANNEL_NA, false)
+                } else if zero_meta.is_some() {
+                    (0, false)
+                } else {
+                    (ledger::CHANNEL_NA, false)
+                }
+            }
             Some(_) => (raw_channel, true),
         },
         ChannelMode::Fixed => match item.channel_index {
@@ -140,7 +177,6 @@ fn evaluate_item(
 
     // 4) 値域検査: min/max各辺独立に series個別 → エントリ現場既定 → カタログ物理限界を
     //    フォールバック(D6決定7外殻不変則: 片辺のみのseries上書きでも反対辺は外殻が生きる)
-    let variant = item.series_variant.as_deref().unwrap_or(ledger::DEFAULT_VARIANT);
     let series_meta = ledger::find_series_meta(conn, system_id, &resolved_key, channel, variant)
         .map_err(|e| e.to_string())?;
     let series_min = series_meta.as_ref().and_then(|m| m.range_min);
@@ -445,6 +481,42 @@ mod tests {
             let vn = eval(conn, &sid, &item("distance_mm", None, vec![100.0]));
             assert!(matches!(vn,
                 RegistryVerdict::Accept { channel_index: ledger::CHANNEL_NA, quarantine: None, .. }));
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn single_mode_routes_to_existing_zero_series_when_channel_na_absent() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = device(conn);
+            ensure_series(conn, &sid, "distance_mm", 0, DEFAULT_VARIANT, false, None).unwrap();
+
+            let v = eval(conn, &sid, &item("distance_mm", None, vec![100.0]));
+
+            assert!(matches!(v,
+                RegistryVerdict::Accept { channel_index: 0, quarantine: None, .. }));
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn single_mode_prefers_channel_na_when_zero_and_na_series_coexist_and_audits() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = device(conn);
+            ensure_series(conn, &sid, "distance_mm", CHANNEL_NA, DEFAULT_VARIANT, false, None).unwrap();
+            ensure_series(conn, &sid, "distance_mm", 0, DEFAULT_VARIANT, false, None).unwrap();
+
+            let v = eval(conn, &sid, &item("distance_mm", Some(0), vec![100.0]));
+
+            assert!(matches!(v,
+                RegistryVerdict::Accept { channel_index: CHANNEL_NA, quarantine: None, .. }));
+            let events: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM ledger_events WHERE kind='channel_form_conflict'",
+                [], |r| r.get(0),
+            ).unwrap();
+            assert_eq!(events, 1);
             Ok(())
         }).unwrap();
     }

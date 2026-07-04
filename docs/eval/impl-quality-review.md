@@ -24,6 +24,31 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
   Watchpoint: Timestamps must be captured at the point of observation (e.g. successful I2C read), not at event construction time. Batch-collect-then-emit patterns can introduce seconds of skew on degraded buses.
   Observed in: timestamp-provenance design review.
 
+- Added: 2026-07-04
+  Revalidate by: 2026-10-04
+  Watchpoint: `Path::parent()` returns `Some("")` for a bare filename (e.g. "iotkit.db"), NOT `None`. `parent().unwrap_or(".")` silently yields an empty path, so `statvfs("")`/fs calls fail. Guard the empty case explicitly: `match p.parent() { Some(x) if !x.as_os_str().is_empty() => x, _ => Path::new(".") }`.
+  Observed in: 計画4 T7 retention.rs (statvfs on default basename db_path).
+
+- Added: 2026-07-04
+  Revalidate by: 2026-10-04
+  Watchpoint: A scalar measurement (value_type != record) must map to items with `values.len() == 1`. Chunking many samples into multi-value items makes the registry policy terminally reject them (`values.len() != 1` → ValueTypeMismatch) = silent data loss. Emit one single-value item per sample; if a per-envelope item cap applies, split into multiple envelopes, never multi-value items.
+  Observed in: 計画4 T9 bravepi ingest_map (contact >256 chunking).
+
+- Added: 2026-07-04
+  Revalidate by: 2026-10-04
+  Watchpoint: Bound parameters (`params!`) protect SQL VALUES only, NOT identifiers. Column/table names taken from an external file (snapshot, config) must be validated against the real schema (`PRAGMA table_info`), unknown keys rejected, and identifiers quoted. Never string-interpolate untrusted identifiers into SQL.
+  Observed in: 計画4 T8 snapshot restore (JSON keys used as INSERT column list).
+
+- Added: 2026-07-04
+  Revalidate by: 2026-10-04
+  Watchpoint: A precondition check (emptiness/existence) that gates a write must run INSIDE the same `Immediate` transaction that holds the write lock, before the writes. A check before `BEGIN IMMEDIATE` leaves a TOCTOU window where a concurrent writer invalidates it.
+  Observed in: 計画4 T8 snapshot restore non-empty check; T5 replace-hardware TOCTOU.
+
+- Added: 2026-07-04
+  Revalidate by: 2026-10-04
+  Watchpoint: When converting a blocking backoff (`sleep().await` then restart in the same arm) to non-blocking (spawn timer → channel → restart in a new select arm), the loop must NOT treat "no active streams" as terminal while restart timers are pending. Track a pending-restart count and exit only when idle AND pending == 0; otherwise the last/only failing adapter is never restarted.
+  Observed in: 計画4 T9 gateway supervisor timer-ization.
+
 ## Baseline Checklist
 
 ### データ検証

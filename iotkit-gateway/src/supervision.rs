@@ -2,6 +2,7 @@
 use iotkit_core_types::AdapterId;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RestartPolicy {
@@ -28,7 +29,10 @@ pub struct RestartTracker {
 
 impl RestartTracker {
     pub fn new(policy: RestartPolicy) -> Self {
-        Self { policy, counts: HashMap::new() }
+        Self {
+            policy,
+            counts: HashMap::new(),
+        }
     }
 
     /// 次の再起動までの待ち時間。予算超過ならNone(永続degraded)。
@@ -50,6 +54,17 @@ impl RestartTracker {
     pub fn note_healthy(&mut self, id: &AdapterId) {
         self.counts.remove(id);
     }
+}
+
+pub fn schedule_restart_notification(
+    id: AdapterId,
+    delay: Duration,
+    tx: mpsc::UnboundedSender<AdapterId>,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let _ = tx.send(id);
+    });
 }
 
 /// D1: グローバルpanicフックでbacktraceをログ(panic="abort"禁止はCargo.toml側で保証)
@@ -88,13 +103,45 @@ mod tests {
         let id = AdapterId::new("a");
         t.next_delay(&id);
         t.note_healthy(&id);
-        assert_eq!(t.next_delay(&id), Some(super::RestartPolicy::default().base_backoff));
+        assert_eq!(
+            t.next_delay(&id),
+            Some(super::RestartPolicy::default().base_backoff)
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_notification_is_delayed_without_blocking_caller() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (other_tx, mut other_rx) = tokio::sync::mpsc::unbounded_channel();
+        let id = AdapterId::new("a");
+
+        super::schedule_restart_notification(id.clone(), Duration::from_millis(100), tx);
+        other_tx.send("processed").unwrap();
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), other_rx.recv())
+                .await
+                .expect("unrelated work should not be blocked by restart delay"),
+            Some("processed")
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .expect("notification should arrive")
+                .expect("channel should stay open"),
+            id
+        );
     }
 
     #[test]
     fn workspace_does_not_use_panic_abort() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let toml = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-        assert!(!toml.contains("panic = \"abort\""), "panic=abort breaks task supervision (D1)");
+        assert!(
+            !toml.contains("panic = \"abort\""),
+            "panic=abort breaks task supervision (D1)"
+        );
     }
 }

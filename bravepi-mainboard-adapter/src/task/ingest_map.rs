@@ -19,6 +19,8 @@
 use iotkit_core_types::{DeviceKey, SensorReading, SensorType};
 use iotkit_ingest_contract::{ReadingItem, TimeSource};
 
+pub(crate) const MAX_ITEMS_PER_ENVELOPE: usize = 256;
+
 /// DeviceKey → hardware_id 正規形(D5決定2)。
 /// BravePI: "bravepi-mainboard:{device_number}:{suffix}" → 個体識別型 "ble:{device_number}"
 pub(crate) fn hardware_id_for(device_key: &DeviceKey) -> Option<String> {
@@ -44,8 +46,12 @@ fn measurement_key_for(sensor_type: &SensorType) -> Option<&'static str> {
 }
 
 fn make_item(
-    hw: &str, key: &str, channel_index: Option<u16>, values: Vec<f64>,
-    rssi: Option<i16>, battery_pct: Option<u8>,
+    hw: &str,
+    key: &str,
+    channel_index: Option<u16>,
+    values: Vec<f64>,
+    rssi: Option<i16>,
+    battery_pct: Option<u8>,
 ) -> ReadingItem {
     ReadingItem {
         subject_hint: Some(hw.to_string()),
@@ -55,7 +61,9 @@ fn make_item(
         values,
         device_time_ms: None,
         time_source: TimeSource::Gateway,
-        age_ms: None, rssi, battery_pct,
+        age_ms: None,
+        rssi,
+        battery_pct,
     }
 }
 
@@ -70,19 +78,32 @@ pub(crate) fn to_items(
 ) -> Option<Vec<ReadingItem>> {
     let key = measurement_key_for(&reading.sensor_type)?;
     let hw = hardware_id_for(device_key)?;
+    if reading.values.is_empty() {
+        return None;
+    }
     let items = match reading.sensor_type {
         // 物理チャネル/固定役割: 値ごとにchannel_index付きで分割(D6決定12)
         SensorType::Acceleration | SensorType::Adc if reading.values.len() > 1 => reading
-            .values.iter().enumerate()
+            .values
+            .iter()
+            .enumerate()
             .map(|(i, v)| make_item(&hw, key, Some(i as u16), vec![*v], rssi, battery_pct))
             .collect(),
         // 接点: 多値は1接点の時系列サンプル——サンプルごとのitem・channelなし
         SensorType::ContactInput | SensorType::ContactOutput if reading.values.len() > 1 => reading
-            .values.iter()
+            .values
+            .iter()
             .map(|v| make_item(&hw, key, None, vec![*v], rssi, battery_pct))
             .collect(),
         // 単ch型(および全型の単値): 単一item・channelなし
-        _ => vec![make_item(&hw, key, None, reading.values.clone(), rssi, battery_pct)],
+        _ => vec![make_item(
+            &hw,
+            key,
+            None,
+            reading.values.clone(),
+            rssi,
+            battery_pct,
+        )],
     };
     Some(items)
 }
@@ -97,10 +118,15 @@ mod tests {
         let items = to_items(
             &DeviceKey::new("bravepi-mainboard:00000000000000ab:temperature"),
             &SensorReading::new(SensorType::Temperature, vec![21.5], vec!["celsius".into()]),
-            Some(-60), Some(90),
-        ).unwrap();
+            Some(-60),
+            Some(90),
+        )
+        .unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].subject_hint.as_deref(), Some("ble:00000000000000ab"));
+        assert_eq!(
+            items[0].subject_hint.as_deref(),
+            Some("ble:00000000000000ab")
+        );
         assert_eq!(items[0].measurement_key, "temperature_c");
         assert_eq!(items[0].channel_index, None);
         assert_eq!(items[0].values, vec![21.5]);
@@ -112,10 +138,15 @@ mod tests {
         // ドライバ出力は既にmG(Task 2)——写像は×1(単位対応表どおり)
         let items = to_items(
             &DeviceKey::new("bravepi-mainboard:00000000000000cc:acceleration"),
-            &SensorReading::new(SensorType::Acceleration, vec![12.0, -34.0, 998.0],
-                vec!["x_mg".into(), "y_mg".into(), "z_mg".into()]),
-            None, None,
-        ).unwrap();
+            &SensorReading::new(
+                SensorType::Acceleration,
+                vec![12.0, -34.0, 998.0],
+                vec!["x_mg".into(), "y_mg".into(), "z_mg".into()],
+            ),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].channel_index, Some(0));
         assert_eq!(items[0].values, vec![12.0]);
@@ -127,10 +158,15 @@ mod tests {
     fn adc_two_channels_split() {
         let items = to_items(
             &DeviceKey::new("bravepi-mainboard:00000000000000dd:adc"),
-            &SensorReading::new(SensorType::Adc, vec![1650.0, 3300.0],
-                vec!["ch1_mv".into(), "ch2_mv".into()]),
-            None, None,
-        ).unwrap();
+            &SensorReading::new(
+                SensorType::Adc,
+                vec![1650.0, 3300.0],
+                vec!["ch1_mv".into(), "ch2_mv".into()],
+            ),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[1].channel_index, Some(1));
         assert_eq!(items[1].measurement_key, "voltage_mv");
@@ -142,27 +178,74 @@ mod tests {
         let items = to_items(
             &DeviceKey::new("bravepi-mainboard:00000000000000ee:contact_input"),
             &SensorReading::new(SensorType::ContactInput, vec![1.0, 0.0, 1.0], vec![]),
-            None, None,
-        ).unwrap();
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(items.len(), 3, "サンプルごとにitem分割");
-        assert!(items.iter().all(|i| i.channel_index.is_none()),
-            "channel_index=None(サンプル番号のチャネル捏造禁止)");
+        assert!(
+            items.iter().all(|i| i.channel_index.is_none()),
+            "channel_index=None(サンプル番号のチャネル捏造禁止)"
+        );
         assert_eq!(items[0].values, vec![1.0]);
         assert_eq!(items[1].values, vec![0.0]);
         assert!(items.iter().all(|i| i.measurement_key == "contact_state"));
     }
 
     #[test]
+    fn contact_samples_over_256_remain_scalar_items_without_sample_loss() {
+        let values: Vec<f64> = (0..300).map(|i| (i % 2) as f64).collect();
+        let expected_values = values.clone();
+        let items = to_items(
+            &DeviceKey::new("bravepi-mainboard:00000000000000ee:contact_input"),
+            &SensorReading::new(SensorType::ContactInput, values, vec![]),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(items.len(), expected_values.len());
+        assert!(items.iter().all(|i| i.channel_index.is_none()));
+        assert!(
+            items.iter().all(|i| i.values.len() == 1),
+            "contact_state is scalar; every sample must remain a single-value item"
+        );
+        let actual_values: Vec<f64> = items.iter().map(|i| i.values[0]).collect();
+        assert_eq!(actual_values, expected_values);
+    }
+
+    #[test]
     fn unknown_sensor_type_and_foreign_key_form_return_none() {
-        assert!(to_items(
-            &DeviceKey::new("bravepi-mainboard:aa:x"),
-            &SensorReading::new(SensorType::Unknown("mystery".into()), vec![1.0], vec![]),
-            None, None,
-        ).is_none());
-        assert!(to_items(
-            &DeviceKey::new("i2c:0x44:illuminance"),
-            &SensorReading::new(SensorType::Illuminance, vec![512.0], vec!["lux".into()]),
-            None, None,
-        ).is_none(), "非BravePI形式キーはこの写像の担当外");
+        assert!(
+            to_items(
+                &DeviceKey::new("bravepi-mainboard:aa:x"),
+                &SensorReading::new(SensorType::Unknown("mystery".into()), vec![1.0], vec![]),
+                None,
+                None,
+            )
+            .is_none()
+        );
+        assert!(
+            to_items(
+                &DeviceKey::new("i2c:0x44:illuminance"),
+                &SensorReading::new(SensorType::Illuminance, vec![512.0], vec!["lux".into()]),
+                None,
+                None,
+            )
+            .is_none(),
+            "非BravePI形式キーはこの写像の担当外"
+        );
+    }
+
+    #[test]
+    fn empty_values_are_not_emitted() {
+        assert!(
+            to_items(
+                &DeviceKey::new("bravepi-mainboard:00000000000000ab:temperature"),
+                &SensorReading::new(SensorType::Temperature, vec![], vec!["celsius".into()]),
+                None,
+                None,
+            )
+            .is_none()
+        );
     }
 }
