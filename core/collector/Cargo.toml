@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 iotkit-ingest-contract = { path = "../../iotkit-ingest-contract" }
 iotkit-core-ledger = { path = "../ledger" }
+iotkit-core-publish = { path = "../publish" }
 iotkit-core-storage = { path = "../storage" }
 iotkit-core-timeseries = { path = "../timeseries" }
 rusqlite = { version = "0.32", features = ["bundled"] }

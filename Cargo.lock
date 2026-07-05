@@ -455,6 +455,7 @@ name = "iotkit-core-collector"
 version = "0.1.0"
 dependencies = [
  "iotkit-core-ledger",
+ "iotkit-core-publish",
  "iotkit-core-storage",
  "iotkit-core-timeseries",
  "iotkit-ingest-contract",
