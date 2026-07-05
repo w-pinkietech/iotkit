@@ -815,6 +815,40 @@ mod tests {
         let received = consumer.received.await.unwrap();
         assert_eq!(received.records.len(), 2);
         assert_eq!(target_cursor(&db), (Some(epoch.clone()), pub_seqs[1]));
+        let survivor_pub_seq = db
+            .with_conn_sync(|conn| {
+                let series_id = conn
+                    .query_row(
+                        "SELECT series_id FROM readings ORDER BY seq LIMIT 1",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap();
+                let reading_seq = iotkit_core_timeseries::insert_reading_v3(
+                    conn,
+                    &NewReading {
+                        series_id,
+                        received_at_ms: 1_002,
+                        device_time_ms: None,
+                        time_source: "gateway".into(),
+                        values: vec![22.5],
+                        rssi: None,
+                        battery_pct: None,
+                        quarantined: false,
+                    },
+                )
+                .unwrap();
+                let pub_seq = iotkit_core_publish::store::enqueue_measurement(
+                    conn,
+                    &epoch,
+                    reading_seq,
+                    2_002,
+                )
+                .unwrap();
+                Ok(pub_seq)
+            })
+            .unwrap();
+        assert!(survivor_pub_seq > pub_seqs[1]);
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("iotkit.db");
@@ -832,8 +866,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(count_rows(&db, "readings"), 0);
-        assert_eq!(count_rows(&db, "publication_log"), 0);
+        assert_eq!(count_rows(&db, "readings"), 1);
+        assert_eq!(count_rows(&db, "publication_log"), 1);
         assert_eq!(orphan_outbox_count(&db), 0);
     }
 
