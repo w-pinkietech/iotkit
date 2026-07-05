@@ -19,10 +19,10 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
 }];
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests_support {
     use super::*;
 
-    fn open() -> rusqlite::Connection {
+    pub fn open() -> rusqlite::Connection {
         let mut all: Vec<Migration> = Vec::new();
         all.extend_from_slice(iotkit_core_storage::MIGRATIONS);
         all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
@@ -33,10 +33,15 @@ mod tests {
         iotkit_core_storage::run_migrations(&conn, &all).unwrap();
         conn
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support;
 
     #[test]
     fn migration_creates_tables() {
-        let conn = open();
+        let conn = tests_support::open();
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('publication_log','target_registry')",
