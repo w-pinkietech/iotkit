@@ -4,12 +4,13 @@ use std::time::Duration;
 use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
 use iotkit_core_storage::DbHandle;
-use rusqlite::{TransactionBehavior, named_params};
+use rusqlite::{TransactionBehavior, named_params, params_from_iter};
 
 use crate::health::{DbHealth, HealthState, RetentionHealth, now_ms};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const DEDUP_TTL_MS: i64 = 72 * 60 * 60 * 1000;
+const PURGE_BATCH: usize = 5_000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RetentionConfig {
@@ -44,57 +45,61 @@ fn purge_readings_custody_aware(
                     AND p.epoch = :cur
                     AND p.pub_seq > :eff
               )
-          )";
-    const DELETE_PROTECTED: &str = "
-        DELETE FROM readings
-        WHERE received_at < :cutoff
-          AND NOT (
-              quarantined = 0
-              AND seq IN (
-                  SELECT p.reading_seq FROM publication_log p
-                  WHERE p.kind='measurement'
-                    AND p.reading_seq IS NOT NULL
-                    AND p.epoch = :cur
-                    AND p.pub_seq > :eff
-              )
-          )";
-    const SELECT_FLOOR_ONLY: &str = "SELECT seq FROM readings WHERE received_at < :cutoff";
-    const DELETE_FLOOR_ONLY: &str = "DELETE FROM readings WHERE received_at < :cutoff";
+          )
+        LIMIT :batch";
+    const SELECT_FLOOR_ONLY: &str = "SELECT seq FROM readings WHERE received_at < :cutoff LIMIT :batch";
 
     if let Some(eff) = effective_cursor {
         iotkit_core_publish::store::prune_acked_outbox(conn, current_epoch, eff)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     }
 
-    let seqs = match effective_cursor {
-        Some(eff) => {
-            let mut stmt = conn.prepare(SELECT_PROTECTED)?;
-            stmt.query_map(
-                named_params! { ":cutoff": cutoff_ms, ":cur": current_epoch, ":eff": eff },
-                |row| row.get::<_, i64>(0),
-            )?
-            .collect::<Result<Vec<_>, _>>()?
-        }
-        None => {
-            let mut stmt = conn.prepare(SELECT_FLOOR_ONLY)?;
-            stmt.query_map(named_params! { ":cutoff": cutoff_ms }, |row| {
-                row.get::<_, i64>(0)
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-        }
-    };
+    let mut total = 0_u64;
+    loop {
+        let seqs = match effective_cursor {
+            Some(eff) => {
+                let mut stmt = conn.prepare(SELECT_PROTECTED)?;
+                stmt.query_map(
+                    named_params! {
+                        ":cutoff": cutoff_ms,
+                        ":cur": current_epoch,
+                        ":eff": eff,
+                        ":batch": PURGE_BATCH as i64,
+                    },
+                    |row| row.get::<_, i64>(0),
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+            }
+            None => {
+                let mut stmt = conn.prepare(SELECT_FLOOR_ONLY)?;
+                stmt.query_map(
+                    named_params! { ":cutoff": cutoff_ms, ":batch": PURGE_BATCH as i64 },
+                    |row| row.get::<_, i64>(0),
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+            }
+        };
 
-    iotkit_core_publish::store::prune_outbox_by_reading_seqs(conn, &seqs)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        if seqs.is_empty() {
+            break;
+        }
 
-    let deleted = match effective_cursor {
-        Some(eff) => conn.execute(
-            DELETE_PROTECTED,
-            named_params! { ":cutoff": cutoff_ms, ":cur": current_epoch, ":eff": eff },
-        )?,
-        None => conn.execute(DELETE_FLOOR_ONLY, named_params! { ":cutoff": cutoff_ms })?,
-    };
-    Ok(deleted as u64)
+        iotkit_core_publish::store::prune_outbox_by_reading_seqs(conn, &seqs)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+        let placeholders = std::iter::repeat_n("?", seqs.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("DELETE FROM readings WHERE seq IN ({placeholders})");
+        let deleted = conn.execute(&sql, params_from_iter(seqs.iter()))?;
+        total += deleted as u64;
+
+        if seqs.len() < PURGE_BATCH {
+            break;
+        }
+    }
+
+    Ok(total)
 }
 
 pub fn spawn_retention_task(
@@ -376,6 +381,56 @@ mod tests {
         .unwrap()
     }
 
+    fn insert_target(
+        conn: &rusqlite::Connection,
+        archive_responsible: bool,
+        cursor_epoch: Option<String>,
+        cursor_pub_seq: i64,
+    ) {
+        iotkit_core_publish::store::target_insert(
+            conn,
+            &iotkit_core_publish::store::TargetRow {
+                target_id: "target-1".into(),
+                endpoint_url: "https://archive.example.test".into(),
+                credential_token: "token-1".into(),
+                archive_responsible,
+                schema_version: 1,
+                cursor_epoch,
+                cursor_pub_seq,
+            },
+            1_000,
+        )
+        .unwrap();
+    }
+
+    async fn run_retention_for_test(db: &iotkit_core_storage::DbHandle) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("iotkit.db");
+        let config = RetentionConfig {
+            retention_days: 1,
+            quarantine_ttl_days: 30,
+            disk_high_watermark_pct: 101,
+        };
+        let health = Arc::new(Mutex::new(HealthState::new(config.retention_days)));
+        let mut latch = WatermarkLatch::default();
+
+        run_retention_once_with_latch(db, &db_path, config, health, &mut latch)
+            .await
+            .unwrap();
+    }
+
+    fn set_sqlite_variable_limit(conn: &rusqlite::Connection, limit: i32) {
+        // SAFETY: This test-only call adjusts a documented SQLite runtime limit on
+        // the active connection and does not retain the raw handle.
+        unsafe {
+            rusqlite::ffi::sqlite3_limit(
+                conn.handle(),
+                rusqlite::ffi::SQLITE_LIMIT_VARIABLE_NUMBER,
+                limit,
+            );
+        }
+    }
+
     #[test]
     fn floor_protects_recent_and_purges_old_acked() {
         let db = retention_db();
@@ -515,6 +570,82 @@ mod tests {
             assert_eq!(reading_seqs(conn), vec![current_epoch_reading]);
             assert_eq!(publog_reading_seqs(conn), vec![current_epoch_reading]);
             assert_eq!(publog_count_for_reading(conn, old_epoch_reading), 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_target_not_archive_responsible_purges_unacked_floor_only() {
+        let db = retention_db();
+        let old_with_pubseq = db
+            .with_conn_sync(|conn| {
+                let series_id = seed_series(conn);
+                let old_with_pubseq = seed_reading(conn, series_id, 1_000, false);
+                let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+                iotkit_core_publish::store::enqueue_measurement(
+                    conn,
+                    &epoch,
+                    old_with_pubseq,
+                    2_000,
+                )
+                .unwrap();
+                insert_target(conn, false, Some(epoch), 0);
+                Ok(old_with_pubseq)
+            })
+            .unwrap();
+
+        run_retention_for_test(&db).await;
+
+        db.with_conn_sync(|conn| {
+            assert!(reading_seqs(conn).is_empty());
+            assert_eq!(publog_count_for_reading(conn, old_with_pubseq), 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_target_without_current_cursor_protects_current_epoch_unacked() {
+        let db = retention_db();
+        let old_unacked = db
+            .with_conn_sync(|conn| {
+                let series_id = seed_series(conn);
+                let old_unacked = seed_reading(conn, series_id, 1_000, false);
+                let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+                iotkit_core_publish::store::enqueue_measurement(conn, &epoch, old_unacked, 2_000)
+                    .unwrap();
+                insert_target(conn, true, None, 0);
+                Ok(old_unacked)
+            })
+            .unwrap();
+
+        run_retention_for_test(&db).await;
+
+        db.with_conn_sync(|conn| {
+            assert_eq!(reading_seqs(conn), vec![old_unacked]);
+            assert_eq!(publog_reading_seqs(conn), vec![old_unacked]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_readings_batches_more_than_purge_batch_victims() {
+        let db = retention_db();
+        db.with_conn_sync(|conn| {
+            let cutoff = 1_000;
+            let series_id = seed_series(conn);
+            for _ in 0..=PURGE_BATCH {
+                seed_reading(conn, series_id, cutoff - 1, false);
+            }
+            let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            set_sqlite_variable_limit(conn, PURGE_BATCH as i32);
+
+            let purged = purge_readings_custody_aware(conn, cutoff, &epoch, None).unwrap();
+
+            assert_eq!(purged, (PURGE_BATCH + 1) as u64);
+            assert!(reading_seqs(conn).is_empty());
             Ok(())
         })
         .unwrap();
