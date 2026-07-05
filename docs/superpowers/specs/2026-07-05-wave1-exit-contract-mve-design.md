@@ -26,7 +26,7 @@
 6. custody→R17 retention 作り替え（クラス① = ack 済み ∧ フロア超過のみ削除、未ack正本は保護）
 7. auth 骨子（per-target bearer + HTTPS）
 8. target 登録ガード（HTTPS 強制・ledger 監査・疎通スモーク成功まで archive_responsible 無効・v1 版チェック）
-9. R22 連携（target registry を snapshot に含める、outbox は除外）
+9. R22 連携（target/token・outbox とも snapshot 非含有、復元後 target 再登録。§12/codex#2）
 10. 適合テスト消費者（リポジトリ内フィクスチャ）
 
 ### 1.3 繰り延べる/封じる（DEFERRED / SEALED）
@@ -64,6 +64,22 @@
 
 ---
 
+### 2.3 codex spec-eval round-2 裁定（2026-07-05, xhigh, read-only）
+書き上げた spec を codex に再照合。**裁定#3(フロア=データ年齢)は独立に支持**（archive_acked_at 不要を再確認、ただし epoch guard 必須）。コードベース主張は全て確認。新規8指摘を裁定:
+
+| # | 重大度 | 指摘 | 裁定 | 反映 |
+|---|---|---|---|---|
+| 1 | 高 | R22 restore 後の旧 cursor_pub_seq が新 epoch に誤適用（未配送を ack 済み扱い→誤パージ） | 採用 | §4.2/§6.4/§8.2 に **epoch guard** 明記 |
+| 2 | 高 | target_registry を平文 R22 snapshot に入れると bearer token 漏洩（D2:75/98 暗号化必須） | 採用 | §12 反転: token/target を snapshot に**含めない**、復元後再登録 |
+| 3 | 高 | publication_id 決定性が spec 未担保（バッチ組成規則 D7:276 は Wave 1 spec 宿題） | 採用 | §6.2/§10 に決定的バッチ組成規則を固定 |
+| 4 | 高 | 検疫解除ガード(§9 soft)は archive 消費者に無音 custody 欠落、hard reject が契約忠実 | **保留→ユーザー裁定** | 承認済み §9 と衝突。§9 に ⚠、報告で再提示 |
+| 5 | 中 | publication_log/readings ライフサイクル(outbox prune)未定義 | 採用 | §4.1/§8.3 に prune 規則 |
+| 6 | 中 | retention 作り替えで既存機能(dedup TTL/検疫失効/statvfs ラッチ/health)を落とす危険 | 採用 | §8.1 に**維持**明記 |
+| 7 | 中 | custody_lost 封じの逆圧が未確定(どの水位でどの ingress に deferred) | 採用 | §8.2 に watermark→collector 逆圧経路 |
+| 8 | 中 | epoch_start enqueue 冪等性未定義(二重 enqueue) | 採用 | §4.1/§5.2 に UNIQUE(epoch,subtype) |
+
+reality-check 補足: `core/collector/src/actor.rs:314` は現状 `insert_reading_v3` の `seq` を破棄している → enqueue で捕捉が必要（§6.1/§15）。
+
 ## 3. コンポーネントとクレート構成
 
 ### 3.1 新クレート `core/publish`
@@ -94,11 +110,15 @@
 pub_seq        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 出口seqの実体（D7决定4）。readings.seq とは別採番
 epoch          TEXT    NOT NULL,                   -- 採番時点の台帳epoch（ledger_meta）
 kind           TEXT    NOT NULL,                   -- 'measurement' | 'annotation'
+subtype        TEXT,                               -- kind=annotation: 'epoch_start' 等。measurement は NULL
 reading_seq    INTEGER,                            -- kind=measurement: readings.seq への参照（JOINで実体化）。annotation は NULL
 annotation_json TEXT,                              -- kind=annotation: 自己完結ペイロード。measurement は NULL
 created_at     INTEGER NOT NULL
+-- 冪等性（codex#8）: 部分 UNIQUE index  UNIQUE(epoch, subtype) WHERE kind='annotation'
+--   → epoch_start の二重 enqueue（起動時再検知後 ack 前クラッシュ）を DB 制約で排除
 ```
 - `pub_seq` は DB ライフタイムで単調（SQLite AUTOINCREMENT、再利用なし）。epoch を併載するので `(epoch, pub_seq)` が大域一意。R22 restore 後は outbox が空（snapshot 非含有）+ epoch 新規なので、新 epoch 下で pub_seq が 1 から再スタートしても `(epoch,pub_seq)` は旧世代と衝突しない。
+- **カーソル同一性は必ず `(epoch, pub_seq)` の複合**（codex#1）。pub_seq 単独で ack/配送/パージ判定をしてはならない（epoch 跨ぎの誤適用を防ぐ。§6.4/§8.2 の epoch guard）。
 - measurement は実体を持たず readings を参照（重複保存回避）。annotation は backing row が無いのでペイロードを inline 保存。
 - **不変条件**: outbox は非検疫行のみ持つ。検疫行は解除まで採番しない（D7决定4）。MVE では検疫解除 renumber を封じる（§9）。
 
@@ -114,7 +134,9 @@ cursor_pub_seq      INTEGER NOT NULL DEFAULT 0,  -- 最後に ack された pub_
 created_at          INTEGER NOT NULL
 ```
 - MVE は1行のみ運用（複数 target は DEFERRED）。
-- `(cursor_epoch, cursor_pub_seq)` = target 別カーソル（D7决定6、target 単位保持）。
+- `(cursor_epoch, cursor_pub_seq)` = target 別カーソル（D7决定6、target 単位保持）。**両方セットで判定**（epoch guard、§6.4/§8.2）。
+- **`credential_token` は秘密** → R22 snapshot に含めない（§12、平文退避を避ける）。
+- HTTPS 強制・疎通スモーク・登録監査は §11。
 
 ---
 
@@ -125,7 +147,7 @@ created_at          INTEGER NOT NULL
 
 ### 5.2 annotation 族（最小: `epoch_start` のみ）
 - 全 target 共有 seq（購読フィルタ不可、D7决定2）。MVE は single-target なので実質同義。
-- **`epoch_start`**: R22 restore で台帳 epoch が更新された時、新 epoch 下の**最初の outbox 行**として enqueue。ペイロード = `{prior_epoch}`（[snapshot 復元が記録する `epoch_renewed` 監査イベント](../../../../docs/redesign/decisions/D7-exit-contract.md) の旧値、D7决定8B: 新 epoch annotation には旧 epoch ID のみ記載）。消費者は自分のカーソルと突合し、新 epoch の pub_seq 1 から載り替える。
+- **`epoch_start`**: R22 restore で台帳 epoch が更新された時、新 epoch 下の**最初の outbox 行**として enqueue。ペイロード = `{prior_epoch}`（[snapshot 復元が記録する `epoch_renewed` 監査イベント](../../../../docs/redesign/decisions/D7-exit-contract.md) の旧値、D7决定8B: 新 epoch annotation には旧 epoch ID のみ記載）。消費者は自分のカーソルと突合し、新 epoch の pub_seq 1 から載り替える。**冪等（codex#8）**: §4.1 の部分 UNIQUE(epoch,subtype) により、起動時再検知後 ack 前クラッシュでも二重 enqueue しない。
 - custody_lost / 検疫遷移 annotation は MVE では**発生させない**（§8/§9 でトリガ封じ）。
 
 ---
@@ -135,27 +157,29 @@ created_at          INTEGER NOT NULL
 ### 6.1 取り込み → outbox enqueue（collector Tx 内、exact-once）
 1. collector が envelope を Immediate Tx で処理（既存）。
 2. 各 reading item を registry policy 評価 → `row_quarantined` 決定（既存）。
-3. `insert_reading_v3` で readings 挿入（既存、`readings.seq` 取得）。
-4. **[新] `row_quarantined == false` の時のみ**、同一 Tx で `publication_log`(kind=measurement, reading_seq=<seq>, epoch=<Tx冒頭で読んだ ledger_epoch>) を挿入。pub_seq は AUTOINCREMENT で採番。
+3. `insert_reading_v3` で readings 挿入。**現状 `core/collector/src/actor.rs:314` は返り値 `seq` を破棄しているので、enqueue のため `seq` を捕捉する（codex reality-check）**。
+4. **[新] `row_quarantined == false` の時のみ**、同一 Tx で `publication_log`(kind=measurement, reading_seq=<捕捉した seq>, epoch=<Tx冒頭で読んだ ledger_epoch>) を挿入。pub_seq は AUTOINCREMENT で採番。
 5. Tx commit（既存の generation bump と同一 commit）。
 
 電源断は正常系: enqueue は reading 挿入と同一 Tx なので、reading があって outbox が無い/その逆は起きない（クラッシュ整合性）。
 
 ### 6.2 push サイクル（常駐タスク）
-1. target を1行読む。`cursor_pub_seq` 以降の outbox 行を最大 N 件（有界バッチ）読む。
-2. measurement 行は readings を JOIN + series/epoch メタで JSON 実体化。annotation 行は inline JSON をそのまま。
-3. バッチの `publication_id = f(target_id, cursor_start_pub_seq, cursor_end_pub_seq)`（**決定的**、§10）。
-4. `POST endpoint_url`、`Authorization: Bearer <token>`、body=JSON バッチ、HTTPS。
-5. 同期レスポンスで ack（消費者が「pub_seq end まで耐久化」を返す）。
-6. ack 成功 → `target_registry.cursor_epoch/cursor_pub_seq` を end まで前進（Tx 永続化）。
-7. 失敗（接続断/非2xx/タイムアウト）→ retry with bounded exponential backoff。shutdown シグナルに応答。
+1. target を1行読む。**effective cursor 決定（codex#1 epoch guard）**: `target.cursor_epoch == current_epoch` なら `cursor = target.cursor_pub_seq`、そうでなければ（R22 restore 後の旧 epoch 等）`cursor = 0`。
+2. **決定的バッチ組成（codex#3, D7:276 宿題を確定）**: `SELECT ... FROM publication_log WHERE epoch = current_epoch AND pub_seq > cursor ORDER BY pub_seq ASC LIMIT N`（件数上限 N または byte cap の先に達した方で切る。切り口は pub_seq 昇順で決定的）。**カーソルは排他（`pub_seq > cursor`）**。cursor_start = cursor+1、cursor_end = バッチ末尾 pub_seq。
+3. measurement 行は readings を JOIN + series/epoch メタで JSON 実体化。annotation 行は inline JSON をそのまま。
+4. バッチの `publication_id = hash(target_id, current_epoch, cursor_start, cursor_end)`（**決定的**、§10）。
+5. `POST endpoint_url`、`Authorization: Bearer <token>`、body=JSON バッチ、HTTPS。
+6. 同期レスポンスで ack（消費者が「pub_seq end まで耐久化」を返す）。
+7. ack 成功 → `target_registry.cursor_epoch = current_epoch`、`cursor_pub_seq = cursor_end` へ前進（Tx 永続化。epoch も必ず更新）。
+8. 失敗（接続断/非2xx/タイムアウト）→ retry with bounded exponential backoff。shutdown シグナルに応答。
 
 ### 6.3 ack → custody → パージ
 - retention タスク（§8）が target の `cursor_pub_seq`（archive_responsible=1 の行）を読み、`pub_seq ≤ cursor_pub_seq` かつ `received_at < now - フロア` の readings をクラス①として削除。
 
-### 6.4 R22 restore → epoch 載り替え
-- restore で epoch 更新（既存）+ target_registry は snapshot から復元（§配下）+ outbox/readings は空。
-- gateway 起動時に epoch 変化を検知 → `epoch_start` annotation を新 epoch 最初の outbox 行として enqueue → push で消費者へ。
+### 6.4 R22 restore → epoch 載り替え（codex#1/#2 反映）
+- restore で epoch 更新（既存）。outbox/readings は空（snapshot 非含有）。**target_registry も snapshot 非含有（§12）なので target は消え、運用者が再登録**。
+- 新 epoch の最初の outbox 行として `epoch_start` annotation を enqueue（`prior_epoch` = restore が記録する `epoch_renewed` 監査の旧値。冪等は §4.1 の UNIQUE(epoch,subtype)）。→ push で消費者へ。
+- **epoch guard**: 将来 target 永続化を実装して旧 `cursor_epoch` を持つ target が復元されても、push/retention は `cursor_epoch != current_epoch` を検知し effective cursor=0、新 epoch を pub_seq 1 から扱う。消費者は epoch 不一致で再 baseline（D7决定8B）。
 
 ---
 
@@ -194,22 +218,30 @@ annotation `epoch_start`:
 
 codex#2/#3 採用。**「追加」でなく置換**。
 
-### 8.1 現状（Wave 0）
-`retention.rs` は `purge_readings_before(received_at cutoff)` で時刻カットオフ削除 + statvfs 水位ラッチ + 検疫期限失効。custody/ack を知らない。
+### 8.1 現状（Wave 0）と維持する機能（codex#6）
+`retention.rs` は同一周期で: readings の `purge_readings_before(received_at cutoff)` + **dedup TTL パージ** + **検疫期限失効** + **statvfs 水位ラッチ** + **health 更新** を行う（`iotkit-gateway/src/retention.rs`）。
+- **本 spec が変えるのは readings パージの判定規則だけ**。dedup TTL パージ・検疫期限失効・statvfs 水位ラッチ・health 更新は**維持**する。custody/ack を知らない `received_at` cutoff 削除を §8.2 の custody 対応パージへ置換する。
 
 ### 8.2 MVE の custody 対応パージ
 D7决定7 の4クラス順序のうち **MVE はクラス① のみ実装**:
-- **クラス①**: archive_responsible target の `cursor_pub_seq` 以下（=ack 済み）**かつ** `readings.received_at < now - 最低保持フロア` の行を削除。
-- **最低保持フロア**: [D1:154](../../../../docs/redesign/decisions/D1-ingest-model.md) / [台帳:115](../../../../docs/redesign/responsibility-ledger.md) = 既定 72h・設定可。**データ年齢(received_at)基準**（ack からの相対でなく、データの新しさで保持。「正常時のデータ残高≒フロア分のみ、断線時のみ水位上昇」）。→ `archive_acked_at` 列は不要（codex#3 の一部棄却）。
-- **未ack正本は保護**: `pub_seq > cursor_pub_seq` の readings は、たとえ received_at が古くても**削除しない**（従来の時刻カットオフ削除を廃止）。
-- **圧力時（フロア超過でも disk 逼迫が続く場合）**: クラス④（未ack正本の削除+custody_lost）は MVE では**実装しない**。代わりに ingest 逆圧 + R12 健全性警報（配送遅延/target 死亡の可視化、D7决定9 の per-target 配送状態）。→ custody_lost トリガ封じ。
+- **クラス① eligibility（codex#1 epoch guard）**: `target.archive_responsible=1` かつ **`target.cursor_epoch == current_epoch`** の時のみ有効。ある reading が「ack 済み」= **`publication_log.epoch == target.cursor_epoch == current_epoch` かつ `pub_seq <= target.cursor_pub_seq`**。epoch 不一致時は新 epoch 行を一切 ack 済み扱いにしない（effective cursor=0）。
+- **削除対象**: 上記で ack 済み **かつ** `readings.received_at < now - 最低保持フロア` の行。
+- **最低保持フロア**: [D1:154](../../../../docs/redesign/decisions/D1-ingest-model.md) / [台帳:115](../../../../docs/redesign/responsibility-ledger.md) = 既定 72h・設定可。**データ年齢(received_at)基準**（ack 相対でなくデータの新しさ。「正常時のデータ残高≒フロア分のみ、断線時のみ水位上昇」）。→ `archive_acked_at` 列は不要（codex#3、round-2 で codex 支持）。
+- **未ack正本は保護**: ack 済みでない readings は received_at が古くても**削除しない**（従来の無条件時刻カットオフ削除を廃止）。
+- **圧力時の逆圧（codex#7、custody_lost トリガ封じ）**: クラス①を出し切っても statvfs 高水位が続く場合、クラス④（未ack正本削除+custody_lost）は MVE では**実装しない**。代わりに **statvfs 高水位ラッチ時、collector が新規取り込みに D1 `deferred` ack を返す/受理を止める逆圧**を掛ける（水位→collector への圧力伝達経路を新設）。R12 に per-target 配送状態（遅延・target 死亡）を公開。→ 未ack正本の無音破棄を起こさない。水位閾値の具体値は writing-plans で確定。
 
-### 8.3 archive target 不在時
-- target 未登録 or archive_responsible=0 の時は custody 約束が無い。MVE は「archive target がいる」前提の骨格なので、target 不在時のパージ挙動は**フロアのみ**（received_at < now - フロア で削除可）に縮退してよい（バッファ最小化）。実装は「archive cursor があればそれで上限、無ければフロアのみ」。
+### 8.3 archive target 不在時 と outbox prune（codex#5）
+- **archive target 不在時**: target 未登録 or archive_responsible=0 は custody 約束なし。パージ上限は**フロアのみ**（received_at < now - フロア）に縮退（バッファ最小化）。実装は「有効な archive cursor があればそれを上限、無ければフロアのみ」。
+- **outbox prune 規則**: `publication_log` 行は「配送 retry のため ack まで保持」。以下で prune:
+  - ack 済み（`epoch==cursor_epoch==current` かつ `pub_seq <= cursor_pub_seq`）の行は、対応 readings のクラス①削除と**同一 retention 周期**で prune（dangling ref を作らない）。
+  - archive target 不在の floor-only 削除で readings を消す時は、対応する outbox 行も同時に prune（outbox が readings より長生きしない・無制限成長しない）。
+  - 旧 epoch の残 outbox 行はフロア基準で prune 可。
 
 ---
 
-## 9. 検疫解除経路のガード（codex#4 採用）
+## 9. 検疫解除経路のガード
+
+> ⚠ **未決（codex spec-eval#2 の#4、ユーザー裁定待ち）**: 下記の承認済み方針（文書化+監査、hard reject なし）に対し、codex は「archive target 登録中は過去検疫 readings が無音で custody 欠落する（audit は R10 消費者に届かない）。MVE で renumber しないなら archive target 存在時は**解除を hard reject** するのが D7:33/D5:89 に契約忠実」と指摘。承認済み方針と衝突するため保留。→ 推奨は hard reject（小さく契約忠実、renumber は出口契約拡張へ）。
 
 Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantine_for_key_checked`）は series 検疫フラグを clear するが、過去 readings 行は触らず outbox 化もしない。MVE は renumber を封じるので、**無音の配送欠落**を防ぐガードを入れる:
 
@@ -220,7 +252,7 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 
 ## 10. クラッシュ整合性と冪等性（codex#5 採用）
 
-- **決定的 publication_id**: `publication_id = hash(target_id, cursor_start_pub_seq, cursor_end_pub_seq)`。同一カーソル範囲からは常に同一 ID。
+- **決定的 publication_id**: `publication_id = hash(target_id, current_epoch, cursor_start, cursor_end)`。§6.2 の決定的バッチ組成（epoch 一致 + `pub_seq > cursor` + ORDER BY pub_seq ASC + LIMIT）で、同一 cursor から同一 `(cursor_start, cursor_end)` が再現 → 同一 ID（codex#3）。
 - **push 後 ack 前クラッシュ**: 再起動で cursor 不変 → 同一範囲を再バッチ → 同一 publication_id → 消費者が dedup。
 - **ack 後 cursor 永続化前クラッシュ**: 同上（cursor 不変なので再送、消費者 dedup）。レコード同一性 `(epoch,pub_seq)` でも二重吸収。
 - cursor 前進は ack 成功後の単一 UPDATE（Tx）。at-least-once + 冪等（D7决定5）。
@@ -239,10 +271,11 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 
 ---
 
-## 12. R22 連携
+## 12. R22 連携（codex spec-eval#2 反映）
 
-- **target_registry は config** → R22 snapshot の SECTIONS に追加（`iotkit-gatewayctl/src/cmd/snapshot.rs`。現状 devices/series/registry_entries/registry_aliases/legacy_sensor_type_map）。復元後も配送先を保持。
-- **publication_log（outbox）は data-plane** → readings と同様 snapshot に**含めない**。復元後は空 + epoch 新規 → §6.4 の epoch_start で消費者が載り替え。
+- **target_registry を平文 R22 snapshot に含めない**。理由: `credential_token` は秘密で、現 R22 snapshot は平文 JSON 書き出し（`iotkit-gatewayctl/src/cmd/snapshot.rs:126`）。[D2:75/98](../../../../docs/redesign/decisions/D2-data-authority-topology-operations.md) は secrets 非空 snapshot の暗号化を必須とする。R22 暗号化は MVE スコープ外なので、**target/token を snapshot に入れない**（当初案を反転）。
+- **復元後の target 再登録**: R22 restore（箱交換）後は epoch fence で消費者がどのみち再 baseline する（§6.4）。運用者が `target add` で target を再登録（credential 再発行 + スモークで archive_responsible 再有効化）。target config の暗号化退避は R22 暗号化と同時に後続 sub-project へ。
+- **publication_log（outbox）は data-plane** → readings と同様 snapshot に**含めない**。復元後は空 + epoch 新規。
 
 ---
 
@@ -276,9 +309,9 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 | `iotkit-gateway/src/main.rs` | migration 連結に publish 追加、push タスク spawn |
 | `iotkit-gateway/src/retention.rs` | custody 対応パージへ作り替え（§8） |
 | `iotkit-gateway/src/health.rs` | per-target 配送状態を health.json へ（R12、D7决定9 最小） |
-| `core/collector/src/actor.rs` | Tx 内 outbox enqueue フック（§6.1） |
+| `core/collector/src/actor.rs` | Tx 内 outbox enqueue フック（§6.1）。**現状 :314 で破棄している `insert_reading_v3` の `seq` を捕捉**。統合水位時の逆圧（§8.2）も collector 側 |
 | `iotkit-gatewayctl/src/cmd/target.rs`（新規）+ `main.rs` | `target add|list`、migration 連結 +1 |
-| `iotkit-gatewayctl/src/cmd/snapshot.rs` | R22 SECTIONS に target_registry 追加（§12） |
+| `iotkit-gatewayctl/src/cmd/snapshot.rs` | **変更なし**（§12 反転: target/token・outbox とも snapshot 非含有。R22 暗号化まで target 永続化はしない） |
 | `core/registry/src/store.rs`（or 呼出側） | 検疫解除ガードの監査記録（§9） |
 | `core/timeseries/migrations/0004_readings_v3.sql` | stale コメント修正（codex#8） |
 
