@@ -15,11 +15,21 @@ pub fn maybe_enqueue_epoch_start(conn: &rusqlite::Connection) -> Result<(), Stri
         .optional()
         .map_err(|e| e.to_string())?;
     let Some(detail) = detail else {
+        // First boot/pristine database: no renewal means nothing to announce.
+        tracing::debug!(
+            epoch = %current_epoch,
+            "skipping epoch_start annotation: no epoch_renewed event"
+        );
         return Ok(());
     };
 
     let detail: serde_json::Value = serde_json::from_str(&detail).map_err(|e| e.to_string())?;
     let Some(old_epoch) = detail.get("old_epoch").and_then(|value| value.as_str()) else {
+        // Fresh-box renew: no prior epoch exists to reference.
+        tracing::debug!(
+            epoch = %current_epoch,
+            "skipping epoch_start annotation: no string old_epoch"
+        );
         return Ok(());
     };
 
@@ -28,7 +38,7 @@ pub fn maybe_enqueue_epoch_start(conn: &rusqlite::Connection) -> Result<(), Stri
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0);
-    iotkit_core_publish::store::enqueue_annotation(
+    let enqueued = iotkit_core_publish::store::enqueue_annotation(
         conn,
         &current_epoch,
         "epoch_start",
@@ -36,6 +46,19 @@ pub fn maybe_enqueue_epoch_start(conn: &rusqlite::Connection) -> Result<(), Stri
         now_ms,
     )
     .map_err(|e| e.to_string())?;
+    match enqueued {
+        Some(pub_seq) => tracing::info!(
+            epoch = %current_epoch,
+            prior_epoch = %old_epoch,
+            pub_seq = pub_seq,
+            "epoch_start annotation enqueued"
+        ),
+        None => tracing::debug!(
+            epoch = %current_epoch,
+            prior_epoch = %old_epoch,
+            "epoch_start annotation already enqueued"
+        ),
+    }
     Ok(())
 }
 
