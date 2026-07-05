@@ -6,7 +6,7 @@
 
 **Architecture:** 新クレート `core/publish`（publication_log[outbox] + target_registry）+ `iotkit-gateway` 常駐 push タスク + `iotkit-gatewayctl target` CLI。collector が非検疫 measurement を reading 挿入と同一 Immediate Tx で outbox に enqueue（別採番 `pub_seq`）。push タスクが `(epoch, pub_seq)` カーソル以降を有界バッチで HTTPS POST→同期 ack→cursor 前進。ack 済み水位を R17 retention のパージ判定へ配線。
 
-**Tech Stack:** Rust / tokio / rusqlite(SQLite WAL, bundled) / `reqwest`（gateway=async default-features、gatewayctl=blocking）。
+**Tech Stack:** Rust / tokio / rusqlite(SQLite WAL, bundled) / `reqwest`（gateway=`default-features=false, features=["json","rustls-tls"]`（async）、gatewayctl=`default-features=false, features=["blocking","json","rustls-tls"]`。spec §9 に一致）。
 
 **設計正本:** [spec](../specs/2026-07-05-wave1-exit-contract-mve-design.md)（codex×3+Sonnet×3 の5周並行レビューで収束、HEAD 0fca885）。各タスクは spec の §番号を参照する。
 
@@ -20,7 +20,7 @@
 - **retention 保護は pub_seq 付き未ack非検疫行のみ**（spec §8.2）。検疫行（quarantined=1、pub_seq 無し）・enqueue されなかった行は floor で消す。これは**新規 readings purge branch**（旧 `purge_readings_before` 置換）。デバイス検疫期限失効（`expire_quarantined_devices`=`devices.state` のみ）は readings を消さない。
 - **HTTP POST は必ず `with_conn`/`with_conn_sync` の外**（spec §6.2、DB は単一 `Arc<Mutex<Connection>>` `core/storage/src/handle.rs:16`）。push は3スコープ [A]lock内 read+build → [B]lock外 POST/ack → [C]lock内 cursor 前進。
 - **`endpoint_url` は `https://` のみ**。per-target bearer token は `Authorization: Bearer`。token は秘密で R22 snapshot に含めない（spec §12）。
-- **reqwest**: `iotkit-gateway` に async（`features=["json","rustls-tls"]`）、`iotkit-gatewayctl` に blocking（`default-features=false, features=["blocking","json","rustls-tls"]`）。inline 宣言（workspace.dependencies 不使用）。
+- **reqwest**: `iotkit-gateway` に async（`default-features=false, features=["json","rustls-tls"]`）、`iotkit-gatewayctl` に blocking（`default-features=false, features=["blocking","json","rustls-tls"]`）。inline 宣言（workspace.dependencies 不使用）。両者とも default-features=false（spec §9）。
 - **check-then-mutate は単一 `Transaction::new_unchecked(conn, TransactionBehavior::Immediate)`**（TOCTOU 防止、spec §3.3/§8.3。gatewayctl は gateway と別プロセスで in-proc Mutex は跨がない）。gatewayctl の変異は `mutate()` ヘルパ（`cmd/devices.rs:82`、Immediate Tx+`bump_generation`+commit）。
 - **最低保持フロア既定 72h**（spec §8.2、[D1:155]）。有界バッチ = 件数上限 N + byte cap（先に達した方、**ただし単一超過でも最低1件**、spec §6.2）。
 - **決定的 publication_id = `hash(target_id, current_epoch, cursor_start, cursor_end)`**（spec §10）。バッチ = `WHERE epoch=current_epoch AND pub_seq>cursor ORDER BY pub_seq ASC LIMIT N`、cursor 排他。
@@ -323,14 +323,14 @@ fn non_quarantined_reading_is_enqueued_to_outbox_same_tx() {
 - [ ] **Step 3: 実装** — `process_item`（:215-319）の `insert_reading_v3` 呼び出し(:314)を seq 捕捉に変更し、非検疫時のみ enqueue。epoch は Tx 冒頭で一度読む（`process_envelope` :172 の Tx 開始直後に `let epoch = ledger::ledger_epoch(&tx)?;` を読み、`process_item` へ `&str` で渡す）。now_ms は既存の時刻取得を流用:
 
 ```rust
-// process_item 内、:314 を置換
+// process_item 内、:314 を置換。received_at は既存の in-scope 変数名(actor.rs:221)
 let seq = ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
 if !row_quarantined {
-    iotkit_core_publish::store::enqueue_measurement(conn, epoch, seq, received_at_ms)
+    iotkit_core_publish::store::enqueue_measurement(conn, epoch, seq, received_at)
         .map_err(|e| e.to_string())?;
 }
 ```
-`process_item` シグネチャに `epoch: &str` を追加、`process_envelope` の呼び出し(:192)で渡す。`conn` は `&tx`（Deref）なので同一 Immediate Tx に入る＝クラッシュ整合（spec §6.1）。
+epoch は Tx 冒頭で一度読む: `process_envelope`(:172)の Tx 開始直後に `let epoch = ledger::ledger_epoch(&tx).map_err(|e| e.to_string())?;`（`process_envelope` の error 型は `String` なので `LedgerError` は必ず `.map_err(|e| e.to_string())`）。`process_item` シグネチャに `epoch: &str` を追加、呼び出し(:192)で渡す。`conn` は `&tx`（Deref）なので同一 Immediate Tx に入る＝クラッシュ整合（spec §6.1）。
 
 - [ ] **Step 4: PASS 確認** — Run: `cargo test -p iotkit-core-collector`  Expected: PASS（既存テスト含め緑）。既存の全緑を壊さないこと。
 
@@ -410,7 +410,7 @@ git commit -m "feat(gateway): exit record types (measurement/annotation) and bat
 
 **Files:**
 - Create: `iotkit-gateway/src/publish_task.rs`
-- Modify: `iotkit-gateway/src/main.rs`（`mod publish_task;`、spawn :126 直後）, `iotkit-gateway/Cargo.toml`（`reqwest = { version="0.12", features=["json","rustls-tls"] }`、dev に何か不要なら追加不要）
+- Modify: `iotkit-gateway/src/main.rs`（`mod publish_task;`、spawn :126 直後）, `iotkit-gateway/Cargo.toml`（`reqwest = { version="0.12", default-features=false, features=["json","rustls-tls"] }`）
 - Test: `iotkit-gateway/src/publish_task.rs`（`#[cfg(test)]`、tokio + 極小 listener）
 
 **Interfaces:**
@@ -419,7 +419,7 @@ git commit -m "feat(gateway): exit record types (measurement/annotation) and bat
 
 **push サイクル**（spec §6.2、3スコープ、epoch guard、決定的 publication_id、ack 検証）:
 
-- [ ] **Step 1: 適合テスト消費者フィクスチャ + e2e 失敗テスト** — tokio でループバック HTTP サーバを立て、バッチ POST を受けて `{"acked_pub_seq": <max pub_seq in batch>}` を返す。テストは target を1件 seed（endpoint=そのサーバ）+ outbox に2行 enqueue → `run_publish_cycle` 1回 → cursor が batch 末尾 pub_seq へ進むこと:
+- [ ] **Step 1: 適合テスト消費者フィクスチャ + e2e 失敗テスト** — tokio でループバック HTTP サーバを立て、バッチ POST を受けて `{"publication_id": <受信した publication_id をそのまま echo>, "acked_pub_seq": <max pub_seq in batch>}` を返す（ack 検証 §6.2 [C] を踏むため publication_id を必ず含める）。テストは target を1件 seed（endpoint=そのサーバ）+ outbox に2行 enqueue → `run_publish_cycle` 1回 → cursor が batch 末尾 pub_seq へ進むこと:
 
 ```rust
 #[tokio::test]
@@ -435,13 +435,21 @@ async fn push_cycle_delivers_batch_and_advances_cursor() {
 async fn byte_cap_single_oversized_record_still_delivers_one() {
     // 1レコードの values が byte cap を超える大きさでも、バッチは空にならず最低1件配送し cursor が進む(spec §6.2)。
 }
+#[tokio::test]
+async fn ack_validation_failure_does_not_advance_cursor() {
+    // consumer が publication_id 不一致(または acked_pub_seq < cursor_end)を返す → cursor 前進せず(spec §6.2 [C])。次 cycle で再送。
+}
+#[tokio::test]
+async fn push_epoch_mismatch_redelivers_from_effective_cursor_zero() {
+    // target.cursor_epoch != current_epoch → effective cursor=0 で current epoch を最小 pub_seq から再配送(push側 epoch guard)。
+}
 ```
 
 - [ ] **Step 2: fail 確認** — Run: `cargo test -p iotkit-gateway push_cycle_delivers`  Expected: FAIL。
 
 - [ ] **Step 3: 実装** — `run_publish_cycle(db: &DbHandle) -> Result<(), String>`:
   - **[A] lock 内**（`db.with_conn` 1回）: `current_epoch=ledger_epoch(conn)`（毎 cycle fresh、spec §6.2）。`target_get` で target 取得（無ければ return Ok）。effective cursor = `if target.cursor_epoch==Some(current) {cursor_pub_seq} else {0}`。`select_batch(conn, &current, cursor, N=256)`。空なら return Ok（POST skip）。`materialize_batch(conn, &rows)` で JSON。**byte cap**: materialize 後、累積シリアライズ長が 1 MiB を超えたら手前で切る（**ただし最低1件は必ず含める**、spec §6.2）。ロック外へ渡すため `Vec<Value>` と `cursor_start=cursor+1`, `cursor_end=（切った後の）バッチ末尾 pub_seq`, `endpoint`, `token`, `target_id` を move で取り出す。
-  - **[B] lock 外**: `publication_id = format!("{:x}", <hash of (target_id,current_epoch,cursor_start,cursor_end)>)`（`std::hash` でなく安定な形、例: sha256 が無ければ `format!("{}:{}:{}:{}", ...)` を id とし決定性を担保）。`reqwest::Client::post(endpoint).bearer_auth(token).json(&body).send().await`（body に `publication_id` と `records`）。非2xx/timeout はエラー→retry。ack JSON を parse。
+  - **[B] lock 外**: `publication_id = format!("{}:{}:{}:{}", target_id, current_epoch, cursor_start, cursor_end)`（**決定的文字列**。spec §10 は決定性のみ要求＝この合成で十分、ハッシュ化不要。epoch を含むので publication_id 一致 ⟹ epoch 一致）。`reqwest::Client::post(endpoint).bearer_auth(token).json(&body).send().await`（body = `{"publication_id": ..., "records": [...]}`）。非2xx/timeout はエラー→retry。ack JSON を parse。
   - **[C] lock 内**（別 `with_conn`）: ack が `acked_pub_seq >= cursor_end`（かつ publication_id 一致、spec §6.2 [C]）を満たすときのみ `target_advance_cursor(conn, target_id, &current, cursor_end)`。
   - retry: bounded exponential backoff（`spawn_publish_task` のループで cycle 失敗時に間隔を空ける）。`spawn_publish_task` は `tokio::select!` で shutdown 対応（spec §13、net-new。`main.rs` の fan-in と同様の select! パターンを新規実装）。
 
@@ -487,6 +495,16 @@ fn remove_refuses_when_unacked_rows_exist_without_override() {
 #[test]
 fn rotate_token_keeps_archive_responsible_1_and_cursor() {
     // rotate-token 成功で token 更新・archive_responsible=1 維持・cursor 不変。
+}
+#[test]
+fn add_rejects_schema_version_mismatch() { /* schema_version != 1 → Err(§11) */ }
+#[test]
+fn rotate_token_smoke_failure_rolls_back_token_and_keeps_archive_responsible_1() {
+    // 再スモーク失敗 → token 旧値へロールバック、archive_responsible 終始 1(spec §3.3、iter3 [中])。
+}
+#[test]
+fn rotation_window_protects_backlog_no_floor_only_misfire() {
+    // 4日超 backlog(>floor) 保持中に rotate-token → target 消えず floor-only 発火せず backlog 保護(iter2 [高])。
 }
 ```
 
@@ -535,28 +553,35 @@ async fn unacked_pubseq_rows_are_protected_even_if_old() { /* pub_seq付き未ac
 #[tokio::test]
 async fn quarantined_rows_floor_purge_not_protected() { /* quarantined=1(pub_seq無し) は floor 超過で消える */ }
 #[tokio::test]
-async fn epoch_mismatch_treats_all_current_as_unacked() { /* cursor_epoch!=current → 新epoch行を purge しない */ }
+async fn epoch_mismatch_treats_all_current_as_unacked() { /* cursor_epoch!=current(分岐b) → 新epoch行を purge しない */ }
+#[tokio::test]
+async fn no_target_registered_purges_by_floor_only() { /* 分岐a: target 0行 → pub_seq付き行も floor 超過で消える(保護なし) */ }
+#[tokio::test]
+async fn old_epoch_outbox_and_readings_pruned_as_pair() { /* 旧epoch の outbox 行と対応 readings が同一 Tx でペア削除、orphan 残らない(spec §8.3) */ }
 ```
 
 - [ ] **Step 2: fail 確認** — Run: `cargo test -p iotkit-gateway retention`  Expected: FAIL。
 
 - [ ] **Step 3: 実装** — `run_retention_once_with_latch` の readings purge を作り替え。旧 `purge_readings_before`(:61) を削り、**Immediate Tx 内**（:74 の Tx を前倒しし purge を含める）で:
   - `let cur = ledger_epoch(&tx)?; let target = publish::target_get(&tx)?;`
-  - effective cursor（§8.2 epoch guard）: archive target があり `cursor_epoch==Some(cur)` なら `cursor_pub_seq`、無ければ「floor-only」（§8.3: target 未登録 or archive_responsible=0）。
-  - **保護集合 = pub_seq 付き未ack非検疫**。削除 SQL（1本）:
+  - effective cursor（§8.2/§8.3 epoch guard、**3分岐**、codex/Sonnet plan-review [高]）:
+    - (a) **target が1行も無い or `archive_responsible=0`** → **floor-only**（pub_seq 保護なし。`eff_cursor` は使わず、保護集合を空にする）。
+    - (b) **archive target 登録済み ∧ `cursor_epoch != cur`（NULL 含む）** → floor-only にしない。**effective cursor=0** で current epoch の pub_seq 付き行を**全保護**（未ack正本の無音破棄は契約違反 [D2:30]）。
+    - (c) **archive target 登録済み ∧ `cursor_epoch==Some(cur)`** → `eff_cursor = cursor_pub_seq`。
+    実装は `let eff_cursor: Option<i64> = match target { None => None /*floor-only*/, Some(t) if !t.archive_responsible => None, Some(t) if t.cursor_epoch.as_deref()==Some(cur) => Some(t.cursor_pub_seq), Some(_) => Some(0) };`（None=floor-only、Some(n)=保護あり）。
+  - **保護集合 = pub_seq 付き未ack非検疫**。削除 SQL（`eff_cursor` が Some のとき。None=floor-only 時は保護 subquery を外し `received_at < :cutoff` 単独）:
     ```sql
     DELETE FROM readings
      WHERE received_at < :cutoff
-       AND seq NOT IN (
-         SELECT p.reading_seq FROM publication_log p
-          WHERE p.kind='measurement' AND p.reading_seq IS NOT NULL
-            AND p.epoch = :cur
-            AND p.pub_seq > :eff_cursor            -- 未ack
-       )
-       AND quarantined = 0                          -- 検疫行は保護しない=このガードを外す
-       ... ;
+       AND NOT (
+         quarantined = 0
+         AND seq IN ( SELECT p.reading_seq FROM publication_log p
+                       WHERE p.kind='measurement' AND p.reading_seq IS NOT NULL
+                         AND p.epoch = :cur
+                         AND p.pub_seq > :eff_cursor )   -- 未ack(effective cursor 排他)
+       );
     ```
-    正確には「保護するのは (非検疫 かつ pub_seq付き かつ未ack)」なので、削除条件は `received_at<cutoff AND NOT (quarantined=0 AND seq IN (未ack outbox reading_seq))`。→ 検疫行・enqueue無し行・ack済み行は floor 超過で消える。
+    保護されるのは **(非検疫 ∧ pub_seq付き ∧ 未ack)** だけ。検疫行(quarantined=1)・enqueue 無し行(outbox に無い)・ack 済み行(pub_seq ≤ eff_cursor)は floor 超過で削除される（spec §8.2）。**`AND quarantined=0` を DELETE のトップレベルに置かない**（それだと検疫行が無条件保護＝無限保持バグ）。
   - 削除された reading_seq に対応する outbox 行を**同一 Tx で prune**（`prune_acked_outbox(&tx, &cur, eff_cursor)` で ack 済み分、加えて floor で消した readings に紐づく行）。実装は「readings 削除前に対象 seq を SELECT し、`prune_outbox_by_reading_seqs` してから readings DELETE」の順（FK 方向 outbox→readings、spec §8.3）。
   - dedup purge / `expire_quarantined_devices` / `record_event("retention_purge")` は維持し、同一 Tx に含める。`observe_watermark_latched` と health 更新は従来どおり Tx 後（spec §8.1 維持）。
   - floor 既定 72h（`RetentionConfig` に floor を追加 or 既存 days を流用しつつ 72h 相当）。
@@ -577,8 +602,8 @@ git commit -m "feat(gateway): custody-aware retention — protect unacked pub_se
 ## Task 8: epoch_start annotation trigger（collector spawn 前）
 
 **Files:**
-- Modify: `iotkit-gateway/src/main.rs`（epoch 読み :109 と Collector::spawn :130 の間）
-- Test: `iotkit-gateway/src/main.rs` か新 `iotkit-gateway/src/epoch_start.rs`（`#[cfg(test)]`）
+- Create: `iotkit-gateway/src/epoch_start.rs`（`maybe_enqueue_epoch_start` + tests）
+- Modify: `iotkit-gateway/src/main.rs`（`mod epoch_start;`、epoch 読み :109 と Collector::spawn :130 の間で呼ぶ）
 
 **Interfaces:**
 - Consumes: `iotkit_core_publish::store::enqueue_annotation`, `ledger::ledger_epoch`, 生 SQL で latest `epoch_renewed`。
@@ -598,12 +623,13 @@ fn after_renew_enqueues_epoch_start_once_with_prior_epoch() {
 
 - [ ] **Step 2: fail 確認** — Run: `cargo test -p iotkit-gateway epoch_start`  Expected: FAIL。
 
-- [ ] **Step 3: 実装** — `maybe_enqueue_epoch_start(conn)`:
-  - `let cur = ledger_epoch(conn)?;`
-  - 最新 `epoch_renewed` を生 SQL で読む: `SELECT detail FROM ledger_events WHERE kind='epoch_renewed' ORDER BY event_id DESC LIMIT 1`。無ければ（初回 boot）return Ok（enqueue しない、spec §5.2）。
-  - `detail` を parse し `old_epoch` を取得。`payload = {"family":"annotation","subtype":"epoch_start","prior_epoch":old}`（epoch/pub_seq は materialize 時に付与、または enqueue 時に epoch を入れ record.rs で pub_seq を付与）。
-  - `enqueue_annotation(conn, &cur, "epoch_start", &payload_json, now)`（UNIQUE 衝突は None=既出、冪等）。
-  - `main.rs` で collector spawn(:130) の**前**に `db.with_conn(|c| maybe_enqueue_epoch_start(c)).await`（epoch は既に :109 で読まれている）。
+- [ ] **Step 3: 実装** — `pub fn maybe_enqueue_epoch_start(conn: &Connection) -> Result<(), String>`:
+  - `let cur = ledger_epoch(conn).map_err(|e| e.to_string())?;`
+  - 最新 `epoch_renewed` を生 SQL で読む: `SELECT detail FROM ledger_events WHERE kind='epoch_renewed' ORDER BY event_id DESC LIMIT 1`。**無ければ（初回 boot、pristine）return Ok**（enqueue しない、spec §5.2）。
+  - `detail`(JSON) を parse し `old_epoch` を取得。**`old_epoch` が JSON `null`（DB 初回 renew=fresh box で `renew_epoch` が `old_epoch:None` を記録、`core/ledger/src/store.rs:713`）の場合も return Ok**（参照すべき prior epoch が無い＝消費者も fresh、Sonnet plan-review [低]）。有効な文字列の時のみ続行。
+  - `payload = {"family":"annotation","subtype":"epoch_start","prior_epoch":<old>}`（epoch/pub_seq は record.rs の materialize 時に付与）。
+  - `enqueue_annotation(conn, &cur, "epoch_start", &payload_json, now).map_err(|e| e.to_string())?`（UNIQUE 衝突は None=既出、冪等）。
+  - `main.rs` で collector spawn(:130) の**前**に呼ぶ。`with_conn` は `Result<T, StorageError>` を要求するので、既存の変換ヘルパ `ledger_to_storage_err`（`main.rs:85`）に倣い `db.with_conn(|c| maybe_enqueue_epoch_start(c).map_err(iotkit_core_storage::StorageError::other)).await`（`StorageError::other(String)` が無ければ `main.rs:85` の変換関数を再利用、または nest-as-value パターン `actor.rs:71`）。epoch は既に :109 で読まれている。
 
 - [ ] **Step 4: PASS 確認** — Run: `cargo test -p iotkit-gateway epoch_start`  Expected: PASS。
 
@@ -619,8 +645,8 @@ git commit -m "feat(gateway): enqueue epoch_start annotation before collector sp
 ## Task 9: §9.1 検疫解除ガード + §9.2 遡及検疫ガード
 
 **Files:**
-- Modify: `core/registry/src/store.rs`（`define_alias` :275-317、§9.1）, `iotkit-gatewayctl/src/cmd/replace.rs`（`run_replace_undo` :253-318、§9.2）, 必要なら呼び出し側 `iotkit-gatewayctl/src/cmd/registry.rs`
-- Test: 各該当 crate の `#[cfg(test)]`
+- Modify: `iotkit-gatewayctl/src/cmd/registry.rs`（§9.1 CLI preflight ガード、`--release-abandon-past`）, `iotkit-gatewayctl/src/cmd/replace.rs`（`run_replace_undo` :253-318、§9.2、`--abandon-custody`）
+- Test: `iotkit-gatewayctl` の `#[cfg(test)]`（コア `core/registry/src/store.rs` の署名は変えない＝§9.1 は CLI 側 preflight）
 
 **Interfaces:**
 - Consumes: `iotkit_core_publish::store::{archive_target_registered, prune_outbox_by_reading_seqs, has_unacked_pubseq_rows}`。
@@ -628,9 +654,9 @@ git commit -m "feat(gateway): enqueue epoch_start annotation before collector sp
 - [ ] **Step 1: 失敗テスト**（両方向）:
 
 ```rust
-// §9.1(registry or gatewayctl 呼び出し側)
+// §9.1(gatewayctl cmd/registry.rs の preflight)
 #[test]
-fn release_rejected_while_archive_target_registered_without_force() { /* archive 登録中の alias 解除は Err、--force で Ok */ }
+fn release_rejected_while_archive_target_registered_without_override() { /* archive 登録中の alias 解除(検疫 series 対象)は Err、--release-abandon-past で Ok */ }
 // §9.2(replace.rs)
 #[test]
 fn replace_undo_rejected_while_archive_target_registered_without_abandon() { /* Err、--abandon-custody で Ok */ }
@@ -643,7 +669,7 @@ fn replace_undo_prunes_outbox_for_retroactively_quarantined_rows_same_tx() {
 - [ ] **Step 2: fail 確認** — Run: `cargo test -p iotkit-core-registry release_rejected; cargo test -p iotkit-gatewayctl replace_undo`  Expected: FAIL。
 
 - [ ] **Step 3: 実装** —
-  - **§9.1**: `define_alias` が検疫解除（`release_series_quarantine_for_key_checked` が released を返す状況）に至る経路で、`archive_target_registered(conn)` が true かつ override 無しなら `RegistryError::Refused`。override フラグは CLI（`registry alias --force` 等）から `define_alias` へ伝播（引数追加 or 呼び出し側でガード）。**推奨**: ガードは gatewayctl の呼び出し側（`cmd/registry.rs::run_registry_alias`）に置き、`define_alias` 前に「解除が起きるか」を軽く判定（対象 series に検疫行があるか）+ `archive_target_registered` で拒否。これでコア registry の署名を変えずに済む。
+  - **§9.1（CLI preflight に確定、コア registry 署名は不変）**: ガードは gatewayctl `cmd/registry.rs::run_registry_alias` に置く。`define_alias` 呼び出し**前**に単一 Immediate Tx 内で: (1) 対象 measurement_key に検疫 series があるか判定（`SELECT EXISTS(SELECT 1 FROM series WHERE measurement_key=?1 AND quarantined=1)` 等）、(2) `publish::archive_target_registered(tx)` が true、の**両方**なら、clap フラグ `--release-abandon-past` が無い限り `AppError::Refused(...)` で中断。フラグ有りなら通常どおり `define_alias(tx, ...)` を呼び、監査 detail に `abandon_past=true` を記録。フラグ名は spec §9.1/§14 の `--release-abandon-past` に一致させる。
   - **§9.2**: `run_replace_undo` の `mutate` クロージャ冒頭で `let cur=ledger_epoch(tx)?;` を読み、`archive_target_registered(tx)?` が true かつ `!args.abandon_custody` なら `Err(AppError::Refused(...))`。override（or archive 不在）時は既存の `mark_readings_quarantined(tx,&series_ids,since,to)` の**直後・同一 Tx**で `prune_outbox_by_reading_seqs(tx, &affected_reading_seqs)?`（affected = その series/範囲で quarantined にした reading の seq。`SELECT seq FROM readings WHERE series_id IN(...) AND received_at BETWEEN since AND to` で取得）。`--abandon-custody` は clap フラグ追加、監査 detail に記録。
 
 - [ ] **Step 4: PASS 確認** — Run: `cargo test -p iotkit-core-registry -p iotkit-gatewayctl`  Expected: PASS。
@@ -651,8 +677,8 @@ fn replace_undo_prunes_outbox_for_retroactively_quarantined_rows_same_tx() {
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/registry/src/store.rs iotkit-gatewayctl/src/cmd/replace.rs iotkit-gatewayctl/src/cmd/registry.rs
-git commit -m "feat: quarantine-transition guards — hard-reject release/replace-undo while archive target registered (§9.1/§9.2)"
+git add iotkit-gatewayctl/src/cmd/registry.rs iotkit-gatewayctl/src/cmd/replace.rs
+git commit -m "feat(gatewayctl): quarantine-transition guards — hard-reject release/replace-undo while archive target registered (§9.1/§9.2)"
 ```
 
 ---
@@ -719,6 +745,7 @@ git commit -m "feat(gateway): per-target delivery status to R12 health, e2e cust
 ## Homework Pins（spec §16、writing-plans で確定 → 実装時の既定）
 
 - floor 既定 72h（T7 の `RetentionConfig`）。バッチ上限 N=256 件 かつ byte cap=1 MiB（累積シリアライズ長、**超過時も最低1件**、spec §6.2、T5 に byte-cap テストを含める）。push 間隔=既定 30s。retry backoff=指数（初期1s、上限60s）。
-- ack レスポンス形式 = `{"publication_id": <string>, "acked_pub_seq": <int>}`（T5 で確定）。
+- ack レスポンス形式 = `{"publication_id": <string、送信値を echo>, "acked_pub_seq": <int>}`。cursor 前進は `response.publication_id == 送信 publication_id`（epoch 込み）**かつ** `acked_pub_seq >= cursor_end` の時のみ（spec §6.2 [C]、T5 で確定）。
 - `publication_log.reading_seq` は FK 宣言しない（削除順 outbox→readings で担保、Global Constraints）。
 - reqwest version = 0.12（Cargo.lock 整合を確認）。
+- **R22 restore 前提（spec §12、Sonnet plan-review [中]）**: pristine 交換箱では series 空 ⟹ readings 空 ⟹ publication_log 空（FK 連鎖）なので publish 表の明示 cleanup は不要（benign）。非 pristine な箱への restore は運用外（推奨: restore 前後に `target remove`/再登録、epoch guard が stale cursor を fail-closed 無効化）。`run_restore` の空判定（`snapshot.rs:259`、5 SECTIONS のみ）を publish/readings へ拡張するのは後続 sub-project。本 MVE では `run_restore` を触らない。
