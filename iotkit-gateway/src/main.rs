@@ -3,6 +3,7 @@
 
 mod adapter_host;
 mod config;
+mod epoch_start;
 mod health;
 mod publish_task;
 #[allow(dead_code)]
@@ -111,6 +112,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         })
         .await
         .expect("ledger epoch");
+    db.with_conn(|conn| Ok(epoch_start::maybe_enqueue_epoch_start(conn)))
+        .await
+        .expect("epoch_start annotation")
+        .expect("epoch_start annotation");
     let _retention_task = retention::spawn_retention_task(
         db.clone(),
         db_path.clone(),
