@@ -33,7 +33,7 @@
 | 項目 | 扱い | 封じ方（無音の穴を作らない） |
 |---|---|---|
 | custody_lost annotation | SEALED | 未ack正本の圧力パージ（クラス④）を実装せず、圧力時は逆圧+R12警報。→ custody_lost が発生しない |
-| 検疫遷移 annotation / 検疫解除 renumber | SEALED | 解除経路（alias 定義）をガード（§9）: 登録 target がある時、過去検疫 readings は再配送されない旨を ledger 監査記録。R11 では引き続き読める |
+| 検疫遷移 annotation / 検疫解除 renumber | SEALED | 解除経路を **hard reject でガード（§9）**: archive target 登録中は解除を拒否（override 必要）。無音の custody 欠落を作らない。過去検疫行は R11 で読める |
 | publication snapshot | DEFERRED | R22 restore 時は `epoch_start` annotation で新 epoch へ載り替え（新 epoch は pub_seq 1 から）。復元前データの backfill は D7决定8B どおり約束しない |
 | bounded backfill | DEFERRED | — |
 | multi-target fan-out / 購読フィルタ | DEFERRED | single-target 固定。archive_responsible target に購読フィルタは元々不適用（D7决定7） |
@@ -72,7 +72,7 @@
 | 1 | 高 | R22 restore 後の旧 cursor_pub_seq が新 epoch に誤適用（未配送を ack 済み扱い→誤パージ） | 採用 | §4.2/§6.4/§8.2 に **epoch guard** 明記 |
 | 2 | 高 | target_registry を平文 R22 snapshot に入れると bearer token 漏洩（D2:75/98 暗号化必須） | 採用 | §12 反転: token/target を snapshot に**含めない**、復元後再登録 |
 | 3 | 高 | publication_id 決定性が spec 未担保（バッチ組成規則 D7:276 は Wave 1 spec 宿題） | 採用 | §6.2/§10 に決定的バッチ組成規則を固定 |
-| 4 | 高 | 検疫解除ガード(§9 soft)は archive 消費者に無音 custody 欠落、hard reject が契約忠実 | **保留→ユーザー裁定** | 承認済み §9 と衝突。§9 に ⚠、報告で再提示 |
+| 4 | 高 | 検疫解除ガード(§9 soft)は archive 消費者に無音 custody 欠落、hard reject が契約忠実 | **採用（hard reject、ユーザー裁定 2026-07-05）** | §9 を hard reject へ改訂 |
 | 5 | 中 | publication_log/readings ライフサイクル(outbox prune)未定義 | 採用 | §4.1/§8.3 に prune 規則 |
 | 6 | 中 | retention 作り替えで既存機能(dedup TTL/検疫失効/statvfs ラッチ/health)を落とす危険 | 採用 | §8.1 に**維持**明記 |
 | 7 | 中 | custody_lost 封じの逆圧が未確定(どの水位でどの ingress に deferred) | 採用 | §8.2 に watermark→collector 逆圧経路 |
@@ -239,14 +239,15 @@ D7决定7 の4クラス順序のうち **MVE はクラス① のみ実装**:
 
 ---
 
-## 9. 検疫解除経路のガード
+## 9. 検疫解除経路のガード（codex#4: hard reject 採用、ユーザー裁定 2026-07-05）
 
-> ⚠ **未決（codex spec-eval#2 の#4、ユーザー裁定待ち）**: 下記の承認済み方針（文書化+監査、hard reject なし）に対し、codex は「archive target 登録中は過去検疫 readings が無音で custody 欠落する（audit は R10 消費者に届かない）。MVE で renumber しないなら archive target 存在時は**解除を hard reject** するのが D7:33/D5:89 に契約忠実」と指摘。承認済み方針と衝突するため保留。→ 推奨は hard reject（小さく契約忠実、renumber は出口契約拡張へ）。
+Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantine_for_key_checked`）は series 検疫フラグを clear するが、過去 readings 行は触らず outbox 化もしない。MVE は renumber を封じるので、**無音の配送欠落を作らないよう解除を hard reject でガードする**（D7:33/D5:89 に契約忠実）:
 
-Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantine_for_key_checked`）は series 検疫フラグを clear するが、過去 readings 行は触らず outbox 化もしない。MVE は renumber を封じるので、**無音の配送欠落**を防ぐガードを入れる:
-
-- **方針（承認済み: 文書化+監査）**: 解除は従来どおり series フラグ clear（以後の新規 readings は非検疫として outbox に流れる）。ただし登録 target がある状態での解除時、「解除された series の過去検疫 readings は本 MVE では出口へ再配送されない（R11 では読める）」旨を **ledger 監査イベントに記録**。ハード拒否はしない。
-- 完全な検疫解除 renumber（過去行の新規採番 + measurement 再配送 + 検疫遷移 annotation）は次段。
+- **ルール**: **archive_responsible target が登録されている間、検疫を解除する操作（＝未配送の検疫 readings を持つ series の解除）は、明示オーバーライドフラグ無しでは拒否**する。
+- **実装**: 解除経路に「登録済み archive target があり、対象 series に未配送の検疫 readings があるか」のチェックを追加。該当すれば `gatewayctl` はエラーで中断し選択肢を提示（① archive target を解除 ② renumber 実装（後続）を待つ ③ `--release-abandon-past` で過去分を放棄して解除、監査記録）。
+- **保持**: 拒否されている間、過去検疫行は検疫のまま `readings` に残り R11 で読める（検疫期限失効までは保持）。**黙って消えない・黙って解除されない**。
+- **解除後の未来データ**: 通常どおり非検疫として outbox に流れる。欠けるのは解除前 backlog のみ。
+- **完全な検疫解除 renumber**（過去行の新規採番 + measurement 再配送 + 検疫遷移 annotation）は出口契約拡張（後続 sub-project）。導入後は archive target 登録中でも過去分ごと配送でき、本ガードを緩められる。
 
 ---
 
