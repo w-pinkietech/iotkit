@@ -1,12 +1,14 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use iotkit_core_publish::store::{select_batch, target_advance_cursor, target_get};
+use iotkit_core_publish::store::{
+    outbox_backlog_count, select_batch, target_advance_cursor, target_get,
+};
 use iotkit_core_storage::{DbHandle, StorageError};
 use rusqlite::Connection;
 use serde_json::Value;
 
-use crate::health::HealthState;
+use crate::health::{HealthState, TargetDeliveryHealth, now_ms};
 
 const BATCH_LIMIT: u32 = 256;
 const BYTE_CAP: usize = 1024 * 1024;
@@ -91,7 +93,7 @@ pub(crate) async fn run_publish_cycle(db: &DbHandle) -> Result<(), String> {
 
 pub(crate) fn spawn_publish_task(
     db: DbHandle,
-    _health: Arc<Mutex<HealthState>>,
+    health: Arc<Mutex<HealthState>>,
     interval: Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -99,7 +101,8 @@ pub(crate) fn spawn_publish_task(
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {
-                    match run_publish_cycle(&db).await {
+                    let result = run_publish_cycle(&db).await;
+                    match &result {
                         Ok(()) => {
                             delay = interval;
                         }
@@ -108,6 +111,7 @@ pub(crate) fn spawn_publish_task(
                             delay = next_backoff(delay, interval);
                         }
                     }
+                    refresh_publish_health(&db, &health, &result).await;
                 }
                 shutdown = tokio::signal::ctrl_c() => {
                     if let Err(e) = shutdown {
@@ -118,6 +122,67 @@ pub(crate) fn spawn_publish_task(
             }
         }
     })
+}
+
+pub(crate) async fn refresh_publish_health(
+    db: &DbHandle,
+    health: &Arc<Mutex<HealthState>>,
+    cycle: &Result<(), String>,
+) {
+    let read = db
+        .with_conn(|conn| {
+            Ok::<_, StorageError>((|| -> Result<Option<(String, i64, i64)>, String> {
+                let current_epoch =
+                    iotkit_core_ledger::ledger_epoch(conn).map_err(|e| e.to_string())?;
+                let Some(target) = target_get(conn).map_err(|e| e.to_string())? else {
+                    return Ok(None);
+                };
+                let backlog = outbox_backlog_count(conn, &current_epoch, &target)
+                    .map_err(|e| e.to_string())?;
+                Ok(Some((target.target_id, target.cursor_pub_seq, backlog)))
+            })())
+        })
+        .await;
+
+    let target = match read {
+        Ok(Ok(target)) => target,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "publish health refresh failed");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "publish health refresh failed");
+            return;
+        }
+    };
+
+    let mut state = health.lock().expect("health state mutex poisoned");
+    let Some((target_id, cursor_pub_seq, backlog)) = target else {
+        state.publish = Vec::new();
+        return;
+    };
+
+    let previous_last_push_at = state
+        .publish
+        .iter()
+        .find(|entry| entry.target_id == target_id)
+        .and_then(|entry| entry.last_push_at);
+    let last_push_at = if cycle.is_ok() {
+        Some(now_ms())
+    } else {
+        previous_last_push_at
+    };
+    let last_error = match cycle {
+        Ok(()) => None,
+        Err(e) => Some(e.clone()),
+    };
+    state.publish = vec![TargetDeliveryHealth {
+        target_id,
+        cursor_pub_seq,
+        backlog,
+        last_push_at,
+        last_error,
+    }];
 }
 
 fn prepare_batch(conn: &Connection) -> Result<Option<PreparedBatch>, String> {
@@ -223,10 +288,9 @@ fn next_backoff(current_delay: Duration, interval: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
-    use iotkit_core_publish::store::{
-        TargetRow, target_advance_cursor, target_get, target_insert,
-    };
+    use iotkit_core_publish::store::{TargetRow, target_advance_cursor, target_get, target_insert};
     use iotkit_core_timeseries::NewReading;
     use rusqlite::params;
     use serde_json::Value;
@@ -238,6 +302,11 @@ mod tests {
     struct TestConsumer {
         endpoint_url: String,
         received: tokio::task::JoinHandle<ReceivedRequest>,
+    }
+
+    struct TestConsumerBatch {
+        endpoint_url: String,
+        received: tokio::task::JoinHandle<Vec<ReceivedRequest>>,
     }
 
     struct ReceivedRequest {
@@ -254,79 +323,105 @@ mod tests {
     }
 
     async fn spawn_consumer(mode: AckMode) -> TestConsumer {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint_url = format!("http://{}", listener.local_addr().unwrap());
+        let batch = spawn_consumers(mode, 1).await;
+        let endpoint_url = batch.endpoint_url;
         let received = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 1024];
-            let header_end = loop {
-                let n = stream.read(&mut chunk).await.unwrap();
-                assert!(n > 0, "client closed before headers");
-                buf.extend_from_slice(&chunk[..n]);
-                if let Some(pos) = find_header_end(&buf) {
-                    break pos;
-                }
-            };
-
-            let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-            let content_length = content_length(&headers);
-            let authorization = header_value(&headers, "authorization");
-            let mut body = buf[header_end + 4..].to_vec();
-            while body.len() < content_length {
-                let n = stream.read(&mut chunk).await.unwrap();
-                assert!(n > 0, "client closed before body");
-                body.extend_from_slice(&chunk[..n]);
-            }
-            body.truncate(content_length);
-
-            let request_json: Value = serde_json::from_slice(&body).unwrap();
-            let publication_id = request_json
-                .get("publication_id")
-                .and_then(|v| v.as_str())
-                .unwrap()
-                .to_string();
-            let records = request_json
-                .get("records")
-                .and_then(|v| v.as_array())
-                .unwrap()
-                .clone();
-            let max_pub_seq = records
-                .iter()
-                .filter_map(|r| r.get("pub_seq").and_then(|v| v.as_i64()))
-                .max()
-                .unwrap_or(0);
-            let ack_publication_id = match mode {
-                AckMode::EchoMax => publication_id.clone(),
-                AckMode::EchoLow => publication_id.clone(),
-                AckMode::WrongPublicationId => format!("{publication_id}:wrong"),
-            };
-            let acked_pub_seq = match mode {
-                AckMode::EchoMax | AckMode::WrongPublicationId => max_pub_seq,
-                AckMode::EchoLow => max_pub_seq - 1,
-            };
-            let ack = serde_json::json!({
-                "publication_id": ack_publication_id,
-                "acked_pub_seq": acked_pub_seq,
-            });
-            let ack_body = serde_json::to_vec(&ack).unwrap();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-                ack_body.len()
-            );
-            stream.write_all(response.as_bytes()).await.unwrap();
-            stream.write_all(&ack_body).await.unwrap();
-
-            ReceivedRequest {
-                authorization,
-                publication_id,
-                records,
-            }
+            let mut requests = batch.received.await.unwrap();
+            assert_eq!(requests.len(), 1);
+            requests.remove(0)
         });
 
         TestConsumer {
             endpoint_url,
             received,
+        }
+    }
+
+    async fn spawn_consumers(mode: AckMode, request_count: usize) -> TestConsumerBatch {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint_url = format!("http://{}", listener.local_addr().unwrap());
+        let received = tokio::spawn(async move {
+            let mut requests = Vec::with_capacity(request_count);
+            for _ in 0..request_count {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                requests.push(read_request_and_ack(&mut stream, mode).await);
+            }
+            requests
+        });
+
+        TestConsumerBatch {
+            endpoint_url,
+            received,
+        }
+    }
+
+    async fn read_request_and_ack(
+        stream: &mut tokio::net::TcpStream,
+        mode: AckMode,
+    ) -> ReceivedRequest {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let header_end = loop {
+            let n = stream.read(&mut chunk).await.unwrap();
+            assert!(n > 0, "client closed before headers");
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = find_header_end(&buf) {
+                break pos;
+            }
+        };
+
+        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        let content_length = content_length(&headers);
+        let authorization = header_value(&headers, "authorization");
+        let mut body = buf[header_end + 4..].to_vec();
+        while body.len() < content_length {
+            let n = stream.read(&mut chunk).await.unwrap();
+            assert!(n > 0, "client closed before body");
+            body.extend_from_slice(&chunk[..n]);
+        }
+        body.truncate(content_length);
+
+        let request_json: Value = serde_json::from_slice(&body).unwrap();
+        let publication_id = request_json
+            .get("publication_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        let records = request_json
+            .get("records")
+            .and_then(|v| v.as_array())
+            .unwrap()
+            .clone();
+        let max_pub_seq = records
+            .iter()
+            .filter_map(|r| r.get("pub_seq").and_then(|v| v.as_i64()))
+            .max()
+            .unwrap_or(0);
+        let ack_publication_id = match mode {
+            AckMode::EchoMax => publication_id.clone(),
+            AckMode::EchoLow => publication_id.clone(),
+            AckMode::WrongPublicationId => format!("{publication_id}:wrong"),
+        };
+        let acked_pub_seq = match mode {
+            AckMode::EchoMax | AckMode::WrongPublicationId => max_pub_seq,
+            AckMode::EchoLow => max_pub_seq - 1,
+        };
+        let ack = serde_json::json!({
+            "publication_id": ack_publication_id,
+            "acked_pub_seq": acked_pub_seq,
+        });
+        let ack_body = serde_json::to_vec(&ack).unwrap();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            ack_body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+        stream.write_all(&ack_body).await.unwrap();
+
+        ReceivedRequest {
+            authorization,
+            publication_id,
+            records,
         }
     }
 
@@ -441,6 +536,34 @@ mod tests {
         db.with_conn_sync(|conn| {
             let target = target_get(conn).unwrap().unwrap();
             Ok((target.cursor_epoch, target.cursor_pub_seq))
+        })
+        .unwrap()
+    }
+
+    fn count_rows(db: &iotkit_core_storage::DbHandle, table: &str) -> i64 {
+        db.with_conn_sync(|conn| {
+            let sql = format!("SELECT COUNT(*) FROM {table}");
+            Ok(conn
+                .query_row(&sql, [], |row| row.get::<_, i64>(0))
+                .unwrap())
+        })
+        .unwrap()
+    }
+
+    fn orphan_outbox_count(db: &iotkit_core_storage::DbHandle) -> i64 {
+        db.with_conn_sync(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM publication_log p
+                     LEFT JOIN readings r ON p.reading_seq = r.seq
+                     WHERE p.kind = 'measurement'
+                       AND p.reading_seq IS NOT NULL
+                       AND r.seq IS NULL",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap())
         })
         .unwrap()
     }
@@ -571,10 +694,7 @@ mod tests {
         let err = super::run_publish_cycle(&db).await.unwrap_err();
 
         let _received = consumer.received.await.unwrap();
-        assert!(
-            err.contains("acked_pub_seq"),
-            "unexpected error: {err}"
-        );
+        assert!(err.contains("acked_pub_seq"), "unexpected error: {err}");
         assert_eq!(target_cursor(&db), (None, 0));
     }
 
@@ -636,12 +756,118 @@ mod tests {
 
         let publication_id = format!(
             "{}:{}:{}:{}",
-            prepared.target_id,
-            prepared.current_epoch,
-            prepared.cursor_start,
-            prepared.cursor_end
+            prepared.target_id, prepared.current_epoch, prepared.cursor_start, prepared.cursor_end
         );
         let cursor_start_segment = publication_id.split(':').nth(2).unwrap();
         assert_eq!(cursor_start_segment, (pub_seqs[0] + 1).to_string());
+    }
+
+    #[tokio::test]
+    async fn health_json_reports_per_target_delivery_state() {
+        let db = test_db();
+        let (epoch, pub_seqs) = seed_target_and_measurements(
+            &db,
+            "http://127.0.0.1:1".into(),
+            Some("previous-epoch".into()),
+            999,
+            vec![vec![21.5], vec![22.0]],
+        );
+        let health = Arc::new(Mutex::new(crate::health::HealthState::new(90)));
+        let cycle = Ok(());
+
+        super::refresh_publish_health(&db, &health, &cycle).await;
+
+        {
+            let snapshot = health.lock().unwrap();
+            assert_eq!(snapshot.publish.len(), 1);
+            assert_eq!(snapshot.publish[0].target_id, "target-1");
+            assert_eq!(snapshot.publish[0].cursor_pub_seq, 999);
+            assert_eq!(snapshot.publish[0].backlog, pub_seqs.len() as i64);
+            assert!(snapshot.publish[0].last_push_at.is_some());
+            assert_eq!(snapshot.publish[0].last_error, None);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("health.json");
+        let snapshot = health.lock().unwrap().clone();
+        crate::health::write_health_json(&path, &epoch, &snapshot).unwrap();
+        let json = std::fs::read_to_string(path).unwrap();
+        assert!(json.contains(r#""publish":[{"target_id":"target-1""#));
+        assert!(json.contains(r#""cursor_pub_seq":999"#));
+        assert!(json.contains(r#""backlog":2"#));
+        assert!(json.contains(r#""last_error":null"#));
+    }
+
+    #[tokio::test]
+    async fn end_to_end_custody_loop() {
+        let consumer = spawn_consumer(AckMode::EchoMax).await;
+        let db = test_db();
+        let (epoch, pub_seqs) = seed_target_and_measurements(
+            &db,
+            consumer.endpoint_url,
+            None,
+            0,
+            vec![vec![21.5], vec![22.0]],
+        );
+
+        super::run_publish_cycle(&db).await.unwrap();
+
+        let received = consumer.received.await.unwrap();
+        assert_eq!(received.records.len(), 2);
+        assert_eq!(target_cursor(&db), (Some(epoch.clone()), pub_seqs[1]));
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("iotkit.db");
+        let config = crate::retention::RetentionConfig {
+            retention_days: 1,
+            quarantine_ttl_days: 30,
+            disk_high_watermark_pct: 101,
+        };
+        let health = Arc::new(Mutex::new(crate::health::HealthState::new(
+            config.retention_days,
+        )));
+        let mut latch = crate::retention::WatermarkLatch::default();
+
+        crate::retention::run_retention_once_with_latch(&db, &db_path, config, health, &mut latch)
+            .await
+            .unwrap();
+
+        assert_eq!(count_rows(&db, "readings"), 0);
+        assert_eq!(count_rows(&db, "publication_log"), 0);
+        assert_eq!(orphan_outbox_count(&db), 0);
+    }
+
+    #[tokio::test]
+    async fn crash_between_post_and_cursor_is_idempotent() {
+        let consumer = spawn_consumers(AckMode::EchoMax, 2).await;
+        let db = test_db();
+        let (epoch, pub_seqs) = seed_target_and_measurements(
+            &db,
+            consumer.endpoint_url,
+            None,
+            0,
+            vec![vec![21.5], vec![22.0]],
+        );
+
+        super::run_publish_cycle(&db).await.unwrap();
+        db.with_conn_sync(|conn| {
+            target_advance_cursor(conn, "target-1", &epoch, 0).unwrap();
+            Ok(())
+        })
+        .unwrap();
+        super::run_publish_cycle(&db).await.unwrap();
+
+        let received = consumer.received.await.unwrap();
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[0].records.len(), 2);
+        assert_eq!(received[1].records.len(), 2);
+        assert_eq!(
+            received[0].records[0]
+                .get("pub_seq")
+                .and_then(|v| v.as_i64()),
+            Some(pub_seqs[0])
+        );
+        assert_eq!(received[1].publication_id, received[0].publication_id);
+        assert_eq!(target_cursor(&db), (Some(epoch), pub_seqs[1]));
     }
 }

@@ -1,5 +1,5 @@
 use crate::PublishError;
-use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, params, params_from_iter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboxRow {
@@ -273,6 +273,20 @@ pub fn any_unacked_for_target(
     .map_err(PublishError::from)
 }
 
+pub fn outbox_backlog_count(
+    conn: &Connection,
+    current_epoch: &str,
+    target: &TargetRow,
+) -> Result<i64, PublishError> {
+    let cursor = effective_cursor(current_epoch, target);
+    conn.query_row(
+        "SELECT count(*) FROM publication_log WHERE epoch = ?1 AND pub_seq > ?2",
+        params![current_epoch, cursor],
+        |row| row.get(0),
+    )
+    .map_err(PublishError::from)
+}
+
 fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TargetRow> {
     Ok(TargetRow {
         target_id: row.get(0)?,
@@ -473,5 +487,40 @@ mod tests {
             ..current
         };
         assert!(any_unacked_for_target(&conn, "E", &old_epoch_cursor).unwrap());
+    }
+
+    #[test]
+    fn outbox_backlog_count_uses_effective_cursor_for_current_epoch() {
+        let conn = crate::tests_support::open();
+        let s1 = enqueue_measurement(&conn, "E", 700, 1).unwrap();
+        let s2 = enqueue_measurement(&conn, "E", 701, 2).unwrap();
+        enqueue_measurement(&conn, "OTHER", 702, 3).unwrap();
+        let current = TargetRow {
+            target_id: "t".into(),
+            endpoint_url: "https://x".into(),
+            credential_token: "k".into(),
+            archive_responsible: true,
+            schema_version: 1,
+            cursor_epoch: Some("E".into()),
+            cursor_pub_seq: s1,
+        };
+
+        assert_eq!(outbox_backlog_count(&conn, "E", &current).unwrap(), 1);
+
+        let all_acked = TargetRow {
+            cursor_pub_seq: s2,
+            ..current.clone()
+        };
+        assert_eq!(outbox_backlog_count(&conn, "E", &all_acked).unwrap(), 0);
+
+        let old_epoch_cursor = TargetRow {
+            cursor_epoch: Some("OLD".into()),
+            cursor_pub_seq: i64::MAX,
+            ..current
+        };
+        assert_eq!(
+            outbox_backlog_count(&conn, "E", &old_epoch_cursor).unwrap(),
+            2
+        );
     }
 }
