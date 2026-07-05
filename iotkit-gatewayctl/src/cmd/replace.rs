@@ -3,7 +3,7 @@ use iotkit_core_ledger as ledger;
 use iotkit_core_registry as registry;
 use iotkit_core_timeseries::{self, query as ts_query};
 use iotkit_ingest_contract::ReadingItem;
-use rusqlite::{Connection, params, params_from_iter};
+use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
 
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -299,24 +299,12 @@ pub fn run_replace_undo(conn: &Connection, args: ReplaceUndoArgs) -> AppResult<(
             .map(|row| row.series_id)
             .collect::<Vec<_>>();
         let rows = ts_query::mark_readings_quarantined(tx, &series_ids, since, to)?;
-        if !series_ids.is_empty() {
-            let placeholders = std::iter::repeat_n("?", series_ids.len())
-                .collect::<Vec<_>>()
-                .join(",");
-            let sql = format!(
-                "DELETE FROM publication_log
-                 WHERE reading_seq IN (
-                     SELECT seq FROM readings
-                     WHERE series_id IN ({placeholders})
-                       AND received_at BETWEEN ? AND ?
-                       AND quarantined = 1
-                 )"
-            );
-            tx.execute(
-                &sql,
-                params_from_iter(series_ids.iter().copied().chain([since, to])),
-            )?;
-        }
+        iotkit_core_publish::store::prune_outbox_for_quarantined_range(
+            tx,
+            &series_ids,
+            since,
+            to,
+        )?;
         let detail = serde_json::json!({
             "old_hw": replace_event.old_hw,
             "new_hw": current.hardware_id,

@@ -128,6 +128,19 @@ pub fn run_health(db_path: &Path, args: HealthArgs) -> AppResult<()> {
             .unwrap_or_else(|| "null".to_string()),
         json["retention"]["last_purged_rows"].as_u64().unwrap_or(0)
     );
+    if let Some(entries) = json["publish"].as_array() {
+        for entry in entries {
+            let last_error = entry["last_error"].as_str().unwrap_or("-");
+            println!(
+                "publish target={} cursor={} backlog={} last_push_at={} last_error={}",
+                entry["target_id"].as_str().unwrap_or(""),
+                json_number_text(&entry["cursor_pub_seq"], "0"),
+                json_number_text(&entry["backlog"], "0"),
+                json_number_text(&entry["last_push_at"], "-"),
+                last_error
+            );
+        }
+    }
     Ok(())
 }
 
@@ -143,4 +156,12 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn json_number_text(value: &serde_json::Value, default: &str) -> String {
+    value
+        .as_i64()
+        .map(|n| n.to_string())
+        .or_else(|| value.as_u64().map(|n| n.to_string()))
+        .unwrap_or_else(|| default.to_string())
 }

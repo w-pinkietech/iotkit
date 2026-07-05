@@ -191,6 +191,7 @@ fn health_command_reads_default_health_json_next_to_db_and_marks_stale() {
                 "uptime_s":12,
                 "collector_alive":true,
                 "adapters":[],
+                "publish":[{{"target_id":"archive","cursor_pub_seq":7,"backlog":3,"last_push_at":1234,"last_error":null}}],
                 "db":{{"size_bytes":10,"disk_available_bytes":20,"watermark_exceeded":false}},
                 "retention":{{"days":90,"last_purge_at":null,"last_purged_rows":0}}
             }}"#
@@ -203,6 +204,10 @@ fn health_command_reads_default_health_json_next_to_db_and_marks_stale() {
     assert!(out.contains("STALE (daemon down?)"), "stdout:\n{out}");
     assert!(out.contains("epoch-1"), "stdout:\n{out}");
     assert!(out.contains("collector_alive=true"), "stdout:\n{out}");
+    assert!(
+        out.contains("publish target=archive cursor=7 backlog=3 last_push_at=1234 last_error=-"),
+        "stdout:\n{out}"
+    );
 }
 
 #[test]

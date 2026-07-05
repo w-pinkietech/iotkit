@@ -114,6 +114,35 @@ pub fn prune_outbox_by_reading_seqs(
     Ok(changed as u64)
 }
 
+/// Prune measurement outbox rows for retroactively-quarantined readings in a series/time window (§9.2).
+/// Uses a subquery over readings (series_ids small; readings via subquery) -- no host-var list explosion.
+pub fn prune_outbox_for_quarantined_range(
+    conn: &Connection,
+    series_ids: &[i64],
+    since_ms: i64,
+    to_ms: i64,
+) -> Result<u64, PublishError> {
+    if series_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let placeholders = repeat_vars(series_ids.len());
+    let sql = format!(
+        "DELETE FROM publication_log
+         WHERE reading_seq IN (
+             SELECT seq FROM readings
+             WHERE series_id IN ({placeholders})
+               AND received_at BETWEEN ? AND ?
+               AND quarantined = 1
+         )"
+    );
+    let changed = conn.execute(
+        &sql,
+        params_from_iter(series_ids.iter().copied().chain([since_ms, to_ms])),
+    )?;
+    Ok(changed as u64)
+}
+
 pub fn prune_acked_outbox(
     conn: &Connection,
     epoch: &str,
@@ -360,6 +389,91 @@ mod tests {
         let conn = crate::tests_support::open();
 
         assert_eq!(prune_outbox_by_reading_seqs(&conn, &[]).unwrap(), 0);
+    }
+
+    #[test]
+    fn prune_outbox_for_quarantined_range_removes_only_quarantined_readings_in_window() {
+        let conn = crate::tests_support::open();
+        let e = "epoch-A";
+        let system_id = vec![1_u8; 16];
+        conn.execute(
+            "INSERT INTO devices (system_id, hardware_id, kind, state, created_at)
+             VALUES (?1, 'hw:test', 'individual', 'active', 1)",
+            params![&system_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO series
+                (series_id, system_id, measurement_key, channel_index, variant, created_at)
+             VALUES
+                (10, ?1, 'temperature', -1, 'primary', 1),
+                (20, ?1, 'humidity', -1, 'primary', 1)",
+            params![&system_id],
+        )
+        .unwrap();
+        let matching = iotkit_core_timeseries::insert_reading_v3(
+            &conn,
+            &iotkit_core_timeseries::NewReading {
+                series_id: 10,
+                received_at_ms: 1_200,
+                device_time_ms: None,
+                time_source: "gateway".into(),
+                values: vec![1.0],
+                rssi: None,
+                battery_pct: None,
+                quarantined: false,
+            },
+        )
+        .unwrap();
+        let outside_range = iotkit_core_timeseries::insert_reading_v3(
+            &conn,
+            &iotkit_core_timeseries::NewReading {
+                series_id: 10,
+                received_at_ms: 2_200,
+                device_time_ms: None,
+                time_source: "gateway".into(),
+                values: vec![2.0],
+                rssi: None,
+                battery_pct: None,
+                quarantined: false,
+            },
+        )
+        .unwrap();
+        let other_series = iotkit_core_timeseries::insert_reading_v3(
+            &conn,
+            &iotkit_core_timeseries::NewReading {
+                series_id: 20,
+                received_at_ms: 1_300,
+                device_time_ms: None,
+                time_source: "gateway".into(),
+                values: vec![3.0],
+                rssi: None,
+                battery_pct: None,
+                quarantined: false,
+            },
+        )
+        .unwrap();
+        enqueue_measurement(&conn, e, matching, 1).unwrap();
+        let keep_outside_range = enqueue_measurement(&conn, e, outside_range, 2).unwrap();
+        let keep_other_series = enqueue_measurement(&conn, e, other_series, 3).unwrap();
+        conn.execute(
+            "UPDATE readings SET quarantined = 1
+             WHERE series_id = ?1 AND received_at BETWEEN ?2 AND ?3",
+            params![10, 1_000, 2_000],
+        )
+        .unwrap();
+
+        assert_eq!(
+            prune_outbox_for_quarantined_range(&conn, &[10], 1_000, 2_000).unwrap(),
+            1
+        );
+
+        let batch = select_batch(&conn, e, 0, 10).unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].pub_seq, keep_outside_range);
+        assert_eq!(batch[0].reading_seq, Some(outside_range));
+        assert_eq!(batch[1].pub_seq, keep_other_series);
+        assert_eq!(batch[1].reading_seq, Some(other_series));
     }
 
     #[test]
