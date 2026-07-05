@@ -32,10 +32,10 @@
 ### 1.3 繰り延べる/封じる（DEFERRED / SEALED）
 | 項目 | 扱い | 封じ方（無音の穴を作らない） |
 |---|---|---|
-| custody_lost annotation | SEALED | クラス④（**保存済み**未ack正本の削除）を実装しない＝保存済みデータを消さないので custody_lost が発生しない。圧力時の劣化は front-door（既存の bounded channel / ingest spool の drop = **未受理**データの損失で custody_lost ではない）+ R12 可視化。**新規の逆圧経路は作らない**（§8.2） |
+| custody_lost annotation | SEALED | クラス④（**保存済み**未ack正本の削除）を実装しない＝保存済みデータを消さないので custody_lost が発生しない。能動逆圧も新設しない。圧力時は R12 が事前警報し、放置時は front-door drop（スループット由来・ディスク水位に非連動）でなく最終的に `ENOSPC` の明示的書込失敗に至る（無音損失なし、iter2 [中] で story 修正）。詳細 §8.2 |
 | 検疫遷移 annotation / 検疫解除 renumber | SEALED | 解除経路を **hard reject でガード（§9）**: archive target 登録中は解除を拒否（override 必要）。無音の custody 欠落を作らない。過去検疫行は R11 で読める |
-| 行レベル検疫 readings の再配送 | SEALED（明示制限） | 行レベル検疫（out_of_range/device_quarantined）は pub_seq を持たず custody 対象外。**保護せず**、既存の検疫期限失効＋フロアで purge（無限保持しない、§8.2/§8.3） |
-| publication snapshot | DEFERRED | R22 restore 時は `epoch_start` annotation で新 epoch へ載り替え（新 epoch は pub_seq 1 から）。復元前データの backfill は D7決定8B どおり約束しない |
+| 行レベル検疫 readings の再配送 | SEALED（明示制限） | 行レベル検疫（out_of_range/device_quarantined）は pub_seq を持たず custody 対象外。**保護せず**、フロア（§8.2 の新規 purge branch）で消える（無限保持しない、§8.2/§8.3） |
+| publication snapshot | DEFERRED | R22 restore 時は `epoch_start` annotation で新 epoch へ載り替え（新 epoch は最小 pub_seq から）。復元前データの backfill は D7決定8B どおり約束しない |
 | bounded backfill | DEFERRED | — |
 | multi-target fan-out / 購読フィルタ | DEFERRED | single-target 固定。archive_responsible target に購読フィルタは元々不適用（D7決定7） |
 | cursor_expired / gap 復帰通知 | DEFERRED | MVE はフロア内保持のため、単一 target が追随できる前提。長期断は front-door 劣化で吸収 |
@@ -87,7 +87,21 @@
 | Sonnet | 低 | select! パターンは既存タスクに無い（net-new） | §6.2/§13 修正 |
 | Sonnet | 低 | §2.1 が 決定8/9 スライス未列挙 | §2.1 追記済み |
 
-reality-check（両レビューで確認）: `core/collector/src/actor.rs:314` は `insert_reading_v3` の `seq` を破棄（→ 捕捉が必要）。`DbHandle` は単一 `Arc<Mutex<Connection>>`（`core/storage/src/handle.rs:14`、プロセス全体で直列化）。`PRAGMA foreign_keys=ON`（`core/storage/src/lib.rs:20`）。`renew_epoch` は `epoch_renewed{old_epoch}` を記録（新 epoch は記録しない、`core/ledger/src/store.rs:699`）。既存 retention/health タスクは bare loop で `select!` shutdown を持たない。
+reality-check（両レビューで確認）: `core/collector/src/actor.rs:314` は `insert_reading_v3` の `seq` を破棄（→ 捕捉が必要）。`DbHandle` は単一 `Arc<Mutex<Connection>>`（`core/storage/src/handle.rs:16`、プロセス全体で直列化）。`PRAGMA foreign_keys=ON`（`core/storage/src/lib.rs:20`）。`renew_epoch` は `epoch_renewed{old_epoch}` を記録（新 epoch は記録しない、`core/ledger/src/store.rs:699`）。既存 retention/health タスクは bare loop で `select!` shutdown を持たない。
+
+### 2.5 iteration 2（再レビュー）裁定（2026-07-05, codex + Sonnet 並行）
+iter1 修正版(b9f7157)を再レビュー。codex は 7/8 landing OK、Sonnet は健全性の大半を trace 確認（epoch guard NULL・restore 書込レース・zero-ack・単一 Tx FK 順・3スコープ push・byte-cap・ack 検証・gatewayctl blocking を「実際に健全」と確認）。両者が**独立に同一の [高] を2件**指摘（＝強シグナル）+ [中]/[低]。全採用:
+
+| 出所 | 重大度 | 指摘 | 反映 |
+|---|---|---|---|
+| both | 高 | `target remove`→add rotation の「target 不在」窓で §8.3 floor-only が保存済み未ack正本を誤パージ（D2:30 違反） | §3.3/§11: in-place `rotate-token`、`remove` は未ack時拒否/`--abandon-custody`。§8.3 floor-only は監査付き remove 後のみ到達 |
+| Sonnet | 高 | 検疫 readings の purge を「既存の検疫期限失効」に誤帰属（実際は devices.state のみ、readings を消す `purge_readings_before` は置換される）→ 検疫行 purge 経路が消滅 | §8.1/§8.2: 新規 floor branch を明示 commission、保護は pub_seq 付き未ack のみ |
+| Sonnet | 中 | pub_seq=1 は非 pristine で不成立（AUTOINCREMENT 継続） | §4.1/§5.2/§6.4: 「新 epoch 内最小 pub_seq」に緩和、test も ==1 を assert しない |
+| Sonnet | 中 | front-door drop はスループット由来でディスク非連動→圧力 story が不正確 | §8.2/§13/§1.3: R12 事前警報→放置時 ENOSPC 明示失敗（無音損失なし）に修正 |
+| both | 中 | 旧 epoch outbox prune が readings を orphan 化 / 非 pristine restore 残留 | §8.3/§12: 旧 epoch outbox+readings をペアで同一 Tx 削除、restore 前提を writing-plans で確定 |
+| both | 中 | §14 に圧力劣化テスト等が実際には無い | §14 に rotation 窓/検疫 floor/旧 epoch orphan/圧力無音損失テスト追加 |
+| Sonnet | 低 | 2nd target 行を拒否するガード無し | §11 add ガードに追加 |
+| Sonnet | 低 | 引用行ズレ（handle.rs:14→16, snapshot.rs:126→129） | 修正 |
 
 ---
 
@@ -104,8 +118,9 @@ reality-check（両レビューで確認）: `core/collector/src/actor.rs:314` �
 - **依存**: `core/publish`（outbox/target 読み・cursor 更新）、`core/timeseries`（measurement 実体の JOIN）、`core/ledger`（series_key/epoch）、`reqwest`（async）。
 
 ### 3.3 target 管理 CLI（`iotkit-gatewayctl`）
-- **責務**: `gatewayctl target add|list|remove`。登録時ガード（§11）。既存 cmd/ モジュール（devices/registry/query/snapshot）と同型。
-- **`remove`**: target 行を削除（+対応 cursor 破棄）。**token rotation = remove + add**（漏洩トークンの失効経路。D1 line 67「トークンは漏れる前提」に対応）。
+- **責務**: `gatewayctl target add|list|rotate-token|remove`。登録時ガード（§11）。既存 cmd/ モジュール（devices/registry/query/snapshot）と同型。
+- **`rotate-token`（token rotation の正路）**: target 行と cursor を**保持したまま** `credential_token` を in-place で UPDATE し再スモーク。**remove+add を rotation に使わない**——remove で target が一瞬でも消えると §8.3 floor-only 窓が開き保存済み未ack正本を誤パージし得るため（iter2 [高]、codex+Sonnet 双方指摘）。
+- **`remove`（decommission=明示的 custody 放棄）**: target 行と cursor を削除。**未 ack の pub_seq 付き正本が cursor 超で残っている場合は拒否**し、`--abandon-custody`（監査記録）でのみ強行。無音の floor-only 誤パージを起こさない。
 - **注**: smoke-test POST（§11）のため、現状 sync な gatewayctl に **`reqwest` blocking client** を追加（gateway daemon 側の async reqwest とは feature 違い）。
 
 ### 3.4 enqueue フック（`core/collector`）
@@ -130,7 +145,7 @@ created_at     INTEGER NOT NULL
 -- 冪等性: 部分 UNIQUE index  UNIQUE(epoch, subtype) WHERE kind='annotation'
 --   → epoch_start の二重 enqueue（起動時再検知後 ack 前クラッシュ）を DB 制約で排除
 ```
-- `pub_seq` は DB ライフタイムで単調（SQLite AUTOINCREMENT、再利用なし）。epoch を併載するので `(epoch, pub_seq)` が大域一意。R22 restore 後は outbox が空（snapshot 非含有）+ epoch 新規なので、新 epoch 下で pub_seq が 1 から再スタートしても `(epoch,pub_seq)` は旧世代と衝突しない。
+- `pub_seq` は DB ライフタイムで単調（SQLite AUTOINCREMENT、再利用なし）。epoch を併載するので `(epoch, pub_seq)` が大域一意。R22 restore 後は epoch 新規なので `(epoch,pub_seq)` は旧世代と衝突しない。pristine 交換箱では outbox 空で pub_seq は 1 から。**非 pristine（旧 outbox 残存）では AUTOINCREMENT が継続し pub_seq は 1 に戻らないが、正しさは絶対値でなく「新 epoch 内で単調」+ `(epoch,pub_seq)` 一意 + effective cursor=0（epoch guard）で保たれる**（iter2 [中]）。
 - **カーソル同一性は必ず `(epoch, pub_seq)` の複合**。pub_seq 単独で ack/配送/パージ判定をしてはならない（epoch 跨ぎの誤適用を防ぐ。§6.4/§8.2 の epoch guard）。
 - measurement は実体を持たず readings を参照（重複保存回避）。annotation は backing row が無いのでペイロードを inline 保存。
 - **`reading_seq` と readings の FK / 削除順**: `PRAGMA foreign_keys=ON`（`core/storage/src/lib.rs:20`）。retention のクラス①削除は **outbox 行 prune → readings 行 delete の順**を単一 Immediate Tx で行う（§8.3）。FK を張る場合は `ON DELETE` 挙動、張らない場合は削除順を、writing-plans で確定（既定＝この削除順を守れば FK 有無どちらでも安全）。
@@ -160,10 +175,10 @@ created_at          INTEGER NOT NULL
 
 ### 5.2 annotation 族（最小: `epoch_start` のみ）
 - 全 target 共有 seq（購読フィルタ不可、D7決定2）。MVE は single-target なので実質同義。
-- **`epoch_start`**: R22 restore で台帳 epoch が更新された時、新 epoch 下の**最初の outbox 行**として enqueue。ペイロード = `{prior_epoch}`（D7決定8B: 新 epoch annotation には旧 epoch ID のみ記載）。消費者は自分のカーソルと突合し、新 epoch の pub_seq 1 から載り替える。
+- **`epoch_start`**: R22 restore で台帳 epoch が更新された時、新 epoch 下の**最初の outbox 行**として enqueue。ペイロード = `{prior_epoch}`（D7決定8B: 新 epoch annotation には旧 epoch ID のみ記載）。消費者は自分のカーソルと突合し、新 epoch の**最小 pub_seq**から載り替える（pristine では 1）。
 - **trigger アルゴリズム（§6.4 でも参照）**: gateway 起動時、collector を spawn する**前**に判定する。(1) 最新の `epoch_renewed` ledger イベントが存在し、その結果 epoch が現 `ledger_epoch` に一致するか（＝この起動が restore 由来か）。一致すれば restore を経ている。(2) `prior_epoch` = その `epoch_renewed` イベントの `old_epoch`。(3) 現 epoch について `epoch_start` が未 enqueue（部分 UNIQUE が保証）なら enqueue。**初回 boot（`epoch_renewed` イベント無し）は enqueue しない**。
 - **冪等**: §4.1 の部分 UNIQUE(epoch,subtype) により、起動時再検知後 ack 前クラッシュでも二重 enqueue しない。
-- **順序保証**: collector spawn 前に enqueue するので、新 epoch の最初の measurement より前に pub_seq が付く（pub_seq 1）。
+- **順序保証**: collector spawn 前に enqueue するので、新 epoch の最初の measurement より前に pub_seq が付く（＝新 epoch 内で**最小 pub_seq**。pristine では 1）。テストは `pub_seq==1` でなく「新 epoch 内の最小 pub_seq」を assert する（iter2 [中]）。
 - custody_lost / 検疫遷移 annotation は MVE では**発生させない**（§8/§9 でトリガ封じ）。
 
 ---
@@ -197,8 +212,8 @@ DB は単一 `Arc<Mutex<Connection>>` 共有（`handle.rs:14`）。**HTTP POST �
 
 ### 6.4 R22 restore → epoch 載り替え
 - restore で epoch 更新（既存、`renew_epoch`）。outbox/readings は空（snapshot 非含有）。**target_registry も snapshot 非含有（§12）なので、pristine な交換箱では target は無く、運用者が再登録**。
-- gateway 起動時、**collector spawn 前**に §5.2 の trigger アルゴリズムで `epoch_start` を enqueue（新 epoch の pub_seq 1 を保証）。
-- **epoch guard**: 万一 target が旧 `cursor_epoch` を持って残っていても（非 pristine 復元）、push/retention は `cursor_epoch != current_epoch` を検知し effective cursor=0、新 epoch を pub_seq 1 から扱う。書込側レース（POST 中に別 restore で epoch が変わり stale cursor を書き戻す）も、次 cycle の再比較で無視され fail-closed（Sonnet 確認）。消費者は epoch 不一致で再 baseline（D7決定8B）。
+- gateway 起動時、**collector spawn 前**に §5.2 の trigger アルゴリズムで `epoch_start` を enqueue（新 epoch 内で**最小 pub_seq**を保証。pristine では 1）。
+- **epoch guard**: 万一 target が旧 `cursor_epoch` を持って残っていても（非 pristine 復元）、push/retention は `cursor_epoch != current_epoch` を検知し effective cursor=0、新 epoch を最小 pub_seq から扱う。書込側レース（POST 中に別 restore で epoch が変わり stale cursor を書き戻す）も、次 cycle の再比較で無視され fail-closed（Sonnet 確認）。消費者は epoch 不一致で再 baseline（D7決定8B）。
 
 ---
 
@@ -238,8 +253,9 @@ annotation `epoch_start`:
 **「追加」でなく置換**。
 
 ### 8.1 現状（Wave 0）と維持する機能
-`retention.rs` は同一周期で: readings の `purge_readings_before(received_at cutoff)` + **dedup TTL パージ** + **検疫期限失効** + **statvfs 水位ラッチ** + **health 更新** を行う（`iotkit-gateway/src/retention.rs`。現状は purge 後に別 Tx で監査/検疫処理 :61-74）。
-- **本 spec が変えるのは readings パージの判定規則だけ**。dedup TTL パージ・検疫期限失効・statvfs 水位ラッチ・health 更新は**維持**する。custody/ack を知らない `received_at` cutoff 削除を §8.2 の custody 対応パージへ置換する。
+`retention.rs` は同一周期で: readings の `purge_readings_before(received_at cutoff)` + **dedup TTL パージ** + **デバイス検疫期限失効**（`expire_quarantined_devices`=`devices.state` を active に戻す処理で、**readings 行は消さない**。`core/ledger/src/store.rs:609`）+ **statvfs 水位ラッチ** + **health 更新** を行う。
+- **本 spec が変えるのは readings パージの判定規則だけ**。dedup TTL パージ・デバイス検疫期限失効・statvfs 水位ラッチ・health 更新は**維持**する。custody/ack を知らない `received_at` cutoff 削除（`purge_readings_before`、`core/timeseries/src/query.rs:268`）を §8.2 の custody 対応パージへ置換する。
+- **注意（iter2 [高]、Sonnet 指摘）**: `purge_readings_before` は quarantine を問わず全 readings を floor で消していた**唯一の readings purge**。これを置換するので、検疫 readings を floor で消す branch は §8.2 で**新規に実装する**（「既存の検疫期限失効が消す」は誤り——それは `devices.state` のみ）。
 
 ### 8.2 MVE の custody 対応パージ
 D7決定7 の4クラス順序のうち **MVE はクラス① のみ実装**:
@@ -247,16 +263,17 @@ D7決定7 の4クラス順序のうち **MVE はクラス① のみ実装**:
 - **削除対象**: 上記で ack 済み **かつ** `readings.received_at < now - 最低保持フロア` の行。
 - **最低保持フロア**: [D1:154](../../../../docs/redesign/decisions/D1-ingest-model.md) / [台帳:115](../../../../docs/redesign/responsibility-ledger.md) = 既定 72h・設定可。**データ年齢(received_at)基準**（ack 相対でなくデータの新しさ。「正常時のデータ残高≒フロア分のみ、断線時のみ水位上昇」）。→ `archive_acked_at` 列は不要。
 - **未ack「正本」は保護**: pub_seq を持つ（=配送対象の）非検疫 readings で未 ack のものは received_at が古くても**削除しない**（従来の無条件時刻カットオフ削除を廃止）。
-- **検疫行は保護しない**（Sonnet 指摘の無限保持を回避）: 行レベル検疫（out_of_range/device_quarantined）や series 検疫の readings は pub_seq を持たず custody 対象外。これらは**既存の検疫期限失効＋フロア**で従来どおり purge する（保護対象は「custody を約束した=pub_seq 付き未 ack 正本」だけ）。
-- **圧力時の劣化（custody_lost トリガ封じ）**: クラス①を出し切っても statvfs 高水位が続く場合、クラス④（**保存済み**未ack正本の削除+custody_lost）は MVE では**実装しない**＝保存済みデータを消さないので custody_lost が定義上発生しない。**新規の「水位→collector deferred 逆圧」経路は作らない**（D1 はプロセス内逆圧を mpsc await と規定し `Deferred` は返さない [D1:111]。現実装も inproc は Full 時 drop）。この場合の劣化は **front-door**: 既存の bounded channel / ingest spool が overflow で**未受理**データを drop する（`bravepi event_loop:136`, `polling_loop:622`, `ingest-client spool:194`）。これは custody（受理・保存済み正本の約束）ではないので custody_lost ではない。R12 に per-target 配送状態（遅延・target 死亡・水位）を公開して可視化する（D7決定9 最小）。水位閾値の具体値は writing-plans。
+- **保護は pub_seq 付き未ack正本だけ / それ以外は floor で purge**（Sonnet iter2 [高]、無限保持回避）: 置換後の readings 判定を「**`received_at < now - floor` の readings を削除。ただし pub_seq を持つ（=配送対象）かつ未ack（epoch 一致で `pub_seq > cursor_pub_seq`）の非検疫行だけは保護（削除しない）**」と実装する。検疫行（quarantined=1、pub_seq 無し）・enqueue されなかった行は保護対象外で floor で消える。これは**新規の readings purge branch**（旧 `purge_readings_before` の置換）であり、「既存機構が検疫 readings を消す」ではない（デバイス検疫期限失効は `devices.state` のみ＝§8.1）。
+- **圧力時の挙動（custody_lost トリガ封じ、iter2 [中] で story 修正）**: クラス①を出し切っても statvfs 高水位が続く場合、クラス④（**保存済み**未ack正本の削除+custody_lost）は MVE では**実装しない**＝保存済みデータを消さないので custody_lost が定義上発生しない。**能動的逆圧（水位→collector 抑制）も新設しない**（D1 はプロセス内逆圧を mpsc await と規定し `Deferred` を返さない [D1:111]）。**正確な劣化像**: 既存の front-door drop（`iotkit-ingest-client/src/lib.rs:184` / `bravepi event_loop:133` / `polling_loop:619`）は**スループット由来**（バースト時のバッファ溢れ）で **ディスク水位に連動しない**（`observe_watermark_latched` は監査+health フラグのみで取り込みを絞らない）。よって「archive 消費者ダウンで custody backlog がディスクを埋める」場面では front-door は発火せず、放置すると最終的に `ENOSPC` で**新規書込が明示的に失敗**する（保存済みデータは保持、無音損失なし、custody_lost でない）。MVE はこれを許容し、**R12 に水位・per-target 配送状態を事前公開して警報**する（能動 throttle とクラス④は後続）。水位閾値・R12 形式は writing-plans。
 
 ### 8.3 archive target 不在時 と outbox prune・Tx 原子性
 - **floor-only へ縮退する条件を厳格化**: **target が1行も登録されていない、または archive_responsible=0 の時のみ** custody 約束が無いので floor-only（received_at < now - フロア）に縮退する。**archive_responsible=1 の target が登録済みだが cursor_epoch が未一致/NULL（未 ack）の場合は floor-only にしない**——effective cursor=0 として全 pub_seq 付き行を保護する（未 ack 正本の無音破棄は契約違反 [D2:30]）。
+  - **「target 不在」に至る経路を限定（iter2 [高]）**: rotation は in-place `rotate-token`（§3.3）で target は消えない。target 不在は明示的 `remove`（未 ack 正本があれば拒否/`--abandon-custody` 監査、§11）でのみ発生する。＝floor-only は「運用者が監査付きで custody を放棄した後」だけに到達し、無音では起きない。
 - **クラス①パージの原子性**: eligibility select → **outbox 行 prune → readings 行 delete** → 監査、を**単一 Immediate Tx** で行う（現 retention の purge 後別 Tx を改める）。電源断で dangling ref や半端状態を残さない。削除順は outbox→readings（FK 方向、§4.1）。
-- **outbox prune 規則**: `publication_log` 行は配送 retry のため ack まで保持し、以下で prune:
+- **outbox prune 規則**: `publication_log` 行は配送 retry のため ack まで保持し、以下で prune（**いずれも対応 readings 削除と同一 Tx でペア**にし、outbox だけ/readings だけの片残り＝orphan を作らない。iter2 [中]）:
   - ack 済み（`epoch==cursor_epoch==current` かつ `pub_seq <= cursor_pub_seq`）行は、対応 readings のクラス①削除と同一 Tx で prune。
-  - archive target 不在の floor-only 削除で readings を消す時は、対応 outbox 行も同時に prune（outbox が readings より長生きしない・無制限成長しない）。
-  - 旧 epoch の残 outbox 行はフロア基準で prune 可。
+  - archive target 不在の floor-only 削除で readings を消す時は、対応 outbox 行も同時に prune。
+  - **旧 epoch の残 outbox 行**（非 pristine restore 等）はフロア基準で、**対応 readings 行と同一 Tx で**削除する（outbox だけ消して readings を orphan 化しない）。
 
 ---
 
@@ -285,11 +302,13 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 
 - **配送接続**: gateway=client, consumer=server。gateway が per-target token を `Authorization: Bearer` で提示、消費者がそれで gateway を認証。HTTPS(rustls) でチャネル保護。相互認証・証明書ピンは R19（sub-project B）。
 - **`gatewayctl target add` ガード（MVE 最小）**:
+  0. **既存 target が1行でもあれば `add` を拒否**（MVE は単一 target。2行目を作らせない。Sonnet iter2 [低]）。
   1. `endpoint_url` は `https://` のみ受理（平文拒否）。
   2. 登録を ledger 監査イベントに記録。
   3. 登録時**疎通スモーク**（空/ping バッチを POST し 2xx+ack を確認）。**スモーク成功まで archive_responsible=0**（誤設定 archive target へ配送→未受信のままパージ＝custody 損失を防ぐ）。
   4. `schema_version` 一致チェック（MVE=1、不一致は拒否）。
-- **`target remove`**: target 行と cursor を削除。漏洩トークンの失効 = remove + 新トークンで add（§3.3）。
+- **`target rotate-token`**: 行と cursor を保持したまま token を UPDATE + 再スモーク（漏洩トークンの正しい失効経路。§3.3）。remove+add は使わない。
+- **`target remove`**: 明示的 custody 放棄。未 ack の pub_seq 付き正本が残る場合は拒否、`--abandon-custody` で監査付き強行のみ（§3.3）。
 - **HTTP クライアント**: smoke-test POST のため gatewayctl に `reqwest`(blocking) を追加（gateway daemon の async reqwest とは別 feature）。
 - 完全な R14 型付き操作（権限段階・dry-run・全操作カタログ）は sub-project E。
 
@@ -297,9 +316,10 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 
 ## 12. R22 連携
 
-- **target_registry を平文 R22 snapshot に含めない**。理由: `credential_token` は秘密で、現 R22 snapshot は平文 JSON 書き出し（`iotkit-gatewayctl/src/cmd/snapshot.rs:126`）。[D2:75/98](../../../../docs/redesign/decisions/D2-data-authority-topology-operations.md) は secrets 非空 snapshot の暗号化を必須とする。R22 暗号化は MVE スコープ外なので、**target/token を snapshot に入れない**。
+- **target_registry を平文 R22 snapshot に含めない**。理由: `credential_token` は秘密で、現 R22 snapshot は平文 JSON 書き出し（`iotkit-gatewayctl/src/cmd/snapshot.rs:129`）。[D2:75/98](../../../../docs/redesign/decisions/D2-data-authority-topology-operations.md) は secrets 非空 snapshot の暗号化を必須とする。R22 暗号化は MVE スコープ外なので、**target/token を snapshot に入れない**。
 - **publication_log（outbox）も data-plane** → readings 同様 snapshot に含めない。
-- **restore 相互作用**: `run_restore` の空判定（`snapshot.rs:259`）は 5 SECTIONS のみを見る＝ publish 2表は判定にもリストアにも関与しない。pristine な交換箱では publish 2表は空で、運用者が `target add` で再登録（credential 再発行 + スモークで archive_responsible 再有効化）。非 pristine な箱へ restore して古い target が残っても、epoch guard が stale cursor を fail-closed に無効化する（§6.4）ので誤パージ・誤配送は起きない（推奨は restore 前後に `target remove`/再登録）。target config の暗号化退避は R22 暗号化と同時に後続 sub-project へ。
+- **restore 相互作用**: `run_restore` の空判定（`snapshot.rs:259`）は 5 SECTIONS のみを見る＝ publish 2表は判定にもリストアにも関与しない。pristine な交換箱では publish 2表は空で、運用者が `target add` で再登録（credential 再発行 + スモークで archive_responsible 再有効化）。非 pristine な箱へ restore して古い target が残っても、epoch guard が stale cursor を fail-closed に無効化する（§6.4）ので誤パージ・誤配送は起きない（推奨は restore 前後に `target remove`/再登録）。
+- **非 pristine 残留の回収（iter2 [中]）**: 旧 epoch の outbox/readings 残存は §8.3 の「旧 epoch floor-prune（outbox+readings ペア、同一 Tx）」で回収する。pub_seq は AUTOINCREMENT 継続で 1 に戻らないが正しさは保つ（§4.1）。**writing-plans は restore 前提を確定する**: publish/readings 空を要求するか、restore Tx 内で publish/readings/sqlite_sequence を明示 cleanup するか。target config の暗号化退避は R22 暗号化と同時に後続 sub-project へ。
 
 ---
 
@@ -307,7 +327,7 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 
 - push 失敗（接続断/非2xx/タイムアウト/ack 不一致）: bounded exponential backoff（上限あり）。**shutdown 応答は net-new**: 既存の retention/health タスクは bare loop（`select!` shutdown 無し）で流用できないため、push タスクは main fan-in ループ（`main.rs:253` 系）の select! パターンを参考に**新規実装**する。
 - スモーク失敗: `target add` はエラーで中断、archive_responsible を立てない。
-- 消費者が長期死亡: cursor 進まず outbox 滞留 → フロア超過分もパージできず水位上昇 → R12 警報。極端な圧力では front-door の未受理 drop（§8.2）に劣化する（保存済み正本は消さない）。MVE は「単一の制御された archive 消費者」前提でこれを許容（文書化された制限）。
+- 消費者が長期死亡: cursor 進まず custody backlog がフロア超で滞留 → 水位上昇 → **R12 警報（事前）**。front-door drop はスループット由来でディスク水位に非連動なので（§8.2）この場面では発火せず、放置すれば最終的に `ENOSPC` で新規書込が明示失敗する（保存済み正本は保持、無音損失なし）。MVE は「単一の制御された archive 消費者」前提でこれを許容（能動 throttle とクラス④は後続）。
 - 全体障害と個別 target 障害を混同しない（MVE は single-target だが、エラー型は target_id 文脈を持つ）。
 
 ---
@@ -325,7 +345,11 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 - **outbox prune / no-dangling**: ack 済み行の同一 Tx prune、floor-only 時の prune、電源断（Tx 途中）で dangling ref が残らないこと。
 - **byte-cap 単一超過**: 1レコードが byte cap を超えても空バッチにならず配送が進むこと。
 - **hard reject（§9）**: archive target 登録中の検疫解除が override 無しで拒否され、`--release-abandon-past` で監査付き解除できること。
-- **target 登録ガード**: http:// 拒否、スモーク失敗で archive_responsible が立たない、schema_version 不一致拒否。`remove` で失効できること。
+- **target 管理ガード**: http:// 拒否、スモーク失敗で archive_responsible が立たない、schema_version 不一致拒否、**既存 target ありで `add` 拒否**、`rotate-token` で cursor 保持しつつ token 更新、`remove` は未 ack 正本ありで拒否/`--abandon-custody` で監査付き。
+- **rotation 窓の custody 保護（iter2 [高]）**: 4日超 backlog（>フロア）保持中に `rotate-token` しても floor-only パージが起きず backlog が保護されること。未 ack ありの `remove` が override 無しで拒否されること。
+- **検疫 readings の floor purge（iter2 [高]）**: 検疫行（quarantined=1、pub_seq 無し）が archive target 登録中でもフロア超で削除される（無限保持しない）。同時に pub_seq 付き未 ack 正本は削除されない（新規 branch を実際に踏む）。
+- **旧 epoch 残留の回収（iter2 [中]）**: 非 pristine 想定で、旧 epoch の outbox 行が対応 readings とペアで削除され orphan が残らないこと。
+- **圧力時の無音損失なし（iter2 [中]）**: 消費者ダウンで水位上昇時、保存済み未 ack 正本が削除されず R12 が水位を公開すること（front-door drop は本経路で発火しない）。
 - 契約(D7)を見るテストであって実装詳細に張り付かない。malformed ack・oversized batch・shutdown 競合を含める。
 
 ---
