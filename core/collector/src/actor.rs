@@ -587,6 +587,63 @@ mod tests {
         assert_eq!(quarantined_outbox, 0, "quarantined readings must not be enqueued");
     }
 
+    #[test]
+    fn multi_item_envelope_enqueues_distinct_outbox_rows() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let mut cache = ResolutionCache::default();
+        let mut envelope = env("e-outbox-multi", "ble:aa", "temperature_c");
+        envelope.items.push(ReadingItem {
+            subject_hint: Some("ble:aa".into()),
+            measurement_key: "humidity_pct".into(),
+            channel_index: None,
+            series_variant: None,
+            values: vec![55.0],
+            device_time_ms: None,
+            time_source: TimeSource::Gateway,
+            age_ms: None, rssi: None, battery_pct: None,
+        });
+
+        let ack = db.with_conn_sync(|conn| {
+            Ok(process_envelope(
+                conn,
+                &mut cache,
+                &PermissiveRegistry,
+                &envelope,
+            ).unwrap())
+        }).unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if items.len() == 2 && items.iter().all(|status| matches!(status,
+                ItemStatus::Stored {
+                    disposition: Disposition::Durable,
+                    quarantine_reason: None,
+                }))));
+
+        let (reading_seqs, outbox_rows): (Vec<i64>, Vec<(i64, i64)>) = db.with_conn_sync(|conn| {
+            let reading_seqs = conn.prepare("SELECT seq FROM readings ORDER BY seq")?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let outbox_rows = conn.prepare(
+                "SELECT pub_seq, reading_seq FROM publication_log
+                 WHERE kind = 'measurement'
+                 ORDER BY pub_seq",
+            )?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((reading_seqs, outbox_rows))
+        }).unwrap();
+        assert_eq!(reading_seqs.len(), 2);
+        assert_ne!(reading_seqs[0], reading_seqs[1]);
+
+        assert_eq!(outbox_rows.len(), 2, "each non-quarantined reading must be enqueued");
+        let outbox_reading_seqs: Vec<i64> = outbox_rows.iter()
+            .map(|(_pub_seq, reading_seq)| *reading_seq)
+            .collect();
+        assert_eq!(outbox_reading_seqs, reading_seqs);
+        assert_ne!(outbox_rows[0].0, outbox_rows[1].0);
+    }
+
     #[tokio::test]
     async fn device_quarantine_is_visible_as_ack_reason() {
         // 検疫状態デバイス(D5経路A: 承認→検疫→active の途中)のデータは行検疫+理由device_quarantined

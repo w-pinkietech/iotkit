@@ -11,6 +11,7 @@ fn full_db() -> iotkit_core_storage::DbHandle {
     all.extend_from_slice(ledger::MIGRATIONS); // 3, 5
     all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // 2, 4
     all.extend_from_slice(iotkit_core_registry::MIGRATIONS); // 6
+    all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
     all.sort_by_key(|m| m.version); // 1..=6
     iotkit_core_storage::init_db_memory(&all).unwrap()
 }

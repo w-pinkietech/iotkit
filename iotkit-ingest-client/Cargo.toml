@@ -19,4 +19,5 @@ iotkit-core-storage = { path = "../core/storage", features = ["test-util"] }
 iotkit-core-ledger = { path = "../core/ledger" }
 iotkit-core-timeseries = { path = "../core/timeseries" }
 iotkit-core-registry = { path = "../core/registry" }
+iotkit-core-publish = { path = "../core/publish" }
 tokio = { version = "1", features = ["sync", "rt", "macros", "time", "rt-multi-thread"] }
