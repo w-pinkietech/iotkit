@@ -180,7 +180,7 @@ fn dispatch(
         },
         Command::Target { command } => {
             let real_smoke = |endpoint: &str, token: &str| -> Result<(), String> {
-                reqwest::blocking::Client::new()
+                let response = reqwest::blocking::Client::new()
                     .post(endpoint)
                     .bearer_auth(token)
                     .json(&serde_json::json!({
@@ -188,9 +188,13 @@ fn dispatch(
                         "records": [],
                     }))
                     .send()
-                    .map_err(|e| e.to_string())?
-                    .error_for_status()
                     .map_err(|e| e.to_string())?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "smoke POST returned non-success status: {}",
+                        response.status()
+                    ));
+                }
                 Ok(())
             };
             match command {

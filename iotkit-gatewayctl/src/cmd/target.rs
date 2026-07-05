@@ -144,17 +144,20 @@ pub fn run_target_list(conn: &Connection) -> AppResult<()> {
         return Ok(());
     };
 
-    println!(
-        "{}\t{}\t{}\tarchive_responsible={}\tschema_version={}\tcursor_epoch={}\tcursor_pub_seq={}",
+    println!("{}", format_target_line(&target));
+    Ok(())
+}
+
+fn format_target_line(target: &TargetRow) -> String {
+    format!(
+        "{}\t{}\t***\tarchive_responsible={}\tschema_version={}\tcursor_epoch={}\tcursor_pub_seq={}",
         target.target_id,
         target.endpoint_url,
-        "***",
         target.archive_responsible,
         target.schema_version,
-        target.cursor_epoch.unwrap_or_default(),
+        target.cursor_epoch.as_deref().unwrap_or_default(),
         target.cursor_pub_seq
-    );
-    Ok(())
+    )
 }
 
 fn now_ms() -> i64 {
@@ -320,6 +323,24 @@ mod tests {
         assert_eq!(row.schema_version, 1);
         assert_eq!(row.cursor_epoch, None);
         assert_eq!(row.cursor_pub_seq, 0);
+    }
+
+    #[test]
+    fn list_masks_credential_token() {
+        let target = TargetRow {
+            target_id: "archive".into(),
+            endpoint_url: "https://archive.example/publish".into(),
+            credential_token: "real-secret-token".into(),
+            archive_responsible: true,
+            schema_version: 1,
+            cursor_epoch: None,
+            cursor_pub_seq: 0,
+        };
+
+        let line = format_target_line(&target);
+
+        assert!(line.contains("***"));
+        assert!(!line.contains("real-secret-token"));
     }
 
     #[test]
