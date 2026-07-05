@@ -4,6 +4,7 @@
 mod adapter_host;
 mod config;
 mod health;
+mod publish_task;
 #[allow(dead_code)]
 mod record;
 mod retention;
@@ -127,6 +128,8 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         health_state.clone(),
         Duration::from_secs(60),
     );
+    let _publish_task =
+        publish_task::spawn_publish_task(db.clone(), health_state.clone(), Duration::from_secs(30));
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
     // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
