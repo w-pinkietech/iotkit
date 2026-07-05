@@ -25,7 +25,7 @@
 5. annotation 族の**最小**（`epoch_start` のみ配送）
 6. custody→R17 retention 作り替え（クラス① = ack 済み ∧ フロア超過のみ削除、未ack**正本**は保護。検疫行は保護しない）
 7. auth 骨子（per-target bearer + HTTPS）
-8. target 管理 CLI（`add|list|remove`）と登録ガード（HTTPS 強制・ledger 監査・疎通スモーク成功まで archive_responsible 無効・v1 版チェック）
+8. target 管理 CLI（`add|list|rotate-token|remove`）と登録ガード（HTTPS 強制・ledger 監査・疎通スモーク成功まで archive_responsible 無効・v1 版チェック）
 9. R22 連携（target/token・outbox とも snapshot 非含有、復元後 target 再登録。§12）
 10. 適合テスト消費者（リポジトリ内フィクスチャ）
 
@@ -38,7 +38,7 @@
 | publication snapshot | DEFERRED | R22 restore 時は `epoch_start` annotation で新 epoch へ載り替え（新 epoch は最小 pub_seq から）。復元前データの backfill は D7決定8B どおり約束しない |
 | bounded backfill | DEFERRED | — |
 | multi-target fan-out / 購読フィルタ | DEFERRED | single-target 固定。archive_responsible target に購読フィルタは元々不適用（D7決定7） |
-| cursor_expired / gap 復帰通知 | DEFERRED | MVE はフロア内保持のため、単一 target が追随できる前提。長期断は front-door 劣化で吸収 |
+| cursor_expired / gap 復帰通知 | DEFERRED | MVE はフロア内保持のため、単一 target が追随できる前提。長期断は R12 事前警報＋保存済み正本保持（放置は ENOSPC 明示失敗、§8.2） |
 | R14 型付き操作フレームワーク | DEFERRED（sub-project E） | target 操作は §11 の最小ガードのみ |
 | R19 完全認証（相互認証・証明書ピン） | DEFERRED（sub-project B） | per-target bearer + HTTPS 骨子のみ |
 
@@ -103,6 +103,19 @@ iter1 修正版(b9f7157)を再レビュー。codex は 7/8 landing OK、Sonnet �
 | Sonnet | 低 | 2nd target 行を拒否するガード無し | §11 add ガードに追加 |
 | Sonnet | 低 | 引用行ズレ（handle.rs:14→16, snapshot.rs:126→129） | 修正 |
 
+### 2.6 iteration 3（再レビュー）裁定（2026-07-05, codex + Sonnet 並行）
+iter2 修正版(72463d7)を再レビュー。**codex は新規[高]なし**（stale 整合の[中]3/[低]1）。**Sonnet は新規[高]2件**を独立発見（codex 未検出＝別系統の価値）。全採用:
+
+| 出所 | 重大度 | 指摘 | 反映 |
+|---|---|---|---|
+| Sonnet | 高 | `replace-undo` の遡及検疫が既 pub_seq 未ack 行を quarantined=1 に反転→§8.2 保護外→floor purge→outbox dangling（無音損失/FK）。付与方向ガード欠落 | §4.1/§9.2: `mark_readings_quarantined` が同一 Tx で outbox prune、既 ack 含む時は archive 登録中 override |
+| Sonnet | 高 | NEW 退行: `remove` の未ack検査に TOCTOU（gatewayctl は別プロセス、in-proc Mutex 跨がず）→検査後に daemon が新 pub_seq commit→floor-only 無音パージ | §3.3/§11: 検査→削除/拒否＋監査を単一 Immediate Tx |
+| Sonnet | 中 | rotate-token の再スモークが archive_responsible を一時 0 にすると §8.3 第2 disjunct が開く。スモーク失敗挙動未定 | §3.3/§11: archive_responsible 終始 1、スモーク失敗は token ロールバック |
+| codex | 中 | target rotation の stale 矛盾（§4.2/§1.2/§15 に remove+add 残骸/CLI 一覧漏れ） | rotate-token へ統一 |
+| codex | 中 | §1.3 cursor_expired が front-door 劣化文言（stale） | ENOSPC story へ整合 |
+| codex | 中 | §9 「検疫期限失効まで保持」が §8.2 floor purge と矛盾 | 「floor purge まで R11 可読」へ |
+| both | 低 | abandon-custody の Tx 原子性 / §6.4 restore 過度一般化 / pre-upgrade readings | §9.2 Tx、§6.4 pristine 限定、§8.2 一文 |
+
 ---
 
 ## 3. コンポーネントとクレート構成
@@ -119,8 +132,8 @@ iter1 修正版(b9f7157)を再レビュー。codex は 7/8 landing OK、Sonnet �
 
 ### 3.3 target 管理 CLI（`iotkit-gatewayctl`）
 - **責務**: `gatewayctl target add|list|rotate-token|remove`。登録時ガード（§11）。既存 cmd/ モジュール（devices/registry/query/snapshot）と同型。
-- **`rotate-token`（token rotation の正路）**: target 行と cursor を**保持したまま** `credential_token` を in-place で UPDATE し再スモーク。**remove+add を rotation に使わない**——remove で target が一瞬でも消えると §8.3 floor-only 窓が開き保存済み未ack正本を誤パージし得るため（iter2 [高]、codex+Sonnet 双方指摘）。
-- **`remove`（decommission=明示的 custody 放棄）**: target 行と cursor を削除。**未 ack の pub_seq 付き正本が cursor 超で残っている場合は拒否**し、`--abandon-custody`（監査記録）でのみ強行。無音の floor-only 誤パージを起こさない。
+- **`rotate-token`（token rotation の正路）**: target 行と cursor を**保持したまま** `credential_token` を in-place で UPDATE し再スモーク。**remove+add を rotation に使わない**——remove で target が一瞬でも消えると §8.3 floor-only 窓が開き保存済み未ack正本を誤パージし得るため（iter2 [高]）。**`archive_responsible` は操作全体で 1 のまま変更しない**（再スモークで一時 0 にすると §8.3 floor-only の第2 disjunct が開く。iter3 [中]）。スモーク失敗時は token を旧値へロールバック（動く token を維持、archive_responsible=1 のまま）。
+- **`remove`（decommission=明示的 custody 放棄）**: target 行と cursor を削除。**未 ack の pub_seq 付き正本が cursor 超で残っている場合は拒否**し、`--abandon-custody`（監査記録）でのみ強行。**gatewayctl は gateway と別プロセスなので、この『未 ack 検査→削除/拒否＋監査』は単一 `BEGIN IMMEDIATE` Tx で行う**（daemon が検査と削除の間に新 pub_seq を commit する TOCTOU を防ぐ。iter3 [高]）。無音の floor-only 誤パージを起こさない。
 - **注**: smoke-test POST（§11）のため、現状 sync な gatewayctl に **`reqwest` blocking client** を追加（gateway daemon 側の async reqwest とは feature 違い）。
 
 ### 3.4 enqueue フック（`core/collector`）
@@ -149,7 +162,7 @@ created_at     INTEGER NOT NULL
 - **カーソル同一性は必ず `(epoch, pub_seq)` の複合**。pub_seq 単独で ack/配送/パージ判定をしてはならない（epoch 跨ぎの誤適用を防ぐ。§6.4/§8.2 の epoch guard）。
 - measurement は実体を持たず readings を参照（重複保存回避）。annotation は backing row が無いのでペイロードを inline 保存。
 - **`reading_seq` と readings の FK / 削除順**: `PRAGMA foreign_keys=ON`（`core/storage/src/lib.rs:20`）。retention のクラス①削除は **outbox 行 prune → readings 行 delete の順**を単一 Immediate Tx で行う（§8.3）。FK を張る場合は `ON DELETE` 挙動、張らない場合は削除順を、writing-plans で確定（既定＝この削除順を守れば FK 有無どちらでも安全）。
-- **不変条件**: outbox は非検疫行のみ持つ。検疫行は解除まで採番しない（D7決定4）。MVE では検疫解除 renumber を封じる（§9）。
+- **不変条件**: outbox は非検疫行のみ持つ。検疫行は採番しない（D7決定4）。**遡及検疫**（`mark_readings_quarantined`、`device replace-undo` 経由で既存行を quarantined=1 に反転）も同一 Tx で対応 outbox 行を prune し、『検疫⇒pub_seq 無し』不変を保つ（iter3 [高]、§9.2）。MVE では検疫解除 renumber を封じる（§9）。
 
 ### 4.2 `target_registry`
 ```
@@ -164,7 +177,7 @@ created_at          INTEGER NOT NULL
 ```
 - MVE は1行のみ運用（複数 target は DEFERRED）。
 - `(cursor_epoch, cursor_pub_seq)` = target 別カーソル（D7決定6）。**両方セットで判定**（epoch guard、§6.4/§8.2）。初期 `cursor_epoch=NULL`（未 ack）は「どの epoch にも一致しない」＝effective cursor 0 として fail-closed に保護される（Sonnet 確認: `NULL = 'epoch'` は false）。
-- **`credential_token` は秘密** → R22 snapshot に含めない（§12）。rotation は §3.3 の remove+add。
+- **`credential_token` は秘密** → R22 snapshot に含めない（§12）。rotation は §3.3 の in-place `rotate-token`（remove+add ではない）。
 
 ---
 
@@ -211,7 +224,7 @@ DB は単一 `Arc<Mutex<Connection>>` 共有（`handle.rs:14`）。**HTTP POST �
 - retention タスク（§8）が archive_responsible=1 の target の `(cursor_epoch, cursor_pub_seq)` と `current_epoch`（cycle 内 fresh）を読み、**`publication_log.epoch == cursor_epoch == current_epoch` かつ `pub_seq ≤ cursor_pub_seq`（=ack済み）** かつ `received_at < now - フロア` の readings をクラス①として削除（§8.2）。epoch 不一致なら ack 済み扱いにしない。
 
 ### 6.4 R22 restore → epoch 載り替え
-- restore で epoch 更新（既存、`renew_epoch`）。outbox/readings は空（snapshot 非含有）。**target_registry も snapshot 非含有（§12）なので、pristine な交換箱では target は無く、運用者が再登録**。
+- restore で epoch 更新（既存、`renew_epoch`）。**pristine な交換箱では** outbox/readings は空（非 pristine の残留は §12/§8.3 で回収）。**target_registry も snapshot 非含有（§12）なので、pristine では target は無く、運用者が再登録**。
 - gateway 起動時、**collector spawn 前**に §5.2 の trigger アルゴリズムで `epoch_start` を enqueue（新 epoch 内で**最小 pub_seq**を保証。pristine では 1）。
 - **epoch guard**: 万一 target が旧 `cursor_epoch` を持って残っていても（非 pristine 復元）、push/retention は `cursor_epoch != current_epoch` を検知し effective cursor=0、新 epoch を最小 pub_seq から扱う。書込側レース（POST 中に別 restore で epoch が変わり stale cursor を書き戻す）も、次 cycle の再比較で無視され fail-closed（Sonnet 確認）。消費者は epoch 不一致で再 baseline（D7決定8B）。
 
@@ -263,7 +276,7 @@ D7決定7 の4クラス順序のうち **MVE はクラス① のみ実装**:
 - **削除対象**: 上記で ack 済み **かつ** `readings.received_at < now - 最低保持フロア` の行。
 - **最低保持フロア**: [D1:154](../../../../docs/redesign/decisions/D1-ingest-model.md) / [台帳:115](../../../../docs/redesign/responsibility-ledger.md) = 既定 72h・設定可。**データ年齢(received_at)基準**（ack 相対でなくデータの新しさ。「正常時のデータ残高≒フロア分のみ、断線時のみ水位上昇」）。→ `archive_acked_at` 列は不要。
 - **未ack「正本」は保護**: pub_seq を持つ（=配送対象の）非検疫 readings で未 ack のものは received_at が古くても**削除しない**（従来の無条件時刻カットオフ削除を廃止）。
-- **保護は pub_seq 付き未ack正本だけ / それ以外は floor で purge**（Sonnet iter2 [高]、無限保持回避）: 置換後の readings 判定を「**`received_at < now - floor` の readings を削除。ただし pub_seq を持つ（=配送対象）かつ未ack（epoch 一致で `pub_seq > cursor_pub_seq`）の非検疫行だけは保護（削除しない）**」と実装する。検疫行（quarantined=1、pub_seq 無し）・enqueue されなかった行は保護対象外で floor で消える。これは**新規の readings purge branch**（旧 `purge_readings_before` の置換）であり、「既存機構が検疫 readings を消す」ではない（デバイス検疫期限失効は `devices.state` のみ＝§8.1）。
+- **保護は pub_seq 付き未ack正本だけ / それ以外は floor で purge**（Sonnet iter2 [高]、無限保持回避）: 置換後の readings 判定を「**`received_at < now - floor` の readings を削除。ただし pub_seq を持つ（=配送対象）かつ未ack（epoch 一致で `pub_seq > cursor_pub_seq`）の非検疫行だけは保護（削除しない）**」と実装する。検疫行（quarantined=1、pub_seq 無し）・enqueue されなかった行は保護対象外で floor で消える。これは**新規の readings purge branch**（旧 `purge_readings_before` の置換）であり、「既存機構が検疫 readings を消す」ではない（デバイス検疫期限失効は `devices.state` のみ＝§8.1）。**Wave 0→1 アップグレード（restore でない）の既存 readings も pub_seq を持たない**ので保護対象外＝従来どおり floor で消える（新たな保護を与えないだけで退行ではない、iter3 [低]）。
 - **圧力時の挙動（custody_lost トリガ封じ、iter2 [中] で story 修正）**: クラス①を出し切っても statvfs 高水位が続く場合、クラス④（**保存済み**未ack正本の削除+custody_lost）は MVE では**実装しない**＝保存済みデータを消さないので custody_lost が定義上発生しない。**能動的逆圧（水位→collector 抑制）も新設しない**（D1 はプロセス内逆圧を mpsc await と規定し `Deferred` を返さない [D1:111]）。**正確な劣化像**: 既存の front-door drop（`iotkit-ingest-client/src/lib.rs:184` / `bravepi event_loop:133` / `polling_loop:619`）は**スループット由来**（バースト時のバッファ溢れ）で **ディスク水位に連動しない**（`observe_watermark_latched` は監査+health フラグのみで取り込みを絞らない）。よって「archive 消費者ダウンで custody backlog がディスクを埋める」場面では front-door は発火せず、放置すると最終的に `ENOSPC` で**新規書込が明示的に失敗**する（保存済みデータは保持、無音損失なし、custody_lost でない）。MVE はこれを許容し、**R12 に水位・per-target 配送状態を事前公開して警報**する（能動 throttle とクラス④は後続）。水位閾値・R12 形式は writing-plans。
 
 ### 8.3 archive target 不在時 と outbox prune・Tx 原子性
@@ -283,9 +296,14 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 
 - **ルール**: **archive_responsible target が登録されている間、検疫を解除する操作（＝未配送の検疫 readings を持つ series の解除）は、明示オーバーライドフラグ無しでは拒否**する。
 - **実装**: 解除経路に「登録済み archive target があり、対象 series に未配送の検疫 readings があるか」のチェックを追加。該当すれば `gatewayctl` はエラーで中断し選択肢を提示（① archive target を remove ② renumber 実装（後続）を待つ ③ `--release-abandon-past` で過去分を放棄して解除、監査記録）。
-- **保持**: 拒否されている間、過去検疫行は検疫のまま `readings` に残り R11 で読める（検疫期限失効までは保持）。**黙って消えない・黙って解除されない**。
+- **保持**: 拒否されている間、過去検疫行は検疫のまま `readings` に残り R11 で読める（**floor purge まで**。§8.2 の非保護行として floor 超過で消える）。**黙って解除されない**。
 - **解除後の未来データ**: 通常どおり非検疫として outbox に流れる。欠けるのは解除前 backlog のみ。
 - **完全な検疫解除 renumber**（過去行の新規採番 + measurement 再配送 + 検疫遷移 annotation）は出口契約拡張（後続 sub-project）。導入後は archive target 登録中でも過去分ごと配送でき、本ガードを緩められる。
+
+### 9.2 検疫付与（遡及）経路のガード（replace-undo、iter3 [高] Sonnet）
+Wave 0 の `device replace-undo`（`iotkit-gatewayctl/src/cmd/replace.rs` → `mark_readings_quarantined`、`core/timeseries/src/query.rs:242`）は既存 readings を遡及的に `quarantined=1` へ反転する。反転対象が既に pub_seq を持つ未 ack 行だと、§8.2 の保護（非検疫限定）から外れて floor purge され、生きた outbox 行が dangling → 無音損失/FK エラーになる。D7決定1 は遡及検疫を annotation で扱うと規定するが MVE は annotation を封じるため、§9（解除方向）と**対称の付与方向ガード**を置く:
+- **機械的**: `mark_readings_quarantined` は同一 Tx で対応 `publication_log` 行を prune し、「検疫⇒pub_seq 無し」不変を回復（未配送分は配送から取り下げ、orphan/silent loss を作らない）。
+- **ポリシー**: 対象に**既 ack（配送済み、pub_seq ≤ cursor）行が含まれる**場合、MVE は遡及検疫を消費者へ通知できない（annotation 封鎖）。archive target 登録中は `replace-undo` を**明示 override（監査）**で確認させる（§9 と対称）。配送済みデータの MVE での回収不可は文書化された制限。
 
 ---
 
@@ -307,8 +325,8 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
   2. 登録を ledger 監査イベントに記録。
   3. 登録時**疎通スモーク**（空/ping バッチを POST し 2xx+ack を確認）。**スモーク成功まで archive_responsible=0**（誤設定 archive target へ配送→未受信のままパージ＝custody 損失を防ぐ）。
   4. `schema_version` 一致チェック（MVE=1、不一致は拒否）。
-- **`target rotate-token`**: 行と cursor を保持したまま token を UPDATE + 再スモーク（漏洩トークンの正しい失効経路。§3.3）。remove+add は使わない。
-- **`target remove`**: 明示的 custody 放棄。未 ack の pub_seq 付き正本が残る場合は拒否、`--abandon-custody` で監査付き強行のみ（§3.3）。
+- **`target rotate-token`**: 行と cursor を保持したまま token を UPDATE + 再スモーク（§3.3）。**`archive_responsible` は変えない（終始 1、スモーク失敗時は token ロールバック）**。remove+add は使わない。
+- **`target remove`**: 明示的 custody 放棄。**未 ack 検査→削除/拒否＋監査を単一 Immediate Tx**（別プロセス gatewayctl の TOCTOU 防止、iter3 [高]）。未 ack の pub_seq 付き正本が残る場合は拒否、`--abandon-custody` で監査付き強行のみ（§3.3）。
 - **HTTP クライアント**: smoke-test POST のため gatewayctl に `reqwest`(blocking) を追加（gateway daemon の async reqwest とは別 feature）。
 - 完全な R14 型付き操作（権限段階・dry-run・全操作カタログ）は sub-project E。
 
@@ -350,6 +368,9 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 - **検疫 readings の floor purge（iter2 [高]）**: 検疫行（quarantined=1、pub_seq 無し）が archive target 登録中でもフロア超で削除される（無限保持しない）。同時に pub_seq 付き未 ack 正本は削除されない（新規 branch を実際に踏む）。
 - **旧 epoch 残留の回収（iter2 [中]）**: 非 pristine 想定で、旧 epoch の outbox 行が対応 readings とペアで削除され orphan が残らないこと。
 - **圧力時の無音損失なし（iter2 [中]）**: 消費者ダウンで水位上昇時、保存済み未 ack 正本が削除されず R12 が水位を公開すること（front-door drop は本経路で発火しない）。
+- **遡及検疫（replace-undo、iter3 [高]）**: `replace-undo` で既 pub_seq・未 ack 行を quarantined=1 にした時、対応 outbox が同一 Tx で prune され dangling/無音損失/FK エラーにならない。既 ack 行を含む場合 archive target 登録中は override が要る。
+- **remove の TOCTOU（iter3 [高]）**: `remove` の未 ack 検査中に別プロセス（gateway daemon）が新 pub_seq を commit しても、単一 Immediate Tx の検査+削除で未 ack 行を無音パージしない。
+- **rotate-token の archive_responsible 不変（iter3 [中]）**: rotate-token 実行中（スモーク失敗含む）archive_responsible が終始 1 で floor-only が発火しないこと。
 - 契約(D7)を見るテストであって実装詳細に張り付かない。malformed ack・oversized batch・shutdown 競合を含める。
 
 ---
@@ -367,6 +388,7 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 | `iotkit-gatewayctl/Cargo.toml` / `iotkit-gateway/Cargo.toml` | reqwest 追加（gatewayctl=blocking / gateway=async、rustls-tls） |
 | `iotkit-gatewayctl/src/cmd/snapshot.rs` | **変更なし**（§12: target/token・outbox とも snapshot 非含有） |
 | `core/registry/src/store.rs`（or 呼出側） | 検疫解除 hard reject ガード（§9） |
+| `iotkit-gatewayctl/src/cmd/replace.rs` / `core/timeseries/src/query.rs` | replace-undo 遡及検疫: `mark_readings_quarantined` が対応 outbox を同一 Tx prune、archive target 登録中は override（§9.2） |
 | `core/timeseries/migrations/0004_readings_v3.sql` | stale コメント修正 |
 
 ---
@@ -381,6 +403,9 @@ Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantin
 - epoch_start trigger の実装場所（gateway 起動シーケンス内、collector spawn 前、§5.2/§6.4）。
 - 水位→R12 公開の具体形と閾値（§8.2）。
 - push タスクの `select!` shutdown 実装（net-new、§13）。
+- rotate-token のスモーク失敗挙動（token ロールバック、archive_responsible 不変、§3.3）。
+- remove / abandon-custody の単一 Immediate Tx 境界（§3.3/§9.2）。
+- replace-undo 遡及検疫の outbox prune と override 境界（§9.2）。
 
 ---
 
