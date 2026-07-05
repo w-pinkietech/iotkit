@@ -12,6 +12,7 @@ fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
     all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
     all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
     all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+    all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
     all.sort_by_key(|m| m.version);
     all
 }
@@ -238,7 +239,7 @@ fn existing_empty_db_gets_gateway_migration_version_set() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9, 10]);
 }
 
 #[test]
