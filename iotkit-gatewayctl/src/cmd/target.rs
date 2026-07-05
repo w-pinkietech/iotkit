@@ -97,6 +97,9 @@ pub fn run_target_rotate_token(
     smoke: &dyn Fn(&str, &str) -> Result<(), String>,
 ) -> AppResult<()> {
     let target = target_get(conn)?.ok_or("no target")?;
+    if !target.endpoint_url.starts_with("https://") {
+        return Err("refusing to rotate token for a non-HTTPS endpoint".into());
+    }
     let old_token = target.credential_token.clone();
 
     crate::cmd::devices::mutate(conn, |tx| {
@@ -388,6 +391,36 @@ mod tests {
         assert!(row.archive_responsible);
         assert_eq!(row.cursor_epoch.as_deref(), Some(epoch.as_str()));
         assert_eq!(row.cursor_pub_seq, 42);
+    }
+
+    #[test]
+    fn rotate_token_refuses_non_https_endpoint() {
+        let conn = test_conn();
+        target_insert(
+            &conn,
+            &TargetRow {
+                target_id: "archive".into(),
+                endpoint_url: "http://legacy.example".into(),
+                credential_token: "old-token".into(),
+                archive_responsible: true,
+                schema_version: 1,
+                cursor_epoch: None,
+                cursor_pub_seq: 0,
+            },
+            1,
+        )
+        .unwrap();
+        let smoke_called = std::cell::Cell::new(false);
+
+        let result = run_target_rotate_token(&conn, "new-token", &|_, _| {
+            smoke_called.set(true);
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert!(!smoke_called.get());
+        let row = target_get(&conn).unwrap().unwrap();
+        assert_eq!(row.credential_token, "old-token");
     }
 
     #[test]
