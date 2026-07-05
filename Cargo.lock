@@ -486,6 +486,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-core-publish"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-ledger",
+ "iotkit-core-storage",
+ "iotkit-core-timeseries",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "iotkit-core-registry"
 version = "0.1.0"
 dependencies = [
@@ -535,6 +551,7 @@ dependencies = [
  "iotkit-core-collector",
  "iotkit-core-engine",
  "iotkit-core-ledger",
+ "iotkit-core-publish",
  "iotkit-core-registry",
  "iotkit-core-storage",
  "iotkit-core-timeseries",
@@ -560,6 +577,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "iotkit-core-ledger",
+ "iotkit-core-publish",
  "iotkit-core-registry",
  "iotkit-core-storage",
  "iotkit-core-timeseries",

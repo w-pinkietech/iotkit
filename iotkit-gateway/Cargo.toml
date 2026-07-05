@@ -12,6 +12,7 @@ iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"]
 iotkit-core-collector = { path = "../core/collector" }
 iotkit-core-ledger = { path = "../core/ledger" }
 iotkit-core-registry = { path = "../core/registry" }
+iotkit-core-publish = { path = "../core/publish" }
 bravepi-mainboard-adapter = { path = "../bravepi-mainboard-adapter" }
 rpi-local-adapter = { path = "../rpi-local-adapter" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
