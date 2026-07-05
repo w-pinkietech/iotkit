@@ -563,6 +563,7 @@ dependencies = [
  "rpi-local-adapter",
  "rusqlite",
  "serde",
+ "serde_json",
  "serial_test",
  "tempfile",
  "thiserror",

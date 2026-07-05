@@ -4,6 +4,8 @@
 mod adapter_host;
 mod config;
 mod health;
+#[allow(dead_code)]
+mod record;
 mod retention;
 mod supervision;
 
