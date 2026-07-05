@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -48,11 +49,12 @@ pub(crate) async fn run_publish_cycle(db: &DbHandle) -> Result<(), String> {
         "publication_id": publication_id.clone(),
         "records": prepared.records,
     });
+    let endpoint_url = delivery_endpoint_url(&prepared.endpoint_url);
 
     let client = reqwest::Client::new();
     let ack = tokio::time::timeout(POST_TIMEOUT, async {
         let response = client
-            .post(&prepared.endpoint_url)
+            .post(endpoint_url.as_ref())
             .bearer_auth(&prepared.credential_token)
             .json(&body)
             .send()
@@ -89,6 +91,16 @@ pub(crate) async fn run_publish_cycle(db: &DbHandle) -> Result<(), String> {
     .map_err(|e| e.to_string())??;
 
     Ok(())
+}
+
+fn delivery_endpoint_url(endpoint_url: &str) -> Cow<'_, str> {
+    #[cfg(test)]
+    if let Some(rest) = endpoint_url.strip_prefix("https://127.0.0.1:") {
+        // Unit tests use a plain loopback server; production still requires https:// targets.
+        return Cow::Owned(format!("http://127.0.0.1:{rest}"));
+    }
+
+    Cow::Borrowed(endpoint_url)
 }
 
 pub(crate) fn spawn_publish_task(
@@ -190,6 +202,15 @@ fn prepare_batch(conn: &Connection) -> Result<Option<PreparedBatch>, String> {
     let Some(target) = target_get(conn).map_err(|e| e.to_string())? else {
         return Ok(None);
     };
+    if !target.archive_responsible {
+        return Ok(None);
+    }
+    if !target.endpoint_url.starts_with("https://") {
+        return Err(format!(
+            "refusing to deliver to non-HTTPS endpoint: {}",
+            target.endpoint_url
+        ));
+    }
     let cursor = if target.cursor_epoch.as_deref() == Some(current_epoch.as_str()) {
         target.cursor_pub_seq
     } else {
@@ -253,9 +274,9 @@ fn advance_cursor_after_ack(
             ack.publication_id
         ));
     }
-    if ack.acked_pub_seq < cursor_end {
+    if ack.acked_pub_seq != cursor_end {
         return Err(format!(
-            "publish acked_pub_seq {} is before cursor_end {}",
+            "publish ack acked_pub_seq {} does not match batch cursor_end {}",
             ack.acked_pub_seq, cursor_end
         ));
     }
@@ -290,7 +311,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use iotkit_core_publish::store::{TargetRow, target_advance_cursor, target_get, target_insert};
+    use iotkit_core_publish::store::{
+        TargetRow, target_advance_cursor, target_get, target_insert,
+        target_set_archive_responsible,
+    };
     use iotkit_core_timeseries::NewReading;
     use rusqlite::params;
     use serde_json::Value;
@@ -339,7 +363,7 @@ mod tests {
 
     async fn spawn_consumers(mode: AckMode, request_count: usize) -> TestConsumerBatch {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint_url = format!("http://{}", listener.local_addr().unwrap());
+        let endpoint_url = format!("https://{}", listener.local_addr().unwrap());
         let received = tokio::spawn(async move {
             let mut requests = Vec::with_capacity(request_count);
             for _ in 0..request_count {
@@ -698,6 +722,89 @@ mod tests {
         assert_eq!(target_cursor(&db), (None, 0));
     }
 
+    #[test]
+    fn ack_with_high_acked_pub_seq_does_not_advance() {
+        let db = test_db();
+        let (epoch, pub_seqs) = seed_target_and_measurements(
+            &db,
+            "https://archive.example/publish".into(),
+            None,
+            0,
+            vec![vec![21.5], vec![22.0]],
+        );
+        let expected_publication_id = format!(
+            "target-1:{}:{}:{}",
+            epoch,
+            pub_seqs[0],
+            pub_seqs[pub_seqs.len() - 1]
+        );
+        let ack = super::AckResponse {
+            publication_id: expected_publication_id.clone(),
+            acked_pub_seq: pub_seqs[pub_seqs.len() - 1] + 1,
+        };
+
+        let err = db
+            .with_conn_sync(|conn| {
+                Ok(super::advance_cursor_after_ack(
+                    conn,
+                    "target-1",
+                    &epoch,
+                    pub_seqs[pub_seqs.len() - 1],
+                    &expected_publication_id,
+                    &ack,
+                ))
+            })
+            .unwrap()
+            .unwrap_err();
+
+        assert!(
+            err.contains("does not match batch cursor_end"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(target_cursor(&db), (None, 0));
+    }
+
+    #[tokio::test]
+    async fn push_skips_when_target_not_archive_responsible() {
+        let db = test_db();
+        seed_target_and_measurements(
+            &db,
+            "https://127.0.0.1:1".into(),
+            None,
+            0,
+            vec![vec![21.5], vec![22.0]],
+        );
+        db.with_conn_sync(|conn| {
+            target_set_archive_responsible(conn, "target-1", false).unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        super::run_publish_cycle(&db).await.unwrap();
+
+        assert_eq!(target_cursor(&db), (None, 0));
+    }
+
+    #[tokio::test]
+    async fn push_refuses_non_https_endpoint() {
+        let db = test_db();
+        seed_target_and_measurements(
+            &db,
+            "http://127.0.0.1:1".into(),
+            None,
+            0,
+            vec![vec![21.5], vec![22.0]],
+        );
+
+        let err = super::run_publish_cycle(&db).await.unwrap_err();
+
+        assert!(
+            err.contains("refusing to deliver to non-HTTPS endpoint: http://127.0.0.1:1"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(target_cursor(&db), (None, 0));
+    }
+
     #[tokio::test]
     async fn push_epoch_mismatch_redelivers_from_effective_cursor_zero() {
         let consumer = spawn_consumer(AckMode::EchoMax).await;
@@ -727,7 +834,7 @@ mod tests {
         let db = test_db();
         let (epoch, pub_seqs) = seed_target_and_measurements(
             &db,
-            "http://127.0.0.1:1".into(),
+            "https://127.0.0.1:1".into(),
             None,
             0,
             vec![vec![21.5], vec![22.0], vec![22.5]],

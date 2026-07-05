@@ -195,6 +195,12 @@ fn dispatch(
                         response.status()
                     ));
                 }
+                let ack: serde_json::Value = response
+                    .json()
+                    .map_err(|e| format!("smoke ack decode failed: {e}"))?;
+                if ack.get("publication_id").and_then(|v| v.as_str()) != Some("smoke") {
+                    return Err("smoke ack did not echo publication_id \"smoke\"".to_string());
+                }
                 Ok(())
             };
             match command {
