@@ -33,7 +33,7 @@
 | 項目 | 扱い | 封じ方（無音の穴を作らない） |
 |---|---|---|
 | custody_lost annotation | SEALED | クラス④（**保存済み**未ack正本の削除）を実装しない＝保存済みデータを消さないので custody_lost が発生しない。能動逆圧も新設しない。圧力時は R12 が事前警報し、放置時は front-door drop（スループット由来・ディスク水位に非連動）でなく最終的に `ENOSPC` の明示的書込失敗に至る（無音損失なし、iter2 [中] で story 修正）。詳細 §8.2 |
-| 検疫遷移 annotation / 検疫解除 renumber | SEALED | 解除経路を **hard reject でガード（§9）**: archive target 登録中は解除を拒否（override 必要）。無音の custody 欠落を作らない。過去検疫行は R11 で読める |
+| 検疫遷移 annotation / 検疫解除・付与 renumber | SEALED | 両方向を **hard reject でガード（§9.1 解除 / §9.2 付与=replace-undo）**: archive target 登録中は解除・遡及検疫とも override 無しで拒否。無音の custody 欠落を作らない。過去検疫行は R11 で読める |
 | 行レベル検疫 readings の再配送 | SEALED（明示制限） | 行レベル検疫（out_of_range/device_quarantined）は pub_seq を持たず custody 対象外。**保護せず**、フロア（§8.2 の新規 purge branch）で消える（無限保持しない、§8.2/§8.3） |
 | publication snapshot | DEFERRED | R22 restore 時は `epoch_start` annotation で新 epoch へ載り替え（新 epoch は最小 pub_seq から）。復元前データの backfill は D7決定8B どおり約束しない |
 | bounded backfill | DEFERRED | — |
@@ -126,6 +126,16 @@ iter3 修正版(8e587b1)を再レビュー。**Sonnet: 新規[高]なし**、ite
 | both | 中 | §15 target.rs 行が rotate-token 漏れ | 修正 |
 | Sonnet | 中 | §14 検疫 purge テスト文言が「検疫期限失効＋フロア」誤帰属を再導入 | §14 を新規 floor branch（§8.2）へ |
 | Sonnet/codex | 低 | §6.2 handle.rs:14→16 / §5.2 trigger 因果 / §16 参照 / §9.2 epoch-guard 句 | §6.2/§5.2/§16 修正、§9.2 は hard-reject 化で predicate 消滅 |
+
+### 2.8 iteration 5（収束確認）裁定（2026-07-05, codex + Sonnet 並行）→ **収束**
+iter4 修正版(0a018b1)を再レビュー。**両者とも新規[高]/[中]の設計問題なし**。Sonnet は §9.2 hard-reject が in-flight race を design/code 両面で閉じたことを確認、全 file:line 引用も検証済み（no hallucinated/drifted citations）。残りは one-line doc 整合のみで**両者「追加レビュー周回不要」明言**。修正を当て収束:
+
+| 出所 | 重大度 | 指摘 | 反映 |
+|---|---|---|---|
+| both | 中 | §14 遡及検疫テストが旧「既 ack だけ override」条件のまま（§9.2 hard-reject に未波及） | §14 を無条件 hard-reject へ |
+| both | 低 | §9.1 見出し欠如 / §1.3 が §9 のみ参照（§9.2 漏れ） | §9.1 見出し追加、§1.3 に §9.2 |
+
+**収束（iter5）**: 設計面は codex×3 + Sonnet×3 の敵対的並行レビュー5周で全 substantive 指摘（14→8→6→2→0 design）を解消。writing-plans へ。
 
 ---
 
@@ -302,8 +312,9 @@ D7決定7 の4クラス順序のうち **MVE はクラス① のみ実装**:
 
 ---
 
-## 9. 検疫解除経路のガード（hard reject、ユーザー裁定 2026-07-05）
+## 9. 検疫遷移経路のガード（解除・付与の両方向、hard reject）
 
+### 9.1 検疫解除（release）方向の hard reject（ユーザー裁定 2026-07-05）
 Wave 0 の alias 定義（`registry::define_alias` → `release_series_quarantine_for_key_checked`）は series 検疫フラグを clear するが、過去 readings 行は触らず outbox 化もしない。MVE は renumber を封じるので、**無音の配送欠落を作らないよう解除を hard reject でガードする**（D7:33/D5:89 に契約忠実）:
 
 - **ルール**: **archive_responsible target が登録されている間、検疫を解除する操作（＝未配送の検疫 readings を持つ series の解除）は、明示オーバーライドフラグ無しでは拒否**する。
@@ -381,7 +392,7 @@ Wave 0 の `device replace-undo`（`iotkit-gatewayctl/src/cmd/replace.rs` → `m
 - **検疫 readings の floor purge（iter2 [高]）**: 検疫行（quarantined=1、pub_seq 無し）が archive target 登録中でもフロア超で削除される（無限保持しない）。同時に pub_seq 付き未 ack 正本は削除されない（新規 branch を実際に踏む）。
 - **旧 epoch 残留の回収（iter2 [中]）**: 非 pristine 想定で、旧 epoch の outbox 行が対応 readings とペアで削除され orphan が残らないこと。
 - **圧力時の無音損失なし（iter2 [中]）**: 消費者ダウンで水位上昇時、保存済み未 ack 正本が削除されず R12 が水位を公開すること（front-door drop は本経路で発火しない）。
-- **遡及検疫（replace-undo、iter3 [高]）**: `replace-undo` で既 pub_seq・未 ack 行を quarantined=1 にした時、対応 outbox が同一 Tx で prune され dangling/無音損失/FK エラーにならない。既 ack 行を含む場合 archive target 登録中は override が要る。
+- **遡及検疫（replace-undo、iter3 [高]/iter4）**: archive_responsible target 登録中の `replace-undo` は `--abandon-custody` 無しで**拒否**される（既 ack か否かに依らず、§9.2）。override 時 or archive 不在時は `mark_readings_quarantined` が対応 outbox を同一 Tx で prune し dangling/無音損失/FK エラーにならない。
 - **remove の TOCTOU（iter3 [高]）**: `remove` の未 ack 検査中に別プロセス（gateway daemon）が新 pub_seq を commit しても、単一 Immediate Tx の検査+削除で未 ack 行を無音パージしない。
 - **rotate-token の archive_responsible 不変（iter3 [中]）**: rotate-token 実行中（スモーク失敗含む）archive_responsible が終始 1 で floor-only が発火しないこと。
 - 契約(D7)を見るテストであって実装詳細に張り付かない。malformed ack・oversized batch・shutdown 競合を含める。
