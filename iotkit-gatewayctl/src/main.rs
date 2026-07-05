@@ -4,6 +4,7 @@ mod cmd {
     pub mod registry;
     pub mod replace;
     pub mod snapshot;
+    pub mod target;
 }
 
 use clap::{Parser, Subcommand};
@@ -49,6 +50,10 @@ enum Command {
     Snapshot {
         #[command(subcommand)]
         command: cmd::snapshot::SnapshotCommand,
+    },
+    Target {
+        #[command(subcommand)]
+        command: cmd::target::TargetCommand,
     },
     Health(cmd::query::HealthArgs),
 }
@@ -173,6 +178,38 @@ fn dispatch(
             cmd::snapshot::SnapshotCommand::Export(args) => cmd::snapshot::run_export(conn, args),
             cmd::snapshot::SnapshotCommand::Restore(args) => cmd::snapshot::run_restore(conn, args),
         },
+        Command::Target { command } => {
+            let real_smoke = |endpoint: &str, token: &str| -> Result<(), String> {
+                reqwest::blocking::Client::new()
+                    .post(endpoint)
+                    .bearer_auth(token)
+                    .json(&serde_json::json!({
+                        "publication_id": "smoke",
+                        "records": [],
+                    }))
+                    .send()
+                    .map_err(|e| e.to_string())?
+                    .error_for_status()
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            };
+            match command {
+                cmd::target::TargetCommand::Add(args) => cmd::target::run_target_add(
+                    conn,
+                    &args.endpoint,
+                    &args.token,
+                    args.schema_version,
+                    &real_smoke,
+                ),
+                cmd::target::TargetCommand::List => cmd::target::run_target_list(conn),
+                cmd::target::TargetCommand::RotateToken(args) => {
+                    cmd::target::run_target_rotate_token(conn, &args.token, &real_smoke)
+                }
+                cmd::target::TargetCommand::Remove(args) => {
+                    cmd::target::run_target_remove(conn, args.abandon_custody)
+                }
+            }
+        }
         Command::Health(args) => cmd::query::run_health(db_path, args),
     }
 }
