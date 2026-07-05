@@ -56,9 +56,12 @@ pub(crate) async fn run_publish_cycle(db: &DbHandle) -> Result<(), String> {
             .send()
             .await
             .map_err(|e| format!("publish POST failed: {e}"))?;
-        let response = response
-            .error_for_status()
-            .map_err(|e| format!("publish POST returned non-success status: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "publish POST returned non-success status: {}",
+                response.status()
+            ));
+        }
         response
             .json::<AckResponse>()
             .await
@@ -221,8 +224,11 @@ fn next_backoff(current_delay: Duration, interval: Duration) -> Duration {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use iotkit_core_publish::store::{TargetRow, target_get, target_insert};
+    use iotkit_core_publish::store::{
+        TargetRow, target_advance_cursor, target_get, target_insert,
+    };
     use iotkit_core_timeseries::NewReading;
+    use rusqlite::params;
     use serde_json::Value;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -243,6 +249,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum AckMode {
         EchoMax,
+        EchoLow,
         WrongPublicationId,
     }
 
@@ -291,11 +298,16 @@ mod tests {
                 .unwrap_or(0);
             let ack_publication_id = match mode {
                 AckMode::EchoMax => publication_id.clone(),
+                AckMode::EchoLow => publication_id.clone(),
                 AckMode::WrongPublicationId => format!("{publication_id}:wrong"),
+            };
+            let acked_pub_seq = match mode {
+                AckMode::EchoMax | AckMode::WrongPublicationId => max_pub_seq,
+                AckMode::EchoLow => max_pub_seq - 1,
             };
             let ack = serde_json::json!({
                 "publication_id": ack_publication_id,
-                "acked_pub_seq": max_pub_seq,
+                "acked_pub_seq": acked_pub_seq,
             });
             let ack_body = serde_json::to_vec(&ack).unwrap();
             let response = format!(
@@ -487,6 +499,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn byte_cap_truncates_mid_batch_and_advances_to_last_included() {
+        let consumer = spawn_consumer(AckMode::EchoMax).await;
+        let db = test_db();
+        let modest_large_values = vec![1.234567; 34_000];
+        let (epoch, pub_seqs) = seed_target_and_measurements(
+            &db,
+            consumer.endpoint_url,
+            None,
+            0,
+            vec![
+                modest_large_values.clone(),
+                modest_large_values.clone(),
+                modest_large_values.clone(),
+                modest_large_values.clone(),
+                modest_large_values,
+            ],
+        );
+        let prepared = db
+            .with_conn_sync(|conn| Ok(super::prepare_batch(conn).unwrap().unwrap()))
+            .unwrap();
+        assert_eq!(prepared.records.len(), 3);
+        assert_eq!(prepared.cursor_end, pub_seqs[2]);
+
+        super::run_publish_cycle(&db).await.unwrap();
+
+        let received = consumer.received.await.unwrap();
+        assert_eq!(received.records.len(), 3);
+        assert_eq!(
+            received.records[0].get("pub_seq").and_then(|v| v.as_i64()),
+            Some(pub_seqs[0])
+        );
+        assert_eq!(
+            received.records[2].get("pub_seq").and_then(|v| v.as_i64()),
+            Some(pub_seqs[2])
+        );
+        assert_eq!(target_cursor(&db), (Some(epoch), pub_seqs[2]));
+    }
+
+    #[tokio::test]
     async fn ack_validation_failure_does_not_advance_cursor() {
         let consumer = spawn_consumer(AckMode::WrongPublicationId).await;
         let db = test_db();
@@ -502,6 +553,28 @@ mod tests {
 
         let _received = consumer.received.await.unwrap();
         assert!(err.contains("ack"), "unexpected error: {err}");
+        assert_eq!(target_cursor(&db), (None, 0));
+    }
+
+    #[tokio::test]
+    async fn ack_with_low_acked_pub_seq_does_not_advance() {
+        let consumer = spawn_consumer(AckMode::EchoLow).await;
+        let db = test_db();
+        seed_target_and_measurements(
+            &db,
+            consumer.endpoint_url,
+            None,
+            0,
+            vec![vec![21.5], vec![22.0]],
+        );
+
+        let err = super::run_publish_cycle(&db).await.unwrap_err();
+
+        let _received = consumer.received.await.unwrap();
+        assert!(
+            err.contains("acked_pub_seq"),
+            "unexpected error: {err}"
+        );
         assert_eq!(target_cursor(&db), (None, 0));
     }
 
@@ -527,5 +600,48 @@ mod tests {
             Some(pub_seqs[0])
         );
         assert_eq!(target_cursor(&db), (Some(epoch), pub_seqs[1]));
+    }
+
+    #[test]
+    fn publication_id_cursor_start_is_prev_cursor_plus_one() {
+        let db = test_db();
+        let (epoch, pub_seqs) = seed_target_and_measurements(
+            &db,
+            "http://127.0.0.1:1".into(),
+            None,
+            0,
+            vec![vec![21.5], vec![22.0], vec![22.5]],
+        );
+        db.with_conn_sync(|conn| {
+            target_advance_cursor(conn, "target-1", &epoch, pub_seqs[0]).unwrap();
+            conn.execute(
+                "DELETE FROM publication_log WHERE pub_seq = ?1",
+                params![pub_seqs[1]],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        let prepared = db
+            .with_conn_sync(|conn| Ok(super::prepare_batch(conn).unwrap().unwrap()))
+            .unwrap();
+        assert_eq!(prepared.cursor_start, pub_seqs[0] + 1);
+        assert_eq!(prepared.cursor_end, pub_seqs[2]);
+        assert_eq!(
+            prepared.records[0].get("pub_seq").and_then(|v| v.as_i64()),
+            Some(pub_seqs[2])
+        );
+        assert_ne!(prepared.cursor_start, pub_seqs[2]);
+
+        let publication_id = format!(
+            "{}:{}:{}:{}",
+            prepared.target_id,
+            prepared.current_epoch,
+            prepared.cursor_start,
+            prepared.cursor_end
+        );
+        let cursor_start_segment = publication_id.split(':').nth(2).unwrap();
+        assert_eq!(cursor_start_segment, (pub_seqs[0] + 1).to_string());
     }
 }
