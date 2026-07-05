@@ -11,7 +11,7 @@ pub struct OutboxRow {
     pub annotation_json: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TargetRow {
     pub target_id: String,
     pub endpoint_url: String,
@@ -20,6 +20,20 @@ pub struct TargetRow {
     pub schema_version: i64,
     pub cursor_epoch: Option<String>,
     pub cursor_pub_seq: i64,
+}
+
+impl std::fmt::Debug for TargetRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TargetRow")
+            .field("target_id", &self.target_id)
+            .field("endpoint_url", &self.endpoint_url)
+            .field("credential_token", &"***")
+            .field("archive_responsible", &self.archive_responsible)
+            .field("schema_version", &self.schema_version)
+            .field("cursor_epoch", &self.cursor_epoch)
+            .field("cursor_pub_seq", &self.cursor_pub_seq)
+            .finish()
+    }
 }
 
 pub fn enqueue_measurement(
@@ -215,6 +229,7 @@ pub fn has_unacked_pubseq_rows(
              SELECT 1
              FROM publication_log
              WHERE epoch = ?1
+               AND kind = 'measurement'
                AND pub_seq > ?2
                AND reading_seq IN ({placeholders})
          )"
@@ -327,6 +342,13 @@ mod tests {
     }
 
     #[test]
+    fn prune_outbox_by_reading_seqs_empty_slice_deletes_zero_rows() {
+        let conn = crate::tests_support::open();
+
+        assert_eq!(prune_outbox_by_reading_seqs(&conn, &[]).unwrap(), 0);
+    }
+
+    #[test]
     fn prune_acked_outbox_removes_up_to_cursor_in_epoch_only() {
         let conn = crate::tests_support::open();
         let s1 = enqueue_measurement(&conn, "E", 300, 1).unwrap();
@@ -405,6 +427,22 @@ mod tests {
             cursor_pub_seq: 9999,
         };
         assert!(!has_unacked_pubseq_rows(&conn, "NEW", &t, &[500]).unwrap());
+    }
+
+    #[test]
+    fn has_unacked_pubseq_rows_empty_reading_seqs_returns_false() {
+        let conn = crate::tests_support::open();
+        let t = TargetRow {
+            target_id: "t".into(),
+            endpoint_url: "https://x".into(),
+            credential_token: "k".into(),
+            archive_responsible: true,
+            schema_version: 1,
+            cursor_epoch: Some("E".into()),
+            cursor_pub_seq: 0,
+        };
+
+        assert!(!has_unacked_pubseq_rows(&conn, "E", &t, &[]).unwrap());
     }
 
     #[test]
