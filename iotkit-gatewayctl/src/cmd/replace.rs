@@ -3,7 +3,7 @@ use iotkit_core_ledger as ledger;
 use iotkit_core_registry as registry;
 use iotkit_core_timeseries::{self, query as ts_query};
 use iotkit_ingest_contract::ReadingItem;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params, params_from_iter};
 use std::collections::BTreeSet;
 
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -26,6 +26,8 @@ pub struct ReplaceUndoArgs {
     pub old_hardware_id: String,
     #[arg(long)]
     pub since: Option<i64>,
+    #[arg(long)]
+    pub abandon_custody: bool,
 }
 
 type Profile = BTreeSet<(String, i32)>;
@@ -254,6 +256,9 @@ pub fn run_replace_undo(conn: &Connection, args: ReplaceUndoArgs) -> AppResult<(
     let sid = ledger::SystemId::from_text(&args.system_id_text)?;
 
     let rows = super::devices::mutate(conn, |tx| {
+        if iotkit_core_publish::store::archive_target_registered(tx)? && !args.abandon_custody {
+            return Err("refused: replace-undo retroactively quarantines rows that may already be enqueued for archive; re-run with --abandon-custody to force".into());
+        }
         let current = ledger::get_device(tx, &sid)?
             .filter(|row| row.state != ledger::DeviceState::Retired)
             .ok_or_else(|| format!("non-retired device {} not found", sid.to_text()))?;
@@ -283,9 +288,7 @@ pub fn run_replace_undo(conn: &Connection, args: ReplaceUndoArgs) -> AppResult<(
         if let Some(alive) = ledger::find_alive_by_hardware_id(tx, &args.old_hardware_id)?
             && alive.system_id != sid
         {
-            return Err(
-                ledger::LedgerError::HardwareIdInUse(args.old_hardware_id.clone()).into(),
-            );
+            return Err(ledger::LedgerError::HardwareIdInUse(args.old_hardware_id.clone()).into());
         }
         tx.execute(
             "UPDATE devices SET hardware_id = ?1 WHERE system_id = ?2 AND state != 'retired'",
@@ -296,6 +299,24 @@ pub fn run_replace_undo(conn: &Connection, args: ReplaceUndoArgs) -> AppResult<(
             .map(|row| row.series_id)
             .collect::<Vec<_>>();
         let rows = ts_query::mark_readings_quarantined(tx, &series_ids, since, to)?;
+        if !series_ids.is_empty() {
+            let placeholders = std::iter::repeat_n("?", series_ids.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "DELETE FROM publication_log
+                 WHERE reading_seq IN (
+                     SELECT seq FROM readings
+                     WHERE series_id IN ({placeholders})
+                       AND received_at BETWEEN ? AND ?
+                       AND quarantined = 1
+                 )"
+            );
+            tx.execute(
+                &sql,
+                params_from_iter(series_ids.iter().copied().chain([since, to])),
+            )?;
+        }
         let detail = serde_json::json!({
             "old_hw": replace_event.old_hw,
             "new_hw": current.hardware_id,
@@ -304,6 +325,7 @@ pub fn run_replace_undo(conn: &Connection, args: ReplaceUndoArgs) -> AppResult<(
                 "to_received_ms": to,
             },
             "rows": rows,
+            "abandon_custody": args.abandon_custody,
         });
         ledger::record_event(
             tx,
