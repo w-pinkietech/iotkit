@@ -1,4 +1,4 @@
-use iotkit_core_ledger::SystemId;
+use iotkit_core_ledger::{CHANNEL_NA, SystemId};
 use rusqlite::params;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -35,7 +35,7 @@ pub fn series_key_of(
     channel_index: i32,
     variant: &str,
 ) -> String {
-    let ch = if channel_index == iotkit_core_ledger::CHANNEL_NA {
+    let ch = if channel_index == CHANNEL_NA {
         "na".to_string()
     } else {
         channel_index.to_string()
@@ -141,14 +141,26 @@ fn materialize_annotation(
         .annotation_json
         .as_deref()
         .ok_or_else(|| "annotation missing annotation_json".to_string())?;
-    let mut v: serde_json::Value =
+    let payload: serde_json::Value =
         serde_json::from_str(annotation_json).map_err(|e| e.to_string())?;
-    let obj = v
-        .as_object_mut()
-        .ok_or_else(|| "annotation_json not object".to_string())?;
-    obj.insert("epoch".into(), serde_json::Value::String(row.epoch.clone()));
-    obj.insert("pub_seq".into(), serde_json::Value::from(row.pub_seq));
-    Ok(v)
+    let subtype = row
+        .subtype
+        .clone()
+        .ok_or_else(|| "annotation missing subtype".to_string())?;
+    let prior_epoch = payload
+        .get("prior_epoch")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "annotation missing prior_epoch".to_string())?
+        .to_string();
+    let rec = AnnotationRecord {
+        family: "annotation",
+        schema_version: SCHEMA_VERSION,
+        epoch: row.epoch.clone(),
+        pub_seq: row.pub_seq,
+        subtype,
+        prior_epoch,
+    };
+    serde_json::to_value(&rec).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -164,6 +176,17 @@ mod tests {
         all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
         all.sort_by_key(|m| m.version);
         iotkit_core_storage::init_db_memory(&all).unwrap()
+    }
+
+    fn outbox_row(kind: &str) -> iotkit_core_publish::store::OutboxRow {
+        iotkit_core_publish::store::OutboxRow {
+            pub_seq: 1,
+            epoch: "E".into(),
+            kind: kind.into(),
+            subtype: None,
+            reading_seq: None,
+            annotation_json: None,
+        }
     }
 
     #[test]
@@ -285,13 +308,16 @@ mod tests {
                 kind: "annotation".into(),
                 subtype: Some("epoch_start".into()),
                 reading_seq: None,
-                annotation_json: Some(
-                    r#"{"family":"annotation","schema_version":1,"subtype":"epoch_start","prior_epoch":"OLD"}"#.into(),
-                ),
+                annotation_json: Some(r#"{"prior_epoch":"OLD"}"#.into()),
             };
             let annotations = materialize_batch(conn, &[annotation]).unwrap();
             assert_eq!(annotations.len(), 1);
             let a = &annotations[0];
+            assert_eq!(
+                a.get("family").and_then(|v| v.as_str()),
+                Some("annotation")
+            );
+            assert_eq!(a.get("schema_version").and_then(|v| v.as_u64()), Some(1));
             assert_eq!(a.get("epoch").and_then(|v| v.as_str()), Some("NEW"));
             assert_eq!(a.get("pub_seq").and_then(|v| v.as_i64()), Some(3));
             assert_eq!(
@@ -299,6 +325,78 @@ mod tests {
                 Some("epoch_start")
             );
             assert_eq!(a.get("prior_epoch").and_then(|v| v.as_str()), Some("OLD"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_rejects_unknown_kind() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let row = outbox_row("bogus");
+            assert!(materialize_batch(conn, &[row]).is_err());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_rejects_measurement_without_reading_seq() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let row = outbox_row("measurement");
+            assert!(materialize_batch(conn, &[row]).is_err());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_rejects_annotation_without_json() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let mut row = outbox_row("annotation");
+            row.subtype = Some("epoch_start".into());
+            assert!(materialize_batch(conn, &[row]).is_err());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_rejects_annotation_json_that_is_not_object() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let mut row = outbox_row("annotation");
+            row.subtype = Some("epoch_start".into());
+            row.annotation_json = Some("[]".into());
+            assert!(materialize_batch(conn, &[row]).is_err());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_rejects_annotation_without_subtype() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let mut row = outbox_row("annotation");
+            row.annotation_json = Some(r#"{"prior_epoch":"OLD"}"#.into());
+            assert!(materialize_batch(conn, &[row]).is_err());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_rejects_annotation_without_prior_epoch() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let mut row = outbox_row("annotation");
+            row.subtype = Some("epoch_start".into());
+            row.annotation_json = Some("{}".into());
+            assert!(materialize_batch(conn, &[row]).is_err());
             Ok(())
         })
         .unwrap();
