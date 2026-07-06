@@ -3,7 +3,11 @@
 
 mod adapter_host;
 mod config;
+mod epoch_start;
 mod health;
+mod publish_task;
+#[allow(dead_code)]
+mod record;
 mod retention;
 mod supervision;
 
@@ -58,7 +62,8 @@ fn main() {
     all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5, v9
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9
+    all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
+    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10
     let db = match iotkit_core_storage::init_db(
         std::path::Path::new(&config.db_path),
         &all_migrations,
@@ -107,6 +112,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         })
         .await
         .expect("ledger epoch");
+    db.with_conn(|conn| Ok(epoch_start::maybe_enqueue_epoch_start(conn)))
+        .await
+        .expect("epoch_start annotation")
+        .expect("epoch_start annotation");
     let _retention_task = retention::spawn_retention_task(
         db.clone(),
         db_path.clone(),
@@ -124,6 +133,8 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         health_state.clone(),
         Duration::from_secs(60),
     );
+    let _publish_task =
+        publish_task::spawn_publish_task(db.clone(), health_state.clone(), Duration::from_secs(30));
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
     // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。

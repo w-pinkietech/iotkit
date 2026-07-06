@@ -12,11 +12,14 @@ iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"]
 iotkit-core-collector = { path = "../core/collector" }
 iotkit-core-ledger = { path = "../core/ledger" }
 iotkit-core-registry = { path = "../core/registry" }
+iotkit-core-publish = { path = "../core/publish" }
 bravepi-mainboard-adapter = { path = "../bravepi-mainboard-adapter" }
 rpi-local-adapter = { path = "../rpi-local-adapter" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 thiserror = "2"
 toml = "0.8"
 tracing = "0.1"

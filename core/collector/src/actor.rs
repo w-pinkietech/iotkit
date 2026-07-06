@@ -187,9 +187,18 @@ fn process_envelope(
         return Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Duplicate });
     }
     let received_at = now_ms();
+    let epoch = ledger::ledger_epoch(&tx).map_err(|e| e.to_string())?;
     let mut item_statuses = Vec::with_capacity(envelope.items.len());
     for item in &envelope.items {
-        item_statuses.push(process_item(&tx, cache, policy, envelope, item, received_at)?);
+        item_statuses.push(process_item(
+            &tx,
+            cache,
+            policy,
+            envelope,
+            item,
+            received_at,
+            &epoch,
+        )?);
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Accepted { items: item_statuses } })
@@ -219,6 +228,7 @@ fn process_item(
     envelope: &Envelope,
     item: &ReadingItem,
     received_at: i64,
+    epoch: &str,
 ) -> Result<ItemStatus, String> {
     // 1) 文法検査(決定的契約違反。レジストリにもDBにも触れず判定できるためprecheck)
     if let Err(e) = validate_measurement_key(&item.measurement_key) {
@@ -311,7 +321,11 @@ fn process_item(
         battery_pct: item.battery_pct,
         quarantined: row_quarantined,
     };
-    ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
+    let seq = ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
+    if !row_quarantined {
+        iotkit_core_publish::store::enqueue_measurement(conn, epoch, seq, received_at)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(ItemStatus::Stored {
         disposition: if row_quarantined { Disposition::Quarantined } else { Disposition::Durable },
         quarantine_reason: if row_quarantined { wire_reason } else { None },
@@ -329,6 +343,7 @@ mod tests {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
         all.extend_from_slice(ledger::MIGRATIONS);
         all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
         all.sort_by_key(|m| m.version);
         iotkit_core_storage::init_db_memory(&all).unwrap()
     }
@@ -337,6 +352,7 @@ mod tests {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
         all.extend_from_slice(ledger::MIGRATIONS);
         all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
         all.sort_by_key(|m| m.version);
         all
     }
@@ -485,6 +501,147 @@ mod tests {
         assert_eq!(s_q, 0, "値域外はseriesを汚さない(行級のみ)");
         assert_eq!(s_reason, None);
         assert_eq!(r_q, 1);
+    }
+
+    #[test]
+    fn non_quarantined_reading_is_enqueued_to_outbox_same_tx() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let mut cache = ResolutionCache::default();
+        let envelope = env("e-outbox-1", "ble:aa", "temperature_c");
+
+        let ack = db.with_conn_sync(|conn| {
+            Ok(process_envelope(
+                conn,
+                &mut cache,
+                &PermissiveRegistry,
+                &envelope,
+            ).unwrap())
+        }).unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored {
+                disposition: Disposition::Durable,
+                quarantine_reason: None,
+            })));
+
+        let (reading_count, reading_seq, outbox_count): (i64, i64, i64) = db.with_conn_sync(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap(),
+                conn.query_row("SELECT seq FROM readings", [], |r| r.get(0)).unwrap(),
+                conn.query_row(
+                    "SELECT COUNT(*) FROM publication_log WHERE kind = 'measurement'",
+                    [],
+                    |r| r.get(0),
+                ).unwrap(),
+            ))
+        }).unwrap();
+        assert_eq!(reading_count, 1);
+        assert_eq!(outbox_count, 1, "non-quarantined readings must be enqueued");
+
+        let (outbox_reading_seq, outbox_epoch, expected_epoch): (i64, String, String) =
+            db.with_conn_sync(|conn| {
+                let expected_epoch = ledger::ledger_epoch(conn).unwrap();
+                let (outbox_reading_seq, outbox_epoch) = conn.query_row(
+                    "SELECT reading_seq, epoch FROM publication_log WHERE kind = 'measurement'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                ).unwrap();
+                Ok((outbox_reading_seq, outbox_epoch, expected_epoch))
+            }).unwrap();
+        assert_eq!(outbox_reading_seq, reading_seq);
+        assert_eq!(outbox_epoch, expected_epoch);
+
+        let quarantined_db = test_db();
+        register_active(&quarantined_db, "ble:qq");
+        let mut quarantine_cache = ResolutionCache::default();
+        let quarantined = env("e-outbox-q", "ble:qq", "custom.mystery");
+
+        let ack = quarantined_db.with_conn_sync(|conn| {
+            Ok(process_envelope(
+                conn,
+                &mut quarantine_cache,
+                &QuarantiningStub(QuarantineReason::UnknownKey),
+                &quarantined,
+            ).unwrap())
+        }).unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored {
+                disposition: Disposition::Quarantined,
+                quarantine_reason: Some(QuarantineReason::UnknownKey),
+            })));
+
+        let (quarantined_readings, quarantined_outbox): (i64, i64) =
+            quarantined_db.with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap(),
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM publication_log WHERE kind = 'measurement'",
+                        [],
+                        |r| r.get(0),
+                    ).unwrap(),
+                ))
+            }).unwrap();
+        assert_eq!(quarantined_readings, 1);
+        assert_eq!(quarantined_outbox, 0, "quarantined readings must not be enqueued");
+    }
+
+    #[test]
+    fn multi_item_envelope_enqueues_distinct_outbox_rows() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let mut cache = ResolutionCache::default();
+        let mut envelope = env("e-outbox-multi", "ble:aa", "temperature_c");
+        envelope.items.push(ReadingItem {
+            subject_hint: Some("ble:aa".into()),
+            measurement_key: "humidity_pct".into(),
+            channel_index: None,
+            series_variant: None,
+            values: vec![55.0],
+            device_time_ms: None,
+            time_source: TimeSource::Gateway,
+            age_ms: None, rssi: None, battery_pct: None,
+        });
+
+        let ack = db.with_conn_sync(|conn| {
+            Ok(process_envelope(
+                conn,
+                &mut cache,
+                &PermissiveRegistry,
+                &envelope,
+            ).unwrap())
+        }).unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if items.len() == 2 && items.iter().all(|status| matches!(status,
+                ItemStatus::Stored {
+                    disposition: Disposition::Durable,
+                    quarantine_reason: None,
+                }))));
+
+        let (reading_seqs, outbox_rows): (Vec<i64>, Vec<(i64, i64)>) = db.with_conn_sync(|conn| {
+            let reading_seqs = conn.prepare("SELECT seq FROM readings ORDER BY seq")?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let outbox_rows = conn.prepare(
+                "SELECT pub_seq, reading_seq FROM publication_log
+                 WHERE kind = 'measurement'
+                 ORDER BY pub_seq",
+            )?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((reading_seqs, outbox_rows))
+        }).unwrap();
+        assert_eq!(reading_seqs.len(), 2);
+        assert_ne!(reading_seqs[0], reading_seqs[1]);
+
+        assert_eq!(outbox_rows.len(), 2, "each non-quarantined reading must be enqueued");
+        let outbox_reading_seqs: Vec<i64> = outbox_rows.iter()
+            .map(|(_pub_seq, reading_seq)| *reading_seq)
+            .collect();
+        assert_eq!(outbox_reading_seqs, reading_seqs);
+        assert_ne!(outbox_rows[0].0, outbox_rows[1].0);
     }
 
     #[tokio::test]

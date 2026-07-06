@@ -4,6 +4,7 @@ mod cmd {
     pub mod registry;
     pub mod replace;
     pub mod snapshot;
+    pub mod target;
 }
 
 use clap::{Parser, Subcommand};
@@ -49,6 +50,10 @@ enum Command {
     Snapshot {
         #[command(subcommand)]
         command: cmd::snapshot::SnapshotCommand,
+    },
+    Target {
+        #[command(subcommand)]
+        command: cmd::target::TargetCommand,
     },
     Health(cmd::query::HealthArgs),
 }
@@ -128,7 +133,8 @@ fn run() -> AppResult<()> {
     all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5, v9
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9
+    all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
+    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
     db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))?
@@ -172,6 +178,48 @@ fn dispatch(
             cmd::snapshot::SnapshotCommand::Export(args) => cmd::snapshot::run_export(conn, args),
             cmd::snapshot::SnapshotCommand::Restore(args) => cmd::snapshot::run_restore(conn, args),
         },
+        Command::Target { command } => {
+            let real_smoke = |endpoint: &str, token: &str| -> Result<(), String> {
+                let response = reqwest::blocking::Client::new()
+                    .post(endpoint)
+                    .bearer_auth(token)
+                    .json(&serde_json::json!({
+                        "publication_id": "smoke",
+                        "records": [],
+                    }))
+                    .send()
+                    .map_err(|e| e.to_string())?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "smoke POST returned non-success status: {}",
+                        response.status()
+                    ));
+                }
+                let ack: serde_json::Value = response
+                    .json()
+                    .map_err(|e| format!("smoke ack decode failed: {e}"))?;
+                if ack.get("publication_id").and_then(|v| v.as_str()) != Some("smoke") {
+                    return Err("smoke ack did not echo publication_id \"smoke\"".to_string());
+                }
+                Ok(())
+            };
+            match command {
+                cmd::target::TargetCommand::Add(args) => cmd::target::run_target_add(
+                    conn,
+                    &args.endpoint,
+                    &args.token,
+                    args.schema_version,
+                    &real_smoke,
+                ),
+                cmd::target::TargetCommand::List => cmd::target::run_target_list(conn),
+                cmd::target::TargetCommand::RotateToken(args) => {
+                    cmd::target::run_target_rotate_token(conn, &args.token, &real_smoke)
+                }
+                cmd::target::TargetCommand::Remove(args) => {
+                    cmd::target::run_target_remove(conn, args.abandon_custody)
+                }
+            }
+        }
         Command::Health(args) => cmd::query::run_health(db_path, args),
     }
 }

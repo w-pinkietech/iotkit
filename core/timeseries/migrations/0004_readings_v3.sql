@@ -1,6 +1,6 @@
 -- D1フェーズ1.5: series_id FK・挿入順単調seq・時刻を一意性に使わない(旧v2の同一ms暗黙dedupはD1と矛盾)
 CREATE TABLE readings (
-    seq            INTEGER PRIMARY KEY AUTOINCREMENT,  -- 出口カーソル(epoch, seq)の後半(D5決定3)
+    seq            INTEGER PRIMARY KEY AUTOINCREMENT,  -- 内部挿入順の単調seq。出口IDはpublication_log.pub_seq(D7決定4、readings.seqは出さない)
     series_id      INTEGER NOT NULL REFERENCES series(series_id),
     received_at    INTEGER NOT NULL,                   -- コレクタが必ず付与(D1)
     device_time    INTEGER,                            -- デバイス申告時刻(任意)

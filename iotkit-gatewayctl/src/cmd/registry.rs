@@ -1,7 +1,7 @@
 use clap::Args;
 use iotkit_core_ledger as ledger;
 use iotkit_core_registry as registry;
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -20,6 +20,8 @@ pub struct RegistryEnableArgs {
 pub struct RegistryAliasArgs {
     pub alias: String,
     pub canonical_key: String,
+    #[arg(long)]
+    pub release_abandon_past: bool,
 }
 
 #[derive(Args)]
@@ -73,12 +75,38 @@ pub fn run_registry_enable(conn: &Connection, args: RegistryEnableArgs) -> AppRe
 
 pub fn run_registry_alias(conn: &Connection, args: RegistryAliasArgs) -> AppResult<()> {
     super::devices::mutate(conn, |tx| {
+        let has_quarantined: bool = tx.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM series
+                 WHERE measurement_key = ?1 AND quarantined = 1
+             )",
+            params![&args.alias],
+            |row| row.get(0),
+        )?;
+        let has_archive =
+            has_quarantined && iotkit_core_publish::store::archive_target_registered(tx)?;
+        if has_archive && !args.release_abandon_past {
+            return Err("refused: releasing past quarantine while an archive target is registered would abandon custody of already-archived data; re-run with --release-abandon-past to force".into());
+        }
         registry::define_alias(
             tx,
             &args.alias,
             &args.canonical_key,
             registry::AliasKind::SiteMapping,
         )?;
+        if has_archive && args.release_abandon_past {
+            ledger::record_event(
+                tx,
+                "quarantine_release_abandon_past",
+                None,
+                &serde_json::json!({
+                    "alias": &args.alias,
+                    "canonical": &args.canonical_key,
+                    "abandon_past": true,
+                })
+                .to_string(),
+            )?;
+        }
         Ok(())
     })?;
     println!("{}\t{}", args.alias, args.canonical_key);

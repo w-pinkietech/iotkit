@@ -24,12 +24,22 @@ pub struct RetentionHealth {
 }
 
 #[derive(Debug, Clone)]
+pub struct TargetDeliveryHealth {
+    pub target_id: String,
+    pub cursor_pub_seq: i64,
+    pub backlog: i64,
+    pub last_push_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct HealthState {
     pub started_at: Instant,
     pub collector_alive: bool,
     pub adapters: Vec<AdapterHealth>,
     pub db: DbHealth,
     pub retention: RetentionHealth,
+    pub publish: Vec<TargetDeliveryHealth>,
 }
 
 impl HealthState {
@@ -48,6 +58,7 @@ impl HealthState {
                 last_purge_at: None,
                 last_purged_rows: 0,
             },
+            publish: Vec::new(),
         }
     }
 
@@ -134,8 +145,27 @@ fn render_health_json(epoch: &str, state: &HealthState) -> String {
         })
         .collect::<Vec<_>>()
         .join(",");
+    let publish = state
+        .publish
+        .iter()
+        .map(|target| {
+            let last_error = match &target.last_error {
+                Some(error) => format!(r#""{}""#, escape_json(error)),
+                None => "null".to_string(),
+            };
+            format!(
+                r#"{{"target_id":"{}","cursor_pub_seq":{},"backlog":{},"last_push_at":{},"last_error":{}}}"#,
+                escape_json(&target.target_id),
+                target.cursor_pub_seq,
+                target.backlog,
+                opt_i64(target.last_push_at),
+                last_error
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        r#"{{"schema":1,"written_at":{},"epoch":"{}","uptime_s":{},"collector_alive":{},"adapters":[{}],"db":{{"size_bytes":{},"disk_available_bytes":{},"watermark_exceeded":{}}},"retention":{{"days":{},"last_purge_at":{},"last_purged_rows":{}}}}}"#,
+        r#"{{"schema":1,"written_at":{},"epoch":"{}","uptime_s":{},"collector_alive":{},"adapters":[{}],"db":{{"size_bytes":{},"disk_available_bytes":{},"watermark_exceeded":{}}},"retention":{{"days":{},"last_purge_at":{},"last_purged_rows":{}}},"publish":[{}]}}"#,
         now_ms(),
         escape_json(epoch),
         state.started_at.elapsed().as_secs(),
@@ -147,6 +177,7 @@ fn render_health_json(epoch: &str, state: &HealthState) -> String {
         state.retention.days,
         opt_i64(state.retention.last_purge_at),
         state.retention.last_purged_rows,
+        publish,
     )
 }
 
@@ -199,6 +230,7 @@ mod tests {
                 last_purge_at: Some(4567),
                 last_purged_rows: 3,
             },
+            publish: Vec::new(),
         };
 
         write_health_json(&path, "epoch-1", &state).unwrap();

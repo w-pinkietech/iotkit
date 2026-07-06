@@ -12,6 +12,7 @@ fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
     all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
     all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
     all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+    all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
     all.sort_by_key(|m| m.version);
     all
 }
@@ -156,6 +157,23 @@ fn prepare_replace_db() -> (tempfile::TempDir, std::path::PathBuf, String) {
     (dir, db_path, sid)
 }
 
+fn seed_archive_target(conn: &rusqlite::Connection) {
+    iotkit_core_publish::store::target_insert(
+        conn,
+        &iotkit_core_publish::store::TargetRow {
+            target_id: "archive".into(),
+            endpoint_url: "https://archive.example/publish".into(),
+            credential_token: "token".into(),
+            archive_responsible: true,
+            schema_version: 1,
+            cursor_epoch: None,
+            cursor_pub_seq: 0,
+        },
+        1_000,
+    )
+    .unwrap();
+}
+
 #[test]
 fn health_command_reads_default_health_json_next_to_db_and_marks_stale() {
     let dir = tempfile::tempdir().unwrap();
@@ -173,6 +191,7 @@ fn health_command_reads_default_health_json_next_to_db_and_marks_stale() {
                 "uptime_s":12,
                 "collector_alive":true,
                 "adapters":[],
+                "publish":[{{"target_id":"archive","cursor_pub_seq":7,"backlog":3,"last_push_at":1234,"last_error":null}}],
                 "db":{{"size_bytes":10,"disk_available_bytes":20,"watermark_exceeded":false}},
                 "retention":{{"days":90,"last_purge_at":null,"last_purged_rows":0}}
             }}"#
@@ -185,6 +204,10 @@ fn health_command_reads_default_health_json_next_to_db_and_marks_stale() {
     assert!(out.contains("STALE (daemon down?)"), "stdout:\n{out}");
     assert!(out.contains("epoch-1"), "stdout:\n{out}");
     assert!(out.contains("collector_alive=true"), "stdout:\n{out}");
+    assert!(
+        out.contains("publish target=archive cursor=7 backlog=3 last_push_at=1234 last_error=-"),
+        "stdout:\n{out}"
+    );
 }
 
 #[test]
@@ -238,7 +261,7 @@ fn existing_empty_db_gets_gateway_migration_version_set() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9, 10]);
 }
 
 #[test]
@@ -348,6 +371,161 @@ fn registry_and_series_commands_round_trip_and_bump_generation() {
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn release_rejected_while_archive_target_registered_without_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let catalog = iotkit_core_registry::standard_catalog();
+        let entry = catalog.find("temperature_c").unwrap();
+        iotkit_core_registry::enable_entry(conn, entry, &catalog.catalog_version, "test").unwrap();
+        let sid = iotkit_core_ledger::insert_device(
+            conn,
+            &iotkit_core_ledger::NewDevice {
+                hardware_id: "ble:quarantined-alias".into(),
+                user_label: None,
+                parent: None,
+                kind: iotkit_core_ledger::DeviceKind::Individual,
+                initial_state: iotkit_core_ledger::DeviceState::Active,
+            },
+        )
+        .unwrap();
+        iotkit_core_ledger::ensure_series(
+            conn,
+            &sid,
+            "temp_alias",
+            iotkit_core_ledger::CHANNEL_NA,
+            iotkit_core_ledger::DEFAULT_VARIANT,
+            true,
+            Some("unknown_key"),
+        )
+        .unwrap();
+        seed_archive_target(conn);
+        Ok(())
+    })
+    .unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let stderr = assert_failure(run(&[
+        "--db",
+        db_arg,
+        "registry",
+        "alias",
+        "temp_alias",
+        "temperature_c",
+    ]));
+    assert!(
+        stderr.contains("refused") && stderr.contains("--release-abandon-past"),
+        "stderr did not explain archive custody refusal:\n{stderr}"
+    );
+    db.with_conn_sync(|conn| {
+        let quarantined: i64 = conn
+            .query_row(
+                "SELECT quarantined FROM series WHERE measurement_key = 'temp_alias'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let aliases: i64 = conn
+            .query_row("SELECT COUNT(*) FROM registry_aliases", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(quarantined, 1);
+        assert_eq!(aliases, 0);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_success(run(&[
+        "--db",
+        db_arg,
+        "registry",
+        "alias",
+        "temp_alias",
+        "temperature_c",
+        "--release-abandon-past",
+    ]));
+    db.with_conn_sync(|conn| {
+        let quarantined: i64 = conn
+            .query_row(
+                "SELECT quarantined FROM series WHERE measurement_key = 'temp_alias'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ledger_events
+                 WHERE kind = 'quarantine_release_abandon_past'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(quarantined, 0);
+        assert_eq!(event_count, 1);
+        Ok(())
+    })
+    .unwrap();
+
+    let no_archive_dir = tempfile::tempdir().unwrap();
+    let no_archive_path = no_archive_dir.path().join("iotkit.db");
+    let no_archive_db = iotkit_core_storage::init_db(&no_archive_path, &all_migrations()).unwrap();
+    no_archive_db
+        .with_conn_sync(|conn| {
+            let catalog = iotkit_core_registry::standard_catalog();
+            let entry = catalog.find("temperature_c").unwrap();
+            iotkit_core_registry::enable_entry(conn, entry, &catalog.catalog_version, "test")
+                .unwrap();
+            let sid = iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "ble:no-archive-alias".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            iotkit_core_ledger::ensure_series(
+                conn,
+                &sid,
+                "temp_alias",
+                iotkit_core_ledger::CHANNEL_NA,
+                iotkit_core_ledger::DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+    assert_success(run(&[
+        "--db",
+        no_archive_path.to_str().unwrap(),
+        "registry",
+        "alias",
+        "temp_alias",
+        "temperature_c",
+    ]));
+    no_archive_db
+        .with_conn_sync(|conn| {
+            let quarantined: i64 = conn
+                .query_row(
+                    "SELECT quarantined FROM series WHERE measurement_key = 'temp_alias'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(quarantined, 0);
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
@@ -700,6 +878,225 @@ fn replace_undo_restores_hardware_id_marks_since_range_and_records_event() {
             .unwrap();
         assert_eq!(kind, "hardware_replace_undone");
         assert!(detail.contains("\"rows\":2"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn replace_undo_rejected_while_archive_target_registered_without_abandon() {
+    let (_dir, db_path, sid_text) = prepare_replace_db();
+    let db_arg = db_path.to_str().unwrap();
+
+    assert_success(run(&[
+        "--db",
+        db_arg,
+        "device",
+        "replace",
+        &sid_text,
+        "--new-hardware-id",
+        "ble:new",
+        "--force",
+        "--yes",
+    ]));
+
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        seed_archive_target(conn);
+        Ok(())
+    })
+    .unwrap();
+
+    let stderr = assert_failure(run(&[
+        "--db",
+        db_arg,
+        "device",
+        "replace-undo",
+        &sid_text,
+        "--old-hardware-id",
+        "ble:old",
+    ]));
+    assert!(
+        stderr.contains("refused") && stderr.contains("--abandon-custody"),
+        "stderr did not explain archive custody refusal:\n{stderr}"
+    );
+    db.with_conn_sync(|conn| {
+        let sid = iotkit_core_ledger::SystemId::from_text(&sid_text).unwrap();
+        let row = iotkit_core_ledger::get_device(conn, &sid).unwrap().unwrap();
+        assert_eq!(row.hardware_id, "ble:new");
+        let undone: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ledger_events WHERE kind = 'hardware_replace_undone'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(undone, 0);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_success(run(&[
+        "--db",
+        db_arg,
+        "device",
+        "replace-undo",
+        &sid_text,
+        "--old-hardware-id",
+        "ble:old",
+        "--abandon-custody",
+    ]));
+    db.with_conn_sync(|conn| {
+        let sid = iotkit_core_ledger::SystemId::from_text(&sid_text).unwrap();
+        let row = iotkit_core_ledger::get_device(conn, &sid).unwrap().unwrap();
+        assert_eq!(row.hardware_id, "ble:old");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn replace_undo_prunes_outbox_for_retroactively_quarantined_rows_same_tx() {
+    let (_dir, db_path, sid_text) = prepare_replace_db();
+    let db_arg = db_path.to_str().unwrap();
+
+    assert_success(run(&[
+        "--db",
+        db_arg,
+        "device",
+        "replace",
+        &sid_text,
+        "--new-hardware-id",
+        "ble:new",
+        "--force",
+        "--yes",
+    ]));
+
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let (before_seq, in_range_seq, second_in_range_seq, outbox_annotation_seq) = db
+        .with_conn_sync(|conn| {
+            let sid = iotkit_core_ledger::SystemId::from_text(&sid_text).unwrap();
+            let series = iotkit_core_ledger::list_series_for_device(conn, &sid).unwrap();
+            let first_series = series[0].series_id;
+            let second_series = series[1].series_id;
+            conn.execute(
+                "UPDATE ledger_events
+                 SET at = 1000, detail = '{\"old_hw\":\"ble:old\",\"new_hw\":\"ble:new\",\"at\":1000}'
+                 WHERE kind = 'hardware_replaced'",
+                [],
+            )
+            .unwrap();
+            let before_seq = iotkit_core_timeseries::insert_reading_v3(
+                conn,
+                &iotkit_core_timeseries::NewReading {
+                    series_id: first_series,
+                    received_at_ms: 500,
+                    device_time_ms: None,
+                    time_source: "gateway".into(),
+                    values: vec![1.0],
+                    rssi: None,
+                    battery_pct: None,
+                    quarantined: false,
+                },
+            )
+            .unwrap();
+            let in_range_seq = iotkit_core_timeseries::insert_reading_v3(
+                conn,
+                &iotkit_core_timeseries::NewReading {
+                    series_id: first_series,
+                    received_at_ms: 1_500,
+                    device_time_ms: None,
+                    time_source: "gateway".into(),
+                    values: vec![2.0],
+                    rssi: None,
+                    battery_pct: None,
+                    quarantined: false,
+                },
+            )
+            .unwrap();
+            let second_in_range_seq = iotkit_core_timeseries::insert_reading_v3(
+                conn,
+                &iotkit_core_timeseries::NewReading {
+                    series_id: second_series,
+                    received_at_ms: 1_600,
+                    device_time_ms: None,
+                    time_source: "gateway".into(),
+                    values: vec![3.0],
+                    rssi: None,
+                    battery_pct: None,
+                    quarantined: false,
+                },
+            )
+            .unwrap();
+            let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            iotkit_core_publish::store::enqueue_measurement(conn, &epoch, before_seq, 501)
+                .unwrap();
+            iotkit_core_publish::store::enqueue_measurement(conn, &epoch, in_range_seq, 1_501)
+                .unwrap();
+            iotkit_core_publish::store::enqueue_measurement(
+                conn,
+                &epoch,
+                second_in_range_seq,
+                1_601,
+            )
+                .unwrap();
+            let outbox_annotation_seq =
+                iotkit_core_publish::store::enqueue_annotation(conn, &epoch, "test", "{}", 1_700)
+                    .unwrap()
+                    .unwrap();
+            Ok((
+                before_seq,
+                in_range_seq,
+                second_in_range_seq,
+                outbox_annotation_seq,
+            ))
+        })
+        .unwrap();
+
+    assert_success(run(&[
+        "--db",
+        db_arg,
+        "device",
+        "replace-undo",
+        &sid_text,
+        "--old-hardware-id",
+        "ble:old",
+    ]));
+
+    db.with_conn_sync(|conn| {
+        let rows: Vec<(i64, i64)> = conn
+            .prepare("SELECT seq, quarantined FROM readings ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(before_seq, 0), (in_range_seq, 1), (second_in_range_seq, 1)]
+        );
+        let outbox: Vec<(String, Option<i64>)> = conn
+            .prepare("SELECT kind, reading_seq FROM publication_log ORDER BY pub_seq")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            outbox,
+            vec![
+                ("measurement".to_string(), Some(before_seq)),
+                ("annotation".to_string(), None)
+            ]
+        );
+        let annotation_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM publication_log WHERE pub_seq = ?1",
+                params![outbox_annotation_seq],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(annotation_exists, 1);
         Ok(())
     })
     .unwrap();

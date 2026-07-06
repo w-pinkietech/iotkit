@@ -7,6 +7,7 @@ members = [
     "core/storage",
     "core/ledger",
     "core/timeseries",
+    "core/publish",
     "core/collector",
     "core/registry",
     "rpi4b-driver/transport",
