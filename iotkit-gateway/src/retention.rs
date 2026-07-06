@@ -158,10 +158,10 @@ pub async fn run_retention_once_with_latch(
             let effective_cursor = match &target {
                 None => None,
                 Some(t) if !t.archive_responsible => None,
-                Some(t) if t.cursor_epoch.as_deref() == Some(current_epoch.as_str()) => {
-                    Some(t.cursor_pub_seq)
-                }
-                Some(_) => Some(0),
+                Some(t) => Some(iotkit_core_publish::store::effective_cursor(
+                    &current_epoch,
+                    t,
+                )),
             };
             let purged_readings =
                 purge_readings_custody_aware(&tx, reading_cutoff, &current_epoch, effective_cursor)

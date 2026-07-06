@@ -262,26 +262,3 @@ pub fn mark_readings_quarantined(
         .map(|n| n as u64)
         .map_err(TimeseriesError::from)
 }
-
-/// Retention purge by insert/receipt time. Deletes in bounded batches so a
-/// first large purge does not monopolize the shared gateway connection.
-pub fn purge_readings_before(
-    conn: &Connection,
-    cutoff_received_ms: i64,
-) -> Result<u64, TimeseriesError> {
-    let mut total = 0_u64;
-    loop {
-        let deleted = conn.execute(
-            "DELETE FROM readings
-             WHERE seq IN (
-                 SELECT seq FROM readings WHERE received_at < ?1 ORDER BY received_at ASC LIMIT 10000
-             )",
-            params![cutoff_received_ms],
-        )?;
-        if deleted == 0 {
-            break;
-        }
-        total += deleted as u64;
-    }
-    Ok(total)
-}
