@@ -188,12 +188,15 @@ pub async fn run_retention_once_with_latch(
                     )
                 })?;
             }
+            let purge_done = now_ms();
+            let duration_ms = purge_done.saturating_sub(now);
             let detail = format!(
-                r#"{{"readings":{},"dedup":{},"sightings":{},"expired_quarantines":{}}}"#,
+                r#"{{"readings":{},"dedup":{},"sightings":{},"expired_quarantines":{},"duration_ms":{}}}"#,
                 purged_readings,
                 purged_dedup,
                 purged_sightings,
-                expired.len()
+                expired.len(),
+                duration_ms
             );
             iotkit_core_ledger::record_event(&tx, "retention_purge", None, &detail).map_err(
                 |e| {
