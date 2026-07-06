@@ -307,7 +307,7 @@ fn process_item(
         .as_deref()
         .unwrap_or(ledger::DEFAULT_VARIANT)
         .to_string();
-    let series_quarantined = registry_quarantine.map_or(false, is_series_level);
+    let series_quarantined = registry_quarantine.is_some_and(is_series_level);
     let skey = (system_id, resolved_key.clone(), channel, variant.clone());
     let series_id = match cache.series.get(&skey) {
         Some(id) => *id,

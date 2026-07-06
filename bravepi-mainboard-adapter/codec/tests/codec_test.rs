@@ -299,7 +299,7 @@ fn decode_rejects_oversized_continuation_with_final_frame() {
         assert!(codec.decode().is_none());
     }
     // 終端フレーム (flag=0) 200 bytes → 累積 4200 > 4096 で DecodeError
-    let final_frame = build_uplink_frame(DEVICE, 262, -60, 0, &vec![0u8; 200]);
+    let final_frame = build_uplink_frame(DEVICE, 262, -60, 0, &[0u8; 200]);
     codec.feed(&final_frame);
     match codec.decode() {
         Some(BravePiFrame::DecodeError { reason, .. }) => {

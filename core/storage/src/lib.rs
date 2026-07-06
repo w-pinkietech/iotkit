@@ -28,13 +28,14 @@ fn configure_pragmas(conn: &Connection) -> Result<(), StorageError> {
 /// Synchronous -- call before entering the async runtime.
 pub fn init_db(db_path: &Path, migrations: &[Migration]) -> Result<DbHandle, StorageError> {
     // Check parent directory exists -- surface as StorageError::Io, not Sqlite.
-    if let Some(parent) = db_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            return Err(StorageError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("parent directory does not exist: {}", parent.display()),
-            )));
-        }
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        return Err(StorageError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("parent directory does not exist: {}", parent.display()),
+        )));
     }
     let conn = Connection::open(db_path)?;
     configure_pragmas(&conn)?;

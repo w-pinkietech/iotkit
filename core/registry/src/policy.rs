@@ -192,7 +192,7 @@ fn evaluate_item(
     let series_max = series_meta.as_ref().and_then(|m| m.range_max);
     let min = series_min.or(entry.site_min).or(entry.physical_min);
     let max = series_max.or(entry.site_max).or(entry.physical_max);
-    let out_of_range = min.map_or(false, |lo| value < lo) || max.map_or(false, |hi| value > hi);
+    let out_of_range = min.is_some_and(|lo| value < lo) || max.is_some_and(|hi| value > hi);
     if out_of_range {
         return Ok(RegistryVerdict::Accept {
             resolved_key,

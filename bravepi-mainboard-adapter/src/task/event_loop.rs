@@ -119,34 +119,34 @@ pub(crate) async fn event_loop(
                                     }
                                 }
 
-                                if let Some(client) = &ingest {
-                                    if let AdapterEvent::SensorData {
+                                if let Some(client) = &ingest
+                                    && let AdapterEvent::SensorData {
                                         device_key, reading, rssi, battery_pct, ..
-                                    } = &event {
-                                        match super::ingest_map::to_items(device_key, reading, *rssi, *battery_pct) {
-                                            Some(items) => {
-                                                for chunk in items.chunks(super::ingest_map::MAX_ITEMS_PER_ENVELOPE) {
-                                                    let envelope = iotkit_ingest_client::new_envelope(
-                                                        adapter_id.as_str(),
-                                                        chunk.to_vec(),
-                                                    );
-                                                    if let Err(e) = client.try_submit(envelope) {
-                                                        match e {
-                                                            iotkit_ingest_client::IngestClientError::Full => {
-                                                                tracing::warn!("ingest queue full; dropping reading");
-                                                            }
-                                                            iotkit_ingest_client::IngestClientError::Closed => {
-                                                                tracing::warn!("ingest client closed; dropping reading");
-                                                            }
+                                    } = &event
+                                {
+                                    match super::ingest_map::to_items(device_key, reading, *rssi, *battery_pct) {
+                                        Some(items) => {
+                                            for chunk in items.chunks(super::ingest_map::MAX_ITEMS_PER_ENVELOPE) {
+                                                let envelope = iotkit_ingest_client::new_envelope(
+                                                    adapter_id.as_str(),
+                                                    chunk.to_vec(),
+                                                );
+                                                if let Err(e) = client.try_submit(envelope) {
+                                                    match e {
+                                                        iotkit_ingest_client::IngestClientError::Full => {
+                                                            tracing::warn!("ingest queue full; dropping reading");
+                                                        }
+                                                        iotkit_ingest_client::IngestClientError::Closed => {
+                                                            tracing::warn!("ingest client closed; dropping reading");
                                                         }
                                                     }
                                                 }
                                             }
-                                            None => tracing::warn!(
-                                                device_key = %device_key,
-                                                "no measurement mapping; reading not ingested"
-                                            ),
                                         }
+                                        None => tracing::warn!(
+                                            device_key = %device_key,
+                                            "no measurement mapping; reading not ingested"
+                                        ),
                                     }
                                 }
 

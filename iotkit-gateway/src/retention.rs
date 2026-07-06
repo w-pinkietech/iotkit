@@ -234,11 +234,10 @@ pub fn observe_db_health(db_path: &Path, disk_high_watermark_pct: u64) -> Result
     let stat = unsafe { stat.assume_init() };
     let available = stat.f_bavail.saturating_mul(stat.f_frsize);
     let total = stat.f_blocks.saturating_mul(stat.f_frsize);
-    let used_pct = if total == 0 {
-        0
-    } else {
-        100_u64.saturating_sub(available.saturating_mul(100) / total)
-    };
+    let used_pct = available
+        .saturating_mul(100)
+        .checked_div(total)
+        .map_or(0, |available_pct| 100_u64.saturating_sub(available_pct));
     Ok(DbHealth {
         size_bytes,
         disk_available_bytes: available,
