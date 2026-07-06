@@ -136,7 +136,7 @@ pub async fn run_retention_once_with_latch(
     let dedup_cutoff = now.saturating_sub(DEDUP_TTL_MS);
     let ttl_ms = (config.quarantine_ttl_days as i64).saturating_mul(DAY_MS);
     let db_path = db_path.to_path_buf();
-    let (purged_readings, purged_dedup) = db
+    let (purged_readings, purged_dedup, purged_sightings) = db
         .with_conn(move |conn| {
             let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
             let purged_dedup = iotkit_core_timeseries::purge_dedup_before(&tx, dedup_cutoff)
@@ -145,6 +145,11 @@ pub async fn run_retention_once_with_latch(
                         rusqlite::Error::ToSqlConversionFailure(Box::new(e)),
                     )
                 })?;
+            let purged_sightings = iotkit_core_ledger::purge_sightings(&tx, now).map_err(|e| {
+                iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                    Box::new(e),
+                ))
+            })?;
             let current_epoch = iotkit_core_ledger::ledger_epoch(&tx).map_err(|e| {
                 iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
                     Box::new(e),
@@ -184,9 +189,10 @@ pub async fn run_retention_once_with_latch(
                 })?;
             }
             let detail = format!(
-                r#"{{"readings":{},"dedup":{},"expired_quarantines":{}}}"#,
+                r#"{{"readings":{},"dedup":{},"sightings":{},"expired_quarantines":{}}}"#,
                 purged_readings,
                 purged_dedup,
+                purged_sightings,
                 expired.len()
             );
             iotkit_core_ledger::record_event(&tx, "retention_purge", None, &detail).map_err(
@@ -197,7 +203,7 @@ pub async fn run_retention_once_with_latch(
                 },
             )?;
             tx.commit()?;
-            Ok((purged_readings, purged_dedup))
+            Ok((purged_readings, purged_dedup, purged_sightings))
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -210,7 +216,7 @@ pub async fn run_retention_once_with_latch(
         state.retention = RetentionHealth {
             days: config.retention_days,
             last_purge_at: Some(now),
-            last_purged_rows: purged_readings + purged_dedup,
+            last_purged_rows: purged_readings + purged_dedup + purged_sightings,
         };
     }
     Ok(())
@@ -293,6 +299,7 @@ mod tests {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
         all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
         all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
         all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
         all.sort_by_key(|m| m.version);
         all
@@ -625,6 +632,39 @@ mod tests {
         db.with_conn_sync(|conn| {
             assert_eq!(reading_seqs(conn), vec![old_unacked]);
             assert_eq!(publog_reading_seqs(conn), vec![old_unacked]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_purges_stale_sightings_and_keeps_fresh() {
+        let db = retention_db();
+        let now = now_ms();
+        let stale_last_seen = now - (31 * DAY_MS);
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
+                 VALUES (?1, ?2, ?3, ?3, 1)",
+                rusqlite::params!["ble:stale", "adapter-test", stale_last_seen],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
+                 VALUES (?1, ?2, ?3, ?3, 1)",
+                rusqlite::params!["ble:fresh", "adapter-test", now],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        run_retention_for_test(&db).await;
+
+        db.with_conn_sync(|conn| {
+            let remaining = iotkit_core_ledger::list_sightings(conn).unwrap();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].hardware_id, "ble:fresh");
             Ok(())
         })
         .unwrap();

@@ -259,7 +259,7 @@ fn existing_empty_db_gets_gateway_migration_version_set() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 }
 
 #[test]
