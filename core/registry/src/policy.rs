@@ -1,5 +1,5 @@
 //! SqliteRegistry: D6決定6(受理判別表)の評価器。受理トランザクション内で呼ばれる。
-use crate::catalog::{standard_catalog, ChannelMode, ValueType};
+use crate::catalog::{ChannelMode, ValueType, standard_catalog};
 use crate::store::{self, EntryRow, Resolution};
 use iotkit_core_collector::{RegistryPolicy, RegistryVerdict};
 use iotkit_core_ledger as ledger;
@@ -25,7 +25,10 @@ fn evaluate_item(
     system_id: &ledger::SystemId,
     item: &ReadingItem,
 ) -> Result<RegistryVerdict, String> {
-    let raw_channel: i32 = item.channel_index.map(i32::from).unwrap_or(ledger::CHANNEL_NA);
+    let raw_channel: i32 = item
+        .channel_index
+        .map(i32::from)
+        .unwrap_or(ledger::CHANNEL_NA);
     // 1) 解決: entries → aliases(series_key不変規則) → カタログauto-enable → 未知
     let declared = item.measurement_key.as_str();
     let (entry, resolved_key): (EntryRow, String) =
@@ -57,7 +60,10 @@ fn evaluate_item(
                     // D6決定4: カタログ内キーの初観測は自動有効化+監査イベント必須。
                     // ストレージ失敗はErrのまま上へ(ackなし=D1)——RejectItemに変換しない。
                     let e = store::enable_entry(
-                        conn, cat_entry, &standard_catalog().catalog_version, "auto",
+                        conn,
+                        cat_entry,
+                        &standard_catalog().catalog_version,
+                        "auto",
                     )
                     .map_err(|e| e.to_string())?;
                     (e, declared.to_string())
@@ -117,7 +123,10 @@ fn evaluate_item(
         _ => {}
     }
 
-    let variant = item.series_variant.as_deref().unwrap_or(ledger::DEFAULT_VARIANT);
+    let variant = item
+        .series_variant
+        .as_deref()
+        .unwrap_or(ledger::DEFAULT_VARIANT);
 
     // 3) チャネル検査+正準化(D6決定6/12)。single modeのNone/Some(0)は
     //    既存seriesのchannel形を尊重しつつ、新規は番兵-1へ寄せる。
@@ -183,8 +192,7 @@ fn evaluate_item(
     let series_max = series_meta.as_ref().and_then(|m| m.range_max);
     let min = series_min.or(entry.site_min).or(entry.physical_min);
     let max = series_max.or(entry.site_max).or(entry.physical_max);
-    let out_of_range =
-        min.map_or(false, |lo| value < lo) || max.map_or(false, |hi| value > hi);
+    let out_of_range = min.map_or(false, |lo| value < lo) || max.map_or(false, |hi| value > hi);
     if out_of_range {
         return Ok(RegistryVerdict::Accept {
             resolved_key,
@@ -193,16 +201,20 @@ fn evaluate_item(
         });
     }
 
-    Ok(RegistryVerdict::Accept { resolved_key, channel_index: channel, quarantine: None })
+    Ok(RegistryVerdict::Accept {
+        resolved_key,
+        channel_index: channel,
+        quarantine: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{define_alias, enable_entry, AliasKind};
+    use crate::store::{AliasKind, define_alias, enable_entry};
     use iotkit_core_ledger::{
-        ensure_series, insert_device, DeviceKind, DeviceState, NewDevice, SystemId,
-        CHANNEL_NA, DEFAULT_VARIANT,
+        CHANNEL_NA, DEFAULT_VARIANT, DeviceKind, DeviceState, NewDevice, SystemId, ensure_series,
+        insert_device,
     };
     use iotkit_ingest_contract::TimeSource;
 
@@ -215,10 +227,17 @@ mod tests {
     }
 
     fn device(conn: &rusqlite::Connection) -> SystemId {
-        insert_device(conn, &NewDevice {
-            hardware_id: "ble:aa".into(), user_label: None, parent: None,
-            kind: DeviceKind::Individual, initial_state: DeviceState::Active,
-        }).unwrap()
+        insert_device(
+            conn,
+            &NewDevice {
+                hardware_id: "ble:aa".into(),
+                user_label: None,
+                parent: None,
+                kind: DeviceKind::Individual,
+                initial_state: DeviceState::Active,
+            },
+        )
+        .unwrap()
     }
 
     fn item(key: &str, channel: Option<u16>, values: Vec<f64>) -> ReadingItem {
@@ -230,13 +249,13 @@ mod tests {
             values,
             device_time_ms: None,
             time_source: TimeSource::Gateway,
-            age_ms: None, rssi: None, battery_pct: None,
+            age_ms: None,
+            rssi: None,
+            battery_pct: None,
         }
     }
 
-    fn eval(
-        conn: &rusqlite::Connection, sid: &SystemId, it: &ReadingItem,
-    ) -> RegistryVerdict {
+    fn eval(conn: &rusqlite::Connection, sid: &SystemId, it: &ReadingItem) -> RegistryVerdict {
         evaluate_item(conn, sid, it).unwrap()
     }
 
@@ -253,20 +272,27 @@ mod tests {
             let entry = store::get_entry(conn, "temperature_c").unwrap().unwrap();
             assert_eq!(entry.origin, "catalog");
             // 監査イベント(D6決定4で必須)
-            let n: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM ledger_events WHERE kind='registry_entry_enabled'",
-                [], |r| r.get(0),
-            ).unwrap();
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ledger_events WHERE kind='registry_entry_enabled'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
             assert_eq!(n, 1);
             // 2回目はauto-enableしない(冪等)
             eval(conn, &sid, &item("temperature_c", None, vec![22.0]));
-            let n2: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM ledger_events WHERE kind='registry_entry_enabled'",
-                [], |r| r.get(0),
-            ).unwrap();
+            let n2: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ledger_events WHERE kind='registry_entry_enabled'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
             assert_eq!(n2, 1);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -290,12 +316,24 @@ mod tests {
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             let ok = eval(conn, &sid, &item("temperature_c", None, vec![21.5]));
-            assert!(matches!(ok, RegistryVerdict::Accept { quarantine: None, .. }));
+            assert!(matches!(
+                ok,
+                RegistryVerdict::Accept {
+                    quarantine: None,
+                    ..
+                }
+            ));
             let hot = eval(conn, &sid, &item("temperature_c", None, vec![5000.0]));
-            assert!(matches!(hot,
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::OutOfRange), .. }));
+            assert!(matches!(
+                hot,
+                RegistryVerdict::Accept {
+                    quarantine: Some(QuarantineReason::OutOfRange),
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -329,12 +367,19 @@ mod tests {
                 "UPDATE registry_entries SET site_min = 0.0, site_max = 100.0
                  WHERE measurement_key='temperature_c'",
                 [],
-            ).unwrap();
+            )
+            .unwrap();
             let v = eval(conn, &sid, &item("temperature_c", None, vec![150.0]));
-            assert!(matches!(v,
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::OutOfRange), .. }));
+            assert!(matches!(
+                v,
+                RegistryVerdict::Accept {
+                    quarantine: Some(QuarantineReason::OutOfRange),
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -343,12 +388,24 @@ mod tests {
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             let ok = eval(conn, &sid, &item("contact_state", None, vec![1.0]));
-            assert!(matches!(ok, RegistryVerdict::Accept { quarantine: None, .. }));
+            assert!(matches!(
+                ok,
+                RegistryVerdict::Accept {
+                    quarantine: None,
+                    ..
+                }
+            ));
             let bad = eval(conn, &sid, &item("contact_state", None, vec![3.0]));
-            assert!(matches!(bad,
-                RegistryVerdict::RejectItem { reason_code: ReasonCode::ValueTypeMismatch, .. }));
+            assert!(matches!(
+                bad,
+                RegistryVerdict::RejectItem {
+                    reason_code: ReasonCode::ValueTypeMismatch,
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -357,13 +414,24 @@ mod tests {
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             let multi = eval(conn, &sid, &item("temperature_c", None, vec![1.0, 2.0]));
-            assert!(matches!(multi,
-                RegistryVerdict::RejectItem { reason_code: ReasonCode::ValueTypeMismatch, .. }));
+            assert!(matches!(
+                multi,
+                RegistryVerdict::RejectItem {
+                    reason_code: ReasonCode::ValueTypeMismatch,
+                    ..
+                }
+            ));
             let empty = eval(conn, &sid, &item("temperature_c", None, vec![]));
-            assert!(matches!(empty,
-                RegistryVerdict::RejectItem { reason_code: ReasonCode::ValueTypeMismatch, .. }));
+            assert!(matches!(
+                empty,
+                RegistryVerdict::RejectItem {
+                    reason_code: ReasonCode::ValueTypeMismatch,
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -372,11 +440,19 @@ mod tests {
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             let v = eval(conn, &sid, &item("vibration_spectrum", None, vec![1.0]));
-            assert!(matches!(v,
-                RegistryVerdict::RejectItem { reason_code: ReasonCode::ValueTypeMismatch, .. }),
-                "record型のワイヤ表現は第二波(D6決定10)——f64配列としては解釈不能");
+            assert!(
+                matches!(
+                    v,
+                    RegistryVerdict::RejectItem {
+                        reason_code: ReasonCode::ValueTypeMismatch,
+                        ..
+                    }
+                ),
+                "record型のワイヤ表現は第二波(D6決定10)——f64配列としては解釈不能"
+            );
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -386,18 +462,39 @@ mod tests {
             let sid = device(conn);
             for ch in 0..3u16 {
                 let v = eval(conn, &sid, &item("acceleration_mg", Some(ch), vec![100.0]));
-                assert!(matches!(v, RegistryVerdict::Accept { quarantine: None, .. }),
-                    "channel {ch} is declared");
+                assert!(
+                    matches!(
+                        v,
+                        RegistryVerdict::Accept {
+                            quarantine: None,
+                            ..
+                        }
+                    ),
+                    "channel {ch} is declared"
+                );
             }
             let v = eval(conn, &sid, &item("acceleration_mg", Some(3), vec![100.0]));
-            assert!(matches!(v,
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::UndeclaredChannel), .. }));
+            assert!(matches!(
+                v,
+                RegistryVerdict::Accept {
+                    quarantine: Some(QuarantineReason::UndeclaredChannel),
+                    ..
+                }
+            ));
             let none = eval(conn, &sid, &item("acceleration_mg", None, vec![100.0]));
-            assert!(matches!(none,
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::UndeclaredChannel), .. }),
-                "fixed型でchannel_indexなしは帰属不能=宣言外扱い");
+            assert!(
+                matches!(
+                    none,
+                    RegistryVerdict::Accept {
+                        quarantine: Some(QuarantineReason::UndeclaredChannel),
+                        ..
+                    }
+                ),
+                "fixed型でchannel_indexなしは帰属不能=宣言外扱い"
+            );
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -405,14 +502,30 @@ mod tests {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let sid = device(conn);
-            assert!(matches!(eval(conn, &sid, &item("distance_mm", None, vec![100.0])),
-                RegistryVerdict::Accept { quarantine: None, .. }));
-            assert!(matches!(eval(conn, &sid, &item("distance_mm", Some(0), vec![100.0])),
-                RegistryVerdict::Accept { quarantine: None, .. }));
-            assert!(matches!(eval(conn, &sid, &item("distance_mm", Some(1), vec![100.0])),
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::UndeclaredChannel), .. }));
+            assert!(matches!(
+                eval(conn, &sid, &item("distance_mm", None, vec![100.0])),
+                RegistryVerdict::Accept {
+                    quarantine: None,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                eval(conn, &sid, &item("distance_mm", Some(0), vec![100.0])),
+                RegistryVerdict::Accept {
+                    quarantine: None,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                eval(conn, &sid, &item("distance_mm", Some(1), vec![100.0])),
+                RegistryVerdict::Accept {
+                    quarantine: Some(QuarantineReason::UndeclaredChannel),
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -422,11 +535,20 @@ mod tests {
             let sid = device(conn);
             for ch in [None, Some(0), Some(1), Some(7)] {
                 let v = eval(conn, &sid, &item("voltage_mv", ch, vec![1650.0]));
-                assert!(matches!(v, RegistryVerdict::Accept { quarantine: None, .. }),
-                    "generic modeは宣言照合なし(Wave 1)なので{ch:?}を通す");
+                assert!(
+                    matches!(
+                        v,
+                        RegistryVerdict::Accept {
+                            quarantine: None,
+                            ..
+                        }
+                    ),
+                    "generic modeは宣言照合なし(Wave 1)なので{ch:?}を通す"
+                );
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -435,15 +557,24 @@ mod tests {
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             let cat = standard_catalog();
-            enable_entry(conn, cat.find("temperature_c").unwrap(), &cat.catalog_version, "test").unwrap();
+            enable_entry(
+                conn,
+                cat.find("temperature_c").unwrap(),
+                &cat.catalog_version,
+                "test",
+            )
+            .unwrap();
             define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
             let v = eval(conn, &sid, &item("temp_old", None, vec![21.5]));
-            assert!(matches!(v,
+            assert!(
+                matches!(v,
                 RegistryVerdict::Accept { ref resolved_key, quarantine: None, .. }
                 if resolved_key == "temperature_c"),
-                "未実体化の申告はcanonicalへ写像(D6決定3(b))");
+                "未実体化の申告はcanonicalへ写像(D6決定3(b))"
+            );
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -452,21 +583,49 @@ mod tests {
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             let cat = standard_catalog();
-            enable_entry(conn, cat.find("temperature_c").unwrap(), &cat.catalog_version, "test").unwrap();
+            enable_entry(
+                conn,
+                cat.find("temperature_c").unwrap(),
+                &cat.catalog_version,
+                "test",
+            )
+            .unwrap();
             // 先に申告キーのままのseriesが存在する状況を作る(検疫期にunknown keyとして実体化済み)
-            ensure_series(conn, &sid, "temp_old", CHANNEL_NA, DEFAULT_VARIANT, true, Some("unknown_key")).unwrap();
+            ensure_series(
+                conn,
+                &sid,
+                "temp_old",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                true,
+                Some("unknown_key"),
+            )
+            .unwrap();
             // エイリアス確立=canonical定義バインドで検疫解除される(Task 3)
             define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
             let meta = iotkit_core_ledger::find_series_meta(
-                conn, &sid, "temp_old", CHANNEL_NA, DEFAULT_VARIANT).unwrap().unwrap();
-            assert!(!meta.quarantined, "確立時点でseries検疫は解除済み(D6決定3(a))");
+                conn,
+                &sid,
+                "temp_old",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                !meta.quarantined,
+                "確立時点でseries検疫は解除済み(D6決定3(a))"
+            );
             let v = eval(conn, &sid, &item("temp_old", None, vec![21.5]));
-            assert!(matches!(v,
+            assert!(
+                matches!(v,
                 RegistryVerdict::Accept { ref resolved_key, quarantine: None, .. }
                 if resolved_key == "temp_old"),
-                "実体化済み申告キーはseries_key不変(D6決定3(a))。検証はcanonical定義で行う");
+                "実体化済み申告キーはseries_key不変(D6決定3(a))。検証はcanonical定義で行う"
+            );
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -476,13 +635,26 @@ mod tests {
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             let v0 = eval(conn, &sid, &item("distance_mm", Some(0), vec![100.0]));
-            assert!(matches!(v0,
-                RegistryVerdict::Accept { channel_index: ledger::CHANNEL_NA, quarantine: None, .. }));
+            assert!(matches!(
+                v0,
+                RegistryVerdict::Accept {
+                    channel_index: ledger::CHANNEL_NA,
+                    quarantine: None,
+                    ..
+                }
+            ));
             let vn = eval(conn, &sid, &item("distance_mm", None, vec![100.0]));
-            assert!(matches!(vn,
-                RegistryVerdict::Accept { channel_index: ledger::CHANNEL_NA, quarantine: None, .. }));
+            assert!(matches!(
+                vn,
+                RegistryVerdict::Accept {
+                    channel_index: ledger::CHANNEL_NA,
+                    quarantine: None,
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -494,10 +666,17 @@ mod tests {
 
             let v = eval(conn, &sid, &item("distance_mm", None, vec![100.0]));
 
-            assert!(matches!(v,
-                RegistryVerdict::Accept { channel_index: 0, quarantine: None, .. }));
+            assert!(matches!(
+                v,
+                RegistryVerdict::Accept {
+                    channel_index: 0,
+                    quarantine: None,
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -505,20 +684,39 @@ mod tests {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let sid = device(conn);
-            ensure_series(conn, &sid, "distance_mm", CHANNEL_NA, DEFAULT_VARIANT, false, None).unwrap();
+            ensure_series(
+                conn,
+                &sid,
+                "distance_mm",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
             ensure_series(conn, &sid, "distance_mm", 0, DEFAULT_VARIANT, false, None).unwrap();
 
             let v = eval(conn, &sid, &item("distance_mm", Some(0), vec![100.0]));
 
-            assert!(matches!(v,
-                RegistryVerdict::Accept { channel_index: CHANNEL_NA, quarantine: None, .. }));
-            let events: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM ledger_events WHERE kind='channel_form_conflict'",
-                [], |r| r.get(0),
-            ).unwrap();
+            assert!(matches!(
+                v,
+                RegistryVerdict::Accept {
+                    channel_index: CHANNEL_NA,
+                    quarantine: None,
+                    ..
+                }
+            ));
+            let events: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ledger_events WHERE kind='channel_form_conflict'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
             assert_eq!(events, 1);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -527,23 +725,54 @@ mod tests {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let sid = device(conn);
-            ensure_series(conn, &sid, "temperature_c", CHANNEL_NA, DEFAULT_VARIANT, false, None).unwrap();
+            ensure_series(
+                conn,
+                &sid,
+                "temperature_c",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
             conn.execute(
                 "UPDATE series SET range_min = -10.0 WHERE measurement_key='temperature_c'",
                 [],
-            ).unwrap(); // range_maxはNULLのまま
+            )
+            .unwrap(); // range_maxはNULLのまま
             let hot = eval(conn, &sid, &item("temperature_c", None, vec![5000.0]));
-            assert!(matches!(hot,
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::OutOfRange), .. }),
-                "max側はカタログ物理限界(1372)が生きる——外殻は消えない");
+            assert!(
+                matches!(
+                    hot,
+                    RegistryVerdict::Accept {
+                        quarantine: Some(QuarantineReason::OutOfRange),
+                        ..
+                    }
+                ),
+                "max側はカタログ物理限界(1372)が生きる——外殻は消えない"
+            );
             let cold = eval(conn, &sid, &item("temperature_c", None, vec![-50.0]));
-            assert!(matches!(cold,
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::OutOfRange), .. }),
-                "min側はseries個別(-10)が適用される");
+            assert!(
+                matches!(
+                    cold,
+                    RegistryVerdict::Accept {
+                        quarantine: Some(QuarantineReason::OutOfRange),
+                        ..
+                    }
+                ),
+                "min側はseries個別(-10)が適用される"
+            );
             let ok = eval(conn, &sid, &item("temperature_c", None, vec![25.0]));
-            assert!(matches!(ok, RegistryVerdict::Accept { quarantine: None, .. }));
+            assert!(matches!(
+                ok,
+                RegistryVerdict::Accept {
+                    quarantine: None,
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -553,10 +782,16 @@ mod tests {
             let sid = device(conn);
             // 未知キー+変なchannel: UnknownKeyが優先(定義がないので他の検査は無意味)
             let v = eval(conn, &sid, &item("custom.x", Some(9), vec![1e18]));
-            assert!(matches!(v,
-                RegistryVerdict::Accept { quarantine: Some(QuarantineReason::UnknownKey), .. }));
+            assert!(matches!(
+                v,
+                RegistryVerdict::Accept {
+                    quarantine: Some(QuarantineReason::UnknownKey),
+                    ..
+                }
+            ));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -566,12 +801,20 @@ mod tests {
             let sid = device(conn);
             for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
                 let verdict = eval(conn, &sid, &item("temperature_c", None, vec![v]));
-                assert!(matches!(verdict,
-                    RegistryVerdict::RejectItem { reason_code: ReasonCode::ValueTypeMismatch, .. }),
-                    "{v} must be terminally rejected, not quarantined or accepted");
+                assert!(
+                    matches!(
+                        verdict,
+                        RegistryVerdict::RejectItem {
+                            reason_code: ReasonCode::ValueTypeMismatch,
+                            ..
+                        }
+                    ),
+                    "{v} must be terminally rejected, not quarantined or accepted"
+                );
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -585,6 +828,7 @@ mod tests {
             assert!(r.is_err(), "storage failure must surface as Err, got {r:?}");
             conn.execute_batch("PRAGMA query_only = OFF;").unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 }

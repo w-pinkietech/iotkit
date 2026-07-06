@@ -5,8 +5,8 @@ use iotkit_core_types::{AdapterEvent, DeviceKey, SensorIdentity};
 use bravepi_codec::BravePiFrame;
 use bravepi_sensors::UartSample;
 
-use crate::registry::lookup_handler;
 use crate::BravepiConnection;
+use crate::registry::lookup_handler;
 
 /// BravePiFrame を AdapterEvent に変換する。
 /// SensorData フレームの場合は SensorIdentity も返す (DeviceDiscovered 用)。
@@ -23,9 +23,10 @@ pub(crate) fn frame_to_event(
             })?;
 
             let transmitter_id = s.device_number.clone();
-            let device_key = DeviceKey::new(
-                format!("bravepi-mainboard:{}:{}", transmitter_id, handler.key_suffix),
-            );
+            let device_key = DeviceKey::new(format!(
+                "bravepi-mainboard:{}:{}",
+                transmitter_id, handler.key_suffix
+            ));
 
             let conn_info = BravepiConnection::Uart {
                 port: port_path.to_string(),
@@ -68,7 +69,10 @@ pub(crate) fn frame_to_event(
                 None
             } else {
                 lookup_handler(sensor_type_raw).map(|h| {
-                    DeviceKey::new(format!("bravepi-mainboard:{}:{}", device_number, h.key_suffix))
+                    DeviceKey::new(format!(
+                        "bravepi-mainboard:{}:{}",
+                        device_number, h.key_suffix
+                    ))
                 })
             };
             Some((

@@ -28,10 +28,19 @@ impl State {
     pub fn apply(&mut self, event: EngineEvent) {
         let adapter_id = event.adapter_id;
         match event.event {
-            AdapterEvent::DeviceDiscovered { device_key, identity } => {
+            AdapterEvent::DeviceDiscovered {
+                device_key,
+                identity,
+            } => {
                 self.apply_discovered(adapter_id, device_key, identity);
             }
-            AdapterEvent::SensorData { device_key, reading, rssi, battery_pct, ingested_at: _ } => {
+            AdapterEvent::SensorData {
+                device_key,
+                reading,
+                rssi,
+                battery_pct,
+                ingested_at: _,
+            } => {
                 let key = EngineDeviceKey {
                     adapter_id,
                     device_key: device_key.clone(),
@@ -82,34 +91,32 @@ impl State {
                     );
                 }
             }
-            AdapterEvent::AdapterError { device_key, error } => {
-                match device_key {
-                    Some(dk) => {
-                        let key = EngineDeviceKey {
-                            adapter_id,
-                            device_key: dk.clone(),
-                        };
-                        match self.devices.get_mut(&key) {
-                            Some(ds) => {
-                                ds.view.last_error = Some(error);
-                            }
-                            None => {
-                                tracing::warn!(
-                                    device_key = %dk,
-                                    error = %error,
-                                    "AdapterError for unknown device, ignoring"
-                                );
-                            }
+            AdapterEvent::AdapterError { device_key, error } => match device_key {
+                Some(dk) => {
+                    let key = EngineDeviceKey {
+                        adapter_id,
+                        device_key: dk.clone(),
+                    };
+                    match self.devices.get_mut(&key) {
+                        Some(ds) => {
+                            ds.view.last_error = Some(error);
+                        }
+                        None => {
+                            tracing::warn!(
+                                device_key = %dk,
+                                error = %error,
+                                "AdapterError for unknown device, ignoring"
+                            );
                         }
                     }
-                    None => {
-                        tracing::warn!(
-                            error = %error,
-                            "Adapter-level error"
-                        );
-                    }
                 }
-            }
+                None => {
+                    tracing::warn!(
+                        error = %error,
+                        "Adapter-level error"
+                    );
+                }
+            },
         }
     }
 
@@ -130,19 +137,22 @@ impl State {
                 ds.last_seen = now;
             }
             None => {
-                self.devices.insert(key.clone(), DeviceState {
-                    view: DeviceView {
-                        key,
-                        identity,
-                        last_reading: None,
-                        rssi: None,
-                        battery_pct: None,
-                        config: None,
-                        last_error: None,
+                self.devices.insert(
+                    key.clone(),
+                    DeviceState {
+                        view: DeviceView {
+                            key,
+                            identity,
+                            last_reading: None,
+                            rssi: None,
+                            battery_pct: None,
+                            config: None,
+                            last_error: None,
+                        },
+                        discovered_at: now,
+                        last_seen: now,
                     },
-                    discovered_at: now,
-                    last_seen: now,
-                });
+                );
             }
         }
     }

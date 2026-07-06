@@ -31,7 +31,10 @@ fn temperature_frame_produces_sensor_data() {
             battery_pct,
             ..
         } => {
-            assert_eq!(device_key.as_str(), "bravepi-mainboard:246880020140018b:temperature");
+            assert_eq!(
+                device_key.as_str(),
+                "bravepi-mainboard:246880020140018b:temperature"
+            );
             assert_eq!(reading.sensor_type, SensorType::Temperature);
             assert_eq!(reading.values.len(), 1);
             assert!((reading.values[0] - 22.4375).abs() < 0.01);
@@ -145,7 +148,10 @@ fn decode_error_produces_adapter_error() {
 
     match event {
         AdapterEvent::AdapterError { device_key, error } => {
-            assert_eq!(device_key.unwrap().as_str(), "bravepi-mainboard:bad_device:temperature");
+            assert_eq!(
+                device_key.unwrap().as_str(),
+                "bravepi-mainboard:bad_device:temperature"
+            );
             assert!(error.contains("Decode error"));
             assert!(error.contains("payload too short"));
         }
@@ -251,9 +257,22 @@ fn temperature_frame_returns_identity() {
     assert_eq!(identity.manufacturer, "Braveridge");
     assert_eq!(identity.ic_part_number, "MCP9600");
     assert_eq!(identity.sensor_type, SensorType::Temperature);
-    assert_eq!(identity.connection.kind, iotkit_core_types::ConnectionKind::Uart);
-    assert_eq!(identity.connection.parameters.get("port").unwrap(), "/dev/ttyAMA0");
-    assert_eq!(identity.connection.parameters.get("transmitter_id").unwrap(), "246880020140018b");
+    assert_eq!(
+        identity.connection.kind,
+        iotkit_core_types::ConnectionKind::Uart
+    );
+    assert_eq!(
+        identity.connection.parameters.get("port").unwrap(),
+        "/dev/ttyAMA0"
+    );
+    assert_eq!(
+        identity
+            .connection
+            .parameters
+            .get("transmitter_id")
+            .unwrap(),
+        "246880020140018b"
+    );
 }
 
 #[test]
@@ -272,8 +291,18 @@ fn contact_input_has_module_identity() {
     assert_eq!(identity.manufacturer, "Braveridge");
     assert_eq!(identity.ic_part_number, "Contact Input Module");
     assert_eq!(identity.sensor_type, SensorType::ContactInput);
-    assert_eq!(identity.connection.kind, iotkit_core_types::ConnectionKind::Uart);
-    assert_eq!(identity.connection.parameters.get("transmitter_id").unwrap(), "test");
+    assert_eq!(
+        identity.connection.kind,
+        iotkit_core_types::ConnectionKind::Uart
+    );
+    assert_eq!(
+        identity
+            .connection
+            .parameters
+            .get("transmitter_id")
+            .unwrap(),
+        "test"
+    );
 }
 
 #[test]
@@ -305,7 +334,10 @@ fn decode_error_unknown_sensor_type_produces_none_key() {
 
     match event {
         AdapterEvent::AdapterError { device_key, error } => {
-            assert!(device_key.is_none(), "unknown sensor type should produce None key");
+            assert!(
+                device_key.is_none(),
+                "unknown sensor type should produce None key"
+            );
             assert!(error.contains("bad payload"));
         }
         other => panic!("expected AdapterError, got {:?}", other),
@@ -325,7 +357,10 @@ fn decode_error_unknown_device_produces_none_key() {
 
     match event {
         AdapterEvent::AdapterError { device_key, error } => {
-            assert!(device_key.is_none(), "unknown device should produce None key");
+            assert!(
+                device_key.is_none(),
+                "unknown device should produce None key"
+            );
             assert!(error.contains("frame size exceeds maximum"));
         }
         other => panic!("expected AdapterError, got {:?}", other),

@@ -12,10 +12,8 @@ pub struct GpioInput {
 impl GpioInput {
     /// BCM ピン番号で入力ピンを開く。
     pub fn open(bcm_pin: u8, pull: GpioPull) -> io::Result<Self> {
-        let gpio = Gpio::new()
-            .map_err(io::Error::other)?;
-        let pin = gpio.get(bcm_pin)
-            .map_err(io::Error::other)?;
+        let gpio = Gpio::new().map_err(io::Error::other)?;
+        let pin = gpio.get(bcm_pin).map_err(io::Error::other)?;
         let pin = match pull {
             GpioPull::Up => pin.into_input_pullup(),
             GpioPull::Down => pin.into_input_pulldown(),
@@ -38,11 +36,8 @@ pub struct GpioOutput {
 impl GpioOutput {
     /// BCM ピン番号で出力ピンを開く。
     pub fn open(bcm_pin: u8) -> io::Result<Self> {
-        let gpio = Gpio::new()
-            .map_err(io::Error::other)?;
-        let pin = gpio.get(bcm_pin)
-            .map_err(io::Error::other)?
-            .into_output();
+        let gpio = Gpio::new().map_err(io::Error::other)?;
+        let pin = gpio.get(bcm_pin).map_err(io::Error::other)?.into_output();
         Ok(Self { pin })
     }
 

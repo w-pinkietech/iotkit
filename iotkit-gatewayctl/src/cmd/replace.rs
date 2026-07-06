@@ -299,12 +299,7 @@ pub fn run_replace_undo(conn: &Connection, args: ReplaceUndoArgs) -> AppResult<(
             .map(|row| row.series_id)
             .collect::<Vec<_>>();
         let rows = ts_query::mark_readings_quarantined(tx, &series_ids, since, to)?;
-        iotkit_core_publish::store::prune_outbox_for_quarantined_range(
-            tx,
-            &series_ids,
-            since,
-            to,
-        )?;
+        iotkit_core_publish::store::prune_outbox_for_quarantined_range(tx, &series_ids, since, to)?;
         let detail = serde_json::json!({
             "old_hw": replace_event.old_hw,
             "new_hw": current.hardware_id,

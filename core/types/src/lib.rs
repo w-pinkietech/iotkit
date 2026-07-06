@@ -100,7 +100,9 @@ pub struct ConnectionInfo {
 impl fmt::Display for ConnectionInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}(", self.kind)?;
-        let params: Vec<String> = self.parameters.iter()
+        let params: Vec<String> = self
+            .parameters
+            .iter()
             .map(|(k, v)| format!("{}={}", k, v))
             .collect();
         write!(f, "{})", params.join(", "))
@@ -127,11 +129,19 @@ pub struct SensorReading {
 
 impl SensorReading {
     pub fn new(sensor_type: SensorType, values: Vec<f64>, labels: Vec<String>) -> Self {
-        Self { sensor_type, values, labels }
+        Self {
+            sensor_type,
+            values,
+            labels,
+        }
     }
 
     pub fn empty(sensor_type: SensorType) -> Self {
-        Self { sensor_type, values: vec![], labels: vec![] }
+        Self {
+            sensor_type,
+            values: vec![],
+            labels: vec![],
+        }
     }
 }
 
@@ -142,8 +152,12 @@ impl SensorReading {
 pub struct AdapterId(String);
 
 impl AdapterId {
-    pub fn new(id: impl Into<String>) -> Self { Self(id.into()) }
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// デバイスの一意キー。adapter 内で一意であればよい。
@@ -151,8 +165,12 @@ impl AdapterId {
 pub struct DeviceKey(String);
 
 impl DeviceKey {
-    pub fn new(key: impl Into<String>) -> Self { Self(key.into()) }
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Display for AdapterId {
@@ -313,7 +331,10 @@ mod tests {
 
     #[test]
     fn config_value_variants() {
-        assert_eq!(ConfigValue::String("hello".into()), ConfigValue::String("hello".into()));
+        assert_eq!(
+            ConfigValue::String("hello".into()),
+            ConfigValue::String("hello".into())
+        );
         assert_eq!(ConfigValue::Integer(42), ConfigValue::Integer(42));
         assert_eq!(ConfigValue::Float(1.5_f64), ConfigValue::Float(1.5_f64));
         assert_eq!(ConfigValue::Bool(true), ConfigValue::Bool(true));
@@ -334,7 +355,10 @@ mod tests {
         for v in variants {
             let db_str = v.as_db_str();
             let round_tripped = SensorType::from_db_str(db_str);
-            assert_eq!(v, round_tripped, "round-trip failed for {v:?} -> {db_str:?}");
+            assert_eq!(
+                v, round_tripped,
+                "round-trip failed for {v:?} -> {db_str:?}"
+            );
         }
     }
 

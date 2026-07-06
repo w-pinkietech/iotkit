@@ -1,0 +1,5 @@
+# Pin the toolchain so formatting, lints, and builds are reproducible across
+# contributors and CI. Bump deliberately (it can change rustfmt/clippy output).
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

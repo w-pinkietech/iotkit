@@ -57,8 +57,8 @@ pub const CONTACT_OUTPUT: SensorHandler = SensorHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use iotkit_core_types::ConnectionKind;
+    use std::collections::BTreeMap;
 
     fn test_conn() -> ConnectionInfo {
         ConnectionInfo {

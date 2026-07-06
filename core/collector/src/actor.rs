@@ -1,4 +1,4 @@
-use crate::registry_policy::{is_series_level, RegistryPolicy, RegistryVerdict};
+use crate::registry_policy::{RegistryPolicy, RegistryVerdict, is_series_level};
 use iotkit_core_ledger as ledger;
 use iotkit_core_storage::DbHandle;
 use iotkit_core_timeseries as ts;
@@ -138,7 +138,11 @@ async fn maybe_purge_dedup(db: &DbHandle, purge_interval_ms: i64, last_purge_ms:
     match result {
         Ok(Ok(deleted)) => {
             if deleted > 0 {
-                tracing::info!(deleted, cutoff_ms = cutoff, "collector: opportunistic ingest_dedup purge");
+                tracing::info!(
+                    deleted,
+                    cutoff_ms = cutoff,
+                    "collector: opportunistic ingest_dedup purge"
+                );
             }
         }
         Ok(Err(e)) => tracing::error!(error = %e, "collector: dedup purge failed"),
@@ -165,15 +169,16 @@ fn process_envelope(
             envelope_id: eid,
             status: AckStatus::Rejected {
                 reason_code: ReasonCode::BatchTooLarge,
-                message: format!("items {} > {}", envelope.items.len(), MAX_ITEMS_PER_ENVELOPE),
+                message: format!(
+                    "items {} > {}",
+                    envelope.items.len(),
+                    MAX_ITEMS_PER_ENVELOPE
+                ),
             },
         });
     }
-    let tx = rusqlite::Transaction::new_unchecked(
-        conn,
-        rusqlite::TransactionBehavior::Immediate,
-    )
-    .map_err(|e| e.to_string())?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
     let generation = ledger::current_generation(&tx).map_err(|e| e.to_string())?;
     if generation != cache.generation {
         cache.devices.clear();
@@ -184,7 +189,10 @@ fn process_envelope(
         .map_err(|e| e.to_string())?;
     if !claimed {
         drop(tx); // dedup判定のみ・書き込みなし
-        return Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Duplicate });
+        return Ok(EnvelopeAck {
+            envelope_id: eid,
+            status: AckStatus::Duplicate,
+        });
     }
     let received_at = now_ms();
     let epoch = ledger::ledger_epoch(&tx).map_err(|e| e.to_string())?;
@@ -201,7 +209,12 @@ fn process_envelope(
         )?);
     }
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(EnvelopeAck { envelope_id: eid, status: AckStatus::Accepted { items: item_statuses } })
+    Ok(EnvelopeAck {
+        envelope_id: eid,
+        status: AckStatus::Accepted {
+            items: item_statuses,
+        },
+    })
 }
 
 fn restore_device_time(
@@ -212,7 +225,9 @@ fn restore_device_time(
 ) -> (Option<i64>, TimeSource) {
     match (device_time_ms, age_ms) {
         (Some(dt), _) => (Some(dt), declared),
-        (None, Some(age)) => match i64::try_from(age).ok().and_then(|a| received_at.checked_sub(a))
+        (None, Some(age)) => match i64::try_from(age)
+            .ok()
+            .and_then(|a| received_at.checked_sub(a))
         {
             Some(dt) => (Some(dt), TimeSource::GatewayAdjusted),
             None => (None, declared),
@@ -248,7 +263,9 @@ fn process_item(
         Some(hit) => Some(*hit),
         None => match ledger::find_alive_by_hardware_id(conn, hw).map_err(|e| e.to_string())? {
             Some(row) => {
-                cache.devices.insert(hw.to_string(), (row.system_id, row.state));
+                cache
+                    .devices
+                    .insert(hw.to_string(), (row.system_id, row.state));
                 Some((row.system_id, row.state))
             }
             None => None,
@@ -267,11 +284,19 @@ fn process_item(
     // 4) レジストリ評価(D6判別表)。Errはストレージ失敗=ackなしへ伝播(D1)
     let (resolved_key, channel, registry_quarantine) =
         match policy.evaluate(conn, &system_id, item)? {
-            RegistryVerdict::Accept { resolved_key, channel_index, quarantine } => {
-                (resolved_key, channel_index, quarantine)
-            }
-            RegistryVerdict::RejectItem { reason_code, message } => {
-                return Ok(ItemStatus::ItemRejected { reason_code, message });
+            RegistryVerdict::Accept {
+                resolved_key,
+                channel_index,
+                quarantine,
+            } => (resolved_key, channel_index, quarantine),
+            RegistryVerdict::RejectItem {
+                reason_code,
+                message,
+            } => {
+                return Ok(ItemStatus::ItemRejected {
+                    reason_code,
+                    message,
+                });
             }
         };
     // 5) series解決(検疫デバイスのデータは検疫行として保存=D1オンボーディング)。
@@ -291,7 +316,13 @@ fn process_item(
                 .filter(|q| is_series_level(*q))
                 .map(|q| q.as_str());
             let id = ledger::ensure_series(
-                conn, &system_id, &resolved_key, channel, &variant, series_quarantined, reason,
+                conn,
+                &system_id,
+                &resolved_key,
+                channel,
+                &variant,
+                series_quarantined,
+                reason,
             )
             .map_err(|e| e.to_string())?;
             cache.series.insert(skey, id);
@@ -305,11 +336,17 @@ fn process_item(
         .or_else(|| device_quarantined.then_some(QuarantineReason::DeviceQuarantined));
     // D1: RTCなしデバイスのage_ms → received_at - age_ms で復元(time_source=gateway_adjusted)。
     // item.device_time_msが既にあればそれが優先(申告時刻>復元時刻)。
-    let (device_time_ms, time_source) =
-        restore_device_time(received_at, item.device_time_ms, item.age_ms, item.time_source);
+    let (device_time_ms, time_source) = restore_device_time(
+        received_at,
+        item.device_time_ms,
+        item.age_ms,
+        item.time_source,
+    );
     let time_source = match time_source {
-        TimeSource::DeviceNtp => "device_ntp", TimeSource::DeviceRtc => "device_rtc",
-        TimeSource::Gateway => "gateway", TimeSource::GatewayAdjusted => "gateway_adjusted",
+        TimeSource::DeviceNtp => "device_ntp",
+        TimeSource::DeviceRtc => "device_rtc",
+        TimeSource::Gateway => "gateway",
+        TimeSource::GatewayAdjusted => "gateway_adjusted",
     };
     let new = ts::NewReading {
         series_id,
@@ -327,7 +364,11 @@ fn process_item(
             .map_err(|e| e.to_string())?;
     }
     Ok(ItemStatus::Stored {
-        disposition: if row_quarantined { Disposition::Quarantined } else { Disposition::Durable },
+        disposition: if row_quarantined {
+            Disposition::Quarantined
+        } else {
+            Disposition::Durable
+        },
         quarantine_reason: if row_quarantined { wire_reason } else { None },
     })
 }
@@ -370,24 +411,35 @@ mod tests {
                 values: vec![1.0],
                 device_time_ms: None,
                 time_source: TimeSource::Gateway,
-                age_ms: None, rssi: None, battery_pct: None,
+                age_ms: None,
+                rssi: None,
+                battery_pct: None,
             }],
         }
     }
 
     fn register_active(db: &iotkit_core_storage::DbHandle, hw: &str) {
         db.with_conn_sync(|conn| {
-            ledger::insert_device(conn, &ledger::NewDevice {
-                hardware_id: hw.into(), user_label: None, parent: None,
-                kind: ledger::DeviceKind::Individual,
-                initial_state: ledger::DeviceState::Active,
-            }).unwrap();
+            ledger::insert_device(
+                conn,
+                &ledger::NewDevice {
+                    hardware_id: hw.into(),
+                    user_label: None,
+                    parent: None,
+                    kind: ledger::DeviceKind::Individual,
+                    initial_state: ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     fn raw_channel(item: &ReadingItem) -> i32 {
-        item.channel_index.map(i32::from).unwrap_or(ledger::CHANNEL_NA)
+        item.channel_index
+            .map(i32::from)
+            .unwrap_or(ledger::CHANNEL_NA)
     }
 
     /// 検疫理由付きのスタブポリシー(コレクタがverdictをseries/行/ackへ正しく写像するかの検証用)
@@ -442,14 +494,21 @@ mod tests {
         let db = test_db();
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
-        let ack = collector.submit(env("e-1", "ble:aa", "temperature_c")).await.unwrap();
+        let ack = collector
+            .submit(env("e-1", "ble:aa", "temperature_c"))
+            .await
+            .unwrap();
         assert!(matches!(ack.status,
             AckStatus::Accepted { ref items }
             if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable, .. })));
         // ack = 耐久点: ackが返った時点で行が存在する(D1)
-        let n: i64 = db.with_conn_sync(|conn| {
-            Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
-        }).unwrap();
+        let n: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn
+                    .query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0))
+                    .unwrap())
+            })
+            .unwrap();
         assert_eq!(n, 1);
     }
 
@@ -458,21 +517,35 @@ mod tests {
         let db = test_db();
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(
-            db.clone(), Arc::new(QuarantiningStub(QuarantineReason::UnknownKey)), 16);
-        let ack = collector.submit(env("e-q1", "ble:aa", "custom.mystery")).await.unwrap();
-        assert!(matches!(ack.status,
+            db.clone(),
+            Arc::new(QuarantiningStub(QuarantineReason::UnknownKey)),
+            16,
+        );
+        let ack = collector
+            .submit(env("e-q1", "ble:aa", "custom.mystery"))
+            .await
+            .unwrap();
+        assert!(
+            matches!(ack.status,
             AckStatus::Accepted { ref items }
             if matches!(items[0], ItemStatus::Stored {
                 disposition: Disposition::Quarantined,
                 quarantine_reason: Some(QuarantineReason::UnknownKey),
-            })), "ackに検疫理由が可視化される(D1追補)");
-        let (s_q, s_reason, r_q): (i64, Option<String>, i64) = db.with_conn_sync(|conn| {
-            Ok((
-                conn.query_row("SELECT quarantined FROM series", [], |r| r.get(0)).unwrap(),
-                conn.query_row("SELECT quarantine_reason FROM series", [], |r| r.get(0)).unwrap(),
-                conn.query_row("SELECT quarantined FROM readings", [], |r| r.get(0)).unwrap(),
-            ))
-        }).unwrap();
+            })),
+            "ackに検疫理由が可視化される(D1追補)"
+        );
+        let (s_q, s_reason, r_q): (i64, Option<String>, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT quarantined FROM series", [], |r| r.get(0))
+                        .unwrap(),
+                    conn.query_row("SELECT quarantine_reason FROM series", [], |r| r.get(0))
+                        .unwrap(),
+                    conn.query_row("SELECT quarantined FROM readings", [], |r| r.get(0))
+                        .unwrap(),
+                ))
+            })
+            .unwrap();
         assert_eq!(s_q, 1, "unknown keyはseries級検疫");
         assert_eq!(s_reason.as_deref(), Some("unknown_key"));
         assert_eq!(r_q, 1);
@@ -483,21 +556,32 @@ mod tests {
         let db = test_db();
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(
-            db.clone(), Arc::new(QuarantiningStub(QuarantineReason::OutOfRange)), 16);
-        let ack = collector.submit(env("e-q2", "ble:aa", "temperature_c")).await.unwrap();
+            db.clone(),
+            Arc::new(QuarantiningStub(QuarantineReason::OutOfRange)),
+            16,
+        );
+        let ack = collector
+            .submit(env("e-q2", "ble:aa", "temperature_c"))
+            .await
+            .unwrap();
         assert!(matches!(ack.status,
-            AckStatus::Accepted { ref items }
-            if matches!(items[0], ItemStatus::Stored {
-                disposition: Disposition::Quarantined,
-                quarantine_reason: Some(QuarantineReason::OutOfRange),
-            })));
-        let (s_q, s_reason, r_q): (i64, Option<String>, i64) = db.with_conn_sync(|conn| {
-            Ok((
-                conn.query_row("SELECT quarantined FROM series", [], |r| r.get(0)).unwrap(),
-                conn.query_row("SELECT quarantine_reason FROM series", [], |r| r.get(0)).unwrap(),
-                conn.query_row("SELECT quarantined FROM readings", [], |r| r.get(0)).unwrap(),
-            ))
-        }).unwrap();
+        AckStatus::Accepted { ref items }
+        if matches!(items[0], ItemStatus::Stored {
+            disposition: Disposition::Quarantined,
+            quarantine_reason: Some(QuarantineReason::OutOfRange),
+        })));
+        let (s_q, s_reason, r_q): (i64, Option<String>, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT quarantined FROM series", [], |r| r.get(0))
+                        .unwrap(),
+                    conn.query_row("SELECT quarantine_reason FROM series", [], |r| r.get(0))
+                        .unwrap(),
+                    conn.query_row("SELECT quarantined FROM readings", [], |r| r.get(0))
+                        .unwrap(),
+                ))
+            })
+            .unwrap();
         assert_eq!(s_q, 0, "値域外はseriesを汚さない(行級のみ)");
         assert_eq!(s_reason, None);
         assert_eq!(r_q, 1);
@@ -510,45 +594,50 @@ mod tests {
         let mut cache = ResolutionCache::default();
         let envelope = env("e-outbox-1", "ble:aa", "temperature_c");
 
-        let ack = db.with_conn_sync(|conn| {
-            Ok(process_envelope(
-                conn,
-                &mut cache,
-                &PermissiveRegistry,
-                &envelope,
-            ).unwrap())
-        }).unwrap();
+        let ack = db
+            .with_conn_sync(|conn| {
+                Ok(process_envelope(conn, &mut cache, &PermissiveRegistry, &envelope).unwrap())
+            })
+            .unwrap();
         assert!(matches!(ack.status,
-            AckStatus::Accepted { ref items }
-            if matches!(items[0], ItemStatus::Stored {
-                disposition: Disposition::Durable,
-                quarantine_reason: None,
-            })));
+        AckStatus::Accepted { ref items }
+        if matches!(items[0], ItemStatus::Stored {
+            disposition: Disposition::Durable,
+            quarantine_reason: None,
+        })));
 
-        let (reading_count, reading_seq, outbox_count): (i64, i64, i64) = db.with_conn_sync(|conn| {
-            Ok((
-                conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap(),
-                conn.query_row("SELECT seq FROM readings", [], |r| r.get(0)).unwrap(),
-                conn.query_row(
-                    "SELECT COUNT(*) FROM publication_log WHERE kind = 'measurement'",
-                    [],
-                    |r| r.get(0),
-                ).unwrap(),
-            ))
-        }).unwrap();
+        let (reading_count, reading_seq, outbox_count): (i64, i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0))
+                        .unwrap(),
+                    conn.query_row("SELECT seq FROM readings", [], |r| r.get(0))
+                        .unwrap(),
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM publication_log WHERE kind = 'measurement'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap(),
+                ))
+            })
+            .unwrap();
         assert_eq!(reading_count, 1);
         assert_eq!(outbox_count, 1, "non-quarantined readings must be enqueued");
 
-        let (outbox_reading_seq, outbox_epoch, expected_epoch): (i64, String, String) =
-            db.with_conn_sync(|conn| {
+        let (outbox_reading_seq, outbox_epoch, expected_epoch): (i64, String, String) = db
+            .with_conn_sync(|conn| {
                 let expected_epoch = ledger::ledger_epoch(conn).unwrap();
-                let (outbox_reading_seq, outbox_epoch) = conn.query_row(
-                    "SELECT reading_seq, epoch FROM publication_log WHERE kind = 'measurement'",
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                ).unwrap();
+                let (outbox_reading_seq, outbox_epoch) = conn
+                    .query_row(
+                        "SELECT reading_seq, epoch FROM publication_log WHERE kind = 'measurement'",
+                        [],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .unwrap();
                 Ok((outbox_reading_seq, outbox_epoch, expected_epoch))
-            }).unwrap();
+            })
+            .unwrap();
         assert_eq!(outbox_reading_seq, reading_seq);
         assert_eq!(outbox_epoch, expected_epoch);
 
@@ -557,34 +646,43 @@ mod tests {
         let mut quarantine_cache = ResolutionCache::default();
         let quarantined = env("e-outbox-q", "ble:qq", "custom.mystery");
 
-        let ack = quarantined_db.with_conn_sync(|conn| {
-            Ok(process_envelope(
-                conn,
-                &mut quarantine_cache,
-                &QuarantiningStub(QuarantineReason::UnknownKey),
-                &quarantined,
-            ).unwrap())
-        }).unwrap();
+        let ack = quarantined_db
+            .with_conn_sync(|conn| {
+                Ok(process_envelope(
+                    conn,
+                    &mut quarantine_cache,
+                    &QuarantiningStub(QuarantineReason::UnknownKey),
+                    &quarantined,
+                )
+                .unwrap())
+            })
+            .unwrap();
         assert!(matches!(ack.status,
-            AckStatus::Accepted { ref items }
-            if matches!(items[0], ItemStatus::Stored {
-                disposition: Disposition::Quarantined,
-                quarantine_reason: Some(QuarantineReason::UnknownKey),
-            })));
+        AckStatus::Accepted { ref items }
+        if matches!(items[0], ItemStatus::Stored {
+            disposition: Disposition::Quarantined,
+            quarantine_reason: Some(QuarantineReason::UnknownKey),
+        })));
 
-        let (quarantined_readings, quarantined_outbox): (i64, i64) =
-            quarantined_db.with_conn_sync(|conn| {
+        let (quarantined_readings, quarantined_outbox): (i64, i64) = quarantined_db
+            .with_conn_sync(|conn| {
                 Ok((
-                    conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap(),
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0))
+                        .unwrap(),
                     conn.query_row(
                         "SELECT COUNT(*) FROM publication_log WHERE kind = 'measurement'",
                         [],
                         |r| r.get(0),
-                    ).unwrap(),
+                    )
+                    .unwrap(),
                 ))
-            }).unwrap();
+            })
+            .unwrap();
         assert_eq!(quarantined_readings, 1);
-        assert_eq!(quarantined_outbox, 0, "quarantined readings must not be enqueued");
+        assert_eq!(
+            quarantined_outbox, 0,
+            "quarantined readings must not be enqueued"
+        );
     }
 
     #[test]
@@ -601,43 +699,51 @@ mod tests {
             values: vec![55.0],
             device_time_ms: None,
             time_source: TimeSource::Gateway,
-            age_ms: None, rssi: None, battery_pct: None,
+            age_ms: None,
+            rssi: None,
+            battery_pct: None,
         });
 
-        let ack = db.with_conn_sync(|conn| {
-            Ok(process_envelope(
-                conn,
-                &mut cache,
-                &PermissiveRegistry,
-                &envelope,
-            ).unwrap())
-        }).unwrap();
+        let ack = db
+            .with_conn_sync(|conn| {
+                Ok(process_envelope(conn, &mut cache, &PermissiveRegistry, &envelope).unwrap())
+            })
+            .unwrap();
         assert!(matches!(ack.status,
-            AckStatus::Accepted { ref items }
-            if items.len() == 2 && items.iter().all(|status| matches!(status,
-                ItemStatus::Stored {
-                    disposition: Disposition::Durable,
-                    quarantine_reason: None,
-                }))));
+        AckStatus::Accepted { ref items }
+        if items.len() == 2 && items.iter().all(|status| matches!(status,
+            ItemStatus::Stored {
+                disposition: Disposition::Durable,
+                quarantine_reason: None,
+            }))));
 
-        let (reading_seqs, outbox_rows): (Vec<i64>, Vec<(i64, i64)>) = db.with_conn_sync(|conn| {
-            let reading_seqs = conn.prepare("SELECT seq FROM readings ORDER BY seq")?
-                .query_map([], |r| r.get(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            let outbox_rows = conn.prepare(
-                "SELECT pub_seq, reading_seq FROM publication_log
+        let (reading_seqs, outbox_rows): (Vec<i64>, Vec<(i64, i64)>) = db
+            .with_conn_sync(|conn| {
+                let reading_seqs = conn
+                    .prepare("SELECT seq FROM readings ORDER BY seq")?
+                    .query_map([], |r| r.get(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let outbox_rows = conn
+                    .prepare(
+                        "SELECT pub_seq, reading_seq FROM publication_log
                  WHERE kind = 'measurement'
                  ORDER BY pub_seq",
-            )?
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok((reading_seqs, outbox_rows))
-        }).unwrap();
+                    )?
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((reading_seqs, outbox_rows))
+            })
+            .unwrap();
         assert_eq!(reading_seqs.len(), 2);
         assert_ne!(reading_seqs[0], reading_seqs[1]);
 
-        assert_eq!(outbox_rows.len(), 2, "each non-quarantined reading must be enqueued");
-        let outbox_reading_seqs: Vec<i64> = outbox_rows.iter()
+        assert_eq!(
+            outbox_rows.len(),
+            2,
+            "each non-quarantined reading must be enqueued"
+        );
+        let outbox_reading_seqs: Vec<i64> = outbox_rows
+            .iter()
             .map(|(_pub_seq, reading_seq)| *reading_seq)
             .collect();
         assert_eq!(outbox_reading_seqs, reading_seqs);
@@ -652,14 +758,23 @@ mod tests {
             ledger::record_sighting(conn, "ble:q", "test-adapter").unwrap();
             ledger::approve_sighting(conn, "ble:q", None, ledger::DeviceKind::Individual).unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
-        let ack = collector.submit(env("e-dq", "ble:q", "temperature_c")).await.unwrap();
-        let AckStatus::Accepted { items } = ack.status else { panic!("expected Accepted") };
-        assert!(matches!(items[0], ItemStatus::Stored {
-            disposition: Disposition::Quarantined,
-            quarantine_reason: Some(QuarantineReason::DeviceQuarantined),
-        }));
+        let ack = collector
+            .submit(env("e-dq", "ble:q", "temperature_c"))
+            .await
+            .unwrap();
+        let AckStatus::Accepted { items } = ack.status else {
+            panic!("expected Accepted")
+        };
+        assert!(matches!(
+            items[0],
+            ItemStatus::Stored {
+                disposition: Disposition::Quarantined,
+                quarantine_reason: Some(QuarantineReason::DeviceQuarantined),
+            }
+        ));
     }
 
     #[tokio::test]
@@ -670,44 +785,59 @@ mod tests {
         let db = iotkit_core_storage::init_db(&db_path, &migrations).unwrap();
         let ctl_db = iotkit_core_storage::init_db(&db_path, &migrations).unwrap();
 
-        let system_id = ctl_db.with_conn_sync(|conn| {
-            ledger::record_sighting(conn, "ble:gen", "test-adapter").unwrap();
-            let sid = ledger::approve_sighting(
-                conn,
-                "ble:gen",
-                Some("generation test"),
-                ledger::DeviceKind::Individual,
-            ).unwrap();
-            Ok(sid)
-        }).unwrap();
+        let system_id = ctl_db
+            .with_conn_sync(|conn| {
+                ledger::record_sighting(conn, "ble:gen", "test-adapter").unwrap();
+                let sid = ledger::approve_sighting(
+                    conn,
+                    "ble:gen",
+                    Some("generation test"),
+                    ledger::DeviceKind::Individual,
+                )
+                .unwrap();
+                Ok(sid)
+            })
+            .unwrap();
 
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
-        let first = collector.submit(env("e-gen-1", "ble:gen", "temperature_c")).await.unwrap();
+        let first = collector
+            .submit(env("e-gen-1", "ble:gen", "temperature_c"))
+            .await
+            .unwrap();
         assert!(matches!(first.status,
-            AckStatus::Accepted { ref items }
-            if matches!(items[0], ItemStatus::Stored {
-                disposition: Disposition::Quarantined,
-                quarantine_reason: Some(QuarantineReason::DeviceQuarantined),
-            })));
+        AckStatus::Accepted { ref items }
+        if matches!(items[0], ItemStatus::Stored {
+            disposition: Disposition::Quarantined,
+            quarantine_reason: Some(QuarantineReason::DeviceQuarantined),
+        })));
 
-        ctl_db.with_conn_sync(move |conn| {
-            let tx = rusqlite::Transaction::new_unchecked(
-                conn,
-                rusqlite::TransactionBehavior::Immediate,
-            ).unwrap();
-            ledger::activate_device(&tx, &system_id).unwrap();
-            ledger::bump_generation(&tx).unwrap();
-            tx.commit().unwrap();
-            Ok(())
-        }).unwrap();
+        ctl_db
+            .with_conn_sync(move |conn| {
+                let tx = rusqlite::Transaction::new_unchecked(
+                    conn,
+                    rusqlite::TransactionBehavior::Immediate,
+                )
+                .unwrap();
+                ledger::activate_device(&tx, &system_id).unwrap();
+                ledger::bump_generation(&tx).unwrap();
+                tx.commit().unwrap();
+                Ok(())
+            })
+            .unwrap();
 
-        let second = collector.submit(env("e-gen-2", "ble:gen", "temperature_c")).await.unwrap();
-        assert!(matches!(second.status,
+        let second = collector
+            .submit(env("e-gen-2", "ble:gen", "temperature_c"))
+            .await
+            .unwrap();
+        assert!(
+            matches!(second.status,
             AckStatus::Accepted { ref items }
             if matches!(items[0], ItemStatus::Stored {
                 disposition: Disposition::Durable,
                 quarantine_reason: None,
-            })), "generation bump must clear cached quarantined device state");
+            })),
+            "generation bump must clear cached quarantined device state"
+        );
     }
 
     #[tokio::test]
@@ -715,15 +845,26 @@ mod tests {
         let db = test_db();
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(RenamingStub), 16);
-        collector.submit(env("e-alias", "ble:aa", "temp_old")).await.unwrap();
-        let (key, ch): (String, i32) = db.with_conn_sync(|conn| {
-            Ok(conn.query_row(
-                "SELECT measurement_key, channel_index FROM series", [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            ).unwrap())
-        }).unwrap();
+        collector
+            .submit(env("e-alias", "ble:aa", "temp_old"))
+            .await
+            .unwrap();
+        let (key, ch): (String, i32) = db
+            .with_conn_sync(|conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT measurement_key, channel_index FROM series",
+                        [],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .unwrap())
+            })
+            .unwrap();
         assert_eq!(key, "temperature_c", "series実体化はresolved_keyを使う");
-        assert_eq!(ch, 7, "コレクタはチャネルを再計算せずverdictのchannel_indexを使う");
+        assert_eq!(
+            ch, 7,
+            "コレクタはチャネルを再計算せずverdictのchannel_indexを使う"
+        );
     }
 
     #[tokio::test]
@@ -769,8 +910,7 @@ mod tests {
 
     #[test]
     fn restore_device_time_age_zero_returns_received_at() {
-        let (device_time, source) =
-            restore_device_time(10_000, None, Some(0), TimeSource::Gateway);
+        let (device_time, source) = restore_device_time(10_000, None, Some(0), TimeSource::Gateway);
         assert_eq!(device_time, Some(10_000));
         assert_eq!(source, TimeSource::GatewayAdjusted);
     }
@@ -789,11 +929,17 @@ mod tests {
         let db = test_db();
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(FailingPolicy), 16);
-        let result = collector.submit(env("e-fail", "ble:aa", "temperature_c")).await;
+        let result = collector
+            .submit(env("e-fail", "ble:aa", "temperature_c"))
+            .await;
         assert!(matches!(result, Err(SubmitError::NoAck)));
-        let n: i64 = db.with_conn_sync(|conn| {
-            Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
-        }).unwrap();
+        let n: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn
+                    .query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0))
+                    .unwrap())
+            })
+            .unwrap();
         assert_eq!(n, 0, "エンベロープ全体がロールバックされる");
     }
 
@@ -815,9 +961,13 @@ mod tests {
         let a2 = collector.submit(e).await.unwrap();
         assert!(matches!(a1.status, AckStatus::Accepted { .. }));
         assert!(matches!(a2.status, AckStatus::Duplicate));
-        let n: i64 = db.with_conn_sync(|conn| {
-            Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
-        }).unwrap();
+        let n: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn
+                    .query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0))
+                    .unwrap())
+            })
+            .unwrap();
         assert_eq!(n, 1);
     }
 
@@ -825,16 +975,23 @@ mod tests {
     async fn unknown_subject_goes_to_sighting_staging_with_staged_disposition() {
         let db = test_db();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
-        let ack = collector.submit(env("e-2", "ble:unknown", "temperature_c")).await.unwrap();
+        let ack = collector
+            .submit(env("e-2", "ble:unknown", "temperature_c"))
+            .await
+            .unwrap();
         assert!(matches!(ack.status,
             AckStatus::Accepted { ref items }
             if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Staged, .. })));
-        let (sightings, staged): (i64, i64) = db.with_conn_sync(|conn| {
-            Ok((
-                conn.query_row("SELECT COUNT(*) FROM sightings", [], |r| r.get(0)).unwrap(),
-                conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |r| r.get(0)).unwrap(),
-            ))
-        }).unwrap();
+        let (sightings, staged): (i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM sightings", [], |r| r.get(0))
+                        .unwrap(),
+                    conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |r| r.get(0))
+                        .unwrap(),
+                ))
+            })
+            .unwrap();
         assert_eq!((sightings, staged), (1, 1));
     }
 
@@ -848,10 +1005,17 @@ mod tests {
         bad.measurement_key = "Bad:Key".into();
         e.items.push(bad);
         let ack = collector.submit(e).await.unwrap();
-        let AckStatus::Accepted { items } = ack.status else { panic!("expected Accepted") };
+        let AckStatus::Accepted { items } = ack.status else {
+            panic!("expected Accepted")
+        };
         assert!(matches!(items[0], ItemStatus::Stored { .. }));
-        assert!(matches!(items[1],
-            ItemStatus::ItemRejected { reason_code: ReasonCode::MalformedMeasurementKey, .. }));
+        assert!(matches!(
+            items[1],
+            ItemStatus::ItemRejected {
+                reason_code: ReasonCode::MalformedMeasurementKey,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -861,9 +1025,16 @@ mod tests {
         let mut e = env("e-4", "ble:aa", "temperature_c");
         e.items[0].subject_hint = None; // ブリッジは多subject送信者なのでhint必須(D5決定1)
         let ack = collector.submit(e).await.unwrap();
-        let AckStatus::Accepted { items } = ack.status else { panic!("expected Accepted") };
-        assert!(matches!(items[0],
-            ItemStatus::ItemRejected { reason_code: ReasonCode::UnknownSubject, .. }));
+        let AckStatus::Accepted { items } = ack.status else {
+            panic!("expected Accepted")
+        };
+        assert!(matches!(
+            items[0],
+            ItemStatus::ItemRejected {
+                reason_code: ReasonCode::UnknownSubject,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -876,9 +1047,12 @@ mod tests {
         db.with_conn_sync(|conn| {
             conn.execute_batch("PRAGMA query_only = ON;")?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
-        let result = collector.submit(env("e-6", "ble:aa", "temperature_c")).await;
+        let result = collector
+            .submit(env("e-6", "ble:aa", "temperature_c"))
+            .await;
         assert!(matches!(result, Err(SubmitError::NoAck)));
     }
 
@@ -911,19 +1085,33 @@ mod tests {
             Collector::spawn_with_purge_interval(db.clone(), Arc::new(PermissiveRegistry), 16, 0);
         // 1件目: 処理成功→パージ判定発火(非同期に開始)。2件目のackが返る頃には、アクターは
         // 単一タスクで逐次処理するため1件目の(purge awaitを含む)イテレーションは完了している。
-        collector.submit(env("e-purge-1", "ble:aa", "temperature_c")).await.unwrap();
-        collector.submit(env("e-purge-2", "ble:aa", "humidity_pct")).await.unwrap();
+        collector
+            .submit(env("e-purge-1", "ble:aa", "temperature_c"))
+            .await
+            .unwrap();
+        collector
+            .submit(env("e-purge-2", "ble:aa", "humidity_pct"))
+            .await
+            .unwrap();
 
-        let (old_count, keep_count): (i64, i64) = db.with_conn_sync(|conn| {
-            Ok((
-                conn.query_row(
-                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'old-sender'", [], |r| r.get(0),
-                ).unwrap(),
-                conn.query_row(
-                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'keep-sender'", [], |r| r.get(0),
-                ).unwrap(),
-            ))
-        }).unwrap();
+        let (old_count, keep_count): (i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'old-sender'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap(),
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id = 'keep-sender'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap(),
+                ))
+            })
+            .unwrap();
         assert_eq!(old_count, 0, "row older than 72h TTL must be purged");
         assert_eq!(keep_count, 1, "row within 72h TTL must be kept");
     }
@@ -963,12 +1151,17 @@ mod tests {
             items: vec![make_item(1.0), make_item(f64::NAN)],
         };
         let result = collector.submit(poison).await;
-        assert!(matches!(result, Err(SubmitError::NoAck)), "storage failure must not produce an ack");
+        assert!(
+            matches!(result, Err(SubmitError::NoAck)),
+            "storage failure must not produce an ack"
+        );
 
         // series行は存在しないはず(ロールバック済み)
         let series_count: i64 = db
             .with_conn_sync(|conn| {
-                Ok(conn.query_row("SELECT COUNT(*) FROM series", [], |r| r.get(0)).unwrap())
+                Ok(conn
+                    .query_row("SELECT COUNT(*) FROM series", [], |r| r.get(0))
+                    .unwrap())
             })
             .unwrap();
         assert_eq!(series_count, 0, "series insert must have been rolled back");
@@ -981,14 +1174,19 @@ mod tests {
             declaration_version: None,
             items: vec![make_item(2.0)],
         };
-        let ack = collector.submit(retry).await.expect("retry must be accepted after cache reset");
+        let ack = collector
+            .submit(retry)
+            .await
+            .expect("retry must be accepted after cache reset");
         assert!(matches!(ack.status,
             AckStatus::Accepted { ref items }
             if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable, .. })));
 
         let n: i64 = db
             .with_conn_sync(|conn| {
-                Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0)).unwrap())
+                Ok(conn
+                    .query_row("SELECT COUNT(*) FROM readings", [], |r| r.get(0))
+                    .unwrap())
             })
             .unwrap();
         assert_eq!(n, 1);
@@ -1000,9 +1198,16 @@ mod tests {
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let mut e = env("e-5", "ble:aa", "temperature_c");
         let item = e.items[0].clone();
-        e.items = std::iter::repeat_with(|| item.clone()).take(MAX_ITEMS_PER_ENVELOPE + 1).collect();
+        e.items = std::iter::repeat_with(|| item.clone())
+            .take(MAX_ITEMS_PER_ENVELOPE + 1)
+            .collect();
         let ack = collector.submit(e).await.unwrap();
-        assert!(matches!(ack.status,
-            AckStatus::Rejected { reason_code: ReasonCode::BatchTooLarge, .. }));
+        assert!(matches!(
+            ack.status,
+            AckStatus::Rejected {
+                reason_code: ReasonCode::BatchTooLarge,
+                ..
+            }
+        ));
     }
 }

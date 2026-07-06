@@ -47,7 +47,8 @@ fn purge_readings_custody_aware(
               )
           )
         LIMIT :batch";
-    const SELECT_FLOOR_ONLY: &str = "SELECT seq FROM readings WHERE received_at < :cutoff LIMIT :batch";
+    const SELECT_FLOOR_ONLY: &str =
+        "SELECT seq FROM readings WHERE received_at < :cutoff LIMIT :batch";
 
     if let Some(eff) = effective_cursor {
         iotkit_core_publish::store::prune_acked_outbox(conn, current_epoch, eff)

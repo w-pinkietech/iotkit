@@ -23,9 +23,9 @@ pub struct SensorHandler {
 }
 
 pub mod contact;
-pub mod opt3001;
-pub mod mcp9600;
-pub mod mcp3427;
-pub mod vl53l1x;
-pub mod sdp810;
 pub mod lis2duxs12;
+pub mod mcp3427;
+pub mod mcp9600;
+pub mod opt3001;
+pub mod sdp810;
+pub mod vl53l1x;

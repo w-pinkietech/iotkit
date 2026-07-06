@@ -3,9 +3,13 @@ pub const MAX_MEASUREMENT_KEY_LEN: usize = 64;
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeasurementKeyError {
     Empty,
-    TooLong { len: usize },
+    TooLong {
+        len: usize,
+    },
     /// コロン等の禁止文字、大文字、セグメント先頭が英小文字でない、空セグメント
-    InvalidSegment { segment: String },
+    InvalidSegment {
+        segment: String,
+    },
 }
 
 impl std::fmt::Display for MeasurementKeyError {
@@ -13,10 +17,16 @@ impl std::fmt::Display for MeasurementKeyError {
         match self {
             Self::Empty => write!(f, "measurement_key is empty"),
             Self::TooLong { len } => {
-                write!(f, "measurement_key length {len} exceeds {MAX_MEASUREMENT_KEY_LEN}")
+                write!(
+                    f,
+                    "measurement_key length {len} exceeds {MAX_MEASUREMENT_KEY_LEN}"
+                )
             }
             Self::InvalidSegment { segment } => {
-                write!(f, "invalid measurement_key segment '{segment}': expected [a-z][a-z0-9_]*")
+                write!(
+                    f,
+                    "invalid measurement_key segment '{segment}': expected [a-z][a-z0-9_]*"
+                )
             }
         }
     }
@@ -36,7 +46,9 @@ pub fn validate_measurement_key(key: &str) -> Result<(), MeasurementKeyError> {
         let valid = matches!(chars.next(), Some('a'..='z'))
             && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_'));
         if !valid {
-            return Err(MeasurementKeyError::InvalidSegment { segment: seg.to_string() });
+            return Err(MeasurementKeyError::InvalidSegment {
+                segment: seg.to_string(),
+            });
         }
     }
     Ok(())
@@ -53,15 +65,33 @@ mod tests {
 
     #[test]
     fn accepts_standard_and_custom_keys() {
-        for k in ["temperature_c", "voltage_mv", "custom.tank_level", "a", "x9_z.b_1"] {
+        for k in [
+            "temperature_c",
+            "voltage_mv",
+            "custom.tank_level",
+            "a",
+            "x9_z.b_1",
+        ] {
             assert!(validate_measurement_key(k).is_ok(), "{k} should be valid");
         }
     }
 
     #[test]
     fn rejects_colon_uppercase_and_bad_segments() {
-        for k in ["custom:temp", "Temp", "9abc", "a..b", ".a", "a.", "", "温度"] {
-            assert!(validate_measurement_key(k).is_err(), "{k} should be invalid");
+        for k in [
+            "custom:temp",
+            "Temp",
+            "9abc",
+            "a..b",
+            ".a",
+            "a.",
+            "",
+            "温度",
+        ] {
+            assert!(
+                validate_measurement_key(k).is_err(),
+                "{k} should be invalid"
+            );
         }
     }
 

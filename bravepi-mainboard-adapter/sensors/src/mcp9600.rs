@@ -3,10 +3,12 @@
 //! I2C: Int16 BE × 0.0625 → ℃
 //! UART (BravePI): Float32LE → ℃
 
-use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 use crate::UartSample;
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
-fn sensor_type() -> SensorType { SensorType::Temperature }
+fn sensor_type() -> SensorType {
+    SensorType::Temperature
+}
 
 pub const MANUFACTURER: &str = "Braveridge";
 pub const IC_PART_NUMBER: &str = "MCP9600";
@@ -34,8 +36,14 @@ pub const DEVICE_ID: u8 = 0x40;
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum ThermocoupleType {
-    K = 0, J = 1, T = 2, N = 3,
-    S = 4, E = 5, B = 6, R = 7,
+    K = 0,
+    J = 1,
+    T = 2,
+    N = 3,
+    S = 4,
+    E = 5,
+    B = 6,
+    R = 7,
 }
 
 /// 熱電対タイプからコンフィグレジスタ値を作成

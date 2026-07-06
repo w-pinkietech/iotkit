@@ -231,10 +231,8 @@ fn mutate_command_without_db_argument_or_env_is_error() {
     let dir = tempfile::tempdir().unwrap();
     let fallback_path = dir.path().join("iotkit.db");
 
-    let output = run_in_dir_without_db_env(
-        &["device", "add", "--hardware-id", "ble:no-db"],
-        dir.path(),
-    );
+    let output =
+        run_in_dir_without_db_env(&["device", "add", "--hardware-id", "ble:no-db"], dir.path());
 
     assert!(!output.status.success());
     assert!(!fallback_path.exists());
@@ -1703,7 +1701,9 @@ fn snapshot_restore_rejects_non_empty_registry_entries_table() {
     target_db
         .with_conn_sync(|conn| {
             let registry_entries: i64 = conn
-                .query_row("SELECT COUNT(*) FROM registry_entries", [], |row| row.get(0))
+                .query_row("SELECT COUNT(*) FROM registry_entries", [], |row| {
+                    row.get(0)
+                })
                 .unwrap();
             assert_eq!(registry_entries, 1);
             Ok(())

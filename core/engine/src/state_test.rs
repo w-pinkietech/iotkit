@@ -1,9 +1,9 @@
 //! Tests for State apply logic.
 
+use crate::*;
+use iotkit_core_types::*;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
-use iotkit_core_types::*;
-use crate::*;
 
 fn adapter_a() -> AdapterId {
     AdapterId::new("adapter-a")
@@ -33,7 +33,11 @@ fn sample_identity() -> SensorIdentity {
 }
 
 fn sample_reading() -> SensorReading {
-    SensorReading::new(SensorType::Temperature, vec![22.5], vec!["temperature_c".to_string()])
+    SensorReading::new(
+        SensorType::Temperature,
+        vec![22.5],
+        vec!["temperature_c".to_string()],
+    )
 }
 
 fn discovered_event(adapter_id: &AdapterId, device_key: &DeviceKey) -> EngineEvent {
@@ -77,16 +81,18 @@ async fn sensor_data_updates_reading() {
     let dk = device_key_1();
 
     engine.apply(discovered_event(&aid, &dk)).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::SensorData {
-            device_key: dk.clone(),
-            reading: sample_reading(),
-            rssi: Some(-70),
-            battery_pct: Some(85),
-            ingested_at: SystemTime::now(),
-        },
-    }).await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::SensorData {
+                device_key: dk.clone(),
+                reading: sample_reading(),
+                rssi: Some(-70),
+                battery_pct: Some(85),
+                ingested_at: SystemTime::now(),
+            },
+        })
+        .await;
 
     let key = engine_key(&aid, &dk);
     let view = engine.device(&key).await.unwrap();
@@ -102,16 +108,18 @@ async fn sensor_data_for_unknown_device_is_ignored() {
     let dk = device_key_1();
 
     // No DeviceDiscovered — send SensorData directly
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::SensorData {
-            device_key: dk.clone(),
-            reading: sample_reading(),
-            rssi: None,
-            battery_pct: None,
-            ingested_at: SystemTime::now(),
-        },
-    }).await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::SensorData {
+                device_key: dk.clone(),
+                reading: sample_reading(),
+                rssi: None,
+                battery_pct: None,
+                ingested_at: SystemTime::now(),
+            },
+        })
+        .await;
 
     assert!(engine.devices().await.is_empty());
 }
@@ -123,17 +131,19 @@ async fn device_config_updates_config() {
     let dk = device_key_1();
 
     engine.apply(discovered_event(&aid, &dk)).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::DeviceConfig {
-            device_key: dk.clone(),
-            config: DeviceConfigData {
-                firmware_version: Some("1.2.3".to_string()),
-                uplink_interval_secs: Some(60),
-                properties: BTreeMap::new(),
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::DeviceConfig {
+                device_key: dk.clone(),
+                config: DeviceConfigData {
+                    firmware_version: Some("1.2.3".to_string()),
+                    uplink_interval_secs: Some(60),
+                    properties: BTreeMap::new(),
+                },
             },
-        },
-    }).await;
+        })
+        .await;
 
     let key = engine_key(&aid, &dk);
     let view = engine.device(&key).await.unwrap();
@@ -148,17 +158,19 @@ async fn device_config_for_unknown_device_is_ignored() {
     let aid = adapter_a();
     let dk = device_key_1();
 
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::DeviceConfig {
-            device_key: dk.clone(),
-            config: DeviceConfigData {
-                firmware_version: None,
-                uplink_interval_secs: None,
-                properties: BTreeMap::new(),
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::DeviceConfig {
+                device_key: dk.clone(),
+                config: DeviceConfigData {
+                    firmware_version: None,
+                    uplink_interval_secs: None,
+                    properties: BTreeMap::new(),
+                },
             },
-        },
-    }).await;
+        })
+        .await;
 
     assert!(engine.devices().await.is_empty());
 }
@@ -172,13 +184,15 @@ async fn device_lost_removes_device() {
     engine.apply(discovered_event(&aid, &dk)).await;
     assert_eq!(engine.devices().await.len(), 1);
 
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::DeviceLost {
-            device_key: dk.clone(),
-            reason: "timeout".to_string(),
-        },
-    }).await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::DeviceLost {
+                device_key: dk.clone(),
+                reason: "timeout".to_string(),
+            },
+        })
+        .await;
 
     let key = engine_key(&aid, &dk);
     assert!(engine.device(&key).await.is_none());
@@ -193,23 +207,27 @@ async fn device_lost_then_rediscovered_is_new_insert() {
 
     // Discover → send reading → lose → rediscover
     engine.apply(discovered_event(&aid, &dk)).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::SensorData {
-            device_key: dk.clone(),
-            reading: sample_reading(),
-            rssi: Some(-50),
-            battery_pct: Some(100),
-            ingested_at: SystemTime::now(),
-        },
-    }).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::DeviceLost {
-            device_key: dk.clone(),
-            reason: "gone".to_string(),
-        },
-    }).await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::SensorData {
+                device_key: dk.clone(),
+                reading: sample_reading(),
+                rssi: Some(-50),
+                battery_pct: Some(100),
+                ingested_at: SystemTime::now(),
+            },
+        })
+        .await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::DeviceLost {
+                device_key: dk.clone(),
+                reason: "gone".to_string(),
+            },
+        })
+        .await;
     engine.apply(discovered_event(&aid, &dk)).await;
 
     let key = engine_key(&aid, &dk);
@@ -226,13 +244,15 @@ async fn adapter_error_with_device_key_updates_last_error() {
     let dk = device_key_1();
 
     engine.apply(discovered_event(&aid, &dk)).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::AdapterError {
-            device_key: Some(dk.clone()),
-            error: "sensor timeout".to_string(),
-        },
-    }).await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::AdapterError {
+                device_key: Some(dk.clone()),
+                error: "sensor timeout".to_string(),
+            },
+        })
+        .await;
 
     let key = engine_key(&aid, &dk);
     let view = engine.device(&key).await.unwrap();
@@ -246,13 +266,15 @@ async fn adapter_error_without_device_key_does_not_affect_devices() {
     let dk = device_key_1();
 
     engine.apply(discovered_event(&aid, &dk)).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::AdapterError {
-            device_key: None,
-            error: "serial disconnected".to_string(),
-        },
-    }).await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::AdapterError {
+                device_key: None,
+                error: "serial disconnected".to_string(),
+            },
+        })
+        .await;
 
     let key = engine_key(&aid, &dk);
     let view = engine.device(&key).await.unwrap();
@@ -266,35 +288,45 @@ async fn multiple_adapters_are_separated() {
     let aid_b = AdapterId::new("adapter-b");
     let dk = device_key_1(); // same device_key in both adapters
 
-    engine.apply(EngineEvent {
-        adapter_id: aid_a.clone(),
-        event: AdapterEvent::DeviceDiscovered {
-            device_key: dk.clone(),
-            identity: sample_identity(),
-        },
-    }).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid_b.clone(),
-        event: AdapterEvent::DeviceDiscovered {
-            device_key: dk.clone(),
-            identity: SensorIdentity {
-                manufacturer: "OtherCorp".to_string(),
-                ic_part_number: "OC-200".to_string(),
-                sensor_type: SensorType::Illuminance,
-                connection: ConnectionInfo {
-                    kind: ConnectionKind::I2c,
-                    parameters: BTreeMap::new(),
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid_a.clone(),
+            event: AdapterEvent::DeviceDiscovered {
+                device_key: dk.clone(),
+                identity: sample_identity(),
+            },
+        })
+        .await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid_b.clone(),
+            event: AdapterEvent::DeviceDiscovered {
+                device_key: dk.clone(),
+                identity: SensorIdentity {
+                    manufacturer: "OtherCorp".to_string(),
+                    ic_part_number: "OC-200".to_string(),
+                    sensor_type: SensorType::Illuminance,
+                    connection: ConnectionInfo {
+                        kind: ConnectionKind::I2c,
+                        parameters: BTreeMap::new(),
+                    },
                 },
             },
-        },
-    }).await;
+        })
+        .await;
 
     assert_eq!(engine.devices().await.len(), 2);
 
     let key_a = engine_key(&aid_a, &dk);
     let key_b = engine_key(&aid_b, &dk);
-    assert_eq!(engine.device(&key_a).await.unwrap().identity.ic_part_number, "TC-100");
-    assert_eq!(engine.device(&key_b).await.unwrap().identity.ic_part_number, "OC-200");
+    assert_eq!(
+        engine.device(&key_a).await.unwrap().identity.ic_part_number,
+        "TC-100"
+    );
+    assert_eq!(
+        engine.device(&key_b).await.unwrap().identity.ic_part_number,
+        "OC-200"
+    );
 }
 
 #[tokio::test]
@@ -304,33 +336,37 @@ async fn device_discovered_resend_updates_identity_keeps_reading() {
     let dk = device_key_1();
 
     engine.apply(discovered_event(&aid, &dk)).await;
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::SensorData {
-            device_key: dk.clone(),
-            reading: sample_reading(),
-            rssi: Some(-60),
-            battery_pct: Some(90),
-            ingested_at: SystemTime::now(),
-        },
-    }).await;
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::SensorData {
+                device_key: dk.clone(),
+                reading: sample_reading(),
+                rssi: Some(-60),
+                battery_pct: Some(90),
+                ingested_at: SystemTime::now(),
+            },
+        })
+        .await;
 
     // Re-discover with different identity
-    engine.apply(EngineEvent {
-        adapter_id: aid.clone(),
-        event: AdapterEvent::DeviceDiscovered {
-            device_key: dk.clone(),
-            identity: SensorIdentity {
-                manufacturer: "NewCorp".to_string(),
-                ic_part_number: "NC-300".to_string(),
-                sensor_type: SensorType::Temperature,
-                connection: ConnectionInfo {
-                    kind: ConnectionKind::Uart,
-                    parameters: BTreeMap::new(),
+    engine
+        .apply(EngineEvent {
+            adapter_id: aid.clone(),
+            event: AdapterEvent::DeviceDiscovered {
+                device_key: dk.clone(),
+                identity: SensorIdentity {
+                    manufacturer: "NewCorp".to_string(),
+                    ic_part_number: "NC-300".to_string(),
+                    sensor_type: SensorType::Temperature,
+                    connection: ConnectionInfo {
+                        kind: ConnectionKind::Uart,
+                        parameters: BTreeMap::new(),
+                    },
                 },
             },
-        },
-    }).await;
+        })
+        .await;
 
     let key = engine_key(&aid, &dk);
     let view = engine.device(&key).await.unwrap();

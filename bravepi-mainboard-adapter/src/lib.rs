@@ -3,13 +3,13 @@
 //!
 //! `task` モジュールで async task として起動し、AdapterEvent channel で core と通信する。
 
-pub mod task;
 pub(crate) mod registry;
+pub mod task;
 pub(crate) mod transport;
 
-use std::collections::BTreeMap;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind};
 use rpi4b_transport::{DataBits, Parity, SerialConfig, StopBits};
+use std::collections::BTreeMap;
 
 /// BravePI adapter 内部の型安全な接続表現。
 #[derive(Debug, Clone, PartialEq)]
@@ -31,7 +31,10 @@ impl BravepiConnection {
     /// adapter 固有の型 → core の汎用型に変換。
     pub fn to_connection_info(&self) -> ConnectionInfo {
         match self {
-            Self::Uart { port, transmitter_id } => ConnectionInfo {
+            Self::Uart {
+                port,
+                transmitter_id,
+            } => ConnectionInfo {
                 kind: ConnectionKind::Uart,
                 parameters: BTreeMap::from([
                     ("port".into(), port.clone()),
@@ -47,9 +50,7 @@ impl BravepiConnection {
             },
             Self::Gpio { pin } => ConnectionInfo {
                 kind: ConnectionKind::Gpio,
-                parameters: BTreeMap::from([
-                    ("pin".into(), format!("BCM{}", pin)),
-                ]),
+                parameters: BTreeMap::from([("pin".into(), format!("BCM{}", pin))]),
             },
         }
     }

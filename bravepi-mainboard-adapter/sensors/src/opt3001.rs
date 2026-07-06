@@ -3,10 +3,12 @@
 //! I2C: 独自フォーマット（指数+仮数） → Lux
 //! UART (BravePI): Float32LE → Lux
 
-use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 use crate::UartSample;
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
-fn sensor_type() -> SensorType { SensorType::Illuminance }
+fn sensor_type() -> SensorType {
+    SensorType::Illuminance
+}
 
 pub const MANUFACTURER: &str = "Braveridge";
 pub const IC_PART_NUMBER: &str = "OPT3001";

@@ -44,9 +44,14 @@ pub struct ConfigFrame {
 /// Downlink コマンド。
 #[derive(Debug, Clone, PartialEq)]
 pub enum DownlinkCommand {
-    ImmediateUplink { sensor_type: u16 },
+    ImmediateUplink {
+        sensor_type: u16,
+    },
     ParameterGet,
-    ContactOutput { signal_mode: u8, signal_out_time: u16 },
+    ContactOutput {
+        signal_mode: u8,
+        signal_out_time: u16,
+    },
 }
 
 // ============================================================
@@ -113,8 +118,7 @@ impl BravePiCodec {
             let device_number = format!(
                 "{:016x}",
                 u64::from_le_bytes([
-                    frame[2], frame[3], frame[4], frame[5],
-                    frame[6], frame[7], frame[8], frame[9],
+                    frame[2], frame[3], frame[4], frame[5], frame[6], frame[7], frame[8], frame[9],
                 ])
             );
             let sensor_type_raw = u16::from_le_bytes([frame[10], frame[11]]);
@@ -134,7 +138,8 @@ impl BravePiCodec {
                                 sensor_type_raw: cont.sensor_type_raw,
                                 reason: format!(
                                     "continuation payload exceeds maximum: {} > {}",
-                                    cont.payload.len(), MAX_FRAME_SIZE
+                                    cont.payload.len(),
+                                    MAX_FRAME_SIZE
                                 ),
                             });
                         }
@@ -161,11 +166,17 @@ impl BravePiCodec {
                             sensor_type_raw: cont.sensor_type_raw,
                             reason: format!(
                                 "continuation payload exceeds maximum: {} > {}",
-                                cont.payload.len(), MAX_FRAME_SIZE
+                                cont.payload.len(),
+                                MAX_FRAME_SIZE
                             ),
                         });
                     }
-                    (cont.device_number, cont.sensor_type_raw, cont.rssi, cont.payload)
+                    (
+                        cont.device_number,
+                        cont.sensor_type_raw,
+                        cont.rssi,
+                        cont.payload,
+                    )
                 } else {
                     (device_number, sensor_type_raw, rssi, payload.to_vec())
                 };
@@ -173,22 +184,31 @@ impl BravePiCodec {
             if sensor_type_raw == 0 {
                 return Some(decode_config(&device_number, rssi, &full_payload));
             } else {
-                return Some(decode_sensor(&device_number, sensor_type_raw, rssi, &full_payload));
+                return Some(decode_sensor(
+                    &device_number,
+                    sensor_type_raw,
+                    rssi,
+                    &full_payload,
+                ));
             }
         }
     }
 
-    pub fn encode_downlink(device_number_hex: &str, cmd: &DownlinkCommand) -> Result<Vec<u8>, String> {
+    pub fn encode_downlink(
+        device_number_hex: &str,
+        cmd: &DownlinkCommand,
+    ) -> Result<Vec<u8>, String> {
         let device_bytes = Self::hex_to_device_bytes(device_number_hex)?;
 
         let (opcode, cmd_data, sensor_type_bytes) = match cmd {
             DownlinkCommand::ImmediateUplink { sensor_type } => {
                 (0x00u8, vec![], sensor_type.to_le_bytes())
             }
-            DownlinkCommand::ParameterGet => {
-                (0x0D, vec![0x00], [0x00, 0x00])
-            }
-            DownlinkCommand::ContactOutput { signal_mode, signal_out_time } => {
+            DownlinkCommand::ParameterGet => (0x0D, vec![0x00], [0x00, 0x00]),
+            DownlinkCommand::ContactOutput {
+                signal_mode,
+                signal_out_time,
+            } => {
                 let mut data = vec![*signal_mode];
                 data.extend_from_slice(&signal_out_time.to_le_bytes());
                 (0x11, data, [0x00, 0x00])
@@ -246,7 +266,12 @@ fn decode_config(device_number: &str, rssi: i8, payload: &[u8]) -> BravePiFrame 
     })
 }
 
-fn decode_sensor(device_number: &str, sensor_type_raw: u16, rssi: i8, payload: &[u8]) -> BravePiFrame {
+fn decode_sensor(
+    device_number: &str,
+    sensor_type_raw: u16,
+    rssi: i8,
+    payload: &[u8],
+) -> BravePiFrame {
     if payload.len() < 3 {
         return BravePiFrame::DecodeError {
             device_number: device_number.to_string(),

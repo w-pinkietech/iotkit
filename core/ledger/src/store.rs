@@ -1646,9 +1646,8 @@ mod tests {
             )
             .unwrap();
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                list_devices(conn, true)
-            }));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list_devices(conn, true)));
 
             assert!(result.is_ok(), "invalid blob length should not panic");
             assert!(result.unwrap().is_err());

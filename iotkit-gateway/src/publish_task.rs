@@ -312,8 +312,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use iotkit_core_publish::store::{
-        TargetRow, target_advance_cursor, target_get, target_insert,
-        target_set_archive_responsible,
+        TargetRow, target_advance_cursor, target_get, target_insert, target_set_archive_responsible,
     };
     use iotkit_core_timeseries::NewReading;
     use rusqlite::params;

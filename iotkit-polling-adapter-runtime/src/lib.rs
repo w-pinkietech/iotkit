@@ -9,9 +9,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use iotkit_core_types::{
-    AdapterCommand, AdapterEvent, AdapterId, SensorIdentity, SensorReading,
-};
+use iotkit_core_types::{AdapterCommand, AdapterEvent, AdapterId, SensorIdentity, SensorReading};
 
 // ── SensorDriver trait ────────────────────────────────────
 
@@ -368,7 +366,9 @@ mod tests {
             poll_interval_ms: 50,
             targets: vec![SensorTargetConfig {
                 address: 0x40,
-                driver: Arc::new(StrictDriver { min_interval_ms: 100 }),
+                driver: Arc::new(StrictDriver {
+                    min_interval_ms: 100,
+                }),
                 key_suffix: None,
             }],
         };
@@ -424,7 +424,10 @@ mod tests {
         let cfg = stub_config();
         let err = start(AdapterId::new("test"), cfg, None).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("no reactor") || msg.contains("runtime"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("no reactor") || msg.contains("runtime"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -440,6 +443,9 @@ mod tests {
         };
         let err = start(AdapterId::new("test"), cfg, None).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("cannot open bus_path"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("cannot open bus_path"),
+            "unexpected error: {msg}"
+        );
     }
 }

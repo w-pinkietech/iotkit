@@ -59,26 +59,22 @@ impl SpiTransport {
             SpiMode::Mode2 => Mode::Mode2,
             SpiMode::Mode3 => Mode::Mode3,
         };
-        let spi = Spi::new(bus, ss, config.clock_speed_hz, mode)
-            .map_err(io::Error::other)?;
+        let spi = Spi::new(bus, ss, config.clock_speed_hz, mode).map_err(io::Error::other)?;
         Ok(Self { spi })
     }
 
     /// 読み取り。
     pub fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.spi.read(buf)
-            .map_err(io::Error::other)
+        self.spi.read(buf).map_err(io::Error::other)
     }
 
     /// 書き込み。
     pub fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.spi.write(data)
-            .map_err(io::Error::other)
+        self.spi.write(data).map_err(io::Error::other)
     }
 
     /// 同時送受信 (full-duplex)。
     pub fn transfer(&mut self, tx: &[u8], rx: &mut [u8]) -> io::Result<usize> {
-        self.spi.transfer(rx, tx)
-            .map_err(io::Error::other)
+        self.spi.transfer(rx, tx).map_err(io::Error::other)
     }
 }

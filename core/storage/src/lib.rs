@@ -10,7 +10,7 @@ use rusqlite::Connection;
 
 pub use error::StorageError;
 pub use handle::DbHandle;
-pub use migrate::{Migration, MIGRATIONS, run_migrations};
+pub use migrate::{MIGRATIONS, Migration, run_migrations};
 
 /// Configure SQLite pragmas for production use.
 fn configure_pragmas(conn: &Connection) -> Result<(), StorageError> {
@@ -32,10 +32,7 @@ pub fn init_db(db_path: &Path, migrations: &[Migration]) -> Result<DbHandle, Sto
         if !parent.as_os_str().is_empty() && !parent.exists() {
             return Err(StorageError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!(
-                    "parent directory does not exist: {}",
-                    parent.display()
-                ),
+                format!("parent directory does not exist: {}", parent.display()),
             )));
         }
     }
@@ -120,7 +117,9 @@ mod tests {
     fn pragmas_use_wal_and_normal_sync() {
         let db = init_db_memory(&[]).unwrap();
         db.with_conn_sync(|conn| {
-            let sync: i64 = conn.query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap();
+            let sync: i64 = conn
+                .query_row("PRAGMA synchronous", [], |r| r.get(0))
+                .unwrap();
             assert_eq!(sync, 1, "synchronous must be NORMAL (D1)");
             Ok(())
         })
@@ -134,24 +133,29 @@ mod tests {
         let db = init_db(&db_path, MIGRATIONS).unwrap();
 
         db.with_conn_sync(|conn| {
-            let journal_mode: String =
-                conn.query_row("PRAGMA journal_mode", [], |row| row.get(0)).unwrap();
+            let journal_mode: String = conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .unwrap();
             assert_eq!(journal_mode, "wal");
 
-            let synchronous: i32 =
-                conn.query_row("PRAGMA synchronous", [], |row| row.get(0)).unwrap();
+            let synchronous: i32 = conn
+                .query_row("PRAGMA synchronous", [], |row| row.get(0))
+                .unwrap();
             assert_eq!(synchronous, 1); // NORMAL (D1)
 
-            let foreign_keys: i32 =
-                conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0)).unwrap();
+            let foreign_keys: i32 = conn
+                .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+                .unwrap();
             assert_eq!(foreign_keys, 1);
 
-            let busy_timeout: i32 =
-                conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0)).unwrap();
+            let busy_timeout: i32 = conn
+                .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .unwrap();
             assert_eq!(busy_timeout, 5000);
 
-            let cache_size: i32 =
-                conn.query_row("PRAGMA cache_size", [], |row| row.get(0)).unwrap();
+            let cache_size: i32 = conn
+                .query_row("PRAGMA cache_size", [], |row| row.get(0))
+                .unwrap();
             assert_eq!(cache_size, -8000);
 
             Ok(())
