@@ -119,8 +119,9 @@ re-deliver data from before the restore (that box is gone).
 ## Retention interaction (why the ack matters)
 
 The gateway purges a reading only when it is both **past a retention floor**
-(data-age based, default 72h, configurable) **and already acknowledged** for the
-registered archive target. Un-acknowledged originals are protected even when old.
+(data-age based, default 90 days, minimum 7, configurable via
+`IOTKIT_RETENTION_DAYS`) **and already acknowledged** for the registered archive
+target. Un-acknowledged originals are protected even when old.
 So: **if you stop acking, the gateway stops purging** — the backlog grows and,
 under sustained pressure, new writes eventually fail with `ENOSPC` rather than
 silently dropping stored data. Keeping up with acks is how you keep the buffer

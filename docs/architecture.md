@@ -91,9 +91,12 @@ Getting these right is most of the design (see D5, D7).
 - **The push task never holds the DB lock across HTTP.** It's three scopes:
   build the batch (lock), POST + await ack (no lock), advance the cursor (lock).
   A slow archive server cannot stall ingestion.
-- **Retention purge is one Immediate transaction** (readings delete + outbox
-  prune + dedup purge + quarantine expiry + audit), internally chunked so a large
-  batch doesn't build an oversized SQL statement.
+- **The custody-critical retention purge is one Immediate transaction** (readings
+  delete + outbox prune + dedup purge + quarantine expiry + audit), internally
+  chunked so a large batch doesn't build an oversized SQL statement. Housekeeping
+  that must never be able to roll back that work — the `sightings` TTL/cap purge —
+  runs in a **separate best-effort transaction after** the critical one commits
+  (its failure is logged and retried next pass, never aborting a readings purge).
 
 ## Migrations & compatibility
 
