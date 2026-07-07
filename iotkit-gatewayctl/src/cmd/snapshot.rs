@@ -1,9 +1,8 @@
 use clap::{Args, Subcommand};
 use iotkit_core_ledger as ledger;
 use rusqlite::{
-    params_from_iter,
+    Connection, OptionalExtension, TransactionBehavior, params_from_iter,
     types::{Value as SqlValue, ValueRef},
-    Connection, OptionalExtension, TransactionBehavior,
 };
 use serde_json::{Map, Value};
 use std::collections::HashSet;

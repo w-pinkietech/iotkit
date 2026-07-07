@@ -159,7 +159,10 @@ pub fn run_activate_device(conn: &Connection, args: SystemIdArgs) -> AppResult<(
 
 pub fn run_retire_device(conn: &Connection, args: RetireArgs) -> AppResult<()> {
     if !args.yes {
-        eprintln!("Retire device {}? Type 'yes' to continue:", args.system_id_text);
+        eprintln!(
+            "Retire device {}? Type 'yes' to continue:",
+            args.system_id_text
+        );
         let mut line = String::new();
         std::io::stdin().read_line(&mut line)?;
         if line.trim() != "yes" {

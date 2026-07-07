@@ -145,13 +145,13 @@ pub fn parse_catalog(toml_text: &str) -> Result<Catalog, CatalogError> {
             }
             _ => {}
         }
-        if let Some(r) = &m.physical_range {
-            if !(r.min < r.max) {
-                return Err(CatalogError::Invalid(format!(
-                    "key '{}': physical_range min must be < max",
-                    m.key
-                )));
-            }
+        if let Some(r) = &m.physical_range
+            && r.min.partial_cmp(&r.max) != Some(std::cmp::Ordering::Less)
+        {
+            return Err(CatalogError::Invalid(format!(
+                "key '{}': physical_range min must be < max",
+                m.key
+            )));
         }
         if m.value_type == ValueType::Record && m.physical_range.is_some() {
             return Err(CatalogError::Invalid(format!(

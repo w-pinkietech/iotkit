@@ -75,8 +75,12 @@ pub struct GatewayConfig {
 
 #[derive(Debug)]
 pub enum ConfigSource {
+    // Path payloads are retained for provenance in Debug/config introspection.
+    #[allow(dead_code)]
     CliArg(PathBuf),
+    #[allow(dead_code)]
     EnvVar(PathBuf),
+    #[allow(dead_code)]
     ImplicitFile(PathBuf),
     DefaultsOnly,
 }
@@ -345,7 +349,7 @@ pub fn load(args: &[String]) -> Result<GatewayConfig, ConfigError> {
 }
 
 /// Parse `--config <path>` from CLI args.
-fn parse_config_arg<'a>(args: &'a [String]) -> Result<Option<&'a str>, ConfigError> {
+fn parse_config_arg(args: &[String]) -> Result<Option<&str>, ConfigError> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == "--config" {

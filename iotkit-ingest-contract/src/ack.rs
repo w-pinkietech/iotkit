@@ -10,10 +10,15 @@ pub struct EnvelopeAck {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum AckStatus {
     /// エンベロープ全体が耐久化された。items は入力itemsと同数・同順(部分受理の内訳)
-    Accepted { items: Vec<ItemStatus> },
+    Accepted {
+        items: Vec<ItemStatus>,
+    },
     Duplicate,
     /// エンベロープ単位の終端拒否(送信側はspoolから除去=D1)
-    Rejected { reason_code: ReasonCode, message: String },
+    Rejected {
+        reason_code: ReasonCode,
+        message: String,
+    },
     /// 一時的過負荷専用。同一エンベロープを不変のまま再試行(D1)
     Deferred,
 }
@@ -27,7 +32,10 @@ pub enum ItemStatus {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quarantine_reason: Option<QuarantineReason>,
     },
-    ItemRejected { reason_code: ReasonCode, message: String },
+    ItemRejected {
+        reason_code: ReasonCode,
+        message: String,
+    },
 }
 
 /// D1追補(2026-07-03): 検疫理由の可視化。D6判別表と1:1(実装はレジストリ実装=本計画と同時)。
@@ -79,17 +87,35 @@ mod tests {
 
     #[test]
     fn stored_reason_is_additive_on_the_wire() {
-        let s = ItemStatus::Stored { disposition: Disposition::Durable, quarantine_reason: None };
+        let s = ItemStatus::Stored {
+            disposition: Disposition::Durable,
+            quarantine_reason: None,
+        };
         let json = serde_json::to_string(&s).unwrap();
-        assert!(!json.contains("quarantine_reason"), "additive: 省略時はワイヤに現れない");
+        assert!(
+            !json.contains("quarantine_reason"),
+            "additive: 省略時はワイヤに現れない"
+        );
         // 旧形式(フィールドなし)のJSONも読める
         let old: ItemStatus =
             serde_json::from_str(r#"{"kind":"stored","disposition":"quarantined"}"#).unwrap();
-        assert!(matches!(old, ItemStatus::Stored { quarantine_reason: None, .. }));
+        assert!(matches!(
+            old,
+            ItemStatus::Stored {
+                quarantine_reason: None,
+                ..
+            }
+        ));
         let with: ItemStatus = serde_json::from_str(
             r#"{"kind":"stored","disposition":"quarantined","quarantine_reason":"out_of_range"}"#,
-        ).unwrap();
-        assert!(matches!(with,
-            ItemStatus::Stored { quarantine_reason: Some(QuarantineReason::OutOfRange), .. }));
+        )
+        .unwrap();
+        assert!(matches!(
+            with,
+            ItemStatus::Stored {
+                quarantine_reason: Some(QuarantineReason::OutOfRange),
+                ..
+            }
+        ));
     }
 }

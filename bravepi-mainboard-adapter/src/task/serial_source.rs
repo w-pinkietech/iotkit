@@ -74,10 +74,7 @@ fn connect_initial(
         ReconnectResult::Connected(t) => Some(t),
         ReconnectResult::ChannelClosed => None,
         ReconnectResult::RetriesExhausted => {
-            let msg = format!(
-                "Failed to open {} after {} retries",
-                port_path, MAX_RETRIES
-            );
+            let msg = format!("Failed to open {} after {} retries", port_path, MAX_RETRIES);
             tracing::error!("{}", msg);
             let _ = bytes_tx.blocking_send(Err(TransportError { message: msg }));
             None

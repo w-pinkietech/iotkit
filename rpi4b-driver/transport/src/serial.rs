@@ -33,9 +33,7 @@ impl SerialTransport {
 
     /// Read bytes from the serial port. Returns number of bytes read.
     pub fn read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<usize> {
-        self.port
-            .set_timeout(timeout)
-            .map_err(io::Error::other)?;
+        self.port.set_timeout(timeout).map_err(io::Error::other)?;
 
         match self.port.read(buf) {
             Ok(n) => Ok(n),

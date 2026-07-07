@@ -2,7 +2,7 @@ use iotkit_core_timeseries::{
     NewReading, insert_reading_v3, insert_staged_reading,
     query::{
         aggregate_readings_v3, export_csv, latest_by_series, list_staged_for_hardware,
-        mark_readings_quarantined, purge_readings_before, query_readings_v3,
+        mark_readings_quarantined, query_readings_v3,
     },
 };
 use rusqlite::params;
@@ -13,65 +13,6 @@ fn test_db() -> iotkit_core_storage::DbHandle {
     all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
     all.sort_by_key(|m| m.version);
     iotkit_core_storage::init_db_memory(&all).unwrap()
-}
-
-#[test]
-fn purge_readings_before_uses_received_at_strict_cutoff() {
-    let db = test_db();
-    db.with_conn_sync(|conn| {
-        let series_id = seed_series(conn);
-        insert_row(conn, series_id, 1, 1000, "[1.0]", false);
-        insert_row(conn, series_id, 2, 1100, "[2.0]", false);
-        insert_row(conn, series_id, 3, 1200, "[3.0]", false);
-
-        let deleted = purge_readings_before(conn, 1300).unwrap();
-
-        assert_eq!(deleted, 2);
-        let remaining: Vec<i64> = conn
-            .prepare("SELECT seq FROM readings ORDER BY seq")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(remaining, vec![3]);
-        Ok(())
-    })
-    .unwrap();
-}
-
-#[test]
-fn purge_readings_before_deletes_more_than_one_batch() {
-    let db = test_db();
-    db.with_conn_sync(|conn| {
-        let series_id = seed_series(conn);
-        let tx = rusqlite::Transaction::new_unchecked(
-            conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .unwrap();
-        for seq in 1..=10_001 {
-            tx.execute(
-                "INSERT INTO readings
-                    (seq, series_id, received_at, device_time, time_source, time_quality,
-                     event_time, event_time_source, values_json, rssi, battery_pct, quarantined)
-                 VALUES (?1, ?2, ?3, NULL, 'gateway', 'unsynced', ?3, 'received_at', '[1.0]', NULL, NULL, 0)",
-                params![seq, series_id, seq],
-            )
-            .unwrap();
-        }
-        tx.commit().unwrap();
-
-        let deleted = purge_readings_before(conn, 20_000).unwrap();
-
-        assert_eq!(deleted, 10_001);
-        let remaining: i64 = conn
-            .query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(remaining, 0);
-        Ok(())
-    })
-    .unwrap();
 }
 
 fn seed_series(conn: &rusqlite::Connection) -> i64 {

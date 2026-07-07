@@ -9,9 +9,9 @@ mod handle;
 pub(crate) mod ingest_map;
 mod serial_source;
 
-pub use handle::{start, AdapterHandle, AdapterParts, ShutdownHandle};
+pub use handle::{AdapterHandle, AdapterParts, ShutdownHandle, start};
 
 #[cfg(test)]
-mod event_loop_test;
-#[cfg(test)]
 mod convert_test;
+#[cfg(test)]
+mod event_loop_test;

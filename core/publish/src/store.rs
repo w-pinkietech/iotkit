@@ -328,7 +328,8 @@ fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TargetRow> {
     })
 }
 
-fn effective_cursor(current_epoch: &str, target: &TargetRow) -> i64 {
+/// Returns the target cursor for the current epoch, or zero across epochs.
+pub fn effective_cursor(current_epoch: &str, target: &TargetRow) -> i64 {
     if target.cursor_epoch.as_deref() == Some(current_epoch) {
         target.cursor_pub_seq
     } else {

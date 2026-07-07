@@ -26,7 +26,9 @@ impl AdapterHandle {
 
         // 3. event_loop の完了を待つ
         if let Some(handle) = self.event_loop_handle.take() {
-            handle.await.map_err(|e| format!("event_loop panicked: {}", e))?;
+            handle
+                .await
+                .map_err(|e| format!("event_loop panicked: {}", e))?;
         }
 
         // 4. reader thread の join
@@ -102,8 +104,7 @@ pub fn start(
     port_path: String,
     ingest: Option<iotkit_ingest_client::IngestClient>,
 ) -> Result<AdapterHandle, std::io::Error> {
-    let runtime_handle = tokio::runtime::Handle::try_current()
-        .map_err(std::io::Error::other)?;
+    let runtime_handle = tokio::runtime::Handle::try_current().map_err(std::io::Error::other)?;
 
     let source = serial_source::start(&port_path)?;
 
@@ -113,9 +114,15 @@ pub fn start(
     let adapter_id = id.as_str().to_string();
 
     let write_tx = source.write_tx;
-    let event_loop_handle = runtime_handle.spawn(
-        event_loop(adapter_id, port_path, source.bytes_rx, event_tx, command_rx, write_tx, ingest)
-    );
+    let event_loop_handle = runtime_handle.spawn(event_loop(
+        adapter_id,
+        port_path,
+        source.bytes_rx,
+        event_tx,
+        command_rx,
+        write_tx,
+        ingest,
+    ));
 
     Ok(AdapterHandle {
         id,
@@ -135,7 +142,10 @@ mod tests {
     #[test]
     fn start_without_runtime_returns_error() {
         let result = start("/dev/null".to_string(), None);
-        assert!(result.is_err(), "start() should return Err without tokio runtime");
+        assert!(
+            result.is_err(),
+            "start() should return Err without tokio runtime"
+        );
     }
 
     #[tokio::test]

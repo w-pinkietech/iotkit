@@ -476,7 +476,7 @@ pub(crate) async fn polling_loop(
     if !targets.is_empty() {
         let t = Arc::clone(&targets);
         let bp = bus_path.clone();
-        let s_snap: Vec<TargetState> = states.iter().cloned().collect();
+        let s_snap: Vec<TargetState> = states.to_vec();
 
         let outcomes = match tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp)).await
         {
@@ -563,7 +563,7 @@ pub(crate) async fn polling_loop(
             _ = ticker.tick() => {
                 let t = Arc::clone(&targets);
                 let bp = bus_path.clone();
-                let s_snap: Vec<TargetState> = states.iter().cloned().collect();
+                let s_snap: Vec<TargetState> = states.to_vec();
 
                 let cycle_start = Instant::now();
                 let outcomes = match tokio::task::spawn_blocking(move || poll_cycle(&t, &s_snap, &bp)).await {

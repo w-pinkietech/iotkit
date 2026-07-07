@@ -3,16 +3,21 @@
 use std::collections::BTreeMap;
 
 use bravepi_sensors::opt3001;
-use iotkit_polling_adapter_runtime::SensorDriver;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorIdentity, SensorReading};
+use iotkit_polling_adapter_runtime::SensorDriver;
 use rpi4b_transport::{I2cConfig, I2cTransport};
 
 pub struct Opt3001Driver;
 
 impl SensorDriver for Opt3001Driver {
     fn detect(&self, bus_path: &str, address: u8) -> Result<SensorIdentity, String> {
-        let mut t = I2cTransport::open(bus_path, &I2cConfig { address: address as u16 })
-            .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
+        let mut t = I2cTransport::open(
+            bus_path,
+            &I2cConfig {
+                address: address as u16,
+            },
+        )
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
 
         let mut id_buf = [0u8; 2];
         t.read_register(opt3001::REG_DEVICE_ID, &mut id_buf)
@@ -27,7 +32,10 @@ impl SensorDriver for Opt3001Driver {
         if device_id != opt3001::DEVICE_ID {
             return Err(format!(
                 "OPT3001 0x{:02x}@{}: device ID mismatch: expected 0x{:04x}, got 0x{:04x}",
-                address, bus_path, opt3001::DEVICE_ID, device_id,
+                address,
+                bus_path,
+                opt3001::DEVICE_ID,
+                device_id,
             ));
         }
 
@@ -42,8 +50,13 @@ impl SensorDriver for Opt3001Driver {
     }
 
     fn init(&self, bus_path: &str, address: u8) -> Result<(), String> {
-        let mut t = I2cTransport::open(bus_path, &I2cConfig { address: address as u16 })
-            .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
+        let mut t = I2cTransport::open(
+            bus_path,
+            &I2cConfig {
+                address: address as u16,
+            },
+        )
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
 
         let config_bytes = opt3001::INIT_CONFIG.to_le_bytes();
         t.write_register(opt3001::REG_CONFIG, &config_bytes)
@@ -58,8 +71,13 @@ impl SensorDriver for Opt3001Driver {
     }
 
     fn read(&self, bus_path: &str, address: u8) -> Result<SensorReading, String> {
-        let mut t = I2cTransport::open(bus_path, &I2cConfig { address: address as u16 })
-            .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
+        let mut t = I2cTransport::open(
+            bus_path,
+            &I2cConfig {
+                address: address as u16,
+            },
+        )
+        .map_err(|e| format!("OPT3001 0x{:02x}@{}: I2C open: {}", address, bus_path, e))?;
 
         let mut raw = [0u8; 2];
         t.read_register(opt3001::REG_RESULT, &mut raw)

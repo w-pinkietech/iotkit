@@ -149,6 +149,12 @@ pub struct ReplaceOutcome {
 pub const CHANNEL_NA: i32 = -1;
 pub const DEFAULT_VARIANT: &str = "primary";
 
+/// Sightings not observed within this window are stale housekeeping and dropped.
+const SIGHTINGS_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000; // 30 days
+/// Hard cap on unapproved sightings; the LRU (oldest last_seen) rows beyond this
+/// are evicted. This is the bound that survives a unique-id flood.
+const SIGHTINGS_CAP: i64 = 10_000;
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -532,6 +538,36 @@ pub fn list_sightings(conn: &Connection) -> Result<Vec<SightingRow>, LedgerError
     })?
     .collect::<Result<Vec<_>, _>>()
     .map_err(LedgerError::from)
+}
+
+/// Bound the unapproved-sightings table so untrusted senders (R2) cannot grow it
+/// without limit. Applied inside the caller's transaction, in order:
+///   1. TTL — drop sightings whose `last_seen` is older than `SIGHTINGS_TTL_MS`
+///      (a live device re-sights on its next contact).
+///   2. Cap — after each retention pass, keep only the `SIGHTINGS_CAP`
+///      most-recently-seen rows (LRU by `last_seen`); the rest are evicted. This
+///      bounds the table at steady state; peak growth within a retention interval
+///      is bounded by R2's admission control (rate/volume limits at ingress),
+///      which is the first line of defense.
+///
+/// Approval still deletes its own row separately; this is pure housekeeping.
+///
+/// Returns the number of rows deleted.
+pub fn purge_sightings(conn: &Connection, now: i64) -> Result<u64, LedgerError> {
+    let cutoff = now.saturating_sub(SIGHTINGS_TTL_MS);
+    let by_ttl = conn.execute(
+        "DELETE FROM sightings WHERE last_seen < ?1",
+        params![cutoff],
+    )?;
+    let by_cap = conn.execute(
+        "DELETE FROM sightings WHERE hardware_id IN (
+             SELECT hardware_id FROM sightings
+             ORDER BY last_seen DESC, hardware_id ASC
+             LIMIT -1 OFFSET ?1
+         )",
+        params![SIGHTINGS_CAP],
+    )?;
+    Ok((by_ttl + by_cap) as u64)
 }
 
 pub fn list_recent_events(conn: &Connection, limit: u32) -> Result<Vec<EventRow>, LedgerError> {
@@ -1083,6 +1119,114 @@ mod tests {
                     .state,
                 DeviceState::Active
             );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_sightings_drops_stale_and_keeps_fresh_rows() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+            let now = 1_700_000_000_000_i64;
+            conn.execute(
+                "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
+                 VALUES (?1, 'adapter-a', ?2, ?2, 1)",
+                params!["ble:stale", now - 31 * DAY_MS],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
+                 VALUES (?1, 'adapter-a', ?2, ?2, 1)",
+                params!["ble:fresh", now - DAY_MS],
+            )
+            .unwrap();
+
+            let purged = purge_sightings(conn, now).unwrap();
+
+            assert_eq!(purged, 1);
+            let remaining = list_sightings(conn).unwrap();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].hardware_id, "ble:fresh");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_sightings_evicts_oldest_rows_beyond_cap() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let now = 1_700_000_000_000_i64;
+            let first_seen = now - SIGHTINGS_TTL_MS + 1;
+            let mut insert = conn
+                .prepare(
+                    "INSERT INTO sightings
+                     (hardware_id, source, first_seen, last_seen, observations)
+                     VALUES (?1, 'adapter-a', ?2, ?2, 1)",
+                )
+                .unwrap();
+            for i in 0..(SIGHTINGS_CAP + 5) {
+                insert
+                    .execute(params![format!("ble:{i:05}"), first_seen + i])
+                    .unwrap();
+            }
+            drop(insert);
+
+            let purged = purge_sightings(conn, now).unwrap();
+
+            assert_eq!(purged, 5);
+            let remaining_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sightings", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(remaining_count, SIGHTINGS_CAP);
+            for i in 0..5 {
+                let exists: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM sightings WHERE hardware_id = ?1)",
+                        params![format!("ble:{i:05}")],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert!(!exists, "oldest sighting ble:{i:05} should be evicted");
+            }
+            let newest_exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sightings WHERE hardware_id = ?1)",
+                    params![format!("ble:{:05}", SIGHTINGS_CAP + 4)],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(newest_exists);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_sightings_keeps_fresh_sighting_approval_flow_working() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let now = now_ms();
+            record_sighting(conn, "ble:approval", "bravepi-mainboard").unwrap();
+
+            let purged = purge_sightings(conn, now).unwrap();
+            let sid = approve_sighting(
+                conn,
+                "ble:approval",
+                Some("new sensor"),
+                DeviceKind::Individual,
+            )
+            .unwrap();
+
+            assert_eq!(purged, 0);
+            let row = find_alive_by_hardware_id(conn, "ble:approval")
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.system_id, sid);
+            assert_eq!(row.state, DeviceState::Quarantined);
+            assert!(list_sightings(conn).unwrap().is_empty());
             Ok(())
         })
         .unwrap();
@@ -1646,9 +1790,8 @@ mod tests {
             )
             .unwrap();
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                list_devices(conn, true)
-            }));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list_devices(conn, true)));
 
             assert!(result.is_ok(), "invalid blob length should not panic");
             assert!(result.unwrap().is_err());

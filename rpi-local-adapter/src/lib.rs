@@ -8,9 +8,9 @@ pub use iotkit_polling_adapter_runtime::AdapterHandle;
 
 use std::sync::Arc;
 
+use iotkit_core_types::AdapterId;
 use iotkit_ingest_client::IngestClient;
 use iotkit_polling_adapter_runtime::{PollingAdapterConfig, SensorTargetConfig};
-use iotkit_core_types::AdapterId;
 
 /// Adapter configuration. Passed to [`start`].
 #[derive(Debug, Clone)]
@@ -39,7 +39,10 @@ pub enum RpiLocalTarget {
 ///
 /// Validates config (including per-driver validation), then delegates to
 /// `iotkit_polling_adapter_runtime::start`.
-pub fn start(config: RpiLocalConfig, ingest: Option<IngestClient>) -> Result<AdapterHandle, std::io::Error> {
+pub fn start(
+    config: RpiLocalConfig,
+    ingest: Option<IngestClient>,
+) -> Result<AdapterHandle, std::io::Error> {
     let polling_config = to_polling_config(&config);
     iotkit_polling_adapter_runtime::start(
         AdapterId::new("rpi-local:default"),
@@ -145,7 +148,10 @@ mod tests {
             bus_path: "/dev/i2c-1".into(),
             poll_interval_ms: 1000,
             targets: vec![
-                RpiLocalTarget::MCP9600 { address: 0x60, thermocouple_type: ThermocoupleType::K },
+                RpiLocalTarget::MCP9600 {
+                    address: 0x60,
+                    thermocouple_type: ThermocoupleType::K,
+                },
                 RpiLocalTarget::OPT3001 { address: 0x44 },
             ],
         };

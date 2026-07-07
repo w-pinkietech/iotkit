@@ -70,7 +70,10 @@ fn run_migrations_inner<M: MigrationEntry>(
     }
 
     // Apply each pending (= not yet applied) migration in its own transaction
-    for m in migrations.iter().filter(|m| !applied.contains(&m.version())) {
+    for m in migrations
+        .iter()
+        .filter(|m| !applied.contains(&m.version()))
+    {
         tracing::info!(
             version = m.version(),
             label = m.label(),
@@ -99,11 +102,10 @@ fn run_migrations_inner<M: MigrationEntry>(
             version: m.version(),
             source: Box::new(e.into()),
         })?;
-        tx.commit()
-            .map_err(|e| StorageError::MigrationFailed {
-                version: m.version(),
-                source: Box::new(e.into()),
-            })?;
+        tx.commit().map_err(|e| StorageError::MigrationFailed {
+            version: m.version(),
+            source: Box::new(e.into()),
+        })?;
     }
 
     Ok(())
@@ -219,10 +221,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(StorageError::SchemaVersionAhead {
-                    on_disk: 9999,
-                    ..
-                })
+                Err(StorageError::SchemaVersionAhead { on_disk: 9999, .. })
             ),
             "expected SchemaVersionAhead, got {result:?}"
         );
@@ -232,14 +231,25 @@ mod tests {
     fn migration_order_validation_rejects_out_of_order() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let bad_migrations = &[
-            Migration { version: 2, label: "second", sql: "SELECT 1;" },
-            Migration { version: 1, label: "first", sql: "SELECT 1;" },
+            Migration {
+                version: 2,
+                label: "second",
+                sql: "SELECT 1;",
+            },
+            Migration {
+                version: 1,
+                label: "first",
+                sql: "SELECT 1;",
+            },
         ];
         let result = run_migrations(&conn, bad_migrations);
         assert!(
             matches!(
                 result,
-                Err(StorageError::InvalidMigrationOrder { first: 2, second: 1 })
+                Err(StorageError::InvalidMigrationOrder {
+                    first: 2,
+                    second: 1
+                })
             ),
             "expected InvalidMigrationOrder, got {result:?}"
         );
@@ -249,14 +259,25 @@ mod tests {
     fn migration_duplicate_version_rejected() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let bad_migrations = &[
-            Migration { version: 1, label: "first", sql: "SELECT 1;" },
-            Migration { version: 1, label: "also-first", sql: "SELECT 1;" },
+            Migration {
+                version: 1,
+                label: "first",
+                sql: "SELECT 1;",
+            },
+            Migration {
+                version: 1,
+                label: "also-first",
+                sql: "SELECT 1;",
+            },
         ];
         let result = run_migrations(&conn, bad_migrations);
         assert!(
             matches!(
                 result,
-                Err(StorageError::InvalidMigrationOrder { first: 1, second: 1 })
+                Err(StorageError::InvalidMigrationOrder {
+                    first: 1,
+                    second: 1
+                })
             ),
             "expected InvalidMigrationOrder, got {result:?}"
         );
@@ -304,10 +325,26 @@ mod tests {
         // 部分セット[1,2,4]で初期化されたDB(分割マイグレーションの誤用シナリオ)に
         // 完全セット[1,2,3,4]を渡すと、水位方式ではv3が永久スキップされる——集合差方式の検証
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        let v1 = Migration { version: 1, label: "init", sql: include_str!("../migrations/0001_init.sql") };
-        let v2 = Migration { version: 2, label: "a", sql: "CREATE TABLE t2 (id INTEGER PRIMARY KEY);" };
-        let v3 = Migration { version: 3, label: "b", sql: "CREATE TABLE t3 (id INTEGER PRIMARY KEY);" };
-        let v4 = Migration { version: 4, label: "c", sql: "CREATE TABLE t4 (id INTEGER PRIMARY KEY);" };
+        let v1 = Migration {
+            version: 1,
+            label: "init",
+            sql: include_str!("../migrations/0001_init.sql"),
+        };
+        let v2 = Migration {
+            version: 2,
+            label: "a",
+            sql: "CREATE TABLE t2 (id INTEGER PRIMARY KEY);",
+        };
+        let v3 = Migration {
+            version: 3,
+            label: "b",
+            sql: "CREATE TABLE t3 (id INTEGER PRIMARY KEY);",
+        };
+        let v4 = Migration {
+            version: 4,
+            label: "c",
+            sql: "CREATE TABLE t4 (id INTEGER PRIMARY KEY);",
+        };
 
         run_migrations(&conn, &[v1, v2, v4]).unwrap(); // 部分適用(1,2,4は昇順なので通る)
         run_migrations(&conn, &[v1, v2, v3, v4]).unwrap(); // 完全セットでv3が埋まる

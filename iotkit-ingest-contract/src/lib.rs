@@ -7,5 +7,5 @@ pub mod measurement_key;
 pub use ack::{AckStatus, Disposition, EnvelopeAck, ItemStatus, QuarantineReason, ReasonCode};
 pub use envelope::{Envelope, ReadingItem, TimeSource};
 pub use measurement_key::{
-    external_envelope_id, validate_measurement_key, MeasurementKeyError, MAX_MEASUREMENT_KEY_LEN,
+    MAX_MEASUREMENT_KEY_LEN, MeasurementKeyError, external_envelope_id, validate_measurement_key,
 };

@@ -285,7 +285,10 @@ mod tests {
             let records = materialize_batch(conn, &batch).unwrap();
             assert_eq!(records.len(), 1);
             let v = &records[0];
-            assert_eq!(v.get("family").and_then(|v| v.as_str()), Some("measurement"));
+            assert_eq!(
+                v.get("family").and_then(|v| v.as_str()),
+                Some("measurement")
+            );
             assert_eq!(v.get("pub_seq").and_then(|v| v.as_i64()), Some(pub_seq));
             assert_eq!(
                 v.get("series_key").and_then(|v| v.as_str()),
@@ -313,10 +316,7 @@ mod tests {
             let annotations = materialize_batch(conn, &[annotation]).unwrap();
             assert_eq!(annotations.len(), 1);
             let a = &annotations[0];
-            assert_eq!(
-                a.get("family").and_then(|v| v.as_str()),
-                Some("annotation")
-            );
+            assert_eq!(a.get("family").and_then(|v| v.as_str()), Some("annotation"));
             assert_eq!(a.get("schema_version").and_then(|v| v.as_u64()), Some(1));
             assert_eq!(a.get("epoch").and_then(|v| v.as_str()), Some("NEW"));
             assert_eq!(a.get("pub_seq").and_then(|v| v.as_i64()), Some(3));

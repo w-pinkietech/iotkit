@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use iotkit_core_types::{
-    AdapterId, AdapterEvent, DeviceConfigData, DeviceKey, SensorIdentity, SensorReading,
+    AdapterEvent, AdapterId, DeviceConfigData, DeviceKey, SensorIdentity, SensorReading,
 };
 
 use state::State;

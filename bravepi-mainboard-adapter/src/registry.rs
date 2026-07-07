@@ -9,18 +9,43 @@ struct RegistryEntry {
 }
 
 static REGISTRY: &[RegistryEntry] = &[
-    RegistryEntry { raw_sensor_type: 257, handler: &bravepi_sensors::contact::CONTACT_INPUT },
-    RegistryEntry { raw_sensor_type: 258, handler: &bravepi_sensors::contact::CONTACT_OUTPUT },
-    RegistryEntry { raw_sensor_type: 259, handler: &bravepi_sensors::mcp3427::HANDLER },
-    RegistryEntry { raw_sensor_type: 260, handler: &bravepi_sensors::vl53l1x::HANDLER },
-    RegistryEntry { raw_sensor_type: 261, handler: &bravepi_sensors::mcp9600::HANDLER },
-    RegistryEntry { raw_sensor_type: 262, handler: &bravepi_sensors::lis2duxs12::HANDLER },
-    RegistryEntry { raw_sensor_type: 263, handler: &bravepi_sensors::sdp810::HANDLER },
-    RegistryEntry { raw_sensor_type: 264, handler: &bravepi_sensors::opt3001::HANDLER },
+    RegistryEntry {
+        raw_sensor_type: 257,
+        handler: &bravepi_sensors::contact::CONTACT_INPUT,
+    },
+    RegistryEntry {
+        raw_sensor_type: 258,
+        handler: &bravepi_sensors::contact::CONTACT_OUTPUT,
+    },
+    RegistryEntry {
+        raw_sensor_type: 259,
+        handler: &bravepi_sensors::mcp3427::HANDLER,
+    },
+    RegistryEntry {
+        raw_sensor_type: 260,
+        handler: &bravepi_sensors::vl53l1x::HANDLER,
+    },
+    RegistryEntry {
+        raw_sensor_type: 261,
+        handler: &bravepi_sensors::mcp9600::HANDLER,
+    },
+    RegistryEntry {
+        raw_sensor_type: 262,
+        handler: &bravepi_sensors::lis2duxs12::HANDLER,
+    },
+    RegistryEntry {
+        raw_sensor_type: 263,
+        handler: &bravepi_sensors::sdp810::HANDLER,
+    },
+    RegistryEntry {
+        raw_sensor_type: 264,
+        handler: &bravepi_sensors::opt3001::HANDLER,
+    },
 ];
 
 pub(crate) fn lookup_handler(raw: u16) -> Option<&'static SensorHandler> {
-    REGISTRY.iter()
+    REGISTRY
+        .iter()
         .find(|e| e.raw_sensor_type == raw)
         .map(|e| e.handler)
 }
@@ -43,8 +68,8 @@ mod tests {
             (264, "illuminance"),
         ];
         for (raw, suffix) in expected {
-            let handler = lookup_handler(raw)
-                .unwrap_or_else(|| panic!("raw {} should resolve", raw));
+            let handler =
+                lookup_handler(raw).unwrap_or_else(|| panic!("raw {} should resolve", raw));
             assert_eq!(handler.key_suffix, suffix, "raw {} suffix mismatch", raw);
         }
     }
@@ -57,9 +82,18 @@ mod tests {
 
     #[test]
     fn handler_sensor_types_are_correct() {
-        assert_eq!(lookup_handler(261).unwrap().sensor_type, SensorType::Temperature);
-        assert_eq!(lookup_handler(257).unwrap().sensor_type, SensorType::ContactInput);
-        assert_eq!(lookup_handler(258).unwrap().sensor_type, SensorType::ContactOutput);
+        assert_eq!(
+            lookup_handler(261).unwrap().sensor_type,
+            SensorType::Temperature
+        );
+        assert_eq!(
+            lookup_handler(257).unwrap().sensor_type,
+            SensorType::ContactInput
+        );
+        assert_eq!(
+            lookup_handler(258).unwrap().sensor_type,
+            SensorType::ContactOutput
+        );
     }
 
     #[test]

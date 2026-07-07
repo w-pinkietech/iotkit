@@ -21,8 +21,7 @@ pub struct UsbSerialInfo {
 
 /// 接続中の USB シリアルデバイスを列挙する。
 pub fn list_usb_serial_devices() -> io::Result<Vec<UsbSerialInfo>> {
-    let ports = serialport::available_ports()
-        .map_err(io::Error::other)?;
+    let ports = serialport::available_ports().map_err(io::Error::other)?;
 
     let mut devices = Vec::new();
     for port in ports {
@@ -49,20 +48,22 @@ pub struct UsbSerialTransport {
 impl UsbSerialTransport {
     /// デバイスパス（例: /dev/ttyUSB0）と設定でオープン。
     pub fn open(path: &str, config: &SerialConfig) -> io::Result<Self> {
-        let inner = SerialTransport::open(path, config)
-            .map_err(io::Error::other)?;
+        let inner = SerialTransport::open(path, config).map_err(io::Error::other)?;
         Ok(Self { inner })
     }
 
     /// VID/PID でデバイスを探してオープン。
     pub fn open_by_vid_pid(vid: u16, pid: u16, config: &SerialConfig) -> io::Result<Self> {
         let devices = list_usb_serial_devices()?;
-        let device = devices.iter()
+        let device = devices
+            .iter()
             .find(|d| d.vid == vid && d.pid == pid)
-            .ok_or_else(|| io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("USB device {:04x}:{:04x} not found", vid, pid),
-            ))?;
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("USB device {:04x}:{:04x} not found", vid, pid),
+                )
+            })?;
         Self::open(&device.port_name, config)
     }
 

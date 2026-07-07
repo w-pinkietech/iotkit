@@ -1,11 +1,14 @@
-use iotkit_core_ledger::{SystemId, CHANNEL_NA};
+use iotkit_core_ledger::{CHANNEL_NA, SystemId};
 use iotkit_ingest_contract::{QuarantineReason, ReadingItem, ReasonCode};
 
 /// series行にも検疫マークを付ける理由か(D6決定6)。
 /// UnknownKey/UndeclaredChannelはseries実体そのものが疑わしい。
 /// OutOfRangeはseriesは健全で観測だけが外れ値、DeviceQuarantinedはデバイス状態由来なのでfalse。
 pub fn is_series_level(reason: QuarantineReason) -> bool {
-    matches!(reason, QuarantineReason::UnknownKey | QuarantineReason::UndeclaredChannel)
+    matches!(
+        reason,
+        QuarantineReason::UnknownKey | QuarantineReason::UndeclaredChannel
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -18,7 +21,10 @@ pub enum RegistryVerdict {
         channel_index: i32,
         quarantine: Option<QuarantineReason>,
     },
-    RejectItem { reason_code: ReasonCode, message: String },
+    RejectItem {
+        reason_code: ReasonCode,
+        message: String,
+    },
 }
 
 /// 受理時のレジストリ検証フック(D6判別表)。本実装はiotkit-core-registryのSqliteRegistry。

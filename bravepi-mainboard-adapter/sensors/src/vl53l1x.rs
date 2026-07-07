@@ -3,10 +3,12 @@
 //! I2C: qwiic ライブラリ → mm (int, 0=無効)
 //! UART (BravePI): UInt16LE → mm
 
-use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 use crate::UartSample;
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
-fn sensor_type() -> SensorType { SensorType::Ranging }
+fn sensor_type() -> SensorType {
+    SensorType::Ranging
+}
 
 pub const MANUFACTURER: &str = "Braveridge";
 pub const IC_PART_NUMBER: &str = "VL53L1X";
@@ -30,7 +32,11 @@ pub fn from_i2c_distance(distance_mm: u16) -> SensorReading {
     if distance_mm == 0 {
         return SensorReading::empty(sensor_type());
     }
-    SensorReading::new(sensor_type(), vec![distance_mm as f64], vec!["distance_mm".to_string()])
+    SensorReading::new(
+        sensor_type(),
+        vec![distance_mm as f64],
+        vec!["distance_mm".to_string()],
+    )
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -42,7 +48,11 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     if mm == 0 {
         return SensorReading::empty(sensor_type());
     }
-    SensorReading::new(sensor_type(), vec![mm as f64], vec!["distance_mm".to_string()])
+    SensorReading::new(
+        sensor_type(),
+        vec![mm as f64],
+        vec!["distance_mm".to_string()],
+    )
 }
 
 fn decode_uart(sample: UartSample<'_>) -> SensorReading {

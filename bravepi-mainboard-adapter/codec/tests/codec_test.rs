@@ -1,6 +1,12 @@
 use bravepi_codec::*;
 
-fn build_uplink_frame(device_number: u64, sensor_type: u16, rssi: i8, flag: u8, payload: &[u8]) -> Vec<u8> {
+fn build_uplink_frame(
+    device_number: u64,
+    sensor_type: u16,
+    rssi: i8,
+    flag: u8,
+    payload: &[u8],
+) -> Vec<u8> {
     let mut frame = Vec::new();
     let payload_len = payload.len() as u16;
     frame.extend_from_slice(&payload_len.to_le_bytes());
@@ -24,8 +30,8 @@ const DEVICE: u64 = 0x246880020140018b;
 #[test]
 fn decode_thermocouple_real_frame() {
     let raw: Vec<u8> = vec![
-        0x07, 0x00, 0x8b, 0x01, 0x40, 0x01, 0x02, 0x80, 0x68, 0x24,
-        0x05, 0x01, 0xae, 0x00, 0x64, 0x01, 0x00, 0x00, 0x80, 0xb3, 0x41,
+        0x07, 0x00, 0x8b, 0x01, 0x40, 0x01, 0x02, 0x80, 0x68, 0x24, 0x05, 0x01, 0xae, 0x00, 0x64,
+        0x01, 0x00, 0x00, 0x80, 0xb3, 0x41,
     ];
     let mut codec = BravePiCodec::new();
     codec.feed(&raw);
@@ -62,7 +68,9 @@ fn decode_config_response() {
     let mut payload = Vec::new();
     payload.extend_from_slice(&261u16.to_le_bytes());
     payload.extend_from_slice(&[1, 2, 3]);
-    payload.push(9); payload.push(1); payload.push(4);
+    payload.push(9);
+    payload.push(1);
+    payload.push(4);
     payload.extend_from_slice(&100u16.to_le_bytes());
     payload.extend_from_slice(&10u32.to_le_bytes());
     let frame = build_uplink_frame(DEVICE, 0, -50, 0, &payload);
@@ -89,7 +97,9 @@ fn decode_continuation_frames() {
     assert!(codec.decode().is_none());
     codec.feed(&frame2);
     match codec.decode().expect("should decode") {
-        BravePiFrame::Sensor(s) => { assert_eq!(s.sensor_type_raw, 262); }
+        BravePiFrame::Sensor(s) => {
+            assert_eq!(s.sensor_type_raw, 262);
+        }
         other => panic!("expected Sensor, got {:?}", other),
     }
 }
@@ -114,14 +124,20 @@ fn decode_unknown_type_still_returns_frame() {
     let mut codec = BravePiCodec::new();
     codec.feed(&frame);
     match codec.decode().expect("should decode") {
-        BravePiFrame::Sensor(s) => { assert_eq!(s.sensor_type_raw, 999); }
+        BravePiFrame::Sensor(s) => {
+            assert_eq!(s.sensor_type_raw, 999);
+        }
         other => panic!("expected Sensor, got {:?}", other),
     }
 }
 
 #[test]
 fn encode_immediate_uplink() {
-    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ImmediateUplink { sensor_type: 261 }).unwrap();
+    let f = BravePiCodec::encode_downlink(
+        "246880020140018b",
+        &DownlinkCommand::ImmediateUplink { sensor_type: 261 },
+    )
+    .unwrap();
     assert_eq!(f[0], 0x00);
     assert_eq!(f[13], 0x00);
     assert_eq!(u16::from_le_bytes([f[11], f[12]]), 261);
@@ -129,13 +145,21 @@ fn encode_immediate_uplink() {
 
 #[test]
 fn encode_parameter_get() {
-    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ParameterGet).unwrap();
+    let f =
+        BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ParameterGet).unwrap();
     assert_eq!(f[13], 0x0D);
 }
 
 #[test]
 fn encode_contact_output() {
-    let f = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ContactOutput { signal_mode: 1, signal_out_time: 5000 }).unwrap();
+    let f = BravePiCodec::encode_downlink(
+        "246880020140018b",
+        &DownlinkCommand::ContactOutput {
+            signal_mode: 1,
+            signal_out_time: 5000,
+        },
+    )
+    .unwrap();
     assert_eq!(f[13], 0x11);
     assert_eq!(f[15], 1);
     assert_eq!(u16::from_le_bytes([f[16], f[17]]), 5000);
@@ -143,20 +167,14 @@ fn encode_contact_output() {
 
 #[test]
 fn encode_downlink_invalid_hex_returns_error() {
-    let result = BravePiCodec::encode_downlink(
-        "not_valid_hex",
-        &DownlinkCommand::ParameterGet,
-    );
+    let result = BravePiCodec::encode_downlink("not_valid_hex", &DownlinkCommand::ParameterGet);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("Invalid device number hex"));
 }
 
 #[test]
 fn encode_downlink_valid_hex_returns_ok() {
-    let result = BravePiCodec::encode_downlink(
-        "246880020140018b",
-        &DownlinkCommand::ParameterGet,
-    );
+    let result = BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ParameterGet);
     assert!(result.is_ok());
 }
 
@@ -185,7 +203,11 @@ fn decode_rejects_oversized_frame() {
     codec.feed(&frame);
     match codec.decode() {
         Some(BravePiFrame::DecodeError { reason, .. }) => {
-            assert!(reason.contains("frame size exceeds maximum"), "reason was: {}", reason);
+            assert!(
+                reason.contains("frame size exceeds maximum"),
+                "reason was: {}",
+                reason
+            );
         }
         other => panic!("expected DecodeError, got {:?}", other),
     }
@@ -237,13 +259,25 @@ fn decode_rejects_oversized_continuation_payload() {
         let result = codec.decode();
         if i < 4 {
             // 累積 1000..4000 → まだ上限以下
-            assert!(result.is_none(), "should be None at chunk {}, got {:?}", i, result);
+            assert!(
+                result.is_none(),
+                "should be None at chunk {}, got {:?}",
+                i,
+                result
+            );
         } else {
             // 累積 5000 → 上限超過で DecodeError
             match result {
-                Some(BravePiFrame::DecodeError { reason, device_number, .. }) => {
-                    assert!(reason.contains("continuation payload exceeds maximum"),
-                        "reason was: {}", reason);
+                Some(BravePiFrame::DecodeError {
+                    reason,
+                    device_number,
+                    ..
+                }) => {
+                    assert!(
+                        reason.contains("continuation payload exceeds maximum"),
+                        "reason was: {}",
+                        reason
+                    );
                     // device_number はフレームから取得できている
                     assert_eq!(device_number, "246880020140018b");
                 }
@@ -265,12 +299,15 @@ fn decode_rejects_oversized_continuation_with_final_frame() {
         assert!(codec.decode().is_none());
     }
     // 終端フレーム (flag=0) 200 bytes → 累積 4200 > 4096 で DecodeError
-    let final_frame = build_uplink_frame(DEVICE, 262, -60, 0, &vec![0u8; 200]);
+    let final_frame = build_uplink_frame(DEVICE, 262, -60, 0, &[0u8; 200]);
     codec.feed(&final_frame);
     match codec.decode() {
         Some(BravePiFrame::DecodeError { reason, .. }) => {
-            assert!(reason.contains("continuation payload exceeds maximum"),
-                "reason was: {}", reason);
+            assert!(
+                reason.contains("continuation payload exceeds maximum"),
+                "reason was: {}",
+                reason
+            );
         }
         other => panic!("expected DecodeError, got {:?}", other),
     }
@@ -280,12 +317,13 @@ fn decode_rejects_oversized_continuation_with_final_frame() {
 fn encode_downlink_device_bytes_match_wire_order() {
     // decode は u64::from_le_bytes でデバイス番号を読む。
     // encode の出力も同じ LE バイト順でなければならない。
-    let f = BravePiCodec::encode_downlink(
-        "246880020140018b",
-        &DownlinkCommand::ParameterGet,
-    ).unwrap();
+    let f =
+        BravePiCodec::encode_downlink("246880020140018b", &DownlinkCommand::ParameterGet).unwrap();
     // device bytes は offset 3..11 (0: direction, 1-2: length, 3-10: device)
     let device_bytes = &f[3..11];
     // on-wire 期待値: 0x246880020140018b の LE 表現
-    assert_eq!(device_bytes, &[0x8b, 0x01, 0x40, 0x01, 0x02, 0x80, 0x68, 0x24]);
+    assert_eq!(
+        device_bytes,
+        &[0x8b, 0x01, 0x40, 0x01, 0x02, 0x80, 0x68, 0x24]
+    );
 }

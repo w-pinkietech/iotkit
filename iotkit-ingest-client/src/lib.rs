@@ -116,7 +116,7 @@ mod inproc {
             loop {
                 // 1) 送信可能なら先頭を送る
                 let ready = !spool.is_empty()
-                    && backoff_until.map_or(true, |t| tokio::time::Instant::now() >= t);
+                    && backoff_until.is_none_or(|t| tokio::time::Instant::now() >= t);
                 if ready {
                     let envelope = spool.front().expect("spool non-empty");
                     match collector.submit(envelope.clone()).await {

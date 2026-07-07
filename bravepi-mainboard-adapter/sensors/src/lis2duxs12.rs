@@ -3,10 +3,12 @@
 //! I2C: Int16LE × 3 × 0.244 → mG
 //! UART (BravePI): Float32LE × 3 → mG
 
-use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 use crate::UartSample;
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
-fn sensor_type() -> SensorType { SensorType::Acceleration }
+fn sensor_type() -> SensorType {
+    SensorType::Acceleration
+}
 
 pub const MANUFACTURER: &str = "Braveridge";
 pub const IC_PART_NUMBER: &str = "LIS2DUXS12";
@@ -35,7 +37,11 @@ pub fn from_i2c_raw(data: &[u8; 6]) -> SensorReading {
     let x = i16::from_le_bytes([data[0], data[1]]) as f64 * MG_SCALE;
     let y = i16::from_le_bytes([data[2], data[3]]) as f64 * MG_SCALE;
     let z = i16::from_le_bytes([data[4], data[5]]) as f64 * MG_SCALE;
-    SensorReading::new(sensor_type(), vec![x, y, z], vec!["x_mg".to_string(), "y_mg".to_string(), "z_mg".to_string()])
+    SensorReading::new(
+        sensor_type(),
+        vec![x, y, z],
+        vec!["x_mg".to_string(), "y_mg".to_string(), "z_mg".to_string()],
+    )
 }
 
 /// UART (BravePI) フレームのペイロードから変換。
@@ -47,7 +53,11 @@ pub fn from_uart_payload(data: &[u8]) -> SensorReading {
     let x = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
     let y = f32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64;
     let z = f32::from_le_bytes([data[8], data[9], data[10], data[11]]) as f64;
-    SensorReading::new(sensor_type(), vec![x, y, z], vec!["x_mg".to_string(), "y_mg".to_string(), "z_mg".to_string()])
+    SensorReading::new(
+        sensor_type(),
+        vec![x, y, z],
+        vec!["x_mg".to_string(), "y_mg".to_string(), "z_mg".to_string()],
+    )
 }
 
 fn decode_uart(sample: UartSample<'_>) -> SensorReading {
@@ -72,12 +82,19 @@ mod tests {
         let raw_y = -100i16;
         let raw_z = 4090i16;
         let data = [
-            raw_x.to_le_bytes()[0], raw_x.to_le_bytes()[1],
-            raw_y.to_le_bytes()[0], raw_y.to_le_bytes()[1],
-            raw_z.to_le_bytes()[0], raw_z.to_le_bytes()[1],
+            raw_x.to_le_bytes()[0],
+            raw_x.to_le_bytes()[1],
+            raw_y.to_le_bytes()[0],
+            raw_y.to_le_bytes()[1],
+            raw_z.to_le_bytes()[0],
+            raw_z.to_le_bytes()[1],
         ];
         let reading = from_i2c_raw(&data);
-        assert_eq!(reading.values.len(), 3, "派生値はワイヤに乗せない(D6決定11)");
+        assert_eq!(
+            reading.values.len(),
+            3,
+            "派生値はワイヤに乗せない(D6決定11)"
+        );
         assert!((reading.values[0] - 12.2).abs() < 1e-3);
         assert!((reading.values[1] - (-24.4)).abs() < 1e-3);
         assert!((reading.values[2] - 997.96).abs() < 1e-3);
@@ -93,7 +110,11 @@ mod tests {
             payload.extend_from_slice(&v.to_le_bytes());
         }
         let reading = from_uart_payload(&payload);
-        assert_eq!(reading.values.len(), 3, "派生値はワイヤに乗せない(D6決定11)");
+        assert_eq!(
+            reading.values.len(),
+            3,
+            "派生値はワイヤに乗せない(D6決定11)"
+        );
         assert!((reading.values[0] - 12.0).abs() < 1e-3);
         assert!((reading.values[2] - 998.0).abs() < 1e-3);
         assert_eq!(reading.labels, vec!["x_mg", "y_mg", "z_mg"]);

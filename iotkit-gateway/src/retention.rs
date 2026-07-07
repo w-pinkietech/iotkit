@@ -47,7 +47,8 @@ fn purge_readings_custody_aware(
               )
           )
         LIMIT :batch";
-    const SELECT_FLOOR_ONLY: &str = "SELECT seq FROM readings WHERE received_at < :cutoff LIMIT :batch";
+    const SELECT_FLOOR_ONLY: &str =
+        "SELECT seq FROM readings WHERE received_at < :cutoff LIMIT :batch";
 
     if let Some(eff) = effective_cursor {
         iotkit_core_publish::store::prune_acked_outbox(conn, current_epoch, eff)
@@ -137,6 +138,7 @@ pub async fn run_retention_once_with_latch(
     let db_path = db_path.to_path_buf();
     let (purged_readings, purged_dedup) = db
         .with_conn(move |conn| {
+            let started = std::time::Instant::now();
             let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
             let purged_dedup = iotkit_core_timeseries::purge_dedup_before(&tx, dedup_cutoff)
                 .map_err(|e| {
@@ -157,10 +159,10 @@ pub async fn run_retention_once_with_latch(
             let effective_cursor = match &target {
                 None => None,
                 Some(t) if !t.archive_responsible => None,
-                Some(t) if t.cursor_epoch.as_deref() == Some(current_epoch.as_str()) => {
-                    Some(t.cursor_pub_seq)
-                }
-                Some(_) => Some(0),
+                Some(t) => Some(iotkit_core_publish::store::effective_cursor(
+                    &current_epoch,
+                    t,
+                )),
             };
             let purged_readings =
                 purge_readings_custody_aware(&tx, reading_cutoff, &current_epoch, effective_cursor)
@@ -182,11 +184,13 @@ pub async fn run_retention_once_with_latch(
                     )
                 })?;
             }
+            let duration_ms = started.elapsed().as_millis() as i64;
             let detail = format!(
-                r#"{{"readings":{},"dedup":{},"expired_quarantines":{}}}"#,
+                r#"{{"readings":{},"dedup":{},"expired_quarantines":{},"duration_ms":{}}}"#,
                 purged_readings,
                 purged_dedup,
-                expired.len()
+                expired.len(),
+                duration_ms
             );
             iotkit_core_ledger::record_event(&tx, "retention_purge", None, &detail).map_err(
                 |e| {
@@ -201,6 +205,24 @@ pub async fn run_retention_once_with_latch(
         .await
         .map_err(|e| e.to_string())?;
 
+    let purged_sightings = db
+        .with_conn(move |conn| {
+            let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let n = iotkit_core_ledger::purge_sightings(&tx, now).map_err(|e| {
+                iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                    Box::new(e),
+                ))
+            })?;
+            tx.commit()?;
+            Ok(n)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "sightings purge failed (non-fatal, will retry next pass)");
+            0
+        });
+    tracing::info!(purged_sightings, "sightings purge");
+
     let db_health =
         observe_watermark_latched(db, &db_path, config.disk_high_watermark_pct, latch).await?;
     {
@@ -209,7 +231,7 @@ pub async fn run_retention_once_with_latch(
         state.retention = RetentionHealth {
             days: config.retention_days,
             last_purge_at: Some(now),
-            last_purged_rows: purged_readings + purged_dedup,
+            last_purged_rows: purged_readings + purged_dedup + purged_sightings,
         };
     }
     Ok(())
@@ -233,11 +255,10 @@ pub fn observe_db_health(db_path: &Path, disk_high_watermark_pct: u64) -> Result
     let stat = unsafe { stat.assume_init() };
     let available = stat.f_bavail.saturating_mul(stat.f_frsize);
     let total = stat.f_blocks.saturating_mul(stat.f_frsize);
-    let used_pct = if total == 0 {
-        0
-    } else {
-        100_u64.saturating_sub(available.saturating_mul(100) / total)
-    };
+    let used_pct = available
+        .saturating_mul(100)
+        .checked_div(total)
+        .map_or(0, |available_pct| 100_u64.saturating_sub(available_pct));
     Ok(DbHealth {
         size_bytes,
         disk_available_bytes: available,
@@ -293,6 +314,7 @@ mod tests {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
         all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
         all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
         all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
         all.sort_by_key(|m| m.version);
         all
@@ -628,6 +650,107 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_purges_stale_sightings_and_keeps_fresh() {
+        let db = retention_db();
+        let now = now_ms();
+        let stale_last_seen = now - (31 * DAY_MS);
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
+                 VALUES (?1, ?2, ?3, ?3, 1)",
+                rusqlite::params!["ble:stale", "adapter-test", stale_last_seen],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
+                 VALUES (?1, ?2, ?3, ?3, 1)",
+                rusqlite::params!["ble:fresh", "adapter-test", now],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        run_retention_for_test(&db).await;
+
+        db.with_conn_sync(|conn| {
+            let remaining = iotkit_core_ledger::list_sightings(conn).unwrap();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].hardware_id, "ble:fresh");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_sightings_purge_failure_does_not_abort_critical_purge() {
+        let db = retention_db();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("iotkit.db");
+        let config = RetentionConfig {
+            retention_days: 1,
+            quarantine_ttl_days: 30,
+            disk_high_watermark_pct: 101,
+        };
+        let health = Arc::new(Mutex::new(HealthState::new(config.retention_days)));
+        let mut latch = WatermarkLatch::default();
+        let now = now_ms();
+        let stale_last_seen = now - (31 * DAY_MS);
+        let old_reading = db
+            .with_conn_sync(|conn| {
+                let series_id = seed_series(conn);
+                let old_reading = seed_reading(conn, series_id, 1_000, false);
+                conn.execute(
+                    "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
+                     VALUES (?1, ?2, ?3, ?3, 1)",
+                    rusqlite::params!["ble:stale", "adapter-test", stale_last_seen],
+                )
+                .unwrap();
+                conn.execute_batch(
+                    "CREATE TRIGGER block_sightings_delete
+                     BEFORE DELETE ON sightings
+                     BEGIN
+                         SELECT RAISE(FAIL, 'sightings delete blocked');
+                     END;",
+                )
+                .unwrap();
+                Ok(old_reading)
+            })
+            .unwrap();
+
+        run_retention_once_with_latch(&db, &db_path, config, health.clone(), &mut latch)
+            .await
+            .expect("sightings purge failure must be non-fatal");
+
+        db.with_conn_sync(|conn| {
+            assert!(reading_seqs(conn).is_empty());
+            assert_eq!(publog_count_for_reading(conn, old_reading), 0);
+            let sightings = iotkit_core_ledger::list_sightings(conn).unwrap();
+            assert_eq!(sightings.len(), 1);
+            assert_eq!(sightings[0].hardware_id, "ble:stale");
+            let detail: String = conn
+                .query_row(
+                    "SELECT detail FROM ledger_events WHERE kind = 'retention_purge'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                detail.starts_with(
+                    r#"{"readings":1,"dedup":0,"expired_quarantines":0,"duration_ms":"#
+                )
+            );
+            assert!(detail.ends_with('}'));
+            assert!(!detail.contains(r#""sightings""#));
+            Ok(())
+        })
+        .unwrap();
+
+        let state = health.lock().expect("health state mutex poisoned");
+        assert_eq!(state.retention.last_purged_rows, 1);
     }
 
     #[test]

@@ -3,10 +3,12 @@
 //! I2C: 9byte読み → CRC検証 → dp/scale_factor → Pa
 //! UART (BravePI): Float32LE → Pa
 
-use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 use crate::UartSample;
+use iotkit_core_types::{ConnectionInfo, SensorIdentity, SensorReading, SensorType};
 
-fn sensor_type() -> SensorType { SensorType::DifferentialPressure }
+fn sensor_type() -> SensorType {
+    SensorType::DifferentialPressure
+}
 
 pub const MANUFACTURER: &str = "Braveridge";
 pub const IC_PART_NUMBER: &str = "SDP810";
@@ -102,9 +104,15 @@ mod tests {
         let dp_bytes = 100i16.to_be_bytes();
         let scale_bytes = 60i16.to_be_bytes();
         let data: [u8; 9] = [
-            dp_bytes[0], dp_bytes[1], crc8(&dp_bytes),
-            0x00, 0x00, 0x00, // bytes 3-5 (temperature, unused here)
-            scale_bytes[0], scale_bytes[1], crc8(&scale_bytes),
+            dp_bytes[0],
+            dp_bytes[1],
+            crc8(&dp_bytes),
+            0x00,
+            0x00,
+            0x00, // bytes 3-5 (temperature, unused here)
+            scale_bytes[0],
+            scale_bytes[1],
+            crc8(&scale_bytes),
         ];
         let reading = from_i2c_raw(&data);
         assert!((reading.values[0] - 1.6667).abs() < 0.01);
