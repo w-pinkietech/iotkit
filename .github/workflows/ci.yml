@@ -20,6 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # serialport (via rpi4b-transport → adapters → iotkit-gateway) pulls
+      # libudev-sys, whose build script needs libudev's pkg-config file. It's
+      # present on dev machines but not on a clean runner.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev
+
       # rustup honors rust-toolchain.toml (channel 1.95.0 + rustfmt + clippy),
       # so the toolchain is pinned and reproducible with local dev.
       - name: Show toolchain
