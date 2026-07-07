@@ -79,8 +79,9 @@ annotationのみ(データは既に配送済みのため回収はしない——
   **過去方向の窓は出口には存在しない**——D1の鮮度ウィンドウ(例24h、設定可能)超の遅着は
   **取り込み時に終端拒否済み**であり(D1不変)、正本に入った行の過去方向はすべて採用できる。
   **【実装状況 2026-07-03、ユーザー裁定】**: このD1鮮度ウィンドウ拒否は**Wave 1実装**(外部送信者=
-  HTTP/MQTT取り込みと同時)。Wave 0の実アダプタ(BravePI/rpi-local)は `device_time=None` 決め打ちで
-  遅着device_timeを送らないため、この前提は未到達でも実害なし。event_time導出(計画4 T2で実装済み)は
+  HTTP/MQTT取り込みと同時)。Wave 0の実アダプタ(BravePI/rpi-local)は `device_time=None` **かつ
+  `age_ms=None`** 決め打ちで、遅着device_timeも `received_at − age_ms` による過去復元(候補2)も
+  送らないため、この前提は未到達でも実害なし(両ingest_mapで確認済み。D1同注記と対)。event_time導出(計画4 T2で実装済み)は
   この前提の上に立つが、Wave 0では該当データが到来しない。計画4レビュー(Sonnet/codex)が
   「前提の未実装」を検出し、Wave 1繰り延べで裁定。
   「拒否される遅着(取り込み=D1)」と「降格される遅着(出口=未来方向のみ)」の境界はこの一文で確定。
@@ -104,39 +105,48 @@ annotationのみ(データは既に配送済みのため回収はしない——
 - **seqの実体は出口publication log**(全family——measurement・annotation——が同一の採番空間を共有する
   単調増加番号)。`readings.seq` は内部の挿入順であって出口seqそのものではない(検疫行は解除まで
   publication logに採番されないため。実装形態——専用outboxテーブル等——はWave 1実装の宿題)。
-- **レコード同一性 = `(epoch, seq)`**。backfill・再送・復旧のどの経路で届いても同一レコードは同一の
-  `(epoch, seq)` を保つ。消費者はレコード単位で冪等upsertする。`publication_id` は**バッチ再送の
-  冪等キーのみ**であり、レコード同一性ではない(同一readingが通常再送とbackfillジョブの別バッチで
+- **レコード同一性 = `(epoch, seq)`**(単一ゲートウェイ局所)。backfill・再送・復旧のどの経路で届いても
+  同一レコードは同一の `(epoch, seq)` を保つ。消費者はレコード単位で冪等upsertする。`publication_id` は
+  **バッチ再送の冪等キーのみ**であり、レコード同一性ではない(同一readingが通常再送とbackfillジョブの別バッチで
   二重到達しても、(epoch, seq)で必ず捕まる)。
+  **(D8波及 2026-07-07)** 複数Gateway Piの現場(Site-managed)では、消費者が保持する**global**なレコード同一性・
+  cursor・dedup・ack水位・batch冪等キーを `gateway_identity` でスコープする——
+  `global_record_identity = (gateway_identity, epoch, seq)`、batch dedup = `(gateway_identity, target_id, publication_id)`。
+  `epoch/seq`(や `publication_id`)を単独で消費者DBの主キー・再開位置に使ってはならない。詳細はD8決定5。
 - `event_time` は観測時刻であり、**単調ではなく、カーソルでもない**。ackと購読再開はカーソルのみで
   行う。event_timeでack/再開すると遅着バックログを取りこぼす——契約で明示的に禁止する。
 - 消費者が表示・集計で時間軸に並べるのはevent_time(それが用途)。配送の完全性はカーソルが担う。
   二つの軸の役割分離が本決定の本体。
 
-## 決定5: 契約はトランスポート非依存。第一波バインディング = 外向きHTTP push一本
+## 決定5: 契約はトランスポート非依存。第一波バインディング = MQTT QoS1 (D9改訂 2026-07-08)
 
 - **契約の語彙(record family・(epoch,seq)カーソル・ack・publication_id)はトランスポート非依存に
-  定義する。** HTTP pushは「第一波のバインディング」であり永久の制約ではない
-  (D1「バインディング複数」原則の出口版)。
-- 第一波: ゲートウェイが登録済みの各target(決定6)のエンドポイントへ**有界バッチをPOST**し、
-  同期レスポンスでackを受ける。**at-least-once + 冪等 `publication_id`**(バッチ単位)。
-  再送権威はゲートウェイ側(outbox)。ADR 0029の決定に忠実。
-- 接続の向きが常に外向き(ゲートウェイ→消費者)なので、[3]LAN内でも[4]クラウドでもNAT/FWを
-  同じ形で通る。custody移転のack(=パージ許可, D2)は本質的にリクエスト/レスポンス形であり
-  HTTPが最も自然(ADR 0029がMQTTを退けた理由と同根: MQTT QoSは「ブローカー到達」までで
-  「消費者DBへの耐久化」を語れない)。
+  定義する。** バインディングは差し替え・追加が可能(D1「バインディング複数」原則の出口版)。
+- 第一波(D9改訂): ゲートウェイが登録済みの各target(決定6)のMQTTエンドポイントへ**有界バッチを
+  publish(QoS1)**し、ackは「しまってから返すPUBACK」+補助topicの `accepted_through` 明細で受ける。
+  **at-least-once + 冪等 `publication_id`**(バッチ単位)。再送権威はゲートウェイ側(outbox)。
+  詳細な意味論(成功専用PUBACK・累積等価・終端通知・session規律)は [D9](D9-exit-mqtt-binding.md)。
+  **HTTP push(旧第一波: POST+同期レスポンスack)は追加バインディング候補に降格**——契約語彙は不変のため、
+  必要とする消費者が現れれば再設計なしで追加できる。
+- 接続の向きが常に外向き(ゲートウェイ→消費者)なのは不変。[3]LAN内でも[4]クラウドでもNAT/FWを
+  同じ形で通る。custody移転のack(=パージ許可, D2)が要求する「耐久保存の確認」は、汎用ブローカーの
+  QoSでは表現できない(「ブローカー到達」まで)——D9は**預かり先自身をMQTT終端(内蔵リスナー)にする**
+  ことでこれを満たす。ADR 0029の懸念への応答はD9「ADR 0029への応答」を参照。
 - 将来のストリーミングバインディング(WebSocket/SSE等)は**追加**であって再設計にならない。
-  追加の引き金: ①波形family(決定2予約)の導入時 ②実測レイテンシ/スループット要件が
-  HTTP pushで満たせない時。
-- HTTP圧縮(gzip/zstd)は**交渉可能な最適化**(Accept-Encoding)であって必須規定ではない。
-- MQTT再公開は作らない。レガシーMQTT互換はYokaKit投影アダプタ(ADR 0028)の仕事であって
-  コアの仕事ではない。
+- HTTP圧縮(gzip/zstd)の交渉(Accept-Encoding)はHTTPバインディング固有の規定。MQTT側のペイロード圧縮は
+  Wave 1の出口設計specで扱う。
+- MQTT再publishは**custody ackの代替にしない**(D8決定9・D9決定8)。配り面(ベストエフォート購読)としての
+  再publishはD9決定8で正式化された。レガシーMQTT互換payloadへの変換はYokaKit投影アダプタ(ADR 0028)の
+  仕事であってコアの仕事ではない(不変)。
 
 ## 決定6: target registryとfan-out(ADR 0035統合)
 
 - 第一波はsingle-target。multi-target化の際は配送状態を **`target_id + publication_id` 粒度で分離**。
 - **(epoch, seq)カーソルはtarget単位で保持**。あるtargetのackが別targetの未配送状態を消すことは禁止。
 - **アーカイブ責任消費者フラグはtarget registryの属性**(D2: 台帳で1消費者を指定)。
+  **(D9波及 2026-07-08)** アーカイブ責任に指定できるtargetは、登録時疎通スモークにおいて
+  **合成テストパブリケーションが補助topic上の `accepted_through` 明細として往復した相手**に限る
+  (=契約実装の預かり係である応用層の証拠。市販ブローカーの誤指定を台帳側で構造的に塞ぐ。D9決定5)。
 - **cursor_expired規律と復帰状態機械**: 非アーカイブtargetの遅延はパージを阻害しない(D2)。
   pushモデルではゲートウェイが各targetのカーソルを知っているため、targetのカーソルがパージ済み
   地平より古くなったことは**ゲートウェイが検知**し、次回push時に**gap通知(配送制御通知=決定2、

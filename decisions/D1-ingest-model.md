@@ -59,7 +59,9 @@ Status: 確定 (2026-07-02、4レンズ専門レビュー済み・ユーザー�
   timestamp+seq並べ直し+小さな遅着許容窓で行う。**遅着タイムスタンプを既定で拒否しない**
   (省電力センサーのバックログは常に「古い」)。ただし鮮度ウィンドウ(例24h、設定可能)超は拒否。
   **【実装状況 2026-07-03、ユーザー裁定】鮮度ウィンドウ超の拒否はWave 1実装**(外部送信者導入と同時)。
-  Wave 0の実アダプタは `device_time=None` 決め打ちで遅着device_timeを送らないため未実装でも実害なし。
+  Wave 0の実アダプタは `device_time=None` **かつ `age_ms=None`** 決め打ちで、遅着した過去時刻を一切送らない
+  (`bravepi-mainboard-adapter` と `iotkit-polling-adapter-runtime` の両ingest_mapで確認済み)ため未実装でも実害なし。
+  event_time導出の候補2(=`received_at − age_ms` による過去復元)も `age_ms=None` で到達不能。
   D7決定3(event_timeの過去方向に妥当窓なし)はこの拒否を前提とする——Wave 1で両者を同時に満たす。
 
 ### セキュリティ(第一波必須)
@@ -119,7 +121,11 @@ Status: 確定 (2026-07-02、4レンズ専門レビュー済み・ユーザー�
   グローバルpanic hookでbacktraceログ。DbHandleのMutex毒性を解消(parking_lot or into_inner回復)。
   blocking I/O(serial/I2C)は必ずread timeout付きループ(スレッドは殺せない。exclusive openのEBUSY対策も兼ねる)。
   再起動は指数バックオフ+jitter+上限、N回超で永続degraded+イベント発行。
-- SQLiteはWAL+`synchronous=NORMAL`(WALでは安全十分・SD fsync負荷を低減)。伸びたらgroup commitの余地。
+- **SQLiteの耐久設定(D8波及 2026-07-07)**: custody-criticalなトランザクション——readings正本を書くコレクタ、
+  およびarchival ack水位・publication logを書く出口側——は `WAL + synchronous=FULL` を**MUST**とする。
+  `synchronous=NORMAL` は電源断でWAL最終同期以降のコミット群が巻き戻りうるため、
+  **再構成可能なderived/retryメタデータ(表示キャッシュ・health cache等)に限る**。
+  `FULL` のRPi上での書込量・group commit要否はD8保留の実測項目。
 - ackタイムアウトをHTTPハンドラに必須(コレクタ詰まり→ハンドラ滞留→メモリ膨張の防止)。
 
 ## 移行フェーズ(iotkit-nextから)

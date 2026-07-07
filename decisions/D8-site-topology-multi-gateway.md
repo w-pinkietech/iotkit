@@ -3,6 +3,8 @@
 Status: 決定 (2026-07-07。複数Pi現場レビュー、subagent細部レビュー、ユーザー裁定を反映)
 用語は [../terminology.md](../terminology.md)、責務は [../responsibility-ledger.md](../responsibility-ledger.md) に従う。
 入力: [../reviews/2026-07-07-topology-decision-multi-pi.md](../reviews/2026-07-07-topology-decision-multi-pi.md)
+査読: クロスベンダー2社(codex gpt-5.5 / Claude)に同一プロンプトで査読させ、両者が独立に一致した指摘
+(クローンSDのsplit-brain対策・波及修正の実適用・移行手順・break-glass競合)を決定3/4/5/7/8・保留・波及修正へ反映(2026-07-07)。
 
 ## 背景
 
@@ -77,6 +79,20 @@ Site Aggregatorの受信、表示、投影、キャッシュ更新、YokaKit派�
 Gateway Piのpurgeを許可するのは、Archival Consumer/Storeがraw recordとack cursorを同一の耐久トランザクションで
 commitした後に返すarchival ackのみである。
 
+### 同一キー衝突の検知(2026-07-07 査読反映)
+
+`(gateway_identity, epoch, seq)` の冪等upsertは「同一キー＝同一送信元・同一中身」を前提にした最適化である。
+予備SDカードの生クローンを本物と同時起動した場合など、**同一キーに異なる中身**が届くと、後勝ちで既存の正本を
+無音上書きし、custody_lostを無音で起こす(D2「無音の正本破棄は契約違反」に抵触)。これを防ぐため:
+
+- Archival Storeは各レコードに**中身の指紋(payload hash)**を併せて保存する。
+- 同一 `(gateway_identity, epoch, seq)` に**指紋が一致する**再送 → 冪等(正常な再送・backfill。上書きも損失もなし)。
+- 同一キーで**指紋が食い違う** → 冪等upsertを行わず**ハードエラーで拒否し、`custody_conflict`(侵害シグナル)として
+  監査へ昇格**、operator復旧へ誘導する。この時点で正本は守られている——D2の`custody_lost`(未ack正本の実損。
+  欠落annotation必須)とは**別のイベントクラス**であり、欠落annotationは発行しない。
+  決定7の「duplicate gateway_identity / stale epoch」行は、
+  正規のcert・epochを両機が提示して見分けがつかない同時起動サブケースを、この指紋照合で判別してfenceする。
+
 ## 決定4: custody状態を明示する
 
 Site-managedの測定データは、次の状態を通る。
@@ -102,16 +118,33 @@ accepted_through = (gateway_identity, epoch, seq)
 batch途中で失敗した場合、ackできるのは耐久保存済みの連続prefixまでである。応答喪失時はGateway Piが
 同じ範囲を再送し、Site Archival Storeは `(gateway_identity, epoch, seq)` で冪等upsertする。
 
+**(D9波及 2026-07-08)** MQTTバインディングでのこの水位の表現: 正式水位は補助topic上の
+`accepted_through` 明細であり、成功専用PUBACKはギャップなし状態でのみその累積等価として扱える。
+詳細はD9決定2・3。
+
 ### purge条件
 
 Site-managedの各Gateway Piは、archive ack済みデータも最低保持フロア以上保持する。
 
-purge可能条件は次の両方を満たすことである。
+purge可能条件は次のすべてを満たすことである。
 
 1. 当該Pi自身のarchival ack水位以下である。
 2. 最低保持フロアを超過している。
+3. 対象範囲に `archive_repair_hold`(下記)が掛かっていない。
 
 Aggregator状態、他Piのack、cloud backup成功/失敗はPi purge条件にしない。
+
+### archive復旧中のpurge停止(2026-07-07 査読反映)
+
+Site Archival StoreのDB損失を「Pi保持内のbounded backfill」で修復する間(決定7の該当行)、Piが従来の
+ack水位のまま通常どおりpurgeを続けると、backfillで送り直すべき範囲を先に消しうる。したがってsite側の
+archive損失/修復を検知したら、対象の `gateway_identity`・範囲へ **`archive_repair_hold`** を掛け、
+修復完了までその範囲のpurgeを止める。
+
+**最低保持フロアの起算点**: フロアは各Piの**archival ack観測時刻**を起算とし、event_time起算にも
+ローカルcommit時刻起算にもしない。フロアの定義は「ack**後も**置く最低保持期間」(D1)なので、ack観測より
+前から数え始めると、site server長期停止後にackが届いた瞬間フロア超過→即purgeとなり、ack後保持がゼロになる。
+event_time起算を避けるのは、省電力センサーの遅着バックログをack直後に即purgeしないため。
 
 ## 決定5: R10のmulti-gateway同一性
 
@@ -137,6 +170,29 @@ global_record_identity = (gateway_identity, epoch, seq)
 - site全体の完全性は単一cursorではなくGateway Piごとの水位ベクトルで表す。
 - gap/cursor_expiredは特定 `(gateway_identity, target_id)` の配送制御通知であり、他Gateway Piの配送状態に影響しない。
 - annotation族の共有seqはsource gateway内のpublication log共有を意味する。
+- **消費者は不完全なsite集計を完全値として提示しない**(2026-07-07 査読反映): partial_partition中
+  (site serverから一部Gateway Piしか見えない)は、YokaKit/Site Consoleは欠けているPi分を集計から
+  除外していることを明示するか、集計自体を暫定として保留する。各Piの到達状況は水位ベクトルで持ち、
+  全Pi分が揃うまで確定値として表示しない。`partial_partition` alarm(決定8)だけに頼らない。
+- **配送保証はexactly-onceではなくat-least-once + 冪等効果**(2026-07-07 査読反映): 連続prefix水位ackと
+  冪等upsertの組み合わせは、単一書き込み元という前提の下で exactly-once 相当になる。前提が崩れる同時起動は
+  決定3の指紋衝突検知で受ける。
+
+### gateway_identity の発行・一意性・世代の権威(2026-07-07 査読反映)
+
+`gateway_identity` はSite-managed全体でレコードの出所を決める鍵なので、発行と一意性を明示的に固定する。
+
+- **発行**: 各Gateway Piは初回自己構成(D2 Phase 2)で自分の `gateway_identity` を1回だけ生成する。
+  **共有OSイメージには `gateway_identity`・TLS秘密鍵・per-deviceトークンを焼き込まない**——焼き込むと、
+  1枚を大量複製したイメージから同一identityの箱が量産され、初期展開の時点で(同時起動を待たず)衝突する。
+  イメージに焼いてよいのはサイト共通設定(`site_id`・ネットワーク・更新ポリシー)に限り、台ごとに固有な値
+  (identity・鍵・トークン)は必ず初回起動でその場で生成する。
+- **一意性検証**: enrollment時にsite serverは同一 `gateway_identity` の重複登録を拒否する。証明書fingerprintと
+  `gateway_identity` の対応が既存登録と食い違う登録も拒否し、operator確認へ回す。
+- **世代(epoch)の権威**: epochはUUIDで、単調な大小比較ができない(RTCなし前提)。「stale epoch」は大小ではなく
+  **site serverが保持するactive epoch台帳との一致**で判定する。site serverはGateway Piごとの現行epochを
+  永続保持し、site server交換時はbackupから復元して各Piと再照合する。R22復元で新epochを採番した箱(D2 §3.5)は、
+  この台帳更新を経て現行になる。
 
 D7は最低限のmulti-gateway消費者義務を定義する。site server固有のsite snapshot、横断backfill orchestration、
 集約R11/R12面、gateway enrollmentはD8または後続のsite-server決定で定義する。
@@ -172,11 +228,12 @@ D7は最低限のmulti-gateway消費者義務を定義する。site server固有
 | Site Archival Store DB損失、Pi purge後、backupなし | site DB検査/照合 | 復旧不能範囲を`archive_lost`監査として記録 | ack済み/purge済みデータのarchive側損失 |
 | Cloud backup損失、site archive健在 | backup監視 | site archiveからbackup再作成 | ゼロ。Pi custody/purgeには影響しない |
 | 部分LAN分断 | site serverから見えるGateway集合が期待一覧の一部のみ | 影響Piはローカル保持、未影響Piは通常継続 | 影響Pi保持上限まではゼロ。site viewは部分的 |
-| N台中1台のGateway Pi全損 | site R12、当該Pi無応答 | 当該PiのR22 snapshotから復元、旧機の回収/無効化 | 当該Pi配下のみ影響。他Piは無影響 |
-| duplicate gateway_identity / stale epoch | enrollment検査、R10認証、epoch不一致 | stale側をfenceし、operator確認 | split-brain防止。ackせず復旧へ誘導 |
+| N台中1台のGateway Pi全損 | site R12、当該Pi無応答 | 当該PiのR22 snapshotから復元、旧機の回収/無効化 | 他Piは無影響。当該Piのsite archiveへ未ackだった正本は失われる(custody_lost)。R22スナップショットはreadings非含有のため新しい箱は喪失範囲を知り得ない——範囲の可視化は欠落annotationではなく、新epoch開始annotation+消費者側カーソル突合による(D7決定8) |
+| site serverとGateway Piの同時障害 | site全体無応答 | site serverをbackupから復元→各Piを復旧/再enrollment→水位ベクトル再照合 | 各Piの未ack正本はPi保持内なら残存。両者同時全損の範囲のみ損失(custody_lost) |
+| duplicate gateway_identity / stale epoch | enrollment検査、R10認証、epoch台帳不一致、payload指紋衝突(決定3) | stale側/指紋不一致側をfenceし、operator確認 | split-brain防止。見分けのつかない同時起動は指紋照合で判別しfence(無音上書きしない) |
 | site server交換 | site server無応答、復旧操作 | site backupから復元、各Piの水位ベクトルと再照合 | Pi保持内は各Piから再送可能 |
 
-D2既存の「工場サーバー[3]故障=データ影響ゼロ」は、non-custodial serverに限って正しい。
+D2既存の「サイトサーバー[3]故障=データ影響ゼロ」は、non-custodial serverに限って正しい。
 Site-managedで[3]がArchival Storeを持つ場合は、上表のようにcustody状態ごとに分ける。
 
 ## 決定8: break-glassと必須アラーム
@@ -187,6 +244,11 @@ R22手動エクスポートは継続する。
 現場作業者はbreak-glass operator権限で各Gateway PiのローカルUIまたは`gatewayctl`に入り、状態確認、
 incident bundle生成、サービス再起動、USB snapshot退避を実行できる。site server停止中の変更はローカル監査に記録し、
 復旧後にsite serverへ同期する。
+
+break-glass中のローカル変更と、site server側の変更が同じ対象(desired設定等)で競合した場合の裁定を定める
+(2026-07-07 査読反映)。各変更はrevision(版番号)を持ち、復旧時の同期を**盲目的な後勝ちにしない**。
+site側とローカル側の双方に同一対象の変更があれば、新しいrevisionを自動採用せず**競合として保留し、
+operator確認へ回す**(緊急対応の変更が無音で上書きされるのを防ぐ)。desired/reportedの調停(R15)に準じる。
 
 Site-managedで必須のアラーム:
 
@@ -231,20 +293,32 @@ Site-managedのR19では、gateway enrollment、target registration、credential
 
 ## 波及修正
 
-本決定により、既存文書へ次の修正が必要である。
+本決定と**同一コミットで**既存文書へ次の修正を適用する(査読指摘: 決定だけ書いて他文書を直さないとコーパスが
+自己矛盾する。本リポジトリの慣行に従い関連文書を同時改稿する)。
 
-1. **D7**: R10のglobal record identityを `(gateway_identity, epoch, seq)` に拡張する。
-   `publication_id`、target registry、backfill、snapshot、annotation、gap/cursor_expiredもgateway scopeを明記する。
-2. **D2**: コミッショニングをStandalone/Site-managedで分岐させ、Site-managed復旧表を追加する。
-3. **D2/D7**: archival ackを `accepted_through=(gateway_identity, epoch, seq)` の連続水位として定義し、
-   purge条件をGateway Piごとに明記する。
+1. **D7**: レコード同一性の記述に、Site-managedでは消費者側の global record identity を
+   `(gateway_identity, epoch, seq)` でスコープする旨を明記(D8決定5へ委譲)。[適用済]
+2. **D2**: §2コミッショニングにStandalone/Site-managedの分岐がD8にある旨、§3復旧表の「サイトサーバー故障=
+   データ影響ゼロ」がnon-custodial serverに限る旨、§4衛星アダプタがD8のトポロジ2分と直交(rpi4b代替ではない)
+   である旨を注記。Site-managed復旧表はD8決定7。[適用済]
+3. **D2/D7**: archival ackを `accepted_through=(gateway_identity, epoch, seq)` の連続水位とし、
+   purge条件をGateway Piごとに明記(D8決定4)。[D8内で確定]
 4. **D1**: `ack=耐久点` を弱めず、custody-criticalなSQLiteトランザクションは `WAL + synchronous=FULL` をMUSTにする。
-   `synchronous=NORMAL` は再構成可能なderived/retry metadataに限る。
-5. **terminology**: Standalone、Site-managed、Site Aggregator、Archival Store、gateway_identityの用語を追加する。
-6. **R19設計**: R10/R19を優先し、gateway enrollment、target credential binding、archive flag操作を先に設計する。
+   `synchronous=NORMAL` は再構成可能なderived/retry metadataに限る。[適用済]
+5. **D5**: series同一性のスコープ宣言に、消費者側の大域同一性が `gateway_identity` でスコープされる旨を注記。[適用済]
+6. **terminology**: Standalone、Site-managed、Site Aggregator、Archival Store、gateway_identity、
+   active epoch台帳、archive_lost、Site Consoleの用語を追加。[適用済]
+7. **responsibility-ledger**: `archive_lost` 監査イベントの定義、R19優先順位(R10出口先行)、R22の
+   gateway_identity発行を注記。[適用済]
+8. **R19設計(後続spec)**: R10/R19を優先し、gateway enrollment、target credential binding、archive flag操作を
+   先に設計する。[後続]
 
 ## 保留事項
 
+- **Standalone→Site-managed移行のrunbook**は後続決定で確定する(既存Gateway Piのdata・`gateway_identity`・
+  target登録・既存archival consumer指定・既存YokaKit `raspberry_pi_id` の引き継ぎ手順)。当面は、移行時に
+  site serverを先に立て、既存Piをそのまま2台目扱いにせず改めてenrollmentし直す前提とする。
+- **Gateway Pi decommission**(期待Gateway一覧からの除去・identity無効化・残データの扱い)の手順も後続で確定する。
 - `WAL + synchronous=FULL` のRPi上での性能、SD/eMMC/USB SSDごとの書込量、group commit要否は実測する。
 - `string_observation` familyはD1/D7の別決定で扱う。
 - site-wide snapshot、横断backfill orchestration、複数拠点cloud federationは後続決定で扱う。

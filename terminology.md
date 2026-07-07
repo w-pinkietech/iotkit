@@ -13,15 +13,27 @@ Date: 2026-07-02
 | 段 | 用語 | 英語 | 実体 | 説明 |
 |---|---|---|---|---|
 | [1] | デバイス | device | BravePI無線センサー端末、直結I2Cセンサー、第三者の自作デバイス(ESP32/PLC等) | 測定・作動する末端。ゲートウェイの配下 |
-| [2] | ゲートウェイ | gateway | 現場に置くRaspberry Pi。IoTKit本体が動く | 責務台帳 R1〜R23 はすべてこの箱の責務 |
-| [3] | 工場サーバー | site server | サーバールーム等の箱(オプション) | AIオペレーター(ローカルLLM)、オンプレYokaKit等が住む |
-| [4] | クラウド | cloud | インターネット上(オプション) | クラウドLLM API、クラウドYokaKit等が住む |
+| [2] | **IoTゲートウェイ**(外向き正式名。「ゲートウェイ」単独は内部略称) | IoT gateway / gateway | 現場に置くRaspberry Pi。IoTKit本体が動く | 責務台帳 R1〜R23 はすべてこの箱の責務。コード・APIの `gateway` / `gateway_identity` は不変 |
+| [3] | **サイトサーバー**(旧称「工場サーバー」廃止 2026-07-08) | site server | 制御室等に置くサイト単位の箱。Standaloneでは不在可、Site-managed(Gateway Pi 2台以上)では必須(D8決定1) | 中の論理ロール: Archival Store(預かり)/Site Aggregator+配り用ブローカー(再publish)/Site Console(D8決定3)。AIオペレーター、オンプレYokaKitもここに住める |
+| [4] | クラウド | cloud | **サイトの敷地外の上位**(オプション)。商用クラウドに限らず、本社サーバールーム等サイト外の箱もここ | クラウドLLM API、クラウドYokaKit、複数拠点統合・fleet管理・DR複製が住む。**サイト横断は必ずここでやる(サイトサーバー同士に上下関係を作らない)** |
 
 ### 禁止・注意語
 
 - **「エッジ」を単独で使わない**。[1]か[2]か曖昧になるため。エッジデバイス/エッジサーバー等の複合語も避け、上の4用語を使う。
 - **「サーバー」を単独で使わない**。[3]か[4]かを明示する。
 - **「上流」(upstream)** = ゲートウェイから見たデータの届け先([3]または[4]にいる消費者)。「下流」(downstream) = ゲートウェイから見たデバイス側。
+- **「ゲートウェイ」は常に[2]を指す。サイトサーバー[3]をゲートウェイと呼ばない**(2026-07-08命名レビュー反映)。
+  業界にはIgnitionのように中央サーバーを"Gateway"と呼ぶ流派が実在するため、明示的に禁止する。
+  また**BravePIメインボードはデバイス[1](親デバイス)であり、ゲートウェイではない**(BLE受信機のため誤呼称されやすい)。
+- **対クラウド境界(「サイトの門」)は箱ではなく出口契約(R10)である**。StandaloneではIoTゲートウェイ1台に
+  取り込み契約(入口)と出口契約(出口)の両面が載る([3]は不在)。「第二の門はどの箱か」という問いは立てない。
+
+### 業界対応表(第三者向け)
+
+| うちの箱 | 業界標準図での位置 | 各生態系での呼び名 |
+|---|---|---|
+| [2] IoTゲートウェイ | 「IoTゲートウェイ/エッジPC」 | AWS: Greengrass core device / SiteWise Edge gateway、Azure: IoT Edge gateway、Sparkplug B: Edge Node |
+| [3] サイトサーバー | 「MQTTブローカー or IoT Hub」 | Sparkplug B: MQTT Server + Primary Host Application、ヒストリアン(PI Server)、**Ignitionの"Gateway"はここ(混同注意)** |
 
 ## 三本柱(再設計の一級要件)
 
@@ -100,6 +112,31 @@ Date: 2026-07-02
 | value_semantics | — | seriesの値の意味クラス: `raw_legacy`(較正前生値)/ `calibrated`。R9較正の二重適用防止(D5) |
 | 較正要再確認 | calibration review required | seriesの較正の信頼を保留する状態(交換疑いシグナル・replace確定時)。検疫との違い: データは流れるが較正の信頼が保留されている(D5決定2) |
 | 最低保持フロア | minimum retention floor | アーカイブ責任消費者のack後もゲートウェイに置く最低保持期間(目安72h、設定可)(D1・責務台帳。旧称「パージフロア」は廃止) |
+
+## サイトトポロジ(複数ゲートウェイ。D8 2026-07-07)
+
+| 用語 | 英語 | 定義 |
+|---|---|---|
+| Standalone | standalone | サイト内のGateway Piがちょうど1台の構成。YokaKit同梱可、上流接続・site server任意(D8決定1) |
+| Site-managed | site-managed | Gateway Piが2台以上でsite server[3]を必須とする構成。各PiはいずれもローカルSQLite/collector/出口を持つ完全ゲートウェイ(D8決定1・2) |
+| gateway_identity | — | Gateway Piの安定した外部同一性。初回自己構成で1回だけ生成し、共有イメージには焼き込まない。消費者側の大域レコード同一性 `(gateway_identity, epoch, seq)` の先頭成分(D8決定5)。台帳エポックとは別概念 |
+| Site Aggregator | site aggregator | site server内の**非権威**ロール。各PiのR10を読み投影・統合表示・運用管理する。custody transferしない(D8決定3) |
+| Archival Store(アーカイブ責任) | archival store / archival consumer | site server内の**custody受け手**ロール。各PiからR10 raw streamを受け耐久保存し、archival ackを返す。このackだけがPiのpurgeを許可(D8決定3。D2のアーカイブ責任消費者——ゲートウェイの台帳で指定する上流の預かり先——をsite server[3]に置いた形) |
+| archive_repair_hold | — | site archive損失/修復の検知中、対象 `gateway_identity`・範囲のGateway Pi purgeを修復完了まで止める保留フラグ。backfillで送り直すべき範囲を先に消さないため(D8決定4) |
+| active epoch台帳 | active epoch registry | site serverがGateway Piごとの現行epochを永続保持する台帳。stale epochは大小比較でなくこの台帳との一致で判定(RTCなし前提。D8決定5) |
+| archive_lost | — | Pi purge済みかつsite archive損失かつbackupなしの範囲に付す監査イベント。Gateway Piの `custody_lost` ではなくsite側の責務損失として区別(D8決定4) |
+| Site Console | site console | site server上の統合運用UI。gateway enrollment・alarm集約・snapshot vault・update orchestrationの操作面(D8決定1・8) |
+
+## 出口MQTTバインディング(D9 2026-07-08)
+
+| 用語 | 英語 | 定義 |
+|---|---|---|
+| 出口MQTTバインディング | exit MQTT binding | 出口契約(R10)の第一波バインディング。IoTゲートウェイがtargetのMQTTエンドポイントへ有界バッチをpublish(QoS1)し、ackを「しまってから返すPUBACK」+補助topic明細で受ける(D9) |
+| 送信窓 | sending window | 未ack(未PUBACK)のin-flightバッチ数の上限。窓が埋まったら新規publishを止めoutboxに滞留(D9決定7) |
+| 補助topic(ack明細) | ack detail topic | `ack/{gateway_identity}` 上でArchival Storeが返す明細。`accepted_through` 水位(正式なpurge水位)・終端通知を運ぶ。target_id/publication_id/epoch相関必須、retained禁止、接続時に再同期(D9決定2・3) |
+| 終端通知 | terminal notice | 再送しても結果が変わらない失敗(決定的契約違反・custody_conflict)をゲートウェイへ伝える補助topicメッセージ。受けたバッチはoutbox隔離+operator解決(D9決定3)。一時的ストレージ失敗には使わない |
+| 非預かりターゲット | non-custodial target | 市販ブローカー等、custodyを移転しない出口先。PUBACKは配達確認どまり、逆圧・カーソル・gap通知は構造的に失われるベストエフォートの配り(D9決定5) |
+| 一級target / 購読者 | first-class target / subscriber | 消費者の二層。一級target=契約対応リスナー(store-then-ack)を実装しカーソル・完全性保証を受ける消費者。購読者=配り用ブローカーをsubscribeするだけのベストエフォート消費者(D9決定8) |
 
 ## デバイス識別(レガシー用語の置き換え)
 

@@ -44,6 +44,9 @@ subject_id = system_id(確定。ADR 0013で未定だった粒度の解決)
   役割分離が予見されるなら細かく登録する。将来の分割操作は「継続」ではなく明示的な後継リンク付き断絶になる。
 - **スコープ宣言**: series同一性は**ゲートウェイ局所**。大域同一性は (gateway_identity, system_id)。
   マルチゲートウェイでの名寄せは上流([3]/[4])の責務。同一デバイスが2ゲートウェイに見えたら2つのsystem_idで正しい。
+  **(D8波及 2026-07-07)** 複数Gateway Piの現場(Site-managed)では、消費者が保持するレコード同一性・cursor・
+  dedup・ack水位も同様に `gateway_identity` でスコープする(`(gateway_identity, epoch, seq)`)。`epoch/seq` 単独を
+  消費者側の主キー・再開位置に使ってはならない。詳細はD8決定5。
 
 ## 決定2: hardware_idの2分類と継続性の意味論
 

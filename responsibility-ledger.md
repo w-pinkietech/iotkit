@@ -54,7 +54,7 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 
 | 項目 | 住む場所 |
 |---|---|
-| AIオペレーター(LLM+runbook実行+診断ループ) | [3]工場サーバー or [4]クラウド |
+| AIオペレーター(LLM+runbook実行+診断ループ) | [3]サイトサーバー or [4]クラウド |
 | YokaKit(生産管理アプリ) | [3] or [4] |
 | フリート管理・更新ロールアウト編成 | [3] or [4] |
 | 通知のリッチなエスカレーション(チャット・電話等) | [3] or [4] |
@@ -96,6 +96,15 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 
 **Waveマーキング**: [decisions/D3-process-and-wave-decisions.md](decisions/D3-process-and-wave-decisions.md) 参照。
 台帳のR1〜R23は「契約上の責務の全体像」であり、実装順はWave分割に従う。
+
+## D8波及(複数ゲートウェイ 2026-07-07)
+
+- **R10/R19の優先順位**: 複数Pi現場(Site-managed)ではR19の直近主戦場がR2入口認証からR10出口認証へ移る。
+  gateway enrollment・target credential binding・archive flag操作を先に設計する([decisions/D8-site-topology-multi-gateway.md](decisions/D8-site-topology-multi-gateway.md) 決定9)。
+- **R22の gateway_identity 発行**: 各Gateway Piは初回自己構成で `gateway_identity` を1回だけ生成し、
+  共有OSイメージには焼き込まない(D8決定5)。site serverはenrollmentで同一identityの重複登録を拒否する。
+- **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
+  Gateway Piの `custody_lost` ではなくsite側の `archive_lost` として記録する(custody境界の明確化。D8決定4)。
 
 ## プロダクト判断(確定 2026-07-02)
 

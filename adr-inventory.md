@@ -163,7 +163,9 @@ exhaustion可視化・no silent dropもD7で回収。0030の取り込み側ack�
   エポック複合カーソル・アーカイブ責任消費者ack・最低保持フロアの組み込み、複数消費者共有の明記
 - **0029 yokakit http push first wave**: push-first/publication_id/at-least-onceは用語集と方向一致。
   統合時: edge語置換、「本ADRは出口(R10)側でありD1の北向きバインディングとは別方向」の明記、
-  アーカイブ責任消費者・R17劣化契約・0035 fan-outとの接続
+  アーカイブ責任消費者・R17劣化契約・0035 fan-outとの接続。
+  **(D9改訂 2026-07-08)** 第一波バインディングはMQTT QoS1へ改訂(HTTPは追加候補に降格)。0029の却下理由
+  2点(ブローカー中心の複雑性/request-response可視性)への応答はD9「ADR 0029への応答」参照
 - **0032 yokakit cold-start recovery**: 原則(gateway側current stateが権威・bounded jobs・無制限履歴
   エクスポート不要)は「バッファであって倉庫ではない」と一致。統合時: 本ADRの「snapshot」を
   D2§3.5のR22スナップショット(高機密資産)と別語に改称(例: publication snapshot)、
