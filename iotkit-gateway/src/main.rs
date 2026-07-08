@@ -22,6 +22,10 @@ use iotkit_ingest_client::IngestClient;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("ring provider");
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -63,7 +67,8 @@ fn main() {
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
     all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11
+    all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
+    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
     let db = match iotkit_core_storage::init_db(
         std::path::Path::new(&config.db_path),
         &all_migrations,

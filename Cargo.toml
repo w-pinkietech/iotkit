@@ -10,6 +10,7 @@ members = [
     "core/publish",
     "core/collector",
     "core/registry",
+    "core/ops",
     "rpi4b-driver/transport",
     "bravepi-mainboard-adapter",
     "bravepi-mainboard-adapter/codec",

@@ -134,7 +134,8 @@ fn run() -> AppResult<()> {
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
     all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11
+    all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
+    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
     db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))?

@@ -184,6 +184,7 @@ mod tests {
         migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
         migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
         migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
+        migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
         migrations.sort_by_key(|m| m.version);
         let conn = Connection::open_in_memory().unwrap();
         iotkit_core_storage::run_migrations(&conn, &migrations).unwrap();
