@@ -315,7 +315,8 @@ Site-managedのR19では、gateway enrollment、target registration、credential
 - 高権限操作は2層に分割する(D10決定5改訂): **中間層**=credential rotation/失効/無人再発行(AIハーネス可。
   疎通スモーク+監査+失効レート上限+canary必須)、**工事層**=target追加・cloud target登録・archive flag変更・
   平文opt-in・enrollment承認(人間のみ。R14高権限型付き操作+疎通スモーク+監査)。AIハーネスのトークンには
-  工事層の動詞が構造的に発行されない。
+  工事層の動詞が構造的に発行されない。※操作全体の権限写像はD12決定3で3分類(中間層/日常層/工事層)へ
+  拡張(2026-07-08)。本項の2層は出口操作内の分類として不変。
 
 ## 却下した案
 

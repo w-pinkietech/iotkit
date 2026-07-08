@@ -163,6 +163,8 @@ BravePI/BraveJIGはプラットフォームの最初の乗客(Wave 0テストケ
 - **298は搬送符号**: 生値series(`current_ma`)+R9スケーリングによる工学値series(`custom.tank_level` 等)の
   2段構成を標準形とする(決定9)。
 - 接点系のカウント/パルス集計はmeasurement_keyを増やさず **series_variant**(count / pulse_count、D5)で表現。
+- `contact_output_state` は**観測語彙として維持**(actuator_stateの状態報告=北向き)。南向きの**駆動**動詞は
+  今回の設計対象外(D12決定1 2026-07-08、ユーザー裁定。将来の有効化条件つき)。
 - 移行seriesは `value_semantics: raw_legacy`(D5レガシー移行)。
 - JIG系(294-299)のアダプタ実装はWave 0対象外(ADR 0007)だが、語彙とエイリアスは契約定義v1に含める
   (D3読み替え規則)。
