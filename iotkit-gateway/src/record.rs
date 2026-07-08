@@ -1,4 +1,4 @@
-use iotkit_core_ledger::{CHANNEL_NA, SystemId};
+use iotkit_core_ledger::{SystemId, series_key_of};
 use rusqlite::params;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -27,26 +27,6 @@ pub struct AnnotationRecord {
     pub pub_seq: i64,
     pub subtype: String,
     pub prior_epoch: String,
-}
-
-pub fn series_key_of(
-    system_id: &SystemId,
-    measurement_key: &str,
-    channel_index: i32,
-    variant: &str,
-) -> String {
-    let ch = if channel_index == CHANNEL_NA {
-        "na".to_string()
-    } else {
-        channel_index.to_string()
-    };
-    format!(
-        "{}:{}:{}:{}",
-        system_id.to_text(),
-        measurement_key,
-        ch,
-        variant
-    )
 }
 
 pub fn materialize_batch(

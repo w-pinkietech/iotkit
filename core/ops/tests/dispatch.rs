@@ -1,6 +1,6 @@
 use iotkit_core_ops::{
-    Actor, ActorKind, DispatchRequest, NewOperatorToken, OpDescriptor, OpError, Tier, TokenKind,
-    dispatch, issue_token,
+    Actor, ActorKind, DispatchRequest, NewOperatorToken, OpContext, OpDescriptor, OpError, Tier,
+    TokenKind, dispatch, issue_token,
 };
 use iotkit_core_storage::Migration;
 use rusqlite::{Connection, params};
@@ -85,15 +85,15 @@ fn targets(params: &Value) -> Vec<String> {
         .collect()
 }
 
-fn preconditions(_tx: &rusqlite::Transaction<'_>, _params: &Value) -> Result<(), OpError> {
+fn preconditions(_tx: &rusqlite::Transaction<'_>, _ctx: &OpContext<'_>) -> Result<(), OpError> {
     Ok(())
 }
 
 fn preconditions_write_then_fail(
     tx: &rusqlite::Transaction<'_>,
-    params: &Value,
+    ctx: &OpContext<'_>,
 ) -> Result<(), OpError> {
-    let id = targets(params)
+    let id = targets(ctx.params)
         .into_iter()
         .next()
         .ok_or_else(|| OpError::Validation("ids required".to_string()))?;
@@ -101,17 +101,21 @@ fn preconditions_write_then_fail(
     Err(OpError::PreconditionFailed("blocked".to_string()))
 }
 
-fn fake_write(tx: &rusqlite::Transaction<'_>, params: &Value) -> Result<Value, OpError> {
-    let id = targets(params)
+fn fake_write(tx: &rusqlite::Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
+    let id = targets(ctx.params)
         .into_iter()
         .next()
         .ok_or_else(|| OpError::Validation("ids required".to_string()))?;
     insert_registry_marker(tx, &id)?;
-    Ok(json!({ "wrote": id }))
+    Ok(json!({
+        "wrote": id,
+        "actor_id": ctx.actor_id,
+        "source": ctx.source,
+    }))
 }
 
-fn fake_fail(tx: &rusqlite::Transaction<'_>, params: &Value) -> Result<Value, OpError> {
-    let id = targets(params)
+fn fake_fail(tx: &rusqlite::Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
+    let id = targets(ctx.params)
         .into_iter()
         .next()
         .ok_or_else(|| OpError::Validation("ids required".to_string()))?;
@@ -233,7 +237,10 @@ fn dry_run_rolls_back_target_write_but_records_audit() {
         )
         .unwrap();
 
-        assert_eq!(out, json!({ "wrote": "dry" }));
+        assert_eq!(
+            out,
+            json!({ "wrote": "dry", "actor_id": "local_cli", "source": "test" })
+        );
         assert_eq!(registry_count(conn), before);
         assert_eq!(r14_count(conn), 1);
         let detail = latest_r14(conn);
@@ -264,7 +271,10 @@ fn execute_success_commits_target_write_audit_and_generation_bump() {
         )
         .unwrap();
 
-        assert_eq!(out, json!({ "wrote": "ok" }));
+        assert_eq!(
+            out,
+            json!({ "wrote": "ok", "actor_id": "local_cli", "source": "test" })
+        );
         assert_eq!(registry_count(conn), before + 1);
         assert_eq!(
             iotkit_core_ledger::current_generation(conn).unwrap(),

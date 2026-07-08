@@ -110,6 +110,22 @@ pub struct SeriesRow {
     pub calibration_review: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedSeriesKey {
+    pub system_id: SystemId,
+    pub measurement_key: String,
+    pub channel_index: i32,
+    pub variant: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeriesListRow {
+    pub series_id: i64,
+    pub series_key: String,
+    pub system_id: String,
+    pub user_label: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SightingRow {
     pub hardware_id: String,
@@ -175,6 +191,49 @@ fn system_id_from_blob(bytes: Vec<u8>, label: &str) -> Result<SystemId, rusqlite
         )
     })?;
     Ok(SystemId::from_bytes(bytes))
+}
+
+pub fn series_key_of(
+    system_id: &SystemId,
+    measurement_key: &str,
+    channel_index: i32,
+    variant: &str,
+) -> String {
+    let channel = if channel_index == CHANNEL_NA {
+        "na".to_string()
+    } else {
+        channel_index.to_string()
+    };
+    format!(
+        "{}:{}:{}:{}",
+        system_id.to_text(),
+        measurement_key,
+        channel,
+        variant
+    )
+}
+
+pub fn parse_series_key(key: &str) -> Result<ParsedSeriesKey, LedgerError> {
+    let parts: Vec<&str> = key.split(':').collect();
+    if parts.len() != 4 {
+        return Err(LedgerError::InvalidId(format!(
+            "series_key must have 4 colon-separated parts: {key}"
+        )));
+    }
+    let system_id = SystemId::from_text(parts[0])?;
+    let channel_index = if parts[2] == "na" {
+        CHANNEL_NA
+    } else {
+        parts[2]
+            .parse::<i32>()
+            .map_err(|_| LedgerError::InvalidId(format!("invalid series channel: {key}")))?
+    };
+    Ok(ParsedSeriesKey {
+        system_id,
+        measurement_key: parts[1].to_string(),
+        channel_index,
+        variant: parts[3].to_string(),
+    })
 }
 
 fn row_to_device(row: &rusqlite::Row<'_>) -> Result<DeviceRow, rusqlite::Error> {
@@ -347,6 +406,47 @@ pub fn find_series_meta(
         },
     )
     .optional()
+    .map_err(LedgerError::from)
+}
+
+pub fn find_series_by_key(conn: &Connection, key: &str) -> Result<Option<i64>, LedgerError> {
+    let parsed = parse_series_key(key)?;
+    conn.query_row(
+        "SELECT series_id FROM series
+         WHERE system_id = ?1 AND measurement_key = ?2 AND channel_index = ?3 AND variant = ?4",
+        params![
+            parsed.system_id.as_bytes().to_vec(),
+            parsed.measurement_key,
+            parsed.channel_index,
+            parsed.variant
+        ],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(LedgerError::from)
+}
+
+pub fn list_series(conn: &Connection) -> Result<Vec<SeriesListRow>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT s.series_id, s.system_id, s.measurement_key, s.channel_index, s.variant,
+                d.user_label
+         FROM series s
+         LEFT JOIN devices d ON d.system_id = s.system_id
+         ORDER BY s.series_id ASC",
+    )?;
+    stmt.query_map([], |row| {
+        let sid = system_id_from_blob(row.get(1)?, "series.system_id")?;
+        let measurement_key: String = row.get(2)?;
+        let channel_index: i32 = row.get(3)?;
+        let variant: String = row.get(4)?;
+        Ok(SeriesListRow {
+            series_id: row.get(0)?,
+            series_key: series_key_of(&sid, &measurement_key, channel_index, &variant),
+            system_id: sid.to_text(),
+            user_label: row.get(5)?,
+        })
+    })?
+    .collect::<Result<Vec<_>, _>>()
     .map_err(LedgerError::from)
 }
 
@@ -760,6 +860,94 @@ mod tests {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
         all.extend_from_slice(crate::MIGRATIONS);
         init_db_memory(&all).expect("in-memory db")
+    }
+
+    #[test]
+    fn series_key_round_trips_na_and_numeric_channels() {
+        let sid = SystemId::from_bytes([0x01_u8; 16]);
+        let na_key = series_key_of(&sid, "temperature_c", CHANNEL_NA, DEFAULT_VARIANT);
+        assert_eq!(
+            na_key,
+            format!("{}:temperature_c:na:primary", sid.to_text())
+        );
+        let parsed = parse_series_key(&na_key).unwrap();
+        assert_eq!(parsed.system_id, sid);
+        assert_eq!(parsed.measurement_key, "temperature_c");
+        assert_eq!(parsed.channel_index, CHANNEL_NA);
+        assert_eq!(parsed.variant, DEFAULT_VARIANT);
+
+        let count_key = series_key_of(&sid, "contact_state", 2, "count");
+        assert_eq!(
+            count_key,
+            format!("{}:contact_state:2:count", sid.to_text())
+        );
+        let parsed = parse_series_key(&count_key).unwrap();
+        assert_eq!(parsed.channel_index, 2);
+        assert_eq!(parsed.variant, "count");
+    }
+
+    #[test]
+    fn parse_series_key_rejects_non_four_part_keys() {
+        assert!(matches!(
+            parse_series_key("not-enough-parts"),
+            Err(LedgerError::InvalidId(_))
+        ));
+        assert!(matches!(
+            parse_series_key("00000000-0000-0000-0000-000000000000:bad:1:too:many"),
+            Err(LedgerError::InvalidId(_))
+        ));
+    }
+
+    #[test]
+    fn find_and_list_series_use_derived_series_key() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let sid = insert_device(
+                conn,
+                &NewDevice {
+                    hardware_id: "rpi-local:default:i2c:0x60".into(),
+                    user_label: Some("Rack sensor".into()),
+                    parent: None,
+                    kind: DeviceKind::Individual,
+                    initial_state: DeviceState::Active,
+                },
+            )
+            .unwrap();
+            let na_id = ensure_series(
+                conn,
+                &sid,
+                "temperature_c",
+                CHANNEL_NA,
+                DEFAULT_VARIANT,
+                false,
+                None,
+            )
+            .unwrap();
+            let count_id =
+                ensure_series(conn, &sid, "contact_state", 2, "count", false, None).unwrap();
+
+            let na_key = series_key_of(&sid, "temperature_c", CHANNEL_NA, DEFAULT_VARIANT);
+            assert_eq!(find_series_by_key(conn, &na_key).unwrap(), Some(na_id));
+            assert_eq!(
+                find_series_by_key(conn, &series_key_of(&sid, "temperature_c", 1, "primary"))
+                    .unwrap(),
+                None
+            );
+
+            let rows = list_series(conn).unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].series_id, na_id);
+            assert_eq!(rows[0].series_key, na_key);
+            assert_eq!(rows[0].system_id, sid.to_text());
+            assert_eq!(rows[0].user_label.as_deref(), Some("Rack sensor"));
+            assert_eq!(rows[1].series_id, count_id);
+            assert_eq!(
+                rows[1].series_key,
+                series_key_of(&sid, "contact_state", 2, "count")
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

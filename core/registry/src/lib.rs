@@ -7,9 +7,10 @@ pub mod store;
 pub use catalog::{Catalog, CatalogEntry, ChannelMode, Range, ValueType, standard_catalog};
 pub use policy::SqliteRegistry;
 pub use store::{
-    AliasKind, AliasRow, EntryRow, LEGACY_SENSOR_MAP, RegistryError, Resolution, define_alias,
-    enable_entry, find_resolution, get_entry, list_aliases, list_entries, lookup_legacy,
-    seed_legacy_sensor_map,
+    AliasKind, AliasRow, CustomEntrySpec, EntryRow, LEGACY_SENSOR_MAP, RegistryError, Resolution,
+    define_alias, define_custom_entry, enable_entry, find_resolution, get_entry, list_aliases,
+    list_entries, lookup_legacy, seed_legacy_sensor_map, validate_custom_entry_spec,
+    validate_measurement_key,
 };
 
 use iotkit_core_storage::Migration;

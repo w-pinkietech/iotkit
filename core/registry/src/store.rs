@@ -1,5 +1,5 @@
 //! 現場レジストリの書き込み層(D6決定3/4)。受理判定(R8)の唯一の参照先。
-use crate::catalog::{CatalogEntry, ChannelMode, ValueType};
+use crate::catalog::{CatalogEntry, ChannelMode, Range, ValueType};
 use iotkit_core_ledger as ledger;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -67,6 +67,19 @@ pub struct AliasRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct CustomEntrySpec {
+    pub measurement_key: String,
+    pub unit_ucum: Option<String>,
+    pub unit_display: Option<String>,
+    pub value_type: ValueType,
+    pub semantic_class: String,
+    pub channel_mode: ChannelMode,
+    pub channel_roles: Vec<String>,
+    pub physical_min: Option<f64>,
+    pub physical_max: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Resolution {
     Entry(EntryRow),
     Alias {
@@ -107,6 +120,60 @@ pub const LEGACY_SENSOR_MAP: &[(u16, &str)] = &[
     (298, "current_ma"),
     (299, "voltage_mv"),
 ];
+
+pub fn validate_measurement_key(key: &str) -> Result<(), RegistryError> {
+    iotkit_ingest_contract::validate_measurement_key(key)
+        .map_err(|e| RegistryError::InvalidKey(format!("{key}: {e}")))
+}
+
+pub fn validate_custom_entry_spec(spec: &CustomEntrySpec) -> Result<(), RegistryError> {
+    if !spec.measurement_key.starts_with("custom.") {
+        return Err(RegistryError::InvalidKey(spec.measurement_key.clone()));
+    }
+    validate_measurement_key(&spec.measurement_key)?;
+    if spec.channel_mode == ChannelMode::Fixed && spec.channel_roles.is_empty() {
+        return Err(RegistryError::InvalidKey(format!(
+            "{}: fixed channel_mode requires channel_roles",
+            spec.measurement_key
+        )));
+    }
+    if spec.channel_mode != ChannelMode::Fixed && !spec.channel_roles.is_empty() {
+        return Err(RegistryError::InvalidKey(format!(
+            "{}: channel_roles only allowed for fixed mode",
+            spec.measurement_key
+        )));
+    }
+    custom_physical_range(spec)?;
+    Ok(())
+}
+
+fn custom_physical_range(spec: &CustomEntrySpec) -> Result<Option<Range>, RegistryError> {
+    let physical_range = match (spec.physical_min, spec.physical_max) {
+        (Some(min), Some(max)) if min.partial_cmp(&max) == Some(std::cmp::Ordering::Less) => {
+            Some(Range { min, max })
+        }
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            return Err(RegistryError::InvalidKey(format!(
+                "{}: physical_min must be less than physical_max",
+                spec.measurement_key
+            )));
+        }
+        _ => {
+            return Err(RegistryError::InvalidKey(format!(
+                "{}: physical_min and physical_max must be supplied together",
+                spec.measurement_key
+            )));
+        }
+    };
+    if spec.value_type == ValueType::Record && physical_range.is_some() {
+        return Err(RegistryError::InvalidKey(format!(
+            "{}: record type cannot carry physical range",
+            spec.measurement_key
+        )));
+    }
+    Ok(physical_range)
+}
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -245,6 +312,70 @@ pub fn enable_entry(
         .ok_or_else(|| RegistryError::Sqlite(rusqlite::Error::QueryReturnedNoRows))
 }
 
+pub fn define_custom_entry(
+    conn: &Connection,
+    spec: &CustomEntrySpec,
+) -> Result<EntryRow, RegistryError> {
+    validate_custom_entry_spec(spec)?;
+    if get_entry(conn, &spec.measurement_key)?.is_some() {
+        return Err(RegistryError::NamespaceCollision(
+            spec.measurement_key.clone(),
+        ));
+    }
+    if alias_exists(conn, &spec.measurement_key)? {
+        return Err(RegistryError::NamespaceCollision(
+            spec.measurement_key.clone(),
+        ));
+    }
+    let physical_range = custom_physical_range(spec)?;
+
+    let entry = CatalogEntry {
+        key: spec.measurement_key.clone(),
+        unit_ucum: spec.unit_ucum.clone(),
+        unit_display: spec.unit_display.clone(),
+        value_type: spec.value_type,
+        semantic_class: spec.semantic_class.clone(),
+        channel_mode: spec.channel_mode,
+        channel_roles: spec.channel_roles.clone(),
+        physical_range,
+    };
+    let revision = entry.revision();
+    let roles_json = if entry.channel_roles.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&entry.channel_roles).expect("string vec serializes"))
+    };
+    conn.execute(
+        "INSERT INTO registry_entries (measurement_key, origin, catalog_version, entry_revision,
+            unit_ucum, unit_display, value_type, semantic_class, channel_mode, channel_roles_json,
+            physical_min, physical_max, site_min, site_max, enabled_at)
+         VALUES (?1, 'custom', NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11)",
+        params![
+            entry.key,
+            revision,
+            entry.unit_ucum,
+            entry.unit_display,
+            entry.value_type.as_db(),
+            entry.semantic_class,
+            entry.channel_mode.as_db(),
+            roles_json,
+            entry.physical_range.map(|r| r.min),
+            entry.physical_range.map(|r| r.max),
+            now_ms(),
+        ],
+    )?;
+    let detail = serde_json::json!({
+        "key": entry.key,
+        "revision": revision,
+        "origin": "custom",
+        "catalog_version": serde_json::Value::Null,
+    })
+    .to_string();
+    ledger::record_event(conn, "registry_entry_enabled", None, &detail)?;
+    get_entry(conn, &spec.measurement_key)?
+        .ok_or_else(|| RegistryError::Sqlite(rusqlite::Error::QueryReturnedNoRows))
+}
+
 pub fn find_resolution(
     conn: &Connection,
     declared_key: &str,
@@ -278,8 +409,7 @@ pub fn define_alias(
     target_key: &str,
     kind: AliasKind,
 ) -> Result<(), RegistryError> {
-    iotkit_ingest_contract::validate_measurement_key(alias)
-        .map_err(|e| RegistryError::InvalidKey(format!("{alias}: {e}")))?;
+    validate_measurement_key(alias)?;
     if get_entry(conn, alias)?.is_some() {
         return Err(RegistryError::NamespaceCollision(alias.to_string()));
     }
@@ -404,6 +534,119 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(events, 1, "冪等re-enableは監査イベントを重複させない");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn custom_spec(key: &str) -> CustomEntrySpec {
+        CustomEntrySpec {
+            measurement_key: key.to_string(),
+            unit_ucum: Some("Cel".to_string()),
+            unit_display: Some("C".to_string()),
+            value_type: ValueType::Float,
+            semantic_class: "sensor".to_string(),
+            channel_mode: ChannelMode::Single,
+            channel_roles: Vec::new(),
+            physical_min: Some(-50.0),
+            physical_max: Some(150.0),
+        }
+    }
+
+    #[test]
+    fn define_custom_entry_requires_custom_prefix() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            assert!(matches!(
+                define_custom_entry(conn, &custom_spec("tank_temp")),
+                Err(RegistryError::InvalidKey(_))
+            ));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn define_custom_entry_rejects_existing_entry_and_alias_collisions() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let spec = custom_spec("custom.tank_temp");
+            define_custom_entry(conn, &spec).unwrap();
+            assert!(matches!(
+                define_custom_entry(conn, &spec),
+                Err(RegistryError::NamespaceCollision(_))
+            ));
+
+            let cat = standard_catalog();
+            enable_entry(
+                conn,
+                cat.find("temperature_c").unwrap(),
+                &cat.catalog_version,
+                "auto",
+            )
+            .unwrap();
+            define_alias(
+                conn,
+                "custom.alias_temp",
+                "temperature_c",
+                AliasKind::SiteMapping,
+            )
+            .unwrap();
+            assert!(matches!(
+                define_custom_entry(conn, &custom_spec("custom.alias_temp")),
+                Err(RegistryError::NamespaceCollision(_))
+            ));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn define_custom_entry_inserts_custom_origin_revision_and_audit() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let spec = custom_spec("custom.tank_temp");
+            let row = define_custom_entry(conn, &spec).unwrap();
+            assert_eq!(row.measurement_key, "custom.tank_temp");
+            assert_eq!(row.origin, "custom");
+            assert_eq!(row.catalog_version, None);
+            assert!(!row.entry_revision.is_empty());
+            assert_eq!(row.unit_ucum.as_deref(), Some("Cel"));
+            assert_eq!(row.channel_mode, ChannelMode::Single);
+            assert_eq!(row.physical_min, Some(-50.0));
+            assert_eq!(row.physical_max, Some(150.0));
+
+            let detail: String = conn
+                .query_row(
+                    "SELECT detail FROM ledger_events WHERE kind='registry_entry_enabled'
+                 ORDER BY event_id DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+            assert_eq!(detail["key"], "custom.tank_temp");
+            assert_eq!(detail["origin"], "custom");
+            assert_eq!(detail["catalog_version"], serde_json::Value::Null);
+            assert_eq!(detail["revision"], row.entry_revision);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn define_custom_entry_fixed_mode_requires_roles() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let mut spec = custom_spec("custom.vector");
+            spec.channel_mode = ChannelMode::Fixed;
+            assert!(matches!(
+                define_custom_entry(conn, &spec),
+                Err(RegistryError::InvalidKey(_))
+            ));
+            spec.channel_roles = vec!["x".to_string(), "y".to_string(), "z".to_string()];
+            let row = define_custom_entry(conn, &spec).unwrap();
+            assert_eq!(row.channel_roles, vec!["x", "y", "z"]);
             Ok(())
         })
         .unwrap();

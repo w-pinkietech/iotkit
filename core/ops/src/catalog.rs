@@ -7,15 +7,21 @@ use crate::{Actor, ActorKind, OpsError, Tier};
 
 pub const SETUP_ALLOWED_OPS: &[&str] = &["registry.resolve_unknown_key", "device.approve_sighting"];
 
+pub struct OpContext<'a> {
+    pub params: &'a Value,
+    pub actor_id: &'a str,
+    pub source: Option<&'a str>,
+}
+
 pub struct OpDescriptor {
     pub name: &'static str,
     pub tier: Tier,
     pub bulk_escalates: bool,
     pub params_schema: fn() -> Value,
     pub targets: fn(&Value) -> Vec<String>,
-    pub preconditions: fn(&Transaction<'_>, &Value) -> Result<(), OpError>,
-    pub dry_run: fn(&Transaction<'_>, &Value) -> Result<Value, OpError>,
-    pub execute: fn(&Transaction<'_>, &Value) -> Result<Value, OpError>,
+    pub preconditions: fn(&Transaction<'_>, &OpContext<'_>) -> Result<(), OpError>,
+    pub dry_run: fn(&Transaction<'_>, &OpContext<'_>) -> Result<Value, OpError>,
+    pub execute: fn(&Transaction<'_>, &OpContext<'_>) -> Result<Value, OpError>,
 }
 
 pub struct DispatchRequest {
@@ -57,19 +63,49 @@ impl From<iotkit_core_storage::StorageError> for OpError {
 
 impl From<iotkit_core_ledger::LedgerError> for OpError {
     fn from(value: iotkit_core_ledger::LedgerError) -> Self {
-        Self::Internal(value.to_string())
+        match value {
+            iotkit_core_ledger::LedgerError::NotFound(_) => Self::NotFound,
+            iotkit_core_ledger::LedgerError::InvalidId(_) => Self::Validation(value.to_string()),
+            iotkit_core_ledger::LedgerError::HardwareIdInUse(_)
+            | iotkit_core_ledger::LedgerError::InvalidReplace(_) => {
+                Self::PreconditionFailed(value.to_string())
+            }
+            iotkit_core_ledger::LedgerError::Storage(_)
+            | iotkit_core_ledger::LedgerError::Sqlite(_) => Self::Internal(value.to_string()),
+        }
     }
 }
 
 impl From<iotkit_core_registry::RegistryError> for OpError {
     fn from(value: iotkit_core_registry::RegistryError) -> Self {
-        Self::Internal(value.to_string())
+        match value {
+            iotkit_core_registry::RegistryError::TargetNotFound(_) => Self::NotFound,
+            iotkit_core_registry::RegistryError::NamespaceCollision(_)
+            | iotkit_core_registry::RegistryError::AliasExists(_) => {
+                Self::PreconditionFailed(value.to_string())
+            }
+            iotkit_core_registry::RegistryError::InvalidKey(_) => {
+                Self::Validation(value.to_string())
+            }
+            iotkit_core_registry::RegistryError::Ledger(e) => e.into(),
+            iotkit_core_registry::RegistryError::Sqlite(_) => Self::Internal(value.to_string()),
+        }
     }
 }
 
 impl From<OpsError> for OpError {
     fn from(value: OpsError) -> Self {
-        Self::Internal(value.to_string())
+        match value {
+            OpsError::NotFound => Self::NotFound,
+            OpsError::Conflict => Self::PreconditionFailed(value.to_string()),
+            OpsError::Forbidden => Self::Forbidden(value.to_string()),
+            OpsError::Validation(_) => Self::Validation(value.to_string()),
+            OpsError::Ledger(e) => e.into(),
+            OpsError::Storage(_)
+            | OpsError::Sqlite(_)
+            | OpsError::CredentialHash
+            | OpsError::Random => Self::Internal(value.to_string()),
+        }
     }
 }
 
@@ -99,6 +135,11 @@ pub fn dispatch(
         }
     } else {
         descriptor.tier
+    };
+    let ctx = OpContext {
+        params: &req.params,
+        actor_id: &req.actor.actor_id,
+        source: req.source.as_deref(),
     };
 
     let result = (|| -> Result<Value, OpError> {
@@ -140,12 +181,12 @@ pub fn dispatch(
             .map_err(|e| OpError::Internal(e.to_string()))?;
 
         let op_result = (|| -> Result<Value, OpError> {
-            (descriptor.preconditions)(&tx, &req.params)?;
+            (descriptor.preconditions)(&tx, &ctx)?;
             if req.dry_run {
-                return (descriptor.dry_run)(&tx, &req.params);
+                return (descriptor.dry_run)(&tx, &ctx);
             }
 
-            let value = (descriptor.execute)(&tx, &req.params)?;
+            let value = (descriptor.execute)(&tx, &ctx)?;
             iotkit_core_ledger::bump_generation(&tx)
                 .map_err(|e| OpError::Internal(e.to_string()))?;
             Ok(value)

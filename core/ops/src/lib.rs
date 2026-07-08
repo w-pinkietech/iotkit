@@ -4,6 +4,7 @@ use iotkit_core_storage::Migration;
 
 pub mod auth;
 pub mod catalog;
+pub mod ops;
 pub mod tier;
 
 pub use auth::{
@@ -11,7 +12,8 @@ pub use auth::{
     issue_token, list_tokens, load_passphrase_hash, reset_passphrase, revoke_token, set_passphrase,
     verify_passphrase,
 };
-pub use catalog::{DispatchRequest, OpDescriptor, OpError, SETUP_ALLOWED_OPS, dispatch};
+pub use catalog::{DispatchRequest, OpContext, OpDescriptor, OpError, SETUP_ALLOWED_OPS, dispatch};
+pub use ops::standard_catalog;
 pub use tier::{Actor, ActorKind, Tier, TokenKind};
 
 pub const MIGRATIONS: &[Migration] = &[Migration {
