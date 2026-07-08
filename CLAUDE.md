@@ -22,7 +22,7 @@ cargo test -p <crate-name>
 scripts/verify.sh          # fmt + test --workspace + clippy -D warnings (host verification)
 ```
 
-ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`trailer.sh`(コミットトレーラ)・`watchpoints.sh`(レビューガイド期限見張り)。
+ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`trailer.sh`(コミットトレーラ、セッションモデル自動検出)・`watchpoints.sh`(レビューガイド期限見張り)。
 
 ## Workflow Rules
 
