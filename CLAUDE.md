@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- `core/engine` <- adapters <- `iotkit-gateway`.
+Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- {`core/engine`, adapters} <- `iotkit-gateway`
+(adapters は `core/engine` に依存しない — 取り込みは `iotkit-ingest-client` 経由、D4).
 
 ## Design Authority
 
@@ -21,7 +22,7 @@ cargo test -p <crate-name>
 scripts/verify.sh          # fmt + test --workspace + clippy -D warnings (host verification)
 ```
 
-ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`trailer.sh`(コミットトレーラ)。
+ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`trailer.sh`(コミットトレーラ)・`watchpoints.sh`(レビューガイド期限見張り)。
 
 ## Workflow Rules
 

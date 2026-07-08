@@ -36,6 +36,7 @@ CODEX_BIN="${CODEX_BIN:-/home/kenta/.local/bin/codex}"
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.5}"
 CODEX_OUT_DIR="${CODEX_OUT_DIR:-/tmp/codex-runs}"
 REPO="${CODEX_REPO:-$(git rev-parse --show-toplevel)}"
+[ -d "$REPO" ] || { echo "repo not found: $REPO" >&2; exit 2; }
 
 case "$MODE" in
   review) SANDBOX="read-only";          DEFAULT_EFFORT="xhigh" ;;

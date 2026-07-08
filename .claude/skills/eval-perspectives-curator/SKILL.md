@@ -50,8 +50,8 @@ Would a reviewer without project context already check it? Yes → too generic.
 ## Format (the one true shape — watchpoints.sh parses the date line)
 
 ```
-- Added: YYYY-MM-DD
-  Revalidate by: YYYY-MM-DD   (default +3 months)
+- Added: YYYY-MM-DD (optional renewal note: "renewed YYYY-MM-DD — reason; delete next expiry if still untriggered")
+  Revalidate by: YYYY-MM-DD   <- bare ISO date, nothing after it (watchpoints.sh parses this line)
   Watchpoint: <one testable claim — what to look for and why it bites>
   Observed in: <where it was seen>
 ```

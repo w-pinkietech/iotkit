@@ -9,11 +9,6 @@ Active Watchpoints を先に読み、次に Baseline Checklist を適用する�
 
 max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-- Added: 2026-03-28 (renewed 2026-07-08 — データ完全性の中核不変条件で、計画6 の入口は envelope/タイムスタンプ構築を新設するため保持)
-  Revalidate by: 2026-10-08
-  Watchpoint: Timestamps must be captured at the point of observation (e.g. successful I2C read), not at event construction time. Batch-collect-then-emit patterns can introduce seconds of skew on degraded buses.
-  Observed in: timestamp-provenance design review.
-
 - Added: 2026-07-04
   Revalidate by: 2026-10-04
   Watchpoint: `Path::parent()` returns `Some("")` for a bare filename (e.g. "iotkit.db"), NOT `None`. `parent().unwrap_or(".")` silently yields an empty path, so `statvfs("")`/fs calls fail. Guard the empty case explicitly: `match p.parent() { Some(x) if !x.as_os_str().is_empty() => x, _ => Path::new(".") }`.
@@ -48,6 +43,7 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - [ ] continuation や partial frame の状態が異常入力で壊れないか。
 - [ ] unknown 値を握りつぶして誤った既知データにしていないか。
 - [ ] placeholder 値を本物の `DeviceKey` や identity に変換していないか。
+- [ ] タイムスタンプを観測時点(I2C read 成功時等)で取得しているか。batch-collect-then-emit は劣化バスで数秒のズレを生む(2026-07-08 に Active から昇格 — 期限付き盲点でなく常設不変条件のため)。
 
 ### エラーハンドリング
 
