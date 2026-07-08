@@ -8,6 +8,15 @@
 # Scrubbing must happen pre-bash: once the script is running, the trace of the
 # very first command has already leaked. (Running via `bash scripts/trailer.sh`
 # bypasses the shebang and is unsupported; invoke the script directly.)
+# Requires GNU coreutils >= 8.30 for `env -S`.
+#
+# Out of scope — CALLER-side environment failures no callee can defend against
+# (the post-commit `git log -1` trailer check, codex-impl-loop step 6, is the
+# net for all of these):
+#   - a caller shell running `set -x` with BASH_XTRACEFD=1 exported writes its
+#     own trace line into the $() capture BEFORE this script starts; one
+#     leading non-trailer line makes git treat ALL trailers as body text
+#   - SHELLOPTS=noexec/onecmd (the script body never executes at all)
 #
 # The Co-Authored-By line names the CURRENT assistant model, auto-detected from
 # this Claude Code session's own transcript (via CLAUDE_CODE_SESSION_ID) so that
