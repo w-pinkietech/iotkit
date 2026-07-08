@@ -8,14 +8,20 @@ Active Watchpoints を先に読み、次に Baseline Checklist を適用する�
 最近のレビューで観測されたプロジェクト固有の盲点。
 max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-- 再起動・再登録経路の整合(added 2026-07-02, TTL 3ヶ月): AdapterHost等の登録APIは重複IDを拒否する。
-  再起動/再接続を計画するタスクは「除去(deregister)手順」が実在APIと整合するか実物を照合すること。
-- 実在IDの形式(added 2026-07-02, TTL 3ヶ月): AdapterId等の実行時識別子はポートパス等を含む合成形式
-  (例: `bravepi-mainboard:/dev/ttyAMA0`)。テストの期待値は生成箇所の実コードから取ること。
-- カタログ/設計値とドライバ実出力の突合(added 2026-07-03, TTL 6ヶ月): ドライバのデコード出力
-  (単位・レンジ・クランプ・派生値)とD6カタログの正準単位・物理限界の対応を実コードで照合する。
-  計画1(加速度g/mG×1000)・計画2(測距2000mmキャップ)と2連続で実データ破壊をこの観点だけが
-  検出した。ドライバ・写像・カタログ値域に触れる計画では必須。
+- Added: 2026-07-02
+  Revalidate by: 2026-10-02
+  Watchpoint: AdapterHost 等の登録 API は重複 ID を拒否する。再起動/再接続を計画するタスクは「除去(deregister)手順」が実在 API と整合するか実物を照合すること。
+  Observed in: Wave 0 plan レビュー(再起動・再登録経路)。
+
+- Added: 2026-07-02
+  Revalidate by: 2026-10-02
+  Watchpoint: AdapterId 等の実行時識別子はポートパス等を含む合成形式(例: `bravepi-mainboard:/dev/ttyAMA0`)。テストの期待値は生成箇所の実コードから取ること。
+  Observed in: Wave 0 plan レビュー(実在 ID の形式)。
+
+- Added: 2026-07-03
+  Revalidate by: 2027-01-03
+  Watchpoint: ドライバのデコード出力(単位・レンジ・クランプ・派生値)と D6 カタログの正準単位・物理限界の対応を実コードで照合する。ドライバ・写像・カタログ値域に触れる計画では必須。
+  Observed in: 計画1(加速度 g/mG×1000)・計画2(測距 2000mm キャップ)— 2連続で実データ破壊をこの観点だけが検出。
 
 ## Baseline Checklist
 

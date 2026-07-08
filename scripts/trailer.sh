@@ -8,12 +8,14 @@
 #   git commit -m "feat(crate): ..." -m "$(scripts/trailer.sh codex)"   # codex-implemented, cross-vendor reviewed
 #   git commit -m "docs: ..."        -m "$(scripts/trailer.sh docs)"    # main-agent authored (docs/harness)
 #
-# Override the model when a different assistant authored the commit:
-#   TRAILER_MODEL="Claude Fable 5" scripts/trailer.sh codex
+# Override the model when a different assistant authored the commit — the default
+# below WILL drift as sessions switch models, so the committing agent must pass
+# TRAILER_MODEL whenever its session model differs:
+#   TRAILER_MODEL="Claude Opus 4.8" scripts/trailer.sh codex
 set -euo pipefail
 MODE="${1:-}"
 [ -n "$MODE" ] || { echo "usage: scripts/trailer.sh <codex|docs>" >&2; exit 2; }
-MODEL="${TRAILER_MODEL:-Claude Opus 4.8}"
+MODEL="${TRAILER_MODEL:-Claude Fable 5}"
 MODEL="${MODEL//[$'\n\r']/ }"   # collapse newlines: a single-line display name, no trailer injection
 case "$MODE" in
   codex)

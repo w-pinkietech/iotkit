@@ -22,6 +22,8 @@
 #                  things and earn max reasoning; the impl grind trades some for speed)
 #   CODEX_OUT_DIR (default /tmp/codex-runs; set to the session scratchpad if you prefer)
 #   CODEX_BIN     (default /home/kenta/.local/bin/codex)
+#   CODEX_REPO    (default: current git toplevel; set to point codex at a different
+#                  checkout, e.g. the design corpus for codex-design-review)
 set -euo pipefail
 
 MODE="${1:-}"; PROMPT="${2:-}"; LABEL="${3:-}"
@@ -33,7 +35,8 @@ fi
 CODEX_BIN="${CODEX_BIN:-/home/kenta/.local/bin/codex}"
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.5}"
 CODEX_OUT_DIR="${CODEX_OUT_DIR:-/tmp/codex-runs}"
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${CODEX_REPO:-$(git rev-parse --show-toplevel)}"
+[ -d "$REPO" ] || { echo "repo not found: $REPO" >&2; exit 2; }
 
 case "$MODE" in
   review) SANDBOX="read-only";          DEFAULT_EFFORT="xhigh" ;;

@@ -9,21 +9,6 @@ Active Watchpoints を先に読み、次に Baseline Checklist を適用する�
 
 max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-- Added: 2026-03-27
-  Revalidate by: 2026-06-27
-  Watchpoint: Every I2C error message must include bus path and address for field debugging on multi-bus/multi-sensor systems. Generic "read failed" messages are untriageable.
-  Observed in: rpi-local-adapter sensor modules.
-
-- Added: 2026-03-27
-  Revalidate by: 2026-06-27
-  Watchpoint: `let _ = channel.send()` in some branches but `if send().is_err() { return }` in others creates inconsistent shutdown behavior. All send paths in a loop must handle closed channels the same way.
-  Observed in: rpi-local-adapter polling_loop.
-
-- Added: 2026-03-28
-  Revalidate by: 2026-06-28
-  Watchpoint: Timestamps must be captured at the point of observation (e.g. successful I2C read), not at event construction time. Batch-collect-then-emit patterns can introduce seconds of skew on degraded buses.
-  Observed in: timestamp-provenance design review.
-
 - Added: 2026-07-04
   Revalidate by: 2026-10-04
   Watchpoint: `Path::parent()` returns `Some("")` for a bare filename (e.g. "iotkit.db"), NOT `None`. `parent().unwrap_or(".")` silently yields an empty path, so `statvfs("")`/fs calls fail. Guard the empty case explicitly: `match p.parent() { Some(x) if !x.as_os_str().is_empty() => x, _ => Path::new(".") }`.
@@ -58,11 +43,12 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 - [ ] continuation や partial frame の状態が異常入力で壊れないか。
 - [ ] unknown 値を握りつぶして誤った既知データにしていないか。
 - [ ] placeholder 値を本物の `DeviceKey` や identity に変換していないか。
+- [ ] タイムスタンプを観測時点(I2C read 成功時等)で取得しているか。batch-collect-then-emit は劣化バスで数秒のズレを生む(2026-07-08 に Active から昇格 — 期限付き盲点でなく常設不変条件のため)。
 
 ### エラーハンドリング
 
 - [ ] runtime path に `unwrap`、`expect`、panic 前提コードがないか。
-- [ ] 返す error が port、device、sensor_type など追跡に必要な文脈を持っているか。
+- [ ] 返す error が port、bus パス、address、device、sensor_type など追跡に必要な文脈を持っているか（汎用 "read failed" は現場でトリアージ不能）。
 - [ ] 全体障害と個別デバイス障害を同じ error で潰していないか。
 - [ ] recoverable error と fatal error が区別されているか。
 - [ ] `std::io::ErrorKind::Other` の手組みより `std::io::Error::other` が使える場所で使っているか。
@@ -70,7 +56,7 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 ### async / thread / channel
 
 - [ ] bounded channel のサイズに意図があるか。
-- [ ] `send().await` の失敗時に task をどう終わらせるか明確か。
+- [ ] `send().await` の失敗時に task をどう終わらせるか明確か。ループ内の全 send 経路で closed channel の扱いが一貫しているか（`let _ =` と `is_err() → return` の混在は不整合な shutdown を生む）。
 - [ ] shutdown 経路で thread、task、channel の終了順が破綻しないか。
 - [ ] retry/backoff 中でも shutdown への応答性が確保されているか。
 - [ ] event の送信順序に意味がある場合、その順序がコード上で保証されているか。

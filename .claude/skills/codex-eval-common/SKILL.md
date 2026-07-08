@@ -1,6 +1,6 @@
 ---
 name: codex-eval-common
-description: Shared infrastructure for Codex evaluation skills (codex-eval-spec, codex-eval-plan, codex-eval-impl-spec, codex-eval-impl-quality). Do not invoke directly — use the phase-specific skill instead.
+description: Shared infrastructure for Codex evaluation skills (codex-eval-spec, codex-eval-plan, codex-eval-impl). Do not invoke directly — use the phase-specific skill instead.
 ---
 
 # Codex Eval Common
@@ -24,6 +24,11 @@ model / flags / sandbox, so a model bump happens in one place (no stale constant
 rot in this doc):
 
 ```bash
+# BEFORE authoring any eval prompt: check the guides you are about to inject
+scripts/watchpoints.sh
+#   -> lists expired/malformed watchpoints; adjudicate them first
+#      (eval-perspectives-curator) — never inject a stale guide
+
 # Write the review prompt to a file, then:
 scripts/codex.sh review <prompt-file> <label>
 #   -> read-only sandbox; model/effort defaults live in scripts/codex.sh
@@ -52,17 +57,19 @@ from plan 5 onward, not optional.
 
 ## Iteration Loop
 
-1. Run `scripts/codex.sh review` with the phase-appropriate prompt
-2. Read result
-3. If Critical or Important issues found:
+1. Run `scripts/watchpoints.sh`; adjudicate anything expired before injecting guides
+2. Dispatch the SAME prompt to BOTH vendors in parallel:
+   `scripts/codex.sh review` + Fable review-max (Agent tool)
+3. Read both results and converge (both-raise = high signal; one-raise = still triaged)
+4. If Critical or Important issues found — **by either vendor**:
    - Non-semantic (wording/structure/omission): fix autonomously
    - Semantic (architecture/requirements): escalate to user
    - Lateral spread check: grep for same pattern workspace-wide, fix ALL instances
-4. Re-run `scripts/codex.sh review` (fresh invocation, new label)
-5. Repeat until zero Critical and zero Important
-6. Run verification pass (one more `scripts/codex.sh review`)
-7. If verification finds new Critical/Important: fix and re-verify
-8. Done when Codex returns zero Critical/Important
+5. Re-run BOTH vendors (fresh invocations, new label)
+6. Repeat until zero unresolved Critical and zero Important **across both vendors**
+7. Run verification pass (one more cross-vendor round)
+8. If verification finds new Critical/Important: fix and re-verify
+9. Done when BOTH vendors return zero Critical/Important
 
 **Safety valve:** If same issue reappears after being fixed twice, escalate to user.
 
@@ -91,6 +98,7 @@ Max 10 per file. Review-by date: 3 months from creation.
 - "I can see the issues myself, no need for Codex"
 - Summarizing Codex feedback without actually running `scripts/codex.sh review`
 - Skipping iteration because "first review was thorough enough"
+- Declaring done while the OTHER vendor still has unresolved Critical/Important
 - Auto-fixing requirement/architecture issue without escalating
 - Reusing a Codex session instead of starting fresh
 
