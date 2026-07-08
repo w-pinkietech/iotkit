@@ -88,12 +88,23 @@ pub fn set_passphrase(
     plaintext: &str,
     audit_actor: &str,
 ) -> Result<SetOutcome, OpsError> {
-    let now = now_ms();
+    if !is_setup_mode(conn)? {
+        return Ok(SetOutcome::AlreadySet);
+    }
     let hash = hash_passphrase(plaintext)?;
+    set_passphrase_with_hash(conn, &hash, audit_actor)
+}
+
+pub fn set_passphrase_with_hash(
+    conn: &Connection,
+    phc: &str,
+    audit_actor: &str,
+) -> Result<SetOutcome, OpsError> {
+    let now = now_ms();
     let changed = conn.execute(
         "INSERT OR IGNORE INTO admin_credential (id, passphrase_hash, set_at, updated_at)
          VALUES (1, ?1, ?2, ?2)",
-        params![hash, now],
+        params![phc, now],
     )?;
     if changed == 0 {
         return Ok(SetOutcome::AlreadySet);
@@ -348,7 +359,7 @@ struct TokenAuthRow {
     last_used_at: Option<i64>,
 }
 
-fn hash_passphrase(plaintext: &str) -> Result<String, OpsError> {
+pub fn hash_passphrase(plaintext: &str) -> Result<String, OpsError> {
     let mut salt_bytes = [0_u8; PASSPHRASE_SALT_BYTES];
     getrandom::fill(&mut salt_bytes).map_err(|_| OpsError::Random)?;
     let salt = SaltString::encode_b64(&salt_bytes).map_err(|_| OpsError::Random)?;
@@ -426,6 +437,53 @@ mod tests {
         db.with_conn_sync(|conn| {
             assert!(is_setup_mode(conn).unwrap());
 
+            let phc = hash_passphrase("correct horse battery staple").unwrap();
+            assert_eq!(
+                set_passphrase_with_hash(conn, &phc, "setup_mode").unwrap(),
+                SetOutcome::FirstSet
+            );
+            assert!(!is_setup_mode(conn).unwrap());
+            assert_eq!(
+                set_passphrase_with_hash(conn, "$argon2id$ignored", "local_cli").unwrap(),
+                SetOutcome::AlreadySet
+            );
+
+            let stored = load_passphrase_hash(conn).unwrap().unwrap();
+            assert_eq!(stored, phc);
+            assert!(verify_passphrase(&stored, "correct horse battery staple"));
+            assert!(!verify_passphrase(&stored, "wrong passphrase"));
+
+            let set_details = event_details(conn, "admin_passphrase_set");
+            assert_eq!(set_details.len(), 1);
+            let set_detail: serde_json::Value = serde_json::from_str(&set_details[0]).unwrap();
+            assert_eq!(set_detail["actor"], "setup_mode");
+            assert!(!set_details[0].contains("correct horse battery staple"));
+            assert!(!set_details[0].contains("passphrase_hash"));
+            assert!(!set_details[0].contains("$argon2"));
+
+            reset_passphrase(conn, "new passphrase", "local_cli").unwrap();
+            let updated = load_passphrase_hash(conn).unwrap().unwrap();
+            assert!(verify_passphrase(&updated, "new passphrase"));
+            assert!(!verify_passphrase(&updated, "correct horse battery staple"));
+
+            let reset_details = event_details(conn, "admin_passphrase_reset");
+            assert_eq!(reset_details.len(), 1);
+            let reset_detail: serde_json::Value = serde_json::from_str(&reset_details[0]).unwrap();
+            assert_eq!(reset_detail["actor"], "local_cli");
+            assert!(!reset_details[0].contains("new passphrase"));
+            assert!(!reset_details[0].contains("passphrase_hash"));
+            assert!(!reset_details[0].contains("$argon2"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn set_passphrase_wrapper_checks_existing_credential_before_hashing() {
+        let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+        db.with_conn_sync(|conn| {
+            assert!(is_setup_mode(conn).unwrap());
+
             assert_eq!(
                 set_passphrase(conn, "correct horse battery staple", "setup_mode").unwrap(),
                 SetOutcome::FirstSet
@@ -436,29 +494,8 @@ mod tests {
                 SetOutcome::AlreadySet
             );
 
-            let phc = load_passphrase_hash(conn).unwrap().unwrap();
-            assert!(verify_passphrase(&phc, "correct horse battery staple"));
-            assert!(!verify_passphrase(&phc, "wrong passphrase"));
-
-            reset_passphrase(conn, "new passphrase", "local_cli").unwrap();
-            let updated = load_passphrase_hash(conn).unwrap().unwrap();
-            assert!(verify_passphrase(&updated, "new passphrase"));
-            assert!(!verify_passphrase(&updated, "correct horse battery staple"));
-
             let set_details = event_details(conn, "admin_passphrase_set");
-            let reset_details = event_details(conn, "admin_passphrase_reset");
             assert_eq!(set_details.len(), 1);
-            assert_eq!(reset_details.len(), 1);
-            let set_detail: serde_json::Value = serde_json::from_str(&set_details[0]).unwrap();
-            let reset_detail: serde_json::Value = serde_json::from_str(&reset_details[0]).unwrap();
-            assert_eq!(set_detail["actor"], "setup_mode");
-            assert_eq!(reset_detail["actor"], "local_cli");
-            for detail in set_details.into_iter().chain(reset_details) {
-                assert!(!detail.contains("correct horse battery staple"));
-                assert!(!detail.contains("new passphrase"));
-                assert!(!detail.contains("passphrase_hash"));
-                assert!(!detail.contains("$argon2"));
-            }
             Ok(())
         })
         .unwrap();

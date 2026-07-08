@@ -1,5 +1,6 @@
 //! Bootstrap config: TOML parse → ENV merge → validated GatewayConfig.
 
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -25,6 +26,8 @@ pub struct RawConfig {
     pub gateway: RawGatewayConfig,
     #[serde(default)]
     pub adapters: RawAdaptersConfig,
+    #[serde(default)]
+    pub api: RawApiConfig,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -42,6 +45,14 @@ pub struct RawGatewayConfig {
 pub struct RawAdaptersConfig {
     pub bravepi: Option<RawBravepiConfig>,
     pub rpi_local: Option<RawRpiLocalConfig>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RawApiConfig {
+    pub enabled: Option<bool>,
+    pub bind: Option<String>,
+    pub gateway_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +82,7 @@ pub struct GatewayConfig {
     pub disk_high_watermark_pct: u64,
     pub bravepi: Option<BravepiConfig>,
     pub rpi_local: Option<RpiLocalResolvedConfig>,
+    pub api: ApiConfig,
 }
 
 #[derive(Debug)]
@@ -94,6 +106,13 @@ pub struct BravepiConfig {
 pub struct RpiLocalResolvedConfig {
     pub bus_path: String,
     pub poll_interval_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiConfig {
+    pub enabled: bool,
+    pub bind: SocketAddr,
+    pub gateway_name: String,
 }
 
 // ── Pipeline: load_raw ─────────────────────────────────
@@ -155,6 +174,12 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
     if let Ok(val) = std::env::var("IOTKIT_DISK_HIGH_WATERMARK_PCT") {
         raw.gateway.disk_high_watermark_pct =
             Some(parse_u64_env("IOTKIT_DISK_HIGH_WATERMARK_PCT", &val)?);
+    }
+    if let Ok(val) = std::env::var("IOTKIT_API_ENABLED") {
+        raw.api.enabled = Some(parse_bool_env("IOTKIT_API_ENABLED", &val)?);
+    }
+    if let Ok(val) = std::env::var("IOTKIT_API_BIND") {
+        raw.api.bind = Some(val);
     }
 
     if let Ok(val) = std::env::var("BRAVEPI_ENABLED") {
@@ -282,6 +307,8 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
         ));
     }
 
+    let api = resolve_api(raw.api)?;
+
     Ok(GatewayConfig {
         config_source: source,
         db_path,
@@ -291,7 +318,36 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
         disk_high_watermark_pct,
         bravepi,
         rpi_local,
+        api,
     })
+}
+
+fn resolve_api(raw: RawApiConfig) -> Result<ApiConfig, ConfigError> {
+    let enabled = raw.enabled.unwrap_or(true);
+    let bind_raw = raw.bind.unwrap_or_else(|| "0.0.0.0:8443".to_string());
+    let bind: SocketAddr = bind_raw.parse().map_err(|_| {
+        ConfigError::Validation(format!(
+            "api.bind must be an IPv4 socket address: '{bind_raw}'"
+        ))
+    })?;
+    if !matches!(bind.ip(), IpAddr::V4(_)) {
+        return Err(ConfigError::Validation(
+            "api.bind must be an IPv4 socket address".to_string(),
+        ));
+    }
+    let gateway_name = raw
+        .gateway_name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(default_gateway_name);
+    Ok(ApiConfig {
+        enabled,
+        bind,
+        gateway_name,
+    })
+}
+
+fn default_gateway_name() -> String {
+    crate::api::tls::hostname().unwrap_or_else(|| "iotkit-gateway".to_string())
 }
 
 pub fn default_health_json_path(db_path: &str) -> PathBuf {
@@ -471,6 +527,8 @@ poll_interval_ms = 500
         "IOTKIT_QUARANTINE_TTL_DAYS",
         "IOTKIT_HEALTH_JSON_PATH",
         "IOTKIT_DISK_HIGH_WATERMARK_PCT",
+        "IOTKIT_API_ENABLED",
+        "IOTKIT_API_BIND",
         "IOTKIT_CONFIG_PATH",
     ];
 

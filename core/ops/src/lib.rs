@@ -9,9 +9,9 @@ pub mod ops;
 pub mod tier;
 
 pub use auth::{
-    IssuedToken, NewOperatorToken, Secret, SetOutcome, TokenRow, authenticate, is_setup_mode,
-    issue_token, list_tokens, load_passphrase_hash, reset_passphrase, revoke_token, set_passphrase,
-    verify_passphrase,
+    IssuedToken, NewOperatorToken, Secret, SetOutcome, TokenRow, authenticate, hash_passphrase,
+    is_setup_mode, issue_token, list_tokens, load_passphrase_hash, reset_passphrase, revoke_token,
+    set_passphrase, set_passphrase_with_hash, verify_passphrase,
 };
 pub use catalog::{DispatchRequest, OpContext, OpDescriptor, OpError, SETUP_ALLOWED_OPS, dispatch};
 pub use fingerprint::fingerprint_of_pem;

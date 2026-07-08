@@ -3,6 +3,13 @@ name = "iotkit-gateway"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "iotkit_gateway"
+
+[[bin]]
+name = "iotkit-gateway"
+path = "src/main.rs"
+
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
 iotkit-core-engine = { path = "../core/engine" }

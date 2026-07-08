@@ -3,13 +3,7 @@
 
 mod adapter_host;
 #[allow(dead_code)]
-mod api;
-mod config;
-mod epoch_start;
-mod health;
 mod publish_task;
-#[allow(dead_code)]
-mod record;
 mod retention;
 mod supervision;
 
@@ -20,6 +14,7 @@ use std::time::Duration;
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
 use iotkit_core_types::{AdapterEvent, AdapterId};
+use iotkit_gateway::{config, epoch_start, health};
 use iotkit_ingest_client::IngestClient;
 use tracing_subscriber::EnvFilter;
 
@@ -53,6 +48,9 @@ fn main() {
         quarantine_ttl_days = config.quarantine_ttl_days,
         health_json_path = %config.health_json_path.display(),
         disk_high_watermark_pct = config.disk_high_watermark_pct,
+        api_enabled = config.api.enabled,
+        api_bind = %config.api.bind,
+        api_gateway_name = %config.api.gateway_name,
         bravepi_enabled = config.bravepi.is_some(),
         rpi_local_enabled = config.rpi_local.is_some(),
         "effective config"

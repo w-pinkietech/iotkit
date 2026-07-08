@@ -73,7 +73,7 @@ fn subject_alt_names() -> Vec<String> {
     names
 }
 
-fn hostname() -> Option<String> {
+pub(crate) fn hostname() -> Option<String> {
     let mut buf = [0_u8; 256];
     // SAFETY: `buf` is a valid writable byte buffer and its length is passed unchanged.
     let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
