@@ -1,11 +1,11 @@
 ---
 name: codex-eval-plan
-description: Use after writing an implementation plan, before dispatching agent teams. Evaluates task granularity, dependency ordering, and spec consistency.
+description: Use after writing an implementation plan, before starting the codex-impl-loop. Evaluates task granularity, dependency ordering, and spec consistency.
 ---
 
 # Codex Eval Plan
 
-Evaluate an implementation plan with Codex before dispatching implementation agents.
+Evaluate an implementation plan with Codex before starting the `codex-impl-loop`.
 
 **REQUIRED:** Read `codex-eval-common` for shared rules (CLI, iteration, safety).
 
@@ -13,7 +13,7 @@ Evaluate an implementation plan with Codex before dispatching implementation age
 
 - After `superpowers:writing-plans` completes
 - After plan self-review is complete
-- Before dispatching agent teams for implementation
+- Before starting the `codex-impl-loop` for implementation
 
 ## Context to Inject
 
@@ -64,4 +64,4 @@ implementation plan from a third-party perspective.
 
 - Fix Critical/Important issues following `codex-eval-common` iteration loop
 - Register novel watchpoints in the Active Watchpoints section of `docs/eval/plan-review.md`
-- When clean: dispatch agent teams for implementation
+- When clean: start the `codex-impl-loop` for implementation

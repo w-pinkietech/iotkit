@@ -5,7 +5,7 @@ Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- `core/engine` <- adap
 ## Design Authority
 
 - **設計正本は [w-pinkietech/iotkit-redesign](https://github.com/w-pinkietech/iotkit-redesign) の `docs/redesign/`**
-  (用語集・責務台帳R1-R23・決定文書D1〜D6)。
+  (用語集・責務台帳R1-R23・決定文書D1〜D13)。
 - ローカル開発ではこのリポジトリの親ディレクトリに設計リポジトリをチェックアウトする配置を推奨
   (例: `~/dev/iot/docs/redesign/` と `~/dev/iot/iotkit-next/`)。本文書内の設計参照はこの配置を前提とした相対位置。
 - monojoh-authorityのADRを参照する前に、必ず設計正本リポジトリの `docs/redesign/adr-inventory.md`
@@ -18,14 +18,18 @@ Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- `core/engine` <- adap
 ```bash
 cargo test --workspace
 cargo test -p <crate-name>
+scripts/verify.sh          # fmt + test --workspace + clippy -D warnings (host verification)
 ```
+
+ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`trailer.sh`(コミットトレーラ)。
 
 ## Workflow Rules
 
-- **Main agent は実装禁止。** 対話/spec/Codex eval dispatch のみ。実装は agent team (lead → dev subagent)。
-- **Codex eval は全段階で必須。** spec → plan → per-task impl → final impl。dev subagent も自分で `codex exec` を実行する。
-- Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → agent-team → PR
-- **Watchpoint curation は Main agent の責務。** Lead/Reviewer の結果を受けて eval-perspectives-curator で review guide の Active Watchpoints を更新する。
+- **Main agent は製品コード実装禁止。** 対話/spec/plan/レビュー dispatch/コミットのみ。Rust は codex が書く。実装は `codex-impl-loop` スキル(Main が codex を直接駆動、Fable でクロスベンダーレビュー)。ハーネス配管(`scripts/`・CI 設定・スキル・docs)は Main の領分。
+- **codex 起動は `scripts/codex.sh` 経由が正。** `scripts/codex.sh review <prompt> <label>`(read-only)/`impl <prompt> <label>`(danger-full-access)。model/flag/sandbox の唯一の真実源=このスクリプト(docs にモデル定数を散らさない)。
+- **各実装タスクはクロスベンダーレビュー必須。** 同一プロンプトを codex(read-only) と Fable(review-max) の両方に通す。spec → plan → per-task impl → final impl の全段階でレビューを省かない。
+- Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → codex-impl-loop → PR
+- **Watchpoint curation は Main agent の責務。** per-task クロスベンダーレビュー(codex+Fable)の結果を受けて eval-perspectives-curator で review guide の Active Watchpoints を更新する。
 - **計画作成時は設計追補を全掃引する。** 対象決定文書の監査追記・追補節(「実装と同時」等の指示を含む)を計画の Global Constraints に反映してから書く(D1 quarantine_reason 追補の見落とし再発防止)。
 
 ## 検証と実行の規律

@@ -1,7 +1,7 @@
 # iotkit-next Implementation Quality Review Guide
 
 コード品質を評価する。
-Codex プロンプトへ注入し、code quality reviewer subagent が使用する。
+Codex プロンプトへ注入し、code quality レビュー(codex/Fable)が使用する。
 
 Active Watchpoints を先に読み、次に Baseline Checklist を適用する。
 

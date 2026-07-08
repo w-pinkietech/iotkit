@@ -1,19 +1,20 @@
 ---
 name: codex-eval-impl-quality
-description: Use as code quality reviewer after spec compliance passes. Evaluates code quality, error handling, concurrency, Rust idioms, and test adequacy.
+description: Use as the code-quality lens of the per-task review. Evaluates code quality, error handling, concurrency, Rust idioms, and test adequacy.
 ---
 
 # Codex Eval Impl Quality
 
 Evaluate code quality of the implementation.
-Used by the code quality reviewer subagent in the 2-stage review process.
+The **code-quality lens** of the single combined per-task review prompt
+(`codex-impl-loop`), run through codex + Fable. Paired with the spec-compliance lens
+(`codex-eval-impl-spec`) in the SAME prompt — not a separate sequential stage.
 
 **REQUIRED:** Read `codex-eval-common` for shared rules (CLI, iteration, safety).
 
 ## When to Use
 
-- After spec compliance review (codex-eval-impl-spec) passes
-- Second stage of the 2-stage review
+- As the code-quality lens of the per-task review prompt (paired with spec compliance)
 
 ## Context to Inject
 
@@ -58,6 +59,6 @@ For each perspective, state findings with severity (Critical/Important/Minor).
 
 ## After Evaluation
 
-- PASS: Task complete, lead merges
-- FAIL: Dev subagent fixes issues, then re-review (quality only, not spec again)
+- PASS: Task complete, Main commits (one commit per task)
+- FAIL: codex fixes issues (fix prompt), then re-review
 - Register novel watchpoints in Active Watchpoints section of `docs/eval/impl-quality-review.md`
