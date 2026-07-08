@@ -1,5 +1,13 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S -u SHELLOPTS -u BASHOPTS -u BASH_XTRACEFD -u BASH_ENV bash
 # trailer.sh — standard commit trailer block.
+#
+# The shebang scrubs inherited shell-option state before bash starts: an
+# exported SHELLOPTS=xtrace with BASH_XTRACEFD=1 would otherwise interleave
+# trace lines into stdout — i.e. into the commit trailer itself (confirmed
+# empirically) — and BASH_ENV would source arbitrary code into this script.
+# Scrubbing must happen pre-bash: once the script is running, the trace of the
+# very first command has already leaked. (Running via `bash scripts/trailer.sh`
+# bypasses the shebang and is unsupported; invoke the script directly.)
 #
 # The Co-Authored-By line names the CURRENT assistant model, auto-detected from
 # this Claude Code session's own transcript (via CLAUDE_CODE_SESSION_ID) so that
