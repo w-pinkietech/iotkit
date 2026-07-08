@@ -54,7 +54,12 @@ fn revoke_targets(params: &Value) -> Vec<String> {
 }
 
 fn issue_preconditions(_tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(), OpError> {
-    parse_new_token(ctx.params)?;
+    let token = parse_new_token(ctx.params)?;
+    if token.kind == TokenKind::Ai && token.ceiling > Tier::Routine {
+        return Err(OpError::Validation(
+            "ai token tier ceiling cannot exceed routine".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -79,7 +84,11 @@ fn issue_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpE
 }
 
 fn revoke_preconditions(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(), OpError> {
-    for token_id in required_string_array(ctx.params, "token_ids")? {
+    let token_ids = required_string_array(ctx.params, "token_ids")?;
+    if token_ids.is_empty() {
+        return Err(OpError::Validation("empty targets".to_string()));
+    }
+    for token_id in token_ids {
         let alive = tx
             .query_row(
                 "SELECT 1 FROM operator_tokens

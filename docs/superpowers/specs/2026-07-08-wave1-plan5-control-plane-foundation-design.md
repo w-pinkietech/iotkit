@@ -25,7 +25,7 @@ getrandom **0.4**（トークン乱数。0.2/0.4 が既にツリーに居るた�
 
 1. `core/ops` クレート: 操作カタログ框組（descriptor + dispatch + tier 執行 + dry-run + 監査）、**標準カタログの単一組み立て点** `standard_catalog()`（§6.5）、認証ストア（`admin_credential` / `operator_tokens`、migration 0012）、setupモード判定
 2. 権限モデル: `Tier { ReadOnly, Routine, Daily, Construction }`。**ReadOnly はトークン ceiling 専用値**であり、OpDescriptor の tier には使えない（dispatch が assert。D12決定3「照会は層ではなくスコープ」）。AI トークンは Routine 上限（構造的: `tier_ceiling` + DB CHECK）
-3. 管理者パスフレーズ（argon2id、単一行）+ **setupモード**（= admin_credential 行が無い状態。閉集合 gate + actor=`setup_mode` 監査 + 常時 setup フラグ表出）
+3. 管理者パスフレーズ（argon2id、単一行、**最小長8・空文字禁止を設定時に422拒否**=Fable掃引I-3反映。空パスフレーズで setup 窓を閉じてゼロエントロピー認証を構成するのを防ぐ。D13決定2「認証を弱められない」の実効化）+ **setupモード**（= admin_credential 行が無い状態。閉集合 gate + actor=`setup_mode` 監査 + 常時 setup フラグ表出）
 4. operatorトークン（発行時のみ平文表示・保存はSHA-256ハッシュ・失効・last_used）+ ログインセッション（パスフレーズ→セッショントークン）
 5. **step-up**: **実効 tier**（bulk 昇格後）が Construction の操作はログイン済みでもパスフレーズ再入力必須（§4.4）
 6. ログイン試行スロットリング（per-source 逓増遅延 + グローバル上限 + 監査。**照合前に適用**）

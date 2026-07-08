@@ -1,31 +1,37 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderValue, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use iotkit_core_ledger as ledger;
 use iotkit_core_ops::{
-    NewOperatorToken, SetOutcome, Tier, TokenKind, hash_passphrase, is_setup_mode, issue_token,
-    load_passphrase_hash, set_passphrase_with_hash, verify_passphrase,
+    Actor, DispatchRequest, NewOperatorToken, OpError, SetOutcome, Tier, TokenKind, dispatch,
+    hash_passphrase, is_setup_mode, issue_token, load_passphrase_hash, set_passphrase_with_hash,
+    standard_catalog, verify_passphrase,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
 use iotkit_core_timeseries::query::{latest_by_series, query_readings_v3};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tower_http::timeout::TimeoutLayer;
 
 use crate::config::ApiConfig;
 use crate::health::{HealthState, now_ms, render_health_json};
 
 use super::auth_layer::auth_layer;
-use super::guard::{Throttle, is_private_source};
+use super::guard::{RetryAfter, Throttle, is_private_source};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const RESERVED_OP_PARAM_KEYS: &[&str] = &["step_up_passphrase"];
+const MIN_PASSPHRASE_LEN: usize = 8;
+const READINGS_LIMIT_MAX: u32 = 10_000;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -43,6 +49,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/series", get(get_series))
         .route("/api/v1/live", get(get_live))
         .route("/api/v1/readings", get(get_readings))
+        .route("/api/v1/ops", get(get_ops_catalog))
+        .route("/api/v1/ops/{name}", post(post_ops_dispatch))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_layer,
@@ -54,6 +62,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/setup/passphrase", post(post_setup_passphrase))
         .merge(protected)
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ))
         .layer(axum::middleware::from_fn(trace_request))
         .layer(axum::middleware::from_fn(private_source_guard))
         .with_state(state)
@@ -64,6 +76,7 @@ pub struct ApiErrorResponse {
     status: StatusCode,
     code: &'static str,
     message: String,
+    retry_after: Option<HeaderValue>,
 }
 
 impl ApiErrorResponse {
@@ -72,26 +85,34 @@ impl ApiErrorResponse {
             status,
             code,
             message: message.into(),
+            retry_after: None,
         }
     }
 
     pub fn unauthorized() -> Self {
         Self::new(StatusCode::UNAUTHORIZED, "unauthorized", "unauthorized")
     }
+
+    pub fn with_retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after = Some(retry_after_header(seconds));
+        self
+    }
 }
 
 impl IntoResponse for ApiErrorResponse {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(json!({
-                "error": {
-                    "code": self.code,
-                    "message": self.message,
-                }
-            })),
-        )
-            .into_response()
+        let body = Json(json!({
+            "error": {
+                "code": self.code,
+                "message": self.message,
+            }
+        }));
+        match self.retry_after {
+            Some(retry_after) => {
+                (self.status, [(header::RETRY_AFTER, retry_after)], body).into_response()
+            }
+            None => (self.status, body).into_response(),
+        }
     }
 }
 
@@ -138,6 +159,22 @@ struct ReadingResponse {
     event_time_source: String,
     quarantined: bool,
     values: Vec<f64>,
+}
+
+#[derive(Serialize)]
+struct OpCatalogResponse {
+    name: &'static str,
+    tier: &'static str,
+    bulk_escalates: bool,
+    params_schema: Value,
+}
+
+#[derive(Deserialize)]
+struct OpDispatchBody {
+    params: serde_json::Map<String, Value>,
+    #[serde(default)]
+    dry_run: bool,
+    step_up_passphrase: Option<String>,
 }
 
 async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorResponse> {
@@ -259,7 +296,7 @@ async fn get_readings(
         ));
     };
     let series_key = query.series_key;
-    let limit = query.limit.unwrap_or(100);
+    let limit = query.limit.unwrap_or(100).min(READINGS_LIMIT_MAX);
     let include_quarantined = query.include_quarantined.unwrap_or(false);
 
     let response = state
@@ -290,22 +327,115 @@ async fn get_readings(
     })
 }
 
+async fn get_ops_catalog() -> Json<Vec<OpCatalogResponse>> {
+    Json(
+        standard_catalog()
+            .iter()
+            .map(|op| OpCatalogResponse {
+                name: op.name,
+                tier: op.tier.as_str(),
+                bulk_escalates: op.bulk_escalates,
+                params_schema: (op.params_schema)(),
+            })
+            .collect(),
+    )
+}
+
+async fn post_ops_dispatch(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    ConnectInfo(source): ConnectInfo<SocketAddr>,
+    Extension(actor): Extension<Actor>,
+    Json(payload): Json<OpDispatchBody>,
+) -> Result<Json<Value>, ApiErrorResponse> {
+    let source_ip = source.ip();
+    reject_reserved_op_params(&payload.params)?;
+    let step_up_verified = match payload.step_up_passphrase {
+        Some(passphrase) => verify_step_up_passphrase(&state, source_ip, passphrase).await?,
+        None => false,
+    };
+    let params = Value::Object(payload.params);
+    let req = DispatchRequest {
+        op: name,
+        params,
+        dry_run: payload.dry_run,
+        actor,
+        source: Some(source_ip.to_string()),
+        step_up_verified,
+    };
+
+    let result = state
+        .db
+        .with_conn(move |conn| Ok(dispatch(conn, standard_catalog(), req)))
+        .await
+        .map_err(op_storage_error)?;
+
+    result.map(Json).map_err(op_error_response)
+}
+
+fn reject_reserved_op_params(
+    params: &serde_json::Map<String, Value>,
+) -> Result<(), ApiErrorResponse> {
+    for key in RESERVED_OP_PARAM_KEYS {
+        if params.contains_key(*key) {
+            return Err(ApiErrorResponse::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "reserved_param",
+                format!("{key} must not appear in params"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn verify_step_up_passphrase(
+    state: &AppState,
+    source_ip: IpAddr,
+    passphrase: String,
+) -> Result<bool, ApiErrorResponse> {
+    state
+        .throttle
+        .check_and_record_source(source_ip)
+        .map_err(rate_limited_error)?;
+
+    let Some(phc) = state
+        .db
+        .with_conn(|conn| load_passphrase_hash(conn).map_err(storage_other))
+        .await
+        .map_err(op_storage_error)?
+    else {
+        state.throttle.record_failure(source_ip);
+        record_auth_failed(&state.db, source_ip, "step_up").await?;
+        return Err(ApiErrorResponse::new(
+            StatusCode::FORBIDDEN,
+            "step_up_required",
+            "step-up required",
+        ));
+    };
+    let verified = tokio::task::spawn_blocking(move || verify_passphrase(&phc, &passphrase))
+        .await
+        .map_err(|e| op_internal_error(format!("passphrase verification task failed: {e}")))?;
+
+    if !verified {
+        state.throttle.record_failure(source_ip);
+        record_auth_failed(&state.db, source_ip, "step_up").await?;
+        return Err(ApiErrorResponse::new(
+            StatusCode::FORBIDDEN,
+            "step_up_required",
+            "step-up required",
+        ));
+    }
+
+    state.throttle.record_success(source_ip);
+    Ok(true)
+}
+
 async fn post_setup_passphrase(
     State(state): State<AppState>,
     ConnectInfo(source): ConnectInfo<SocketAddr>,
     Json(payload): Json<PassphraseRequest>,
 ) -> Result<Json<Value>, ApiErrorResponse> {
     let source_ip = source.ip();
-    state
-        .throttle
-        .check_and_record_source(source_ip)
-        .map_err(|retry| {
-            ApiErrorResponse::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                format!("retry after {} seconds", retry.duration.as_secs().max(1)),
-            )
-        })?;
 
     let setup_mode = state
         .db
@@ -313,11 +443,11 @@ async fn post_setup_passphrase(
         .await
         .map_err(internal_error)?;
     if !setup_mode {
-        state.throttle.record_failure(source_ip);
         return Err(passphrase_already_set());
     }
 
     let passphrase = payload.passphrase;
+    validate_new_passphrase(&passphrase)?;
     let phc = tokio::task::spawn_blocking(move || hash_passphrase(&passphrase))
         .await
         .map_err(|e| internal_error(format!("passphrase hashing task failed: {e}")))?
@@ -341,11 +471,8 @@ async fn post_setup_passphrase(
         .map_err(internal_error)?;
 
     let Some(issued) = issued else {
-        state.throttle.record_failure(source_ip);
         return Err(passphrase_already_set());
     };
-
-    state.throttle.record_success(source_ip);
 
     Ok(Json(token_response(issued)))
 }
@@ -372,13 +499,7 @@ async fn post_session(
     state
         .throttle
         .check_and_record_source(source_ip)
-        .map_err(|retry| {
-            ApiErrorResponse::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                format!("retry after {} seconds", retry.duration.as_secs().max(1)),
-            )
-        })?;
+        .map_err(rate_limited_error)?;
 
     let phc = state
         .db
@@ -444,6 +565,27 @@ fn token_response(issued: iotkit_core_ops::IssuedToken) -> Value {
     })
 }
 
+fn validate_new_passphrase(passphrase: &str) -> Result<(), ApiErrorResponse> {
+    if passphrase.len() < MIN_PASSPHRASE_LEN {
+        return Err(ApiErrorResponse::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "weak_passphrase",
+            "passphrase must be at least 8 characters",
+        ));
+    }
+    Ok(())
+}
+
+fn rate_limited_error(retry: RetryAfter) -> ApiErrorResponse {
+    let seconds = retry.duration.as_secs().max(1);
+    ApiErrorResponse::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate_limited",
+        format!("retry after {seconds} seconds"),
+    )
+    .with_retry_after(seconds)
+}
+
 async fn record_auth_failed(
     db: &DbHandle,
     source: IpAddr,
@@ -483,7 +625,7 @@ pub async fn trace_request(req: Request<Body>, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let started = Instant::now();
     let response = next.run(req).await;
-    tracing::info!(
+    tracing::trace!(
         method = %method,
         path = %path,
         status = response.status().as_u16(),
@@ -516,10 +658,47 @@ fn find_series_for_api(
 }
 
 fn internal_error<E: std::fmt::Display>(e: E) -> ApiErrorResponse {
+    tracing::error!(error = %e, "api internal error");
     ApiErrorResponse::new(
         StatusCode::INTERNAL_SERVER_ERROR,
         "internal",
-        format!("internal error: {e}"),
+        "internal error",
+    )
+}
+
+fn op_error_response(err: OpError) -> ApiErrorResponse {
+    match err {
+        OpError::NotFound => {
+            ApiErrorResponse::new(StatusCode::NOT_FOUND, "unknown_op", "unknown op")
+        }
+        OpError::Forbidden(reason) => {
+            ApiErrorResponse::new(StatusCode::FORBIDDEN, "forbidden", reason)
+        }
+        OpError::StepUpRequired => ApiErrorResponse::new(
+            StatusCode::FORBIDDEN,
+            "step_up_required",
+            "step-up required",
+        ),
+        OpError::PreconditionFailed(message) => {
+            ApiErrorResponse::new(StatusCode::CONFLICT, "precondition_failed", message)
+        }
+        OpError::Validation(message) => {
+            ApiErrorResponse::new(StatusCode::UNPROCESSABLE_ENTITY, "validation", message)
+        }
+        OpError::Internal(message) => op_internal_error(message),
+    }
+}
+
+fn op_storage_error<E: std::fmt::Display>(e: E) -> ApiErrorResponse {
+    op_internal_error(e)
+}
+
+fn op_internal_error<E: std::fmt::Display>(e: E) -> ApiErrorResponse {
+    tracing::error!(error = %e, "ops api internal error");
+    ApiErrorResponse::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal",
+        "internal error",
     )
 }
 

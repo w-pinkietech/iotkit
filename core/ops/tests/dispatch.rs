@@ -1,6 +1,6 @@
 use iotkit_core_ops::{
     Actor, ActorKind, DispatchRequest, NewOperatorToken, OpContext, OpDescriptor, OpError, Tier,
-    TokenKind, dispatch, issue_token,
+    TokenKind, dispatch, issue_token, standard_catalog,
 };
 use iotkit_core_storage::Migration;
 use rusqlite::{Connection, params};
@@ -161,6 +161,23 @@ fn request(
     DispatchRequest {
         op: op.to_string(),
         params: json!({ "ids": ids }),
+        dry_run,
+        actor,
+        source: Some("test".to_string()),
+        step_up_verified,
+    }
+}
+
+fn standard_request(
+    op: &str,
+    params: Value,
+    dry_run: bool,
+    actor: Actor,
+    step_up_verified: bool,
+) -> DispatchRequest {
+    DispatchRequest {
+        op: op.to_string(),
+        params,
         dry_run,
         actor,
         source: Some("test".to_string()),
@@ -530,6 +547,62 @@ fn setup_mode_rejects_bulk() {
         assert!(matches!(err, OpError::Forbidden(reason) if reason == "setup_bulk"));
         let detail = latest_r14(conn);
         assert_eq!(detail["result"], "error:forbidden");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn ai_token_issue_dry_run_rejects_ceiling_above_routine() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let err = dispatch(
+            conn,
+            standard_catalog(),
+            standard_request(
+                "operator_token.issue",
+                json!({
+                    "name": "ai-daily",
+                    "kind": "ai",
+                    "tier_ceiling": "daily"
+                }),
+                true,
+                actor(ActorKind::LocalCli, Tier::Construction),
+                true,
+            ),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, OpError::Validation(message) if message == "ai token tier ceiling cannot exceed routine")
+        );
+        let detail = latest_r14(conn);
+        assert_eq!(detail["result"], "error:validation");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn retire_empty_targets_is_validation_error() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let err = dispatch(
+            conn,
+            standard_catalog(),
+            standard_request(
+                "device.retire",
+                json!({ "system_ids": [] }),
+                true,
+                actor(ActorKind::LocalCli, Tier::Daily),
+                false,
+            ),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, OpError::Validation(message) if message == "empty targets"));
+        let detail = latest_r14(conn);
+        assert_eq!(detail["result"], "error:validation");
         Ok(())
     })
     .unwrap();

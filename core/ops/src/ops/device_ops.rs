@@ -51,7 +51,11 @@ fn system_targets(params: &Value) -> Vec<String> {
 }
 
 fn approve_preconditions(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(), OpError> {
-    for hw in required_string_array(ctx.params, "hardware_ids")? {
+    let hardware_ids = required_string_array(ctx.params, "hardware_ids")?;
+    if hardware_ids.is_empty() {
+        return Err(OpError::Validation("empty targets".to_string()));
+    }
+    for hw in hardware_ids {
         let exists = tx
             .query_row(
                 "SELECT 1 FROM sightings WHERE hardware_id = ?1",
@@ -121,7 +125,11 @@ fn retire_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, Op
 }
 
 fn system_ids(ctx: &OpContext<'_>) -> Result<Vec<SystemId>, OpError> {
-    required_string_array(ctx.params, "system_ids")?
+    let system_ids = required_string_array(ctx.params, "system_ids")?;
+    if system_ids.is_empty() {
+        return Err(OpError::Validation("empty targets".to_string()));
+    }
+    system_ids
         .into_iter()
         .map(|sid| SystemId::from_text(&sid).map_err(OpError::from))
         .collect()

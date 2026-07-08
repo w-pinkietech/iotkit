@@ -137,7 +137,7 @@ async fn box_setup_session_throttle_and_graceful_shutdown() {
         .send()
         .await
         .unwrap();
-    assert_eq!(throttled_setup.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(throttled_setup.status(), StatusCode::CONFLICT);
     assert_eq!(event_count(&db, "admin_passphrase_set"), 1);
     assert_eq!(event_count(&db, "auth_session_issued"), 1);
 
@@ -152,6 +152,10 @@ async fn box_setup_session_throttle_and_graceful_shutdown() {
             .await
             .unwrap();
         if res.status() == StatusCode::TOO_MANY_REQUESTS {
+            assert!(
+                res.headers().contains_key(reqwest::header::RETRY_AFTER),
+                "429 response should include Retry-After"
+            );
             saw_429 = true;
             break;
         }
@@ -173,6 +177,60 @@ async fn box_setup_session_throttle_and_graceful_shutdown() {
         .unwrap();
     assert!(session["token"].as_str().unwrap().starts_with("iko_"));
     assert!(event_count(&db, "auth_session_issued") >= 2);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn setup_passphrase_rejects_empty_and_short_before_accepting_minimum_length() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let health = Arc::new(Mutex::new(HealthState::new(90)));
+    let cfg = api_config("127.0.0.1:0".parse().unwrap());
+
+    let handle = spawn_api_task(
+        db.clone(),
+        health,
+        cfg,
+        "epoch-passphrase-test".to_string(),
+        dir.path().to_path_buf(),
+    )
+    .await
+    .unwrap();
+    let base = format!("https://{}", handle.local_addr);
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+
+    for passphrase in ["", "1234567"] {
+        let res = client
+            .post(format!("{base}/api/v1/setup/passphrase"))
+            .json(&json!({"passphrase": passphrase}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: Value = res.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "weak_passphrase");
+    }
+    assert_eq!(event_count(&db, "admin_passphrase_set"), 0);
+
+    let setup: Value = client
+        .post(format!("{base}/api/v1/setup/passphrase"))
+        .json(&json!({"passphrase": "12345678"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(setup["token"].as_str().unwrap().starts_with("iko_"));
+    assert_eq!(event_count(&db, "admin_passphrase_set"), 1);
 
     shutdown(handle).await;
 }

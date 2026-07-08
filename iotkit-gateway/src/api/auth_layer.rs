@@ -5,7 +5,7 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{Method, Request, header};
 use axum::middleware::Next;
 use axum::response::Response;
-use iotkit_core_ops::{Actor, ActorKind, Tier, authenticate, is_setup_mode};
+use iotkit_core_ops::{Actor, ActorKind, SETUP_ALLOWED_OPS, Tier, authenticate, is_setup_mode};
 
 use crate::health::now_ms;
 
@@ -35,10 +35,11 @@ pub async fn auth_layer(
         })
         .await
         .map_err(|e| {
+            tracing::error!(error = %e, "auth layer internal error");
             ApiErrorResponse::new(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "internal",
-                format!("internal error: {e}"),
+                "internal error",
             )
         })?;
     if setup_mode {
@@ -65,10 +66,11 @@ pub async fn auth_layer(
         })
         .await
         .map_err(|e| {
+            tracing::error!(error = %e, "auth layer internal error");
             ApiErrorResponse::new(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "internal",
-                format!("internal error: {e}"),
+                "internal error",
             )
         })?
         .ok_or_else(ApiErrorResponse::unauthorized)?;
@@ -89,7 +91,7 @@ fn is_setup_allowed(method: &Method, path: &str) -> bool {
         (&Method::GET, "/api/v1/series" | "/api/v1/live" | "/api/v1/ops") => true,
         (&Method::POST, path) => path
             .strip_prefix("/api/v1/ops/")
-            .is_some_and(|name| !name.is_empty()),
+            .is_some_and(|name| SETUP_ALLOWED_OPS.contains(&name)),
         _ => false,
     }
 }
@@ -108,6 +110,10 @@ mod tests {
         assert!(is_setup_allowed(
             &Method::POST,
             "/api/v1/ops/device.approve_sighting"
+        ));
+        assert!(!is_setup_allowed(
+            &Method::POST,
+            "/api/v1/ops/device.retire"
         ));
 
         assert!(!is_setup_allowed(&Method::POST, "/api/v1/ops"));
