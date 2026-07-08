@@ -2,6 +2,16 @@
 
 use iotkit_core_storage::Migration;
 
+pub mod auth;
+pub mod tier;
+
+pub use auth::{
+    IssuedToken, NewOperatorToken, Secret, SetOutcome, TokenRow, authenticate, is_setup_mode,
+    issue_token, list_tokens, load_passphrase_hash, reset_passphrase, revoke_token, set_passphrase,
+    verify_passphrase,
+};
+pub use tier::{Actor, ActorKind, Tier, TokenKind};
+
 pub const MIGRATIONS: &[Migration] = &[Migration {
     version: 12,
     label: "ops",
@@ -14,6 +24,8 @@ pub enum OpsError {
     Storage(#[from] iotkit_core_storage::StorageError),
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Ledger(#[from] iotkit_core_ledger::LedgerError),
     #[error("not found")]
     NotFound,
     #[error("conflict")]
@@ -22,6 +34,10 @@ pub enum OpsError {
     Forbidden,
     #[error("validation: {0}")]
     Validation(String),
+    #[error("credential hashing failed")]
+    CredentialHash,
+    #[error("random generation failed")]
+    Random,
 }
 
 #[cfg(test)]
