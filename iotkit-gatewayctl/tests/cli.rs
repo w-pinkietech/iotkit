@@ -1,4 +1,5 @@
-use std::process::{Command, Output};
+use std::io::Write;
+use std::process::{Command, Output, Stdio};
 
 use rusqlite::{params, types::ValueRef};
 use serde_json::{Map, Value};
@@ -20,6 +21,23 @@ fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
 
 fn run(args: &[&str]) -> Output {
     gatewayctl().args(args).output().expect("run gatewayctl")
+}
+
+fn run_with_stdin(args: &[&str], stdin: &str) -> Output {
+    let mut child = gatewayctl()
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn gatewayctl");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().expect("run gatewayctl")
 }
 
 fn run_in_dir_without_db_env(args: &[&str], cwd: &std::path::Path) -> Output {
@@ -173,6 +191,238 @@ fn seed_archive_target(conn: &rusqlite::Connection) {
         1_000,
     )
     .unwrap();
+}
+
+fn token_id_from_list(output: &str) -> String {
+    output
+        .split_whitespace()
+        .find(|part| part.starts_with("tok_"))
+        .expect("token id in list output")
+        .to_string()
+}
+
+fn token_id_from_labeled_stderr(output: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(output);
+    stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("token_id: "))
+        .expect("labeled token id in stderr")
+        .to_string()
+}
+
+#[test]
+fn token_issue_list_and_revoke_do_not_expose_token_material() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let issued = run(&[
+        "--db",
+        db_arg,
+        "token",
+        "issue",
+        "--name",
+        "routine-human",
+        "--kind",
+        "human",
+        "--tier",
+        "routine",
+    ]);
+    assert!(
+        issued.status.success(),
+        "status: {:?}\nstdout:\n{}\nstderr:\n{}",
+        issued.status.code(),
+        String::from_utf8_lossy(&issued.stdout),
+        String::from_utf8_lossy(&issued.stderr)
+    );
+    let plaintext = String::from_utf8(issued.stdout).unwrap().trim().to_string();
+    assert!(plaintext.starts_with("iko_"), "stdout:\n{plaintext}");
+    let issued_token_id = token_id_from_labeled_stderr(&issued.stderr);
+
+    let listed = assert_success(run(&["--db", db_arg, "token", "list"]));
+    let token_id = token_id_from_list(&listed);
+    assert_eq!(issued_token_id, token_id);
+    assert!(listed.contains("routine-human"), "stdout:\n{listed}");
+    assert!(
+        !listed.contains(&plaintext),
+        "stdout leaked plaintext:\n{listed}"
+    );
+    assert!(
+        !listed.contains("token_hash"),
+        "stdout leaked hash header:\n{listed}"
+    );
+    assert!(
+        !listed.contains("$argon2"),
+        "stdout leaked hash material:\n{listed}"
+    );
+
+    assert_success(run(&["--db", db_arg, "token", "revoke", "--id", &token_id]));
+
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        assert!(
+            iotkit_core_ops::authenticate(conn, &plaintext, i64::MAX)
+                .unwrap()
+                .is_none()
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn token_issue_rejects_ai_daily() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let stderr = assert_failure(run(&[
+        "--db", db_arg, "token", "issue", "--name", "ai-daily", "--kind", "ai", "--tier", "daily",
+    ]));
+
+    assert!(
+        stderr.contains("ai token tier ceiling cannot exceed routine")
+            || stderr.contains("validation"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn passphrase_reset_validates_strength_and_replaces_existing_passphrase() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let empty = assert_failure(run_with_stdin(
+        &["--db", db_arg, "passphrase", "reset"],
+        "\n\n",
+    ));
+    assert!(empty.contains("at least 8"), "stderr:\n{empty}");
+
+    let short_output = run_with_stdin(&["--db", db_arg, "passphrase", "reset"], "1234567\n");
+    assert!(
+        !String::from_utf8_lossy(&short_output.stdout).contains("confirm passphrase"),
+        "stdout:\n{}",
+        String::from_utf8_lossy(&short_output.stdout)
+    );
+    let short = assert_failure(short_output);
+    assert!(short.contains("at least 8"), "stderr:\n{short}");
+
+    assert_success(run_with_stdin(
+        &["--db", db_arg, "passphrase", "reset"],
+        "old-pass\nold-pass\n",
+    ));
+    assert_success(run_with_stdin(
+        &["--db", db_arg, "passphrase", "reset"],
+        "new-pass\nnew-pass\n",
+    ));
+
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let hash = iotkit_core_ops::load_passphrase_hash(conn)
+            .unwrap()
+            .unwrap();
+        assert!(!iotkit_core_ops::verify_passphrase(&hash, "old-pass"));
+        assert!(iotkit_core_ops::verify_passphrase(&hash, "new-pass"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn passphrase_reset_rejects_mismatched_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let stderr = assert_failure(run_with_stdin(
+        &["--db", db_arg, "passphrase", "reset"],
+        "first-pass\nsecond-pass\n",
+    ));
+
+    assert!(
+        stderr.contains("passphrases do not match"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn fingerprint_reads_cert_next_to_db_and_reports_missing_material() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let missing = run(&["--db", db_arg, "fingerprint"]);
+    assert!(
+        !missing.status.success(),
+        "expected missing fingerprint material to fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&missing.stdout),
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    assert!(
+        missing.stdout.is_empty(),
+        "stdout should be empty when fingerprint is unavailable:\n{}",
+        String::from_utf8_lossy(&missing.stdout)
+    );
+    let missing_stderr = String::from_utf8(missing.stderr).unwrap();
+    assert!(
+        missing_stderr.contains("未生成") && missing_stderr.contains("gateway 未起動"),
+        "stderr:\n{missing_stderr}"
+    );
+
+    let tls_dir = dir.path().join("tls");
+    std::fs::create_dir(&tls_dir).unwrap();
+    let cert_pem = "-----BEGIN CERTIFICATE-----\nAQIDBAU=\n-----END CERTIFICATE-----\n";
+    std::fs::write(tls_dir.join("cert.pem"), cert_pem).unwrap();
+    let expected = iotkit_core_ops::fingerprint_of_pem(cert_pem).unwrap();
+
+    let out = assert_success(run(&["--db", db_arg, "fingerprint"]));
+
+    assert_eq!(out.trim(), expected);
+}
+
+#[test]
+fn target_add_is_rejected_in_setup_mode_and_allowed_after_passphrase_reset() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let setup_stderr = assert_failure(run(&[
+        "--db",
+        db_arg,
+        "target",
+        "add",
+        "https://archive.example/publish",
+        "token",
+    ]));
+    assert!(
+        setup_stderr.contains("setupモード中は出口target登録不可"),
+        "stderr:\n{setup_stderr}"
+    );
+
+    assert_success(run_with_stdin(
+        &["--db", db_arg, "passphrase", "reset"],
+        "admin-pass\nadmin-pass\n",
+    ));
+
+    let post_reset_stderr = assert_failure(run(&[
+        "--db",
+        db_arg,
+        "target",
+        "add",
+        "http://archive.example/publish",
+        "token",
+    ]));
+    assert!(
+        !post_reset_stderr.contains("setupモード中は出口target登録不可"),
+        "stderr:\n{post_reset_stderr}"
+    );
 }
 
 #[test]
