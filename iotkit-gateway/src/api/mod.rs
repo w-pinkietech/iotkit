@@ -56,6 +56,7 @@ pub async fn spawn_api_task(
     let app = routes::router(state).into_make_service_with_connect_info::<SocketAddr>();
     let server = axum_server::bind_rustls(cfg.bind, rustls_config).handle(server_handle.clone());
     let shutdown_handle = server_handle.clone();
+    let health_for_cleanup = health.clone();
     let join = tokio::spawn(async move {
         tokio::spawn(async move {
             let _ = shutdown_rx.await;
@@ -64,6 +65,10 @@ pub async fn spawn_api_task(
         if let Err(e) = server.serve(app).await {
             tracing::error!(error = %e, "api server exited with error");
         }
+        health_for_cleanup
+            .lock()
+            .expect("health state mutex poisoned")
+            .api = None;
     });
     let local_addr = server_handle
         .listening()

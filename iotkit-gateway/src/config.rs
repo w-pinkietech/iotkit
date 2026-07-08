@@ -301,13 +301,13 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
         }
     };
 
-    if bravepi.is_none() && rpi_local.is_none() {
+    let api = resolve_api(raw.api)?;
+
+    if bravepi.is_none() && rpi_local.is_none() && !api.enabled {
         return Err(ConfigError::Validation(
-            "at least one adapter must be enabled".to_string(),
+            "at least one adapter or api must be enabled".to_string(),
         ));
     }
-
-    let api = resolve_api(raw.api)?;
 
     Ok(GatewayConfig {
         config_source: source,
@@ -860,16 +860,30 @@ poll_interval_ms = 500
     }
 
     #[test]
-    fn resolve_rejects_all_adapters_disabled() {
+    fn resolve_allows_all_adapters_disabled_when_api_is_enabled() {
         let mut raw = raw_with_defaults();
         raw.adapters.bravepi = Some(RawBravepiConfig {
             enabled: Some(false),
             port: None,
         });
         // rpi_local defaults to disabled
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert!(config.bravepi.is_none());
+        assert!(config.rpi_local.is_none());
+        assert!(config.api.enabled);
+    }
+
+    #[test]
+    fn resolve_rejects_all_adapters_disabled_when_api_is_disabled() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.bravepi = Some(RawBravepiConfig {
+            enabled: Some(false),
+            port: None,
+        });
+        raw.api.enabled = Some(false);
         let result = resolve(raw, ConfigSource::DefaultsOnly);
         assert!(
-            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter"))
+            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter or api"))
         );
     }
 
