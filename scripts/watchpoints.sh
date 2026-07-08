@@ -24,14 +24,20 @@ bad=0
 
 # Every "Watchpoint:" entry must carry a "Revalidate by:" line — an entry
 # whose date line was forgotten would otherwise be invisible here forever.
+# Patterns are line-anchored so prose mentioning the literals never counts;
+# grep exit 1 = zero matches (fine), >1 = scan error (hard fail, not silence).
 for f in docs/eval/*-review.md; do
-  w="$(grep -c "Watchpoint:" "$f" || true)"
-  r="$(grep -c "Revalidate by:" "$f" || true)"
+  w="$(grep -c "^[[:space:]]*Watchpoint:" "$f")" || [ $? -eq 1 ] \
+    || { echo "grep failed scanning $f" >&2; exit 2; }
+  r="$(grep -c "^[[:space:]]*Revalidate by:" "$f")" || [ $? -eq 1 ] \
+    || { echo "grep failed scanning $f" >&2; exit 2; }
   if [ "$w" -ne "$r" ]; then
     echo "MALFORMED: $f has $w 'Watchpoint:' but $r 'Revalidate by:' lines (entry missing its date?)"
     bad=1
   fi
 done
+# (a read error in the same files would already have failed above, so the
+#  process-substitution grep below needs no separate status handling)
 
 # "Revalidate by: YYYY-MM-DD" is the one true watchpoint date format
 # (eval-perspectives-curator). ISO dates compare correctly as strings; the
@@ -41,14 +47,14 @@ while IFS= read -r hit; do
   d="${hit##*Revalidate by: }"
   d="${d%%[[:space:]]*}"
   if [[ ! "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
-     || [ "$(date -d "$d" +%F 2>/dev/null || true)" != "$d" ]; then
+     || [ "$(date -u -d "$d" +%F 2>/dev/null || true)" != "$d" ]; then
     echo "MALFORMED date ('$d'): ${hit%%:  *}"
     bad=1
   elif [[ "$d" < "$today" ]]; then
     echo "EXPIRED ($d): ${hit%%:  *}"
     bad=1
   fi
-done < <(grep -rnH "Revalidate by:" docs/eval/*-review.md)
+done < <(grep -rnH "^[[:space:]]*Revalidate by:" docs/eval/*-review.md)
 # (zero grep matches = no watchpoints anywhere = legitimately clean; the
 #  process-substitution exit status is intentionally not propagated)
 
