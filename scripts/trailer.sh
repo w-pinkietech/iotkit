@@ -18,6 +18,9 @@
 # If the transcript format ever changes, detection degrades to the fallback;
 # update FALLBACK_MODEL when that happens.
 set -euo pipefail
+# An inherited failglob (exported BASHOPTS) would turn detect_model's no-match
+# glob into a hard error — the empty-trailer failure mode again. Neutralize it.
+shopt -u failglob
 
 MODE="${1:-}"
 [ -n "$MODE" ] || { echo "usage: scripts/trailer.sh <codex|docs>" >&2; exit 2; }
@@ -32,16 +35,21 @@ FALLBACK_MODEL="Claude Fable 5"
 # "isSidechain":false guards against subagent lines; requiring the claude- prefix
 # skips "<synthetic>" bookkeeping entries; escaped copies of this pattern inside
 # tool-result strings (\"model\":...) can never match the unescaped pattern.
+# The charset includes "." so a hypothetical dotted id still matches the NEWEST
+# line instead of silently falling through to an older (wrong-model) line.
 detect_model() {
   local sid="${CLAUDE_CODE_SESSION_ID:-}" f hit id=""
   [ -n "$sid" ] || return 1
-  for f in "$HOME"/.claude/projects/*/"$sid".jsonl; do
+  # ${HOME:-}: under set -u an unset HOME is an EXPANSION error, which aborts
+  # the subshell outright — bypassing the caller's `|| true` — before any
+  # fallback can run. Guarded, an unset HOME just means no match -> fallback.
+  for f in "${HOME:-}"/.claude/projects/*/"$sid".jsonl; do
     [ -r "$f" ] || continue
     hit="$(tac "$f" 2>/dev/null \
-           | grep -m1 -E '"isSidechain":false.*"message":\{"model":"claude-[a-z0-9-]+"' \
+           | grep -m1 -E '"isSidechain":false.*"message":\{"model":"claude-[a-z0-9.-]+"' \
            || true)"
     id="$(printf '%s' "$hit" \
-          | grep -oE '"message":\{"model":"claude-[a-z0-9-]+"' | head -n1 \
+          | grep -oE '"message":\{"model":"claude-[a-z0-9.-]+"' | head -n1 \
           | cut -d'"' -f6 || true)"
     [ -n "$id" ] && break
   done
