@@ -963,6 +963,7 @@ dependencies = [
  "iotkit-core-registry",
  "iotkit-core-storage",
  "password-hash",
+ "rcgen",
  "rusqlite",
  "serde",
  "serde_json",

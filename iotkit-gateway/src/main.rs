@@ -2,6 +2,8 @@
 //! adapter を起動し、core/engine に event を渡す。
 
 mod adapter_host;
+#[allow(dead_code)]
+mod api;
 mod config;
 mod epoch_start;
 mod health;
@@ -24,7 +26,7 @@ use tracing_subscriber::EnvFilter;
 fn main() {
     rustls::crypto::ring::default_provider()
         .install_default()
-        .expect("ring provider");
+        .expect("ring provider install");
 
     tracing_subscriber::fmt()
         .with_env_filter(
