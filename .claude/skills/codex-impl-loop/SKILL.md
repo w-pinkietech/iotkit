@@ -72,8 +72,8 @@ For each task in the plan, in order:
    ```bash
    git commit -m "feat(crate): ..." -m "$(scripts/trailer.sh codex)"
    ```
-   If the session model differs from trailer.sh's default, pass
-   `TRAILER_MODEL="<current model>"` — the hardcoded default drifts.
+   trailer.sh auto-detects the session model from the transcript; check the
+   trailer in `git log -1` and pass `TRAILER_MODEL="<model>"` only if it's wrong.
 
 ## After All Tasks
 
