@@ -6,7 +6,7 @@ description: Use as code quality reviewer after spec compliance passes. Evaluate
 # Codex Eval Impl Quality
 
 Evaluate code quality of the implementation.
-Used by the code quality reviewer subagent in the 2-stage review process.
+Stage 2 of the cross-vendor review in the `codex-impl-loop` (code quality).
 
 **REQUIRED:** Read `codex-eval-common` for shared rules (CLI, iteration, safety).
 
@@ -58,6 +58,6 @@ For each perspective, state findings with severity (Critical/Important/Minor).
 
 ## After Evaluation
 
-- PASS: Task complete, lead merges
-- FAIL: Dev subagent fixes issues, then re-review (quality only, not spec again)
+- PASS: Task complete, Main commits (one commit per task)
+- FAIL: codex fixes issues (fix prompt), then re-review (quality only, not spec again)
 - Register novel watchpoints in Active Watchpoints section of `docs/eval/impl-quality-review.md`

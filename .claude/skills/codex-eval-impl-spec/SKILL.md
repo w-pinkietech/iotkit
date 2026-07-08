@@ -1,18 +1,18 @@
 ---
 name: codex-eval-impl-spec
-description: Use as spec compliance reviewer after a dev subagent completes a task. Evaluates whether implementation matches the plan task specification exactly.
+description: Use as spec compliance reviewer after codex implements a task. Evaluates whether implementation matches the plan task specification exactly.
 ---
 
 # Codex Eval Impl Spec
 
 Evaluate whether implementation matches the plan task specification.
-Used by the spec compliance reviewer subagent in the 2-stage review process.
+Stage 1 of the cross-vendor review in the `codex-impl-loop` (spec compliance).
 
 **REQUIRED:** Read `codex-eval-common` for shared rules (CLI, iteration, safety).
 
 ## When to Use
 
-- After a dev subagent reports task completion
+- After codex reports task completion (host-verified with `scripts/verify.sh`)
 - First stage of the 2-stage review (before code quality review)
 
 ## Context to Inject
@@ -58,5 +58,5 @@ For each perspective, state findings with severity (Critical/Important/Minor).
 ## After Evaluation
 
 - PASS: Proceed to code quality review (codex-eval-impl-quality)
-- FAIL: Dev subagent fixes issues, then re-review
+- FAIL: codex fixes issues (fix prompt), then re-review
 - Register novel watchpoints in Active Watchpoints section of `docs/eval/impl-spec-review.md`

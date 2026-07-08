@@ -19,21 +19,35 @@ You MUST invoke Codex. Your own analysis does NOT substitute.
 
 ## CLI Usage
 
+Invoke through the wrapper — `scripts/codex.sh` is the single source of truth for
+model / flags / sandbox, so a model bump happens in one place (no stale constant to
+rot in this doc):
+
 ```bash
-codex exec -m gpt-5.4 -c reasoning_effort=xhigh \
-  -o /tmp/codex-eval-{phase}-{review_id}-iter{n}.txt \
-  -s read-only \
-  "$(cat <<'PROMPT'
-{prompt content}
-PROMPT
-)"
+# Write the review prompt to a file, then:
+scripts/codex.sh review <prompt-file> <label>
+#   -> read-only sandbox, model gpt-5.5, effort high
+#   -> output: /tmp/codex-runs/codex-<label>-review.txt
+
+# Deep review: bump reasoning effort
+CODEX_EFFORT=xhigh scripts/codex.sh review <prompt-file> <label>
 ```
 
-**MUST use:** `-s read-only`
-**MUST NOT use:** `--full-auto`, `-s workspace-write`, `-s danger-full-access`
-**Unique output paths:** Every invocation uses a unique file. Never reuse paths.
-**Non-git directories:** Add `--skip-git-repo-check`.
-**Fresh sessions:** Every iteration is a new `codex exec` invocation. No session reuse.
+**`review` mode is ALWAYS read-only** — evaluation never mutates the tree. The wrapper
+enforces this; do not hand-run `codex exec` with a writable sandbox for a review.
+(Implementation is a separate path: `scripts/codex.sh impl`, danger-full-access — that
+is the codex-impl-loop skill, NOT eval.)
+**Unique labels:** Each invocation uses a distinct `<label>` so outputs never collide.
+Re-review = a fresh `codex.sh` call (no session reuse).
+
+## Cross-Vendor Review (Fable)
+
+Codex is one vendor. Run the **same** review prompt through a Fable review-max agent
+in parallel (Agent tool, `subagent_type: review-max`) — identical lens, only the vendor
+differs. Converge the two result sets: a finding both vendors raise is high-signal; a
+finding only one raises still gets triaged. Same-vendor self-consistency bias is exactly
+what the second vendor catches (memory: cross-vendor-review-same-lens). This is standard
+from plan 5 onward, not optional.
 
 ## Iteration Loop
 
