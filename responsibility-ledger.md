@@ -59,7 +59,7 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 | フリート管理・更新ロールアウト編成 | [3] or [4] |
 | 通知のリッチなエスカレーション(チャット・電話等) | [3] or [4] |
 | 契約仕様書・SDK・適合試験ハーネス | リポジトリ資産(どの箱でもない) |
-| CA(証明書の発行) | [3] or [4] |
+| credential発行権威(enrollment台帳・束縛credential発行。フルCA基盤は不採用=D3決定5/D10決定1) | [3](site_server)。cloud/external targetは当該endpointの終端者(D10決定4) |
 | 長期アーカイブ | [3] or [4] |
 | UI本体(React静的ビルド) | 配布物(ゲートウェイが配信はする) |
 | OSレイヤ(A/Bパーティション機構・NTPデーモン・カーネルドライバ) | [2]内だがIoTKitアプリの外(OSイメージ/インストーラ) |
@@ -105,6 +105,20 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
   共有OSイメージには焼き込まない(D8決定5)。site serverはenrollmentで同一identityの重複登録を拒否する。
 - **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
   Gateway Piの `custody_lost` ではなくsite側の `archive_lost` として記録する(custody境界の明確化。D8決定4)。
+
+## D10波及(出口認証・ホスト型 2026-07-08)
+
+- **R19出口認証の設計本体**は [decisions/D10-exit-authentication.md](decisions/D10-exit-authentication.md)。
+  名簿(enrollment台帳)+束縛credential方式、登録券bootstrap、credentialの一生(短命/2スロット/無人再発行)、
+  発行権威の一般則(credential_authority)。
+- **R14権限段階の2層分割**(D8決定9改訂): 中間層=credential rotation・失効・無人再発行・トンネル鍵rotation
+  (AIハーネス可、スモーク+監査+レート上限+canary。一括失効は人間operator確認へ昇格)、
+  工事層=target追加・削除、cloud target登録、archive designation変更、平文opt-in、enrollment承認
+  (人間のみ。AIトークンには構造的に発行不可)。動詞集合の正本=D10決定5。
+- **AIハーネス=名前を持つ運用主体**: 専用service principal(権限段階=中間層まで)、監査に主体として記録、
+  自身の権限・監査設定は変更不可(D10決定6)。
+- **ホスト型サイトサーバーの経路クラス規則**: [2]↔[3]の全プレーンは、インターネットを渡るなら
+  ピン留め静的鍵トンネル内MUST。R2の悪意入力耐性とは別に、出口側リスナーの公開面制限をR19が持つ(D10決定7)。
 
 ## プロダクト判断(確定 2026-07-02)
 

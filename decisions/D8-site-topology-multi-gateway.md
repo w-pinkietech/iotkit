@@ -5,6 +5,8 @@ Status: 決定 (2026-07-07。複数Pi現場レビュー、subagent細部レビ�
 入力: [../reviews/2026-07-07-topology-decision-multi-pi.md](../reviews/2026-07-07-topology-decision-multi-pi.md)
 査読: クロスベンダー2社(codex gpt-5.5 / Claude)に同一プロンプトで査読させ、両者が独立に一致した指摘
 (クローンSDのsplit-brain対策・波及修正の実適用・移行手順・break-glass競合)を決定3/4/5/7/8・保留・波及修正へ反映(2026-07-07)。
+改訂: D10(出口認証・ホスト型サイトサーバー 2026-07-08)により、決定1(ホスト型変種)・決定4(不達時purge自動保留)・
+決定6(登録券)・決定7(ホスト型行)・決定8(アラーム改名/追加)・決定9(権限2層分割・束縛キー)・却下表(注記)を改訂。
 
 ## 背景
 
@@ -39,6 +41,16 @@ Gateway Piが2台以上必要なサイトはSite-managedとし、site server [3]
 
 代表Gateway Pi、親Gateway Pi、または他Piの管理を担う「管理Pi」は標準トポロジとして置かない。
 複数Piなのにsite serverを置かない「小規模マルチPi」も標準トポロジにしない。
+
+### Site-managed(ホスト型) 変種 (2026-07-08 D10裁定)
+
+常設サーバーを置けない現場のため、site server[3]のソフトウェア一式を敷地外(クラウド/VPS)で運用する
+**ホスト型**を正式変種とする。[3]/[4]の判定は物理配置ではなく役割で行う(保持する状態が単一の
+`site_id` に束縛される=[3]。terminology改訂)。
+
+成立条件はD10決定7に定める。要点: [2]↔[3]間の全プレーンをピン留め静的鍵トンネル内に通す(MUST)、
+`required_wan_outage_days` の宣言とPhase 6検査、不達時のpurge自動保留(決定4)、VPS外DRバックアップ
+(purge条件にはしない)、WAN断中の現場ローカル可視化、1インスタンス=1サイト(相乗りは別決定)。
 
 ## 決定2: Site-managedでも各Gateway Piは完全ゲートウェイである
 
@@ -146,6 +158,21 @@ archive損失/修復を検知したら、対象の `gateway_identity`・範囲�
 前から数え始めると、site server長期停止後にackが届いた瞬間フロア超過→即purgeとなり、ack後保持がゼロになる。
 event_time起算を避けるのは、省電力センサーの遅着バックログをack直後に即purgeしないため。
 
+### 不達時のpurge自動保留 (2026-07-08 D10)
+
+アーカイブ責任targetへの**不達が最低保持フロア長を超えて続く間は、ack済み範囲のpurgeも一時停止**する
+(ローカル判定、到達回復で自動解除)。特にホスト型では、archival store(VPS)の全損はPiからただのWAN断と
+区別できないため、この保留が「復旧後にbounded backfillで埋め戻す原資」を守る唯一の保険になる。
+これはpurge**条件**の追加ではない(条件は上記3項目=archival ack単一のまま)。不達という観測事実が
+保留を掛けるだけで、DR backupや他の箱のackがpurge判断に入らない原則は不変。
+
+**保留とR17劣化契約の優先関係**(2026-07-08 検証査読反映): 保留(本節の不達時自動保留と
+`archive_repair_hold` の両方)はベストエフォートの保険であり、**R17の資源圧力に劣後する**。
+ディスク圧力が劣化契約の発動域に達したら、パージ順序はD2 §1の4クラス(①ack済み→②保管対象外→
+③検疫滞留→④未ack正本)のまま、**保留中の①から監査イベント付きで破棄してよい**。破棄した範囲は
+復旧後のbackfill原資から外れる(DR外なら `archive_lost`)が、それでも④未ack正本のcustody_lostより
+軽い——保留が④の破棄を先に強いる解釈を禁止する。
+
 ## 決定5: R10のmulti-gateway同一性
 
 D7の `(epoch, seq)` はGateway Pi局所の同一性である。Site-managedでは、消費者が保持するグローバルな
@@ -208,15 +235,16 @@ D7は最低限のmulti-gateway消費者義務を定義する。site server固有
 
 ### Site-managed
 
-- Phase 0: site serverを先に用意し、`site_id`、期待Gateway一覧、登録トークン、更新ポリシー、
-  snapshot退避先を作成する。
+- Phase 0: site serverを先に用意し、`site_id`、期待Gateway一覧、登録券(D10決定2: 単回使用・短TTL・
+  共有イメージ焼き込み禁止)、更新ポリシー、snapshot退避先を作成する。
 - Phase 2: 各Gateway Piは自己構成後にsite serverへ登録する。site serverは証明書fingerprint、
   `gateway_identity`、operator権限、所属siteを記録する。
 - Phase 4: デバイス登録はGateway Pi単位で行い、site serverは統合承認画面を提供する。
 - Phase 5: 全Gateway Piがsite serverをアーカイブ責任targetとして登録し、Gateway Piごとの
   合成テストパブリケーションを成功させる。
-- Phase 6: 全Gateway登録、R10疎通、証明書期限、snapshot鮮度、outbox risk horizon、
-  バージョン整合、部分分断なしをサイト単位で検査する。
+- Phase 6: 全Gateway登録、R10疎通、credential健全性(旧: 証明書期限)、snapshot鮮度、outbox risk horizon、
+  バージョン整合、部分分断なしをサイト単位で検査する。ホスト型では加えて `required_wan_outage_days` に
+  対するストレージ容量充足を検査し、満たさない構成は不合格とする(D10決定7)。
 
 ## 決定7: Site-managedの復旧表をD2へ追加する
 
@@ -232,6 +260,8 @@ D7は最低限のmulti-gateway消費者義務を定義する。site server固有
 | site serverとGateway Piの同時障害 | site全体無応答 | site serverをbackupから復元→各Piを復旧/再enrollment→水位ベクトル再照合 | 各Piの未ack正本はPi保持内なら残存。両者同時全損の範囲のみ損失(custody_lost) |
 | duplicate gateway_identity / stale epoch | enrollment検査、R10認証、epoch台帳不一致、payload指紋衝突(決定3) | stale側/指紋不一致側をfenceし、operator確認 | split-brain防止。見分けのつかない同時起動は指紋照合で判別しfence(無音上書きしない) |
 | site server交換 | site server無応答、復旧操作 | site backupから復元、各Piの水位ベクトルと再照合 | Pi保持内は各Piから再送可能 |
+| WAN断/トンネルpeer down(ホスト型) | `site_unreachable`(全Pi一斉不達。`partial_partition`とは別事象)、トンネルハンドシェイク失敗 | Piは収集継続。フロア長超過で不達時purge自動保留(決定4)が掛かる。回復後cursorから再送 | 宣言WAN断耐久日数の範囲はゼロ。超過時のみR17劣化契約 |
+| ホスト型site server(VPS)全損 | Piからは上記WAN断と区別不能。事業者障害通知/DR監視 | VPS外DRバックアップから復元 + 各Piからbounded backfill + `archive_repair_hold` | purge自動保留が効いた範囲は復旧可。保留前にpurge済みかつDR外の範囲は`archive_lost` |
 
 D2既存の「サイトサーバー[3]故障=データ影響ゼロ」は、non-custodial serverに限って正しい。
 Site-managedで[3]がArchival Storeを持つ場合は、上表のようにcustody状態ごとに分ける。
@@ -255,10 +285,11 @@ Site-managedで必須のアラーム:
 | alarm | 意味 |
 |---|---|
 | `outbox_risk_horizon` | 未ack正本がR17劣化契約の未ack正本破棄に到達する推定残時間 |
-| `certificate_expiry` | Gateway証明書、target資格情報、operator tokenの期限またはrotation失敗 |
+| `credential_health`(旧称 `certificate_expiry`、D10改名) | Gateway証明書、target資格情報、operator tokenの期限・rotation失敗・ピン不一致・2スロット片肺 |
 | `snapshot_staleness` | 最終成功snapshotがRPOを超過、または最終台帳変更後のsnapshot未取得 |
 | `mixed_versions` | Gateway間またはsite serverとの契約/API/DB/catalogバージョン不整合 |
-| `partial_partition` | site serverから見えるGateway集合が期待Gateway一覧の一部に限られる状態 |
+| `partial_partition` | site serverから見えるGateway集合が期待Gateway一覧の一部に限られる状態(LAN内の部分分断) |
+| `site_unreachable`(ホスト型。D10追加) | archival storeへの全Pi一斉不達(WAN断/トンネル断/VPS障害)。`partial_partition`とは別事象として扱い、site集計の適用判定を濁らせない |
 
 ## 決定9: YokaKit統合とR19の優先順位
 
@@ -276,10 +307,15 @@ YokaKitはStandaloneでは同一Pi上のローカルR10 targetとして、Site-m
 今回のトポロジ裁定により、R19の直近主戦場はR2入口認証ではなくR10出口認証へ移る。
 
 Site-managedのR19では、gateway enrollment、target registration、credential binding、archive flag変更を先に固定する。
+設計本体はD10(2026-07-08)。
 
-- gateway enrollmentは`gateway_identity`、ledger epoch、証明書fingerprint、site所属を登録する。
-- target credentialは `gateway_identity + target_id + target_url + scope` へ束縛する。
-- cloud target登録、archive flag変更、資格情報rotation/失効はR14の高権限型付き操作とし、疎通スモークと監査を必須にする。
+- gateway enrollmentは`gateway_identity`、ledger epoch、証明書fingerprint、site所属を登録する(手順=D10決定2の登録券)。
+- target credentialは `gateway_identity + target_id + target_endpoint_id + pinset + scope` へ束縛する
+  (旧記述の `target_url` 束縛はD10で改訂——URL文字列はサーバー移転/HA構成で壊れるため)。
+- 高権限操作は2層に分割する(D10決定5改訂): **中間層**=credential rotation/失効/無人再発行(AIハーネス可。
+  疎通スモーク+監査+失効レート上限+canary必須)、**工事層**=target追加・cloud target登録・archive flag変更・
+  平文opt-in・enrollment承認(人間のみ。R14高権限型付き操作+疎通スモーク+監査)。AIハーネスのトークンには
+  工事層の動詞が構造的に発行されない。
 
 ## 却下した案
 
@@ -289,7 +325,7 @@ Site-managedのR19では、gateway enrollment、target registration、credential
 | 小規模マルチPi without server | Pi管理、証明書、target、復旧、長期保存が散らばる |
 | 代表Pi / 管理Pi | 中央ゲートウェイと誤解されやすく、故障時にYokaKit/管理面がPiに引きずられる |
 | site serverをcollectorにする | Gateway Piのローカルcustodyを壊す |
-| cloud backup成功をPi purge条件にする | WAN断でPi purgeが止まり、site archiveの責務境界が曖昧になる |
+| cloud backup成功をPi purge条件にする | WAN断でPi purgeが止まり、site archiveの責務境界が曖昧になる。**注記(2026-07-08 D10)**: ここで却下したのは「敷地内にarchival storeがあるのに、別の箱(DR複製)のackを**追加の**purge条件にする=条件の二重化」である。ホスト型変種(決定1)は「site専属のarchival storeそのものが敷地外にある」構成で、purge条件はarchival ack単一のまま——本行の却下対象ではない。DR backupがpurge条件にならない規則は不変 |
 
 ## 波及修正
 

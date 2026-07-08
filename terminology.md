@@ -6,16 +6,19 @@ Date: 2026-07-02
 この文書は再設計に関わるすべての文書・コード・会話で使う統一語彙を定める。
 ここにない語を新しく使うときは、まずこの文書に追加する。
 
-## 配置の4段(物理的な「箱」)
+## 配置の4段(「箱」の役割階層)
 
 システムの構成要素は必ず次の4段のどこに住むかを明示する。
+段の判定は**役割**で行う(2026-07-08 D10改訂——ホスト型サイトサーバーの導入により物理配置基準を廃止):
+**保持する状態が単一の `site_id` に束縛されるなら[3]、site_idを跨ぐなら[4]**。物理配置は既定値
+([3]=サイト内LAN)にすぎず、判定基準ではない。
 
 | 段 | 用語 | 英語 | 実体 | 説明 |
 |---|---|---|---|---|
 | [1] | デバイス | device | BravePI無線センサー端末、直結I2Cセンサー、第三者の自作デバイス(ESP32/PLC等) | 測定・作動する末端。ゲートウェイの配下 |
 | [2] | **IoTゲートウェイ**(外向き正式名。「ゲートウェイ」単独は内部略称) | IoT gateway / gateway | 現場に置くRaspberry Pi。IoTKit本体が動く | 責務台帳 R1〜R23 はすべてこの箱の責務。コード・APIの `gateway` / `gateway_identity` は不変 |
-| [3] | **サイトサーバー**(旧称「工場サーバー」廃止 2026-07-08) | site server | 制御室等に置くサイト単位の箱。Standaloneでは不在可、Site-managed(Gateway Pi 2台以上)では必須(D8決定1) | 中の論理ロール: Archival Store(預かり)/Site Aggregator+配り用ブローカー(再publish)/Site Console(D8決定3)。AIオペレーター、オンプレYokaKitもここに住める |
-| [4] | クラウド | cloud | **サイトの敷地外の上位**(オプション)。商用クラウドに限らず、本社サーバールーム等サイト外の箱もここ | クラウドLLM API、クラウドYokaKit、複数拠点統合・fleet管理・DR複製が住む。**サイト横断は必ずここでやる(サイトサーバー同士に上下関係を作らない)** |
+| [3] | **サイトサーバー**(旧称「工場サーバー」廃止 2026-07-08) | site server | **単一サイトの責務**(Archival Store/Aggregator/Console)を担う箱。既定は制御室等サイト内LAN。敷地外で運用する**ホスト型**変種あり(D8決定1・D10決定7の条件下で正式)。Standaloneでは不在可、Site-managed(Gateway Pi 2台以上)では必須(D8決定1) | 中の論理ロール: Archival Store(預かり)/Site Aggregator+配り用ブローカー(再publish)/Site Console(D8決定3)。AIオペレーター、オンプレYokaKitもここに住める。1インスタンス=1サイト(相乗り禁止、D10決定7) |
+| [4] | クラウド | cloud | **site_idを跨ぐ上位層**(オプション)。商用クラウドに限らず、本社サーバールーム等もここ。※ホスト型[3]と同じデータセンターに同居しうるが、単一site_idに閉じるインスタンスは[3]である(役割基準) | クラウドLLM API、クラウドYokaKit、複数拠点統合・fleet管理・DR複製が住む。**サイト横断は必ずここでやる(サイトサーバー同士に上下関係を作らない)** |
 
 ### 禁止・注意語
 
@@ -137,6 +140,22 @@ Date: 2026-07-02
 | 終端通知 | terminal notice | 再送しても結果が変わらない失敗(決定的契約違反・custody_conflict)をゲートウェイへ伝える補助topicメッセージ。受けたバッチはoutbox隔離+operator解決(D9決定3)。一時的ストレージ失敗には使わない |
 | 非預かりターゲット | non-custodial target | 市販ブローカー等、custodyを移転しない出口先。PUBACKは配達確認どまり、逆圧・カーソル・gap通知は構造的に失われるベストエフォートの配り(D9決定5) |
 | 一級target / 購読者 | first-class target / subscriber | 消費者の二層。一級target=契約対応リスナー(store-then-ack)を実装しカーソル・完全性保証を受ける消費者。購読者=配り用ブローカーをsubscribeするだけのベストエフォート消費者(D9決定8) |
+
+## 出口認証(D10 2026-07-08)
+
+| 用語 | 英語 | 定義 |
+|---|---|---|
+| enrollment台帳(名簿) | enrollment ledger | site server[3]が保持する登録台帳: `gateway_identity`・鍵/証明書fingerprint・ledger epoch・site所属・credential束縛レコード。D8決定5の一意性検証・active epoch台帳と同居(D10決定1) |
+| 登録券 | enrollment ticket | 新Gateway Piを名簿に載せる単回使用のprovisioning束 {接続endpoint, サーバー公開鍵ピン, site_id, 単回使用秘密, 短TTL}。共有イメージ焼き込み禁止、人間承認必須(D10決定2) |
+| 束縛credential | bound credential | Pi・targetごとに1つの資格情報。`gateway_identity + target_id + target_endpoint_id + pinset + scope` へ束縛(URL文字列には束縛しない)。共有credential禁止(D10決定1) |
+| 2スロット(make-before-break) | two-slot rotation | targetごとにcredentialを2枠持ち、「新発行→疎通スモーク成功→旧失効」の順で更新する方式。スモーク成功が旧失効の事前条件(D10決定3) |
+| 無人再発行 | unattended re-issuance | 期限切れcredentialの非常口。箱から出ない鍵(登録済みfingerprintの鍵ペア/トンネル鍵)で認証→名簿照合→自動再発行+監査。人間の関与不要(D10決定3) |
+| 中間層 / 工事層 | routine tier / construction tier | 高権限操作の2層(D8決定9改訂)。中間層=credential rotation・失効・無人再発行・トンネル鍵rotation(AIハーネス可、スモーク+監査+レート上限+canary。一括失効は人間operator確認へ昇格)。工事層=target追加・削除、cloud target登録、archive designation変更、平文opt-in、enrollment承認(人間のみ。AIトークンには構造的に発行不可)(動詞集合の正本=D10決定5) |
+| ホスト型サイトサーバー | hosted site server | site server[3]のソフトウェア一式を敷地外(クラウド/VPS)で運用する正式変種。成立条件(トンネルMUST・WAN断耐久宣言・purge自動保留・VPS外DR・相乗り禁止)はD10決定7 |
+| 経路クラス規則 | path-class rule | 守りの強度を箱の設置場所でなく経路で決める規則。[2]↔[3]の全プレーンは、LAN内なら「廊下」ルール、インターネットを渡るならピン留め静的鍵トンネル内MUST(D10決定7) |
+| トンネル鍵 | tunnel key | ホスト型の[2]↔[3]トンネル(WireGuard等)のピア鍵。Pi上で生成し公開鍵のみ名簿登録、期限なし(有効性=名簿照合)、rotation=中間層2スロット、失効=peer除去+MQTTセッション切断連動(D10決定7) |
+| credential_health | — | アラーム(旧称 `certificate_expiry`)。証明書・target資格情報・operator tokenの期限・rotation失敗・ピン不一致・2スロット片肺(D10) |
+| site_unreachable | — | ホスト型のアラーム。archival storeへの全Pi一斉不達(WAN断/トンネル断/VPS障害)。LAN内部分分断の `partial_partition` とは別事象(D10) |
 
 ## デバイス識別(レガシー用語の置き換え)
 

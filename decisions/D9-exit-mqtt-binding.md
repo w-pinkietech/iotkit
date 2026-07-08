@@ -173,11 +173,14 @@ request/response可視性の毀損、である。本改訂の応答:
 ## セキュリティ(R19連動)
 
 - MQTT over TLS。サーバー証明書は自己署名+フィンガープリントピン(D3決定5をMQTTに適用)。
-- 認証: username=gateway_identity、password=target credential。D8決定9のtarget credential束縛
-  (gateway_identity + target_id + target_url + scope)をMQTT資格情報に写像する。
-- credential rotation/失効・ACL(ゲートウェイは自分のdata/ack topicにのみpublish/subscribe可)・
-  平文MQTT opt-in時の機能制限(アーカイブ責任target指定の禁止等)の詳細はR19設計specで確定する。
-- 平文MQTTは明示opt-in+警告ログでのみ許可(D1の平文HTTP opt-inと同型)。
+- 認証: username=gateway_identity、password=束縛credential。束縛は
+  `gateway_identity + target_id + target_endpoint_id + pinset + scope`(D10決定1。
+  本節旧記述の `target_url` 束縛はD10で改訂——URL文字列はサーバー移転/HA構成で壊れるため)。
+- credentialの一生(登録券・短命/2スロット・無人再発行・失効時のセッション強制切断)、権限2層、
+  ホスト型サイトサーバーの経路クラス規則、平文MQTT opt-in時の機能制限は**D10で確定**(2026-07-08)。
+  ACL(ゲートウェイは自分のdata/ack topicにのみpublish/subscribe可)の詳細のみWave 1出口specに残る。
+- 平文MQTTは明示opt-in+警告ログでのみ許可(D1の平文HTTP opt-inと同型)。機能制限はD10決定8
+  (非預かりtargetのみ・プライベートアドレス限定・credential配布/制御プレーン禁止・監査必須)。
 
 ## 波及修正
 
@@ -190,6 +193,7 @@ request/response可視性の毀損、である。本改訂の応答:
 3. **ADR 0029**: 注記を追加(上記「ADR 0029への応答」の要旨。誤引用をしない)。
 4. **adr-inventory**: 0029行に本書参照を追記。
 5. **R19設計spec**: MQTT資格情報・TLSピン・ACL・rotation・enrollment束縛を出口認証の設計対象に含める。
+   [適用済 2026-07-08: D10として決定。ACL詳細のみWave 1出口specに残る]
 6. **terminology**: 「出口MQTTバインディング」「送信窓」「非預かりターゲット」「一級target/購読者」
    「補助topic(ack明細)」等を追加。
 7. **monojoh-authority契約文書群**(yokakit-transport-binding / publisher契約テスト / outbox-retry-policy):
