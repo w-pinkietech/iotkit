@@ -150,12 +150,24 @@ Date: 2026-07-02
 | 束縛credential | bound credential | Pi・targetごとに1つの資格情報。`gateway_identity + target_id + target_endpoint_id + pinset + scope` へ束縛(URL文字列には束縛しない)。共有credential禁止(D10決定1) |
 | 2スロット(make-before-break) | two-slot rotation | targetごとにcredentialを2枠持ち、「新発行→疎通スモーク成功→旧失効」の順で更新する方式。スモーク成功が旧失効の事前条件(D10決定3) |
 | 無人再発行 | unattended re-issuance | 期限切れcredentialの非常口。箱から出ない鍵(登録済みfingerprintの鍵ペア/トンネル鍵)で認証→名簿照合→自動再発行+監査。人間の関与不要(D10決定3) |
-| 中間層 / 工事層 | routine tier / construction tier | 高権限操作の2層(D8決定9改訂)。中間層=credential rotation・失効・無人再発行・トンネル鍵rotation(AIハーネス可、スモーク+監査+レート上限+canary。一括失効は人間operator確認へ昇格)。工事層=target追加・削除、cloud target登録、archive designation変更、平文opt-in、enrollment承認(人間のみ。AIトークンには構造的に発行不可)(動詞集合の正本=D10決定5) |
+| 中間層 / 工事層 | routine tier / construction tier | 高権限操作の2層(D8決定9改訂)。中間層=**出口の**credential rotation・失効・無人再発行・トンネル鍵rotation(AIハーネス可、スモーク+監査+レート上限+canary。一括失効は人間operator確認へ昇格)。工事層=target追加・削除、cloud target登録、archive designation変更、平文opt-in、enrollment承認、入口リスナー有効化/bind変更(人間のみ。AIトークンには構造的に発行不可)(動詞集合の正本=D10決定5・D11決定8)。※入口の**デバイストークン失効は中間層に含まれない**——人間のみ(D11決定3) |
 | ホスト型サイトサーバー | hosted site server | site server[3]のソフトウェア一式を敷地外(クラウド/VPS)で運用する正式変種。成立条件(トンネルMUST・WAN断耐久宣言・purge自動保留・VPS外DR・相乗り禁止)はD10決定7 |
 | 経路クラス規則 | path-class rule | 守りの強度を箱の設置場所でなく経路で決める規則。[2]↔[3]の全プレーンは、LAN内なら「廊下」ルール、インターネットを渡るならピン留め静的鍵トンネル内MUST(D10決定7) |
 | トンネル鍵 | tunnel key | ホスト型の[2]↔[3]トンネル(WireGuard等)のピア鍵。Pi上で生成し公開鍵のみ名簿登録、期限なし(有効性=名簿照合)、rotation=中間層2スロット、失効=peer除去+MQTTセッション切断連動(D10決定7) |
 | credential_health | — | アラーム(旧称 `certificate_expiry`)。証明書・target資格情報・operator tokenの期限・rotation失敗・ピン不一致・2スロット片肺(D10) |
 | site_unreachable | — | ホスト型のアラーム。archival storeへの全Pi一斉不達(WAN断/トンネル断/VPS障害)。LAN内部分分断の `partial_partition` とは別事象(D10) |
+
+## 入口認証(D11 2026-07-08)
+
+| 用語 | 英語 | 定義 |
+|---|---|---|
+| 流量クラス | rate class | デバイス登録時に申告する想定流量の粗い段階(既定クラスあり)。容量設計=現場エンジニアの責任、執行=ソフトの責任、という分担の実体。クラス変更は人間のみ(D11決定4・8) |
+| 絞り | throttle | 流量クラス超過分を**非終端**の応答で退けるシステム自動執行。HTTP=429+Retry-After(耐久ackなし)、ack語彙上は `deferred`——終端 `rejected` には決して写像しない(spool持ち送信者のデータ破壊防止)。可逆・ヒステリシス付き自動解除・騒がしく(アラーム+R23+監査)(D11決定4) |
+| 対応の階段 | response ladder | 入口の事故対応の順序: 絞る(自動)→検疫(自動・既決)→トークン失効(人間のみ)。自動対応は必ず騒がしく行う(D11決定4) |
+| ペアリング窓 / 登録コード | pairing window / registration code | デバイス登録の儀式(D1既決)。登録コードはD10登録券の縮小版(単回使用・短TTL・窓内のみ有効)。窓は自動クローズ、開けっ放し禁止(D11決定6) |
+| 入口リスナー既定オフ | ingress listener off-by-default | ネットワーク入口(HTTP/MQTT ingest)は既定で無効。有効化・bind変更・プロトコル追加は独立した工事層操作(device addの暗黙副作用にしない)。インターネット公開は禁止——遠隔地からのデータは別のIoTゲートウェイ[2]+出口契約で運ぶ(D11決定7) |
+| site_local_cidr | — | 入口リスナーのbind先を定義する明示設定(CIDR+許可インターフェース)。「LAN限定」の検証可能な実体。別拠点・第三者WiFi・VPN越しのプライベートアドレスは含めない(D11決定7) |
+| capacity_debt | — | 流量クラス申告合計が箱の実測体力を超えたまま、人間の明示承認で `device add`/クラス変更を通した記録。検算はPhase 6と操作のたびの両方で実行(D11決定4) |
 
 ## デバイス識別(レガシー用語の置き換え)
 
