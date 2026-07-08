@@ -24,6 +24,8 @@ skills, docs — IS Main's domain.
 
 ## Per-Task Loop
 
+Prompt files live in the session scratchpad (temporary, not committed to the repo).
+
 For each task in the plan, in order:
 
 1. **Author the impl prompt** → `scratchpad/codex-impl-t<N>.md`
@@ -32,7 +34,9 @@ For each task in the plan, in order:
    - State the design-corpus invariants the task must not violate (test-green ≠ correct)
    - Require codex to self-run `cargo test` / `clippy` (danger-full-access lets it)
 
-2. **Dispatch codex (impl)** — background, read output when it returns:
+2. **Dispatch codex (impl)** — background, read output when it returns.
+   Precondition: a clean working tree (commit/stash uncommitted changes first) — `impl` runs
+   danger-full-access on the main checkout, unsandboxed, so uncommitted work is at risk.
    ```bash
    scripts/codex.sh impl scratchpad/codex-impl-t<N>.md t<N>
    ```
@@ -44,13 +48,17 @@ For each task in the plan, in order:
    fmt + `cargo test --workspace` + clippy `-D warnings`. Green is necessary, not sufficient.
 
 4. **Cross-vendor review — one prompt, two vendors, in parallel**
-   - Write ONE review prompt → `scratchpad/codex-review-t<N>.md`. Include a reality-check
-     block: your state claims (expected HEAD, commit range, key code facts, test counts)
-     for the vendor to independently confirm/refute against git/disk/test ("語りを信じるな、実物を読め").
+   - Write ONE review prompt → `scratchpad/codex-review-t<N>.md`. It integrates BOTH review
+     lenses — spec compliance and code quality — by injecting `docs/eval/impl-spec-review.md`
+     and `docs/eval/impl-quality-review.md` (skills: codex-eval-impl-spec, codex-eval-impl-quality).
+     Include a reality-check block: your state claims (expected HEAD, commit range, key code facts,
+     test counts) for the vendor to independently confirm/refute against git/disk/test ("語りを信じるな、実物を読め").
    - codex (read-only): `scripts/codex.sh review scratchpad/codex-review-t<N>.md t<N>`
    - Fable (review-max): Agent tool, `subagent_type: review-max`, the SAME prompt text.
    - Converge findings. Two-layer defense: reality-check catches false claims (hallucination),
      independent review catches blind spots (missed bugs). Both required — different failure classes.
+   - Register any novel, project-specific blind spot as an Active Watchpoint in the matching
+     `docs/eval/*-review.md` (eval-perspectives-curator) — this is how the evaluator learns.
 
 5. **Fix loop** — for each Critical/Important:
    - Author `scratchpad/codex-fix-t<N>.md`, dispatch `scripts/codex.sh impl`, re-verify, re-review.
@@ -65,8 +73,8 @@ For each task in the plan, in order:
 
 ## After All Tasks
 
-- Final codex review on the full diff (feature branch vs default branch): cross-task
-  consistency, integration issues. Same cross-vendor pass if the change is substantial.
+- Final cross-vendor review on the full diff (feature branch vs default branch) — codex
+  (read-only) + Fable, **mandatory, not skipped for size**: cross-task consistency, integration.
 - `scripts/verify.sh` once more.
 - Record task closure in the SDD ledger with REAL commit hashes (git log is canon, not memory).
 - Then `superpowers:finishing-a-development-branch` (push / PR / merge).

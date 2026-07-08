@@ -9,10 +9,11 @@ description: Maintain and evolve Codex eval-perspectives — run after each code
 
 The Codex evaluator's effectiveness depends on the quality of its learned perspectives. Without curation, perspectives become stale, narrow, or redundant — and the evaluator regresses to generic advice.
 
-This skill maintains the three phase-specific eval-perspectives files as living documents:
+This skill maintains the phase-specific eval-perspectives files as living documents:
 - `docs/eval/spec-review.md` — Active Watchpoints section for design/architecture
 - `docs/eval/plan-review.md` — Active Watchpoints section for task decomposition
-- `docs/eval/impl-review.md` — Active Watchpoints section for code quality/runtime
+- `docs/eval/impl-spec-review.md` — Active Watchpoints for spec compliance
+- `docs/eval/impl-quality-review.md` — Active Watchpoints for code quality/runtime
 
 **Core principle:** Perspectives should be the distilled lessons that make *this project's* reviews sharper than a generic code review. If a perspective wouldn't change what Codex looks for, it's noise.
 
@@ -44,7 +45,8 @@ When the user asks to review, audit, or improve perspectives.
 ```bash
 cat docs/eval/spec-review.md
 cat docs/eval/plan-review.md
-cat docs/eval/impl-review.md
+cat docs/eval/impl-spec-review.md
+cat docs/eval/impl-quality-review.md
 ```
 
 ### Step 2: Evaluate Each Perspective
@@ -128,9 +130,10 @@ Good: Perspectives spread across concurrency, I/O, config, testing, naming
 ## Format Rules
 
 Perspectives files (one per review phase):
-- `docs/superpowers/eval-perspectives-spec.md`
-- `docs/superpowers/eval-perspectives-plan.md`
-- `docs/superpowers/eval-perspectives-impl.md`
+- `docs/eval/spec-review.md`
+- `docs/eval/plan-review.md`
+- `docs/eval/impl-spec-review.md`
+- `docs/eval/impl-quality-review.md`
 
 ```markdown
 # Codex Eval Perspectives
@@ -159,8 +162,8 @@ Level 2 (principle): "Every I/O boundary must document its byte order contract"
 
 ## Integration
 
-- **Called by:** `codex-eval-spec`, `codex-eval-plan`, `codex-eval-impl` (after each review cycle)
-- **Reads/writes:** Active Watchpoints section in `docs/eval/{spec,plan,impl}-review.md`
+- **Called by:** `codex-eval-spec`, `codex-eval-plan`, `codex-eval-impl-spec`, `codex-eval-impl-quality` (after each review cycle)
+- **Reads/writes:** Active Watchpoints section in `docs/eval/{spec,plan,impl-spec,impl-quality}-review.md`
 - **Does NOT modify:** any source code or specs
 
 ## Quick Reference

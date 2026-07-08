@@ -12,10 +12,11 @@
 #   TRAILER_MODEL="Claude Fable 5" scripts/trailer.sh codex
 set -euo pipefail
 MODEL="${TRAILER_MODEL:-Claude Opus 4.8}"
+MODEL="${MODEL//[$'\n\r']/ }"   # collapse newlines: a single-line display name, no trailer injection
 case "${1:-codex}" in
   codex)
     printf 'Implemented-by: codex\nReviewed-by: codex (read-only), Fable review-max\nCo-Authored-By: %s <noreply@anthropic.com>\n' "$MODEL" ;;
-  docs|main)
+  docs)
     printf 'Co-Authored-By: %s <noreply@anthropic.com>\n' "$MODEL" ;;
   *) echo "usage: scripts/trailer.sh <codex|docs>" >&2; exit 2 ;;
 esac

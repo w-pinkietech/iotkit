@@ -1,7 +1,7 @@
 # iotkit-next Implementation Spec Compliance Review Guide
 
 実装がタスク仕様に合っているかを評価する。
-Codex プロンプトへ注入し、spec compliance reviewer subagent が使用する。
+Codex プロンプトへ注入し、spec compliance レビュー(codex/Fable)が使用する。
 
 Active Watchpoints を先に読み、次に Baseline Checklist を適用する。
 

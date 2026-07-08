@@ -1,6 +1,6 @@
 ---
 name: codex-eval-common
-description: Shared infrastructure for Codex evaluation skills (codex-eval-spec, codex-eval-plan, codex-eval-impl). Do not invoke directly — use the phase-specific skill instead.
+description: Shared infrastructure for Codex evaluation skills (codex-eval-spec, codex-eval-plan, codex-eval-impl-spec, codex-eval-impl-quality). Do not invoke directly — use the phase-specific skill instead.
 ---
 
 # Codex Eval Common
@@ -26,11 +26,12 @@ rot in this doc):
 ```bash
 # Write the review prompt to a file, then:
 scripts/codex.sh review <prompt-file> <label>
-#   -> read-only sandbox, model gpt-5.5, effort high
-#   -> output: /tmp/codex-runs/codex-<label>-review.txt
+#   -> read-only sandbox; model/effort defaults live in scripts/codex.sh
+#      (review defaults to xhigh reasoning — reviews earn max reasoning)
+#   -> output: /tmp/codex-runs/codex-<label>-review-<timestamp>.txt
 
-# Deep review: bump reasoning effort
-CODEX_EFFORT=xhigh scripts/codex.sh review <prompt-file> <label>
+# Cheaper mechanical pass: dial effort down
+CODEX_EFFORT=high scripts/codex.sh review <prompt-file> <label>
 ```
 
 **`review` mode is ALWAYS read-only** — evaluation never mutates the tree. The wrapper
@@ -51,15 +52,15 @@ from plan 5 onward, not optional.
 
 ## Iteration Loop
 
-1. Run `codex exec` with phase-appropriate prompt
+1. Run `scripts/codex.sh review` with the phase-appropriate prompt
 2. Read result
 3. If Critical or Important issues found:
    - Non-semantic (wording/structure/omission): fix autonomously
    - Semantic (architecture/requirements): escalate to user
    - Lateral spread check: grep for same pattern workspace-wide, fix ALL instances
-4. Re-run `codex exec` (fresh session)
+4. Re-run `scripts/codex.sh review` (fresh invocation, new label)
 5. Repeat until zero Critical and zero Important
-6. Run verification pass (one more `codex exec`)
+6. Run verification pass (one more `scripts/codex.sh review`)
 7. If verification finds new Critical/Important: fix and re-verify
 8. Done when Codex returns zero Critical/Important
 
@@ -88,7 +89,7 @@ Max 10 per file. Review-by date: 3 months from creation.
 
 - About to review content yourself instead of invoking Codex
 - "I can see the issues myself, no need for Codex"
-- Summarizing Codex feedback without actually running `codex exec`
+- Summarizing Codex feedback without actually running `scripts/codex.sh review`
 - Skipping iteration because "first review was thorough enough"
 - Auto-fixing requirement/architecture issue without escalating
 - Reusing a Codex session instead of starting fresh

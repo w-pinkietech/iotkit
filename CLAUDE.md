@@ -5,7 +5,7 @@ Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- `core/engine` <- adap
 ## Design Authority
 
 - **設計正本は [w-pinkietech/iotkit-redesign](https://github.com/w-pinkietech/iotkit-redesign) の `docs/redesign/`**
-  (用語集・責務台帳R1-R23・決定文書D1〜D6)。
+  (用語集・責務台帳R1-R23・決定文書D1〜D13)。
 - ローカル開発ではこのリポジトリの親ディレクトリに設計リポジトリをチェックアウトする配置を推奨
   (例: `~/dev/iot/docs/redesign/` と `~/dev/iot/iotkit-next/`)。本文書内の設計参照はこの配置を前提とした相対位置。
 - monojoh-authorityのADRを参照する前に、必ず設計正本リポジトリの `docs/redesign/adr-inventory.md`
@@ -29,7 +29,7 @@ scripts/verify.sh          # fmt + test --workspace + clippy -D warnings (host v
 - **codex 起動は `scripts/codex.sh` 経由が正。** `scripts/codex.sh review <prompt> <label>`(read-only)/`impl <prompt> <label>`(danger-full-access)。model/flag/sandbox の唯一の真実源=このスクリプト(docs にモデル定数を散らさない)。
 - **各実装タスクはクロスベンダーレビュー必須。** 同一プロンプトを codex(read-only) と Fable(review-max) の両方に通す。spec → plan → per-task impl → final impl の全段階でレビューを省かない。
 - Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → codex-impl-loop → PR
-- **Watchpoint curation は Main agent の責務。** Lead/Reviewer の結果を受けて eval-perspectives-curator で review guide の Active Watchpoints を更新する。
+- **Watchpoint curation は Main agent の責務。** per-task クロスベンダーレビュー(codex+Fable)の結果を受けて eval-perspectives-curator で review guide の Active Watchpoints を更新する。
 - **計画作成時は設計追補を全掃引する。** 対象決定文書の監査追記・追補節(「実装と同時」等の指示を含む)を計画の Global Constraints に反映してから書く(D1 quarantine_reason 追補の見落とし再発防止)。
 
 ## 検証と実行の規律

@@ -6,14 +6,16 @@ description: Use as spec compliance reviewer after codex implements a task. Eval
 # Codex Eval Impl Spec
 
 Evaluate whether implementation matches the plan task specification.
-Stage 1 of the cross-vendor review in the `codex-impl-loop` (spec compliance).
+The **spec-compliance lens** of the single combined per-task review prompt
+(`codex-impl-loop`), run through codex + Fable. Paired with the code-quality lens
+(`codex-eval-impl-quality`) in the SAME prompt — not a separate sequential stage.
 
 **REQUIRED:** Read `codex-eval-common` for shared rules (CLI, iteration, safety).
 
 ## When to Use
 
 - After codex reports task completion (host-verified with `scripts/verify.sh`)
-- First stage of the 2-stage review (before code quality review)
+- As the spec-compliance lens of the per-task review prompt (paired with code quality)
 
 ## Context to Inject
 
@@ -57,6 +59,6 @@ For each perspective, state findings with severity (Critical/Important/Minor).
 
 ## After Evaluation
 
-- PASS: Proceed to code quality review (codex-eval-impl-quality)
+- Findings feed the per-task converge step (codex-impl-loop step 4); the same prompt also carries the code-quality lens (codex-eval-impl-quality)
 - FAIL: codex fixes issues (fix prompt), then re-review
 - Register novel watchpoints in Active Watchpoints section of `docs/eval/impl-spec-review.md`
