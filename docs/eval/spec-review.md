@@ -8,20 +8,15 @@ Active Watchpoints を先に読み、次に Baseline Checklist を適用する�
 最近のレビューで観測されたプロジェクト固有の盲点。
 max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は Baseline に昇格する。
 
-- Added: 2026-03-27
-  Revalidate by: 2026-06-27
+- Added: 2026-03-27 (renewed 2026-07-08 — untriggered since creation; kept because 計画6 のネットワーク入口は fan-in ループを新設する。次の期限でも未検証なら削除)
+  Revalidate by: 2026-10-08
   Watchpoint: `biased` in `tokio::select!` creates starvation risk when one channel has sustained traffic — applies to any fan-in or adapter loop.
   Observed in: rpi-local-adapter impl review.
 
-- Added: 2026-03-27
-  Revalidate by: 2026-06-27
+- Added: 2026-03-27 (renewed 2026-07-08 — untriggered since creation; kept because 計画6 はリスナー・トークン等の新しい設定面を追加する。次の期限でも未検証なら削除)
+  Revalidate by: 2026-10-08
   Watchpoint: Partial config surfaces (some env vars, some hardcoded) create an awkward middle ground that invites silent misconfiguration. Either fully hardcode or fully expose.
   Observed in: rpi-local-adapter gateway integration.
-
-- Added: 2026-03-28
-  Revalidate by: 2026-06-28
-  Watchpoint: When a runtime claims "sensor-specific logic only / zero boilerplate," verify that transport-level metadata (ConnectionInfo, bus/address parameters) is constructed by the runtime, not repeated in each driver.
-  Observed in: polling-adapter-runtime config rename review.
 
 ## Baseline Checklist
 

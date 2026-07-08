@@ -48,9 +48,11 @@ For each task in the plan, in order:
    fmt + `cargo test --workspace` + clippy `-D warnings`. Green is necessary, not sufficient.
 
 4. **Cross-vendor review — one prompt, two vendors, in parallel**
+   - First run `scripts/watchpoints.sh`; adjudicate any expired watchpoints
+     (eval-perspectives-curator) so the guides you inject are current.
    - Write ONE review prompt → `scratchpad/codex-review-t<N>.md`. It integrates BOTH review
      lenses — spec compliance and code quality — by injecting `docs/eval/impl-spec-review.md`
-     and `docs/eval/impl-quality-review.md` (skills: codex-eval-impl-spec, codex-eval-impl-quality).
+     and `docs/eval/impl-quality-review.md` (skill: codex-eval-impl has the template).
      Include a reality-check block: your state claims (expected HEAD, commit range, key code facts,
      test counts) for the vendor to independently confirm/refute against git/disk/test ("語りを信じるな、実物を読め").
    - codex (read-only): `scripts/codex.sh review scratchpad/codex-review-t<N>.md t<N>`
@@ -70,6 +72,8 @@ For each task in the plan, in order:
    ```bash
    git commit -m "feat(crate): ..." -m "$(scripts/trailer.sh codex)"
    ```
+   If the session model differs from trailer.sh's default, pass
+   `TRAILER_MODEL="<current model>"` — the hardcoded default drifts.
 
 ## After All Tasks
 

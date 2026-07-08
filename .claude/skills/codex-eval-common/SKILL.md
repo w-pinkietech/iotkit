@@ -1,6 +1,6 @@
 ---
 name: codex-eval-common
-description: Shared infrastructure for Codex evaluation skills (codex-eval-spec, codex-eval-plan, codex-eval-impl-spec, codex-eval-impl-quality). Do not invoke directly — use the phase-specific skill instead.
+description: Shared infrastructure for Codex evaluation skills (codex-eval-spec, codex-eval-plan, codex-eval-impl). Do not invoke directly — use the phase-specific skill instead.
 ---
 
 # Codex Eval Common
