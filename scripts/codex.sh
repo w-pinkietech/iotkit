@@ -42,9 +42,9 @@ case "$MODE" in
 esac
 CODEX_EFFORT="${CODEX_EFFORT:-$DEFAULT_EFFORT}"
 
-[ -f "$PROMPT" ] || { echo "prompt file not found: $PROMPT" >&2; exit 2; }
+[ -s "$PROMPT" ] || { echo "prompt file missing or empty: $PROMPT" >&2; exit 2; }
 mkdir -p "$CODEX_OUT_DIR"
-OUT="$CODEX_OUT_DIR/codex-${LABEL}-${MODE}-$(date +%Y%m%d-%H%M%S).txt"
+OUT="$CODEX_OUT_DIR/codex-${LABEL}-${MODE}-$(date +%Y%m%d-%H%M%S)-$$.txt"
 
 {
   echo "→ codex ${MODE} (sandbox=${SANDBOX}) model=${CODEX_MODEL} effort=${CODEX_EFFORT}"

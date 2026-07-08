@@ -1,6 +1,6 @@
 ---
 name: eval-perspectives-curator
-description: Maintain and evolve Codex eval-perspectives — run after each codex-eval-review cycle completes, or when the user asks to review perspective quality. Prevents staleness, bias, and overfit.
+description: Maintain and evolve Codex eval-perspectives — run after each codex-eval-* review cycle completes, or when the user asks to review perspective quality. Prevents staleness, bias, and overfit.
 ---
 
 # Eval Perspectives Curator
@@ -19,9 +19,9 @@ This skill maintains the phase-specific eval-perspectives files as living docume
 
 ## When to Use
 
-### Automatic (after codex-eval-review)
+### Automatic (after codex-eval-* review)
 
-Run after every codex-eval-review cycle completes. Check:
+Run after every codex-eval-* review cycle completes. Check:
 1. Did this review produce findings that deserve a new perspective?
 2. Did any existing perspective prove its value (Codex found what it predicted)?
 3. Did any perspective fail to help (Codex missed something the perspective should have caught)?
@@ -170,7 +170,7 @@ Level 2 (principle): "Every I/O boundary must document its byte order contract"
 
 | Trigger | Action |
 |---------|--------|
-| codex-eval-review completed | Run curation: new perspectives? existing ones validated? |
+| codex-eval-* review completed | Run curation: new perspectives? existing ones validated? |
 | Perspective review-by date reached | Evaluate: keep, update, or remove |
 | User asks to audit perspectives | Full curation pass |
 | Adding perspective #11 | Remove least valuable existing one |
