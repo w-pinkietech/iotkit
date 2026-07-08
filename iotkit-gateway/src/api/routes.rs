@@ -3,23 +3,26 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderValue, Request, StatusCode};
+use axum::extract::{ConnectInfo, Query, State};
+use axum::http::{HeaderValue, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use iotkit_core_ledger as ledger;
 use iotkit_core_ops::{
     NewOperatorToken, SetOutcome, Tier, TokenKind, hash_passphrase, is_setup_mode, issue_token,
     load_passphrase_hash, set_passphrase_with_hash, verify_passphrase,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
-use serde::Deserialize;
+use iotkit_core_timeseries::query::{latest_by_series, query_readings_v3};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::config::ApiConfig;
-use crate::health::{HealthState, now_ms};
+use crate::health::{HealthState, now_ms, render_health_json};
 
+use super::auth_layer::auth_layer;
 use super::guard::{Throttle, is_private_source};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
@@ -35,10 +38,21 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    let protected = Router::new()
+        .route("/api/v1/health", get(get_health))
+        .route("/api/v1/series", get(get_series))
+        .route("/api/v1/live", get(get_live))
+        .route("/api/v1/readings", get(get_readings))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_layer,
+        ));
+
     Router::new()
         .route("/api/v1/box", get(get_box))
         .route("/api/v1/session", post(post_session))
         .route("/api/v1/setup/passphrase", post(post_setup_passphrase))
+        .merge(protected)
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .layer(axum::middleware::from_fn(trace_request))
         .layer(axum::middleware::from_fn(private_source_guard))
@@ -86,6 +100,46 @@ struct PassphraseRequest {
     passphrase: String,
 }
 
+#[derive(Serialize)]
+struct SeriesResponse {
+    series_key: String,
+    system_id: String,
+    user_label: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LiveResponse {
+    series_key: String,
+    event_time: i64,
+    event_time_source: String,
+    quarantined: bool,
+    values: Vec<f64>,
+}
+
+#[derive(Deserialize)]
+struct ReadingsQuery {
+    series_key: String,
+    from_ms: Option<i64>,
+    to_ms: Option<i64>,
+    limit: Option<u32>,
+    include_quarantined: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ReadingsResponse {
+    series_key: String,
+    rows: Vec<ReadingResponse>,
+}
+
+#[derive(Serialize)]
+struct ReadingResponse {
+    seq: i64,
+    event_time: i64,
+    event_time_source: String,
+    quarantined: bool,
+    values: Vec<f64>,
+}
+
 async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorResponse> {
     let setup_mode = state
         .db
@@ -115,6 +169,125 @@ async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorR
             "adapters_alive": adapters_alive,
         },
     })))
+}
+
+async fn get_health(State(state): State<AppState>) -> Result<Response, ApiErrorResponse> {
+    let snapshot = state
+        .health
+        .lock()
+        .expect("health state mutex poisoned")
+        .clone();
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )],
+        render_health_json(&state.epoch, &snapshot),
+    )
+        .into_response())
+}
+
+async fn get_series(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<SeriesResponse>>, ApiErrorResponse> {
+    let rows = state
+        .db
+        .with_conn(|conn| {
+            ledger::list_series(conn)
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|row| SeriesResponse {
+                            series_key: row.series_key,
+                            system_id: row.system_id,
+                            user_label: row.user_label,
+                        })
+                        .collect()
+                })
+                .map_err(storage_other)
+        })
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(rows))
+}
+
+async fn get_live(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<LiveResponse>>, ApiErrorResponse> {
+    let rows = state
+        .db
+        .with_conn(|conn| {
+            let series = ledger::list_series(conn).map_err(storage_other)?;
+            let mut out = Vec::new();
+            for series in series {
+                if let Some(row) =
+                    latest_by_series(conn, series.series_id).map_err(storage_other)?
+                {
+                    out.push(LiveResponse {
+                        series_key: series.series_key,
+                        event_time: row.event_time,
+                        event_time_source: row.event_time_source,
+                        quarantined: row.quarantined,
+                        values: row.values,
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(rows))
+}
+
+async fn get_readings(
+    State(state): State<AppState>,
+    Query(query): Query<ReadingsQuery>,
+) -> Result<Json<ReadingsResponse>, ApiErrorResponse> {
+    let Some(from_ms) = query.from_ms else {
+        return Err(ApiErrorResponse::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "missing_range",
+            "from_ms and to_ms are required",
+        ));
+    };
+    let Some(to_ms) = query.to_ms else {
+        return Err(ApiErrorResponse::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "missing_range",
+            "from_ms and to_ms are required",
+        ));
+    };
+    let series_key = query.series_key;
+    let limit = query.limit.unwrap_or(100);
+    let include_quarantined = query.include_quarantined.unwrap_or(false);
+
+    let response = state
+        .db
+        .with_conn(move |conn| {
+            let Some(series_id) = find_series_for_api(conn, &series_key)? else {
+                return Ok(None);
+            };
+            let rows =
+                query_readings_v3(conn, series_id, from_ms, to_ms, limit, include_quarantined)
+                    .map_err(storage_other)?
+                    .into_iter()
+                    .map(|row| ReadingResponse {
+                        seq: row.seq,
+                        event_time: row.event_time,
+                        event_time_source: row.event_time_source,
+                        quarantined: row.quarantined,
+                        values: row.values,
+                    })
+                    .collect();
+            Ok(Some(ReadingsResponse { series_key, rows }))
+        })
+        .await
+        .map_err(internal_error)?;
+
+    response.map(Json).ok_or_else(|| {
+        ApiErrorResponse::new(StatusCode::NOT_FOUND, "unknown_series", "unknown series")
+    })
 }
 
 async fn post_setup_passphrase(
@@ -329,6 +502,17 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+}
+
+fn find_series_for_api(
+    conn: &rusqlite::Connection,
+    series_key: &str,
+) -> Result<Option<i64>, StorageError> {
+    match ledger::find_series_by_key(conn, series_key) {
+        Ok(found) => Ok(found),
+        Err(ledger::LedgerError::InvalidId(_)) => Ok(None),
+        Err(e) => Err(storage_other(e)),
+    }
 }
 
 fn internal_error<E: std::fmt::Display>(e: E) -> ApiErrorResponse {

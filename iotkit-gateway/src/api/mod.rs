@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::config::ApiConfig;
-use crate::health::HealthState;
+use crate::health::{ApiHealth, HealthState};
 
 pub mod auth_layer;
 pub mod guard;
@@ -47,7 +47,7 @@ pub async fn spawn_api_task(
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let state = routes::AppState {
         db,
-        health,
+        health: health.clone(),
         cfg: cfg.clone(),
         epoch,
         fingerprint: material.fingerprint.clone(),
@@ -69,6 +69,13 @@ pub async fn spawn_api_task(
         .listening()
         .await
         .ok_or(ApiError::NoLocalAddr)?;
+    {
+        let mut health = health.lock().expect("health state mutex poisoned");
+        health.api = Some(ApiHealth {
+            bind: local_addr.to_string(),
+            tls_fingerprint: material.fingerprint.clone(),
+        });
+    }
 
     Ok(ApiHandle {
         local_addr,

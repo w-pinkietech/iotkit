@@ -33,6 +33,12 @@ pub struct TargetDeliveryHealth {
 }
 
 #[derive(Debug, Clone)]
+pub struct ApiHealth {
+    pub bind: String,
+    pub tls_fingerprint: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct HealthState {
     pub started_at: Instant,
     pub collector_alive: bool,
@@ -40,6 +46,7 @@ pub struct HealthState {
     pub db: DbHealth,
     pub retention: RetentionHealth,
     pub publish: Vec<TargetDeliveryHealth>,
+    pub api: Option<ApiHealth>,
 }
 
 impl HealthState {
@@ -59,6 +66,7 @@ impl HealthState {
                 last_purged_rows: 0,
             },
             publish: Vec::new(),
+            api: None,
         }
     }
 
@@ -131,7 +139,7 @@ fn temp_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.tmp", path.display()))
 }
 
-fn render_health_json(epoch: &str, state: &HealthState) -> String {
+pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
     let adapters = state
         .adapters
         .iter()
@@ -164,8 +172,16 @@ fn render_health_json(epoch: &str, state: &HealthState) -> String {
         })
         .collect::<Vec<_>>()
         .join(",");
+    let api = match &state.api {
+        Some(api) => format!(
+            r#"{{"bind":"{}","tls_fingerprint":"{}"}}"#,
+            escape_json(&api.bind),
+            escape_json(&api.tls_fingerprint)
+        ),
+        None => "null".to_string(),
+    };
     format!(
-        r#"{{"schema":1,"written_at":{},"epoch":"{}","uptime_s":{},"collector_alive":{},"adapters":[{}],"db":{{"size_bytes":{},"disk_available_bytes":{},"watermark_exceeded":{}}},"retention":{{"days":{},"last_purge_at":{},"last_purged_rows":{}}},"publish":[{}]}}"#,
+        r#"{{"schema":1,"written_at":{},"epoch":"{}","uptime_s":{},"collector_alive":{},"adapters":[{}],"db":{{"size_bytes":{},"disk_available_bytes":{},"watermark_exceeded":{}}},"retention":{{"days":{},"last_purge_at":{},"last_purged_rows":{}}},"publish":[{}],"api":{}}}"#,
         now_ms(),
         escape_json(epoch),
         state.started_at.elapsed().as_secs(),
@@ -178,6 +194,7 @@ fn render_health_json(epoch: &str, state: &HealthState) -> String {
         opt_i64(state.retention.last_purge_at),
         state.retention.last_purged_rows,
         publish,
+        api,
     )
 }
 
@@ -231,6 +248,10 @@ mod tests {
                 last_purged_rows: 3,
             },
             publish: Vec::new(),
+            api: Some(ApiHealth {
+                bind: "127.0.0.1:8443".to_string(),
+                tls_fingerprint: "sha256:test".to_string(),
+            }),
         };
 
         write_health_json(&path, "epoch-1", &state).unwrap();
@@ -244,6 +265,9 @@ mod tests {
         assert!(json.contains(r#""id":"bravepi-mainboard""#));
         assert!(json.contains(r#""size_bytes":42"#));
         assert!(json.contains(r#""days":90"#));
+        assert!(
+            json.contains(r#""api":{"bind":"127.0.0.1:8443","tls_fingerprint":"sha256:test"}"#)
+        );
         assert!(json.contains(r#""uptime_s":10"#) || json.contains(r#""uptime_s":11"#));
     }
 }
