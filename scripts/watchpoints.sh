@@ -22,13 +22,26 @@ compgen -G "docs/eval/*-review.md" >/dev/null \
 today="$(date +%F)"
 bad=0
 
+# Every "Watchpoint:" entry must carry a "Revalidate by:" line — an entry
+# whose date line was forgotten would otherwise be invisible here forever.
+for f in docs/eval/*-review.md; do
+  w="$(grep -c "Watchpoint:" "$f" || true)"
+  r="$(grep -c "Revalidate by:" "$f" || true)"
+  if [ "$w" -ne "$r" ]; then
+    echo "MALFORMED: $f has $w 'Watchpoint:' but $r 'Revalidate by:' lines (entry missing its date?)"
+    bad=1
+  fi
+done
+
 # "Revalidate by: YYYY-MM-DD" is the one true watchpoint date format
-# (eval-perspectives-curator). ISO dates compare correctly as strings.
+# (eval-perspectives-curator). ISO dates compare correctly as strings; the
+# date(1) round-trip rejects shape-legal but impossible dates (2026-13-45).
 # -H forces the file:line prefix even when only one file matches.
 while IFS= read -r hit; do
   d="${hit##*Revalidate by: }"
   d="${d%%[[:space:]]*}"
-  if [[ ! "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  if [[ ! "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+     || [ "$(date -d "$d" +%F 2>/dev/null || true)" != "$d" ]; then
     echo "MALFORMED date ('$d'): ${hit%%:  *}"
     bad=1
   elif [[ "$d" < "$today" ]]; then
