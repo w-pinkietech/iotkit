@@ -34,6 +34,8 @@ durably taken custody of it.
 - **Measurement registry** (standard vocabulary + site overrides) and row/series quarantine for unknown or out-of-range data.
 - **Exit contract (R10):** outbound HTTPS push to one archive consumer, at-least-once, with a per-target cursor; the consumer's ack is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
 - **Operator CLI** (`gatewayctl`) for the device ledger, measurement registry, snapshots/restore, and the archive target.
+- Fresh-DB restore re-enters setup mode; the admin passphrase must be set again after restore.
+- The control-plane API is intended for private LAN reachability only. Use SSH port forwarding for Tailscale/CGNAT direct-access scenarios.
 
 ## Build & test
 

@@ -1,10 +1,13 @@
 mod cmd {
     pub mod devices;
+    pub mod fingerprint;
+    pub mod passphrase;
     pub mod query;
     pub mod registry;
     pub mod replace;
     pub mod snapshot;
     pub mod target;
+    pub mod token;
 }
 
 use clap::{Parser, Subcommand};
@@ -55,6 +58,15 @@ enum Command {
         #[command(subcommand)]
         command: cmd::target::TargetCommand,
     },
+    Passphrase {
+        #[command(subcommand)]
+        command: cmd::passphrase::PassphraseCommand,
+    },
+    Token {
+        #[command(subcommand)]
+        command: cmd::token::TokenCommand,
+    },
+    Fingerprint,
     Health(cmd::query::HealthArgs),
 }
 
@@ -134,7 +146,8 @@ fn run() -> AppResult<()> {
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
     all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11
+    all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
+    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
     db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))?
@@ -220,6 +233,17 @@ fn dispatch(
                 }
             }
         }
+        Command::Passphrase { command } => match command {
+            cmd::passphrase::PassphraseCommand::Reset => {
+                cmd::passphrase::run_passphrase_reset(conn)
+            }
+        },
+        Command::Token { command } => match command {
+            cmd::token::TokenCommand::Issue(args) => cmd::token::run_token_issue(conn, args),
+            cmd::token::TokenCommand::Revoke(args) => cmd::token::run_token_revoke(conn, args),
+            cmd::token::TokenCommand::List => cmd::token::run_token_list(conn),
+        },
+        Command::Fingerprint => cmd::fingerprint::run_fingerprint(conn, db_path),
         Command::Health(args) => cmd::query::run_health(db_path, args),
     }
 }

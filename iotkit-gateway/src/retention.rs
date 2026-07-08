@@ -6,7 +6,7 @@ use std::{ffi::CString, os::unix::ffi::OsStrExt};
 use iotkit_core_storage::DbHandle;
 use rusqlite::{TransactionBehavior, named_params, params_from_iter};
 
-use crate::health::{DbHealth, HealthState, RetentionHealth, now_ms};
+use iotkit_gateway::health::{DbHealth, HealthState, RetentionHealth, now_ms};
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const DEDUP_TTL_MS: i64 = 72 * 60 * 60 * 1000;

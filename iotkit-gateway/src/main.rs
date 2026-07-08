@@ -2,26 +2,29 @@
 //! adapter を起動し、core/engine に event を渡す。
 
 mod adapter_host;
-mod config;
-mod epoch_start;
-mod health;
-mod publish_task;
 #[allow(dead_code)]
-mod record;
+mod publish_task;
 mod retention;
 mod supervision;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
 use iotkit_core_types::{AdapterEvent, AdapterId};
+use iotkit_gateway::api::{ApiHandle, spawn_api_task};
+use iotkit_gateway::{config, epoch_start, health};
 use iotkit_ingest_client::IngestClient;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("ring provider install");
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -47,6 +50,9 @@ fn main() {
         quarantine_ttl_days = config.quarantine_ttl_days,
         health_json_path = %config.health_json_path.display(),
         disk_high_watermark_pct = config.disk_high_watermark_pct,
+        api_enabled = config.api.enabled,
+        api_bind = %config.api.bind,
+        api_gateway_name = %config.api.gateway_name,
         bravepi_enabled = config.bravepi.is_some(),
         rpi_local_enabled = config.rpi_local.is_some(),
         "effective config"
@@ -63,7 +69,8 @@ fn main() {
     all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
     all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11
+    all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
+    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
     let db = match iotkit_core_storage::init_db(
         std::path::Path::new(&config.db_path),
         &all_migrations,
@@ -94,8 +101,9 @@ fn ledger_to_storage_err(e: iotkit_core_ledger::LedgerError) -> iotkit_core_stor
     iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
 }
 
-/// フォールインループを実行する。戻り値は「コレクタタスクが生きたまま終了したか」
-/// (true=正常終了・ctrl_c/全アダプタclose、false=コレクタ死亡によるfail-fast終了)。
+/// フォールインループを実行する。戻り値は「プロセスとして正常終了してよいか」
+/// (true=正常終了・ctrl_c/全アダプタclose、false=コレクタ死亡/API bind失敗/
+/// API専用モードでのAPI異常終了によるfail-fast終了)。
 /// `main`はfalseを非ゼロexitに変換し、systemdのプロセス再起動に委ねる(R20と同じ設計方針)。
 async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -> bool {
     let engine = Engine::new();
@@ -129,12 +137,53 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     );
     let _health_task = health::spawn_health_writer(
         config.health_json_path.clone(),
-        epoch,
+        epoch.clone(),
         health_state.clone(),
         Duration::from_secs(60),
     );
     let _publish_task =
         publish_task::spawn_publish_task(db.clone(), health_state.clone(), Duration::from_secs(30));
+
+    let mut api_shutdown = None;
+    let mut api_join = None;
+    if config.api.enabled {
+        let data_dir = Path::new(&config.db_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let handle = match spawn_api_task(
+            db.clone(),
+            health_state.clone(),
+            config.api.clone(),
+            epoch.clone(),
+            data_dir,
+        )
+        .await
+        {
+            Ok(handle) => handle,
+            Err(e) => {
+                tracing::error!(error = %e, bind = %config.api.bind, "failed to start control-plane API");
+                return false;
+            }
+        };
+        let ApiHandle {
+            local_addr,
+            fingerprint,
+            shutdown,
+            join,
+        } = handle;
+        tracing::info!(
+            bind = %local_addr,
+            tls_fingerprint = %fingerprint,
+            interfaces = "box,setup,session,health,series,live,readings,ops",
+            "control-plane API started"
+        );
+        api_shutdown = Some(shutdown);
+        api_join = Some(join);
+    } else {
+        tracing::info!("control-plane API disabled");
+    }
+    let mut api_task_running = api_join.is_some();
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
     // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
@@ -250,21 +299,54 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     // (正常終了=ctrl_c/全アダプタclose はtrueのまま=exit 0)。プロセスレベルの再起動は
     // systemdの責務(R20コメント参照)であり、ここでは「健康でないまま動き続けない」ことだけ担保する。
     let mut collector_alive = true;
+    let mut api_failed = false;
+    let mut api_shutdown_requested = false;
+    let api_only_mode = config.api.enabled && host.is_empty();
     let mut ingest_client_pinned = ingest_client_handle;
     let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
     let mut pending_restart_count = 0usize;
 
     // Unified fan-in loop
     loop {
-        if host.is_empty() && should_stop_after_all_adapter_streams_closed(pending_restart_count) {
-            tracing::info!("All adapter channels closed");
+        if host.is_empty()
+            && should_stop_after_all_adapter_streams_closed(
+                pending_restart_count,
+                api_task_running,
+                api_only_mode,
+            )
+        {
+            log_fan_in_stop(api_only_mode, api_failed);
             break;
         }
 
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("Shutdown signal received");
+                if let Some(shutdown) = api_shutdown.take() {
+                    api_shutdown_requested = true;
+                    let _ = shutdown.send(());
+                }
                 break;
+            }
+            api_result = wait_for_api_task(&mut api_join), if api_task_running => {
+                api_task_running = false;
+                api_shutdown = None;
+                health_state
+                    .lock()
+                    .expect("health state mutex poisoned")
+                    .api = None;
+                if api_shutdown_requested {
+                    match api_result {
+                        Ok(()) => tracing::info!("control-plane API task exited"),
+                        Err(e) => tracing::error!(error = %e, "control-plane API task panicked during requested shutdown"),
+                    }
+                } else {
+                    api_failed = true;
+                    match api_result {
+                        Ok(()) => tracing::error!("control-plane API task exited unexpectedly"),
+                        Err(e) => tracing::error!(error = %e, "control-plane API task panicked"),
+                    }
+                }
             }
             _ = &mut ingest_client_pinned => {
                 // クライアントタスク退出=コレクタ死亡(Closed)。取り込み全損なのでfail-fast
@@ -382,8 +464,12 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                         }
                     }
                     None => {
-                        if should_stop_after_all_adapter_streams_closed(pending_restart_count) {
-                            tracing::info!("All adapter channels closed");
+                        if should_stop_after_all_adapter_streams_closed(
+                            pending_restart_count,
+                            api_task_running,
+                            api_only_mode,
+                        ) {
+                            log_fan_in_stop(api_only_mode, api_failed);
                             break;
                         }
                     }
@@ -393,15 +479,44 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     }
 
     host.shutdown_all().await;
-    health_state
-        .lock()
-        .expect("health state mutex poisoned")
-        .collector_alive = collector_alive;
+    if let Some(shutdown) = api_shutdown.take() {
+        api_shutdown_requested = true;
+        let _ = shutdown.send(());
+    }
+    if let Some(join) = api_join.take()
+        && api_task_running
+    {
+        match join.await {
+            Ok(()) if api_shutdown_requested => {
+                tracing::info!("control-plane API task exited during requested shutdown");
+            }
+            Ok(()) => {
+                tracing::info!("control-plane API task exited during shutdown");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "control-plane API task panicked during shutdown");
+            }
+        }
+    }
+    {
+        let mut health = health_state.lock().expect("health state mutex poisoned");
+        health.api = None;
+        health.collector_alive = collector_alive;
+    }
 
     let devices = engine.devices().await;
     tracing::info!(device_count = devices.len(), "Engine state at shutdown");
 
-    collector_alive
+    !should_exit_nonzero(collector_alive, api_failed)
+}
+
+async fn wait_for_api_task(
+    api_join: &mut Option<tokio::task::JoinHandle<()>>,
+) -> Result<(), tokio::task::JoinError> {
+    match api_join {
+        Some(join) => join.await,
+        None => std::future::pending().await,
+    }
 }
 
 /// R20: 再起動を許可される公式アダプタ(D4: 再起動権限は形態①のみ)の起動パラメータ。
@@ -457,8 +572,29 @@ fn start_rpi_local(
     Ok(id)
 }
 
-fn should_stop_after_all_adapter_streams_closed(pending_restart_count: usize) -> bool {
-    pending_restart_count == 0
+fn should_stop_after_all_adapter_streams_closed(
+    pending_restart_count: usize,
+    api_task_running: bool,
+    api_only_mode: bool,
+) -> bool {
+    pending_restart_count == 0 && (!api_only_mode || !api_task_running)
+}
+
+fn should_exit_nonzero(collector_alive: bool, api_failed: bool) -> bool {
+    !collector_alive || api_failed
+}
+
+fn log_fan_in_stop(api_only_mode: bool, api_failed: bool) {
+    match (api_only_mode, api_failed) {
+        (true, true) => tracing::error!(
+            "control-plane API task exited unexpectedly (API-only mode); exiting for restart"
+        ),
+        (true, false) => tracing::info!("control-plane API task exited; API-only mode stopping"),
+        (false, true) => tracing::error!(
+            "All adapter channels closed after control-plane API task failure; exiting for restart"
+        ),
+        (false, false) => tracing::info!("All adapter channels closed"),
+    }
 }
 
 /// Hardcoded sensor targets for the v1 RPi4B hardware profile.
@@ -483,12 +619,36 @@ mod tests {
     #[test]
     fn fan_in_continues_while_restart_notification_is_pending() {
         assert!(
-            !should_stop_after_all_adapter_streams_closed(1),
+            !should_stop_after_all_adapter_streams_closed(1, false, false),
             "pending restart timers must keep the fan-in loop alive"
         );
         assert!(
-            should_stop_after_all_adapter_streams_closed(0),
+            should_stop_after_all_adapter_streams_closed(0, true, false),
+            "normal adapter closure should stop even while the API task is running"
+        );
+        assert!(
+            !should_stop_after_all_adapter_streams_closed(0, true, true),
+            "API-only mode must keep the fan-in loop alive until the API task exits"
+        );
+        assert!(
+            should_stop_after_all_adapter_streams_closed(0, false, true),
             "the fan-in loop may stop only when no restart is pending"
+        );
+    }
+
+    #[test]
+    fn run_exit_status_reflects_collector_and_api_failures() {
+        assert!(
+            !should_exit_nonzero(true, false),
+            "ctrl_c and normal adapter closure should exit successfully"
+        );
+        assert!(
+            should_exit_nonzero(false, false),
+            "collector death remains fail-fast"
+        );
+        assert!(
+            should_exit_nonzero(true, true),
+            "unexpected API task exit in API-only mode should be fail-fast"
         );
     }
 }

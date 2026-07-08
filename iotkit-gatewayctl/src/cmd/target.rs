@@ -45,6 +45,11 @@ pub fn run_target_add(
     schema_version: u32,
     smoke: &dyn Fn(&str, &str) -> Result<(), String>,
 ) -> AppResult<()> {
+    if iotkit_core_ops::is_setup_mode(conn)? {
+        return Err(
+            "setupモード中は出口target登録不可（D13）。管理者パスフレーズを設定してから".into(),
+        );
+    }
     if !endpoint.starts_with("https://") {
         return Err("target endpoint must use https://".into());
     }
@@ -184,6 +189,7 @@ mod tests {
         migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
         migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
         migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
+        migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
         migrations.sort_by_key(|m| m.version);
         let conn = Connection::open_in_memory().unwrap();
         iotkit_core_storage::run_migrations(&conn, &migrations).unwrap();
@@ -196,6 +202,10 @@ mod tests {
 
     fn err_smoke(_: &str, _: &str) -> Result<(), String> {
         Err("smoke failed".into())
+    }
+
+    fn seed_admin(conn: &Connection) {
+        iotkit_core_ops::reset_passphrase(conn, "test-passphrase", "local_cli").unwrap();
     }
 
     fn seed_target(conn: &Connection, token: &str) {
@@ -258,6 +268,7 @@ mod tests {
     #[test]
     fn add_rejects_non_https() {
         let conn = test_conn();
+        seed_admin(&conn);
 
         let result = run_target_add(
             &conn,
@@ -274,6 +285,7 @@ mod tests {
     #[test]
     fn add_rejects_second_target() {
         let conn = test_conn();
+        seed_admin(&conn);
         seed_target(&conn, "old-token");
 
         let result = run_target_add(
@@ -293,6 +305,7 @@ mod tests {
     #[test]
     fn add_keeps_archive_responsible_zero_until_smoke_ok() {
         let conn = test_conn();
+        seed_admin(&conn);
 
         let result = run_target_add(
             &conn,
@@ -311,6 +324,7 @@ mod tests {
     #[test]
     fn add_sets_archive_responsible_1_on_smoke_ok() {
         let conn = test_conn();
+        seed_admin(&conn);
 
         run_target_add(
             &conn,
@@ -349,6 +363,7 @@ mod tests {
     #[test]
     fn add_rejects_schema_version_mismatch() {
         let conn = test_conn();
+        seed_admin(&conn);
 
         let result = run_target_add(
             &conn,
@@ -359,6 +374,23 @@ mod tests {
         );
 
         assert!(result.is_err());
+        assert!(target_get(&conn).unwrap().is_none());
+    }
+
+    #[test]
+    fn add_rejects_setup_mode_before_any_other_validation() {
+        let conn = test_conn();
+
+        let result = run_target_add(
+            &conn,
+            "http://archive.example/publish",
+            "token",
+            1,
+            &ok_smoke,
+        );
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("setupモード中は出口target登録不可"));
         assert!(target_get(&conn).unwrap().is_none());
     }
 
