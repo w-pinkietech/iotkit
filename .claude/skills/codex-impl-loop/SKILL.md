@@ -65,9 +65,28 @@ For each task in the plan, in order:
      independent review catches blind spots (missed bugs). Both required — different failure classes.
    - Register any novel, project-specific blind spot as an Active Watchpoint in the matching
      `docs/eval/*-review.md` (eval-perspectives-curator) — this is how the evaluator learns.
+   - While reviews run, continue independent work (CLAUDE.md 待たない運用) — the under-review
+     artifact is frozen for BOTH reads and writes (消費ゲート); record pending state in
+     scratchpad `review-pending.md` (artifact path, reviewed hash, vendors owed).
 
 5. **Fix loop** — for each Critical/Important:
-   - Author `scratchpad/codex-fix-t<N>.md`, dispatch `scripts/codex.sh impl`, re-verify, re-review.
+   - Author `scratchpad/codex-fix-t<N>.md`, dispatch `scripts/codex.sh impl`, re-verify,
+     re-review (unless the exact-transcription exception below applies).
+   - Confirmation-round addressees: the owner(s) of every Critical/Important you fixed OR
+     REJECTED this round — a rejection is a Main-originated absence claim and requires the
+     owner's confirmation (or user adjudication). A vendor's zero binds only to the tree hash
+     it reviewed. If a fix's SEMANTIC EFFECT (not its edit location — an in-line edit that
+     creates a new contradiction elsewhere counts) reaches beyond the prescription, or you
+     are in doubt (when in doubt, send), the final hash goes to the zero vendor too. Only a
+     verbatim transcription whose semantic effect stays inside the prescription leaves a
+     standing zero valid (the transcription proof substitutes for re-review — sole exception);
+     done = both vendors zero unresolved C/I on the final hash, via that exception or fresh
+     confirmation.
+   - Skip the confirmation round only when the reviewer supplied a complete replacement/patch
+     (their file:line, copied) and the applied diff matches the prescription exactly — zero
+     extra hunks, zero semantic judgment, zero lateral edits. Read each hunk back against the
+     PRESCRIPTION text, not just the findings list. Lateral spread touches un-cited locations
+     and asserts "no other instances" (an absence claim) — never skip its confirmation.
    - Lateral spread: grep the pattern workspace-wide, fix ALL instances.
    - Minors: log to the plan's deferred-hardening file (flexible-early-dev preference), don't block.
    - Safety valve: same issue survives two fixes → escalate to user.

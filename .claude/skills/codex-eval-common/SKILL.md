@@ -65,11 +65,15 @@ from plan 5 onward, not optional.
    - Non-semantic (wording/structure/omission): fix autonomously
    - Semantic (architecture/requirements): escalate to user
    - Lateral spread check: grep for same pattern workspace-wide, fix ALL instances
-5. Re-run BOTH vendors (fresh invocations, new label)
+5. Re-run per CLAUDE.md 待たない運用/確認ラウンドの規律: addressees = owners of the C/I you
+   fixed or rejected (a zero-vendor re-enters when a fix's semantic EFFECT reaches beyond
+   the prescription, or when in doubt — when in doubt, send); the exact-transcription skip
+   and its hunk-vs-prescription read-back apply here too
 6. Repeat until zero unresolved Critical and zero Important **across both vendors**
 7. Run verification pass (one more cross-vendor round)
 8. If verification finds new Critical/Important: fix and re-verify
-9. Done when BOTH vendors return zero Critical/Important
+9. Done when BOTH vendors are at zero Critical/Important **on the final tree hash**
+   (a vendor's zero binds to the hash it reviewed, not to the artifact forever)
 
 **Safety valve:** If same issue reappears after being fixed twice, escalate to user.
 
