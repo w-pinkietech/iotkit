@@ -9,19 +9,28 @@
 #
 # IMPORTANT — this is a STATIC reviewer, NOT the same shape as codex's sandbox.
 # codex's read-only sandbox still EXECUTES commands (it can run `cargo test`, grep,
-# boundary-probe scripts against a read-only filesystem). This script runs
-# `claude -p --permission-mode plan`, under which the reviewer can Read/Grep/Glob
-# but CANNOT run Bash or edit/write/commit at all (every Bash/Edit call needs an
-# approval that never arrives in headless `-p`). So the Claude side reads code and
-# reasons; the run-it-and-test angle (runtime/data-loss/concurrency bugs that only
-# surface on execution) is codex's job. Do not over-trust a clean Claude pass on
-# execution-dependent findings.
+# boundary-probe scripts against a read-only filesystem). This script gives the
+# reviewer Read/Grep/Glob only — Bash is technically removed (see the guard below),
+# so it reads code and reasons but CANNOT run a single test. The run-it-and-test
+# angle (runtime/data-loss/concurrency bugs that only surface on execution) is
+# codex's job. Do not over-trust a clean Claude pass on execution-dependent findings.
 #
-# Read-only is enforced three ways: plan mode (Edit/Write gated behind ExitPlanMode,
-# which has no approver headless), `--disallowedTools` on the mutating tools, and
-# `--setting-sources ''` so a reviewed repo's own `.claude/settings.json`
-# hooks/permissions cannot load and escalate (a SessionStart hook in reviewed
-# content would otherwise run before the model starts).
+# Read-only is enforced by TECHNICAL exclusion, not model cooperation (verified):
+#   - `--disallowedTools Bash Edit Write NotebookEdit` removes those tools outright —
+#     the reviewer has no Bash at all (proven: it returns NO_BASH_TOOL even under
+#     bypassPermissions), so it genuinely cannot execute or mutate. This is the
+#     load-bearing guard; plan mode alone only makes the MODEL refuse Bash, not the
+#     tool unavailable.
+#   - `--strict-mcp-config` so no MCP server loads (MCP tools are NOT gated by
+#     --setting-sources and could otherwise execute/mutate).
+#   - `--setting-sources ''` so a reviewed repo's own `.claude/settings.json`
+#     hooks/permissions cannot load and escalate (a SessionStart hook in reviewed
+#     content would otherwise run before the model starts).
+#   - `--permission-mode plan` as a redundant fourth layer.
+# CONSEQUENCE of `--setting-sources ''`: project CLAUDE.md / rules / skills are NOT
+# auto-loaded, so the review PROMPT must supply the context the reviewer needs
+# (design authority, the eval guides, architecture.md). The cross-vendor review
+# briefs already inject these explicitly — keep doing so.
 #
 # Usage:
 #   scripts/claude-review.sh <prompt-file> <label>
@@ -32,8 +41,10 @@
 # clean, zero-findings review.
 #
 # Env overrides:
-#   CLAUDE_REVIEW_MODEL   (default: unset → user's configured default model; pin a
-#                          strong reviewer e.g. "opus" for the hardest reviews)
+#   CLAUDE_REVIEW_MODEL   (default: unset → runtime/account default. NOTE: because
+#                          `--setting-sources ''` suppresses user settings, this is
+#                          NOT reliably your configured default — PIN a strong
+#                          reviewer here (e.g. "opus") for any serious review)
 #   CLAUDE_REVIEW_EFFORT  (default max for review — mirrors codex.sh's max; reviews
 #                          earn the deepest reasoning. Scale: low<medium<high<xhigh<max)
 #   CLAUDE_REVIEW_REPO    (default: current git toplevel; point at another checkout,
@@ -82,7 +93,8 @@ trap 'rm -f "$OUT_PARTIAL"' EXIT
 ( cd "$REPO" && "$CLAUDE_BIN" -p \
     --permission-mode plan \
     --setting-sources "" \
-    --disallowedTools Edit Write NotebookEdit \
+    --strict-mcp-config \
+    --disallowedTools Bash Edit Write NotebookEdit \
     --effort "$CLAUDE_REVIEW_EFFORT" \
     --output-format text \
     "${MODEL_ARGS[@]}" ) < "$PROMPT_ABS" > "$OUT_PARTIAL"
