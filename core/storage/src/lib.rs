@@ -16,7 +16,7 @@ pub use migrate::{MIGRATIONS, Migration, run_migrations};
 fn configure_pragmas(conn: &Connection) -> Result<(), StorageError> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
-         PRAGMA synchronous = NORMAL;
+         PRAGMA synchronous = FULL;
          PRAGMA foreign_keys = ON;
          PRAGMA busy_timeout = 5000;
          PRAGMA cache_size = -8000;",
@@ -115,13 +115,13 @@ mod tests {
     }
 
     #[test]
-    fn pragmas_use_wal_and_normal_sync() {
+    fn pragmas_use_wal_and_full_sync() {
         let db = init_db_memory(&[]).unwrap();
         db.with_conn_sync(|conn| {
             let sync: i64 = conn
                 .query_row("PRAGMA synchronous", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(sync, 1, "synchronous must be NORMAL (D1)");
+            assert_eq!(sync, 2, "synchronous must be FULL (D8 amendment)");
             Ok(())
         })
         .unwrap();
@@ -142,7 +142,7 @@ mod tests {
             let synchronous: i32 = conn
                 .query_row("PRAGMA synchronous", [], |row| row.get(0))
                 .unwrap();
-            assert_eq!(synchronous, 1); // NORMAL (D1)
+            assert_eq!(synchronous, 2); // FULL (D8 amendment)
 
             let foreign_keys: i32 = conn
                 .query_row("PRAGMA foreign_keys", [], |row| row.get(0))

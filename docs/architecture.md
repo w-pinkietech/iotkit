@@ -235,8 +235,10 @@ Getting these right is most of the design (see D5, D7).
 - **One `Arc<Mutex<Connection>>`** for the whole process (`core/storage/DbHandle`).
   Every subsystem (collector, push, retention, health, API) serializes through it
   via `spawn_blocking`. SQLite has exactly one writer anyway, so a connection pool
-  would be over-engineering. WAL + `synchronous=NORMAL` (verified by a
-  pragma-readback test).
+  would be over-engineering. WAL + `synchronous=FULL` (D8 amendment:
+  custody-critical transactions must not lose an acked commit on power loss;
+  NORMAL is reserved for reconstructable metadata, which today shares the same
+  connection, so the whole connection runs FULL).
 - **The push task never holds the DB lock across HTTP.** It's three scopes:
   build the batch (lock), POST + await ack (no lock), advance the cursor (lock).
   A slow archive server cannot stall ingestion.

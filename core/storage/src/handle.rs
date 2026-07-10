@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rusqlite::Connection;
 
@@ -48,6 +48,28 @@ fn enter_guard(key: usize) -> ReentrancyGuard {
     ReentrancyGuard { key }
 }
 
+fn lock_connection(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    conn.lock().unwrap_or_else(|poisoned| {
+        let conn = PoisonError::into_inner(poisoned);
+
+        // D1:124 requires poison recovery. Rusqlite transaction guards roll back on unwind in
+        // the normal case; this defensive ROLLBACK covers a hypothetical raw-BEGIN panicker so a
+        // recovered connection can never silently ride an open transaction.
+        if !conn.is_autocommit() {
+            conn.execute_batch("ROLLBACK").unwrap_or_else(|error| {
+                // A connection SQLite cannot roll back is genuinely unusable, so a loud panic is
+                // more honest than lending it back to callers.
+                panic!(
+                    "DbHandle poison recovery could not roll back an open SQLite transaction; \
+                     connection is unusable: {error}"
+                )
+            });
+        }
+
+        conn
+    })
+}
+
 impl DbHandle {
     pub(crate) fn new(conn: Connection) -> Self {
         Self {
@@ -68,7 +90,7 @@ impl DbHandle {
         let key = self.identity();
         tokio::task::spawn_blocking(move || {
             let _guard = enter_guard(key);
-            let lock = conn.lock().expect("DbHandle mutex poisoned");
+            let lock = lock_connection(&conn);
             f(&lock)
         })
         .await
@@ -80,7 +102,7 @@ impl DbHandle {
         F: FnOnce(&Connection) -> Result<T, StorageError>,
     {
         let _guard = enter_guard(self.identity());
-        let lock = self.conn.lock().expect("DbHandle mutex poisoned");
+        let lock = lock_connection(&self.conn);
         f(&lock)
     }
 }
@@ -102,6 +124,48 @@ mod tests {
         assert_eq!(result, 42);
     }
 
+    #[test]
+    fn with_conn_sync_poison_recovery_rolls_back_open_transaction() {
+        let conn = Connection::open_in_memory().unwrap();
+        let handle = DbHandle::new(conn);
+        handle
+            .with_conn_sync(|c| {
+                c.execute_batch("CREATE TABLE readings (value INTEGER NOT NULL)")?;
+                Ok(())
+            })
+            .unwrap();
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), StorageError> = handle.with_conn_sync(|c| {
+                c.execute_batch("BEGIN; INSERT INTO readings (value) VALUES (1)")?;
+                panic!("intentional test panic");
+            });
+        }));
+        assert!(panic.is_err());
+
+        handle
+            .with_conn_sync(|c| {
+                assert!(c.is_autocommit());
+                let count: i64 =
+                    c.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?;
+                assert_eq!(count, 0);
+
+                let tx = c.unchecked_transaction()?;
+                tx.execute("INSERT INTO readings (value) VALUES (2)", [])?;
+                tx.commit()?;
+                Ok(())
+            })
+            .unwrap();
+
+        let count: i64 = handle
+            .with_conn_sync(|c| {
+                c.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))
+                    .map_err(StorageError::from)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
     #[tokio::test]
     async fn with_conn_executes_query() {
         let conn = Connection::open_in_memory().unwrap();
@@ -114,6 +178,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, 2);
+    }
+
+    #[tokio::test]
+    async fn with_conn_recovers_after_closure_panics() {
+        let conn = Connection::open_in_memory().unwrap();
+        let handle = DbHandle::new(conn);
+        let panicking_handle = handle.clone();
+
+        let panic = tokio::spawn(async move {
+            let _: Result<(), StorageError> = panicking_handle
+                .with_conn(|_c| panic!("intentional test panic"))
+                .await;
+        })
+        .await
+        .unwrap_err();
+        assert!(panic.is_panic());
+
+        let result = handle
+            .with_conn(|c| {
+                let n: i64 = c.query_row("SELECT 42", [], |row| row.get(0))?;
+                Ok(n)
+            })
+            .await
+            .unwrap();
+        assert_eq!(result, 42);
     }
 
     #[test]
