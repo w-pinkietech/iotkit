@@ -26,7 +26,7 @@ scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D w
 
 ## Workflow Rules
 
-- **Main agent は製品コード実装禁止。** 対話/spec/plan/レビュー dispatch/コミットのみ。Rust は codex が書く。実装は `codex-impl-loop` スキル(Main が codex を直接駆動、Fable でクロスベンダーレビュー)。ハーネス配管(`scripts/`・CI 設定・スキル・docs)は Main の領分。
+- **Main agent は製品コード実装禁止。** 対話/spec/plan/レビュー dispatch/コミットのみ。Rust は codex が書く。実装は `codex-impl-loop` スキル(Main が codex を直接駆動、Claude でクロスベンダーレビュー)。ハーネス配管(`scripts/`・CI 設定・スキル・docs)は Main の領分。
 - **codex 起動は `scripts/codex.sh` 経由が正。** `scripts/codex.sh review <prompt> <label>`(read-only)/`impl <prompt> <label>`(danger-full-access)。model/flag/sandbox の唯一の真実源=このスクリプト(docs にモデル定数を散らさない)。
 - **各実装タスクはクロスベンダーレビュー必須。** 同一プロンプトを codex(read-only) と Claude(review-max) の両方に通す。spec → plan → per-task impl → final impl の全段階でレビューを省かない。Claude 側の起動は、Main が Claude なら Agent tool の review-max、codex がメイン駆動なら `scripts/claude-review.sh`(静的 read-only、`CLAUDE_REVIEW_MODEL` で強モデルをピン)。
 - Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → codex-impl-loop → PR

@@ -164,7 +164,7 @@ Main 発の不在主張=確認必須)/tier は「下流が根拠として読む�
   ——「計画6への持ち込み」8項目+D-9〜D-18。
 - **メモリ**(Claude 側、参考): `../.claude/memory/`(iot リポジトリに symlink)。
   review-speed-policy / iotkit-wave1-status など。
-- ハーネス: `scripts/`(codex.sh・verify.sh・check-layers・trailer.sh・watchpoints.sh)。
+- ハーネス: `scripts/`(codex.sh・claude-review.sh・verify.sh・check-layers・trailer.sh・watchpoints.sh)。
 - レビューガイド: `docs/eval/{spec,plan,impl-spec,impl-quality}-review.md`。
 
 ## 7. 移行後の最初の一手 (推奨)

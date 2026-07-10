@@ -40,7 +40,9 @@ check-layers の分類と architecture.md の地図を同時に更新する。
 
 - codex 側(read-only sandbox、コマンド実行可=`cargo test`・境界プローブができる):
   `scripts/codex.sh review <prompt-file> <label>`
-- Claude 側(**静的** read-only=plan モード。Read/Grep/Glob は使えるが Bash 実行・編集は不可):
+- Claude 側(**静的** read-only。Read/Grep/Glob は使えるが Bash・編集は技術的に不可——
+  load-bearing な保証は `--disallowedTools Bash Edit Write NotebookEdit`+`--strict-mcp-config`
+  +`--setting-sources ''`。plan モードは冗長な追加層):
   `scripts/claude-review.sh <prompt-file> <label>`
   (effort は既定 max=`CLAUDE_REVIEW_EFFORT`。強モデルは `CLAUDE_REVIEW_MODEL` でピン。
   出力は codex と同じ `/tmp/codex-runs/`)
