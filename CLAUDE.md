@@ -22,7 +22,7 @@ cargo test -p <crate-name>
 scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D warnings (host verification)
 ```
 
-ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`check-layers`(crate 層規則の機械検査)・`trailer.sh`(コミットトレーラ、セッションモデル自動検出)・`watchpoints.sh`(レビューガイド期限見張り)。
+ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`claude-review.sh`(Claude 側レビュー起動、静的 read-only=plan+disallow+no-settings。codex 駆動時のクロスベンダー用。Bash 実行不可=静的レビュアー、実行系は codex 担当)・`verify.sh`(ホスト検証)・`check-layers`(crate 層規則の機械検査)・`trailer.sh`(コミットトレーラ、セッションモデル自動検出)・`watchpoints.sh`(レビューガイド期限見張り)。
 
 ## Workflow Rules
 

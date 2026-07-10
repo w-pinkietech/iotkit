@@ -16,11 +16,13 @@ codex CLI に移す。
 - コミットは自分で行う(呼び出し側がいない)。コミットスタイルは CLAUDE.md の Commit Style。
   トレーラは `scripts/trailer.sh`(引数はモデル名の検出用——codex 駆動なら実際の生成者に合わせる)。
 - spec/plan/レビュー dispatch/ユーザー対話も自分の責務になる(旧: Claude メインの領分)。
-- **クロスベンダーレビューの独立性が問題になる**。従来は「codex が書き、Claude/Fable が独立レビュー」
-  だった。codex がメインで書くと、自己レビューは独立でない。移行後の選択肢(ユーザーと要相談):
-  (a) `claude -p <prompt>` をヘッドレスで独立レビュアーに使う、(b) 独立レビューを諦めて単一ベンダー
-  +現実照合のみにする(品質は落ちる)、(c) 重要変更だけ人間がClaude セッションを開いてレビュー。
-  **今日 05db5da で正文化した「待たない運用+消費ベース tier+確認ラウンドの規律」は、レビュアーが
+- **クロスベンダーレビューは維持する(2026-07-11 ユーザー決定)**。codex がメインで書くので、
+  Claude 側を codex から呼ぶ: `scripts/claude-review.sh <prompt-file> <label>`(**静的** read-only
+  =plan+disallow+no-settings。出力は同じ `/tmp/codex-runs/`、effort 既定 max、強モデルは
+  `CLAUDE_REVIEW_MODEL` でピン)。手順は codex.sh review と claude-review.sh へ同一プロンプトを
+  並走 dispatch。**非対称**: codex 側はコマンド実行可(cargo test 等)、Claude 側は静的(Bash 不可)
+  ——実行依存のバグは codex が主担当。AGENTS.md「クロスベンダーレビュー(メイン駆動時)」節に正文。
+  **05db5da で正文化した「待たない運用+消費ベース tier+確認ラウンドの規律」は、レビュアーが
   誰であっても成り立つ規律なので維持する**(CLAUDE.md Workflow Rules)。
 
 ## 1. いまどこにいるか (git 実状態 2026-07-11)

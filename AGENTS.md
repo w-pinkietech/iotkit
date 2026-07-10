@@ -32,3 +32,22 @@ check-layers の分類と architecture.md の地図を同時に更新する。
 - `git commit` しない(コミットは呼び出し側が行う)。
 - 完了報告の前に `scripts/verify.sh`(fmt + 層規則 check-layers + `cargo test --workspace` + clippy `-D warnings`)を通す。
 - テスト緑は必要条件であって十分条件ではない — データ損失・並行退行・仕様逸脱はテストを素通りしうる。設計正本の不変条件を自分で照合する。
+
+## クロスベンダーレビュー(メイン駆動時。2026-07-11 ユーザー決定)
+
+メイン駆動として自分がコードを書いた後、レビューは**クロスベンダーで行う**(自己レビューは独立でない)。
+同一プロンプトを2ベンダーへ並走で dispatch する:
+
+- codex 側(read-only sandbox、コマンド実行可=`cargo test`・境界プローブができる):
+  `scripts/codex.sh review <prompt-file> <label>`
+- Claude 側(**静的** read-only=plan モード。Read/Grep/Glob は使えるが Bash 実行・編集は不可):
+  `scripts/claude-review.sh <prompt-file> <label>`
+  (effort は既定 max=`CLAUDE_REVIEW_EFFORT`。強モデルは `CLAUDE_REVIEW_MODEL` でピン。
+  出力は codex と同じ `/tmp/codex-runs/`)
+
+**非対称に注意**: codex 側は実行できるが Claude 側は静的。runtime/データ損失/並行のバグ(実行しないと
+出ない類)は codex 側が主担当——Claude のクリーン通過だけで実行依存の指摘を過信しない。
+
+完了条件・確認ラウンド・消費ゲート・tier は `CLAUDE.md` の Workflow Rules(待たない運用・確認ラウンド
+の規律・消費ベース tier、2026-07-11 も維持)に従う——レビュアーが誰であっても成り立つ規律。ハーネス
+変更(`scripts/`・CI・スキル・docs)は最強レビューでかける。
