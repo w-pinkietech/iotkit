@@ -1,13 +1,31 @@
+/// The maximum accepted UTF-8 byte length of a measurement key.
+///
+/// [`validate_measurement_key`] returns [`MeasurementKeyError::TooLong`] when a
+/// key exceeds this limit.
 pub const MAX_MEASUREMENT_KEY_LEN: usize = 64;
 
+/// A deterministic measurement-key grammar violation.
+///
+/// Callers can use the variant to correct input before submitting an envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeasurementKeyError {
+    /// No key text was provided.
+    ///
+    /// Supply at least one valid segment before retrying the observation.
     Empty,
+    /// The key exceeds [`MAX_MEASUREMENT_KEY_LEN`] UTF-8 bytes.
+    ///
+    /// Shorten the key while preserving the required segment grammar.
     TooLong {
+        /// The actual UTF-8 byte length that was validated.
         len: usize,
     },
-    /// コロン等の禁止文字、大文字、セグメント先頭が英小文字でない、空セグメント
+    /// A dot-delimited segment does not match `[a-z][a-z0-9_]*`.
+    ///
+    /// This includes empty segments, uppercase text, colons, and any segment that
+    /// does not begin with an ASCII lowercase letter.
     InvalidSegment {
+        /// The offending segment, or an empty string for an empty segment.
         segment: String,
     },
 }
@@ -33,7 +51,12 @@ impl std::fmt::Display for MeasurementKeyError {
 }
 impl std::error::Error for MeasurementKeyError {}
 
-/// D6決定2: セグメント=[a-z][a-z0-9_]*、区切りドット、コロン禁止(charsetで排除)、上限64。
+/// Validates the stable version-1 measurement-key grammar.
+///
+/// A key contains one or more dot-separated `[a-z][a-z0-9_]*` segments,
+/// excludes colons through that character set, and is at most
+/// [`MAX_MEASUREMENT_KEY_LEN`] UTF-8 bytes. Receivers apply this validation before
+/// registry lookup.
 pub fn validate_measurement_key(key: &str) -> Result<(), MeasurementKeyError> {
     if key.is_empty() {
         return Err(MeasurementKeyError::Empty);
@@ -54,7 +77,12 @@ pub fn validate_measurement_key(key: &str) -> Result<(), MeasurementKeyError> {
     Ok(())
 }
 
-/// D1推奨プロファイル `sender_id + boot_epoch + 単調seq` の正準文字列形式。
+/// Builds the recommended external-device envelope identifier.
+///
+/// The stable representation is `sender_id-boot_epoch-seq`. The boot epoch must
+/// distinguish restarts and the sequence must increase within it; the sender
+/// stores the resulting identifier with a spooled envelope and reuses it unchanged
+/// for every retry.
 pub fn external_envelope_id(sender_id: &str, boot_epoch: u64, seq: u64) -> String {
     format!("{sender_id}-{boot_epoch}-{seq}")
 }
