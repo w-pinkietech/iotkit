@@ -1,5 +1,11 @@
 # AGENTS.md
 
+> **メイン駆動を引き継ぐ場合(2026-07-11〜)**: このリポジトリはメイン駆動を Claude Code から
+> codex CLI へ移行中。移行時点の生の作業状態(計画6 の設計ドラフト・配布既定メニューのユーザー裁定
+> 待ち・役割逆転の注意)は [docs/superpowers/HANDOFF-2026-07-11-to-codex-driver.md](docs/superpowers/HANDOFF-2026-07-11-to-codex-driver.md)。
+> 本 AGENTS.md は「呼ばれる側の per-task ワーカー」向けに書かれている——メイン駆動になると
+> コミット・spec/plan・ユーザー対話も自分の責務になる(引き継ぎ §0)。
+
 ## Project Context
 
 `iotkit-next` は旧 `iotkit` をゼロから作り直す Rust + tokio の IoT ゲートウェイ(Raspberry Pi 向け)。
