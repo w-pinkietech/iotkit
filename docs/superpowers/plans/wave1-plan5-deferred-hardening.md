@@ -40,3 +40,58 @@ Fable review-max + codex の T9 レビュー。Important/Critical なし。高�
 ## Task 10 への引き継ぎ(Fable Minor7)
 
 - **spawn_api_task の data_dir**: fingerprint CLI コマンドは `{db_path 親}/tls/cert.pem` を前提とする。Task 10 で main が `spawn_api_task(..., data_dir=db_path.parent())` を渡し、gateway が実際に生成する cert.pem のパスと CLI の前提が一致することを必須確認する(不一致だと fingerprint コマンドが常に「未生成」を返す)。
+
+## D-9〜D-15: 構造監査(2026-07-10、クロスベンダー+ユーザー裁定)の繰り延べ項目
+
+監査の DO-NOW 分(耐久性 FULL 化・毒性回復・リネーム2件・core/supervision 分離・契約 rustdoc)は
+96c34d5〜 で実施済み。以下は台帳送り(Minor または トリガー待ち)。
+
+- **D-9**: `iotkit-polling-adapter-runtime/src/polling_loop.rs` の約1,490行のインラインテストを
+  `polling_loop_test.rs` へ分離(house pattern。実コードは638行で責務違反なし=監査確定)。
+- **D-10**: `core/ledger/src/store.rs`(実コード853行)のモジュール分割(device/series/sighting/
+  event/meta、ルート re-export 維持)。挙動不変の内部整理。crate 分割はしない(トランザクション
+  所有が壊れるため=監査裁定、正本の例外に記載)。
+- **D-11**: `iotkit-gateway/src/epoch_start.rs` の ledger_events 生読みを
+  `core/ledger::last_epoch_renewal()` ヘルパーへ(enqueue 側は既に core/publish 経由)。
+- **D-12**: `rpi-local-adapter/Cargo.toml` が edition 2021(workspace は 2024)→ 統一。
+- **D-13**: `iotkit-gateway/src/main.rs` のモジュールレベル `#[allow(dead_code)]`(publish_task)を
+  項目単位へスコープ縮小(本当に死んだ項目を隠している)。
+- **D-14**: `docs/install.md` + systemd unit + `iotkit.toml.example` + 初回パスフレーズ/fingerprint
+  手順(設置者ペルソナの一枚紙)。**トリガー: 初の外部配布前**(Wave 1 出口条件)。
+- **D-15**: typed StartupError(config/TLS エラーにファイルパスと次に確認すべきことを付与)。
+  起動系を触る計画のついでに。Fable 監査はエラー文言を「現状 actionable」と判定済み=急がない。
+
+### 昇格トリガー(最初の2件は正本 architecture.md の Deliberate exceptions と対。event_loop と OSS メタデータは台帳のみで管理)
+
+- `core/retention` 新設 = retention の次機能(active back-pressure)着手時。
+- `record.rs` → `core/publish` = D9 MQTT 出口バインディングが共有 materialization を要した時
+  (docs/exit-contract.md:4-6 の実装参照の同時更新を忘れない)。
+- BravePI `event_loop` 分割 = 世話サービサ移行が旧南向き経路を削除する時(それまでの分割は
+  捨てられる労力=監査裁定・ユーザー承認済み)。
+- LICENSE / CONTRIBUTING / SECURITY / 公開メタデータ = Wave 2(公開 OSS)入口。
+
+## 計画6への持ち込み(構造監査+計画6メニュー検証 2026-07-10)
+
+計画6(R2 入口)の brainstorming/spec は以下を Global Constraints へ全掃引すること。
+
+1. **IngestPrincipal**: 認証送信者identityを `IngestRequest` にエンベロープと別載せ。dedup・subject
+   認可・流量会計・監査はこちらを使う。`envelope.source` は診断メタデータ扱い、principal との
+   不一致は reject+侵害シグナル監査(D11決定2、D1:198-201「実装はWave 1のHTTP ingress」)。
+   **同時に D5決定1 の「トークン1:1 送信者は subject_hint 省略可」の解決経路を実装する**——
+   現行コレクタは無条件必須(欠落=終端 UnknownSubject)で、1:1 トークンが登場する計画6までに
+   契約どおりの省略解決が要る(2026-07-10 最終レビュー codex 指摘の裁定)。
+2. **ack 契約の完成**: 拒否詳細に `field_path`(JSON pointer)+期待スキーマヒント追加、
+   `ReasonCode::Internal` 削除(未使用・D1準拠の生成者なし=T4監査で文書化済み)。D1:90/93。
+   ワイヤ適合テストと同時に。
+3. **docs/ingest-contract.md** 正規文書(exit-contract.md の対)+ curl 3行体験を受け入れ基準に。
+4. **入口は別crate**: `iotkit-ingest-http`(R2)。`gateway/src/api` は制御面専用——認証・レート
+   制限境界が異なる(D1:142、R2台帳)。check-layers に INGRESS 分類を新設。
+5. **鮮度ウィンドウ超の拒否**: D1:60-65 のユーザー裁定「外部送信者導入と同時」=計画6が該当。
+6. **スコープ裁定済み(2026-07-10 メニュー検証)**: HTTP 先行は正本既決(D1:106)。MQTT ingest は
+   別計画(先頭タスク=D11保留のMQTT絞りワイヤ表現の決定)。ペアリング窓経路は計画9へ(承認画面の
+   突合が必要=D13)→計画6は無認証面ゼロ。流量クラス等の具体値は設定化した暫定値+実測確定は
+   命名済み別計画(容量ベンチ・電源断リグも吸収)。絞りの執行は網リスナー限定(in-proc は有界
+   チャネルが逆圧=D1:117)。token-bucket 採用は D11保留の解決として還流記録すること。
+   アラーム基盤は未実装のため「騒がしく」=監査イベント+R12 水位+エピソード集約(R23はフック)。
+7. **未決(計画6 brainstorming でユーザーに確認)**: R22 snapshot 秘密投入+暗号化コンテナを
+   計画6に含めるか(計画5 spec §9の約束)vs 直後の小計画6.5に分割するか。

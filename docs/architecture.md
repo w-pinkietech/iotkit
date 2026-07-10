@@ -195,6 +195,21 @@ checked.
   dev-dependencies for tests.)
 - **BravePI-owned subcrates remain colocated intentionally:** `bravepi-codec`
   and `bravepi-poc` stay nested under `bravepi-mainboard-adapter/`.
+- **Some custody-critical SQL lives in the gateway, deliberately.** The
+  retention purge (`iotkit-gateway/src/retention.rs`) and exit-record
+  materialization (`src/record.rs`) join tables owned by *different* `core/*`
+  crates, so no single core crate could own them today. Graduation triggers: a
+  `core/retention` crate when retention gains its next feature (active
+  back-pressure); `record.rs` → `core/publish` when the D9 MQTT exit binding
+  needs shared materialization (update `docs/exit-contract.md`'s
+  implementation pointers at the same time). Separately, the epoch-start read
+  (`src/epoch_start.rs`) touches only a `core/ledger`-owned table — a
+  temporary raw read queued to become `core/ledger::last_epoch_renewal()`
+  (deferred ledger D-11), not a cross-crate join.
+- **`core/ledger` is a deliberate single-crate aggregate** (devices, series,
+  sightings, audit events, epochs share identity rules and transactions).
+  Splitting its `store.rs` into modules is fine; splitting it into crates is
+  rejected — it would break transaction ownership.
 
 ## Placement rules — "where does new code go?"
 
