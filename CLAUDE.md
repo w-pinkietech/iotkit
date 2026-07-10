@@ -19,10 +19,10 @@ Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- {`core/engine`, adapt
 ```bash
 cargo test --workspace
 cargo test -p <crate-name>
-scripts/verify.sh          # fmt + test --workspace + clippy -D warnings (host verification)
+scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D warnings (host verification)
 ```
 
-ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`trailer.sh`(コミットトレーラ、セッションモデル自動検出)・`watchpoints.sh`(レビューガイド期限見張り)。
+ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`verify.sh`(ホスト検証)・`check-layers`(crate 層規則の機械検査)・`trailer.sh`(コミットトレーラ、セッションモデル自動検出)・`watchpoints.sh`(レビューガイド期限見張り)。
 
 ## Workflow Rules
 
@@ -45,6 +45,7 @@ scripts/verify.sh          # fmt + test --workspace + clippy -D warnings (host v
 
 | Topic | Path |
 |---|---|
+| 構造正本(crate地図・置き場規則・層規則・ペルソナ) | [docs/architecture.md](docs/architecture.md) |
 | Spec review guide | [docs/eval/spec-review.md](docs/eval/spec-review.md) |
 | Plan review guide | [docs/eval/plan-review.md](docs/eval/plan-review.md) |
 | Impl spec compliance review | [docs/eval/impl-spec-review.md](docs/eval/impl-spec-review.md) |

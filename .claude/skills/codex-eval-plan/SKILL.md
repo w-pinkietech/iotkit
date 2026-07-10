@@ -20,6 +20,7 @@ Evaluate an implementation plan with Codex before starting the `codex-impl-loop`
 | File | Purpose |
 |---|---|
 | `docs/eval/plan-review.md` | Plan review guide (watchpoints + baseline checklist) |
+| `docs/architecture.md` — crate map, layer rules, placement table | The structure canon; the guide's File-Structure check needs the map |
 | The corresponding spec document | For spec-plan consistency check |
 
 ## Evaluation Focus (5 perspectives)
@@ -50,6 +51,9 @@ implementation plan from a third-party perspective.
 
 ## Plan Review Guide
 {content of docs/eval/plan-review.md}
+
+## Architecture Canon (structure/placement reference)
+{crate map, layer rules, placement table from docs/architecture.md}
 
 ## Spec Document (for consistency check)
 {content of the spec this plan implements}

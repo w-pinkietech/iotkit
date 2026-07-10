@@ -18,6 +18,7 @@ lives in `codex-impl-loop` step 4 — not duplicated here.
 |---|---|
 | `docs/eval/impl-spec-review.md` | Spec-compliance lens guide (watchpoints + baseline) |
 | `docs/eval/impl-quality-review.md` | Code-quality lens guide (watchpoints + baseline) |
+| `docs/architecture.md` — the crate map, layer rules, placement table, and "Who this serves" sections | The structure canon: reviewers can't judge placement without the map |
 | The plan task being evaluated | For spec-implementation comparison |
 
 Run `scripts/watchpoints.sh` first — adjudicate any expired watchpoints
@@ -43,6 +44,14 @@ BOTH lenses; report findings per lens.
 4. Rust idioms — types over sentinels? natural ownership? honest naming?
 5. Observability — structured tracing fields? anomaly timeline traceable?
 6. Test quality — edge cases covered? behavior verified, not just compilation?
+7. Structure & placement — new code in the right crate/module per the
+   architecture canon? file responsibilities intact? consistent with
+   neighboring code's patterns?
+8. Contributor/user lens — pub items documented? wire/ops-visible changes
+   synced to docs? usable by the target persona without reading Rust internals?
+
+## Architecture Canon (structure/placement/persona reference)
+{crate map, layer rules, placement table, "Who this serves" from docs/architecture.md}
 
 ## Spec Compliance Review Guide
 {content of docs/eval/impl-spec-review.md}

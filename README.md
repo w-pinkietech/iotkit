@@ -44,34 +44,33 @@ Requires the pinned toolchain in [`rust-toolchain.toml`](rust-toolchain.toml)
 
 ```bash
 cargo build --workspace
-cargo test  --workspace      # ~460 tests; 2 hardware-only tests are #[ignore]d
+cargo test  --workspace      # ~530 tests; 2 hardware-only tests are #[ignore]d
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
-CI runs all four on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+CI additionally checks the crate layer rules (`scripts/check-layers`) and runs
+all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml));
+`scripts/verify.sh` runs the fmt / layer-rule / test / clippy checks locally.
 
 ## Repository layout
 
 | Path | What |
 |------|------|
-| `core/storage` | SQLite handle, migration harness (cross-crate, set-difference versioning) |
-| `core/ledger` | Device ledger, series identity, epochs, audit events |
-| `core/timeseries` | `readings` storage, event-time derivation |
-| `core/registry` | Measurement registry (catalog + site overrides), quarantine policy |
-| `core/collector` | Ingest actor: dedup, series resolution, quarantine, outbox enqueue |
-| `core/publish` | Exit-contract data layer: `publication_log` (outbox) + `target_registry` |
-| `iotkit-gateway` | The daemon: adapters, push task, custody-aware retention, health |
-| `iotkit-gatewayctl` | Operator CLI |
-| `iotkit-ingest-client` | In-process ingest client used by adapters |
-| `*-adapter*` | Sensor adapters (BravePI mainboard, rpi-local, polling runtime) |
+| `core/*` | The domain, one responsibility per crate: storage, ledger (device identity), timeseries, registry, collector (ingest), publish (outbox), ops (R14 typed operations & auth), types, engine (supervision) |
+| `iotkit-ingest-contract` / `iotkit-ingest-client` | The ingest wire contract (Envelope/Ack) and the client adapters use |
+| `*-adapter*` / `rpi4b-driver` | Sensor adapters (BravePI mainboard, rpi-local), shared polling runtime, raw bus transport |
+| `iotkit-gateway` / `iotkit-gatewayctl` | The daemon and the operator CLI |
+
+The full crate map, layer rules, and "where does new code go" placement table
+live in [docs/architecture.md](docs/architecture.md).
 
 ## Architecture & contracts
 
-- [docs/architecture.md](docs/architecture.md) — crate map, data flow, the custody loop, concurrency model.
+- [docs/architecture.md](docs/architecture.md) — who this serves, crate map & placement rules, data flow, the custody loop, concurrency model.
 - [docs/exit-contract.md](docs/exit-contract.md) — what an archive consumer receives and must do (record schema, ack, cursor, epochs).
 
-The authoritative design corpus (decision records **D1–D7**, the **R1–R23**
+The authoritative design corpus (decision records **D1–D13**, the **R1–R23**
 responsibility ledger) lives under `../docs/redesign/` and is currently
 Japanese-only. You do **not** need it to build, run, or make a routine change —
 it's the "why", for deep dives.

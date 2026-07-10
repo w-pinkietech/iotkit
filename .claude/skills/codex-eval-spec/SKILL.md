@@ -20,6 +20,7 @@ Evaluate a design spec with Codex before proceeding to implementation planning.
 | File | Purpose |
 |---|---|
 | `docs/eval/spec-review.md` | Spec review guide (watchpoints + baseline checklist) |
+| `docs/architecture.md` — Site anatomy, crate map, layer rules, Who this serves | The structure canon; the guide's placement/anatomy items reference it |
 
 ## Evaluation Focus (5 perspectives)
 
@@ -44,6 +45,9 @@ design spec from a third-party perspective.
 
 ## Spec Review Guide
 {content of docs/eval/spec-review.md}
+
+## Architecture Canon (structure/placement/persona reference)
+{Site anatomy, crate map, layer rules, Who this serves from docs/architecture.md}
 
 ## Spec Content
 {the spec document}

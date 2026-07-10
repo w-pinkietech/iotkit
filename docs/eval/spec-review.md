@@ -26,7 +26,7 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 
 - [ ] `core/types` に adapter、transport、protocol の詳細が逆流していないか。
 - [ ] crate 依存が一方向になっているか。
-- [ ] `AdapterEvent`、`AdapterCommand`、`SensorIdentity`、`DeviceKey` が汎用契約として保たれているか。
+- [ ] 取り込みは Envelope(`iotkit-ingest-contract`)経由か。`AdapterEvent`/`AdapterCommand` は凍結レガシー語彙(`core/types` 在住。監督・旧南向き用、D4/D12)——新規の使用箇所や新規バリアント追加を前提とする設計になっていないか。
 - [ ] adapter 固有の値や enum が core の共有型に漏れていないか。
 - [ ] transport は open、read、write などの I/O 責務に留まっているか。
 - [ ] codec はフレーム分解の責務に留まり、意味解釈を抱え込みすぎていないか。
@@ -74,6 +74,7 @@ max 10 items、デフォルト TTL 3ヶ月。繰り返し出現する項目は B
 
 ### 定番質問
 
+- この設計が足す新しい面(リスナー・エンドポイント・常駐タスク)は配置4段([1]デバイス〜[4]クラウド)のどの箱に住み、設置者の手順に何を足すか(docs/architecture.md「Site anatomy」)。
 - この変更で新しい sensor type を足すと、どのファイルを何箇所触るか。
 - この変更で新しい adapter を足すと、どこまで共通化が効くか。
 - 1台のデバイスが無言で消えたとき、core はいつどう知るか。

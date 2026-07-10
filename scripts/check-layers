@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""check-layers — mechanically enforce the crate layer rules of docs/architecture.md.
+
+Cargo prevents dependency *cycles*, not dependency *direction*: nothing else stops
+an adapter from quietly gaining `iotkit-core-engine` or a direct data-plane
+dependency. This script is the hard gate; the review guides only reference it.
+
+Rules (see docs/architecture.md "Layer rules"):
+  1. adapters never depend on core/engine
+  2. adapters reach the data plane only through iotkit-ingest-client
+  3. iotkit-ingest-contract's runtime deps are serde and nothing else
+  4. core/types and core/storage are leaves; core/engine depends only on core/types;
+     no core/* crate depends on adapters or binaries
+  5. a NEW workspace crate must be classified here deliberately (unclassified = error)
+  6. iotkit-ingest-client's workspace deps are exactly core/collector + the contract
+
+Deliberate exception (do not "fix"): core/registry -> core/collector is dependency
+inversion — the collector owns the RegistryPolicy trait, the registry implements it.
+
+Normal AND build dependencies are checked (a build.rs can use the target crate at
+product-build time, so a build-dep is a real edge); only dev-dependencies are
+excluded (tests may cross layers).
+"""
+
+import json
+import subprocess
+import sys
+
+DATA_PLANE = {
+    "iotkit-core-storage", "iotkit-core-ledger", "iotkit-core-timeseries",
+    "iotkit-core-publish", "iotkit-core-collector", "iotkit-core-registry",
+    "iotkit-core-ops",
+}
+ADAPTERS = {
+    "bravepi-mainboard-adapter", "bravepi-codec", "bravepi-sensors", "bravepi-poc",
+    "rpi-local-adapter", "iotkit-polling-adapter-runtime", "rpi4b-transport",
+}
+BINARIES = {"iotkit-gateway", "iotkit-gatewayctl"}
+CONTRACT = "iotkit-ingest-contract"
+CLIENT = "iotkit-ingest-client"
+ENGINE = "iotkit-core-engine"
+TYPES = "iotkit-core-types"
+STORAGE = "iotkit-core-storage"
+CLASSIFIED = DATA_PLANE | ADAPTERS | BINARIES | {CONTRACT, CLIENT, ENGINE, TYPES}
+
+
+def main() -> int:
+    meta = json.loads(subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        capture_output=True, check=True, text=True).stdout)
+    packages = {p["name"]: p for p in meta["packages"]}
+    workspace = set(packages)
+    errors = []
+
+    for name in sorted(workspace - CLASSIFIED):
+        errors.append(f"{name}: new crate is not classified in scripts/check-layers — "
+                      f"place it in a layer deliberately, and on the docs/architecture.md "
+                      f"map (rule 5)")
+
+    for name, pkg in sorted(packages.items()):
+        checked = [d for d in pkg["dependencies"] if d.get("kind") != "dev"]
+        internal = {d["name"] for d in checked if d["name"] in workspace}
+
+        if name in ADAPTERS:
+            if ENGINE in internal:
+                errors.append(f"{name} depends on {ENGINE} (rule 1: projection "
+                              f"machinery is the gateway's business)")
+            direct = internal & DATA_PLANE
+            if direct:
+                errors.append(f"{name} depends on the data plane directly: "
+                              f"{sorted(direct)} (rule 2: go through {CLIENT})")
+
+        if name == CONTRACT:
+            external = {d["name"] for d in checked}
+            extra = external - {"serde"}
+            if extra:
+                errors.append(f"{CONTRACT} grew dependencies beyond serde: "
+                              f"{sorted(extra)} (rule 3: conformance suites must be "
+                              f"able to depend on this crate alone)")
+
+        if name == CLIENT:
+            expected = {"iotkit-core-collector", CONTRACT}
+            if internal != expected:
+                errors.append(f"{CLIENT} workspace deps are {sorted(internal)}, but "
+                              f"rule 6 pins exactly {sorted(expected)} — if the binding "
+                              f"design changed, update this rule and the canon deliberately")
+
+        if name in (TYPES, STORAGE) and internal:
+            errors.append(f"{name} is a leaf but depends on {sorted(internal)} (rule 4)")
+
+        if name == ENGINE and internal - {TYPES}:
+            errors.append(f"{ENGINE} may depend only on {TYPES}, found "
+                          f"{sorted(internal - {TYPES})} (rule 4)")
+
+        if name.startswith("iotkit-core-"):
+            upward = internal & (ADAPTERS | BINARIES)
+            if upward:
+                errors.append(f"{name} depends upward on {sorted(upward)} (rule 4)")
+
+    if errors:
+        print("check-layers: FAIL", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+    print(f"check-layers: OK ({len(workspace)} crates, layer rules hold)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

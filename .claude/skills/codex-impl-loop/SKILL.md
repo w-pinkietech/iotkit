@@ -31,6 +31,9 @@ For each task in the plan, in order:
 1. **Author the impl prompt** → `scratchpad/codex-impl-t<N>.md`
    - Scope to THIS task only ("Task N だけ。git commit するな。")
    - Point at the plan section + Global Constraints + relevant spec §§ + any deferred-hardening carry
+   - Point at `docs/architecture.md` placement rules (crate map / placement table / layer
+     rules) so code lands in the right crate — a task adding a crate must also update
+     the `scripts/check-layers` classification and the architecture.md map
    - State the design-corpus invariants the task must not violate (test-green ≠ correct)
    - Require codex to self-run `cargo test` / `clippy` (danger-full-access lets it)
 
@@ -45,7 +48,8 @@ For each task in the plan, in order:
    ```bash
    scripts/verify.sh
    ```
-   fmt + `cargo test --workspace` + clippy `-D warnings`. Green is necessary, not sufficient.
+   fmt + layer rules (`check-layers`) + `cargo test --workspace` + clippy `-D warnings`.
+   Green is necessary, not sufficient.
 
 4. **Cross-vendor review — one prompt, two vendors, in parallel**
    - First run `scripts/watchpoints.sh`; adjudicate any expired watchpoints

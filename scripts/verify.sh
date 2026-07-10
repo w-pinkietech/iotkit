@@ -11,6 +11,9 @@ cd "$(git rev-parse --show-toplevel)"
 echo "== cargo fmt --all --check =="
 cargo fmt --all --check
 
+echo "== scripts/check-layers (crate layer rules) =="
+scripts/check-layers
+
 echo "== cargo test --workspace =="
 cargo test --workspace
 

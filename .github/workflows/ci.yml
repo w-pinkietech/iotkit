@@ -41,6 +41,9 @@ jobs:
       - name: Formatting (cargo fmt --check)
         run: cargo fmt --all --check
 
+      - name: Layer rules (scripts/check-layers)
+        run: scripts/check-layers
+
       - name: Lints (cargo clippy -D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
