@@ -175,7 +175,7 @@ async fn normal_data_flow_produces_device_discovered_then_sensor_data() {
                 device_key.as_str(),
                 "bravepi-mainboard:246880020140018b:temperature"
             );
-            assert_eq!(identity.manufacturer, "Braveridge");
+            assert_eq!(identity.manufacturer, "Microchip");
             assert_eq!(identity.ic_part_number, "MCP9600");
         }
         other => panic!("expected DeviceDiscovered, got {:?}", other),

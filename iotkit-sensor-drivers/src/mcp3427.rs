@@ -10,7 +10,7 @@ fn sensor_type() -> SensorType {
     SensorType::Adc
 }
 
-pub const MANUFACTURER: &str = "Braveridge";
+pub const MANUFACTURER: &str = "Microchip";
 pub const IC_PART_NUMBER: &str = "MCP3427";
 
 pub fn identity(connection: ConnectionInfo) -> SensorIdentity {

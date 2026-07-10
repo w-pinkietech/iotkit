@@ -142,8 +142,8 @@ layer rules below mechanically (in `verify.sh` and CI).
 | `iotkit-core-ops` | `core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
 | `iotkit-ingest-client` | `iotkit-ingest-client` | The ingest-contract client adapters use (D4). In-proc binding today; HTTP/MQTT are future feature flags. |
 | `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Shared scaffolding for I2C-bus polling sensor adapters. |
-| `rpi4b-transport` | `rpi4b-driver/transport` | Raw bus access (serial/I2C/GPIO/SPI/PWM/USB). Bytes and pin states, zero protocol knowledge. |
-| `bravepi-sensors` | `bravepi-mainboard-adapter/sensors` | Per-sensor-IC conversion drivers, input-source-agnostic (shared by multiple adapters). |
+| `rpi4b-transport` | `rpi4b-transport` | Raw bus access (serial/I2C/GPIO/SPI/PWM/USB). Bytes and pin states, zero protocol knowledge. |
+| `iotkit-sensor-drivers` | `iotkit-sensor-drivers` | Vendor-neutral per-sensor-IC conversion drivers, input-source-agnostic (shared by multiple adapters). |
 | `bravepi-codec` | `bravepi-mainboard-adapter/codec` | BravePI frame encoding/decoding. |
 | `bravepi-mainboard-adapter` | `bravepi-mainboard-adapter` | BravePI-protocol adapter: transport + codec + sensors → Envelopes. |
 | `rpi-local-adapter` | `rpi-local-adapter` | On-Pi I2C sensor adapter; thin wrapper over the polling runtime. |
@@ -186,17 +186,14 @@ cross layers); build-dependencies are checked.
   in-proc binding (D4): official adapters get durable ingest behind the
   contract without carrying an HTTP stack. (Its other `core/*` entries are
   dev-dependencies for tests.)
-- **Directory names ≠ crate names in two places** (historical): the
-  `rpi4b-driver/` directory holds the `rpi4b-transport` crate, and
-  `bravepi-mainboard-adapter/` hosts the shared `bravepi-sensors` /
-  `bravepi-codec` subcrates. Renames/moves are queued Wave-1 structural
-  homework (D12 decision 8) — don't half-fix them ad hoc.
+- **BravePI-owned subcrates remain colocated intentionally:** `bravepi-codec`
+  and `bravepi-poc` stay nested under `bravepi-mainboard-adapter/`.
 
 ## Placement rules — "where does new code go?"
 
 | You are adding… | It goes in… |
 |---|---|
-| A new sensor-IC conversion (usable by several adapters) | `bravepi-sensors` (the shared driver crate, despite the vendor-flavored name — see exceptions above) |
+| A new sensor-IC conversion (usable by several adapters) | `iotkit-sensor-drivers` |
 | A new sensor family / device protocol | A **new top-level `*-adapter` crate**; build on `iotkit-polling-adapter-runtime` if it's bus polling. Never inside `core/*` or the gateway. |
 | A change to the ingest wire (envelope fields, ack semantics, reason codes) | `iotkit-ingest-contract` **only**, with its conformance tests; consumers adapt. The wire is the contract — the Rust types follow it, not vice versa. |
 | A new operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |

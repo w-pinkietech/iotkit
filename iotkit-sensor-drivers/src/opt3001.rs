@@ -10,7 +10,7 @@ fn sensor_type() -> SensorType {
     SensorType::Illuminance
 }
 
-pub const MANUFACTURER: &str = "Braveridge";
+pub const MANUFACTURER: &str = "Texas Instruments";
 pub const IC_PART_NUMBER: &str = "OPT3001";
 
 pub fn identity(connection: ConnectionInfo) -> SensorIdentity {

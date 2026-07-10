@@ -1,7 +1,7 @@
 //! BravePI raw sensor_type → SensorHandler の対応表。
 //! BravePI プロトコル固有の番号体系はこのモジュールに閉じる。
 
-use bravepi_sensors::SensorHandler;
+use iotkit_sensor_drivers::SensorHandler;
 
 struct RegistryEntry {
     raw_sensor_type: u16,
@@ -11,35 +11,35 @@ struct RegistryEntry {
 static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
         raw_sensor_type: 257,
-        handler: &bravepi_sensors::contact::CONTACT_INPUT,
+        handler: &iotkit_sensor_drivers::contact::CONTACT_INPUT,
     },
     RegistryEntry {
         raw_sensor_type: 258,
-        handler: &bravepi_sensors::contact::CONTACT_OUTPUT,
+        handler: &iotkit_sensor_drivers::contact::CONTACT_OUTPUT,
     },
     RegistryEntry {
         raw_sensor_type: 259,
-        handler: &bravepi_sensors::mcp3427::HANDLER,
+        handler: &iotkit_sensor_drivers::mcp3427::HANDLER,
     },
     RegistryEntry {
         raw_sensor_type: 260,
-        handler: &bravepi_sensors::vl53l1x::HANDLER,
+        handler: &iotkit_sensor_drivers::vl53l1x::HANDLER,
     },
     RegistryEntry {
         raw_sensor_type: 261,
-        handler: &bravepi_sensors::mcp9600::HANDLER,
+        handler: &iotkit_sensor_drivers::mcp9600::HANDLER,
     },
     RegistryEntry {
         raw_sensor_type: 262,
-        handler: &bravepi_sensors::lis2duxs12::HANDLER,
+        handler: &iotkit_sensor_drivers::lis2duxs12::HANDLER,
     },
     RegistryEntry {
         raw_sensor_type: 263,
-        handler: &bravepi_sensors::sdp810::HANDLER,
+        handler: &iotkit_sensor_drivers::sdp810::HANDLER,
     },
     RegistryEntry {
         raw_sensor_type: 264,
-        handler: &bravepi_sensors::opt3001::HANDLER,
+        handler: &iotkit_sensor_drivers::opt3001::HANDLER,
     },
 ];
 

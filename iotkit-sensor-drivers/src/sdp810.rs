@@ -10,7 +10,7 @@ fn sensor_type() -> SensorType {
     SensorType::DifferentialPressure
 }
 
-pub const MANUFACTURER: &str = "Braveridge";
+pub const MANUFACTURER: &str = "Sensirion";
 pub const IC_PART_NUMBER: &str = "SDP810";
 
 pub fn identity(connection: ConnectionInfo) -> SensorIdentity {

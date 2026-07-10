@@ -10,7 +10,7 @@ fn sensor_type() -> SensorType {
     SensorType::Temperature
 }
 
-pub const MANUFACTURER: &str = "Braveridge";
+pub const MANUFACTURER: &str = "Microchip";
 pub const IC_PART_NUMBER: &str = "MCP9600";
 
 /// センサーの素性を返す。

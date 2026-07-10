@@ -1,4 +1,4 @@
-//! iotkit-sensors: sensor IC ごとの変換ドライバー
+//! iotkit-sensor-drivers: sensor IC ごとの変換ドライバー
 //!
 //! 入力ソース（I2C 生値 / UART BravePI フレーム）を問わず、
 //! 同じセンサー IC なら同じ SensorReading を返す。

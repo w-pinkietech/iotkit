@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
-rpi4b-transport = { path = "../rpi4b-driver/transport" }
+rpi4b-transport = { path = "../rpi4b-transport" }
 bravepi-codec = { path = "codec" }
-bravepi-sensors = { path = "sensors" }
+iotkit-sensor-drivers = { path = "../iotkit-sensor-drivers" }
 iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"] }
 iotkit-ingest-contract = { path = "../iotkit-ingest-contract" }
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }

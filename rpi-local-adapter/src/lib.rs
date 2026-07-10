@@ -3,8 +3,8 @@
 
 pub mod drivers;
 
-pub use bravepi_sensors::mcp9600::ThermocoupleType;
 pub use iotkit_polling_adapter_runtime::AdapterHandle;
+pub use iotkit_sensor_drivers::mcp9600::ThermocoupleType;
 
 use std::sync::Arc;
 

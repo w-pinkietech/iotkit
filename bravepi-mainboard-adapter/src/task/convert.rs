@@ -3,7 +3,7 @@
 use iotkit_core_types::{AdapterEvent, DeviceKey, SensorIdentity};
 
 use bravepi_codec::BravePiFrame;
-use bravepi_sensors::UartSample;
+use iotkit_sensor_drivers::UartSample;
 
 use crate::BravepiConnection;
 use crate::registry::lookup_handler;

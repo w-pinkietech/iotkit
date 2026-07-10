@@ -254,7 +254,7 @@ fn temperature_frame_returns_identity() {
     let (_event, identity) = frame_to_event(frame, "/dev/ttyAMA0").expect("should produce event");
 
     let identity = identity.expect("temperature should have identity");
-    assert_eq!(identity.manufacturer, "Braveridge");
+    assert_eq!(identity.manufacturer, "Microchip");
     assert_eq!(identity.ic_part_number, "MCP9600");
     assert_eq!(identity.sensor_type, SensorType::Temperature);
     assert_eq!(

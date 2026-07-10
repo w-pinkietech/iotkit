@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use bravepi_sensors::opt3001;
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorIdentity, SensorReading};
 use iotkit_polling_adapter_runtime::SensorDriver;
+use iotkit_sensor_drivers::opt3001;
 use rpi4b_transport::{I2cConfig, I2cTransport};
 
 pub struct Opt3001Driver;

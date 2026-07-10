@@ -10,7 +10,7 @@ fn sensor_type() -> SensorType {
     SensorType::Acceleration
 }
 
-pub const MANUFACTURER: &str = "Braveridge";
+pub const MANUFACTURER: &str = "STMicroelectronics";
 pub const IC_PART_NUMBER: &str = "LIS2DUXS12";
 
 pub fn identity(connection: ConnectionInfo) -> SensorIdentity {

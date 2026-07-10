@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use bravepi_sensors::mcp9600::{self, ThermocoupleType};
 use iotkit_core_types::{ConnectionInfo, ConnectionKind, SensorIdentity, SensorReading};
 use iotkit_polling_adapter_runtime::SensorDriver;
+use iotkit_sensor_drivers::mcp9600::{self, ThermocoupleType};
 use rpi4b_transport::{I2cConfig, I2cTransport};
 
 pub struct Mcp9600Driver {

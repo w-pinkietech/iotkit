@@ -32,7 +32,7 @@ DATA_PLANE = {
     "iotkit-core-ops",
 }
 ADAPTERS = {
-    "bravepi-mainboard-adapter", "bravepi-codec", "bravepi-sensors", "bravepi-poc",
+    "bravepi-mainboard-adapter", "bravepi-codec", "iotkit-sensor-drivers", "bravepi-poc",
     "rpi-local-adapter", "iotkit-polling-adapter-runtime", "rpi4b-transport",
 }
 BINARIES = {"iotkit-gateway", "iotkit-gatewayctl"}

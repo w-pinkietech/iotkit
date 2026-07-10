@@ -59,7 +59,7 @@ all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows
 |------|------|
 | `core/*` | The domain, one responsibility per crate: storage, ledger (device identity), timeseries, registry, collector (ingest), publish (outbox), ops (R14 typed operations & auth), types, engine (supervision) |
 | `iotkit-ingest-contract` / `iotkit-ingest-client` | The ingest wire contract (Envelope/Ack) and the client adapters use |
-| `*-adapter*` / `rpi4b-driver` | Sensor adapters (BravePI mainboard, rpi-local), shared polling runtime, raw bus transport |
+| `*-adapter*` / `iotkit-sensor-drivers` / `rpi4b-transport` | Sensor adapters (BravePI mainboard, rpi-local), shared sensor-IC drivers and polling runtime, raw bus transport |
 | `iotkit-gateway` / `iotkit-gatewayctl` | The daemon and the operator CLI |
 
 The full crate map, layer rules, and "where does new code go" placement table

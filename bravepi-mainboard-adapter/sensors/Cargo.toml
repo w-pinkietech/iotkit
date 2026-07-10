@@ -1,7 +1,0 @@
-[package]
-name = "bravepi-sensors"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-iotkit-core-types = { path = "../../core/types" }

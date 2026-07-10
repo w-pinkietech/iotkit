@@ -237,10 +237,10 @@ name = "bravepi-mainboard-adapter"
 version = "0.1.0"
 dependencies = [
  "bravepi-codec",
- "bravepi-sensors",
  "iotkit-core-types",
  "iotkit-ingest-client",
  "iotkit-ingest-contract",
+ "iotkit-sensor-drivers",
  "rpi4b-transport",
  "tokio",
  "tracing",
@@ -255,13 +255,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "bravepi-sensors"
-version = "0.1.0"
-dependencies = [
- "iotkit-core-types",
 ]
 
 [[package]]
@@ -1123,6 +1116,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-sensor-drivers"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1614,10 +1614,10 @@ dependencies = [
 name = "rpi-local-adapter"
 version = "0.1.0"
 dependencies = [
- "bravepi-sensors",
  "iotkit-core-types",
  "iotkit-ingest-client",
  "iotkit-polling-adapter-runtime",
+ "iotkit-sensor-drivers",
  "rpi4b-transport",
  "tokio",
  "tracing",
