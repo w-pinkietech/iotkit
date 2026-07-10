@@ -17,9 +17,13 @@
 # stderr). Timestamped so a re-review never clobbers earlier evidence.
 #
 # Env overrides:
-#   CODEX_MODEL   (default gpt-5.5)
-#   CODEX_EFFORT  (override; default xhigh for review, high for impl — reviews decide
-#                  things and earn max reasoning; the impl grind trades some for speed)
+#   CODEX_MODEL   (default gpt-5.6-sol — strongest tier for complex coding/review;
+#                  gpt-5.6-terra/-luna are the cheaper siblings)
+#   CODEX_EFFORT  (override; default max for review, high for impl — reviews decide
+#                  things and earn the deepest reasoning; the impl grind trades some
+#                  for speed. Effort scale: low < medium < high < xhigh < max; "ultra"
+#                  also exists but fans out subagents — a different execution/cost
+#                  mode, never a silent default; opt in explicitly via CODEX_EFFORT)
 #   CODEX_OUT_DIR (default /tmp/codex-runs; set to the session scratchpad if you prefer)
 #   CODEX_BIN     (default /home/kenta/.local/bin/codex)
 #   CODEX_REPO    (default: current git toplevel; set to point codex at a different
@@ -33,13 +37,13 @@ if [ -z "$MODE" ] || [ -z "$PROMPT" ] || [ -z "$LABEL" ]; then
 fi
 
 CODEX_BIN="${CODEX_BIN:-/home/kenta/.local/bin/codex}"
-CODEX_MODEL="${CODEX_MODEL:-gpt-5.5}"
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
 CODEX_OUT_DIR="${CODEX_OUT_DIR:-/tmp/codex-runs}"
 REPO="${CODEX_REPO:-$(git rev-parse --show-toplevel)}"
 [ -d "$REPO" ] || { echo "repo not found: $REPO" >&2; exit 2; }
 
 case "$MODE" in
-  review) SANDBOX="read-only";          DEFAULT_EFFORT="xhigh" ;;
+  review) SANDBOX="read-only";          DEFAULT_EFFORT="max" ;;
   impl)   SANDBOX="danger-full-access"; DEFAULT_EFFORT="high"  ;;
   *) echo "mode must be 'review' or 'impl', got: '$MODE'" >&2; exit 2 ;;
 esac

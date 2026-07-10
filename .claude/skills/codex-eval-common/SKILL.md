@@ -32,7 +32,7 @@ scripts/watchpoints.sh
 # Write the review prompt to a file, then:
 scripts/codex.sh review <prompt-file> <label>
 #   -> read-only sandbox; model/effort defaults live in scripts/codex.sh
-#      (review defaults to xhigh reasoning — reviews earn max reasoning)
+#      (review defaults to the deepest reasoning tier — reviews earn max reasoning)
 #   -> output: /tmp/codex-runs/codex-<label>-review-<timestamp>.txt
 
 # Cheaper mechanical pass: dial effort down
