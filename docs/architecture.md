@@ -145,7 +145,7 @@ layer rules below mechanically (in `verify.sh` and CI).
 | `rpi4b-transport` | `rpi4b-transport` | Raw bus access (serial/I2C/GPIO/SPI/PWM/USB). Bytes and pin states, zero protocol knowledge. |
 | `iotkit-sensor-drivers` | `iotkit-sensor-drivers` | Vendor-neutral per-sensor-IC conversion drivers, input-source-agnostic (shared by multiple adapters). |
 | `bravepi-codec` | `bravepi-mainboard-adapter/codec` | BravePI frame encoding/decoding. |
-| `bravepi-mainboard-adapter` | `bravepi-mainboard-adapter` | BravePI-protocol adapter: transport + codec + sensors → Envelopes. |
+| `bravepi-mainboard-adapter` | `bravepi-mainboard-adapter` | BravePI-protocol adapter: transport + codec + sensor drivers → Envelopes. |
 | `rpi-local-adapter` | `rpi-local-adapter` | On-Pi I2C sensor adapter; thin wrapper over the polling runtime. |
 | `bravepi-poc` | `bravepi-mainboard-adapter/poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
 | `iotkit-gateway` | `iotkit-gateway` | **Binary.** Composition root: adapter supervision, push task, retention, health, HTTPS API. |
