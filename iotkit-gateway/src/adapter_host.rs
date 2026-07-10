@@ -9,7 +9,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::{Stream, StreamExt, StreamMap};
 
 use iotkit_core_engine::EngineEvent;
-use iotkit_core_types::{AdapterEvent, AdapterId};
+use iotkit_core_supervision::AdapterEvent;
+use iotkit_core_types::AdapterId;
 
 /// Event yielded by [`AdapterHost::next_event`].
 pub enum AdapterHostEvent {

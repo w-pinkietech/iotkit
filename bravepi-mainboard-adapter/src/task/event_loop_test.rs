@@ -1,7 +1,7 @@
-use iotkit_core_types::{
-    AdapterCommand, AdapterEvent, ConfigValue, DeviceCommand, DeviceCommandPayload, DeviceKey,
-    SensorType,
+use iotkit_core_supervision::{
+    AdapterCommand, AdapterEvent, ConfigValue, DeviceCommand, DeviceCommandPayload,
 };
+use iotkit_core_types::{DeviceKey, SensorType};
 use iotkit_ingest_client::channel_for_test;
 use tokio::sync::mpsc;
 
@@ -830,11 +830,11 @@ async fn set_output_to_contact_output_device_produces_downlink_bytes() {
     // Send SetOutput command
     command_tx
         .send(AdapterCommand::DeviceCommand(
-            iotkit_core_types::DeviceCommand {
+            iotkit_core_supervision::DeviceCommand {
                 device_key: iotkit_core_types::DeviceKey::new(
                     "bravepi-mainboard:1234567890abcdef:contact_output",
                 ),
-                payload: iotkit_core_types::DeviceCommandPayload::SetOutput {
+                payload: iotkit_core_supervision::DeviceCommandPayload::SetOutput {
                     value: true,
                     duration_ms: Some(5000),
                 },
@@ -882,11 +882,11 @@ async fn query_config_produces_downlink_bytes() {
     // Send QueryConfig command
     command_tx
         .send(AdapterCommand::DeviceCommand(
-            iotkit_core_types::DeviceCommand {
+            iotkit_core_supervision::DeviceCommand {
                 device_key: iotkit_core_types::DeviceKey::new(
                     "bravepi-mainboard:246880020140018b:temperature",
                 ),
-                payload: iotkit_core_types::DeviceCommandPayload::QueryConfig,
+                payload: iotkit_core_supervision::DeviceCommandPayload::QueryConfig,
             },
         ))
         .await

@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
+iotkit-core-supervision = { path = "../core/supervision" }
 iotkit-core-engine = { path = "../core/engine" }
 iotkit-core-storage = { path = "../core/storage" }
 iotkit-core-timeseries = { path = "../core/timeseries" }

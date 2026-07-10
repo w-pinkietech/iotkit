@@ -3,7 +3,7 @@
 ## Project Context
 
 `iotkit-next` は旧 `iotkit` をゼロから作り直す Rust + tokio の IoT ゲートウェイ(Raspberry Pi 向け)。
-レイヤ: `core/types` <- {`core/engine`, adapters} <- `iotkit-gateway`。
+レイヤ: {`core/types`, `core/supervision`} <- {`core/engine`, adapters} <- `iotkit-gateway`。
 取り込み経路はアダプタ内クライアント(`iotkit-ingest-client`)が正(D4)。adapters は `core/engine` に
 依存しない — `AdapterEvent` は engine/監督専用の frozen vocabulary で、新規コードは依存を増やさない。
 

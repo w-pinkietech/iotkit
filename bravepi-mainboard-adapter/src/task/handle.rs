@@ -1,6 +1,7 @@
 //! AdapterHandle: adapter の起動とライフサイクル管理。
 
-use iotkit_core_types::{AdapterCommand, AdapterEvent, AdapterId};
+use iotkit_core_supervision::{AdapterCommand, AdapterEvent};
+use iotkit_core_types::AdapterId;
 use tokio::sync::mpsc;
 
 use super::event_loop::event_loop;

@@ -72,10 +72,10 @@ contract with per-device tokens. `AdapterEvent`/`AdapterCommand` are a
 *frozen* legacy vocabulary, **not** the ingest path: `AdapterEvent` carries
 adapter-lifecycle supervision into `core/engine`'s device-state projection,
 and `AdapterCommand` carries shutdown plus legacy southbound commands into
-the adapter runtimes. Both are defined in `core/types` (moving them to a
-dedicated home is queued structural homework, D12 decision 8); because they
-sit inside a crate everyone may use, the freeze is **review-enforced**, not
-machine-enforced: new code must not grow new uses of them (D4).
+the adapter runtimes. Both are defined in `core/supervision`. The freeze is
+machine-enforced for **new crate dependents**: `scripts/check-layers` rule 7
+pins the complete dependent set. Reviews still police usage growth inside the
+existing dependent crates (D4/D12 decision 8).
 
 ## The custody loop (the core idea)
 
@@ -124,16 +124,16 @@ path.**
 
 ## Crate map
 
-Twenty crates, four layers. The table is topologically ordered — a crate only
-ever depends on crates in *earlier* rows. `scripts/check-layers` enforces the
-layer rules below mechanically (in `verify.sh` and CI).
+Twenty-one crates, four layers. `scripts/check-layers` enforces the layer rules
+below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
 |---|---|---|
-| `iotkit-core-types` | `core/types` | Domain entity types (no protocol specifics). Also still hosts the *frozen* `AdapterEvent`/`AdapterCommand` vocabulary (supervision / legacy southbound) — a known mix; the split is queued (D12 decision 8). Leaf. |
+| `iotkit-core-types` | `core/types` | Domain entity types (no protocol specifics). Leaf. |
 | `iotkit-ingest-contract` | `iotkit-ingest-contract` | Ingest wire contract v1: `Envelope`/`Ack`/reason codes. The wire is normative; runtime deps = serde only (serde_json appears only in dev-dependencies). Leaf. |
 | `iotkit-core-storage` | `core/storage` | SQLite handle (`DbHandle`) + cross-crate migration harness. Leaf. |
-| `iotkit-core-engine` | `core/engine` | In-memory device-state projection consuming the frozen `AdapterEvent` vocabulary (defined in `core/types`). Depends on `types` only; adapters must never depend on it. |
+| `iotkit-core-supervision` | `core/supervision` | Frozen supervision / legacy-southbound `AdapterEvent`/`AdapterCommand` vocabulary (D4/D12). Depends only on `types`; its dependent set is pinned by rule 7. |
+| `iotkit-core-engine` | `core/engine` | In-memory device-state projection consuming the frozen `AdapterEvent` vocabulary from `core/supervision`. Depends only on `types` and `supervision`; adapters must never depend on it. |
 | `iotkit-core-ledger` | `core/ledger` | Device ledger: `system_id` issuance, series identity, sightings, epochs, audit events. |
 | `iotkit-core-timeseries` | `core/timeseries` | `readings` + staged readings persistence, event-time derivation, queries. |
 | `iotkit-core-publish` | `core/publish` | Exit-contract data layer: `publication_log` (outbox), `target_registry`, cursors. |
@@ -155,14 +155,15 @@ layer rules below mechanically (in `verify.sh` and CI).
 
 1. **Adapters never depend on `core/engine`** — projection machinery is the
    gateway's business (D4). Note: the frozen `AdapterEvent`/`AdapterCommand`
-   vocabulary lives in `core/types`, so this gate does **not** police the
-   freeze — reviews do.
+   vocabulary lives in `core/supervision`; rule 7 prevents new dependents,
+   while reviews police usage growth inside existing dependents.
 2. **Adapters reach the data plane only through `iotkit-ingest-client`** —
    never directly on storage/ledger/timeseries/publish/collector/registry/ops.
 3. **`iotkit-ingest-contract`'s runtime deps are serde and nothing else** —
    third-party conformance tests must be able to depend on it alone.
-4. **`core/types` and `core/storage` are leaves**, `core/engine` depends only
-   on `core/types`, and nothing in `core/*` depends on adapters or binaries
+4. **`core/types` and `core/storage` are leaves**, `core/supervision` depends
+   only on `core/types`, `core/engine` depends only on `core/types` and
+   `core/supervision`, and nothing in `core/*` depends on adapters or binaries
    (no upward edges).
 5. **A new workspace crate must be classified deliberately** in
    `scripts/check-layers` (and placed on this map) — an unclassified crate
@@ -170,10 +171,16 @@ layer rules below mechanically (in `verify.sh` and CI).
 6. **`iotkit-ingest-client`'s workspace dependencies are exactly
    `core/collector` + the contract** — never adapters, binaries, or
    `core/engine`.
+7. **The non-dev dependent set of `core/supervision` is pinned exactly** — the
+   frozen supervision vocabulary gains no new dependents without a corpus
+   decision (D4/D12 decision 8). Dev-dependencies remain exempt.
 
 Rule numbers match the `scripts/check-layers` error messages. Only the two
-**binaries** may depend on everything. Dev-dependencies are exempt (tests may
-cross layers); build-dependencies are checked.
+**binaries** may depend on any layer — with one exception: rule 7 pins the
+`core/supervision` dependent set, so even a binary (today: `iotkit-gatewayctl`)
+cannot pick up the frozen vocabulary without a deliberate rule-7 + canon update.
+Dev-dependencies are exempt (tests may cross layers); build-dependencies are
+checked.
 
 ### Deliberate exceptions (do not "fix" these)
 

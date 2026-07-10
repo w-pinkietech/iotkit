@@ -4,6 +4,7 @@ members = [
     "iotkit-ingest-client",
     "core/types",
     "core/engine",
+    "core/supervision",
     "core/storage",
     "core/ledger",
     "core/timeseries",

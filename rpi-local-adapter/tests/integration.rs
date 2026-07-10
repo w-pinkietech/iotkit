@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use iotkit_core_types::AdapterEvent;
+use iotkit_core_supervision::AdapterEvent;
 use rpi_local_adapter::{RpiLocalConfig, RpiLocalTarget, ThermocoupleType};
 
 #[tokio::test]

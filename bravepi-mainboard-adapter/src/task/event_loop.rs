@@ -5,10 +5,11 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use bravepi_codec::{BravePiCodec, DownlinkCommand};
-use iotkit_core_types::{
-    AdapterCommand, AdapterEvent, ConfigValue, DeviceCommandPayload, DeviceConfigData, DeviceKey,
-    SensorType,
+use iotkit_core_supervision::{
+    AdapterCommand, AdapterEvent, ConfigValue, DeviceCommand, DeviceCommandPayload,
+    DeviceConfigData,
 };
+use iotkit_core_types::{DeviceKey, SensorType};
 use tokio::sync::mpsc;
 
 use super::convert::frame_to_event;
@@ -238,7 +239,7 @@ async fn handle_config_frame(
 
 /// Returns true if the event channel is closed.
 async fn handle_device_command(
-    cmd: iotkit_core_types::DeviceCommand,
+    cmd: DeviceCommand,
     devices: &HashMap<DeviceKey, DeviceState>,
     write_tx: &BytesSender,
     event_tx: &mpsc::Sender<AdapterEvent>,

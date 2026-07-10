@@ -237,6 +237,7 @@ name = "bravepi-mainboard-adapter"
 version = "0.1.0"
 dependencies = [
  "bravepi-codec",
+ "iotkit-core-supervision",
  "iotkit-core-types",
  "iotkit-ingest-client",
  "iotkit-ingest-contract",
@@ -251,7 +252,7 @@ name = "bravepi-poc"
 version = "0.1.0"
 dependencies = [
  "bravepi-mainboard-adapter",
- "iotkit-core-types",
+ "iotkit-core-supervision",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -929,6 +930,7 @@ dependencies = [
 name = "iotkit-core-engine"
 version = "0.1.0"
 dependencies = [
+ "iotkit-core-supervision",
  "iotkit-core-types",
  "tokio",
  "tracing",
@@ -1012,6 +1014,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-core-supervision"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-types",
+]
+
+[[package]]
 name = "iotkit-core-timeseries"
 version = "0.1.0"
 dependencies = [
@@ -1039,6 +1048,7 @@ dependencies = [
  "iotkit-core-publish",
  "iotkit-core-registry",
  "iotkit-core-storage",
+ "iotkit-core-supervision",
  "iotkit-core-timeseries",
  "iotkit-core-types",
  "iotkit-ingest-client",
@@ -1108,6 +1118,7 @@ dependencies = [
 name = "iotkit-polling-adapter-runtime"
 version = "0.1.0"
 dependencies = [
+ "iotkit-core-supervision",
  "iotkit-core-types",
  "iotkit-ingest-client",
  "iotkit-ingest-contract",
@@ -1614,6 +1625,7 @@ dependencies = [
 name = "rpi-local-adapter"
 version = "0.1.0"
 dependencies = [
+ "iotkit-core-supervision",
  "iotkit-core-types",
  "iotkit-ingest-client",
  "iotkit-polling-adapter-runtime",

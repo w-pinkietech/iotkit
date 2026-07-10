@@ -1,5 +1,6 @@
 use bravepi_codec::{BravePiFrame, ConfigFrame, SensorFrame};
-use iotkit_core_types::{AdapterEvent, SensorType};
+use iotkit_core_supervision::AdapterEvent;
+use iotkit_core_types::SensorType;
 
 use super::convert::frame_to_event;
 

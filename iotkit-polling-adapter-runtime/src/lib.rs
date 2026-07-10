@@ -9,7 +9,8 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use iotkit_core_types::{AdapterCommand, AdapterEvent, AdapterId, SensorIdentity, SensorReading};
+use iotkit_core_supervision::{AdapterCommand, AdapterEvent};
+use iotkit_core_types::{AdapterId, SensorIdentity, SensorReading};
 
 // ── SensorDriver trait ────────────────────────────────────
 

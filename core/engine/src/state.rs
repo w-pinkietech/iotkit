@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use tokio::time::Instant;
 
-use iotkit_core_types::{AdapterEvent, DeviceKey, SensorIdentity};
+use iotkit_core_supervision::AdapterEvent;
+use iotkit_core_types::{DeviceKey, SensorIdentity};
 
 use crate::{DeviceView, EngineDeviceKey, EngineEvent};
 

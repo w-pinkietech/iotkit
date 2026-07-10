@@ -1,6 +1,7 @@
 //! Tests for State apply logic.
 
 use crate::*;
+use iotkit_core_supervision::*;
 use iotkit_core_types::*;
 use std::collections::BTreeMap;
 use std::time::SystemTime;

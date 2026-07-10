@@ -11,3 +11,6 @@ rpi4b-transport = { path = "../rpi4b-transport" }
 iotkit-sensor-drivers = { path = "../iotkit-sensor-drivers" }
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 tracing = "0.1"
+
+[dev-dependencies]
+iotkit-core-supervision = { path = "../core/supervision" }

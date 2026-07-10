@@ -2,9 +2,8 @@ use std::panic;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use iotkit_core_types::{
-    AdapterCommand, AdapterEvent, AdapterId, DeviceKey, SensorIdentity, SensorReading,
-};
+use iotkit_core_supervision::{AdapterCommand, AdapterEvent};
+use iotkit_core_types::{AdapterId, DeviceKey, SensorIdentity, SensorReading};
 use iotkit_ingest_client::IngestClient;
 
 use crate::{PollingAdapterConfig, SensorDriver};
@@ -811,9 +810,9 @@ mod tests {
         // Send a DeviceCommand to trigger a send on the closed event channel.
         let _ = command_tx
             .send(AdapterCommand::DeviceCommand(
-                iotkit_core_types::DeviceCommand {
+                iotkit_core_supervision::DeviceCommand {
                     device_key: DeviceKey::new("test"),
-                    payload: iotkit_core_types::DeviceCommandPayload::QueryConfig,
+                    payload: iotkit_core_supervision::DeviceCommandPayload::QueryConfig,
                 },
             ))
             .await;
@@ -862,9 +861,9 @@ mod tests {
 
         command_tx
             .send(AdapterCommand::DeviceCommand(
-                iotkit_core_types::DeviceCommand {
+                iotkit_core_supervision::DeviceCommand {
                     device_key: DeviceKey::new("i2c:0x40:temperature"),
-                    payload: iotkit_core_types::DeviceCommandPayload::QueryConfig,
+                    payload: iotkit_core_supervision::DeviceCommandPayload::QueryConfig,
                 },
             ))
             .await

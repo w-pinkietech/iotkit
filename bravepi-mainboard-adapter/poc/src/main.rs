@@ -4,7 +4,7 @@
 //! core 側は AdapterEvent を受信して表示するだけの最小ループ。
 
 use bravepi_mainboard_adapter::task;
-use iotkit_core_types::AdapterEvent;
+use iotkit_core_supervision::AdapterEvent;
 
 #[tokio::main]
 async fn main() {

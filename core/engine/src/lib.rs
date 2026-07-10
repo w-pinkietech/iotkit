@@ -1,5 +1,5 @@
 //! iotkit-core-engine: adapter event の集約と device state の in-memory projection。
-//! core/types のみに依存し、adapter 実装を知らない。
+//! core/types と core/supervision のみに依存し、adapter 実装を知らない。
 
 mod state;
 
@@ -10,9 +10,8 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use iotkit_core_types::{
-    AdapterEvent, AdapterId, DeviceConfigData, DeviceKey, SensorIdentity, SensorReading,
-};
+use iotkit_core_supervision::{AdapterEvent, DeviceConfigData};
+use iotkit_core_types::{AdapterId, DeviceKey, SensorIdentity, SensorReading};
 
 use state::State;
 

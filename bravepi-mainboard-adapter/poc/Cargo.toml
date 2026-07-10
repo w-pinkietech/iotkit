@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iotkit-core-types = { path = "../../core/types" }
+iotkit-core-supervision = { path = "../../core/supervision" }
 bravepi-mainboard-adapter = { path = ".." }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"

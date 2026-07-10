@@ -9,10 +9,12 @@ Rules (see docs/architecture.md "Layer rules"):
   1. adapters never depend on core/engine
   2. adapters reach the data plane only through iotkit-ingest-client
   3. iotkit-ingest-contract's runtime deps are serde and nothing else
-  4. core/types and core/storage are leaves; core/engine depends only on core/types;
-     no core/* crate depends on adapters or binaries
+  4. core/types and core/storage are leaves; core/supervision depends only on
+     core/types; core/engine depends only on core/types + core/supervision; no
+     core/* crate depends on adapters or binaries
   5. a NEW workspace crate must be classified here deliberately (unclassified = error)
   6. iotkit-ingest-client's workspace deps are exactly core/collector + the contract
+  7. the frozen core/supervision vocabulary's non-dev dependent set is pinned
 
 Deliberate exception (do not "fix"): core/registry -> core/collector is dependency
 inversion — the collector owns the RegistryPolicy trait, the registry implements it.
@@ -39,9 +41,19 @@ BINARIES = {"iotkit-gateway", "iotkit-gatewayctl"}
 CONTRACT = "iotkit-ingest-contract"
 CLIENT = "iotkit-ingest-client"
 ENGINE = "iotkit-core-engine"
+SUPERVISION = "iotkit-core-supervision"
 TYPES = "iotkit-core-types"
 STORAGE = "iotkit-core-storage"
-CLASSIFIED = DATA_PLANE | ADAPTERS | BINARIES | {CONTRACT, CLIENT, ENGINE, TYPES}
+CLASSIFIED = DATA_PLANE | ADAPTERS | BINARIES | {
+    CONTRACT, CLIENT, ENGINE, SUPERVISION, TYPES,
+}
+SUPERVISION_DEPENDENTS = {
+    "iotkit-core-engine",
+    "iotkit-gateway",
+    "bravepi-mainboard-adapter",
+    "bravepi-poc",
+    "iotkit-polling-adapter-runtime",
+}
 
 
 def main() -> int:
@@ -51,6 +63,7 @@ def main() -> int:
     packages = {p["name"]: p for p in meta["packages"]}
     workspace = set(packages)
     errors = []
+    supervision_dependents = set()
 
     for name in sorted(workspace - CLASSIFIED):
         errors.append(f"{name}: new crate is not classified in scripts/check-layers — "
@@ -60,6 +73,9 @@ def main() -> int:
     for name, pkg in sorted(packages.items()):
         checked = [d for d in pkg["dependencies"] if d.get("kind") != "dev"]
         internal = {d["name"] for d in checked if d["name"] in workspace}
+
+        if SUPERVISION in internal:
+            supervision_dependents.add(name)
 
         if name in ADAPTERS:
             if ENGINE in internal:
@@ -88,14 +104,27 @@ def main() -> int:
         if name in (TYPES, STORAGE) and internal:
             errors.append(f"{name} is a leaf but depends on {sorted(internal)} (rule 4)")
 
-        if name == ENGINE and internal - {TYPES}:
-            errors.append(f"{ENGINE} may depend only on {TYPES}, found "
+        if name == SUPERVISION and internal - {TYPES}:
+            errors.append(f"{SUPERVISION} may depend only on {TYPES}, found "
                           f"{sorted(internal - {TYPES})} (rule 4)")
+
+        if name == ENGINE and internal - {TYPES, SUPERVISION}:
+            errors.append(f"{ENGINE} may depend only on {TYPES} and {SUPERVISION}, found "
+                          f"{sorted(internal - {TYPES, SUPERVISION})} (rule 4)")
 
         if name.startswith("iotkit-core-"):
             upward = internal & (ADAPTERS | BINARIES)
             if upward:
                 errors.append(f"{name} depends upward on {sorted(upward)} (rule 4)")
+
+    if supervision_dependents != SUPERVISION_DEPENDENTS:
+        errors.append(
+            f"{SUPERVISION} non-dev dependents are {sorted(supervision_dependents)}, "
+            f"expected exactly {sorted(SUPERVISION_DEPENDENTS)}: the frozen supervision "
+            f"vocabulary changes dependents (grow OR shrink) only by deliberate decision — "
+            f"update SUPERVISION_DEPENDENTS and the canon's rule 7 together (rule 7) — "
+            f"D4/D12決定8"
+        )
 
     if errors:
         print("check-layers: FAIL", file=sys.stderr)

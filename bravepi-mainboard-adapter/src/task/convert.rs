@@ -1,6 +1,7 @@
 //! BravePiFrame → AdapterEvent 変換。純粋関数、状態なし。
 
-use iotkit_core_types::{AdapterEvent, DeviceKey, SensorIdentity};
+use iotkit_core_supervision::AdapterEvent;
+use iotkit_core_types::{DeviceKey, SensorIdentity};
 
 use bravepi_codec::BravePiFrame;
 use iotkit_sensor_drivers::UartSample;

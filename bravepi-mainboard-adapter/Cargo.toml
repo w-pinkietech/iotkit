@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
+iotkit-core-supervision = { path = "../core/supervision" }
 rpi4b-transport = { path = "../rpi4b-transport" }
 bravepi-codec = { path = "codec" }
 iotkit-sensor-drivers = { path = "../iotkit-sensor-drivers" }

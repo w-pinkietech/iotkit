@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Rust + tokio IoT gateway for Raspberry Pi. `core/types` <- {`core/engine`, adapters} <- `iotkit-gateway`
+Rust + tokio IoT gateway for Raspberry Pi. {`core/types`, `core/supervision`} <- {`core/engine`, adapters} <- `iotkit-gateway`
 (adapters は `core/engine` に依存しない — 取り込みは `iotkit-ingest-client` 経由、D4).
 
 ## Design Authority

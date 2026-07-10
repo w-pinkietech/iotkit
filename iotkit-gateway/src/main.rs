@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
-use iotkit_core_types::{AdapterEvent, AdapterId};
+use iotkit_core_supervision::AdapterEvent;
+use iotkit_core_types::AdapterId;
 use iotkit_gateway::api::{ApiHandle, spawn_api_task};
 use iotkit_gateway::{config, epoch_start, health};
 use iotkit_ingest_client::IngestClient;
