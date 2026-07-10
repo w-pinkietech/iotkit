@@ -127,7 +127,9 @@ mTLS不採用・CA基盤を作らない」。
   (iotkit-ingest-contract/client新設、core/ledger)にも不一致 → 実際のクレートマップ参照に書き直し
   (host-agent/gatewayctl/migratorは「未実装の将来クレート」と明示)、
   (3) 「rustls for TLS and mTLS」→ mTLS削除
-- **0039 sqlite single-writer batching profile**: (1) `synchronous=NORMAL`(D1明記)が欠落 → 追加、
+- **0039 sqlite single-writer batching profile**: (1) 耐久設定の明記が欠落 → 追加。ただし D8波及修正4
+  (2026-07-07)が D1 を改訂済み: custody-critical は `WAL + synchronous=FULL` が MUST、`NORMAL` は
+  再構成可能な派生メタデータ限定(旧記載の「NORMAL(D1明記)」は失効。実装も FULL 済み=iotkit-next 96c34d5)、
   (2) 「10件or100msフラッシュ」をD1の位置づけ(group commitは伸びたら追加する将来拡張)に合わせ、
   Wave 0は即時コミット+メトリクス確認後に導入の段階付けに書き直し、
   (3) 本ADRの「batching」(writer-lane flush)とD1「エンベロープバッチ」(ワイヤ契約)は別概念と脚注、

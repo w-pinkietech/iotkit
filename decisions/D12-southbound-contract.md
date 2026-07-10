@@ -227,6 +227,12 @@ command_id/job_id/desired_revision、能力宣言版、dry-run結果、実行結
   揃ったため**Wave 1実装計画の宿題に降ろす**(設計上の障害は解消)。旧語彙のfrozen vocabulary
   (D4では「論点2確定まで」)は、**本決定で移行ブリッジ削除まで延長**する——論点2は確定したが、
   ブリッジが残る間に旧語彙への依存を増やせば再一体化が再発するため。
+  [監査追記 2026-07-10: ブリッジは Wave 0 計画3で削除済みのため上記の終点は失効している。
+  凍結の終点は「世話サービサ移行が旧南向き経路(AdapterCommand 経由)を削除するまで」と読み替える。
+  なお宿題のうちリネーム(iotkit-sensor-drivers 化・rpi4b 平坦化)と core/types 分割は実施済み——
+  旧語彙は専用 crate `core/supervision` に隔離され、新規 crate の依存は check-layers rule 7 が
+  CI で拒否する(iotkit-next 96c34d5〜fa45967)。event_loop 分割は「世話サービサ移行時に旧経路ごと
+  削除」のため見送り(監査裁定)]
 
 ## 波及修正
 

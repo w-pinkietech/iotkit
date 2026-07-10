@@ -10,7 +10,7 @@ Status: 確定 (2026-07-02、3レンズレビュー済み: 概念整合/Rust実�
 
 | 部品 | 話す相手 | 知らないもの | 実例(iotkit-next) |
 |---|---|---|---|
-| ドライバ | 物理(transport+コーデック+デコード)。南向きencodeも含む | 取り込み契約(ドライバSPIには従う) | rpi4b-transport, bravepi-codec, bravepi-sensors |
+| ドライバ | 物理(transport+コーデック+デコード)。南向きencodeも含む | 取り込み契約(ドライバSPIには従う) | rpi4b-transport, bravepi-codec, iotkit-sensor-drivers |
 | アダプタランタイム | 両者の間(スケジューリング、状態機械、panic隔離、measurement写像=measurement_key+channel、南向きディスパッチ)。series解決はコレクタ=D5 | 契約もICも知らない | iotkit-polling-adapter-runtime(ポーリング型)、BravePI event_loop(イベント駆動型) |
 | 取り込みクライアント | 取り込み契約(エンベロープ/ack/spool)。北向き専用 | ハードウェア | **現存しない(空席)**。D1移行フェーズ1-2で新設 |
 
