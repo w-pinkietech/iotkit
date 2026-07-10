@@ -70,6 +70,36 @@ Fable review-max + codex の T9 レビュー。Important/Critical なし。高�
   捨てられる労力=監査裁定・ユーザー承認済み)。
 - LICENSE / CONTRIBUTING / SECURITY / 公開メタデータ = Wave 2(公開 OSS)入口。
 
+## D-16〜D-18: Grok 総合レビュー(2026-07-09)トリアージの繰り延べ項目
+
+第三ベンダー(Grok/xAI)による全体レビュー `docs/eval/grok-review-2026-07-09.md`(対象 a4ae911)を
+2026-07-10 に実物照合でトリアージ(初回照合の誤り2件をクロスベンダーレビューが訂正済み)。
+
+- 解消済み: A1(二重データ面の文書)・未使用 ReasonCode の明記は構造ラン(0916ded/f23b1b3)。
+- 重複: I1/I4/I5/I7/I8/A4(polling・store)は既存の決定・台帳(D1軽量プロファイル・昇格トリガー・
+  D-9/D-10)と重複。
+- 不採用(設計どおり): I6 の検疫TTL自動active化は**実在する**(retention 駆動
+  `expire_quarantined_devices`、`core/ledger/src/store.rs:744`、既定7日=`quarantine_ttl_days`
+  で設定可)が、D5:198「時限自動失効+CLI解除のみ」・D1:83 の決定どおりの挙動。当初「機構なし」
+  と誤記帳→両ベンダーレビューが訂正。
+- 不採用(実装済み): I9 の `last_used_at` 書き込みは既に60秒間引き実装済み
+  (`core/ops/src/auth.rs:20,258`。Grok 対象の a4ae911 時点でも存在)。
+- C1(配布時セキュリティ既定)は計画6持ち込み 8 へ。
+
+- **D-16 (Grok A5)**: ホットパスの stringly error が未裁定——collector の
+  `Result<EnvelopeAck, String>`(`core/collector/src/actor.rs:164`)、`ToSqlConversionFailure`
+  への橋渡し(`iotkit-gateway/src/publish_task.rs:200`・`api/auth_layer.rs:30-34`・retention.rs)。
+  D-15(起動系 StartupError)はこれを覆わない。→ 強化パスで typed error(CollectorError 等)へ。
+- **D-17 (Grok I2)**: archive target 未登録 / `archive_responsible=false` だと retention が
+  floor-only になり custody 保証が成立しないが、現状その状態は health に現れない。ただし D8 の
+  Standalone は上流任意なので target 不在は正当な構成——無条件 degraded にはしない。→ custody
+  を期待する構成(Site-managed、または custody 前提と明示された設定)に限定して health に明示
+  表示を追加し、D-14(docs/install.md)の初回チェックリストと対にする。
+- **D-18 (Grok §1.5 + A4 残り)**: `iotkit-ingest-client::new_envelope` が空 values の item を
+  黙って落とす仕様が doc コメントに無い(テスト `new_envelope_drops_empty_value_items` で意図は
+  固定済み)→ doc コメント追記。あわせて `core/collector/src/actor.rs` のインラインテスト
+  約840行の分離(実コードは約375行で責務違反なし=2026-07-10 実測。D-9 と同じ house pattern)。
+
 ## 計画6への持ち込み(構造監査+計画6メニュー検証 2026-07-10)
 
 計画6(R2 入口)の brainstorming/spec は以下を Global Constraints へ全掃引すること。
@@ -95,3 +125,13 @@ Fable review-max + codex の T9 レビュー。Important/Critical なし。高�
    アラーム基盤は未実装のため「騒がしく」=監査イベント+R12 水位+エピソード集約(R23はフック)。
 7. **未決(計画6 brainstorming でユーザーに確認)**: R22 snapshot 秘密投入+暗号化コンテナを
    計画6に含めるか(計画5 spec §9の約束)vs 直後の小計画6.5に分割するか。
+8. **配布時セキュリティ既定(Grok C1、2026-07-10 実物照合済み)**: API 既定が `enabled=true` +
+   bind `0.0.0.0:8443`(`iotkit-gateway/src/config.rs:326-327`)。setup モード(パスフレーズ
+   未設定)の間、同一 LAN の任意ホストから (a) `POST /api/v1/setup/passphrase` が認証外
+   (`api/routes.rs:62`)のため**先にパスフレーズを設定した者が箱を掌握できる**(最強ベクター)、
+   (b) Bearer なしで `SETUP_ALLOWED_OPS` の 2 op(`device.approve_sighting`=デバイス承認 /
+   `registry.resolve_unknown_key`=測定キー解決、`core/ops/src/catalog.rs:8`)が実行可能
+   (単一ターゲット限定・bulk 不可・private_source_guard はインターネット直公開のみ遮断)。
+   R19 入口認証の設計と同じ議論で既定を裁定する: bind 既定 127.0.0.1 / setup 完了まで API
+   閉鎖 / ワンタイム setup トークン等。採った既定は D-14(設置手順)の初回チェックリストと
+   対にする。
