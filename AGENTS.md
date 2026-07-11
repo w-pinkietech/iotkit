@@ -26,30 +26,36 @@ check-layers の分類と architecture.md の地図を同時に更新する。
 - データを黙って失わない。ack の意味は D1 に従う — rejected は決定的違反専用で、ストレージ失敗に rejected を返さない(ack なし)。
 - 変更系操作は R14 dispatch 経由。SQL 直書きの変更経路を新設しない。
 
-## Working Rules(codex タスク)
+## Worker mode rules(codex タスク)
 
 - プロンプトで指定されたタスクだけを実装する。スコープ外の「改善」を混ぜない。
 - `git commit` しない(コミットは呼び出し側が行う)。
 - 完了報告の前に `scripts/verify.sh`(fmt + 層規則 check-layers + `cargo test --workspace` + clippy `-D warnings`)を通す。
 - テスト緑は必要条件であって十分条件ではない — データ損失・並行退行・仕様逸脱はテストを素通りしうる。設計正本の不変条件を自分で照合する。
 
-## クロスベンダーレビュー(メイン駆動時。2026-07-11 ユーザー決定)
+## メイン駆動時の運用(2026-07-11 ユーザー決定)
 
-メイン駆動として自分がコードを書いた後、レビューは**クロスベンダーで行う**(自己レビューは独立でない)。
-同一プロンプトを2ベンダーへ並走で dispatch する:
+この節はMain mode専用。上の「commitしない」はworkerにだけ適用し、Mainは承認済みmission内で
+意図的にcommitする(push/PRは別承認)。該当フェーズでは `.claude/skills/*/SKILL.md` も読み、
+運用正本に反する旧記述は運用正本を優先する。
+
+運用正本は `docs/development-workflow.md`。メイン駆動はDesign Ready、Green/Yellow/Red、
+リスク適応パイプライン、永続台帳、停止条件に従う。Plan 6はYellow autonomy試行であり、
+Green/Yellowは自律、Redのみ最大3件の判断パケットとしてユーザーへ上げる。
+
+独立レビューは同一成果物ハッシュを3ベンダーへ並走dispatchする:
 
 - codex 側(read-only sandbox、コマンド実行可=`cargo test`・境界プローブができる):
-  `scripts/codex.sh review <prompt-file> <label>`
-- Claude 側(**静的** read-only。Read/Grep/Glob は使えるが Bash・編集は技術的に不可——
-  load-bearing な保証は `--disallowedTools Bash Edit Write NotebookEdit`+`--strict-mcp-config`
-  +`--setting-sources ''`。plan モードは冗長な追加層):
-  `scripts/claude-review.sh <prompt-file> <label>`
-  (effort は既定 max=`CLAUDE_REVIEW_EFFORT`。強モデルは `CLAUDE_REVIEW_MODEL` でピン。
+  `REVIEW_MANIFEST=<manifest> scripts/codex.sh review <prompt-file> <label>`
+- Claude 側(**静的**。manifest内容をstdinへ束ね、ツールを全て無効化 + safe-mode):
+  `REVIEW_MANIFEST=<manifest> scripts/claude-review.sh <prompt-file> <label>`
+  (通常は Fable/high。高リスク時は Opus/max。
   出力は codex と同じ `/tmp/codex-runs/`)
+- Grok 側(クリーンHOME・bubblewrap読取専用mount、web/memory/subagents無効):
+  `REVIEW_MANIFEST=<manifest> scripts/grok-review.sh <prompt-file> <label>`
 
-**非対称に注意**: codex 側は実行できるが Claude 側は静的。runtime/データ損失/並行のバグ(実行しないと
-出ない類)は codex 側が主担当——Claude のクリーン通過だけで実行依存の指摘を過信しない。
+主担当: Codex=実行/原子性/データ損失、Claude=正本/意味整合/Grok=攻撃者/UX/配布運用。
+全員がRed分類、auth/secrets、data loss/custody、外部作用、hash provenance、settlementも確認する。
+他観点の指摘は禁止しない。Codexのみ実行可で、Claude/Grokのクリーン通過を実行依存保証に使わない。
 
-完了条件・確認ラウンド・消費ゲート・tier は `CLAUDE.md` の Workflow Rules(待たない運用・確認ラウンド
-の規律・消費ベース tier、2026-07-11 も維持)に従う——レビュアーが誰であっても成り立つ規律。ハーネス
-変更(`scripts/`・CI・スキル・docs)は最強レビューでかける。
+完了条件・確認ラウンド・消費ゲート、通常/high-riskモデル行列は運用正本に従う。

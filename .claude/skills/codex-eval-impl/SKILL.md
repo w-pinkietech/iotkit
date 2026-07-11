@@ -6,7 +6,7 @@ description: Use when reviewing a codex-implemented task after scripts/verify.sh
 # Codex Eval Impl (spec + quality lenses)
 
 The per-task review is ONE combined prompt carrying BOTH lenses below, run through
-codex (read-only) AND Fable (review-max) in parallel. This skill defines what goes
+Codex, Claude, and Grok in parallel. This skill defines what goes
 IN the prompt; the loop around it (dispatch, converge, fix, watchpoint registration)
 lives in `codex-impl-loop` step 4 — not duplicated here.
 
@@ -29,6 +29,11 @@ Run `scripts/watchpoints.sh` first — adjudicate any expired watchpoints
 ```
 You are an independent implementation reviewer. Evaluate the changes through
 BOTH lenses; report findings per lens.
+
+## Vendor roles and common safety core
+{all three primary roles from docs/development-workflow.md; every vendor checks Red
+classification, auth/secrets, data loss/custody, external effects, hash provenance,
+settlement, then its specialty and a residual out-of-role C/I pass}
 
 ## Lens A — Spec Compliance
 1. Coverage — is every step in the task spec implemented?

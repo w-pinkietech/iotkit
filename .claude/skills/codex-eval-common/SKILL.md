@@ -17,6 +17,10 @@ You MUST invoke Codex. Your own analysis does NOT substitute.
 
 **Violating the letter of this rule is violating the spirit of this rule.**
 
+Workflow authority, risk classification, vendor roles, effort policy, settlement, and the
+persistent ledger are defined in `docs/development-workflow.md`. This skill supplies phase
+mechanics and must not duplicate or weaken that policy.
+
 ## CLI Usage
 
 Invoke through the wrapper — `scripts/codex.sh` is the single source of truth for
@@ -30,49 +34,46 @@ scripts/watchpoints.sh
 #      (eval-perspectives-curator) — never inject a stale guide
 
 # Write the review prompt to a file, then:
-scripts/codex.sh review <prompt-file> <label>
+REVIEW_MANIFEST=<manifest> scripts/codex.sh review <prompt-file> <label>
 #   -> read-only sandbox; model/effort defaults live in scripts/codex.sh
-#      (review defaults to the deepest reasoning tier — reviews earn max reasoning)
+#      (normal review defaults to high; high-risk work escalates per the canon)
 #   -> output: /tmp/codex-runs/codex-<label>-review-<timestamp>.txt
 
 # Cheaper mechanical pass: dial effort down
-CODEX_EFFORT=high scripts/codex.sh review <prompt-file> <label>
+REVIEW_MANIFEST=<manifest> CODEX_EFFORT=medium scripts/codex.sh review <prompt-file> <label>
 ```
 
 **`review` mode is ALWAYS read-only** — evaluation never mutates the tree. The wrapper
 enforces this; do not hand-run `codex exec` with a writable sandbox for a review.
-(Implementation is a separate path: `scripts/codex.sh impl`, danger-full-access — that
+(Implementation is a separate path: `scripts/codex.sh impl`, workspace-write — that
 is the codex-impl-loop skill, NOT eval.)
 **Unique labels:** Each invocation uses a distinct `<label>` so outputs never collide.
 Re-review = a fresh `codex.sh` call (no session reuse).
 
-## Cross-Vendor Review (Fable)
+## Three-Vendor Review
 
-Codex is one vendor. Run the **same** review prompt through a Fable review-max agent
-in parallel (Agent tool, `subagent_type: review-max`) — identical lens, only the vendor
-differs. Converge the two result sets: a finding both vendors raise is high-signal; a
-finding only one raises still gets triaged. Same-vendor self-consistency bias is exactly
-what the second vendor catches (memory: cross-vendor-review-same-lens). This is standard
-from plan 5 onward, not optional.
+Run the same artifact hash and review brief through Codex, Claude, and Grok in parallel.
+The brief names the primary roles and mandatory common safety core from
+`docs/development-workflow.md`; cross-role findings remain valid. A finding from one vendor
+still gets triaged.
 
 ## Iteration Loop
 
 1. Run `scripts/watchpoints.sh`; adjudicate anything expired before injecting guides
-2. Dispatch the SAME prompt to BOTH vendors in parallel:
-   `scripts/codex.sh review` + Fable review-max (Agent tool)
-3. Read both results and converge (both-raise = high signal; one-raise = still triaged)
-4. If Critical or Important issues found — **by either vendor**:
-   - Non-semantic (wording/structure/omission): fix autonomously
-   - Semantic (architecture/requirements): escalate to user
+2. Dispatch the SAME prompt and `REVIEW_MANIFEST=<manifest>` to all three vendors in parallel.
+3. Read all results and converge (multi-vendor agreement = high signal; one-raise = triaged)
+4. If Critical or Important issues are found by any required vendor:
+   - Green/Yellow and authority-settled semantic corrections: fix/reject autonomously
+   - Red under `docs/development-workflow.md`: escalate as a bundled user packet
    - Lateral spread check: grep for same pattern workspace-wide, fix ALL instances
-5. Re-run per CLAUDE.md 待たない運用/確認ラウンドの規律: addressees = owners of the C/I you
+5. Re-run per the settlement rules in `docs/development-workflow.md`: addressees = owners of the C/I you
    fixed or rejected (a zero-vendor re-enters when a fix's semantic EFFECT reaches beyond
-   the prescription, or when in doubt — when in doubt, send); the exact-transcription skip
-   and its hunk-vs-prescription read-back apply here too
-6. Repeat until zero unresolved Critical and zero Important **across both vendors**
-7. Run verification pass (one more cross-vendor round)
+   the prescription, or when in doubt — when in doubt, send); exact transcription can reduce
+   intermediate confirmation only
+6. Repeat until zero unresolved Critical and zero Important across all required vendors
+7. After any content change, run one final all-required-vendor round on the final hash
 8. If verification finds new Critical/Important: fix and re-verify
-9. Done when BOTH vendors are at zero Critical/Important **on the final tree hash**
+9. Done when all required vendors are at zero Critical/Important **on the final tree hash**
    (a vendor's zero binds to the hash it reviewed, not to the artifact forever)
 
 **Safety valve:** If same issue reappears after being fixed twice, escalate to user.
@@ -102,8 +103,8 @@ Max 10 per file. Review-by date: 3 months from creation.
 - "I can see the issues myself, no need for Codex"
 - Summarizing Codex feedback without actually running `scripts/codex.sh review`
 - Skipping iteration because "first review was thorough enough"
-- Declaring done while the OTHER vendor still has unresolved Critical/Important
-- Auto-fixing requirement/architecture issue without escalating
+- Declaring done while any required vendor still has unresolved Critical/Important
+- Auto-fixing a Red requirement/architecture issue without escalating
 - Reusing a Codex session instead of starting fresh
 
 ## Output Format (standard for all phases)

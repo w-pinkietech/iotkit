@@ -15,6 +15,10 @@ Evaluate a design spec with Codex before proceeding to implementation planning.
 - When spec self-review is complete
 - Before invoking `superpowers:writing-plans`
 
+Precondition: the Design Ready evidence pack in `docs/development-workflow.md` is complete.
+For Large/Red work, inject its constraint ledger, state machine, trust provenance, user
+journey, adversarial-six answers, and invariant traceability into the review prompt.
+
 ## Context to Inject
 
 | File | Purpose |
@@ -35,6 +39,11 @@ Evaluate a design spec with Codex before proceeding to implementation planning.
 ```
 You are an independent design evaluator. Thoroughly review the following
 design spec from a third-party perspective.
+
+## Vendor roles and common safety core
+{all three primary roles from docs/development-workflow.md; every vendor checks Red
+classification, auth/secrets, data loss/custody, external effects, hash provenance,
+settlement, then its specialty and a residual out-of-role C/I pass}
 
 ## Evaluation Perspectives (all 5)
 1. Logical contradictions, implicit assumptions, overlooked dependencies

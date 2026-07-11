@@ -22,18 +22,22 @@ cargo test -p <crate-name>
 scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D warnings (host verification)
 ```
 
-ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`claude-review.sh`(Claude 側レビュー起動、静的 read-only=plan+disallow+no-settings。codex 駆動時のクロスベンダー用。Bash 実行不可=静的レビュアー、実行系は codex 担当)・`verify.sh`(ホスト検証)・`check-layers`(crate 層規則の機械検査)・`trailer.sh`(コミットトレーラ、セッションモデル自動検出)・`watchpoints.sh`(レビューガイド期限見張り)。
+ハーネス補助スクリプト(`scripts/`): `codex.sh`(codex 起動)・`claude-review.sh` / `grok-review.sh`
+(静的read-onlyレビュー)・`verify.sh`(ホスト検証)・`check-layers`(crate層規則)・`trailer.sh`
+(コミットトレーラ)・`watchpoints.sh`(レビューガイド期限見張り)。
 
 ## Workflow Rules
 
-- **Main agent は製品コード実装禁止。** 対話/spec/plan/レビュー dispatch/コミットのみ。Rust は codex が書く。実装は `codex-impl-loop` スキル(Main が codex を直接駆動、Claude でクロスベンダーレビュー)。ハーネス配管(`scripts/`・CI 設定・スキル・docs)は Main の領分。
-- **codex 起動は `scripts/codex.sh` 経由が正。** `scripts/codex.sh review <prompt> <label>`(read-only)/`impl <prompt> <label>`(danger-full-access)。model/flag/sandbox の唯一の真実源=このスクリプト(docs にモデル定数を散らさない)。
-- **各実装タスクはクロスベンダーレビュー必須。** 同一プロンプトを codex(read-only) と Claude(review-max) の両方に通す。spec → plan → per-task impl → final impl の全段階でレビューを省かない。Claude 側の起動は、Main が Claude なら Agent tool の review-max、codex がメイン駆動なら `scripts/claude-review.sh`(静的 read-only、`CLAUDE_REVIEW_MODEL` で強モデルをピン)。
-- Pipeline: brainstorming → codex-eval-spec → writing-plans → codex-eval-plan → codex-impl-loop → PR
-- **待たない運用(2026-07-10裁定)。** レビューは並走させ、Main は待ち時間も独立作業を進める。**凍結と消費ゲート**(対象は台帳・裁定・計画・ハーネス等、問わない): レビュー往復の**飛行中**(ディスパッチ〜結果返却)は当該成果物を読みも書きもしない(書くと指摘の file:line アンカーがずれる)。指摘が返ったら修正のための読み書きは可。ただし**下流消費**(次工程の根拠として読む)は SETTLED まで禁止。未決状態は scratchpad の `review-pending.md` にディスク記録——成果物パス・**各ファイルの内容ハッシュ(`git hash-object`)**・待ちベンダー——し、全対象ベンダーの C/I ゼロが**同一内容ハッシュ**に揃ったら SETTLED。**fail-closed**: このファイルの不在は SETTLED の証拠ではない。セッション開始時、settle 記録のない dirty 成果物は未決として扱う。
-- **確認ラウンドの規律(2026-07-10裁定)。** ベンダーの「ゼロ」判定はレビューしたツリーのハッシュにのみ紐づく。宛先=今ラウンドで **fix または棄却した Critical/Important** の指摘オーナー(Minor のみのベンダーは宛先外=台帳送りで従来どおり)。**棄却(修正ゼロで closed)は Main 発の不在主張を含むため、当該オーナーの確認かユーザー裁定が必須**。修正の**意味的影響**(編集位置でなく効果——処方どおりの行内編集でも他条項と新たな矛盾を生めば「越えた」)が処方の範囲を越える場合、および判断に迷う場合(**迷ったら送る**)は、R1 ゼロだったベンダーにも最終ハッシュの確認を送る。完全転記かつ意味的影響が処方範囲内に留まる修正だけが既存のゼロを失効させない(転記証明が再レビューの代替——唯一の例外)。確認省略は「レビュアーが完全な置換/パッチを file:line つきで処方し、適用 diff が処方と完全一致(余剰 hunk・意味的判断・lateral 編集ゼロ)」の場合のみで、各 hunk を**処方文**と突合して読み戻す。lateral spread(未指摘箇所への同型修正)は「他に無い」という不在主張を含むため常に確認対象。
-- **レビュー tier は消費ベース(2026-07-10裁定)。** 判定は「下流がこれを根拠として読むか」の一問で、**例示より一問テストが優先**。台帳・裁定・計画・ハーネス・製品コード=両ベンダー並列(従来どおり)。純記録=「既決事実の非正典な表示のみで、diff を丸ごと revert しても将来の計画・裁定・実装・ゲートが何も変わらないもの」(状況メモ・typo 等)=codex 単独+コミット非ブロック(下流が読む前に決着)。裁定・読み替え・不在主張を一行でも含む注記は純記録ではない。重複時は高い tier が勝ち、迷ったら両ベンダー。R1 結果を見てからの直列エスカレーションはしない(壁時計が悪化する)——ただし tier 判定自体の誤りが判明した場合の再分類は訂正であり、この禁止の対象外。
-- **Watchpoint curation は Main agent の責務。** per-task クロスベンダーレビュー(codex+Fable)の結果を受けて eval-perspectives-curator で review guide の Active Watchpoints を更新する。
+- **運用正本は `docs/development-workflow.md`。** Design Ready、リスク別パイプライン、
+  Green/Yellow/Red、自律コミット、3ベンダーレビュー、SETTLED、永続台帳、停止条件はそこに従う。
+- **Main agent は製品コード実装禁止。** Rustはcodex workerが書き、Mainは対話、設計、plan、
+  dispatch、検証、レビュー調停、コミットを担う。scripts/CI/skills/docsはMainの領分。
+- **Plan 6はYellow autonomy試行。** Green/Yellowは逐次承認なしで進め、Redを最大3件の判断
+  パケットへ束ねる。push/PR/release等の外部作用は別承認。
+- **レビューはCodex・Claude・Grokの3ベンダー。** 同一成果物ハッシュを並走レビューし、
+  未解決C/Iゼロの最終ハッシュだけをSETTLEDとする。
+- **Watchpoint curation は Main agent の責務。** 3ベンダーレビューの結果を受けて
+  eval-perspectives-curatorでreview guideのActive Watchpointsを更新する。
 - **計画作成時は設計追補を全掃引する。** 対象決定文書の監査追記・追補節(「実装と同時」等の指示を含む)を計画の Global Constraints に反映してから書く(D1 quarantine_reason 追補の見落とし再発防止)。
 
 ## 検証と実行の規律
@@ -48,6 +52,8 @@ scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D w
 
 | Topic | Path |
 |---|---|
+| 開発運用正本(Design Ready・自律判断・3ベンダー・永続台帳) | [docs/development-workflow.md](docs/development-workflow.md) |
+| 現在の工程・レビュー債務・次タスク | [docs/superpowers/active-ledger.md](docs/superpowers/active-ledger.md) |
 | 構造正本(crate地図・置き場規則・層規則・ペルソナ) | [docs/architecture.md](docs/architecture.md) |
 | Spec review guide | [docs/eval/spec-review.md](docs/eval/spec-review.md) |
 | Plan review guide | [docs/eval/plan-review.md](docs/eval/plan-review.md) |
@@ -58,4 +64,5 @@ scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D w
 
 ## Commit Style
 
-`feat(crate):` / `fix(crate):` / `refactor(crate):` / `docs:` + Co-Authored-By line.
+`feat(crate):` / `fix(crate):` / `refactor(crate):` / `docs:`; add Co-Authored-By only when the
+assistant identity is evidenced, and Review-hash only from settled receipt evidence.

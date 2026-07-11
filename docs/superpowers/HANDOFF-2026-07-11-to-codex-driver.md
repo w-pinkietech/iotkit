@@ -1,5 +1,10 @@
 # 引き継ぎ: メイン駆動を Claude Code → codex CLI へ (2026-07-11)
 
+> **2026-07-11追補:** 移行後の運用正本は `docs/development-workflow.md`、永続状態は
+> `docs/superpowers/active-ledger.md`。本書の2ベンダー、既定effort、`/tmp` scratchpad、逐次承認の
+> 記述は移行時スナップショットとしてのみ読む。現在はCodex/Claude/Grokの3ベンダーとPlan 6
+> Yellow autonomy試行が正。
+
 このファイルは、これまで Claude Code のメインエージェントが保持していた「会話コンテキスト上の
 進捗」を、codex CLI がメイン駆動として引き継ぐための一枚ものスナップショットである。設計正本でも
 台帳でもない——**移行時点の生の作業状態**を失わないための橋渡し。恒久的な正本は末尾の「正典の所在」
@@ -9,6 +14,9 @@
 codex CLI に移す。
 
 ## 0. 役割の逆転(AGENTS.md との差分——重要)
+
+> **Historical:** 以下は移行時点の説明。現在のMain/Worker分離、3ベンダー、モデル/effort、
+> settlementは `docs/development-workflow.md` と `AGENTS.md` を使う。
 
 `AGENTS.md` は「codex=呼ばれる側の per-task 実装ワーカー」向けに書かれている(「git commit しない」
 「指定タスクだけ」)。**メイン駆動になった codex には、そのうち以下が変わる**:
@@ -144,6 +152,9 @@ bind/site_local_cidr は claim 保証を入れた後の副次的な露出ノブ�
 
 ## 5. 直近で決めたレビュー速度方針 (05db5da、維持する)
 
+> **Historical:** この節のscratchpad、2ベンダー、転記例外は廃止済み。現在のレシート、
+> active ledger、最終ハッシュ全ベンダー確認を運用正本で参照する。
+
 CLAUDE.md Workflow Rules の3バレットが正文(条件はそこを読む。ここに再記述しない=drift 防止)。
 骨子だけ: レビュー並走+消費ゲート(未決成果物は飛行中 読み書き凍結、下流消費は SETTLED まで禁止、
 未決は scratchpad `review-pending.md` に**内容ハッシュ付き**でディスク記録、fail-closed)/
@@ -159,7 +170,8 @@ Main 発の不在主張=確認必須)/tier は「下流が根拠として読む�
 - **設計正本**: `../docs/redesign/`(D1〜D13、責務台帳 R1〜R23、terminology、adr-inventory)。
   特に計画6は **D11-ingress-authentication.md** が本体。
 - **構造正本**(crate地図・置き場・層規則・ペルソナ): `docs/architecture.md`。機械検査=`scripts/check-layers`。
-- **ワークフロー規律**: `CLAUDE.md`(Claude 向け)/ `AGENTS.md`(codex 向け——役割逆転分は本書 §0)。
+- **ワークフロー規律**: `docs/development-workflow.md`。再開状態は
+  `docs/superpowers/active-ledger.md`。`CLAUDE.md` / `AGENTS.md` は役割別入口。
 - **繰り延べ台帳**(計画6が全掃引する): `docs/superpowers/plans/wave1-plan5-deferred-hardening.md`
   ——「計画6への持ち込み」8項目+D-9〜D-18。
 - **メモリ**(Claude 側、参考): `../.claude/memory/`(iot リポジトリに symlink)。
@@ -168,6 +180,9 @@ Main 発の不在主張=確認必須)/tier は「下流が根拠として読む�
 - レビューガイド: `docs/eval/{spec,plan,impl-spec,impl-quality}-review.md`。
 
 ## 7. 移行後の最初の一手 (推奨)
+
+> **Historical:** 以下は実行済みまたは置換済み。現在の次作業は
+> `docs/superpowers/active-ledger.md` の `Next executable work` を使う。
 
 1. 両リポジトリの `git log -1` で HEAD を確認(本書の主張を鵜呑みにしない=「語りを信じるな、
    実物を読め」)。

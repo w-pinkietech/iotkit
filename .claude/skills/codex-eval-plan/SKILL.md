@@ -15,6 +15,10 @@ Evaluate an implementation plan with Codex before starting the `codex-impl-loop`
 - After plan self-review is complete
 - Before starting the `codex-impl-loop` for implementation
 
+Plans are contract-centered per `docs/development-workflow.md`: constrain invariants,
+forbidden scope, failing tests, verification, review focus, commit boundary, and rollback.
+Do not require helper names or code snippets unless semantically load-bearing.
+
 ## Context to Inject
 
 | File | Purpose |
@@ -36,6 +40,11 @@ Evaluate an implementation plan with Codex before starting the `codex-impl-loop`
 ```
 You are an independent plan evaluator. Thoroughly review the following
 implementation plan from a third-party perspective.
+
+## Vendor roles and common safety core
+{all three primary roles from docs/development-workflow.md; every vendor checks Red
+classification, auth/secrets, data loss/custody, external effects, hash provenance,
+settlement, then its specialty and a residual out-of-role C/I pass}
 
 ## Evaluation Perspectives (all 5)
 1. Task decomposition — is each task independently compilable and testable?

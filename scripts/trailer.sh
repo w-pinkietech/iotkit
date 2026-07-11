@@ -23,17 +23,16 @@
 # nobody has to remember to update anything when sessions switch models.
 #
 # Usage:
-#   git commit -m "feat(crate): ..." -m "$(scripts/trailer.sh codex)"   # codex-implemented, cross-vendor reviewed
-#   git commit -m "docs: ..."        -m "$(scripts/trailer.sh docs)"    # main-agent authored (docs/harness)
+#   git commit -m "feat(crate): ..." -m "$(scripts/trailer.sh codex)"   # codex-implemented
+#   git commit -m "docs: ..."        -m "$(scripts/trailer.sh docs)"    # main-agent authored
 #
-# TRAILER_MODEL overrides detection — only needed when the detected name is wrong:
+# TRAILER_MODEL overrides detection when the current assistant is not Claude:
 #   TRAILER_MODEL="Claude Opus 4.8" scripts/trailer.sh codex
+# TRAILER_EMAIL overrides the matching co-author address (Codex main uses
+# `TRAILER_MODEL="OpenAI Codex" TRAILER_EMAIL="noreply@openai.com"`).
 #
-# Detection failure falls back to FALLBACK_MODEL instead of erroring: callers
-# invoke this via $(command substitution), which swallows exit codes — a hard
-# fail here would silently commit an EMPTY trailer, worse than a stale name.
-# If the transcript format ever changes, detection degrades to the fallback;
-# update FALLBACK_MODEL when that happens.
+# Review trailers are emitted only when both TRAILER_REVIEWED_BY and
+# TRAILER_REVIEW_HASH are explicitly supplied from verified receipts.
 set -euo pipefail
 # An inherited failglob (exported BASHOPTS) would turn detect_model's no-match
 # glob into a hard error — the empty-trailer failure mode again. Neutralize it.
@@ -41,8 +40,6 @@ shopt -u failglob
 
 MODE="${1:-}"
 [ -n "$MODE" ] || { echo "usage: scripts/trailer.sh <codex|docs>" >&2; exit 2; }
-
-FALLBACK_MODEL="Claude Fable 5"
 
 # Print the current session model's display name, or return 1 (caller falls back).
 # The transcript's main-chain assistant lines look like
@@ -92,13 +89,36 @@ MODEL="${TRAILER_MODEL:-}"
 if [ -z "$MODEL" ]; then
   MODEL="$(detect_model || true)"
 fi
-MODEL="${MODEL:-$FALLBACK_MODEL}"
 MODEL="${MODEL//[$'\n\r']/ }"   # collapse newlines: a single-line display name, no trailer injection
+TRAILER_EMAIL="${TRAILER_EMAIL:-noreply@anthropic.com}"
+TRAILER_EMAIL="${TRAILER_EMAIL//[$'\n\r']/ }"
+REVIEWED_BY="${TRAILER_REVIEWED_BY:-}"
+REVIEW_HASH="${TRAILER_REVIEW_HASH:-}"
+REVIEWED_BY="${REVIEWED_BY//[$'\n\r']/ }"
+REVIEW_HASH="${REVIEW_HASH//[$'\n\r']/ }"
+[ -z "$REVIEWED_BY" ] || [ -n "$REVIEW_HASH" ] || {
+  echo "TRAILER_REVIEW_HASH is required with TRAILER_REVIEWED_BY" >&2
+  exit 2
+}
+[ -z "$REVIEW_HASH" ] || [[ "$REVIEW_HASH" =~ ^[0-9a-f]{64}$ ]] || { echo "review hash must be SHA-256" >&2; exit 2; }
+
+emit_review() {
+  [ -n "$REVIEWED_BY" ] || return 0
+  printf 'Reviewed-by: %s\nReview-hash: %s\n' "$REVIEWED_BY" "$REVIEW_HASH"
+}
+
+emit_coauthor() {
+  [ -n "$MODEL" ] || return 0
+  printf 'Co-Authored-By: %s <%s>\n' "$MODEL" "$TRAILER_EMAIL"
+}
 
 case "$MODE" in
   codex)
-    printf 'Implemented-by: codex\nReviewed-by: codex (read-only), Fable review-max\nCo-Authored-By: %s <noreply@anthropic.com>\n' "$MODEL" ;;
+    printf 'Implemented-by: codex\n'
+    emit_review
+    emit_coauthor ;;
   docs)
-    printf 'Co-Authored-By: %s <noreply@anthropic.com>\n' "$MODEL" ;;
+    emit_review
+    emit_coauthor ;;
   *) echo "usage: scripts/trailer.sh <codex|docs>" >&2; exit 2 ;;
 esac

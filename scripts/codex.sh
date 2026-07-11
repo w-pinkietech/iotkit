@@ -7,8 +7,8 @@
 #
 # Usage:
 #   scripts/codex.sh <mode> <prompt-file> <label>
-#     mode = review  -> sandbox read-only          (adversarial review; never mutates)
-#     mode = impl    -> sandbox danger-full-access  (implementation; codex self-tests build/test/clippy)
+#     mode = review  -> sandbox read-only     (adversarial review; never mutates)
+#     mode = impl    -> sandbox workspace-write (implementation; no host-wide writes)
 #
 # The prompt is fed on STDIN (not argv) so prompts may start with '-' and exceed
 # the 128KiB single-argument limit (large plan/spec pastes).
@@ -19,9 +19,9 @@
 # Env overrides:
 #   CODEX_MODEL   (default gpt-5.6-sol — strongest tier for complex coding/review;
 #                  gpt-5.6-terra/-luna are the cheaper siblings)
-#   CODEX_EFFORT  (override; default max for review, high for impl — reviews decide
-#                  things and earn the deepest reasoning; the impl grind trades some
-#                  for speed. Effort scale: low < medium < high < xhigh < max; "ultra"
+#   CODEX_EFFORT  (override; default high for normal review and impl. Raise the
+#                  responsible vendor to max for high-risk work per the workflow canon.
+#                  Effort scale: low < medium < high < xhigh < max; "ultra"
 #                  also exists but fans out subagents — a different execution/cost
 #                  mode, never a silent default; opt in explicitly via CODEX_EFFORT)
 #   CODEX_OUT_DIR (default /tmp/codex-runs; set to the session scratchpad if you prefer)
@@ -29,12 +29,15 @@
 #   CODEX_REPO    (default: current git toplevel; set to point codex at a different
 #                  checkout, e.g. the design corpus for codex-design-review)
 set -euo pipefail
+umask 077
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE="${1:-}"; PROMPT="${2:-}"; LABEL="${3:-}"
 if [ -z "$MODE" ] || [ -z "$PROMPT" ] || [ -z "$LABEL" ]; then
   echo "usage: scripts/codex.sh <review|impl> <prompt-file> <label>" >&2
   exit 2
 fi
+[[ "$LABEL" =~ ^[A-Za-z0-9._-]{1,80}$ ]] || { echo "unsafe label" >&2; exit 2; }
 
 CODEX_BIN="${CODEX_BIN:-/home/kenta/.local/bin/codex}"
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
@@ -43,15 +46,28 @@ REPO="${CODEX_REPO:-$(git rev-parse --show-toplevel)}"
 [ -d "$REPO" ] || { echo "repo not found: $REPO" >&2; exit 2; }
 
 case "$MODE" in
-  review) SANDBOX="read-only";          DEFAULT_EFFORT="max" ;;
-  impl)   SANDBOX="danger-full-access"; DEFAULT_EFFORT="high"  ;;
+  review) SANDBOX="read-only";      DEFAULT_EFFORT="high" ;;
+  impl)   SANDBOX="workspace-write"; DEFAULT_EFFORT="high" ;;
   *) echo "mode must be 'review' or 'impl', got: '$MODE'" >&2; exit 2 ;;
 esac
 CODEX_EFFORT="${CODEX_EFFORT:-$DEFAULT_EFFORT}"
+case "$CODEX_EFFORT" in low|medium|high|xhigh|max) ;; *) echo "unsupported Codex effort" >&2; exit 2 ;; esac
 
 [ -s "$PROMPT" ] || { echo "prompt file missing or empty: $PROMPT" >&2; exit 2; }
+if [ "$MODE" = review ] && [ -z "${REVIEW_MANIFEST:-}" ]; then echo "REVIEW_MANIFEST is required for review" >&2; exit 2; fi
+if [ -n "${REVIEW_MANIFEST:-}" ]; then
+  REVIEW_MANIFEST="$(readlink -f "$REVIEW_MANIFEST")"
+  export REVIEW_MANIFEST
+  (cd "$REPO" && "$SCRIPT_DIR/review-manifest.sh" --verify "$REVIEW_MANIFEST")
+  MANIFEST_SHA256="$(sha256sum -- "$REVIEW_MANIFEST" | cut -d' ' -f1)"
+fi
 mkdir -p "$CODEX_OUT_DIR"
+chmod 700 "$CODEX_OUT_DIR"
+[ -O "$CODEX_OUT_DIR" ] || { echo "output directory is not owned by current user" >&2; exit 2; }
 OUT="$CODEX_OUT_DIR/codex-${LABEL}-${MODE}-$(date +%Y%m%d-%H%M%S)-$$.txt"
+OUT_PARTIAL="$OUT.partial"
+PROMPT_SHA256="$(sha256sum -- "$PROMPT" | cut -d' ' -f1)"
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 {
   echo "→ codex ${MODE} (sandbox=${SANDBOX}) model=${CODEX_MODEL} effort=${CODEX_EFFORT}"
@@ -60,14 +76,26 @@ OUT="$CODEX_OUT_DIR/codex-${LABEL}-${MODE}-$(date +%Y%m%d-%H%M%S)-$$.txt"
   echo "  out    = ${OUT}"
 } >&2
 
-# Prompt on stdin ('-'); flags before it.
+# Prompt on stdin ('-'); flags before it. Never expose a partial/empty result as
+# review evidence.
+trap 'rm -f "$OUT_PARTIAL"' EXIT
 "$CODEX_BIN" exec \
   -s "$SANDBOX" \
   --skip-git-repo-check \
   -C "$REPO" \
   -m "$CODEX_MODEL" \
   -c "model_reasoning_effort=${CODEX_EFFORT}" \
-  -o "$OUT" \
+  -o "$OUT_PARTIAL" \
   - < "$PROMPT"
+
+[ -s "$OUT_PARTIAL" ] || { echo "x empty codex output — treat as FAILED" >&2; exit 1; }
+mv "$OUT_PARTIAL" "$OUT"
+trap 'rm -f "$OUT_PARTIAL" "$OUT" "$OUT.receipt" "$OUT.receipt.partial"' EXIT
+[ "$(sha256sum -- "$PROMPT" | cut -d' ' -f1)" = "$PROMPT_SHA256" ] || { echo "prompt changed during review" >&2; exit 1; }
+[ "$MODE" != review ] || (cd "$REPO" && "$SCRIPT_DIR/review-manifest.sh" --verify "$REVIEW_MANIFEST")
+[ "$MODE" != review ] || [ "$(sha256sum -- "$REVIEW_MANIFEST" | cut -d' ' -f1)" = "$MANIFEST_SHA256" ] || { echo "manifest changed during review" >&2; exit 1; }
+"$SCRIPT_DIR/review-receipt.sh" codex "$MODE" "$CODEX_MODEL" "$CODEX_EFFORT" \
+  "$PROMPT" "$OUT" "$STARTED_AT"
+trap - EXIT
 
 echo "✔ codex ${MODE} done → ${OUT}" >&2
