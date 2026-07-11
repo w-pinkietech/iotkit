@@ -7,11 +7,11 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `b863296`
+- Artifact/base HEAD: `82a71f6`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 2 reviewed and commit-ready; local settlement commit is next;
-  product code remains worker-only
+- Active phase: Plan 6 Task 2 settled and committed; Task 3 implementation dispatch
+  preparation; product code remains worker-only
 
 ## Mission
 
@@ -49,7 +49,7 @@ git/disk/test. Never store secrets here.
 
 ## Review state
 
-- Plan-6 Task 2 wire/principal collector seam: **SETTLED, pending local commit**. Confirmation
+- Plan-6 Task 2 wire/principal collector seam: **SETTLED and committed as `82a71f6`**. Confirmation
   manifest `.review/plan6-task2-confirm.manifest` SHA-256
   `046f2679118b489374274c718977c8ff5f13b19e4f26a442731472fc804a588a`; prompt
   `.review/plan6-task2-confirm-review.md` SHA-256
@@ -300,8 +300,7 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Commit Plan 6 Task 2 locally as `feat(ingest): add principal-aware collector contract`.
-2. Prepare and dispatch Plan 6 Task 3 through Sol/high `scripts/codex.sh impl`.
+1. Prepare and dispatch Plan 6 Task 3 through Sol/high `scripts/codex.sh impl`.
 
 ## Verification
 
