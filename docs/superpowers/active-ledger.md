@@ -14,7 +14,7 @@ git/disk/test. Never store secrets here.
 
 ## Mission
 
-- Adopt risk-adaptive autonomous delivery with Design Ready, Green/Yellow/Red, three-vendor
+- Adopt risk-adaptive autonomous delivery with Design Ready, Green/Yellow/Red, independent
   review, and persistent restart state.
 - Preserve independent review, TDD, verification, design canon, and product-code worker
   separation.
@@ -23,16 +23,37 @@ git/disk/test. Never store secrets here.
 
 ## User decisions
 
-- 2026-07-11: Codex becomes Main driver; cross-vendor review remains mandatory.
+- 2026-07-11: Codex becomes Main driver; cross-vendor review remains mandatory (superseded
+  2026-07-12 while both external vendors are unavailable).
 - 2026-07-11: Normal review matrix is Codex high, Claude Fable/high, Grok high;
   high-risk review escalates to strongest pinned models/max.
 - 2026-07-11: Add local Grok Build as the third review vendor.
+- 2026-07-12: Grok quota is exhausted. Required settlement vendors were Codex and Claude;
+  Grok remains optional and creates no review debt unless explicitly opted in before dispatch.
+- 2026-07-12: Claude subscription access was disabled and returns HTTP 403. Cross-vendor review
+  is temporarily impossible. Required review is a fresh read-only Codex session; Claude/Grok
+  are optional and create no debt unless explicitly opted in before dispatch.
 - 2026-07-11: Improve the process to accelerate development; adopt the discussion input via
   reviewed workflow changes.
 - Plan 6 product decision already approved: no network box claim; initial admin ownership is
   local/per-card only. This design is not SETTLED yet.
 
 ## Review state
+
+- Review-policy restoration: REVIEW IN FLIGHT. Manifest
+  `.review/two-vendor-policy.manifest` SHA-256
+  `204f56da63e074f6d33a3fadcdf01d91149084ccaa936a64684a802ca9e3efc5`; prompt SHA-256
+  `f024b0b6525aa5ff4b0b80a3448785ea00f9e7e9495a30a774a0f18187de732d`.
+  Codex medium completed with two Important findings; Claude failed with HTTP 403 and is no
+  longer required under the superseding user decision. Grok=NOT REQUIRED.
+- Degraded-review final: **SETTLED**. Manifest
+  `.review/degraded-review-policy.manifest` SHA-256
+  `886502e52cd0e6342d969dbbd8762b0e67b3bec6ebe4b332346f927457190d96`; prompt SHA-256
+  `c37c633ed676403437a8071e139c6881d21ba08b431d398da69d3c8ca161cce9`.
+  Fresh Codex medium returned zero C/I. Result SHA-256
+  `e9510aa77ce3c33da9269017d8e4f1a5ae9cc2e55fdc3ed09fb54372374de9ac`; receipt SHA-256
+  `bb7232fb391c98e6d7844caf341d3440ae7d291a2dd4b288d4b7dba0bd4883eb`.
+  Claude/Grok=UNAVAILABLE, NOT REQUIRED.
 
 - Workflow-policy review round 1: COMPLETE, NOT SETTLED. Prompt
   `/tmp/workflow-autonomy-review.md` SHA-256

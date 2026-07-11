@@ -2,7 +2,8 @@
 
 > **2026-07-11追補:** 移行後の運用正本は `docs/development-workflow.md`、永続状態は
 > `docs/superpowers/active-ledger.md`。本書の2ベンダー、既定effort、`/tmp` scratchpad、逐次承認の
-> 記述は移行時スナップショットとしてのみ読む。現在はCodex/Claude/Grokの3ベンダーとPlan 6
+> 記述は移行時スナップショットとしてのみ読む。cross-vendor reviewは一時停止し、現在の必須レビューは
+> freshなCodex read-only session。Claude/Grokは利用可能時のみ任意。Plan 6
 > Yellow autonomy試行が正。
 
 このファイルは、これまで Claude Code のメインエージェントが保持していた「会話コンテキスト上の
@@ -15,7 +16,7 @@ codex CLI に移す。
 
 ## 0. 役割の逆転(AGENTS.md との差分——重要)
 
-> **Historical:** 以下は移行時点の説明。現在のMain/Worker分離、3ベンダー、モデル/effort、
+> **Historical:** 以下は移行時点の説明。現在のMain/Worker分離、必須レビュアー、モデル/effort、
 > settlementは `docs/development-workflow.md` と `AGENTS.md` を使う。
 
 `AGENTS.md` は「codex=呼ばれる側の per-task 実装ワーカー」向けに書かれている(「git commit しない」
@@ -153,7 +154,7 @@ bind/site_local_cidr は claim 保証を入れた後の副次的な露出ノブ�
 ## 5. 直近で決めたレビュー速度方針 (05db5da、維持する)
 
 > **Historical:** この節のscratchpad、2ベンダー、転記例外は廃止済み。現在のレシート、
-> active ledger、最終ハッシュ全ベンダー確認を運用正本で参照する。
+> active ledger、最終ハッシュの全required-vendor確認を運用正本で参照する。
 
 CLAUDE.md Workflow Rules の3バレットが正文(条件はそこを読む。ここに再記述しない=drift 防止)。
 骨子だけ: レビュー並走+消費ゲート(未決成果物は飛行中 読み書き凍結、下流消費は SETTLED まで禁止、

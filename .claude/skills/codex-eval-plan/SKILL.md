@@ -42,7 +42,7 @@ You are an independent plan evaluator. Thoroughly review the following
 implementation plan from a third-party perspective.
 
 ## Vendor roles and common safety core
-{all three primary roles from docs/development-workflow.md; every vendor checks Red
+{required vendor roles from docs/development-workflow.md; every vendor checks Red
 classification, auth/secrets, data loss/custody, external effects, hash provenance,
 settlement, then its specialty and a residual out-of-role C/I pass}
 

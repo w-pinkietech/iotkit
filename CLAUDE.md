@@ -29,14 +29,14 @@ scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D w
 ## Workflow Rules
 
 - **運用正本は `docs/development-workflow.md`。** Design Ready、リスク別パイプライン、
-  Green/Yellow/Red、自律コミット、3ベンダーレビュー、SETTLED、永続台帳、停止条件はそこに従う。
+  Green/Yellow/Red、自律コミット、独立レビュー、SETTLED、永続台帳、停止条件はそこに従う。
 - **Main agent は製品コード実装禁止。** Rustはcodex workerが書き、Mainは対話、設計、plan、
   dispatch、検証、レビュー調停、コミットを担う。scripts/CI/skills/docsはMainの領分。
 - **Plan 6はYellow autonomy試行。** Green/Yellowは逐次承認なしで進め、Redを最大3件の判断
   パケットへ束ねる。push/PR/release等の外部作用は別承認。
-- **レビューはCodex・Claude・Grokの3ベンダー。** 同一成果物ハッシュを並走レビューし、
-  未解決C/Iゼロの最終ハッシュだけをSETTLEDとする。
-- **Watchpoint curation は Main agent の責務。** 3ベンダーレビューの結果を受けて
+- **cross-vendor reviewは一時停止中。** 必須レビューはfreshなCodex read-only session。
+  Claude/Grokは利用可能な場合のみ任意追加する。未解決C/Iゼロの最終ハッシュだけをSETTLEDとする。
+- **Watchpoint curation は Main agent の責務。** 独立レビューの結果を受けて
   eval-perspectives-curatorでreview guideのActive Watchpointsを更新する。
 - **計画作成時は設計追補を全掃引する。** 対象決定文書の監査追記・追補節(「実装と同時」等の指示を含む)を計画の Global Constraints に反映してから書く(D1 quarantine_reason 追補の見落とし再発防止)。
 
@@ -52,7 +52,7 @@ scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D w
 
 | Topic | Path |
 |---|---|
-| 開発運用正本(Design Ready・自律判断・3ベンダー・永続台帳) | [docs/development-workflow.md](docs/development-workflow.md) |
+| 開発運用正本(Design Ready・自律判断・独立レビュー・永続台帳) | [docs/development-workflow.md](docs/development-workflow.md) |
 | 現在の工程・レビュー債務・次タスク | [docs/superpowers/active-ledger.md](docs/superpowers/active-ledger.md) |
 | 構造正本(crate地図・置き場規則・層規則・ペルソナ) | [docs/architecture.md](docs/architecture.md) |
 | Spec review guide | [docs/eval/spec-review.md](docs/eval/spec-review.md) |

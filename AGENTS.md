@@ -43,18 +43,19 @@ check-layers の分類と architecture.md の地図を同時に更新する。
 リスク適応パイプライン、永続台帳、停止条件に従う。Plan 6はYellow autonomy試行であり、
 Green/Yellowは自律、Redのみ最大3件の判断パケットとしてユーザーへ上げる。
 
-独立レビューは同一成果物ハッシュを3ベンダーへ並走dispatchする:
+cross-vendor reviewは一時停止中。必須レビューは同一成果物ハッシュをfreshなCodex
+read-only sessionへdispatchする:
 
 - codex 側(read-only sandbox、コマンド実行可=`cargo test`・境界プローブができる):
   `REVIEW_MANIFEST=<manifest> scripts/codex.sh review <prompt-file> <label>`
-- Claude 側(**静的**。manifest内容をstdinへ束ね、ツールを全て無効化 + safe-mode):
+- Claude 側(任意。subscription access復旧時のみ):
   `REVIEW_MANIFEST=<manifest> scripts/claude-review.sh <prompt-file> <label>`
   (通常は Fable/high。高リスク時は Opus/max。
   出力は codex と同じ `/tmp/codex-runs/`)
-- Grok 側(クリーンHOME・bubblewrap読取専用mount、web/memory/subagents無効):
+- Grok 側(任意。quota復旧時のみ):
   `REVIEW_MANIFEST=<manifest> scripts/grok-review.sh <prompt-file> <label>`
 
-主担当: Codex=実行/原子性/データ損失、Claude=正本/意味整合/Grok=攻撃者/UX/配布運用。
+degraded modeではCodexが実行/原子性/データ損失/攻撃実行面に加え、正本/意味整合/UX/配布運用も担う。
 全員がRed分類、auth/secrets、data loss/custody、外部作用、hash provenance、settlementも確認する。
 他観点の指摘は禁止しない。Codexのみ実行可で、Claude/Grokのクリーン通過を実行依存保証に使わない。
 

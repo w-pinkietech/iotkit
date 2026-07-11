@@ -42,11 +42,11 @@ Classify the work by impact, not line count:
 | Risk | Typical work | Required pipeline |
 |---|---|---|
 | Small | clear bug, wording, test, internal refactor inside settled design | reality check → failing test → fix → verify → targeted review → commit |
-| Medium | config, non-destructive migration, internal API, local reversible feature | short design note → Design Ready → targeted three-vendor review → concise plan → implementation → integration review |
-| Large / Red | auth, secrets, wire/API, custody, restore, threat model, major responsibility boundary | Mission Brief → Design Ready → spec → three-vendor review → contract-centered plan → plan review → task loops → final integration review |
+| Medium | config, non-destructive migration, internal API, local reversible feature | short design note → Design Ready → independent Codex review → concise plan → implementation → integration review |
+| Large / Red | auth, secrets, wire/API, custody, restore, threat model, major responsibility boundary | Mission Brief → Design Ready → spec → independent Codex review → contract-centered plan → plan review → task loops → final integration review |
 
 Small requires at least one independent vendor; Main's own analysis never substitutes.
-Medium and Large require all three vendors. A targeted review that discovers contract or
+Medium and Large require a fresh read-only Codex review session. A targeted review that discovers contract or
 trust impact reclassifies the work before commit.
 
 Any public-contract, auth/secret, data-loss/custody, restore, trust-boundary, irreversible
@@ -134,26 +134,27 @@ Bundle up to three related Red decisions into one packet: decision, why Red, rec
 alternatives, consequences, and independent work that continues while awaiting the answer.
 Do not ask separately for direct consequences of an already approved principle.
 
-## 5. Three-vendor independent review
+## 5. Independent review (temporary degraded mode)
 
-Every required cross-vendor gate uses the same artifact/content hash and a review brief that
-states all primary roles:
+Cross-vendor review is temporarily unavailable because Claude subscription access is disabled
+and Grok quota is exhausted. Every required gate uses a fresh read-only Codex session on the
+same artifact/content hash. This is independent-session review, not cross-vendor assurance.
 
 - **Codex**: executable reality checks, boundary probes, concurrency, atomicity, data loss,
-  and tests.
-- **Claude**: canon/responsibility alignment, semantic consistency, propagation, and missing
-  contracts. Static read-only.
-- **Grok**: adversarial behavior, user journey, distribution, operations, recovery, and
-  relevant external patterns. Static read-only with web disabled unless explicitly authorized.
+  tests, and adversarial runtime behavior.
+- **Codex also covers while degraded**: canon/semantic consistency, user journey, distribution,
+  operations, recovery, and the mandatory common safety core.
+- **Claude/Grok (optional)**: use only when service/quota is available. They create no debt
+  unless explicitly opted in before dispatch.
 
 Primary roles reduce duplicated full scans; they do not forbid cross-role findings.
 Every vendor must also perform the common safety core: Red classification, secrets/auth,
 data-loss/custody, external effects, artifact/hash provenance, and settlement integrity; then
 perform its specialty deep dive and a residual C/I scan outside that specialty.
 
-Normal review defaults: Codex `gpt-5.6-sol/high`, Claude `fable/high`, Grok
-`grok-4.5/high`. Auth, data loss, custody, restore, difficult concurrency, and workflow/harness
-changes require the strongest pinned model and `max` effort for all three; Claude uses `opus`.
+Normal required review defaults: Codex `gpt-5.6-sol/high`. Auth, data loss, custody, restore,
+difficult concurrency, and workflow/harness changes require the strongest pinned model and
+`max` effort. A separate fresh session remains mandatory; Main analysis cannot substitute.
 Confirmation rounds use `high` after a strongest-matrix discovery round when every C/I has a
 bounded prescription and executable negative probes cover the changed guards. Auth/custody/
 restore product-contract settlement retains the strongest matrix through the final round.
@@ -162,9 +163,10 @@ Dispatch all required vendors in parallel through:
 
 ```bash
 REVIEW_MANIFEST=<manifest> CODEX_EFFORT=high scripts/codex.sh review <prompt> <label>
-REVIEW_MANIFEST=<manifest> CLAUDE_REVIEW_MODEL=fable CLAUDE_REVIEW_EFFORT=high scripts/claude-review.sh <prompt> <label>
-REVIEW_MANIFEST=<manifest> GROK_REVIEW_EFFORT=high scripts/grok-review.sh <prompt> <label>
 ```
+
+Optional when available: `scripts/claude-review.sh` and `scripts/grok-review.sh` with the same
+`REVIEW_MANIFEST` and prompt.
 
 ### Settlement
 
@@ -211,7 +213,7 @@ them. Safer, simpler implementation discovered during work is Green if spec mean
 unchanged.
 
 Product implementation remains worker-driven through `scripts/codex.sh impl`; Main verifies
-with `scripts/verify.sh`, runs three-vendor review, reconciles findings, and commits one
+with `scripts/verify.sh`, runs the required independent Codex review, reconciles findings, and commits one
 intentional unit at a time. Final integration review remains mandatory.
 
 The independent-review iron law is absolute: an author/Main analysis is not its own independent

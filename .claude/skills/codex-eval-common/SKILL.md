@@ -50,9 +50,10 @@ is the codex-impl-loop skill, NOT eval.)
 **Unique labels:** Each invocation uses a distinct `<label>` so outputs never collide.
 Re-review = a fresh `codex.sh` call (no session reuse).
 
-## Three-Vendor Review
+## Independent Review (degraded mode)
 
-Run the same artifact hash and review brief through Codex, Claude, and Grok in parallel.
+Run the artifact through a fresh read-only Codex session. Claude and Grok are optional while
+their subscription/quota is unavailable. Never describe this as cross-vendor assurance.
 The brief names the primary roles and mandatory common safety core from
 `docs/development-workflow.md`; cross-role findings remain valid. A finding from one vendor
 still gets triaged.
@@ -60,7 +61,7 @@ still gets triaged.
 ## Iteration Loop
 
 1. Run `scripts/watchpoints.sh`; adjudicate anything expired before injecting guides
-2. Dispatch the SAME prompt and `REVIEW_MANIFEST=<manifest>` to all three vendors in parallel.
+2. Dispatch the prompt and `REVIEW_MANIFEST=<manifest>` to a fresh Codex session.
 3. Read all results and converge (multi-vendor agreement = high signal; one-raise = triaged)
 4. If Critical or Important issues are found by any required vendor:
    - Green/Yellow and authority-settled semantic corrections: fix/reject autonomously
