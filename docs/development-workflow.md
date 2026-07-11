@@ -152,17 +152,28 @@ Every vendor must also perform the common safety core: Red classification, secre
 data-loss/custody, external effects, artifact/hash provenance, and settlement integrity; then
 perform its specialty deep dive and a residual C/I scan outside that specialty.
 
-Normal required review defaults: Codex `gpt-5.6-sol/high`. Auth, data loss, custody, restore,
-difficult concurrency, and workflow/harness changes require the strongest pinned model and
-`max` effort. A separate fresh session remains mandatory; Main analysis cannot substitute.
-Confirmation rounds use `high` after a strongest-matrix discovery round when every C/I has a
-bounded prescription and executable negative probes cover the changed guards. Auth/custody/
-restore product-contract settlement retains the strongest matrix through the final round.
+Model and effort follow the task, using the lowest effort that reliably produces the required
+result:
+
+| Work | Default | Escalation |
+|---|---|---|
+| Clear, repeatable, high-volume mechanical work | `gpt-5.6-luna/low` | Move to Terra if judgment or non-local tool use appears |
+| Everyday settled-spec implementation | `gpt-5.6-terra/medium` | Move to Sol when the task becomes ambiguous, high-value, or contract-sensitive |
+| Normal independent review | `gpt-5.6-sol/medium` | Use `high` for difficult multi-step or high-risk review |
+| Design, auth/secrets, data loss/custody, restore, difficult concurrency, or workflow/harness work | `gpt-5.6-sol/high` | Use `xhigh` only for especially difficult work with substantial tradeoffs |
+
+Plan 6 and every Large/Red or design workflow remain `gpt-5.6-sol/high` through confirmation
+and final settlement; their internal subtasks do not downgrade merely because a step looks
+mechanical. The lighter rows apply only to separately classified non-high-risk work. `max` is
+exceptional, explicit, and reserved for the hardest single-agent problems; it is never a
+routine default. A separate fresh review session remains mandatory; Main analysis cannot
+substitute. Non-high-risk confirmation rounds use their applicable row once every C/I has a
+bounded prescription and executable negative probes cover the changed guards.
 
 Dispatch all required vendors in parallel through:
 
 ```bash
-REVIEW_MANIFEST=<manifest> CODEX_EFFORT=high scripts/codex.sh review <prompt> <label>
+REVIEW_MANIFEST=<manifest> scripts/codex.sh review <prompt> <label>
 ```
 
 Optional when available: `scripts/claude-review.sh` and `scripts/grok-review.sh` with the same
@@ -212,7 +223,9 @@ Exact helper names and code snippets are fixed only where the public/semantic co
 them. Safer, simpler implementation discovered during work is Green if spec meaning is
 unchanged.
 
-Product implementation remains worker-driven through `scripts/codex.sh impl`; Main verifies
+Product implementation remains worker-driven through `scripts/codex.sh impl`; its ordinary
+default is Terra/medium, while Plan 6 and other high-risk work explicitly set
+`CODEX_MODEL=gpt-5.6-sol CODEX_EFFORT=high`. Main verifies
 with `scripts/verify.sh`, runs the required independent Codex review, reconciles findings, and commits one
 intentional unit at a time. Final integration review remains mandatory.
 

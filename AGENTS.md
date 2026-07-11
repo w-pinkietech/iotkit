@@ -50,7 +50,7 @@ read-only sessionへdispatchする:
   `REVIEW_MANIFEST=<manifest> scripts/codex.sh review <prompt-file> <label>`
 - Claude 側(任意。subscription access復旧時のみ):
   `REVIEW_MANIFEST=<manifest> scripts/claude-review.sh <prompt-file> <label>`
-  (通常は Fable/high。高リスク時は Opus/max。
+  (復旧後に任意追加するときのモデル/effortは運用正本とその時点の明示判断に従う。
   出力は codex と同じ `/tmp/codex-runs/`)
 - Grok 側(任意。quota復旧時のみ):
   `REVIEW_MANIFEST=<manifest> scripts/grok-review.sh <prompt-file> <label>`

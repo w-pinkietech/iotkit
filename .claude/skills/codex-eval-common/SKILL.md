@@ -36,11 +36,14 @@ scripts/watchpoints.sh
 # Write the review prompt to a file, then:
 REVIEW_MANIFEST=<manifest> scripts/codex.sh review <prompt-file> <label>
 #   -> read-only sandbox; model/effort defaults live in scripts/codex.sh
-#      (normal review defaults to high; high-risk work escalates per the canon)
+#      (normal review defaults to Sol/medium)
 #   -> output: /tmp/codex-runs/codex-<label>-review-<timestamp>.txt
 
-# Cheaper mechanical pass: dial effort down
-REVIEW_MANIFEST=<manifest> CODEX_EFFORT=medium scripts/codex.sh review <prompt-file> <label>
+# Plan 6 and other high-risk review: explicitly select Sol/high
+REVIEW_MANIFEST=<manifest> CODEX_MODEL=gpt-5.6-sol CODEX_EFFORT=high scripts/codex.sh review <prompt-file> <label>
+
+# Clearly bounded mechanical pass: explicitly select Luna/low
+REVIEW_MANIFEST=<manifest> CODEX_MODEL=gpt-5.6-luna CODEX_EFFORT=low scripts/codex.sh review <prompt-file> <label>
 ```
 
 **`review` mode is ALWAYS read-only** — evaluation never mutates the tree. The wrapper

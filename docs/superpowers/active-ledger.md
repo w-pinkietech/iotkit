@@ -7,7 +7,7 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `203ee4c`
+- Artifact/base HEAD: `8a4245b`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
 - Active phase: workflow acceleration adoption; Plan 6 product design frozen
@@ -25,20 +25,69 @@ git/disk/test. Never store secrets here.
 
 - 2026-07-11: Codex becomes Main driver; cross-vendor review remains mandatory (superseded
   2026-07-12 while both external vendors are unavailable).
-- 2026-07-11: Normal review matrix is Codex high, Claude Fable/high, Grok high;
-  high-risk review escalates to strongest pinned models/max.
+- 2026-07-11: Normal review matrix was Codex high, Claude Fable/high, Grok high;
+  high-risk review escalated to strongest pinned models/max. **Superseded 2026-07-12** by the
+  official-use routing below; do not use this historical matrix for new dispatches.
 - 2026-07-11: Add local Grok Build as the third review vendor.
 - 2026-07-12: Grok quota is exhausted. Required settlement vendors were Codex and Claude;
   Grok remains optional and creates no review debt unless explicitly opted in before dispatch.
 - 2026-07-12: Claude subscription access was disabled and returns HTTP 403. Cross-vendor review
   is temporarily impossible. Required review is a fresh read-only Codex session; Claude/Grok
   are optional and create no debt unless explicitly opted in before dispatch.
+- 2026-07-12: Adopt the official-use model/effort routing: Luna/low for clear repeatable
+  mechanical work, Terra/medium for everyday settled-spec implementation, Sol/medium for
+  normal independent review, and Sol/high for design and high-risk work. Plan 6 uses Sol/high;
+  `xhigh` is exceptional and `max` is not a routine default.
 - 2026-07-11: Improve the process to accelerate development; adopt the discussion input via
   reviewed workflow changes.
 - Plan 6 product decision already approved: no network box claim; initial admin ownership is
   local/per-card only. This design is not SETTLED yet.
 
 ## Review state
+
+- Model/effort routing policy: **SETTLED**. Round 1 substantive manifest
+  `.review/model-routing.manifest` SHA-256
+  `7a4dcefe1fae3943b62a85c07368d3edbf3c4f7218804613c4dfa9a840def13c`; prompt
+  `.review/model-routing-review.md` round-1/2 SHA-256
+  `25a39365cd824df0e47f29f4648045bd6aae96076e75f5515dbebaca0309d09a`.
+  Fresh Codex `gpt-5.6-sol/high` found two Important legacy-routing contradictions; both were
+  fixed. Result SHA-256
+  `e6bd7b4a8433479af5a1cdaa0d3066fe3a448b88119a0e91f134e6ceabee9dfc`; receipt SHA-256
+  `bcabc8d50ff2ed59e7d50764c5bac2a56e4e0fdd2bc9ab5f5cdb877b2af9a9a6`.
+  Confirmation round 2 on `.review/model-routing-final.manifest` SHA-256
+  `d7deb30528cc0f6216144d55dad05a446cff9595e6b4dc1fa0db39f4b6933884` found one Important
+  stale eval-skill instruction, now fixed. Result SHA-256
+  `6a023e33d9dd8d0bb2296f186846d808a56cd244b40c600a4e91d4993994f0b9`; receipt SHA-256
+  `29f540c3743faa5f1aa8b0e078b6c2812da375912ad10eacc3f50927485c54f8`.
+  Starting with round 3, the prompt added shared eval-skill consistency checking; its SHA-256 is
+  `80b83ed6b696bbc93a344a971b9e9ced591064071bb6dd63beed0ee06413890f`.
+  Confirmation round 3 on `.review/model-routing-final2.manifest` SHA-256
+  `ea39c22f900fea8941e8cc60915bb0f352cdb9f0b3510b543624bdf313736dcd` found one Important
+  stale cross-vendor requirement in the optional Claude wrapper header, now fixed. Result
+  SHA-256 `0d32ad4e189dc5f61fe714c2cb0e74cfc91555af2e597e03c71a1beb3f4685b7`; receipt SHA-256
+  `7119e993461844c9dd141845097fd72bccb4b3f808529372781de45803bbcf9f`.
+  Confirmation round 4 on `.review/model-routing-final3.manifest` SHA-256
+  `2686e57f956c37d1fcfd18b8af8bd9ce315e694ec8978fbca476735b14ebeebb` found one Important
+  stale next-action ordering in this operational ledger, now fixed. Result SHA-256
+  `0597022f20c82ff2ecf2bf5e80672fc4687bf63b904b824446c85b7c0abc05c9`; receipt SHA-256
+  `2ce32e606b1edcb0c966179389dff1c69f1a62351286fa4724491127b0da6f8c`.
+  Confirmation round 5 on the same manifest found one Important high-risk downgrade path;
+  Plan 6 and every Large/Red or design workflow are now pinned to Sol/high through final
+  settlement. Result SHA-256
+  `ccca2914b6ce996d4feffa25a0a235a65f4fd526e7441b6b4324274cb4153e4e`; receipt SHA-256
+  `a691dbe3e4b6dac1a2f11d133ca2373d69fe99d63f430a1315b604f5a6914a26`.
+  Confirmation round 6 on `.review/model-routing-final5.manifest` found one Important stale
+  prompt-provenance description in this operational ledger, now fixed. Result SHA-256
+  `a4a31e7c7826e0b1a523e4416aed4532ae4efda1ee21edb344c2687a8cccc6e1`; receipt SHA-256
+  `7397211c5262605f7eb12097e5e310e9e871105fda21c64396f5c92497ff36e7`.
+  Final confirmation completed on `.review/model-routing-final5.manifest` SHA-256
+  `dff5c9f32a19b5c3a1eca358b4c1c40e3caa141a21982eadb56fd503c5a437b8`; prompt
+  `.review/model-routing-review.md` SHA-256
+  `80b83ed6b696bbc93a344a971b9e9ced591064071bb6dd63beed0ee06413890f`.
+  Fresh Codex `gpt-5.6-sol/high` returned zero unresolved C/I. Result SHA-256
+  `13cc67240d0f977eb77aa73a82a7e3d291a6e245e95928b181886a6dde903cf6`; receipt SHA-256
+  `3a134260335a2ef1ee07e8a75403d9bbb7dbd65be67b0e90e1f4a953e44e33fa`.
+  Claude/Grok were unavailable and not required.
 
 - Review-policy restoration: REVIEW IN FLIGHT. Manifest
   `.review/two-vendor-policy.manifest` SHA-256
@@ -64,14 +113,16 @@ git/disk/test. Never store secrets here.
   `/tmp/codex-runs/grok-workflow-autonomy-review-20260711-131705-318419.txt`.
   All three returned adopt-after-fixes; fixes are in progress. This round predates receipts
   and cannot establish final settlement.
-- Workflow-policy final round: READY TO DISPATCH. Substantive manifest
+- Workflow-policy final round: **HISTORICAL / CANCELLED; DO NOT DISPATCH**. This prepared
+  max-effort three-vendor round was superseded by the later completed Final4 settlement and
+  the 2026-07-12 degraded-review policy. Substantive manifest
   `.review/workflow-final.manifest` SHA-256
   `626b9b422795bed4a8eef9ac272efd3e4c4eab06c7691a5e18d7b403b0edcba0`; prompt
   `.review/workflow-final-review.md` SHA-256
   `5c23b7f56a156782d9134f580792ac556ffec7e28ea9feca830c8f2bc85f751b`.
   Vendors owed: Codex (`gpt-5.6-sol/max`), Claude (`opus/max`), Grok
   (`grok-4.5/max`). Expected result and receipt directory: `/tmp/codex-runs/`.
-  Per-vendor state: Codex=PENDING, Claude=PENDING, Grok=PENDING.
+  Historical per-vendor state at preparation: Codex=PENDING, Claude=PENDING, Grok=PENDING.
 - Workflow max discovery round completed with bound receipts. Codex and Grok returned
   adopt-after-fixes; Claude output exposed plan-mode external writing and its findings were
   recovered from the generated plan. Confirmation artifact is
@@ -125,8 +176,8 @@ Do not ask these separately. Continue Design Ready evidence that is common to al
 
 ## Next executable work
 
-1. Commit the SETTLED workflow/harness artifact.
-2. Resume Plan 6 with its Design Ready pack and one bundled Red packet.
+1. Resume Plan 6 with its Design Ready pack and one bundled Red packet, using Sol/high through
+   design, implementation, and final settlement.
 
 ## Verification
 

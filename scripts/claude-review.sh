@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# claude-review.sh — cross-vendor review dispatch for the Claude side.
+# claude-review.sh — optional static Claude review dispatch.
 #
-# Symmetric COUNTERPART to codex.sh, for when codex is the MAIN driver: codex
-# writes code, then dispatches BOTH review sides — `codex.sh review` (OpenAI) and
-# this script (Claude) — with the SAME prompt, so cross-vendor review keeps working
-# after the 2026-07-11 driver handoff
-# (docs/superpowers/HANDOFF-2026-07-11-to-codex-driver.md).
+# This is the Claude counterpart to `codex.sh review` when Claude access is available
+# and the run is explicitly opted in. Required-vendor status is governed only by
+# docs/development-workflow.md; in the current degraded mode this wrapper is optional
+# and creates no review debt unless selected before dispatch.
 #
 # IMPORTANT — this is a STATIC reviewer, NOT the same shape as codex's sandbox.
 # codex's read-only sandbox still EXECUTES commands (it can run `cargo test`, grep,
@@ -41,9 +40,10 @@
 # clean, zero-findings review.
 #
 # Env overrides:
-#   CLAUDE_REVIEW_MODEL   (default fable; pin opus for high-risk review)
-#   CLAUDE_REVIEW_EFFORT  (default high for normal review; raise to max for the
-#                          risk owners named in docs/development-workflow.md)
+#   CLAUDE_REVIEW_MODEL   (compatibility default fable; when optional Claude review is
+#                          restored, choose routing explicitly under the workflow canon)
+#   CLAUDE_REVIEW_EFFORT  (compatibility default high; it is not the current required-review
+#                          default and does not make max routine)
 #   CLAUDE_REVIEW_REPO    (default: current git toplevel; point at another checkout,
 #                          e.g. the design corpus, symmetric to codex.sh CODEX_REPO)
 #   CLAUDE_OUT_DIR        (default /tmp/codex-runs — same dir as codex.sh so both

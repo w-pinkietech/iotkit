@@ -17,10 +17,11 @@
 # stderr). Timestamped so a re-review never clobbers earlier evidence.
 #
 # Env overrides:
-#   CODEX_MODEL   (default gpt-5.6-sol — strongest tier for complex coding/review;
-#                  gpt-5.6-terra/-luna are the cheaper siblings)
-#   CODEX_EFFORT  (override; default high for normal review and impl. Raise the
-#                  responsible vendor to max for high-risk work per the workflow canon.
+#   CODEX_MODEL   (override; review defaults to gpt-5.6-sol, ordinary impl to
+#                  gpt-5.6-terra. Use gpt-5.6-luna explicitly for clear,
+#                  repeatable mechanical work.)
+#   CODEX_EFFORT  (override; default medium for normal review and impl. Plan 6
+#                  and other high-risk work use Sol/high per the workflow canon.
 #                  Effort scale: low < medium < high < xhigh < max; "ultra"
 #                  also exists but fans out subagents — a different execution/cost
 #                  mode, never a silent default; opt in explicitly via CODEX_EFFORT)
@@ -40,16 +41,16 @@ fi
 [[ "$LABEL" =~ ^[A-Za-z0-9._-]{1,80}$ ]] || { echo "unsafe label" >&2; exit 2; }
 
 CODEX_BIN="${CODEX_BIN:-/home/kenta/.local/bin/codex}"
-CODEX_MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
 CODEX_OUT_DIR="${CODEX_OUT_DIR:-/tmp/codex-runs}"
 REPO="${CODEX_REPO:-$(git rev-parse --show-toplevel)}"
 [ -d "$REPO" ] || { echo "repo not found: $REPO" >&2; exit 2; }
 
 case "$MODE" in
-  review) SANDBOX="read-only";      DEFAULT_EFFORT="high" ;;
-  impl)   SANDBOX="workspace-write"; DEFAULT_EFFORT="high" ;;
+  review) SANDBOX="read-only";       DEFAULT_MODEL="gpt-5.6-sol";   DEFAULT_EFFORT="medium" ;;
+  impl)   SANDBOX="workspace-write"; DEFAULT_MODEL="gpt-5.6-terra"; DEFAULT_EFFORT="medium" ;;
   *) echo "mode must be 'review' or 'impl', got: '$MODE'" >&2; exit 2 ;;
 esac
+CODEX_MODEL="${CODEX_MODEL:-$DEFAULT_MODEL}"
 CODEX_EFFORT="${CODEX_EFFORT:-$DEFAULT_EFFORT}"
 case "$CODEX_EFFORT" in low|medium|high|xhigh|max) ;; *) echo "unsupported Codex effort" >&2; exit 2 ;; esac
 
