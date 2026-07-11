@@ -221,18 +221,16 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
     // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
-    let (collector, _collector_handle) = iotkit_core_collector::Collector::spawn(
-        db.clone(),
-        std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
-        256,
-    );
-    // 取り込みクライアント(D4の第3部品、inproc)。アダプタが直接Envelopeを送る。
-    // AdapterEventはengine/監督用のfrozen vocabularyとして並走(D4)。
-    let (ingest_client, ingest_client_handle) = iotkit_ingest_client::spawn_inproc(
-        collector,
-        iotkit_ingest_client::DEFAULT_QUEUE_CAP,
-        iotkit_ingest_client::DEFAULT_SPOOL_CAP,
-    );
+    let (collector, principal_issuer, _collector_handle) =
+        iotkit_core_collector::Collector::spawn_composed(
+            db.clone(),
+            std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
+            256,
+        );
+    // 取り込みクライアント(D4の第3部品、inproc)はアダプタごとにreceiver-created
+    // principalを束縛する。アダプタ側が送れるのはEnvelopeだけ。
+    let (ingest_exit_tx, mut ingest_exit_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut ingest_client_task_count = 0usize;
 
     // rpi_local有効時、位置型デバイスを起動時に登録する(D5経路B: 定義=登録)。
     // hardcoded_rpi_local_targets()と同じ2アドレス(0x60, 0x44)。冪等: 既にalive登録済みならスキップ。
@@ -272,12 +270,27 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
 
     // BravePI mainboard adapter
     if let Some(bp) = &config.bravepi {
-        match start_bravepi(&mut host, &bp.port, Some(ingest_client.clone())) {
+        let source = format!("bravepi-mainboard:{}", bp.port);
+        let principal = principal_issuer.official_adapter(format!("principal:{source}"), source);
+        let (ingest, ingest_handle) = iotkit_ingest_client::spawn_inproc(
+            collector.clone(),
+            principal,
+            iotkit_ingest_client::DEFAULT_QUEUE_CAP,
+            iotkit_ingest_client::DEFAULT_SPOOL_CAP,
+        );
+        ingest_client_task_count += 1;
+        let exit_tx = ingest_exit_tx.clone();
+        tokio::spawn(async move {
+            let _ = ingest_handle.await;
+            let _ = exit_tx.send(());
+        });
+        match start_bravepi(&mut host, &bp.port, Some(ingest.clone())) {
             Ok(id) => {
                 restart_specs.insert(
                     id,
                     RestartSpec::BravePi {
                         port: bp.port.clone(),
+                        ingest,
                     },
                 );
             }
@@ -304,16 +317,27 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
             poll_interval_ms: rpi.poll_interval_ms,
             targets,
         };
-        match start_rpi_local(
-            &mut host,
-            adapter_config.clone(),
-            Some(ingest_client.clone()),
-        ) {
+        let principal =
+            principal_issuer.official_adapter("principal:rpi-local:default", "rpi-local:default");
+        let (ingest, ingest_handle) = iotkit_ingest_client::spawn_inproc(
+            collector.clone(),
+            principal,
+            iotkit_ingest_client::DEFAULT_QUEUE_CAP,
+            iotkit_ingest_client::DEFAULT_SPOOL_CAP,
+        );
+        ingest_client_task_count += 1;
+        let exit_tx = ingest_exit_tx.clone();
+        tokio::spawn(async move {
+            let _ = ingest_handle.await;
+            let _ = exit_tx.send(());
+        });
+        match start_rpi_local(&mut host, adapter_config.clone(), Some(ingest.clone())) {
             Ok(id) => {
                 restart_specs.insert(
                     id,
                     RestartSpec::RpiLocal {
                         config: adapter_config,
+                        ingest,
                     },
                 );
             }
@@ -325,6 +349,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     } else {
         tracing::info!("RPi local adapter disabled");
     }
+    drop(ingest_exit_tx);
 
     // R20: アプリレベル監督(責務台帳)。プロセスレベルはsystemdに委譲。
     let mut tracker = supervision::RestartTracker::new(supervision::RestartPolicy::default());
@@ -336,7 +361,6 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     let mut api_failed = false;
     let mut api_shutdown_requested = false;
     let api_only_mode = config.api.enabled && host.is_empty();
-    let mut ingest_client_pinned = ingest_client_handle;
     let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
     let mut pending_restart_count = 0usize;
 
@@ -382,7 +406,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                     }
                 }
             }
-            _ = &mut ingest_client_pinned => {
+            Some(()) = ingest_exit_rx.recv(), if ingest_client_task_count > 0 => {
                 // クライアントタスク退出=コレクタ死亡(Closed)。取り込み全損なのでfail-fast
                 tracing::error!("ingest client exited (collector closed); aborting fan-in loop");
                 collector_alive = false;
@@ -402,14 +426,14 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                     continue;
                 };
                 let restart_result = match &spec {
-                    RestartSpec::BravePi { port } => {
-                        start_bravepi(&mut host, port, Some(ingest_client.clone()))
+                    RestartSpec::BravePi { port, ingest } => {
+                        start_bravepi(&mut host, port, Some(ingest.clone()))
                     }
-                    RestartSpec::RpiLocal { config } => {
+                    RestartSpec::RpiLocal { config, ingest } => {
                         start_rpi_local(
                             &mut host,
                             config.clone(),
-                            Some(ingest_client.clone()),
+                            Some(ingest.clone()),
                         )
                     }
                 };
@@ -559,9 +583,11 @@ async fn wait_for_api_task(
 enum RestartSpec {
     BravePi {
         port: String,
+        ingest: IngestClient,
     },
     RpiLocal {
         config: rpi_local_adapter::RpiLocalConfig,
+        ingest: IngestClient,
     },
 }
 

@@ -34,7 +34,7 @@ pub use inproc::{
 #[cfg(feature = "inproc")]
 mod inproc {
     use super::*;
-    use iotkit_core_collector::{Collector, SubmitError};
+    use iotkit_core_collector::{Collector, IngestPrincipal, IngestRequest, SubmitError};
     use iotkit_ingest_contract::{AckStatus, ItemStatus};
     use std::collections::VecDeque;
     use tokio::sync::mpsc;
@@ -64,6 +64,8 @@ mod inproc {
     }
 
     impl IngestClient {
+        /// Submit sender-owned wire data. The receiver-bound principal is added
+        /// behind this handle and cannot be selected by the adapter.
         pub fn try_submit(&self, envelope: Envelope) -> Result<(), IngestClientError> {
             self.tx.try_send(envelope).map_err(|e| match e {
                 mpsc::error::TrySendError::Full(_) => IngestClientError::Full,
@@ -87,30 +89,33 @@ mod inproc {
     /// - NoAck/Deferredはエンベロープ不変で再送、ジッタ付きバックオフ(D1)
     pub fn spawn_inproc(
         collector: Collector,
+        principal: IngestPrincipal,
         queue_cap: usize,
         spool_cap: usize,
     ) -> (IngestClient, tokio::task::JoinHandle<()>) {
-        spawn_inproc_inner(collector, queue_cap, spool_cap, None)
+        spawn_inproc_inner(collector, principal, queue_cap, spool_cap, None)
     }
 
     pub fn spawn_inproc_observed(
         collector: Collector,
+        principal: IngestPrincipal,
         queue_cap: usize,
         spool_cap: usize,
         observer: mpsc::UnboundedSender<IngestClientEvent>,
     ) -> (IngestClient, tokio::task::JoinHandle<()>) {
-        spawn_inproc_inner(collector, queue_cap, spool_cap, Some(observer))
+        spawn_inproc_inner(collector, principal, queue_cap, spool_cap, Some(observer))
     }
 
     fn spawn_inproc_inner(
         collector: Collector,
+        principal: IngestPrincipal,
         queue_cap: usize,
         spool_cap: usize,
         observer: Option<mpsc::UnboundedSender<IngestClientEvent>>,
     ) -> (IngestClient, tokio::task::JoinHandle<()>) {
         let (tx, mut rx) = mpsc::channel::<Envelope>(queue_cap);
         let handle = tokio::spawn(async move {
-            let mut spool: VecDeque<Envelope> = VecDeque::new();
+            let mut spool: VecDeque<IngestRequest> = VecDeque::new();
             let mut backoff_until: Option<tokio::time::Instant> = None;
             let mut attempt = 0usize;
             loop {
@@ -118,8 +123,9 @@ mod inproc {
                 let ready = !spool.is_empty()
                     && backoff_until.is_none_or(|t| tokio::time::Instant::now() >= t);
                 if ready {
-                    let envelope = spool.front().expect("spool non-empty");
-                    match collector.submit(envelope.clone()).await {
+                    let request = spool.front().expect("spool non-empty");
+                    let envelope = &request.envelope;
+                    match collector.submit(request.clone()).await {
                         Ok(ack) if matches!(ack.status, AckStatus::Deferred) => {
                             // inprocでは返らないが、将来バインディング共用のため意味論どおり
                             // 不変再試行する(D1)
@@ -147,6 +153,17 @@ mod inproc {
                                 "no ack (storage failure)",
                             );
                         }
+                        Err(SubmitError::ClockUntrusted) => {
+                            if let Some(observer) = &observer {
+                                notify(observer, IngestClientEvent::SubmitNoAck);
+                            }
+                            schedule_retry(
+                                &mut backoff_until,
+                                &mut attempt,
+                                &envelope.envelope_id,
+                                "trusted wall clock unavailable",
+                            );
+                        }
                         Err(SubmitError::Closed) => {
                             tracing::error!(
                                 spooled = spool.len(),
@@ -161,7 +178,12 @@ mod inproc {
                 if let Some(deadline) = backoff_until {
                     tokio::select! {
                         maybe = rx.recv() => match maybe {
-                            Some(e) => push_bounded(&mut spool, e, spool_cap, observer.as_ref()),
+                            Some(envelope) => push_bounded(
+                                &mut spool,
+                                IngestRequest { principal: principal.clone(), envelope },
+                                spool_cap,
+                                observer.as_ref(),
+                            ),
                             None => { shutdown_note(&spool); return; }
                         },
                         _ = tokio::time::sleep_until(deadline) => { backoff_until = None; }
@@ -169,7 +191,15 @@ mod inproc {
                 } else {
                     // ここに来るのはspoolが空の場合のみ
                     match rx.recv().await {
-                        Some(e) => push_bounded(&mut spool, e, spool_cap, observer.as_ref()),
+                        Some(envelope) => push_bounded(
+                            &mut spool,
+                            IngestRequest {
+                                principal: principal.clone(),
+                                envelope,
+                            },
+                            spool_cap,
+                            observer.as_ref(),
+                        ),
                         None => {
                             shutdown_note(&spool);
                             return;
@@ -182,15 +212,15 @@ mod inproc {
     }
 
     fn push_bounded(
-        spool: &mut VecDeque<Envelope>,
-        e: Envelope,
+        spool: &mut VecDeque<IngestRequest>,
+        e: IngestRequest,
         cap: usize,
         observer: Option<&mpsc::UnboundedSender<IngestClientEvent>>,
     ) {
         if spool.len() >= cap {
             let dropped = spool.pop_front();
             tracing::warn!(
-                envelope_id = dropped.as_ref().map(|d| d.envelope_id.as_str()),
+                envelope_id = dropped.as_ref().map(|d| d.envelope.envelope_id.as_str()),
                 "ingest spool overflow: dropping oldest (bounded spool, D1 lightweight profile)"
             );
             if let Some(observer) = observer {
@@ -229,7 +259,7 @@ mod inproc {
             Some(tokio::time::Instant::now() + std::time::Duration::from_millis(base + jitter));
     }
 
-    fn shutdown_note(spool: &VecDeque<Envelope>) {
+    fn shutdown_note(spool: &VecDeque<IngestRequest>) {
         if !spool.is_empty() {
             tracing::warn!(
                 spooled = spool.len(),
@@ -245,6 +275,7 @@ mod inproc {
                     if let ItemStatus::ItemRejected {
                         reason_code,
                         message,
+                        ..
                     } = it
                     {
                         tracing::warn!(
@@ -263,6 +294,7 @@ mod inproc {
             AckStatus::Rejected {
                 reason_code,
                 message,
+                ..
             } => {
                 tracing::warn!(
                     envelope_id,

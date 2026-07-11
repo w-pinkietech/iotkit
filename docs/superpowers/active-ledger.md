@@ -7,11 +7,11 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `5d23f96`
+- Artifact/base HEAD: `b863296`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 1 settled; Task 2 implementation dispatch preparation; product code
-  remains worker-only
+- Active phase: Plan 6 Task 2 reviewed and commit-ready; local settlement commit is next;
+  product code remains worker-only
 
 ## Mission
 
@@ -48,6 +48,22 @@ git/disk/test. Never store secrets here.
   batch provisioning to a separate pre-distribution deliverable.
 
 ## Review state
+
+- Plan-6 Task 2 wire/principal collector seam: **SETTLED, pending local commit**. Confirmation
+  manifest `.review/plan6-task2-confirm.manifest` SHA-256
+  `046f2679118b489374274c718977c8ff5f13b19e4f26a442731472fc804a588a`; prompt
+  `.review/plan6-task2-confirm-review.md` SHA-256
+  `5909b76e57ca852c8053025dba055ee041ae65aae65cc5315ff6cd677305e7b2`.
+  Fresh Codex `gpt-5.6-sol/high` confirmed the four discovery findings were closed and returned
+  zero Critical/Important; its sole Minor was this ledger refresh. Result SHA-256
+  `b68c76badf1f5c745e2a246838ac6a79a84fd71e907cf6929ea37284a2fe6368`; receipt SHA-256
+  `010a2c233de82a7c700924922e8ef8ec3a9d58533e1299b8f0764c062f645038`.
+  Discovery manifest `.review/plan6-task2.manifest` SHA-256
+  `913142a9bedb28539ea02c21e021bcaa750a2c1ea8aa453a606afe5600ac7788` found four Important
+  gaps: sender-created trusted principals, suppressible scope signals, unchecked freshness
+  limits, and stale `age_ms` documentation. All were fixed through a Sol/high product-code
+  worker. Main reran `scripts/verify.sh`, including real loopback gateway tests; all passed.
+  Claude/Grok unavailable and not required.
 
 - Plan-6 Task 1 ownership/recovery/clock/restore closure: **SETTLED**. Final manifest
   `.review/plan6-task1-final.manifest` SHA-256
@@ -284,11 +300,14 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Commit Plan 6 Task 1 locally.
-2. Dispatch Task 2 product code through Sol/high `scripts/codex.sh impl`.
+1. Commit Plan 6 Task 2 locally as `feat(ingest): add principal-aware collector contract`.
+2. Prepare and dispatch Plan 6 Task 3 through Sol/high `scripts/codex.sh impl`.
 
 ## Verification
 
+- Plan 6 Task 2: focused contract/collector/client/adapter/registry/gateway tests and Main-owned
+  `scripts/verify.sh` passed; workspace Clippy `-D warnings`, layer checks, formatting, and
+  `git diff --check` are green. Confirmation review returned zero C/I.
 - Round-1 pre-dispatch: `bash -n`, `git diff --check`, watchpoints, and Grok low smoke passed.
 - Final: wrapper negative probes, tool-free Fable smoke, isolated Grok smoke, mode-aware
   manifest, bound receipts, `bash -n`, `git diff --check`, watchpoints, and Final4

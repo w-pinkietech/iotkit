@@ -48,12 +48,17 @@ pub const STAGED_READINGS_CAP_PER_HW: i64 = 1000;
 
 pub const FUTURE_TOLERANCE_MS: i64 = 300_000;
 
-/// Attempt to claim (sender_id, envelope_id) in `ingest_dedup`.
+/// Attempt to claim `(stable_principal_id, envelope_id)` in `ingest_dedup`.
+///
+/// Credential/auth epochs deliberately do not participate. Replacement restore
+/// does not carry readings/outbox and therefore does not carry these claims:
+/// its fresh target resets the dedup window, so an unchanged post-restore retry
+/// may be accepted again under the replacement's new ledger epoch.
 /// Returns `true` if this is the first claim (proceed with ingest),
 /// `false` if already claimed (duplicate -- D1 dedup key is sender-scoped).
 pub fn try_claim_envelope(
     conn: &rusqlite::Connection,
-    sender_id: &str,
+    stable_principal_id: &str,
     envelope_id: &str,
 ) -> Result<bool, TimeseriesError> {
     let now = std::time::SystemTime::now()
@@ -64,7 +69,7 @@ pub fn try_claim_envelope(
         .execute(
             "INSERT INTO ingest_dedup (sender_id, envelope_id, received_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(sender_id, envelope_id) DO NOTHING",
-            rusqlite::params![sender_id, envelope_id, now],
+            rusqlite::params![stable_principal_id, envelope_id, now],
         )
         .map_err(|e| TimeseriesError::Storage(iotkit_core_storage::StorageError::Sqlite(e)))?;
     Ok(n == 1)

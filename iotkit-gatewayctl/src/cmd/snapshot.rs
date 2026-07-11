@@ -14,6 +14,10 @@ type SchemaRow = (String, String, String, Option<String>);
 
 const FORMAT_VERSION: i64 = 1;
 // Wave 1 encrypted containers should dispatch by outer magic plus manifest.format_version.
+// `readings`, `publication_log`, and `ingest_dedup` intentionally remain outside
+// replacement snapshots as one custody unit. A restored pristine target therefore
+// starts a fresh dedup window; unchanged retries can be accepted again under the
+// newly minted ledger epoch instead of suppressing a reading absent after restore.
 const SECTIONS: &[&str] = &[
     "devices",
     "series",

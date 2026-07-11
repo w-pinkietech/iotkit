@@ -14,9 +14,10 @@ pub struct Envelope {
     pub envelope_id: String,
     /// A required self-description of the sender.
     ///
-    /// The receiver uses it for diagnostics and as the in-process sender
-    /// identity. Authenticated bindings derive authorization and deduplication
-    /// identity from credentials rather than trusting this value.
+    /// The receiver uses it for diagnostics and checks it against the
+    /// receiver-created principal. Authorization, deduplication, flow ownership,
+    /// and scope never derive from this sender-controlled value, including for
+    /// in-process adapters.
     pub source: String,
     /// An optional version of the sender's accompanying declaration.
     ///
@@ -44,12 +45,11 @@ pub struct ReadingItem {
     /// per item. The D5 decision 1 contract allows senders whose token maps 1:1 to a
     /// single subject to omit it.
     ///
-    /// Resolution of the 1:1 omission is not yet implemented. The gateway currently
-    /// rejects any missing `subject_hint` terminally with
-    /// [`ReasonCode::UnknownSubject`](crate::ReasonCode::UnknownSubject), and a
-    /// spooling sender deletes the envelope. Until network ingress ships that
-    /// resolution, ALWAYS supply `subject_hint`. A supplied but unknown identifier
-    /// is accepted into staging.
+    /// The collector resolves omission only when the receiver-created principal
+    /// has exactly one authorized subject. Multi-subject omission is terminally
+    /// item-rejected. A supplied unknown identifier is staged only for a trusted
+    /// official in-process principal; externally authenticated device principals
+    /// receive a terminal item rejection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_hint: Option<String>,
     /// The required canonical key identifying the measured quantity.
@@ -86,13 +86,12 @@ pub struct ReadingItem {
     pub time_source: TimeSource,
     /// An optional sender-reported age of the observation in milliseconds.
     ///
-    /// The collector considers it only when `device_time_ms` is absent. If the
-    /// value converts to `i64` and checked subtraction succeeds, the collector
-    /// reconstructs the observation time as receive time minus this duration and
-    /// records the effective source as [`TimeSource::GatewayAdjusted`]. If either
-    /// operation fails, it ignores `age_ms` and event time falls back to receive
-    /// time. When `device_time_ms` is present, it takes precedence and `age_ms` is
-    /// ignored.
+    /// The collector considers it only when `device_time_ms` is absent. It first
+    /// validates the value directly against the configured freshness window;
+    /// out-of-window and overflow-scale ages are terminally rejected. Only then
+    /// does it reconstruct observation time as receive time minus the age and
+    /// record the effective source as [`TimeSource::GatewayAdjusted`]. When
+    /// `device_time_ms` is present, it takes precedence and `age_ms` is ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub age_ms: Option<u64>,
     /// Optional sender-provided received-signal-strength metadata.
@@ -132,17 +131,18 @@ pub enum TimeSource {
     ///
     /// With no device timestamp, a valid `age_ms` makes event time receive time
     /// minus `age_ms` and changes the effective source to
-    /// [`TimeSource::GatewayAdjusted`]. If `age_ms` is absent, cannot convert to
-    /// `i64`, or cannot be subtracted without overflow, the receiver ignores it
-    /// and uses receive time. A `device_time_ms` tagged `Gateway` is not used as
-    /// event time.
+    /// [`TimeSource::GatewayAdjusted`]. If `age_ms` is absent, the receiver uses
+    /// receive time. An out-of-window or overflow-scale `age_ms` is rejected by
+    /// freshness validation before reconstruction; it does not fall back to
+    /// receive time. A `device_time_ms` tagged `Gateway` is not used as event time.
     Gateway,
     /// The effective source for an observation time reconstructed from relative age.
     ///
     /// The collector records this source after converting `age_ms` to `i64` and
-    /// successfully subtracting it from receive time. The reconstructed timestamp
-    /// is an event-time candidate. If a `GatewayAdjusted` input has no usable
-    /// reconstructed or supplied timestamp, event time falls back to receive time.
+    /// successfully subtracting it from receive time. Freshness validation of the
+    /// direct age happens first, so out-of-window and overflow-scale values are
+    /// terminally rejected rather than accepted through a receive-time fallback.
+    /// The reconstructed timestamp is an event-time candidate.
     GatewayAdjusted,
 }
 

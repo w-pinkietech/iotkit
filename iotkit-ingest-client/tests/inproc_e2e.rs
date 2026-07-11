@@ -91,8 +91,13 @@ async fn wait_for_ingest_event(
 async fn accepted_envelope_reaches_readings() {
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let (client, _h) = spawn_inproc(collector, 16, 64);
+    let (collector, issuer, _ch) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter(
+        "principal:bravepi-mainboard:/dev/ttyAMA0",
+        "bravepi-mainboard:/dev/ttyAMA0",
+    );
+    let (client, _h) = spawn_inproc(collector, principal, 16, 64);
     let e = new_envelope(
         "bravepi-mainboard:/dev/ttyAMA0",
         vec![item("ble:aa", "temperature_c", 21.5)],
@@ -102,12 +107,40 @@ async fn accepted_envelope_reaches_readings() {
 }
 
 #[tokio::test]
+async fn bound_principal_cannot_be_replaced_by_envelope_source() {
+    let db = full_db();
+    register_active(&db, "ble:aa");
+    let (collector, issuer, _ch) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:receiver-owned", "receiver-owned");
+    let (client, _h) = spawn_inproc(collector, principal, 16, 64);
+
+    client
+        .try_submit(new_envelope(
+            "forged-sender",
+            vec![item("ble:aa", "temperature_c", 20.0)],
+        ))
+        .unwrap();
+    client
+        .try_submit(new_envelope(
+            "receiver-owned",
+            vec![item("ble:aa", "temperature_c", 21.0)],
+        ))
+        .unwrap();
+
+    wait_for_readings(&db, 1).await;
+    assert_eq!(readings_count(&db).await, 1);
+}
+
+#[tokio::test]
 async fn envelope_id_is_stable_and_duplicate_is_success() {
     // 同一エンベロープを2回投入 → コレクタのdedupがDuplicateを返し、クライアントは成功扱いで前進する
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let (client, _h) = spawn_inproc(collector, 16, 64);
+    let (collector, issuer, _ch) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, _h) = spawn_inproc(collector, principal, 16, 64);
     let e = new_envelope("test-adapter", vec![item("ble:aa", "temperature_c", 21.5)]);
     client.try_submit(e.clone()).unwrap();
     client.try_submit(e).unwrap();
@@ -132,9 +165,11 @@ async fn noack_is_retried_with_same_envelope_until_recovery() {
         Ok(())
     })
     .unwrap();
-    let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _ch) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     let (obs_tx, mut obs_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (client, _h) = spawn_inproc_observed(collector, 16, 64, obs_tx);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, _h) = spawn_inproc_observed(collector, principal, 16, 64, obs_tx);
     let e = new_envelope("test-adapter", vec![item("ble:aa", "temperature_c", 21.5)]);
     client.try_submit(e).unwrap();
     wait_for_ingest_event(&mut obs_rx, IngestClientEvent::SubmitNoAck).await;
@@ -167,8 +202,10 @@ async fn terminal_rejection_is_not_retried() {
     // 文法違反キー=エンベロープ内item拒否(終端)。クライアントは再送せず前進する
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let (client, _h) = spawn_inproc(collector, 16, 64);
+    let (collector, issuer, _ch) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, _h) = spawn_inproc(collector, principal, 16, 64);
     client
         .try_submit(new_envelope(
             "test-adapter",
@@ -200,9 +237,11 @@ async fn spool_overflow_drops_oldest_and_keeps_newest() {
         Ok(())
     })
     .unwrap();
-    let (collector, _ch) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _ch) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     let (obs_tx, mut obs_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (client, _h) = spawn_inproc_observed(collector, 64, 4, obs_tx); // queue_cap=64: 入力側では落ちない
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, _h) = spawn_inproc_observed(collector, principal, 64, 4, obs_tx); // queue_cap=64: 入力側では落ちない
     for i in 0..12 {
         let e = new_envelope(
             "test-adapter",
@@ -244,8 +283,10 @@ async fn collector_death_exits_client_task() {
     // コレクタのJoinHandleをabort → submitがClosed → クライアントタスクが退出する
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, collector_handle) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let (client, client_handle) = spawn_inproc(collector, 16, 64);
+    let (collector, issuer, collector_handle) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, client_handle) = spawn_inproc(collector, principal, 16, 64);
     collector_handle.abort();
     let _ = client.try_submit(new_envelope(
         "test-adapter",

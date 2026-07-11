@@ -57,6 +57,12 @@ pub enum AckStatus {
         /// It is diagnostic text; sender behavior is determined by the status and
         /// reason code, not by parsing this string.
         message: String,
+        /// Optional JSON Pointer locating the invalid envelope field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_path: Option<String>,
+        /// Optional stable hint describing the expected schema or value shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema_hint: Option<String>,
     },
     /// The receiver is temporarily overloaded and has not accepted custody.
     ///
@@ -100,6 +106,12 @@ pub enum ItemStatus {
         /// It is intended for diagnostics and must not be parsed to choose retry
         /// behavior.
         message: String,
+        /// Optional JSON Pointer locating the invalid item field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field_path: Option<String>,
+        /// Optional stable hint describing the expected schema or value shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema_hint: Option<String>,
     },
 }
 
@@ -191,11 +203,10 @@ pub enum ReasonCode {
     ValueTypeMismatch,
     /// The receiver cannot resolve a required subject identity from the item.
     ///
-    /// The gateway currently produces this TERMINAL item rejection for any missing
-    /// `subject_hint`, and a spooling sender deletes the envelope. The D5 decision 1
-    /// contract reserves omission for senders whose token maps 1:1 to a single
-    /// subject, but that resolution is not yet implemented. A supplied but
-    /// unregistered subject is staged instead.
+    /// The gateway produces this TERMINAL item rejection for multi-subject
+    /// omission and for unknown subjects from externally authenticated device
+    /// principals. One-subject omission resolves from receiver-owned principal
+    /// scope; only trusted official adapters can stage unknown sightings.
     UnknownSubject,
     /// The authenticated sender is not authorized for the resolved subject.
     ///
@@ -219,12 +230,135 @@ pub enum ReasonCode {
     /// failures must produce no acknowledgement instead. If received with a
     /// rejected status, preserve that status's TERMINAL handling, remove the
     /// envelope from a spool, and report a receiver defect rather than blind-retry.
+    #[deprecated(
+        note = "read-only v1 vocabulary; producers must return no ack on internal failure"
+    )]
+    #[serde(skip_serializing)]
     Internal,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod frozen_v1_reader {
+        use serde::Deserialize;
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        pub struct EnvelopeAck {
+            pub envelope_id: String,
+            pub status: AckStatus,
+        }
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(rename_all = "snake_case", tag = "kind")]
+        pub enum AckStatus {
+            Accepted {
+                items: Vec<ItemStatus>,
+            },
+            Duplicate,
+            Rejected {
+                reason_code: ReasonCode,
+                message: String,
+            },
+            Deferred,
+        }
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(rename_all = "snake_case", tag = "kind")]
+        pub enum ItemStatus {
+            Stored {
+                disposition: Disposition,
+                #[serde(default)]
+                quarantine_reason: Option<QuarantineReason>,
+            },
+            ItemRejected {
+                reason_code: ReasonCode,
+                message: String,
+            },
+        }
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(rename_all = "snake_case")]
+        pub enum Disposition {
+            Durable,
+            Staged,
+            Quarantined,
+        }
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(rename_all = "snake_case")]
+        pub enum QuarantineReason {
+            OutOfRange,
+            UnknownKey,
+            UndeclaredChannel,
+            DeviceQuarantined,
+        }
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(rename_all = "snake_case")]
+        pub enum ReasonCode {
+            MalformedMeasurementKey,
+            ValueTypeMismatch,
+            UnknownSubject,
+            SubjectScopeViolation,
+            BatchTooLarge,
+            StaleTimestamp,
+            Internal,
+        }
+    }
+
+    #[test]
+    fn rejection_details_are_absent_compatible_and_old_v1_reader_ignores_them() {
+        let envelope = EnvelopeAck {
+            envelope_id: "e-envelope".into(),
+            status: AckStatus::Rejected {
+                reason_code: ReasonCode::SubjectScopeViolation,
+                message: "configured source does not match principal".into(),
+                field_path: Some("/source".into()),
+                schema_hint: Some("source must match the authenticated principal".into()),
+            },
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        let old: frozen_v1_reader::EnvelopeAck = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            old.status,
+            frozen_v1_reader::AckStatus::Rejected { .. }
+        ));
+
+        let item = ItemStatus::ItemRejected {
+            reason_code: ReasonCode::UnknownSubject,
+            message: "subject is unknown".into(),
+            field_path: Some("/items/0/subject_hint".into()),
+            schema_hint: Some("registered subject identifier".into()),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let old: frozen_v1_reader::ItemStatus = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            old,
+            frozen_v1_reader::ItemStatus::ItemRejected { .. }
+        ));
+
+        let old_rejected = r#"{"kind":"rejected","reason_code":"unknown_subject","message":"old"}"#;
+        assert!(matches!(
+            serde_json::from_str::<AckStatus>(old_rejected).unwrap(),
+            AckStatus::Rejected {
+                field_path: None,
+                schema_hint: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn legacy_internal_is_read_compatible() {
+        let json = r#"{"kind":"rejected","reason_code":"internal","message":"legacy"}"#;
+        let parsed = serde_json::from_str::<AckStatus>(json).unwrap();
+        assert!(
+            serde_json::to_string(&parsed).is_err(),
+            "read-only legacy Internal must not be emitted by a producer"
+        );
+    }
 
     #[test]
     fn stored_reason_is_additive_on_the_wire() {

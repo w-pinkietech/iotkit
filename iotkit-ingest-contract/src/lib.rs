@@ -13,9 +13,12 @@ pub mod ack;
 pub mod envelope;
 /// Measurement-key validation and external envelope-ID helpers.
 pub mod measurement_key;
+/// Side-effect-free validation report types.
+pub mod validation;
 
 pub use ack::{AckStatus, Disposition, EnvelopeAck, ItemStatus, QuarantineReason, ReasonCode};
 pub use envelope::{Envelope, ReadingItem, TimeSource};
 pub use measurement_key::{
     MAX_MEASUREMENT_KEY_LEN, MeasurementKeyError, external_envelope_id, validate_measurement_key,
 };
+pub use validation::{ValidationIssue, ValidationReport};

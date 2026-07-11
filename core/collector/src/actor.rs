@@ -1,3 +1,6 @@
+use crate::freshness::{FreshnessClock, FreshnessLimits, FreshnessSnapshot, UntrustedSystemClock};
+use crate::principal::IngestPrincipal;
+use crate::principal::LocalPrincipalIssuer;
 use crate::registry_policy::{RegistryPolicy, RegistryVerdict, is_series_level};
 use iotkit_core_ledger as ledger;
 use iotkit_core_storage::DbHandle;
@@ -15,14 +18,35 @@ pub const DEDUP_TTL_MS: i64 = 72 * 60 * 60 * 1000;
 /// 日和見パージの既定発火間隔。本番はこの値、テストは`spawn_with_purge_interval`で0を注入する。
 pub const DEFAULT_PURGE_INTERVAL_MS: i64 = 60 * 60 * 1000;
 
+#[derive(Debug, Clone)]
 pub struct IngestRequest {
+    pub principal: IngestPrincipal,
     pub envelope: Envelope,
-    pub ack_tx: oneshot::Sender<EnvelopeAck>,
+}
+
+struct QueuedRequest {
+    request: IngestRequest,
+    ack_tx: oneshot::Sender<Result<EnvelopeAck, SubmitError>>,
 }
 
 #[derive(Clone)]
 pub struct Collector {
-    tx: mpsc::Sender<IngestRequest>,
+    tx: mpsc::Sender<QueuedRequest>,
+}
+
+/// Bounded security signal emitted without including hostile payload text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntrusionSignal {
+    pub principal_id: String,
+    pub credential_id: Option<String>,
+    pub kind: IntrusionKind,
+}
+
+/// Stable intrusion categories exposed by the collector hook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrusionKind {
+    SourceMismatch,
+    SubjectScopeViolation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +54,9 @@ pub enum SubmitError {
     /// ackなし=未耐久(ストレージ失敗等)。コレクタは生存しており、同一envelope_idの再送で
     /// 回復可能(D1)。再送/スプールは送信側(計画3のアダプタ内クライアント)の責務。
     NoAck,
+    /// Absolute freshness comparison requires the shared trusted wall clock.
+    /// Network Task 5 maps this to 503 with no ingest acknowledgement.
+    ClockUntrusted,
     /// コレクタタスク死亡(キュー閉鎖)。送信を継続しても回復しない。
     Closed,
 }
@@ -44,12 +71,32 @@ struct ResolutionCache {
 }
 
 impl Collector {
+    /// Start the collector and return the non-cloneable receiver composition
+    /// capability used to mint principals before handing sender-only handles to
+    /// adapters.
+    pub fn spawn_composed(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+    ) -> (Collector, LocalPrincipalIssuer, tokio::task::JoinHandle<()>) {
+        let (collector, handle) = Self::spawn(db, policy, queue_cap);
+        (collector, LocalPrincipalIssuer::new(), handle)
+    }
+
     pub fn spawn(
         db: DbHandle,
         policy: Arc<dyn RegistryPolicy>,
         queue_cap: usize,
     ) -> (Collector, tokio::task::JoinHandle<()>) {
-        Self::spawn_with_purge_interval(db, policy, queue_cap, DEFAULT_PURGE_INTERVAL_MS)
+        Self::spawn_with_components(
+            db,
+            policy,
+            queue_cap,
+            DEFAULT_PURGE_INTERVAL_MS,
+            Arc::new(UntrustedSystemClock),
+            FreshnessLimits::default(),
+            None,
+        )
     }
 
     /// `spawn`と同じだが、日和見dedupパージの発火間隔を注入できる(テスト用: 0を渡すと
@@ -60,30 +107,67 @@ impl Collector {
         queue_cap: usize,
         purge_interval_ms: i64,
     ) -> (Collector, tokio::task::JoinHandle<()>) {
-        let (tx, mut rx) = mpsc::channel::<IngestRequest>(queue_cap);
+        Self::spawn_with_components(
+            db,
+            policy,
+            queue_cap,
+            purge_interval_ms,
+            Arc::new(UntrustedSystemClock),
+            FreshnessLimits::default(),
+            None,
+        )
+    }
+
+    /// Construct the collector with receiver-owned clock evidence and an optional
+    /// bounded intrusion channel. The channel is written only with `try_send`, so
+    /// a saturated security sink cannot block custody processing.
+    pub fn spawn_with_components(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+        purge_interval_ms: i64,
+        freshness_clock: Arc<dyn FreshnessClock>,
+        freshness_limits: FreshnessLimits,
+        intrusion_tx: Option<mpsc::Sender<IntrusionSignal>>,
+    ) -> (Collector, tokio::task::JoinHandle<()>) {
+        let (tx, mut rx) = mpsc::channel::<QueuedRequest>(queue_cap);
         let handle = tokio::spawn(async move {
             let mut cache = ResolutionCache::default();
             let mut last_purge_ms = now_ms();
             while let Some(req) = rx.recv().await {
                 let taken = std::mem::take(&mut cache);
                 let policy = Arc::clone(&policy);
-                let envelope = req.envelope;
+                let request = req.request;
+                let freshness_clock = Arc::clone(&freshness_clock);
+                let intrusion_tx = intrusion_tx.clone();
                 let result = db
                     .with_conn(move |conn| {
                         let mut c = taken;
-                        let outcome = process_envelope(conn, &mut c, policy.as_ref(), &envelope);
+                        let outcome = process_envelope(
+                            conn,
+                            &mut c,
+                            policy.as_ref(),
+                            freshness_clock.as_ref(),
+                            freshness_limits,
+                            intrusion_tx.as_ref(),
+                            &request,
+                        );
                         Ok((outcome, c))
                     })
                     .await;
                 match result {
                     Ok((Ok(ack), c)) => {
                         cache = c;
-                        let _ = req.ack_tx.send(ack);
+                        let _ = req.ack_tx.send(Ok(ack));
                         // 計画4のTTL/保持ワイヤリング着地までの日和見パージ(受理トランザクション
                         // の外・別途with_connで実行。ack耐久性には影響しない)。
                         maybe_purge_dedup(&db, purge_interval_ms, &mut last_purge_ms).await;
                     }
-                    Ok((Err(e), _c)) => {
+                    Ok((Err(ProcessError::ClockUntrusted), c)) => {
+                        cache = c;
+                        let _ = req.ack_tx.send(Err(SubmitError::ClockUntrusted));
+                    }
+                    Ok((Err(ProcessError::Storage(e)), _c)) => {
                         tracing::error!(error = %e, "collector: storage failure (envelope aborted)");
                         // ロールバックでキャッシュ済みseries_id(・devices)が無効化されうるため
                         // 全捨てが安全。process_itemはensure_seriesのINSERT直後(コミット前)に
@@ -103,15 +187,27 @@ impl Collector {
         (Collector { tx }, handle)
     }
 
-    pub async fn submit(&self, envelope: Envelope) -> Result<EnvelopeAck, SubmitError> {
+    pub async fn submit(&self, request: IngestRequest) -> Result<EnvelopeAck, SubmitError> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
-            .send(IngestRequest { envelope, ack_tx })
+            .send(QueuedRequest { request, ack_tx })
             .await
             .map_err(|_| SubmitError::Closed)?;
         // ack_txドロップ(ストレージ失敗)はNoAck。コレクタ死亡による中途ドロップも
         // 保守的にNoAckとする(次のsubmitがClosedを返す)。
-        ack_rx.await.map_err(|_| SubmitError::NoAck)
+        ack_rx.await.map_err(|_| SubmitError::NoAck)?
+    }
+}
+
+#[derive(Debug)]
+enum ProcessError {
+    Storage(String),
+    ClockUntrusted,
+}
+
+impl From<String> for ProcessError {
+    fn from(value: String) -> Self {
+        Self::Storage(value)
     }
 }
 
@@ -160,9 +256,26 @@ fn process_envelope(
     conn: &rusqlite::Connection,
     cache: &mut ResolutionCache,
     policy: &dyn RegistryPolicy,
-    envelope: &Envelope,
-) -> Result<EnvelopeAck, String> {
+    freshness_clock: &dyn FreshnessClock,
+    freshness_limits: FreshnessLimits,
+    intrusion_tx: Option<&mpsc::Sender<IntrusionSignal>>,
+    request: &IngestRequest,
+) -> Result<EnvelopeAck, ProcessError> {
+    let principal = &request.principal;
+    let envelope = &request.envelope;
     let eid = envelope.envelope_id.clone();
+    if envelope.source != principal.configured_source() {
+        emit_intrusion(intrusion_tx, principal, IntrusionKind::SourceMismatch);
+        return Ok(EnvelopeAck {
+            envelope_id: eid,
+            status: AckStatus::Rejected {
+                reason_code: ReasonCode::SubjectScopeViolation,
+                message: "configured source does not match authenticated principal".into(),
+                field_path: Some("/source".into()),
+                schema_hint: Some("configured authenticated source identity".into()),
+            },
+        });
+    }
     if envelope.items.len() > MAX_ITEMS_PER_ENVELOPE {
         // 決定的な契約違反(サイズ超過はDBに触れる前に判定できる) → 終端Rejectedを維持
         return Ok(EnvelopeAck {
@@ -174,18 +287,26 @@ fn process_envelope(
                     envelope.items.len(),
                     MAX_ITEMS_PER_ENVELOPE
                 ),
+                field_path: Some("/items".into()),
+                schema_hint: Some(format!("at most {MAX_ITEMS_PER_ENVELOPE} items")),
             },
         });
     }
+    let clock = freshness_clock
+        .snapshot(conn)
+        .map_err(ProcessError::Storage)?;
+    if clock.trusted_wall_time_ms.is_none() && envelope.items.iter().any(requires_absolute_time) {
+        return Err(ProcessError::ClockUntrusted);
+    }
     let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ProcessError::Storage(e.to_string()))?;
     let generation = ledger::current_generation(&tx).map_err(|e| e.to_string())?;
     if generation != cache.generation {
         cache.devices.clear();
         cache.series.clear();
         cache.generation = generation;
     }
-    let claimed = ts::try_claim_envelope(&tx, &envelope.source, &envelope.envelope_id)
+    let claimed = ts::try_claim_envelope(&tx, principal.principal_id(), &envelope.envelope_id)
         .map_err(|e| e.to_string())?;
     if !claimed {
         drop(tx); // dedup判定のみ・書き込みなし
@@ -194,18 +315,25 @@ fn process_envelope(
             status: AckStatus::Duplicate,
         });
     }
-    let received_at = now_ms();
+    let received_at = clock.received_at_ms;
     let epoch = ledger::ledger_epoch(&tx).map_err(|e| e.to_string())?;
+    let item_context = ItemContext {
+        principal,
+        received_at,
+        clock,
+        freshness_limits,
+        intrusion_tx,
+        epoch: &epoch,
+    };
     let mut item_statuses = Vec::with_capacity(envelope.items.len());
-    for item in &envelope.items {
+    for (item_index, item) in envelope.items.iter().enumerate() {
         item_statuses.push(process_item(
             &tx,
             cache,
             policy,
-            envelope,
             item,
-            received_at,
-            &epoch,
+            item_index,
+            &item_context,
         )?);
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -215,6 +343,28 @@ fn process_envelope(
             items: item_statuses,
         },
     })
+}
+
+fn emit_intrusion(
+    intrusion_tx: Option<&mpsc::Sender<IntrusionSignal>>,
+    principal: &IngestPrincipal,
+    kind: IntrusionKind,
+) {
+    if let Some(tx) = intrusion_tx {
+        let _ = tx.try_send(IntrusionSignal {
+            principal_id: principal.principal_id().to_string(),
+            credential_id: principal.credential_id().map(str::to_string),
+            kind,
+        });
+    }
+}
+
+fn requires_absolute_time(item: &ReadingItem) -> bool {
+    item.device_time_ms.is_some()
+        && matches!(
+            item.time_source,
+            TimeSource::DeviceNtp | TimeSource::DeviceRtc | TimeSource::GatewayAdjusted
+        )
 }
 
 fn restore_device_time(
@@ -236,46 +386,118 @@ fn restore_device_time(
     }
 }
 
+struct ItemContext<'a> {
+    principal: &'a IngestPrincipal,
+    received_at: i64,
+    clock: FreshnessSnapshot,
+    freshness_limits: FreshnessLimits,
+    intrusion_tx: Option<&'a mpsc::Sender<IntrusionSignal>>,
+    epoch: &'a str,
+}
+
 fn process_item(
     conn: &rusqlite::Connection,
     cache: &mut ResolutionCache,
     policy: &dyn RegistryPolicy,
-    envelope: &Envelope,
     item: &ReadingItem,
-    received_at: i64,
-    epoch: &str,
+    item_index: usize,
+    context: &ItemContext<'_>,
 ) -> Result<ItemStatus, String> {
-    // 1) 文法検査(決定的契約違反。レジストリにもDBにも触れず判定できるためprecheck)
+    let principal = context.principal;
+    // 1) subject解決とscope検査。principalだけが省略解決・認可を決める。
+    // scope違反は他のsender-controlled item fieldで隠せないよう、schema検査より先に行う。
+    let (hardware_hint, resolved) = match item.subject_hint.as_deref() {
+        Some(hw) => {
+            let resolved = match cache.devices.get(hw) {
+                Some(hit) => Some(*hit),
+                None => {
+                    match ledger::find_alive_by_hardware_id(conn, hw).map_err(|e| e.to_string())? {
+                        Some(row) => {
+                            cache
+                                .devices
+                                .insert(hw.to_string(), (row.system_id, row.state));
+                            Some((row.system_id, row.state))
+                        }
+                        None => None,
+                    }
+                }
+            };
+            (Some(hw), resolved)
+        }
+        None => match principal.sole_subject() {
+            Some(system_id) => {
+                let row = ledger::get_device(conn, &system_id).map_err(|e| e.to_string())?;
+                let resolved = row
+                    .filter(|row| row.state != ledger::DeviceState::Retired)
+                    .map(|row| (row.system_id, row.state));
+                (None, resolved)
+            }
+            None => {
+                return Ok(ItemStatus::ItemRejected {
+                    reason_code: ReasonCode::UnknownSubject,
+                    message: "subject_hint required for a multi-subject principal".into(),
+                    field_path: Some(format!("/items/{item_index}/subject_hint")),
+                    schema_hint: Some("one subject identifier from the principal scope".into()),
+                });
+            }
+        },
+    };
+
+    if let Some((system_id, _)) = resolved
+        && !principal.subject_allowed(&system_id)
+    {
+        emit_intrusion(
+            context.intrusion_tx,
+            principal,
+            IntrusionKind::SubjectScopeViolation,
+        );
+        return Ok(ItemStatus::ItemRejected {
+            reason_code: ReasonCode::SubjectScopeViolation,
+            message: "subject is outside the authenticated principal scope".into(),
+            field_path: Some(format!("/items/{item_index}/subject_hint")),
+            schema_hint: Some("subject authorized for this principal".into()),
+        });
+    }
+
+    // 2) 文法検査。scope認可済みのitemについて決定的契約違反を返す。
     if let Err(e) = validate_measurement_key(&item.measurement_key) {
         return Ok(ItemStatus::ItemRejected {
             reason_code: ReasonCode::MalformedMeasurementKey,
             message: e.to_string(),
+            field_path: Some(format!("/items/{item_index}/measurement_key")),
+            schema_hint: Some("canonical measurement key".into()),
         });
     }
-    // 2) subject解決(D5決定1: 送信者+subject_hint→台帳)。hint欠如も決定的な契約違反
-    let Some(hw) = item.subject_hint.as_deref() else {
-        return Ok(ItemStatus::ItemRejected {
-            reason_code: ReasonCode::UnknownSubject,
-            message: "subject_hint required for multi-subject sender".into(),
-        });
-    };
-    let resolved = match cache.devices.get(hw) {
-        Some(hit) => Some(*hit),
-        None => match ledger::find_alive_by_hardware_id(conn, hw).map_err(|e| e.to_string())? {
-            Some(row) => {
-                cache
-                    .devices
-                    .insert(hw.to_string(), (row.system_id, row.state));
-                Some((row.system_id, row.state))
-            }
-            None => None,
-        },
-    };
+
+    if let Some(rejected) =
+        freshness_rejection(item, item_index, context.clock, context.freshness_limits)
+    {
+        return Ok(rejected);
+    }
+
     let Some((system_id, state)) = resolved else {
-        // 3) 未知subject → 目撃ステージング(D5決定4経路A、ack=staged)。レジストリ評価はしない
+        let field_path = Some(format!("/items/{item_index}/subject_hint"));
+        let Some(hw) = hardware_hint else {
+            return Ok(ItemStatus::ItemRejected {
+                reason_code: ReasonCode::UnknownSubject,
+                message: "the principal's sole subject is not registered".into(),
+                field_path,
+                schema_hint: Some("registered subject identifier".into()),
+            });
+        };
+        if !principal.can_stage_unknown() {
+            return Ok(ItemStatus::ItemRejected {
+                reason_code: ReasonCode::UnknownSubject,
+                message: "subject is not registered".into(),
+                field_path,
+                schema_hint: Some("registered subject identifier".into()),
+            });
+        }
+        // 3) trusted official principalだけが未知subjectを目撃ステージングできる。
         let payload = serde_json::to_string(item).unwrap_or_else(|_| "{}".into());
-        ledger::record_sighting(conn, hw, &envelope.source).map_err(|e| e.to_string())?;
-        ts::insert_staged_reading(conn, hw, received_at, &payload).map_err(|e| e.to_string())?;
+        ledger::record_sighting(conn, hw, principal.principal_id()).map_err(|e| e.to_string())?;
+        ts::insert_staged_reading(conn, hw, context.received_at, &payload)
+            .map_err(|e| e.to_string())?;
         return Ok(ItemStatus::Stored {
             disposition: Disposition::Staged,
             quarantine_reason: None, // stagedとquarantinedは直列に成立しない(D1: subject解決が常に先)
@@ -296,6 +518,8 @@ fn process_item(
                 return Ok(ItemStatus::ItemRejected {
                     reason_code,
                     message,
+                    field_path: None,
+                    schema_hint: None,
                 });
             }
         };
@@ -337,7 +561,7 @@ fn process_item(
     // D1: RTCなしデバイスのage_ms → received_at - age_ms で復元(time_source=gateway_adjusted)。
     // item.device_time_msが既にあればそれが優先(申告時刻>復元時刻)。
     let (device_time_ms, time_source) = restore_device_time(
-        received_at,
+        context.received_at,
         item.device_time_ms,
         item.age_ms,
         item.time_source,
@@ -350,7 +574,7 @@ fn process_item(
     };
     let new = ts::NewReading {
         series_id,
-        received_at_ms: received_at,
+        received_at_ms: context.received_at,
         device_time_ms,
         time_source: time_source.to_string(),
         values: item.values.clone(),
@@ -360,8 +584,13 @@ fn process_item(
     };
     let seq = ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
     if !row_quarantined {
-        iotkit_core_publish::store::enqueue_measurement(conn, epoch, seq, received_at)
-            .map_err(|e| e.to_string())?;
+        iotkit_core_publish::store::enqueue_measurement(
+            conn,
+            context.epoch,
+            seq,
+            context.received_at,
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(ItemStatus::Stored {
         disposition: if row_quarantined {
@@ -371,6 +600,58 @@ fn process_item(
         },
         quarantine_reason: if row_quarantined { wire_reason } else { None },
     })
+}
+
+fn freshness_rejection(
+    item: &ReadingItem,
+    item_index: usize,
+    clock: FreshnessSnapshot,
+    limits: FreshnessLimits,
+) -> Option<ItemStatus> {
+    if item.device_time_ms.is_none()
+        && item
+            .age_ms
+            .is_some_and(|age| age > limits.max_age_ms() as u64)
+    {
+        return Some(ItemStatus::ItemRejected {
+            reason_code: ReasonCode::StaleTimestamp,
+            message: "observation age exceeds the configured freshness window".into(),
+            field_path: Some(format!("/items/{item_index}/age_ms")),
+            schema_hint: Some(format!("age_ms <= {}", limits.max_age_ms())),
+        });
+    }
+
+    if requires_absolute_time(item) {
+        let now = clock
+            .trusted_wall_time_ms
+            .expect("absolute freshness is preflighted against clock trust");
+        let timestamp = item
+            .device_time_ms
+            .expect("absolute time requires timestamp");
+        if timestamp < now.saturating_sub(limits.max_age_ms()) {
+            return Some(ItemStatus::ItemRejected {
+                reason_code: ReasonCode::StaleTimestamp,
+                message: "device timestamp is older than the configured freshness window".into(),
+                field_path: Some(format!("/items/{item_index}/device_time_ms")),
+                schema_hint: Some(format!(
+                    "device_time_ms >= trusted_now_ms - {}",
+                    limits.max_age_ms()
+                )),
+            });
+        }
+        if timestamp > now.saturating_add(limits.max_future_skew_ms()) {
+            return Some(ItemStatus::ItemRejected {
+                reason_code: ReasonCode::StaleTimestamp,
+                message: "device timestamp exceeds the configured future-skew limit".into(),
+                field_path: Some(format!("/items/{item_index}/device_time_ms")),
+                schema_hint: Some(format!(
+                    "device_time_ms <= trusted_now_ms + {}",
+                    limits.max_future_skew_ms()
+                )),
+            });
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -398,8 +679,8 @@ mod tests {
         all
     }
 
-    fn env(id: &str, hw: &str, key: &str) -> Envelope {
-        Envelope {
+    fn env(id: &str, hw: &str, key: &str) -> IngestRequest {
+        let envelope = Envelope {
             envelope_id: id.into(),
             source: "test-adapter".into(),
             declaration_version: None,
@@ -415,12 +696,36 @@ mod tests {
                 rssi: None,
                 battery_pct: None,
             }],
+        };
+        IngestRequest {
+            principal: IngestPrincipal::trusted_official_adapter(
+                "principal:test-adapter",
+                "test-adapter",
+            ),
+            envelope,
         }
     }
 
-    fn register_active(db: &iotkit_core_storage::DbHandle, hw: &str) {
+    fn process_test(
+        conn: &rusqlite::Connection,
+        cache: &mut ResolutionCache,
+        policy: &dyn RegistryPolicy,
+        request: &IngestRequest,
+    ) -> Result<EnvelopeAck, ProcessError> {
+        process_envelope(
+            conn,
+            cache,
+            policy,
+            &UntrustedSystemClock,
+            FreshnessLimits::default(),
+            None,
+            request,
+        )
+    }
+
+    fn register_active_id(db: &iotkit_core_storage::DbHandle, hw: &str) -> ledger::SystemId {
         db.with_conn_sync(|conn| {
-            ledger::insert_device(
+            let id = ledger::insert_device(
                 conn,
                 &ledger::NewDevice {
                     hardware_id: hw.into(),
@@ -431,9 +736,21 @@ mod tests {
                 },
             )
             .unwrap();
-            Ok(())
+            Ok(id)
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    fn register_active(db: &iotkit_core_storage::DbHandle, hw: &str) {
+        let _ = register_active_id(db, hw);
+    }
+
+    struct FixedFreshnessClock(FreshnessSnapshot);
+
+    impl FreshnessClock for FixedFreshnessClock {
+        fn snapshot(&self, _conn: &rusqlite::Connection) -> Result<FreshnessSnapshot, String> {
+            Ok(self.0)
+        }
     }
 
     fn raw_channel(item: &ReadingItem) -> i32 {
@@ -596,7 +913,7 @@ mod tests {
 
         let ack = db
             .with_conn_sync(|conn| {
-                Ok(process_envelope(conn, &mut cache, &PermissiveRegistry, &envelope).unwrap())
+                Ok(process_test(conn, &mut cache, &PermissiveRegistry, &envelope).unwrap())
             })
             .unwrap();
         assert!(matches!(ack.status,
@@ -648,7 +965,7 @@ mod tests {
 
         let ack = quarantined_db
             .with_conn_sync(|conn| {
-                Ok(process_envelope(
+                Ok(process_test(
                     conn,
                     &mut quarantine_cache,
                     &QuarantiningStub(QuarantineReason::UnknownKey),
@@ -691,7 +1008,7 @@ mod tests {
         register_active(&db, "ble:aa");
         let mut cache = ResolutionCache::default();
         let mut envelope = env("e-outbox-multi", "ble:aa", "temperature_c");
-        envelope.items.push(ReadingItem {
+        envelope.envelope.items.push(ReadingItem {
             subject_hint: Some("ble:aa".into()),
             measurement_key: "humidity_pct".into(),
             channel_index: None,
@@ -706,7 +1023,7 @@ mod tests {
 
         let ack = db
             .with_conn_sync(|conn| {
-                Ok(process_envelope(conn, &mut cache, &PermissiveRegistry, &envelope).unwrap())
+                Ok(process_test(conn, &mut cache, &PermissiveRegistry, &envelope).unwrap())
             })
             .unwrap();
         assert!(matches!(ack.status,
@@ -873,9 +1190,9 @@ mod tests {
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let mut e = env("e-age", "ble:aa", "temperature_c");
-        e.items[0].age_ms = Some(5000);
-        e.items[0].time_source = TimeSource::Gateway;
-        e.items[0].device_time_ms = None;
+        e.envelope.items[0].age_ms = Some(5000);
+        e.envelope.items[0].time_source = TimeSource::Gateway;
+        e.envelope.items[0].device_time_ms = None;
         collector.submit(e).await.unwrap();
 
         let (received_at, device_time, time_source, event_time, event_time_source):
@@ -890,6 +1207,23 @@ mod tests {
         assert_eq!(time_source, "gateway_adjusted");
         assert_eq!(event_time, received_at - 5000);
         assert_eq!(event_time_source, "gateway_adjusted");
+    }
+
+    #[tokio::test]
+    async fn overflow_scale_age_is_terminally_rejected_before_reconstruction() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db, Arc::new(PermissiveRegistry), 16);
+        let mut request = env("age-overflow", "ble:aa", "temperature_c");
+        request.envelope.items[0].age_ms = Some(u64::MAX);
+
+        let ack = collector.submit(request).await.unwrap();
+
+        assert!(matches!(ack.status, AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::ItemRejected {
+                reason_code: ReasonCode::StaleTimestamp,
+                ref field_path,
+                ..
+            } if field_path.as_deref() == Some("/items/0/age_ms"))));
     }
 
     #[test]
@@ -1001,9 +1335,9 @@ mod tests {
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let mut e = env("e-3", "ble:aa", "temperature_c");
-        let mut bad = e.items[0].clone();
+        let mut bad = e.envelope.items[0].clone();
         bad.measurement_key = "Bad:Key".into();
-        e.items.push(bad);
+        e.envelope.items.push(bad);
         let ack = collector.submit(e).await.unwrap();
         let AckStatus::Accepted { items } = ack.status else {
             panic!("expected Accepted")
@@ -1023,7 +1357,7 @@ mod tests {
         let db = test_db();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let mut e = env("e-4", "ble:aa", "temperature_c");
-        e.items[0].subject_hint = None; // ブリッジは多subject送信者なのでhint必須(D5決定1)
+        e.envelope.items[0].subject_hint = None; // ブリッジは多subject送信者なのでhint必須(D5決定1)
         let ack = collector.submit(e).await.unwrap();
         let AckStatus::Accepted { items } = ack.status else {
             panic!("expected Accepted")
@@ -1144,11 +1478,17 @@ mod tests {
 
         // 1件目: 新規series(=temp_a)を作成しキャッシュに載せる。2件目: NaNで書き込み失敗。
         // envelope全体がロールバックされる = series行は消えるがキャッシュには残る(修正前)。
-        let poison = Envelope {
-            envelope_id: "e-poison".into(),
-            source: "test-adapter".into(),
-            declaration_version: None,
-            items: vec![make_item(1.0), make_item(f64::NAN)],
+        let poison = IngestRequest {
+            principal: IngestPrincipal::trusted_official_adapter(
+                "principal:test-adapter",
+                "test-adapter",
+            ),
+            envelope: Envelope {
+                envelope_id: "e-poison".into(),
+                source: "test-adapter".into(),
+                declaration_version: None,
+                items: vec![make_item(1.0), make_item(f64::NAN)],
+            },
         };
         let result = collector.submit(poison).await;
         assert!(
@@ -1168,11 +1508,17 @@ mod tests {
 
         // 再送(同キー、正常値)。修正前はキャッシュの幻series_idでFK違反 → ackなしのまま。
         // 修正後はキャッシュがリセットされているのでensure_seriesが再実行され、Acceptedになる。
-        let retry = Envelope {
-            envelope_id: "e-retry".into(),
-            source: "test-adapter".into(),
-            declaration_version: None,
-            items: vec![make_item(2.0)],
+        let retry = IngestRequest {
+            principal: IngestPrincipal::trusted_official_adapter(
+                "principal:test-adapter",
+                "test-adapter",
+            ),
+            envelope: Envelope {
+                envelope_id: "e-retry".into(),
+                source: "test-adapter".into(),
+                declaration_version: None,
+                items: vec![make_item(2.0)],
+            },
         };
         let ack = collector
             .submit(retry)
@@ -1192,13 +1538,389 @@ mod tests {
         assert_eq!(n, 1);
     }
 
+    fn device_request(
+        principal_id: &str,
+        credential_id: &str,
+        source: &str,
+        subjects: impl IntoIterator<Item = ledger::SystemId>,
+        auth_epoch: &str,
+        envelope: Envelope,
+    ) -> IngestRequest {
+        IngestRequest {
+            principal: IngestPrincipal::authenticated_device(
+                principal_id,
+                credential_id,
+                source,
+                subjects,
+                "default",
+                auth_epoch,
+            ),
+            envelope,
+        }
+    }
+
+    #[tokio::test]
+    async fn forged_source_is_envelope_rejected_and_intrusion_hook_is_bounded() {
+        let db = test_db();
+        let subject = register_active_id(&db, "ble:aa");
+        let (signal_tx, mut signal_rx) = mpsc::channel(1);
+        let (collector, _h) = Collector::spawn_with_components(
+            db.clone(),
+            Arc::new(PermissiveRegistry),
+            16,
+            DEFAULT_PURGE_INTERVAL_MS,
+            Arc::new(UntrustedSystemClock),
+            FreshnessLimits::default(),
+            Some(signal_tx),
+        );
+        let mut envelope = env("forged-1", "ble:aa", "temperature_c").envelope;
+        envelope.source = "attacker-controlled-source".into();
+        let request = device_request(
+            "principal-a",
+            "credential-a",
+            "configured-device-a",
+            [subject],
+            "epoch-1",
+            envelope,
+        );
+        let ack = collector.submit(request.clone()).await.unwrap();
+        assert!(matches!(
+            ack.status,
+            AckStatus::Rejected {
+                reason_code: ReasonCode::SubjectScopeViolation,
+                field_path: Some(ref path),
+                ..
+            } if path == "/source"
+        ));
+        // Leave the capacity-one hook full: another mismatch still completes and
+        // cannot grow or block on hostile source cardinality.
+        let _ = collector.submit(request).await.unwrap();
+        assert_eq!(
+            signal_rx.recv().await.unwrap(),
+            IntrusionSignal {
+                principal_id: "principal-a".into(),
+                credential_id: Some("credential-a".into()),
+                kind: IntrusionKind::SourceMismatch,
+            }
+        );
+        assert!(
+            signal_rx.try_recv().is_err(),
+            "saturated hook drops excess signals"
+        );
+        let (readings, dedup): (i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?,
+                    conn.query_row("SELECT COUNT(*) FROM ingest_dedup", [], |row| row.get(0))?,
+                ))
+            })
+            .unwrap();
+        assert_eq!((readings, dedup), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn dedup_uses_stable_principal_and_ignores_auth_epoch() {
+        let db = test_db();
+        let subject = register_active_id(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let envelope = env("stable-envelope", "ble:aa", "temperature_c").envelope;
+        let first = device_request(
+            "principal-a",
+            "credential-old",
+            "test-adapter",
+            [subject],
+            "auth-epoch-1",
+            envelope.clone(),
+        );
+        let reissued = device_request(
+            "principal-a",
+            "credential-new",
+            "test-adapter",
+            [subject],
+            "auth-epoch-2",
+            envelope,
+        );
+        assert!(matches!(
+            collector.submit(first).await.unwrap().status,
+            AckStatus::Accepted { .. }
+        ));
+        assert!(matches!(
+            collector.submit(reissued).await.unwrap().status,
+            AckStatus::Duplicate
+        ));
+        let keys: Vec<(String, String)> = db
+            .with_conn_sync(|conn| {
+                Ok(conn
+                    .prepare("SELECT sender_id, envelope_id FROM ingest_dedup")?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<Result<_, _>>()?)
+            })
+            .unwrap();
+        assert_eq!(keys, vec![("principal-a".into(), "stable-envelope".into())]);
+    }
+
+    #[tokio::test]
+    async fn subject_scope_rules_are_positional_and_valid_siblings_commit() {
+        let db = test_db();
+        let allowed = register_active_id(&db, "ble:allowed");
+        let other = register_active_id(&db, "ble:other");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+
+        let mut envelope = env("scope-mixed", "ble:allowed", "temperature_c").envelope;
+        let mut cross_scope = envelope.items[0].clone();
+        cross_scope.subject_hint = Some("ble:other".into());
+        let mut unknown = envelope.items[0].clone();
+        unknown.subject_hint = Some("ble:unknown-http".into());
+        envelope.items.extend([cross_scope, unknown]);
+        let request = device_request(
+            "principal-http",
+            "credential-http",
+            "test-adapter",
+            [allowed],
+            "auth-epoch",
+            envelope,
+        );
+        let AckStatus::Accepted { items } = collector.submit(request).await.unwrap().status else {
+            panic!("mixed deterministic item outcomes must remain an accepted envelope")
+        };
+        assert!(matches!(
+            items[0],
+            ItemStatus::Stored {
+                disposition: Disposition::Durable,
+                ..
+            }
+        ));
+        assert!(matches!(
+            items[1],
+            ItemStatus::ItemRejected {
+                reason_code: ReasonCode::SubjectScopeViolation,
+                ..
+            }
+        ));
+        assert!(matches!(
+            items[2],
+            ItemStatus::ItemRejected {
+                reason_code: ReasonCode::UnknownSubject,
+                ..
+            }
+        ));
+        let readings: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?)
+            })
+            .unwrap();
+        assert_eq!(readings, 1);
+        assert_ne!(allowed, other);
+    }
+
+    #[tokio::test]
+    async fn one_subject_omission_resolves_but_multi_subject_omission_rejects() {
+        let db = test_db();
+        let one = register_active_id(&db, "ble:one");
+        let two = register_active_id(&db, "ble:two");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+
+        let mut one_envelope = env("one-omitted", "ble:one", "temperature_c").envelope;
+        one_envelope.items[0].subject_hint = None;
+        let one_ack = collector
+            .submit(device_request(
+                "principal-one",
+                "c1",
+                "test-adapter",
+                [one],
+                "e1",
+                one_envelope,
+            ))
+            .await
+            .unwrap();
+        assert!(
+            matches!(one_ack.status, AckStatus::Accepted { ref items } if matches!(items[0], ItemStatus::Stored { .. }))
+        );
+
+        let mut multi_envelope = env("multi-omitted", "ble:one", "temperature_c").envelope;
+        multi_envelope.items[0].subject_hint = None;
+        let multi_ack = collector
+            .submit(device_request(
+                "principal-multi",
+                "c2",
+                "test-adapter",
+                [one, two],
+                "e1",
+                multi_envelope,
+            ))
+            .await
+            .unwrap();
+        assert!(
+            matches!(multi_ack.status, AckStatus::Accepted { ref items } if matches!(items[0], ItemStatus::ItemRejected { reason_code: ReasonCode::UnknownSubject, .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn only_trusted_official_principal_stages_unknown_subject() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let ack = collector
+            .submit(env(
+                "official-unknown",
+                "ble:official-unknown",
+                "temperature_c",
+            ))
+            .await
+            .unwrap();
+        assert!(
+            matches!(ack.status, AckStatus::Accepted { ref items } if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Staged, .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn scope_violation_precedes_malformed_measurement_and_emits_intrusion() {
+        let db = test_db();
+        let allowed = register_active_id(&db, "ble:allowed");
+        register_active_id(&db, "ble:outside");
+        let (intrusion_tx, mut intrusion_rx) = mpsc::channel(1);
+        let (collector, _h) = Collector::spawn_with_components(
+            db,
+            Arc::new(PermissiveRegistry),
+            16,
+            DEFAULT_PURGE_INTERVAL_MS,
+            Arc::new(UntrustedSystemClock),
+            FreshnessLimits::default(),
+            Some(intrusion_tx),
+        );
+        let request = device_request(
+            "principal-a",
+            "credential-a",
+            "test-adapter",
+            [allowed],
+            "epoch-a",
+            env("scope-malformed", "ble:outside", "not valid!").envelope,
+        );
+
+        let ack = collector.submit(request).await.unwrap();
+
+        assert!(matches!(ack.status, AckStatus::Accepted { ref items }
+        if matches!(items[0], ItemStatus::ItemRejected {
+            reason_code: ReasonCode::SubjectScopeViolation,
+            ..
+        })));
+        assert_eq!(
+            intrusion_rx.try_recv().unwrap(),
+            IntrusionSignal {
+                principal_id: "principal-a".into(),
+                credential_id: Some("credential-a".into()),
+                kind: IntrusionKind::SubjectScopeViolation,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn trusted_freshness_failures_are_positional_and_untrusted_absolute_time_has_no_ack() {
+        let db = test_db();
+        let subject = register_active_id(&db, "ble:aa");
+        let limits = FreshnessLimits::new(1_000, 100).unwrap();
+        let (collector, _h) = Collector::spawn_with_components(
+            db.clone(),
+            Arc::new(PermissiveRegistry),
+            16,
+            DEFAULT_PURGE_INTERVAL_MS,
+            Arc::new(FixedFreshnessClock(FreshnessSnapshot {
+                received_at_ms: 10_000,
+                trusted_wall_time_ms: Some(10_000),
+            })),
+            limits,
+            None,
+        );
+        let mut envelope = env("freshness-mixed", "ble:aa", "temperature_c").envelope;
+        envelope.items[0].device_time_ms = Some(10_000);
+        envelope.items[0].time_source = TimeSource::DeviceNtp;
+        let mut stale_boundary = envelope.items[0].clone();
+        stale_boundary.device_time_ms = Some(9_000);
+        let mut future_boundary = envelope.items[0].clone();
+        future_boundary.device_time_ms = Some(10_100);
+        let mut stale = envelope.items[0].clone();
+        stale.device_time_ms = Some(8_999);
+        let mut future = envelope.items[0].clone();
+        future.device_time_ms = Some(10_101);
+        envelope
+            .items
+            .extend([stale_boundary, future_boundary, stale, future]);
+        let ack = collector
+            .submit(device_request(
+                "principal-a",
+                "c1",
+                "test-adapter",
+                [subject],
+                "e1",
+                envelope,
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(ack.status, AckStatus::Accepted { ref items }
+            if matches!(items[0], ItemStatus::Stored { .. })
+            && matches!(items[1], ItemStatus::Stored { .. })
+            && matches!(items[2], ItemStatus::Stored { .. })
+            && matches!(items[3], ItemStatus::ItemRejected { reason_code: ReasonCode::StaleTimestamp, .. })
+            && matches!(items[4], ItemStatus::ItemRejected { reason_code: ReasonCode::StaleTimestamp, .. })));
+
+        let untrusted_db = test_db();
+        let untrusted_subject = register_active_id(&untrusted_db, "ble:aa");
+        let (untrusted, _h) = Collector::spawn(untrusted_db, Arc::new(PermissiveRegistry), 16);
+        let mut absolute = env("untrusted-absolute", "ble:aa", "temperature_c").envelope;
+        absolute.items[0].device_time_ms = Some(10_000);
+        absolute.items[0].time_source = TimeSource::DeviceRtc;
+        assert!(matches!(
+            untrusted
+                .submit(device_request(
+                    "principal-a",
+                    "c1",
+                    "test-adapter",
+                    [untrusted_subject],
+                    "e1",
+                    absolute
+                ))
+                .await,
+            Err(SubmitError::ClockUntrusted)
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_reset_of_dedup_window_accepts_same_principal_and_envelope_again() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let request = env("restore-retry", "ble:aa", "temperature_c");
+        assert!(matches!(
+            collector.submit(request.clone()).await.unwrap().status,
+            AckStatus::Accepted { .. }
+        ));
+        db.with_conn_sync(|conn| {
+            conn.execute("DELETE FROM ingest_dedup", [])?;
+            ledger::renew_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert!(matches!(
+            collector.submit(request).await.unwrap().status,
+            AckStatus::Accepted { .. }
+        ));
+        let readings: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?)
+            })
+            .unwrap();
+        assert_eq!(
+            readings, 2,
+            "restore resets dedup because readings/outbox are not restored; unchanged retries may be accepted again"
+        );
+    }
+
     #[tokio::test]
     async fn oversized_envelope_is_rejected_whole() {
         let db = test_db();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let mut e = env("e-5", "ble:aa", "temperature_c");
-        let item = e.items[0].clone();
-        e.items = std::iter::repeat_with(|| item.clone())
+        let item = e.envelope.items[0].clone();
+        e.envelope.items = std::iter::repeat_with(|| item.clone())
             .take(MAX_ITEMS_PER_ENVELOPE + 1)
             .collect();
         let ack = collector.submit(e).await.unwrap();

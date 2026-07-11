@@ -1,6 +1,6 @@
 //! D6判別表のE2E: Envelope → Collector(SqliteRegistry) → readings/series/registry_entries。
 //! ackの各語彙とDB状態の対応を、コレクタ実物のトランザクション境界越しに検証する。
-use iotkit_core_collector::Collector;
+use iotkit_core_collector::{Collector, IngestRequest, LocalPrincipalIssuer};
 use iotkit_core_ledger as ledger;
 use iotkit_core_registry::SqliteRegistry;
 use iotkit_ingest_contract::*;
@@ -34,8 +34,15 @@ fn register_active(db: &iotkit_core_storage::DbHandle, hw: &str) {
     .unwrap();
 }
 
-fn env_with(id: &str, hw: &str, key: &str, channel: Option<u16>, values: Vec<f64>) -> Envelope {
-    Envelope {
+fn env_with(
+    issuer: &LocalPrincipalIssuer,
+    id: &str,
+    hw: &str,
+    key: &str,
+    channel: Option<u16>,
+    values: Vec<f64>,
+) -> IngestRequest {
+    let envelope = Envelope {
         envelope_id: id.into(),
         source: "bravepi-mainboard:/dev/ttyAMA0".into(), // 実在ID形式(handle.rs:109)
         declaration_version: None,
@@ -51,6 +58,13 @@ fn env_with(id: &str, hw: &str, key: &str, channel: Option<u16>, values: Vec<f64
             rssi: None,
             battery_pct: None,
         }],
+    };
+    IngestRequest {
+        principal: issuer.official_adapter(
+            "principal:bravepi-mainboard:/dev/ttyAMA0",
+            "bravepi-mainboard:/dev/ttyAMA0",
+        ),
+        envelope,
     }
 }
 
@@ -58,9 +72,17 @@ fn env_with(id: &str, hw: &str, key: &str, channel: Option<u16>, values: Vec<f64
 async fn known_key_in_range_is_durable_and_auto_enables() {
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     let ack = collector
-        .submit(env_with("e-1", "ble:aa", "temperature_c", None, vec![21.5]))
+        .submit(env_with(
+            &issuer,
+            "e-1",
+            "ble:aa",
+            "temperature_c",
+            None,
+            vec![21.5],
+        ))
         .await
         .unwrap();
     assert!(matches!(ack.status,
@@ -102,9 +124,11 @@ async fn known_key_in_range_is_durable_and_auto_enables() {
 async fn out_of_range_is_quarantined_row_with_clean_series() {
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     let ack = collector
         .submit(env_with(
+            &issuer,
             "e-2",
             "ble:aa",
             "temperature_c",
@@ -139,9 +163,11 @@ async fn out_of_range_is_quarantined_row_with_clean_series() {
 async fn unknown_key_materializes_quarantined_series_with_reason() {
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     let ack = collector
         .submit(env_with(
+            &issuer,
             "e-3",
             "ble:aa",
             "custom.tank_level",
@@ -176,9 +202,10 @@ async fn unknown_key_materializes_quarantined_series_with_reason() {
 async fn value_type_mismatch_rejects_item_but_stores_valid_sibling() {
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let mut e = env_with("e-4", "ble:aa", "temperature_c", None, vec![21.5]);
-    e.items.push(ReadingItem {
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
+    let mut e = env_with(&issuer, "e-4", "ble:aa", "temperature_c", None, vec![21.5]);
+    e.envelope.items.push(ReadingItem {
         subject_hint: Some("ble:aa".into()),
         measurement_key: "contact_state".into(),
         channel_index: None,
@@ -214,9 +241,11 @@ async fn value_type_mismatch_rejects_item_but_stores_valid_sibling() {
 async fn undeclared_acceleration_channel_is_quarantined() {
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     let ok = collector
         .submit(env_with(
+            &issuer,
             "e-5",
             "ble:aa",
             "acceleration_mg",
@@ -230,6 +259,7 @@ async fn undeclared_acceleration_channel_is_quarantined() {
         if matches!(items[0], ItemStatus::Stored { disposition: Disposition::Durable, .. })));
     let bad = collector
         .submit(env_with(
+            &issuer,
             "e-6",
             "ble:aa",
             "acceleration_mg",
@@ -251,13 +281,22 @@ async fn single_mode_none_and_zero_channel_share_one_series() {
     // 正準化(評価器のchannel_index)により None / Some(0) が同一seriesへ落ちる
     let db = full_db();
     register_active(&db, "ble:aa");
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     collector
-        .submit(env_with("e-c1", "ble:aa", "distance_mm", None, vec![100.0]))
+        .submit(env_with(
+            &issuer,
+            "e-c1",
+            "ble:aa",
+            "distance_mm",
+            None,
+            vec![100.0],
+        ))
         .await
         .unwrap();
     collector
         .submit(env_with(
+            &issuer,
             "e-c2",
             "ble:aa",
             "distance_mm",
@@ -308,9 +347,17 @@ async fn alias_routes_new_series_to_canonical_key() {
         Ok(())
     })
     .unwrap();
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
     collector
-        .submit(env_with("e-7", "ble:aa", "temp_old", None, vec![21.5]))
+        .submit(env_with(
+            &issuer,
+            "e-7",
+            "ble:aa",
+            "temp_old",
+            None,
+            vec![21.5],
+        ))
         .await
         .unwrap();
     let key: String = db
@@ -340,8 +387,9 @@ async fn auto_enable_failure_produces_no_ack_and_retry_recovers_consistently() {
         Ok(())
     })
     .unwrap();
-    let (collector, _h) = Collector::spawn(db.clone(), Arc::new(SqliteRegistry), 16);
-    let e = env_with("e-8", "ble:aa", "temperature_c", None, vec![21.5]);
+    let (collector, issuer, _h) =
+        Collector::spawn_composed(db.clone(), Arc::new(SqliteRegistry), 16);
+    let e = env_with(&issuer, "e-8", "ble:aa", "temperature_c", None, vec![21.5]);
     let result = collector.submit(e.clone()).await;
     assert!(
         matches!(result, Err(iotkit_core_collector::SubmitError::NoAck)),
