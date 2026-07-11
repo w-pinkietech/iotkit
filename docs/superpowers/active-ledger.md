@@ -7,10 +7,10 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `82a71f6`
+- Artifact/base HEAD: `166d50c`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 2 settled and committed; Task 3 implementation dispatch
+- Active phase: Plan 6 Task 3 settled and committed; Task 4 implementation dispatch
   preparation; product code remains worker-only
 
 ## Mission
@@ -48,6 +48,23 @@ git/disk/test. Never store secrets here.
   batch provisioning to a separate pre-distribution deliverable.
 
 ## Review state
+
+- Plan-6 Task 3 device credential lifecycle/capacity/recovery foundation: **SETTLED and committed
+  as `166d50c`**. Final manifest `.review/plan6-task3-confirm3.manifest` SHA-256
+  `3f404fe1367278a5c143b9da3fa2443b48a8cd6ef938e219e5d20637bf40ac3c`; prompt
+  `.review/plan6-task3-confirm3-review.md` SHA-256
+  `c67ed2df290b231d54d5fbbd63676c9e86dcb8448571cc52db0a04a94a32b7b6`.
+  Fresh Codex `gpt-5.6-sol/high` verified every manifest blob, confirmed all prior findings closed,
+  and returned `Critical 0 / Important 0 / Minor 0`; result SHA-256
+  `d1f4d7257138cac50f3cfb0b2bcebe7291fec2822fb2c8f3e1b5aed42c3c11f0`; receipt SHA-256
+  `f13f3dc237dafb92634719fd63c44e01c4d2b8f069915bf9d5af547d0bdfcdd5`.
+  Earlier fresh rounds found and closed 26 Important and 4 Minor issues across restore/token
+  continuity, typed secret ownership, R14 mutation boundaries, bounded authentication/scopes,
+  generation fencing, lifecycle clocks, live-authority capacity/debt math, overflow handling,
+  atomic consent previews, snapshot no-clobber publication, health false-safe states, and CLI
+  recovery UX. Main reran `scripts/verify.sh` after the final fixes; workspace tests (including
+  real loopback API tests), Clippy `-D warnings`, layer checks, formatting, and diff checks passed.
+  Claude/Grok unavailable and not required.
 
 - Plan-6 Task 2 wire/principal collector seam: **SETTLED and committed as `82a71f6`**. Confirmation
   manifest `.review/plan6-task2-confirm.manifest` SHA-256
@@ -300,10 +317,13 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Prepare and dispatch Plan 6 Task 3 through Sol/high `scripts/codex.sh impl`.
+1. Prepare and dispatch Plan 6 Task 4 through Sol/high `scripts/codex.sh impl`.
 
 ## Verification
 
+- Plan 6 Task 3: final manifest review returned zero C/I/M; Main-owned `scripts/verify.sh` passed
+  after the final fix round, including workspace tests and real loopback gateway integration;
+  Clippy `-D warnings`, layer checks, formatting, and `git diff --check` are green.
 - Plan 6 Task 2: focused contract/collector/client/adapter/registry/gateway tests and Main-owned
   `scripts/verify.sh` passed; workspace Clippy `-D warnings`, layer checks, formatting, and
   `git diff --check` are green. Confirmation review returned zero C/I.
