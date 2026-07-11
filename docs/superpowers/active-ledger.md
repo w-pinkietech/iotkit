@@ -7,10 +7,11 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `ee1fbd6`
+- Artifact/base HEAD: `6cfaa27`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Design Ready and bundled Red decision preparation; product code frozen
+- Active phase: Plan 6 Task 1 implementation dispatch preparation; product code remains
+  worker-only
 
 ## Mission
 
@@ -18,7 +19,7 @@ git/disk/test. Never store secrets here.
   review, and persistent restart state.
 - Preserve independent review, TDD, verification, design canon, and product-code worker
   separation.
-- Trial Yellow autonomy on Plan 6.
+- Deliver Plan 6 as Large / Red under Sol/high through final settlement.
 - External push/PR/release is not authorized by this mission.
 
 ## User decisions
@@ -40,10 +41,46 @@ git/disk/test. Never store secrets here.
   `xhigh` is exceptional and `max` is not a routine default.
 - 2026-07-11: Improve the process to accelerate development; adopt the discussion input via
   reviewed workflow changes.
-- Plan 6 product decision already approved: no network box claim; initial admin ownership is
-  local/per-card only. This design is not SETTLED yet.
+- 2026-07-12: Approved the bundled Plan 6 Red recommendations: preserve logical gateway
+  identity/TLS/device-token continuity on restore and accept loudly reported post-backup
+  device-token revocation rollback; invalidate admin/operator/session authority; allow factory
+  reset only from SSH or physical/local root; keep initial ownership local-CLI-only and defer
+  batch provisioning to a separate pre-distribution deliverable.
 
 ## Review state
+
+- Plan-6 formal specification: **SETTLED**. Final staging/canon-aligned manifest
+  `.review/plan6-spec-staging-final.manifest` SHA-256
+  `678f8e505fafb0bc12c9de60d631a9a91f1d0def7f58f69a321ac883a83e8dd5`; prompt
+  `.review/plan6-spec-staging-final-review.md` SHA-256
+  `e342eca69a170d77e43b2e96ee485a583d905ac5481504550ca6514742f4d546`.
+  Fresh Codex `gpt-5.6-sol/high` returned zero unresolved Critical/Important. Result SHA-256
+  `d3613dde722a147924e3066aabf50f3997b4aac401e766e23d8c9810728d0942`; receipt SHA-256
+  `c48421ceb9a81f4bf1ed366feafbf7e08b5c7e3fc19542f39e64af5e63d873a8`.
+  Earlier rounds found and closed 16 Important issues covering pre-auth DoS/accounting,
+  subject/ack semantics, compatibility/validation/TLS UX, restore/dedup/clock ownership, code
+  placement, and staging overflow alignment. Claude/Grok unavailable and not required.
+
+- Plan-6 design-canon propagation: **SETTLED and committed in the parent design repository as
+  `f10c2a5`**. Final manifest `/tmp/plan6-canon-confirm.manifest` SHA-256
+  `76367eb58039621f133c0ffb7e1a8665cb95da38af4f19872cee8a6253864bfc`; prompt SHA-256
+  `59c99ac4261060825a78f37d80ce33aee3ea43af38efc4d0d87554a83de1316e`.
+  Fresh Codex Sol/high returned zero C/I after closing five Important propagation gaps. Result
+  SHA-256 `d3613dde722a147924e3066aabf50f3997b4aac401e766e23d8c9810728d0942`; receipt SHA-256
+  `109026a4af401f2fb465280d2cb33b175548ed80235fc200a2c163a78ec917e8`.
+
+- Plan-6 contract-centered implementation plan: **SETTLED**. Final substantive manifest
+  `.review/plan6-implementation-plan-confirm.manifest` SHA-256
+  `0672bd86f9ce909632ec757f763dea986a7a27376271519df0032287834a09c6`; prompt
+  `.review/plan6-implementation-plan-confirm-review.md` SHA-256
+  `92089c9a1fcbf43e9af5e954e3fb9d02587e9c1d1215bd8cbc3e5f3577f7ac16`.
+  Fresh Codex Sol/high confirmed all eleven initial Important sequencing/verification findings
+  closed and returned zero C/I. Result SHA-256
+  `d3613dde722a147924e3066aabf50f3997b4aac401e766e23d8c9810728d0942`; receipt SHA-256
+  `f954fdf011fa2150ed165ec161d74b357b9ed0a5b0047443a63704794c60b425`.
+  Status-label confirmation manifest `.review/plan6-plan-settled.manifest` SHA-256
+  `da362dd4e75d1f4d7c953902972893b7fb542b493753c78a6a3da9927f600b8f` returned zero C/I;
+  receipt SHA-256 `aaf39c554376a7d8e33cd4660638716c924e272744da8537c8157592e32057b1`.
 
 - Plan-6 Design Ready zero-C/I confirmation: **SETTLED**. Manifest
   `.review/plan6-design-ready-final3.manifest` SHA-256
@@ -204,21 +241,21 @@ git/disk/test. Never store secrets here.
   preseed-replay, and local-trust-boundary issues. Product work remains frozen until resumed
   under this workflow.
 
-## Unresolved Red packet
+## Resolved Red packet
 
-Prepared as `docs/superpowers/PLAN6-DESIGN-READY.md`; independent review is SETTLED. The packet
-bundles:
+Recorded as `docs/superpowers/PLAN6-DESIGN-READY.md`; independent review and the user's bundled
+decision are SETTLED. The packet bundles:
 
 1. R22 restore versus auth revocation-generation rollback.
 2. Factory reset meaning and authority.
 3. Product scope/UX consequence of the local-only bootstrap producer and recovery limit.
 
-Do not ask these separately. Revised recommendations: replacement preserves logical gateway
-identity/TLS and, if the user accepts explicit post-backup revocation rollback risk, active
-device-token continuity; admin/operator/session authority is invalidated with a new auth epoch;
+Approved result: replacement preserves logical gateway identity/TLS and active device-token
+continuity while accepting explicit post-backup revocation rollback risk;
+admin/operator/session authority is invalidated with a new auth epoch;
 factory reset is SSH/local-root full erase and distinct from non-destructive admin recovery;
 Plan 6 uses local CLI ownership only and defers nonexistent provisioning tooling to the
-distribution gate. Continue Design Ready evidence common to all choices.
+distribution gate. These choices are now being folded into canon and the formal specification.
 
 ## Yellow decisions
 
@@ -232,9 +269,8 @@ distribution gate. Continue Design Ready evidence common to all choices.
 
 ## Next executable work
 
-1. Obtain the user's three related Red decisions from the settled bundled packet.
-2. After the decision, write and settle the Plan 6 spec and contract-centered implementation
-   plan before dispatching product-code workers.
+1. Commit the settled Plan 6 specification, plan, canon links, and operational ledger locally.
+2. Dispatch Task 1 product code through Sol/high `scripts/codex.sh impl`.
 
 ## Verification
 

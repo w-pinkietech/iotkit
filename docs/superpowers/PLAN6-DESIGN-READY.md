@@ -1,6 +1,6 @@
 # Plan 6 Design Ready Pack and Red Decision Packet
 
-Status: **DRAFT / USER DECISION REQUIRED** (2026-07-12)
+Status: **APPROVED / SETTLED** (2026-07-12)
 
 This is workflow evidence, not design authority. After the Red packet is decided and the
 independent review is settled, the accepted result is folded into the Plan 6 spec and the
@@ -78,11 +78,12 @@ tooling remains a separately approved distribution deliverable.
 ### 2.4 Fact, value judgment, and implementation choice
 
 - **Fact:** an old backup cannot prove that a credential was not revoked later.
-- **User-value judgment required:** whether recovery convenience may ever outweigh automatic
-  invalidation of restored credentials.
-- **User-value judgment required:** D2 continuity (logical identity, TLS pins, and device
-  credentials survive replacement) versus rollback protection (post-backup revocations cannot
-  be undone) cannot both be fully guaranteed without a newer external authority.
+- **Approved user-value judgment:** replacement usability outweighs automatic invalidation of
+  restored device credentials. The accepted cost is that a post-backup device-token revocation
+  can roll back when no newer external authority exists.
+- **Approved user-value judgment:** preserve D2 continuity for logical identity, TLS pins, and
+  device credentials; do not claim rollback protection that the available authority cannot
+  provide.
 - **Fact:** accepting a bootstrap secret over the LAN is still a network claim, even if the
   secret originated locally.
 - **Already approved value judgment:** initial ownership is established locally/per-card.
@@ -145,7 +146,7 @@ Restore material decision matrix:
 | TLS key/certificate | restore encrypted; existing pins continue | generate new; every client/device re-pins | preserve, but require explicit rotation if compromise is suspected |
 | Admin hash | do not restore active | do not restore active | local reset required |
 | Operator tokens/sessions | D2 currently restores hashes active for immediate operator entry | do not restore active | **supersede D2 §3.5**; require local admin recovery and operator-token reissue |
-| Device-token hashes | restore active; later revocation can roll back | restore disabled/reissue every device | **user decision required**; no standalone mechanism can infer later revocations |
+| Device-token hashes | restore active; later revocation can roll back | restore disabled/reissue every device | **approved: continuity**; loudly report the accepted rollback risk |
 | Auth epoch | always new; restored device rows may be rebound only by the restore transaction | always new | always new |
 
 Plan 6.5 owns encrypted carriage, restore staging/fencing mechanics, and recovery-passphrase
@@ -280,7 +281,7 @@ the Plan 5 setup route/restore sections, `docs/architecture.md`, `README.md`, an
 install one-pager. Browser commissioning remains available **after** local ownership; only
 network establishment of ownership is removed.
 
-## 8. Bundled Red decision packet
+## 8. Bundled Red decision record
 
 The three decisions are bundled because choosing convenience in one place can reintroduce
 ownership through another.
@@ -349,23 +350,22 @@ Alternatives:
 - Bring image-writer/batch provisioning into Plan 6: better fleet UX sooner, but expands Plan 6
   into currently nonexistent OS-image/distribution infrastructure and delays HTTP ingress.
 
-### Requested decision
+### Decision (approved 2026-07-12)
 
-Answer the three decisions in one packet; they are related but independently selectable:
+The user approved all three recommendations as one packet:
 
-1. **R-A:** accept the continuity recommendation (including the stated revocation-rollback
-   risk and make-before-break overlap), or choose rollback-safe device reissue/new identity or
-   TLS material.
-2. **R-B:** allow factory reset from SSH/local root as recommended, or require physical presence.
-3. **R-C:** keep Plan 6 local-CLI-only and defer provisioning tooling as recommended, or expand
-   Plan 6 to build it now.
+1. **R-A continuity:** preserve logical gateway identity, TLS material, and active device-token
+   continuity; accept and report post-backup device-token revocation rollback; use
+   make-before-break reissue. Admin/operator/session authority never returns active.
+2. **R-B reset authority:** factory reset is a full erase invokable by SSH root or
+   physical/local root, never by IoTKit API, AI, or a general R14 operation.
+3. **R-C scope:** initial ownership is local-CLI-only in Plan 6. Provisioning and batch tooling
+   are a separate pre-distribution deliverable.
 
-Approval authorizes the direct consequences and required canon amendments above; it does not
-authorize push, release, or a future external revocation service.
+This approval authorizes the direct consequences and required canon amendments above; it does
+not authorize push, release, or a future external revocation service.
 
-## 9. Work that does not depend on the Red answer
+## 9. Next work after approval
 
-While the packet is pending, Plan 6 can continue Design Ready evidence and contract work that
-is common to every option: `IngestPrincipal`, the separate ingress crate boundary, ack schema
-cleanup, HTTP request limits, freshness tests, token-bucket semantics, and the ingest contract
-documentation outline. Product implementation remains frozen until the spec and plan settle.
+Fold this record into the design canon and formal Plan 6 specification. Product implementation
+remains frozen until the specification and contract-centered implementation plan settle.

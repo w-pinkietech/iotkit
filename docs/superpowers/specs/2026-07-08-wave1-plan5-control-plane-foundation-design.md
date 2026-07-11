@@ -4,6 +4,11 @@
 
 **Goal:** ゲートウェイ内に初の HTTPS API サーバー（自己署名 TLS + フィンガープリント）を立て、R14 型付き操作カタログ（権限3分類+read-only スコープ、dry-run、全操作監査）と認証の座席（管理者パスフレーズ・setupモード・operatorトークン）を作る。以降の全計画（R2入口・南向き・UI）はこの土台の上に乗る。
 
+> **Superseded security behavior (2026-07-12 Plan 6):** 本書は計画5実装時点の記録として保存する。
+> network `setup/passphrase`、setup-mode未認証allowlist、復元後のnetwork setup、active operator-token復元は
+> 2026-07-12のPlan 6裁定で廃止・上書き済み。未所有中はAPI/UIをbindせず、local `gatewayctl`だけが所有権を作る。
+> 復元でadmin/operator/session権限はactiveに戻さない。正式な将来契約はPlan 6 specとD2/D13を優先する。
+
 **Architecture:** 新クレート `core/ops`（操作カタログ框組 + 標準カタログ組み立て + 認証ストア + 監査、migration 0012。依存は storage/ledger/registry への一方向）+ `iotkit-gateway/src/api/`（axum + rustls の常駐 API タスク）+ `iotkit-gatewayctl` 追加コマンド（passphrase reset / fingerprint / token）。UI・CLI・AI は同じ操作カタログを叩く（R14「AI/人間共用」、D13前提1）。
 
 **Tech Stack:** Rust 1.95 / tokio / rusqlite(WAL) / axum 0.8 + **axum-server 0.8（`tls-rustls-no-provider`）+

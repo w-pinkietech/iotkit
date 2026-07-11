@@ -37,6 +37,11 @@ durably taken custody of it.
 - Fresh-DB restore re-enters setup mode; the admin passphrase must be set again after restore.
 - The control-plane API is intended for private LAN reachability only. Use SSH port forwarding for Tailscale/CGNAT direct-access scenarios.
 
+> **Approved Plan 6 target (not implemented yet):** remove network setup and every unauthenticated
+> setup-mode operation. An unowned gateway will keep its API/UI unbound until a local TTY or
+> SSH-root `gatewayctl` action establishes ownership. Restore will require local admin recovery
+> and operator-token reissue; it will not reactivate admin/operator/session authority.
+
 ## Build & test
 
 Requires the pinned toolchain in [`rust-toolchain.toml`](rust-toolchain.toml)
@@ -78,7 +83,7 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Wave 1 — "distributable to others":** exit contract (done, MVE), then public network ingress (HTTP/MQTT) with per-device auth, onboarding/quarantine UX, calibration, config authority. **In progress.**
+- **Wave 1 — "distributable to others":** exit contract (done, MVE), then default-off authenticated site-LAN ingress (HTTP/MQTT; never Internet-exposed), onboarding/quarantine UX, calibration, config authority. **In progress.**
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 
 ## License

@@ -122,6 +122,14 @@ starts in **setup mode** until the passphrase is set. The prescriptive rule:
 **a new mutation surface is an R14 descriptor — never a fresh SQL mutation
 path.**
 
+> **Approved Plan 6 target (not current implementation):** the network
+> `setup/passphrase` route and setup-mode unauthenticated allowlist are removed.
+> An unowned or locally recovering gateway does not bind the control API/UI;
+> ownership is established only through a non-echoing local TTY or SSH-root
+> `gatewayctl` action, which atomically revokes all operator/session tokens. The
+> paragraphs above describe the repository until Plan 6 lands; D2/D13 and the
+> Plan 6 specification govern the target behavior.
+
 ## Crate map
 
 Twenty-one crates, four layers. `scripts/check-layers` enforces the layer rules
@@ -220,7 +228,8 @@ checked.
 | A change to the ingest wire (envelope fields, ack semantics, reason codes) | `iotkit-ingest-contract` **only**, with its conformance tests; consumers adapt. The wire is the contract — the Rust types follow it, not vice versa. |
 | A new operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |
 | A new table / column | A migration in the **owning** `core/*` crate's version slice (the binaries concatenate the slices; the `core/storage` harness applies them by set difference). |
-| A new HTTP API route | `iotkit-gateway/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
+| A new control-plane HTTP API route | `iotkit-gateway/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
+| An authenticated measurement-ingress HTTP binding | Approved Plan 6 target: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
 | A new CLI command | `iotkit-gatewayctl`, calling `core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
 | Raw bus/pin access | `rpi4b-transport`. |
 | A gateway module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `core/<name>` crate.** The gateway is a composition root, not a home for domain logic. |

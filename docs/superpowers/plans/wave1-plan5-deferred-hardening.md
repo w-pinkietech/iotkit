@@ -110,8 +110,9 @@ Fable review-max + codex の T9 レビュー。Important/Critical なし。高�
    **同時に D5決定1 の「トークン1:1 送信者は subject_hint 省略可」の解決経路を実装する**——
    現行コレクタは無条件必須(欠落=終端 UnknownSubject)で、1:1 トークンが登場する計画6までに
    契約どおりの省略解決が要る(2026-07-10 最終レビュー codex 指摘の裁定)。
-2. **ack 契約の完成**: 拒否詳細に `field_path`(JSON pointer)+期待スキーマヒント追加、
-   `ReasonCode::Internal` 削除(未使用・D1準拠の生成者なし=T4監査で文書化済み)。D1:90/93。
+2. **ack 契約の完成**: 拒否詳細に `field_path`(JSON pointer)+期待スキーマヒント追加。
+   `ReasonCode::Internal`は旧v1読取互換のためdeprecated語彙として残すが、生成者は禁止
+   (未使用・D1準拠の生成者なし=T4監査で文書化済み)。D1:90/93。
    ワイヤ適合テストと同時に。
 3. **docs/ingest-contract.md** 正規文書(exit-contract.md の対)+ curl 3行体験を受け入れ基準に。
 4. **入口は別crate**: `iotkit-ingest-http`(R2)。`gateway/src/api` は制御面専用——認証・レート
@@ -123,15 +124,15 @@ Fable review-max + codex の T9 レビュー。Important/Critical なし。高�
    命名済み別計画(容量ベンチ・電源断リグも吸収)。絞りの執行は網リスナー限定(in-proc は有界
    チャネルが逆圧=D1:117)。token-bucket 採用は D11保留の解決として還流記録すること。
    アラーム基盤は未実装のため「騒がしく」=監査イベント+R12 水位+エピソード集約(R23はフック)。
-7. **未決(計画6 brainstorming でユーザーに確認)**: R22 snapshot 秘密投入+暗号化コンテナを
-   計画6に含めるか(計画5 spec §9の約束)vs 直後の小計画6.5に分割するか。
-8. **配布時セキュリティ既定(Grok C1、2026-07-10 実物照合済み)**: API 既定が `enabled=true` +
+7. **解決済み(2026-07-12)**: R22 snapshotの暗号化コンテナ実装は小計画6.5へ分割。
+   計画6は復元の権限・継続・crash fence契約を固定するが、暗号化搬送とfilesystem stagingは実装しない。
+8. **解決済み(2026-07-12、Grok C1)**: API 既定が `enabled=true` +
    bind `0.0.0.0:8443`(`iotkit-gateway/src/config.rs:326-327`)。setup モード(パスフレーズ
    未設定)の間、同一 LAN の任意ホストから (a) `POST /api/v1/setup/passphrase` が認証外
    (`api/routes.rs:62`)のため**先にパスフレーズを設定した者が箱を掌握できる**(最強ベクター)、
    (b) Bearer なしで `SETUP_ALLOWED_OPS` の 2 op(`device.approve_sighting`=デバイス承認 /
    `registry.resolve_unknown_key`=測定キー解決、`core/ops/src/catalog.rs:8`)が実行可能
    (単一ターゲット限定・bulk 不可・private_source_guard はインターネット直公開のみ遮断)。
-   R19 入口認証の設計と同じ議論で既定を裁定する: bind 既定 127.0.0.1 / setup 完了まで API
-   閉鎖 / ワンタイム setup トークン等。採った既定は D-14(設置手順)の初回チェックリストと
-   対にする。
+   2026-07-12裁定でnetwork claimは廃止。未所有中はcontrol API/UIをbindせず、
+   local `gatewayctl`（TTYまたはSSH root）の非表示入力だけが初期所有権を作る。
+   `/api/v1/setup/passphrase`とsetup-mode未認証allowlistは計画6で削除し、D-14の設置手順と対にする。
