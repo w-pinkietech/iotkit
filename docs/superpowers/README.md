@@ -16,5 +16,6 @@ Current product guidance lives in two places:
 
 Development workflow guidance lives in [`docs/development-workflow.md`](../development-workflow.md).
 
-The live files here are `active-ledger.md` (restartable workflow state) and
+The live files here are `active-ledger.md` (restartable workflow state),
+`PLAN6-DESIGN-READY.md` (the current Plan 6 evidence/Red packet until folded into its spec), and
 `plans/wave1-plan5-deferred-hardening.md` plus successors (deferred-item ledgers).

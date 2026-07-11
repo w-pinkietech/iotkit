@@ -7,10 +7,10 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `8a4245b`
+- Artifact/base HEAD: `ee1fbd6`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: workflow acceleration adoption; Plan 6 product design frozen
+- Active phase: Plan 6 Design Ready and bundled Red decision preparation; product code frozen
 
 ## Mission
 
@@ -44,6 +44,56 @@ git/disk/test. Never store secrets here.
   local/per-card only. This design is not SETTLED yet.
 
 ## Review state
+
+- Plan-6 Design Ready zero-C/I confirmation: **SETTLED**. Manifest
+  `.review/plan6-design-ready-final3.manifest` SHA-256
+  `048012f9f6c4536be97af41d3acae54cfff771f955def27de4a150b463ed9c0a`; prompt
+  `.review/plan6-design-ready-final3-review.md` SHA-256
+  `33e7e02fd6bb89d8a8b78b1ea67f95b5b16b1fc45996a6bee8f29f0b0e6cd112`.
+  Fresh Codex `gpt-5.6-sol/high` confirmed both final prescriptions and returned zero unresolved
+  Critical/Important in the residual scan. Result SHA-256
+  `6cdc9d23b7eded7972a256b553c99299bc471ffe35338d66c59d1d575d221c7c`; receipt SHA-256
+  `a0696676007d852bc84560faba1f4e01107be49e21faf4b68737457806924858`.
+  Claude/Grok unavailable and not required.
+
+- Plan-6 Design Ready exact final confirmation: **COMPLETE, NOT SETTLED**. Manifest
+  `.review/plan6-design-ready-final2.manifest` SHA-256
+  `63ec44d674819d4e67dd56881adc34139abad325ea03c156d040b96c5d442d22`; prompt
+  `.review/plan6-design-ready-final2-review.md` SHA-256
+  `a32bb468b1fb68995bd2134d270c5a056f17f0789672b6fb1d17960f02f4f280`.
+  Fresh Codex `gpt-5.6-sol/high` confirmed both owned findings, then found two new Important
+  internal contradictions: the device-token provenance row ignored the selected restore mode,
+  and the actual echoed admin input contradicted secret-safety traceability. Both exact fixes
+  are applied; Plan 6 now requires non-echoed local passphrase input. Result SHA-256
+  `135fd4c7dee8c4e3cee726472de17656faa50048e23b9809cff64afbbb16da6e`; receipt SHA-256
+  `d3d4cc37b688108c2359993d2cfe57e66e9ef375335f8e2449d143a978bb79aa`.
+  Claude/Grok unavailable and not required.
+
+- Plan-6 Design Ready final confirmation: **COMPLETE, NOT SETTLED**. Substantive manifest
+  `.review/plan6-design-ready-final.manifest` SHA-256
+  `e03cb60ba0f19c648dd8098289c3c69b5ffd6b0f0bf516360c4de0e2075ce29d`; prompt
+  `.review/plan6-design-ready-final-review.md` SHA-256
+  `7bca7615c30142ef4ecefdf07b88ac26e15a2ba05da661086f8a1d84dc08d6e4`.
+  Fresh Codex `gpt-5.6-sol/high` confirmed round-1 items 2–10 and found two remaining Important
+  omissions: D2 §3.5's active operator-token restoration conflict was not named, and DB/TLS
+  restore lacked a cross-filesystem crash fence. Both exact prescriptions are now applied.
+  Result SHA-256 `022f4f4265b56efd4d5a3132677ea38dfbcac39d6022a724a871eed85df7205b`;
+  receipt SHA-256 `3243abe92bf62f5d7265ef078896db47334254801922c60f82e81302e847b788`.
+  Claude/Grok were unavailable and not required.
+
+- Plan-6 Design Ready round 1: **COMPLETE, NOT SETTLED**. Substantive manifest
+  `.review/plan6-design-ready.manifest` SHA-256
+  `ebfe355aad145ab68a8836f2d4ee7300e418e7a18fddcd65f9e11810273aa01a`; prompt
+  `.review/plan6-design-ready-review.md` SHA-256
+  `a926e3b18d9b1197739adcd172477f3bd2725f0fefc0fc3eb5aad14888b2b40e`.
+  Fresh Codex `gpt-5.6-sol/high` found zero Critical and ten Important gaps: restore material
+  matrix/identity/TLS, current non-pristine restore predicate, preseed lifecycle, filesystem
+  crash ordering, SSH reset authority, nonexistent provisioner UX, canon propagation, auth
+  clock rollback, device-token reissue state, and partial TLS loss. All are addressed in the
+  revised pack; Red consequences were expanded rather than silently decided. Result SHA-256
+  `9f8eb68ecec26357db2205c06dccc78bb5e703ab0d79d8aa191234558b9c2ba9`; receipt SHA-256
+  `eddbba5279dbc28d11d1d3e8507aa8f865e236467a852ae9b140021f3466f4ea`.
+  Claude/Grok were unavailable and not required.
 
 - Model/effort routing policy: **SETTLED**. Round 1 substantive manifest
   `.review/model-routing.manifest` SHA-256
@@ -156,13 +206,19 @@ git/disk/test. Never store secrets here.
 
 ## Unresolved Red packet
 
-Prepare one bundled Plan-6 packet after the workflow is SETTLED. Candidate items:
+Prepared as `docs/superpowers/PLAN6-DESIGN-READY.md`; independent review is SETTLED. The packet
+bundles:
 
 1. R22 restore versus auth revocation-generation rollback.
 2. Factory reset meaning and authority.
 3. Product scope/UX consequence of the local-only bootstrap producer and recovery limit.
 
-Do not ask these separately. Continue Design Ready evidence that is common to all choices.
+Do not ask these separately. Revised recommendations: replacement preserves logical gateway
+identity/TLS and, if the user accepts explicit post-backup revocation rollback risk, active
+device-token continuity; admin/operator/session authority is invalidated with a new auth epoch;
+factory reset is SSH/local-root full erase and distinct from non-destructive admin recovery;
+Plan 6 uses local CLI ownership only and defers nonexistent provisioning tooling to the
+distribution gate. Continue Design Ready evidence common to all choices.
 
 ## Yellow decisions
 
@@ -176,8 +232,9 @@ Do not ask these separately. Continue Design Ready evidence that is common to al
 
 ## Next executable work
 
-1. Resume Plan 6 with its Design Ready pack and one bundled Red packet, using Sol/high through
-   design, implementation, and final settlement.
+1. Obtain the user's three related Red decisions from the settled bundled packet.
+2. After the decision, write and settle the Plan 6 spec and contract-centered implementation
+   plan before dispatching product-code workers.
 
 ## Verification
 
