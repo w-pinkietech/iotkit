@@ -155,6 +155,7 @@ pub fn reset_passphrase_with_hash(
     tx.execute(
         "UPDATE auth_state
          SET auth_generation = auth_generation + 1,
+             device_credential_generation = device_credential_generation + 1,
              recovery_required = 0,
              ownership_ever_established = 1
          WHERE id = 1",
@@ -195,12 +196,18 @@ pub fn new_auth_epoch() -> Result<String, OpsError> {
     random_prefixed("auth_", TOKEN_ID_RANDOM_BYTES)
 }
 
-pub fn enter_restored_local_recovery(conn: &Connection, new_epoch: &str) -> Result<(), OpsError> {
-    conn.execute("DELETE FROM admin_credential", [])?;
-    conn.execute("DELETE FROM operator_tokens", [])?;
-    conn.execute(
+pub fn enter_restored_local_recovery(
+    tx: &rusqlite::Transaction<'_>,
+    new_epoch: &str,
+) -> Result<(), OpsError> {
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+    let prior_device_generation = crate::device_auth_generation(tx)?;
+    tx.execute("DELETE FROM admin_credential", [])?;
+    tx.execute("DELETE FROM operator_tokens", [])?;
+    tx.execute(
         "UPDATE auth_state
          SET auth_generation = auth_generation + 1,
+             device_credential_generation = device_credential_generation + 1,
              auth_epoch = ?1,
              recovery_required = 1,
              ownership_ever_established = 1,
@@ -210,8 +217,13 @@ pub fn enter_restored_local_recovery(conn: &Connection, new_epoch: &str) -> Resu
          WHERE id = 1",
         [new_epoch],
     )?;
+    tx.execute("UPDATE device_credentials SET auth_epoch = ?1", [new_epoch])?;
+    tx.execute(
+        "UPDATE auth_state SET device_credential_generation=?1 WHERE id=1",
+        [prior_device_generation.saturating_add(1)],
+    )?;
     record_auth_event(
-        conn,
+        tx,
         "restore_authority_cleared",
         json!({ "actor": "local_cli", "recovery": "local_recovery_required" }),
     )?;

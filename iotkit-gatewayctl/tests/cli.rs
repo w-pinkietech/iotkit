@@ -3,9 +3,706 @@ use std::process::{Command, Output, Stdio};
 
 use rusqlite::{params, types::ValueRef};
 use serde_json::{Map, Value};
+use sha2::Digest;
 
 fn gatewayctl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_iotkit-gatewayctl"))
+}
+
+#[test]
+fn legacy_snapshot_export_refuses_device_credentials_without_secret_or_hash_leak() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("credential-export.db");
+    let out_path = dir.path().join("replacement.json");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let (plaintext, hash_hex) = db
+        .with_conn_sync(|conn| {
+            let (_credential_id, plaintext) = seed_device_credential(conn, "export");
+            let hash: Vec<u8> = conn
+                .query_row("SELECT token_hash FROM device_credentials", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            Ok((
+                plaintext,
+                hash.iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+            ))
+        })
+        .unwrap();
+    drop(db);
+
+    let output = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        out_path.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Plan 6.5 encrypted replacement backup"));
+    for capture in [&*stdout, &*stderr] {
+        assert!(!capture.contains(&plaintext));
+        assert!(!capture.contains(&hash_hex));
+        assert!(!capture.contains("complete backup"));
+    }
+    assert!(!out_path.exists());
+}
+
+#[test]
+fn snapshot_export_failure_leaves_no_output_or_temporary_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("export-failure.db");
+    let out_path = dir.path().join("replacement.json");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
+        .unwrap();
+    drop(db);
+    let output = run_with_env(
+        &[
+            "--db",
+            db_path.to_str().unwrap(),
+            "snapshot",
+            "export",
+            out_path.to_str().unwrap(),
+        ],
+        "IOTKIT_TEST_FAIL_EXPORT_BEFORE_RENAME",
+        "1",
+    );
+    assert_failure(output);
+    assert!(!out_path.exists());
+    let leftovers = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("replacement.json.tmp")
+        })
+        .count();
+    assert_eq!(leftovers, 0);
+}
+
+#[test]
+fn snapshot_export_holds_immediate_transaction_against_concurrent_credential_creation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("export-race.db");
+    let out_path = dir.path().join("replacement.json");
+    let ready = dir.path().join("export.ready");
+    let proceed = dir.path().join("export.continue");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
+        .unwrap();
+    drop(db);
+
+    let mut export = gatewayctl();
+    export.args([
+        "--db",
+        db_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        out_path.to_str().unwrap(),
+    ]);
+    export
+        .env("IOTKIT_TEST_EXPORT_READY_FILE", &ready)
+        .env("IOTKIT_TEST_EXPORT_CONTINUE_FILE", &proceed);
+    let export = export.spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "export never acquired its transaction"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut add = gatewayctl();
+    add.args([
+        "--db",
+        db_path.to_str().unwrap(),
+        "device",
+        "add",
+        "--hardware-id",
+        "concurrent-device",
+    ]);
+    add.stdout(Stdio::null()).stderr(Stdio::null());
+    let mut add = add.spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        add.try_wait().unwrap().is_none(),
+        "credential creation bypassed export's IMMEDIATE transaction"
+    );
+    std::fs::write(&proceed, b"continue").unwrap();
+    assert!(export.wait_with_output().unwrap().status.success());
+    assert!(add.wait().unwrap().success());
+    assert!(out_path.exists());
+}
+
+#[test]
+fn confirmation_review_snapshot_publish_never_clobbers_concurrent_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("publish-race.db");
+    let out_path = dir.path().join("replacement.json");
+    let ready = dir.path().join("publish.ready");
+    let proceed = dir.path().join("publish.continue");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
+        .unwrap();
+    drop(db);
+
+    let mut export = gatewayctl();
+    export.args([
+        "--db",
+        db_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        out_path.to_str().unwrap(),
+    ]);
+    export
+        .env("IOTKIT_TEST_EXPORT_PUBLISH_READY_FILE", &ready)
+        .env("IOTKIT_TEST_EXPORT_PUBLISH_CONTINUE_FILE", &proceed);
+    let mut export = export.spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !ready.exists() && std::time::Instant::now() < deadline {
+        if export.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        ready.exists(),
+        "export did not reach its atomic publication boundary"
+    );
+    std::fs::write(&out_path, b"concurrent-winner").unwrap();
+    std::fs::write(&proceed, b"continue").unwrap();
+    let output = export.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&out_path).unwrap(), b"concurrent-winner");
+    assert!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .contains("replacement.json.tmp"))
+    );
+}
+
+#[test]
+fn restore_rejects_target_containing_only_device_authority_without_changing_epoch() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("source.db");
+    let snapshot_path = dir.path().join("state.json");
+    let target_path = dir.path().join("target.db");
+    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    source
+        .with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
+        .unwrap();
+    drop(source);
+    assert_success(run(&[
+        "--db",
+        source_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    let (old_epoch, plaintext) = target.with_conn_sync(|conn| {
+        let epoch = iotkit_core_ops::auth_epoch(conn).unwrap();
+        let (_id, plaintext) = seed_device_credential(conn, "restore-target");
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DELETE FROM devices; DELETE FROM ledger_events; DELETE FROM sqlite_sequence;").unwrap();
+        Ok((epoch, plaintext))
+    }).unwrap();
+    drop(target);
+    let output = run(&[
+        "snapshot",
+        "restore",
+        snapshot_path.to_str().unwrap(),
+        "--db",
+        target_path.to_str().unwrap(),
+        "--yes",
+    ]);
+    let stderr = assert_failure(output);
+    assert!(
+        stderr.contains("auth_state")
+            || stderr.contains("device_ingest_principals")
+            || stderr.contains("device_credentials"),
+        "{stderr}"
+    );
+
+    let conn = rusqlite::Connection::open(&target_path).unwrap();
+    assert_eq!(iotkit_core_ops::auth_epoch(&conn).unwrap(), old_epoch);
+    let credential_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM device_credentials", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(credential_rows, 1);
+    let stored_hash: Vec<u8> = conn
+        .query_row("SELECT token_hash FROM device_credentials", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        stored_hash,
+        sha2::Sha256::digest(plaintext.as_bytes()).to_vec()
+    );
+}
+
+#[test]
+fn restore_pristine_check_includes_principal_material_generation_and_runtime_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("pristine-source.db");
+    let snapshot_path = dir.path().join("pristine.json");
+    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    source
+        .with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
+        .unwrap();
+    drop(source);
+    assert_success(run(&[
+        "--db",
+        source_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    for (index, mutation) in [
+        "UPDATE auth_state SET device_credential_generation=1 WHERE id=1",
+        "UPDATE device_flow_classes SET steady_units=2 WHERE flow_class='low'",
+        "UPDATE device_capacity SET stale_after_ms=2 WHERE id=1",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let target_path = dir.path().join(format!("pristine-target-{index}.db"));
+        let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+        target
+            .with_conn_sync(|conn| {
+                conn.execute(mutation, [])?;
+                Ok(())
+            })
+            .unwrap();
+        drop(target);
+        let stderr = assert_failure(run(&[
+            "snapshot",
+            "restore",
+            snapshot_path.to_str().unwrap(),
+            "--db",
+            target_path.to_str().unwrap(),
+            "--yes",
+        ]));
+        assert!(stderr.contains("restore target is not empty"), "{stderr}");
+    }
+}
+
+#[test]
+fn device_add_and_credential_cli_show_plaintext_once_and_drive_make_before_break() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("credential-cli.db");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    drop(db);
+    let add = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device",
+        "add",
+        "--hardware-id",
+        "cli-credential-device",
+    ]);
+    assert!(String::from_utf8_lossy(&add.stderr).contains("shown once"));
+    assert!(String::from_utf8_lossy(&add.stderr).contains("revoke"));
+    let first = assert_success(add).trim().to_string();
+    assert!(first.starts_with("ikd_"));
+
+    let audit_before_list: i64 = rusqlite::Connection::open(&db_path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM ledger_events", [], |row| row.get(0))
+        .unwrap();
+
+    let list = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "list",
+    ]));
+    let audit_after_list: i64 = rusqlite::Connection::open(&db_path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM ledger_events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        audit_after_list, audit_before_list,
+        "read-only list must not audit or mutate"
+    );
+    assert!(!list.contains(&first));
+    assert!(!list.contains("token_hash"));
+    let value: Value = serde_json::from_str(list.trim()).unwrap();
+    let principal = value["principals"][0]["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first_id = value["credentials"][0]["credential_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let reissue = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "reissue",
+        "--principal-id",
+        &principal,
+        "--reason-code",
+        "credential_reissue",
+    ]));
+    let pending = reissue.trim().to_string();
+    assert!(pending.starts_with("ikd_"));
+    assert_ne!(pending, first);
+    let second = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "reissue",
+        "--principal-id",
+        &principal,
+        "--reason-code",
+        "credential_reissue",
+    ]);
+    assert!(!second.status.success());
+    assert!(!String::from_utf8_lossy(&second.stderr).contains(&pending));
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    assert!(
+        iotkit_core_ops::authenticate_device(&conn, &pending)
+            .unwrap()
+            .is_some()
+    );
+    let pending_id: String = conn
+        .query_row(
+            "SELECT credential_id FROM device_credentials WHERE state='pending'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "confirm",
+        "--principal-id",
+        &principal,
+        "--credential-id",
+        &pending_id,
+        "--reason-code",
+        "credential_confirmed",
+    ]));
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    assert!(
+        iotkit_core_ops::authenticate_device(&conn, &first)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        iotkit_core_ops::authenticate_device(&conn, &pending)
+            .unwrap()
+            .is_some()
+    );
+    let old_state: String = conn
+        .query_row(
+            "SELECT state FROM device_credentials WHERE credential_id=?1",
+            [&first_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(old_state, "revoked");
+    let audit: String = conn
+        .query_row(
+            "SELECT COALESCE(group_concat(detail, '\n'), '') FROM ledger_events WHERE kind='r14_op'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!audit.contains(&first));
+    assert!(!audit.contains(&pending));
+    assert!(!audit.contains("token_hash"));
+}
+
+#[test]
+fn confirmation_review_secret_loss_guidance_matches_returned_credential_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("credential-guidance.db");
+    drop(iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap());
+    let add = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device",
+        "add",
+        "--hardware-id",
+        "guidance-device",
+    ]);
+    let add_stderr = String::from_utf8_lossy(&add.stderr);
+    assert!(add.status.success(), "{add_stderr}");
+    assert!(add_stderr.contains("revoke it, then issue a new credential"));
+    assert!(!add_stderr.contains("abandon"));
+
+    let list = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "list",
+    ]));
+    let value: Value = serde_json::from_str(list.trim()).unwrap();
+    let principal = value["principals"][0]["principal_id"].as_str().unwrap();
+    let reissue = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "reissue",
+        "--principal-id",
+        principal,
+        "--reason-code",
+        "credential_reissue",
+    ]);
+    let reissue_stderr = String::from_utf8_lossy(&reissue.stderr);
+    assert!(reissue.status.success(), "{reissue_stderr}");
+    assert!(reissue_stderr.contains("abandon it, then reissue a new credential"));
+    assert!(!reissue_stderr.contains("revoke it, then issue"));
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute(
+        "UPDATE device_capacity SET steady_units=2, burst_units=2",
+        [],
+    )
+    .unwrap();
+    let sid = iotkit_core_ledger::insert_device(
+        &conn,
+        &iotkit_core_ledger::NewDevice {
+            hardware_id: "guidance-dormant".into(),
+            user_label: None,
+            parent: None,
+            kind: iotkit_core_ledger::DeviceKind::Individual,
+            initial_state: iotkit_core_ledger::DeviceState::Active,
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO device_ingest_principals
+         (principal_id, device_system_id, flow_class, profile, created_at)
+         VALUES ('guidance-dormant-principal', ?1, 'default', 'simple_bearer', 1)",
+        [sid.as_bytes().as_slice()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO device_principal_scopes (principal_id, system_id)
+         VALUES ('guidance-dormant-principal', ?1)",
+        [sid.as_bytes().as_slice()],
+    )
+    .unwrap();
+    drop(conn);
+    let issue = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "issue",
+        "--principal-id",
+        "guidance-dormant-principal",
+        "--reason-code",
+        "manual_issue",
+    ]);
+    let issue_stderr = String::from_utf8_lossy(&issue.stderr);
+    assert!(issue.status.success(), "{issue_stderr}");
+    assert!(issue_stderr.contains("revoke it, then issue a new credential"));
+    assert!(!issue_stderr.contains("abandon"));
+}
+
+#[test]
+fn capacity_debt_cli_displays_required_and_available_and_requires_deliberate_automation_confirmation()
+ {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("capacity-cli.db");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        conn.execute(
+            "UPDATE device_flow_classes SET steady_units=5, burst_units=6 WHERE flow_class='high'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    drop(db);
+    let args = [
+        "--db",
+        db_path.to_str().unwrap(),
+        "device",
+        "add",
+        "--hardware-id",
+        "capacity-cli-device",
+        "--flow-class",
+        "high",
+        "--accept-capacity-debt",
+    ];
+    let rejected = run(&args);
+    let rejected_stderr = assert_failure(rejected);
+    assert!(rejected_stderr.contains("required steady/burst = 5/6"));
+    assert!(rejected_stderr.contains("available = 1/1"));
+    assert!(rejected_stderr.contains("--yes"));
+
+    let mut accepted_args = args.to_vec();
+    accepted_args.push("--yes");
+    let accepted = run(&accepted_args);
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    assert!(String::from_utf8_lossy(&accepted.stderr).contains("shown once"));
+}
+
+fn run_capacity_race(
+    db_path: &std::path::Path,
+    ready: &std::path::Path,
+    proceed: &std::path::Path,
+    args: &[&str],
+) -> Output {
+    let mut command = gatewayctl();
+    command.args(args);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+        .env("IOTKIT_TEST_CAPACITY_PREVIEW_READY_FILE", ready)
+        .env("IOTKIT_TEST_CAPACITY_PREVIEW_CONTINUE_FILE", proceed);
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"approve-capacity-debt\n")
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "capacity preview never completed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    conn.execute(
+        "UPDATE auth_state SET device_credential_generation=device_credential_generation+1 WHERE id=1",
+        [],
+    )
+    .unwrap();
+    std::fs::write(proceed, b"continue").unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn capacity_debt_add_atomic_preview_rejects_equal_total_authority_race() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("capacity-add-race.db");
+    let ready = dir.path().join("add.ready");
+    let proceed = dir.path().join("add.continue");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        conn.execute(
+            "UPDATE device_flow_classes SET steady_units=5, burst_units=5 WHERE flow_class='high'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    drop(db);
+    let output = run_capacity_race(
+        &db_path,
+        &ready,
+        &proceed,
+        &[
+            "--db",
+            db_path.to_str().unwrap(),
+            "device",
+            "add",
+            "--hardware-id",
+            "capacity-add-race",
+            "--flow-class",
+            "high",
+            "--accept-capacity-debt",
+        ],
+    );
+    let stderr = assert_failure(output);
+    assert!(stderr.contains("capacity_approval_stale"));
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let created: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM devices WHERE hardware_id='capacity-add-race'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(created, 0);
+}
+
+#[test]
+fn capacity_debt_flow_atomic_preview_rejects_equal_total_authority_race() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("capacity-flow-race.db");
+    let ready = dir.path().join("flow.ready");
+    let proceed = dir.path().join("flow.continue");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let principal = db
+        .with_conn_sync(|conn| {
+            let (_credential, _plaintext) = seed_device_credential(conn, "flow-race");
+            conn.execute(
+                "UPDATE device_flow_classes SET steady_units=5, burst_units=5 WHERE flow_class='high'",
+                [],
+            )?;
+            conn.query_row(
+                "SELECT principal_id FROM device_ingest_principals LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    drop(db);
+    let output = run_capacity_race(
+        &db_path,
+        &ready,
+        &proceed,
+        &[
+            "--db",
+            db_path.to_str().unwrap(),
+            "device-credential",
+            "flow-class",
+            "--principal-id",
+            &principal,
+            "--flow-class",
+            "high",
+            "--accept-capacity-debt",
+            "--yes",
+        ],
+    );
+    let stderr = assert_failure(output);
+    assert!(stderr.contains("capacity_approval_stale"));
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let flow: String = conn
+        .query_row(
+            "SELECT flow_class FROM device_ingest_principals WHERE principal_id=?1",
+            [&principal],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(flow, "default");
 }
 
 fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
@@ -245,6 +942,45 @@ fn snapshot_sections(conn: &rusqlite::Connection) -> Map<String, Value> {
         )
     })
     .collect()
+}
+
+fn seed_device_credential(conn: &rusqlite::Connection, suffix: &str) -> (String, String) {
+    let sid = iotkit_core_ledger::insert_device(
+        conn,
+        &iotkit_core_ledger::NewDevice {
+            hardware_id: format!("credential-test-{suffix}"),
+            user_label: None,
+            parent: None,
+            kind: iotkit_core_ledger::DeviceKind::Individual,
+            initial_state: iotkit_core_ledger::DeviceState::Active,
+        },
+    )
+    .unwrap();
+    let principal = format!("test-principal-{suffix}");
+    conn.execute(
+        "INSERT INTO device_ingest_principals
+         (principal_id, device_system_id, flow_class, profile, created_at)
+         VALUES (?1, ?2, 'default', 'simple_bearer', 1)",
+        params![principal, sid.as_bytes().as_slice()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO device_principal_scopes (principal_id, system_id) VALUES (?1, ?2)",
+        params![principal, sid.as_bytes().as_slice()],
+    )
+    .unwrap();
+    let credential_id = format!("test-credential-{suffix}");
+    let plaintext = format!("ikd_test_{suffix}");
+    let hash = sha2::Sha256::digest(plaintext.as_bytes());
+    conn.execute(
+        "INSERT INTO device_credentials
+         (credential_id, principal_id, token_hash, auth_epoch, state, issued_at, issue_reason)
+         VALUES (?1, ?2, ?3, (SELECT auth_epoch FROM auth_state WHERE id=1),
+                 'current', 1, 'manual_issue')",
+        params![credential_id, principal, hash.as_slice()],
+    )
+    .unwrap();
+    (credential_id, plaintext)
 }
 
 fn seed_replace_target(conn: &rusqlite::Connection) -> iotkit_core_ledger::SystemId {
@@ -759,7 +1495,10 @@ fn existing_empty_db_gets_gateway_migration_version_set() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    assert_eq!(
+        versions,
+        vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    );
 }
 
 #[test]

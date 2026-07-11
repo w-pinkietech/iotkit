@@ -197,6 +197,38 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
             && op["tier"] == "construction"
             && op["params_schema"].get("required").is_some()
     }));
+
+    let generic_secret_issue = client
+        .post(format!("{base}/api/v1/ops/device.add_with_credential"))
+        .header(header::AUTHORIZATION, &session_bearer)
+        .json(&json!({"params": {
+            "hardware_id":"generic-api-denied-operation",
+            "flow_class":"default",
+            "reason_code":"device_commissioning"
+        }}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(generic_secret_issue.status(), StatusCode::FORBIDDEN);
+    let generic_secret_body: Value = generic_secret_issue.json().await.unwrap();
+    assert_eq!(generic_secret_body["error"]["code"], "forbidden");
+    db.with_conn_sync(|conn| {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE hardware_id='generic-api-denied-operation')",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!exists);
+        let audit: String = conn.query_row(
+            "SELECT detail FROM ledger_events WHERE kind='r14_op' ORDER BY event_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!audit.contains("ikd_"));
+        assert!(!audit.contains("plaintext"));
+        Ok(())
+    })
+    .unwrap();
     assert!(catalog.iter().any(|op| {
         op["name"] == "device.approve_sighting"
             && op["tier"] == "daily"

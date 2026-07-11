@@ -13,11 +13,13 @@ pub fn approve_sighting_descriptor() -> OpDescriptor {
         name: "device.approve_sighting",
         tier: Tier::Daily,
         bulk_escalates: true,
+        changes_state: true,
         params_schema: hardware_schema,
         targets: hardware_targets,
         preconditions: approve_preconditions,
         dry_run: approve_dry_run,
         execute: approve_execute,
+        secret_execute: None,
     }
 }
 
@@ -26,11 +28,13 @@ pub fn retire_descriptor() -> OpDescriptor {
         name: "device.retire",
         tier: Tier::Daily,
         bulk_escalates: true,
+        changes_state: true,
         params_schema: system_schema,
         targets: system_targets,
         preconditions: retire_preconditions,
         dry_run: retire_dry_run,
         execute: retire_execute,
+        secret_execute: None,
     }
 }
 
@@ -121,7 +125,13 @@ fn retire_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, Op
         retire_device(tx, &sid)?;
         retired.push(sid.to_text());
     }
+    crate::device_credentials::recover_capacity_debt_if_possible_in_tx(tx, now_ms())?;
     Ok(json!({ "retired": retired }))
+}
+
+fn now_ms() -> i64 {
+    use crate::device_credentials::CredentialClock;
+    crate::device_credentials::SystemCredentialClock.now_ms()
 }
 
 fn system_ids(ctx: &OpContext<'_>) -> Result<Vec<SystemId>, OpError> {

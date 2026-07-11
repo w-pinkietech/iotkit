@@ -5,6 +5,7 @@ use iotkit_core_storage::Migration;
 pub mod auth;
 pub mod catalog;
 pub mod clock;
+pub mod device_credentials;
 pub mod fingerprint;
 pub mod ops;
 pub mod tier;
@@ -17,10 +18,21 @@ pub use auth::{
     reconcile_database_initialization_provenance, require_passphrase_authority_unchanged,
     reset_passphrase_with_hash, revoke_token, verify_passphrase,
 };
-pub use catalog::{DispatchRequest, OpContext, OpDescriptor, OpError, dispatch};
+pub use catalog::{
+    DeviceCredentialDispatchResult, DispatchRequest, DispatchResult, OpContext, OpDescriptor,
+    OpError, SecretOpExecute, dispatch,
+};
 pub use clock::{
     Clock, ClockEvidence, ClockTrust, ClockTrustError, SystemClock, TrustSource,
     confirm_time_with_clock,
+};
+pub use device_credentials::{
+    CapacityHealth, CapacityStatus, CredentialReasonCode, DeviceAuthentication,
+    DeviceAuthorityConfig, DeviceCredentialPresentation, DeviceCredentialRow,
+    DeviceCredentialState, DevicePrincipal, DevicePrincipalRow, FlowWeight, StaleCredentialHealth,
+    authenticate_device, capacity_health, configured_stale_after_ms, device_auth_generation,
+    list_device_credentials, list_device_principals, replacement_backup_health,
+    stale_credential_health,
 };
 pub use fingerprint::fingerprint_of_pem;
 pub use ops::standard_catalog;
@@ -41,6 +53,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 14,
         label: "task1_provenance",
         sql: include_str!("../migrations/0014_task1_provenance.sql"),
+    },
+    Migration {
+        version: 15,
+        label: "device_credentials",
+        sql: include_str!("../migrations/0015_device_credentials.sql"),
     },
 ];
 

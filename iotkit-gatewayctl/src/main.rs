@@ -1,4 +1,5 @@
 mod cmd {
+    pub mod device_credential;
     pub mod devices;
     pub mod fingerprint;
     pub mod passphrase;
@@ -34,6 +35,10 @@ enum Command {
     Device {
         #[command(subcommand)]
         command: DeviceCommand,
+    },
+    DeviceCredential {
+        #[command(subcommand)]
+        command: cmd::device_credential::DeviceCredentialCommand,
     },
     Events {
         #[command(subcommand)]
@@ -160,6 +165,21 @@ fn run() -> AppResult<()> {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         return cmd::snapshot::run_restore_status(&conn);
+    }
+    if matches!(
+        &cli.command,
+        Command::DeviceCredential {
+            command: cmd::device_credential::DeviceCredentialCommand::List(_),
+        }
+    ) {
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        if let Command::DeviceCredential { command } = cli.command {
+            return cmd::device_credential::run(&conn, command);
+        }
+        unreachable!("device credential list match was checked");
     }
     let mut created_target = None;
     if allow_missing_db {
@@ -294,6 +314,7 @@ fn dispatch(
             DeviceCommand::Replace(args) => cmd::replace::run_replace(conn, args),
             DeviceCommand::ReplaceUndo(args) => cmd::replace::run_replace_undo(conn, args),
         },
+        Command::DeviceCredential { command } => cmd::device_credential::run(conn, command),
         Command::Events { command } => match command {
             EventsCommand::Tail(args) => cmd::devices::run_tail_events(conn, args),
         },

@@ -172,6 +172,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         epoch.clone(),
         health_state.clone(),
         clock_trust.clone(),
+        db.clone(),
         Duration::from_secs(60),
     );
     let _publish_task =

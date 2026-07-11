@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::{fmt, ops::Deref};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
@@ -10,17 +11,106 @@ pub struct OpContext<'a> {
     pub actor_id: &'a str,
     pub source: Option<&'a str>,
     pub clock_trust: Option<&'a crate::ClockTrust>,
+    pub actor_kind: ActorKind,
+    pub dry_run: bool,
 }
+
+pub type SecretOpExecute =
+    fn(&Transaction<'_>, &OpContext<'_>) -> Result<DeviceCredentialDispatchResult, OpError>;
 
 pub struct OpDescriptor {
     pub name: &'static str,
     pub tier: Tier,
     pub bulk_escalates: bool,
+    pub changes_state: bool,
     pub params_schema: fn() -> Value,
     pub targets: fn(&Value) -> Vec<String>,
     pub preconditions: fn(&Transaction<'_>, &OpContext<'_>) -> Result<(), OpError>,
     pub dry_run: fn(&Transaction<'_>, &OpContext<'_>) -> Result<Value, OpError>,
     pub execute: fn(&Transaction<'_>, &OpContext<'_>) -> Result<Value, OpError>,
+    pub secret_execute: Option<SecretOpExecute>,
+}
+
+pub struct DeviceCredentialDispatchResult {
+    metadata: Value,
+    presentation: crate::DeviceCredentialPresentation,
+}
+
+impl DeviceCredentialDispatchResult {
+    pub fn new(metadata: Value, presentation: crate::DeviceCredentialPresentation) -> Self {
+        Self {
+            metadata,
+            presentation,
+        }
+    }
+
+    pub fn metadata(&self) -> &Value {
+        &self.metadata
+    }
+
+    pub fn consume(self) -> (Value, zeroize::Zeroizing<String>) {
+        (self.metadata, self.presentation.consume())
+    }
+}
+
+impl fmt::Debug for DeviceCredentialDispatchResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceCredentialDispatchResult")
+            .field("metadata", &self.metadata)
+            .field("presentation", &"[REDACTED]")
+            .finish()
+    }
+}
+
+pub enum DispatchResult {
+    Public(Value),
+    DeviceCredential(DeviceCredentialDispatchResult),
+}
+
+impl DispatchResult {
+    pub fn into_public(self) -> Result<Value, OpError> {
+        match self {
+            Self::Public(value) => Ok(value),
+            Self::DeviceCredential(_) => Err(OpError::Forbidden(
+                "authorized_presentation_required".into(),
+            )),
+        }
+    }
+
+    pub fn metadata(&self) -> &Value {
+        match self {
+            Self::Public(value) => value,
+            Self::DeviceCredential(secret) => secret.metadata(),
+        }
+    }
+}
+
+impl fmt::Debug for DispatchResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Public(value) => f.debug_tuple("Public").field(value).finish(),
+            Self::DeviceCredential(secret) => secret.fmt(f),
+        }
+    }
+}
+
+impl Deref for DispatchResult {
+    type Target = Value;
+    fn deref(&self) -> &Self::Target {
+        self.metadata()
+    }
+}
+
+impl PartialEq for DispatchResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.metadata() == other.metadata()
+    }
+}
+
+impl PartialEq<Value> for DispatchResult {
+    fn eq(&self, other: &Value) -> bool {
+        self.metadata() == other
+    }
 }
 
 pub struct DispatchRequest {
@@ -51,7 +141,12 @@ pub enum OpError {
 
 impl From<rusqlite::Error> for OpError {
     fn from(value: rusqlite::Error) -> Self {
-        Self::Internal(value.to_string())
+        let message = value.to_string();
+        if message.contains("capacity_math_overflow") {
+            Self::Validation("capacity_math_overflow".into())
+        } else {
+            Self::Internal(message)
+        }
     }
 }
 
@@ -99,14 +194,20 @@ impl From<OpsError> for OpError {
             OpsError::NotFound => Self::NotFound,
             OpsError::Conflict => Self::PreconditionFailed(value.to_string()),
             OpsError::Forbidden => Self::Forbidden(value.to_string()),
-            OpsError::Validation(_) => Self::Validation(value.to_string()),
+            OpsError::Validation(code) if code == "capacity_math_overflow" => {
+                Self::Validation(code)
+            }
+            OpsError::Validation(code) => Self::Validation(format!("validation: {code}")),
             OpsError::ClockUntrusted => Self::PreconditionFailed(value.to_string()),
             OpsError::Ledger(e) => e.into(),
+            OpsError::Sqlite(error) if error.to_string().contains("capacity_math_overflow") => {
+                Self::Validation("capacity_math_overflow".into())
+            }
             OpsError::Storage(_)
-            | OpsError::Sqlite(_)
             | OpsError::CredentialHash
             | OpsError::Random
             | OpsError::Io(_) => Self::Internal(value.to_string()),
+            OpsError::Sqlite(_) => Self::Internal(value.to_string()),
         }
     }
 }
@@ -115,7 +216,7 @@ pub fn dispatch(
     conn: &Connection,
     catalog: &[OpDescriptor],
     req: DispatchRequest,
-) -> Result<Value, OpError> {
+) -> Result<DispatchResult, OpError> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| OpError::Internal(e.to_string()))?;
 
@@ -143,9 +244,11 @@ pub fn dispatch(
         actor_id: &req.actor.actor_id,
         source: req.source.as_deref(),
         clock_trust: req.clock_trust.as_deref(),
+        actor_kind: req.actor.actor_kind,
+        dry_run: req.dry_run,
     };
 
-    let result = (|| -> Result<Value, OpError> {
+    let result = (|| -> Result<DispatchResult, OpError> {
         if matches!(req.actor.actor_kind, ActorKind::Human | ActorKind::Ai) {
             let token_expiry = tx
                 .query_row(
@@ -208,19 +311,33 @@ pub fn dispatch(
             return Err(OpError::StepUpRequired);
         }
 
+        if descriptor.secret_execute.is_some()
+            && !req.dry_run
+            && req.actor.actor_kind != ActorKind::LocalCli
+        {
+            return Err(OpError::Forbidden(
+                "authorized_presentation_required".into(),
+            ));
+        }
+
         validate_params((descriptor.params_schema)(), &req.params)?;
         tx.execute_batch("SAVEPOINT op")
             .map_err(|e| OpError::Internal(e.to_string()))?;
 
-        let op_result = (|| -> Result<Value, OpError> {
+        let op_result = (|| -> Result<DispatchResult, OpError> {
             (descriptor.preconditions)(&tx, &ctx)?;
             if req.dry_run {
-                return (descriptor.dry_run)(&tx, &ctx);
+                return (descriptor.dry_run)(&tx, &ctx).map(DispatchResult::Public);
             }
 
-            let value = (descriptor.execute)(&tx, &ctx)?;
-            iotkit_core_ledger::bump_generation(&tx)
-                .map_err(|e| OpError::Internal(e.to_string()))?;
+            let value = match descriptor.secret_execute {
+                Some(execute) => DispatchResult::DeviceCredential(execute(&tx, &ctx)?),
+                None => DispatchResult::Public((descriptor.execute)(&tx, &ctx)?),
+            };
+            if descriptor.changes_state {
+                iotkit_core_ledger::bump_generation(&tx)
+                    .map_err(|e| OpError::Internal(e.to_string()))?;
+            }
             Ok(value)
         })();
 
@@ -247,7 +364,7 @@ pub fn dispatch(
         "tier": descriptor.tier.as_str(),
         "effective_tier": effective_tier.as_str(),
         "dry_run": req.dry_run,
-        "params": req.params,
+        "params": redact_audit_value(&req.params),
         "result": audit_result(&result),
         "targets": targets,
         "source": req.source,
@@ -257,6 +374,37 @@ pub fn dispatch(
     tx.commit().map_err(|e| OpError::Internal(e.to_string()))?;
 
     result
+}
+
+fn redact_audit_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    let sensitive_key = matches!(
+                        key.as_str(),
+                        "plaintext"
+                            | "token"
+                            | "token_hash"
+                            | "credential"
+                            | "credential_hash"
+                            | "passphrase"
+                    );
+                    let value = if sensitive_key {
+                        Value::String("[REDACTED]".into())
+                    } else {
+                        redact_audit_value(value)
+                    };
+                    (key.clone(), value)
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(redact_audit_value).collect()),
+        Value::String(value) if value.contains("ikd_") || value.contains("iko_") => {
+            Value::String("[REDACTED]".into())
+        }
+        _ => value.clone(),
+    }
 }
 
 fn validate_params(schema: Value, params: &Value) -> Result<(), OpError> {
@@ -278,7 +426,7 @@ fn validate_params(schema: Value, params: &Value) -> Result<(), OpError> {
     Ok(())
 }
 
-fn audit_result(result: &Result<Value, OpError>) -> String {
+fn audit_result(result: &Result<DispatchResult, OpError>) -> String {
     match result {
         Ok(_) => "ok".to_string(),
         Err(err) => format!("error:{}", error_code(err)),

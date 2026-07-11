@@ -365,7 +365,10 @@ async fn post_ops_dispatch(
         .await
         .map_err(op_storage_error)?;
 
-    result.map(Json).map_err(op_error_response)
+    result
+        .and_then(iotkit_core_ops::DispatchResult::into_public)
+        .map(Json)
+        .map_err(op_error_response)
 }
 
 fn reject_reserved_op_params(

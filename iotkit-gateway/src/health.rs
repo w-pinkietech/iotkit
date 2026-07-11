@@ -45,6 +45,37 @@ pub struct ClockHealth {
     pub observed_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialHealthQueryState {
+    Ok,
+    Degraded,
+    Unknown,
+}
+
+impl CredentialHealthQueryState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Degraded => "degraded",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceCredentialHealth {
+    pub query_state: CredentialHealthQueryState,
+    pub active_count: Option<u64>,
+    pub stale_count: Option<u64>,
+    pub counts_capped: Option<bool>,
+    pub capacity_required_steady: Option<i64>,
+    pub capacity_required_burst: Option<i64>,
+    pub capacity_steady: Option<i64>,
+    pub capacity_burst: Option<i64>,
+    pub capacity_debt: Option<bool>,
+    pub replacement_backup_unavailable: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 pub struct HealthState {
     pub started_at: Instant,
@@ -55,6 +86,7 @@ pub struct HealthState {
     pub publish: Vec<TargetDeliveryHealth>,
     pub api: Option<ApiHealth>,
     pub clock: ClockHealth,
+    pub device_credentials: DeviceCredentialHealth,
 }
 
 impl HealthState {
@@ -80,6 +112,53 @@ impl HealthState {
                 source: None,
                 observed_at_ms: None,
             },
+            device_credentials: DeviceCredentialHealth {
+                query_state: CredentialHealthQueryState::Unknown,
+                active_count: None,
+                stale_count: None,
+                counts_capped: None,
+                capacity_required_steady: None,
+                capacity_required_burst: None,
+                capacity_steady: None,
+                capacity_burst: None,
+                capacity_debt: None,
+                replacement_backup_unavailable: None,
+            },
+        }
+    }
+
+    pub fn apply_device_credential_health(
+        &mut self,
+        stale: iotkit_core_ops::StaleCredentialHealth,
+        capacity: iotkit_core_ops::CapacityHealth,
+        backup: iotkit_core_ops::device_credentials::ReplacementBackupHealth,
+    ) {
+        self.device_credentials = DeviceCredentialHealth {
+            query_state: CredentialHealthQueryState::Ok,
+            active_count: Some(stale.active_count),
+            stale_count: Some(stale.stale_count),
+            counts_capped: Some(stale.counts_capped),
+            capacity_required_steady: Some(capacity.status.required_steady_units),
+            capacity_required_burst: Some(capacity.status.required_burst_units),
+            capacity_steady: Some(capacity.status.capacity_steady_units),
+            capacity_burst: Some(capacity.status.capacity_burst_units),
+            capacity_debt: Some(capacity.active_debt),
+            replacement_backup_unavailable: Some(backup.replacement_backup_unavailable),
+        };
+    }
+
+    pub fn mark_device_credential_health_failed(&mut self) {
+        self.device_credentials.query_state = match self.device_credentials.query_state {
+            CredentialHealthQueryState::Ok | CredentialHealthQueryState::Degraded => {
+                CredentialHealthQueryState::Degraded
+            }
+            CredentialHealthQueryState::Unknown => CredentialHealthQueryState::Unknown,
+        };
+        if self.device_credentials.capacity_debt == Some(false) {
+            self.device_credentials.capacity_debt = None;
+        }
+        if self.device_credentials.replacement_backup_unavailable == Some(false) {
+            self.device_credentials.replacement_backup_unavailable = None;
         }
     }
 
@@ -157,12 +236,47 @@ pub fn spawn_health_writer(
     epoch: String,
     state: std::sync::Arc<std::sync::Mutex<HealthState>>,
     clock_trust: std::sync::Arc<iotkit_core_ops::ClockTrust>,
+    db: iotkit_core_storage::DbHandle,
     interval: Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             let mut snapshot = state.lock().expect("health state mutex poisoned").clone();
             snapshot.apply_clock_evidence(clock_trust.evidence());
+            match db
+                .with_conn(|conn| {
+                    Ok((
+                        iotkit_core_ops::configured_stale_after_ms(conn).and_then(
+                            |stale_after_ms| {
+                                iotkit_core_ops::stale_credential_health(
+                                    conn,
+                                    now_ms(),
+                                    stale_after_ms,
+                                )
+                            },
+                        ),
+                        iotkit_core_ops::capacity_health(conn),
+                        iotkit_core_ops::replacement_backup_health(conn),
+                    ))
+                })
+                .await
+            {
+                Ok((Ok(stale), Ok(capacity), Ok(backup))) => {
+                    snapshot.apply_device_credential_health(stale, capacity, backup);
+                    state
+                        .lock()
+                        .expect("health state mutex poisoned")
+                        .device_credentials = snapshot.device_credentials;
+                }
+                Ok(_) | Err(_) => {
+                    snapshot.mark_device_credential_health_failed();
+                    state
+                        .lock()
+                        .expect("health state mutex poisoned")
+                        .mark_device_credential_health_failed();
+                    tracing::error!("device credential health query failed");
+                }
+            }
             if let Err(e) = write_health_json(&path, &epoch, &snapshot) {
                 tracing::error!(error = %e, path = %path.display(), "health json write failed");
             }
@@ -179,94 +293,58 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
     let adapters = state
         .adapters
         .iter()
-        .map(|adapter| {
-            format!(
-                r#"{{"id":"{}","alive":{},"last_event_at":{}}}"#,
-                escape_json(&adapter.id),
-                adapter.alive,
-                opt_i64(adapter.last_event_at)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
+        .map(|adapter| serde_json::json!({"id":adapter.id,"alive":adapter.alive,"last_event_at":adapter.last_event_at}))
+        .collect::<Vec<_>>();
     let publish = state
         .publish
         .iter()
-        .map(|target| {
-            let last_error = match &target.last_error {
-                Some(error) => format!(r#""{}""#, escape_json(error)),
-                None => "null".to_string(),
-            };
-            format!(
-                r#"{{"target_id":"{}","cursor_pub_seq":{},"backlog":{},"last_push_at":{},"last_error":{}}}"#,
-                escape_json(&target.target_id),
-                target.cursor_pub_seq,
-                target.backlog,
-                opt_i64(target.last_push_at),
-                last_error
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let api = match &state.api {
-        Some(api) => format!(
-            r#"{{"bind":"{}","tls_fingerprint":"{}"}}"#,
-            escape_json(&api.bind),
-            escape_json(&api.tls_fingerprint)
+        .map(|target| serde_json::json!({"target_id":target.target_id,"cursor_pub_seq":target.cursor_pub_seq,
+            "backlog":target.backlog,"last_push_at":target.last_push_at,"last_error":target.last_error}))
+        .collect::<Vec<_>>();
+    let api = state
+        .api
+        .as_ref()
+        .map(|api| serde_json::json!({"bind":api.bind,"tls_fingerprint":api.tls_fingerprint}));
+    let replacement_action = match state.device_credentials.replacement_backup_unavailable {
+        Some(true) => Some(iotkit_core_ops::device_credentials::REPLACEMENT_BACKUP_ACTION),
+        Some(false) => None,
+        None => Some(
+            "Credential health is unknown; do not rely on replacement backup safety. Install Plan 6.5 encrypted replacement backup support, then create a complete encrypted replacement backup.",
         ),
-        None => "null".to_string(),
     };
-    let clock_source = state
-        .clock
-        .source
-        .map(|source| format!(r#""{}""#, escape_json(source)))
-        .unwrap_or_else(|| "null".to_string());
-    format!(
-        r#"{{"schema":1,"written_at":{},"epoch":"{}","uptime_s":{},"collector_alive":{},"adapters":[{}],"db":{{"size_bytes":{},"disk_available_bytes":{},"watermark_exceeded":{}}},"retention":{{"days":{},"last_purge_at":{},"last_purged_rows":{}}},"publish":[{}],"api":{},"clock_trust":{{"trusted":{},"source":{},"observed_at_ms":{},"recovery_command":"gatewayctl time confirm"}}}}"#,
-        now_ms(),
-        escape_json(epoch),
-        state.started_at.elapsed().as_secs(),
-        state.collector_alive,
-        adapters,
-        state.db.size_bytes,
-        state.db.disk_available_bytes,
-        state.db.watermark_exceeded,
-        state.retention.days,
-        opt_i64(state.retention.last_purge_at),
-        state.retention.last_purged_rows,
-        publish,
-        api,
-        state.clock.trusted,
-        clock_source,
-        opt_i64(state.clock.observed_at_ms),
-    )
-}
-
-fn opt_i64(v: Option<i64>) -> String {
-    v.map(|n| n.to_string())
-        .unwrap_or_else(|| "null".to_string())
-}
-
-fn escape_json(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
+    serde_json::to_string(&serde_json::json!({
+        "schema":1,"written_at":now_ms(),"epoch":epoch,"uptime_s":state.started_at.elapsed().as_secs(),
+        "collector_alive":state.collector_alive,"adapters":adapters,
+        "db":{"size_bytes":state.db.size_bytes,"disk_available_bytes":state.db.disk_available_bytes,"watermark_exceeded":state.db.watermark_exceeded},
+        "retention":{"days":state.retention.days,"last_purge_at":state.retention.last_purge_at,"last_purged_rows":state.retention.last_purged_rows},
+        "publish":publish,"api":api,
+        "clock_trust":{"trusted":state.clock.trusted,"source":state.clock.source,"observed_at_ms":state.clock.observed_at_ms,"recovery_command":"gatewayctl time confirm"},
+        "device_credentials":{"query_state":state.device_credentials.query_state.as_str(),
+            "active_count":state.device_credentials.active_count,"stale_count":state.device_credentials.stale_count,
+            "counts_capped":state.device_credentials.counts_capped,
+            "capacity":{"required_steady_units":state.device_credentials.capacity_required_steady,
+                "required_burst_units":state.device_credentials.capacity_required_burst,
+                "steady_units":state.device_credentials.capacity_steady,"burst_units":state.device_credentials.capacity_burst,
+                "debt":state.device_credentials.capacity_debt},
+            "replacement_backup_unavailable":state.device_credentials.replacement_backup_unavailable,
+            "recovery_action":replacement_action}
+    })).expect("health document contains only JSON-safe values")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
+        let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
+        all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_ops::MIGRATIONS);
+        all.sort_by_key(|migration| migration.version);
+        all
+    }
 
     #[test]
     fn write_health_json_uses_temp_file_then_rename() {
@@ -301,6 +379,7 @@ mod tests {
                 source: None,
                 observed_at_ms: None,
             },
+            device_credentials: HealthState::new(90).device_credentials,
         };
 
         write_health_json(&path, "epoch-1", &state).unwrap();
@@ -317,9 +396,197 @@ mod tests {
         assert!(
             json.contains(r#""api":{"bind":"127.0.0.1:8443","tls_fingerprint":"sha256:test"}"#)
         );
-        assert!(json.contains(
-            r#""clock_trust":{"trusted":false,"source":null,"observed_at_ms":null,"recovery_command":"gatewayctl time confirm"}"#
-        ));
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["clock_trust"]["trusted"], false);
+        assert!(parsed["clock_trust"]["source"].is_null());
+        assert_eq!(
+            parsed["clock_trust"]["recovery_command"],
+            "gatewayctl time confirm"
+        );
         assert!(json.contains(r#""uptime_s":10"#) || json.contains(r#""uptime_s":11"#));
+    }
+
+    #[test]
+    fn device_credential_health_is_bounded_and_names_plan_6_5_recovery() {
+        let mut state = HealthState::new(90);
+        state.device_credentials = DeviceCredentialHealth {
+            query_state: CredentialHealthQueryState::Ok,
+            active_count: Some(10_000),
+            stale_count: Some(10_000),
+            counts_capped: Some(true),
+            capacity_required_steady: Some(120),
+            capacity_required_burst: Some(130),
+            capacity_steady: Some(100),
+            capacity_burst: Some(100),
+            capacity_debt: Some(true),
+            replacement_backup_unavailable: Some(true),
+        };
+        let rendered = render_health_json("test-epoch", &state);
+        serde_json::from_str::<serde_json::Value>(&rendered).unwrap();
+        assert!(rendered.contains(r#""active_count":10000"#));
+        assert!(rendered.contains(r#""counts_capped":true"#));
+        assert!(rendered.contains(r#""debt":true"#));
+        assert!(rendered.contains(r#""replacement_backup_unavailable":true"#));
+        assert!(rendered.contains("Install Plan 6.5 encrypted replacement backup support"));
+        assert!(!rendered.contains("token_hash"));
+        assert!(!rendered.contains("principal_id"));
+    }
+
+    #[test]
+    fn failed_health_refresh_is_loud_and_preserves_last_good_replacement_alert() {
+        let mut state = HealthState::new(90);
+        let unknown = render_health_json("epoch", &state);
+        let unknown: serde_json::Value = serde_json::from_str(&unknown).unwrap();
+        assert_eq!(unknown["device_credentials"]["query_state"], "unknown");
+        assert!(unknown["device_credentials"]["replacement_backup_unavailable"].is_null());
+
+        state.device_credentials = DeviceCredentialHealth {
+            query_state: CredentialHealthQueryState::Ok,
+            active_count: Some(1),
+            stale_count: Some(0),
+            counts_capped: Some(false),
+            capacity_required_steady: Some(1),
+            capacity_required_burst: Some(1),
+            capacity_steady: Some(1),
+            capacity_burst: Some(1),
+            capacity_debt: Some(false),
+            replacement_backup_unavailable: Some(true),
+        };
+        state.mark_device_credential_health_failed();
+        let degraded: serde_json::Value =
+            serde_json::from_str(&render_health_json("epoch", &state)).unwrap();
+        assert_eq!(degraded["device_credentials"]["query_state"], "degraded");
+        assert_eq!(
+            degraded["device_credentials"]["replacement_backup_unavailable"],
+            true
+        );
+        assert!(
+            degraded["device_credentials"]["recovery_action"]
+                .as_str()
+                .unwrap()
+                .contains("Plan 6.5")
+        );
+    }
+
+    #[test]
+    fn failed_refresh_drops_last_good_safe_booleans_but_keeps_unsafe_alerts() {
+        let mut state = HealthState::new(90);
+        state.device_credentials = DeviceCredentialHealth {
+            query_state: CredentialHealthQueryState::Ok,
+            active_count: Some(0),
+            stale_count: Some(0),
+            counts_capped: Some(false),
+            capacity_required_steady: Some(0),
+            capacity_required_burst: Some(0),
+            capacity_steady: Some(1),
+            capacity_burst: Some(1),
+            capacity_debt: Some(false),
+            replacement_backup_unavailable: Some(false),
+        };
+        state.mark_device_credential_health_failed();
+        let degraded: serde_json::Value =
+            serde_json::from_str(&render_health_json("epoch", &state)).unwrap();
+        assert_eq!(degraded["device_credentials"]["query_state"], "degraded");
+        assert!(degraded["device_credentials"]["capacity"]["debt"].is_null());
+        assert!(degraded["device_credentials"]["replacement_backup_unavailable"].is_null());
+        assert!(
+            degraded["device_credentials"]["recovery_action"]
+                .as_str()
+                .unwrap()
+                .contains("Plan 6.5")
+        );
+
+        state.device_credentials.capacity_debt = Some(true);
+        state.device_credentials.replacement_backup_unavailable = Some(true);
+        state.mark_device_credential_health_failed();
+        let unsafe_snapshot: serde_json::Value =
+            serde_json::from_str(&render_health_json("epoch", &state)).unwrap();
+        assert_eq!(
+            unsafe_snapshot["device_credentials"]["capacity"]["debt"],
+            true
+        );
+        assert_eq!(
+            unsafe_snapshot["device_credentials"]["replacement_backup_unavailable"],
+            true
+        );
+
+        state.apply_device_credential_health(
+            iotkit_core_ops::StaleCredentialHealth {
+                active_count: 0,
+                stale_count: 0,
+                counts_capped: false,
+            },
+            iotkit_core_ops::CapacityHealth {
+                status: iotkit_core_ops::CapacityStatus {
+                    required_steady_units: 0,
+                    required_burst_units: 0,
+                    capacity_steady_units: 1,
+                    capacity_burst_units: 1,
+                },
+                active_debt: false,
+            },
+            iotkit_core_ops::device_credentials::ReplacementBackupHealth {
+                replacement_backup_unavailable: false,
+                recovery_action: None,
+            },
+        );
+        assert_eq!(state.device_credentials.capacity_debt, Some(false));
+        assert_eq!(
+            state.device_credentials.replacement_backup_unavailable,
+            Some(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn health_writer_database_failure_publishes_unknown_not_false_safe_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("health-failure.db");
+        let health_path = dir.path().join("health.json");
+        let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+        let trust = db
+            .with_conn_sync(|conn| {
+                Ok(Arc::new(
+                    iotkit_core_ops::ClockTrust::load(
+                        conn,
+                        Arc::new(iotkit_core_ops::SystemClock::default()),
+                        Duration::from_secs(1),
+                        Duration::from_secs(60),
+                    )
+                    .unwrap(),
+                ))
+            })
+            .unwrap();
+        db.with_conn_sync(|conn| {
+            conn.execute_batch("DROP TABLE device_capacity")?;
+            Ok(())
+        })
+        .unwrap();
+        let state = Arc::new(Mutex::new(HealthState::new(90)));
+        let task = spawn_health_writer(
+            health_path.clone(),
+            "epoch".into(),
+            state,
+            trust,
+            db,
+            Duration::from_millis(10),
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !health_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(health_path).unwrap()).unwrap();
+        assert_eq!(json["device_credentials"]["query_state"], "unknown");
+        assert!(json["device_credentials"]["replacement_backup_unavailable"].is_null());
+        assert!(
+            json["device_credentials"]["recovery_action"]
+                .as_str()
+                .unwrap()
+                .contains("unknown")
+        );
     }
 }

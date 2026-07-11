@@ -14,11 +14,13 @@ pub fn resolve_unknown_key_descriptor() -> OpDescriptor {
         name: "registry.resolve_unknown_key",
         tier: Tier::Daily,
         bulk_escalates: false,
+        changes_state: true,
         params_schema,
         targets,
         preconditions,
         dry_run,
         execute,
+        secret_execute: None,
     }
 }
 

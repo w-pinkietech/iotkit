@@ -7,7 +7,46 @@ use rusqlite::{
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
+
+fn publish_noreplace(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let source = CString::new(source.as_os_str().as_bytes())?;
+        let destination = CString::new(destination.as_os_str().as_bytes())?;
+        // SAFETY: both pointers are live NUL-terminated path buffers for the duration of the call.
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::ENOSYS | libc::EINVAL)) {
+            return Err(error);
+        }
+    }
+
+    // Same-directory hard-link publication is atomic and fails if destination exists. Removing
+    // the private temporary name afterwards leaves the published inode in place.
+    std::fs::hard_link(source, destination)?;
+    std::fs::remove_file(source)?;
+    Ok(())
+}
 
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 type SchemaRow = (String, String, String, Option<String>);
@@ -120,7 +159,25 @@ fn existing_epoch(conn: &Connection) -> AppResult<String> {
 }
 
 pub fn run_export(conn: &Connection, args: ExportArgs) -> AppResult<()> {
-    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Deferred)?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    if iotkit_core_ops::replacement_backup_health(&tx)?.replacement_backup_unavailable {
+        return Err(format!(
+            "replacement backup unavailable: legacy plaintext snapshot export is refused while device credentials exist. {}",
+            iotkit_core_ops::device_credentials::REPLACEMENT_BACKUP_ACTION
+        ).into());
+    }
+    if let Some(ready_path) = std::env::var_os("IOTKIT_TEST_EXPORT_READY_FILE") {
+        std::fs::write(&ready_path, b"ready")?;
+        let continue_path = std::env::var_os("IOTKIT_TEST_EXPORT_CONTINUE_FILE")
+            .ok_or("IOTKIT_TEST_EXPORT_CONTINUE_FILE is required with ready file")?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !std::path::Path::new(&continue_path).exists() {
+            if std::time::Instant::now() >= deadline {
+                return Err("timed out waiting for export concurrency test continuation".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
     let epoch = existing_epoch(&tx)?;
     let mut root = Map::new();
     root.insert(
@@ -138,12 +195,57 @@ pub fn run_export(conn: &Connection, args: ExportArgs) -> AppResult<()> {
     root.insert("secrets".to_string(), Value::Null);
     root.insert("calibration".to_string(), Value::Null);
     root.insert("desired_config".to_string(), Value::Null);
-    std::fs::write(
-        args.out_path,
-        serde_json::to_vec_pretty(&Value::Object(root))?,
-    )?;
-    tx.commit()?;
-    Ok(())
+    let bytes = serde_json::to_vec_pretty(&Value::Object(root))?;
+    if args.out_path.exists() {
+        return Err(format!(
+            "snapshot output already exists: {}",
+            args.out_path.display()
+        )
+        .into());
+    }
+    let parent = args
+        .out_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = args
+        .out_path
+        .file_name()
+        .ok_or("snapshot output requires a file name")?
+        .to_string_lossy();
+    let temp_path = parent.join(format!(".{file_name}.tmp.{}", std::process::id()));
+    let result = (|| -> AppResult<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        if std::env::var_os("IOTKIT_TEST_FAIL_EXPORT_BEFORE_RENAME").is_some() {
+            return Err("injected snapshot export failure before rename".into());
+        }
+        if let Some(ready_path) = std::env::var_os("IOTKIT_TEST_EXPORT_PUBLISH_READY_FILE") {
+            std::fs::write(&ready_path, b"ready")?;
+            let continue_path = std::env::var_os("IOTKIT_TEST_EXPORT_PUBLISH_CONTINUE_FILE")
+                .ok_or("IOTKIT_TEST_EXPORT_PUBLISH_CONTINUE_FILE is required with ready file")?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !std::path::Path::new(&continue_path).exists() {
+                if std::time::Instant::now() >= deadline {
+                    return Err("timed out waiting for export publication continuation".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        publish_noreplace(&temp_path, &args.out_path)?;
+        std::fs::File::open(parent)?.sync_all()?;
+        tx.commit()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
 }
 
 fn section_rows<'a>(snapshot: &'a Value, table: &str) -> AppResult<&'a Vec<Value>> {
@@ -259,6 +361,7 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
         "SELECT COUNT(*) FROM auth_state
          WHERE id = 1
            AND auth_generation = 0
+           AND device_credential_generation = 0
            AND recovery_required = 0
            AND ownership_ever_established = 0
            AND clock_floor_ms = 0
@@ -273,12 +376,43 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
             "restore target is not empty: auth_state contains authority or recovery state".into(),
         );
     }
+    let canonical_flow_classes: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM device_flow_classes
+         WHERE flow_class IN ('low', 'default', 'high')
+           AND steady_units = 1 AND burst_units = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let flow_class_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM device_flow_classes", [], |row| {
+            row.get(0)
+        })?;
+    if canonical_flow_classes != 3 || flow_class_rows != 3 {
+        return Err(
+            "restore target is not empty: device_flow_classes contains non-pristine configuration"
+                .into(),
+        );
+    }
+    let canonical_capacity: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM device_capacity
+         WHERE id = 1 AND steady_units = 1 AND burst_units = 1 AND stale_after_ms = 1)",
+        [],
+        |row| row.get(0),
+    )?;
+    let capacity_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM device_capacity", [], |row| row.get(0))?;
+    if !canonical_capacity || capacity_rows != 1 {
+        return Err(
+            "restore target is not empty: device_capacity contains non-pristine configuration"
+                .into(),
+        );
+    }
 
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_schema
          WHERE type = 'table'
            AND name NOT LIKE 'sqlite_%'
-           AND name NOT IN ('_schema_version', 'auth_state')
+           AND name NOT IN ('_schema_version', 'auth_state', 'device_flow_classes', 'device_capacity')
          ORDER BY name",
     )?;
     let tables = stmt

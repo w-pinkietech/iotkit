@@ -898,10 +898,11 @@ mod tests {
         let snapshot = health.lock().unwrap().clone();
         iotkit_gateway::health::write_health_json(&path, &epoch, &snapshot).unwrap();
         let json = std::fs::read_to_string(path).unwrap();
-        assert!(json.contains(r#""publish":[{"target_id":"target-1""#));
-        assert!(json.contains(r#""cursor_pub_seq":999"#));
-        assert!(json.contains(r#""backlog":2"#));
-        assert!(json.contains(r#""last_error":null"#));
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(json["publish"][0]["target_id"], "target-1");
+        assert_eq!(json["publish"][0]["cursor_pub_seq"], 999);
+        assert_eq!(json["publish"][0]["backlog"], 2);
+        assert!(json["publish"][0]["last_error"].is_null());
     }
 
     #[tokio::test]

@@ -12,11 +12,13 @@ pub fn issue_descriptor() -> OpDescriptor {
         name: "operator_token.issue",
         tier: Tier::Construction,
         bulk_escalates: false,
+        changes_state: true,
         params_schema: issue_schema,
         targets: issue_targets,
         preconditions: issue_preconditions,
         dry_run: issue_dry_run,
         execute: issue_execute,
+        secret_execute: None,
     }
 }
 
@@ -25,11 +27,13 @@ pub fn revoke_descriptor() -> OpDescriptor {
         name: "operator_token.revoke",
         tier: Tier::Daily,
         bulk_escalates: true,
+        changes_state: true,
         params_schema: revoke_schema,
         targets: revoke_targets,
         preconditions: revoke_preconditions,
         dry_run: revoke_dry_run,
         execute: revoke_execute,
+        secret_execute: None,
     }
 }
 

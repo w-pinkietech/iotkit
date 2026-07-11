@@ -35,6 +35,15 @@ pub struct AddArgs {
     pub kind: KindArg,
     #[arg(long)]
     pub active: bool,
+    #[arg(long, default_value = "default")]
+    pub flow_class: String,
+    #[arg(long)]
+    pub accept_capacity_debt: bool,
+    /// Deliberate noninteractive confirmation for capacity debt automation.
+    #[arg(long)]
+    pub yes: bool,
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args)]
@@ -115,24 +124,65 @@ pub fn run_list_devices(conn: &Connection, args: ListArgs) -> AppResult<()> {
 }
 
 pub fn run_add_device(conn: &Connection, args: AddArgs) -> AppResult<()> {
-    let state = if args.active {
-        ledger::DeviceState::Active
+    if args.active {
+        return Err("device add with a credential always starts quarantined; activate it separately after validation".into());
+    }
+    if !matches!(args.kind, KindArg::Individual) {
+        return Err("device credential registration supports individual devices only".into());
+    }
+    let op = if args.accept_capacity_debt {
+        "device.add_with_credential_capacity_debt"
     } else {
-        ledger::DeviceState::Quarantined
+        "device.add_with_credential"
     };
-    let sid = mutate(conn, |tx| {
-        Ok(ledger::insert_device(
-            tx,
-            &ledger::NewDevice {
-                hardware_id: args.hardware_id,
-                user_label: args.label,
-                parent: None,
-                kind: args.kind.into(),
-                initial_state: state,
+    let mut params = serde_json::json!({"hardware_id":args.hardware_id,"label":args.label,"flow_class":args.flow_class,"reason_code":"device_commissioning"});
+    if args.accept_capacity_debt && !args.dry_run {
+        super::device_credential::preview_confirm_and_bind_capacity_debt(
+            conn,
+            op,
+            &mut params,
+            args.yes,
+        )?;
+    }
+    let value = iotkit_core_ops::dispatch(
+        conn,
+        iotkit_core_ops::standard_catalog(),
+        iotkit_core_ops::DispatchRequest {
+            op: op.into(),
+            params,
+            dry_run: args.dry_run,
+            actor: iotkit_core_ops::Actor {
+                actor_id: "local_cli".into(),
+                actor_kind: iotkit_core_ops::ActorKind::LocalCli,
+                tier_ceiling: iotkit_core_ops::Tier::Construction,
             },
-        )?)
-    })?;
-    println!("{}", sid.to_text());
+            source: Some("local_cli".into()),
+            step_up_verified: args.accept_capacity_debt,
+            clock_trust: None,
+        },
+    )?;
+    if let iotkit_core_ops::DispatchResult::DeviceCredential(secret) = value {
+        let (metadata, plaintext) = secret.consume();
+        eprintln!(
+            "system_id: {}",
+            metadata["system_id"].as_str().unwrap_or("")
+        );
+        eprintln!(
+            "principal_id: {}",
+            metadata["principal_id"].as_str().unwrap_or("")
+        );
+        eprintln!(
+            "credential_id: {}",
+            metadata["credential_id"].as_str().unwrap_or("")
+        );
+        eprintln!("WARNING: this device token is shown once and cannot be displayed again.");
+        eprintln!(
+            "If this initial token is lost before delivery, revoke it, then issue a new credential with `gatewayctl device-credential issue`."
+        );
+        println!("{}", plaintext.as_str());
+    } else {
+        println!("{}", serde_json::to_string(value.metadata())?);
+    }
     Ok(())
 }
 

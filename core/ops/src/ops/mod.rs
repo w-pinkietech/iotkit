@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::{OpDescriptor, OpError};
 
+mod credential_ops;
 mod device_ops;
 mod registry_ops;
 mod token_ops;
@@ -12,13 +13,14 @@ pub fn standard_catalog() -> &'static [OpDescriptor] {
     static CATALOG: OnceLock<Vec<OpDescriptor>> = OnceLock::new();
     CATALOG
         .get_or_init(|| {
-            let catalog = vec![
+            let mut catalog = vec![
                 registry_ops::resolve_unknown_key_descriptor(),
                 device_ops::approve_sighting_descriptor(),
                 device_ops::retire_descriptor(),
                 token_ops::issue_descriptor(),
                 token_ops::revoke_descriptor(),
             ];
+            catalog.extend(credential_ops::descriptors());
             debug_assert!(catalog.iter().all(|op| op.tier != crate::Tier::ReadOnly));
             catalog
         })
