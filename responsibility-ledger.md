@@ -136,6 +136,12 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
   失効・流量クラス・LAN限定露出の4枚で受ける(D11決定3)。
 - **入口リスナー既定オフ+インターネット公開禁止**(D11決定7)。R2の「公開受信面」とは
   サイトLAN内の面を指す。
+- **Plan 6初期所有権・復旧裁定(2026-07-12):** network box claimを廃止し、初期admin所有権は箱上の
+  local `gatewayctl`(物理/SSH root、非echo入力)だけで確立する。未所有中はnetwork API/UIをbindしない。
+  admin recoveryは全operator/sessionを失効する非破壊操作。factory resetはSSH/local rootだけの全消去で、
+  API/AI/R14には載せない。R22 replacementはgateway identity/TLS/device-token continuityを維持する一方、
+  admin/operator/sessionを新auth epochで無効化する。device-tokenはsnapshot後の失効rollbackを明示受容し、
+  復元時に騒がしく報告する。暗号化containerとDB/TLS世代fenceの実装はPlan 6.5。
 
 ## D12波及(南向き契約 2026-07-08)
 
@@ -179,4 +185,4 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 - series識別モデル: **確定** — [decisions/D5-series-identity.md](decisions/D5-series-identity.md)(3レンズ+8次元整合レビュー済み)
 - 測定レジストリ: **確定** — [decisions/D6-measurement-registry.md](decisions/D6-measurement-registry.md)(Fable 6レンズ精密レビュー反映。Wave 0設計ブロッカー全解除)
 - 論点2(南向き契約): **確定** — [decisions/D12-southbound-contract.md](decisions/D12-southbound-contract.md)(クロスベンダー査読2回反映。世話のみ・権限3分類・受領側認証・DFUキャンペーン。クレート再編の実判断はWave 1実装計画へ)
-- UIスコープ(キュー6): **確定** — [decisions/D13-ui-scope.md](decisions/D13-ui-scope.md)(静的配布物+予算・setupモード+管理者パスフレーズ1本・画面在庫・NOTリスト・時間集約派生series予約。**Wave 1着手前の設計課題はこれで全解消**)
+- UIスコープ(キュー6): **確定** — [decisions/D13-ui-scope.md](decisions/D13-ui-scope.md)(静的配布物+予算・local-only初期所有権+管理者パスフレーズ1本・画面在庫・NOTリスト・時間集約派生series予約。**Wave 1着手前の設計課題はこれで全解消**)
