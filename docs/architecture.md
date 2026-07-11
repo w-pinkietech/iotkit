@@ -113,22 +113,17 @@ dispatch. The plan-5 CLI commands reuse the same `core/ops` functions —
 `token issue|revoke` call exactly what the catalog descriptors call, and
 `passphrase reset` is a deliberate out-of-band recovery path — each audited
 as `local_cli`. Migrating the older CLI mutation paths (targets, snapshots,
-replace-hardware) onto R14 is queued across plans 7–8. Two API endpoints
-change state outside R14 by design:
-initial passphrase setup and session login. Authentication is an admin
+replace-hardware) onto R14 is queued across plans 7–8. Session login is the
+only network endpoint here that changes state outside R14 by design. Authentication is an admin
 passphrase (argon2id) plus operator tokens (issued once in plaintext, stored as
-SHA-256; AI tokens are structurally capped at `Routine`). A fresh database
-starts in **setup mode** until the passphrase is set. The prescriptive rule:
+SHA-256; AI tokens are structurally capped at `Routine`). Initial ownership and
+admin recovery are local-root maintenance commands: an unowned/recovering box
+does not bind the control API/UI, and `gatewayctl passphrase reset` atomically
+replaces the credential and revokes all operator/session tokens. There is no
+network setup route or unauthenticated setup allowlist. The prescriptive rule:
 **a new mutation surface is an R14 descriptor — never a fresh SQL mutation
-path.**
-
-> **Approved Plan 6 target (not current implementation):** the network
-> `setup/passphrase` route and setup-mode unauthenticated allowlist are removed.
-> An unowned or locally recovering gateway does not bind the control API/UI;
-> ownership is established only through a non-echoing local TTY or SSH-root
-> `gatewayctl` action, which atomically revokes all operator/session tokens. The
-> paragraphs above describe the repository until Plan 6 lands; D2/D13 and the
-> Plan 6 specification govern the target behavior.
+path.** Local-root ownership/recovery (and the separately specified factory-reset
+maintenance family) are explicit non-network exceptions, never API/UI/AI operations.
 
 ## Crate map
 

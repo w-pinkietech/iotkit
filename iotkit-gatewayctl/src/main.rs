@@ -7,6 +7,7 @@ mod cmd {
     pub mod replace;
     pub mod snapshot;
     pub mod target;
+    pub mod time;
     pub mod token;
 }
 
@@ -61,6 +62,10 @@ enum Command {
     Passphrase {
         #[command(subcommand)]
         command: cmd::passphrase::PassphraseCommand,
+    },
+    Time {
+        #[command(subcommand)]
+        command: cmd::time::TimeCommand,
     },
     Token {
         #[command(subcommand)]
@@ -123,6 +128,9 @@ fn run() -> AppResult<()> {
         Command::Snapshot {
             command: cmd::snapshot::SnapshotCommand::Restore(args),
         } => Some(args.db.clone()),
+        Command::Snapshot {
+            command: cmd::snapshot::SnapshotCommand::RestoreStatus(args),
+        } => Some(args.db.clone()),
         _ => None,
     };
     let allow_missing_db = matches!(
@@ -137,8 +145,35 @@ fn run() -> AppResult<()> {
     let Some(db_path) = db_path else {
         return Err("no database specified: pass --db or set IOTKIT_DB_PATH".into());
     };
-    if !db_path.exists() && !allow_missing_db {
+    let database_existed_before_open = db_path.exists();
+    if !database_existed_before_open && !allow_missing_db {
         return Err(format!("database file does not exist: {}", db_path.display()).into());
+    }
+    if matches!(
+        &cli.command,
+        Command::Snapshot {
+            command: cmd::snapshot::SnapshotCommand::RestoreStatus(_),
+        }
+    ) {
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        return cmd::snapshot::run_restore_status(&conn);
+    }
+    let mut created_target = None;
+    if allow_missing_db {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&db_path)
+            .map_err(|error| {
+                format!(
+                    "restore --create requires an absent target created exclusively by restore ({}): {error}",
+                    db_path.display()
+                )
+            })?;
+        created_target = Some(CreatedRestoreTarget::new(db_path.clone()));
     }
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -150,7 +185,95 @@ fn run() -> AppResult<()> {
     all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
-    db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))?
+    if created_target.is_none() {
+        reconcile_database_initialization_provenance(&db, &db_path, database_existed_before_open)?;
+    }
+    db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))??;
+    if created_target.is_some() {
+        // The restore transaction must validate the exclusively created database while it is
+        // pristine and establish local recovery itself. Reconcile only afterward to create a
+        // missing marker without interpreting a pre-existing marker as state in the fresh DB.
+        reconcile_database_initialization_provenance(&db, &db_path, true)?;
+    }
+    if let Some(target) = created_target.as_mut() {
+        target.committed = true;
+    }
+    Ok(())
+}
+
+fn reconcile_database_initialization_provenance(
+    db: &iotkit_core_storage::DbHandle,
+    db_path: &std::path::Path,
+    database_existed_before_open: bool,
+) -> Result<(), iotkit_core_storage::StorageError> {
+    db.with_conn_sync(|conn| {
+        iotkit_core_ops::reconcile_database_initialization_provenance(
+            conn,
+            db_path,
+            database_existed_before_open,
+        )
+        .map_err(|error| {
+            iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                Box::new(error),
+            ))
+        })
+    })
+}
+
+struct CreatedRestoreTarget {
+    path: PathBuf,
+    committed: bool,
+    marker_existed: bool,
+}
+
+impl CreatedRestoreTarget {
+    fn new(path: PathBuf) -> Self {
+        let marker_existed = iotkit_core_ops::database_initialization_marker_path(&path).exists();
+        Self {
+            path,
+            committed: false,
+            marker_existed,
+        }
+    }
+}
+
+impl Drop for CreatedRestoreTarget {
+    fn drop(&mut self) {
+        let committed_receipt = rusqlite::Connection::open_with_flags(
+            &self.path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM restore_receipts WHERE id = 1)",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+        })
+        .unwrap_or(false);
+        if self.committed || committed_receipt {
+            return;
+        }
+        let mut paths = vec![
+            self.path.clone(),
+            PathBuf::from(format!("{}-wal", self.path.display())),
+            PathBuf::from(format!("{}-shm", self.path.display())),
+        ];
+        if !self.marker_existed {
+            paths.push(iotkit_core_ops::database_initialization_marker_path(
+                &self.path,
+            ));
+        }
+        for path in paths {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    eprintln!("failed to clean restore target {}: {error}", path.display())
+                }
+            }
+        }
+    }
 }
 
 fn dispatch(
@@ -190,6 +313,9 @@ fn dispatch(
         Command::Snapshot { command } => match command {
             cmd::snapshot::SnapshotCommand::Export(args) => cmd::snapshot::run_export(conn, args),
             cmd::snapshot::SnapshotCommand::Restore(args) => cmd::snapshot::run_restore(conn, args),
+            cmd::snapshot::SnapshotCommand::RestoreStatus(_) => {
+                cmd::snapshot::run_restore_status(conn)
+            }
         },
         Command::Target { command } => {
             let real_smoke = |endpoint: &str, token: &str| -> Result<(), String> {
@@ -237,6 +363,9 @@ fn dispatch(
             cmd::passphrase::PassphraseCommand::Reset => {
                 cmd::passphrase::run_passphrase_reset(conn)
             }
+        },
+        Command::Time { command } => match command {
+            cmd::time::TimeCommand::Confirm => cmd::time::run_time_confirm(conn),
         },
         Command::Token { command } => match command {
             cmd::token::TokenCommand::Issue(args) => cmd::token::run_token_issue(conn, args),

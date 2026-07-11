@@ -54,6 +54,7 @@ pub fn run_token_issue(conn: &Connection, args: IssueArgs) -> AppResult<()> {
         },
         "local_cli",
         None,
+        None,
     )?;
     tx.commit()?;
     eprintln!("token_id: {}", issued.token_id);

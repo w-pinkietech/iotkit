@@ -144,7 +144,6 @@ fn actor(kind: ActorKind, ceiling: Tier) -> Actor {
             ActorKind::Human => "tok_human".to_string(),
             ActorKind::Ai => "tok_ai".to_string(),
             ActorKind::LocalCli => "local_cli".to_string(),
-            ActorKind::SetupMode => "setup_mode".to_string(),
         },
         actor_kind: kind,
         tier_ceiling: ceiling,
@@ -165,6 +164,7 @@ fn request(
         actor,
         source: Some("test".to_string()),
         step_up_verified,
+        clock_trust: None,
     }
 }
 
@@ -182,6 +182,7 @@ fn standard_request(
         actor,
         source: Some("test".to_string()),
         step_up_verified,
+        clock_trust: None,
     }
 }
 
@@ -197,6 +198,7 @@ fn human_token_actor(conn: &Connection) -> Actor {
         },
         "test",
         Some("test"),
+        None,
     )
     .unwrap();
     Actor {
@@ -497,56 +499,6 @@ fn bulk_escalation_to_construction_requires_step_up() {
         let detail = latest_r14(conn);
         assert_eq!(detail["result"], "error:step_up_required");
         assert_eq!(detail["effective_tier"], "construction");
-        Ok(())
-    })
-    .unwrap();
-}
-
-#[test]
-fn setup_mode_rejects_ops_outside_closed_set() {
-    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
-    db.with_conn_sync(|conn| {
-        let err = dispatch(
-            conn,
-            &catalog(),
-            request(
-                "fake.write",
-                &["setup"],
-                false,
-                actor(ActorKind::SetupMode, Tier::Daily),
-                false,
-            ),
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, OpError::Forbidden(reason) if reason == "setup_closed_set"));
-        let detail = latest_r14(conn);
-        assert_eq!(detail["result"], "error:forbidden");
-        Ok(())
-    })
-    .unwrap();
-}
-
-#[test]
-fn setup_mode_rejects_bulk() {
-    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
-    db.with_conn_sync(|conn| {
-        let err = dispatch(
-            conn,
-            &catalog(),
-            request(
-                "fake.write",
-                &["setup-a", "setup-b"],
-                false,
-                actor(ActorKind::SetupMode, Tier::Daily),
-                false,
-            ),
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, OpError::Forbidden(reason) if reason == "setup_bulk"));
-        let detail = latest_r14(conn);
-        assert_eq!(detail["result"], "error:forbidden");
         Ok(())
     })
     .unwrap();

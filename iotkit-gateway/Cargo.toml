@@ -46,3 +46,4 @@ libc = "0.2"
 tempfile = "3"
 serial_test = "3"
 iotkit-core-storage = { path = "../core/storage", features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }

@@ -28,6 +28,25 @@ fn api_config() -> ApiConfig {
     }
 }
 
+fn prepare_owned_clock(db: &DbHandle) -> Arc<iotkit_core_ops::ClockTrust> {
+    db.with_conn_sync(|conn| {
+        let hash = iotkit_core_ops::hash_passphrase("correct horse battery staple").unwrap();
+        iotkit_core_ops::reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
+        let clock = Arc::new(iotkit_core_ops::SystemClock::default());
+        let trust = iotkit_core_ops::ClockTrust::load(
+            conn,
+            clock.clone(),
+            Duration::from_secs(2),
+            Duration::from_secs(300),
+        )
+        .unwrap();
+        let displayed = iotkit_core_ops::Clock::wall_time_ms(clock.as_ref());
+        iotkit_core_ops::confirm_time_with_clock(conn, clock.as_ref(), displayed).unwrap();
+        Ok(Arc::new(trust))
+    })
+    .unwrap()
+}
+
 async fn shutdown(handle: ApiHandle) {
     let _ = handle.shutdown.send(());
     tokio::time::timeout(Duration::from_secs(5), handle.join)
@@ -123,6 +142,7 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
     );
     let dry_run_sid = seed_active_device(&db, "rpi-local:default:i2c:0x63");
     let health = Arc::new(Mutex::new(HealthState::new(90)));
+    let clock_trust = prepare_owned_clock(&db);
 
     let handle = spawn_api_task(
         db.clone(),
@@ -130,6 +150,7 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
         api_config(),
         "epoch-ops-test".to_string(),
         dir.path().to_path_buf(),
+        clock_trust,
     )
     .await
     .unwrap();
@@ -139,8 +160,29 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
         .build()
         .unwrap();
 
+    let unauthenticated_catalog = client
+        .get(format!("{base}/api/v1/ops"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated_catalog.status(), StatusCode::UNAUTHORIZED);
+
+    let session: Value = client
+        .post(format!("{base}/api/v1/session"))
+        .json(&json!({"passphrase": "correct horse battery staple"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_bearer = format!("Bearer {}", session["token"].as_str().unwrap());
+
     let catalog: Value = client
         .get(format!("{base}/api/v1/ops"))
+        .header(header::AUTHORIZATION, &session_bearer)
         .send()
         .await
         .unwrap()
@@ -163,6 +205,7 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
 
     let approved: Value = client
         .post(format!("{base}/api/v1/ops/device.approve_sighting"))
+        .header(header::AUTHORIZATION, &session_bearer)
         .json(&json!({
             "params": {"hardware_ids": ["rpi-local:default:i2c:0x60"]}
         }))
@@ -179,6 +222,7 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
 
     let setup_bulk = client
         .post(format!("{base}/api/v1/ops/device.approve_sighting"))
+        .header(header::AUTHORIZATION, &session_bearer)
         .json(&json!({
             "params": {
                 "hardware_ids": [
@@ -192,7 +236,7 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
         .unwrap();
     assert_eq!(setup_bulk.status(), StatusCode::FORBIDDEN);
     let setup_bulk_body: Value = setup_bulk.json().await.unwrap();
-    assert_eq!(setup_bulk_body["error"]["message"], "setup_bulk");
+    assert_eq!(setup_bulk_body["error"]["code"], "step_up_required");
 
     let setup_retire = client
         .post(format!("{base}/api/v1/ops/device.retire"))
@@ -203,32 +247,6 @@ async fn ops_catalog_dispatch_step_up_and_audit_behaviour() {
     assert_eq!(setup_retire.status(), StatusCode::UNAUTHORIZED);
     let setup_retire_body: Value = setup_retire.json().await.unwrap();
     assert_eq!(setup_retire_body["error"]["code"], "unauthorized");
-
-    let setup: Value = client
-        .post(format!("{base}/api/v1/setup/passphrase"))
-        .json(&json!({"passphrase": "correct horse battery staple"}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert!(setup["token"].as_str().unwrap().starts_with("iko_"));
-
-    let session: Value = client
-        .post(format!("{base}/api/v1/session"))
-        .json(&json!({"passphrase": "correct horse battery staple"}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let session_bearer = format!("Bearer {}", session["token"].as_str().unwrap());
 
     let reserved_param_passphrase = "reserved param should not be audited";
     let reserved_param = client

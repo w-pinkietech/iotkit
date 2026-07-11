@@ -11,8 +11,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use iotkit_core_ledger as ledger;
 use iotkit_core_ops::{
-    Actor, DispatchRequest, NewOperatorToken, OpError, SetOutcome, Tier, TokenKind, dispatch,
-    hash_passphrase, is_setup_mode, issue_token, load_passphrase_hash, set_passphrase_with_hash,
+    Actor, DispatchRequest, OpError, Tier, dispatch, issue_session_token, load_passphrase_hash,
     standard_catalog, verify_passphrase,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
@@ -22,14 +21,13 @@ use serde_json::{Value, json};
 use tower_http::timeout::TimeoutLayer;
 
 use crate::config::ApiConfig;
-use crate::health::{HealthState, now_ms, render_health_json};
+use crate::health::{HealthState, render_health_json};
 
 use super::auth_layer::auth_layer;
 use super::guard::{RetryAfter, Throttle, is_private_source};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 const RESERVED_OP_PARAM_KEYS: &[&str] = &["step_up_passphrase"];
-const MIN_PASSPHRASE_LEN: usize = 8;
 const READINGS_LIMIT_MAX: u32 = 10_000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -41,6 +39,7 @@ pub struct AppState {
     pub epoch: String,
     pub fingerprint: String,
     pub throttle: Arc<Throttle>,
+    pub clock_trust: Arc<iotkit_core_ops::ClockTrust>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -59,7 +58,6 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/box", get(get_box))
         .route("/api/v1/session", post(post_session))
-        .route("/api/v1/setup/passphrase", post(post_setup_passphrase))
         .merge(protected)
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
@@ -178,11 +176,6 @@ struct OpDispatchBody {
 }
 
 async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorResponse> {
-    let setup_mode = state
-        .db
-        .with_conn(|conn| is_setup_mode(conn).map_err(storage_other))
-        .await
-        .map_err(internal_error)?;
     let health = state.health.lock().expect("health state mutex poisoned");
     let adapters_alive = health
         .adapters
@@ -199,7 +192,7 @@ async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorR
         "gateway_name": state.cfg.gateway_name,
         "epoch": state.epoch,
         "version": env!("CARGO_PKG_VERSION"),
-        "setup_mode": setup_mode,
+        "ownership": "owned",
         "tls_fingerprint": state.fingerprint,
         "health_summary": {
             "status": status,
@@ -209,11 +202,12 @@ async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorR
 }
 
 async fn get_health(State(state): State<AppState>) -> Result<Response, ApiErrorResponse> {
-    let snapshot = state
+    let mut snapshot = state
         .health
         .lock()
         .expect("health state mutex poisoned")
         .clone();
+    snapshot.apply_clock_evidence(state.clock_trust.evidence());
     Ok((
         [(
             header::CONTENT_TYPE,
@@ -362,6 +356,7 @@ async fn post_ops_dispatch(
         actor,
         source: Some(source_ip.to_string()),
         step_up_verified,
+        clock_trust: Some(state.clock_trust.clone()),
     };
 
     let result = state
@@ -430,93 +425,30 @@ async fn verify_step_up_passphrase(
     Ok(true)
 }
 
-async fn post_setup_passphrase(
-    State(state): State<AppState>,
-    ConnectInfo(source): ConnectInfo<SocketAddr>,
-    Json(payload): Json<PassphraseRequest>,
-) -> Result<Json<Value>, ApiErrorResponse> {
-    let source_ip = source.ip();
-
-    let setup_mode = state
-        .db
-        .with_conn(|conn| is_setup_mode(conn).map_err(storage_other))
-        .await
-        .map_err(internal_error)?;
-    if !setup_mode {
-        return Err(passphrase_already_set());
-    }
-
-    let passphrase = payload.passphrase;
-    validate_new_passphrase(&passphrase)?;
-    let phc = tokio::task::spawn_blocking(move || hash_passphrase(&passphrase))
-        .await
-        .map_err(|e| internal_error(format!("passphrase hashing task failed: {e}")))?
-        .map_err(internal_error)?;
-
-    let source_string = source_ip.to_string();
-    let issued = state
-        .db
-        .with_conn(move |conn| {
-            match set_passphrase_with_hash(conn, &phc, "setup_mode").map_err(storage_other)? {
-                SetOutcome::FirstSet => {}
-                SetOutcome::AlreadySet => {
-                    return Ok(None);
-                }
-            }
-            issue_session_token(conn, "setup", "setup_mode", Some(&source_string))
-                .map(Some)
-                .map_err(storage_other)
-        })
-        .await
-        .map_err(internal_error)?;
-
-    let Some(issued) = issued else {
-        return Err(passphrase_already_set());
-    };
-
-    Ok(Json(token_response(issued)))
-}
-
 async fn post_session(
     State(state): State<AppState>,
     ConnectInfo(source): ConnectInfo<SocketAddr>,
     Json(payload): Json<PassphraseRequest>,
 ) -> Result<Json<Value>, ApiErrorResponse> {
     let source_ip = source.ip();
-    let setup_mode = state
-        .db
-        .with_conn(|conn| is_setup_mode(conn).map_err(storage_other))
-        .await
-        .map_err(internal_error)?;
-    if setup_mode {
-        return Err(ApiErrorResponse::new(
-            StatusCode::CONFLICT,
-            "setup_mode",
-            "admin passphrase is not set",
-        ));
-    }
-
     state
         .throttle
         .check_and_record_source(source_ip)
         .map_err(rate_limited_error)?;
 
-    let phc = state
+    let authority = state
         .db
-        .with_conn(|conn| load_passphrase_hash(conn).map_err(storage_other))
+        .with_conn(|conn| iotkit_core_ops::load_passphrase_authority(conn).map_err(storage_other))
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            ApiErrorResponse::new(
-                StatusCode::CONFLICT,
-                "setup_mode",
-                "admin passphrase is not set",
-            )
-        })?;
+        .ok_or_else(ApiErrorResponse::unauthorized)?;
     let passphrase = payload.passphrase;
-    let verified = tokio::task::spawn_blocking(move || verify_passphrase(&phc, &passphrase))
-        .await
-        .map_err(|e| internal_error(format!("passphrase verification task failed: {e}")))?;
+    let authority_for_hash = authority.clone();
+    let verified = tokio::task::spawn_blocking(move || {
+        verify_passphrase(&authority_for_hash.phc, &passphrase)
+    })
+    .await
+    .map_err(|e| internal_error(format!("passphrase verification task failed: {e}")))?;
 
     if !verified {
         state.throttle.record_failure(source_ip);
@@ -526,35 +458,49 @@ async fn post_session(
 
     state.throttle.record_success(source_ip);
     let source_string = source_ip.to_string();
+    let clock_trust = state.clock_trust.clone();
     let issued = state
         .db
         .with_conn(move |conn| {
-            issue_session_token(conn, "session", "self", Some(&source_string))
-                .map_err(storage_other)
+            let tx = rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(StorageError::from)?;
+            if let Err(error) =
+                iotkit_core_ops::require_passphrase_authority_unchanged(&tx, &authority)
+            {
+                return Ok(Err(error));
+            }
+            let result =
+                issue_human_session(&tx, "session", "self", Some(&source_string), &clock_trust);
+            if result.is_ok() {
+                tx.commit().map_err(StorageError::from)?;
+            }
+            Ok(result)
         })
         .await
-        .map_err(internal_error)?;
+        .map_err(internal_error)?
+        .map_err(auth_operation_error)?;
 
     Ok(Json(token_response(issued)))
 }
 
-fn issue_session_token(
+fn issue_human_session(
     conn: &rusqlite::Connection,
     name: &str,
     audit_actor: &str,
     audit_source: Option<&str>,
+    clock_trust: &iotkit_core_ops::ClockTrust,
 ) -> Result<iotkit_core_ops::IssuedToken, iotkit_core_ops::OpsError> {
-    issue_token(
+    issue_session_token(
         conn,
-        &NewOperatorToken {
-            name: name.to_string(),
-            kind: TokenKind::Human,
-            ceiling: Tier::Construction,
-            is_session: true,
-            expires_at: Some(now_ms() + SESSION_TTL_MS),
-        },
+        name,
+        Tier::Construction,
+        SESSION_TTL_MS,
         audit_actor,
         audit_source,
+        clock_trust,
     )
 }
 
@@ -563,17 +509,6 @@ fn token_response(issued: iotkit_core_ops::IssuedToken) -> Value {
         "token_id": issued.token_id,
         "token": issued.plaintext.expose(),
     })
-}
-
-fn validate_new_passphrase(passphrase: &str) -> Result<(), ApiErrorResponse> {
-    if passphrase.len() < MIN_PASSPHRASE_LEN {
-        return Err(ApiErrorResponse::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "weak_passphrase",
-            "passphrase must be at least 8 characters",
-        ));
-    }
-    Ok(())
 }
 
 fn rate_limited_error(retry: RetryAfter) -> ApiErrorResponse {
@@ -702,6 +637,91 @@ fn op_internal_error<E: std::fmt::Display>(e: E) -> ApiErrorResponse {
     )
 }
 
-fn passphrase_already_set() -> ApiErrorResponse {
-    ApiErrorResponse::new(StatusCode::CONFLICT, "conflict", "passphrase already set")
+fn auth_operation_error(error: iotkit_core_ops::OpsError) -> ApiErrorResponse {
+    match error {
+        iotkit_core_ops::OpsError::ClockUntrusted => ApiErrorResponse::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "clock_untrusted",
+            "trusted wall clock is required; run gatewayctl time confirm locally",
+        ),
+        iotkit_core_ops::OpsError::Forbidden => ApiErrorResponse::unauthorized(),
+        other => internal_error(other),
+    }
+}
+
+#[cfg(test)]
+mod route_inventory_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use super::*;
+    use iotkit_core_ops::{NewOperatorToken, TokenKind, issue_token};
+
+    #[tokio::test]
+    async fn network_admin_passphrase_setup_route_is_absent() {
+        let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
+        migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
+        migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+        migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
+        migrations.sort_by_key(|migration| migration.version);
+        let db = iotkit_core_storage::init_db_memory(&migrations).unwrap();
+        let clock_trust = db
+            .with_conn_sync(|conn| {
+                iotkit_core_ops::ClockTrust::load(
+                    conn,
+                    Arc::new(iotkit_core_ops::SystemClock::default()),
+                    Duration::from_secs(2),
+                    Duration::from_secs(300),
+                )
+                .map(Arc::new)
+                .map_err(storage_other)
+            })
+            .unwrap();
+        let bearer = db
+            .with_conn_sync(|conn| {
+                issue_token(
+                    conn,
+                    &NewOperatorToken {
+                        name: "route inventory".into(),
+                        kind: TokenKind::Human,
+                        ceiling: Tier::ReadOnly,
+                        is_session: false,
+                        expires_at: None,
+                    },
+                    "local_cli",
+                    None,
+                    None,
+                )
+                .map(|issued| issued.plaintext.expose().to_string())
+                .map_err(storage_other)
+            })
+            .unwrap();
+        let state = AppState {
+            db,
+            health: Arc::new(Mutex::new(HealthState::new(90))),
+            cfg: ApiConfig {
+                enabled: true,
+                bind: "127.0.0.1:0".parse().unwrap(),
+                gateway_name: "test".into(),
+            },
+            epoch: "test".into(),
+            fingerprint: "test".into(),
+            throttle: Arc::new(Throttle::default()),
+            clock_trust,
+        };
+        let mut request = Request::post("/api/v1/setup/passphrase")
+            .header("authorization", format!("Bearer {bearer}"))
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345".parse::<SocketAddr>().unwrap(),
+        ));
+
+        let response = router(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

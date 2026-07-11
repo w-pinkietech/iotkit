@@ -29,6 +29,25 @@ fn api_config() -> ApiConfig {
     }
 }
 
+fn prepare_owned_clock(db: &DbHandle) -> Arc<iotkit_core_ops::ClockTrust> {
+    db.with_conn_sync(|conn| {
+        let hash = iotkit_core_ops::hash_passphrase("correct horse battery staple").unwrap();
+        iotkit_core_ops::reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
+        let clock = Arc::new(iotkit_core_ops::SystemClock::default());
+        let trust = iotkit_core_ops::ClockTrust::load(
+            conn,
+            clock.clone(),
+            Duration::from_secs(2),
+            Duration::from_secs(300),
+        )
+        .unwrap();
+        let displayed = iotkit_core_ops::Clock::wall_time_ms(clock.as_ref());
+        iotkit_core_ops::confirm_time_with_clock(conn, clock.as_ref(), displayed).unwrap();
+        Ok(Arc::new(trust))
+    })
+    .unwrap()
+}
+
 async fn shutdown(handle: ApiHandle) {
     let _ = handle.shutdown.send(());
     tokio::time::timeout(Duration::from_secs(5), handle.join)
@@ -39,7 +58,6 @@ async fn shutdown(handle: ApiHandle) {
 
 struct Seeded {
     temp_key: String,
-    humidity_key: String,
     temp_expected_seqs: Vec<i64>,
     temp_latest_seq: i64,
 }
@@ -83,13 +101,6 @@ fn seed_readings(db: &DbHandle) -> Seeded {
             ledger::CHANNEL_NA,
             ledger::DEFAULT_VARIANT,
         );
-        let humidity_key = ledger::series_key_of(
-            &system_id,
-            "humidity_pct",
-            ledger::CHANNEL_NA,
-            ledger::DEFAULT_VARIANT,
-        );
-
         let temp_seq_1 = insert_reading_v3(
             conn,
             &NewReading {
@@ -149,7 +160,6 @@ fn seed_readings(db: &DbHandle) -> Seeded {
 
         Ok(Seeded {
             temp_key,
-            humidity_key,
             temp_expected_seqs: vec![temp_seq_1, temp_seq_2],
             temp_latest_seq: temp_seq_2,
         })
@@ -165,6 +175,7 @@ async fn protected_read_routes_match_setup_and_bearer_matrix() {
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
     let seeded = seed_readings(&db);
     let health = Arc::new(Mutex::new(HealthState::new(90)));
+    let clock_trust = prepare_owned_clock(&db);
 
     let handle = spawn_api_task(
         db.clone(),
@@ -172,6 +183,7 @@ async fn protected_read_routes_match_setup_and_bearer_matrix() {
         api_config(),
         "epoch-read-test".to_string(),
         dir.path().to_path_buf(),
+        clock_trust,
     )
     .await
     .unwrap();
@@ -181,68 +193,8 @@ async fn protected_read_routes_match_setup_and_bearer_matrix() {
         .build()
         .unwrap();
 
-    let setup_series: Value = client
-        .get(format!("{base}/api/v1/series"))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let setup_series = setup_series.as_array().unwrap();
-    assert_eq!(setup_series.len(), 2);
-    assert!(setup_series[0].get("series_id").is_none());
-    assert!(setup_series[0].get("series_key").is_some());
-    assert!(setup_series[0].get("system_id").is_some());
-    assert_eq!(setup_series[0]["user_label"], "Kitchen node");
-
-    let setup_live: Value = client
-        .get(format!("{base}/api/v1/live"))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let setup_live = setup_live.as_array().unwrap();
-    assert_eq!(setup_live.len(), 2);
-    let temp_live = setup_live
-        .iter()
-        .find(|row| row["series_key"] == seeded.temp_key)
-        .unwrap();
-    assert_eq!(temp_live["event_time"], 2000);
-    assert_eq!(temp_live["event_time_source"], "received_at");
-    assert_eq!(temp_live["quarantined"], false);
-    assert_eq!(temp_live["values"], json!([21.0]));
-    assert!(temp_live.get("seq").is_none());
-    assert!(
-        setup_live
-            .iter()
-            .any(|row| row["series_key"] == seeded.humidity_key)
-    );
-
-    let setup_readings = client
-        .get(format!(
-            "{base}/api/v1/readings?series_key={}&from_ms=0&to_ms=3000",
-            seeded.temp_key
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(setup_readings.status(), StatusCode::UNAUTHORIZED);
-    let setup_health = client
-        .get(format!("{base}/api/v1/health"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(setup_health.status(), StatusCode::UNAUTHORIZED);
-
-    let setup: Value = client
-        .post(format!("{base}/api/v1/setup/passphrase"))
+    let session: Value = client
+        .post(format!("{base}/api/v1/session"))
         .json(&json!({"passphrase":"correct horse battery staple"}))
         .send()
         .await
@@ -252,7 +204,7 @@ async fn protected_read_routes_match_setup_and_bearer_matrix() {
         .json()
         .await
         .unwrap();
-    let token = setup["token"].as_str().unwrap();
+    let token = session["token"].as_str().unwrap();
 
     for path in [
         "/api/v1/health",

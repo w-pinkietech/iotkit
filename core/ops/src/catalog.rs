@@ -1,16 +1,15 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
 
 use crate::{Actor, ActorKind, OpsError, Tier};
-
-pub const SETUP_ALLOWED_OPS: &[&str] = &["registry.resolve_unknown_key", "device.approve_sighting"];
 
 pub struct OpContext<'a> {
     pub params: &'a Value,
     pub actor_id: &'a str,
     pub source: Option<&'a str>,
+    pub clock_trust: Option<&'a crate::ClockTrust>,
 }
 
 pub struct OpDescriptor {
@@ -31,6 +30,7 @@ pub struct DispatchRequest {
     pub actor: Actor,
     pub source: Option<String>,
     pub step_up_verified: bool,
+    pub clock_trust: Option<Arc<crate::ClockTrust>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -100,11 +100,13 @@ impl From<OpsError> for OpError {
             OpsError::Conflict => Self::PreconditionFailed(value.to_string()),
             OpsError::Forbidden => Self::Forbidden(value.to_string()),
             OpsError::Validation(_) => Self::Validation(value.to_string()),
+            OpsError::ClockUntrusted => Self::PreconditionFailed(value.to_string()),
             OpsError::Ledger(e) => e.into(),
             OpsError::Storage(_)
             | OpsError::Sqlite(_)
             | OpsError::CredentialHash
-            | OpsError::Random => Self::Internal(value.to_string()),
+            | OpsError::Random
+            | OpsError::Io(_) => Self::Internal(value.to_string()),
         }
     }
 }
@@ -140,35 +142,65 @@ pub fn dispatch(
         params: &req.params,
         actor_id: &req.actor.actor_id,
         source: req.source.as_deref(),
+        clock_trust: req.clock_trust.as_deref(),
     };
 
     let result = (|| -> Result<Value, OpError> {
         if matches!(req.actor.actor_kind, ActorKind::Human | ActorKind::Ai) {
-            let token_alive = tx
+            let token_expiry = tx
                 .query_row(
-                    "SELECT 1 FROM operator_tokens
+                    "SELECT expires_at FROM operator_tokens
                      WHERE token_id = ?1
                        AND revoked_at IS NULL
-                       AND (expires_at IS NULL OR expires_at > ?2)",
-                    params![req.actor.actor_id.as_str(), now_ms()],
-                    |_| Ok(()),
+                       AND auth_generation = (
+                           SELECT auth_generation FROM auth_state WHERE id = 1
+                       )",
+                    [req.actor.actor_id.as_str()],
+                    |row| row.get::<_, Option<i64>>(0),
                 )
                 .optional()
                 .map_err(|e| OpError::Internal(e.to_string()))?
-                .is_some();
-            if !token_alive {
+                .flatten();
+            let token_exists = tx
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM operator_tokens
+                       WHERE token_id = ?1
+                         AND revoked_at IS NULL
+                         AND auth_generation = (
+                           SELECT auth_generation FROM auth_state WHERE id = 1
+                         )
+                     )",
+                    [req.actor.actor_id.as_str()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|e| OpError::Internal(e.to_string()))?;
+            if !token_exists {
                 return Err(OpError::Forbidden("token_revoked".to_string()));
+            }
+            if let Some(expires_at) = token_expiry {
+                let clock_trust = req
+                    .clock_trust
+                    .as_deref()
+                    .ok_or_else(|| OpError::Forbidden("clock_untrusted".to_string()))?;
+                let now =
+                    clock_trust
+                        .trusted_now_and_advance(&tx)
+                        .map_err(|error| match error {
+                            crate::ClockTrustError::Untrusted => {
+                                OpError::Forbidden("clock_untrusted".to_string())
+                            }
+                            crate::ClockTrustError::Ops(error) => {
+                                OpError::Internal(error.to_string())
+                            }
+                        })?;
+                if expires_at <= now {
+                    return Err(OpError::Forbidden("token_revoked".to_string()));
+                }
             }
         }
 
-        if req.actor.actor_kind == ActorKind::SetupMode {
-            if targets.len() > 1 {
-                return Err(OpError::Forbidden("setup_bulk".to_string()));
-            }
-            if !SETUP_ALLOWED_OPS.contains(&descriptor.name) {
-                return Err(OpError::Forbidden("setup_closed_set".to_string()));
-            }
-        } else if req.actor.tier_ceiling < effective_tier {
+        if req.actor.tier_ceiling < effective_tier {
             return Err(OpError::Forbidden("tier".to_string()));
         }
 
@@ -269,13 +301,5 @@ fn actor_kind_str(kind: ActorKind) -> &'static str {
         ActorKind::Human => "human",
         ActorKind::Ai => "ai",
         ActorKind::LocalCli => "local_cli",
-        ActorKind::SetupMode => "setup_mode",
     }
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }

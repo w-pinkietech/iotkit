@@ -28,6 +28,25 @@ fn api_config() -> ApiConfig {
     }
 }
 
+fn prepare_owned_clock(db: &DbHandle) -> Arc<iotkit_core_ops::ClockTrust> {
+    db.with_conn_sync(|conn| {
+        let hash = iotkit_core_ops::hash_passphrase("correct horse battery staple").unwrap();
+        iotkit_core_ops::reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
+        let clock = Arc::new(iotkit_core_ops::SystemClock::default());
+        let trust = iotkit_core_ops::ClockTrust::load(
+            conn,
+            clock.clone(),
+            Duration::from_secs(2),
+            Duration::from_secs(300),
+        )
+        .unwrap();
+        let displayed = iotkit_core_ops::Clock::wall_time_ms(clock.as_ref());
+        iotkit_core_ops::confirm_time_with_clock(conn, clock.as_ref(), displayed).unwrap();
+        Ok(Arc::new(trust))
+    })
+    .unwrap()
+}
+
 fn seed_sighting(db: &DbHandle, hardware_id: &str) {
     db.with_conn_sync(|conn| {
         ledger::record_sighting(conn, hardware_id, "api-e2e-test").unwrap();
@@ -72,6 +91,7 @@ async fn acceptance_setup_session_approve_sighting_and_api_health_cleanup() {
     let hardware_id = "rpi-local:default:i2c:0x60";
     seed_sighting(&db, hardware_id);
     let health = Arc::new(Mutex::new(HealthState::new(90)));
+    let clock_trust = prepare_owned_clock(&db);
 
     let handle = spawn_api_task(
         db.clone(),
@@ -79,6 +99,7 @@ async fn acceptance_setup_session_approve_sighting_and_api_health_cleanup() {
         api_config(),
         "epoch-e2e".to_string(),
         dir.path().to_path_buf(),
+        clock_trust,
     )
     .await
     .unwrap();
@@ -98,29 +119,8 @@ async fn acceptance_setup_session_approve_sighting_and_api_health_cleanup() {
         .json()
         .await
         .unwrap();
-    assert_eq!(box_before["setup_mode"], true);
+    assert_eq!(box_before["ownership"], "owned");
     assert_eq!(box_before["tls_fingerprint"], handle.fingerprint);
-
-    client
-        .post(format!("{base}/api/v1/setup/passphrase"))
-        .json(&json!({"passphrase":"correct horse battery staple"}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap();
-
-    let box_after: Value = client
-        .get(format!("{base}/api/v1/box"))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(box_after["setup_mode"], false);
 
     let session: Value = client
         .post(format!("{base}/api/v1/session"))

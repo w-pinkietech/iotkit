@@ -957,6 +957,7 @@ dependencies = [
  "iotkit-core-ledger",
  "iotkit-core-registry",
  "iotkit-core-storage",
+ "libc",
  "password-hash",
  "rcgen",
  "rusqlite",
@@ -1067,6 +1068,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -1084,10 +1086,13 @@ dependencies = [
  "iotkit-core-storage",
  "iotkit-core-timeseries",
  "iotkit-ingest-contract",
+ "libc",
  "reqwest",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tempfile",
+ "time",
 ]
 
 [[package]]

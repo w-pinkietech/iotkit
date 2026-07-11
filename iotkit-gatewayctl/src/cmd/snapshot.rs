@@ -5,10 +5,12 @@ use rusqlite::{
     types::{Value as SqlValue, ValueRef},
 };
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
+type SchemaRow = (String, String, String, Option<String>);
 
 const FORMAT_VERSION: i64 = 1;
 // Wave 1 encrypted containers should dispatch by outer magic plus manifest.format_version.
@@ -24,6 +26,13 @@ const SECTIONS: &[&str] = &[
 pub enum SnapshotCommand {
     Export(ExportArgs),
     Restore(RestoreArgs),
+    RestoreStatus(RestoreStatusArgs),
+}
+
+#[derive(Args)]
+pub struct RestoreStatusArgs {
+    #[arg(long)]
+    pub db: PathBuf,
 }
 
 #[derive(Args)]
@@ -235,9 +244,103 @@ fn confirm_restore(args: &RestoreArgs) -> AppResult<()> {
     }
 }
 
+fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
+    require_canonical_schema(conn)?;
+    let sequence_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM sqlite_sequence", [], |row| row.get(0))?;
+    if sequence_rows != 0 {
+        return Err("restore target is not empty: sqlite sequence state exists".into());
+    }
+    let auth_state_rows: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM auth_state
+         WHERE id = 1
+           AND auth_generation = 0
+           AND recovery_required = 0
+           AND ownership_ever_established = 0
+           AND clock_floor_ms = 0
+           AND clock_evidence_source IS NULL
+           AND clock_evidence_at_ms IS NULL
+           AND manual_evidence_seq = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    if auth_state_rows != 1 {
+        return Err(
+            "restore target is not empty: auth_state contains authority or recovery state".into(),
+        );
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_schema
+         WHERE type = 'table'
+           AND name NOT LIKE 'sqlite_%'
+           AND name NOT IN ('_schema_version', 'auth_state')
+         ORDER BY name",
+    )?;
+    let tables = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    for table in tables {
+        let count: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM {}", quote_sqlite_identifier(&table)),
+            [],
+            |row| row.get(0),
+        )?;
+        if count != 0 {
+            return Err(format!("restore target is not empty: {table} table has rows").into());
+        }
+    }
+    Ok(())
+}
+
+fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
+    let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
+    migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
+    migrations.sort_by_key(|migration| migration.version);
+    migrations
+}
+
+fn canonical_schema_rows(conn: &Connection) -> AppResult<Vec<SchemaRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT type, name, tbl_name, sql FROM sqlite_schema
+         WHERE name NOT LIKE 'sqlite_%'
+         ORDER BY type, name, tbl_name",
+    )?;
+    Ok(stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn migration_rows(conn: &Connection) -> AppResult<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare("SELECT version, label FROM _schema_version ORDER BY version")?;
+    Ok(stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn require_canonical_schema(conn: &Connection) -> AppResult<()> {
+    let canonical = Connection::open_in_memory()?;
+    iotkit_core_storage::run_migrations(&canonical, &all_migrations())?;
+    if canonical_schema_rows(conn)? != canonical_schema_rows(&canonical)?
+        || migration_rows(conn)? != migration_rows(&canonical)?
+    {
+        return Err("restore target schema or migration set is not canonical".into());
+    }
+    Ok(())
+}
+
 pub fn run_restore(conn: &Connection, args: RestoreArgs) -> AppResult<()> {
     confirm_restore(&args)?;
-    let snapshot: Value = serde_json::from_slice(&std::fs::read(&args.in_path)?)?;
+    let snapshot_bytes = std::fs::read(&args.in_path)?;
+    let snapshot_sha256 = format!("{:x}", Sha256::digest(&snapshot_bytes));
+    let snapshot: Value = serde_json::from_slice(&snapshot_bytes)?;
     let manifest = snapshot
         .get("manifest")
         .and_then(Value::as_object)
@@ -253,22 +356,80 @@ pub fn run_restore(conn: &Connection, args: RestoreArgs) -> AppResult<()> {
     if *sections != expected_sections {
         return Err("snapshot sections do not match R22 Wave 0 format".into());
     }
+    let new_auth_epoch = iotkit_core_ops::new_auth_epoch()?;
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    require_exhaustively_pristine_target(&tx)?;
+    let old_ledger_generation = ledger::current_generation(&tx)?;
+    let old_ledger_epoch: Option<String> = tx
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'epoch'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let old_auth_generation = iotkit_core_ops::auth_generation(&tx)?;
+    let old_auth_epoch = iotkit_core_ops::auth_epoch(&tx)?;
     tx.execute("PRAGMA defer_foreign_keys = ON", [])?;
-    for table in SECTIONS {
-        let existing_rows: i64 =
-            tx.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })?;
-        if existing_rows > 0 {
-            return Err(format!("restore target is not empty: {table} table has rows").into());
-        }
-    }
     for table in SECTIONS {
         restore_table(&tx, table, section_rows(&snapshot, table)?)?;
     }
-    ledger::renew_epoch(&tx)?;
-    ledger::bump_generation(&tx)?;
+    let new_ledger_epoch = ledger::renew_epoch(&tx)?;
+    iotkit_core_ops::enter_restored_local_recovery(&tx, &new_auth_epoch)?;
+    let new_ledger_generation = ledger::bump_generation(&tx)?;
+    let new_auth_generation = iotkit_core_ops::auth_generation(&tx)?;
+    tx.execute(
+        "INSERT INTO restore_receipts (
+           id, snapshot_sha256, old_ledger_generation, new_ledger_generation,
+           old_ledger_epoch, new_ledger_epoch, old_auth_generation, new_auth_generation,
+           old_auth_epoch, new_auth_epoch, committed_at
+         ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            snapshot_sha256,
+            old_ledger_generation,
+            new_ledger_generation,
+            old_ledger_epoch,
+            new_ledger_epoch,
+            old_auth_generation,
+            new_auth_generation,
+            old_auth_epoch,
+            new_auth_epoch,
+            now_ms(),
+        ],
+    )?;
+    if std::env::var_os("IOTKIT_TEST_FAIL_RESTORE_BEFORE_COMMIT").is_some() {
+        return Err("injected restore failure before commit".into());
+    }
     tx.commit()?;
+    Ok(())
+}
+
+pub fn run_restore_status(conn: &Connection) -> AppResult<()> {
+    let receipt = conn
+        .query_row(
+            "SELECT snapshot_sha256, old_ledger_generation, new_ledger_generation,
+                    old_ledger_epoch, new_ledger_epoch, old_auth_generation,
+                    new_auth_generation, old_auth_epoch, new_auth_epoch, committed_at
+             FROM restore_receipts WHERE id = 1",
+            [],
+            |row| {
+                Ok(serde_json::json!({
+                    "snapshot_sha256": row.get::<_, String>(0)?,
+                    "old_ledger_generation": row.get::<_, i64>(1)?,
+                    "new_ledger_generation": row.get::<_, i64>(2)?,
+                    "old_ledger_epoch": row.get::<_, Option<String>>(3)?,
+                    "new_ledger_epoch": row.get::<_, String>(4)?,
+                    "old_auth_generation": row.get::<_, i64>(5)?,
+                    "new_auth_generation": row.get::<_, i64>(6)?,
+                    "old_auth_epoch": row.get::<_, String>(7)?,
+                    "new_auth_epoch": row.get::<_, String>(8)?,
+                    "committed_at": row.get::<_, i64>(9)?,
+                }))
+            },
+        )
+        .optional()?;
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({ "restore_receipt": receipt }))?
+    );
     Ok(())
 }

@@ -7,11 +7,11 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `6cfaa27`
+- Artifact/base HEAD: `5d23f96`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 1 implementation dispatch preparation; product code remains
-  worker-only
+- Active phase: Plan 6 Task 1 settled; Task 2 implementation dispatch preparation; product code
+  remains worker-only
 
 ## Mission
 
@@ -48,6 +48,21 @@ git/disk/test. Never store secrets here.
   batch provisioning to a separate pre-distribution deliverable.
 
 ## Review state
+
+- Plan-6 Task 1 ownership/recovery/clock/restore closure: **SETTLED**. Final manifest
+  `.review/plan6-task1-final.manifest` SHA-256
+  `c348b62d152c7e75e390ca55a16cb33a414abd137e50da9b4161c5e6d989e66d`; prompt
+  `.review/plan6-task1-final-review.md` SHA-256
+  `eee401d1c6570608f830b5067fce0ba9e0df52391e3112ba57e98489c967d9f5`.
+  Fresh Codex `gpt-5.6-sol/high` confirmed the last restore-marker/time-confirmation fixes and
+  returned zero unresolved Critical/Important after the full residual scan. Result SHA-256
+  `4432cb82fc3d47d3f31dce2464beca8d82d88526abc42bf5494f307c5e940685`; receipt SHA-256
+  `ad2a1b4240a8d60098e503f54e32afb4e78ae650bb5abd8bddc0111d35bce07e`.
+  Discovery found one Critical old-passphrase/reset race and seven Important TLS/schema/clock/
+  TTY/restore/provenance/docs gaps; confirmation found two further Important marker/time TOCTOU
+  gaps. All were fixed through Sol/high product-code workers. Main reran real TCP API integration,
+  gatewayctl PTY/restore tests, and `scripts/verify.sh`; all passed. Claude/Grok unavailable and
+  not required.
 
 - Plan-6 formal specification: **SETTLED**. Final staging/canon-aligned manifest
   `.review/plan6-spec-staging-final.manifest` SHA-256
@@ -269,8 +284,8 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Commit the settled Plan 6 specification, plan, canon links, and operational ledger locally.
-2. Dispatch Task 1 product code through Sol/high `scripts/codex.sh impl`.
+1. Commit Plan 6 Task 1 locally.
+2. Dispatch Task 2 product code through Sol/high `scripts/codex.sh impl`.
 
 ## Verification
 

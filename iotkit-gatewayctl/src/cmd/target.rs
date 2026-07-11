@@ -45,7 +45,7 @@ pub fn run_target_add(
     schema_version: u32,
     smoke: &dyn Fn(&str, &str) -> Result<(), String>,
 ) -> AppResult<()> {
-    if iotkit_core_ops::is_setup_mode(conn)? {
+    if iotkit_core_ops::ownership_state(conn)? != iotkit_core_ops::OwnershipState::Owned {
         return Err(
             "setupモード中は出口target登録不可（D13）。管理者パスフレーズを設定してから".into(),
         );
@@ -205,7 +205,8 @@ mod tests {
     }
 
     fn seed_admin(conn: &Connection) {
-        iotkit_core_ops::reset_passphrase(conn, "test-passphrase", "local_cli").unwrap();
+        let hash = iotkit_core_ops::hash_passphrase("test-passphrase").unwrap();
+        iotkit_core_ops::reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
     }
 
     fn seed_target(conn: &Connection, token: &str) {
@@ -378,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn add_rejects_setup_mode_before_any_other_validation() {
+    fn add_rejects_unowned_state_before_any_other_validation() {
         let conn = test_conn();
 
         let result = run_target_add(

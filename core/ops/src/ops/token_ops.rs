@@ -76,7 +76,7 @@ fn issue_dry_run(_tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, Op
 
 fn issue_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
     let token = parse_new_token(ctx.params)?;
-    let issued = issue_token(tx, &token, ctx.actor_id, ctx.source)?;
+    let issued = issue_token(tx, &token, ctx.actor_id, ctx.source, ctx.clock_trust)?;
     Ok(json!({
         "token_id": issued.token_id,
         "plaintext": issued.plaintext.expose(),

@@ -72,16 +72,30 @@ fn main() {
     all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
     all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
     all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
-    let db = match iotkit_core_storage::init_db(
-        std::path::Path::new(&config.db_path),
-        &all_migrations,
-    ) {
+    let db_path_for_init = std::path::Path::new(&config.db_path);
+    let database_existed_before_open = db_path_for_init.exists();
+    let db = match iotkit_core_storage::init_db(db_path_for_init, &all_migrations) {
         Ok(handle) => handle,
         Err(e) => {
             tracing::error!(error = %e, db_path = %config.db_path, "failed to initialize database");
             std::process::exit(1);
         }
     };
+    if let Err(error) = db.with_conn_sync(|conn| {
+        iotkit_core_ops::reconcile_database_initialization_provenance(
+            conn,
+            db_path_for_init,
+            database_existed_before_open,
+        )
+        .map_err(|error| {
+            iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                Box::new(error),
+            ))
+        })
+    }) {
+        tracing::error!(error = %error, db_path = %config.db_path, "failed to reconcile database initialization provenance");
+        std::process::exit(1);
+    }
     tracing::info!(db_path = %config.db_path, "database initialized");
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -111,6 +125,23 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     let mut host = AdapterHost::new();
     let db_path = std::path::PathBuf::from(&config.db_path);
     let health_state = Arc::new(Mutex::new(health::HealthState::new(config.retention_days)));
+    let clock_trust = db
+        .with_conn(|conn| {
+            iotkit_core_ops::ClockTrust::load(
+                conn,
+                Arc::new(iotkit_core_ops::SystemClock::default()),
+                Duration::from_secs(2),
+                Duration::from_secs(5 * 60),
+            )
+            .map_err(|error| {
+                iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                    Box::new(error),
+                ))
+            })
+        })
+        .await
+        .expect("clock trust state");
+    let clock_trust = Arc::new(clock_trust);
     let epoch = db
         .with_conn(|conn| {
             iotkit_core_ledger::ledger_epoch(conn).map_err(|e| {
@@ -140,6 +171,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         config.health_json_path.clone(),
         epoch.clone(),
         health_state.clone(),
+        clock_trust.clone(),
         Duration::from_secs(60),
     );
     let _publish_task =
@@ -158,6 +190,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
             config.api.clone(),
             epoch.clone(),
             data_dir,
+            clock_trust.clone(),
         )
         .await
         {
@@ -176,7 +209,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         tracing::info!(
             bind = %local_addr,
             tls_fingerprint = %fingerprint,
-            interfaces = "box,setup,session,health,series,live,readings,ops",
+            interfaces = "box,session,health,series,live,readings,ops",
             "control-plane API started"
         );
         api_shutdown = Some(shutdown);

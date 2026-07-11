@@ -2,11 +2,14 @@ use iotkit_core_ledger::{
     DeviceKind, DeviceState, NewDevice, SystemId, get_device, insert_device, record_sighting,
 };
 use iotkit_core_ops::{
-    Actor, ActorKind, DispatchRequest, OpError, Tier, authenticate, dispatch, standard_catalog,
+    Actor, ActorKind, DispatchRequest, OpError, Tier, dispatch, standard_catalog,
 };
 use iotkit_core_storage::Migration;
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
 
 fn all_migrations() -> Vec<Migration> {
     let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -23,7 +26,6 @@ fn actor(kind: ActorKind, ceiling: Tier) -> Actor {
             ActorKind::Human => "tok_human".to_string(),
             ActorKind::Ai => "tok_ai".to_string(),
             ActorKind::LocalCli => "local_cli".to_string(),
-            ActorKind::SetupMode => "setup_mode".to_string(),
         },
         actor_kind: kind,
         tier_ceiling: ceiling,
@@ -38,6 +40,7 @@ fn request(op: &str, params: Value, dry_run: bool, actor: Actor, step_up: bool) 
         actor,
         source: Some("test-suite".to_string()),
         step_up_verified: step_up,
+        clock_trust: None,
     }
 }
 
@@ -560,10 +563,11 @@ fn ai_token_cannot_dispatch_construction_token_issue() {
             ),
         )
         .unwrap();
-        let plaintext = issued["plaintext"].as_str().unwrap();
-        let ai_actor = authenticate(conn, plaintext, i64::MAX - 1)
-            .unwrap()
-            .expect("issued token authenticates");
+        let ai_actor = Actor {
+            actor_id: issued["token_id"].as_str().unwrap().to_string(),
+            actor_kind: ActorKind::Ai,
+            tier_ceiling: Tier::Routine,
+        };
         assert_eq!(ai_actor.actor_kind, ActorKind::Ai);
         assert_eq!(ai_actor.tier_ceiling, Tier::Routine);
 
@@ -580,6 +584,95 @@ fn ai_token_cannot_dispatch_construction_token_issue() {
         )
         .unwrap_err();
         assert!(matches!(err, OpError::Forbidden(_)));
+        Ok(())
+    })
+    .unwrap();
+}
+
+struct RollbackClock(AtomicI64);
+
+impl iotkit_core_ops::Clock for RollbackClock {
+    fn wall_time_ms(&self) -> i64 {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    fn monotonic_ms(&self) -> u64 {
+        0
+    }
+
+    fn kernel_synchronized(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn middleware_auth_then_clock_rollback_is_rechecked_inside_dispatch() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let clock = Arc::new(RollbackClock(AtomicI64::new(5_000)));
+        let trust = Arc::new(
+            iotkit_core_ops::ClockTrust::load(
+                conn,
+                clock.clone(),
+                Duration::from_millis(10),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let issued = iotkit_core_ops::issue_session_token(
+            conn,
+            "finite",
+            Tier::Construction,
+            60_000,
+            "test",
+            None,
+            &trust,
+        )
+        .unwrap();
+        let middleware_actor =
+            iotkit_core_ops::authenticate(conn, issued.plaintext.expose(), &trust)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            iotkit_core_ops::ClockTrust::persisted_floor(conn).unwrap(),
+            5_000
+        );
+
+        clock.0.store(1_000, Ordering::SeqCst);
+        let result = dispatch(
+            conn,
+            standard_catalog(),
+            DispatchRequest {
+                op: "operator_token.issue".to_string(),
+                params: json!({
+                    "name": "must-not-exist",
+                    "kind": "human",
+                    "tier_ceiling": "routine",
+                    "expires_at": null,
+                }),
+                dry_run: false,
+                actor: middleware_actor,
+                source: Some("test-suite".to_string()),
+                step_up_verified: true,
+                clock_trust: Some(trust),
+            },
+        );
+        assert_eq!(
+            result,
+            Err(OpError::Forbidden("clock_untrusted".to_string()))
+        );
+        let created: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM operator_tokens WHERE name = 'must-not-exist'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 0);
+        assert_eq!(
+            iotkit_core_ops::ClockTrust::persisted_floor(conn).unwrap(),
+            5_000
+        );
         Ok(())
     })
     .unwrap();

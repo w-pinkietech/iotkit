@@ -39,6 +39,13 @@ pub struct ApiHealth {
 }
 
 #[derive(Debug, Clone)]
+pub struct ClockHealth {
+    pub trusted: bool,
+    pub source: Option<&'static str>,
+    pub observed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct HealthState {
     pub started_at: Instant,
     pub collector_alive: bool,
@@ -47,6 +54,7 @@ pub struct HealthState {
     pub retention: RetentionHealth,
     pub publish: Vec<TargetDeliveryHealth>,
     pub api: Option<ApiHealth>,
+    pub clock: ClockHealth,
 }
 
 impl HealthState {
@@ -67,7 +75,33 @@ impl HealthState {
             },
             publish: Vec::new(),
             api: None,
+            clock: ClockHealth {
+                trusted: false,
+                source: None,
+                observed_at_ms: None,
+            },
         }
+    }
+
+    pub fn apply_clock_evidence(&mut self, evidence: iotkit_core_ops::ClockEvidence) {
+        self.clock = match evidence {
+            iotkit_core_ops::ClockEvidence::Untrusted => ClockHealth {
+                trusted: false,
+                source: None,
+                observed_at_ms: None,
+            },
+            iotkit_core_ops::ClockEvidence::Trusted {
+                source,
+                observed_at_ms,
+            } => ClockHealth {
+                trusted: true,
+                source: Some(match source {
+                    iotkit_core_ops::TrustSource::KernelSync => "kernel_sync",
+                    iotkit_core_ops::TrustSource::ManualLocalRoot => "manual_local_root",
+                }),
+                observed_at_ms: Some(observed_at_ms),
+            },
+        };
     }
 
     pub fn note_adapter_event(&mut self, id: &str, at_ms: i64) {
@@ -122,11 +156,13 @@ pub fn spawn_health_writer(
     path: PathBuf,
     epoch: String,
     state: std::sync::Arc<std::sync::Mutex<HealthState>>,
+    clock_trust: std::sync::Arc<iotkit_core_ops::ClockTrust>,
     interval: Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let snapshot = state.lock().expect("health state mutex poisoned").clone();
+            let mut snapshot = state.lock().expect("health state mutex poisoned").clone();
+            snapshot.apply_clock_evidence(clock_trust.evidence());
             if let Err(e) = write_health_json(&path, &epoch, &snapshot) {
                 tracing::error!(error = %e, path = %path.display(), "health json write failed");
             }
@@ -180,8 +216,13 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
         ),
         None => "null".to_string(),
     };
+    let clock_source = state
+        .clock
+        .source
+        .map(|source| format!(r#""{}""#, escape_json(source)))
+        .unwrap_or_else(|| "null".to_string());
     format!(
-        r#"{{"schema":1,"written_at":{},"epoch":"{}","uptime_s":{},"collector_alive":{},"adapters":[{}],"db":{{"size_bytes":{},"disk_available_bytes":{},"watermark_exceeded":{}}},"retention":{{"days":{},"last_purge_at":{},"last_purged_rows":{}}},"publish":[{}],"api":{}}}"#,
+        r#"{{"schema":1,"written_at":{},"epoch":"{}","uptime_s":{},"collector_alive":{},"adapters":[{}],"db":{{"size_bytes":{},"disk_available_bytes":{},"watermark_exceeded":{}}},"retention":{{"days":{},"last_purge_at":{},"last_purged_rows":{}}},"publish":[{}],"api":{},"clock_trust":{{"trusted":{},"source":{},"observed_at_ms":{},"recovery_command":"gatewayctl time confirm"}}}}"#,
         now_ms(),
         escape_json(epoch),
         state.started_at.elapsed().as_secs(),
@@ -195,6 +236,9 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
         state.retention.last_purged_rows,
         publish,
         api,
+        state.clock.trusted,
+        clock_source,
+        opt_i64(state.clock.observed_at_ms),
     )
 }
 
@@ -252,6 +296,11 @@ mod tests {
                 bind: "127.0.0.1:8443".to_string(),
                 tls_fingerprint: "sha256:test".to_string(),
             }),
+            clock: ClockHealth {
+                trusted: false,
+                source: None,
+                observed_at_ms: None,
+            },
         };
 
         write_health_json(&path, "epoch-1", &state).unwrap();
@@ -268,6 +317,9 @@ mod tests {
         assert!(
             json.contains(r#""api":{"bind":"127.0.0.1:8443","tls_fingerprint":"sha256:test"}"#)
         );
+        assert!(json.contains(
+            r#""clock_trust":{"trusted":false,"source":null,"observed_at_ms":null,"recovery_command":"gatewayctl time confirm"}"#
+        ));
         assert!(json.contains(r#""uptime_s":10"#) || json.contains(r#""uptime_s":11"#));
     }
 }

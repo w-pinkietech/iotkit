@@ -1,15 +1,19 @@
 use std::fmt;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::OpsError;
+use crate::clock::{ClockTrust, ClockTrustError};
 use crate::tier::{Actor, ActorKind, Tier, TokenKind};
 
 const TOKEN_RANDOM_BYTES: usize = 32;
@@ -32,12 +36,6 @@ impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("[REDACTED]")
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetOutcome {
-    FirstSet,
-    AlreadySet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,80 +66,154 @@ pub struct TokenRow {
     pub last_used_at: Option<i64>,
 }
 
-pub fn is_setup_mode(conn: &Connection) -> Result<bool, OpsError> {
-    let exists: i64 = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM admin_credential WHERE id = 1)",
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnershipState {
+    Unowned,
+    LocalRecoveryRequired,
+    Owned,
+}
+
+pub fn ownership_state(conn: &Connection) -> Result<OwnershipState, OpsError> {
+    let (recovery_required, ownership_ever_established): (bool, bool) = conn.query_row(
+        "SELECT recovery_required, ownership_ever_established FROM auth_state WHERE id = 1",
         [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    Ok(exists == 0)
+    let credential = load_passphrase_hash(conn)?;
+    if recovery_required {
+        return Ok(OwnershipState::LocalRecoveryRequired);
+    }
+    match credential {
+        None if ownership_ever_established => Ok(OwnershipState::LocalRecoveryRequired),
+        None => Ok(OwnershipState::Unowned),
+        Some(hash) if PasswordHash::new(&hash).is_ok() => Ok(OwnershipState::Owned),
+        Some(_) => Ok(OwnershipState::LocalRecoveryRequired),
+    }
 }
 
-/// Sets the initial admin passphrase if it has not already been set.
-///
-/// Mutation and audit INSERT atomicity is guaranteed by the caller's transaction:
-/// dispatch (Task 3) uses one Immediate Tx, while session/setup routes (Task 6)
-/// and gatewayctl (Task 9) create a Tx inside `with_conn`. This function does not
-/// open its own transaction, so it does not nest with the caller's Tx.
-pub fn set_passphrase(
-    conn: &Connection,
-    plaintext: &str,
-    audit_actor: &str,
-) -> Result<SetOutcome, OpsError> {
-    if !is_setup_mode(conn)? {
-        return Ok(SetOutcome::AlreadySet);
-    }
-    let hash = hash_passphrase(plaintext)?;
-    set_passphrase_with_hash(conn, &hash, audit_actor)
+pub fn database_initialization_marker_path(db_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.initialized", db_path.display()))
 }
 
-pub fn set_passphrase_with_hash(
+pub fn reconcile_database_initialization_provenance(
     conn: &Connection,
-    phc: &str,
-    audit_actor: &str,
-) -> Result<SetOutcome, OpsError> {
-    let now = now_ms();
-    let changed = conn.execute(
-        "INSERT OR IGNORE INTO admin_credential (id, passphrase_hash, set_at, updated_at)
-         VALUES (1, ?1, ?2, ?2)",
-        params![phc, now],
-    )?;
-    if changed == 0 {
-        return Ok(SetOutcome::AlreadySet);
+    db_path: &Path,
+    database_existed_before_open: bool,
+) -> Result<(), OpsError> {
+    let marker = database_initialization_marker_path(db_path);
+    let marker_existed = marker.exists();
+    if marker_existed && !database_existed_before_open {
+        conn.execute(
+            "UPDATE auth_state
+             SET recovery_required = 1,
+                 ownership_ever_established = 1
+             WHERE id = 1",
+            [],
+        )?;
+        record_auth_event(
+            conn,
+            "database_reinitialized_after_loss",
+            json!({ "actor": "local_startup" }),
+        )?;
     }
-    record_auth_event(
-        conn,
-        "admin_passphrase_set",
-        json!({ "actor": audit_actor }),
-    )?;
-    Ok(SetOutcome::FirstSet)
+    if !marker_existed {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)?;
+        file.write_all(b"iotkit-database-initialized-v1\n")?;
+        file.sync_all()?;
+        let parent = marker
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 /// Resets the admin passphrase, creating it first if needed.
 ///
-/// Mutation and audit INSERT atomicity is guaranteed by the caller's transaction:
-/// dispatch (Task 3) uses one Immediate Tx, while session/setup routes (Task 6)
-/// and gatewayctl (Task 9) create a Tx inside `with_conn`. This function does not
-/// open its own transaction, so it does not nest with the caller's Tx.
-pub fn reset_passphrase(
+/// The caller must hash before the SQLite write transaction. This local-maintenance boundary owns the
+/// Immediate transaction that updates the credential, generation, revocations, and audit.
+pub fn reset_passphrase_with_hash(
     conn: &Connection,
-    plaintext: &str,
+    phc: &str,
     audit_actor: &str,
 ) -> Result<(), OpsError> {
+    PasswordHash::new(phc).map_err(|_| OpsError::CredentialHash)?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = now_ms();
-    let hash = hash_passphrase(plaintext)?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO admin_credential (id, passphrase_hash, set_at, updated_at)
          VALUES (1, ?1, ?2, ?2)
          ON CONFLICT(id) DO UPDATE SET
            passphrase_hash = excluded.passphrase_hash,
            updated_at = excluded.updated_at",
-        params![hash, now],
+        params![phc, now],
+    )?;
+    tx.execute(
+        "UPDATE auth_state
+         SET auth_generation = auth_generation + 1,
+             recovery_required = 0,
+             ownership_ever_established = 1
+         WHERE id = 1",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE operator_tokens SET revoked_at = ?1 WHERE revoked_at IS NULL",
+        [now],
+    )?;
+    record_auth_event(
+        &tx,
+        "admin_passphrase_reset",
+        json!({ "actor": audit_actor }),
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn auth_generation(conn: &Connection) -> Result<i64, OpsError> {
+    conn.query_row(
+        "SELECT auth_generation FROM auth_state WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(OpsError::from)
+}
+
+pub fn auth_epoch(conn: &Connection) -> Result<String, OpsError> {
+    conn.query_row(
+        "SELECT auth_epoch FROM auth_state WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(OpsError::from)
+}
+
+pub fn new_auth_epoch() -> Result<String, OpsError> {
+    random_prefixed("auth_", TOKEN_ID_RANDOM_BYTES)
+}
+
+pub fn enter_restored_local_recovery(conn: &Connection, new_epoch: &str) -> Result<(), OpsError> {
+    conn.execute("DELETE FROM admin_credential", [])?;
+    conn.execute("DELETE FROM operator_tokens", [])?;
+    conn.execute(
+        "UPDATE auth_state
+         SET auth_generation = auth_generation + 1,
+             auth_epoch = ?1,
+             recovery_required = 1,
+             ownership_ever_established = 1,
+             clock_evidence_source = NULL,
+             clock_evidence_at_ms = NULL,
+             manual_evidence_seq = manual_evidence_seq + 1
+         WHERE id = 1",
+        [new_epoch],
     )?;
     record_auth_event(
         conn,
-        "admin_passphrase_reset",
-        json!({ "actor": audit_actor }),
+        "restore_authority_cleared",
+        json!({ "actor": "local_cli", "recovery": "local_recovery_required" }),
     )?;
     Ok(())
 }
@@ -154,6 +226,53 @@ pub fn load_passphrase_hash(conn: &Connection) -> Result<Option<String>, OpsErro
     )
     .optional()
     .map_err(OpsError::from)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassphraseAuthority {
+    pub phc: String,
+    pub auth_generation: i64,
+}
+
+pub fn load_passphrase_authority(
+    conn: &Connection,
+) -> Result<Option<PassphraseAuthority>, OpsError> {
+    conn.query_row(
+        "SELECT admin_credential.passphrase_hash, auth_state.auth_generation
+         FROM admin_credential CROSS JOIN auth_state
+         WHERE admin_credential.id = 1 AND auth_state.id = 1",
+        [],
+        |row| {
+            Ok(PassphraseAuthority {
+                phc: row.get(0)?,
+                auth_generation: row.get(1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(OpsError::from)
+}
+
+pub fn require_passphrase_authority_unchanged(
+    conn: &Connection,
+    expected: &PassphraseAuthority,
+) -> Result<(), OpsError> {
+    let unchanged: bool = conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM admin_credential CROSS JOIN auth_state
+           WHERE admin_credential.id = 1
+             AND auth_state.id = 1
+             AND admin_credential.passphrase_hash = ?1
+             AND auth_state.auth_generation = ?2
+         )",
+        params![expected.phc, expected.auth_generation],
+        |row| row.get(0),
+    )?;
+    if unchanged {
+        Ok(())
+    } else {
+        Err(OpsError::Forbidden)
+    }
 }
 
 pub fn verify_passphrase(phc: &str, plaintext: &str) -> bool {
@@ -176,6 +295,7 @@ pub fn issue_token(
     token: &NewOperatorToken,
     audit_actor: &str,
     audit_source: Option<&str>,
+    clock_trust: Option<&ClockTrust>,
 ) -> Result<IssuedToken, OpsError> {
     if token.kind == TokenKind::Ai && token.ceiling > Tier::Routine {
         return Err(OpsError::Validation(
@@ -183,15 +303,61 @@ pub fn issue_token(
         ));
     }
 
-    let now = now_ms();
+    let now = if token.expires_at.is_some() {
+        clock_trust
+            .ok_or(OpsError::ClockUntrusted)?
+            .trusted_now_and_advance(conn)
+            .map_err(clock_error)?
+    } else {
+        now_ms()
+    };
+    issue_token_at(conn, token, audit_actor, audit_source, now)
+}
+
+pub fn issue_session_token(
+    conn: &Connection,
+    name: &str,
+    ceiling: Tier,
+    ttl_ms: i64,
+    audit_actor: &str,
+    audit_source: Option<&str>,
+    clock_trust: &ClockTrust,
+) -> Result<IssuedToken, OpsError> {
+    if ttl_ms <= 0 {
+        return Err(OpsError::Validation("session TTL must be positive".into()));
+    }
+    let now = clock_trust
+        .trusted_now_and_advance(conn)
+        .map_err(clock_error)?;
+    let expires_at = now
+        .checked_add(ttl_ms)
+        .ok_or_else(|| OpsError::Validation("session expiry overflow".into()))?;
+    let token = NewOperatorToken {
+        name: name.to_string(),
+        kind: TokenKind::Human,
+        ceiling,
+        is_session: true,
+        expires_at: Some(expires_at),
+    };
+    issue_token_at(conn, &token, audit_actor, audit_source, now)
+}
+
+fn issue_token_at(
+    conn: &Connection,
+    token: &NewOperatorToken,
+    audit_actor: &str,
+    audit_source: Option<&str>,
+    now: i64,
+) -> Result<IssuedToken, OpsError> {
+    let generation = auth_generation(conn)?;
     let token_id = random_prefixed(TOKEN_ID_PREFIX, TOKEN_ID_RANDOM_BYTES)?;
     let plaintext = random_prefixed(TOKEN_PREFIX, TOKEN_RANDOM_BYTES)?;
     let token_hash = hash_token(&plaintext);
     conn.execute(
         "INSERT INTO operator_tokens (
            token_id, name, token_hash, kind, tier_ceiling, is_session,
-           created_at, expires_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+           created_at, expires_at, auth_generation
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             token_id,
             token.name.as_str(),
@@ -200,7 +366,8 @@ pub fn issue_token(
             token.ceiling.as_str(),
             if token.is_session { 1_i64 } else { 0_i64 },
             now,
-            token.expires_at
+            token.expires_at,
+            generation,
         ],
     )?;
 
@@ -228,12 +395,13 @@ pub fn issue_token(
 pub fn authenticate(
     conn: &Connection,
     plaintext: &str,
-    now_ms: i64,
+    clock_trust: &ClockTrust,
 ) -> Result<Option<Actor>, OpsError> {
     let token_hash = hash_token(plaintext);
     let row = conn
         .query_row(
-            "SELECT token_id, kind, tier_ceiling, expires_at, revoked_at, last_used_at
+            "SELECT token_id, kind, tier_ceiling, expires_at, revoked_at, last_used_at,
+                    auth_generation
              FROM operator_tokens WHERE token_hash = ?1",
             params![token_hash],
             |row| {
@@ -244,6 +412,7 @@ pub fn authenticate(
                     expires_at: row.get(3)?,
                     revoked_at: row.get(4)?,
                     last_used_at: row.get(5)?,
+                    auth_generation: row.get(6)?,
                 })
             },
         )
@@ -252,16 +421,27 @@ pub fn authenticate(
     let Some(row) = row else {
         return Ok(None);
     };
-    if row.revoked_at.is_some() || row.expires_at.is_some_and(|expires| expires <= now_ms) {
+    if row.revoked_at.is_some() || row.auth_generation != auth_generation(conn)? {
         return Ok(None);
     }
+    let observed_now = if let Some(expires) = row.expires_at {
+        let now = clock_trust
+            .trusted_now_and_advance(conn)
+            .map_err(clock_error)?;
+        if expires <= now {
+            return Ok(None);
+        }
+        now
+    } else {
+        clock_trust.wall_time_ms()
+    };
     if row
         .last_used_at
-        .is_none_or(|last| now_ms - last > LAST_USED_UPDATE_INTERVAL_MS)
+        .is_none_or(|last| observed_now.saturating_sub(last) > LAST_USED_UPDATE_INTERVAL_MS)
     {
         conn.execute(
             "UPDATE operator_tokens SET last_used_at = ?1 WHERE token_id = ?2",
-            params![now_ms, row.token_id],
+            params![observed_now, row.token_id],
         )?;
     }
 
@@ -357,6 +537,14 @@ struct TokenAuthRow {
     expires_at: Option<i64>,
     revoked_at: Option<i64>,
     last_used_at: Option<i64>,
+    auth_generation: i64,
+}
+
+fn clock_error(error: ClockTrustError) -> OpsError {
+    match error {
+        ClockTrustError::Untrusted => OpsError::ClockUntrusted,
+        ClockTrustError::Ops(error) => error,
+    }
 }
 
 pub fn hash_passphrase(plaintext: &str) -> Result<String, OpsError> {
@@ -397,11 +585,56 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+    use std::time::Duration;
+
     use rusqlite::{OptionalExtension, params};
 
     use super::*;
     use crate::tier::{ActorKind, Tier, TokenKind};
     use iotkit_core_storage::Migration;
+
+    #[derive(Default)]
+    struct TestClock {
+        wall: AtomicI64,
+        monotonic: AtomicU64,
+        synchronized: AtomicBool,
+    }
+
+    impl TestClock {
+        fn set_wall(&self, value: i64) {
+            self.wall.store(value, Ordering::SeqCst);
+        }
+    }
+
+    impl crate::Clock for TestClock {
+        fn wall_time_ms(&self) -> i64 {
+            self.wall.load(Ordering::SeqCst)
+        }
+
+        fn monotonic_ms(&self) -> u64 {
+            self.monotonic.load(Ordering::SeqCst)
+        }
+
+        fn kernel_synchronized(&self) -> bool {
+            self.synchronized.load(Ordering::SeqCst)
+        }
+    }
+
+    fn test_clock(conn: &Connection, now: i64) -> (Arc<TestClock>, ClockTrust) {
+        let clock = Arc::new(TestClock::default());
+        clock.set_wall(now);
+        clock.synchronized.store(true, Ordering::SeqCst);
+        let trust = ClockTrust::load(
+            conn,
+            clock.clone(),
+            Duration::from_millis(10),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        (clock, trust)
+    }
 
     fn all_migrations() -> Vec<Migration> {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -432,70 +665,159 @@ mod tests {
     }
 
     #[test]
-    fn passphrase_setup_set_verify_reset_and_audit_do_not_expose_secret() {
+    fn local_passphrase_reset_establishes_ownership_and_audit_does_not_expose_secret() {
         let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
         db.with_conn_sync(|conn| {
-            assert!(is_setup_mode(conn).unwrap());
-
+            assert_eq!(ownership_state(conn).unwrap(), OwnershipState::Unowned);
             let phc = hash_passphrase("correct horse battery staple").unwrap();
-            assert_eq!(
-                set_passphrase_with_hash(conn, &phc, "setup_mode").unwrap(),
-                SetOutcome::FirstSet
-            );
-            assert!(!is_setup_mode(conn).unwrap());
-            assert_eq!(
-                set_passphrase_with_hash(conn, "$argon2id$ignored", "local_cli").unwrap(),
-                SetOutcome::AlreadySet
-            );
+            reset_passphrase_with_hash(conn, &phc, "local_cli").unwrap();
+            assert_eq!(ownership_state(conn).unwrap(), OwnershipState::Owned);
 
             let stored = load_passphrase_hash(conn).unwrap().unwrap();
             assert_eq!(stored, phc);
             assert!(verify_passphrase(&stored, "correct horse battery staple"));
             assert!(!verify_passphrase(&stored, "wrong passphrase"));
 
-            let set_details = event_details(conn, "admin_passphrase_set");
-            assert_eq!(set_details.len(), 1);
-            let set_detail: serde_json::Value = serde_json::from_str(&set_details[0]).unwrap();
-            assert_eq!(set_detail["actor"], "setup_mode");
-            assert!(!set_details[0].contains("correct horse battery staple"));
-            assert!(!set_details[0].contains("passphrase_hash"));
-            assert!(!set_details[0].contains("$argon2"));
-
-            reset_passphrase(conn, "new passphrase", "local_cli").unwrap();
+            let new_hash = hash_passphrase("new passphrase").unwrap();
+            reset_passphrase_with_hash(conn, &new_hash, "local_cli").unwrap();
             let updated = load_passphrase_hash(conn).unwrap().unwrap();
             assert!(verify_passphrase(&updated, "new passphrase"));
             assert!(!verify_passphrase(&updated, "correct horse battery staple"));
 
             let reset_details = event_details(conn, "admin_passphrase_reset");
-            assert_eq!(reset_details.len(), 1);
-            let reset_detail: serde_json::Value = serde_json::from_str(&reset_details[0]).unwrap();
+            assert_eq!(reset_details.len(), 2);
+            let reset_detail: serde_json::Value = serde_json::from_str(&reset_details[1]).unwrap();
             assert_eq!(reset_detail["actor"], "local_cli");
-            assert!(!reset_details[0].contains("new passphrase"));
-            assert!(!reset_details[0].contains("passphrase_hash"));
-            assert!(!reset_details[0].contains("$argon2"));
+            for detail in reset_details {
+                assert!(!detail.contains("new passphrase"));
+                assert!(!detail.contains("correct horse battery staple"));
+                assert!(!detail.contains("passphrase_hash"));
+                assert!(!detail.contains("$argon2"));
+            }
             Ok(())
         })
         .unwrap();
     }
 
     #[test]
-    fn set_passphrase_wrapper_checks_existing_credential_before_hashing() {
+    fn passphrase_reset_revokes_all_operator_and_session_authority() {
         let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
         db.with_conn_sync(|conn| {
-            assert!(is_setup_mode(conn).unwrap());
+            let (_clock, trust) = test_clock(conn, 1_000);
+            let operator = issue_token(
+                conn,
+                &NewOperatorToken {
+                    name: "operator".to_string(),
+                    kind: TokenKind::Human,
+                    ceiling: Tier::Daily,
+                    is_session: false,
+                    expires_at: None,
+                },
+                "local_cli",
+                None,
+                None,
+            )
+            .unwrap();
+            let session = issue_token(
+                conn,
+                &NewOperatorToken {
+                    name: "session".to_string(),
+                    kind: TokenKind::Human,
+                    ceiling: Tier::Construction,
+                    is_session: true,
+                    expires_at: Some(10_000),
+                },
+                "local_cli",
+                None,
+                Some(&trust),
+            )
+            .unwrap();
 
-            assert_eq!(
-                set_passphrase(conn, "correct horse battery staple", "setup_mode").unwrap(),
-                SetOutcome::FirstSet
-            );
-            assert!(!is_setup_mode(conn).unwrap());
-            assert_eq!(
-                set_passphrase(conn, "losing concurrent writer", "local_cli").unwrap(),
-                SetOutcome::AlreadySet
-            );
+            let hash = hash_passphrase("replacement passphrase").unwrap();
+            reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
 
-            let set_details = event_details(conn, "admin_passphrase_set");
-            assert_eq!(set_details.len(), 1);
+            assert!(
+                authenticate(conn, operator.plaintext.expose(), &trust)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                authenticate(conn, session.plaintext.expose(), &trust)
+                    .unwrap()
+                    .is_none()
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn passphrase_reset_audit_failure_preserves_prior_authority_atomically() {
+        let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+        db.with_conn_sync(|conn| {
+            let (_clock, trust) = test_clock(conn, 1_000);
+            let original_hash = hash_passphrase("original passphrase").unwrap();
+            reset_passphrase_with_hash(conn, &original_hash, "local_cli").unwrap();
+            let issued = issue_token(
+                conn,
+                &NewOperatorToken {
+                    name: "surviving operator".into(),
+                    kind: TokenKind::Human,
+                    ceiling: Tier::Routine,
+                    is_session: false,
+                    expires_at: None,
+                },
+                "local_cli",
+                None,
+                None,
+            )
+            .unwrap();
+            let generation = auth_generation(conn).unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_reset_audit BEFORE INSERT ON ledger_events
+                 WHEN NEW.kind = 'admin_passphrase_reset'
+                 BEGIN SELECT RAISE(ABORT, 'injected audit failure'); END;",
+            )
+            .unwrap();
+
+            let replacement_hash = hash_passphrase("replacement passphrase").unwrap();
+            assert!(reset_passphrase_with_hash(conn, &replacement_hash, "local_cli").is_err());
+
+            assert_eq!(load_passphrase_hash(conn).unwrap().unwrap(), original_hash);
+            assert_eq!(auth_generation(conn).unwrap(), generation);
+            assert!(
+                authenticate(conn, issued.plaintext.expose(), &trust)
+                    .unwrap()
+                    .is_some()
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn concurrent_passphrase_resets_serialize_and_leave_one_committed_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.db");
+        let db = iotkit_core_storage::init_db(&path, &all_migrations()).unwrap();
+        let first = hash_passphrase("first concurrent passphrase").unwrap();
+        let second = hash_passphrase("second concurrent passphrase").unwrap();
+        let mut workers = Vec::new();
+        for hash in [first.clone(), second.clone()] {
+            let path = path.clone();
+            workers.push(std::thread::spawn(move || {
+                let conn = Connection::open(path).unwrap();
+                conn.busy_timeout(Duration::from_secs(5)).unwrap();
+                reset_passphrase_with_hash(&conn, &hash, "local_cli").unwrap();
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        db.with_conn_sync(|conn| {
+            let committed = load_passphrase_hash(conn).unwrap().unwrap();
+            assert!(committed == first || committed == second);
+            assert_eq!(auth_generation(conn).unwrap(), 2);
             Ok(())
         })
         .unwrap();
@@ -505,6 +827,7 @@ mod tests {
     fn token_issue_authenticate_expire_revoke_and_audit_do_not_expose_secret() {
         let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
         db.with_conn_sync(|conn| {
+            let (clock, trust) = test_clock(conn, 1_000);
             let issued = issue_token(
                 conn,
                 &NewOperatorToken {
@@ -516,6 +839,7 @@ mod tests {
                 },
                 "local_cli",
                 Some("127.0.0.1"),
+                None,
             )
             .unwrap();
             assert_eq!(format!("{:?}", issued.plaintext), "[REDACTED]");
@@ -524,7 +848,7 @@ mod tests {
             assert_eq!(issued.plaintext.expose().len(), 47);
             assert!(issued.plaintext.expose().starts_with("iko_"));
 
-            let actor = authenticate(conn, issued.plaintext.expose(), 1_000)
+            let actor = authenticate(conn, issued.plaintext.expose(), &trust)
                 .unwrap()
                 .unwrap();
             assert_eq!(actor.actor_id, issued.token_id);
@@ -540,19 +864,21 @@ mod tests {
                     is_session: true,
                     expires_at: Some(5_000),
                 },
-                "setup_mode",
+                "local_cli",
                 None,
+                Some(&trust),
             )
             .unwrap();
+            clock.set_wall(5_001);
             assert!(
-                authenticate(conn, expired.plaintext.expose(), 5_001)
+                authenticate(conn, expired.plaintext.expose(), &trust)
                     .unwrap()
                     .is_none()
             );
 
             revoke_token(conn, &issued.token_id, "local_cli").unwrap();
             assert!(
-                authenticate(conn, issued.plaintext.expose(), 2_000)
+                authenticate(conn, issued.plaintext.expose(), &trust)
                     .unwrap()
                     .is_none()
             );
@@ -576,7 +902,7 @@ mod tests {
                 serde_json::from_str(&revoke_details[0]).unwrap();
             assert_eq!(issue_detail["actor"], "local_cli");
             assert_eq!(issue_detail["source"], "127.0.0.1");
-            assert_eq!(session_detail["actor"], "setup_mode");
+            assert_eq!(session_detail["actor"], "local_cli");
             assert!(session_detail["source"].is_null());
             assert_eq!(revoke_detail["actor"], "local_cli");
             for detail in issue_details
@@ -598,6 +924,7 @@ mod tests {
     fn authenticate_rejects_token_expiring_at_now() {
         let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
         db.with_conn_sync(|conn| {
+            let (clock, trust) = test_clock(conn, 4_000);
             let issued = issue_token(
                 conn,
                 &NewOperatorToken {
@@ -609,14 +936,102 @@ mod tests {
                 },
                 "local_cli",
                 None,
+                Some(&trust),
             )
             .unwrap();
 
+            clock.set_wall(5_000);
             assert!(
-                authenticate(conn, issued.plaintext.expose(), 5_000)
+                authenticate(conn, issued.plaintext.expose(), &trust)
                     .unwrap()
                     .is_none()
             );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn finite_auth_floor_failure_rejects_without_updating_session_state() {
+        let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+        db.with_conn_sync(|conn| {
+            let (clock, trust) = test_clock(conn, 4_000);
+            let issued = issue_token(
+                conn,
+                &NewOperatorToken {
+                    name: "finite".into(),
+                    kind: TokenKind::Human,
+                    ceiling: Tier::Routine,
+                    is_session: true,
+                    expires_at: Some(10_000),
+                },
+                "local_cli",
+                None,
+                Some(&trust),
+            )
+            .unwrap();
+            let floor = ClockTrust::persisted_floor(conn).unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_auth_floor BEFORE UPDATE OF clock_floor_ms ON auth_state
+                 WHEN NEW.clock_floor_ms > OLD.clock_floor_ms
+                 BEGIN SELECT RAISE(ABORT, 'injected auth floor failure'); END;",
+            )
+            .unwrap();
+            clock.set_wall(5_000);
+            let tx =
+                rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate).unwrap();
+            assert!(authenticate(&tx, issued.plaintext.expose(), &trust).is_err());
+            drop(tx);
+            assert_eq!(ClockTrust::persisted_floor(conn).unwrap(), floor);
+            assert_eq!(token_last_used(conn, &issued.token_id), None);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn concurrent_finite_auth_transactions_share_one_clock_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("concurrent-auth.db");
+        let db = iotkit_core_storage::init_db(&path, &all_migrations()).unwrap();
+        let (plaintext, trust) = db
+            .with_conn_sync(|conn| {
+                let (_clock, trust) = test_clock(conn, 7_000);
+                let trust = Arc::new(trust);
+                let issued = issue_session_token(
+                    conn,
+                    "concurrent session",
+                    Tier::Routine,
+                    60_000,
+                    "local_cli",
+                    None,
+                    &trust,
+                )
+                .unwrap();
+                Ok((issued.plaintext.expose().to_string(), trust))
+            })
+            .unwrap();
+
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let path = path.clone();
+            let plaintext = plaintext.clone();
+            let trust = trust.clone();
+            workers.push(std::thread::spawn(move || {
+                let conn = Connection::open(path).unwrap();
+                conn.busy_timeout(Duration::from_secs(5)).unwrap();
+                let tx =
+                    rusqlite::Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
+                        .unwrap();
+                assert!(authenticate(&tx, &plaintext, &trust).unwrap().is_some());
+                tx.commit().unwrap();
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        db.with_conn_sync(|conn| {
+            assert_eq!(ClockTrust::persisted_floor(conn).unwrap(), 7_000);
             Ok(())
         })
         .unwrap();
@@ -636,6 +1051,7 @@ mod tests {
                     expires_at: None,
                 },
                 "local_cli",
+                None,
                 None,
             );
             assert!(matches!(result, Err(crate::OpsError::Validation(_))));
@@ -660,6 +1076,7 @@ mod tests {
     fn authenticate_throttles_last_used_updates_to_sixty_seconds() {
         let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
         db.with_conn_sync(|conn| {
+            let (clock, trust) = test_clock(conn, 1_000);
             let issued = issue_token(
                 conn,
                 &NewOperatorToken {
@@ -671,25 +1088,27 @@ mod tests {
                 },
                 "local_cli",
                 None,
+                None,
             )
             .unwrap();
 
             assert!(
-                authenticate(conn, issued.plaintext.expose(), 1_000)
+                authenticate(conn, issued.plaintext.expose(), &trust)
                     .unwrap()
                     .is_some()
             );
             assert_eq!(token_last_used(conn, &issued.token_id), Some(1_000));
 
             assert!(
-                authenticate(conn, issued.plaintext.expose(), 2_000)
+                authenticate(conn, issued.plaintext.expose(), &trust)
                     .unwrap()
                     .is_some()
             );
             assert_eq!(token_last_used(conn, &issued.token_id), Some(1_000));
 
+            clock.set_wall(61_001);
             assert!(
-                authenticate(conn, issued.plaintext.expose(), 61_001)
+                authenticate(conn, issued.plaintext.expose(), &trust)
                     .unwrap()
                     .is_some()
             );
@@ -713,6 +1132,7 @@ mod tests {
                     expires_at: None,
                 },
                 "local_cli",
+                None,
                 None,
             )
             .unwrap();
@@ -738,5 +1158,80 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn old_passphrase_verification_cannot_issue_after_concurrent_reset() {
+        let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+        db.with_conn_sync(|conn| {
+            let old_hash = hash_passphrase("old-passphrase").unwrap();
+            reset_passphrase_with_hash(conn, &old_hash, "local_cli").unwrap();
+            let pre_hash_authority = load_passphrase_authority(conn).unwrap().unwrap();
+            assert!(verify_passphrase(&pre_hash_authority.phc, "old-passphrase"));
+
+            let new_hash = hash_passphrase("new-passphrase").unwrap();
+            reset_passphrase_with_hash(conn, &new_hash, "local_cli").unwrap();
+
+            let tx =
+                rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate).unwrap();
+            assert!(matches!(
+                require_passphrase_authority_unchanged(&tx, &pre_hash_authority),
+                Err(OpsError::Forbidden)
+            ));
+            let sessions: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM operator_tokens WHERE is_session = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(sessions, 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn losing_credential_after_ownership_requires_local_recovery() {
+        let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+        db.with_conn_sync(|conn| {
+            let hash = hash_passphrase("owned-passphrase").unwrap();
+            reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
+            conn.execute("DELETE FROM admin_credential", []).unwrap();
+            assert_eq!(
+                ownership_state(conn).unwrap(),
+                OwnershipState::LocalRecoveryRequired
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn external_initialization_marker_distinguishes_first_init_from_database_loss() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.db");
+        let first = iotkit_core_storage::init_db(&path, &all_migrations()).unwrap();
+        first
+            .with_conn_sync(|conn| {
+                reconcile_database_initialization_provenance(conn, &path, false).unwrap();
+                assert_eq!(ownership_state(conn).unwrap(), OwnershipState::Unowned);
+                Ok(())
+            })
+            .unwrap();
+        drop(first);
+        std::fs::remove_file(&path).unwrap();
+
+        let recreated = iotkit_core_storage::init_db(&path, &all_migrations()).unwrap();
+        recreated
+            .with_conn_sync(|conn| {
+                reconcile_database_initialization_provenance(conn, &path, false).unwrap();
+                assert_eq!(
+                    ownership_state(conn).unwrap(),
+                    OwnershipState::LocalRecoveryRequired
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 }

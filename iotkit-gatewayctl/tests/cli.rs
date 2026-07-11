@@ -23,6 +23,14 @@ fn run(args: &[&str]) -> Output {
     gatewayctl().args(args).output().expect("run gatewayctl")
 }
 
+fn run_with_env(args: &[&str], key: &str, value: &str) -> Output {
+    gatewayctl()
+        .args(args)
+        .env(key, value)
+        .output()
+        .expect("run gatewayctl")
+}
+
 fn run_with_stdin(args: &[&str], stdin: &str) -> Output {
     let mut child = gatewayctl()
         .args(args)
@@ -47,6 +55,131 @@ fn run_in_dir_without_db_env(args: &[&str], cwd: &std::path::Path) -> Output {
         .env_remove("IOTKIT_DB_PATH")
         .output()
         .expect("run gatewayctl")
+}
+
+#[cfg(unix)]
+struct PtyChild {
+    child: std::process::Child,
+    master: Option<std::fs::File>,
+    inspect_fd: std::os::fd::RawFd,
+    output: Vec<u8>,
+}
+
+#[cfg(unix)]
+impl PtyChild {
+    fn spawn(args: &[&str]) -> Self {
+        use std::os::fd::FromRawFd;
+
+        let mut master = -1;
+        let mut slave = -1;
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        let inspect_fd = unsafe { libc::dup(slave) };
+        let stdin_fd = unsafe { libc::dup(slave) };
+        let stdout_fd = unsafe { libc::dup(slave) };
+        let stderr_fd = unsafe { libc::dup(slave) };
+        assert!(inspect_fd >= 0 && stdin_fd >= 0 && stdout_fd >= 0 && stderr_fd >= 0);
+        let child = gatewayctl()
+            .args(args)
+            .stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(stdin_fd)) })
+            .stdout(unsafe { Stdio::from(std::fs::File::from_raw_fd(stdout_fd)) })
+            .stderr(unsafe { Stdio::from(std::fs::File::from_raw_fd(stderr_fd)) })
+            .spawn()
+            .unwrap();
+        unsafe { libc::close(slave) };
+        let flags = unsafe { libc::fcntl(master, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+        Self {
+            child,
+            master: Some(unsafe { std::fs::File::from_raw_fd(master) }),
+            inspect_fd,
+            output: Vec::new(),
+        }
+    }
+
+    fn wait_for(&mut self, needle: &str) {
+        use std::io::Read;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let mut buf = [0_u8; 1024];
+            match self.master.as_mut().unwrap().read(&mut buf) {
+                Ok(0) => {}
+                Ok(n) => self.output.extend_from_slice(&buf[..n]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => {}
+                Err(error) => panic!("PTY read: {error}"),
+            }
+            if String::from_utf8_lossy(&self.output).contains(needle) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!(
+            "PTY did not contain {needle:?}: {}",
+            String::from_utf8_lossy(&self.output)
+        );
+    }
+
+    fn write(&mut self, value: &str) {
+        self.master
+            .as_mut()
+            .unwrap()
+            .write_all(value.as_bytes())
+            .unwrap();
+    }
+
+    fn echo_enabled(&self) -> bool {
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        assert_eq!(
+            unsafe { libc::tcgetattr(self.inspect_fd, termios.as_mut_ptr()) },
+            0
+        );
+        unsafe { termios.assume_init() }.c_lflag & libc::ECHO != 0
+    }
+
+    fn finish(mut self) -> (std::process::ExitStatus, String, bool) {
+        use std::io::Read;
+        let status = self.child.wait().unwrap();
+        let mut buf = [0_u8; 1024];
+        if let Some(master) = self.master.as_mut() {
+            loop {
+                match master.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => self.output.extend_from_slice(&buf[..n]),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                    Err(error) => panic!("PTY read: {error}"),
+                }
+            }
+        }
+        let echo = self.echo_enabled();
+        (
+            status,
+            String::from_utf8_lossy(&self.output).into_owned(),
+            echo,
+        )
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PtyChild {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.inspect_fd) };
+    }
 }
 
 fn assert_success(output: Output) -> String {
@@ -261,11 +394,12 @@ fn token_issue_list_and_revoke_do_not_expose_token_material() {
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
     db.with_conn_sync(|conn| {
-        assert!(
-            iotkit_core_ops::authenticate(conn, &plaintext, i64::MAX)
-                .unwrap()
-                .is_none()
-        );
+        let revoked: bool = conn.query_row(
+            "SELECT revoked_at IS NOT NULL FROM operator_tokens WHERE token_id = ?1",
+            [&token_id],
+            |row| row.get(0),
+        )?;
+        assert!(revoked);
         Ok(())
     })
     .unwrap();
@@ -311,10 +445,13 @@ fn passphrase_reset_validates_strength_and_replaces_existing_passphrase() {
     let short = assert_failure(short_output);
     assert!(short.contains("at least 8"), "stderr:\n{short}");
 
-    assert_success(run_with_stdin(
+    let captured = run_with_stdin(
         &["--db", db_arg, "passphrase", "reset"],
         "old-pass\nold-pass\n",
-    ));
+    );
+    assert!(captured.status.success());
+    assert!(!String::from_utf8_lossy(&captured.stdout).contains("old-pass"));
+    assert!(!String::from_utf8_lossy(&captured.stderr).contains("old-pass"));
     assert_success(run_with_stdin(
         &["--db", db_arg, "passphrase", "reset"],
         "new-pass\nnew-pass\n",
@@ -348,6 +485,118 @@ fn passphrase_reset_rejects_mismatched_confirmation() {
         stderr.contains("passphrases do not match"),
         "stderr:\n{stderr}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn passphrase_tty_success_hides_secret_and_restores_echo() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("pty-success.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let mut process = PtyChild::spawn(&["--db", db_path.to_str().unwrap(), "passphrase", "reset"]);
+    process.wait_for("new passphrase:");
+    process.write("pty-secret-one\n");
+    process.wait_for("confirm passphrase:");
+    process.write("pty-secret-one\n");
+    let (status, output, echo) = process.finish();
+    assert!(status.success(), "{output}");
+    assert!(
+        !output.contains("pty-secret-one"),
+        "secret echoed: {output}"
+    );
+    assert!(echo, "ECHO was not restored after success");
+}
+
+#[cfg(unix)]
+#[test]
+fn passphrase_tty_eof_restores_echo() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("pty-eof.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let mut process = PtyChild::spawn(&["--db", db_path.to_str().unwrap(), "passphrase", "reset"]);
+    process.wait_for("new passphrase:");
+    process.write("\u{4}");
+    let (status, output, echo) = process.finish();
+    assert!(!status.success(), "{output}");
+    assert!(echo, "ECHO was not restored after EOF/error");
+}
+
+#[cfg(unix)]
+#[test]
+fn passphrase_tty_mismatch_hides_both_secrets_and_restores_echo() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("pty-mismatch.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let mut process = PtyChild::spawn(&["--db", db_path.to_str().unwrap(), "passphrase", "reset"]);
+    process.wait_for("new passphrase:");
+    process.write("pty-secret-first\n");
+    process.wait_for("confirm passphrase:");
+    process.write("pty-secret-second\n");
+    let (status, output, echo) = process.finish();
+    assert!(!status.success(), "{output}");
+    assert!(output.contains("passphrases do not match"), "{output}");
+    assert!(
+        !output.contains("pty-secret-first") && !output.contains("pty-secret-second"),
+        "secret echoed: {output}"
+    );
+    assert!(echo, "ECHO was not restored after mismatch");
+}
+
+#[cfg(unix)]
+#[test]
+fn passphrase_tty_sigint_restores_echo_without_echoing_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("pty-sigint.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let mut process = PtyChild::spawn(&["--db", db_path.to_str().unwrap(), "passphrase", "reset"]);
+    process.wait_for("new passphrase:");
+    assert!(
+        !process.echo_enabled(),
+        "test must observe ECHO disabled while waiting"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(
+        unsafe { libc::kill(process.child.id() as libc::pid_t, libc::SIGINT) },
+        0
+    );
+    let (status, output, echo) = process.finish();
+    assert!(!status.success(), "{output}");
+    assert!(!output.contains("pty-secret"), "secret echoed: {output}");
+    assert!(echo, "ECHO was not restored after SIGINT");
+}
+
+#[test]
+fn time_confirm_is_typed_transactional_and_audited_as_local_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db_arg = db_path.to_str().unwrap();
+
+    let aborted_output = run_with_stdin(&["--db", db_arg, "time", "confirm"], "no\n");
+    let display = String::from_utf8_lossy(&aborted_output.stderr);
+    assert!(display.contains("current_time_ms="), "stderr:\n{display}");
+    assert!(display.contains("current_time_utc="), "stderr:\n{display}");
+    let aborted = assert_failure(aborted_output);
+    assert!(aborted.contains("time confirmation aborted"));
+
+    assert_success(run_with_stdin(
+        &["--db", db_arg, "time", "confirm"],
+        "confirm\n",
+    ));
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let detail: String = conn.query_row(
+            "SELECT detail FROM ledger_events
+             WHERE kind = 'clock_trust_confirmed' ORDER BY event_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let detail: Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(detail["actor"], "local_cli");
+        assert_eq!(detail["source"], "manual_local_root");
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -387,7 +636,7 @@ fn fingerprint_reads_cert_next_to_db_and_reports_missing_material() {
 }
 
 #[test]
-fn target_add_is_rejected_in_setup_mode_and_allowed_after_passphrase_reset() {
+fn target_add_is_rejected_while_unowned_and_allowed_after_passphrase_reset() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("iotkit.db");
     iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
@@ -510,7 +759,7 @@ fn existing_empty_db_gets_gateway_migration_version_set() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    assert_eq!(versions, vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
 }
 
 #[test]
@@ -1687,6 +1936,22 @@ fn snapshot_export_restore_round_trips_full_columns_and_renews_epoch() {
                 [],
             )
             .unwrap();
+            let hash = iotkit_core_ops::hash_passphrase("source admin authority").unwrap();
+            iotkit_core_ops::reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
+            iotkit_core_ops::issue_token(
+                conn,
+                &iotkit_core_ops::NewOperatorToken {
+                    name: "source operator".into(),
+                    kind: iotkit_core_ops::TokenKind::Human,
+                    ceiling: iotkit_core_ops::Tier::Routine,
+                    is_session: false,
+                    expires_at: None,
+                },
+                "local_cli",
+                None,
+                None,
+            )
+            .unwrap();
             Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap())
         })
         .unwrap();
@@ -1743,7 +2008,8 @@ fn snapshot_export_restore_round_trips_full_columns_and_renews_epoch() {
             assert_ne!(restored_epoch, source_epoch);
             let (kind, detail): (String, String) = conn
                 .query_row(
-                    "SELECT kind, detail FROM ledger_events ORDER BY event_id DESC LIMIT 1",
+                    "SELECT kind, detail FROM ledger_events
+                     WHERE kind = 'epoch_renewed' ORDER BY event_id DESC LIMIT 1",
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
@@ -1751,6 +2017,15 @@ fn snapshot_export_restore_round_trips_full_columns_and_renews_epoch() {
             assert_eq!(kind, "epoch_renewed");
             let detail: Value = serde_json::from_str(&detail).unwrap();
             assert!(detail["old_epoch"].is_null());
+            assert_eq!(
+                iotkit_core_ops::ownership_state(conn).unwrap(),
+                iotkit_core_ops::OwnershipState::LocalRecoveryRequired
+            );
+            assert!(iotkit_core_ops::load_passphrase_hash(conn).unwrap().is_none());
+            let token_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM operator_tokens", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(token_count, 0);
             let blob_columns: Vec<(String, String)> = conn
                 .prepare(
                     "SELECT 'devices.system_id', typeof(system_id) FROM devices
@@ -1960,6 +2235,437 @@ fn snapshot_restore_rejects_non_empty_registry_entries_table() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn snapshot_restore_rejects_auth_only_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("source.db");
+    let target_path = dir.path().join("target.db");
+    let snapshot_path = dir.path().join("snapshot.json");
+    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    source
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    let original_auth_epoch = target
+        .with_conn_sync(|conn| {
+            let hash = iotkit_core_ops::hash_passphrase("target-only authority").unwrap();
+            iotkit_core_ops::reset_passphrase_with_hash(conn, &hash, "local_cli").unwrap();
+            iotkit_core_ops::auth_epoch(conn).map_err(|error| {
+                iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                    Box::new(error),
+                ))
+            })
+        })
+        .unwrap();
+
+    assert_success(run(&[
+        "--db",
+        source_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+    let output = run(&[
+        "snapshot",
+        "restore",
+        snapshot_path.to_str().unwrap(),
+        "--db",
+        target_path.to_str().unwrap(),
+        "--yes",
+    ]);
+
+    let stderr = assert_failure(output);
+    assert!(
+        stderr.contains("restore target is not empty"),
+        "stderr:\n{stderr}"
+    );
+    target
+        .with_conn_sync(|conn| {
+            assert_eq!(
+                iotkit_core_ops::auth_epoch(conn).unwrap(),
+                original_auth_epoch
+            );
+            assert_eq!(
+                iotkit_core_ops::ownership_state(conn).unwrap(),
+                iotkit_core_ops::OwnershipState::Owned
+            );
+            let hash = iotkit_core_ops::load_passphrase_hash(conn)
+                .unwrap()
+                .unwrap();
+            assert!(iotkit_core_ops::verify_passphrase(
+                &hash,
+                "target-only authority"
+            ));
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn snapshot_restore_create_refuses_even_a_pristine_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("source.db");
+    let target_path = dir.path().join("target.db");
+    let snapshot_path = dir.path().join("snapshot.json");
+    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    source
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    assert_success(run(&[
+        "--db",
+        source_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    let stderr = assert_failure(run(&[
+        "snapshot",
+        "restore",
+        snapshot_path.to_str().unwrap(),
+        "--db",
+        target_path.to_str().unwrap(),
+        "--create",
+        "--yes",
+    ]));
+    assert!(
+        stderr.contains("requires an absent target"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn snapshot_restore_authority_failure_rolls_back_restored_state_and_epochs() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("source.db");
+    let target_path = dir.path().join("target.db");
+    let snapshot_path = dir.path().join("snapshot.json");
+    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    source
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "restore-fault-device".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    assert_success(run(&[
+        "--db",
+        source_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    assert_failure(run_with_env(
+        &[
+            "snapshot",
+            "restore",
+            snapshot_path.to_str().unwrap(),
+            "--db",
+            target_path.to_str().unwrap(),
+            "--yes",
+        ],
+        "IOTKIT_TEST_FAIL_RESTORE_BEFORE_COMMIT",
+        "1",
+    ));
+    target
+        .with_conn_sync(|conn| {
+            let devices: i64 =
+                conn.query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))?;
+            let ledger_meta: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ledger_meta", [], |row| row.get(0))?;
+            let events: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ledger_events", [], |row| row.get(0))?;
+            assert_eq!((devices, ledger_meta, events), (0, 0, 0));
+            assert_eq!(
+                iotkit_core_ops::ownership_state(conn).unwrap(),
+                iotkit_core_ops::OwnershipState::Unowned
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn snapshot_restore_rejects_every_noncanonical_schema_object_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("source-schema.db");
+    let snapshot_path = dir.path().join("schema-snapshot.json");
+    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    source
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_success(run(&[
+        "--db",
+        source_path.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot_path.to_str().unwrap(),
+    ]));
+
+    let mutations = [
+        "CREATE TABLE hostile_table (id INTEGER)",
+        "CREATE INDEX hostile_index ON auth_state(auth_generation)",
+        "CREATE TRIGGER hostile_trigger AFTER UPDATE ON auth_state BEGIN SELECT 1; END",
+        "CREATE VIEW hostile_view AS SELECT * FROM auth_state",
+        "ALTER TABLE auth_state ADD COLUMN hostile_column TEXT",
+    ];
+    for (index, mutation) in mutations.iter().enumerate() {
+        let target_path = dir.path().join(format!("noncanonical-{index}.db"));
+        let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+        target
+            .with_conn_sync(|conn| {
+                conn.execute_batch(mutation)?;
+                Ok(())
+            })
+            .unwrap();
+        drop(target);
+        let stderr = assert_failure(run(&[
+            "snapshot",
+            "restore",
+            snapshot_path.to_str().unwrap(),
+            "--db",
+            target_path.to_str().unwrap(),
+            "--yes",
+        ]));
+        assert!(
+            stderr.contains("schema or migration set is not canonical"),
+            "mutation {mutation}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn snapshot_restore_create_cleans_every_precommit_failure_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid_snapshot = dir.path().join("invalid.json");
+    std::fs::write(&invalid_snapshot, b"not json").unwrap();
+    let target = dir.path().join("created.db");
+
+    assert_failure(run(&[
+        "snapshot",
+        "restore",
+        invalid_snapshot.to_str().unwrap(),
+        "--db",
+        target.to_str().unwrap(),
+        "--create",
+        "--yes",
+    ]));
+    for path in [
+        target.clone(),
+        std::path::PathBuf::from(format!("{}-wal", target.display())),
+        std::path::PathBuf::from(format!("{}-shm", target.display())),
+        iotkit_core_ops::database_initialization_marker_path(&target),
+    ] {
+        assert!(!path.exists(), "precommit failure left {}", path.display());
+    }
+
+    let source = dir.path().join("abort-source.db");
+    let valid_snapshot = dir.path().join("abort-snapshot.json");
+    let source_db = iotkit_core_storage::init_db(&source, &all_migrations()).unwrap();
+    source_db
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_success(run(&[
+        "--db",
+        source.to_str().unwrap(),
+        "snapshot",
+        "export",
+        valid_snapshot.to_str().unwrap(),
+    ]));
+    let aborted_target = dir.path().join("aborted.db");
+    let stderr = assert_failure(run_with_stdin(
+        &[
+            "snapshot",
+            "restore",
+            valid_snapshot.to_str().unwrap(),
+            "--db",
+            aborted_target.to_str().unwrap(),
+            "--create",
+        ],
+        "no\n",
+    ));
+    assert!(stderr.contains("restore aborted"), "{stderr}");
+    assert!(!aborted_target.exists());
+    assert!(!iotkit_core_ops::database_initialization_marker_path(&aborted_target).exists());
+
+    let lost_target = dir.path().join("lost-before-restore.db");
+    let preexisting_marker = iotkit_core_ops::database_initialization_marker_path(&lost_target);
+    std::fs::write(&preexisting_marker, b"iotkit-database-initialized-v1\n").unwrap();
+    assert_failure(run_with_env(
+        &[
+            "snapshot",
+            "restore",
+            valid_snapshot.to_str().unwrap(),
+            "--db",
+            lost_target.to_str().unwrap(),
+            "--create",
+            "--yes",
+        ],
+        "IOTKIT_TEST_FAIL_RESTORE_BEFORE_COMMIT",
+        "1",
+    ));
+    assert!(!lost_target.exists());
+    assert!(
+        preexisting_marker.exists(),
+        "preexisting loss provenance was removed"
+    );
+}
+
+#[test]
+fn snapshot_restore_create_succeeds_with_preexisting_loss_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("loss-source.db");
+    let target = dir.path().join("lost.db");
+    let snapshot = dir.path().join("loss-snapshot.json");
+    let source_db = iotkit_core_storage::init_db(&source, &all_migrations()).unwrap();
+    source_db
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::insert_device(
+                conn,
+                &iotkit_core_ledger::NewDevice {
+                    hardware_id: "restored-after-loss".into(),
+                    user_label: None,
+                    parent: None,
+                    kind: iotkit_core_ledger::DeviceKind::Individual,
+                    initial_state: iotkit_core_ledger::DeviceState::Active,
+                },
+            )
+            .unwrap();
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_success(run(&[
+        "--db",
+        source.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot.to_str().unwrap(),
+    ]));
+    let marker = iotkit_core_ops::database_initialization_marker_path(&target);
+    std::fs::write(&marker, b"preexisting-external-loss-marker\n").unwrap();
+
+    assert_success(run(&[
+        "snapshot",
+        "restore",
+        snapshot.to_str().unwrap(),
+        "--db",
+        target.to_str().unwrap(),
+        "--create",
+        "--yes",
+    ]));
+
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        b"preexisting-external-loss-marker\n"
+    );
+    let restored = iotkit_core_storage::init_db(&target, &all_migrations()).unwrap();
+    restored
+        .with_conn_sync(|conn| {
+            assert_eq!(
+                iotkit_core_ops::ownership_state(conn).unwrap(),
+                iotkit_core_ops::OwnershipState::LocalRecoveryRequired
+            );
+            let devices: i64 =
+                conn.query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))?;
+            assert_eq!(devices, 1);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn restore_receipt_status_identifies_the_committed_snapshot() {
+    use sha2::{Digest, Sha256};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("receipt-source.db");
+    let target = dir.path().join("receipt-target.db");
+    let snapshot = dir.path().join("receipt.json");
+    let source_db = iotkit_core_storage::init_db(&source, &all_migrations()).unwrap();
+    source_db
+        .with_conn_sync(|conn| {
+            iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_success(run(&[
+        "--db",
+        source.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot.to_str().unwrap(),
+    ]));
+    let expected_hash = format!("{:x}", Sha256::digest(std::fs::read(&snapshot).unwrap()));
+    assert_success(run(&[
+        "snapshot",
+        "restore",
+        snapshot.to_str().unwrap(),
+        "--db",
+        target.to_str().unwrap(),
+        "--create",
+        "--yes",
+    ]));
+
+    let status = assert_success(run(&[
+        "snapshot",
+        "restore-status",
+        "--db",
+        target.to_str().unwrap(),
+    ]));
+    let status: Value = serde_json::from_str(status.trim()).unwrap();
+    assert_eq!(status["restore_receipt"]["snapshot_sha256"], expected_hash);
+    assert!(
+        status["restore_receipt"]["new_ledger_generation"]
+            .as_i64()
+            .unwrap()
+            > status["restore_receipt"]["old_ledger_generation"]
+                .as_i64()
+                .unwrap()
+    );
+    assert!(
+        status["restore_receipt"]["new_auth_generation"]
+            .as_i64()
+            .unwrap()
+            > status["restore_receipt"]["old_auth_generation"]
+                .as_i64()
+                .unwrap()
+    );
+    assert_ne!(
+        status["restore_receipt"]["new_ledger_epoch"],
+        status["restore_receipt"]["old_ledger_epoch"]
+    );
+    assert_ne!(
+        status["restore_receipt"]["new_auth_epoch"],
+        status["restore_receipt"]["old_auth_epoch"]
+    );
 }
 
 #[test]
