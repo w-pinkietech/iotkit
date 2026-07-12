@@ -14,6 +14,9 @@ cargo fmt --all --check
 echo "== scripts/check-layers (crate layer rules) =="
 scripts/check-layers
 
+echo "== scripts/test-codex-cloud.sh (Cloud harness safety) =="
+scripts/test-codex-cloud.sh
+
 echo "== cargo test --workspace =="
 cargo test --workspace
 

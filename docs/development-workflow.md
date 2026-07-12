@@ -229,6 +229,31 @@ default is Terra/medium, while Plan 6 and other high-risk work explicitly set
 with `scripts/verify.sh`, runs the required independent Codex review, reconciles findings, and commits one
 intentional unit at a time. Final integration review remains mandatory.
 
+### Hybrid Codex Cloud candidate lane
+
+`scripts/codex-cloud.sh` may dispatch implementation or advisory-review work to a configured Codex
+Cloud environment. Cloud submission is an external action and requires the authority applicable
+to that task. The wrapper snapshots the prompt/query and records that local HEAD matched the live
+remote branch immediately before dispatch; Cloud cannot consume uncommitted local state. Because
+the installed CLI submits a mutable branch and does not return the checked-out commit, this is
+local intent evidence, not proof of Cloud's actual base. Automatic Cloud apply remains disabled.
+
+Cloud work remains on a candidate branch. A task ID, URL, lifecycle status, best-of-N attempt, or
+diff is not a review result and cannot satisfy settlement. The installed Cloud CLI does not expose
+the final answer body for hashing, so wrapper-generated Cloud collect receipts are explicitly
+`settlement_eligible=false`. Unless a separately reviewed export/binding mechanism exists, a fresh
+local `scripts/codex.sh review` remains required before `SETTLED` or integration to `master`.
+
+While the user's computer is unavailable, a Cloud task may serve as temporary Main for candidate
+work and ledger updates. It may not claim settlement, integrate to `master`, push/open a PR, merge,
+release, or spend extra attempts without applicable authority. It records branch/base/commit, task
+ID/URL, verification, review debt, timing, and next work. Returning local Main re-verifies Git,
+ledger, tests, and receipts. Full mechanics and environment setup are in
+`docs/cloud-development.md`.
+
+Reconciled Cloud work follows the ordinary order without exception: verify → manifest-bound
+independent review → reconcile and final verify → commit → separately authorized push/merge.
+
 The independent-review iron law is absolute: an author/Main analysis is not its own independent
 review. Read each applied fix hunk back against the prescription; workspace-wide absence claims
 require the search scope/command and reviewer confirmation. If the same issue survives two fix
@@ -251,8 +276,8 @@ Wait for the user only when a Red decision blocks the full critical path, canon 
 a contradiction, possible data loss/secret exposure/auth bypass cannot be excluded, required
 independent review has failed, or new authority is needed for destructive/external action.
 
-Commits within the approved mission are autonomous. Push, PR, merge, release, publication,
-external messages, and spending remain separately authorized unless the user explicitly
+Commits within the approved mission are autonomous. Cloud task submission/extra attempts, push,
+PR, merge, release, publication, external messages, and spending remain separately authorized unless the user explicitly
 included them in the mission.
 
 ## 10. Plan-6 trial and rollback
