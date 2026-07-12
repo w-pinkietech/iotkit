@@ -7,10 +7,10 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `13a57de`
+- Artifact/base HEAD: `d11bc8d`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 3 settled and committed; Task 4 implementation dispatch ready;
+- Active phase: Plan 6 Task 4 settled and committed; Task 5 dispatch preparation is next;
   product code remains worker-only
 
 ## Mission
@@ -54,8 +54,38 @@ git/disk/test. Never store secrets here.
   authenticated network sender, forbids sharing across independent senders, requires explicit R14
   apply, and keeps listener enablement separate, DHCP/router authority external, and retire
   non-automatic. QR codes are not a requirement; they were only a discussion example.
+- 2026-07-12: Starting with the next task, measure and report wall time for planning/research,
+  implementation, verification, independent review, finding fixes/reverification, documentation/
+  commit, and total elapsed time. Distinguish tool/model wait from direct Main work where the
+  evidence permits; record model/effort and retry/confirmation counts.
+- 2026-07-12: The timing-rule change modifies workflow authority and is therefore classified
+  **Large / Red** by the workflow promotion rule. User authority is the explicit request to adopt
+  per-step timing; scope is measurement/reporting only, with no product or review-strength change.
+  It requires Sol/high independent review before its separate documentation commit.
 
 ## Review state
+
+- Plan-6 Task 4 default-off site-LAN HTTP listener foundation: **SETTLED and committed as
+  `d11bc8d`**. Final manifest `.review/plan6-task4-confirm3.manifest` SHA-256
+  `1f7a4f07edb24233f43882dc5b55482b18f783595ff8853f264980bafab2cf52`; prompt
+  `.review/plan6-task4-confirm3-review.md` SHA-256
+  `1b7d333aabf182445c2bc6e367209f93191ce31881514e1bc49169c9d6ea9c29`.
+  Fresh Codex `gpt-5.6-sol/high` returned `Critical 0 / Important 0 / Minor 0` and declared the
+  task commit-ready; result SHA-256
+  `d722a25df973aec1fe6caf5e1b00be5defa757194353a4dd10ecd9cd3e1e17ac`; receipt SHA-256
+  `44defbc5d59c7d69556fa6c9e81ef7cb418760666d676506007b892a39c4c624`.
+  Earlier rounds found and closed 14 Important and 1 Minor issues across restore/control
+  availability, TLS custody/handshake/fingerprint/atomic settlement, OS interface and route
+  confinement, bind/switchover TOCTOU, continuous authority, truthful desired/applied health,
+  R14 secret redaction/schema strictness, and executable layer/transport tests. Main reran
+  `scripts/verify.sh` after the final fixes; workspace tests, real socket/OS inventory probes,
+  Clippy `-D warnings`, layer checks, formatting, and diff checks passed. Claude/Grok unavailable
+  and not required.
+  Retrospective Task wall time was 1h34m01s (10:55:25–12:29:26 JST, dispatch start through
+  commit completion): initial implementation 25m08s; four independent review rounds 18m49s;
+  three principal fix rounds plus one environmental-test correction 41m58s; remaining Main
+  verification/manifest/commit critical-path time 8m06s. This retrospective predates the formal
+  timing rule, so its phase split is receipt-derived rather than a live phase log.
 
 - Plan-6 Task 3 device credential lifecycle/capacity/recovery foundation: **SETTLED and committed
   as `166d50c`**. Final manifest `.review/plan6-task3-confirm3.manifest` SHA-256
@@ -325,10 +355,14 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Prepare and dispatch Plan 6 Task 4 through Sol/high `scripts/codex.sh impl`.
+1. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl`, with per-step wall
+   time measurement enabled from dispatch.
 
 ## Verification
 
+- Plan 6 Task 4: final manifest review returned zero C/I/M; Main-owned `scripts/verify.sh` passed
+  after the final fix round, including workspace tests, real sockets/OS inventory, Clippy
+  `-D warnings`, layer checks, formatting, and `git diff --check`.
 - Plan 6 Task 3: final manifest review returned zero C/I/M; Main-owned `scripts/verify.sh` passed
   after the final fix round, including workspace tests and real loopback gateway integration;
   Clippy `-D warnings`, layer checks, formatting, and `git diff --check` are green.

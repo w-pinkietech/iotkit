@@ -265,3 +265,18 @@ duplicate findings, confirmation rounds, Design-Ready catches, and autonomous re
 Rollback to shadow autonomy if a Yellow decision is later found Red, a serious defect stems
 from reduced review scope/effort, or speculative work causes material discard. The user makes
 the post-plan evaluation.
+
+For each task, capture start/end timestamps. Task time starts immediately before the first scoped
+planning or dispatch action after the preceding task boundary and ends when the task commit
+completes (or when a blocked/stopped decision is recorded). Use wrapper-receipt UTC timestamps for
+model runs, the Git committer timestamp for commit completion, and an ISO-8601 Main timestamp for
+unwrapped boundaries.
+
+Report one non-overlapping critical-path timeline whose categories are planning/research,
+implementation, verification, independent review, finding fixes/reverification, and
+documentation/commit. Attribute each interval to the phase currently gating completion; a model
+run therefore remains implementation/review/fix time even if Main performs incidental work while
+waiting. These exclusive categories must sum to total elapsed time. Separately report any reliably
+measured overlapping Main activity or tool/model wait as supplemental activity metrics; they do
+not sum to the elapsed total. Record model/effort and retry/confirmation counts in the active
+ledger. Estimates and incomplete timestamp coverage must be labelled explicitly.
