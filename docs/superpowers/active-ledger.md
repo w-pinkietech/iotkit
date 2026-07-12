@@ -6,15 +6,14 @@ git/disk/test. Never store secrets here.
 ## Reality
 
 - Repository: `iotkit-next`
-- Branch: `master`
-- Artifact/base HEAD: `30c369f`
-- Working tree at workflow-design start: user-owned untracked
-  `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 5 implementation and independent review are settled; its local commit is
-  the next action. Task 6 has not started, and product code remains worker-only.
-- Task 5 local implementation preparation started from clean `87e3d87`, with review-isolation
-  authority committed at `30c369f`; pre-dispatch
-  `scripts/verify.sh` passed on 2026-07-12.
+- Branch: `feature/codex-model-routing` in isolated worktree
+  `.worktrees/codex-model-routing`
+- Artifact/base HEAD: `81ae496371da2209f0f75b9d6bcb6ad0f8c83e74`
+- Active phase: Codex native model-routing implementation review is settled at C0/I0/M0 on the
+  corrected exact manifest. Final verification and the local atomic commit are the next actions.
+- Baseline `cargo build` passed. Baseline `scripts/verify.sh` passed with host permissions on
+  2026-07-13; the first sandboxed run failed only because loopback publish tests received
+  `EPERM`, and the unchanged suite passed when rerun outside that network sandbox.
 
 ## Mission
 
@@ -44,7 +43,14 @@ git/disk/test. Never store secrets here.
 - 2026-07-12: Adopt the official-use model/effort routing: Luna/low for clear repeatable
   mechanical work, Terra/medium for everyday settled-spec implementation, Sol/medium for
   normal independent review, and Sol/high for design and high-risk work. Plan 6 uses Sol/high;
-  `xhigh` is exceptional and `max` is not a routine default.
+  `xhigh` is exceptional and `max` is not a routine default. **Superseded 2026-07-13** by the
+  role-based routing decision below; preserve this entry only as history.
+- 2026-07-13: Model routing is role-based: Main and every independent review/confirmation use
+  `gpt-5.6-sol/high`; implementation and execution use `gpt-5.6-luna/max`. Project-native roles
+  and `scripts/codex.sh` defaults must agree, explicit overrides remain observable, and no route
+  silently falls back or downgrades. Native subagent output remains advisory; fresh read-only
+  manifest/receipt/final-hash settlement is unchanged. This workflow-authority and review-harness
+  change is Large/Red, and the user explicitly approved the design and Subagent-Driven execution.
 - 2026-07-11: Improve the process to accelerate development; adopt the discussion input via
   reviewed workflow changes.
 - 2026-07-12: Approved the bundled Plan 6 Red recommendations: preserve logical gateway
@@ -91,6 +97,117 @@ git/disk/test. Never store secrets here.
   independently verifies Git/disk/test claims.
 
 ## Review state
+
+- Codex native model-routing implementation review: **SETTLED for local commit** from artifact/base
+  `81ae496371da2209f0f75b9d6bcb6ad0f8c83e74`. A fresh `gpt-5.6-luna/max` worker implemented only
+  plan Steps 1–9, left the ledger/review artifacts/staging/commit to Main, and reported red on the
+  initially missing project config followed by `scripts/test-codex.sh` green. Installed Codex
+  0.144.1 `config/read` loaded the project role paths, but the independent review disproved the
+  worker's initial claim that this surface validates every referenced role layer. The corrected
+  repository preflight now resolves those paths and strict-parses each layer independently, with
+  deterministic missing/malformed/unknown-key failures. Native role selection remains unverified
+  because the exposed agent schema has no role selector. The worker's host-permission
+  `scripts/verify.sh` passed. Its parent wrapper exited after the successful worker turn because
+  the running old wrapper called the newly migrated receipt v2 interface; no implementation
+  receipt was retained, and this is not settlement evidence. Main independently reran
+  `scripts/test-codex.sh`, `git diff --check`, shell syntax checks, caller compatibility inspection,
+  and host-permission `scripts/verify.sh`; all passed. Required implementation review is one fresh
+  read-only `gpt-5.6-sol/high` session over the exact manifest recorded below; settlement remains
+  forbidden until zero unresolved Critical/Important findings bind the final hash. Manifest
+  `.review/codex-model-routing.manifest` SHA-256
+  `acd3d47b3f4b4e76b0adbd46fd5fcf22b00e3bbca4f3e3ed06eb7062f65b2adc`; prompt
+  `.review/codex-model-routing-review.md` SHA-256
+  `2415ea7ff7cf660c86898a19e2956b2ab6dbb82082c0496dee73ff1db6153379`. The first review returned
+  **C0/I4/M1**: add an authoritative role-layer preflight because app-server path loading does not
+  validate every referenced file; enforce exact JSONL lifecycle order; close the final
+  prompt/manifest check-to-receipt race; and replace obsolete active restart guidance. The Minor
+  requests byte-for-byte fake stdin validation. Result SHA-256
+  `bfdc66a70be2b3c4058a84a29336409d8c0490ff446d6e0cecf8470288c7b21b`; event-stream SHA-256
+  `3cefd1b7b95d13ec00dc3c81a3deba48579b505ae3d0944991ab90f61ebf73c0`; receipt SHA-256
+  `78c14dc48867d089cb955a07ddcf67a25fa951626cd5da946de88a177f17b084`; Sol/high ran
+  2026-07-12T17:17:32Z–17:23:39Z with requested model/effort recorded and observed model/effort
+  explicitly `UNAVAILABLE`. A fresh Luna/max fix worker resolved all four Important prescriptions
+  and the bounded Minor: authoritative strict role preflight, ordered lifecycle validation, final
+  frozen-hash comparison inside receipt creation, obsolete restart-guidance replacement, and fake
+  stdin byte comparison. Its result SHA-256
+  `22dee6ed4114c06b6c9db92906f9ea86f93465e4b757b6cced5bb4a2de032e82`; event-stream SHA-256
+  `123e43e4b76b42e82b0b01b11691c98f0247b423c48cdda04215a1c4e5016811`; receipt SHA-256
+  `aa421a92f14b4be18ee0748115c6c574b619638575637a207d4eb8a3190e3849`; Luna/max ran
+  2026-07-12T17:24:40Z–17:41:20Z with `approval_policy=never` and workspace-write. Focused role,
+  routing, lifecycle, mutation-race, stdin, and Claude/Grok compatibility tests passed. Fresh
+  Main host-permission `scripts/verify.sh` passed after the fixes. Exact-hash confirmation uses
+  `.review/codex-model-routing-confirm.manifest` SHA-256
+  `0ec1b4d26e7e1f8f6210b03cf07d577bbae8027ee3a719ae4dc3a8c54f3f9678` and prompt
+  `.review/codex-model-routing-confirm.md` SHA-256
+  `84d8dd7511ce4ae6c712fb41fcfc2120c0a27cd8fd6513c4905c304dc37fa43b`. Fresh Sol/high
+  confirmation returned **C0/I0/M0** on all 19 manifest blobs. Result SHA-256
+  `7e40a9f7c98c530a8102d1c7328b24a47d89761d4734328cafe2cc6527dbc00b`; event-stream SHA-256
+  `29ec5945d33e56b195bfc29cf1ceb82b7e2d800748dc30ee39f86151d58a8726`; receipt SHA-256
+  `87eb495f0e2428895e1436ce8a7101fdd56aeeebf6d7006a6cb495f2829f2f86`; Sol/high ran
+  2026-07-12T17:43:56Z–17:47:03Z with read-only sandbox, `approval_policy=never`, requested
+  Sol/high, and observed model/effort explicitly `UNAVAILABLE`. Every prior finding is closed;
+  settlement is eligible on manifest SHA-256
+  `0ec1b4d26e7e1f8f6210b03cf07d577bbae8027ee3a719ae4dc3a8c54f3f9678`.
+
+### Codex native model-routing timing
+
+- Measured post-design critical path begins at design commit `83bc42a` on
+  2026-07-13T01:13:09+09:00. Earlier user discussion/design time was not timestamped and is omitted.
+- Planning/plan review through worker dispatch: **46m43s**
+  (01:13:09–01:59:52+09:00).
+- Initial Luna/max implementation and Main verification: **17m40s**
+  (01:59:52–02:17:32+09:00).
+- Initial Sol/high independent review: **6m07s** (02:17:32–02:23:39+09:00).
+- Luna/max finding fixes and reverification: **20m17s**
+  (02:23:39–02:43:56+09:00).
+- Final Sol/high confirmation: **3m07s** (02:43:56–02:47:03+09:00).
+- Documentation/commit begins at 02:47:03+09:00 and ends at the containing commit's Git committer
+  timestamp. Total measured post-design elapsed is 1h33m54s plus that final interval. Model runs:
+  one initial Luna/max implementation without a retained receipt, one receipt-bound Luna/max fix,
+  one Sol/high implementation review, one Sol/high confirmation, plus four plan-confirmation
+  rounds after the initial plan review. No push/PR/release occurred.
+
+- Codex native model-routing plan review: **SETTLED for implementation** from artifact/base
+  `8868c998eec6981a2b26e4a8ff41e17c3141bd02`. Required vendor is one fresh read-only Codex
+  `gpt-5.6-sol/high` session. Manifest `.review/codex-model-routing-plan.manifest` SHA-256
+  `7f6dda2ff8f79a4872af2f6dadf2401d5a0af9afb37b33f1d6d38462c12ab7c3`; prompt
+  `.review/codex-model-routing-plan-review.md` SHA-256
+  `df1045b3fbaf61d425393a1b7a7477e271051f78f2f90c5d6353b813595b2972`. Initial review returned
+  **C2/I5/M1**: requested-vs-effective model provenance, approval escalation, an invalid strict
+  config probe, omitted active authorities/harness dependencies, weak fake-CLI assertions,
+  worker/Main commit ambiguity, and an unsupported `ultra` claim. Result SHA-256
+  `e994545a7b155ea6064a1c6aaaeedfeae7ec6b721f281ceb433bc867f89b1527`; receipt SHA-256
+  `4d16d1ceacf48079938e4aa416019432afb7849587445f608abe2b4c859d03eb`; Sol/high ran
+  2026-07-12T16:36:11Z–16:40:35Z. All prescriptions were incorporated in the amended design/plan.
+  First confirmation used manifest `.review/codex-model-routing-plan-confirm.manifest`
+  SHA-256 `a4b86c74d8f2df8c6dcc5b3fdb506dd1b1fb656bfca6a27e0a5a2d2cd084efbc` with prompt
+  `.review/codex-model-routing-plan-confirm.md` SHA-256
+  `d5ce3454b1909c4ba01dee777efca238d4c435377437e7de092f7c1a011ee696`. It returned
+  **C0/I1/M0** because the planned final manifest omitted unchanged `AGENTS.md`; result SHA-256
+  `451ce2365e1d2e60af24de8e5bac46e32ae8ba27acf9179b282476a834078c19`; receipt SHA-256
+  `9e6b1d0ee952b87c9dbd5bd0a7f64174dc791c61aeeeefaf09451b9459b13c59`. The final-manifest
+  command now includes `AGENTS.md`, and the timing ledger wording distinguishes requested from
+  observed model/effort evidence. The next exact-hash reconfirmation used
+  `.review/codex-model-routing-plan-confirm2.manifest` SHA-256
+  `1c4299439aa8b78ad9f4b21a36dc7872a466c979da91c02b1ef9163506c37919` and the same prompt hash. It
+  returned **C1/I0/M0** after an installed-CLI parser probe proved that `-a never` is a root option
+  and fails when placed after `exec`; result SHA-256
+  `9eebdd8e6ce59c95d352f509c3f75541a559fa7e830cf8704af2149658b30d20`; receipt SHA-256
+  `68d9dfb5ac1352d496384c662b9bf4fdab34f38253449cf5c04e5c25602e4507`. Both complete ordered argv
+  vectors and the wrapper prescription now place `-a never` before `exec`. Exact-hash
+  reconfirmation uses `.review/codex-model-routing-plan-confirm3.manifest` SHA-256
+  `a8ebe5ac95f8049c20a88d85ea412f867a95178842d6d357f7a2e833f9589be5` and the same prompt hash. It
+  returned **C0/I1/M0** because invalid-effort and absent-manifest tests required zero invocation
+  but did not explicitly require the same no-publication/no-partial invariant as later failures;
+  result SHA-256 `0a47faea95e9a06434c5f3c65c7f51bee10e5460c3d0cb966ddba1644931543b`; receipt SHA-256
+  `7c1196f2a256b424a0857b9ea6feca4a8351a86a56eb196ddeefe7f83726622a`. The test prescription now
+  requires both properties. Final exact-hash reconfirmation used
+  `.review/codex-model-routing-plan-confirm4.manifest` SHA-256
+  `a73480d0fbab033723e19e0559a913813154909426ad23a4311da2a4f4a34854` and the same prompt hash. It
+  returned **C0/I0/M0**; result SHA-256
+  `c1645b6bb44e71ef307c54616b874369169b80361592f187db5f20008449a5a2`; receipt SHA-256
+  `bfe4edad18e5600c29503f9f76a06bf6b8148eba94c142757b1c3ca5514cb3eb`. All eight required
+  closures are satisfied, so implementation may consume this plan.
 
 - Hybrid local/Cloud execution harness: **SETTLED locally at `a754ce0`**. Design record, wrapper,
   environment setup, negative tests, workflow authority, and Cloud guide passed the required
@@ -502,12 +619,16 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Commit the settled Plan 6 Task 5 candidate locally, then prepare Task 6 listener/readiness
-   integration under the same worker-only, Sol/high, fresh-review-agent workflow. Do not push
+1. Run final verification and commit the settled model-routing unit locally. Then resume the
+   current Plan 6 work under Main/review Sol/high and implementation/execution Luna/max. Do not push
    without separate user authority.
 
 ## Verification
 
+- Codex native model routing: Main host-permission `scripts/verify.sh` passed after finding fixes,
+  including strict role preflight, missing/malformed/unknown-key fixtures, routing/lifecycle/race/
+  stdin tests, all workspace tests, and Clippy `-D warnings`. Fresh Sol/high confirmation returned
+  C0/I0/M0 on the corrected 19-blob manifest.
 - Plan 6 Task 5: Main-owned focused and full verification passed, including ten repeated
   real-socket header/idle-timeout probes; the final fresh no-context review returned C0/I0/M1
   with APPROVE on the exact staged tree and frozen hashes below.

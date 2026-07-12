@@ -6,6 +6,10 @@ This is workflow evidence, not design authority. After the Red packet is decided
 independent review is settled, the accepted result is folded into the Plan 6 spec and the
 design corpus where required.
 
+> **Workflow supersession (2026-07-13):** The approved Plan 6 product contract and historical
+> Design Ready evidence are unchanged. Current routing keeps Main/design/review/confirmation/
+> settlement on Sol/high and uses Luna/max for implementation/execution workers.
+
 ## 1. Mission brief
 
 Plan 6 implements the first network ingest path: R2 HTTP ingress plus the R19 ingress-side

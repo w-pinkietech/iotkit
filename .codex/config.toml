@@ -1,0 +1,15 @@
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+review_model = "gpt-5.6-sol"
+
+[agents.implementer]
+description = "Implement settled requirements and write focused tests. Escalate new product or trust decisions to Main."
+config_file = "agents/luna-max.toml"
+
+[agents.executor]
+description = "Run tests, verification commands, and bounded mechanical probes without changing approved contracts."
+config_file = "agents/luna-max.toml"
+
+[agents.reviewer]
+description = "Independently review design or implementation for correctness, safety, provenance, and contract compliance."
+config_file = "agents/sol-high.toml"
