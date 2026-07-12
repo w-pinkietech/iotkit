@@ -38,7 +38,7 @@ pub fn revoke_descriptor() -> OpDescriptor {
 }
 
 fn issue_schema() -> Value {
-    json!({ "required": ["name", "kind", "tier_ceiling"] })
+    json!({ "required": ["name", "kind", "tier_ceiling"], "optional": ["expires_at"] })
 }
 
 fn revoke_schema() -> Value {

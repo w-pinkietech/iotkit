@@ -1,0 +1,12 @@
+[package]
+name = "iotkit-ingest-http-negative-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+# Negative fixture only: this forbidden dependency represents putting ingress behind the control
+# API. scripts/check-layers rule 8 must reject the same edge in a workspace package.
+[dependencies]
+iotkit-gateway = { path = "../../../iotkit-gateway" }

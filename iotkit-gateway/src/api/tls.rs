@@ -5,10 +5,15 @@ use std::path::{Path, PathBuf};
 use iotkit_core_ops::{OpsError, fingerprint_of_pem};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use rusqlite::{Connection, OptionalExtension, params};
+use rustls::ServerConfig;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 pub struct TlsMaterial {
     pub cert_pem_path: PathBuf,
     pub key_pem_path: PathBuf,
+    pub cert_pem: Vec<u8>,
+    pub key_pem: Vec<u8>,
     pub fingerprint: String,
 }
 
@@ -50,8 +55,11 @@ pub fn ensure_tls_material(conn: &Connection, data_dir: &Path) -> Result<TlsMate
         return Err(TlsError::PartialMaterial);
     }
     if cert_exists {
-        let cert_pem = fs::read_to_string(&cert_pem_path)?;
-        let fingerprint = fingerprint_of_pem(&cert_pem)?;
+        let cert_pem = fs::read(&cert_pem_path)?;
+        let key_pem = fs::read(&key_pem_path)?;
+        let cert_text = std::str::from_utf8(&cert_pem).map_err(|_| TlsError::IdentityMismatch)?;
+        let fingerprint = fingerprint_of_pem(cert_text)?;
+        validate_pair(&cert_pem, &key_pem)?;
         if let Some((_, expected_fingerprint)) = expected {
             if fingerprint != expected_fingerprint {
                 return Err(TlsError::IdentityMismatch);
@@ -62,6 +70,8 @@ pub fn ensure_tls_material(conn: &Connection, data_dir: &Path) -> Result<TlsMate
         return Ok(TlsMaterial {
             cert_pem_path,
             key_pem_path,
+            cert_pem,
+            key_pem,
             fingerprint,
         });
     }
@@ -78,8 +88,59 @@ pub fn ensure_tls_material(conn: &Connection, data_dir: &Path) -> Result<TlsMate
     Ok(TlsMaterial {
         cert_pem_path,
         key_pem_path,
+        cert_pem: cert_pem.into_bytes(),
+        key_pem: key_pem.into_bytes(),
         fingerprint,
     })
+}
+
+/// Strict runtime gate: validation only, never generation or replacement.
+pub fn validate_existing_tls_material(
+    conn: &Connection,
+    data_dir: &Path,
+) -> Result<TlsMaterial, TlsError> {
+    let cert_path = data_dir.join("tls/cert.pem");
+    let key_path = data_dir.join("tls/key.pem");
+    if cert_path.exists() != key_path.exists() {
+        return Err(TlsError::PartialMaterial);
+    }
+    if !cert_path.exists() {
+        return Err(TlsError::MissingInitializedMaterial);
+    }
+    let expected: Option<String> = conn
+        .query_row(
+            "SELECT fingerprint FROM tls_identity WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let expected = expected.ok_or(TlsError::MissingInitializedMaterial)?;
+    let cert = fs::read(&cert_path)?;
+    let key = fs::read(&key_path)?;
+    let cert_text = std::str::from_utf8(&cert).map_err(|_| TlsError::IdentityMismatch)?;
+    if fingerprint_of_pem(cert_text)? != expected {
+        return Err(TlsError::IdentityMismatch);
+    }
+    validate_pair(&cert, &key)?;
+    Ok(TlsMaterial {
+        cert_pem_path: cert_path,
+        key_pem_path: key_path,
+        cert_pem: cert,
+        key_pem: key,
+        fingerprint: expected,
+    })
+}
+
+fn validate_pair(cert: &[u8], key: &[u8]) -> Result<(), TlsError> {
+    let certs = CertificateDer::pem_slice_iter(cert)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| TlsError::IdentityMismatch)?;
+    let key = PrivateKeyDer::from_pem_slice(key).map_err(|_| TlsError::IdentityMismatch)?;
+    ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|_| TlsError::IdentityMismatch)?;
+    Ok(())
 }
 
 fn persist_initial_identity(conn: &Connection, fingerprint: &str) -> Result<(), TlsError> {

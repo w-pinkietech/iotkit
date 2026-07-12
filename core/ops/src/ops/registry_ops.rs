@@ -111,6 +111,7 @@ enum ResolutionSpec {
 
 fn resolution(params: &Value) -> Result<ResolutionSpec, OpError> {
     let resolution = required_object(params, "resolution")?;
+    reject_undeclared(resolution, &["alias_to", "custom"])?;
     match (resolution.get("alias_to"), resolution.get("custom")) {
         (Some(_), Some(_)) => Err(OpError::Validation(
             "resolution must contain exactly one of alias_to or custom".to_string(),
@@ -138,6 +139,20 @@ fn resolution(params: &Value) -> Result<ResolutionSpec, OpError> {
 }
 
 fn custom_spec(custom: &serde_json::Map<String, Value>) -> Result<CustomEntrySpec, OpError> {
+    reject_undeclared(
+        custom,
+        &[
+            "measurement_key",
+            "unit_ucum",
+            "unit_display",
+            "value_type",
+            "semantic_class",
+            "channel_mode",
+            "channel_roles",
+            "physical_min",
+            "physical_max",
+        ],
+    )?;
     let value_type = match required_field(custom, "value_type")? {
         "float" => ValueType::Float,
         "int" => ValueType::Int,
@@ -166,6 +181,16 @@ fn custom_spec(custom: &serde_json::Map<String, Value>) -> Result<CustomEntrySpe
         physical_min: optional_f64(custom, "physical_min")?,
         physical_max: optional_f64(custom, "physical_max")?,
     })
+}
+
+fn reject_undeclared(
+    object: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), OpError> {
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(OpError::Validation("undeclared operation parameter".into()));
+    }
+    Ok(())
 }
 
 fn required_field<'a>(

@@ -175,6 +175,19 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         db.clone(),
         Duration::from_secs(60),
     );
+    // R2 listener ownership is supervised independently from the control API and collection.
+    // Through Task 5 its compiled readiness gate keeps it unbound while still publishing exact
+    // desired/applied state and recovery reasons.
+    let data_dir = Path::new(&config.db_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let _ingress_task = iotkit_gateway::ingress::spawn_ingress_supervisor(
+        db.clone(),
+        data_dir,
+        health_state.clone(),
+        Duration::from_secs(1),
+    );
     let _publish_task =
         publish_task::spawn_publish_task(db.clone(), health_state.clone(), Duration::from_secs(30));
 

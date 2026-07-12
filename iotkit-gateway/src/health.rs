@@ -38,6 +38,158 @@ pub struct ApiHealth {
     pub tls_fingerprint: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IngressQueryState {
+    Ok,
+    Degraded,
+    Unknown,
+}
+
+impl IngressQueryState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Degraded => "degraded",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IngressListenerHealth {
+    pub query_state: IngressQueryState,
+    pub status: &'static str,
+    pub desired_generation: Option<u64>,
+    pub applied_generation: Option<u64>,
+    pub bind: Option<&'static str>,
+    pub mode: Option<&'static str>,
+    pub desired_mode: Option<&'static str>,
+    pub applied_mode: Option<&'static str>,
+    pub plaintext_warning: bool,
+    pub last_error: Option<String>,
+    pub last_action: String,
+    pub gate_reason: Option<String>,
+}
+
+impl IngressListenerHealth {
+    pub fn listening(config: iotkit_core_ops::IngressListenerConfig, degraded: bool) -> Self {
+        let mode = ingress_mode(config.desired.mode);
+        Self {
+            query_state: if degraded {
+                IngressQueryState::Degraded
+            } else {
+                IngressQueryState::Ok
+            },
+            status: if degraded { "degraded" } else { "listening" },
+            desired_generation: Some(config.desired.generation),
+            applied_generation: Some(config.desired.generation),
+            bind: Some("private_site"),
+            mode: Some(mode),
+            desired_mode: Some(mode),
+            applied_mode: Some(mode),
+            plaintext_warning: degraded,
+            last_error: None,
+            last_action: "listening".into(),
+            gate_reason: None,
+        }
+    }
+    pub fn disabled(generation: u64, last_action: String) -> Self {
+        Self {
+            query_state: IngressQueryState::Ok,
+            status: "disabled",
+            desired_generation: Some(generation),
+            applied_generation: Some(generation),
+            bind: None,
+            mode: None,
+            desired_mode: None,
+            applied_mode: None,
+            plaintext_warning: false,
+            last_error: None,
+            last_action,
+            gate_reason: Some("ingress_not_ready".into()),
+        }
+    }
+    pub fn blocked(config: iotkit_core_ops::IngressListenerConfig, reason: &str) -> Self {
+        let desired_mode = ingress_mode(config.desired.mode);
+        let applied_generation = config.applied.as_ref().map(|state| state.generation);
+        let applied_mode = config
+            .applied
+            .as_ref()
+            .map(|state| ingress_mode(state.mode));
+        Self {
+            query_state: IngressQueryState::Degraded,
+            status: "error",
+            desired_generation: Some(config.desired.generation),
+            applied_generation,
+            bind: applied_generation.map(|_| "private_site"),
+            mode: applied_mode,
+            desired_mode: Some(desired_mode),
+            applied_mode,
+            plaintext_warning: applied_mode == Some("private_plaintext"),
+            last_error: Some(reason.into()),
+            last_action: config.last_action,
+            gate_reason: Some(reason.into()),
+        }
+    }
+    /// Runtime authority was invalidated and the transport was dropped. Desired state remains
+    /// useful for repair, but no formerly applied bind/mode may survive in health.
+    pub fn invalidated(config: iotkit_core_ops::IngressListenerConfig, reason: &str) -> Self {
+        Self {
+            query_state: IngressQueryState::Degraded,
+            status: "unbound",
+            desired_generation: Some(config.desired.generation),
+            applied_generation: None,
+            bind: None,
+            mode: None,
+            desired_mode: Some(ingress_mode(config.desired.mode)),
+            applied_mode: None,
+            plaintext_warning: false,
+            last_error: Some(reason.into()),
+            last_action: "runtime_invalidated".into(),
+            gate_reason: Some(reason.into()),
+        }
+    }
+    pub fn blocked_unknown(reason: String) -> Self {
+        Self {
+            query_state: IngressQueryState::Degraded,
+            status: "unbound",
+            desired_generation: None,
+            applied_generation: None,
+            bind: None,
+            mode: None,
+            desired_mode: None,
+            applied_mode: None,
+            plaintext_warning: false,
+            last_error: Some(reason.clone()),
+            last_action: "gate_blocked".into(),
+            gate_reason: Some(reason),
+        }
+    }
+    pub fn unknown(reason: &str) -> Self {
+        Self {
+            query_state: IngressQueryState::Unknown,
+            status: "unknown",
+            desired_generation: None,
+            applied_generation: None,
+            bind: None,
+            mode: None,
+            desired_mode: None,
+            applied_mode: None,
+            plaintext_warning: false,
+            last_error: Some(reason.into()),
+            last_action: "query_failed".into(),
+            gate_reason: Some("unknown".into()),
+        }
+    }
+}
+
+fn ingress_mode(mode: iotkit_core_ops::IngressListenerMode) -> &'static str {
+    match mode {
+        iotkit_core_ops::IngressListenerMode::Tls => "tls",
+        iotkit_core_ops::IngressListenerMode::PrivatePlaintext => "private_plaintext",
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ClockHealth {
     pub trusted: bool,
@@ -85,6 +237,7 @@ pub struct HealthState {
     pub retention: RetentionHealth,
     pub publish: Vec<TargetDeliveryHealth>,
     pub api: Option<ApiHealth>,
+    pub ingress: IngressListenerHealth,
     pub clock: ClockHealth,
     pub device_credentials: DeviceCredentialHealth,
 }
@@ -107,6 +260,7 @@ impl HealthState {
             },
             publish: Vec::new(),
             api: None,
+            ingress: IngressListenerHealth::unknown("not_observed"),
             clock: ClockHealth {
                 trusted: false,
                 source: None,
@@ -318,6 +472,12 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
         "db":{"size_bytes":state.db.size_bytes,"disk_available_bytes":state.db.disk_available_bytes,"watermark_exceeded":state.db.watermark_exceeded},
         "retention":{"days":state.retention.days,"last_purge_at":state.retention.last_purge_at,"last_purged_rows":state.retention.last_purged_rows},
         "publish":publish,"api":api,
+        "ingress_listener":{"query_state":state.ingress.query_state.as_str(),"status":state.ingress.status,
+            "desired_generation":state.ingress.desired_generation,"applied_generation":state.ingress.applied_generation,
+            "bind":state.ingress.bind,"mode":state.ingress.mode,
+            "desired_mode":state.ingress.desired_mode,"applied_mode":state.ingress.applied_mode,
+            "plaintext_warning":state.ingress.plaintext_warning,
+            "last_error":state.ingress.last_error,"last_action":state.ingress.last_action,"gate_reason":state.ingress.gate_reason},
         "clock_trust":{"trusted":state.clock.trusted,"source":state.clock.source,"observed_at_ms":state.clock.observed_at_ms,"recovery_command":"gatewayctl time confirm"},
         "device_credentials":{"query_state":state.device_credentials.query_state.as_str(),
             "active_count":state.device_credentials.active_count,"stale_count":state.device_credentials.stale_count,
@@ -374,6 +534,7 @@ mod tests {
                 bind: "127.0.0.1:8443".to_string(),
                 tls_fingerprint: "sha256:test".to_string(),
             }),
+            ingress: IngressListenerHealth::disabled(0, "disabled".into()),
             clock: ClockHealth {
                 trusted: false,
                 source: None,
@@ -404,6 +565,103 @@ mod tests {
             "gatewayctl time confirm"
         );
         assert!(json.contains(r#""uptime_s":10"#) || json.contains(r#""uptime_s":11"#));
+    }
+
+    #[test]
+    fn ingress_health_is_stable_coarse_and_secret_free() {
+        let mut state = HealthState::new(90);
+        state.ingress = IngressListenerHealth {
+            query_state: IngressQueryState::Degraded,
+            status: "degraded",
+            desired_generation: Some(7),
+            applied_generation: Some(6),
+            bind: Some("private_site"),
+            mode: Some("private_plaintext"),
+            desired_mode: Some("tls"),
+            applied_mode: Some("private_plaintext"),
+            plaintext_warning: true,
+            last_error: Some("bind_failed".into()),
+            last_action: "retain_last_safe".into(),
+            gate_reason: Some("tls_not_ready".into()),
+        };
+        let rendered = render_health_json("epoch", &state);
+        let json: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(json["ingress_listener"]["desired_generation"], 7);
+        assert_eq!(json["ingress_listener"]["applied_generation"], 6);
+        assert_eq!(json["ingress_listener"]["bind"], "private_site");
+        assert_eq!(json["ingress_listener"]["plaintext_warning"], true);
+        assert_eq!(json["ingress_listener"]["gate_reason"], "tls_not_ready");
+        assert!(!rendered.contains("PRIVATE KEY"));
+        assert!(!rendered.contains("192.168."));
+    }
+
+    #[test]
+    fn failed_tls_desired_with_plaintext_applied_reports_active_plaintext() {
+        let config = ingress_config(
+            iotkit_core_ops::IngressListenerMode::Tls,
+            iotkit_core_ops::IngressListenerMode::PrivatePlaintext,
+        );
+        let health = IngressListenerHealth::blocked(config, "bind_failed");
+        assert_eq!(health.desired_mode, Some("tls"));
+        assert_eq!(health.applied_mode, Some("private_plaintext"));
+        assert!(health.plaintext_warning);
+    }
+
+    #[test]
+    fn failed_plaintext_desired_with_tls_applied_reports_active_tls() {
+        let config = ingress_config(
+            iotkit_core_ops::IngressListenerMode::PrivatePlaintext,
+            iotkit_core_ops::IngressListenerMode::Tls,
+        );
+        let health = IngressListenerHealth::blocked(config, "bind_failed");
+        assert_eq!(health.desired_mode, Some("private_plaintext"));
+        assert_eq!(health.applied_mode, Some("tls"));
+        assert!(!health.plaintext_warning);
+    }
+
+    #[test]
+    fn invalidated_plaintext_and_tls_applied_states_report_desired_only_unbound_health() {
+        for mode in [
+            iotkit_core_ops::IngressListenerMode::PrivatePlaintext,
+            iotkit_core_ops::IngressListenerMode::Tls,
+        ] {
+            let health = IngressListenerHealth::invalidated(
+                ingress_config(mode, mode),
+                "authority_invalidated",
+            );
+            assert_eq!(health.status, "unbound");
+            assert_eq!(health.desired_generation, Some(2));
+            assert_eq!(health.desired_mode, Some(ingress_mode(mode)));
+            assert_eq!(health.applied_generation, None);
+            assert_eq!(health.bind, None);
+            assert_eq!(health.mode, None);
+            assert_eq!(health.applied_mode, None);
+            assert!(!health.plaintext_warning);
+        }
+    }
+
+    fn ingress_config(
+        desired_mode: iotkit_core_ops::IngressListenerMode,
+        applied_mode: iotkit_core_ops::IngressListenerMode,
+    ) -> iotkit_core_ops::IngressListenerConfig {
+        let state = |generation, mode| iotkit_core_ops::IngressListenerState {
+            generation,
+            bind_addr: "192.168.1.2:8444".into(),
+            interface: "eth0".into(),
+            site_local_cidrs: vec!["192.168.1.0/24".into()],
+            mode,
+            tls_generation: (mode == iotkit_core_ops::IngressListenerMode::Tls)
+                .then_some(generation),
+            tls_fingerprint: (mode == iotkit_core_ops::IngressListenerMode::Tls)
+                .then(|| "fingerprint".into()),
+        };
+        iotkit_core_ops::IngressListenerConfig {
+            enabled: true,
+            desired: state(2, desired_mode),
+            applied: Some(state(1, applied_mode)),
+            last_error: None,
+            last_action: "apply_failed".into(),
+        }
     }
 
     #[test]

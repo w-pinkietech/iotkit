@@ -17,6 +17,7 @@ iotkit-core-engine = { path = "../core/engine" }
 iotkit-core-storage = { path = "../core/storage" }
 iotkit-core-timeseries = { path = "../core/timeseries" }
 iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"] }
+iotkit-ingest-http = { path = "../iotkit-ingest-http" }
 iotkit-core-collector = { path = "../core/collector" }
 iotkit-core-ledger = { path = "../core/ledger" }
 iotkit-core-registry = { path = "../core/registry" }

@@ -236,13 +236,14 @@ fn human_only(_tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(), OpError>
 }
 
 fn add_schema() -> Value {
-    json!({ "required": ["hardware_id", "flow_class", "reason_code"] })
+    json!({ "required": ["hardware_id", "flow_class", "reason_code"],
+        "optional": ["label", "scope_system_ids"] })
 }
 fn debt_add_schema() -> Value {
     debt_schema(&["hardware_id", "flow_class", "reason_code"])
 }
 fn lifecycle_schema() -> Value {
-    json!({ "required": ["principal_id", "reason_code"] })
+    json!({ "required": ["principal_id", "reason_code"], "optional": ["credential_id"] })
 }
 fn debt_lifecycle_schema() -> Value {
     debt_schema(&["principal_id", "reason_code"])
@@ -274,7 +275,10 @@ fn debt_flow_schema() -> Value {
 
 fn debt_schema(base: &[&str]) -> Value {
     let required = base.iter().map(|value| json!(value)).collect::<Vec<_>>();
-    json!({"required": required})
+    json!({"required": required, "optional": ["label", "scope_system_ids",
+        "credential_id", "expected_required_steady_units", "expected_required_burst_units",
+        "expected_capacity_steady_units", "expected_capacity_burst_units",
+        "expected_authority_generation"]})
 }
 
 fn approval_preview(tx: &Transaction<'_>, status: crate::CapacityStatus) -> Result<Value, OpError> {

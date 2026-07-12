@@ -127,7 +127,7 @@ maintenance family) are explicit non-network exceptions, never API/UI/AI operati
 
 ## Crate map
 
-Twenty-one crates, four layers. `scripts/check-layers` enforces the layer rules
+Twenty-two crates, five layers. `scripts/check-layers` enforces the layer rules
 below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
@@ -144,6 +144,7 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-core-registry` | `core/registry` | D6 measurement registry (standard catalog + site overrides); implements `RegistryPolicy`. |
 | `iotkit-core-ops` | `core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
 | `iotkit-ingest-client` | `iotkit-ingest-client` | The ingest-contract client adapters use (D4). In-proc binding today; HTTP/MQTT are future feature flags. |
+| `iotkit-ingest-http` | `iotkit-ingest-http` | **INGRESS.** Listener parsing, exposure/TLS validation, accepted-peer checks, and transport construction; never control-API routes or measurement domain logic. |
 | `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Shared scaffolding for I2C-bus polling sensor adapters. |
 | `rpi4b-transport` | `rpi4b-transport` | Raw bus access (serial/I2C/GPIO/SPI/PWM/USB). Bytes and pin states, zero protocol knowledge. |
 | `iotkit-sensor-drivers` | `iotkit-sensor-drivers` | Vendor-neutral per-sensor-IC conversion drivers, input-source-agnostic (shared by multiple adapters). |
@@ -177,6 +178,10 @@ below mechanically (in `verify.sh` and CI).
 7. **The non-dev dependent set of `core/supervision` is pinned exactly** — the
    frozen supervision vocabulary gains no new dependents without a corpus
    decision (D4/D12 decision 8). Dev-dependencies remain exempt.
+8. **`INGRESS` is separate from the control API** — `iotkit-ingest-http` must not
+   depend on `iotkit-gateway`; its internal allowlist is the ingest contract,
+   collector boundary, storage/auth services (`core/ops`), and no other workspace
+   crate. The gateway composes it, never the reverse.
 
 Rule numbers match the `scripts/check-layers` error messages. Only the two
 **binaries** may depend on any layer — with one exception: rule 7 pins the

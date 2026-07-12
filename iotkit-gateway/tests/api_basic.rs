@@ -331,6 +331,69 @@ async fn known_restore_or_reset_state_blocks_control_listener_before_bind() {
 }
 
 #[tokio::test]
+async fn restored_ingress_mismatch_does_not_block_local_control_recovery() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let dir = tempfile::tempdir().unwrap();
+    let db = iotkit_core_storage::init_db(&dir.path().join("owned.db"), &all_migrations()).unwrap();
+    let health = Arc::new(Mutex::new(HealthState::new(90)));
+    let clock_trust = prepare_owned_clock(&db);
+    db.with_conn_sync(|conn| {
+        conn.execute(
+            "UPDATE ingress_listener_config SET enabled=1,desired_generation=1,
+             applied_generation=0,bind_addr='192.168.1.2:8444',interface='eth0',
+             site_local_cidrs='[\"192.168.1.0/24\"]',mode='private_plaintext' WHERE id=1",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    let handle = spawn_api_task(
+        db,
+        health,
+        api_config("127.0.0.1:0".parse().unwrap()),
+        "epoch-restored".into(),
+        dir.path().to_path_buf(),
+        clock_trust,
+    )
+    .await
+    .expect("ingress-only desired/applied mismatch must not remove the recovery API");
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn bound_control_listener_drains_when_a_fence_or_tls_partial_state_appears() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    for invalidate in ["restore_fence", "partial_tls"] {
+        let dir = tempfile::tempdir().unwrap();
+        let db =
+            iotkit_core_storage::init_db(&dir.path().join("owned.db"), &all_migrations()).unwrap();
+        let health = Arc::new(Mutex::new(HealthState::new(90)));
+        let clock_trust = prepare_owned_clock(&db);
+        let handle = spawn_api_task(
+            db,
+            health.clone(),
+            api_config("127.0.0.1:0".parse().unwrap()),
+            format!("epoch-{invalidate}"),
+            dir.path().to_path_buf(),
+            clock_trust,
+        )
+        .await
+        .unwrap();
+        if invalidate == "restore_fence" {
+            std::fs::write(dir.path().join("restore-in-progress"), b"fenced").unwrap();
+        } else {
+            std::fs::remove_file(dir.path().join("tls/key.pem")).unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(3), handle.join)
+            .await
+            .expect("continuous authority observer must drain the control listener")
+            .expect("control task must exit without panic");
+        assert!(health.lock().unwrap().api.is_none());
+    }
+}
+
+#[tokio::test]
 async fn network_passphrase_setup_route_is_absent() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let dir = tempfile::tempdir().unwrap();

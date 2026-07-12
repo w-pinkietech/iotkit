@@ -218,6 +218,15 @@ pub fn enter_restored_local_recovery(
         [new_epoch],
     )?;
     tx.execute("UPDATE device_credentials SET auth_epoch = ?1", [new_epoch])?;
+    // A restored desired enable flag is retained for operator diagnosis, but applied network
+    // authority is always fenced. Local recovery alone cannot silently reopen ingress.
+    tx.execute(
+        "UPDATE ingress_listener_config SET applied_generation=0,
+          applied_bind_addr=NULL,applied_interface=NULL,applied_site_local_cidrs=NULL,
+          applied_mode=NULL,applied_tls_generation=NULL,applied_tls_fingerprint=NULL,
+          last_error='restore_reapply_required',last_action='restore_fenced' WHERE id=1",
+        [],
+    )?;
     tx.execute(
         "UPDATE auth_state SET device_credential_generation=?1 WHERE id=1",
         [prior_device_generation.saturating_add(1)],

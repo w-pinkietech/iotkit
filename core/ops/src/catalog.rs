@@ -13,6 +13,9 @@ pub struct OpContext<'a> {
     pub clock_trust: Option<&'a crate::ClockTrust>,
     pub actor_kind: ActorKind,
     pub dry_run: bool,
+    /// Product-owned directory for durable secret custody. Generic dispatches deliberately
+    /// provide none, so an operation cannot silently fall back to database secret storage.
+    pub secret_dir: Option<&'a std::path::Path>,
 }
 
 pub type SecretOpExecute =
@@ -217,12 +220,32 @@ pub fn dispatch(
     catalog: &[OpDescriptor],
     req: DispatchRequest,
 ) -> Result<DispatchResult, OpError> {
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
-        .map_err(|e| OpError::Internal(e.to_string()))?;
+    dispatch_with_secret_dir(conn, catalog, req, None)
+}
 
+pub fn dispatch_with_secret_dir(
+    conn: &Connection,
+    catalog: &[OpDescriptor],
+    req: DispatchRequest,
+    secret_dir: Option<&std::path::Path>,
+) -> Result<DispatchResult, OpError> {
     let Some(descriptor) = catalog.iter().find(|op| op.name == req.op) else {
         return Err(OpError::NotFound);
     };
+    let settles_tls_custody = req.op == "ingress.tls.rotate" && !req.dry_run;
+    let reconcile_tls_custody = || -> Result<(), OpError> {
+        if settles_tls_custody && let Some(secret_dir) = secret_dir {
+            crate::reconcile_ingress_tls_custody(conn, secret_dir)
+                .map_err(|_| OpError::Internal("tls_custody_io".into()))?;
+        }
+        Ok(())
+    };
+    // Recover a prior crash window before choosing the next generation. This removes
+    // unreferenced material and promotes only state whose R14 transaction is already visible.
+    reconcile_tls_custody()?;
+
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
+        .map_err(|e| OpError::Internal(e.to_string()))?;
     if descriptor.tier == Tier::ReadOnly {
         return Err(OpError::Internal("invalid op tier: read_only".to_string()));
     }
@@ -246,6 +269,7 @@ pub fn dispatch(
         clock_trust: req.clock_trust.as_deref(),
         actor_kind: req.actor.actor_kind,
         dry_run: req.dry_run,
+        secret_dir,
     };
 
     let result = (|| -> Result<DispatchResult, OpError> {
@@ -369,9 +393,18 @@ pub fn dispatch(
         "targets": targets,
         "source": req.source,
     });
-    iotkit_core_ledger::record_event(&tx, "r14_op", None, &detail.to_string())
-        .map_err(|e| OpError::Internal(e.to_string()))?;
-    tx.commit().map_err(|e| OpError::Internal(e.to_string()))?;
+    if let Err(error) = iotkit_core_ledger::record_event(&tx, "r14_op", None, &detail.to_string()) {
+        drop(tx);
+        reconcile_tls_custody()?;
+        return Err(OpError::Internal(error.to_string()));
+    }
+    if let Err(error) = tx.commit() {
+        reconcile_tls_custody()?;
+        return Err(OpError::Internal(error.to_string()));
+    }
+    // Promotion is intentionally after audit + SQLite commit. On an operation error this same
+    // pass removes any unreferenced staging; on success it publishes the now-proven generation.
+    reconcile_tls_custody()?;
 
     result
 }
@@ -381,15 +414,20 @@ fn redact_audit_value(value: &Value) -> Value {
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(key, value)| {
-                    let sensitive_key = matches!(
-                        key.as_str(),
-                        "plaintext"
-                            | "token"
-                            | "token_hash"
-                            | "credential"
-                            | "credential_hash"
-                            | "passphrase"
-                    );
+                    let normalized = key.to_ascii_lowercase();
+                    let sensitive_key = [
+                        "plaintext",
+                        "token",
+                        "credential",
+                        "passphrase",
+                        "private",
+                        "secret",
+                        "pem",
+                    ]
+                    .iter()
+                    .any(|marker| normalized.contains(marker))
+                        || (normalized.ends_with("key")
+                            && !matches!(normalized.as_str(), "key" | "measurement_key"));
                     let value = if sensitive_key {
                         Value::String("[REDACTED]".into())
                     } else {
@@ -400,7 +438,12 @@ fn redact_audit_value(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Array(values) => Value::Array(values.iter().map(redact_audit_value).collect()),
-        Value::String(value) if value.contains("ikd_") || value.contains("iko_") => {
+        Value::String(value)
+            if value.contains("ikd_")
+                || value.contains("iko_")
+                || value.contains("-----BEGIN ")
+                || value.contains("PRIVATE KEY-----") =>
+        {
             Value::String("[REDACTED]".into())
         }
         _ => value.clone(),
@@ -408,9 +451,31 @@ fn redact_audit_value(value: &Value) -> Value {
 }
 
 fn validate_params(schema: Value, params: &Value) -> Result<(), OpError> {
-    let Some(required) = schema.get("required").and_then(Value::as_array) else {
-        return Ok(());
+    let Some(params) = params.as_object() else {
+        return Err(OpError::Validation("params must be an object".into()));
     };
+    let Some(required) = schema.get("required").and_then(Value::as_array) else {
+        return Err(OpError::Internal(
+            "operation schema must declare required parameters".into(),
+        ));
+    };
+    let optional = schema
+        .get("optional")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut declared = std::collections::BTreeSet::new();
+    for key in required.iter().chain(optional.iter()) {
+        let Some(key) = key.as_str() else {
+            return Err(OpError::Internal(
+                "schema parameter entries must be strings".into(),
+            ));
+        };
+        declared.insert(key);
+    }
+    if params.keys().any(|key| !declared.contains(key.as_str())) {
+        return Err(OpError::Validation("undeclared operation parameter".into()));
+    }
     for key in required {
         let Some(key) = key.as_str() else {
             return Err(OpError::Validation(

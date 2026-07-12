@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod clock;
 pub mod device_credentials;
 pub mod fingerprint;
+pub mod ingress_listener;
 pub mod ops;
 pub mod tier;
 
@@ -20,7 +21,7 @@ pub use auth::{
 };
 pub use catalog::{
     DeviceCredentialDispatchResult, DispatchRequest, DispatchResult, OpContext, OpDescriptor,
-    OpError, SecretOpExecute, dispatch,
+    OpError, SecretOpExecute, dispatch, dispatch_with_secret_dir,
 };
 pub use clock::{
     Clock, ClockEvidence, ClockTrust, ClockTrustError, SystemClock, TrustSource,
@@ -35,6 +36,11 @@ pub use device_credentials::{
     stale_credential_health,
 };
 pub use fingerprint::fingerprint_of_pem;
+pub use ingress_listener::{
+    INGRESS_READY, IngressListenerConfig, IngressListenerMode, IngressListenerState,
+    load_ingress_listener_config, mark_ingress_applied, mark_ingress_applied_in_transaction,
+    mark_ingress_apply_error, mark_ingress_runtime_unbound, reconcile_ingress_tls_custody,
+};
 pub use ops::standard_catalog;
 pub use tier::{Actor, ActorKind, Tier, TokenKind};
 
@@ -58,6 +64,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 15,
         label: "device_credentials",
         sql: include_str!("../migrations/0015_device_credentials.sql"),
+    },
+    Migration {
+        version: 16,
+        label: "ingress_listener",
+        sql: include_str!("../migrations/0016_ingress_listener.sql"),
     },
 ];
 

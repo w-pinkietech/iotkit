@@ -407,12 +407,35 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
                 .into(),
         );
     }
+    let canonical_ingress: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ingress_listener_config
+         WHERE id=1 AND desired_generation=0 AND applied_generation=0 AND enabled=0
+           AND bind_addr='127.0.0.1:0' AND interface='disabled'
+           AND site_local_cidrs='[]' AND mode='tls'
+           AND desired_tls_generation IS NULL AND desired_tls_fingerprint IS NULL
+           AND applied_bind_addr IS NULL AND applied_interface IS NULL
+           AND applied_site_local_cidrs IS NULL AND applied_mode IS NULL
+           AND applied_tls_generation IS NULL AND applied_tls_fingerprint IS NULL
+           AND last_error IS NULL AND last_action='disabled')",
+        [],
+        |row| row.get(0),
+    )?;
+    let ingress_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM ingress_listener_config", [], |row| {
+            row.get(0)
+        })?;
+    if !canonical_ingress || ingress_rows != 1 {
+        return Err(
+            "restore target is not empty: ingress_listener_config contains desired or applied state"
+                .into(),
+        );
+    }
 
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_schema
          WHERE type = 'table'
            AND name NOT LIKE 'sqlite_%'
-           AND name NOT IN ('_schema_version', 'auth_state', 'device_flow_classes', 'device_capacity')
+           AND name NOT IN ('_schema_version', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config')
          ORDER BY name",
     )?;
     let tables = stmt

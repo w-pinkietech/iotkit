@@ -957,10 +957,12 @@ dependencies = [
  "iotkit-core-ledger",
  "iotkit-core-registry",
  "iotkit-core-storage",
+ "ipnet",
  "libc",
  "password-hash",
  "rcgen",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -1055,6 +1057,7 @@ dependencies = [
  "iotkit-core-timeseries",
  "iotkit-core-types",
  "iotkit-ingest-client",
+ "iotkit-ingest-http",
  "libc",
  "rcgen",
  "reqwest",
@@ -1119,6 +1122,24 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "iotkit-ingest-http"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-ops",
+ "ipnet",
+ "libc",
+ "rcgen",
+ "rustls",
+ "sha2",
+ "socket2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

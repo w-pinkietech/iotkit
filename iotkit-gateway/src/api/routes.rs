@@ -11,7 +11,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use iotkit_core_ledger as ledger;
 use iotkit_core_ops::{
-    Actor, DispatchRequest, OpError, Tier, dispatch, issue_session_token, load_passphrase_hash,
+    Actor, DispatchRequest, OpError, Tier, issue_session_token, load_passphrase_hash,
     standard_catalog, verify_passphrase,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
@@ -40,6 +40,7 @@ pub struct AppState {
     pub fingerprint: String,
     pub throttle: Arc<Throttle>,
     pub clock_trust: Arc<iotkit_core_ops::ClockTrust>,
+    pub data_dir: std::path::PathBuf,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -359,9 +360,17 @@ async fn post_ops_dispatch(
         clock_trust: Some(state.clock_trust.clone()),
     };
 
+    let secret_dir = state.data_dir.clone();
     let result = state
         .db
-        .with_conn(move |conn| Ok(dispatch(conn, standard_catalog(), req)))
+        .with_conn(move |conn| {
+            Ok(iotkit_core_ops::dispatch_with_secret_dir(
+                conn,
+                standard_catalog(),
+                req,
+                Some(&secret_dir),
+            ))
+        })
         .await
         .map_err(op_storage_error)?;
 
@@ -715,6 +724,7 @@ mod route_inventory_tests {
             fingerprint: "test".into(),
             throttle: Arc::new(Throttle::default()),
             clock_trust,
+            data_dir: std::env::temp_dir(),
         };
         let mut request = Request::post("/api/v1/setup/passphrase")
             .header("authorization", format!("Bearer {bearer}"))
