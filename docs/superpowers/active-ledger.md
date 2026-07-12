@@ -6,15 +6,14 @@ git/disk/test. Never store secrets here.
 ## Reality
 
 - Repository: `iotkit-next`
-- Branch: `master`
-- Artifact/base HEAD: `30c369f`
-- Working tree at workflow-design start: user-owned untracked
-  `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 5 implementation and independent review are settled; its local commit is
-  the next action. Task 6 has not started, and product code remains worker-only.
-- Task 5 local implementation preparation started from clean `87e3d87`, with review-isolation
-  authority committed at `30c369f`; pre-dispatch
-  `scripts/verify.sh` passed on 2026-07-12.
+- Branch: `feature/codex-model-routing` in isolated worktree
+  `.worktrees/codex-model-routing`
+- Artifact/base HEAD: `8868c998eec6981a2b26e4a8ff41e17c3141bd02`
+- Active phase: Codex native model-routing design and implementation plan are review-settled;
+  implementation has not started. The next action is Luna/max worker execution of plan Steps 1–9.
+- Baseline `cargo build` passed. Baseline `scripts/verify.sh` passed with host permissions on
+  2026-07-13; the first sandboxed run failed only because loopback publish tests received
+  `EPERM`, and the unchanged suite passed when rerun outside that network sandbox.
 
 ## Mission
 
@@ -44,7 +43,14 @@ git/disk/test. Never store secrets here.
 - 2026-07-12: Adopt the official-use model/effort routing: Luna/low for clear repeatable
   mechanical work, Terra/medium for everyday settled-spec implementation, Sol/medium for
   normal independent review, and Sol/high for design and high-risk work. Plan 6 uses Sol/high;
-  `xhigh` is exceptional and `max` is not a routine default.
+  `xhigh` is exceptional and `max` is not a routine default. **Superseded 2026-07-13** by the
+  role-based routing decision below; preserve this entry only as history.
+- 2026-07-13: Model routing is role-based: Main and every independent review/confirmation use
+  `gpt-5.6-sol/high`; implementation and execution use `gpt-5.6-luna/max`. Project-native roles
+  and `scripts/codex.sh` defaults must agree, explicit overrides remain observable, and no route
+  silently falls back or downgrades. Native subagent output remains advisory; fresh read-only
+  manifest/receipt/final-hash settlement is unchanged. This workflow-authority and review-harness
+  change is Large/Red, and the user explicitly approved the design and Subagent-Driven execution.
 - 2026-07-11: Improve the process to accelerate development; adopt the discussion input via
   reviewed workflow changes.
 - 2026-07-12: Approved the bundled Plan 6 Red recommendations: preserve logical gateway
@@ -91,6 +97,48 @@ git/disk/test. Never store secrets here.
   independently verifies Git/disk/test claims.
 
 ## Review state
+
+- Codex native model-routing plan review: **SETTLED for implementation** from artifact/base
+  `8868c998eec6981a2b26e4a8ff41e17c3141bd02`. Required vendor is one fresh read-only Codex
+  `gpt-5.6-sol/high` session. Manifest `.review/codex-model-routing-plan.manifest` SHA-256
+  `7f6dda2ff8f79a4872af2f6dadf2401d5a0af9afb37b33f1d6d38462c12ab7c3`; prompt
+  `.review/codex-model-routing-plan-review.md` SHA-256
+  `df1045b3fbaf61d425393a1b7a7477e271051f78f2f90c5d6353b813595b2972`. Initial review returned
+  **C2/I5/M1**: requested-vs-effective model provenance, approval escalation, an invalid strict
+  config probe, omitted active authorities/harness dependencies, weak fake-CLI assertions,
+  worker/Main commit ambiguity, and an unsupported `ultra` claim. Result SHA-256
+  `e994545a7b155ea6064a1c6aaaeedfeae7ec6b721f281ceb433bc867f89b1527`; receipt SHA-256
+  `4d16d1ceacf48079938e4aa416019432afb7849587445f608abe2b4c859d03eb`; Sol/high ran
+  2026-07-12T16:36:11Z–16:40:35Z. All prescriptions were incorporated in the amended design/plan.
+  First confirmation used manifest `.review/codex-model-routing-plan-confirm.manifest`
+  SHA-256 `a4b86c74d8f2df8c6dcc5b3fdb506dd1b1fb656bfca6a27e0a5a2d2cd084efbc` with prompt
+  `.review/codex-model-routing-plan-confirm.md` SHA-256
+  `d5ce3454b1909c4ba01dee777efca238d4c435377437e7de092f7c1a011ee696`. It returned
+  **C0/I1/M0** because the planned final manifest omitted unchanged `AGENTS.md`; result SHA-256
+  `451ce2365e1d2e60af24de8e5bac46e32ae8ba27acf9179b282476a834078c19`; receipt SHA-256
+  `9e6b1d0ee952b87c9dbd5bd0a7f64174dc791c61aeeeefaf09451b9459b13c59`. The final-manifest
+  command now includes `AGENTS.md`, and the timing ledger wording distinguishes requested from
+  observed model/effort evidence. The next exact-hash reconfirmation used
+  `.review/codex-model-routing-plan-confirm2.manifest` SHA-256
+  `1c4299439aa8b78ad9f4b21a36dc7872a466c979da91c02b1ef9163506c37919` and the same prompt hash. It
+  returned **C1/I0/M0** after an installed-CLI parser probe proved that `-a never` is a root option
+  and fails when placed after `exec`; result SHA-256
+  `9eebdd8e6ce59c95d352f509c3f75541a559fa7e830cf8704af2149658b30d20`; receipt SHA-256
+  `68d9dfb5ac1352d496384c662b9bf4fdab34f38253449cf5c04e5c25602e4507`. Both complete ordered argv
+  vectors and the wrapper prescription now place `-a never` before `exec`. Exact-hash
+  reconfirmation uses `.review/codex-model-routing-plan-confirm3.manifest` SHA-256
+  `a8ebe5ac95f8049c20a88d85ea412f867a95178842d6d357f7a2e833f9589be5` and the same prompt hash. It
+  returned **C0/I1/M0** because invalid-effort and absent-manifest tests required zero invocation
+  but did not explicitly require the same no-publication/no-partial invariant as later failures;
+  result SHA-256 `0a47faea95e9a06434c5f3c65c7f51bee10e5460c3d0cb966ddba1644931543b`; receipt SHA-256
+  `7c1196f2a256b424a0857b9ea6feca4a8351a86a56eb196ddeefe7f83726622a`. The test prescription now
+  requires both properties. Final exact-hash reconfirmation used
+  `.review/codex-model-routing-plan-confirm4.manifest` SHA-256
+  `a73480d0fbab033723e19e0559a913813154909426ad23a4311da2a4f4a34854` and the same prompt hash. It
+  returned **C0/I0/M0**; result SHA-256
+  `c1645b6bb44e71ef307c54616b874369169b80361592f187db5f20008449a5a2`; receipt SHA-256
+  `bfe4edad18e5600c29503f9f76a06bf6b8148eba94c142757b1c3ca5514cb3eb`. All eight required
+  closures are satisfied, so implementation may consume this plan.
 
 - Hybrid local/Cloud execution harness: **SETTLED locally at `a754ce0`**. Design record, wrapper,
   environment setup, negative tests, workflow authority, and Cloud guide passed the required

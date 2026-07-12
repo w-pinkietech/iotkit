@@ -16,6 +16,12 @@
 - Native role output is advisory and cannot satisfy independent-review settlement by itself.
 - Settlement review remains a fresh read-only process with `REVIEW_MANIFEST`, final-hash binding, an atomic receipt, and zero unresolved Critical/Important findings.
 - `CODEX_MODEL` and `CODEX_EFFORT` remain explicit wrapper overrides; no route silently falls back or downgrades.
+- Codex dispatch captures an atomic JSONL event stream, rejects any model-reroute event, and binds
+  the stream to its receipt. Receipts say `requested_model` and `requested_effort`; they do not
+  claim an effective model or effort when the CLI does not attest it, and record
+  `observed_model=UNAVAILABLE` / `observed_effort=UNAVAILABLE` explicitly.
+- Review is explicitly `read-only` plus approval policy `never`; implementation is explicitly
+  `workspace-write` plus approval policy `never`. Neither mode inherits machine approval policy.
 - Do not copy provider, authentication, notification, telemetry, or other machine-local settings into project configuration.
 - Do not issue a model turn merely to validate configuration parsing or default arguments.
 - No product code, public API, database, design-corpus contract, Cloud behavior, or external-vendor policy changes.
@@ -26,11 +32,20 @@
 - Create `.codex/config.toml`: trusted-repository Main default and named native agent-role registry.
 - Create `.codex/agents/luna-max.toml`: shared Luna/max writable role layer for implementer and executor.
 - Create `.codex/agents/sol-high.toml`: shared Sol/high read-only role layer for reviewer.
+- Create `scripts/check-codex-events.sh`: validate JSONL completion and fail on model reroute.
 - Create `scripts/test-codex.sh`: no-network fake-CLI regression test for role files, wrapper defaults, overrides, receipts, and fail-closed validation.
 - Modify `scripts/codex.sh`: change only documented and executable defaults; preserve sandbox and receipt behavior.
+- Modify `scripts/review-receipt.sh`: distinguish requested values and bind approval, sandbox, and
+  Codex event-stream evidence.
 - Modify `scripts/verify.sh`: run the new deterministic wrapper/config regression test.
 - Modify `docs/development-workflow.md`: replace task-tier model routing with the approved role routing and preserve risk/settlement boundaries.
 - Modify `docs/superpowers/plans/2026-07-12-wave1-plan6-http-ingress-authentication.md`: replace active Plan 6 implementation dispatch instructions with Luna/max.
+- Modify `docs/superpowers/specs/2026-07-12-wave1-plan6-http-ingress-authentication-design.md`:
+  append dated model-routing supersession without rewriting the settled 2026-07-12 record.
+- Modify `docs/superpowers/PLAN6-DESIGN-READY.md`: append the same dated workflow supersession to
+  historical Design Ready evidence.
+- Modify `.claude/skills/codex-eval-common/SKILL.md`: remove duplicated effort examples and defer
+  review routing to workflow authority and `scripts/codex.sh`.
 - Modify `docs/superpowers/active-ledger.md`: record the superseding Red decision, artifact/review state, verification, and final settlement evidence.
 - Create `.review/codex-model-routing-review.md` and `.review/codex-model-routing.manifest`: ignored operational review inputs; do not commit them.
 
@@ -38,24 +53,33 @@
 
 ### Task 1: Implement and settle native model routing as one atomic workflow unit
 
+**Ownership:** Steps 1–9 belong to a fresh Luna/max implementation worker. The worker must not
+modify the active ledger, stage, or commit. Steps 10–14 belong only to Main. Main performs review
+reconciliation, settlement bookkeeping, staging, and commit.
+
 **Files:**
 - Create: `.codex/config.toml`
 - Create: `.codex/agents/luna-max.toml`
 - Create: `.codex/agents/sol-high.toml`
+- Create: `scripts/check-codex-events.sh`
 - Create: `scripts/test-codex.sh`
 - Modify: `scripts/codex.sh:17-27,49-55`
 - Modify: `scripts/verify.sh:14-18`
+- Modify: `scripts/review-receipt.sh`
 - Modify: `docs/development-workflow.md:155-171,224-230`
 - Modify: `docs/superpowers/plans/2026-07-12-wave1-plan6-http-ingress-authentication.md:10-18,438-443`
+- Modify: `docs/superpowers/specs/2026-07-12-wave1-plan6-http-ingress-authentication-design.md:21-24`
+- Modify: `docs/superpowers/PLAN6-DESIGN-READY.md:21-23`
+- Modify: `.claude/skills/codex-eval-common/SKILL.md:24-52`
 - Modify: `docs/superpowers/active-ledger.md` under `Reality`, `User decisions`, and `Review state`
 - Create operationally: `.review/codex-model-routing-review.md`
 - Create operationally: `.review/codex-model-routing.manifest`
 
 **Interfaces:**
 - Consumes: Codex configuration keys `model`, `review_model`, `model_reasoning_effort`, and `agents.<name>.config_file`; wrapper environment variables `CODEX_MODEL`, `CODEX_EFFORT`, `CODEX_BIN`, `CODEX_REPO`, `CODEX_OUT_DIR`, and `REVIEW_MANIFEST`.
-- Produces: native roles `implementer`, `executor`, and `reviewer`; wrapper defaults `impl = gpt-5.6-luna/max` and `review = gpt-5.6-sol/high`; deterministic command `scripts/test-codex.sh` returning zero only when arguments and receipts match the approved routing.
+- Produces: native roles `implementer`, `executor`, and `reviewer`; wrapper defaults `impl = gpt-5.6-luna/max` and `review = gpt-5.6-sol/high`; a JSONL event validator; receipt schema fields `requested_model`, `requested_effort`, `observed_model`, `observed_effort`, `approval_policy`, `sandbox_mode`, `event_stream_path`, `event_stream_sha256`, and `model_reroute_observed`; deterministic command `scripts/test-codex.sh` returning zero only when complete ordered arguments, events, cleanup, and receipts match the approved routing.
 
-- [ ] **Step 1: Record the task start and verify the clean implementation base**
+- [ ] **Step 1 (worker): Record the task start and verify the clean implementation base**
 
 Run:
 
@@ -67,128 +91,59 @@ git rev-parse HEAD
 
 Expected: timestamp recorded for the ledger/timing report, clean status, and HEAD equal to the committed design/plan base. If unrelated user changes exist, preserve them and stop if they overlap any listed file.
 
-- [ ] **Step 2: Write the failing wrapper and role regression test**
+- [ ] **Step 2 (worker): Write the failing wrapper, event, receipt, and role regression tests**
 
-Create executable `scripts/test-codex.sh` with this behavior and structure:
+Create executable `scripts/test-codex.sh`. It must initialize a temporary Git repository and a
+fake Codex binary, then enforce all of these exact contracts:
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
+1. Capture fake Codex argv as NUL-delimited bytes and compare it with `cmp` against a separately
+   generated complete ordered vector. Membership-only assertions are forbidden.
+2. The expected implementation vector is exactly:
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+   ```text
+   -a never exec -s workspace-write --skip-git-repo-check -C <repo>
+   -m gpt-5.6-luna -c model_reasoning_effort=max --json -o <partial-result> -
+   ```
 
-REPO="$TMP/repo"
-OUT="$TMP/out"
-FAKE_CODEX="$TMP/codex"
-CAPTURE="$TMP/args"
-mkdir -p "$REPO/.review"
-git init -q "$REPO"
-git -C "$REPO" config user.name test
-git -C "$REPO" config user.email test@example.invalid
-printf 'artifact\n' >"$REPO/artifact"
-printf 'prompt\n' >"$REPO/.review/prompt.md"
-git -C "$REPO" add artifact
-git -C "$REPO" commit -qm init
+3. The expected review vector differs only where required:
 
-cat >"$FAKE_CODEX" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-: >"$FAKE_CAPTURE"
-OUT_PATH=""
-while [ "$#" -gt 0 ]; do
-  printf '%s\n' "$1" >>"$FAKE_CAPTURE"
-  if [ "$1" = -o ]; then
-    shift
-    OUT_PATH="$1"
-    printf '%s\n' "$1" >>"$FAKE_CAPTURE"
-  fi
-  shift
-done
-[ -n "$OUT_PATH" ]
-printf 'fake result\n' >"$OUT_PATH"
-EOF
-chmod +x "$FAKE_CODEX"
+   ```text
+   -a never exec -s read-only --skip-git-repo-check -C <repo>
+   -m gpt-5.6-sol -c model_reasoning_effort=high --json -o <partial-result> -
+   ```
 
-assert_arg() {
-  grep -Fx -- "$1" "$CAPTURE" >/dev/null || {
-    printf 'missing fake Codex argument: %s\n' "$1" >&2
-    exit 1
-  }
-}
+4. The fake binary rejects every unexpected option, duplicate, missing option value, or misplaced
+   argument. A success fixture writes a non-empty last-message file and emits exactly one
+   `thread.started`, one `turn.started`, and one `turn.completed` JSON object to stdout.
+5. A reroute fixture emits a `model_reroute` event before `turn.completed`. Malformed JSON,
+   `turn.failed`, `error`, missing `turn.completed`, empty last message, and nonzero fake exit each
+   have separate fixtures.
+6. Successful implementation, review, and explicit-override cases verify complete receipt fields:
+   `requested_model`, `requested_effort`, `observed_model=UNAVAILABLE`,
+   `observed_effort=UNAVAILABLE`, `sandbox_mode`, `approval_policy`, prompt/manifest/result/
+   event-stream absolute paths and SHA-256 hashes, and `model_reroute_observed=false`.
+7. Invalid effort and absent manifest fail before fake invocation and also assert absence of final
+   result, event stream, receipt, and every `.partial` file. Mutated manifest, reroute,
+   malformed/incomplete/error JSONL, empty output, and fake failure assert nonzero status plus the
+   same no-publication/no-partial invariant. The mutated-manifest case must prove the fake ran
+   before the post-run verification rejected publication.
+8. Role-file checks include model, requested effort, sandbox, and `approval_policy = "never"`.
 
-assert_role_file() {
-  local file="$1" model="$2" effort="$3" sandbox="$4"
-  grep -Fx "model = \"$model\"" "$file" >/dev/null
-  grep -Fx "model_reasoning_effort = \"$effort\"" "$file" >/dev/null
-  grep -Fx "sandbox_mode = \"$sandbox\"" "$file" >/dev/null
-}
-
-grep -Fx 'model = "gpt-5.6-sol"' "$ROOT/.codex/config.toml" >/dev/null
-grep -Fx 'model_reasoning_effort = "high"' "$ROOT/.codex/config.toml" >/dev/null
-grep -Fx 'review_model = "gpt-5.6-sol"' "$ROOT/.codex/config.toml" >/dev/null
-grep -Fx '[agents.implementer]' "$ROOT/.codex/config.toml" >/dev/null
-grep -Fx '[agents.executor]' "$ROOT/.codex/config.toml" >/dev/null
-grep -Fx '[agents.reviewer]' "$ROOT/.codex/config.toml" >/dev/null
-[ "$(grep -Fc 'config_file = "agents/luna-max.toml"' "$ROOT/.codex/config.toml")" -eq 2 ]
-[ "$(grep -Fc 'config_file = "agents/sol-high.toml"' "$ROOT/.codex/config.toml")" -eq 1 ]
-assert_role_file "$ROOT/.codex/agents/luna-max.toml" gpt-5.6-luna max workspace-write
-assert_role_file "$ROOT/.codex/agents/sol-high.toml" gpt-5.6-sol high read-only
-
-FAKE_CAPTURE="$CAPTURE" CODEX_BIN="$FAKE_CODEX" CODEX_REPO="$REPO" \
-  CODEX_OUT_DIR="$OUT" "$ROOT/scripts/codex.sh" impl "$REPO/.review/prompt.md" impl-default
-assert_arg workspace-write
-assert_arg gpt-5.6-luna
-assert_arg model_reasoning_effort=max
-IMPL_RECEIPT="$(find "$OUT" -name 'codex-impl-default-impl-*.txt.receipt' -print -quit)"
-grep -Fx 'model=gpt-5.6-luna' "$IMPL_RECEIPT" >/dev/null
-grep -Fx 'effort=max' "$IMPL_RECEIPT" >/dev/null
-
-(cd "$REPO" && "$ROOT/scripts/review-manifest.sh" .review/manifest artifact >/dev/null)
-FAKE_CAPTURE="$CAPTURE" CODEX_BIN="$FAKE_CODEX" CODEX_REPO="$REPO" \
-  CODEX_OUT_DIR="$OUT" REVIEW_MANIFEST="$REPO/.review/manifest" \
-  "$ROOT/scripts/codex.sh" review "$REPO/.review/prompt.md" review-default
-assert_arg read-only
-assert_arg gpt-5.6-sol
-assert_arg model_reasoning_effort=high
-REVIEW_RECEIPT="$(find "$OUT" -name 'codex-review-default-review-*.txt.receipt' -print -quit)"
-grep -Fx 'model=gpt-5.6-sol' "$REVIEW_RECEIPT" >/dev/null
-grep -Fx 'effort=high' "$REVIEW_RECEIPT" >/dev/null
-grep -E '^artifact_manifest_sha256=[0-9a-f]{64}$' "$REVIEW_RECEIPT" >/dev/null
-
-FAKE_CAPTURE="$CAPTURE" CODEX_BIN="$FAKE_CODEX" CODEX_REPO="$REPO" \
-  CODEX_OUT_DIR="$OUT" CODEX_MODEL=gpt-5.6-sol CODEX_EFFORT=xhigh \
-  "$ROOT/scripts/codex.sh" impl "$REPO/.review/prompt.md" explicit-override
-assert_arg gpt-5.6-sol
-assert_arg model_reasoning_effort=xhigh
-OVERRIDE_RECEIPT="$(find "$OUT" -name 'codex-explicit-override-impl-*.txt.receipt' -print -quit)"
-grep -Fx 'model=gpt-5.6-sol' "$OVERRIDE_RECEIPT" >/dev/null
-grep -Fx 'effort=xhigh' "$OVERRIDE_RECEIPT" >/dev/null
-
-if CODEX_BIN="$FAKE_CODEX" CODEX_REPO="$REPO" CODEX_OUT_DIR="$OUT" \
-  CODEX_EFFORT=invalid "$ROOT/scripts/codex.sh" impl \
-  "$REPO/.review/prompt.md" invalid-effort >/dev/null 2>&1; then
-  echo 'invalid effort unexpectedly succeeded' >&2
-  exit 1
-fi
-if CODEX_BIN="$FAKE_CODEX" CODEX_REPO="$REPO" CODEX_OUT_DIR="$OUT" \
-  "$ROOT/scripts/codex.sh" review "$REPO/.review/prompt.md" no-manifest \
-  >/dev/null 2>&1; then
-  echo 'review without manifest unexpectedly succeeded' >&2
-  exit 1
-fi
-
-echo 'codex routing tests: OK'
-```
-
-Mark it executable:
+Use helpers with explicit contracts, for example:
 
 ```bash
-chmod +x scripts/test-codex.sh
+write_expected_argv() { printf '%s\0' "$@" >"$EXPECTED"; }
+assert_no_publication() {
+  local label="$1"
+  ! find "$OUT" -maxdepth 1 -type f \
+    \( -name "codex-${label}-*" -o -name "codex-${label}-*.partial" \) | grep -q .
+}
 ```
 
-- [ ] **Step 3: Run the new test and verify the intended red state**
+The test itself never invokes the real Codex binary or the network. Mark it executable with
+`chmod +x scripts/test-codex.sh`.
+
+- [ ] **Step 3 (worker): Run the new test and verify the intended red state**
 
 Run:
 
@@ -198,7 +153,7 @@ scripts/test-codex.sh
 
 Expected: FAIL before a fake model invocation because `.codex/config.toml` does not exist. A failure caused by missing expected configuration/defaults is the required red signal; an environmental failure must be fixed before continuing.
 
-- [ ] **Step 4: Add the native project roles**
+- [ ] **Step 4 (worker): Add the native project roles**
 
 Create `.codex/config.toml`:
 
@@ -226,6 +181,7 @@ Create `.codex/agents/luna-max.toml`:
 model = "gpt-5.6-luna"
 model_reasoning_effort = "max"
 sandbox_mode = "workspace-write"
+approval_policy = "never"
 ```
 
 Create `.codex/agents/sol-high.toml`:
@@ -234,21 +190,40 @@ Create `.codex/agents/sol-high.toml`:
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
+approval_policy = "never"
 ```
 
-- [ ] **Step 5: Prove the installed CLI accepts the project configuration without a model turn**
+- [ ] **Step 5 (worker): Prove configuration loading without claiming native role selection**
 
-Run:
+Use Codex app-server `config/read` with `cwd` set to the worktree and `includeLayers=true`. Run it
+with host permission if the ordinary sandbox cannot initialize `$CODEX_HOME` SQLite state. Do not
+use `codex --strict-config ... features list`: CLI 0.144.1 rejects that combination, while
+non-strict `features list` ignores invalid role layers.
+
+The probe must initialize app-server over stdio, issue `config/read`, and use `jq` to assert the
+effective Main model/effort and all three `agents.<name>.config_file` layers. In temporary copied
+configuration, run negative startup/read probes for:
+
+- missing role file;
+- malformed TOML role file;
+- unknown role-layer field.
+
+Each negative case must exit nonzero or return a structured configuration error before any model
+turn. Record the exact request/response commands in the worker report.
+
+Separately run catalog checks:
 
 ```bash
-/home/kenta/.local/bin/codex --strict-config -C "$PWD" features list
 /home/kenta/.local/bin/codex debug models | jq -e '.models[] | select(.slug == "gpt-5.6-sol") | .supported_reasoning_levels[] | select(.effort == "high")'
 /home/kenta/.local/bin/codex debug models | jq -e '.models[] | select(.slug == "gpt-5.6-luna") | .supported_reasoning_levels[] | select(.effort == "max")'
 ```
 
-Expected: all commands exit zero; strict config reports no unknown-field/config-layer error, and each `jq` command returns one supported effort entry. These checks establish parsing and catalog support, not proof that the current exposed `spawn_agent` schema selected a role.
+Expected: effective-config and catalog assertions pass, and all three negative role-layer probes
+fail closed. These checks establish loading and catalog support only. The current exposed
+`spawn_agent` schema has no role selector, so the worker and Main must record native role selection
+as unverified rather than claim it works.
 
-- [ ] **Step 6: Change wrapper defaults and keep overrides explicit**
+- [ ] **Step 6 (worker): Harden wrapper events, approvals, receipts, and defaults**
 
 Modify the environment-variable comments and mode mapping in `scripts/codex.sh` to say and implement:
 
@@ -256,23 +231,39 @@ Modify the environment-variable comments and mode mapping in `scripts/codex.sh` 
 #   CODEX_MODEL   (override; review defaults to gpt-5.6-sol, impl to
 #                  gpt-5.6-luna.)
 #   CODEX_EFFORT  (override; review defaults to high, impl to max.
-#                  Effort scale: low < medium < high < xhigh < max; "ultra"
-#                  also exists but fans out subagents — a different execution/cost
-#                  mode, never a silent default; opt in explicitly via CODEX_EFFORT)
+#                  Accepted scale: low < medium < high < xhigh < max.)
 ```
 
 ```bash
 case "$MODE" in
-  review) SANDBOX="read-only";       DEFAULT_MODEL="gpt-5.6-sol";  DEFAULT_EFFORT="high" ;;
-  impl)   SANDBOX="workspace-write"; DEFAULT_MODEL="gpt-5.6-luna"; DEFAULT_EFFORT="max" ;;
+  review) SANDBOX="read-only";       APPROVAL="never"; DEFAULT_MODEL="gpt-5.6-sol";  DEFAULT_EFFORT="high" ;;
+  impl)   SANDBOX="workspace-write"; APPROVAL="never"; DEFAULT_MODEL="gpt-5.6-luna"; DEFAULT_EFFORT="max" ;;
   *) echo "mode must be 'review' or 'impl', got: '$MODE'" >&2; exit 2 ;;
 esac
 ```
 
-Do not change the effort allowlist, command construction, prompt transport, manifest verification,
-atomic output handling, or receipt call.
+Create executable `scripts/check-codex-events.sh <events-jsonl>`. It must parse every line with
+`jq`, require exactly one `thread.started`, `turn.started`, and `turn.completed`, reject
+`turn.failed`, `error`, and any event type matching model reroute, and print only stable
+machine-readable evidence needed by the wrapper. Empty or malformed streams fail.
 
-- [ ] **Step 7: Run the focused regression test and verify green**
+Change `scripts/codex.sh` to invoke `"$CODEX_BIN" -a "$APPROVAL" exec ...` (the approval flag is a
+root option and must precede the `exec` subcommand), pass `--json`, redirect stdout to a private
+`.events.jsonl.partial`, validate it, and only then atomically publish both final message and event
+stream. Any command, event, post-run manifest, or receipt failure removes final and partial success
+artifacts. Keep stderr available for progress diagnostics.
+
+Change `scripts/review-receipt.sh` to schema version 2. Rename ambiguous `model`/`effort` fields to
+`requested_model`/`requested_effort`; add `observed_model`, `observed_effort`, `sandbox_mode`,
+`approval_policy`, `event_stream_path`, `event_stream_sha256`, and
+`model_reroute_observed=false`. Use `UNAVAILABLE` for observed model/effort unless a documented
+event attests them; absence of reroute is not effective-model attestation. Require a bound stream
+for vendor `codex`; other vendors record `UNAVAILABLE` rather than fabricating evidence. Preserve
+prompt, manifest, result, timestamp, atomic-write, newline-rejection, and hash binding behavior.
+Update Claude/Grok callers only as needed for the explicit schema inputs; do not change their model
+policy or availability.
+
+- [ ] **Step 7 (worker): Run the focused regression test and verify green**
 
 Run:
 
@@ -282,7 +273,7 @@ scripts/test-codex.sh
 
 Expected final line: `codex routing tests: OK`; exit status zero. No real model process or network request occurs because `CODEX_BIN` points at the fake CLI.
 
-- [ ] **Step 8: Add the routing regression to full verification**
+- [ ] **Step 8 (worker): Add the routing regression to full verification**
 
 Insert this block in `scripts/verify.sh` after `scripts/test-codex-cloud.sh`:
 
@@ -300,7 +291,7 @@ git diff --check
 
 Expected: routing tests report OK and `git diff --check` emits nothing.
 
-- [ ] **Step 9: Align the authoritative workflow and active Plan 6 instructions**
+- [ ] **Step 9 (worker): Align every active workflow, Plan 6, and evaluation instruction**
 
 Replace the model-effort table and surrounding routing prose in `docs/development-workflow.md`
 with:
@@ -316,8 +307,8 @@ Model and effort follow the dispatched role:
 
 Project-scoped native agent roles and `scripts/codex.sh` use the same mapping. A running thread
 does not change models; Main starts a new role dispatch. Explicit wrapper overrides remain visible
-in receipts, but no route silently downgrades or falls back. `ultra` remains a distinct automatic-
-delegation mode and is never a default.
+as requested values in receipts. Codex JSONL evidence is bound to the receipt and every observed
+model reroute fails closed. Effective effort is not claimed when the CLI does not attest it.
 
 Plan 6 and every Large/Red workflow keep Main, design, independent review, reconciliation,
 confirmation, and final settlement on `gpt-5.6-sol/high`. Their implementation and execution
@@ -345,7 +336,25 @@ At the later worker redispatch instruction, state explicitly that product-code f
 Luna/max implementation role. Preserve settled historical review receipts and statements that
 truthfully record earlier Sol/high runs.
 
-- [ ] **Step 10: Record the superseding Red decision before review dispatch**
+In `docs/superpowers/specs/2026-07-12-wave1-plan6-http-ingress-authentication-design.md`, retain the
+original 2026-07-12 sentence and immediately append:
+
+```markdown
+> **Workflow supersession (2026-07-13):** The product contract above is unchanged. Current model
+> routing follows `docs/development-workflow.md`: Plan 6 Main/design/review/confirmation/settlement
+> use Sol/high; implementation/execution workers use Luna/max.
+```
+
+Append the equivalent dated note to `docs/superpowers/PLAN6-DESIGN-READY.md`; do not rewrite its
+historical 2026-07-12 evidence.
+
+In `.claude/skills/codex-eval-common/SKILL.md`, keep the single default command
+`REVIEW_MANIFEST=<manifest> scripts/codex.sh review ...`, remove normal/mechanical/high-risk model
+examples, and state that all current review routing and approval/sandbox defaults come exclusively
+from `docs/development-workflow.md` and `scripts/codex.sh`. Preserve its fresh-session, unique-label,
+read-only, manifest, and settlement mechanics.
+
+- [ ] **Step 10 (Main): Record the superseding Red decision before implementation review dispatch**
 
 Update `docs/superpowers/active-ledger.md`:
 
@@ -359,7 +368,7 @@ Update `docs/superpowers/active-ledger.md`:
 
 Do not claim `SETTLED` before a final receipt with zero unresolved Critical/Important findings.
 
-- [ ] **Step 11: Run full verification before freezing the review artifact**
+- [ ] **Step 11 (Main): Run full verification before freezing the review artifact**
 
 Run:
 
@@ -373,7 +382,7 @@ Expected: `scripts/verify.sh` ends with its PASS line, diff check is silent, and
 the intended configuration, scripts, tests, workflow, Plan 6 instruction, ledger, and this plan if
 it was not previously committed. Diagnose any failure before review; do not weaken a check.
 
-- [ ] **Step 12: Build the exact review manifest and prompt**
+- [ ] **Step 12 (Main): Build the exact review manifest and prompt**
 
 Create `.review/codex-model-routing-review.md` containing:
 
@@ -402,14 +411,21 @@ manifest themselves:
 
 ```bash
 scripts/review-manifest.sh .review/codex-model-routing.manifest \
+  AGENTS.md \
   .codex/config.toml \
   .codex/agents/luna-max.toml \
   .codex/agents/sol-high.toml \
   scripts/codex.sh \
+  scripts/check-codex-events.sh \
   scripts/test-codex.sh \
   scripts/verify.sh \
+  scripts/review-manifest.sh \
+  scripts/review-receipt.sh \
   docs/development-workflow.md \
   docs/superpowers/plans/2026-07-12-wave1-plan6-http-ingress-authentication.md \
+  docs/superpowers/specs/2026-07-12-wave1-plan6-http-ingress-authentication-design.md \
+  docs/superpowers/PLAN6-DESIGN-READY.md \
+  .claude/skills/codex-eval-common/SKILL.md \
   docs/superpowers/specs/2026-07-13-codex-native-model-routing-design.md \
   docs/superpowers/plans/2026-07-13-codex-native-model-routing.md
 sha256sum .review/codex-model-routing.manifest .review/codex-model-routing-review.md
@@ -418,7 +434,7 @@ sha256sum .review/codex-model-routing.manifest .review/codex-model-routing-revie
 Expected: manifest creation exits zero and both SHA-256 values are recorded in the ledger. Freeze
 every manifest file until the result is collected.
 
-- [ ] **Step 13: Dispatch the required independent Sol/high review and reconcile findings**
+- [ ] **Step 13 (Main): Dispatch the required independent Sol/high review and reconcile findings**
 
 Run:
 
@@ -428,8 +444,11 @@ CODEX_MODEL=gpt-5.6-sol CODEX_EFFORT=high \
 scripts/codex.sh review .review/codex-model-routing-review.md codex-model-routing
 ```
 
-Expected: a non-empty result and receipt under `/tmp/codex-runs`; receipt fields include
-`mode=review`, `model=gpt-5.6-sol`, `effort=high`, and the exact prompt/manifest hashes.
+Expected: a non-empty result, event stream, and receipt under `/tmp/codex-runs`; receipt fields
+include `mode=review`, `requested_model=gpt-5.6-sol`, `requested_effort=high`,
+`observed_model=UNAVAILABLE`, `observed_effort=UNAVAILABLE`, `sandbox_mode=read-only`,
+`approval_policy=never`, `model_reroute_observed=false`, and exact
+event/prompt/manifest/result hashes.
 
 For every Critical/Important finding:
 
@@ -444,12 +463,12 @@ If the current CLI does not actually expose configured native roles, retain wrap
 the limitation, and do not claim native dispatch works. If resolving it changes the approved
 architecture materially, stop and return to the user.
 
-- [ ] **Step 14: Record final settlement, verify, and commit the atomic unit**
+- [ ] **Step 14 (Main): Record final settlement, verify, and commit the atomic unit**
 
 Update the active ledger with:
 
 - final manifest, prompt, result, and receipt paths plus SHA-256 hashes;
-- actual model/effort and timestamps;
+- requested and observed model/effort evidence, plus timestamps;
 - finding progression and confirmation count;
 - exact verification commands/results;
 - task timing categories required by `docs/development-workflow.md`;
@@ -471,9 +490,14 @@ Commit:
 
 ```bash
 git add .codex/config.toml .codex/agents/luna-max.toml .codex/agents/sol-high.toml \
-  scripts/codex.sh scripts/test-codex.sh scripts/verify.sh \
+  scripts/codex.sh scripts/check-codex-events.sh scripts/test-codex.sh scripts/verify.sh \
+  scripts/review-receipt.sh \
   docs/development-workflow.md \
   docs/superpowers/plans/2026-07-12-wave1-plan6-http-ingress-authentication.md \
+  docs/superpowers/specs/2026-07-12-wave1-plan6-http-ingress-authentication-design.md \
+  docs/superpowers/PLAN6-DESIGN-READY.md \
+  .claude/skills/codex-eval-common/SKILL.md \
+  docs/superpowers/specs/2026-07-13-codex-native-model-routing-design.md \
   docs/superpowers/plans/2026-07-13-codex-native-model-routing.md \
   docs/superpowers/active-ledger.md
 git commit -m "chore: route Codex work by native agent role"

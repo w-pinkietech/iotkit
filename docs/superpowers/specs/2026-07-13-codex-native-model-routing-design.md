@@ -14,10 +14,11 @@ evidence where required.
 
 Acceptance outcome:
 
-- a new trusted-repository Codex CLI session loads named `implementer`, `executor`, and `reviewer`
-  roles without configuration errors;
-- `implementer` and `executor` resolve to Luna/max;
-- `reviewer` and Main resolve to Sol/high;
+- a no-model app-server `config/read` probe loads named `implementer`, `executor`, and `reviewer`
+  role layers without configuration errors and rejects missing, malformed, or unknown role
+  configuration;
+- the loaded `implementer` and `executor` role configuration is Luna/max, while the loaded
+  `reviewer` and Main configuration is Sol/high;
 - `scripts/codex.sh impl` defaults to Luna/max and `scripts/codex.sh review` defaults to Sol/high;
 - explicit wrapper overrides remain available and are recorded in receipts;
 - independent-review settlement remains fresh-session, read-only, manifest-bound, and fail-closed;
@@ -38,7 +39,10 @@ Implementation still requires the ordinary independent Sol/high review and settl
   freshness, sandbox, and final-hash requirements are satisfied.
 - Model selection must not weaken sandbox, approval, secret handling, data-loss, or external-effect
   controls.
-- Model and effort actually used by wrapper dispatches remain visible in atomic receipts.
+- Atomic receipts distinguish requested model/effort from observable runtime evidence. A Codex
+  JSONL event stream is bound to each receipt, and any model-reroute event fails closed. Effort is
+  recorded as requested unless the installed CLI exposes trustworthy effective-effort evidence;
+  unavailable observed model/effort fields are explicit rather than inferred.
 
 ### Non-goals
 
@@ -48,6 +52,9 @@ Implementation still requires the ordinary independent Sol/high review and settl
 - No global `~/.codex` role policy for unrelated repositories.
 - No attempt to change the model of a running agent thread. A different model requires a new role
   dispatch.
+- The currently exposed `spawn_agent` schema has no role selector. Configuration loading is in
+  scope; successful native role selection is not claimed until a supported surface demonstrates
+  it in a new session.
 
 ## 3. Considered approaches
 
@@ -90,6 +97,8 @@ machine-local settings into the repository.
 
 Native role routing is advisory orchestration, not an independent-review receipt mechanism. The
 authoritative settlement route remains `scripts/codex.sh review` with `REVIEW_MANIFEST`.
+Every native role sets `approval_policy = "never"`; the reviewer additionally remains read-only,
+and Luna roles remain bounded by workspace-write. A role cannot request host escalation silently.
 
 ## 5. Wrapper and workflow alignment
 
@@ -102,8 +111,14 @@ authoritative settlement route remains `scripts/codex.sh review` with `REVIEW_MA
 
 `CODEX_MODEL` and `CODEX_EFFORT` remain explicit per-dispatch overrides. The wrapper continues to
 reject unsupported effort strings, require a manifest for review, bind hashes, and record the
-effective model and effort in its receipt. It must not silently fall back to another model or
-effort.
+requested model and effort in its receipt. Both modes explicitly pass approval policy `never`;
+review remains read-only and implementation remains workspace-write. Codex stdout is captured as
+an atomic JSONL event stream. The wrapper rejects malformed/incomplete event streams and every
+model-reroute event, publishes no successful result or receipt on rejection, and binds the event
+stream hash into the receipt. Until Codex exposes trustworthy effective-effort evidence, receipts
+must use `requested_effort` plus `observed_effort=UNAVAILABLE` rather than implying runtime
+attestation. Likewise, `observed_model=UNAVAILABLE` is explicit when the event stream proves only
+that no reroute was reported, not which backend served the request.
 
 `docs/development-workflow.md` will replace the superseded task-tier matrix with role-based routing.
 It will preserve impact-based Green/Yellow/Red classification: choosing Luna/max for implementation
@@ -122,7 +137,9 @@ review reconciliation, confirmation, and final settlement remain Sol/high.
    wrapper, even if a native reviewer already provided advisory feedback.
 5. If Codex rejects a role configuration, model, or effort, dispatch fails visibly. Main records
    the failure and stops that route; it does not downgrade silently.
-6. If the installed CLI does not expose configured role selection through its current multi-agent
+6. If the JSONL stream reports model rerouting, is malformed, lacks successful turn completion, or
+   cannot be bound to the receipt, the wrapper removes partial/final success artifacts and fails.
+7. If the installed CLI does not expose configured role selection through its current multi-agent
    interface, the wrapper path remains operational and the native-role limitation is recorded
    rather than represented as working.
 
@@ -135,14 +152,19 @@ tested wrapper fallback.
 
 Implementation verification must include:
 
-- parse and inspect the effective project configuration with the installed Codex CLI without
-  issuing a model turn; if the CLI exposes no non-model validation path, record that limitation
-  and do not claim native role resolution from parsing alone;
+- parse and inspect the effective project and role configuration through app-server `config/read`
+  without issuing a model turn, with negative probes for missing, malformed, and unknown role
+  configuration; parsing does not prove native role selection;
 - confirm the installed model catalog lists Sol and Luna with the requested effort levels;
 - exercise wrapper default selection without launching a model by using or adding a bounded test
   seam;
 - exercise explicit `CODEX_MODEL` and `CODEX_EFFORT` overrides;
 - exercise rejection of an invalid effort and review dispatch without `REVIEW_MANIFEST`;
+- compare the complete ordered Codex argv for both modes, including explicit approval policy;
+- exercise matching JSONL, model reroute, malformed/incomplete JSONL, empty output, CLI failure,
+  and mutated-manifest cases, asserting fail-closed removal of final/partial result and receipt;
+- verify requested model/effort, approval policy, event-stream path/hash, result path/hash, prompt
+  path/hash, and manifest path/hash in the receipt;
 - search the active workflow authority for stale Terra/medium, Sol/medium, and Plan-6 Sol/high
   implementation prescriptions, retaining historical ledger entries only when clearly marked
   superseded;
@@ -150,9 +172,9 @@ Implementation verification must include:
 - obtain a fresh, read-only, manifest-bound Sol/high review of the final artifact hash and resolve
   every Critical/Important finding before commit.
 
-The review must focus on native-role support in the installed CLI, configuration layering, role
-selection observability, wrapper/receipt provenance, fail-closed behavior, and contradictions with
-the active workflow authority.
+The review must focus on native-role support in the installed CLI, configuration layering, the
+explicit limit on role-selection observability, wrapper JSONL/reroute and receipt provenance,
+approval non-escalation, fail-closed behavior, and contradictions with active workflow authority.
 
 ## 8. Rollback
 
