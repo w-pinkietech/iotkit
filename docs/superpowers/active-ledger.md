@@ -7,11 +7,11 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `166d50c`
+- Artifact/base HEAD: `13a57de`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 3 settled and committed; Task 4 implementation dispatch
-  preparation; product code remains worker-only
+- Active phase: Plan 6 Task 3 settled and committed; Task 4 implementation dispatch ready;
+  product code remains worker-only
 
 ## Mission
 
