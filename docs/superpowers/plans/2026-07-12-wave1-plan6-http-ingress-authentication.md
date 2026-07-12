@@ -12,7 +12,7 @@ control-plane setup state.
 This is **Large / Red**. Every product-code task is dispatched through:
 
 ```bash
-CODEX_MODEL=gpt-5.6-sol CODEX_EFFORT=high scripts/codex.sh impl <prompt> <label>
+CODEX_MODEL=gpt-5.6-luna CODEX_EFFORT=max scripts/codex.sh impl <prompt> <label>
 ```
 
 Workers do not commit. Main reads the diff, runs task checks, obtains the required independent
@@ -437,7 +437,8 @@ After every task:
    focused tests and the task's completion commands.
 3. Build a manifest for changed product/tests/docs plus relevant contract artifacts.
 4. Fresh Codex Sol/high reviews security, custody/ack, concurrency, cancellation, canon, and UX.
-5. Every Rust/product-code fix is redispatched through `scripts/codex.sh impl`; Main edits only
+5. Every Rust/product-code fix is redispatched through the same Luna/max implementation role:
+   `CODEX_MODEL=gpt-5.6-luna CODEX_EFFORT=max scripts/codex.sh impl`. Main edits only
    docs/workflow/CI within its authority. Fix all C/I, rerun full verification, confirm on the
    final hash, then commit and record hash/receipt in the active ledger.
 

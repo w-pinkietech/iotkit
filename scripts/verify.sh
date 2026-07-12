@@ -17,6 +17,15 @@ scripts/check-layers
 echo "== scripts/test-codex-cloud.sh (Cloud harness safety) =="
 scripts/test-codex-cloud.sh
 
+echo "== scripts/check-codex-role-config.sh (strict no-model role preflight) =="
+scripts/check-codex-role-config.sh
+
+echo "== scripts/test-codex-role-config.sh (role preflight negative fixtures) =="
+scripts/test-codex-role-config.sh
+
+echo "== scripts/test-codex.sh (model routing and receipt defaults) =="
+scripts/test-codex.sh
+
 echo "== cargo test --workspace =="
 cargo test --workspace
 

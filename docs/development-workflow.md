@@ -152,23 +152,23 @@ Every vendor must also perform the common safety core: Red classification, secre
 data-loss/custody, external effects, artifact/hash provenance, and settlement integrity; then
 perform its specialty deep dive and a residual C/I scan outside that specialty.
 
-Model and effort follow the task, using the lowest effort that reliably produces the required
-result:
+Model and effort follow the dispatched role:
 
-| Work | Default | Escalation |
+| Role | Default | Boundary |
 |---|---|---|
-| Clear, repeatable, high-volume mechanical work | `gpt-5.6-luna/low` | Move to Terra if judgment or non-local tool use appears |
-| Everyday settled-spec implementation | `gpt-5.6-terra/medium` | Move to Sol when the task becomes ambiguous, high-value, or contract-sensitive |
-| Normal independent review | `gpt-5.6-sol/medium` | Use `high` for difficult multi-step or high-risk review |
-| Design, auth/secrets, data loss/custody, restore, difficult concurrency, or workflow/harness work | `gpt-5.6-sol/high` | Use `xhigh` only for especially difficult work with substantial tradeoffs |
+| Main | `gpt-5.6-sol/high` | Classifies work, owns design and reconciliation, and does not write Rust product code |
+| Independent review and confirmation | `gpt-5.6-sol/high` | Fresh read-only session; manifest/receipt/final-hash settlement remains mandatory |
+| Implementation and execution | `gpt-5.6-luna/max` | Executes the settled contract; new Red decisions return to Main/user |
 
-Plan 6 and every Large/Red or design workflow remain `gpt-5.6-sol/high` through confirmation
-and final settlement; their internal subtasks do not downgrade merely because a step looks
-mechanical. The lighter rows apply only to separately classified non-high-risk work. `max` is
-exceptional, explicit, and reserved for the hardest single-agent problems; it is never a
-routine default. A separate fresh review session remains mandatory; Main analysis cannot
-substitute. Non-high-risk confirmation rounds use their applicable row once every C/I has a
-bounded prescription and executable negative probes cover the changed guards.
+Project-scoped native agent roles and `scripts/codex.sh` use the same mapping. A running thread
+does not change models; Main starts a new role dispatch. Explicit wrapper overrides remain visible
+as requested values in receipts. Codex JSONL evidence is bound to the receipt and every observed
+model reroute fails closed. Effective effort is not claimed when the CLI does not attest it.
+
+Plan 6 and every Large/Red workflow keep Main, design, independent review, reconciliation,
+confirmation, and final settlement on `gpt-5.6-sol/high`. Their implementation and execution
+workers use `gpt-5.6-luna/max`; model choice does not change the risk classification or authorize
+workers to make Red product decisions.
 
 Dispatch all required vendors in parallel through:
 
@@ -223,11 +223,10 @@ Exact helper names and code snippets are fixed only where the public/semantic co
 them. Safer, simpler implementation discovered during work is Green if spec meaning is
 unchanged.
 
-Product implementation remains worker-driven through `scripts/codex.sh impl`; its ordinary
-default is Terra/medium, while Plan 6 and other high-risk work explicitly set
-`CODEX_MODEL=gpt-5.6-sol CODEX_EFFORT=high`. Main verifies
-with `scripts/verify.sh`, runs the required independent Codex review, reconciles findings, and commits one
-intentional unit at a time. Final integration review remains mandatory.
+Product implementation remains worker-driven through `scripts/codex.sh impl`, whose default is
+`gpt-5.6-luna/max`. Main remains `gpt-5.6-sol/high`, verifies with `scripts/verify.sh`, runs the
+required independent `gpt-5.6-sol/high` review, reconciles findings, and commits one intentional
+unit at a time. Final integration review remains mandatory.
 
 ### Hybrid Codex Cloud candidate lane
 

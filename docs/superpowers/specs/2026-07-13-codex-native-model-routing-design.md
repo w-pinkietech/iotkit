@@ -14,11 +14,12 @@ evidence where required.
 
 Acceptance outcome:
 
-- a no-model app-server `config/read` probe loads named `implementer`, `executor`, and `reviewer`
-  role layers without configuration errors and rejects missing, malformed, or unknown role
-  configuration;
-- the loaded `implementer` and `executor` role configuration is Luna/max, while the loaded
-  `reviewer` and Main configuration is Sol/high;
+- a no-model app-server `config/read` probe resolves named `implementer`, `executor`, and
+  `reviewer` role-layer paths without configuration errors; the repository-owned role preflight
+  then strict-parses each resolved layer and fails closed for a missing file, malformed TOML, or
+  an unknown role-layer key;
+- the independently strict-parsed `implementer` and `executor` role layers are Luna/max, while
+  the independently strict-parsed `reviewer` layer and Main configuration are Sol/high;
 - `scripts/codex.sh impl` defaults to Luna/max and `scripts/codex.sh review` defaults to Sol/high;
 - explicit wrapper overrides remain available and are recorded in receipts;
 - independent-review settlement remains fresh-session, read-only, manifest-bound, and fail-closed;
@@ -95,6 +96,12 @@ The project configuration explicitly sets Main to Sol/high so the repository doe
 particular user's model default. It will not copy provider, authentication, telemetry, or other
 machine-local settings into the repository.
 
+The no-model app-server `config/read` probe resolves the project `agents.<name>.config_file` paths;
+it does not load or validate every referenced role file. `scripts/check-codex-role-config.sh` is the
+repository-owned authoritative preflight: it resolves those paths through `config/read` and invokes
+the installed Codex strict parser independently for each role layer. Configuration loading still
+does not prove native role selection.
+
 Native role routing is advisory orchestration, not an independent-review receipt mechanism. The
 authoritative settlement route remains `scripts/codex.sh review` with `REVIEW_MANIFEST`.
 Every native role sets `approval_policy = "never"`; the reviewer additionally remains read-only,
@@ -152,9 +159,11 @@ tested wrapper fallback.
 
 Implementation verification must include:
 
-- parse and inspect the effective project and role configuration through app-server `config/read`
-  without issuing a model turn, with negative probes for missing, malformed, and unknown role
-  configuration; parsing does not prove native role selection;
+- resolve the effective project role paths through a no-model app-server `config/read` probe, then
+  run `scripts/check-codex-role-config.sh` so the installed Codex strict parser independently
+  validates each referenced role layer; deterministic negative fixtures cover missing, malformed,
+  and unknown role-layer keys. `config/read` path resolution does not prove native role selection
+  or validate every referenced role file;
 - confirm the installed model catalog lists Sol and Luna with the requested effort levels;
 - exercise wrapper default selection without launching a model by using or adding a bounded test
   seam;

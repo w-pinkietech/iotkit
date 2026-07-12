@@ -17,14 +17,10 @@
 # stderr). Timestamped so a re-review never clobbers earlier evidence.
 #
 # Env overrides:
-#   CODEX_MODEL   (override; review defaults to gpt-5.6-sol, ordinary impl to
-#                  gpt-5.6-terra. Use gpt-5.6-luna explicitly for clear,
-#                  repeatable mechanical work.)
-#   CODEX_EFFORT  (override; default medium for normal review and impl. Plan 6
-#                  and other high-risk work use Sol/high per the workflow canon.
-#                  Effort scale: low < medium < high < xhigh < max; "ultra"
-#                  also exists but fans out subagents — a different execution/cost
-#                  mode, never a silent default; opt in explicitly via CODEX_EFFORT)
+#   CODEX_MODEL   (override; review defaults to gpt-5.6-sol, impl to
+#                  gpt-5.6-luna.)
+#   CODEX_EFFORT  (override; review defaults to high, impl to max.
+#                  Accepted scale: low < medium < high < xhigh < max.)
 #   CODEX_OUT_DIR (default /tmp/codex-runs; set to the session scratchpad if you prefer)
 #   CODEX_BIN     (default /home/kenta/.local/bin/codex)
 #   CODEX_REPO    (default: current git toplevel; set to point codex at a different
@@ -46,8 +42,8 @@ REPO="${CODEX_REPO:-$(git rev-parse --show-toplevel)}"
 [ -d "$REPO" ] || { echo "repo not found: $REPO" >&2; exit 2; }
 
 case "$MODE" in
-  review) SANDBOX="read-only";       DEFAULT_MODEL="gpt-5.6-sol";   DEFAULT_EFFORT="medium" ;;
-  impl)   SANDBOX="workspace-write"; DEFAULT_MODEL="gpt-5.6-terra"; DEFAULT_EFFORT="medium" ;;
+  review) SANDBOX="read-only";       APPROVAL="never"; DEFAULT_MODEL="gpt-5.6-sol";  DEFAULT_EFFORT="high" ;;
+  impl)   SANDBOX="workspace-write"; APPROVAL="never"; DEFAULT_MODEL="gpt-5.6-luna"; DEFAULT_EFFORT="max" ;;
   *) echo "mode must be 'review' or 'impl', got: '$MODE'" >&2; exit 2 ;;
 esac
 CODEX_MODEL="${CODEX_MODEL:-$DEFAULT_MODEL}"
@@ -67,6 +63,8 @@ chmod 700 "$CODEX_OUT_DIR"
 [ -O "$CODEX_OUT_DIR" ] || { echo "output directory is not owned by current user" >&2; exit 2; }
 OUT="$CODEX_OUT_DIR/codex-${LABEL}-${MODE}-$(date +%Y%m%d-%H%M%S)-$$.txt"
 OUT_PARTIAL="$OUT.partial"
+EVENT_STREAM="$OUT.events.jsonl"
+EVENT_STREAM_PARTIAL="$EVENT_STREAM.partial"
 PROMPT_SHA256="$(sha256sum -- "$PROMPT" | cut -d' ' -f1)"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -77,26 +75,53 @@ STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "  out    = ${OUT}"
 } >&2
 
-# Prompt on stdin ('-'); flags before it. Never expose a partial/empty result as
-# review evidence.
-trap 'rm -f "$OUT_PARTIAL"' EXIT
-"$CODEX_BIN" exec \
+# Prompt on stdin ('-'); flags before it. Never expose a partial/empty result,
+# event stream, or receipt as review evidence.
+cleanup() {
+  rm -f -- "$OUT_PARTIAL" "$EVENT_STREAM_PARTIAL" "$OUT" "$EVENT_STREAM" \
+    "$OUT.receipt" "$OUT.receipt.partial"
+}
+trap cleanup EXIT
+if ! "$CODEX_BIN" -a "$APPROVAL" exec \
   -s "$SANDBOX" \
   --skip-git-repo-check \
   -C "$REPO" \
   -m "$CODEX_MODEL" \
   -c "model_reasoning_effort=${CODEX_EFFORT}" \
+  --json \
   -o "$OUT_PARTIAL" \
-  - < "$PROMPT"
+  - < "$PROMPT" > "$EVENT_STREAM_PARTIAL"; then
+  echo "x Codex command failed — treat as FAILED" >&2
+  exit 1
+fi
 
 [ -s "$OUT_PARTIAL" ] || { echo "x empty codex output — treat as FAILED" >&2; exit 1; }
-mv "$OUT_PARTIAL" "$OUT"
-trap 'rm -f "$OUT_PARTIAL" "$OUT" "$OUT.receipt" "$OUT.receipt.partial"' EXIT
+[ -s "$EVENT_STREAM_PARTIAL" ] || { echo "x empty Codex event stream — treat as FAILED" >&2; exit 1; }
+if ! EVENT_EVIDENCE="$("$SCRIPT_DIR/check-codex-events.sh" "$EVENT_STREAM_PARTIAL")"; then
+  echo "x invalid Codex event stream — treat as FAILED" >&2
+  exit 1
+fi
+MODEL_REROUTE_OBSERVED="${EVENT_EVIDENCE#model_reroute_observed=}"
+[ "$MODEL_REROUTE_OBSERVED" = false ] || { echo "x unsupported event evidence" >&2; exit 1; }
 [ "$(sha256sum -- "$PROMPT" | cut -d' ' -f1)" = "$PROMPT_SHA256" ] || { echo "prompt changed during review" >&2; exit 1; }
-[ "$MODE" != review ] || (cd "$REPO" && "$SCRIPT_DIR/review-manifest.sh" --verify "$REVIEW_MANIFEST")
-[ "$MODE" != review ] || [ "$(sha256sum -- "$REVIEW_MANIFEST" | cut -d' ' -f1)" = "$MANIFEST_SHA256" ] || { echo "manifest changed during review" >&2; exit 1; }
+if [ -n "${REVIEW_MANIFEST:-}" ]; then
+  (cd "$REPO" && "$SCRIPT_DIR/review-manifest.sh" --verify "$REVIEW_MANIFEST")
+  [ "$(sha256sum -- "$REVIEW_MANIFEST" | cut -d' ' -f1)" = "$MANIFEST_SHA256" ] || {
+    echo "manifest changed during review" >&2
+    exit 1
+  }
+fi
+mv "$OUT_PARTIAL" "$OUT"
+mv "$EVENT_STREAM_PARTIAL" "$EVENT_STREAM"
+# Test-only seam used by scripts/test-codex.sh to mutate an input in the final
+# check-to-receipt interval; normal callers leave it unset.
+if [ -n "${CODEX_TEST_PRE_RECEIPT_HOOK:-}" ]; then
+  "$CODEX_TEST_PRE_RECEIPT_HOOK"
+fi
 "$SCRIPT_DIR/review-receipt.sh" codex "$MODE" "$CODEX_MODEL" "$CODEX_EFFORT" \
-  "$PROMPT" "$OUT" "$STARTED_AT"
+  "$PROMPT" "$OUT" "$STARTED_AT" \
+  UNAVAILABLE UNAVAILABLE "$SANDBOX" "$APPROVAL" "$EVENT_STREAM" "$MODEL_REROUTE_OBSERVED" \
+  "$PROMPT_SHA256" "${MANIFEST_SHA256:-UNBOUND}"
 trap - EXIT
 
 echo "✔ codex ${MODE} done → ${OUT}" >&2

@@ -32,12 +32,14 @@
 - Create `.codex/config.toml`: trusted-repository Main default and named native agent-role registry.
 - Create `.codex/agents/luna-max.toml`: shared Luna/max writable role layer for implementer and executor.
 - Create `.codex/agents/sol-high.toml`: shared Sol/high read-only role layer for reviewer.
+- Create `scripts/check-codex-role-config.sh`: resolve project role paths and independently strict-parse each role layer without a model turn.
+- Create `scripts/test-codex-role-config.sh`: deterministic positive/missing/malformed/unknown-key preflight regression fixtures.
 - Create `scripts/check-codex-events.sh`: validate JSONL completion and fail on model reroute.
 - Create `scripts/test-codex.sh`: no-network fake-CLI regression test for role files, wrapper defaults, overrides, receipts, and fail-closed validation.
 - Modify `scripts/codex.sh`: change only documented and executable defaults; preserve sandbox and receipt behavior.
 - Modify `scripts/review-receipt.sh`: distinguish requested values and bind approval, sandbox, and
   Codex event-stream evidence.
-- Modify `scripts/verify.sh`: run the new deterministic wrapper/config regression test.
+- Modify `scripts/verify.sh`: run the no-model role preflight and both deterministic routing/config regression tests.
 - Modify `docs/development-workflow.md`: replace task-tier model routing with the approved role routing and preserve risk/settlement boundaries.
 - Modify `docs/superpowers/plans/2026-07-12-wave1-plan6-http-ingress-authentication.md`: replace active Plan 6 implementation dispatch instructions with Luna/max.
 - Modify `docs/superpowers/specs/2026-07-12-wave1-plan6-http-ingress-authentication-design.md`:
@@ -61,6 +63,8 @@ reconciliation, settlement bookkeeping, staging, and commit.
 - Create: `.codex/config.toml`
 - Create: `.codex/agents/luna-max.toml`
 - Create: `.codex/agents/sol-high.toml`
+- Create: `scripts/check-codex-role-config.sh`
+- Create: `scripts/test-codex-role-config.sh`
 - Create: `scripts/check-codex-events.sh`
 - Create: `scripts/test-codex.sh`
 - Modify: `scripts/codex.sh:17-27,49-55`
@@ -77,7 +81,7 @@ reconciliation, settlement bookkeeping, staging, and commit.
 
 **Interfaces:**
 - Consumes: Codex configuration keys `model`, `review_model`, `model_reasoning_effort`, and `agents.<name>.config_file`; wrapper environment variables `CODEX_MODEL`, `CODEX_EFFORT`, `CODEX_BIN`, `CODEX_REPO`, `CODEX_OUT_DIR`, and `REVIEW_MANIFEST`.
-- Produces: native roles `implementer`, `executor`, and `reviewer`; wrapper defaults `impl = gpt-5.6-luna/max` and `review = gpt-5.6-sol/high`; a JSONL event validator; receipt schema fields `requested_model`, `requested_effort`, `observed_model`, `observed_effort`, `approval_policy`, `sandbox_mode`, `event_stream_path`, `event_stream_sha256`, and `model_reroute_observed`; deterministic command `scripts/test-codex.sh` returning zero only when complete ordered arguments, events, cleanup, and receipts match the approved routing.
+- Produces: a no-model `config/read` path resolver plus an authoritative strict role-layer preflight; native role declarations `implementer`, `executor`, and `reviewer` (native selection remains unverified); wrapper defaults `impl = gpt-5.6-luna/max` and `review = gpt-5.6-sol/high`; a JSONL event validator; receipt schema fields `requested_model`, `requested_effort`, `observed_model`, `observed_effort`, `approval_policy`, `sandbox_mode`, `event_stream_path`, `event_stream_sha256`, and `model_reroute_observed`; deterministic commands `scripts/test-codex-role-config.sh` and `scripts/test-codex.sh` returning zero only when role parsing, complete ordered arguments, events, cleanup, and receipts match the approved routing.
 
 - [ ] **Step 1 (worker): Record the task start and verify the clean implementation base**
 
@@ -140,8 +144,10 @@ assert_no_publication() {
 }
 ```
 
-The test itself never invokes the real Codex binary or the network. Mark it executable with
-`chmod +x scripts/test-codex.sh`.
+`scripts/test-codex.sh` itself never invokes the real Codex binary or the network; the separate
+`scripts/test-codex-role-config.sh` intentionally invokes the installed strict parser in a
+no-model app-server process. Mark both tests executable with `chmod +x scripts/test-codex.sh
+scripts/test-codex-role-config.sh`.
 
 - [ ] **Step 3 (worker): Run the new test and verify the intended red state**
 
@@ -201,15 +207,19 @@ use `codex --strict-config ... features list`: CLI 0.144.1 rejects that combinat
 non-strict `features list` ignores invalid role layers.
 
 The probe must initialize app-server over stdio, issue `config/read`, and use `jq` to assert the
-effective Main model/effort and all three `agents.<name>.config_file` layers. In temporary copied
-configuration, run negative startup/read probes for:
+effective Main model/effort and all three `agents.<name>.config_file` paths. `config/read` resolves
+those paths but does not load or validate the referenced role files. The authoritative
+`scripts/check-codex-role-config.sh` invokes the installed `app-server --strict-config` parser
+independently for every resolved layer, and `scripts/test-codex-role-config.sh` runs deterministic
+positive and negative fixtures for:
 
 - missing role file;
 - malformed TOML role file;
 - unknown role-layer field.
 
-Each negative case must exit nonzero or return a structured configuration error before any model
-turn. Record the exact request/response commands in the worker report.
+Each negative case exits nonzero before any model turn. These checks establish config parsing and
+path/layer integrity only; the current exposed `spawn_agent` schema has no role selector, so native
+role selection remains unverified rather than claimed.
 
 Separately run catalog checks:
 
@@ -218,10 +228,11 @@ Separately run catalog checks:
 /home/kenta/.local/bin/codex debug models | jq -e '.models[] | select(.slug == "gpt-5.6-luna") | .supported_reasoning_levels[] | select(.effort == "max")'
 ```
 
-Expected: effective-config and catalog assertions pass, and all three negative role-layer probes
-fail closed. These checks establish loading and catalog support only. The current exposed
-`spawn_agent` schema has no role selector, so the worker and Main must record native role selection
-as unverified rather than claim it works.
+Expected: effective-config and catalog assertions pass, the preflight reports three resolved and
+strict-parsed layers, and all three negative role-layer fixtures fail closed. These checks establish
+config parsing, path integrity, and catalog support only. The current exposed `spawn_agent` schema
+has no role selector, so the worker and Main must record native role selection as unverified rather
+than claim it works.
 
 - [ ] **Step 6 (worker): Harden wrapper events, approvals, receipts, and defaults**
 
@@ -275,9 +286,15 @@ Expected final line: `codex routing tests: OK`; exit status zero. No real model 
 
 - [ ] **Step 8 (worker): Add the routing regression to full verification**
 
-Insert this block in `scripts/verify.sh` after `scripts/test-codex-cloud.sh`:
+Insert these blocks in `scripts/verify.sh` after `scripts/test-codex-cloud.sh`:
 
 ```bash
+echo "== scripts/check-codex-role-config.sh (strict no-model role preflight) =="
+scripts/check-codex-role-config.sh
+
+echo "== scripts/test-codex-role-config.sh (role preflight negative fixtures) =="
+scripts/test-codex-role-config.sh
+
 echo "== scripts/test-codex.sh (model routing and receipt defaults) =="
 scripts/test-codex.sh
 ```
@@ -416,6 +433,8 @@ scripts/review-manifest.sh .review/codex-model-routing.manifest \
   .codex/agents/luna-max.toml \
   .codex/agents/sol-high.toml \
   scripts/codex.sh \
+  scripts/check-codex-role-config.sh \
+  scripts/test-codex-role-config.sh \
   scripts/check-codex-events.sh \
   scripts/test-codex.sh \
   scripts/verify.sh \
@@ -490,7 +509,8 @@ Commit:
 
 ```bash
 git add .codex/config.toml .codex/agents/luna-max.toml .codex/agents/sol-high.toml \
-  scripts/codex.sh scripts/check-codex-events.sh scripts/test-codex.sh scripts/verify.sh \
+  scripts/codex.sh scripts/check-codex-role-config.sh scripts/test-codex-role-config.sh \
+  scripts/check-codex-events.sh scripts/test-codex.sh scripts/verify.sh \
   scripts/review-receipt.sh \
   docs/development-workflow.md \
   docs/superpowers/plans/2026-07-12-wave1-plan6-http-ingress-authentication.md \

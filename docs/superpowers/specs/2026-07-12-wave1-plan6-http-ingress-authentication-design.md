@@ -23,6 +23,10 @@ Risk is **Large / Red**. Design, implementation, review, and settlement use
 `gpt-5.6-sol/high`. Product code is implemented by a product-code worker after this spec and
 its implementation plan settle.
 
+> **Workflow supersession (2026-07-13):** The product contract above is unchanged. Current model
+> routing follows `docs/development-workflow.md`: Plan 6 Main/design/review/confirmation/settlement
+> use Sol/high; implementation/execution workers use Luna/max.
+
 ## 2. Scope
 
 ### 2.1 In scope
