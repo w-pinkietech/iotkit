@@ -7,11 +7,11 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `f10e95d`
+- Artifact/base HEAD: `a754ce0`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: hybrid local-Main/Codex-Cloud candidate-lane harness is under Large/Red workflow
-  review before Plan 6 Task 5; product code remains worker-only
+- Active phase: hybrid local-Main/Codex-Cloud candidate lane is settled locally; Plan 6 Task 5 is
+  next and product code remains worker-only
 
 ## Mission
 
@@ -84,9 +84,9 @@ git/disk/test. Never store secrets here.
 
 ## Review state
 
-- Hybrid local/Cloud execution harness: **NOT SETTLED**. Design record, wrapper, environment setup,
-  negative tests, workflow authority, Cloud guide, and active ledger require a confirmation
-  Sol/high review on one final manifest before commit. Initial review returned C0/I7/M1; all seven
+- Hybrid local/Cloud execution harness: **SETTLED locally at `a754ce0`**. Design record, wrapper,
+  environment setup, negative tests, workflow authority, and Cloud guide passed the required
+  Sol/high final-manifest review before commit. Initial review returned C0/I7/M1; all seven
   Important areas were reconciled in the narrowed design. Initial result SHA-256
   `7e61273cb559f9802e1759d93b5b2b8321c52b50b4116c8a7d1ce8ceca6a2b0e`; receipt SHA-256
   `fcc93e7ed64dd772d671285b592b3897aae59a292794ebda27ba9234dcb28dd4`; Sol/high review ran
@@ -106,8 +106,27 @@ git/disk/test. Never store secrets here.
   `3d55a23a09e199fe568ed505d4c334b423cb310c467a4a53cc36eab7bb07225d`; receipt SHA-256
   `04b9af031d9f3142bb0360ab27110acafb7dc110e1c1c8c3d28a1f2c231de1f9`; Sol/high ran
   2026-07-12T05:25:12Z–05:30:55Z. A guardian now retains `flock` until an orphan CLI exits and the
-  remote-movement regression is included; one final exact-hash confirmation remains owed. No
-  Cloud task was submitted by this change.
+  remote-movement regression is included. Final exact-hash Sol/high confirmation returned
+  **C0/I0/M0** on manifest SHA-256
+  `a2fc69d1d321a0d66c34e0b2f6b54c36c9050c756cbc178e718629a04b7d1c6f`; prompt SHA-256
+  `400de63d301fa55a6fa4c330c8c9b1906d601d0d9f584fb31ba43432e9e95715`; result SHA-256
+  `84316732bb848b1f0039fca4c4dabcb910ee391e38d4872d6e17f5bf2afe03ea`; receipt SHA-256
+  `41c3effc5fd9edb37459b8fcc10d956d122db207fadf44cff0de441c8ceefc43`. It ran
+  2026-07-12T05:33:19Z–05:38:04Z and independently confirmed guardian/CLI lock FD ownership with
+  `/proc`. No Cloud task was submitted by this change; no push is authorized or performed.
+
+### Hybrid Cloud harness timing
+
+- Total critical-path wall time: **1h04m51s**, from 2026-07-12T13:34:06+09:00 to commit
+  `a754ce0` at 2026-07-12T14:38:57+09:00.
+- Planning/research: **2m24s estimated**; implementation: **6m15s estimated**; initial
+  verification: **1m05s estimated**. Fine-grained phase timestamps were not yet emitted during
+  this first measured harness task, so these three split the exact 9m44s pre-review interval.
+- Independent review: **27m28s exact from five Sol/high receipts** (initial plus four confirmation
+  rounds). Finding fixes/reverification: **26m46s** between those receipts. Documentation/commit:
+  **53s**. These non-overlapping categories sum to the total.
+- Review progression: C0/I7/M1 → C0/I5/M0 → C0/I1/M0 → C0/I1/M1 → C0/I0/M0. The long tail came
+  from adversarial process-boundary checks, not Cloud execution; no external Cloud task ran.
 
 - Single-repository context migration: **SETTLED and published as two-parent merge `f10e95d`**.
   Mission/design record:
@@ -442,9 +461,7 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Settle and commit the hybrid Cloud execution harness; do not submit an external Cloud task as
-   part of harness verification.
-2. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl` or an explicitly
+1. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl` or an explicitly
    authorized Cloud candidate task,
    with per-step wall time measurement enabled from dispatch.
 
