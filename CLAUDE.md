@@ -52,6 +52,7 @@ scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D w
 |---|---|
 | 開発運用正本(Design Ready・自律判断・独立レビュー・永続台帳) | [docs/development-workflow.md](docs/development-workflow.md) |
 | 現在の工程・レビュー債務・次タスク | [docs/superpowers/active-ledger.md](docs/superpowers/active-ledger.md) |
+| Codex Cloud候補ブランチ・ローカル復帰手順 | [docs/cloud-development.md](docs/cloud-development.md) |
 | 設計正本(D1〜D13・R1〜R23・用語集) | [docs/redesign/](docs/redesign/) |
 | 構造正本(crate地図・置き場規則・層規則・ペルソナ) | [docs/architecture.md](docs/architecture.md) |
 | Spec review guide | [docs/eval/spec-review.md](docs/eval/spec-review.md) |

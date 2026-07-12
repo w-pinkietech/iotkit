@@ -10,9 +10,8 @@ git/disk/test. Never store secrets here.
 - Artifact/base HEAD: `f10e95d`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: single-repository context migration is SETTLED, published, and the former design
-  repository is archived read-only; Plan 6 Task 5 dispatch preparation is next; product code
-  remains worker-only
+- Active phase: hybrid local-Main/Codex-Cloud candidate-lane harness is under Large/Red workflow
+  review before Plan 6 Task 5; product code remains worker-only
 
 ## Mission
 
@@ -72,8 +71,43 @@ git/disk/test. Never store secrets here.
   sync, publish the consolidated repository, and freeze `iotkit-redesign` with a destination
   pointer. This authority-location change is **Large / Red**; the user's explicit approval settles
   the value decision, while implementation still requires Sol/high independent review.
+- 2026-07-12: Adjust the repository so local Main can dispatch/monitor/collect Codex Cloud candidate
+  work and Cloud can temporarily act as Main while the computer is unavailable. This workflow and
+  external-dispatch change is **Large / Red**. The approved envelope keeps Cloud work on candidate
+  branches, preserves separate authority for each future Cloud submission/push/PR/merge/release,
+  and forbids task URL/status/diff from satisfying hash-bound review settlement. Design record:
+  `docs/superpowers/migrations/2026-07-12-hybrid-cloud-execution.md`.
+  Initial Sol/high review found that the installed CLI cannot prove the commit actually checked
+  out by Cloud. The implementation was narrowed to disable automatic apply, label requested base
+  as unverified, snapshot the exact prompt/query, preserve pre-dispatch pending state, and recover
+  interrupted locks before confirmation review.
 
 ## Review state
+
+- Hybrid local/Cloud execution harness: **NOT SETTLED**. Design record, wrapper, environment setup,
+  negative tests, workflow authority, Cloud guide, and active ledger require a confirmation
+  Sol/high review on one final manifest before commit. Initial review returned C0/I7/M1; all seven
+  Important areas were reconciled in the narrowed design. Initial result SHA-256
+  `7e61273cb559f9802e1759d93b5b2b8321c52b50b4116c8a7d1ce8ceca6a2b0e`; receipt SHA-256
+  `fcc93e7ed64dd772d671285b592b3897aae59a292794ebda27ba9234dcb28dd4`; Sol/high review ran
+  2026-07-12T04:43:50Z–04:48:18Z. First confirmation returned C0/I5/M0 and drove exact-query
+  binding, control-character rejection, single-attempt confinement, HMAC/schema validation, and
+  pre-commit review-order fixes. Confirmation result SHA-256
+  `ab3a4920488e3260865928541bc00be99021e0c148b6431dba904fa9e01f2936`; receipt SHA-256
+  `466573849dd237a75bbd5bee4325589a80dbd618e4a7b400433870557fc9159d`; Sol/high ran
+  2026-07-12T05:04:26Z–05:11:26Z. The next final round returned C0/I1/M0: all prior findings were
+  closed, but PID-based stale-lock recovery retained a concurrent TOCTOU. Result SHA-256
+  `ea65ef2a47b80a5889bc4c8d52255c8e364dde41cc250c38e7c7f1a2578d8c98`; receipt SHA-256
+  `9701d5c2c83e55b53f4e3d1d9ddfec37366483978bafa4e70ffc12ac8ee2184b`; Sol/high ran
+  2026-07-12T05:16:36Z–05:22:08Z. The fix replaces PID recovery with kernel-held `flock` and a
+  non-authoritative interruption marker. Its confirmation returned C0/I1/M1 because the wrapper
+  alone held the lock, allowing a surviving orphan CLI after wrapper death; it also requested a
+  distinguishing live-remote-movement test. Result SHA-256
+  `3d55a23a09e199fe568ed505d4c334b423cb310c467a4a53cc36eab7bb07225d`; receipt SHA-256
+  `04b9af031d9f3142bb0360ab27110acafb7dc110e1c1c8c3d28a1f2c231de1f9`; Sol/high ran
+  2026-07-12T05:25:12Z–05:30:55Z. A guardian now retains `flock` until an orphan CLI exits and the
+  remote-movement regression is included; one final exact-hash confirmation remains owed. No
+  Cloud task was submitted by this change.
 
 - Single-repository context migration: **SETTLED and published as two-parent merge `f10e95d`**.
   Mission/design record:
@@ -408,7 +442,10 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl`,
+1. Settle and commit the hybrid Cloud execution harness; do not submit an external Cloud task as
+   part of harness verification.
+2. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl` or an explicitly
+   authorized Cloud candidate task,
    with per-step wall time measurement enabled from dispatch.
 
 ## Verification

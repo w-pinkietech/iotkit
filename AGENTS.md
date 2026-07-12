@@ -8,6 +8,8 @@
 >
 > Codex Cloudを含む新しいcloneからの再開は
 > [docs/cloud-development.md](docs/cloud-development.md) を読み、次に永続台帳を実物と照合する。
+> Cloud taskは候補ブランチ専用で、task URL/status/diffだけを独立レビューやSETTLEDの証拠にしない。
+> 外出中のCloud Mainは未決レビュー債務を台帳へ残し、`master`統合をローカル復帰後まで保留する。
 
 ## Project Context
 
