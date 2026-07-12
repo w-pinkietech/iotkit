@@ -41,7 +41,7 @@ Acceptance outcomes:
 
 | Constraint | Authority / observed implementation | Consequence |
 |---|---|---|
-| R2 is a site-LAN network ingress with authentication, rate limiting, and hostile-input resistance. | `../../../docs/redesign/responsibility-ledger.md` R2/R19; D11 | A listener without the complete security boundary cannot ship. |
+| R2 is a site-LAN network ingress with authentication, rate limiting, and hostile-input resistance. | [`../redesign/responsibility-ledger.md`](../redesign/responsibility-ledger.md) R2/R19; D11 | A listener without the complete security boundary cannot ship. |
 | Network ingress is off by default and internet exposure is forbidden. | D11 decisions 2 and 7 | Listener enablement and bind changes are construction-tier R14 operations. |
 | HTTP precedes MQTT; pairing-window ingress is a later UI-coupled plan. | D1; Plan-5 deferred ledger item 6 | Plan 6 has no unauthenticated ingress exception. |
 | Initial admin ownership is local/per-card only; network box claim is rejected. | User decision recorded in `active-ledger.md` | Setup mode must not grant an unauthenticated network actor ownership. |

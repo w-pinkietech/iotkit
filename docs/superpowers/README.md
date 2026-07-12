@@ -11,7 +11,7 @@ forbids (southbound verbs go to the future `iotkit-southbound-contract`).
 
 Current product guidance lives in two places:
 
-- **What/why**: the design corpus `../../../docs/redesign/` (D1–D13, R1–R23)
+- **What/why**: the design corpus [`../redesign/`](../redesign/) (D1–D13, R1–R23)
 - **Where code goes / how it's structured**: [`docs/architecture.md`](../architecture.md)
 
 Development workflow guidance lives in [`docs/development-workflow.md`](../development-workflow.md).

@@ -4,7 +4,7 @@ IoTKit is one Rust binary (`iotkit-gateway`) plus an operator CLI
 (`iotkit-gatewayctl`), backed by a single SQLite database. It runs unattended on
 a Raspberry Pi under systemd. This document is the "get oriented in 10 minutes"
 map **and the canon for code placement**; the authoritative *why* is the
-Japanese design corpus under `../docs/redesign/` (decision records D1–D13,
+Japanese design corpus under `docs/redesign/` (decision records D1–D13,
 responsibility ledger R1–R23).
 
 ## Who this serves
@@ -289,5 +289,5 @@ downgrade" discipline.
 ## Where to go next
 
 - The exit-contract wire details: [exit-contract.md](exit-contract.md).
-- The authoritative rationale: `../docs/redesign/` (D1–D13, R-ledger) — Japanese,
+- The authoritative rationale: `docs/redesign/` (D1–D13, R-ledger) — Japanese,
   for deep dives only.

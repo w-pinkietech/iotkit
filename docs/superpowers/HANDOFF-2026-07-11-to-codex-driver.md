@@ -5,6 +5,11 @@
 > 記述は移行時スナップショットとしてのみ読む。cross-vendor reviewは一時停止し、現在の必須レビューは
 > freshなCodex read-only session。Claude/Grokは利用可能時のみ任意。Plan 6
 > Yellow autonomy試行が正。
+>
+> **2026-07-12リポジトリ統合:** 設計正本は `iotkit-next/docs/redesign/` へ履歴付きで移転した。
+> 以後は別cloneや親ディレクトリを前提にしない。本書の「両リポジトリ」「別HEAD」および
+> `../.claude/memory/` の記述は当時の履歴であり、再開には使わない。現在の再開手順は
+> [`../cloud-development.md`](../cloud-development.md) と `active-ledger.md` を使う。
 
 このファイルは、これまで Claude Code のメインエージェントが保持していた「会話コンテキスト上の
 進捗」を、codex CLI がメイン駆動として引き継ぐための一枚ものスナップショットである。設計正本でも
@@ -168,15 +173,15 @@ Main 発の不在主張=確認必須)/tier は「下流が根拠として読む�
 
 ## 6. 正典の所在 (恒久。この引き継ぎ文書より優先)
 
-- **設計正本**: `../docs/redesign/`(D1〜D13、責務台帳 R1〜R23、terminology、adr-inventory)。
+- **設計正本**: `docs/redesign/`(D1〜D13、責務台帳 R1〜R23、terminology、adr-inventory)。
   特に計画6は **D11-ingress-authentication.md** が本体。
 - **構造正本**(crate地図・置き場・層規則・ペルソナ): `docs/architecture.md`。機械検査=`scripts/check-layers`。
 - **ワークフロー規律**: `docs/development-workflow.md`。再開状態は
   `docs/superpowers/active-ledger.md`。`CLAUDE.md` / `AGENTS.md` は役割別入口。
 - **繰り延べ台帳**(計画6が全掃引する): `docs/superpowers/plans/wave1-plan5-deferred-hardening.md`
   ——「計画6への持ち込み」8項目+D-9〜D-18。
-- **メモリ**(Claude 側、参考): `../.claude/memory/`(iot リポジトリに symlink)。
-  review-speed-policy / iotkit-wave1-status など。
+- **旧メモリ**(Claude 側、履歴のみ): 旧設計リポジトリの `.claude/memory/`。再開状態として
+  依存しない。恒久情報は本リポジトリの正本・運用正本・active ledgerへ移す。
 - ハーネス: `scripts/`(codex.sh・claude-review.sh・verify.sh・check-layers・trailer.sh・watchpoints.sh)。
 - レビューガイド: `docs/eval/{spec,plan,impl-spec,impl-quality}-review.md`。
 

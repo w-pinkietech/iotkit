@@ -1,6 +1,6 @@
 # Wave 1 出口契約 MVE（R10 歩く骨格）設計仕様
 
-> **For agentic workers:** この spec は brainstorming の成果物。実装は writing-plans → subagent-driven-development で行う。本文書は「契約」ではなく「Wave 1 実装 spec」——契約正本は [D7](../../../../docs/redesign/decisions/D7-exit-contract.md)。
+> **For agentic workers:** この spec は brainstorming の成果物。実装は writing-plans → subagent-driven-development で行う。本文書は「契約」ではなく「Wave 1 実装 spec」——契約正本は [D7](../../redesign/decisions/D7-exit-contract.md)。
 
 **Goal:** アーカイブ責任消費者1台へ measurement レコードストリームを外向き HTTP push で at-least-once 配送し、その ack で正本(readings)のパージを許可する「end-to-end custody ループ」の最小実装。
 
@@ -14,7 +14,7 @@
 
 ### 1.1 位置づけ
 - Wave 1「他人に配れる」の最初の sub-project（出口契約 R10）。Wave 0（動く最小、全4計画 master マージ済み）の上に立つ。
-- 契約は [D7](../../../../docs/redesign/decisions/D7-exit-contract.md) で確定済み。本 spec は契約を再定義しない。[D3](../../../../docs/redesign/decisions/D3-process-and-wave-decisions.md) 読み替え規則「契約は本番形のまま実装だけ削る」に従い、契約の一部だけを実装する。
+- 契約は [D7](../../redesign/decisions/D7-exit-contract.md) で確定済み。本 spec は契約を再定義しない。[D3](../../redesign/decisions/D3-process-and-wave-decisions.md) 読み替え規則「契約は本番形のまま実装だけ削る」に従い、契約の一部だけを実装する。
 - MVE = **歩く骨格**（single-target・measurement 族中心）。
 
 ### 1.2 実装する（IN）
@@ -57,7 +57,7 @@
 |---|---|---|
 | 1 | annotation 族の丸ごと繰り延べは契約違反 | 採用 → §5（epoch_start 実装、他トリガ封じ） |
 | 2 | retention を現構造(received_at cutoff)のまま足すと未ack正本を消す | 採用 → §8 作り替え |
-| 3 | cursor だけでは ack後フロア不可、`archive_acked_at` が要る | **部分採用/一部棄却**: フロア遵守は採用。ただし**フロアはデータ年齢(received_at)基準**（[台帳:115](../../../../docs/redesign/responsibility-ledger.md)「正常時のデータ残高≒フロア分のみ」）なので `archive_acked_at` は不要。遠隔ack時刻案は過剰として棄却 |
+| 3 | cursor だけでは ack後フロア不可、`archive_acked_at` が要る | **部分採用/一部棄却**: フロア遵守は採用。ただし**フロアはデータ年齢(received_at)基準**（[台帳:115](../../redesign/responsibility-ledger.md)「正常時のデータ残高≒フロア分のみ」）なので `archive_acked_at` は不要。遠隔ack時刻案は過剰として棄却 |
 | 4 | 検疫解除 renumber 繰り延べは既存解除操作を封じないと穴 | 採用 → §9 ガード |
 | 5 | publication_id は再送・クラッシュ後も安定必要 | 採用 → §10 決定的ID |
 | 6 | target 登録骨子不足（版交渉/疎通スモーク/監査） | 部分採用 → §11 最小ガード、R14 本体は E へ |
@@ -295,7 +295,7 @@ annotation `epoch_start`:
 D7決定7 の4クラス順序のうち **MVE はクラス① のみ実装**:
 - **クラス① eligibility（epoch guard）**: `target.archive_responsible=1` かつ **`target.cursor_epoch == current_epoch`** の時のみ有効。ある reading が「ack 済み」= **`publication_log.epoch == target.cursor_epoch == current_epoch` かつ `pub_seq <= target.cursor_pub_seq`**。epoch 不一致・cursor_epoch NULL 時は新 epoch 行を一切 ack 済み扱いにしない（effective cursor=0）。
 - **削除対象**: 上記で ack 済み **かつ** `readings.received_at < now - 最低保持フロア` の行。
-- **最低保持フロア**: [D1:154](../../../../docs/redesign/decisions/D1-ingest-model.md) / [台帳:115](../../../../docs/redesign/responsibility-ledger.md) = 既定 72h・設定可。**データ年齢(received_at)基準**（ack 相対でなくデータの新しさ。「正常時のデータ残高≒フロア分のみ、断線時のみ水位上昇」）。→ `archive_acked_at` 列は不要。
+- **最低保持フロア**: [D1:154](../../redesign/decisions/D1-ingest-model.md) / [台帳:115](../../redesign/responsibility-ledger.md) = 既定 72h・設定可。**データ年齢(received_at)基準**（ack 相対でなくデータの新しさ。「正常時のデータ残高≒フロア分のみ、断線時のみ水位上昇」）。→ `archive_acked_at` 列は不要。
 - **未ack「正本」は保護**: pub_seq を持つ（=配送対象の）非検疫 readings で未 ack のものは received_at が古くても**削除しない**（従来の無条件時刻カットオフ削除を廃止）。
 - **保護は pub_seq 付き未ack正本だけ / それ以外は floor で purge**（Sonnet iter2 [高]、無限保持回避）: 置換後の readings 判定を「**`received_at < now - floor` の readings を削除。ただし pub_seq を持つ（=配送対象）かつ未ack（epoch 一致で `pub_seq > cursor_pub_seq`）の非検疫行だけは保護（削除しない）**」と実装する。検疫行（quarantined=1、pub_seq 無し）・enqueue されなかった行は保護対象外で floor で消える。これは**新規の readings purge branch**（旧 `purge_readings_before` の置換）であり、「既存機構が検疫 readings を消す」ではない（デバイス検疫期限失効は `devices.state` のみ＝§8.1）。**Wave 0→1 アップグレード（restore でない）の既存 readings も pub_seq を持たない**ので保護対象外＝従来どおり floor で消える（新たな保護を与えないだけで退行ではない、iter3 [低]）。
 - **圧力時の挙動（custody_lost トリガ封じ、iter2 [中] で story 修正）**: クラス①を出し切っても statvfs 高水位が続く場合、クラス④（**保存済み**未ack正本の削除+custody_lost）は MVE では**実装しない**＝保存済みデータを消さないので custody_lost が定義上発生しない。**能動的逆圧（水位→collector 抑制）も新設しない**（D1 はプロセス内逆圧を mpsc await と規定し `Deferred` を返さない [D1:111]）。**正確な劣化像**: 既存の front-door drop（`iotkit-ingest-client/src/lib.rs:184` / `bravepi event_loop:133` / `polling_loop:619`）は**スループット由来**（バースト時のバッファ溢れ）で **ディスク水位に連動しない**（`observe_watermark_latched` は監査+health フラグのみで取り込みを絞らない）。よって「archive 消費者ダウンで custody backlog がディスクを埋める」場面では front-door は発火せず、放置すると最終的に `ENOSPC` で**新規書込が明示的に失敗**する（保存済みデータは保持、無音損失なし、custody_lost でない）。MVE はこれを許容し、**R12 に水位・per-target 配送状態を事前公開して警報**する（能動 throttle とクラス④は後続）。水位閾値・R12 形式は writing-plans。
@@ -358,7 +358,7 @@ Wave 0 の `device replace-undo`（`iotkit-gatewayctl/src/cmd/replace.rs` → `m
 
 ## 12. R22 連携
 
-- **target_registry を平文 R22 snapshot に含めない**。理由: `credential_token` は秘密で、現 R22 snapshot は平文 JSON 書き出し（`iotkit-gatewayctl/src/cmd/snapshot.rs:129`）。[D2:75/98](../../../../docs/redesign/decisions/D2-data-authority-topology-operations.md) は secrets 非空 snapshot の暗号化を必須とする。R22 暗号化は MVE スコープ外なので、**target/token を snapshot に入れない**。
+- **target_registry を平文 R22 snapshot に含めない**。理由: `credential_token` は秘密で、現 R22 snapshot は平文 JSON 書き出し（`iotkit-gatewayctl/src/cmd/snapshot.rs:129`）。[D2:75/98](../../redesign/decisions/D2-data-authority-topology-operations.md) は secrets 非空 snapshot の暗号化を必須とする。R22 暗号化は MVE スコープ外なので、**target/token を snapshot に入れない**。
 - **publication_log（outbox）も data-plane** → readings 同様 snapshot に含めない。
 - **restore 相互作用**: `run_restore` の空判定（`snapshot.rs:259`）は 5 SECTIONS のみを見る＝ publish 2表は判定にもリストアにも関与しない。pristine な交換箱では publish 2表は空で、運用者が `target add` で再登録（credential 再発行 + スモークで archive_responsible 再有効化）。非 pristine な箱へ restore して古い target が残っても、epoch guard が stale cursor を fail-closed に無効化する（§6.4）ので誤パージ・誤配送は起きない（推奨は restore 前後に `target remove`/再登録）。
 - **非 pristine 残留の回収（iter2 [中]）**: 旧 epoch の outbox/readings 残存は §8.3 の「旧 epoch floor-prune（outbox+readings ペア、同一 Tx）」で回収する。pub_seq は AUTOINCREMENT 継続で 1 に戻らないが正しさは保つ（§4.1）。**writing-plans は restore 前提を確定する**: publish/readings 空を要求するか、restore Tx 内で publish/readings/sqlite_sequence を明示 cleanup するか。target config の暗号化退避は R22 暗号化と同時に後続 sub-project へ。
@@ -419,7 +419,7 @@ Wave 0 の `device replace-undo`（`iotkit-gatewayctl/src/cmd/replace.rs` → `m
 
 ## 16. 宿題ピン（writing-plans で確定する値・判断）
 
-- 最低保持フロア既定値: 72h（[D1:155](../../../../docs/redesign/decisions/D1-ingest-model.md)）。設定手段（config or ledger_meta）。
+- 最低保持フロア既定値: 72h（[D1:155](../../redesign/decisions/D1-ingest-model.md)）。設定手段（config or ledger_meta）。
 - 有界バッチ上限 N（件数）と byte cap。**単一レコード超過時は最低1件**（§6.2）。
 - ack レスポンス形式（publication_id / epoch / cursor_end 到達の JSON 形、§6.2 [C]）。MVE は all-or-nothing バッチ ack（部分 ack は DEFERRED）。
 - retry backoff パラメータ・push 間隔。

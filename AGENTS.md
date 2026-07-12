@@ -5,6 +5,9 @@
 > 待ち・役割逆転の注意)は [docs/superpowers/HANDOFF-2026-07-11-to-codex-driver.md](docs/superpowers/HANDOFF-2026-07-11-to-codex-driver.md)。
 > 本 AGENTS.md は「呼ばれる側の per-task ワーカー」向けに書かれている——メイン駆動になると
 > コミット・spec/plan・ユーザー対話も自分の責務になる(引き継ぎ §0)。
+>
+> Codex Cloudを含む新しいcloneからの再開は
+> [docs/cloud-development.md](docs/cloud-development.md) を読み、次に永続台帳を実物と照合する。
 
 ## Project Context
 
@@ -17,7 +20,8 @@
 が機械検査。verify.sh に含まれる)。新しいコードの配置は置き場決定表に従い、新 crate を作るときは
 check-layers の分類と architecture.md の地図を同時に更新する。
 
-**正しさの基準は旧実装ではなく設計正本** — `../docs/redesign/`(用語集・責務台帳 R1〜R23・決定文書 D1〜D13)。
+**正しさの基準は旧実装ではなく、このリポジトリ内の設計正本** — `docs/redesign/`
+(用語集・責務台帳 R1〜R23・決定文書 D1〜D13)。
 旧実装との互換はゴールではない。タスク指示が設計正本と矛盾して見えるときは、勝手に解釈せず作業を止めて報告する。
 
 ## Invariants(絶対に破らない)

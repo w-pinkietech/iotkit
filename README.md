@@ -70,14 +70,19 @@ all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows
 The full crate map, layer rules, and "where does new code go" placement table
 live in [docs/architecture.md](docs/architecture.md).
 
+Development can be resumed from a single clone, including in Codex Cloud. See
+[docs/cloud-development.md](docs/cloud-development.md) for the restart order and
+context-authority rules.
+
 ## Architecture & contracts
 
 - [docs/architecture.md](docs/architecture.md) — who this serves, crate map & placement rules, data flow, the custody loop, concurrency model.
 - [docs/exit-contract.md](docs/exit-contract.md) — what an archive consumer receives and must do (record schema, ack, cursor, epochs).
 
 The authoritative design corpus (decision records **D1–D13**, the **R1–R23**
-responsibility ledger) lives under `../docs/redesign/` and is currently
-Japanese-only. You do **not** need it to build, run, or make a routine change —
+responsibility ledger) lives in [docs/redesign/](docs/redesign/) and is currently
+Japanese-only. It travels with every clone so local and Codex Cloud work use the
+same design context. You do **not** need it to build, run, or make a routine change —
 it's the "why", for deep dives.
 
 ## Roadmap

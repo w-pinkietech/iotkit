@@ -6,7 +6,7 @@
 
 **Architecture:** D1(取り込み契約)/D5(series識別)/D6(測定レジストリ)の Wave 0 実装。アダプタ→(暫定ブリッジ)→Envelope→コレクタactor(mpsc+oneshot)→SQLite同一トランザクション(ingest_dedup+readings)→コミット後ack。台帳解決(hardware_id→system_id→series_id)はコレクタが実行。レジストリ検証は `RegistryPolicy` トレイトのフックとして席だけ用意し、計画2が実装を差し込む。
 
-**Tech Stack:** Rust 2024 / tokio / rusqlite 0.32 (bundled) / serde / uuid (v4+v7)。設計正本: `/home/kenta/dev/iot/docs/redesign/` の terminology.md, responsibility-ledger.md, decisions/D1・D5・D6。
+**Tech Stack:** Rust 2024 / tokio / rusqlite 0.32 (bundled) / serde / uuid (v4+v7)。設計正本: `docs/redesign/` の terminology.md, responsibility-ledger.md, decisions/D1・D5・D6。
 
 ## Global Constraints
 

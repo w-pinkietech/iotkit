@@ -5,10 +5,8 @@ Rust + tokio IoT gateway for Raspberry Pi. {`core/types`, `core/supervision`} <-
 
 ## Design Authority
 
-- **設計正本は [w-pinkietech/iotkit-redesign](https://github.com/w-pinkietech/iotkit-redesign) の `docs/redesign/`**
-  (用語集・責務台帳R1-R23・決定文書D1〜D13)。
-- ローカル開発ではこのリポジトリの親ディレクトリに設計リポジトリをチェックアウトする配置を推奨
-  (例: `~/dev/iot/docs/redesign/` と `~/dev/iot/iotkit-next/`)。本文書内の設計参照はこの配置を前提とした相対位置。
+- **設計正本はこのリポジトリの [`docs/redesign/`](docs/redesign/)**
+  (用語集・責務台帳R1-R23・決定文書D1〜D13)。設計と実装は同じclone・commit・PRで管理する。
 - monojoh-authorityのADRを参照する前に、必ず設計正本リポジトリの `docs/redesign/adr-inventory.md`
   (生死棚卸し表)を確認する。要改訂21本・廃止1本があり、単体で読むと逆方向(host-agent広域・mTLS等)に実装する危険がある。
 - 取り込み経路はアダプタ内クライアント(iotkit-ingest-client)が正(D4)。旧語彙(AdapterEvent)は
@@ -54,6 +52,7 @@ scripts/verify.sh          # fmt + check-layers + test --workspace + clippy -D w
 |---|---|
 | 開発運用正本(Design Ready・自律判断・独立レビュー・永続台帳) | [docs/development-workflow.md](docs/development-workflow.md) |
 | 現在の工程・レビュー債務・次タスク | [docs/superpowers/active-ledger.md](docs/superpowers/active-ledger.md) |
+| 設計正本(D1〜D13・R1〜R23・用語集) | [docs/redesign/](docs/redesign/) |
 | 構造正本(crate地図・置き場規則・層規則・ペルソナ) | [docs/architecture.md](docs/architecture.md) |
 | Spec review guide | [docs/eval/spec-review.md](docs/eval/spec-review.md) |
 | Plan review guide | [docs/eval/plan-review.md](docs/eval/plan-review.md) |

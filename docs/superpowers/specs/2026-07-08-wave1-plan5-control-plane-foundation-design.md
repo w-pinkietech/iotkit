@@ -1,6 +1,6 @@
 # Wave 1 計画5: 制御プレーンの土台（R14操作カタログ + 認証の座席 + APIサーバー）設計仕様
 
-> **For agentic workers:** この spec は brainstorming（設計正本 D1〜D13、2026-07-08 確定）の成果物。実装は writing-plans → subagent-driven-development で行う。本文書は「契約」ではなく「Wave 1 実装 spec」——契約正本は設計リポジトリの [D3決定5](../../../../docs/redesign/decisions/D3-process-and-wave-decisions.md) / [D12決定3](../../../../docs/redesign/decisions/D12-southbound-contract.md) / [D13](../../../../docs/redesign/decisions/D13-ui-scope.md) / 責務台帳 R11/R12/R14。
+> **For agentic workers:** この spec は brainstorming（設計正本 D1〜D13、2026-07-08 確定）の成果物。実装は writing-plans → subagent-driven-development で行う。本文書は「契約」ではなく「Wave 1 実装 spec」——契約正本は [D3決定5](../../redesign/decisions/D3-process-and-wave-decisions.md) / [D12決定3](../../redesign/decisions/D12-southbound-contract.md) / [D13](../../redesign/decisions/D13-ui-scope.md) / 責務台帳 R11/R12/R14。
 
 **Goal:** ゲートウェイ内に初の HTTPS API サーバー（自己署名 TLS + フィンガープリント）を立て、R14 型付き操作カタログ（権限3分類+read-only スコープ、dry-run、全操作監査）と認証の座席（管理者パスフレーズ・setupモード・operatorトークン）を作る。以降の全計画（R2入口・南向き・UI）はこの土台の上に乗る。
 

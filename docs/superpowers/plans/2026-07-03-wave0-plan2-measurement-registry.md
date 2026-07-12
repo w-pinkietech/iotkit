@@ -6,7 +6,7 @@
 
 **Architecture:** 新クレート `core/registry`(iotkit-core-registry)がD6のドメインを所有する: バイナリ同梱の標準語彙カタログ(TOML、`include_str!`)、現場レジストリのSQLiteスキーマ(copy-on-enable+エントリrevision)、受理判別表の評価器。コレクタは自分が必要とする港(`RegistryPolicy` トレイト)を定義し続け、registryクレートがそれを実装する(ports-and-adapters。依存方向: registry → collector)。ゲートウェイのcomposition rootが `SqliteRegistry` を配線する。
 
-**Tech Stack:** Rust (edition 2024), rusqlite 0.32 (bundled), toml 0.8, serde, sha2, tokio。設計正本: [D6](https://github.com/w-pinkietech/iotkit-redesign) `docs/redesign/decisions/D6-measurement-registry.md`(Wave分割節がスコープの正)。
+**Tech Stack:** Rust (edition 2024), rusqlite 0.32 (bundled), toml 0.8, serde, sha2, tokio。設計正本: [D6](../../redesign/decisions/D6-measurement-registry.md)(Wave分割節がスコープの正)。
 
 ## Global Constraints
 

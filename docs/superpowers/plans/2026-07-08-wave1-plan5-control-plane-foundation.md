@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 1.95 / tokio / rusqlite(bundled, WAL) / axum 0.8 / axum-server 0.8（`tls-rustls-no-provider`）/ `rustls = { version = "0.23", default-features = false, features = ["ring","std","tls12"] }` / rcgen 0.13 / argon2 0.5 / sha2 0.10 / getrandom 0.4 / base64 0.22。
 
-**設計正本:** [spec](../specs/2026-07-08-wave1-plan5-control-plane-foundation-design.md)（codex xhigh + Claude review-max の並行2ラウンドで収束）。各タスクは spec の §番号を参照する。設計リポジトリ正本: D3決定5 / D12決定3 / D13決定1・2 / D6決定9 / R11 / R12 / R14。
+**設計正本:** [spec](../specs/2026-07-08-wave1-plan5-control-plane-foundation-design.md)（codex xhigh + Claude review-max の並行2ラウンドで収束）。各タスクは spec の §番号を参照する。設計正本: D3決定5 / D12決定3 / D13決定1・2 / D6決定9 / R11 / R12 / R14。
 
 ## Global Constraints
 
@@ -314,13 +314,13 @@ pub fn ensure_tls_material(data_dir: &Path) -> Result<TlsMaterial, TlsError>;  /
 - [ ] **Step 2: main 配線 + graceful shutdown + fan-in 継続条件**（bind 失敗で非ゼロ exit=DB init と同格。アダプタ0台+api 有効で常駐）
 - [ ] **Step 3: 受け入れ基準4** — `grep -rin "disable\|insecure\|allow_public\|skip_auth\|no_auth" iotkit-gateway/src core/ops/src` で認証オフ/公開スイッチが無いことを確認（タスク手順として実施・出力を記録）
 - [ ] **Step 4: `cargo test --workspace`（466+新規 全緑）+ `cargo clippy --workspace --all-targets -- -D warnings` → commit** `feat(gateway): wire control-plane API into runtime (plan 5 close)`
-- [ ] **Step 5: 設計正本への還流**（spec §13）— 設計リポジトリ（`../docs/redesign/`）側の D13 保留節へ「工場リセット=setupモード再突入の意味論を計画5 spec で部分確定（fresh DB 復元=再突入）」、D13決定2 の回復経路実装確定、台帳 R14 行へ「計画5で骨格実装」を注記（別リポジトリのため**別コミット**、設計リポジトリの日本語 `docs:` 規約で）。progress.md / plan-review.md / README 更新 → iotkit-next 側 commit `docs: close wave1 plan5, unblock plan6 (R2 ingress)`
+- [ ] **Step 5: 設計正本への還流**（spec §13）— **Historical:** 計画5当時は別リポジトリだったため別コミットで還流した。2026-07-12以降は本リポジトリの `docs/redesign/` を同じ変更系列で更新する。
 
 ---
 
 ## Self-Review（plan-eval 反映後・記入済み）
 
-- **Spec coverage**: §4(Task 2,6) §5(Task 5) §6(Task 3,4,8) §7(Task 6,7,8) §8(Task 9) §9(Task 10 README) §10(Task 6,10) §11(各タスクのテスト、監査INSERT失敗rollback=Task 8・throttleリセット=Task 6) §12(Task 8 基準3=ai×GET・Task 10) §13(Task 10 Step 5 で設計リポジトリへ別コミット還流)。
+- **Spec coverage**: §4(Task 2,6) §5(Task 5) §6(Task 3,4,8) §7(Task 6,7,8) §8(Task 9) §9(Task 10 README) §10(Task 6,10) §11(各タスクのテスト、監査INSERT失敗rollback=Task 8・throttleリセット=Task 6) §12(Task 8 基準3=ai×GET・Task 10) §13(Task 10 Step 5 で設計正本へ還流)。
 - **Type consistency**: `Tier`/`Actor`/`ActorKind` は **Task 2（tier.rs）** 定義を Task 3/4/6/8 が消費（順序逆転を解消=plan-eval I1）。`OpError`/`OpDescriptor`/`SETUP_ALLOWED_OPS` は Task 3 定義を Task 4/6/8 が消費。`find_series_by_key`/`list_series`（series_key_of は i32）は Task 4 定義を Task 7 が消費。`fingerprint_of_pem` は **core/ops（Task 5）** 定義を gateway tls.rs（Task 5）と gatewayctl（Task 9）が消費（クレート境界解消=plan-eval I6）。`ApiHandle` は Task 6 定義を Task 10 が消費。
 - **依存順序**: Task 1(骨格+スパイク)→2(型+auth)→3(dispatch)→4(catalog)→5(TLS+fingerprint)→6(lib化+server)→7/8(routes)→9(CLI)→10(配線)。各タスクが独立コンパイル可能（Task 2 が型を持つため Task 2 単独で緑）。
 - **Placeholder scan**: 「echo 抑制なしを許容」（Task 9）は判断確定済み（rpassword を足さない）。TBD なし。

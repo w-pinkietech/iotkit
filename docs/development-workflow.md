@@ -2,8 +2,8 @@
 
 Status: **Authoritative** (2026-07-11)
 
-This document is the single workflow authority for `iotkit-next`. Design authority remains
-`../docs/redesign/`; structural authority remains `docs/architecture.md`. `CLAUDE.md`,
+This document is the single workflow authority for `iotkit-next`. Design authority is
+`docs/redesign/`; structural authority remains `docs/architecture.md`. `CLAUDE.md`,
 `AGENTS.md`, and `.claude/skills/` may add role-specific mechanics but must not contradict
 this document.
 

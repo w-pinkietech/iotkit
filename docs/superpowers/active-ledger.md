@@ -7,11 +7,12 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `d11bc8d`
+- Artifact/base HEAD: `f8186ea`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: Plan 6 Task 4 settled and committed; Task 5 dispatch preparation is next;
-  product code remains worker-only
+- Active phase: approved single-repository context migration before Plan 6 Task 5; design corpus
+  imported from frozen `iotkit-redesign` commit `f10c2a5` through split-history commit `28fe683`;
+  migration is not SETTLED or published yet; product code remains worker-only
 
 ## Mission
 
@@ -21,6 +22,9 @@ git/disk/test. Never store secrets here.
   separation.
 - Deliver Plan 6 as Large / Red under Sol/high through final settlement.
 - External push/PR/release is not authorized by this mission.
+- For the 2026-07-12 context-migration mission only, the user explicitly authorized the proposed
+  sequence including final pushes and freezing the former design repository. This does not grant
+  standing push/PR/release authority for Plan 6 product tasks.
 
 ## User decisions
 
@@ -62,8 +66,35 @@ git/disk/test. Never store secrets here.
   **Large / Red** by the workflow promotion rule. User authority is the explicit request to adopt
   per-step timing; scope is measurement/reporting only, with no product or review-strength change.
   It requires Sol/high independent review before its separate documentation commit.
+- 2026-07-12: Before Task 5, consolidate design authority and implementation context into
+  `iotkit-next` so one local or Codex Cloud clone can resume work. Import `docs/redesign/` with
+  history, move active references and restart guidance in-repository, avoid submodules/two-way
+  sync, publish the consolidated repository, and freeze `iotkit-redesign` with a destination
+  pointer. This authority-location change is **Large / Red**; the user's explicit approval settles
+  the value decision, while implementation still requires Sol/high independent review.
 
 ## Review state
+
+- Single-repository context migration: **NOT SETTLED**. Mission/design record:
+  `docs/superpowers/migrations/2026-07-12-single-repository-context.md`. Artifact/base
+  `f8186ea`; source design commit `f10c2a5`; history-preserving split commit `28fe683`.
+  Fresh Codex Sol/high review manifest `.review/context-consolidation.manifest` SHA-256
+  `e408b0171a603396faf9c51b25b25b90e44d189db0f2f2ab329220f4d2fab97e`; prompt
+  `.review/context-consolidation-review.md` SHA-256
+  `194c3607520ffa1d53770d814c55449903e255667152561d6b11eb64c7e27e6f`.
+  Initial result `/tmp/codex-runs/codex-context-consolidation-review-20260712-125311-387886.txt`
+  returned `Critical 0 / Important 3 / Minor 0`; all three findings have bounded fixes pending
+  final confirmation: include this ledger in the final bound artifact, stage every migration
+  file before confirmation/commit, and make pre-publication rollback preserve unrelated files.
+  Result SHA-256 `af64e233580149e4e9fb9f17b42460d39043dde14cc4fd2289530ba1b2efd47f`;
+  receipt SHA-256 `2aeb6c370f3cba632604def948d15504d6421da27e54d97df3ba8a110b0264fb`.
+  The final confirmation manifest intentionally binds this ledger; because a file cannot contain
+  the hash of a manifest that hashes the file itself, the final manifest/result/receipt hashes are
+  recorded in the resulting merge commit trailers and the immediate post-commit timing/settlement
+  ledger entry, not self-referentially in this pre-commit blob. Until that merge commit exists,
+  this migration is pending. Once the two-parent merge is committed with a zero-C/I bound receipt
+  and published with the old-repository pointer, the migration is SETTLED and Plan 6 Task 5 is the
+  next executable product work.
 
 - Plan-6 Task 4 default-off site-LAN HTTP listener foundation: **SETTLED and committed as
   `d11bc8d`**. Final manifest `.review/plan6-task4-confirm3.manifest` SHA-256
@@ -355,8 +386,11 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl`, with per-step wall
-   time measurement enabled from dispatch.
+1. Finish the single-repository context migration: update the old-repository pointer, verify tree
+   identity and local links, dispatch Sol/high independent review, settle findings, commit both
+   repositories, push, and verify the old repository is frozen.
+2. After settlement, prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl`,
+   with per-step wall time measurement enabled from dispatch.
 
 ## Verification
 
