@@ -46,6 +46,14 @@ git/disk/test. Never store secrets here.
   device-token revocation rollback; invalidate admin/operator/session authority; allow factory
   reset only from SSH or physical/local root; keep initial ownership local-CLI-only and defer
   batch provisioning to a separate pre-distribution deliverable.
+- 2026-07-12: Record declarative provisioning for multiple sensor devices on one gateway as an
+  **unsettled future candidate**, separate from both Plan 6 and the gateway-box/card distribution
+  deliverable. Candidate note:
+  `docs/superpowers/future/device-fleet-declarative-provisioning.md`. It may inventory non-secret
+  network intent and generate device-specific work, but preserves credentials per independent
+  authenticated network sender, forbids sharing across independent senders, requires explicit R14
+  apply, and keeps listener enablement separate, DHCP/router authority external, and retire
+  non-automatic. QR codes are not a requirement; they were only a discussion example.
 
 ## Review state
 
