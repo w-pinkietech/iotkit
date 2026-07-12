@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use iotkit_ingest_http::{
+use crate::{
     ExposureSnapshot, ListenerConfig, ListenerMode, SiteCidr, TlsMaterial, ValidatedListenerConfig,
     validate_peer,
 };
@@ -118,7 +118,7 @@ fn private_plaintext_is_degraded_and_never_valid_on_unsafe_exposure() {
 fn trusted_os_inventory_producer_observes_the_named_interface() {
     let exposure = match ExposureSnapshot::from_os("lo") {
         Ok(exposure) => exposure,
-        Err(iotkit_ingest_http::ListenerError::Io(error))
+        Err(crate::ListenerError::Io(error))
             if error.kind() == std::io::ErrorKind::PermissionDenied =>
         {
             eprintln!("ENVIRONMENTAL SKIP: sandbox denied OS interface inventory");
@@ -149,9 +149,9 @@ async fn safe_loopback_listener_can_be_constructed_directly_for_tests() {
     );
     config.interface = "lo".into();
     let validated = ValidatedListenerConfig::new_for_test(config, &exposure).unwrap();
-    let listener = match iotkit_ingest_http::Listener::bind(validated).await {
+    let listener = match crate::Listener::bind(validated).await {
         Ok(listener) => listener,
-        Err(iotkit_ingest_http::ListenerError::Io(error))
+        Err(crate::ListenerError::Io(error))
             if error.kind() == std::io::ErrorKind::PermissionDenied =>
         {
             eprintln!("ENVIRONMENTAL SKIP: sandbox denied loopback bind; parent rerun required");
@@ -218,13 +218,13 @@ async fn tls_listener_handshakes_before_exposing_a_stream_and_rejects_plaintext(
         ListenerMode::Tls(material),
     );
     config.interface = "lo".into();
-    let listener = match iotkit_ingest_http::Listener::bind(
+    let listener = match crate::Listener::bind(
         ValidatedListenerConfig::new_for_test(config, &exposure).unwrap(),
     )
     .await
     {
         Ok(listener) => std::sync::Arc::new(listener),
-        Err(iotkit_ingest_http::ListenerError::Io(error))
+        Err(crate::ListenerError::Io(error))
             if error.kind() == std::io::ErrorKind::PermissionDenied =>
         {
             eprintln!("ENVIRONMENTAL SKIP: sandbox denied loopback bind; parent rerun required");
@@ -262,8 +262,5 @@ async fn tls_listener_handshakes_before_exposing_a_stream_and_rejects_plaintext(
         .await
         .unwrap();
     let (accepted, _) = tls_accept.await.unwrap().unwrap();
-    assert!(matches!(
-        accepted,
-        iotkit_ingest_http::AcceptedStream::Tls(_)
-    ));
+    assert!(matches!(accepted, crate::AcceptedStream::Tls(_)));
 }

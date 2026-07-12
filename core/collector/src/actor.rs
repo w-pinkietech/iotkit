@@ -1,4 +1,5 @@
 use crate::freshness::{FreshnessClock, FreshnessLimits, FreshnessSnapshot, UntrustedSystemClock};
+use crate::principal::DevicePrincipalIssuer;
 use crate::principal::IngestPrincipal;
 use crate::principal::LocalPrincipalIssuer;
 use crate::registry_policy::{RegistryPolicy, RegistryVerdict, is_series_level};
@@ -26,9 +27,23 @@ pub struct IngestRequest {
 
 struct QueuedRequest {
     request: IngestRequest,
-    ack_tx: oneshot::Sender<Result<EnvelopeAck, SubmitError>>,
+    output: RequestedOutput,
 }
 
+enum RequestedOutput {
+    Submit(oneshot::Sender<Result<EnvelopeAck, SubmitError>>),
+    Validate(oneshot::Sender<Result<ValidationReport, SubmitError>>),
+}
+
+/// Sender handles expose submission only; authenticated-principal authority is returned once
+/// from `Collector::spawn_device_composed` and cannot be recovered from a clone.
+///
+/// ```compile_fail
+/// use iotkit_core_collector::Collector;
+/// fn cannot_mint_from_sender(collector: &Collector) {
+///     let _issuer = collector.device_principal_issuer();
+/// }
+/// ```
 #[derive(Clone)]
 pub struct Collector {
     tx: mpsc::Sender<QueuedRequest>,
@@ -57,6 +72,9 @@ pub enum SubmitError {
     /// Absolute freshness comparison requires the shared trusted wall clock.
     /// Network Task 5 maps this to 503 with no ingest acknowledgement.
     ClockUntrusted,
+    /// The credential proof lost its ordering race with a committed authority mutation.
+    /// Network ingress maps this to 401 with no acknowledgement.
+    AuthenticationStale,
     /// コレクタタスク死亡(キュー閉鎖)。送信を継続しても回復しない。
     Closed,
 }
@@ -81,6 +99,21 @@ impl Collector {
     ) -> (Collector, LocalPrincipalIssuer, tokio::task::JoinHandle<()>) {
         let (collector, handle) = Self::spawn(db, policy, queue_cap);
         (collector, LocalPrincipalIssuer::new(), handle)
+    }
+
+    /// Start a collector and return the non-cloneable device-auth composition capability.
+    /// Ordinary `Collector` clones expose submission only and cannot recreate this issuer.
+    pub fn spawn_device_composed(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+    ) -> (
+        Collector,
+        DevicePrincipalIssuer,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (collector, handle) = Self::spawn(db, policy, queue_cap);
+        (collector, DevicePrincipalIssuer::new(), handle)
     }
 
     pub fn spawn(
@@ -138,12 +171,14 @@ impl Collector {
                 let taken = std::mem::take(&mut cache);
                 let policy = Arc::clone(&policy);
                 let request = req.request;
+                let commit = matches!(req.output, RequestedOutput::Submit(_));
+                let purge_after_success = commit;
                 let freshness_clock = Arc::clone(&freshness_clock);
                 let intrusion_tx = intrusion_tx.clone();
                 let result = db
                     .with_conn(move |conn| {
                         let mut c = taken;
-                        let outcome = process_envelope(
+                        let outcome = process_envelope_mode(
                             conn,
                             &mut c,
                             policy.as_ref(),
@@ -151,6 +186,7 @@ impl Collector {
                             freshness_limits,
                             intrusion_tx.as_ref(),
                             &request,
+                            commit,
                         );
                         Ok((outcome, c))
                     })
@@ -158,14 +194,42 @@ impl Collector {
                 match result {
                     Ok((Ok(ack), c)) => {
                         cache = c;
-                        let _ = req.ack_tx.send(Ok(ack));
-                        // 計画4のTTL/保持ワイヤリング着地までの日和見パージ(受理トランザクション
-                        // の外・別途with_connで実行。ack耐久性には影響しない)。
-                        maybe_purge_dedup(&db, purge_interval_ms, &mut last_purge_ms).await;
+                        match req.output {
+                            RequestedOutput::Submit(tx) => {
+                                let _ = tx.send(Ok(ack));
+                            }
+                            RequestedOutput::Validate(tx) => {
+                                let _ = tx.send(Ok(validation_report_from_ack(ack)));
+                            }
+                        }
+                        if purge_after_success {
+                            // 計画4のTTL/保持ワイヤリング着地までの日和見パージ(受理トランザクション
+                            // の外・別途with_connで実行。ack耐久性には影響しない)。Validationは
+                            // product/custody stateへの書き込みを一切起動しない。
+                            maybe_purge_dedup(&db, purge_interval_ms, &mut last_purge_ms).await;
+                        }
                     }
                     Ok((Err(ProcessError::ClockUntrusted), c)) => {
                         cache = c;
-                        let _ = req.ack_tx.send(Err(SubmitError::ClockUntrusted));
+                        match req.output {
+                            RequestedOutput::Submit(tx) => {
+                                let _ = tx.send(Err(SubmitError::ClockUntrusted));
+                            }
+                            RequestedOutput::Validate(tx) => {
+                                let _ = tx.send(Err(SubmitError::ClockUntrusted));
+                            }
+                        }
+                    }
+                    Ok((Err(ProcessError::AuthenticationStale), c)) => {
+                        cache = c;
+                        match req.output {
+                            RequestedOutput::Submit(tx) => {
+                                let _ = tx.send(Err(SubmitError::AuthenticationStale));
+                            }
+                            RequestedOutput::Validate(tx) => {
+                                let _ = tx.send(Err(SubmitError::AuthenticationStale));
+                            }
+                        }
                     }
                     Ok((Err(ProcessError::Storage(e)), _c)) => {
                         tracing::error!(error = %e, "collector: storage failure (envelope aborted)");
@@ -190,12 +254,29 @@ impl Collector {
     pub async fn submit(&self, request: IngestRequest) -> Result<EnvelopeAck, SubmitError> {
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
-            .send(QueuedRequest { request, ack_tx })
+            .send(QueuedRequest {
+                request,
+                output: RequestedOutput::Submit(ack_tx),
+            })
             .await
             .map_err(|_| SubmitError::Closed)?;
         // ack_txドロップ(ストレージ失敗)はNoAck。コレクタ死亡による中途ドロップも
         // 保守的にNoAckとする(次のsubmitがClosedを返す)。
         ack_rx.await.map_err(|_| SubmitError::NoAck)?
+    }
+
+    /// Run the same deterministic collector checks while rolling back all product and custody
+    /// writes. Security intrusion signals remain allowed by the Plan 6 validation contract.
+    pub async fn validate(&self, request: IngestRequest) -> Result<ValidationReport, SubmitError> {
+        let (report_tx, report_rx) = oneshot::channel();
+        self.tx
+            .send(QueuedRequest {
+                request,
+                output: RequestedOutput::Validate(report_tx),
+            })
+            .await
+            .map_err(|_| SubmitError::Closed)?;
+        report_rx.await.map_err(|_| SubmitError::NoAck)?
     }
 }
 
@@ -203,6 +284,7 @@ impl Collector {
 enum ProcessError {
     Storage(String),
     ClockUntrusted,
+    AuthenticationStale,
 }
 
 impl From<String> for ProcessError {
@@ -252,6 +334,7 @@ async fn maybe_purge_dedup(db: &DbHandle, purge_interval_ms: i64, last_purge_ms:
 /// 未耐久データにRejectedを返すと無音損失になる(D1)。呼び出し元はErrに対してack_txを
 /// ドロップし、送信側の再送に委ねる。トランザクションはコミットせずに終わるため自動ロールバック
 /// される(部分コミットしない)。
+#[cfg(test)]
 fn process_envelope(
     conn: &rusqlite::Connection,
     cache: &mut ResolutionCache,
@@ -261,9 +344,37 @@ fn process_envelope(
     intrusion_tx: Option<&mpsc::Sender<IntrusionSignal>>,
     request: &IngestRequest,
 ) -> Result<EnvelopeAck, ProcessError> {
+    process_envelope_mode(
+        conn,
+        cache,
+        policy,
+        freshness_clock,
+        freshness_limits,
+        intrusion_tx,
+        request,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_envelope_mode(
+    conn: &rusqlite::Connection,
+    cache: &mut ResolutionCache,
+    policy: &dyn RegistryPolicy,
+    freshness_clock: &dyn FreshnessClock,
+    freshness_limits: FreshnessLimits,
+    intrusion_tx: Option<&mpsc::Sender<IntrusionSignal>>,
+    request: &IngestRequest,
+    commit: bool,
+) -> Result<EnvelopeAck, ProcessError> {
     let principal = &request.principal;
     let envelope = &request.envelope;
     let eid = envelope.envelope_id.clone();
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| ProcessError::Storage(e.to_string()))?;
+    if !authentication_is_current_at_serialization(&tx, principal)? {
+        return Err(ProcessError::AuthenticationStale);
+    }
     if envelope.source != principal.configured_source() {
         emit_intrusion(intrusion_tx, principal, IntrusionKind::SourceMismatch);
         return Ok(EnvelopeAck {
@@ -293,27 +404,27 @@ fn process_envelope(
         });
     }
     let clock = freshness_clock
-        .snapshot(conn)
+        .snapshot(&tx)
         .map_err(ProcessError::Storage)?;
     if clock.trusted_wall_time_ms.is_none() && envelope.items.iter().any(requires_absolute_time) {
         return Err(ProcessError::ClockUntrusted);
     }
-    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| ProcessError::Storage(e.to_string()))?;
     let generation = ledger::current_generation(&tx).map_err(|e| e.to_string())?;
     if generation != cache.generation {
         cache.devices.clear();
         cache.series.clear();
         cache.generation = generation;
     }
-    let claimed = ts::try_claim_envelope(&tx, principal.principal_id(), &envelope.envelope_id)
-        .map_err(|e| e.to_string())?;
-    if !claimed {
-        drop(tx); // dedup判定のみ・書き込みなし
-        return Ok(EnvelopeAck {
-            envelope_id: eid,
-            status: AckStatus::Duplicate,
-        });
+    if commit {
+        let claimed = ts::try_claim_envelope(&tx, principal.principal_id(), &envelope.envelope_id)
+            .map_err(|e| e.to_string())?;
+        if !claimed {
+            drop(tx); // dedup判定のみ・書き込みなし
+            return Ok(EnvelopeAck {
+                envelope_id: eid,
+                status: AckStatus::Duplicate,
+            });
+        }
     }
     let received_at = clock.received_at_ms;
     let epoch = ledger::ledger_epoch(&tx).map_err(|e| e.to_string())?;
@@ -336,13 +447,102 @@ fn process_envelope(
             &item_context,
         )?);
     }
-    tx.commit().map_err(|e| e.to_string())?;
+    if commit {
+        tx.commit().map_err(|e| e.to_string())?;
+    } else {
+        tx.rollback().map_err(|e| e.to_string())?;
+        // Validation may have populated IDs for rows that were deliberately rolled back.
+        cache.devices.clear();
+        cache.series.clear();
+    }
     Ok(EnvelopeAck {
         envelope_id: eid,
         status: AckStatus::Accepted {
             items: item_statuses,
         },
     })
+}
+
+fn authentication_is_current_at_serialization(
+    conn: &rusqlite::Connection,
+    principal: &IngestPrincipal,
+) -> Result<bool, ProcessError> {
+    if principal.actor_kind() != crate::principal::IngestActorKind::DeviceToken {
+        return Ok(true);
+    }
+    let (Some(credential_id), Some(auth_epoch), Some(auth_generation), Some(material_generation)) = (
+        principal.credential_id(),
+        principal.auth_epoch(),
+        principal.auth_generation(),
+        principal.principal_material_generation(),
+    ) else {
+        #[cfg(test)]
+        return Ok(true);
+        #[cfg(not(test))]
+        return Ok(false);
+    };
+    conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM auth_state a
+           JOIN device_credentials c ON c.credential_id=?1
+           JOIN live_device_ingest_principals p ON p.principal_id=c.principal_id
+           WHERE a.id=1 AND c.principal_id=?2 AND c.auth_epoch=?3
+             AND c.state IN ('current','pending')
+             AND a.auth_epoch=?3 AND a.auth_generation=?4
+             AND a.device_credential_generation=?5
+         )",
+        rusqlite::params![
+            credential_id,
+            principal.principal_id(),
+            auth_epoch,
+            auth_generation,
+            material_generation,
+        ],
+        |row| row.get(0),
+    )
+    .map_err(|error| ProcessError::Storage(error.to_string()))
+}
+
+fn validation_report_from_ack(ack: EnvelopeAck) -> ValidationReport {
+    let issues = match ack.status {
+        AckStatus::Accepted { items } => items
+            .into_iter()
+            .enumerate()
+            .filter_map(|(item_index, status)| match status {
+                ItemStatus::Stored { .. } => None,
+                ItemStatus::ItemRejected {
+                    reason_code,
+                    message,
+                    field_path,
+                    schema_hint,
+                } => Some(ValidationIssue {
+                    item_index: Some(item_index),
+                    reason_code,
+                    message,
+                    field_path,
+                    schema_hint,
+                }),
+            })
+            .collect(),
+        AckStatus::Rejected {
+            reason_code,
+            message,
+            field_path,
+            schema_hint,
+        } => vec![ValidationIssue {
+            item_index: None,
+            reason_code,
+            message,
+            field_path,
+            schema_hint,
+        }],
+        AckStatus::Duplicate | AckStatus::Deferred => Vec::new(),
+    };
+    ValidationReport {
+        envelope_id: ack.envelope_id,
+        valid: issues.is_empty(),
+        issues,
+    }
 }
 
 fn emit_intrusion(
@@ -827,6 +1027,58 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn device_principal_issuer_is_returned_only_by_receiver_composition() {
+        let db = test_db();
+        let (collector, _issuer, _handle) =
+            Collector::spawn_device_composed(db, Arc::new(PermissiveRegistry), 16);
+        let clone = collector.clone();
+        drop(clone);
+    }
+
+    #[tokio::test]
+    async fn validation_runs_collector_rules_without_product_or_custody_writes() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut request = env("validate-1", "ble:aa", "temperature_c");
+        request.envelope.items.push(ReadingItem {
+            subject_hint: Some("ble:aa".into()),
+            measurement_key: "not valid!".into(),
+            ..request.envelope.items[0].clone()
+        });
+
+        let before: (i64, i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?,
+                    conn.query_row("SELECT COUNT(*) FROM ingest_dedup", [], |row| row.get(0))?,
+                    conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |row| row.get(0))?,
+                ))
+            })
+            .unwrap();
+        let report = collector.validate(request).await.unwrap();
+        let after: (i64, i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?,
+                    conn.query_row("SELECT COUNT(*) FROM ingest_dedup", [], |row| row.get(0))?,
+                    conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |row| row.get(0))?,
+                ))
+            })
+            .unwrap();
+
+        assert_eq!(before, after);
+        assert!(!report.valid);
+        assert_eq!(report.envelope_id, "validate-1");
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].item_index, Some(1));
+        assert_eq!(
+            report.issues[0].reason_code,
+            ReasonCode::MalformedMeasurementKey
+        );
     }
 
     #[tokio::test]
@@ -1451,6 +1703,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn validation_never_triggers_opportunistic_dedup_purge() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        let old_at = now_ms() - 100 * 60 * 60 * 1000;
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ingest_dedup (sender_id, envelope_id, received_at)
+                 VALUES ('validation-purge-sentinel', 'old-env', ?1)",
+                [old_at],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let (collector, _h) =
+            Collector::spawn_with_purge_interval(db.clone(), Arc::new(PermissiveRegistry), 16, 0);
+        collector
+            .validate(env("validate-purge-1", "ble:aa", "temperature_c"))
+            .await
+            .unwrap();
+        collector
+            .validate(env("validate-purge-2", "ble:aa", "humidity_pct"))
+            .await
+            .unwrap();
+
+        let sentinel_count: i64 = db
+            .with_conn_sync(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM ingest_dedup
+                     WHERE sender_id='validation-purge-sentinel'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(sentinel_count, 1, "validation must not mutate dedup state");
+    }
+
+    #[tokio::test]
     async fn cache_is_reset_after_storage_failure() {
         // 回帰テスト: process_itemはensure_seriesのINSERT直後(コミット前)にcache.seriesへ
         // 書き込む。同一envelope内の後続itemがストレージ失敗すると全体がロールバックされ、
@@ -1547,7 +1838,7 @@ mod tests {
         envelope: Envelope,
     ) -> IngestRequest {
         IngestRequest {
-            principal: IngestPrincipal::authenticated_device(
+            principal: IngestPrincipal::test_authenticated_device(
                 principal_id,
                 credential_id,
                 source,

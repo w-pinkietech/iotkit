@@ -31,9 +31,9 @@ pub use device_credentials::{
     CapacityHealth, CapacityStatus, CredentialReasonCode, DeviceAuthentication,
     DeviceAuthorityConfig, DeviceCredentialPresentation, DeviceCredentialRow,
     DeviceCredentialState, DevicePrincipal, DevicePrincipalRow, FlowWeight, StaleCredentialHealth,
-    authenticate_device, capacity_health, configured_stale_after_ms, device_auth_generation,
-    list_device_credentials, list_device_principals, replacement_backup_health,
-    stale_credential_health,
+    authenticate_device, authentication_is_current, capacity_health, configured_stale_after_ms,
+    device_auth_generation, inspect_device_credential, list_device_credentials,
+    list_device_principals, replacement_backup_health, stale_credential_health,
 };
 pub use fingerprint::fingerprint_of_pem;
 pub use ingress_listener::{

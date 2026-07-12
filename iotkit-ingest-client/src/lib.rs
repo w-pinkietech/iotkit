@@ -164,6 +164,20 @@ mod inproc {
                                 "trusted wall clock unavailable",
                             );
                         }
+                        Err(SubmitError::AuthenticationStale) => {
+                            // In-process principals never carry device-token proofs. If this
+                            // boundary invariant is violated, retain the envelope and fail
+                            // conservatively rather than manufacturing a terminal ack.
+                            if let Some(observer) = &observer {
+                                notify(observer, IngestClientEvent::SubmitNoAck);
+                            }
+                            schedule_retry(
+                                &mut backoff_until,
+                                &mut attempt,
+                                &envelope.envelope_id,
+                                "collector rejected an impossible local authentication proof",
+                            );
+                        }
                         Err(SubmitError::Closed) => {
                             tracing::error!(
                                 spooled = spool.len(),

@@ -477,29 +477,71 @@ pub fn authenticate_device(
     authenticate_device_with_clock(conn, plaintext, &SystemCredentialClock)
 }
 
-pub(crate) fn authenticate_device_with_clock(
+/// Authenticate bearer material without updating last-used/proven/audit state.
+/// This is the side-effect-free credential boundary used by `/ingest/validate`.
+pub fn inspect_device_credential(
     conn: &Connection,
     plaintext: &str,
-    clock: &dyn CredentialClock,
 ) -> Result<Option<DeviceAuthentication>, OpsError> {
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let result = authenticate_device_in_tx(&tx, plaintext, clock)?;
-    tx.commit()?;
-    Ok(result)
+    Ok(lookup_device_credential(conn, plaintext)?.map(|matched| matched.authentication))
 }
 
-fn authenticate_device_in_tx(
-    tx: &Transaction<'_>,
-    plaintext: &str,
-    clock: &dyn CredentialClock,
-) -> Result<Option<DeviceAuthentication>, OpsError> {
-    let candidate = Sha256::digest(plaintext.as_bytes());
-    let (current_epoch, auth_generation): (String, i64) = tx.query_row(
-        "SELECT auth_epoch, auth_generation FROM auth_state WHERE id=1",
+/// Recheck every authority generation and the active credential row immediately before
+/// admission/handoff. This closes cache races with revoke, promotion, reset, and restore.
+pub fn authentication_is_current(
+    conn: &Connection,
+    authentication: &DeviceAuthentication,
+) -> Result<bool, OpsError> {
+    let principal = authentication.principal();
+    let (auth_epoch, auth_generation, material_generation): (String, i64, i64) = conn.query_row(
+        "SELECT auth_epoch, auth_generation, device_credential_generation
+         FROM auth_state WHERE id=1",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    let row = tx
+    if auth_epoch != principal.auth_epoch()
+        || auth_generation != authentication.auth_generation()
+        || material_generation != authentication.principal_material_generation()
+    {
+        return Ok(false);
+    }
+    Ok(conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM device_credentials c
+           JOIN live_device_ingest_principals p ON p.principal_id=c.principal_id
+           WHERE c.credential_id=?1 AND c.principal_id=?2 AND c.auth_epoch=?3
+             AND c.state IN ('current','pending')
+         )",
+        params![
+            principal.credential_id(),
+            principal.principal_id(),
+            principal.auth_epoch()
+        ],
+        |row| row.get(0),
+    )?)
+}
+
+struct MatchedAuthentication {
+    authentication: DeviceAuthentication,
+    last_used: Option<i64>,
+    issued_at: i64,
+    proven_at: Option<i64>,
+    confirmed_at: Option<i64>,
+}
+
+fn lookup_device_credential(
+    conn: &Connection,
+    plaintext: &str,
+) -> Result<Option<MatchedAuthentication>, OpsError> {
+    let candidate = Sha256::digest(plaintext.as_bytes());
+    let (current_epoch, auth_generation, material_generation): (String, i64, i64) = conn
+        .query_row(
+            "SELECT auth_epoch, auth_generation, device_credential_generation
+             FROM auth_state WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    let row = conn
         .query_row(
             "SELECT c.credential_id, c.principal_id, c.token_hash, c.auth_epoch, c.state,
                 p.device_system_id, p.flow_class, p.profile, c.last_used_at,
@@ -555,11 +597,61 @@ fn authenticate_device_in_tx(
     {
         return Ok(None);
     }
-    let scopes = principal_scopes(tx, &principal_id)?;
+    let scopes = principal_scopes(conn, &principal_id)?;
     if scopes.is_empty() || scopes.len() > DEVICE_PRINCIPAL_SCOPE_CAP {
         return Ok(None);
     }
-    let state = DeviceCredentialState::parse(&state)?;
+    Ok(Some(MatchedAuthentication {
+        authentication: DeviceAuthentication {
+            principal: DevicePrincipal {
+                principal_id,
+                credential_id,
+                device_system_id: system_id_from_blob(device)?,
+                scopes,
+                flow_class: flow,
+                profile,
+                auth_epoch: epoch,
+            },
+            credential_state: DeviceCredentialState::parse(&state)?,
+            auth_generation,
+            principal_material_generation: material_generation,
+        },
+        last_used,
+        issued_at,
+        proven_at,
+        confirmed_at,
+    }))
+}
+
+pub(crate) fn authenticate_device_with_clock(
+    conn: &Connection,
+    plaintext: &str,
+    clock: &dyn CredentialClock,
+) -> Result<Option<DeviceAuthentication>, OpsError> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let result = authenticate_device_in_tx(&tx, plaintext, clock)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+fn authenticate_device_in_tx(
+    tx: &Transaction<'_>,
+    plaintext: &str,
+    clock: &dyn CredentialClock,
+) -> Result<Option<DeviceAuthentication>, OpsError> {
+    let Some(matched) = lookup_device_credential(tx, plaintext)? else {
+        return Ok(None);
+    };
+    let MatchedAuthentication {
+        mut authentication,
+        last_used,
+        issued_at,
+        proven_at,
+        confirmed_at,
+    } = matched;
+    let credential_id = authentication.principal.credential_id.clone();
+    let current_epoch = authentication.principal.auth_epoch.clone();
+    let state = authentication.credential_state;
     let observed_now = clock.now_ms();
     let now = logical_lifecycle_time(
         observed_now,
@@ -607,21 +699,10 @@ fn authenticate_device_in_tx(
                 .to_string(),
         )?;
     }
-    let material_generation = device_auth_generation(tx)?;
-    Ok(Some(DeviceAuthentication {
-        principal: DevicePrincipal {
-            principal_id,
-            credential_id,
-            device_system_id: system_id_from_blob(device)?,
-            scopes,
-            flow_class: flow,
-            profile,
-            auth_epoch: epoch,
-        },
-        credential_state: state,
-        auth_generation,
-        principal_material_generation: material_generation,
-    }))
+    // Lifecycle writes are generation-tracked. Return the post-write generation so the
+    // authenticator's immediate race-closing recheck does not invalidate its own commit.
+    authentication.principal_material_generation = device_auth_generation(tx)?;
+    Ok(Some(authentication))
 }
 
 pub(crate) fn confirm_device_credential_in_tx(

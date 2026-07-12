@@ -7,12 +7,13 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `a754ce0`
+- Artifact/base HEAD: `30c369f`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: hybrid local-Main/Codex-Cloud candidate lane is settled locally; Plan 6 Task 5 is
-  next and product code remains worker-only
-- Task 5 local implementation preparation started from clean `87e3d87`; pre-dispatch
+- Active phase: Plan 6 Task 5 implementation and independent review are settled; its local commit is
+  the next action. Task 6 has not started, and product code remains worker-only.
+- Task 5 local implementation preparation started from clean `87e3d87`, with review-isolation
+  authority committed at `30c369f`; pre-dispatch
   `scripts/verify.sh` passed on 2026-07-12.
 
 ## Mission
@@ -466,14 +467,50 @@ distribution gate. These choices are now being folded into canon and the formal 
   alter the approved product envelope. Reviewers must confirm this classification on the final
   workflow round.
 
+## Plan 6 Task 5 settlement
+
+- **SETTLED for local commit** on base `30c369f31e47522d2aedbc0faf1bbce179f1ae3f`.
+  Final staged candidate tree: `4fc70c036817ab037d7f5ac03bc59ded62e3ce49`.
+- Final frozen diff `.review/t5-fix4b-review.diff` SHA-256
+  `e56797a58dd730f225794478e350bc0f13cd0f35aae5f8f3bad446da4a0bb167`; manifest
+  `.review/t5-fix4b.manifest` SHA-256
+  `c8ee79ef07c2a2518cb8ea83d9f4a5797ac14b59d8fd5638fef7bc74ceb6af25`; implementation
+  report SHA-256 `5f747a8ddfb99b12b22ad34536c7f058b242ce2741d3e6a1977f238fd5d6100d`.
+- A fresh, dedicated, no-inherited-context final reviewer independently verified the full Task 5
+  candidate, every manifest blob, provenance, repeated real-socket timeout tests, auth/custody
+  serialization, validation isolation, resource bounds, public API closure, and full verification.
+  Verdict **APPROVE**, Critical 0 / Important 0 / Minor 1. Review SHA-256
+  `390e250aa51ef6a0a0e517af0c2df52ef166b32e7b27ae7c8390616d59d455da`.
+  The sole Minor is stale Task 4-era crate-level wording in `iotkit-ingest-http/src/lib.rs`; it is
+  non-behavioral and does not block settlement.
+- Main-owned `.review/t5-fix4b-main-verify.log` repeated both new real-socket tests five times,
+  then passed the HTTP, collector, device-credential, workspace, layer, formatting, and Clippy
+  checks. `.review/t5-fix4b-main-verify.exit` is `0`; final `scripts/verify.sh` was green.
+- Review progression across fresh dedicated agents was C1/I4/M1 -> C0/I1/M1 -> C0/I2/M0 ->
+  C0/I2/M0 -> C0/I0/M1. Four focused fix waves plus one test-synchronization correction closed
+  every Critical and Important finding. All implementation workers used `gpt-5.6-sol/high`.
+- Timing boundary through final review settlement: **2h10m27s exact**, from review-isolation
+  commit `30c369f` at 2026-07-12T15:54:58+09:00 to the final review artifact at
+  2026-07-12T18:05:25+09:00. Later receipt-bound worker time was **33m50s exact** across fix2,
+  fix3, fix4, and fix4b; initial implementation and fix1 predated successful receipts, so their
+  split is reconstructed from artifact mtimes. Planning/preparation was complete at the start
+  boundary; implementation, verification, review, and finding-fix work overlapped only where
+  explicitly monitored. Documentation/commit time is measured separately at handoff. One fix4b
+  dispatch was rejected before code execution by quota and is counted as one retry.
+- No push, PR, release, listener enablement, or Task 6 work is authorized or performed.
+  `INGRESS_READY=false` remains the required boundary.
+
 ## Next executable work
 
-1. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl` or an explicitly
-   authorized Cloud candidate task,
-   with per-step wall time measurement enabled from dispatch.
+1. Commit the settled Plan 6 Task 5 candidate locally, then prepare Task 6 listener/readiness
+   integration under the same worker-only, Sol/high, fresh-review-agent workflow. Do not push
+   without separate user authority.
 
 ## Verification
 
+- Plan 6 Task 5: Main-owned focused and full verification passed, including ten repeated
+  real-socket header/idle-timeout probes; the final fresh no-context review returned C0/I0/M1
+  with APPROVE on the exact staged tree and frozen hashes below.
 - Single-repository context migration: imported `docs/redesign` tree SHA `3548c3e` exactly matches
   old `f10c2a5`; the merge parents are `f8186ea` and split-history `28fe683`; 100 changed-file
   local Markdown targets resolved; Main and independent-review `scripts/verify.sh` passed; both

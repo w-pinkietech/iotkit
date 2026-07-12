@@ -30,7 +30,52 @@ pub struct IngestPrincipal {
     scope: SubjectScope,
     flow_profile: String,
     auth_epoch: Option<String>,
+    auth_generation: Option<i64>,
+    principal_material_generation: Option<i64>,
     actor_kind: IngestActorKind,
+}
+
+pub struct AuthenticatedDeviceIdentity {
+    principal_id: String,
+    credential_id: String,
+    configured_source: String,
+    flow_profile: String,
+}
+
+impl AuthenticatedDeviceIdentity {
+    pub fn new(
+        principal_id: impl Into<String>,
+        credential_id: impl Into<String>,
+        configured_source: impl Into<String>,
+        flow_profile: impl Into<String>,
+    ) -> Self {
+        Self {
+            principal_id: principal_id.into(),
+            credential_id: credential_id.into(),
+            configured_source: configured_source.into(),
+            flow_profile: flow_profile.into(),
+        }
+    }
+}
+
+pub struct DeviceAuthorityProof {
+    auth_epoch: String,
+    auth_generation: i64,
+    principal_material_generation: i64,
+}
+
+impl DeviceAuthorityProof {
+    pub fn new(
+        auth_epoch: impl Into<String>,
+        auth_generation: i64,
+        principal_material_generation: i64,
+    ) -> Self {
+        Self {
+            auth_epoch: auth_epoch.into(),
+            auth_generation,
+            principal_material_generation,
+        }
+    }
 }
 
 impl IngestPrincipal {
@@ -45,18 +90,32 @@ impl IngestPrincipal {
             scope: SubjectScope::OfficialDiscovery,
             flow_profile: "trusted_in_process".into(),
             auth_epoch: None,
+            auth_generation: None,
+            principal_material_generation: None,
             actor_kind: IngestActorKind::OfficialAdapter,
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "device-principal construction is reserved for the Task 5 authenticator boundary"
-        )
-    )]
     pub(crate) fn authenticated_device(
+        identity: AuthenticatedDeviceIdentity,
+        allowed_subjects: impl IntoIterator<Item = SystemId>,
+        proof: DeviceAuthorityProof,
+    ) -> Self {
+        Self {
+            principal_id: identity.principal_id,
+            credential_id: Some(identity.credential_id),
+            configured_source: identity.configured_source,
+            scope: SubjectScope::Restricted(allowed_subjects.into_iter().collect()),
+            flow_profile: identity.flow_profile,
+            auth_epoch: Some(proof.auth_epoch),
+            auth_generation: Some(proof.auth_generation),
+            principal_material_generation: Some(proof.principal_material_generation),
+            actor_kind: IngestActorKind::DeviceToken,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_authenticated_device(
         principal_id: impl Into<String>,
         credential_id: impl Into<String>,
         configured_source: impl Into<String>,
@@ -71,6 +130,8 @@ impl IngestPrincipal {
             scope: SubjectScope::Restricted(allowed_subjects.into_iter().collect()),
             flow_profile: flow_profile.into(),
             auth_epoch: Some(auth_epoch.into()),
+            auth_generation: None,
+            principal_material_generation: None,
             actor_kind: IngestActorKind::DeviceToken,
         }
     }
@@ -125,6 +186,14 @@ impl IngestPrincipal {
         matches!(self.scope, SubjectScope::OfficialDiscovery)
             && self.actor_kind == IngestActorKind::OfficialAdapter
     }
+
+    pub(crate) fn auth_generation(&self) -> Option<i64> {
+        self.auth_generation
+    }
+
+    pub(crate) fn principal_material_generation(&self) -> Option<i64> {
+        self.principal_material_generation
+    }
 }
 
 /// Receiver-composition capability for creating trusted local principals.
@@ -137,6 +206,27 @@ impl IngestPrincipal {
 /// principal and cannot use this local-authority capability.
 pub struct LocalPrincipalIssuer {
     _private: (),
+}
+
+/// Non-cloneable composition capability for turning an authenticated device record into the
+/// collector's receiver-owned principal. HTTP handlers receive principals, never this authority.
+pub struct DevicePrincipalIssuer {
+    _private: (),
+}
+
+impl DevicePrincipalIssuer {
+    pub(crate) fn new() -> Self {
+        Self { _private: () }
+    }
+
+    pub fn authenticated_device(
+        &self,
+        identity: AuthenticatedDeviceIdentity,
+        allowed_subjects: impl IntoIterator<Item = SystemId>,
+        proof: DeviceAuthorityProof,
+    ) -> IngestPrincipal {
+        IngestPrincipal::authenticated_device(identity, allowed_subjects, proof)
+    }
 }
 
 impl LocalPrincipalIssuer {

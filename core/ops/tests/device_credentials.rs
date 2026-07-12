@@ -1,8 +1,9 @@
 use iotkit_core_ledger::{DeviceKind, DeviceState, NewDevice, SystemId};
 use iotkit_core_ops::{
     Actor, ActorKind, DeviceCredentialState, DispatchRequest, OpError, Tier,
-    authenticate_device as authenticate_device_public, capacity_health, dispatch,
-    list_device_credentials, replacement_backup_health, stale_credential_health, standard_catalog,
+    authenticate_device as authenticate_device_public, authentication_is_current, capacity_health,
+    dispatch, inspect_device_credential, list_device_credentials, replacement_backup_health,
+    stale_credential_health, standard_catalog,
 };
 use iotkit_core_storage::Migration;
 use rusqlite::{TransactionBehavior, params};
@@ -19,6 +20,38 @@ impl TestPresentation {
     fn consume(self) -> Zeroizing<String> {
         self.0
     }
+}
+
+#[test]
+fn read_only_authentication_does_not_prove_touch_or_audit_and_recheck_fails_after_revoke() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let (_sid, principal) = seed_principal(conn, "readonly-auth");
+        let (credential_id, secret) =
+            issue_at(conn, &principal, DeviceCredentialState::Pending, 211, 100);
+        let before: (Option<i64>, Option<i64>, i64) = conn.query_row(
+            "SELECT proven_at, last_used_at, (SELECT COUNT(*) FROM ledger_events)
+             FROM device_credentials WHERE credential_id=?1",
+            [&credential_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        let authentication = inspect_device_credential(conn, &secret).unwrap().unwrap();
+        let after: (Option<i64>, Option<i64>, i64) = conn.query_row(
+            "SELECT proven_at, last_used_at, (SELECT COUNT(*) FROM ledger_events)
+             FROM device_credentials WHERE credential_id=?1",
+            [&credential_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(before, after);
+        assert!(authentication_is_current(conn, &authentication).unwrap());
+
+        abandon_device_credential(conn, &principal, &credential_id, "pending_abandoned", 101)
+            .unwrap();
+        assert!(!authentication_is_current(conn, &authentication).unwrap());
+        Ok(())
+    })
+    .unwrap();
 }
 impl std::fmt::Debug for TestPresentation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1043,10 +1076,10 @@ fn confirmation_review_mutations_are_not_public_escape_hatches() {
 fn confirmation_review_authentication_query_is_indexed_and_single_candidate() {
     let source = include_str!("../src/device_credentials.rs");
     let auth = source
-        .split("fn authenticate_device_in_tx")
+        .split("fn lookup_device_credential")
         .nth(1)
         .expect("authentication implementation")
-        .split("pub(crate) fn confirm_device_credential")
+        .split("pub(crate) fn authenticate_device_with_clock")
         .next()
         .unwrap();
     assert!(auth.contains("c.token_hash=?"));

@@ -2,6 +2,93 @@
 //!
 //! HTTP routes and ingest-domain behavior deliberately do not live here yet. Task 4 only owns
 //! exposure classification, TLS material validation, peer checks, and socket construction.
+//!
+//! Test-only clocks, configuration constructors, and state probes are deliberately unavailable
+//! to default external consumers:
+//!
+//! A normal external consumer cannot provide an alternate admission clock:
+//!
+//! ```compile_fail
+//! #[derive(Clone)]
+//! struct ExternalManualClock(u64);
+//!
+//! impl iotkit_ingest_http::MonotonicClock for ExternalManualClock {
+//!     fn now_ms(&self) -> u64 {
+//!         self.0
+//!     }
+//! }
+//!
+//! let _ = iotkit_ingest_http::AdmissionController::new(
+//!     iotkit_ingest_http::AdmissionConfig::default(),
+//!     ExternalManualClock(7),
+//! )?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! The fixed production clock path remains available to normal external consumers:
+//!
+//! ```
+//! let _ = iotkit_ingest_http::AdmissionController::new(
+//!     iotkit_ingest_http::AdmissionConfig::default(),
+//!     iotkit_ingest_http::SystemMonotonicClock::default(),
+//! )?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ```compile_fail
+//! use iotkit_ingest_http::ManualMonotonicClock;
+//! let _ = ManualMonotonicClock::new(0);
+//! ```
+//!
+//! ```compile_fail
+//! let _ = iotkit_ingest_http::AdmissionConfig::for_test();
+//! ```
+//!
+//! ```compile_fail
+//! let _ = iotkit_ingest_http::HttpIngestConfig::for_test();
+//! ```
+//!
+//! ```compile_fail
+//! # use std::net::{IpAddr, Ipv4Addr};
+//! # let clock = iotkit_ingest_http::SystemMonotonicClock::default();
+//! # let admission = iotkit_ingest_http::AdmissionController::new(Default::default(), clock)?;
+//! let _ = admission.pre_auth_source_count();
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ```compile_fail
+//! # use std::net::{IpAddr, Ipv4Addr};
+//! let _ = iotkit_ingest_http::ExposureSnapshot::new(
+//!     "eth0",
+//!     [IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))],
+//!     false,
+//! );
+//! ```
+//!
+//! ```compile_fail
+//! # let exposure = iotkit_ingest_http::ExposureSnapshot::from_os("eth0")?;
+//! let _ = exposure.interface();
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ```compile_fail
+//! # let exposure = iotkit_ingest_http::ExposureSnapshot::from_os("eth0")?;
+//! let _ = exposure.addresses();
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ```compile_fail
+//! # let exposure = iotkit_ingest_http::ExposureSnapshot::from_os("eth0")?;
+//! let _ = exposure.internet_default_route();
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ```compile_fail
+//! # let exposure = iotkit_ingest_http::ExposureSnapshot::from_os("eth0")?;
+//! # let config: iotkit_ingest_http::ListenerConfig = unimplemented!();
+//! let _ = iotkit_ingest_http::ValidatedListenerConfig::new_for_test(config, &exposure);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::collections::BTreeSet;
 use std::io;
@@ -21,6 +108,19 @@ extern crate self as iotkit_ingest_http;
 
 mod transition;
 pub use transition::{ApplyError, ListenerTransition};
+
+mod admission;
+#[cfg(test)]
+pub(crate) use admission::ManualMonotonicClock;
+pub use admission::{
+    AdmissionConfig, AdmissionController, AdmissionDenied, AuthPermit, FlowClassLimit,
+    InvalidAdmissionConfig, MonotonicClock, PrincipalReservation, SystemMonotonicClock,
+};
+
+mod routes;
+pub use routes::{
+    HttpIngestConfig, HttpIngestService, InvalidHttpIngestConfig, ServeConnectionError,
+};
 
 pub type SiteCidr = IpNet;
 
@@ -117,7 +217,7 @@ pub struct ListenerConfig {
 pub struct ExposureSnapshot {
     interface: String,
     addresses: BTreeSet<IpAddr>,
-    internet_default_route: bool,
+    _internet_default_route: bool,
 }
 
 impl ExposureSnapshot {
@@ -164,12 +264,12 @@ impl ExposureSnapshot {
         Ok(Self {
             interface: interface.to_owned(),
             addresses,
-            internet_default_route: interface_has_default_route(interface)?,
+            _internet_default_route: interface_has_default_route(interface)?,
         })
     }
 
-    #[doc(hidden)]
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         interface: impl Into<String>,
         addresses: impl IntoIterator<Item = IpAddr>,
         internet_default_route: bool,
@@ -177,23 +277,18 @@ impl ExposureSnapshot {
         Self {
             interface: interface.into(),
             addresses: addresses.into_iter().map(normalize_ip).collect(),
-            internet_default_route,
+            _internet_default_route: internet_default_route,
         }
     }
 
-    #[doc(hidden)]
-    pub fn interface(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn interface(&self) -> &str {
         &self.interface
     }
 
-    #[doc(hidden)]
-    pub fn addresses(&self) -> &BTreeSet<IpAddr> {
+    #[cfg(test)]
+    pub(crate) fn addresses(&self) -> &BTreeSet<IpAddr> {
         &self.addresses
-    }
-
-    #[doc(hidden)]
-    pub fn internet_default_route(&self) -> bool {
-        self.internet_default_route
     }
 }
 
@@ -211,7 +306,8 @@ impl ValidatedListenerConfig {
 
     /// Loopback is deliberately available only to crate/integration tests. Product configuration
     /// must name a real private site interface and CIDR.
-    pub fn new_for_test(
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
         config: ListenerConfig,
         exposure: &ExposureSnapshot,
     ) -> Result<Self, ListenerError> {
@@ -324,6 +420,20 @@ impl Listener {
             )),
             None => Ok((AcceptedStream::PrivatePlaintext(stream), peer)),
         }
+    }
+
+    /// Accept one connection and finish its TLS handshake within a finite bound. Task 5 servers
+    /// use this boundary so a peer that connects and then stalls cannot occupy the accept path.
+    pub async fn accept_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<(AcceptedStream, SocketAddr), ListenerError> {
+        if timeout.is_zero() {
+            return Err(ListenerError::InvalidAcceptTimeout);
+        }
+        tokio::time::timeout(timeout, self.accept())
+            .await
+            .map_err(|_| ListenerError::AcceptTimeout)?
     }
 }
 
@@ -500,4 +610,16 @@ pub enum ListenerError {
     Io(#[from] io::Error),
     #[error("TLS handshake failed")]
     TlsHandshake(#[from] rustls::Error),
+    #[error("listener accept/TLS handshake timed out")]
+    AcceptTimeout,
+    #[error("listener accept timeout must be positive")]
+    InvalidAcceptTimeout,
 }
+
+#[cfg(test)]
+#[path = "../tests/admission.rs"]
+mod admission_tests;
+
+#[cfg(test)]
+#[path = "../tests/listener_boundary.rs"]
+mod listener_boundary_tests;
