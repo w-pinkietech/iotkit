@@ -12,6 +12,8 @@ git/disk/test. Never store secrets here.
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
 - Active phase: hybrid local-Main/Codex-Cloud candidate lane is settled locally; Plan 6 Task 5 is
   next and product code remains worker-only
+- Task 5 local implementation preparation started from clean `87e3d87`; pre-dispatch
+  `scripts/verify.sh` passed on 2026-07-12.
 
 ## Mission
 
@@ -81,6 +83,11 @@ git/disk/test. Never store secrets here.
   out by Cloud. The implementation was narrowed to disable automatic apply, label requested base
   as unverified, snapshot the exact prompt/query, preserve pre-dispatch pending state, and recover
   interrupted locks before confirmation review.
+- 2026-07-12: The user requires every implementation review and confirmation review to use a
+  dedicated fresh review agent with no inherited conversation context. Main may reconcile and
+  dispatch fixes but cannot substitute its own analysis for review. Each reviewer receives only
+  the exact requirements, artifact/manifest hash, review lenses, and verification commands, and
+  independently verifies Git/disk/test claims.
 
 ## Review state
 
