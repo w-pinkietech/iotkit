@@ -7,12 +7,12 @@ git/disk/test. Never store secrets here.
 
 - Repository: `iotkit-next`
 - Branch: `master`
-- Artifact/base HEAD: `f8186ea`
+- Artifact/base HEAD: `f10e95d`
 - Working tree at workflow-design start: user-owned untracked
   `docs/eval/autonomous-development-policy-discussion-2026-07-11.md`
-- Active phase: approved single-repository context migration before Plan 6 Task 5; design corpus
-  imported from frozen `iotkit-redesign` commit `f10c2a5` through split-history commit `28fe683`;
-  migration is not SETTLED or published yet; product code remains worker-only
+- Active phase: single-repository context migration is SETTLED, published, and the former design
+  repository is archived read-only; Plan 6 Task 5 dispatch preparation is next; product code
+  remains worker-only
 
 ## Mission
 
@@ -75,7 +75,8 @@ git/disk/test. Never store secrets here.
 
 ## Review state
 
-- Single-repository context migration: **NOT SETTLED**. Mission/design record:
+- Single-repository context migration: **SETTLED and published as two-parent merge `f10e95d`**.
+  Mission/design record:
   `docs/superpowers/migrations/2026-07-12-single-repository-context.md`. Artifact/base
   `f8186ea`; source design commit `f10c2a5`; history-preserving split commit `28fe683`.
   Fresh Codex Sol/high review manifest `.review/context-consolidation.manifest` SHA-256
@@ -83,18 +84,39 @@ git/disk/test. Never store secrets here.
   `.review/context-consolidation-review.md` SHA-256
   `194c3607520ffa1d53770d814c55449903e255667152561d6b11eb64c7e27e6f`.
   Initial result `/tmp/codex-runs/codex-context-consolidation-review-20260712-125311-387886.txt`
-  returned `Critical 0 / Important 3 / Minor 0`; all three findings have bounded fixes pending
-  final confirmation: include this ledger in the final bound artifact, stage every migration
+  returned `Critical 0 / Important 3 / Minor 0`; all three findings were resolved by the final
+  confirmation: include this ledger in the final bound artifact, stage every migration
   file before confirmation/commit, and make pre-publication rollback preserve unrelated files.
   Result SHA-256 `af64e233580149e4e9fb9f17b42460d39043dde14cc4fd2289530ba1b2efd47f`;
   receipt SHA-256 `2aeb6c370f3cba632604def948d15504d6421da27e54d97df3ba8a110b0264fb`.
-  The final confirmation manifest intentionally binds this ledger; because a file cannot contain
-  the hash of a manifest that hashes the file itself, the final manifest/result/receipt hashes are
-  recorded in the resulting merge commit trailers and the immediate post-commit timing/settlement
-  ledger entry, not self-referentially in this pre-commit blob. Until that merge commit exists,
-  this migration is pending. Once the two-parent merge is committed with a zero-C/I bound receipt
-  and published with the old-repository pointer, the migration is SETTLED and Plan 6 Task 5 is the
-  next executable product work.
+  Final confirmation manifest `.review/context-consolidation-confirm.manifest` SHA-256
+  `d5bd1b37d74e8bdba3c5b150cb622fe2de59c3612bee2a16ea117d4536acf373`; prompt
+  `.review/context-consolidation-confirm-review.md` SHA-256
+  `bb0fda4b7881391135c4bfae0a978e11918c1ae84e45e9d7529e6e6c3f84f191`.
+  Fresh Codex Sol/high returned `Critical 0 / Important 0 / Minor 0`; result SHA-256
+  `ae215588c33ae613b44716d2d745c870a4ebe366a3f19054b050f47525bcf29c`; receipt SHA-256
+  `4d265466ddb1e0c0a89d3f842157cbb0dcb6a3451f43bd9907d63eb8663d06a3`.
+  GitHub `iotkit-next/master` was verified at `f10e95d`. The former repository pointer was
+  independently confirmed at zero C/I, committed as `iotkit-redesign` `538f9c3`, pushed, and
+  GitHub reported `isArchived=true`. Its final confirmation manifest SHA-256 is
+  `c5b03ada2706f95fe190218320219ad956ecab8f3de6335ce9410dbfc05988a3`; prompt SHA-256
+  `7915caa6e325ee3e517246b46451276efe6b95fade87d6b8c360c58759e21888`; result SHA-256
+  `66738f225413654e57cd4c2d00bba2f707e5abb065b0fe8e1cb49ed7de6d7472`; receipt SHA-256
+  `facee5043fe8a93b7ccfc2909eecebb683b034b3cf7a172e03b50ea02088960f`.
+
+### Single-repository migration timing
+
+- Boundary: `2026-07-12T12:45:06+09:00` to `2026-07-12T13:09:51+09:00`; total **24m45s**.
+- Planning/research: **2m00s**; documentation implementation: **4m30s**; verification:
+  **1m35s**; independent review: **12m47s**; finding fixes/reverification: **2m22s**;
+  documentation/commit/push/archive: **1m31s**. Categories are non-overlapping and sum to the
+  total. The first three internal boundaries are reconstructed estimates; the other non-review
+  categories allocate exact inter-review intervals from the recorded actions rather than wrapper
+  measurements. Wrapper review times, Git commit times, and the total boundary are exact.
+- Model/effort: four fresh Codex reviews, all `gpt-5.6-sol/high`; two were confirmation rounds.
+  Initial migration review found 3 Important; its confirmation found zero. Initial freeze-pointer
+  review found 1 Important release-order issue; its confirmation found zero. No worker retries or
+  product implementation runs occurred.
 
 - Plan-6 Task 4 default-off site-LAN HTTP listener foundation: **SETTLED and committed as
   `d11bc8d`**. Final manifest `.review/plan6-task4-confirm3.manifest` SHA-256
@@ -386,14 +408,15 @@ distribution gate. These choices are now being folded into canon and the formal 
 
 ## Next executable work
 
-1. Finish the single-repository context migration: update the old-repository pointer, verify tree
-   identity and local links, dispatch Sol/high independent review, settle findings, commit both
-   repositories, push, and verify the old repository is frozen.
-2. After settlement, prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl`,
+1. Prepare and dispatch Plan 6 Task 5 through Sol/high `scripts/codex.sh impl`,
    with per-step wall time measurement enabled from dispatch.
 
 ## Verification
 
+- Single-repository context migration: imported `docs/redesign` tree SHA `3548c3e` exactly matches
+  old `f10c2a5`; the merge parents are `f8186ea` and split-history `28fe683`; 100 changed-file
+  local Markdown targets resolved; Main and independent-review `scripts/verify.sh` passed; both
+  remote tips and the old repository's archived state were verified after publication.
 - Plan 6 Task 4: final manifest review returned zero C/I/M; Main-owned `scripts/verify.sh` passed
   after the final fix round, including workspace tests, real sockets/OS inventory, Clippy
   `-D warnings`, layer checks, formatting, and `git diff --check`.
