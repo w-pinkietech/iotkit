@@ -113,8 +113,9 @@ mod admission;
 #[cfg(test)]
 pub(crate) use admission::ManualMonotonicClock;
 pub use admission::{
-    AdmissionConfig, AdmissionController, AdmissionDenied, AuthPermit, FlowClassLimit,
-    InvalidAdmissionConfig, MonotonicClock, PrincipalReservation, SystemMonotonicClock,
+    AdmissionConfig, AdmissionController, AdmissionDenied, AdmissionHealthSnapshot, AuthPermit,
+    FlowClassLimit, InvalidAdmissionConfig, MonotonicClock, PrincipalReservation,
+    SystemMonotonicClock, ThrottleEpisodeEvent,
 };
 
 mod routes;
@@ -381,6 +382,28 @@ pub struct Listener {
     tls: Option<TlsAcceptor>,
 }
 
+pub struct ServingListener {
+    local_addr: SocketAddr,
+    shutdown: tokio::sync::watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ServingListener {
+    pub fn is_finished(&self) -> bool {
+        self.task.is_finished()
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+}
+
+impl Drop for ServingListener {
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(true);
+    }
+}
+
 impl Listener {
     pub async fn bind(config: ValidatedListenerConfig) -> Result<Self, ListenerError> {
         let tls = match config.mode() {
@@ -434,6 +457,60 @@ impl Listener {
         tokio::time::timeout(timeout, self.accept())
             .await
             .map_err(|_| ListenerError::AcceptTimeout)?
+    }
+
+    pub fn serve<C: crate::MonotonicClock>(
+        self,
+        service: crate::HttpIngestService<C>,
+    ) -> io::Result<ServingListener> {
+        let local_addr = self.local_addr()?;
+        let listener = Arc::new(self);
+        let (shutdown, mut accept_shutdown) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                let accepted = tokio::select! {
+                    changed = accept_shutdown.changed() => {
+                        if changed.is_err() || *accept_shutdown.borrow() {
+                            break;
+                        }
+                        continue;
+                    }
+                    accepted = listener.accept_with_timeout(std::time::Duration::from_secs(5)) => accepted,
+                    Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+                };
+                let (stream, peer) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(ListenerError::AcceptTimeout | ListenerError::PeerOutsideSiteCidr) => {
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::error!(error = %error, "HTTP ingress accept loop stopped");
+                        break;
+                    }
+                };
+                let service = service.clone();
+                let mut connection_shutdown = accept_shutdown.clone();
+                connections.spawn(async move {
+                    tokio::select! {
+                        changed = connection_shutdown.changed() => {
+                            let _ = changed;
+                        }
+                        result = service.serve_connection(stream, peer) => {
+                            if let Err(error) = result {
+                                tracing::debug!(error = %error, "HTTP ingress connection ended");
+                            }
+                        }
+                    }
+                });
+            }
+            connections.shutdown().await;
+        });
+        Ok(ServingListener {
+            local_addr,
+            shutdown,
+            task,
+        })
     }
 }
 

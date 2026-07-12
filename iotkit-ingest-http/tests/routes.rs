@@ -2,6 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use crate::ManualMonotonicClock;
 use axum::body::Body;
@@ -331,6 +332,113 @@ async fn prove_subsequent_http_connection_enters(
         "subsequent valid HTTP connection must reach the service"
     );
     assert_eq!(serving.await.unwrap(), Ok(()));
+}
+
+async fn assert_listener_drop_closes_keep_alive<S>(
+    mut client: S,
+    serving: crate::ServingListener,
+    reason: &str,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    client
+        .write_all(b"GET /api/v1/ingest HTTP/1.1\r\nHost: local\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    while !response.windows(4).any(|window| window == b"\r\n\r\n") {
+        let mut chunk = [0_u8; 1024];
+        let read = client.read(&mut chunk).await.unwrap();
+        assert_ne!(read, 0);
+        response.extend_from_slice(&chunk[..read]);
+    }
+    assert!(response.starts_with(b"HTTP/1.1 405"));
+
+    drop(serving);
+    let mut byte = [0_u8; 1];
+    let closed = tokio::time::timeout(Duration::from_secs(1), client.read(&mut byte))
+        .await
+        .unwrap_or_else(|_| panic!("{reason}: established keep-alive was not cancelled"));
+    match closed {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+            ) => {}
+        other => panic!("{reason}: invalidated connection remained usable: {other:?}"),
+    }
+}
+
+async fn prove_listener_invalidation_closes_established_keep_alive(reason: &str, tls: bool) {
+    let (_db, _collector, _secret, service) =
+        fixture_with_policy(Arc::new(PermissiveRegistry), HttpIngestConfig::for_test());
+    let exposure = crate::ExposureSnapshot::new("lo", [IpAddr::V4(Ipv4Addr::LOCALHOST)], false);
+    let (mode, trusted_cert) = if tls {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["localhost".into()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let cert_pem = cert.pem();
+        let fingerprint = iotkit_core_ops::fingerprint_of_pem(&cert_pem).unwrap();
+        let material = crate::TlsMaterial::validate(
+            cert_pem.into_bytes(),
+            key.serialize_pem().into_bytes(),
+            &fingerprint,
+            1,
+        )
+        .unwrap();
+        (crate::ListenerMode::Tls(material), Some(cert.der().clone()))
+    } else {
+        (crate::ListenerMode::PrivatePlaintext, None)
+    };
+    let config = crate::ListenerConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        interface: "lo".into(),
+        site_local_cidrs: vec!["127.0.0.0/8".parse().unwrap()],
+        mode,
+    };
+    let listener = crate::Listener::bind(
+        crate::ValidatedListenerConfig::new_for_test(config, &exposure).unwrap(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{reason}: loopback bind required for host rerun: {error}"));
+    let address = listener.local_addr().unwrap();
+    let serving = listener.serve(service).unwrap();
+    let raw = tokio::net::TcpStream::connect(address).await.unwrap();
+    if let Some(cert) = trusted_cert {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert).unwrap();
+        let client = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(client));
+        let tls_client = connector
+            .connect("localhost".try_into().unwrap(), raw)
+            .await
+            .unwrap();
+        assert_listener_drop_closes_keep_alive(tls_client, serving, reason).await;
+    } else {
+        assert_listener_drop_closes_keep_alive(raw, serving, reason).await;
+    }
+}
+
+#[tokio::test]
+async fn disablement_cancels_established_keep_alive_connection() {
+    prove_listener_invalidation_closes_established_keep_alive("disablement", false).await;
+}
+
+#[tokio::test]
+async fn ownership_or_restore_fence_cancels_established_keep_alive_connection() {
+    prove_listener_invalidation_closes_established_keep_alive("authority_fence", false).await;
+}
+
+#[tokio::test]
+async fn tls_generation_invalidation_cancels_established_keep_alive_connection() {
+    prove_listener_invalidation_closes_established_keep_alive("tls_generation", true).await;
 }
 
 fn file_fixture_with_hooks(
@@ -1243,6 +1351,10 @@ async fn full_http_collector_lane_returns_503_without_ack() {
             .to_bytes()
             .is_empty()
     );
+    let overload = service.admission_health();
+    assert!(overload.throttle_active);
+    assert_eq!(overload.throttled_drop_count, 1);
+    assert_eq!(overload.queue_current, 1);
     let (lock, ready) = &*gate;
     *lock.lock().unwrap() = true;
     ready.notify_all();

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
@@ -80,6 +80,7 @@ pub struct AdmissionConfig {
     high_flow: FlowClassLimit,
     global_rate_per_second: u64,
     global_burst: u64,
+    throttle_cooldown_ms: u64,
 }
 
 impl AdmissionConfig {
@@ -103,6 +104,7 @@ impl AdmissionConfig {
             high_flow: FlowClassLimit::new(1_000_000, 1_000_000),
             global_rate_per_second: 4_000_000,
             global_burst: 4_000_000,
+            throttle_cooldown_ms: 1_000,
         }
     }
 
@@ -178,6 +180,11 @@ impl AdmissionConfig {
         self
     }
 
+    pub fn with_throttle_cooldown_ms(mut self, value: u64) -> Self {
+        self.throttle_cooldown_ms = value;
+        self
+    }
+
     fn validate(&self) -> Result<(), InvalidAdmissionConfig> {
         if self.auth_workers == 0
             || self.reserved_auth_workers == 0
@@ -196,6 +203,7 @@ impl AdmissionConfig {
             || !self.high_flow.valid()
             || self.global_rate_per_second == 0
             || self.global_burst == 0
+            || self.throttle_cooldown_ms == 0
         {
             return Err(InvalidAdmissionConfig);
         }
@@ -223,6 +231,7 @@ impl Default for AdmissionConfig {
             high_flow: FlowClassLimit::new(1_000_000, 1_000_000),
             global_rate_per_second: 4_000_000,
             global_burst: 4_000_000,
+            throttle_cooldown_ms: 5_000,
         }
     }
 }
@@ -241,6 +250,9 @@ impl std::error::Error for InvalidAdmissionConfig {}
 struct TokenBucket {
     tokens_milli: u128,
     last_ms: u64,
+    capacity_milli: u128,
+    rate_per_second: u64,
+    burst: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -255,6 +267,42 @@ struct AdmissionState {
     sources: HashMap<IpAddr, SourceState>,
     global_flow: TokenBucket,
     principals: HashMap<String, TokenBucket>,
+    throttled_drop_count: u64,
+    queue_high_water: usize,
+    throttle_active: bool,
+    current_episode_id: u64,
+    next_episode_id: u64,
+    episode_drops: u64,
+    last_drop_ms: u64,
+    episode_events: VecDeque<ThrottleEpisodeEvent>,
+    queue_current: usize,
+    queue_capacity: usize,
+    request_current: usize,
+    request_capacity: usize,
+    connection_current: usize,
+    connection_capacity: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThrottleEpisodeEvent {
+    Started { episode_id: u64 },
+    Recovered { episode_id: u64, drops: u64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdmissionHealthSnapshot {
+    pub throttled_drop_count: u64,
+    pub queue_high_water: usize,
+    pub throttle_active: bool,
+    pub queue_current: usize,
+    pub queue_pressure_percent: u8,
+    pub request_pressure_percent: u8,
+    pub connection_pressure_percent: u8,
+    pub auth_pressure_percent: u8,
+    pub global_flow_pressure_percent: u8,
+    pub principal_pressure_percent: u8,
+    pub source_state_count: usize,
+    pub principal_state_count: usize,
 }
 
 pub struct AdmissionController<C: MonotonicClock = SystemMonotonicClock> {
@@ -281,17 +329,40 @@ impl<C: MonotonicClock> AdmissionController<C> {
                 auth: TokenBucket {
                     tokens_milli: u128::from(config.initial_auth_tokens) * 1000,
                     last_ms: now,
+                    capacity_milli: u128::from(config.auth_burst) * 1000,
+                    rate_per_second: config.auth_rate_per_second,
+                    burst: config.auth_burst,
                 },
                 reserved_auth: TokenBucket {
                     tokens_milli: u128::from(config.initial_reserved_auth_tokens) * 1000,
                     last_ms: now,
+                    capacity_milli: u128::from(config.reserved_auth_burst) * 1000,
+                    rate_per_second: config.reserved_auth_rate_per_second,
+                    burst: config.reserved_auth_burst,
                 },
                 sources: HashMap::with_capacity(config.pre_auth_source_capacity),
                 global_flow: TokenBucket {
                     tokens_milli: u128::from(config.global_burst) * 1000,
                     last_ms: now,
+                    capacity_milli: u128::from(config.global_burst) * 1000,
+                    rate_per_second: config.global_rate_per_second,
+                    burst: config.global_burst,
                 },
                 principals: HashMap::with_capacity(config.principal_state_capacity),
+                throttled_drop_count: 0,
+                queue_high_water: 0,
+                throttle_active: false,
+                current_episode_id: 0,
+                next_episode_id: 1,
+                episode_drops: 0,
+                last_drop_ms: now,
+                episode_events: VecDeque::with_capacity(3),
+                queue_current: 0,
+                queue_capacity: 1,
+                request_current: 0,
+                request_capacity: 1,
+                connection_current: 0,
+                connection_capacity: 1,
             })),
             general_workers: Arc::new(Semaphore::new(config.auth_workers)),
             reserved_workers: Arc::new(Semaphore::new(config.reserved_auth_workers)),
@@ -322,6 +393,124 @@ impl<C: MonotonicClock> AdmissionController<C> {
         }
     }
 
+    pub fn health_snapshot(&self) -> AdmissionHealthSnapshot {
+        let now = self.clock.now_ms();
+        let mut state = self.state.lock().expect("admission mutex poisoned");
+        refill(&mut state.auth, &self.config, now);
+        refill_rate(
+            &mut state.global_flow,
+            self.config.global_rate_per_second,
+            self.config.global_burst,
+            now,
+        );
+        for principal in state.principals.values_mut() {
+            let rate = principal.rate_per_second;
+            let burst = principal.burst;
+            refill_rate(principal, rate, burst, now);
+        }
+        maybe_recover(&mut state, &self.config, now);
+        let principal_pressure_percent = state
+            .principals
+            .values()
+            .map(bucket_pressure_percent)
+            .max()
+            .unwrap_or(0);
+        AdmissionHealthSnapshot {
+            throttled_drop_count: state.throttled_drop_count,
+            queue_high_water: state.queue_high_water,
+            throttle_active: state.throttle_active,
+            queue_current: state.queue_current,
+            queue_pressure_percent: capacity_pressure_percent(
+                state.queue_current,
+                state.queue_capacity,
+            ),
+            request_pressure_percent: capacity_pressure_percent(
+                state.request_current,
+                state.request_capacity,
+            ),
+            connection_pressure_percent: capacity_pressure_percent(
+                state.connection_current,
+                state.connection_capacity,
+            ),
+            auth_pressure_percent: bucket_pressure_percent(&state.auth),
+            global_flow_pressure_percent: bucket_pressure_percent(&state.global_flow),
+            principal_pressure_percent,
+            source_state_count: state.sources.len(),
+            principal_state_count: state.principals.len(),
+        }
+    }
+
+    pub fn pending_episode_events(&self) -> Vec<ThrottleEpisodeEvent> {
+        self.state
+            .lock()
+            .expect("admission mutex poisoned")
+            .episode_events
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    pub fn acknowledge_episode_events(&self, events: &[ThrottleEpisodeEvent]) -> bool {
+        let mut state = self.state.lock().expect("admission mutex poisoned");
+        if state.episode_events.len() < events.len()
+            || !state
+                .episode_events
+                .iter()
+                .zip(events)
+                .all(|(pending, acknowledged)| pending == acknowledged)
+        {
+            return false;
+        }
+        state.episode_events.drain(..events.len());
+        true
+    }
+
+    pub fn note_queue_depth(&self, depth: usize) {
+        let mut state = self.state.lock().expect("admission mutex poisoned");
+        state.queue_high_water = state.queue_high_water.max(depth);
+    }
+
+    pub fn note_current_capacity_pressure(
+        &self,
+        queue_current: usize,
+        queue_capacity: usize,
+        request_current: usize,
+        request_capacity: usize,
+        connection_current: usize,
+        connection_capacity: usize,
+    ) {
+        let mut state = self.state.lock().expect("admission mutex poisoned");
+        state.queue_current = queue_current.min(queue_capacity);
+        state.queue_capacity = queue_capacity.max(1);
+        state.request_current = request_current.min(request_capacity);
+        state.request_capacity = request_capacity.max(1);
+        state.connection_current = connection_current.min(connection_capacity);
+        state.connection_capacity = connection_capacity.max(1);
+        state.queue_high_water = state.queue_high_water.max(state.queue_current);
+    }
+
+    pub fn record_throttled_drop(&self) {
+        self.record_drop(self.clock.now_ms());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_drop_count_for_test(&self, value: u64) {
+        self.state
+            .lock()
+            .expect("admission mutex poisoned")
+            .throttled_drop_count = value;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_throttled_drop_for_test(&self) {
+        self.record_drop(self.clock.now_ms());
+    }
+
+    fn record_drop(&self, now: u64) {
+        let mut state = self.state.lock().expect("admission mutex poisoned");
+        note_drop(&mut state, now);
+    }
+
     pub fn try_begin_auth(
         &self,
         peer: IpAddr,
@@ -334,6 +523,7 @@ impl<C: MonotonicClock> AdmissionController<C> {
             if let Some(source) = state.sources.get(&peer)
                 && source.failures >= self.config.pre_auth_failures_per_window
             {
+                note_drop(&mut state, now);
                 return Err(AdmissionDenied::Throttled);
             }
             refill(&mut state.auth, &self.config, now);
@@ -348,6 +538,7 @@ impl<C: MonotonicClock> AdmissionController<C> {
             } else if recently_validated && state.reserved_auth.tokens_milli >= 1000 {
                 state.reserved_auth.tokens_milli -= 1000;
             } else {
+                note_drop(&mut state, now);
                 return Err(AdmissionDenied::Throttled);
             }
             if state.sources.len() < self.config.pre_auth_source_capacity {
@@ -369,9 +560,13 @@ impl<C: MonotonicClock> AdmissionController<C> {
                     Err(tokio::sync::TryAcquireError::NoPermits)
                 }
             });
-        permit
-            .map(|permit| AuthPermit { _permit: permit })
-            .map_err(|_| AdmissionDenied::Busy)
+        match permit {
+            Ok(permit) => Ok(AuthPermit { _permit: permit }),
+            Err(_) => {
+                self.record_drop(now);
+                Err(AdmissionDenied::Busy)
+            }
+        }
     }
 
     pub fn record_auth_failure(&self, peer: IpAddr) {
@@ -390,6 +585,7 @@ impl<C: MonotonicClock> AdmissionController<C> {
         maximum_cost: u64,
     ) -> Result<PrincipalReservation, AdmissionDenied> {
         if maximum_cost == 0 {
+            self.record_drop(self.clock.now_ms());
             return Err(AdmissionDenied::Throttled);
         }
         let now = self.clock.now_ms();
@@ -397,7 +593,10 @@ impl<C: MonotonicClock> AdmissionController<C> {
             "low" => self.config.low_flow,
             "default" => self.config.default_flow,
             "high" => self.config.high_flow,
-            _ => return Err(AdmissionDenied::Throttled),
+            _ => {
+                self.record_drop(now);
+                return Err(AdmissionDenied::Throttled);
+            }
         };
         let mut state = self.state.lock().expect("admission mutex poisoned");
         refill_rate(
@@ -409,6 +608,7 @@ impl<C: MonotonicClock> AdmissionController<C> {
         if !state.principals.contains_key(principal_id)
             && state.principals.len() >= self.config.principal_state_capacity
         {
+            note_drop(&mut state, now);
             return Err(AdmissionDenied::Throttled);
         }
         {
@@ -419,8 +619,15 @@ impl<C: MonotonicClock> AdmissionController<C> {
                     .or_insert(TokenBucket {
                         tokens_milli: u128::from(flow.burst) * 1000,
                         last_ms: now,
+                        capacity_milli: u128::from(flow.burst) * 1000,
+                        rate_per_second: flow.rate_per_second,
+                        burst: flow.burst,
                     });
             refill_rate(principal, flow.rate_per_second, flow.burst, now);
+            principal.capacity_milli = u128::from(flow.burst) * 1000;
+            principal.rate_per_second = flow.rate_per_second;
+            principal.burst = flow.burst;
+            principal.tokens_milli = principal.tokens_milli.min(principal.capacity_milli);
         }
         let cost = u128::from(maximum_cost) * 1000;
         if state.global_flow.tokens_milli < cost
@@ -429,6 +636,7 @@ impl<C: MonotonicClock> AdmissionController<C> {
                 .get(principal_id)
                 .is_none_or(|principal| principal.tokens_milli < cost)
         {
+            note_drop(&mut state, now);
             return Err(AdmissionDenied::Throttled);
         }
         state.global_flow.tokens_milli -= cost;
@@ -444,9 +652,78 @@ impl<C: MonotonicClock> AdmissionController<C> {
             consumed_milli: 1000,
             global_capacity_milli: u128::from(self.config.global_burst) * 1000,
             principal_capacity_milli: u128::from(flow.burst) * 1000,
+            reserved_at_ms: now,
             settled: false,
         })
     }
+}
+
+fn note_drop(state: &mut AdmissionState, now: u64) {
+    state.throttled_drop_count = state.throttled_drop_count.saturating_add(1);
+    state.episode_drops = state.episode_drops.saturating_add(1);
+    state.last_drop_ms = now;
+    if !state.throttle_active {
+        state.throttle_active = true;
+        state.current_episode_id = state.next_episode_id;
+        state.next_episode_id = state.next_episode_id.saturating_add(1);
+        state.episode_drops = 1;
+        state
+            .episode_events
+            .push_back(ThrottleEpisodeEvent::Started {
+                episode_id: state.current_episode_id,
+            });
+    }
+}
+
+fn maybe_recover(state: &mut AdmissionState, config: &AdmissionConfig, now: u64) {
+    if !state.throttle_active
+        || now.saturating_sub(state.last_drop_ms) < config.throttle_cooldown_ms
+        || state.auth.tokens_milli < u128::from(config.auth_burst) * 500
+        || state.global_flow.tokens_milli < u128::from(config.global_burst) * 500
+        || state
+            .principals
+            .values()
+            .any(|principal| bucket_pressure_percent(principal) >= 50)
+        || capacity_pressure_percent(state.queue_current, state.queue_capacity) >= 50
+        || capacity_pressure_percent(state.request_current, state.request_capacity) >= 50
+        || capacity_pressure_percent(state.connection_current, state.connection_capacity) >= 50
+        || state.episode_events.iter().any(|event| {
+            matches!(
+                event,
+                ThrottleEpisodeEvent::Recovered { episode_id, .. }
+                    if *episode_id != state.current_episode_id
+            )
+        })
+    {
+        return;
+    }
+    state.throttle_active = false;
+    let drops = std::mem::take(&mut state.episode_drops);
+    state
+        .episode_events
+        .push_back(ThrottleEpisodeEvent::Recovered {
+            episode_id: state.current_episode_id,
+            drops,
+        });
+}
+
+fn bucket_pressure_percent(bucket: &TokenBucket) -> u8 {
+    if bucket.capacity_milli == 0 {
+        return 100;
+    }
+    let used = bucket.capacity_milli.saturating_sub(bucket.tokens_milli);
+    u8::try_from(used.saturating_mul(100) / bucket.capacity_milli)
+        .unwrap_or(100)
+        .min(100)
+}
+
+fn capacity_pressure_percent(current: usize, capacity: usize) -> u8 {
+    if capacity == 0 {
+        return 100;
+    }
+    u8::try_from(current.saturating_mul(100) / capacity)
+        .unwrap_or(100)
+        .min(100)
 }
 
 fn refill(bucket: &mut TokenBucket, config: &AdmissionConfig, now: u64) {
@@ -474,6 +751,7 @@ pub struct PrincipalReservation {
     consumed_milli: u128,
     global_capacity_milli: u128,
     principal_capacity_milli: u128,
+    reserved_at_ms: u64,
     settled: bool,
 }
 
@@ -488,7 +766,17 @@ impl PrincipalReservation {
 
     /// Finish two-stage charging. The fixed request unit, decoded bytes, and item work remain
     /// consumed; only unused conservative reservation is refunded.
-    pub fn reconcile(mut self, decoded_bytes: usize, items: usize) -> Result<(), AdmissionDenied> {
+    pub fn reconcile(self, decoded_bytes: usize, items: usize) -> Result<(), AdmissionDenied> {
+        let observed_at_ms = self.reserved_at_ms;
+        self.reconcile_at(decoded_bytes, items, observed_at_ms)
+    }
+
+    pub fn reconcile_at(
+        mut self,
+        decoded_bytes: usize,
+        items: usize,
+        observed_at_ms: u64,
+    ) -> Result<(), AdmissionDenied> {
         let actual = 1_u128
             .saturating_add(decoded_bytes as u128)
             .saturating_add((items as u128).saturating_mul(256))
@@ -501,6 +789,7 @@ impl PrincipalReservation {
                 .get(&self.principal_id)
                 .is_some_and(|principal| principal.tokens_milli >= additional);
             if state.global_flow.tokens_milli < additional || !principal_has {
+                note_drop(&mut state, observed_at_ms);
                 self.consumed_milli = self.reserved_milli;
                 self.settled = true;
                 return Err(AdmissionDenied::Throttled);

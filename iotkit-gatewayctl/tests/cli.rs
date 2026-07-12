@@ -278,6 +278,7 @@ fn restore_pristine_check_includes_principal_material_generation_and_runtime_con
         "UPDATE device_flow_classes SET steady_units=2 WHERE flow_class='low'",
         "UPDATE device_capacity SET stale_after_ms=2 WHERE id=1",
         "UPDATE ingress_listener_config SET desired_generation=1,bind_addr='192.168.1.2:8444',interface='eth0',site_local_cidrs='[\"192.168.1.0/24\"]' WHERE id=1",
+        "UPDATE ingest_dedup_maintenance SET degraded=1,last_failure_at=1 WHERE id=1",
         "INSERT INTO ingress_tls_material (id,generation,fingerprint,approved_at,approved_by) VALUES (1,1,'test',1,'test')",
     ]
     .into_iter()
@@ -1499,7 +1500,7 @@ fn existing_empty_db_gets_gateway_migration_version_set() {
         .unwrap();
     assert_eq!(
         versions,
-        vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     );
 }
 

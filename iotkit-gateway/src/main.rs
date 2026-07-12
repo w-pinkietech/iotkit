@@ -67,11 +67,11 @@ fn main() {
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
     all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5, v9, v11
-    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
+    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8, v17
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
     all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
     all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
+    all_migrations.sort_by_key(|m| m.version);
     let db_path_for_init = std::path::Path::new(&config.db_path);
     let database_existed_before_open = db_path_for_init.exists();
     let db = match iotkit_core_storage::init_db(db_path_for_init, &all_migrations) {
@@ -175,19 +175,6 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         db.clone(),
         Duration::from_secs(60),
     );
-    // R2 listener ownership is supervised independently from the control API and collection.
-    // Through Task 5 its compiled readiness gate keeps it unbound while still publishing exact
-    // desired/applied state and recovery reasons.
-    let data_dir = Path::new(&config.db_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let _ingress_task = iotkit_gateway::ingress::spawn_ingress_supervisor(
-        db.clone(),
-        data_dir,
-        health_state.clone(),
-        Duration::from_secs(1),
-    );
     let _publish_task =
         publish_task::spawn_publish_task(db.clone(), health_state.clone(), Duration::from_secs(30));
 
@@ -235,12 +222,33 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
     // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
-    let (collector, principal_issuer, _collector_handle) =
-        iotkit_core_collector::Collector::spawn_composed(
+    let (collector, principal_issuer, device_issuer, _collector_handle) =
+        iotkit_core_collector::Collector::spawn_fully_composed(
             db.clone(),
             std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
             256,
         );
+    let ingress_service = iotkit_ingest_http::HttpIngestService::new(
+        db.clone(),
+        collector.clone(),
+        device_issuer,
+        iotkit_ingest_http::HttpIngestConfig::default(),
+        iotkit_ingest_http::SystemMonotonicClock::default(),
+    )
+    .expect("finite HTTP ingress configuration");
+    // R2 listener ownership is supervised independently from control API and collection. Task 6
+    // connects the bounded Task 5 HTTP service before the first possible enabled bind.
+    let data_dir = Path::new(&config.db_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let _ingress_task = iotkit_gateway::ingress::spawn_ingress_supervisor_serving(
+        db.clone(),
+        data_dir,
+        health_state.clone(),
+        Duration::from_secs(1),
+        ingress_service,
+    );
     // 取り込みクライアント(D4の第3部品、inproc)はアダプタごとにreceiver-created
     // principalを束縛する。アダプタ側が送れるのはEnvelopeだけ。
     let (ingest_exit_tx, mut ingest_exit_rx) = tokio::sync::mpsc::unbounded_channel();

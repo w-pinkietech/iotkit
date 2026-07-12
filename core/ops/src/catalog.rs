@@ -423,6 +423,7 @@ fn redact_audit_value(value: &Value) -> Value {
                         "private",
                         "secret",
                         "pem",
+                        "staging_subject",
                     ]
                     .iter()
                     .any(|marker| normalized.contains(marker))

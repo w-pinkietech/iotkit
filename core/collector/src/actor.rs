@@ -89,6 +89,26 @@ struct ResolutionCache {
 }
 
 impl Collector {
+    /// Gateway composition receives both non-cloneable issuer capabilities exactly once.
+    pub fn spawn_fully_composed(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+    ) -> (
+        Collector,
+        LocalPrincipalIssuer,
+        DevicePrincipalIssuer,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (collector, handle) = Self::spawn(db, policy, queue_cap);
+        (
+            collector,
+            LocalPrincipalIssuer::new(),
+            DevicePrincipalIssuer::new(),
+            handle,
+        )
+    }
+
     /// Start the collector and return the non-cloneable receiver composition
     /// capability used to mint principals before handing sender-only handles to
     /// adapters.
@@ -167,6 +187,7 @@ impl Collector {
         let handle = tokio::spawn(async move {
             let mut cache = ResolutionCache::default();
             let mut last_purge_ms = now_ms();
+            let mut maintenance_latch = DedupMaintenanceLatch::default();
             while let Some(req) = rx.recv().await {
                 let taken = std::mem::take(&mut cache);
                 let policy = Arc::clone(&policy);
@@ -206,7 +227,13 @@ impl Collector {
                             // 計画4のTTL/保持ワイヤリング着地までの日和見パージ(受理トランザクション
                             // の外・別途with_connで実行。ack耐久性には影響しない)。Validationは
                             // product/custody stateへの書き込みを一切起動しない。
-                            maybe_purge_dedup(&db, purge_interval_ms, &mut last_purge_ms).await;
+                            maybe_purge_dedup(
+                                &db,
+                                purge_interval_ms,
+                                &mut last_purge_ms,
+                                &mut maintenance_latch,
+                            )
+                            .await;
                         }
                     }
                     Ok((Err(ProcessError::ClockUntrusted), c)) => {
@@ -303,9 +330,26 @@ fn now_ms() -> i64 {
 /// 日和見dedupパージ: 最終パージから`purge_interval_ms`超過していれば
 /// `purge_dedup_before(now - DEDUP_TTL_MS)`を実行する。受理トランザクションの外(別途with_conn)
 /// で行うため、ack耐久点(D1)には影響しない。パージ自体の失敗は致命的ではないのでログのみ。
-async fn maybe_purge_dedup(db: &DbHandle, purge_interval_ms: i64, last_purge_ms: &mut i64) {
+#[derive(Debug, Clone, Copy)]
+struct PendingDedupMaintenanceTransition {
+    at_ms: i64,
+    failed: bool,
+}
+
+#[derive(Debug, Default)]
+struct DedupMaintenanceLatch {
+    pending: Option<PendingDedupMaintenanceTransition>,
+}
+
+async fn maybe_purge_dedup(
+    db: &DbHandle,
+    purge_interval_ms: i64,
+    last_purge_ms: &mut i64,
+    latch: &mut DedupMaintenanceLatch,
+) {
     let now = now_ms();
     if now.saturating_sub(*last_purge_ms) < purge_interval_ms {
+        latch.retry(db).await;
         return;
     }
     *last_purge_ms = now;
@@ -313,7 +357,7 @@ async fn maybe_purge_dedup(db: &DbHandle, purge_interval_ms: i64, last_purge_ms:
     let result = db
         .with_conn(move |conn| Ok(ts::purge_dedup_before(conn, cutoff).map_err(|e| e.to_string())))
         .await;
-    match result {
+    let purge_failed = match result {
         Ok(Ok(deleted)) => {
             if deleted > 0 {
                 tracing::info!(
@@ -322,9 +366,91 @@ async fn maybe_purge_dedup(db: &DbHandle, purge_interval_ms: i64, last_purge_ms:
                     "collector: opportunistic ingest_dedup purge"
                 );
             }
+            false
         }
-        Ok(Err(e)) => tracing::error!(error = %e, "collector: dedup purge failed"),
-        Err(e) => tracing::error!(error = %e, "collector: dedup purge failed (db)"),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "collector: dedup purge failed");
+            true
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "collector: dedup purge failed (db)");
+            true
+        }
+    };
+
+    if latch.pending.is_some_and(|pending| !pending.failed) && purge_failed {
+        // A recovery transaction that never committed cannot describe a newer failed purge.
+        latch.pending = None;
+    } else if !latch.retry(db).await {
+        return;
+    }
+    if !record_dedup_maintenance_transition(db, now, purge_failed).await {
+        latch.pending = Some(PendingDedupMaintenanceTransition {
+            at_ms: now,
+            failed: purge_failed,
+        });
+    }
+}
+
+impl DedupMaintenanceLatch {
+    async fn retry(&mut self, db: &DbHandle) -> bool {
+        let Some(pending) = self.pending else {
+            return true;
+        };
+        if record_dedup_maintenance_transition(db, pending.at_ms, pending.failed).await {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+async fn record_dedup_maintenance_transition(db: &DbHandle, now: i64, failed: bool) -> bool {
+    let result = db
+        .with_conn(move |conn| {
+            Ok((|| -> Result<(), String> {
+                let tx = rusqlite::Transaction::new_unchecked(
+                    conn,
+                    rusqlite::TransactionBehavior::Immediate,
+                )
+                .map_err(|error| error.to_string())?;
+                let transitioned = if failed {
+                    ts::mark_dedup_purge_failed(&tx, now).map_err(|error| error.to_string())?
+                } else {
+                    ts::mark_dedup_purge_recovered(&tx, now)
+                        .map_err(|error| error.to_string())?
+                };
+                if transitioned {
+                    let (kind, detail) = if failed {
+                        (
+                            "dedup_window_degraded",
+                            r#"{"state":"degraded","operator_action":"Check database storage and run retention maintenance; duplicate suppression is reduced until recovery."}"#,
+                        )
+                    } else {
+                        (
+                            "dedup_window_recovered",
+                            r#"{"state":"recovered","summary":"configured duplicate-suppression maintenance resumed"}"#,
+                        )
+                    };
+                    ledger::record_event(&tx, kind, None, detail)
+                        .map_err(|error| error.to_string())?;
+                }
+                tx.commit().map_err(|error| error.to_string())?;
+                Ok(())
+            })())
+        })
+        .await;
+    match result {
+        Err(error) => {
+            tracing::error!(error = %error, "collector: dedup maintenance health update failed");
+            false
+        }
+        Ok(Err(error)) => {
+            tracing::error!(error = %error, "collector: dedup maintenance health update failed");
+            false
+        }
+        Ok(Ok(())) => true,
     }
 }
 
@@ -416,8 +542,14 @@ fn process_envelope_mode(
         cache.generation = generation;
     }
     if commit {
-        let claimed = ts::try_claim_envelope(&tx, principal.principal_id(), &envelope.envelope_id)
-            .map_err(|e| e.to_string())?;
+        let claimed = ts::try_claim_envelope_bounded_at(
+            &tx,
+            principal.principal_id(),
+            &envelope.envelope_id,
+            clock.received_at_ms,
+            ts::DedupLimits::default(),
+        )
+        .map_err(|e| e.to_string())?;
         if !claimed {
             drop(tx); // dedup判定のみ・書き込みなし
             return Ok(EnvelopeAck {
@@ -437,6 +569,7 @@ fn process_envelope_mode(
         epoch: &epoch,
     };
     let mut item_statuses = Vec::with_capacity(envelope.items.len());
+    let mut pending_sightings = Vec::new();
     for (item_index, item) in envelope.items.iter().enumerate() {
         item_statuses.push(process_item(
             &tx,
@@ -445,7 +578,37 @@ fn process_envelope_mode(
             item,
             item_index,
             &item_context,
+            &mut pending_sightings,
         )?);
+    }
+    if !pending_sightings.is_empty() {
+        let staged = pending_sightings
+            .iter()
+            .map(|sighting| ts::StagedSighting {
+                hardware_id: &sighting.hardware_id,
+                payload_json: &sighting.payload_json,
+            })
+            .collect::<Vec<_>>();
+        let bounded = ts::stage_sightings_at(
+            &tx,
+            principal.principal_id(),
+            received_at,
+            &staged,
+            ts::StagingLimits::default(),
+        )
+        .map_err(|e| e.to_string())?;
+        for sighting in &pending_sightings {
+            ledger::record_sighting(&tx, &sighting.hardware_id, principal.principal_id())
+                .map_err(|e| e.to_string())?;
+        }
+        if bounded.expired_subjects > 0 || bounded.evicted_subjects > 0 {
+            let detail = serde_json::json!({
+                "expired_subjects": bounded.expired_subjects,
+                "evicted_subjects": bounded.evicted_subjects,
+            });
+            ledger::record_event(&tx, "staging_bounds", None, &detail.to_string())
+                .map_err(|e| e.to_string())?;
+        }
     }
     if commit {
         tx.commit().map_err(|e| e.to_string())?;
@@ -595,6 +758,31 @@ struct ItemContext<'a> {
     epoch: &'a str,
 }
 
+struct PendingSighting {
+    hardware_id: String,
+    payload_json: String,
+}
+
+fn stage_unknown_item_with<E>(
+    item: &ReadingItem,
+    hardware_id: &str,
+    pending_sightings: &mut Vec<PendingSighting>,
+    serialize: impl FnOnce(&ReadingItem) -> Result<String, E>,
+) -> Result<ItemStatus, String>
+where
+    E: std::fmt::Display,
+{
+    let payload_json = serialize(item).map_err(|error| error.to_string())?;
+    pending_sightings.push(PendingSighting {
+        hardware_id: hardware_id.to_string(),
+        payload_json,
+    });
+    Ok(ItemStatus::Stored {
+        disposition: Disposition::Staged,
+        quarantine_reason: None, // stagedとquarantinedは直列に成立しない(D1: subject解決が常に先)
+    })
+}
+
 fn process_item(
     conn: &rusqlite::Connection,
     cache: &mut ResolutionCache,
@@ -602,6 +790,7 @@ fn process_item(
     item: &ReadingItem,
     item_index: usize,
     context: &ItemContext<'_>,
+    pending_sightings: &mut Vec<PendingSighting>,
 ) -> Result<ItemStatus, String> {
     let principal = context.principal;
     // 1) subject解決とscope検査。principalだけが省略解決・認可を決める。
@@ -669,6 +858,15 @@ fn process_item(
         });
     }
 
+    if !item.values.iter().all(|value| value.is_finite()) {
+        return Ok(ItemStatus::ItemRejected {
+            reason_code: ReasonCode::ValueTypeMismatch,
+            message: "values must contain only finite numbers".into(),
+            field_path: Some(format!("/items/{item_index}/values")),
+            schema_hint: Some("array of finite numbers".into()),
+        });
+    }
+
     if let Some(rejected) =
         freshness_rejection(item, item_index, context.clock, context.freshness_limits)
     {
@@ -694,14 +892,7 @@ fn process_item(
             });
         }
         // 3) trusted official principalだけが未知subjectを目撃ステージングできる。
-        let payload = serde_json::to_string(item).unwrap_or_else(|_| "{}".into());
-        ledger::record_sighting(conn, hw, principal.principal_id()).map_err(|e| e.to_string())?;
-        ts::insert_staged_reading(conn, hw, context.received_at, &payload)
-            .map_err(|e| e.to_string())?;
-        return Ok(ItemStatus::Stored {
-            disposition: Disposition::Staged,
-            quarantine_reason: None, // stagedとquarantinedは直列に成立しない(D1: subject解決が常に先)
-        });
+        return stage_unknown_item_with(item, hw, pending_sightings, serde_json::to_string);
     };
     // 4) レジストリ評価(D6判別表)。Errはストレージ失敗=ackなしへ伝播(D1)
     let (resolved_key, channel, registry_quarantine) =
@@ -1034,6 +1225,17 @@ mod tests {
         let db = test_db();
         let (collector, _issuer, _handle) =
             Collector::spawn_device_composed(db, Arc::new(PermissiveRegistry), 16);
+        let clone = collector.clone();
+        drop(clone);
+    }
+
+    #[tokio::test]
+    async fn gateway_composition_receives_distinct_local_and_device_issuers() {
+        let db = test_db();
+        let (collector, local, device, _handle) =
+            Collector::spawn_fully_composed(db, Arc::new(PermissiveRegistry), 16);
+        let _local_principal = local.official_adapter("principal:local", "local");
+        let _device_issuer = device;
         let clone = collector.clone();
         drop(clone);
     }
@@ -1582,6 +1784,339 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_finite_unknown_subjects_are_terminally_rejected_and_deduplicated() {
+        for (suffix, value) in [
+            ("nan", f64::NAN),
+            ("positive-infinity", f64::INFINITY),
+            ("negative-infinity", f64::NEG_INFINITY),
+        ] {
+            let db = test_db();
+            let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+            let mut request = env(
+                &format!("non-finite-{suffix}"),
+                &format!("unknown-{suffix}"),
+                "temperature_c",
+            );
+            request.envelope.items[0].values = vec![value];
+
+            let ack = collector.submit(request.clone()).await.unwrap();
+
+            assert!(matches!(ack.status,
+                AckStatus::Accepted { ref items }
+                if matches!(&items[..], [ItemStatus::ItemRejected {
+                    reason_code: ReasonCode::ValueTypeMismatch,
+                    field_path: Some(path),
+                    schema_hint: Some(_),
+                    ..
+                }] if path == "/items/0/values")));
+            let state: (i64, i64, i64) = db
+                .with_conn_sync(|conn| {
+                    Ok((
+                        conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |row| {
+                            row.get(0)
+                        })?,
+                        conn.query_row("SELECT COUNT(*) FROM sightings", [], |row| row.get(0))?,
+                        conn.query_row(
+                            "SELECT COUNT(*) FROM ingest_dedup WHERE envelope_id=?1",
+                            [format!("non-finite-{suffix}")],
+                            |row| row.get(0),
+                        )?,
+                    ))
+                })
+                .unwrap();
+            assert_eq!(state, (0, 0, 1));
+
+            let retry = collector.submit(request).await.unwrap();
+            assert!(matches!(retry.status, AckStatus::Duplicate));
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_unknown_subject_envelope_stages_only_finite_sibling() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut request = env(
+            "mixed-finite-and-non-finite",
+            "unknown-valid",
+            "temperature_c",
+        );
+        let mut invalid = request.envelope.items[0].clone();
+        invalid.subject_hint = Some("unknown-invalid".into());
+        invalid.values = vec![f64::NAN];
+        request.envelope.items.push(invalid);
+
+        let ack = collector.submit(request).await.unwrap();
+
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(&items[..], [
+                ItemStatus::Stored { disposition: Disposition::Staged, .. },
+                ItemStatus::ItemRejected {
+                    reason_code: ReasonCode::ValueTypeMismatch,
+                    field_path: Some(path),
+                    schema_hint: Some(_),
+                    ..
+                }
+            ] if path == "/items/1/values")));
+        let state: (i64, i64, i64, i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |row| row.get(0))?,
+                    conn.query_row("SELECT COUNT(*) FROM sightings", [], |row| row.get(0))?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM staged_readings WHERE hardware_id='unknown-valid'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM staged_readings WHERE hardware_id='unknown-invalid'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM ingest_dedup WHERE envelope_id='mixed-finite-and-non-finite'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(state, (1, 1, 1, 0, 1));
+    }
+
+    #[tokio::test]
+    async fn validation_reports_non_finite_unknown_subject_without_state_changes() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut request = env(
+            "validate-non-finite-unknown",
+            "unknown-validation-valid",
+            "temperature_c",
+        );
+        let mut invalid = request.envelope.items[0].clone();
+        invalid.subject_hint = Some("unknown-validation-invalid".into());
+        invalid.values = vec![f64::NEG_INFINITY];
+        request.envelope.items.push(invalid);
+        let state = |db: &iotkit_core_storage::DbHandle| {
+            db.with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    conn.query_row("SELECT COUNT(*) FROM series", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    conn.query_row("SELECT COUNT(*) FROM staged_readings", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    conn.query_row("SELECT COUNT(*) FROM sightings", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    conn.query_row("SELECT COUNT(*) FROM ingest_dedup", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    conn.query_row("SELECT COUNT(*) FROM publication_log", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                ))
+            })
+            .unwrap()
+        };
+        let before = state(&db);
+
+        let report = collector.validate(request).await.unwrap();
+
+        assert!(!report.valid);
+        assert_eq!(report.envelope_id, "validate-non-finite-unknown");
+        assert!(matches!(&report.issues[..], [ValidationIssue {
+            item_index: Some(1),
+            reason_code: ReasonCode::ValueTypeMismatch,
+            field_path: Some(path),
+            schema_hint: Some(_),
+            ..
+        }] if path == "/items/1/values"));
+        assert_eq!(state(&db), before);
+    }
+
+    #[test]
+    fn staged_serialization_failure_propagates_without_a_stored_outcome() {
+        let request = env(
+            "serialization-failure",
+            "unknown-serialization-failure",
+            "temperature_c",
+        );
+        let mut pending_sightings = Vec::new();
+
+        let result = stage_unknown_item_with(
+            &request.envelope.items[0],
+            "unknown-serialization-failure",
+            &mut pending_sightings,
+            |_| Err::<String, _>("injected serialization failure"),
+        );
+
+        assert_eq!(result, Err("injected serialization failure".into()));
+        assert!(pending_sightings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finite_guard_precedes_registry_lookup_but_not_measurement_key_grammar() {
+        let db = test_db();
+        register_active(&db, "ble:finite-precheck");
+        let (collector, _h) = Collector::spawn(db, Arc::new(FailingPolicy), 16);
+        let mut non_finite = env(
+            "finite-before-registry",
+            "ble:finite-precheck",
+            "custom.unknown",
+        );
+        non_finite.envelope.items[0].values = vec![f64::INFINITY];
+
+        let ack = collector.submit(non_finite).await.unwrap();
+
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(&items[..], [ItemStatus::ItemRejected {
+                reason_code: ReasonCode::ValueTypeMismatch,
+                field_path: Some(path),
+                ..
+            }] if path == "/items/0/values")));
+
+        let mut malformed = env("grammar-before-finite", "ble:finite-precheck", "not valid!");
+        malformed.envelope.items[0].values = vec![f64::NAN];
+        let ack = collector.submit(malformed).await.unwrap();
+        assert!(matches!(ack.status,
+            AckStatus::Accepted { ref items }
+            if matches!(&items[..], [ItemStatus::ItemRejected {
+                reason_code: ReasonCode::MalformedMeasurementKey,
+                field_path: Some(path),
+                ..
+            }] if path == "/items/0/measurement_key")));
+    }
+
+    #[tokio::test]
+    async fn multi_item_staging_over_reserve_is_no_ack_and_rolls_back_every_sibling() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let mut insert = conn.prepare(
+                "INSERT INTO staged_readings
+                 (hardware_id, received_at, payload_json, principal_id, payload_bytes, pinned)
+                 VALUES (?1, 0, '{}', 'principal:test-adapter', 11186, 1)",
+            )?;
+            for index in 0..744 {
+                insert.execute([format!("pinned-{index}")])?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut request = env(
+            "staging-envelope-over-reserve",
+            "incoming-1",
+            "temperature_c",
+        );
+        request.envelope.items[0].series_variant = Some("x".repeat(40 * 1024));
+        let mut second = request.envelope.items[0].clone();
+        second.subject_hint = Some("incoming-2".into());
+        request.envelope.items.push(second);
+        let staged_sizes = request
+            .envelope
+            .items
+            .iter()
+            .map(|item| serde_json::to_string(item).unwrap().len())
+            .collect::<Vec<_>>();
+        assert!(staged_sizes.iter().all(|size| *size < 64 * 1024));
+        assert!(staged_sizes.iter().sum::<usize>() > 64 * 1024);
+
+        let result = collector.submit(request).await;
+
+        assert!(matches!(result, Err(SubmitError::NoAck)));
+        let state: (i64, i64, i64, i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM staged_readings WHERE pinned=1",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COALESCE(SUM(payload_bytes),0) FROM staged_readings WHERE pinned=1",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM staged_readings WHERE hardware_id IN ('incoming-1','incoming-2')",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM sightings WHERE hardware_id IN ('incoming-1','incoming-2')",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM ingest_dedup WHERE envelope_id='staging-envelope-over-reserve'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(state, (744, 8_322_384, 0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn multi_item_staging_at_reserve_is_acknowledged_and_fully_durable() {
+        let db = test_db();
+        let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        let mut request = env(
+            "staging-envelope-within-reserve",
+            "incoming-1",
+            "temperature_c",
+        );
+        request.envelope.items[0].series_variant = Some("x".repeat(30 * 1024));
+        let mut second = request.envelope.items[0].clone();
+        second.subject_hint = Some("incoming-2".into());
+        request.envelope.items.push(second);
+        let staged_bytes = request
+            .envelope
+            .items
+            .iter()
+            .map(|item| serde_json::to_string(item).unwrap().len())
+            .sum::<usize>();
+        assert!(staged_bytes <= 64 * 1024);
+
+        let ack = collector.submit(request).await.unwrap();
+
+        assert!(matches!(ack.status, AckStatus::Accepted { ref items }
+        if items.len() == 2 && items.iter().all(|item| matches!(
+            item,
+            ItemStatus::Stored { disposition: Disposition::Staged, .. }
+        ))));
+        let state: (i64, i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM staged_readings WHERE hardware_id IN ('incoming-1','incoming-2')",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM sightings WHERE hardware_id IN ('incoming-1','incoming-2')",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM ingest_dedup WHERE envelope_id='staging-envelope-within-reserve'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(state, (2, 2, 1));
+    }
+
+    #[tokio::test]
     async fn malformed_measurement_key_rejects_item_but_stores_valid_sibling() {
         let db = test_db();
         register_active(&db, "ble:aa");
@@ -1703,6 +2238,253 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dedup_purge_failure_degrades_once_without_invalidating_committed_ack() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ingest_dedup(sender_id,envelope_id,received_at) VALUES('old','old',0)",
+                [],
+            )?;
+            conn.execute_batch(
+                "CREATE TRIGGER fail_dedup_purge BEFORE DELETE ON ingest_dedup
+                 BEGIN SELECT RAISE(FAIL, 'injected purge failure'); END;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let (collector, _h) =
+            Collector::spawn_with_purge_interval(db.clone(), Arc::new(PermissiveRegistry), 16, 0);
+
+        let first = collector
+            .submit(env("purge-failure-1", "ble:aa", "temperature_c"))
+            .await
+            .unwrap();
+        assert!(matches!(first.status, AckStatus::Accepted { .. }));
+        let second = collector
+            .submit(env("purge-failure-2", "ble:aa", "humidity_pct"))
+            .await
+            .unwrap();
+        assert!(matches!(second.status, AckStatus::Accepted { .. }));
+
+        db.with_conn_sync(|conn| {
+            let degraded: bool = conn.query_row(
+                "SELECT degraded FROM ingest_dedup_maintenance WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            let starts: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM ledger_events WHERE kind='dedup_window_degraded'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(degraded);
+            assert_eq!(starts, 1);
+            Ok(())
+        })
+        .unwrap();
+
+        db.with_conn_sync(|conn| {
+            conn.execute_batch("DROP TRIGGER fail_dedup_purge")?;
+            Ok(())
+        })
+        .unwrap();
+        collector
+            .submit(env("purge-recovery-1", "ble:aa", "pressure_pa"))
+            .await
+            .unwrap();
+        collector
+            .submit(env("purge-recovery-2", "ble:aa", "voltage_v"))
+            .await
+            .unwrap();
+        db.with_conn_sync(|conn| {
+            let degraded: bool = conn.query_row(
+                "SELECT degraded FROM ingest_dedup_maintenance WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            let recoveries: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM ledger_events WHERE kind='dedup_window_recovered'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(!degraded);
+            assert_eq!(recoveries, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dedup_degradation_transition_retries_after_maintenance_update_failure() {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ingest_dedup(sender_id,envelope_id,received_at) VALUES('old','old',0)",
+                [],
+            )?;
+            conn.execute_batch(
+                "CREATE TRIGGER fail_dedup_purge BEFORE DELETE ON ingest_dedup
+                 BEGIN SELECT RAISE(FAIL, 'injected purge failure'); END;
+                 CREATE TRIGGER fail_maintenance_update BEFORE UPDATE ON ingest_dedup_maintenance
+                 BEGIN SELECT RAISE(FAIL, 'injected maintenance update failure'); END;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let mut last_purge_ms = 0;
+        let mut latch = DedupMaintenanceLatch::default();
+        maybe_purge_dedup(
+            &db,
+            DEFAULT_PURGE_INTERVAL_MS,
+            &mut last_purge_ms,
+            &mut latch,
+        )
+        .await;
+        db.with_conn_sync(|conn| {
+            let degraded: bool = conn.query_row(
+                "SELECT degraded FROM ingest_dedup_maintenance WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(!degraded, "the injected transition really must have failed");
+            conn.execute_batch("DROP TRIGGER fail_maintenance_update")?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Still inside the normal purge interval: only a retained transition latch can retry.
+        maybe_purge_dedup(
+            &db,
+            DEFAULT_PURGE_INTERVAL_MS,
+            &mut last_purge_ms,
+            &mut latch,
+        )
+        .await;
+        db.with_conn_sync(|conn| {
+            let degraded: bool = conn.query_row(
+                "SELECT degraded FROM ingest_dedup_maintenance WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            let starts: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM ledger_events WHERE kind='dedup_window_degraded'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(degraded);
+            assert_eq!(starts, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    async fn prove_dedup_transition_retry_after_fault(fault_sql: &str, remove_fault_sql: &str) {
+        let db = test_db();
+        register_active(&db, "ble:aa");
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ingest_dedup(sender_id,envelope_id,received_at) VALUES('old','old',0)",
+                [],
+            )?;
+            conn.execute_batch(
+                "CREATE TRIGGER fail_dedup_purge BEFORE DELETE ON ingest_dedup
+                 BEGIN SELECT RAISE(FAIL, 'injected purge failure'); END;",
+            )?;
+            conn.execute_batch(fault_sql)?;
+            Ok(())
+        })
+        .unwrap();
+        let mut last_purge_ms = 0;
+        let mut latch = DedupMaintenanceLatch::default();
+        maybe_purge_dedup(
+            &db,
+            DEFAULT_PURGE_INTERVAL_MS,
+            &mut last_purge_ms,
+            &mut latch,
+        )
+        .await;
+        assert!(latch.pending.is_some());
+
+        db.with_conn_sync(|conn| {
+            conn.execute_batch(remove_fault_sql)?;
+            Ok(())
+        })
+        .unwrap();
+        maybe_purge_dedup(
+            &db,
+            DEFAULT_PURGE_INTERVAL_MS,
+            &mut last_purge_ms,
+            &mut latch,
+        )
+        .await;
+        assert!(latch.pending.is_none());
+        db.with_conn_sync(|conn| {
+            let state: (bool, i64) = conn.query_row(
+                "SELECT degraded,
+                    (SELECT COUNT(*) FROM ledger_events WHERE kind='dedup_window_degraded')
+                 FROM ingest_dedup_maintenance WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(state, (true, 1));
+            conn.execute_batch("DROP TRIGGER fail_dedup_purge")?;
+            Ok(())
+        })
+        .unwrap();
+        last_purge_ms = 0;
+        maybe_purge_dedup(
+            &db,
+            DEFAULT_PURGE_INTERVAL_MS,
+            &mut last_purge_ms,
+            &mut latch,
+        )
+        .await;
+        db.with_conn_sync(|conn| {
+            let state: (bool, i64, i64) = conn.query_row(
+                "SELECT degraded,
+                    (SELECT COUNT(*) FROM ledger_events WHERE kind='dedup_window_degraded'),
+                    (SELECT COUNT(*) FROM ledger_events WHERE kind='dedup_window_recovered')
+                 FROM ingest_dedup_maintenance WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!(state, (false, 1, 1));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dedup_degradation_transition_retries_after_ledger_insert_failure() {
+        prove_dedup_transition_retry_after_fault(
+            "CREATE TRIGGER fail_maintenance_ledger BEFORE INSERT ON ledger_events
+             WHEN new.kind='dedup_window_degraded'
+             BEGIN SELECT RAISE(FAIL, 'injected ledger insert failure'); END;",
+            "DROP TRIGGER fail_maintenance_ledger",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn dedup_degradation_transition_retries_after_commit_failure() {
+        prove_dedup_transition_retry_after_fault(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE maintenance_fault_parent(id INTEGER PRIMARY KEY);
+             CREATE TABLE maintenance_fault_child(
+                 parent_id INTEGER REFERENCES maintenance_fault_parent(id)
+                     DEFERRABLE INITIALLY DEFERRED
+             );
+             CREATE TRIGGER fail_maintenance_commit AFTER INSERT ON ledger_events
+             WHEN new.kind='dedup_window_degraded'
+             BEGIN INSERT INTO maintenance_fault_child(parent_id) VALUES(999); END;",
+            "DROP TRIGGER fail_maintenance_commit",
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn validation_never_triggers_opportunistic_dedup_purge() {
         let db = test_db();
         register_active(&db, "ble:aa");
@@ -1748,10 +2530,17 @@ mod tests {
         // series行はDBから消えるが、修正前はcacheに幻のseries_idが残っていた。次のenvelopeが
         // 同キーを使うとFK違反→ackなしの無限ループ(再送しても回復しない=D1違反)になる。
         //
-        // f64::NANはserde_json経由だとnullになってしまうため、ReadingItemを直接構築して
-        // serdeを迂回し、insert_reading_v3の非有限値チェックで2番目のitemを確実に失敗させる。
         let db = test_db();
         register_active(&db, "ble:aa");
+        db.with_conn_sync(|conn| {
+            conn.execute_batch(
+                "CREATE TRIGGER fail_second_reading BEFORE INSERT ON readings
+                 WHEN new.values_json='[2.0]'
+                 BEGIN SELECT RAISE(FAIL, 'injected second reading failure'); END;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
 
         let make_item = |value: f64| ReadingItem {
@@ -1767,7 +2556,7 @@ mod tests {
             battery_pct: None,
         };
 
-        // 1件目: 新規series(=temp_a)を作成しキャッシュに載せる。2件目: NaNで書き込み失敗。
+        // 1件目: 新規series(=temp_a)を作成しキャッシュに載せる。2件目: triggerで書き込み失敗。
         // envelope全体がロールバックされる = series行は消えるがキャッシュには残る(修正前)。
         let poison = IngestRequest {
             principal: IngestPrincipal::trusted_official_adapter(
@@ -1778,7 +2567,7 @@ mod tests {
                 envelope_id: "e-poison".into(),
                 source: "test-adapter".into(),
                 declaration_version: None,
-                items: vec![make_item(1.0), make_item(f64::NAN)],
+                items: vec![make_item(1.0), make_item(2.0)],
             },
         };
         let result = collector.submit(poison).await;
@@ -1796,6 +2585,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(series_count, 0, "series insert must have been rolled back");
+
+        db.with_conn_sync(|conn| {
+            conn.execute_batch("DROP TRIGGER fail_second_reading")?;
+            Ok(())
+        })
+        .unwrap();
 
         // 再送(同キー、正常値)。修正前はキャッシュの幻series_idでFK違反 → ackなしのまま。
         // 修正後はキャッシュがリセットされているのでensure_seriesが再実行され、Acceptedになる。
