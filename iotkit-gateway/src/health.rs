@@ -62,6 +62,7 @@ pub struct IngressListenerHealth {
     pub desired_generation: Option<u64>,
     pub applied_generation: Option<u64>,
     pub bind: Option<&'static str>,
+    pub local_addr: Option<String>,
     pub mode: Option<&'static str>,
     pub desired_mode: Option<&'static str>,
     pub applied_mode: Option<&'static str>,
@@ -118,6 +119,14 @@ impl IngressBoundsHealth {
 
 impl IngressListenerHealth {
     pub fn listening(config: iotkit_core_ops::IngressListenerConfig, degraded: bool) -> Self {
+        Self::listening_at(config, degraded, None)
+    }
+
+    pub fn listening_at(
+        config: iotkit_core_ops::IngressListenerConfig,
+        degraded: bool,
+        local_addr: Option<std::net::SocketAddr>,
+    ) -> Self {
         let mode = ingress_mode(config.desired.mode);
         Self {
             query_state: if degraded {
@@ -129,6 +138,7 @@ impl IngressListenerHealth {
             desired_generation: Some(config.desired.generation),
             applied_generation: Some(config.desired.generation),
             bind: Some("private_site"),
+            local_addr: local_addr.map(|address| address.to_string()),
             mode: Some(mode),
             desired_mode: Some(mode),
             applied_mode: Some(mode),
@@ -145,6 +155,7 @@ impl IngressListenerHealth {
             desired_generation: Some(generation),
             applied_generation: Some(generation),
             bind: None,
+            local_addr: None,
             mode: None,
             desired_mode: None,
             applied_mode: None,
@@ -167,6 +178,7 @@ impl IngressListenerHealth {
             desired_generation: Some(config.desired.generation),
             applied_generation,
             bind: applied_generation.map(|_| "private_site"),
+            local_addr: None,
             mode: applied_mode,
             desired_mode: Some(desired_mode),
             applied_mode,
@@ -185,6 +197,7 @@ impl IngressListenerHealth {
             desired_generation: Some(config.desired.generation),
             applied_generation: None,
             bind: None,
+            local_addr: None,
             mode: None,
             desired_mode: Some(ingress_mode(config.desired.mode)),
             applied_mode: None,
@@ -201,6 +214,7 @@ impl IngressListenerHealth {
             desired_generation: None,
             applied_generation: None,
             bind: None,
+            local_addr: None,
             mode: None,
             desired_mode: None,
             applied_mode: None,
@@ -217,6 +231,7 @@ impl IngressListenerHealth {
             desired_generation: None,
             applied_generation: None,
             bind: None,
+            local_addr: None,
             mode: None,
             desired_mode: None,
             applied_mode: None,
@@ -582,6 +597,7 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
         "ingress_listener":{"query_state":state.ingress.query_state.as_str(),"status":state.ingress.status,
             "desired_generation":state.ingress.desired_generation,"applied_generation":state.ingress.applied_generation,
             "bind":state.ingress.bind,"mode":state.ingress.mode,
+            "local_addr":state.ingress.local_addr.as_deref(),
             "desired_mode":state.ingress.desired_mode,"applied_mode":state.ingress.applied_mode,
             "plaintext_warning":state.ingress.plaintext_warning,
             "last_error":state.ingress.last_error.as_deref().map(bounded_health_text),
@@ -712,6 +728,7 @@ mod tests {
             desired_generation: Some(7),
             applied_generation: Some(6),
             bind: Some("private_site"),
+            local_addr: None,
             mode: Some("private_plaintext"),
             desired_mode: Some("tls"),
             applied_mode: Some("private_plaintext"),

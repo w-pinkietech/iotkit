@@ -1,16 +1,49 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iotkit_core_ops::{INGRESS_READY, IngressListenerConfig, IngressListenerMode};
 use iotkit_core_storage::DbHandle;
 use iotkit_ingest_http::{
-    ApplyError, ExposureSnapshot, HttpIngestService, Listener, ListenerConfig, ListenerMode,
-    ListenerTransition, ServingListener, SiteCidr, SystemMonotonicClock, TlsMaterial,
+    ApplyError, ExposureSnapshot, HttpIngestService, Listener, ListenerConfig, ListenerError,
+    ListenerMode, ListenerTransition, ServingListener, SiteCidr, SystemMonotonicClock, TlsMaterial,
     ValidatedListenerConfig,
 };
 
 use crate::health::{HealthState, IngressListenerHealth, IngressQueryState};
+
+pub type IngressBindFuture =
+    Pin<Box<dyn Future<Output = Result<Listener, ListenerError>> + Send + 'static>>;
+
+/// Composition boundary for the listener's trusted interface inventory and socket ownership.
+///
+/// The default implementation reads the host inventory and binds the validated site address.
+/// Alternate implementations must still return a strictly validated configuration; the socket
+/// boundary exists for socket activation and deterministic supervisor composition, not to bypass
+/// the private-site validation performed by [`ValidatedListenerConfig::new`].
+pub trait IngressComposition: Send + Sync {
+    fn exposure(&self, interface: &str) -> Result<ExposureSnapshot, ListenerError>;
+
+    fn bind(&self, config: ValidatedListenerConfig) -> IngressBindFuture;
+}
+
+struct OsIngressComposition;
+
+impl IngressComposition for OsIngressComposition {
+    fn exposure(&self, interface: &str) -> Result<ExposureSnapshot, ListenerError> {
+        ExposureSnapshot::from_os(interface)
+    }
+
+    fn bind(&self, config: ValidatedListenerConfig) -> IngressBindFuture {
+        Box::pin(Listener::bind(config))
+    }
+}
+
+fn os_ingress_composition() -> Arc<dyn IngressComposition> {
+    Arc::new(OsIngressComposition)
+}
 
 pub fn spawn_ingress_supervisor(
     db: DbHandle,
@@ -18,7 +51,14 @@ pub fn spawn_ingress_supervisor(
     health: Arc<Mutex<HealthState>>,
     interval: Duration,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_ingress_supervisor_inner(db, data_dir, health, interval, None)
+    spawn_ingress_supervisor_inner(
+        db,
+        data_dir,
+        health,
+        interval,
+        None,
+        os_ingress_composition(),
+    )
 }
 
 pub fn spawn_ingress_supervisor_serving(
@@ -28,7 +68,25 @@ pub fn spawn_ingress_supervisor_serving(
     interval: Duration,
     service: HttpIngestService<SystemMonotonicClock>,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_ingress_supervisor_inner(db, data_dir, health, interval, Some(service))
+    spawn_ingress_supervisor_inner(
+        db,
+        data_dir,
+        health,
+        interval,
+        Some(service),
+        os_ingress_composition(),
+    )
+}
+
+pub fn spawn_ingress_supervisor_serving_with_composition(
+    db: DbHandle,
+    data_dir: PathBuf,
+    health: Arc<Mutex<HealthState>>,
+    interval: Duration,
+    service: HttpIngestService<SystemMonotonicClock>,
+    composition: Arc<dyn IngressComposition>,
+) -> tokio::task::JoinHandle<()> {
+    spawn_ingress_supervisor_inner(db, data_dir, health, interval, Some(service), composition)
 }
 
 fn spawn_ingress_supervisor_inner(
@@ -37,6 +95,7 @@ fn spawn_ingress_supervisor_inner(
     health: Arc<Mutex<HealthState>>,
     interval: Duration,
     service: Option<HttpIngestService<SystemMonotonicClock>>,
+    composition: Arc<dyn IngressComposition>,
 ) -> tokio::task::JoinHandle<()> {
     struct ExitGuard(Arc<Mutex<HealthState>>);
     impl Drop for ExitGuard {
@@ -62,7 +121,7 @@ fn spawn_ingress_supervisor_inner(
         }
         let mut transition = ListenerTransition::<ServingListener>::default();
         let recovered = if INGRESS_READY && custody_reconciled {
-            recover_last_applied(&db, &data_dir, service.as_ref()).await
+            recover_last_applied(&db, &data_dir, service.as_ref(), composition.clone()).await
         } else {
             None
         };
@@ -114,22 +173,23 @@ fn spawn_ingress_supervisor_inner(
             let next = match observed {
                 Ok(config) if !config.enabled => {
                     let generation = config.desired.generation;
-                    if transition
-                        .disable_generation(generation, |_| Ok::<_, ()>(()))
-                        .is_err()
+                    match disable_generation_safely(
+                        &db,
+                        &data_dir,
+                        &config,
+                        &mut transition,
+                        composition.clone(),
+                    )
+                    .await
                     {
-                        record_apply_error(&db, generation, "generation_conflict").await;
-                        IngressListenerHealth::blocked(config, "generation_conflict")
-                    } else {
-                        match publish_applied_if_authorized(
-                            &db, &data_dir, &config, generation, None,
-                        )
-                        .await
-                        {
-                            Ok(()) => {
-                                IngressListenerHealth::disabled(generation, config.last_action)
-                            }
-                            Err(_) => IngressListenerHealth::unknown("applied_state_write_failed"),
+                        Ok(()) => IngressListenerHealth::disabled(generation, config.last_action),
+                        Err("generation_conflict") => {
+                            record_apply_error(&db, generation, "generation_conflict").await;
+                            IngressListenerHealth::blocked(config, "generation_conflict")
+                        }
+                        Err(code) => {
+                            record_apply_error(&db, generation, code).await;
+                            IngressListenerHealth::blocked(config, code)
                         }
                     }
                 }
@@ -140,101 +200,45 @@ fn spawn_ingress_supervisor_inner(
                 }
                 Ok(config) => {
                     let desired_generation = config.desired.generation;
-                    if transition.active().is_some()
+                    if transition
+                        .active()
+                        .is_some_and(ServingListener::is_finished)
+                    {
+                        invalidate_runtime(&db, &mut transition, "http_service_exited").await;
+                        record_apply_error(&db, desired_generation, "http_service_exited").await;
+                        IngressListenerHealth::invalidated(config, "http_service_exited")
+                    } else if transition.active().is_some()
                         && transition.applied_generation() == desired_generation
                     {
-                        if transition
-                            .active()
-                            .is_some_and(ServingListener::is_finished)
-                        {
-                            invalidate_runtime(&db, &mut transition, "http_service_exited").await;
-                            record_apply_error(&db, desired_generation, "http_service_exited")
-                                .await;
-                            IngressListenerHealth::invalidated(config, "http_service_exited")
-                        } else {
-                            match validate_runtime_config(&config, &data_dir) {
-                                Ok(degraded) => IngressListenerHealth::listening(config, degraded),
-                                Err(code) => {
-                                    invalidate_runtime(&db, &mut transition, code).await;
-                                    record_apply_error(&db, desired_generation, code).await;
-                                    IngressListenerHealth::invalidated(config, code)
-                                }
+                        match validate_runtime_config(&config, &data_dir, composition.as_ref()) {
+                            Ok(degraded) => IngressListenerHealth::listening_at(
+                                config,
+                                degraded,
+                                transition.active().map(ServingListener::local_addr),
+                            ),
+                            Err(code) => {
+                                invalidate_runtime(&db, &mut transition, code).await;
+                                record_apply_error(&db, desired_generation, code).await;
+                                IngressListenerHealth::invalidated(config, code)
                             }
                         }
                     } else {
-                        let tls_generation = match config.desired.mode {
-                            IngressListenerMode::Tls => config.desired.tls_generation,
-                            IngressListenerMode::PrivatePlaintext => None,
-                        };
                         let degraded = config.desired.mode == IngressListenerMode::PrivatePlaintext;
-                        let prior_generation = transition.applied_generation();
-                        let post_bind_db = db.clone();
-                        let post_bind_dir = data_dir.clone();
-                        let post_bind_config = config.clone();
-                        let pre_switchover_db = db.clone();
-                        let pre_switchover_dir = data_dir.clone();
-                        let pre_switchover_config = config.clone();
-                        let serving_service = service.clone();
-                        let applied = transition
-                            .apply_generation_async_checked(
-                                desired_generation,
-                                || build_validated_config(&config, &data_dir),
-                                Ok,
-                                move |(validated, _)| async move {
-                                    let service =
-                                        serving_service.ok_or("http_service_unavailable")?;
-                                    let listener = Listener::bind(validated)
-                                        .await
-                                        .map_err(|_| "bind_failed")?;
-                                    recheck_authority(
-                                        &post_bind_db,
-                                        &post_bind_dir,
-                                        &post_bind_config,
-                                        &post_bind_config,
-                                    )
-                                    .await?;
-                                    listener
-                                        .serve(service)
-                                        .map_err(|_| "http_service_start_failed")
-                                },
-                                move || async move {
-                                    recheck_authority(
-                                        &pre_switchover_db,
-                                        &pre_switchover_dir,
-                                        &pre_switchover_config,
-                                        &pre_switchover_config,
-                                    )
-                                    .await
-                                },
-                            )
-                            .await;
-                        match applied {
-                            Ok(old) => {
-                                let written = publish_applied_if_authorized(
-                                    &db,
-                                    &data_dir,
-                                    &config,
-                                    desired_generation,
-                                    tls_generation,
-                                )
-                                .await;
-                                if written.is_ok() {
-                                    drop(old);
-                                    IngressListenerHealth::listening(config, degraded)
-                                } else {
-                                    drop(transition.rollback_switchover(old, prior_generation));
-                                    record_apply_error(
-                                        &db,
-                                        desired_generation,
-                                        "applied_state_write_failed",
-                                    )
-                                    .await;
-                                    IngressListenerHealth::blocked(
-                                        config,
-                                        "applied_state_write_failed",
-                                    )
-                                }
-                            }
+                        match apply_generation_safely(
+                            &db,
+                            &data_dir,
+                            &config,
+                            &mut transition,
+                            service.as_ref(),
+                            composition.clone(),
+                        )
+                        .await
+                        {
+                            Ok(()) => IngressListenerHealth::listening_at(
+                                config,
+                                degraded,
+                                transition.active().map(ServingListener::local_addr),
+                            ),
                             Err(ApplyError::External(code)) => {
                                 record_apply_error(&db, desired_generation, code).await;
                                 IngressListenerHealth::blocked(config, code)
@@ -280,10 +284,172 @@ fn spawn_ingress_supervisor_inner(
     })
 }
 
+async fn apply_generation_safely(
+    db: &DbHandle,
+    data_dir: &Path,
+    config: &IngressListenerConfig,
+    transition: &mut ListenerTransition<ServingListener>,
+    service: Option<&HttpIngestService<SystemMonotonicClock>>,
+    composition: Arc<dyn IngressComposition>,
+) -> Result<(), ApplyError<&'static str>> {
+    let generation = config.desired.generation;
+    transition
+        .prepare_generation(generation)
+        .map_err(ApplyError::State)?;
+    let (validated, installed_tls_generation) =
+        build_validated_config(config, data_dir, composition.as_ref())
+            .map_err(ApplyError::External)?;
+    let same_bind = transition.active().is_some_and(|active| {
+        let requested = validated.bind_addr();
+        let current = active.configured_addr();
+        requested.ip() == current.ip()
+            && (requested.port() == 0 || requested.port() == current.port())
+    });
+
+    if same_bind {
+        let active = transition.active().ok_or(ApplyError::State(
+            iotkit_ingest_http::TransitionError::GenerationRollback,
+        ))?;
+        let policy = Listener::stage_policy_for_local_addr(&validated, active.local_addr())
+            .map_err(|_| ApplyError::External("http_service_start_failed"))?;
+        active
+            .pause()
+            .await
+            .map_err(|_| ApplyError::External("http_service_exited"))?;
+        if let Err(code) = publish_applied_if_authorized_with_composition(
+            db,
+            data_dir,
+            config,
+            generation,
+            installed_tls_generation,
+            composition.clone(),
+        )
+        .await
+        {
+            active
+                .resume()
+                .await
+                .map_err(|_| ApplyError::External("http_service_exited"))?;
+            return Err(ApplyError::External(code));
+        }
+        let old_policy = active
+            .replace_policy(policy)
+            .await
+            .map_err(|_| ApplyError::External("http_service_exited"))?;
+        active
+            .resume()
+            .await
+            .map_err(|_| ApplyError::External("http_service_exited"))?;
+        transition
+            .commit_reused_generation(generation)
+            .map_err(ApplyError::State)?;
+        drop(old_policy);
+        return Ok(());
+    }
+
+    let service = service
+        .cloned()
+        .ok_or(ApplyError::External("http_service_unavailable"))?;
+    let staged = composition
+        .bind(validated)
+        .await
+        .map_err(|_| ApplyError::External("bind_failed"))?;
+    let staged = staged
+        .serve_paused(service)
+        .map_err(|_| ApplyError::External("http_service_start_failed"))?;
+    let old_was_paused = if let Some(active) = transition.active() {
+        active
+            .pause()
+            .await
+            .map_err(|_| ApplyError::External("http_service_exited"))?;
+        true
+    } else {
+        false
+    };
+
+    if let Err(code) = publish_applied_if_authorized_with_composition(
+        db,
+        data_dir,
+        config,
+        generation,
+        installed_tls_generation,
+        composition.clone(),
+    )
+    .await
+    {
+        if old_was_paused && let Some(active) = transition.active() {
+            active
+                .resume()
+                .await
+                .map_err(|_| ApplyError::External("http_service_exited"))?;
+        }
+        staged.shutdown().await;
+        return Err(ApplyError::External(code));
+    }
+
+    if staged.resume().await.is_err() {
+        staged.shutdown().await;
+        invalidate_runtime(db, transition, "http_service_start_failed").await;
+        return Err(ApplyError::External("http_service_start_failed"));
+    }
+    let old = transition
+        .commit_replaced_generation(generation, staged)
+        .map_err(ApplyError::State)?;
+    if let Some(old) = old {
+        old.shutdown().await;
+    }
+    Ok(())
+}
+
+async fn disable_generation_safely(
+    db: &DbHandle,
+    data_dir: &Path,
+    config: &IngressListenerConfig,
+    transition: &mut ListenerTransition<ServingListener>,
+    composition: Arc<dyn IngressComposition>,
+) -> Result<(), &'static str> {
+    let generation = config.desired.generation;
+    if transition.active().is_none() && transition.applied_generation() == generation {
+        return Ok(());
+    }
+    transition
+        .prepare_generation(generation)
+        .map_err(|_| "generation_conflict")?;
+    let old_was_paused = if let Some(active) = transition.active() {
+        active.pause().await.map_err(|_| "http_service_exited")?;
+        true
+    } else {
+        false
+    };
+    if let Err(code) = publish_applied_if_authorized_with_composition(
+        db,
+        data_dir,
+        config,
+        generation,
+        None,
+        composition,
+    )
+    .await
+    {
+        if old_was_paused && let Some(active) = transition.active() {
+            active.resume().await.map_err(|_| "http_service_exited")?;
+        }
+        return Err(code);
+    }
+    let old = transition
+        .commit_disabled_generation(generation)
+        .map_err(|_| "generation_conflict")?;
+    if let Some(old) = old {
+        old.shutdown().await;
+    }
+    Ok(())
+}
+
 async fn recover_last_applied(
     db: &DbHandle,
     data_dir: &Path,
     service: Option<&HttpIngestService<SystemMonotonicClock>>,
+    composition: Arc<dyn IngressComposition>,
 ) -> Option<(ServingListener, u64, u64)> {
     let service = service?.clone();
     let config = observe_authority(db, data_dir).await.ok()?;
@@ -293,12 +459,12 @@ async fn recover_last_applied(
     let applied = config.applied.clone()?;
     let mut recovery = config.clone();
     recovery.desired = applied.clone();
-    let (validated, _) = build_validated_config(&recovery, data_dir).ok()?;
-    let listener = Listener::bind(validated).await.ok()?;
-    recheck_authority(db, data_dir, &config, &recovery)
+    let (validated, _) = build_validated_config(&recovery, data_dir, composition.as_ref()).ok()?;
+    let listener = composition.bind(validated).await.ok()?;
+    recheck_authority(db, data_dir, &config, &recovery, composition.clone())
         .await
         .ok()?;
-    recheck_authority(db, data_dir, &config, &recovery)
+    recheck_authority(db, data_dir, &config, &recovery, composition)
         .await
         .ok()?;
     let listener = listener.serve(service).ok()?;
@@ -310,19 +476,25 @@ async fn recheck_authority(
     data_dir: &Path,
     expected: &IngressListenerConfig,
     runtime: &IngressListenerConfig,
+    composition: Arc<dyn IngressComposition>,
 ) -> Result<(), &'static str> {
     let data_dir = data_dir.to_path_buf();
     let expected = expected.clone();
     let runtime = runtime.clone();
     db.with_conn(move |conn| {
         Ok(recheck_authority_on_conn(
-            conn, &data_dir, &expected, &runtime,
+            conn,
+            &data_dir,
+            &expected,
+            &runtime,
+            composition.as_ref(),
         ))
     })
     .await
     .map_err(|_| "database_query_failed")?
 }
 
+#[cfg(test)]
 async fn publish_applied_if_authorized(
     db: &DbHandle,
     data_dir: &Path,
@@ -330,13 +502,32 @@ async fn publish_applied_if_authorized(
     generation: u64,
     tls_generation: Option<u64>,
 ) -> Result<(), &'static str> {
+    publish_applied_if_authorized_with_composition(
+        db,
+        data_dir,
+        expected,
+        generation,
+        tls_generation,
+        os_ingress_composition(),
+    )
+    .await
+}
+
+async fn publish_applied_if_authorized_with_composition(
+    db: &DbHandle,
+    data_dir: &Path,
+    expected: &IngressListenerConfig,
+    generation: u64,
+    tls_generation: Option<u64>,
+    composition: Arc<dyn IngressComposition>,
+) -> Result<(), &'static str> {
     let data_dir = data_dir.to_path_buf();
     let expected = expected.clone();
     db.with_conn(move |conn| {
         let tx =
             rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
         let checked = (|| {
-            recheck_authority_on_conn(&tx, &data_dir, &expected, &expected)?;
+            recheck_authority_on_conn(&tx, &data_dir, &expected, &expected, composition.as_ref())?;
             iotkit_core_ops::mark_ingress_applied_in_transaction(&tx, generation, tls_generation)
                 .map_err(|_| "applied_state_write_failed")
         })();
@@ -357,6 +548,7 @@ fn recheck_authority_on_conn(
     data_dir: &Path,
     expected: &IngressListenerConfig,
     runtime: &IngressListenerConfig,
+    composition: &dyn IngressComposition,
 ) -> Result<(), &'static str> {
     crate::network_authority::require_common_network_authority(conn, data_dir)
         .map_err(|_| "authority_invalidated")?;
@@ -367,7 +559,7 @@ fn recheck_authority_on_conn(
         return Err("desired_generation_changed");
     }
     if expected.enabled {
-        validate_runtime_config(runtime, data_dir).map(|_| ())?;
+        validate_runtime_config(runtime, data_dir, composition).map(|_| ())?;
     }
     Ok(())
 }
@@ -394,13 +586,16 @@ async fn observe_authority(
 fn validate_runtime_config(
     config: &IngressListenerConfig,
     data_dir: &Path,
+    composition: &dyn IngressComposition,
 ) -> Result<bool, &'static str> {
-    build_validated_config(config, data_dir).map(|(validated, _)| validated.is_degraded())
+    build_validated_config(config, data_dir, composition)
+        .map(|(validated, _)| validated.is_degraded())
 }
 
 fn build_validated_config(
     config: &IngressListenerConfig,
     data_dir: &Path,
+    composition: &dyn IngressComposition,
 ) -> Result<(ValidatedListenerConfig, Option<u64>), &'static str> {
     let state = &config.desired;
     let bind = state.bind_addr.parse().map_err(|_| "invalid_bind")?;
@@ -412,7 +607,9 @@ fn build_validated_config(
                 .map_err(|_| "invalid_site_local_cidr")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let exposure = ExposureSnapshot::from_os(&state.interface).map_err(|_| "inventory_invalid")?;
+    let exposure = composition
+        .exposure(&state.interface)
+        .map_err(|_| "inventory_invalid")?;
     let (mode, tls_generation) = match state.mode {
         IngressListenerMode::PrivatePlaintext => (ListenerMode::PrivatePlaintext, None),
         IngressListenerMode::Tls => {
@@ -527,6 +724,7 @@ pub fn note_ingress_task_exit(health: &Arc<Mutex<HealthState>>, action: &'static
         desired_generation: None,
         applied_generation: None,
         bind: None,
+        local_addr: None,
         mode: None,
         desired_mode: None,
         applied_mode: None,

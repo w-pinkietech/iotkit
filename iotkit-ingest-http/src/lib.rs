@@ -101,13 +101,16 @@ use rustls::ServerConfig;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_rustls::TlsAcceptor;
+
+const TLS_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[cfg(test)]
 extern crate self as iotkit_ingest_http;
 
 mod transition;
-pub use transition::{ApplyError, ListenerTransition};
+pub use transition::{ApplyError, ListenerTransition, TransitionError};
 
 mod admission;
 #[cfg(test)]
@@ -222,8 +225,9 @@ pub struct ExposureSnapshot {
 }
 
 impl ExposureSnapshot {
-    /// Reads interface addresses and default-route state from the running OS. Product listener
-    /// construction uses this trusted producer; arbitrary snapshots are test-only.
+    /// Reads interface addresses and default-route state from the running OS. The default product
+    /// listener composition uses this trusted producer; alternate inventory snapshots must enter
+    /// through the explicit composition boundary and do not change validation rules.
     pub fn from_os(interface: &str) -> Result<Self, ListenerError> {
         let mut addresses = BTreeSet::new();
         let mut head = std::ptr::null_mut();
@@ -269,6 +273,36 @@ impl ExposureSnapshot {
         })
     }
 
+    /// Constructs a snapshot from an already-authoritative interface inventory.
+    ///
+    /// The default gateway composition uses [`Self::from_os`]. This boundary is for a trusted
+    /// composition root that already owns the inventory source (for example, a supervisor that
+    /// receives interface state from a platform service). It does not classify or authorize a
+    /// bind by itself: [`ValidatedListenerConfig::new`] still requires a private address, a
+    /// matching interface, and a site-local CIDR.
+    pub fn from_inventory(
+        interface: impl Into<String>,
+        addresses: impl IntoIterator<Item = IpAddr>,
+        internet_default_route: bool,
+    ) -> Result<Self, ListenerError> {
+        let interface = interface.into();
+        if interface.trim().is_empty() || interface.len() > 64 {
+            return Err(ListenerError::UnapprovedInterface);
+        }
+        let addresses = addresses
+            .into_iter()
+            .map(normalize_ip)
+            .collect::<BTreeSet<_>>();
+        if addresses.is_empty() {
+            return Err(ListenerError::UnapprovedInterface);
+        }
+        Ok(Self {
+            interface,
+            addresses,
+            _internet_default_route: internet_default_route,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn new(
         interface: impl Into<String>,
@@ -297,7 +331,6 @@ impl ExposureSnapshot {
 pub struct ValidatedListenerConfig {
     config: ListenerConfig,
     degraded: bool,
-    test_only: bool,
 }
 
 impl ValidatedListenerConfig {
@@ -348,11 +381,7 @@ impl ValidatedListenerConfig {
         }
         validate_private_ip(config.bind.ip(), allow_loopback)?;
         let degraded = matches!(config.mode, ListenerMode::PrivatePlaintext);
-        Ok(Self {
-            config,
-            degraded,
-            test_only: allow_loopback,
-        })
+        Ok(Self { config, degraded })
     }
 
     pub fn is_degraded(&self) -> bool {
@@ -378,14 +407,37 @@ impl ValidatedListenerConfig {
 
 pub struct Listener {
     inner: tokio::net::TcpListener,
-    config: ValidatedListenerConfig,
+    policy: ListenerPolicy,
+    configured_addr: SocketAddr,
+}
+
+/// Runtime transport policy staged independently from a bound socket. The gateway uses this
+/// boundary to validate TLS/configuration changes before pausing and swapping a live listener.
+#[derive(Clone)]
+pub struct ListenerPolicy {
+    site_local_cidrs: Vec<SiteCidr>,
     tls: Option<TlsAcceptor>,
 }
 
 pub struct ServingListener {
+    configured_addr: SocketAddr,
     local_addr: SocketAddr,
-    shutdown: tokio::sync::watch::Sender<bool>,
+    shutdown: watch::Sender<bool>,
+    control: mpsc::Sender<ListenerCommand>,
     task: tokio::task::JoinHandle<()>,
+}
+
+enum ListenerCommand {
+    Pause {
+        response: oneshot::Sender<()>,
+    },
+    ReplacePolicy {
+        policy: ListenerPolicy,
+        response: oneshot::Sender<Result<ListenerPolicy, io::Error>>,
+    },
+    Resume {
+        response: oneshot::Sender<()>,
+    },
 }
 
 impl ServingListener {
@@ -396,6 +448,62 @@ impl ServingListener {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
+
+    /// Returns the durable configuration endpoint whose generation this listener serves.
+    ///
+    /// This is intentionally separate from [`Self::local_addr`]: a `:0` configuration remains
+    /// the desired/applied truth while the kernel-selected runtime port is reported separately.
+    pub fn configured_addr(&self) -> SocketAddr {
+        self.configured_addr
+    }
+
+    /// Stop accepting new peers and acknowledge only after the accept loop has entered the
+    /// paused state. Existing connection tasks are allowed to drain.
+    pub async fn pause(&self) -> io::Result<()> {
+        let (response, result) = oneshot::channel();
+        self.control
+            .send(ListenerCommand::Pause { response })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "listener task exited"))?;
+        result
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "listener task exited"))?;
+        Ok(())
+    }
+
+    /// Replace the runtime TLS/peer policy while the listener is paused and return the previous
+    /// policy for rollback if durable applied-state publication fails.
+    pub async fn replace_policy(&self, policy: ListenerPolicy) -> io::Result<ListenerPolicy> {
+        let (response, result) = oneshot::channel();
+        self.control
+            .send(ListenerCommand::ReplacePolicy { policy, response })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "listener task exited"))?;
+        result
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "listener task exited"))?
+    }
+
+    /// Resume accepting peers after the durable generation boundary has completed.
+    pub async fn resume(&self) -> io::Result<()> {
+        let (response, result) = oneshot::channel();
+        self.control
+            .send(ListenerCommand::Resume { response })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "listener task exited"))?;
+        result
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "listener task exited"))?;
+        Ok(())
+    }
+
+    /// Signal listener shutdown and wait until every supervised peer task has been
+    /// drained or cancelled. This is the composition boundary used by orderly
+    /// teardown; dropping still provides a best-effort signal for invalidation paths.
+    pub async fn shutdown(mut self) {
+        let _ = self.shutdown.send(true);
+        let _ = (&mut self.task).await;
+    }
 }
 
 impl Drop for ServingListener {
@@ -405,28 +513,77 @@ impl Drop for ServingListener {
 }
 
 impl Listener {
-    pub async fn bind(config: ValidatedListenerConfig) -> Result<Self, ListenerError> {
+    pub fn stage_policy(config: &ValidatedListenerConfig) -> Result<ListenerPolicy, ListenerError> {
+        Self::stage_policy_with_cidrs(config, config.site_local_cidrs().to_vec())
+    }
+
+    /// Stages policy for a socket supplied by the composition root.
+    ///
+    /// A loopback socket is explicitly treated as local-only and therefore accepts only
+    /// loopback peers. This keeps the socket-injection boundary useful for deterministic
+    /// supervisor composition without turning loopback into an accepted site-LAN exposure.
+    pub fn stage_policy_for_local_addr(
+        config: &ValidatedListenerConfig,
+        local_addr: SocketAddr,
+    ) -> Result<ListenerPolicy, ListenerError> {
+        let local_ip = normalize_ip(local_addr.ip());
+        let configured_ip = normalize_ip(config.bind_addr().ip());
+        let peer_cidrs = if local_ip.is_loopback() {
+            vec![loopback_cidr(local_ip)]
+        } else if local_ip == configured_ip {
+            config.site_local_cidrs().to_vec()
+        } else {
+            return Err(ListenerError::BindNotOnInterface);
+        };
+        Self::stage_policy_with_cidrs(config, peer_cidrs)
+    }
+
+    fn stage_policy_with_cidrs(
+        config: &ValidatedListenerConfig,
+        site_local_cidrs: Vec<SiteCidr>,
+    ) -> Result<ListenerPolicy, ListenerError> {
         let tls = match config.mode() {
             ListenerMode::Tls(material) => Some(TlsAcceptor::from(material.server_config()?)),
             ListenerMode::PrivatePlaintext => None,
         };
-        let socket = socket2::Socket::new(
-            match config.bind_addr() {
-                SocketAddr::V4(_) => socket2::Domain::IPV4,
-                SocketAddr::V6(_) => socket2::Domain::IPV6,
-            },
-            socket2::Type::STREAM,
-            Some(socket2::Protocol::TCP),
-        )?;
-        socket.set_nonblocking(true)?;
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        if !config.test_only {
-            socket.bind_device(Some(config.config.interface.as_bytes()))?;
-        }
-        socket.bind(&config.bind_addr().into())?;
-        socket.listen(128)?;
-        let inner = tokio::net::TcpListener::from_std(socket.into())?;
-        Ok(Self { inner, config, tls })
+        Ok(ListenerPolicy {
+            site_local_cidrs,
+            tls,
+        })
+    }
+
+    pub async fn bind(config: ValidatedListenerConfig) -> Result<Self, ListenerError> {
+        let policy = Self::stage_policy(&config)?;
+        let bind_addr = config.bind_addr();
+        let socket = match bind_addr.ip() {
+            IpAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+            IpAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+        };
+        #[cfg(not(windows))]
+        socket.set_reuseaddr(true)?;
+        socket.bind(bind_addr)?;
+        let inner = socket.listen(128)?;
+        Ok(Self {
+            inner,
+            policy,
+            configured_addr: bind_addr,
+        })
+    }
+
+    /// Adopts a socket owned by the composition root after the configuration has been strictly
+    /// validated. This supports socket activation and deterministic supervisor probes without
+    /// changing the production [`Self::bind`] path or its private-site checks.
+    pub fn from_prebound_socket(
+        config: ValidatedListenerConfig,
+        inner: tokio::net::TcpListener,
+    ) -> Result<Self, ListenerError> {
+        let local_addr = inner.local_addr()?;
+        let policy = Self::stage_policy_for_local_addr(&config, local_addr)?;
+        Ok(Self {
+            inner,
+            policy,
+            configured_addr: config.bind_addr(),
+        })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -435,8 +592,16 @@ impl Listener {
 
     pub async fn accept(&self) -> Result<(AcceptedStream, SocketAddr), ListenerError> {
         let (stream, peer) = self.inner.accept().await?;
-        validate_peer(peer, self.config.site_local_cidrs())?;
-        match &self.tls {
+        Self::accept_stream(stream, peer, &self.policy).await
+    }
+
+    async fn accept_stream(
+        stream: tokio::net::TcpStream,
+        peer: SocketAddr,
+        policy: &ListenerPolicy,
+    ) -> Result<(AcceptedStream, SocketAddr), ListenerError> {
+        validate_peer(peer, &policy.site_local_cidrs)?;
+        match &policy.tls {
             Some(acceptor) => Ok((
                 AcceptedStream::Tls(Box::new(acceptor.accept(stream).await?)),
                 peer,
@@ -463,52 +628,130 @@ impl Listener {
         self,
         service: crate::HttpIngestService<C>,
     ) -> io::Result<ServingListener> {
+        self.serve_inner(service, false)
+    }
+
+    /// Start a viable bound listener with accepting paused. This is used for a different-bind
+    /// switchover so the new socket cannot expose a generation before durable publication.
+    pub fn serve_paused<C: crate::MonotonicClock>(
+        self,
+        service: crate::HttpIngestService<C>,
+    ) -> io::Result<ServingListener> {
+        self.serve_inner(service, true)
+    }
+
+    fn serve_inner<C: crate::MonotonicClock>(
+        self,
+        service: crate::HttpIngestService<C>,
+        initially_paused: bool,
+    ) -> io::Result<ServingListener> {
         let local_addr = self.local_addr()?;
-        let listener = Arc::new(self);
-        let (shutdown, mut accept_shutdown) = tokio::sync::watch::channel(false);
+        let Listener {
+            inner,
+            policy,
+            configured_addr,
+        } = self;
+        let (shutdown, mut accept_shutdown) = watch::channel(false);
+        let (control, mut commands) = mpsc::channel(8);
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
+            let mut policy = policy;
+            let mut paused = initially_paused;
             loop {
-                let accepted = tokio::select! {
+                tokio::select! {
                     changed = accept_shutdown.changed() => {
                         if changed.is_err() || *accept_shutdown.borrow() {
                             break;
                         }
-                        continue;
                     }
-                    accepted = listener.accept_with_timeout(std::time::Duration::from_secs(5)) => accepted,
-                    Some(_) = connections.join_next(), if !connections.is_empty() => continue,
-                };
-                let (stream, peer) = match accepted {
-                    Ok(accepted) => accepted,
-                    Err(ListenerError::AcceptTimeout | ListenerError::PeerOutsideSiteCidr) => {
-                        continue;
-                    }
-                    Err(error) => {
-                        tracing::error!(error = %error, "HTTP ingress accept loop stopped");
-                        break;
-                    }
-                };
-                let service = service.clone();
-                let mut connection_shutdown = accept_shutdown.clone();
-                connections.spawn(async move {
-                    tokio::select! {
-                        changed = connection_shutdown.changed() => {
-                            let _ = changed;
-                        }
-                        result = service.serve_connection(stream, peer) => {
-                            if let Err(error) = result {
-                                tracing::debug!(error = %error, "HTTP ingress connection ended");
+                    command = commands.recv() => {
+                        match command {
+                            Some(ListenerCommand::Pause { response }) => {
+                                paused = true;
+                                let _ = response.send(());
                             }
+                            Some(ListenerCommand::ReplacePolicy { policy: next, response }) => {
+                                if !paused {
+                                    let _ = response.send(Err(io::Error::new(
+                                        io::ErrorKind::InvalidInput,
+                                        "listener must be paused before policy replacement",
+                                    )));
+                                } else {
+                                    let old = std::mem::replace(&mut policy, next);
+                                    let _ = response.send(Ok(old));
+                                }
+                            }
+                            Some(ListenerCommand::Resume { response }) => {
+                                paused = false;
+                                let _ = response.send(());
+                            }
+                            None => break,
                         }
                     }
-                });
+                    accepted = inner.accept(), if !paused => {
+                        let (stream, peer) = match accepted {
+                            Ok(accepted) => accepted,
+                            Err(error) => {
+                                tracing::error!(error = %error, "HTTP ingress accept loop stopped");
+                                break;
+                            }
+                        };
+                        let connection = match service.try_acquire_connection() {
+                            Ok(connection) => connection,
+                            Err(crate::ServeConnectionError::Busy) => {
+                                // No HTTP response is possible before TLS. Closing the raw
+                                // stream is the bounded overload behavior for this peer.
+                                continue;
+                            }
+                            Err(error) => {
+                                tracing::error!(error = %error, "HTTP ingress connection admission failed");
+                                continue;
+                            }
+                        };
+                        let peer_policy = policy.clone();
+                        let service = service.clone();
+                        let mut connection_shutdown = accept_shutdown.clone();
+                        connections.spawn(async move {
+                            let negotiated = tokio::time::timeout(
+                                TLS_HANDSHAKE_TIMEOUT,
+                                Listener::accept_stream(stream, peer, &peer_policy),
+                            )
+                            .await
+                            .map_err(|_| ListenerError::AcceptTimeout)
+                            .and_then(|result| result);
+                            let (stream, peer) = match negotiated {
+                                Ok(accepted) => accepted,
+                                Err(error) => {
+                                    tracing::debug!(error = %error, peer = %peer, "HTTP ingress peer connection rejected");
+                                    return;
+                                }
+                            };
+                            tokio::select! {
+                                changed = connection_shutdown.changed() => {
+                                    let _ = changed;
+                                }
+                                result = service.serve_connection_with_permit(stream, peer, connection) => {
+                                    if let Err(error) = result {
+                                        tracing::debug!(error = %error, peer = %peer, "HTTP ingress connection ended");
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Some(result) = connections.join_next(), if !connections.is_empty() => {
+                        if let Err(error) = result {
+                            tracing::error!(error = %error, "HTTP ingress connection task failed");
+                        }
+                    }
+                }
             }
             connections.shutdown().await;
         });
         Ok(ServingListener {
+            configured_addr,
             local_addr,
             shutdown,
+            control,
             task,
         })
     }
@@ -594,6 +837,13 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
             .map(IpAddr::V4)
             .unwrap_or(IpAddr::V6(ip)),
         ip => ip,
+    }
+}
+
+fn loopback_cidr(ip: IpAddr) -> SiteCidr {
+    match normalize_ip(ip) {
+        IpAddr::V4(_) => "127.0.0.0/8".parse().expect("loopback CIDR literal"),
+        IpAddr::V6(_) => "::1/128".parse().expect("loopback CIDR literal"),
     }
 }
 
@@ -700,3 +950,7 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "../tests/listener_boundary.rs"]
 mod listener_boundary_tests;
+
+#[cfg(test)]
+#[path = "../tests/e2e.rs"]
+mod e2e_tests;

@@ -309,7 +309,7 @@ pub fn mark_ingress_applied_in_transaction(
     if installed_tls_generation != expected_tls {
         return Err(OpsError::Validation("tls_generation_not_installed".into()));
     }
-    tx.execute(
+    let changed = tx.execute(
         "UPDATE ingress_listener_config SET applied_generation=desired_generation,
           applied_bind_addr=bind_addr, applied_interface=interface,
           applied_site_local_cidrs=site_local_cidrs, applied_mode=mode,
@@ -319,6 +319,9 @@ pub fn mark_ingress_applied_in_transaction(
          WHERE id=1 AND desired_generation=?1",
         params![generation, installed_tls_generation],
     )?;
+    if changed != 1 {
+        return Err(OpsError::Conflict);
+    }
     Ok(())
 }
 

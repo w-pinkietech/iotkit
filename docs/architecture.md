@@ -66,9 +66,17 @@ gains one. Anything that complicates this story needs a strong reason.
 ```
 
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
-`iotkit-ingest-contract`) through `iotkit-ingest-client`. Today the only
-binding is in-process; Wave 1 adds a network ingress (HTTP) speaking the same
-contract with per-device tokens. `AdapterEvent`/`AdapterCommand` are a
+`iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
+binding is a separate, default-off authenticated HTTP/TLS listener:
+
+```
+  device builder ── HTTPS + device bearer ──▶ bounded HTTP ingress ──▶ collector
+       (Envelope/Ack; /api/v1/ingest)          (/validate is no-write)
+```
+
+In-process adapters and the HTTP binding both hand the collector a
+receiver-created principal; sender-controlled `Envelope.source` never grants
+authority. MQTT and pairing-window bindings remain future work. `AdapterEvent`/`AdapterCommand` are a
 *frozen* legacy vocabulary, **not** the ingest path: `AdapterEvent` carries
 adapter-lifecycle supervision into `core/engine`'s device-state projection,
 and `AdapterCommand` carries shutdown plus legacy southbound commands into
@@ -125,6 +133,21 @@ network setup route or unauthenticated setup allowlist. The prescriptive rule:
 path.** Local-root ownership/recovery (and the separately specified factory-reset
 maintenance family) are explicit non-network exceptions, never API/UI/AI operations.
 
+## Current Plan 6 state
+
+The repository currently ships the first network measurement path as a separate,
+default-off `iotkit-ingest-http` listener. It accepts authenticated JSON
+envelopes over a site-LAN TLS binding, applies finite header/body/time/queue and
+admission limits, returns custody-correct acknowledgements, and exposes the
+side-effect-free `/api/v1/ingest/validate` endpoint. Its principal, staging,
+deduplication, health, and episode-audit boundaries are distinct from the
+control API.
+
+Plan 6.5 remains the pre-distribution owner of encrypted replacement backup
+containers and cross-filesystem restore-fence mechanics. MQTT, pairing-window
+registration, batch provisioning, and rich device UI are not alternate current
+bindings; they require later approved work.
+
 ## Crate map
 
 Twenty-two crates, five layers. `scripts/check-layers` enforces the layer rules
@@ -143,7 +166,7 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-core-collector` | `core/collector` | Ingest actor: dedup, series resolution, quarantine decision, same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
 | `iotkit-core-registry` | `core/registry` | D6 measurement registry (standard catalog + site overrides); implements `RegistryPolicy`. |
 | `iotkit-core-ops` | `core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
-| `iotkit-ingest-client` | `iotkit-ingest-client` | The ingest-contract client adapters use (D4). In-proc binding today; HTTP/MQTT are future feature flags. |
+| `iotkit-ingest-client` | `iotkit-ingest-client` | The ingest-contract client adapters use (D4). In-process binding for official adapters; network device builders use the separate HTTP binding. MQTT remains future. |
 | `iotkit-ingest-http` | `iotkit-ingest-http` | **INGRESS.** Listener parsing, exposure/TLS validation, accepted-peer checks, and transport construction; never control-API routes or measurement domain logic. |
 | `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Shared scaffolding for I2C-bus polling sensor adapters. |
 | `rpi4b-transport` | `rpi4b-transport` | Raw bus access (serial/I2C/GPIO/SPI/PWM/USB). Bytes and pin states, zero protocol knowledge. |
@@ -229,7 +252,7 @@ checked.
 | A new operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |
 | A new table / column | A migration in the **owning** `core/*` crate's version slice (the binaries concatenate the slices; the `core/storage` harness applies them by set difference). |
 | A new control-plane HTTP API route | `iotkit-gateway/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
-| An authenticated measurement-ingress HTTP binding | Approved Plan 6 target: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
+| An authenticated measurement-ingress HTTP binding | Shipped Plan 6 binding: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
 | A new CLI command | `iotkit-gatewayctl`, calling `core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
 | Raw bus/pin access | `rpi4b-transport`. |
 | A gateway module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `core/<name>` crate.** The gateway is a composition root, not a home for domain logic. |
