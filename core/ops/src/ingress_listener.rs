@@ -8,8 +8,9 @@ use rusqlite::{Transaction, TransactionBehavior, params};
 
 use crate::OpsError;
 
-/// Deliberately compiled false through Task 5. It is not persisted and has no override path.
-pub const INGRESS_READY: bool = false;
+/// Compile-time exposure marker. Task 6 sets this only after durable staging/dedup bounds and
+/// bounded throttle episode accounting are part of the same build.
+pub const INGRESS_READY: bool = true;
 
 pub(crate) fn stage_ingress_tls_generation(
     data_dir: &Path,

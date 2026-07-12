@@ -610,7 +610,7 @@ fn last_used_is_throttled_and_health_is_aggregate_bounded_and_actionable() {
             })
             .unwrap();
         assert_eq!(first, throttled);
-        clock.0.set(61_000);
+        clock.0.set(61_001);
         conn.execute("UPDATE device_credentials SET last_used_at=issued_at", [])?;
         authenticate_device(conn, &secret, &clock).unwrap();
         let updated: i64 = conn
@@ -629,6 +629,16 @@ fn last_used_is_throttled_and_health_is_aggregate_bounded_and_actionable() {
                 .recovery_action
                 .unwrap()
                 .contains("Plan 6.5 encrypted replacement backup")
+        );
+        conn.execute(
+            "INSERT OR REPLACE INTO ledger_meta(key,value) VALUES('encrypted_replacement_backup_configured','true')",
+            [],
+        )?;
+        assert!(
+            replacement_backup_health(conn)
+                .unwrap()
+                .replacement_backup_unavailable,
+            "configuration alone is not complete encrypted replacement-backup support"
         );
         Ok(())
     })

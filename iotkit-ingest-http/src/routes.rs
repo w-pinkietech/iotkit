@@ -269,6 +269,38 @@ impl<C: MonotonicClock> HttpIngestService<C> {
         self.shared.admission.snapshot()
     }
 
+    pub fn admission_health(&self) -> crate::AdmissionHealthSnapshot {
+        self.shared.admission.note_current_capacity_pressure(
+            self.shared
+                .config
+                .collector_queue_slots
+                .saturating_sub(self.shared.queue.available_permits()),
+            self.shared.config.collector_queue_slots,
+            self.shared
+                .config
+                .concurrent_requests
+                .saturating_sub(self.shared.requests.available_permits()),
+            self.shared.config.concurrent_requests,
+            self.shared
+                .config
+                .concurrent_connections
+                .saturating_sub(self.shared.connections.available_permits()),
+            self.shared.config.concurrent_connections,
+        );
+        self.shared.admission.health_snapshot()
+    }
+
+    pub fn pending_throttle_episode_events(&self) -> Vec<crate::ThrottleEpisodeEvent> {
+        self.shared.admission.pending_episode_events()
+    }
+
+    pub fn acknowledge_throttle_episode_events(
+        &self,
+        events: &[crate::ThrottleEpisodeEvent],
+    ) -> bool {
+        self.shared.admission.acknowledge_episode_events(events)
+    }
+
     #[cfg(test)]
     pub(crate) fn auth_cache_contains(&self, bearer: &str) -> bool {
         let key: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
@@ -283,7 +315,10 @@ impl<C: MonotonicClock> HttpIngestService<C> {
     pub async fn handle(&self, observed_peer: IpAddr, request: Request<Body>) -> Response<Body> {
         let request_permit = match self.shared.requests.clone().try_acquire_owned() {
             Ok(permit) => permit,
-            Err(_) => return self.retry_response(StatusCode::TOO_MANY_REQUESTS),
+            Err(_) => {
+                self.shared.admission.record_throttled_drop();
+                return self.retry_response(StatusCode::TOO_MANY_REQUESTS);
+            }
         };
         match tokio::time::timeout(
             self.shared.config.whole_request_timeout,
@@ -297,18 +332,19 @@ impl<C: MonotonicClock> HttpIngestService<C> {
     }
 
     /// Serve a previously site-CIDR-validated stream with hard header and connection limits.
-    /// The listener readiness gate remains owned by the gateway and is still false in Task 5.
+    /// The listener readiness gate remains owned by the gateway composition boundary.
     pub async fn serve_connection(
         &self,
         stream: crate::AcceptedStream,
         observed_peer: std::net::SocketAddr,
     ) -> Result<(), ServeConnectionError> {
-        let _connection = self
-            .shared
-            .connections
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ServeConnectionError::Busy)?;
+        let _connection = match self.shared.connections.clone().try_acquire_owned() {
+            Ok(connection) => connection,
+            Err(_) => {
+                self.shared.admission.record_throttled_drop();
+                return Err(ServeConnectionError::Busy);
+            }
+        };
         let service = self.clone();
         let hyper_service = service_fn(move |request: Request<hyper::body::Incoming>| {
             let service = service.clone();
@@ -499,7 +535,7 @@ impl<C: MonotonicClock> HttpIngestService<C> {
         };
         if envelope.items.len() > self.shared.config.max_items {
             if reservation
-                .reconcile(body.len(), envelope.items.len())
+                .reconcile_at(body.len(), envelope.items.len(), self.shared.clock.now_ms())
                 .is_err()
             {
                 return self.retry_response(StatusCode::TOO_MANY_REQUESTS);
@@ -549,7 +585,7 @@ impl<C: MonotonicClock> HttpIngestService<C> {
             };
         }
         if reservation
-            .reconcile(body.len(), envelope.items.len())
+            .reconcile_at(body.len(), envelope.items.len(), self.shared.clock.now_ms())
             .is_err()
         {
             return self.retry_response(StatusCode::TOO_MANY_REQUESTS);
@@ -564,8 +600,17 @@ impl<C: MonotonicClock> HttpIngestService<C> {
         }
         let _queue_permit = match self.shared.queue.clone().try_acquire_owned() {
             Ok(permit) => permit,
-            Err(_) => return response(StatusCode::SERVICE_UNAVAILABLE, Body::empty()),
+            Err(_) => {
+                self.shared.admission.record_throttled_drop();
+                return response(StatusCode::SERVICE_UNAVAILABLE, Body::empty());
+            }
         };
+        self.shared.admission.note_queue_depth(
+            self.shared
+                .config
+                .collector_queue_slots
+                .saturating_sub(self.shared.queue.available_permits()),
+        );
         if let Some(hook) = &self.shared.hooks.after_queue_acquired {
             hook();
             tokio::task::yield_now().await;

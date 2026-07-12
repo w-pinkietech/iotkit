@@ -957,6 +957,7 @@ dependencies = [
  "iotkit-core-ledger",
  "iotkit-core-registry",
  "iotkit-core-storage",
+ "iotkit-core-timeseries",
  "ipnet",
  "libc",
  "password-hash",
@@ -1033,6 +1034,7 @@ dependencies = [
  "iotkit-core-storage",
  "rusqlite",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1156,6 +1158,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "tracing",
 ]
 
 [[package]]

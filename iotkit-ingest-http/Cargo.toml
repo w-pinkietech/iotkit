@@ -19,6 +19,7 @@ ipnet = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 socket2 = { version = "0.6", features = ["all"] }
 thiserror = "2"
+tracing = "0.1"
 tokio = { version = "1", features = ["io-util", "net", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 libc = "0.2"

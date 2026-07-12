@@ -430,12 +430,28 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
                 .into(),
         );
     }
+    let canonical_dedup_maintenance: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ingest_dedup_maintenance
+         WHERE id=1 AND degraded=0 AND episode_started_at IS NULL
+           AND last_failure_at IS NULL AND last_success_at IS NULL)",
+        [],
+        |row| row.get(0),
+    )?;
+    let dedup_maintenance_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM ingest_dedup_maintenance", [], |row| {
+            row.get(0)
+        })?;
+    if !canonical_dedup_maintenance || dedup_maintenance_rows != 1 {
+        return Err(
+            "restore target is not empty: ingest_dedup_maintenance contains runtime state".into(),
+        );
+    }
 
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_schema
          WHERE type = 'table'
            AND name NOT LIKE 'sqlite_%'
-           AND name NOT IN ('_schema_version', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config')
+           AND name NOT IN ('_schema_version', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config', 'ingest_dedup_maintenance')
          ORDER BY name",
     )?;
     let tables = stmt

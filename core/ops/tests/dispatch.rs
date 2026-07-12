@@ -595,3 +595,93 @@ fn unknown_op_returns_not_found_without_audit() {
     })
     .unwrap();
 }
+
+#[test]
+fn sighting_pin_is_typed_dry_runnable_and_preserves_evictable_reserve() {
+    let mut migrations = all_migrations();
+    migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+    migrations.sort_by_key(|migration| migration.version);
+    let db = iotkit_core_storage::init_db_memory(&migrations).unwrap();
+    db.with_conn_sync(|conn| {
+        let limits = iotkit_core_timeseries::StagingLimits::default();
+        iotkit_core_timeseries::stage_sighting_at(
+            conn,
+            "principal:official",
+            "subject-a",
+            10,
+            "{}",
+            limits,
+        )
+        .unwrap();
+        let params = json!({
+            "principal_id":"principal:official",
+            "staging_subject":"subject-a",
+            "pinned":true
+        });
+        let result = dispatch(
+            conn,
+            standard_catalog(),
+            standard_request(
+                "device.sighting_pin",
+                params.clone(),
+                true,
+                actor(ActorKind::LocalCli, Tier::Daily),
+                false,
+            ),
+        )
+        .unwrap();
+        assert_eq!(result["would"], "set_sighting_pin");
+        assert!(!conn.query_row(
+            "SELECT pinned FROM staged_readings WHERE hardware_id='subject-a'",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?);
+
+        dispatch(
+            conn,
+            standard_catalog(),
+            standard_request(
+                "device.sighting_pin",
+                params,
+                false,
+                actor(ActorKind::LocalCli, Tier::Daily),
+                false,
+            ),
+        )
+        .unwrap();
+        assert!(conn.query_row(
+            "SELECT pinned FROM staged_readings WHERE hardware_id='subject-a'",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?);
+
+        conn.execute_batch(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<743)
+             INSERT INTO staged_readings
+                 (hardware_id,received_at,payload_json,principal_id,payload_bytes,pinned)
+             SELECT printf('pinned-%04d',x),x,'{}','principal:official',2,1 FROM n;
+             INSERT INTO staged_readings
+                 (hardware_id,received_at,payload_json,principal_id,payload_bytes,pinned)
+             VALUES('reserve-candidate',1000,'{}','principal:official',2,0);",
+        )?;
+        let reserve_error = dispatch(
+            conn,
+            standard_catalog(),
+            standard_request(
+                "device.sighting_pin",
+                json!({
+                    "principal_id":"principal:official",
+                    "staging_subject":"reserve-candidate",
+                    "pinned":true
+                }),
+                false,
+                actor(ActorKind::LocalCli, Tier::Daily),
+                false,
+            ),
+        )
+        .unwrap_err();
+        assert!(matches!(reserve_error, OpError::PreconditionFailed(message) if message.contains("evictable reserve")));
+        Ok(())
+    })
+    .unwrap();
+}

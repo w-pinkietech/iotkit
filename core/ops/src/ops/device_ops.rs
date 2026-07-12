@@ -8,6 +8,74 @@ use crate::{OpContext, OpDescriptor, OpError, Tier};
 
 use super::{required_string_array, target_string_array};
 
+pub fn pin_sighting_descriptor() -> OpDescriptor {
+    OpDescriptor {
+        name: "device.sighting_pin",
+        tier: Tier::Daily,
+        bulk_escalates: false,
+        changes_state: true,
+        params_schema: pin_schema,
+        targets: |_| vec!["staging_sighting".into()],
+        preconditions: pin_preconditions,
+        dry_run: pin_dry_run,
+        execute: pin_execute,
+        secret_execute: None,
+    }
+}
+
+fn pin_schema() -> Value {
+    json!({ "required": ["principal_id", "staging_subject", "pinned"] })
+}
+
+fn pin_params<'a>(ctx: &'a OpContext<'_>) -> Result<(&'a str, &'a str, bool), OpError> {
+    let principal = ctx
+        .params
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OpError::Validation("principal_id must be a string".into()))?;
+    let subject = ctx
+        .params
+        .get("staging_subject")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OpError::Validation("staging_subject must be a string".into()))?;
+    let pinned = ctx
+        .params
+        .get("pinned")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| OpError::Validation("pinned must be boolean".into()))?;
+    Ok((principal, subject, pinned))
+}
+
+fn pin_preconditions(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(), OpError> {
+    let (principal, subject, pinned) = pin_params(ctx)?;
+    iotkit_core_timeseries::validate_sighting_pin(
+        tx,
+        principal,
+        subject,
+        pinned,
+        iotkit_core_timeseries::StagingLimits::default(),
+    )
+    .map_err(|error| OpError::PreconditionFailed(error.to_string()))
+}
+
+fn pin_dry_run(_tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
+    let (_, _, pinned) = pin_params(ctx)?;
+    Ok(json!({ "would": "set_sighting_pin", "pinned": pinned }))
+}
+
+fn pin_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
+    let (principal, subject, pinned) = pin_params(ctx)?;
+    iotkit_core_timeseries::set_sighting_pin(
+        tx,
+        principal,
+        subject,
+        pinned,
+        iotkit_core_timeseries::StagingLimits::default(),
+    )
+    .map_err(|error| OpError::PreconditionFailed(error.to_string()))?;
+    Ok(json!({ "pinned": pinned }))
+}
+
 pub fn approve_sighting_descriptor() -> OpDescriptor {
     OpDescriptor {
         name: "device.approve_sighting",

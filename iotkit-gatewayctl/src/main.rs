@@ -198,7 +198,7 @@ fn run() -> AppResult<()> {
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
     all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5, v9, v11
-    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8
+    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8, v17
     all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
     all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
     all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12

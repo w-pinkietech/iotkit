@@ -71,6 +71,51 @@ pub struct IngressListenerHealth {
     pub gate_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct IngressBoundsHealth {
+    pub query_state: IngressQueryState,
+    pub throttled_drop_count: u64,
+    pub throttle_active: bool,
+    pub queue_current: usize,
+    pub queue_high_water: usize,
+    pub queue_pressure_percent: u8,
+    pub auth_pressure_percent: u8,
+    pub global_flow_pressure_percent: u8,
+    pub principal_pressure_percent: u8,
+    pub request_pressure_percent: u8,
+    pub connection_pressure_percent: u8,
+    pub staging_rows: Option<u64>,
+    pub staging_bytes: Option<u64>,
+    pub staging_pinned_rows: Option<u64>,
+    pub dedup_rows: Option<u64>,
+    pub dedup_max_principal_rows: Option<u64>,
+    pub dedup_degraded: Option<bool>,
+}
+
+impl IngressBoundsHealth {
+    fn unknown() -> Self {
+        Self {
+            query_state: IngressQueryState::Unknown,
+            throttled_drop_count: 0,
+            throttle_active: false,
+            queue_current: 0,
+            queue_high_water: 0,
+            queue_pressure_percent: 0,
+            auth_pressure_percent: 0,
+            global_flow_pressure_percent: 0,
+            principal_pressure_percent: 0,
+            request_pressure_percent: 0,
+            connection_pressure_percent: 0,
+            staging_rows: None,
+            staging_bytes: None,
+            staging_pinned_rows: None,
+            dedup_rows: None,
+            dedup_max_principal_rows: None,
+            dedup_degraded: None,
+        }
+    }
+}
+
 impl IngressListenerHealth {
     pub fn listening(config: iotkit_core_ops::IngressListenerConfig, degraded: bool) -> Self {
         let mode = ingress_mode(config.desired.mode);
@@ -106,7 +151,7 @@ impl IngressListenerHealth {
             plaintext_warning: false,
             last_error: None,
             last_action,
-            gate_reason: Some("ingress_not_ready".into()),
+            gate_reason: None,
         }
     }
     pub fn blocked(config: iotkit_core_ops::IngressListenerConfig, reason: &str) -> Self {
@@ -238,6 +283,7 @@ pub struct HealthState {
     pub publish: Vec<TargetDeliveryHealth>,
     pub api: Option<ApiHealth>,
     pub ingress: IngressListenerHealth,
+    pub ingress_bounds: IngressBoundsHealth,
     pub clock: ClockHealth,
     pub device_credentials: DeviceCredentialHealth,
 }
@@ -261,6 +307,7 @@ impl HealthState {
             publish: Vec::new(),
             api: None,
             ingress: IngressListenerHealth::unknown("not_observed"),
+            ingress_bounds: IngressBoundsHealth::unknown(),
             clock: ClockHealth {
                 trusted: false,
                 source: None,
@@ -299,6 +346,35 @@ impl HealthState {
             capacity_debt: Some(capacity.active_debt),
             replacement_backup_unavailable: Some(backup.replacement_backup_unavailable),
         };
+    }
+
+    pub fn apply_ingress_persistence_health(
+        &mut self,
+        staging: iotkit_core_timeseries::StagingHealth,
+        dedup: iotkit_core_timeseries::DedupHealth,
+        maintenance: iotkit_core_timeseries::DedupMaintenanceHealth,
+    ) {
+        self.ingress_bounds.query_state = if maintenance.degraded {
+            IngressQueryState::Degraded
+        } else {
+            IngressQueryState::Ok
+        };
+        self.ingress_bounds.staging_rows = Some(staging.rows);
+        self.ingress_bounds.staging_bytes = Some(staging.bytes);
+        self.ingress_bounds.staging_pinned_rows = Some(staging.pinned_rows);
+        self.ingress_bounds.dedup_rows = Some(dedup.rows);
+        self.ingress_bounds.dedup_max_principal_rows = Some(dedup.max_principal_rows);
+        self.ingress_bounds.dedup_degraded = Some(maintenance.degraded);
+    }
+
+    pub fn mark_ingress_persistence_health_failed(&mut self) {
+        self.ingress_bounds.query_state = match self.ingress_bounds.query_state {
+            IngressQueryState::Ok | IngressQueryState::Degraded => IngressQueryState::Degraded,
+            IngressQueryState::Unknown => IngressQueryState::Unknown,
+        };
+        if self.ingress_bounds.dedup_degraded == Some(false) {
+            self.ingress_bounds.dedup_degraded = None;
+        }
     }
 
     pub fn mark_device_credential_health_failed(&mut self) {
@@ -411,24 +487,40 @@ pub fn spawn_health_writer(
                         ),
                         iotkit_core_ops::capacity_health(conn),
                         iotkit_core_ops::replacement_backup_health(conn),
+                        iotkit_core_timeseries::staging_health(
+                            conn,
+                            iotkit_core_timeseries::StagingLimits::default(),
+                        ),
+                        iotkit_core_timeseries::dedup_health(
+                            conn,
+                            iotkit_core_timeseries::DedupLimits::default(),
+                        ),
+                        iotkit_core_timeseries::dedup_maintenance_health(conn),
                     ))
                 })
                 .await
             {
-                Ok((Ok(stale), Ok(capacity), Ok(backup))) => {
+                Ok((
+                    Ok(stale),
+                    Ok(capacity),
+                    Ok(backup),
+                    Ok(staging),
+                    Ok(dedup),
+                    Ok(maintenance),
+                )) => {
                     snapshot.apply_device_credential_health(stale, capacity, backup);
-                    state
-                        .lock()
-                        .expect("health state mutex poisoned")
-                        .device_credentials = snapshot.device_credentials;
+                    snapshot.apply_ingress_persistence_health(staging, dedup, maintenance);
+                    let mut shared = state.lock().expect("health state mutex poisoned");
+                    shared.device_credentials = snapshot.device_credentials;
+                    shared.ingress_bounds = snapshot.ingress_bounds;
                 }
                 Ok(_) | Err(_) => {
                     snapshot.mark_device_credential_health_failed();
-                    state
-                        .lock()
-                        .expect("health state mutex poisoned")
-                        .mark_device_credential_health_failed();
-                    tracing::error!("device credential health query failed");
+                    snapshot.mark_ingress_persistence_health_failed();
+                    let mut shared = state.lock().expect("health state mutex poisoned");
+                    shared.mark_device_credential_health_failed();
+                    shared.mark_ingress_persistence_health_failed();
+                    tracing::error!("device credential or ingress bound health query failed");
                 }
             }
             if let Err(e) = write_health_json(&path, &epoch, &snapshot) {
@@ -447,18 +539,21 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
     let adapters = state
         .adapters
         .iter()
-        .map(|adapter| serde_json::json!({"id":adapter.id,"alive":adapter.alive,"last_event_at":adapter.last_event_at}))
+        .take(64)
+        .map(|adapter| serde_json::json!({"id":bounded_health_text(&adapter.id),"alive":adapter.alive,"last_event_at":adapter.last_event_at}))
         .collect::<Vec<_>>();
     let publish = state
         .publish
         .iter()
-        .map(|target| serde_json::json!({"target_id":target.target_id,"cursor_pub_seq":target.cursor_pub_seq,
-            "backlog":target.backlog,"last_push_at":target.last_push_at,"last_error":target.last_error}))
+        .take(64)
+        .map(|target| serde_json::json!({"target_id":bounded_health_text(&target.target_id),"cursor_pub_seq":target.cursor_pub_seq,
+            "backlog":target.backlog,"last_push_at":target.last_push_at,
+            "last_error":target.last_error.as_deref().map(bounded_health_text)}))
         .collect::<Vec<_>>();
-    let api = state
-        .api
-        .as_ref()
-        .map(|api| serde_json::json!({"bind":api.bind,"tls_fingerprint":api.tls_fingerprint}));
+    let api = state.api.as_ref().map(|api| {
+        serde_json::json!({"bind":bounded_health_text(&api.bind),
+            "tls_fingerprint":bounded_health_text(&api.tls_fingerprint)})
+    });
     let replacement_action = match state.device_credentials.replacement_backup_unavailable {
         Some(true) => Some(iotkit_core_ops::device_credentials::REPLACEMENT_BACKUP_ACTION),
         Some(false) => None,
@@ -466,8 +561,20 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
             "Credential health is unknown; do not rely on replacement backup safety. Install Plan 6.5 encrypted replacement backup support, then create a complete encrypted replacement backup.",
         ),
     };
+    let ingress_recovery_action = match state.ingress_bounds.dedup_degraded {
+        Some(true) => Some(
+            "Check database storage and run retention maintenance; verify dedup health returns to ok before relying on the full duplicate-suppression window.",
+        ),
+        Some(false) => None,
+        None => Some(
+            "Inspect database health and run retention maintenance; ingress staging/dedup state is unknown.",
+        ),
+    };
+    let capacity_debt_action = (state.device_credentials.capacity_debt == Some(true)).then_some(
+        "Run the construction-tier device capacity dry-run, then increase ingress capacity or reduce assigned device flow classes before clearing capacity debt.",
+    );
     serde_json::to_string(&serde_json::json!({
-        "schema":1,"written_at":now_ms(),"epoch":epoch,"uptime_s":state.started_at.elapsed().as_secs(),
+        "schema":1,"written_at":now_ms(),"epoch":bounded_health_text(epoch),"uptime_s":state.started_at.elapsed().as_secs(),
         "collector_alive":state.collector_alive,"adapters":adapters,
         "db":{"size_bytes":state.db.size_bytes,"disk_available_bytes":state.db.disk_available_bytes,"watermark_exceeded":state.db.watermark_exceeded},
         "retention":{"days":state.retention.days,"last_purge_at":state.retention.last_purge_at,"last_purged_rows":state.retention.last_purged_rows},
@@ -477,7 +584,26 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
             "bind":state.ingress.bind,"mode":state.ingress.mode,
             "desired_mode":state.ingress.desired_mode,"applied_mode":state.ingress.applied_mode,
             "plaintext_warning":state.ingress.plaintext_warning,
-            "last_error":state.ingress.last_error,"last_action":state.ingress.last_action,"gate_reason":state.ingress.gate_reason},
+            "last_error":state.ingress.last_error.as_deref().map(bounded_health_text),
+            "last_action":bounded_health_text(&state.ingress.last_action),
+            "gate_reason":state.ingress.gate_reason.as_deref().map(bounded_health_text)},
+        "ingress_bounds":{"query_state":state.ingress_bounds.query_state.as_str(),
+            "throttled_drop_count":state.ingress_bounds.throttled_drop_count,
+            "throttle_active":state.ingress_bounds.throttle_active,
+            "queue_current":state.ingress_bounds.queue_current,
+            "queue_high_water":state.ingress_bounds.queue_high_water,
+            "class_pressure_percent":{"auth":state.ingress_bounds.auth_pressure_percent,
+                "global_flow":state.ingress_bounds.global_flow_pressure_percent,
+                "principal":state.ingress_bounds.principal_pressure_percent,
+                "queue":state.ingress_bounds.queue_pressure_percent,
+                "request":state.ingress_bounds.request_pressure_percent,
+                "connection":state.ingress_bounds.connection_pressure_percent},
+            "staging":{"rows":state.ingress_bounds.staging_rows,"bytes":state.ingress_bounds.staging_bytes,
+                "pinned_rows":state.ingress_bounds.staging_pinned_rows},
+            "dedup":{"rows":state.ingress_bounds.dedup_rows,
+                "max_principal_rows":state.ingress_bounds.dedup_max_principal_rows,
+                "degraded":state.ingress_bounds.dedup_degraded},
+            "recovery_action":ingress_recovery_action},
         "clock_trust":{"trusted":state.clock.trusted,"source":state.clock.source,"observed_at_ms":state.clock.observed_at_ms,"recovery_command":"gatewayctl time confirm"},
         "device_credentials":{"query_state":state.device_credentials.query_state.as_str(),
             "active_count":state.device_credentials.active_count,"stale_count":state.device_credentials.stale_count,
@@ -485,10 +611,18 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
             "capacity":{"required_steady_units":state.device_credentials.capacity_required_steady,
                 "required_burst_units":state.device_credentials.capacity_required_burst,
                 "steady_units":state.device_credentials.capacity_steady,"burst_units":state.device_credentials.capacity_burst,
-                "debt":state.device_credentials.capacity_debt},
+                "debt":state.device_credentials.capacity_debt,"debt_action":capacity_debt_action},
             "replacement_backup_unavailable":state.device_credentials.replacement_backup_unavailable,
             "recovery_action":replacement_action}
     })).expect("health document contains only JSON-safe values")
+}
+
+fn bounded_health_text(value: &str) -> &str {
+    if value.len() <= 256 {
+        value
+    } else {
+        "[TRUNCATED]"
+    }
 }
 
 #[cfg(test)]
@@ -502,6 +636,7 @@ mod tests {
         all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
         all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
         all.extend_from_slice(iotkit_core_ops::MIGRATIONS);
+        all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
         all.sort_by_key(|migration| migration.version);
         all
     }
@@ -535,6 +670,7 @@ mod tests {
                 tls_fingerprint: "sha256:test".to_string(),
             }),
             ingress: IngressListenerHealth::disabled(0, "disabled".into()),
+            ingress_bounds: IngressBoundsHealth::unknown(),
             clock: ClockHealth {
                 trusted: false,
                 source: None,
@@ -846,5 +982,114 @@ mod tests {
                 .unwrap()
                 .contains("unknown")
         );
+    }
+
+    #[test]
+    fn ingress_bound_health_is_aggregate_actionable_and_serialized_size_is_bounded() {
+        let mut state = HealthState::new(90);
+        for i in 0_i64..10_000 {
+            state.adapters.push(AdapterHealth {
+                id: if i == 0 {
+                    format!("HOSTILE_MARKER{}", "x".repeat(100_000))
+                } else {
+                    format!("adapter-{i}")
+                },
+                alive: true,
+                last_event_at: Some(i),
+            });
+            state.publish.push(TargetDeliveryHealth {
+                target_id: format!("target-{i}"),
+                cursor_pub_seq: i,
+                backlog: i,
+                last_push_at: None,
+                last_error: (i == 0).then(|| format!("HOSTILE_ERROR{}", "y".repeat(100_000))),
+            });
+        }
+        state.ingress_bounds = IngressBoundsHealth {
+            query_state: IngressQueryState::Degraded,
+            throttled_drop_count: u64::MAX,
+            throttle_active: true,
+            queue_current: 15,
+            queue_high_water: 16,
+            queue_pressure_percent: 93,
+            auth_pressure_percent: 75,
+            global_flow_pressure_percent: 80,
+            principal_pressure_percent: 90,
+            request_pressure_percent: 93,
+            connection_pressure_percent: 87,
+            staging_rows: Some(10_000),
+            staging_bytes: Some(64 * 1024 * 1024),
+            staging_pinned_rows: Some(9_744),
+            dedup_rows: Some(100_000),
+            dedup_max_principal_rows: Some(10_000),
+            dedup_degraded: Some(true),
+        };
+        state.device_credentials.capacity_debt = Some(true);
+
+        let rendered = render_health_json("epoch", &state);
+        let json: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert!(rendered.len() < 64 * 1024);
+        assert_eq!(json["adapters"].as_array().unwrap().len(), 64);
+        assert_eq!(json["publish"].as_array().unwrap().len(), 64);
+        assert_eq!(json["ingress_bounds"]["throttled_drop_count"], u64::MAX);
+        assert_eq!(json["ingress_bounds"]["throttle_active"], true);
+        assert_eq!(json["ingress_bounds"]["queue_current"], 15);
+        assert_eq!(
+            json["ingress_bounds"]["class_pressure_percent"]["principal"],
+            90
+        );
+        assert_eq!(
+            json["ingress_bounds"]["class_pressure_percent"]["queue"],
+            93
+        );
+        assert!(
+            json["device_credentials"]["capacity"]["debt_action"]
+                .as_str()
+                .unwrap()
+                .contains("construction-tier")
+        );
+        assert_eq!(json["ingress_bounds"]["dedup"]["degraded"], true);
+        assert!(
+            json["ingress_bounds"]["recovery_action"]
+                .as_str()
+                .unwrap()
+                .contains("retention")
+        );
+        assert!(!rendered.contains("token_id"));
+        assert!(!rendered.contains("source_id"));
+        assert!(!rendered.contains("HOSTILE_MARKER"));
+        assert!(!rendered.contains("HOSTILE_ERROR"));
+    }
+
+    #[test]
+    fn persisted_staging_and_dedup_health_populate_aggregate_state() {
+        let mut state = HealthState::new(90);
+        state.apply_ingress_persistence_health(
+            iotkit_core_timeseries::StagingHealth {
+                rows: 7,
+                bytes: 700,
+                pinned_rows: 2,
+                pinned_bytes: 200,
+                principals: 3,
+            },
+            iotkit_core_timeseries::DedupHealth {
+                rows: 9,
+                max_principal_rows: 4,
+                oldest_age_ms: 50,
+            },
+            iotkit_core_timeseries::DedupMaintenanceHealth {
+                degraded: true,
+                episode_started_at: Some(10),
+                last_failure_at: Some(20),
+                last_success_at: None,
+            },
+        );
+        assert_eq!(
+            state.ingress_bounds.query_state,
+            IngressQueryState::Degraded
+        );
+        assert_eq!(state.ingress_bounds.staging_rows, Some(7));
+        assert_eq!(state.ingress_bounds.dedup_rows, Some(9));
+        assert_eq!(state.ingress_bounds.dedup_degraded, Some(true));
     }
 }

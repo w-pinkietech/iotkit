@@ -616,7 +616,7 @@ pub fn record_sighting(
     conn.execute(
         "INSERT INTO sightings (hardware_id, source, first_seen, last_seen, observations)
          VALUES (?1, ?2, ?3, ?3, 1)
-         ON CONFLICT(hardware_id) DO UPDATE SET last_seen = ?3, observations = observations + 1",
+         ON CONFLICT(hardware_id) DO UPDATE SET source = excluded.source, last_seen = ?3, observations = sightings.observations + 1",
         params![hardware_id, source, now_ms()],
     )?;
     Ok(())
@@ -655,16 +655,31 @@ pub fn list_sightings(conn: &Connection) -> Result<Vec<SightingRow>, LedgerError
 /// Returns the number of rows deleted.
 pub fn purge_sightings(conn: &Connection, now: i64) -> Result<u64, LedgerError> {
     let cutoff = now.saturating_sub(SIGHTINGS_TTL_MS);
+    let staged_table_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='staged_readings')",
+        [],
+        |row| row.get(0),
+    )?;
+    let staged_guard = if staged_table_exists {
+        " AND NOT EXISTS (
+            SELECT 1 FROM staged_readings
+            WHERE staged_readings.hardware_id=sightings.hardware_id
+          )"
+    } else {
+        ""
+    };
     let by_ttl = conn.execute(
-        "DELETE FROM sightings WHERE last_seen < ?1",
+        &format!("DELETE FROM sightings WHERE last_seen < ?1{staged_guard}"),
         params![cutoff],
     )?;
     let by_cap = conn.execute(
-        "DELETE FROM sightings WHERE hardware_id IN (
-             SELECT hardware_id FROM sightings
-             ORDER BY last_seen DESC, hardware_id ASC
-             LIMIT -1 OFFSET ?1
-         )",
+        &format!(
+            "DELETE FROM sightings WHERE hardware_id IN (
+                 SELECT hardware_id FROM sightings
+                 ORDER BY last_seen DESC, hardware_id ASC
+                 LIMIT -1 OFFSET ?1
+             ){staged_guard}"
+        ),
         params![SIGHTINGS_CAP],
     )?;
     Ok((by_ttl + by_cap) as u64)
@@ -1414,6 +1429,43 @@ mod tests {
                 .unwrap();
             assert_eq!(row.system_id, sid);
             assert_eq!(row.state, DeviceState::Quarantined);
+            assert!(list_sightings(conn).unwrap().is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_sightings_never_deletes_metadata_while_staged_rows_survive() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            conn.execute_batch(
+                "CREATE TABLE staged_readings (
+                    id INTEGER PRIMARY KEY,
+                    hardware_id TEXT NOT NULL,
+                    received_at INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL
+                );",
+            )?;
+            record_sighting(conn, "ble:staged", "official-a").unwrap();
+            conn.execute(
+                "INSERT INTO staged_readings(hardware_id, received_at, payload_json)
+                 VALUES('ble:staged', 0, '{}')",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE sightings SET last_seen=0 WHERE hardware_id='ble:staged'",
+                [],
+            )?;
+
+            purge_sightings(conn, SIGHTINGS_TTL_MS + 1).unwrap();
+            assert_eq!(list_sightings(conn).unwrap().len(), 1);
+
+            conn.execute(
+                "DELETE FROM staged_readings WHERE hardware_id='ble:staged'",
+                [],
+            )?;
+            purge_sightings(conn, SIGHTINGS_TTL_MS + 1).unwrap();
             assert!(list_sightings(conn).unwrap().is_empty());
             Ok(())
         })

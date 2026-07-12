@@ -17,6 +17,7 @@ pub fn standard_catalog() -> &'static [OpDescriptor] {
             let mut catalog = vec![
                 registry_ops::resolve_unknown_key_descriptor(),
                 device_ops::approve_sighting_descriptor(),
+                device_ops::pin_sighting_descriptor(),
                 device_ops::retire_descriptor(),
                 token_ops::issue_descriptor(),
                 token_ops::revoke_descriptor(),

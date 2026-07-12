@@ -7,6 +7,8 @@ use iotkit_core_storage::Migration;
 use rcgen::{CertificateParams, KeyPair};
 use serde_json::{Value, json};
 
+const _: () = assert!(iotkit_core_ops::INGRESS_READY);
+
 fn dispatch(
     conn: &rusqlite::Connection,
     catalog: &[OpDescriptor],
@@ -21,6 +23,7 @@ fn migrations() -> Vec<Migration> {
     all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
     all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
     all.extend_from_slice(iotkit_core_ops::MIGRATIONS);
+    all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
     all.sort_by_key(|migration| migration.version);
     all
 }
@@ -74,7 +77,7 @@ fn default_is_durably_disabled_unbound_and_generation_zero() {
 }
 
 #[test]
-fn every_product_enable_fails_stable_readiness_gate_without_mutation() {
+fn enable_succeeds_only_after_bounded_ingest_schema_is_present() {
     let db = iotkit_core_storage::init_db_memory(&migrations()).unwrap();
     db.with_conn_sync(|conn| {
         let (cert, key) = pair("ingress.test");
@@ -88,8 +91,19 @@ fn every_product_enable_fails_stable_readiness_gate_without_mutation() {
             ),
         )
         .unwrap();
-        let before = load_ingress_listener_config(conn).unwrap();
-        for dry_run in [false, true] {
+        let bounded_columns: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('staged_readings') WHERE name IN ('principal_id','payload_bytes','pinned')",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(bounded_columns, 3);
+        let maintenance_table: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ingest_dedup_maintenance')",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(maintenance_table);
+        for dry_run in [true, false] {
             let mut enable = request(
                 "ingress.listener.configure",
                 json!({
@@ -99,18 +113,17 @@ fn every_product_enable_fails_stable_readiness_gate_without_mutation() {
                 true,
             );
             enable.dry_run = dry_run;
-            let err = dispatch(conn, standard_catalog(), enable).unwrap_err();
-            assert_eq!(err, OpError::PreconditionFailed("ingress_not_ready".into()));
+            dispatch(conn, standard_catalog(), enable).unwrap();
         }
         let after = load_ingress_listener_config(conn).unwrap();
-        assert_eq!(before, after);
+        assert!(after.enabled);
         let audit: String = conn.query_row(
             "SELECT detail FROM ledger_events WHERE kind='r14_op' ORDER BY event_id DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
         .unwrap();
-        assert!(audit.contains("precondition_failed"));
+        assert!(audit.contains(r#""result":"ok""#));
         assert!(!audit.contains("PRIVATE KEY"));
         Ok(())
     })
