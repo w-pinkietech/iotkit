@@ -1,6 +1,6 @@
 # Codex Native Model Routing Design
 
-Status: **User-approved design direction; implementation pending written-spec review**
+Status: **Approved for implementation** (2026-07-13)
 
 Date: 2026-07-13
 
