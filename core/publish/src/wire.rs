@@ -8,7 +8,7 @@ pub const MAX_BATCH_BYTES: usize = 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordBatch {
     pub schema_version: u32,
-    pub gateway_identity: String,
+    pub edge_node_id: String,
     pub ledger_epoch: String,
     pub publication_id: String,
     pub cursor_start: i64,
@@ -19,7 +19,7 @@ pub struct RecordBatch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcceptedThrough {
     pub schema_version: u32,
-    pub gateway_identity: String,
+    pub edge_node_id: String,
     pub ledger_epoch: String,
     pub publication_id: String,
     pub accepted_through: i64,
@@ -34,7 +34,7 @@ impl RecordBatch {
         if self.schema_version != EGRESS_SCHEMA_VERSION {
             return invalid("unsupported schema_version");
         }
-        validate_topic_segment("gateway_identity", &self.gateway_identity)?;
+        validate_topic_segment("edge_node_id", &self.edge_node_id)?;
         validate_identity_component("ledger_epoch", &self.ledger_epoch)?;
         if self.cursor_start < 1 || self.cursor_end < self.cursor_start {
             return invalid("cursor range must be positive and non-empty");
@@ -52,7 +52,7 @@ impl RecordBatch {
             return invalid("batch exceeds record limit");
         }
         let expected_publication_id = publication_id(
-            &self.gateway_identity,
+            &self.edge_node_id,
             &self.ledger_epoch,
             self.cursor_start,
             self.cursor_end,
@@ -94,8 +94,8 @@ impl AcceptedThrough {
         if self.schema_version != EGRESS_SCHEMA_VERSION {
             return invalid("ack schema_version mismatch");
         }
-        if self.gateway_identity != batch.gateway_identity {
-            return invalid("ack gateway_identity mismatch");
+        if self.edge_node_id != batch.edge_node_id {
+            return invalid("ack edge_node_id mismatch");
         }
         if self.ledger_epoch != batch.ledger_epoch {
             return invalid("ack ledger_epoch mismatch");
@@ -114,12 +114,12 @@ impl AcceptedThrough {
 }
 
 pub fn publication_id(
-    gateway_identity: &str,
+    edge_node_id: &str,
     ledger_epoch: &str,
     cursor_start: i64,
     cursor_end: i64,
 ) -> String {
-    format!("{gateway_identity}:{ledger_epoch}:{cursor_start}:{cursor_end}")
+    format!("{edge_node_id}:{ledger_epoch}:{cursor_start}:{cursor_end}")
 }
 
 fn validate_topic_segment(name: &str, value: &str) -> Result<(), WireError> {

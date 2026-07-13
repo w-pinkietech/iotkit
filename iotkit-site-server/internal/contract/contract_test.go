@@ -21,7 +21,7 @@ func TestDecodeBatchFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if batch.GatewayIdentity != "gateway-01" || batch.CursorStart != 1 || batch.CursorEnd != 1 {
+	if batch.EdgeNodeID != "edge-node-01" || batch.CursorStart != 1 || batch.CursorEnd != 1 {
 		t.Fatalf("unexpected batch: %+v", batch)
 	}
 	if len(batch.Records) != 1 {
@@ -34,8 +34,23 @@ func TestDecodeAcceptedThroughFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ack.AcceptedThrough != 1 || ack.PublicationID != "gateway-01:epoch-01:1:1" {
+	if ack.AcceptedThrough != 1 || ack.PublicationID != "edge-node-01:epoch-01:1:1" {
 		t.Fatalf("unexpected ack: %+v", ack)
+	}
+}
+
+func TestBatchWithOnlyLegacyGatewayIdentityIsRejected(t *testing.T) {
+	payload := []byte(`{
+		"schema_version": 1,
+		"gateway_identity": "gateway-01",
+		"ledger_epoch": "epoch-01",
+		"publication_id": "gateway-01:epoch-01:1:1",
+		"cursor_start": 1,
+		"cursor_end": 1,
+		"records": [{"schema_version": 1, "epoch": "epoch-01", "pub_seq": 1}]
+	}`)
+	if _, err := DecodeBatch(payload); err == nil {
+		t.Fatal("legacy gateway_identity-only batch decoded successfully")
 	}
 }
 

@@ -17,7 +17,7 @@ const (
 
 type RecordBatch struct {
 	SchemaVersion   uint32            `json:"schema_version"`
-	GatewayIdentity string            `json:"gateway_identity"`
+	EdgeNodeID      string            `json:"edge_node_id"`
 	LedgerEpoch     string            `json:"ledger_epoch"`
 	PublicationID   string            `json:"publication_id"`
 	CursorStart     int64             `json:"cursor_start"`
@@ -27,7 +27,7 @@ type RecordBatch struct {
 
 type AcceptedThrough struct {
 	SchemaVersion   uint32 `json:"schema_version"`
-	GatewayIdentity string `json:"gateway_identity"`
+	EdgeNodeID      string `json:"edge_node_id"`
 	LedgerEpoch     string `json:"ledger_epoch"`
 	PublicationID   string `json:"publication_id"`
 	AcceptedThrough int64  `json:"accepted_through"`
@@ -68,7 +68,7 @@ func (batch RecordBatch) Validate() error {
 	if batch.SchemaVersion != SchemaVersion {
 		return invalid("unsupported schema_version")
 	}
-	if err := validateTopicSegment("gateway_identity", batch.GatewayIdentity); err != nil {
+	if err := validateTopicSegment("edge_node_id", batch.EdgeNodeID); err != nil {
 		return err
 	}
 	if err := validateIdentityComponent("ledger_epoch", batch.LedgerEpoch); err != nil {
@@ -85,7 +85,7 @@ func (batch RecordBatch) Validate() error {
 		return invalid("batch exceeds record limit")
 	}
 	expectedPublicationID := PublicationID(
-		batch.GatewayIdentity,
+		batch.EdgeNodeID,
 		batch.LedgerEpoch,
 		batch.CursorStart,
 		batch.CursorEnd,
@@ -122,7 +122,7 @@ func (ack AcceptedThrough) Validate() error {
 	if ack.SchemaVersion != SchemaVersion {
 		return invalid("unsupported ack schema_version")
 	}
-	if err := validateTopicSegment("gateway_identity", ack.GatewayIdentity); err != nil {
+	if err := validateTopicSegment("edge_node_id", ack.EdgeNodeID); err != nil {
 		return err
 	}
 	if err := validateIdentityComponent("ledger_epoch", ack.LedgerEpoch); err != nil {
@@ -141,8 +141,8 @@ func (ack AcceptedThrough) ValidateFor(batch RecordBatch, priorCursor int64) err
 	if err := ack.Validate(); err != nil {
 		return err
 	}
-	if ack.GatewayIdentity != batch.GatewayIdentity {
-		return invalid("ack gateway_identity mismatch")
+	if ack.EdgeNodeID != batch.EdgeNodeID {
+		return invalid("ack edge_node_id mismatch")
 	}
 	if ack.LedgerEpoch != batch.LedgerEpoch {
 		return invalid("ack ledger_epoch mismatch")
@@ -159,8 +159,8 @@ func (ack AcceptedThrough) ValidateFor(batch RecordBatch, priorCursor int64) err
 	return nil
 }
 
-func PublicationID(gatewayIdentity, ledgerEpoch string, cursorStart, cursorEnd int64) string {
-	return fmt.Sprintf("%s:%s:%d:%d", gatewayIdentity, ledgerEpoch, cursorStart, cursorEnd)
+func PublicationID(edgeNodeID, ledgerEpoch string, cursorStart, cursorEnd int64) string {
+	return fmt.Sprintf("%s:%s:%d:%d", edgeNodeID, ledgerEpoch, cursorStart, cursorEnd)
 }
 
 func decodeOne(payload []byte, destination any) error {
