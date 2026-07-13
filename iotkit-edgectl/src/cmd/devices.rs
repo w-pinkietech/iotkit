@@ -177,7 +177,7 @@ pub fn run_add_device(conn: &Connection, args: AddArgs) -> AppResult<()> {
         );
         eprintln!("WARNING: this device token is shown once and cannot be displayed again.");
         eprintln!(
-            "If this initial token is lost before delivery, revoke it, then issue a new credential with `gatewayctl device-credential issue`."
+            "If this initial token is lost before delivery, revoke it, then issue a new credential with `iotkit-edgectl device-credential issue`."
         );
         println!("{}", plaintext.as_str());
     } else {

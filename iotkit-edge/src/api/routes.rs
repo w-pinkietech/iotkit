@@ -654,7 +654,7 @@ fn auth_operation_error(error: iotkit_core_ops::OpsError) -> ApiErrorResponse {
         iotkit_core_ops::OpsError::ClockUntrusted => ApiErrorResponse::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "clock_untrusted",
-            "trusted wall clock is required; run gatewayctl time confirm locally",
+            "trusted wall clock is required; run iotkit-edgectl time confirm locally",
         ),
         iotkit_core_ops::OpsError::Forbidden => ApiErrorResponse::unauthorized(),
         other => internal_error(other),

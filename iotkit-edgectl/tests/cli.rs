@@ -5,8 +5,8 @@ use rusqlite::{params, types::ValueRef};
 use serde_json::{Map, Value};
 use sha2::Digest;
 
-fn gatewayctl() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_iotkit-gatewayctl"))
+fn edgectl() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_iotkit-edgectl"))
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn snapshot_export_holds_immediate_transaction_against_concurrent_credential_cre
         .unwrap();
     drop(db);
 
-    let mut export = gatewayctl();
+    let mut export = edgectl();
     export.args([
         "--db",
         db_path.to_str().unwrap(),
@@ -120,7 +120,7 @@ fn snapshot_export_holds_immediate_transaction_against_concurrent_credential_cre
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let mut add = gatewayctl();
+    let mut add = edgectl();
     add.args([
         "--db",
         db_path.to_str().unwrap(),
@@ -154,7 +154,7 @@ fn confirmation_review_snapshot_publish_never_clobbers_concurrent_destination() 
         .unwrap();
     drop(db);
 
-    let mut export = gatewayctl();
+    let mut export = edgectl();
     export.args([
         "--db",
         db_path.to_str().unwrap(),
@@ -576,7 +576,7 @@ fn run_capacity_race(
     proceed: &std::path::Path,
     args: &[&str],
 ) -> Output {
-    let mut command = gatewayctl();
+    let mut command = edgectl();
     command.args(args);
     command
         .stdin(Stdio::piped())
@@ -720,41 +720,41 @@ fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
 }
 
 fn run(args: &[&str]) -> Output {
-    gatewayctl().args(args).output().expect("run gatewayctl")
+    edgectl().args(args).output().expect("run iotkit-edgectl")
 }
 
 fn run_with_env(args: &[&str], key: &str, value: &str) -> Output {
-    gatewayctl()
+    edgectl()
         .args(args)
         .env(key, value)
         .output()
-        .expect("run gatewayctl")
+        .expect("run iotkit-edgectl")
 }
 
 fn run_with_stdin(args: &[&str], stdin: &str) -> Output {
-    let mut child = gatewayctl()
+    let mut child = edgectl()
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn gatewayctl");
+        .expect("spawn iotkit-edgectl");
     child
         .stdin
         .as_mut()
         .unwrap()
         .write_all(stdin.as_bytes())
         .unwrap();
-    child.wait_with_output().expect("run gatewayctl")
+    child.wait_with_output().expect("run iotkit-edgectl")
 }
 
 fn run_in_dir_without_db_env(args: &[&str], cwd: &std::path::Path) -> Output {
-    gatewayctl()
+    edgectl()
         .args(args)
         .current_dir(cwd)
         .env_remove("IOTKIT_DB_PATH")
         .output()
-        .expect("run gatewayctl")
+        .expect("run iotkit-edgectl")
 }
 
 #[cfg(unix)]
@@ -789,7 +789,7 @@ impl PtyChild {
         let stdout_fd = unsafe { libc::dup(slave) };
         let stderr_fd = unsafe { libc::dup(slave) };
         assert!(inspect_fd >= 0 && stdin_fd >= 0 && stdout_fd >= 0 && stderr_fd >= 0);
-        let child = gatewayctl()
+        let child = edgectl()
             .args(args)
             .stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(stdin_fd)) })
             .stdout(unsafe { Stdio::from(std::fs::File::from_raw_fd(stdout_fd)) })

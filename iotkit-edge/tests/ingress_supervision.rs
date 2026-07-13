@@ -8,9 +8,9 @@ use iotkit_core_ops::{
     Actor, ActorKind, DispatchRequest, DispatchResult, Tier, dispatch, dispatch_with_secret_dir,
     standard_catalog,
 };
-use iotkit_gateway::health::HealthState;
-use iotkit_gateway::ingress::{IngressBindFuture, IngressComposition};
-use iotkit_gateway::network_authority::{NetworkAuthorityError, require_network_authority};
+use iotkit_edge::health::HealthState;
+use iotkit_edge::ingress::{IngressBindFuture, IngressComposition};
+use iotkit_edge::network_authority::{NetworkAuthorityError, require_network_authority};
 use iotkit_ingest_http::{
     ExposureSnapshot, HttpIngestConfig, HttpIngestService, Listener, ListenerError,
     SystemMonotonicClock, ValidatedListenerConfig,
@@ -460,7 +460,7 @@ async fn start_tls_supervisor() -> (RunningTlsSupervisor, TestTlsGeneration) {
             .unwrap();
     own(&db);
     db.with_conn_sync(|conn| {
-        iotkit_gateway::api::tls::ensure_tls_material(conn, dir.path())
+        iotkit_edge::api::tls::ensure_tls_material(conn, dir.path())
             .map(|_| ())
             .map_err(|error| {
                 iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
@@ -489,7 +489,7 @@ async fn start_tls_supervisor() -> (RunningTlsSupervisor, TestTlsGeneration) {
     .unwrap();
     let health = Arc::new(Mutex::new(HealthState::new(90)));
     let composition = Arc::new(DeterministicIngressComposition::default());
-    let task = iotkit_gateway::ingress::spawn_ingress_supervisor_serving_with_composition(
+    let task = iotkit_edge::ingress::spawn_ingress_supervisor_serving_with_composition(
         db.clone(),
         dir.path().to_path_buf(),
         health.clone(),
@@ -704,7 +704,7 @@ async fn listener_supervisor_exit_clears_health_without_stopping_collection() {
     own(&db);
     let dir = tempfile::tempdir().unwrap();
     db.with_conn_sync(|conn| {
-        iotkit_gateway::api::tls::ensure_tls_material(conn, dir.path())
+        iotkit_edge::api::tls::ensure_tls_material(conn, dir.path())
             .map(|_| ())
             .map_err(|error| {
                 iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
@@ -714,7 +714,7 @@ async fn listener_supervisor_exit_clears_health_without_stopping_collection() {
     })
     .unwrap();
     let health = Arc::new(Mutex::new(HealthState::new(90)));
-    let task = iotkit_gateway::ingress::spawn_ingress_supervisor(
+    let task = iotkit_edge::ingress::spawn_ingress_supervisor(
         db,
         dir.path().to_path_buf(),
         health.clone(),
@@ -745,7 +745,7 @@ async fn restored_local_recovery_drains_the_edge_ingress_listener() {
     .unwrap();
     own(&db);
     db.with_conn_sync(|conn| {
-        iotkit_gateway::api::tls::ensure_tls_material(conn, dir.path())
+        iotkit_edge::api::tls::ensure_tls_material(conn, dir.path())
             .map(|_| ())
             .map_err(|error| {
                 iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
@@ -774,7 +774,7 @@ async fn restored_local_recovery_drains_the_edge_ingress_listener() {
     .unwrap();
     let health = Arc::new(Mutex::new(HealthState::new(90)));
     let composition = Arc::new(DeterministicIngressComposition::default());
-    let supervisor = iotkit_gateway::ingress::spawn_ingress_supervisor_serving_with_composition(
+    let supervisor = iotkit_edge::ingress::spawn_ingress_supervisor_serving_with_composition(
         db.clone(),
         dir.path().to_path_buf(),
         health.clone(),
@@ -935,7 +935,7 @@ fn common_gate_closes_unowned_recovery_fences_and_restored_generation_mismatch()
     .unwrap();
     own(&db);
     db.with_conn_sync(|conn| {
-        iotkit_gateway::api::tls::ensure_tls_material(conn, dir.path())
+        iotkit_edge::api::tls::ensure_tls_material(conn, dir.path())
             .map(|_| ())
             .map_err(|error| {
                 iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
@@ -998,7 +998,7 @@ fn common_gate_closes_unowned_recovery_fences_and_restored_generation_mismatch()
     own(&db);
     db.with_conn_sync(|conn| {
         assert!(
-            iotkit_gateway::network_authority::require_common_network_authority(conn, dir.path())
+            iotkit_edge::network_authority::require_common_network_authority(conn, dir.path())
                 .is_ok(),
             "local recovery must restore control-plane authority even while ingress awaits reapply"
         );
@@ -1017,7 +1017,7 @@ fn common_gate_rejects_partial_corrupt_and_mismatched_control_tls_for_both_liste
     own(&db);
     let dir = tempfile::tempdir().unwrap();
     db.with_conn_sync(|conn| {
-        iotkit_gateway::api::tls::ensure_tls_material(conn, dir.path())
+        iotkit_edge::api::tls::ensure_tls_material(conn, dir.path())
             .map(|_| ())
             .map_err(|error| {
                 iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
@@ -1071,7 +1071,7 @@ fn ingress_gate_requires_the_exact_approved_tls_generation_bytes() {
     own(&db);
     let dir = tempfile::tempdir().unwrap();
     db.with_conn_sync(|conn| {
-        iotkit_gateway::api::tls::ensure_tls_material(conn, dir.path())
+        iotkit_edge::api::tls::ensure_tls_material(conn, dir.path())
             .map(|_| ())
             .map_err(|error| {
                 iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(

@@ -1,4 +1,4 @@
-//! iotkit-gateway: composition root。
+//! iotkit-edge: composition root。
 //! adapter を起動し、core/engine に event を渡す。
 
 mod adapter_host;
@@ -17,8 +17,8 @@ use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
 use iotkit_core_supervision::AdapterEvent;
 use iotkit_core_types::AdapterId;
-use iotkit_gateway::api::{ApiHandle, spawn_api_task};
-use iotkit_gateway::{config, epoch_start, health};
+use iotkit_edge::api::{ApiHandle, spawn_api_task};
+use iotkit_edge::{config, epoch_start, health};
 use iotkit_ingest_client::IngestClient;
 use tracing_subscriber::EnvFilter;
 
@@ -280,7 +280,7 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let _ingress_task = iotkit_gateway::ingress::spawn_ingress_supervisor_serving(
+    let _ingress_task = iotkit_edge::ingress::spawn_ingress_supervisor_serving(
         db.clone(),
         data_dir,
         health_state.clone(),

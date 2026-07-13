@@ -49,7 +49,7 @@ pub async fn auth_layer(
             OpsError::ClockUntrusted => ApiErrorResponse::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "clock_untrusted",
-                "trusted wall clock is required; run gatewayctl time confirm locally",
+                "trusted wall clock is required; run iotkit-edgectl time confirm locally",
             ),
             other => {
                 tracing::error!(error = %other, "auth layer operation failed");

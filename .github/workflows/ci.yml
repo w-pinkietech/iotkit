@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # serialport (via rpi4b-transport → adapters → iotkit-gateway) pulls
+      # serialport (via rpi4b-transport → adapters → iotkit-edge) pulls
       # libudev-sys, whose build script needs libudev's pkg-config file. It's
       # present on dev machines but not on a clean runner.
       - name: Install system dependencies

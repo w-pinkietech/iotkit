@@ -297,10 +297,10 @@ pub fn run(conn: &Connection, command: DeviceCredentialCommand) -> AppResult<()>
         eprintln!("WARNING: this device token is shown once and cannot be displayed again.");
         match metadata.get("state").and_then(Value::as_str) {
             Some("pending") => eprintln!(
-                "If this pending token is lost before delivery, abandon it, then reissue a new credential with `gatewayctl device-credential reissue`."
+                "If this pending token is lost before delivery, abandon it, then reissue a new credential with `iotkit-edgectl device-credential reissue`."
             ),
             _ => eprintln!(
-                "If this current token is lost before delivery, revoke it, then issue a new credential with `gatewayctl device-credential issue`."
+                "If this current token is lost before delivery, revoke it, then issue a new credential with `iotkit-edgectl device-credential issue`."
             ),
         }
         println!("{}", plaintext.as_str());

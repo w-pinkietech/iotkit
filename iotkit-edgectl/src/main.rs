@@ -18,7 +18,7 @@ use std::path::PathBuf;
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Parser)]
-#[command(name = "gatewayctl")]
+#[command(name = "iotkit-edgectl")]
 struct Cli {
     #[arg(long)]
     db: Option<PathBuf>,

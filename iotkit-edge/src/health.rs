@@ -620,7 +620,7 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
                 "max_principal_rows":state.ingress_bounds.dedup_max_principal_rows,
                 "degraded":state.ingress_bounds.dedup_degraded},
             "recovery_action":ingress_recovery_action},
-        "clock_trust":{"trusted":state.clock.trusted,"source":state.clock.source,"observed_at_ms":state.clock.observed_at_ms,"recovery_command":"gatewayctl time confirm"},
+        "clock_trust":{"trusted":state.clock.trusted,"source":state.clock.source,"observed_at_ms":state.clock.observed_at_ms,"recovery_command":"iotkit-edgectl time confirm"},
         "device_credentials":{"query_state":state.device_credentials.query_state.as_str(),
             "active_count":state.device_credentials.active_count,"stale_count":state.device_credentials.stale_count,
             "counts_capped":state.device_credentials.counts_capped,
@@ -714,7 +714,7 @@ mod tests {
         assert!(parsed["clock_trust"]["source"].is_null());
         assert_eq!(
             parsed["clock_trust"]["recovery_command"],
-            "gatewayctl time confirm"
+            "iotkit-edgectl time confirm"
         );
         assert!(json.contains(r#""uptime_s":10"#) || json.contains(r#""uptime_s":11"#));
     }

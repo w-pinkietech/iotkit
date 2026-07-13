@@ -80,7 +80,7 @@ pub enum SubmitError {
 }
 
 /// タスク所有キャッシュ(D5: 起動時全ロードはWave 0では行数が小さいため遅延ロードで開始し、
-/// ミス時にDBを引く。gatewayctl(別プロセス)変異はgeneration counterで無効化する(T4、D5決定3))
+/// ミス時にDBを引く。iotkit-edgectl(別プロセス)変異はgeneration counterで無効化する(T4、D5決定3))
 #[derive(Default)]
 struct ResolutionCache {
     generation: i64,

@@ -9,7 +9,7 @@ use iotkit_core_storage::{DbHandle, StorageError};
 use rusqlite::Connection;
 use serde_json::Value;
 
-use iotkit_gateway::health::{HealthState, TargetDeliveryHealth, now_ms};
+use iotkit_edge::health::{HealthState, TargetDeliveryHealth, now_ms};
 
 const BATCH_LIMIT: u32 = 256;
 const BYTE_CAP: usize = 1024 * 1024;
@@ -222,7 +222,7 @@ fn prepare_batch(conn: &Connection) -> Result<Option<PreparedBatch>, String> {
         return Ok(None);
     }
 
-    let mut records = iotkit_gateway::record::materialize_batch(conn, &rows)?;
+    let mut records = iotkit_edge::record::materialize_batch(conn, &rows)?;
     if records.is_empty() {
         return Err("materialized empty records for non-empty outbox batch".to_string());
     }
@@ -878,7 +878,7 @@ mod tests {
             999,
             vec![vec![21.5], vec![22.0]],
         );
-        let health = Arc::new(Mutex::new(iotkit_gateway::health::HealthState::new(90)));
+        let health = Arc::new(Mutex::new(iotkit_edge::health::HealthState::new(90)));
         let cycle = Ok(());
 
         super::refresh_publish_health(&db, &health, &cycle).await;
@@ -896,7 +896,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("health.json");
         let snapshot = health.lock().unwrap().clone();
-        iotkit_gateway::health::write_health_json(&path, &epoch, &snapshot).unwrap();
+        iotkit_edge::health::write_health_json(&path, &epoch, &snapshot).unwrap();
         let json = std::fs::read_to_string(path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(json["publish"][0]["target_id"], "target-1");
@@ -964,7 +964,7 @@ mod tests {
             quarantine_ttl_days: 30,
             disk_high_watermark_pct: 101,
         };
-        let health = Arc::new(Mutex::new(iotkit_gateway::health::HealthState::new(
+        let health = Arc::new(Mutex::new(iotkit_edge::health::HealthState::new(
             config.retention_days,
         )));
         let mut latch = crate::retention::WatermarkLatch::default();

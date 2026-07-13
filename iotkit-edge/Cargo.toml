@@ -1,13 +1,13 @@
 [package]
-name = "iotkit-gateway"
+name = "iotkit-edge"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "iotkit_gateway"
+name = "iotkit_edge"
 
 [[bin]]
-name = "iotkit-gateway"
+name = "iotkit-edge"
 path = "src/main.rs"
 
 [dependencies]

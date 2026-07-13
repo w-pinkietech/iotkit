@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use iotkit_core_ledger as ledger;
 use iotkit_core_storage::{DbHandle, Migration};
-use iotkit_gateway::api::{ApiHandle, spawn_api_task};
-use iotkit_gateway::config::ApiConfig;
-use iotkit_gateway::health::HealthState;
+use iotkit_edge::api::{ApiHandle, spawn_api_task};
+use iotkit_edge::config::ApiConfig;
+use iotkit_edge::health::HealthState;
 use reqwest::header;
 use serde_json::{Value, json};
 

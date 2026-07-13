@@ -9,8 +9,8 @@ use iotkit_core_publish::wire::{
     publication_id,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
-use iotkit_gateway::config::MqttExitConfig;
-use iotkit_gateway::health::HealthState;
+use iotkit_edge::config::MqttExitConfig;
+use iotkit_edge::health::HealthState;
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, Transport};
 use rusqlite::Connection;
 
@@ -246,7 +246,7 @@ fn prepare_batch(
         }
     }
 
-    let mut records = iotkit_gateway::record::materialize_batch(conn, &rows)?;
+    let mut records = iotkit_edge::record::materialize_batch(conn, &rows)?;
     while !records.is_empty() {
         let cursor_start = prior_cursor + 1;
         let cursor_end = cursor_start + records.len() as i64 - 1;

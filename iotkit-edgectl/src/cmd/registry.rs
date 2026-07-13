@@ -66,7 +66,7 @@ pub fn run_registry_enable(conn: &Connection, args: RegistryEnableArgs) -> AppRe
             tx,
             entry,
             &catalog.catalog_version,
-            "gatewayctl",
+            "iotkit-edgectl",
         )?)
     })?;
     println!("{}", row.measurement_key);

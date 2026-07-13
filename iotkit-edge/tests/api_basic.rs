@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iotkit_core_storage::{DbHandle, Migration};
-use iotkit_gateway::api::{ApiHandle, spawn_api_task};
-use iotkit_gateway::config::{
+use iotkit_edge::api::{ApiHandle, spawn_api_task};
+use iotkit_edge::config::{
     ApiConfig, ConfigError, ConfigSource, RawApiConfig, RawConfig, resolve,
 };
-use iotkit_gateway::health::HealthState;
+use iotkit_edge::health::HealthState;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
@@ -296,7 +296,7 @@ async fn fresh_database_never_starts_a_control_listener() {
 
     assert!(matches!(
         result,
-        Err(iotkit_gateway::api::ApiError::NotReady("unowned"))
+        Err(iotkit_edge::api::ApiError::NotReady("unowned"))
     ));
 }
 
@@ -325,7 +325,7 @@ async fn known_restore_or_reset_state_blocks_control_listener_before_bind() {
 
     assert!(matches!(
         result,
-        Err(iotkit_gateway::api::ApiError::NotReady(
+        Err(iotkit_edge::api::ApiError::NotReady(
             "restore_in_progress"
         ))
     ));
@@ -445,7 +445,7 @@ async fn network_passphrase_setup_route_is_absent() {
 
 #[test]
 fn private_source_guard_accepts_only_private_or_link_local_sources() {
-    use iotkit_gateway::api::guard::is_private_source;
+    use iotkit_edge::api::guard::is_private_source;
 
     let accepted = [
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
