@@ -2,7 +2,11 @@
 
 Date: 2026-07-12
 
-Status: **approved; implementation under review**
+Status: **Historical migration record; completed and superseded as workflow guidance**
+
+This document records the 2026-07-12 migration. References below to the former active ledger,
+risk classification, review settlement, or workflow files are historical and are not current
+instructions. Current authority is described by `AGENTS.md` and `docs/superpowers/README.md`.
 
 Risk: **Large / Red** because it changes design and workflow authority location
 

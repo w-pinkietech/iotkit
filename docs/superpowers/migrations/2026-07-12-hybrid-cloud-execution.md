@@ -2,7 +2,11 @@
 
 Date: 2026-07-12
 
-Status: **approved; implementation under review**
+Status: **Historical migration record; completed and superseded as workflow guidance**
+
+This document records the 2026-07-12 migration. References below to the former active ledger,
+risk classification, review settlement, or workflow files are historical and are not current
+instructions. Current Cloud operation is described by `docs/cloud-development.md`.
 
 Risk: **Large / Red** because this changes workflow authority, review provenance, and external
 Cloud-task dispatch mechanics.

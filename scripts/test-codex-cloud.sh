@@ -63,7 +63,6 @@ run_cloud submit impl "$REPO/.review/prompt.md" candidate cloud/test >"$TMP/subm
 SUBMIT_RECEIPT="$(find "$OUT" -type f -name 'codex-cloud-candidate-impl-*.txt.receipt' -print -quit)"
 [ -s "$SUBMIT_RECEIPT" ]
 grep -qx 'status=submitted' "$SUBMIT_RECEIPT"
-grep -qx 'settlement_eligible=false' "$SUBMIT_RECEIPT"
 grep -qx 'cloud_base_verified=false' "$SUBMIT_RECEIPT"
 grep -qx 'task_id=task_e_test123' "$SUBMIT_RECEIPT"
 grep -qx 'attempts=1' "$SUBMIT_RECEIPT"
@@ -90,6 +89,13 @@ cp "$SUBMIT_RECEIPT" "$TMP/duplicate.receipt"
 sed -i '$d' "$TMP/duplicate.receipt"
 printf 'attempts=1\n' >>"$TMP/duplicate.receipt"
 KEY_HEX="$(od -An -v -tx1 "$OUT/.cloud-receipt-key" | tr -d ' \n')"
+cp "$TMP/original.receipt" "$TMP/legacy-v2.receipt"
+sed -i '$d' "$TMP/legacy-v2.receipt"
+sed -i '/^vendor=codex-cloud$/a settlement_eligible=false' "$TMP/legacy-v2.receipt"
+LEGACY_HMAC="$(openssl dgst -sha256 -mac HMAC -macopt "hexkey:$KEY_HEX" "$TMP/legacy-v2.receipt" | awk '{print $NF}')"
+printf 'integrity_hmac_sha256=%s\n' "$LEGACY_HMAC" >>"$TMP/legacy-v2.receipt"
+run_cloud verify-receipt "$TMP/legacy-v2.receipt" | grep -qx 'receipt integrity: OK'
+
 DUP_HMAC="$(openssl dgst -sha256 -mac HMAC -macopt "hexkey:$KEY_HEX" "$TMP/duplicate.receipt" | awk '{print $NF}')"
 printf 'integrity_hmac_sha256=%s\n' "$DUP_HMAC" >>"$TMP/duplicate.receipt"
 if run_cloud verify-receipt "$TMP/duplicate.receipt" >/dev/null 2>&1; then
@@ -123,7 +129,6 @@ fi
 
 run_cloud collect task_e_test123 candidate >"$TMP/collect.out"
 COLLECT_RECEIPT="$(find "$OUT" -type f -name 'codex-cloud-candidate-collect-*.txt.receipt' -print -quit)"
-grep -qx 'settlement_eligible=false' "$COLLECT_RECEIPT"
 run_cloud verify-receipt "$COLLECT_RECEIPT" >/dev/null
 grep -q '^== status ==$' "$TMP/collect.out"; grep -q '^== diff ==$' "$TMP/collect.out"
 

@@ -1,21 +1,19 @@
-# ⚠️ Historical execution records — not current guidance
+# Superpowers design and execution records
 
-Unless explicitly named live below, everything under `docs/superpowers/` (specs and plans alike) is the **execution
-record of past work**, kept for archaeology. It is intentionally left as
-written, so it contains instructions that were correct THEN and are wrong NOW.
-Known examples: the Wave-0 plan 1 tells you to set SQLite `synchronous=NORMAL`
-(superseded by D8 波及修正4 — custody-critical transactions MUST be `FULL`,
-implemented 2026-07-10), and the 2026-03 command-boundary design teaches
-extending `AdapterCommand` — the exact move the D4/D12 vocabulary freeze now
-forbids (southbound verbs go to the future `iotkit-southbound-contract`).
+開発プロセスの正本は、現在の実行環境にインストールされた標準 Superpowers スキルである。
+作業内容に応じて `brainstorming`、`writing-plans`、`test-driven-development`、
+レビュー、検証、ブランチ完了の各スキルを適用する。
 
-Current product guidance lives in two places:
+このディレクトリの `specs/`、`plans/`、`migrations/` は、設計判断と実行計画をリポジトリに残す場所。
+現在の作業で明示的に選ばれた文書以外は履歴資料であり、書かれた当時の運用手順を
+現行指示として扱わない。履歴資料は、現在の設計正本と矛盾しない範囲で判断理由や
+実装経緯を調べるために使う。
 
-- **What/why**: the design corpus [`../redesign/`](../redesign/) (D1–D13, R1–R23)
-- **Where code goes / how it's structured**: [`docs/architecture.md`](../architecture.md)
+現在の正本:
 
-Development workflow guidance lives in [`docs/development-workflow.md`](../development-workflow.md).
+- 製品の what/why: [`../redesign/`](../redesign/)
+- コード配置、crate 地図、層規則: [`../architecture.md`](../architecture.md)
+- エージェント規則、安全不変条件、検証方針: [`../../AGENTS.md`](../../AGENTS.md)
 
-The live files here are `active-ledger.md` (restartable workflow state),
-`PLAN6-DESIGN-READY.md` (the current Plan 6 evidence/Red packet until folded into its spec), and
-`plans/wave1-plan5-deferred-hardening.md` plus successors (deferred-item ledgers).
+過去の計画に残る廃止済み vocabulary、設定値、レビュー手続きより、上記の正本と
+現在選択中の Superpowers スキルを優先する。

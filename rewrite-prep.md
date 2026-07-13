@@ -1,6 +1,9 @@
-# IoTKit / YokaKit Rewrite Prep
+# IoTKit / YokaKit Rewrite Prep (historical)
 
 Date: 2026-07-01
+
+This is a historical workspace survey, not current project or workflow authority. For current
+IoTKit decisions use `docs/redesign/`, `docs/architecture.md`, and `AGENTS.md`.
 
 ## Local Repositories
 
@@ -72,8 +75,7 @@ There are three different authority layers:
 
 - `_legacy-remake/remake-plan.md`
 - `_legacy-remake/open-questions-adapter-architecture.md`
-- `codex-review.md`
-- `docs/eval/*.md`
+- `docs/superpowers/specs/` and `docs/superpowers/plans/` (historical design records)
 
 ## Important Design Direction
 

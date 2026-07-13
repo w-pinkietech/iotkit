@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Submit and collect Codex Cloud candidate work from a local Main agent.
-# Cloud status/diff output is provenance only; it is not a bound review result.
+# Cloud status/diff output is candidate evidence, not proof of correctness.
 set -euo pipefail
 umask 077
 
@@ -97,10 +97,14 @@ validate_receipt_schema() {
       *) fail "receipt contains unknown field: $field" ;;
     esac
   done <"$receipt"
-  for field in receipt_version status vendor settlement_eligible; do require_receipt_field_once "$receipt" "$field"; done
+  for field in receipt_version status vendor; do require_receipt_field_once "$receipt" "$field"; done
   grep -qx 'receipt_version=2' "$receipt" || fail "unsupported receipt version"
   grep -qx 'vendor=codex-cloud' "$receipt" || fail "unexpected receipt vendor"
-  grep -qx 'settlement_eligible=false' "$receipt" || fail "Cloud receipt cannot be settlement eligible"
+  # Compatibility only: older version-2 receipts carried this retired workflow field.
+  if grep -q '^settlement_eligible=' "$receipt"; then
+    require_receipt_field_once "$receipt" settlement_eligible
+    grep -qx 'settlement_eligible=false' "$receipt" || fail "invalid legacy settlement field"
+  fi
   status="$(sed -n 's/^status=//p' "$receipt")"
   case "$status" in
     submission-pending)
@@ -235,11 +239,11 @@ case "$COMMAND" in
 
     MODE_RULE="Implement candidate work and run relevant verification."
     if [ "$MODE" = review ]; then
-      MODE_RULE="Review independently without editing. Return explicit Critical/Important/Minor counts. This answer is advisory until separately exported and hash-bound."
+      MODE_RULE="Review independently without editing. Report findings with severity and concrete evidence."
     fi
     QUERY="$({ printf '%s\n\n' \
         "IoTKit Cloud candidate task. Mode: $MODE. Requested branch: $BRANCH. Locally observed remote commit: $REMOTE_HEAD." \
-        "Read AGENTS.md, docs/cloud-development.md, docs/development-workflow.md, and docs/superpowers/active-ledger.md before acting. $MODE_RULE Do not push, open a PR, merge, release, or claim SETTLED without explicit authority.";
+        "Read AGENTS.md, docs/cloud-development.md, and the task's selected spec or plan before acting. $MODE_RULE Do not push, open a PR, merge, or release without explicit authority.";
       cat "$PROMPT_SNAPSHOT"; })"
     printf '%s' "$QUERY" >"$QUERY_PATH"
     chmod 600 "$QUERY_PATH"
@@ -247,7 +251,7 @@ case "$COMMAND" in
 
     {
       printf 'receipt_version=2\nstatus=submission-pending\nvendor=codex-cloud\n'
-      printf 'settlement_eligible=false\ncloud_base_verified=false\nmode=%s\nlabel=%s\n' "$MODE" "$LABEL"
+      printf 'cloud_base_verified=false\nmode=%s\nlabel=%s\n' "$MODE" "$LABEL"
       printf 'environment_id=%s\nbranch=%s\nremote_commit=%s\nattempts=%s\n' "$CODEX_CLOUD_ENV" "$BRANCH" "$REMOTE_HEAD" "$ATTEMPTS"
       printf 'prompt_path=%s\nprompt_snapshot_path=%s\nprompt_sha256=%s\n' "$PROMPT" "$PROMPT_SNAPSHOT" "$PROMPT_SHA256"
       printf 'query_path=%s\nquery_sha256=%s\nsubmitted_at=%s\n' "$QUERY_PATH" "$QUERY_SHA256" "$STARTED_AT"
@@ -269,7 +273,7 @@ case "$COMMAND" in
 
     {
       printf 'receipt_version=2\nstatus=submitted\nvendor=codex-cloud\n'
-      printf 'settlement_eligible=false\ncloud_base_verified=false\nmode=%s\nlabel=%s\n' "$MODE" "$LABEL"
+      printf 'cloud_base_verified=false\nmode=%s\nlabel=%s\n' "$MODE" "$LABEL"
       printf 'task_id=%s\ntask_url=https://chatgpt.com/codex/tasks/%s\n' "$TASK_ID" "$TASK_ID"
       printf 'environment_id=%s\nbranch=%s\nremote_commit=%s\nattempts=%s\n' "$CODEX_CLOUD_ENV" "$BRANCH" "$REMOTE_HEAD" "$ATTEMPTS"
       printf 'prompt_path=%s\nprompt_snapshot_path=%s\nprompt_sha256=%s\n' "$PROMPT" "$PROMPT_SNAPSHOT" "$PROMPT_SHA256"
@@ -302,12 +306,12 @@ case "$COMMAND" in
     mv "$PARTIAL" "$OUT"
     {
       printf 'receipt_version=2\nstatus=collected\nvendor=codex-cloud\n'
-      printf 'settlement_eligible=false\ntask_id=%s\n' "$TASK_ID"
+      printf 'task_id=%s\n' "$TASK_ID"
       printf 'result_path=%s\nresult_sha256=%s\n' "$(readlink -f "$OUT")" "$(sha256sum -- "$OUT" | cut -d' ' -f1)"
       printf 'started_at=%s\ncompleted_at=%s\n' "$STARTED_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } >"$RECEIPT.partial"
     seal_receipt "$RECEIPT.partial"; mv "$RECEIPT.partial" "$RECEIPT"; trap - EXIT
-    cat "$OUT"; echo "Collected (not settlement evidence): $RECEIPT" >&2
+    cat "$OUT"; echo "Collected: $RECEIPT" >&2
     ;;
   verify-receipt)
     ensure_runtime; verify_receipt "${1:-}"; echo "receipt integrity: OK"
