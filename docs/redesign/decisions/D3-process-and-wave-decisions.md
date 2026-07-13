@@ -95,6 +95,12 @@ credentialごと削除して新構成から再作成した。新しい`edge_node
 `PRAGMA quick_check = ok`であり、Edge停止後にUARTが解放されたことも確認した。破棄したpre-releaseの
 identity key、topic namespace、credentialは再利用していない。
 
+同日の最終レビュー修正後commit `b6b9402`でも、上記の新形式DBを再作成せずに最終Edgeを起動した。
+read-only cutover preflightが既存の`edge_node_id`を受理し、BravePI MainboardのUARTから受信した
+温度3観測が`pub_seq` 12〜14としてSiteへ保存された。Edgeの`accepted-through` cursorは11から14へ進み、
+Site queryで同じ`edge_node_id`・`ledger_epoch`と`temperature_c`の3 recordを確認した。停止後のEdge DBと
+Site DBはともに`PRAGMA quick_check = ok`であり、Edge processの停止とUART解放も確認した。
+
 これにより `BravePI Transmitter -> BLE Long Range -> BravePI Mainboard -> UART -> IoTKit Edge SQLite -> MQTT
 -> MQTT Broker -> IoTKit Site raw SQLite -> accepted-through -> Edge cursor` は実機確認済みとなった。
 平文MQTTは同一Piのloopbackだけを使う実験設定であり、実運用のTLS要件を緩和しない。
