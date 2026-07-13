@@ -1,7 +1,7 @@
 # IoTKit / YokaKit 再設計 用語集
 
 Status: 会話合意済み (living document)
-Date: 2026-07-02
+Updated: 2026-07-13
 
 この文書は再設計に関わるすべての文書・コード・会話で使う統一語彙を定める。
 ここにない語を新しく使うときは、まずこの文書に追加する。
@@ -89,7 +89,7 @@ Date: 2026-07-02
 |---|---|---|
 | 検疫 | quarantine | データ/デバイスを「保存・可視化(R11)はするが、下流配送(R10)とアクション駆動(R9)には使わない」状態に置くこと。値域外データ・未登録測定キー・登録直後デバイスに適用。解除は時限自動失効またはR14の操作(誰も解除できない誤検知を作らない)。※「隔離」という語は使わない |
 | 正本 | source of truth | その情報の権威あるコピー。「その情報なしで動けなくなる箱が持つ」(D2) |
-| custody transfer | — | 測定データの正本が配送とともにゲートウェイ→上流へ移転すること(D2) |
+| 保管責任の引き渡し | custody transfer | 測定データを失わず保持する責任が、耐久保存の確認とともにGatewayからSiteへ移ること(D2/D9) |
 | アーカイブ責任消費者 | archival consumer | 出口契約の消費者のうち台帳で1つ指定。そのackのみが正本移転=パージ許可を意味する(D2) |
 | AIハーネス | AI harness | AIオペレーターの実行環境(エージェントループ・runbook・ゲートウェイAPIツール・認証情報)。キットの提供物で[3]/[4]に住む。背後のLLMは差し替え可能 |
 | operatorトークン | operator token | 制御プレーンを叩く運用主体(AIハーネス/人間)の認証情報。権限段階つき(D3決定5) |
@@ -107,7 +107,7 @@ Date: 2026-07-02
 | event_time_source | — | event_timeにどの候補を採用したか+未来方向降格の有無を表す出口レコードのフィールド。time_source(入力の事実)とは別の、導出結果の表示(D7決定3) |
 | target / target registry | — | 出口配送先の登録単位とその台帳。配送状態(カーソル・ack)はtarget単位で分離。登録・変更はR14型付き操作(D7決定6) |
 | 購読フィルタ | subscription filter | targetが受け取るシリーズの選択(実体化series_keyで照合)。解釈ではなく選択。アーカイブ責任targetには適用しない(D7決定7) |
-| 保管対象ポリシー | custody scope policy | アーカイブ責任消費者に託して長期保存するシリーズ範囲の台帳宣言(既定=全量)。対象外シリーズはcustodyの約束自体がなく、retention窓超過でcustody_lostにならず期限失効する(D7決定7) |
+| 保管対象ポリシー | custody scope policy | アーカイブ責任消費者に託して長期保存するシリーズ範囲の台帳宣言(既定=全量)。対象外シリーズには保管責任の約束自体がなく、retention窓超過で`custody_lost`にならず期限失効する(D7決定7) |
 | 配送制御通知 | delivery control notice | 特定targetの配送状態についての通知(gap/cursor_expired等)。ストリームレコードではなくpushバッチのメタデータ(帯域外)で運び、カーソルを消費しない。全target共有のannotation族とは別レイヤ(D7決定2・6) |
 | 目撃ステージング | sighting (staging) | 未知hardware_idの観測を有界・パージ可能に保持する登録前状態(hardware_id仮キーでデータ保持)。人間承認の瞬間に採番→検疫→active(D5決定4)。ステージング中のackは `disposition: staged`(D1監査追記) |
 | retire(墓標) | retire / tombstone | 台帳エントリの削除に相当する終端状態。行は消さず、system_id再利用は永久禁止(D5決定4) |
@@ -126,17 +126,17 @@ Date: 2026-07-02
 | Site-managed | site-managed | 複数Gatewayを独立した完全GatewayとしてSite Serverへ接続する構成(D8) |
 | gateway_identity | — | Gateway Piの安定した外部同一性。消費者側の大域レコード同一性 `(gateway_identity, epoch, seq)` の先頭成分(D8) |
 | Site Aggregator | site aggregator | canonical recordをsite表示やapplication向けに投影する非custodialロール(D8) |
-| Archival Store(アーカイブ責任) | archival store / archival consumer | raw canonical recordを耐久保存しapplication custody ackを返すSiteロール。このackだけがGateway purgeを許可(D8/D9) |
-| archive_lost | — | Siteが一度custodyを取った後に失った範囲を表す監査事実。MVP後のhardening対象(D8) |
+| Archival Store(アーカイブ責任) | archival store / archival consumer | raw canonical recordを耐久保存し保管完了確認を返すSiteロール。この確認だけがGateway purgeを許可(D8/D9) |
+| archive_lost | — | Siteが一度保管責任を引き受けた後に失った範囲を表す監査事実。MVP後のhardening対象(D8) |
 
 ## 出口MQTTバインディング(D9 2026-07-13改訂)
 
 | 用語 | 英語 | 定義 |
 |---|---|---|
 | 出口MQTTバインディング | exit MQTT binding | Gatewayが標準brokerへ有界batchをQoS 1 publishするR10第一バインディング。broker PUBACKはtransport受領だけを表す(D9) |
-| application custody ack | application custody acknowledgement | Siteがraw recordと連続cursorを同一transactionでcommitした後、`accepted-through` topicへpublishする正式水位。これだけがGateway purgeを許可する(D9) |
-| 送信窓 | sending window | application custody ack待ちbatch数の上限。MVPは1。PUBACKでは窓を解放しない(D9) |
-| Archival Store | archival store | canonical recordを耐久保存してapplication custody ackを返すSiteの役割。標準broker自体はArchival Storeではない |
+| 保管完了確認 | application custody acknowledgement | Siteがraw recordと連続cursorを同一transactionでcommitした後、`accepted-through` topicへpublishする正式水位。これだけがGateway purgeを許可する(D9) |
+| 送信窓 | sending window | 保管完了確認待ちbatch数の上限。MVPは1。PUBACKでは窓を解放しない(D9) |
+| Archival Store | archival store | canonical recordを耐久保存して保管完了確認を返すSiteの役割。標準broker自体はArchival Storeではない |
 
 ## 出口認証(D10 2026-07-13改訂)
 

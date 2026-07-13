@@ -9,7 +9,7 @@ IoTKitは2つの配置を認める。
 ### Standalone
 
 - 1台のRaspberry Piが完全なGatewayを動かす。
-- Gatewayはローカル収集、SQLite custody、outbox、queryを持つ。
+- Gatewayはローカル収集、SQLite上の保管責任、outbox、queryを持つ。
 - Site Serverや上流接続は任意である。
 
 ### Site-managed
@@ -18,21 +18,21 @@ IoTKitは2つの配置を認める。
 - 代表Pi、親Gateway、中央collectorは置かない。
 - Site Serverは標準MQTT broker、Archival Store、site-level query/application接続点を提供する。
 - Site Serverはsensor busを読まず、Gateway collectorやregistryの権威を奪わない。
-- cloudは任意の上位層であり、Site custodyの必須条件ではない。
+- cloudは任意の上位層であり、Siteによる保管責任引受の必須条件ではない。
 
-最初の実機縦切りは1 Gateway + 1 Siteで通信とcustodyを証明する。これはmulti-Gateway運用UI、fleet管理、
+最初の実機縦切りは1 Gateway + 1 Siteで通信と保管責任の引き渡しを証明する。これはmulti-Gateway運用UI、fleet管理、
 一括enrollmentを実装する意味ではない。
 
 ## Custody roles
 
-- **Gateway**: 観測を耐久保存し、application custody ackまでoutboxを保持する。
+- **Gateway**: 観測を耐久保存し、保管完了確認までoutboxを保持する。
 - **MQTT broker**: QoS 1 transportを提供する。PUBACKはpurge権威ではない。
 - **Site Archival Store**: raw canonical recordsと連続cursorを同一transactionで保存し、
   application-level accepted-throughを返す。
 - **Application consumer**: YokaKit、dashboard、analytics等。Siteのcanonical streamを自分のdomainへ投影する。
   通常はnon-custodialであり、その業務処理結果はGateway purgeを許可しない。
 
-Site query projectionやapplication projectionが壊れても、Archival Storeのraw custodyとGateway cursorを
+Site query projectionやapplication projectionが壊れても、Archival Storeが引き受けたraw recordの保管責任とGateway cursorを
 巻き戻したり進めたりしない。
 
 ## Identity and ordering
@@ -46,7 +46,7 @@ Site側のglobal record identityは次である。
 - `gateway_identity`は各Gatewayが初回構成時に生成し、共有imageへ焼き込まない。
 - Gatewayごとのpublication orderはあるが、複数Gateway間の全順序は定義しない。
 - Site全体の配送状態は単一cursorでなくGatewayごとのwatermark vectorで表す。
-- 同じglobal identityに異なる内容が到着した場合は上書きせずcustody conflictとする。
+- 同じglobal identityに異なる内容が到着した場合は上書きせず保管競合(custody conflict)とする。
 - deliveryはat-least-onceであり、Site保存とapplication projectionは冪等にする。
 
 ## Failure behavior

@@ -1,23 +1,29 @@
 # IoTKit Gateway
 
-A small, data-integrity-first IoT gateway for the Raspberry Pi. It ingests
-measurements from local sensor adapters, stores them durably through power loss,
-and publishes them to an external archive consumer under an **explicit custody
-contract**: data is not purged until the consumer has acknowledged receipt.
+A small, data-integrity-first IoT gateway for the Raspberry Pi. Add a focused
+sensor adapter and IoTKit supplies durable collection, retry, and an explicit
+transfer of storage responsibility to the Site: data is not purge-eligible until
+the Site has durably stored it.
 
-> **Status: pre-1.0, not yet a public release.** Wave 0 ("runs at our own first
-> site") is done; Wave 1 ("distributable to others") is in progress. APIs, the
-> on-disk schema, and the wire contract may still change. See
+> **Status: pre-1.0, not yet a public release.** The current milestone is one
+> OPT3001, one Rust Gateway, one standard MQTT broker, and one Go Site Server.
+> Broader Wave 1 work is frozen until this real-hardware path proves collection,
+> outage recovery, and storage-responsibility transfer. APIs, the on-disk schema,
+> and the wire contract may still change. See
 > [Roadmap](#roadmap).
 
 ## Why
 
-Industrial sites need a box that keeps collecting and never silently loses data —
-even when the network is down, the power blinks, or the SD card is aging. IoTKit
-is deliberately boring about this: **one Rust binary + SQLite + systemd**, no
-container orchestration, no on-gateway ML, no central rules engine. The gateway
-is a *buffer, not a warehouse* — it holds data only until an archive consumer has
-durably taken custody of it.
+Industrial sites need to connect varied sensors without rebuilding reliability for
+each one. An adapter owns only sensor communication, configuration, reading, and
+measurement mapping; it does not own SQLite, MQTT, retry, retention, or
+authentication. IoTKit supplies those concerns once, keeps collecting through
+network outages, and recovers safely after power loss without silently losing data.
+
+IoTKit is deliberately boring about this: **one Rust binary + SQLite + systemd**,
+no on-gateway container orchestration, ML platform, or central rules engine. The
+gateway is a *buffer, not a warehouse* — it holds data until the Site confirms
+durable storage. MQTT PUBACK alone is not that confirmation.
 
 ## What it does today
 
@@ -91,7 +97,9 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Wave 1 — "distributable to others":** exit contract (done, MVE), authenticated default-off site-LAN HTTP ingress (done for Plan 6), then MQTT, onboarding/quarantine UX, calibration, and config authority. **In progress.**
+- **Current implementation gate:** one OPT3001 → one Gateway → standard MQTT broker → one Go Site Server → raw SQLite → direct CLI query. It must survive component restarts and outages, replay idempotently, and advance purge eligibility only after validated `accepted-through`. **In progress.**
+- **After the gate:** add a different second sensor without core changes to test the adapter boundary, then choose broader Wave 1 work from observed needs.
+- **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 
 ## License

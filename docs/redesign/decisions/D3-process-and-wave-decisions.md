@@ -1,6 +1,71 @@
 # D3: プロセス決定とWave分割
 
-Status: 確定 (2026-07-02、4レンズ厳格レビュー後のユーザー判断)
+Status: 確定 (2026-07-13、現在の実装ゲートを追記)
+
+## 現在のプロダクト中心価値
+
+> IoTKitは、さまざまなセンサーを小さなadapterで簡単につなぎ、現場データを黙って失うことなく
+> Siteへ届けるIoT Gatewayである。
+
+この価値は次の2点の組み合わせにある。
+
+1. **adapterの作りやすさ**: adapter作者はセンサー固有の通信、設定、値の読み取り、measurementへの
+   写像だけを担当する。SQLite、MQTT、再送、保管責任、retention、認証をadapterへ持ち込まない。
+2. **保管責任の確実な引き渡し**: Gatewayは観測を耐久保存し、Siteがraw recordを耐久保存したと確認できる
+   まで保持する。MQTT PUBACKだけではGatewayの保管責任を解除しない。
+
+IoTKitは汎用IoTプラットフォーム、ダッシュボード、生産管理、独自MQTT brokerではない。R1〜R23と
+Wave 1/2は将来の責務地図であり、現在すべてを実装するバックログではない。
+
+## 現在の実装ゲート: 最初の実機縦切り
+
+Wave 1の残項目を横に広げる前に、次の1本を完成させる。
+
+```text
+OPT3001
+  -> Rust Gateway on Raspberry Pi
+  -> MQTT QoS 1
+  -> standard broker
+  -> Go Site Server
+  -> raw SQLite
+  -> direct CLI query
+```
+
+### 作るもの
+
+- OPT3001 adapterと既存polling runtimeによる収集
+- Gatewayでのcanonical record化、readingとoutboxのatomic保存
+- GatewayのMQTT publish、`accepted-through`検証、cursor更新、保管責任に基づくretention
+- Mosquitto等の標準brokerと、Gatewayごとのstatic credential/topic ACL
+- Siteでのraw recordと連続cursorのatomic保存、commit後の`accepted-through` publish
+- 重複再送の冪等処理と、同一identity・異内容のconflict検出
+- Site raw dataの直接CLI query
+- Dockerによる開発・障害試験環境と、Raspberry Pi上のsystemd実行
+
+### 完了条件
+
+- OPT3001の観測がGatewayとSiteの双方で確認できる。
+- 保持容量内では、Site、broker、ネットワークの停止中もGatewayが収集を継続し、復旧後に欠けなく再送する。
+- 同じbatchの再送でSiteのraw rowが重複せず、異内容ならconflictとしてcursorを進めない。
+- SiteのSQLite commit失敗時は`accepted-through`を返さない。
+- MQTT PUBACKだけではGateway cursorやpurge eligibilityが進まず、検証済み`accepted-through`だけで進む。
+- Gateway、broker、Siteを個別に再起動しても同じ状態へ収束する。
+- Docker試験に加え、Raspberry Piと実センサーで一連の流れを再現できる。
+
+### このゲートでは作らないもの
+
+- YokaKit連携、UI、dashboard、Site projection、cloud/fleet管理
+- 第三者デバイスingress、pairing、オンボーディングUI
+- credential enrollment/rotation、multi-Gateway運用、broker HA
+- Site backup/restore、archive repair、汎用fan-out
+- calibration UI、local rule、通知、南向きcommand/DFU
+- 汎用adapter SDK、adapter code generator、宣言型driver DSL
+
+既に実装済みのHTTP ingress、control API、operation catalog等は削除しないが、このゲートの完了条件から外し、
+必要な保守以外の機能追加を止める。最初の実機縦切り後、種類の異なる2個目のセンサーをcore変更なしで
+追加できるか確認し、その実績からadapter templateやSDKの必要性を判断する。
+
+以下のWave分割は長期ロードマップと既存決定の参照用に維持する。現在の実装順は上記ゲートを優先する。
 
 ## 決定1: 3段階Wave分割を採用
 
