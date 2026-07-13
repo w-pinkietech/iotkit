@@ -360,7 +360,7 @@ mod tests {
                 series_id,
                 received_at_ms,
                 device_time_ms: None,
-                time_source: "gateway".into(),
+                time_source: "edge".into(),
                 values: vec![21.5],
                 rssi: None,
                 battery_pct: None,

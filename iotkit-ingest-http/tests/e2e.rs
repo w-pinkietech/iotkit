@@ -128,8 +128,8 @@ fn normative_contract_matches_shipped_wire_schema_and_finite_defaults() {
         "internal",
         "device_ntp",
         "device_rtc",
-        "gateway",
-        "gateway_adjusted",
+        "edge",
+        "edge_adjusted",
     ] {
         assert!(
             contract.contains(&format!("`{value}`")),
@@ -176,7 +176,7 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
     let _subscriber = tracing::subscriber::set_default(subscriber);
     let db_path = dir.path().join("journey.db");
     let (principal, token) = provision_device(&db_path);
-    let running = start_gateway(
+    let running = start_edge(
         &db_path,
         material.clone(),
         HttpIngestConfig::for_test(),
@@ -242,13 +242,13 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
             {
                 "measurement_key": "temperature_c",
                 "values": [22.0],
-                "time_source": "gateway"
+                "time_source": "edge"
             },
             {
                 "subject_hint": "not-registered",
                 "measurement_key": "temperature_c",
                 "values": [23.0],
-                "time_source": "gateway"
+                "time_source": "edge"
             }
         ]),
     );
@@ -282,7 +282,7 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
         json!([{
             "measurement_key": "temperature_c",
             "values": [24.0],
-            "time_source": "gateway"
+            "time_source": "edge"
         }]),
     );
     let rejected = run_pinned_body(&running, &ca_path, &rejected_path, "rejected-response").await;
@@ -300,7 +300,7 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
         json!([{
             "measurement_key": "temperature_c",
             "values": [25.0],
-            "time_source": "gateway"
+            "time_source": "edge"
         }]),
     );
     let validation = run_pinned_validation(&running, &ca_path, &validation_path).await;
@@ -341,8 +341,8 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
     assert!(!audit.contains(&passphrase));
 
     let secret_for_restart = running.token.clone();
-    stop_gateway(running).await;
-    let restarted = start_gateway(
+    stop_edge(running).await;
+    let restarted = start_edge(
         &db_path,
         material,
         HttpIngestConfig::for_test(),
@@ -358,7 +358,7 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
     assert!(matches!(after_restart_ack.status, AckStatus::Duplicate));
     assert_eq!(database_counts(&restarted.db).0, 2);
 
-    stop_gateway(restarted).await;
+    stop_edge(restarted).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -378,7 +378,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
     });
     let mut config_429 = HttpIngestConfig::for_test();
     config_429.concurrent_requests = 1;
-    let running_429 = start_gateway(
+    let running_429 = start_edge(
         &db_429,
         material.clone(),
         config_429,
@@ -392,7 +392,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
         &payload_429,
         &principal_429,
         "retry-after-429-0001",
-        json!([{"measurement_key":"temperature_c","values":[27.0],"time_source":"gateway"}]),
+        json!([{"measurement_key":"temperature_c","values":[27.0],"time_source":"edge"}]),
     );
     let first_429 = tokio::spawn(run_pinned_body_owned(
         running_429.url(),
@@ -423,7 +423,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
     let retry_429_ack: EnvelopeAck = serde_json::from_slice(&retry_429.stdout).unwrap();
     assert!(matches!(retry_429_ack.status, AckStatus::Duplicate));
     assert_eq!(database_counts(&running_429.db).0, 1);
-    stop_gateway(running_429).await;
+    stop_edge(running_429).await;
 
     let db_503 = dir.path().join("throttle-503.db");
     let (principal_503, token_503) = provision_device(&db_503);
@@ -436,7 +436,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
     });
     let mut config_503 = HttpIngestConfig::for_test();
     config_503.collector_queue_slots = 1;
-    let running_503 = start_gateway(
+    let running_503 = start_edge(
         &db_503,
         material,
         config_503,
@@ -450,7 +450,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
         &payload_503,
         &principal_503,
         "retry-after-503-0001",
-        json!([{"measurement_key":"temperature_c","values":[28.0],"time_source":"gateway"}]),
+        json!([{"measurement_key":"temperature_c","values":[28.0],"time_source":"edge"}]),
     );
     let first_503 = tokio::spawn(run_pinned_body_owned(
         running_503.url(),
@@ -481,7 +481,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
     let retry_503_ack: EnvelopeAck = serde_json::from_slice(&retry_503.stdout).unwrap();
     assert!(matches!(retry_503_ack.status, AckStatus::Duplicate));
     assert_eq!(database_counts(&running_503.db).0, 1);
-    stop_gateway(running_503).await;
+    stop_edge(running_503).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -491,7 +491,7 @@ async fn live_tls_route_inventory_has_no_setup_or_control_api_route() {
     let (material, ca_path) = test_tls_material(&dir);
     let db_path = dir.path().join("routes.db");
     let (principal, token) = provision_device(&db_path);
-    let running = start_gateway(
+    let running = start_edge(
         &db_path,
         material,
         HttpIngestConfig::for_test(),
@@ -528,7 +528,7 @@ async fn live_tls_route_inventory_has_no_setup_or_control_api_route() {
         )
         .is_err()
     );
-    stop_gateway(running).await;
+    stop_edge(running).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -538,7 +538,7 @@ async fn tls_accept_loop_survives_junk_tls_and_keeps_serving() {
     let (material, ca_path) = test_tls_material(&dir);
     let db_path = dir.path().join("tls-junk.db");
     let (principal, token) = provision_device(&db_path);
-    let running = start_gateway(
+    let running = start_edge(
         &db_path,
         material,
         HttpIngestConfig::for_test(),
@@ -561,7 +561,7 @@ async fn tls_accept_loop_survives_junk_tls_and_keeps_serving() {
     .expect("a junk TLS peer must not stop the listener")
     .expect("the pinned request after junk TLS must complete");
     assert!(response.starts_with(b"HTTP/1.1 405"));
-    stop_gateway(running).await;
+    stop_edge(running).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -571,7 +571,7 @@ async fn stalled_tls_does_not_monopolize_accept_loop() {
     let (material, ca_path) = test_tls_material(&dir);
     let db_path = dir.path().join("tls-stalled.db");
     let (principal, token) = provision_device(&db_path);
-    let running = start_gateway(
+    let running = start_edge(
         &db_path,
         material,
         HttpIngestConfig::for_test(),
@@ -593,7 +593,7 @@ async fn stalled_tls_does_not_monopolize_accept_loop() {
     assert!(response.starts_with(b"HTTP/1.1 405"));
 
     drop(stalled);
-    stop_gateway(running).await;
+    stop_edge(running).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -603,7 +603,7 @@ async fn failed_hostname_tls_client_does_not_stop_listener() {
     let (material, ca_path) = test_tls_material(&dir);
     let db_path = dir.path().join("tls-hostname.db");
     let (principal, token) = provision_device(&db_path);
-    let running = start_gateway(
+    let running = start_edge(
         &db_path,
         material,
         HttpIngestConfig::for_test(),
@@ -633,7 +633,7 @@ async fn failed_hostname_tls_client_does_not_stop_listener() {
     .expect("a failed hostname validation must not stop the listener")
     .expect("the pinned request after a hostname failure must complete");
     assert!(response.starts_with(b"HTTP/1.1 405"));
-    stop_gateway(running).await;
+    stop_edge(running).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -643,7 +643,7 @@ async fn peer_cidr_rejection_closes_only_that_connection() {
     let (material, ca_path) = test_tls_material(&dir);
     let db_path = dir.path().join("tls-peer-cidr.db");
     let (principal, token) = provision_device(&db_path);
-    let running = start_gateway_with_cidr(
+    let running = start_edge_with_cidr(
         &db_path,
         material,
         HttpIngestConfig::for_test(),
@@ -673,7 +673,7 @@ async fn peer_cidr_rejection_closes_only_that_connection() {
     .expect("peer-CIDR rejection must not stop the listener")
     .expect("a permitted peer after CIDR rejection must complete");
     assert!(response.starts_with(b"HTTP/1.1 405"));
-    stop_gateway(running).await;
+    stop_edge(running).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -685,7 +685,7 @@ async fn pre_tls_connection_permit_is_bounded_and_released_on_shutdown() {
     let (principal, token) = provision_device(&db_path);
     let mut config = HttpIngestConfig::for_test();
     config.concurrent_connections = 1;
-    let running = start_gateway(
+    let running = start_edge(
         &db_path,
         material,
         config,
@@ -721,7 +721,7 @@ async fn pre_tls_connection_permit_is_bounded_and_released_on_shutdown() {
     );
 
     drop(stalled);
-    stop_gateway(running).await;
+    stop_edge(running).await;
     assert_eq!(service.admission_health().connection_pressure_percent, 0);
 }
 
@@ -770,7 +770,7 @@ fn journey_commands() -> (String, String, String) {
 }
 
 async fn run_documented_journey(
-    running: &RunningGateway,
+    running: &RunningEdge,
     dir: &TempDir,
     ca_path: &Path,
     export: &str,
@@ -791,7 +791,7 @@ async fn run_documented_journey(
     .await
 }
 
-async fn run_unpinned_request(running: &RunningGateway, payload: &Path) -> Output {
+async fn run_unpinned_request(running: &RunningEdge, payload: &Path) -> Output {
     shell(
         "curl --fail-with-body --silent --show-error --output /dev/null --header \"Authorization: Bearer $IOTKIT_TOKEN\" --header \"Content-Type: application/json\" --data-binary \"@$IOTKIT_PAYLOAD\" \"$IOTKIT_URL/api/v1/ingest\"",
         payload.parent().unwrap_or_else(|| Path::new(".")),
@@ -805,7 +805,7 @@ async fn run_unpinned_request(running: &RunningGateway, payload: &Path) -> Outpu
 }
 
 async fn run_pinned_body(
-    running: &RunningGateway,
+    running: &RunningEdge,
     ca_path: &Path,
     payload: &Path,
     response_name: &str,
@@ -845,7 +845,7 @@ async fn run_pinned_body_owned(
     .await
 }
 
-async fn run_pinned_validation(running: &RunningGateway, ca_path: &Path, payload: &Path) -> Output {
+async fn run_pinned_validation(running: &RunningEdge, ca_path: &Path, payload: &Path) -> Output {
     shell(
         "curl --fail-with-body --silent --show-error --cacert \"$IOTKIT_CA\" --header \"Authorization: Bearer $IOTKIT_TOKEN\" --header \"Content-Type: application/json\" --data-binary \"@$IOTKIT_PAYLOAD\" \"$IOTKIT_URL/api/v1/ingest/validate\"",
         payload.parent().unwrap_or_else(|| Path::new(".")),
@@ -928,7 +928,7 @@ async fn untrusted_tls_request(address: SocketAddr, server_name: &str) -> Result
 }
 
 async fn run_pinned_status(
-    running: &RunningGateway,
+    running: &RunningEdge,
     ca_path: &Path,
     payload: &Path,
     response_name: &str,
@@ -962,7 +962,7 @@ async fn run_pinned_status(
 }
 
 async fn run_path_status(
-    running: &RunningGateway,
+    running: &RunningEdge,
     ca_path: &Path,
     method: Method,
     path: &str,
@@ -1089,7 +1089,7 @@ impl Drop for GateReleaseGuard {
     }
 }
 
-struct RunningGateway {
+struct RunningEdge {
     db: DbHandle,
     service: HttpIngestService<SystemMonotonicClock>,
     serving: ServingListener,
@@ -1098,21 +1098,21 @@ struct RunningGateway {
     token: String,
 }
 
-impl RunningGateway {
+impl RunningEdge {
     fn url(&self) -> String {
         format!("https://localhost:{}", self.serving.local_addr().port())
     }
 }
 
-async fn start_gateway(
+async fn start_edge(
     db_path: &Path,
     material: TlsMaterial,
     config: HttpIngestConfig,
     hooks: HttpIngestHooks,
     principal: String,
     token: String,
-) -> RunningGateway {
-    start_gateway_with_cidr(
+) -> RunningEdge {
+    start_edge_with_cidr(
         db_path,
         material,
         config,
@@ -1124,7 +1124,7 @@ async fn start_gateway(
     .await
 }
 
-async fn start_gateway_with_cidr(
+async fn start_edge_with_cidr(
     db_path: &Path,
     material: TlsMaterial,
     config: HttpIngestConfig,
@@ -1132,7 +1132,7 @@ async fn start_gateway_with_cidr(
     principal: String,
     token: String,
     site_cidr: &str,
-) -> RunningGateway {
+) -> RunningEdge {
     let db = iotkit_core_storage::init_db(db_path, &migrations()).unwrap();
     let (collector, issuer, collector_task) =
         Collector::spawn_device_composed(db.clone(), Arc::new(PermissiveRegistry), 8);
@@ -1157,7 +1157,7 @@ async fn start_gateway_with_cidr(
             .await
             .unwrap();
     let serving = listener.serve(service.clone()).unwrap();
-    RunningGateway {
+    RunningEdge {
         db,
         service,
         serving,
@@ -1167,8 +1167,8 @@ async fn start_gateway_with_cidr(
     }
 }
 
-async fn stop_gateway(running: RunningGateway) {
-    let RunningGateway {
+async fn stop_edge(running: RunningEdge) {
+    let RunningEdge {
         serving,
         collector_task,
         service,
@@ -1198,7 +1198,7 @@ fn test_tls_material(dir: &TempDir) -> (TlsMaterial, PathBuf) {
         1,
     )
     .unwrap();
-    let ca_path = dir.path().join("gateway-ca.pem");
+    let ca_path = dir.path().join("edge-ca.pem");
     std::fs::write(&ca_path, cert_pem).unwrap();
     (material, ca_path)
 }

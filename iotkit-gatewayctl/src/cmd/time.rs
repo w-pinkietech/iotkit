@@ -23,7 +23,7 @@ pub fn run_time_confirm(conn: &Connection) -> AppResult<()> {
     let confirmation_window_seconds =
         iotkit_core_ops::clock::MAX_MANUAL_CONFIRMATION_DRIFT_MS / 1_000;
     eprintln!(
-        "Type 'confirm' within {confirmation_window_seconds} seconds to trust this local time for the current gateway process:"
+        "Type 'confirm' within {confirmation_window_seconds} seconds to trust this local time for the current Edge process:"
     );
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;

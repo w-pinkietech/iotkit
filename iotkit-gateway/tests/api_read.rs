@@ -25,7 +25,7 @@ fn api_config() -> ApiConfig {
     ApiConfig {
         enabled: true,
         bind: "127.0.0.1:0".parse().unwrap(),
-        gateway_name: "read-test-gateway".to_string(),
+        edge_name: "read-test-edge".to_string(),
     }
 }
 
@@ -107,7 +107,7 @@ fn seed_readings(db: &DbHandle) -> Seeded {
                 series_id: temp_id,
                 received_at_ms: 1000,
                 device_time_ms: None,
-                time_source: "gateway".to_string(),
+                time_source: "edge".to_string(),
                 values: vec![20.5],
                 rssi: None,
                 battery_pct: None,
@@ -121,7 +121,7 @@ fn seed_readings(db: &DbHandle) -> Seeded {
                 series_id: temp_id,
                 received_at_ms: 1500,
                 device_time_ms: None,
-                time_source: "gateway".to_string(),
+                time_source: "edge".to_string(),
                 values: vec![99.9],
                 rssi: None,
                 battery_pct: None,
@@ -135,7 +135,7 @@ fn seed_readings(db: &DbHandle) -> Seeded {
                 series_id: temp_id,
                 received_at_ms: 2000,
                 device_time_ms: None,
-                time_source: "gateway".to_string(),
+                time_source: "edge".to_string(),
                 values: vec![21.0],
                 rssi: None,
                 battery_pct: None,
@@ -149,7 +149,7 @@ fn seed_readings(db: &DbHandle) -> Seeded {
                 series_id: humidity_id,
                 received_at_ms: 1800,
                 device_time_ms: None,
-                time_source: "gateway".to_string(),
+                time_source: "edge".to_string(),
                 values: vec![55.0],
                 rssi: None,
                 battery_pct: None,

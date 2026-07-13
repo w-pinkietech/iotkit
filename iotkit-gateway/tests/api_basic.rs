@@ -92,7 +92,7 @@ fn api_config(bind: SocketAddr) -> ApiConfig {
     ApiConfig {
         enabled: true,
         bind,
-        gateway_name: "test-gateway".to_string(),
+        edge_name: "test-edge".to_string(),
     }
 }
 
@@ -159,7 +159,8 @@ async fn box_setup_session_throttle_and_graceful_shutdown() {
         .json()
         .await
         .unwrap();
-    assert_eq!(box_before["gateway_name"], "test-gateway");
+    assert_eq!(box_before["edge_name"], "test-edge");
+    assert!(box_before.get("gateway_name").is_none());
     assert_eq!(box_before["epoch"], "epoch-test");
     assert_eq!(box_before["ownership"], "owned");
     assert_eq!(box_before["tls_fingerprint"], handle.fingerprint);

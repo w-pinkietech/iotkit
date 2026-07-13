@@ -54,7 +54,7 @@ fn main() {
         disk_high_watermark_pct = config.disk_high_watermark_pct,
         api_enabled = config.api.enabled,
         api_bind = %config.api.bind,
-        api_gateway_name = %config.api.gateway_name,
+        api_edge_name = %config.api.edge_name,
         bravepi_enabled = config.bravepi.is_some(),
         rpi_local_enabled = config.rpi_local.is_some(),
         mqtt_exit_enabled = config.mqtt_exit.is_some(),
@@ -126,7 +126,7 @@ fn main() {
     }
 }
 
-/// ledger::LedgerError → StorageError の橋渡し(gateway起動シーケンス専用ヘルパ)。
+/// ledger::LedgerError → StorageError の橋渡し(Edge起動シーケンス専用ヘルパ)。
 /// ledgerクレートはStorageErrorを直接返さないため、ここで包む。起動時失敗はexpectで落とす方針(brief参照)。
 fn ledger_to_storage_err(e: iotkit_core_ledger::LedgerError) -> iotkit_core_storage::StorageError {
     // rusqlite::Error::ModuleError requires the "vtab" feature (not enabled here),
@@ -139,7 +139,7 @@ fn ledger_to_storage_err(e: iotkit_core_ledger::LedgerError) -> iotkit_core_stor
 /// (true=正常終了・ctrl_c/全アダプタclose、false=コレクタ死亡/API bind失敗/
 /// API専用モードでのAPI異常終了によるfail-fast終了)。
 /// `main`はfalseを非ゼロexitに変換し、systemdのプロセス再起動に委ねる(R20と同じ設計方針)。
-async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -> bool {
+async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> bool {
     let engine = Engine::new();
     let mut host = AdapterHost::new();
     let db_path = std::path::PathBuf::from(&config.db_path);
@@ -743,7 +743,7 @@ fn log_fan_in_stop(service_only_mode: bool, api_failed: bool) {
 
 /// Hardcoded sensor targets for the v1 RPi4B hardware profile.
 ///
-/// Deployment inventory -- lives in the gateway composition root, not the
+/// Deployment inventory -- lives in the Edge composition root, not the
 /// adapter crate. Replaced by #35 auto-detection or #23 device-config-service.
 fn hardcoded_rpi_local_targets() -> Vec<rpi_local_adapter::RpiLocalTarget> {
     use rpi_local_adapter::ThermocoupleType;

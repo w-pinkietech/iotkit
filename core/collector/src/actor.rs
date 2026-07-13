@@ -89,7 +89,7 @@ struct ResolutionCache {
 }
 
 impl Collector {
-    /// Gateway composition receives both non-cloneable issuer capabilities exactly once.
+    /// Edge composition receives both non-cloneable issuer capabilities exactly once.
     pub fn spawn_fully_composed(
         db: DbHandle,
         policy: Arc<dyn RegistryPolicy>,
@@ -726,7 +726,7 @@ fn requires_absolute_time(item: &ReadingItem) -> bool {
     item.device_time_ms.is_some()
         && matches!(
             item.time_source,
-            TimeSource::DeviceNtp | TimeSource::DeviceRtc | TimeSource::GatewayAdjusted
+            TimeSource::DeviceNtp | TimeSource::DeviceRtc | TimeSource::EdgeAdjusted
         )
 }
 
@@ -742,7 +742,7 @@ fn restore_device_time(
             .ok()
             .and_then(|a| received_at.checked_sub(a))
         {
-            Some(dt) => (Some(dt), TimeSource::GatewayAdjusted),
+            Some(dt) => (Some(dt), TimeSource::EdgeAdjusted),
             None => (None, declared),
         },
         (None, None) => (None, declared),
@@ -949,7 +949,7 @@ fn process_item(
     let row_quarantined = registry_quarantine.is_some() || device_quarantined;
     let wire_reason = registry_quarantine
         .or_else(|| device_quarantined.then_some(QuarantineReason::DeviceQuarantined));
-    // D1: RTCなしデバイスのage_ms → received_at - age_ms で復元(time_source=gateway_adjusted)。
+    // D1: RTCなしデバイスのage_ms → received_at - age_ms で復元(time_source=edge_adjusted)。
     // item.device_time_msが既にあればそれが優先(申告時刻>復元時刻)。
     let (device_time_ms, time_source) = restore_device_time(
         context.received_at,
@@ -960,8 +960,8 @@ fn process_item(
     let time_source = match time_source {
         TimeSource::DeviceNtp => "device_ntp",
         TimeSource::DeviceRtc => "device_rtc",
-        TimeSource::Gateway => "gateway",
-        TimeSource::GatewayAdjusted => "gateway_adjusted",
+        TimeSource::Edge => "edge",
+        TimeSource::EdgeAdjusted => "edge_adjusted",
     };
     let new = ts::NewReading {
         series_id,
@@ -1082,7 +1082,7 @@ mod tests {
                 series_variant: None,
                 values: vec![1.0],
                 device_time_ms: None,
-                time_source: TimeSource::Gateway,
+                time_source: TimeSource::Edge,
                 age_ms: None,
                 rssi: None,
                 battery_pct: None,
@@ -1230,7 +1230,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gateway_composition_receives_distinct_local_and_device_issuers() {
+    async fn edge_composition_receives_distinct_local_and_device_issuers() {
         let db = test_db();
         let (collector, local, device, _handle) =
             Collector::spawn_fully_composed(db, Arc::new(PermissiveRegistry), 16);
@@ -1469,7 +1469,7 @@ mod tests {
             series_variant: None,
             values: vec![55.0],
             device_time_ms: None,
-            time_source: TimeSource::Gateway,
+            time_source: TimeSource::Edge,
             age_ms: None,
             rssi: None,
             battery_pct: None,
@@ -1639,13 +1639,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn age_ms_restores_gateway_adjusted_device_time() {
+    async fn age_ms_restores_edge_adjusted_device_time() {
         let db = test_db();
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let mut e = env("e-age", "ble:aa", "temperature_c");
         e.envelope.items[0].age_ms = Some(5000);
-        e.envelope.items[0].time_source = TimeSource::Gateway;
+        e.envelope.items[0].time_source = TimeSource::Edge;
         e.envelope.items[0].device_time_ms = None;
         collector.submit(e).await.unwrap();
 
@@ -1658,9 +1658,9 @@ mod tests {
             ).unwrap())
         }).unwrap();
         assert_eq!(device_time, received_at - 5000);
-        assert_eq!(time_source, "gateway_adjusted");
+        assert_eq!(time_source, "edge_adjusted");
         assert_eq!(event_time, received_at - 5000);
-        assert_eq!(event_time_source, "gateway_adjusted");
+        assert_eq!(event_time_source, "edge_adjusted");
     }
 
     #[tokio::test]
@@ -1683,24 +1683,24 @@ mod tests {
     #[test]
     fn restore_device_time_ignores_unrepresentable_age_ms() {
         let (device_time, source) =
-            restore_device_time(10_000, None, Some(i64::MAX as u64 + 1), TimeSource::Gateway);
+            restore_device_time(10_000, None, Some(i64::MAX as u64 + 1), TimeSource::Edge);
         assert_eq!(device_time, None);
-        assert_eq!(source, TimeSource::Gateway);
+        assert_eq!(source, TimeSource::Edge);
     }
 
     #[test]
     fn restore_device_time_ignores_age_ms_that_would_underflow() {
         let (device_time, source) =
-            restore_device_time(i64::MIN, None, Some(1), TimeSource::Gateway);
+            restore_device_time(i64::MIN, None, Some(1), TimeSource::Edge);
         assert_eq!(device_time, None);
-        assert_eq!(source, TimeSource::Gateway);
+        assert_eq!(source, TimeSource::Edge);
     }
 
     #[test]
     fn restore_device_time_age_zero_returns_received_at() {
-        let (device_time, source) = restore_device_time(10_000, None, Some(0), TimeSource::Gateway);
+        let (device_time, source) = restore_device_time(10_000, None, Some(0), TimeSource::Edge);
         assert_eq!(device_time, Some(10_000));
-        assert_eq!(source, TimeSource::GatewayAdjusted);
+        assert_eq!(source, TimeSource::EdgeAdjusted);
     }
 
     #[test]
@@ -2550,7 +2550,7 @@ mod tests {
             series_variant: None,
             values: vec![value],
             device_time_ms: None,
-            time_source: TimeSource::Gateway,
+            time_source: TimeSource::Edge,
             age_ms: None,
             rssi: None,
             battery_pct: None,

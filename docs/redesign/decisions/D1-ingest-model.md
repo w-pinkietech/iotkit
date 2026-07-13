@@ -46,7 +46,7 @@ Status: 確定 (2026-07-02、4レンズ専門レビュー済み・ユーザー�
 
 - **デバイス時刻はオプショナル**。「時刻がないからrejected」は禁止。
 - **二本立て**: デバイス申告時刻(あれば)+`received_at`(コレクタが必ず付与)。
-- `time_source` タグ: device_ntp / device_rtc / gateway / gateway_adjusted。
+- `time_source` タグ: device_ntp / device_rtc / edge / edge_adjusted。
 - RTCなしデバイス向けに `age_ms`(送信時点からの経過ms)を許可し、受信時刻-age_msで復元。
 
 ### バッチと順序

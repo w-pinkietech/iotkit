@@ -275,7 +275,7 @@ impl ExposureSnapshot {
 
     /// Constructs a snapshot from an already-authoritative interface inventory.
     ///
-    /// The default gateway composition uses [`Self::from_os`]. This boundary is for a trusted
+    /// The default Edge composition uses [`Self::from_os`]. This boundary is for a trusted
     /// composition root that already owns the inventory source (for example, a supervisor that
     /// receives interface state from a platform service). It does not classify or authorize a
     /// bind by itself: [`ValidatedListenerConfig::new`] still requires a private address, a
@@ -411,7 +411,7 @@ pub struct Listener {
     configured_addr: SocketAddr,
 }
 
-/// Runtime transport policy staged independently from a bound socket. The gateway uses this
+/// Runtime transport policy staged independently from a bound socket. The Edge uses this
 /// boundary to validate TLS/configuration changes before pausing and swapping a live listener.
 #[derive(Clone)]
 pub struct ListenerPolicy {

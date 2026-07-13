@@ -9,7 +9,7 @@ pub const MAX_FRESHNESS_LIMIT_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 /// Receiver-owned clock snapshot used for freshness decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FreshnessSnapshot {
-    /// Gateway receive time for persistence and relative-age checks.
+    /// Edge receive time for persistence and relative-age checks.
     pub received_at_ms: i64,
     /// Trusted wall time for absolute device timestamps, or `None` while untrusted.
     pub trusted_wall_time_ms: Option<i64>,

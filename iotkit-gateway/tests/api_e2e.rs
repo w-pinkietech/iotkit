@@ -24,7 +24,7 @@ fn api_config() -> ApiConfig {
     ApiConfig {
         enabled: true,
         bind: "127.0.0.1:0".parse().unwrap(),
-        gateway_name: "e2e-gateway".to_string(),
+        edge_name: "e2e-edge".to_string(),
     }
 }
 

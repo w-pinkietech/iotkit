@@ -55,7 +55,7 @@ pub fn start(
 ///
 /// Converts to `PollingAdapterConfig` internally and delegates to
 /// `iotkit_polling_adapter_runtime::validate_config()`. Used for
-/// preflight validation in the gateway before `start()`.
+/// preflight validation in the Edge before `start()`.
 pub fn validate(config: &RpiLocalConfig) -> Result<(), String> {
     let polling_config = to_polling_config(config);
     iotkit_polling_adapter_runtime::validate_config(&polling_config)

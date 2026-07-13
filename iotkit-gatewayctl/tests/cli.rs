@@ -1029,10 +1029,10 @@ fn stage_item(
 ) {
     let payload = match channel_index {
         Some(ch) => format!(
-            r#"{{"measurement_key":"{measurement_key}","channel_index":{ch},"values":[1.0],"time_source":"gateway"}}"#
+            r#"{{"measurement_key":"{measurement_key}","channel_index":{ch},"values":[1.0],"time_source":"edge"}}"#
         ),
         None => format!(
-            r#"{{"measurement_key":"{measurement_key}","values":[1.0],"time_source":"gateway"}}"#
+            r#"{{"measurement_key":"{measurement_key}","values":[1.0],"time_source":"edge"}}"#
         ),
     };
     iotkit_core_timeseries::insert_staged_reading(conn, hardware_id, 1000, &payload).unwrap();
@@ -1359,7 +1359,7 @@ fn fingerprint_reads_cert_next_to_db_and_reports_missing_material() {
     );
     let missing_stderr = String::from_utf8(missing.stderr).unwrap();
     assert!(
-        missing_stderr.contains("未生成") && missing_stderr.contains("gateway 未起動"),
+        missing_stderr.contains("未生成") && missing_stderr.contains("Edge 未起動"),
         "stderr:\n{missing_stderr}"
     );
 
@@ -1483,7 +1483,7 @@ fn mutate_command_without_db_argument_or_env_is_error() {
 }
 
 #[test]
-fn existing_empty_db_gets_gateway_migration_version_set() {
+fn existing_empty_db_gets_edge_migration_version_set() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("iotkit.db");
     std::fs::File::create(&db_path).unwrap();
@@ -2077,7 +2077,7 @@ fn replace_undo_restores_hardware_id_marks_since_range_and_records_event() {
                 (seq, series_id, received_at, device_time, time_source, time_quality,
                  event_time, event_time_source, values_json, rssi, battery_pct, quarantined)
              VALUES
-                (1, ?1, 500, 500, 'gateway', 'unsynced', 500, 'received_at', '[1.0]', NULL, NULL, 0),
+                (1, ?1, 500, 500, 'edge', 'unsynced', 500, 'received_at', '[1.0]', NULL, NULL, 0),
                 (2, ?1, 1500, 100, 'device_ntp', 'unsynced', 100, 'device', '[2.0]', NULL, NULL, 0),
                 (3, ?2, 1600, 200, 'device_ntp', 'unsynced', 200, 'device', '[3.0]', NULL, NULL, 0)",
             params![first, second],
@@ -2232,7 +2232,7 @@ fn replace_undo_prunes_outbox_for_retroactively_quarantined_rows_same_tx() {
                     series_id: first_series,
                     received_at_ms: 500,
                     device_time_ms: None,
-                    time_source: "gateway".into(),
+                    time_source: "edge".into(),
                     values: vec![1.0],
                     rssi: None,
                     battery_pct: None,
@@ -2246,7 +2246,7 @@ fn replace_undo_prunes_outbox_for_retroactively_quarantined_rows_same_tx() {
                     series_id: first_series,
                     received_at_ms: 1_500,
                     device_time_ms: None,
-                    time_source: "gateway".into(),
+                    time_source: "edge".into(),
                     values: vec![2.0],
                     rssi: None,
                     battery_pct: None,
@@ -2260,7 +2260,7 @@ fn replace_undo_prunes_outbox_for_retroactively_quarantined_rows_same_tx() {
                     series_id: second_series,
                     received_at_ms: 1_600,
                     device_time_ms: None,
-                    time_source: "gateway".into(),
+                    time_source: "edge".into(),
                     values: vec![3.0],
                     rssi: None,
                     battery_pct: None,

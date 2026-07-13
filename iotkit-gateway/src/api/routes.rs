@@ -190,7 +190,7 @@ async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorR
     };
 
     Ok(Json(json!({
-        "gateway_name": state.cfg.gateway_name,
+        "edge_name": state.cfg.edge_name,
         "epoch": state.epoch,
         "version": env!("CARGO_PKG_VERSION"),
         "ownership": "owned",
@@ -718,7 +718,7 @@ mod route_inventory_tests {
             cfg: ApiConfig {
                 enabled: true,
                 bind: "127.0.0.1:0".parse().unwrap(),
-                gateway_name: "test".into(),
+                edge_name: "test".into(),
             },
             epoch: "test".into(),
             fingerprint: "test".into(),

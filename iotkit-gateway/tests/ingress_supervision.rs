@@ -736,7 +736,7 @@ async fn listener_supervisor_exit_clears_health_without_stopping_collection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn restored_local_recovery_drains_the_gateway_ingress_listener() {
+async fn restored_local_recovery_drains_the_edge_ingress_listener() {
     let dir = tempfile::tempdir().unwrap();
     let db = iotkit_core_storage::init_db(
         &dir.path().join("recovery-ingress.db"),
@@ -808,7 +808,7 @@ async fn restored_local_recovery_drains_the_gateway_ingress_listener() {
                 "subject_hint": "task7-recovery-device",
                 "measurement_key": "temperature_c",
                 "values": [30.5],
-                "time_source": "gateway"
+                "time_source": "edge"
             }]
         }))
         .send()
@@ -842,7 +842,7 @@ async fn restored_local_recovery_drains_the_gateway_ingress_listener() {
         .await;
     assert!(
         after_recovery.is_err(),
-        "recovery authority must drain the gateway listener, not return an ingest auth response"
+        "recovery authority must drain the Edge listener, not return an ingest auth response"
     );
 
     own(&db);
@@ -859,7 +859,7 @@ async fn restored_local_recovery_drains_the_gateway_ingress_listener() {
                 "subject_hint": "task7-recovery-device",
                 "measurement_key": "temperature_c",
                 "values": [31.5],
-                "time_source": "gateway"
+                "time_source": "edge"
             }]
         }))
         .send()

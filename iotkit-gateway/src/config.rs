@@ -1,4 +1,4 @@
-//! Bootstrap config: TOML parse → ENV merge → validated GatewayConfig.
+//! Bootstrap config: TOML parse → ENV merge → validated EdgeConfig.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ pub enum ConfigError {
 #[serde(deny_unknown_fields)]
 pub struct RawConfig {
     #[serde(default)]
-    pub gateway: RawGatewayConfig,
+    pub edge: RawEdgeConfig,
     #[serde(default)]
     pub adapters: RawAdaptersConfig,
     #[serde(default)]
@@ -34,7 +34,7 @@ pub struct RawConfig {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct RawGatewayConfig {
+pub struct RawEdgeConfig {
     pub db_path: Option<String>,
     pub retention_days: Option<u64>,
     pub quarantine_ttl_days: Option<u64>,
@@ -54,7 +54,7 @@ pub struct RawAdaptersConfig {
 pub struct RawApiConfig {
     pub enabled: Option<bool>,
     pub bind: Option<String>,
-    pub gateway_name: Option<String>,
+    pub edge_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -92,7 +92,7 @@ pub struct RawRpiLocalConfig {
 // ── Resolved (validated) ────────────────────────────────
 
 #[derive(Debug)]
-pub struct GatewayConfig {
+pub struct EdgeConfig {
     pub config_source: ConfigSource,
     pub db_path: String,
     pub retention_days: u64,
@@ -132,7 +132,7 @@ pub struct RpiLocalResolvedConfig {
 pub struct ApiConfig {
     pub enabled: bool,
     pub bind: SocketAddr,
-    pub gateway_name: String,
+    pub edge_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,19 +189,19 @@ fn parse_u64_env(var: &str, val: &str) -> Result<u64, ConfigError> {
 /// Apply ENV overrides to a `RawConfig`. Returns error on parse failure.
 pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
     if let Ok(val) = std::env::var("IOTKIT_DB_PATH") {
-        raw.gateway.db_path = Some(val);
+        raw.edge.db_path = Some(val);
     }
     if let Ok(val) = std::env::var("IOTKIT_RETENTION_DAYS") {
-        raw.gateway.retention_days = Some(parse_u64_env("IOTKIT_RETENTION_DAYS", &val)?);
+        raw.edge.retention_days = Some(parse_u64_env("IOTKIT_RETENTION_DAYS", &val)?);
     }
     if let Ok(val) = std::env::var("IOTKIT_QUARANTINE_TTL_DAYS") {
-        raw.gateway.quarantine_ttl_days = Some(parse_u64_env("IOTKIT_QUARANTINE_TTL_DAYS", &val)?);
+        raw.edge.quarantine_ttl_days = Some(parse_u64_env("IOTKIT_QUARANTINE_TTL_DAYS", &val)?);
     }
     if let Ok(val) = std::env::var("IOTKIT_HEALTH_JSON_PATH") {
-        raw.gateway.health_json_path = Some(val);
+        raw.edge.health_json_path = Some(val);
     }
     if let Ok(val) = std::env::var("IOTKIT_DISK_HIGH_WATERMARK_PCT") {
-        raw.gateway.disk_high_watermark_pct =
+        raw.edge.disk_high_watermark_pct =
             Some(parse_u64_env("IOTKIT_DISK_HIGH_WATERMARK_PCT", &val)?);
     }
     if let Ok(val) = std::env::var("IOTKIT_API_ENABLED") {
@@ -256,13 +256,13 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
 
 // ── Pipeline: resolve ──────────────────────────────────
 
-/// Resolve a `RawConfig` into a validated `GatewayConfig`.
+/// Resolve a `RawConfig` into a validated `EdgeConfig`.
 ///
 /// Applies defaults to `None` fields, validates constraints,
 /// and returns `Err(ConfigError::Validation)` on invalid values.
-pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, ConfigError> {
+pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, ConfigError> {
     let db_path = raw
-        .gateway
+        .edge
         .db_path
         .unwrap_or_else(|| "iotkit.db".to_string());
     if db_path.is_empty() {
@@ -270,11 +270,11 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
             "db_path must not be empty".to_string(),
         ));
     }
-    let retention_days = raw.gateway.retention_days.unwrap_or(90).max(7);
-    let quarantine_ttl_days = raw.gateway.quarantine_ttl_days.unwrap_or(7);
-    let disk_high_watermark_pct = raw.gateway.disk_high_watermark_pct.unwrap_or(90);
+    let retention_days = raw.edge.retention_days.unwrap_or(90).max(7);
+    let quarantine_ttl_days = raw.edge.quarantine_ttl_days.unwrap_or(7);
+    let disk_high_watermark_pct = raw.edge.disk_high_watermark_pct.unwrap_or(90);
     let health_json_path = raw
-        .gateway
+        .edge
         .health_json_path
         .map(PathBuf::from)
         .unwrap_or_else(|| default_health_json_path(&db_path));
@@ -339,7 +339,7 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
         ));
     }
 
-    Ok(GatewayConfig {
+    Ok(EdgeConfig {
         config_source: source,
         db_path,
         retention_days,
@@ -405,19 +405,19 @@ fn resolve_api(raw: RawApiConfig) -> Result<ApiConfig, ConfigError> {
             "api.bind must be an IPv4 socket address".to_string(),
         ));
     }
-    let gateway_name = raw
-        .gateway_name
+    let edge_name = raw
+        .edge_name
         .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(default_gateway_name);
+        .unwrap_or_else(default_edge_name);
     Ok(ApiConfig {
         enabled,
         bind,
-        gateway_name,
+        edge_name,
     })
 }
 
-fn default_gateway_name() -> String {
-    crate::api::tls::hostname().unwrap_or_else(|| "iotkit-gateway".to_string())
+fn default_edge_name() -> String {
+    crate::api::tls::hostname().unwrap_or_else(|| "iotkit-edge".to_string())
 }
 
 pub fn default_health_json_path(db_path: &str) -> PathBuf {
@@ -430,14 +430,14 @@ pub fn default_health_json_path(db_path: &str) -> PathBuf {
 
 // ── Pipeline: load (public entry point) ────────────────
 
-/// Load gateway config from TOML file + ENV overrides.
+/// Load Edge config from TOML file + ENV overrides.
 ///
 /// Config source resolution order:
 /// 1. `--config <path>` CLI arg -> must exist
 /// 2. `IOTKIT_CONFIG_PATH` ENV -> must exist
 /// 3. `./iotkit.toml` -> optional (silently skipped if absent)
 /// 4. No file -> all defaults
-pub fn load(args: &[String]) -> Result<GatewayConfig, ConfigError> {
+pub fn load(args: &[String]) -> Result<EdgeConfig, ConfigError> {
     enum Found {
         CliArg(PathBuf),
         EnvVar(PathBuf),
@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn parse_full_toml() {
         let toml_str = r#"
-[gateway]
+[edge]
 db_path = "test.db"
 
 [adapters.bravepi]
@@ -520,9 +520,13 @@ host = "site.internal"
 port = 8883
 password_file = "/run/secrets/iotkit-mqtt-password"
 ca_file = "/etc/iotkit/site-ca.pem"
+
+[api]
+edge_name = "kitchen-edge"
 "#;
         let raw: RawConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(raw.gateway.db_path.as_deref(), Some("test.db"));
+        assert_eq!(raw.edge.db_path.as_deref(), Some("test.db"));
+        assert_eq!(raw.api.edge_name.as_deref(), Some("kitchen-edge"));
         let bp = raw.adapters.bravepi.unwrap();
         assert_eq!(bp.enabled, Some(true));
         assert_eq!(bp.port.as_deref(), Some("/dev/ttyUSB0"));
@@ -541,14 +545,27 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     fn parse_empty_toml_gives_defaults() {
         let raw: RawConfig = toml::from_str("").unwrap();
-        assert!(raw.gateway.db_path.is_none());
+        assert!(raw.edge.db_path.is_none());
         assert!(raw.adapters.bravepi.is_none());
         assert!(raw.adapters.rpi_local.is_none());
     }
 
     #[test]
     fn unknown_field_rejected() {
-        let result: Result<RawConfig, _> = toml::from_str("[gateway]\nunknown = true");
+        let result: Result<RawConfig, _> = toml::from_str("[edge]\nunknown = true");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn legacy_gateway_root_is_rejected() {
+        let result: Result<RawConfig, _> = toml::from_str("[gateway]\ndb_path = \"old.db\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn legacy_gateway_name_is_rejected() {
+        let result: Result<RawConfig, _> =
+            toml::from_str("[api]\ngateway_name = \"old-name\"");
         assert!(result.is_err());
     }
 
@@ -565,7 +582,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     fn load_raw_missing_implicit_returns_defaults() {
         let raw = load_raw(Some(Path::new("/tmp/does-not-exist.toml")), false).unwrap();
-        assert!(raw.gateway.db_path.is_none());
+        assert!(raw.edge.db_path.is_none());
     }
 
     #[test]
@@ -577,9 +594,9 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     fn load_raw_valid_file() {
         let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        write!(tmpfile, "[gateway]\ndb_path = \"from-file.db\"").unwrap();
+        write!(tmpfile, "[edge]\ndb_path = \"from-file.db\"").unwrap();
         let raw = load_raw(Some(tmpfile.path()), true).unwrap();
-        assert_eq!(raw.gateway.db_path.as_deref(), Some("from-file.db"));
+        assert_eq!(raw.edge.db_path.as_deref(), Some("from-file.db"));
     }
 
     #[test]
@@ -593,7 +610,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     fn load_raw_none_path_returns_defaults() {
         let raw = load_raw(None, false).unwrap();
-        assert!(raw.gateway.db_path.is_none());
+        assert!(raw.edge.db_path.is_none());
     }
 
     // ── apply_env tests ────────────────────────────────
@@ -665,7 +682,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
         with_env_vars(&[("IOTKIT_DB_PATH", "env.db")], || {
             apply_env(&mut raw).unwrap();
         });
-        assert_eq!(raw.gateway.db_path.as_deref(), Some("env.db"));
+        assert_eq!(raw.edge.db_path.as_deref(), Some("env.db"));
     }
 
     #[test]
@@ -753,12 +770,12 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     #[serial]
     fn apply_env_overrides_toml_value() {
-        let mut raw: RawConfig = toml::from_str("[gateway]\ndb_path = \"from-toml.db\"").unwrap();
-        assert_eq!(raw.gateway.db_path.as_deref(), Some("from-toml.db"));
+        let mut raw: RawConfig = toml::from_str("[edge]\ndb_path = \"from-toml.db\"").unwrap();
+        assert_eq!(raw.edge.db_path.as_deref(), Some("from-toml.db"));
         with_env_vars(&[("IOTKIT_DB_PATH", "from-env.db")], || {
             apply_env(&mut raw).unwrap();
         });
-        assert_eq!(raw.gateway.db_path.as_deref(), Some("from-env.db"));
+        assert_eq!(raw.edge.db_path.as_deref(), Some("from-env.db"));
     }
 
     #[test]
@@ -801,7 +818,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     }
 
     #[test]
-    fn resolve_mqtt_exit_uses_gateway_identity_as_implicit_username() {
+    fn resolve_mqtt_exit_uses_edge_identity_as_implicit_username() {
         let mut raw = raw_with_defaults();
         raw.exit.mqtt = Some(RawMqttExitConfig {
             enabled: Some(true),
@@ -856,7 +873,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     fn resolve_health_json_path_defaults_to_db_parent() {
         let mut raw = raw_with_defaults();
-        raw.gateway.db_path = Some("var/lib/iotkit/iotkit.db".to_string());
+        raw.edge.db_path = Some("var/lib/iotkit/iotkit.db".to_string());
         let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
         assert_eq!(
             config.health_json_path,
@@ -867,7 +884,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     fn resolve_retention_days_clamps_to_minimum_seven() {
         let mut raw = raw_with_defaults();
-        raw.gateway.retention_days = Some(3);
+        raw.edge.retention_days = Some(3);
         let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
         assert_eq!(config.retention_days, 7);
     }
@@ -885,13 +902,13 @@ ca_file = "/etc/iotkit/site-ca.pem"
             ],
             || apply_env(&mut raw).unwrap(),
         );
-        assert_eq!(raw.gateway.retention_days, Some(120));
-        assert_eq!(raw.gateway.quarantine_ttl_days, Some(14));
+        assert_eq!(raw.edge.retention_days, Some(120));
+        assert_eq!(raw.edge.quarantine_ttl_days, Some(14));
         assert_eq!(
-            raw.gateway.health_json_path.as_deref(),
+            raw.edge.health_json_path.as_deref(),
             Some("/tmp/iotkit-health.json")
         );
-        assert_eq!(raw.gateway.disk_high_watermark_pct, Some(85));
+        assert_eq!(raw.edge.disk_high_watermark_pct, Some(85));
     }
 
     #[test]
@@ -942,7 +959,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[test]
     fn resolve_rejects_empty_db_path() {
         let mut raw = raw_with_defaults();
-        raw.gateway.db_path = Some(String::new());
+        raw.edge.db_path = Some(String::new());
         let result = resolve(raw, ConfigSource::DefaultsOnly);
         assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("db_path")));
     }
@@ -1052,7 +1069,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     fn load_with_explicit_missing_file_errors() {
         with_env_vars(&[], || {
             let args = vec![
-                "gateway".to_string(),
+                "edge".to_string(),
                 "--config".to_string(),
                 "/tmp/no-such-file.toml".to_string(),
             ];
@@ -1065,7 +1082,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
     #[serial]
     fn load_with_config_flag_but_no_path_errors() {
         with_env_vars(&[], || {
-            let args = vec!["gateway".to_string(), "--config".to_string()];
+            let args = vec!["edge".to_string(), "--config".to_string()];
             let result = load(&args);
             assert!(
                 matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("--config"))
@@ -1092,7 +1109,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
         };
         std::env::set_current_dir(tmp.path()).unwrap();
         with_env_vars(&[], || {
-            let args = vec!["gateway".to_string()];
+            let args = vec!["edge".to_string()];
             let config = load(&args).unwrap();
             assert_eq!(config.db_path, "iotkit.db");
         });
@@ -1104,7 +1121,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
         with_env_vars(
             &[("IOTKIT_CONFIG_PATH", "/tmp/nonexistent-config.toml")],
             || {
-                let args = vec!["gateway".to_string()];
+                let args = vec!["edge".to_string()];
                 let result = load(&args);
                 assert!(result.is_err());
             },
@@ -1118,7 +1135,7 @@ ca_file = "/etc/iotkit/site-ca.pem"
         write!(
             tmpfile,
             r#"
-[gateway]
+[edge]
 db_path = "loaded.db"
 
 [adapters.bravepi]
@@ -1128,7 +1145,7 @@ port = "/dev/ttyUSB0"
         .unwrap();
         with_env_vars(&[], || {
             let args = vec![
-                "gateway".to_string(),
+                "edge".to_string(),
                 "--config".to_string(),
                 tmpfile.path().to_str().unwrap().to_string(),
             ];
@@ -1147,7 +1164,7 @@ port = "/dev/ttyUSB0"
         write!(
             tmpfile,
             r#"
-[gateway]
+[edge]
 db_path = "integration.db"
 
 [adapters.bravepi]
@@ -1163,7 +1180,7 @@ poll_interval_ms = 750
         .unwrap();
         with_env_vars(&[], || {
             let args = vec![
-                "gateway".to_string(),
+                "edge".to_string(),
                 "--config".to_string(),
                 tmpfile.path().to_str().unwrap().to_string(),
             ];
@@ -1182,11 +1199,11 @@ poll_interval_ms = 750
     #[serial]
     fn load_with_env_config_path_valid_file() {
         let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-        write!(tmpfile, "[gateway]\ndb_path = \"env-path.db\"").unwrap();
+        write!(tmpfile, "[edge]\ndb_path = \"env-path.db\"").unwrap();
         with_env_vars(
             &[("IOTKIT_CONFIG_PATH", tmpfile.path().to_str().unwrap())],
             || {
-                let args = vec!["gateway".to_string()];
+                let args = vec!["edge".to_string()];
                 let config = load(&args).unwrap();
                 assert_eq!(config.db_path, "env-path.db");
                 assert!(matches!(config.config_source, ConfigSource::EnvVar(_)));
@@ -1199,13 +1216,13 @@ poll_interval_ms = 750
     fn load_with_implicit_iotkit_toml() {
         let tmp = tempfile::tempdir().unwrap();
         let toml_path = tmp.path().join("iotkit.toml");
-        std::fs::write(&toml_path, "[gateway]\ndb_path = \"implicit.db\"").unwrap();
+        std::fs::write(&toml_path, "[edge]\ndb_path = \"implicit.db\"").unwrap();
         let _cwd_guard = CwdGuard {
             prev: std::env::current_dir().unwrap(),
         };
         std::env::set_current_dir(tmp.path()).unwrap();
         with_env_vars(&[], || {
-            let args = vec!["gateway".to_string()];
+            let args = vec!["edge".to_string()];
             let config = load(&args).unwrap();
             assert_eq!(config.db_path, "implicit.db");
             assert!(matches!(
@@ -1219,14 +1236,14 @@ poll_interval_ms = 750
     #[serial]
     fn load_cli_arg_takes_precedence_over_env() {
         let mut cli_file = tempfile::NamedTempFile::new().unwrap();
-        write!(cli_file, "[gateway]\ndb_path = \"from-cli.db\"").unwrap();
+        write!(cli_file, "[edge]\ndb_path = \"from-cli.db\"").unwrap();
         let mut env_file = tempfile::NamedTempFile::new().unwrap();
-        write!(env_file, "[gateway]\ndb_path = \"from-env.db\"").unwrap();
+        write!(env_file, "[edge]\ndb_path = \"from-env.db\"").unwrap();
         with_env_vars(
             &[("IOTKIT_CONFIG_PATH", env_file.path().to_str().unwrap())],
             || {
                 let args = vec![
-                    "gateway".to_string(),
+                    "edge".to_string(),
                     "--config".to_string(),
                     cli_file.path().to_str().unwrap().to_string(),
                 ];

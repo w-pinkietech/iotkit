@@ -337,7 +337,7 @@ mod inproc {
                 series_variant: None,
                 values,
                 device_time_ms: None,
-                time_source: TimeSource::Gateway,
+                time_source: TimeSource::Edge,
                 age_ms: None,
                 rssi: None,
                 battery_pct: None,

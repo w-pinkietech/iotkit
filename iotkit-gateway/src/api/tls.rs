@@ -161,22 +161,27 @@ fn now_ms() -> i64 {
 
 fn generate_tls_pair() -> Result<(String, String), TlsError> {
     let key_pair = KeyPair::generate()?;
-    let mut params = CertificateParams::new(subject_alt_names())?;
-    params.distinguished_name = DistinguishedName::new();
-    params
-        .distinguished_name
-        .push(DnType::CommonName, "iotkit-gateway");
-    params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(365 * 100);
+    let params = certificate_params()?;
 
     let cert = params.self_signed(&key_pair)?;
     Ok((cert.pem(), key_pair.serialize_pem()))
 }
 
+fn certificate_params() -> Result<CertificateParams, rcgen::Error> {
+    let mut params = CertificateParams::new(subject_alt_names())?;
+    params.distinguished_name = DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, "iotkit-edge");
+    params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(365 * 100);
+    Ok(params)
+}
+
 fn subject_alt_names() -> Vec<String> {
-    let mut names = vec!["iotkit-gateway.local".to_string()];
+    let mut names = vec!["iotkit-edge.local".to_string()];
     if let Some(hostname) = hostname() {
         let hostname = hostname.trim();
-        if !hostname.is_empty() && hostname != "iotkit-gateway.local" {
+        if !hostname.is_empty() && hostname != "iotkit-edge.local" {
             names.push(hostname.to_string());
         }
     }
@@ -232,8 +237,9 @@ fn set_permissions(_path: &Path, _mode: u32) -> std::io::Result<()> {
 mod tests {
     use std::fs;
 
-    use super::ensure_tls_material;
+    use super::{certificate_params, ensure_tls_material};
     use iotkit_core_ops::fingerprint_of_pem;
+    use rcgen::{DnType, DnValue, SanType};
 
     fn db() -> iotkit_core_storage::DbHandle {
         let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -282,6 +288,18 @@ mod tests {
         assert!(!material.key_pem_path.with_extension("pem.tmp").exists());
         assert_eq!(material.cert_pem_path.file_name().unwrap(), "cert.pem");
         assert_eq!(material.key_pem_path.file_name().unwrap(), "key.pem");
+    }
+
+    #[test]
+    fn default_certificate_uses_edge_common_name_and_subject_alt_name() {
+        let params = certificate_params().unwrap();
+        assert_eq!(
+            params.distinguished_name.get(&DnType::CommonName),
+            Some(&DnValue::Utf8String("iotkit-edge".to_string()))
+        );
+        assert!(params.subject_alt_names.contains(&SanType::DnsName(
+            "iotkit-edge.local".try_into().unwrap()
+        )));
     }
 
     #[test]

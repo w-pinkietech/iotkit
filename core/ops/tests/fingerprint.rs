@@ -3,7 +3,7 @@ use rcgen::generate_simple_self_signed;
 
 #[test]
 fn fingerprint_of_pem_returns_stable_colon_separated_sha256() {
-    let cert = generate_simple_self_signed(vec!["iotkit-gateway.local".to_string()]).unwrap();
+    let cert = generate_simple_self_signed(vec!["iotkit-edge.local".to_string()]).unwrap();
     let pem = cert.cert.pem();
 
     let first = fingerprint_of_pem(&pem).unwrap();
