@@ -132,6 +132,10 @@ query_output=$(docker compose -p "$project" -f "$repo_root/compose.dev.yaml" exe
   iotkit-site-server query --db /data/site.db --limit 10)
 grep -q '"pub_seq": 1' <<<"$query_output"
 
+# Site uses a clean MQTT session, so a broker restart must be followed by a
+# fresh records subscription before the real Gateway batch is published.
+docker compose -p "$project" -f "$repo_root/compose.dev.yaml" restart broker
+
 cat >"$scratch/gateway.toml" <<EOF
 [gateway]
 db_path = "$scratch/gateway.db"

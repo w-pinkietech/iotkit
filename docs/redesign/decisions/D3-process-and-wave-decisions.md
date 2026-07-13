@@ -63,8 +63,8 @@ BravePI temperature sensor
 
 ### 実機検証状況 (2026-07-13)
 
-Raspberry Pi (Debian 13 / arm64) とペアリング済みBravePI実機で、現在の
-`master` (`0c974f0`) のGateway入口を確認した。
+Raspberry Pi (Debian 13 / arm64) とペアリング済みBravePI実機で、現在のGatewayから
+Siteまでの縦経路を確認した。
 
 - `/dev/serial0` (`ttyAMA0`, 38400 8N1) から既存POCで、温度センサー
   `246880020140018b` と接点入力センサー `246880020140018c` のframeをdecodeした。
@@ -78,12 +78,21 @@ Raspberry Pi (Debian 13 / arm64) とペアリング済みBravePI実機で、現�
   温度は26.0〜26.3125°Cだった。
 - 停止後のSQLiteに`PRAGMA quick_check`を実行し`ok`を確認した。試験終了後はGatewayが
   停止し、UARTが解放されることも確認した。
+- 同じPi上の独立したDocker環境で、認証・topic ACL付きMosquittoとGo Site Serverを起動した。
+  Gatewayに保持されていた`pub_seq` 1〜8をMQTT QoS 1で送り、Site raw SQLiteの8行と、
+  Site commit後の`accepted-through = 8`によるGateway cursor更新を確認した。
+- UART収集とMQTT出口を同時に35秒動かし、新しい温度3観測が`pub_seq` 9〜11としてSiteへ
+  保存され、Gateway cursorも11へ進んだ。Site CLIからraw recordを直接照会できた。
+- broker再起動時、Siteが再接続後にrecords topicを再購読しない不具合を実機で発見した。
+  購読をPahoの接続callbackへ移し、broker再起動をend-to-end試験へ追加した。修正版Siteは
+  containerを再起動せず再購読し、その後の実機配送と`accepted-through`を完了した。
 
-これにより `BravePI -> BLE Long Range -> mainboard -> UART -> Gateway -> SQLite
-(reading + publication log)` までは実機確認済みとなった。MQTT broker、Site raw SQLite、
-`accepted-through`、再送・再起動・停止中収集はこの実機試験には含めておらず、引き続き
-現在の実装ゲートの未完了条件である。接点入力はUART decodeまでの確認であり、Gatewayへの
-通常取り込みは温度経路の次に行う。
+これにより `BravePI -> BLE Long Range -> mainboard -> UART -> Gateway SQLite -> MQTT
+-> broker -> Site raw SQLite -> accepted-through -> Gateway cursor` は実機確認済みとなった。
+平文MQTTは同一Piのloopbackだけを使う実験設定であり、実運用のTLS要件を緩和しない。
+SQLite commit失敗、内容conflict、全コンポーネントの再起動組合せ、長時間停止中の連続収集は
+引き続き現在の実装ゲートの未完了条件である。接点入力はUART decodeまでの確認であり、
+Gatewayへの通常取り込みは温度経路の次に行う。
 
 実験用Piでの初回native release buildは、空のbuild cacheからRust toolchainと依存crateを
 最適化したため一時的にCPUを飽和させ、SSH応答も遅くなった。日常の実機反復はdebug buildを
