@@ -17,7 +17,7 @@ Updated: 2026-07-13
 |---|---|---|---|---|
 | [1] | デバイス | device | BravePI Transmitter、直結I2Cセンサー、第三者の自作デバイス(ESP32/PLC等) | 測定・作動する末端。IoTKit Edgeの配下 |
 | [2] | **IoTKit Edge**(短縮: Edge、役割名: Edge Node) | IoTKit Edge / Edge Node | 現場に置くRaspberry Pi。IoTKit Edgeが動く | 収集・正規化・耐久buffer・再送を担う。責務台帳 R1〜R23 はすべてこの箱の責務 |
-| [3] | **IoTKit Site**(短縮: Site) | IoTKit Site | 単一サイトのMQTT Broker、Archival Store、query、application接続・export境界を担う箱。Standaloneでは不在可、Site-managedでは必須(D8) | 初期実装はGo+SQLite。複数Edge Nodeを集約し、YokaKitは別applicationとして接続する |
+| [3] | **IoTKit Site**(短縮: Site) | IoTKit Site | 単一サイトのMQTT Broker、Archival Store、query、site-local sensor semantic mapping、application接続・export境界を担う箱。Standaloneでは不在可、Site-managedでは必須(D8) | 初期実装はGo+SQLite。複数Edge Nodeを集約し、YokaKitは別applicationとして接続する |
 | [4] | クラウド | cloud | **site_idを跨ぐ上位層**(オプション)。商用クラウドに限らず、本社サーバールーム等もここ。※ホスト型[3]と同じデータセンターに同居しうるが、単一site_idに閉じるインスタンスは[3]である(役割基準) | クラウドLLM API、クラウドYokaKit、複数拠点統合・fleet管理・DR複製が住む。**サイト横断は必ずここでやる(IoTKit Site同士に上下関係を作らない)** |
 
 ### 禁止・注意語
@@ -204,7 +204,7 @@ Updated: 2026-07-13
 | IoTKit | IoTKit EdgeとIoTKit Siteからなる、オンプレミス優先のIoTデータ収集基盤 |
 | IoTKit Edge | Raspberry Pi側の現場収集ノード。短縮はEdge。収集・正規化・耐久buffer・再送を担う |
 | Edge Node | IoTKit Edgeが担うアーキテクチャ上の役割。センサーデータを収集・保全・配送するノード。`Node`単独では呼ばない |
-| IoTKit Site | 単一拠点の集約、raw保存、Edge Nodeごとのcursor、query、application接続・export境界。短縮はSite |
+| IoTKit Site | 単一拠点の集約、raw保存、Edge Nodeごとのcursor、query、設定可能なセンサー意味付け、application接続・export境界。短縮はSite |
 | MQTT Broker | EdgeとSite間のQoS 1 transportを担う標準MQTT broker。IoTKitはBrokerを自作しない |
 | YokaKit | 生産管理アプリ。別プロダクト。出口契約の一消費者。[3]/[4]に住む |
 | iotkit-edgectl | 通常コマンドはR14制御プレーンを叩く人間/AI共用操作口。別にlocal-root maintenance系(初期所有権・admin recovery・factory reset)を持ち、これらは箱上の物理/SSH root専用でAPI/UI/AI/R14に公開しない |

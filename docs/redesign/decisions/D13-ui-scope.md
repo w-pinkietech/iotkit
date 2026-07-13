@@ -23,8 +23,8 @@ credential、token、private keyをargv、URL、ログ、監査detail、query ou
 
 YokaKit UIはYokaKitの責務であり、IoTKit管理UIではない。設備、工程、生産、OEE、alarm、dashboardを
 IoTKit UIへ取り込まない。IoTKitが将来提供するUIはEdge/Siteの設置、状態、generic observation、
-契約上の操作だけを扱う。Siteのapplication export設定は保存済みseriesのrouting・projectionまでを扱い、
-`production`等の業務意味は扱わない。
+契約上の操作に加え、Siteで保存済みseriesを`production`等の設定可能なセンサー意味へ対応付ける
+routing・projection設定を扱う。品番・工程master、生産実績、OEE、alarm、dashboardは扱わない。
 
 ## Deferred
 
