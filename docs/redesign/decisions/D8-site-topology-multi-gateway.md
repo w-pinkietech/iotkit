@@ -20,7 +20,8 @@ IoTKitは2つの配置を認める。
 - Site Serverはsensor busを読まず、Gateway collectorやregistryの権威を奪わない。
 - cloudは任意の上位層であり、Siteによる保管責任引受の必須条件ではない。
 
-最初の実機縦切りは1 Gateway + 1 Siteで通信と保管責任の引き渡しを証明する。これはmulti-Gateway運用UI、fleet管理、
+最初の実機縦切りは、ペアリング済みBravePI温度センサー1台 + 1 Gateway + 1 Siteで通信と保管責任の
+引き渡しを証明する。これはmulti-Gateway運用UI、fleet管理、
 一括enrollmentを実装する意味ではない。
 
 ## Custody roles

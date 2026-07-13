@@ -153,8 +153,11 @@ side-effect-free `/api/v1/ingest/validate` endpoint. Its principal, staging,
 deduplication, health, and episode-audit boundaries are distinct from the
 control API.
 
-The next slice is deliberately narrow: one OPT3001, one Gateway, one standard broker, one Go Site
-Server, raw SQLite storage, application-level accepted-through, and a direct CLI query. Enrollment,
+The next slice is deliberately narrow: one paired BravePI temperature sensor through
+the existing Long Range BLE/mainboard/UART path, one Gateway, one standard broker, one Go Site
+Server, raw SQLite storage, application-level accepted-through, and a direct CLI query. BravePI owns
+BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
+mainboard UART stream. Enrollment,
 credential rotation, Site backup/restore, projection, legacy HTTPS migration, multi-Gateway hardware,
 YokaKit integration, and UI are deferred until this path works on real hardware.
 

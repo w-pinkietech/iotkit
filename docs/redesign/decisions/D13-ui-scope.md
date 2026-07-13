@@ -4,8 +4,8 @@ Status: 確定、2026-07-13簡素化改訂
 
 ## Decision
 
-最初のOPT3001 → Gateway → MQTT → Site実機縦切りにWeb UIを含めない。GatewayとSiteのCLI、health、
-direct queryで収集・配送・保管責任の引き渡し・照会を検証する。
+最初のBravePI温度センサー → Long Range BLE → mainboard UART → Gateway → MQTT → Site実機縦切りに
+Web UIを含めない。GatewayとSiteのCLI、health、direct queryで収集・配送・保管責任の引き渡し・照会を検証する。
 
 UIは既存のtyped operationとread modelの薄いclientであり、UIだけのmutation path、direct SQL、
 秘密情報の再表示、保管責任cursor操作を作らない。

@@ -68,4 +68,4 @@ custom listener、manual PUBACK、独自keepalive/session/backpressure implement
 - HTTPSからMQTTへの既存target移行
 - broker HA
 
-これらは1 Gateway + 1 Site + 1 OPT3001の実機縦切り後に、観測された必要性から決める。
+これらはペアリング済みBravePI温度センサー1台 + 1 Gateway + 1 Siteの実機縦切り後に、観測された必要性から決める。

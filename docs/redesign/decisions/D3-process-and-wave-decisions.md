@@ -22,7 +22,11 @@ Wave 1/2は将来の責務地図であり、現在すべてを実装するバッ
 Wave 1の残項目を横に広げる前に、次の1本を完成させる。
 
 ```text
-OPT3001
+BravePI temperature sensor
+  -> transmitter
+  -> BLE Long Range
+  -> BravePI mainboard
+  -> UART
   -> Rust Gateway on Raspberry Pi
   -> MQTT QoS 1
   -> standard broker
@@ -33,7 +37,9 @@ OPT3001
 
 ### 作るもの
 
-- OPT3001 adapterと既存polling runtimeによる収集
+- BravePI mainboardのUARTを受動的に読む既存adapterと、温度frameのdecode。手元の機体は
+  sensor type 261(MCP9600熱電対温度)と仮定して開始し、最初の実frameで型を確認する
+- `device_number`を安定したhardware identityとして扱い、RSSIとbatteryを観測へ引き継ぐ経路
 - Gatewayでのcanonical record化、readingとoutboxのatomic保存
 - GatewayのMQTT publish、`accepted-through`検証、cursor更新、保管責任に基づくretention
 - Mosquitto等の標準brokerと、Gatewayごとのstatic credential/topic ACL
@@ -44,7 +50,10 @@ OPT3001
 
 ### 完了条件
 
-- OPT3001の観測がGatewayとSiteの双方で確認できる。
+- ペアリング済みBravePI温度センサー1台の観測が、UART経由でGatewayとSiteの双方に記録される。
+- 実frameからsensor typeとpayloadを確認し、仮定と異なる場合も正しいdriverへ明示的に対応付ける。
+- `device_number`、RSSI、battery、温度値が期待どおりdecode・保存される。
+- GatewayまたはBravePI mainboardの再起動後、UART受信が自動的に復帰する。
 - 保持容量内では、Site、broker、ネットワークの停止中もGatewayが収集を継続し、復旧後に欠けなく再送する。
 - 同じbatchの再送でSiteのraw rowが重複せず、異内容ならconflictとしてcursorを進めない。
 - SiteのSQLite commit失敗時は`accepted-through`を返さない。
@@ -54,6 +63,8 @@ OPT3001
 
 ### このゲートでは作らないもの
 
+- BravePIのBLE、ペアリング、トランスミッタ管理、送信間隔/出力設定、Long Range到達距離の再検証
+- BravePIへの取得要求、downlink command、接点出力
 - YokaKit連携、UI、dashboard、Site projection、cloud/fleet管理
 - 第三者デバイスingress、pairing、オンボーディングUI
 - credential enrollment/rotation、multi-Gateway運用、broker HA
@@ -62,8 +73,16 @@ OPT3001
 - 汎用adapter SDK、adapter code generator、宣言型driver DSL
 
 既に実装済みのHTTP ingress、control API、operation catalog等は削除しないが、このゲートの完了条件から外し、
-必要な保守以外の機能追加を止める。最初の実機縦切り後、種類の異なる2個目のセンサーをcore変更なしで
-追加できるか確認し、その実績からadapter templateやSDKの必要性を判断する。
+必要な保守以外の機能追加を止める。既存のrpi-local/OPT3001経路も維持するが、このゲートの完了条件には
+含めない。最初の実機縦切り後、手元のBravePI接点入力センサーを2種類目として実機確認し、その実績から
+adapter templateやSDKの必要性を判断する。
+
+### BravePIとの責任境界
+
+- センサー、トランスミッタ、BLE Long Range、ペアリング、メインボード上の端末管理はBravePIの責任とする。
+- ペアリングは既存iOS applicationで行う。IoTKitにpairing UIや設定経路を作らない。
+- ペアリング済み端末のデータはメインボードからUARTへ自動送出される前提とする。
+- IoTKitの責任はUART streamの受信から始まり、frame decode、正規化、耐久保存、Siteへの引き渡しを担う。
 
 以下のWave分割は長期ロードマップと既存決定の参照用に維持する。現在の実装順は上記ゲートを優先する。
 

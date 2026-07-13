@@ -6,7 +6,8 @@ transfer of storage responsibility to the Site: data is not purge-eligible until
 the Site has durably stored it.
 
 > **Status: pre-1.0, not yet a public release.** The current milestone is one
-> OPT3001, one Rust Gateway, one standard MQTT broker, and one Go Site Server.
+> paired BravePI temperature sensor, one Rust Gateway, one standard
+> MQTT broker, and one Go Site Server.
 > Broader Wave 1 work is frozen until this real-hardware path proves collection,
 > outage recovery, and storage-responsibility transfer. APIs, the on-disk schema,
 > and the wire contract may still change. See
@@ -97,8 +98,8 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Current implementation gate:** one OPT3001 → one Gateway → standard MQTT broker → one Go Site Server → raw SQLite → direct CLI query. It must survive component restarts and outages, replay idempotently, and advance purge eligibility only after validated `accepted-through`. **In progress.**
-- **After the gate:** add a different second sensor without core changes to test the adapter boundary, then choose broader Wave 1 work from observed needs.
+- **Current implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI mainboard → UART → one Gateway → standard MQTT broker → one Go Site Server → raw SQLite → direct CLI query. It must survive component restarts and outages, replay idempotently, and advance purge eligibility only after validated `accepted-through`. **In progress.**
+- **After the gate:** run a BravePI contact-input sensor as the second real sensor type, then choose adapter tooling and broader Wave 1 work from observed needs.
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 
