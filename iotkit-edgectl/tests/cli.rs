@@ -1502,6 +1502,100 @@ fn existing_empty_db_gets_edge_migration_version_set() {
         versions,
         vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     );
+    let edge_node_id: String = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'edge_node_id'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!edge_node_id.is_empty());
+}
+
+#[test]
+fn fresh_database_gets_edge_identity_before_command_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("iotkit.db");
+    std::fs::File::create(&db_path).unwrap();
+
+    assert_failure(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device",
+        "activate",
+        "not-a-system-id",
+    ]));
+
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let edge_node_id: String = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'edge_node_id'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!edge_node_id.is_empty());
+}
+
+fn create_pre_cutover_cli_database(db_path: &std::path::Path, identity_key: Option<&str>) {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE _schema_version (
+            version INTEGER NOT NULL PRIMARY KEY,
+            label TEXT NOT NULL,
+            applied_at INTEGER NOT NULL
+        );
+        INSERT INTO _schema_version VALUES (1, 'init', 0);
+        CREATE TABLE ledger_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )
+    .unwrap();
+    if let Some(identity_key) = identity_key {
+        conn.execute(
+            "INSERT INTO ledger_meta (key, value) VALUES (?1, 'legacy-edge')",
+            [identity_key],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn readonly_cli_rejects_gateway_database_without_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("gateway.db");
+    create_pre_cutover_cli_database(&db_path, Some("gateway_identity"));
+    let bytes_before = std::fs::read(&db_path).unwrap();
+
+    let stderr = assert_failure(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "device-credential",
+        "list",
+    ]));
+
+    assert!(
+        stderr.contains("unsupported pre-release Edge database; recreate the Edge database"),
+        "stderr:\n{stderr}"
+    );
+    assert_eq!(std::fs::read(db_path).unwrap(), bytes_before);
+}
+
+#[test]
+fn writable_cli_rejects_unmarked_pre_cutover_database_without_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("pre-cutover.db");
+    create_pre_cutover_cli_database(&db_path, None);
+    let bytes_before = std::fs::read(&db_path).unwrap();
+
+    let stderr = assert_failure(run(&["--db", db_path.to_str().unwrap(), "device", "list"]));
+
+    assert!(
+        stderr.contains("unsupported pre-release Edge database; recreate the Edge database"),
+        "stderr:\n{stderr}"
+    );
+    assert_eq!(std::fs::read(db_path).unwrap(), bytes_before);
 }
 
 #[test]
@@ -2746,6 +2840,14 @@ fn snapshot_export_restore_round_trips_full_columns_and_renews_epoch() {
     restored_db
         .with_conn_sync(|conn| {
             assert_eq!(snapshot_sections(conn), source_sections);
+            let edge_node_id: String = conn
+                .query_row(
+                    "SELECT value FROM ledger_meta WHERE key = 'edge_node_id'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(!edge_node_id.is_empty());
             let restored_epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
             assert_ne!(restored_epoch, source_epoch);
             let (kind, detail): (String, String) = conn

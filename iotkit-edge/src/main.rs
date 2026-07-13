@@ -85,6 +85,10 @@ fn main() {
     all_migrations.sort_by_key(|m| m.version);
     let db_path_for_init = std::path::Path::new(&config.db_path);
     let database_existed_before_open = db_path_for_init.exists();
+    if let Err(error) = iotkit_core_storage::preflight_edge_database(db_path_for_init) {
+        tracing::error!(error = %error, db_path = %config.db_path, "Edge database cutover preflight failed");
+        std::process::exit(1);
+    }
     let db = match iotkit_core_storage::init_db(db_path_for_init, &all_migrations) {
         Ok(handle) => handle,
         Err(e) => {

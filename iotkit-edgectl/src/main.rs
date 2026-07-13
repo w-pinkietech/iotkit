@@ -129,6 +129,12 @@ fn main() {
 
 fn run() -> AppResult<()> {
     let cli = Cli::parse();
+    let restoring_snapshot = matches!(
+        &cli.command,
+        Command::Snapshot {
+            command: cmd::snapshot::SnapshotCommand::Restore(_),
+        }
+    );
     let restore_target = match &cli.command {
         Command::Snapshot {
             command: cmd::snapshot::SnapshotCommand::Restore(args),
@@ -154,6 +160,7 @@ fn run() -> AppResult<()> {
     if !database_existed_before_open && !allow_missing_db {
         return Err(format!("database file does not exist: {}", db_path.display()).into());
     }
+    iotkit_core_storage::preflight_edge_database(&db_path)?;
     if matches!(
         &cli.command,
         Command::Snapshot {
@@ -205,10 +212,18 @@ fn run() -> AppResult<()> {
     all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
+    if !restoring_snapshot {
+        ensure_edge_node_id(&db)?;
+    }
     if created_target.is_none() {
         reconcile_database_initialization_provenance(&db, &db_path, database_existed_before_open)?;
     }
     db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))??;
+    if restoring_snapshot {
+        // Restore validates that the target is pristine, so identity is minted only after the
+        // restore transaction has committed successfully.
+        ensure_edge_node_id(&db)?;
+    }
     if created_target.is_some() {
         // The restore transaction must validate the exclusively created database while it is
         // pristine and establish local recovery itself. Reconcile only afterward to create a
@@ -219,6 +234,24 @@ fn run() -> AppResult<()> {
         target.committed = true;
     }
     Ok(())
+}
+
+fn ensure_edge_node_id(
+    db: &iotkit_core_storage::DbHandle,
+) -> Result<(), iotkit_core_storage::StorageError> {
+    db.with_conn_sync(|conn| {
+        iotkit_core_ledger::edge_node_id(conn)
+            .map(|_| ())
+            .map_err(ledger_to_storage_err)
+    })
+}
+
+fn ledger_to_storage_err(
+    error: iotkit_core_ledger::LedgerError,
+) -> iotkit_core_storage::StorageError {
+    iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(
+        error,
+    )))
 }
 
 fn reconcile_database_initialization_provenance(

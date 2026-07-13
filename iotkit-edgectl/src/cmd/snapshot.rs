@@ -451,7 +451,7 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
         "SELECT name FROM sqlite_schema
          WHERE type = 'table'
            AND name NOT LIKE 'sqlite_%'
-           AND name NOT IN ('_schema_version', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config', 'ingest_dedup_maintenance')
+           AND name NOT IN ('_schema_version', '_iotkit_edge_format', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config', 'ingest_dedup_maintenance')
          ORDER BY name",
     )?;
     let tables = stmt
