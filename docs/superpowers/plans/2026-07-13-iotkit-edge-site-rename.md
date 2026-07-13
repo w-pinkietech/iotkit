@@ -710,7 +710,20 @@ iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
 
 Site credentialは別username/passwordを使う。旧`gateway_identity` key、旧topic、旧credentialを再利用しない。
 
-- [ ] **Step 6: BrokerとIoTKit SiteをDockerで起動する**
+- [ ] **Step 6: BravePI温度センサーを新DBへ承認・active化する**
+
+旧DBを再利用しないため、温度センサーを受信して`staged_readings`へ入ったことを確認後、新CLIでsightingを承認する。`device approve`が出力した`system_id`をそのまま`device activate`へ渡す。
+
+```bash
+iotkit-edgectl --db /home/iotkit/iotkit-lab/edge.db sightings list
+system_id=$(iotkit-edgectl --db /home/iotkit/iotkit-lab/edge.db \
+  device approve ble:246880020140018b --label bravepi-temperature)
+iotkit-edgectl --db /home/iotkit/iotkit-lab/edge.db device activate "$system_id"
+```
+
+Expected: `device list`で`ble:246880020140018b`が`active`。接点入力センサーは今回の温度smoke対象へ広げない。
+
+- [ ] **Step 7: BrokerとIoTKit SiteをDockerで起動する**
 
 repoの`compose.dev.yaml`を使い、Pi専用のpassword/ACL/data pathをenvironmentで渡す。container logにpasswordが出ていないことを確認する。
 
@@ -719,11 +732,11 @@ docker compose -f /home/iotkit/iotkit/iotkit-next-current/compose.dev.yaml \
   --env-file /home/iotkit/iotkit-lab/compose.env up --build --detach
 ```
 
-- [ ] **Step 7: BravePIを有効にしたIoTKit Edgeを起動する**
+- [ ] **Step 8: BravePIを有効にしたIoTKit Edgeを起動する**
 
 `/dev/serial0`を開くprocessが他にないことを確認し、Edgeを起動する。PIDとlogはlab配下へ保存する。MQTT password fileの中身はlogへ出さない。
 
-- [ ] **Step 8: UARTからSiteとack cursorまで確認する**
+- [ ] **Step 9: UARTからSiteとack cursorまで確認する**
 
 新しい温度観測について次を確認する。
 
@@ -743,7 +756,7 @@ docker compose -f /home/iotkit/iotkit/iotkit-next-current/compose.dev.yaml \
 
 Expected: BravePI Mainboardからの温度recordが`edge_node_id`付きで表示され、ack後のEdge cursorが同じseq以上になる。
 
-- [ ] **Step 9: 実機結果を正本文書へ記録する**
+- [ ] **Step 10: 実機結果を正本文書へ記録する**
 
 `docs/redesign/decisions/D3-process-and-wave-decisions.md`へ日付、commit、確認したsensor、cursor範囲、Edge/Site quick check、停止時のUART解放を追記する。秘密値、実password、private keyは書かない。
 
@@ -753,6 +766,6 @@ git commit -m "docs: record Edge and Site hardware validation"
 git diff --check HEAD~1
 ```
 
-- [ ] **Step 10: PR準備完了を報告して停止する**
+- [ ] **Step 11: PR準備完了を報告して停止する**
 
 `git status --short --branch`、Task 9の検証結果、Pi smokeの証拠、commit一覧を報告する。push、PR作成、mergeはユーザーの別承認を待つ。
