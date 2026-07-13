@@ -44,7 +44,7 @@ func DecodeBatch(payload []byte) (RecordBatch, error) {
 	if len(payload) > MaxBatchBytes {
 		return batch, invalid("batch exceeds encoded byte limit")
 	}
-	if err := decodeOne(payload, &batch); err != nil {
+	if err := decodeOneStrict(payload, &batch); err != nil {
 		return batch, fmt.Errorf("decode record batch: %w", err)
 	}
 	if err := batch.Validate(); err != nil {
@@ -55,7 +55,7 @@ func DecodeBatch(payload []byte) (RecordBatch, error) {
 
 func DecodeAcceptedThrough(payload []byte) (AcceptedThrough, error) {
 	var ack AcceptedThrough
-	if err := decodeOne(payload, &ack); err != nil {
+	if err := decodeOneStrict(payload, &ack); err != nil {
 		return ack, fmt.Errorf("decode accepted-through: %w", err)
 	}
 	if err := ack.Validate(); err != nil {
@@ -165,6 +165,16 @@ func PublicationID(edgeNodeID, ledgerEpoch string, cursorStart, cursorEnd int64)
 
 func decodeOne(payload []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
+	return decodeSingleValue(decoder, destination)
+}
+
+func decodeOneStrict(payload []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	return decodeSingleValue(decoder, destination)
+}
+
+func decodeSingleValue(decoder *json.Decoder, destination any) error {
 	if err := decoder.Decode(destination); err != nil {
 		return err
 	}

@@ -38,6 +38,26 @@ fn batch_with_only_legacy_gateway_identity_is_rejected() {
 }
 
 #[test]
+fn batch_with_edge_node_id_and_legacy_gateway_identity_is_rejected() {
+    let mixed = BATCH_FIXTURE.replacen(
+        r#""edge_node_id": "edge-node-01""#,
+        r#""edge_node_id": "edge-node-01", "gateway_identity": "gateway-01""#,
+        1,
+    );
+    assert!(serde_json::from_str::<RecordBatch>(&mixed).is_err());
+}
+
+#[test]
+fn ack_with_edge_node_id_and_legacy_gateway_identity_is_rejected() {
+    let mixed = ACK_FIXTURE.replacen(
+        r#""edge_node_id": "edge-node-01""#,
+        r#""edge_node_id": "edge-node-01", "gateway_identity": "gateway-01""#,
+        1,
+    );
+    assert!(serde_json::from_str::<AcceptedThrough>(&mixed).is_err());
+}
+
+#[test]
 fn puback_cannot_be_represented_as_application_ack() {
     let transport_only = r#"{"packet_id":7}"#;
     assert!(serde_json::from_str::<AcceptedThrough>(transport_only).is_err());

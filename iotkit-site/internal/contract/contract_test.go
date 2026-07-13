@@ -54,6 +54,51 @@ func TestBatchWithOnlyLegacyGatewayIdentityIsRejected(t *testing.T) {
 	}
 }
 
+func TestBatchWithEdgeNodeIDAndLegacyGatewayIdentityIsRejected(t *testing.T) {
+	payload := []byte(`{
+		"schema_version": 1,
+		"edge_node_id": "edge-node-01",
+		"gateway_identity": "gateway-01",
+		"ledger_epoch": "epoch-01",
+		"publication_id": "edge-node-01:epoch-01:1:1",
+		"cursor_start": 1,
+		"cursor_end": 1,
+		"records": [{"schema_version": 1, "epoch": "epoch-01", "pub_seq": 1, "family": "measurement"}]
+	}`)
+	if _, err := DecodeBatch(payload); err == nil {
+		t.Fatal("batch with edge_node_id and legacy gateway_identity decoded successfully")
+	}
+}
+
+func TestAcceptedThroughWithEdgeNodeIDAndLegacyGatewayIdentityIsRejected(t *testing.T) {
+	payload := []byte(`{
+		"schema_version": 1,
+		"edge_node_id": "edge-node-01",
+		"gateway_identity": "gateway-01",
+		"ledger_epoch": "epoch-01",
+		"publication_id": "edge-node-01:epoch-01:1:1",
+		"accepted_through": 1
+	}`)
+	if _, err := DecodeAcceptedThrough(payload); err == nil {
+		t.Fatal("accepted-through with edge_node_id and legacy gateway_identity decoded successfully")
+	}
+}
+
+func TestRecordHeaderAllowsAdditionalRecordFields(t *testing.T) {
+	payload := []byte(`{
+		"schema_version": 1,
+		"edge_node_id": "edge-node-01",
+		"ledger_epoch": "epoch-01",
+		"publication_id": "edge-node-01:epoch-01:1:1",
+		"cursor_start": 1,
+		"cursor_end": 1,
+		"records": [{"schema_version": 1, "epoch": "epoch-01", "pub_seq": 1, "family": "measurement", "value": 23.5}]
+	}`)
+	if _, err := DecodeBatch(payload); err != nil {
+		t.Fatalf("record fields outside the header were rejected: %v", err)
+	}
+}
+
 func TestTransportPUBACKIsNotApplicationAck(t *testing.T) {
 	if _, err := DecodeAcceptedThrough([]byte(`{"packet_id":7}`)); err == nil {
 		t.Fatal("transport PUBACK decoded as application acknowledgement")

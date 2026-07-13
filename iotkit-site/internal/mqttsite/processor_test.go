@@ -125,6 +125,35 @@ func TestProcessRejectsLegacyGatewayTopicWithoutStoreOrAck(t *testing.T) {
 	}
 }
 
+func TestProcessRejectsMixedEdgeAndGatewayIdentityWithoutStoreOrAck(t *testing.T) {
+	store := &fakeStore{}
+	processor := Processor{Store: store}
+	payload := []byte(`{
+		"schema_version": 1,
+		"edge_node_id": "edge-node-01",
+		"gateway_identity": "gateway-01",
+		"ledger_epoch": "epoch-01",
+		"publication_id": "edge-node-01:epoch-01:1:1",
+		"cursor_start": 1,
+		"cursor_end": 1,
+		"records": [{"schema_version": 1, "epoch": "epoch-01", "pub_seq": 1}]
+	}`)
+	published := false
+	err := processor.Process(context.Background(), "iotkit/v1/edge-nodes/edge-node-01/records", payload, func(string, []byte) error {
+		published = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("mixed edge_node_id and gateway_identity payload accepted")
+	}
+	if len(store.batches) != 0 {
+		t.Fatalf("store called for mixed identity payload: %+v", store.batches)
+	}
+	if published {
+		t.Fatal("ack published for mixed identity payload")
+	}
+}
+
 func TestRecordsTopicEdgeNodeAcceptsOnlyEdgeNodeRecordsTopic(t *testing.T) {
 	tests := []struct {
 		name    string

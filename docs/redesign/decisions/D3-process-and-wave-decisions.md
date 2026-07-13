@@ -92,8 +92,8 @@ credentialごと削除して新構成から再作成した。新しい`edge_node
 温度センサー`ble:246880020140018b`を新DBで承認・active化した。BravePI MainboardのUARTから受信した
 新しい温度観測11件が`pub_seq` 1〜11としてIoTKit Siteの11行へ同じ`edge_node_id`・`ledger_epoch`で
 保存され、Edgeの`accepted-through` cursorも11へ収束した。停止後のEdge DBとSite DBはともに
-`PRAGMA quick_check = ok`であり、Edge停止後にUARTが解放されたことも確認した。旧`gateway_identity`、
-旧`/gateways/` topic、旧credentialは再利用していない。
+`PRAGMA quick_check = ok`であり、Edge停止後にUARTが解放されたことも確認した。破棄したpre-releaseの
+identity key、topic namespace、credentialは再利用していない。
 
 これにより `BravePI Transmitter -> BLE Long Range -> BravePI Mainboard -> UART -> IoTKit Edge SQLite -> MQTT
 -> MQTT Broker -> IoTKit Site raw SQLite -> accepted-through -> Edge cursor` は実機確認済みとなった。

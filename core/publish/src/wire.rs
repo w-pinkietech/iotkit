@@ -6,6 +6,7 @@ pub const MAX_BATCH_RECORDS: usize = 256;
 pub const MAX_BATCH_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecordBatch {
     pub schema_version: u32,
     pub edge_node_id: String,
@@ -17,6 +18,7 @@ pub struct RecordBatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AcceptedThrough {
     pub schema_version: u32,
     pub edge_node_id: String,
