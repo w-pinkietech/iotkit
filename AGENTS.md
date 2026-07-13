@@ -32,21 +32,60 @@ vocabulary であり、新規コードは依存を増やさない。
 
 ## Development Workflow
 
-開発プロセスは、その作業に該当する標準 Superpowers スキルに従う。基本の流れは次のとおり。
+Superpowers skills は任意の作業支援ツールであり、全変更に一律適用する必須パイプラインではない。
+ユーザーの直接指示と本ファイルのプロジェクト規則は、plugin skill の一般的な trigger や成果物要件に
+優先する。着手前に現実的なリスクへ応じて次の lane を選び、必要な場合だけ skill を使う。
 
-```text
-brainstorming
-  -> written design + user review
-  -> writing-plans
-  -> test-driven-development
-  -> requesting-code-review / receiving-code-review
-  -> verification-before-completion
-  -> finishing-a-development-branch
-```
+### Fast lane
 
-設計や計画が不要な単純作業まで形式的に膨らませない。適用条件は各スキルの記述に従う。
-`docs/superpowers/specs/` と `docs/superpowers/plans/` は、現在の作業に明示的に選ばれた
-文書を除き、設計判断と実行履歴である。履歴中の古い運用指示は現行ルールではない。
+局所的な bug、refactor、文書、設定、小機能で、公開契約・認証・custody・data loss・restore・
+migration・外部作用へ影響しない作業に使う。
+
+1. 目的と完了条件を短く確認する。
+2. 製品挙動が変わる場合は focused test を先に追加または更新する。
+3. 実装する。
+4. リスクに比例した focused verification を実行する。
+5. 結果を報告する。
+
+ユーザーが明示しない限り、design spec、永続 implementation plan、worktree、subagent team、
+独立レビューを作らない。
+
+### Standard lane
+
+複数 crate にまたがる変更、新しい内部境界、または有力な実装案が複数ある作業に使う。
+
+1. 原則1ページ以内の簡潔な設計を示す。
+2. 重要な選択が残る場合だけ方向を確認する。
+3. 永続 plan 文書でなく一時 checklist を使う。
+4. 適切なテストとともに実装する。
+5. 1回のレビューとリスクに比例した verification を行う。
+
+新しい spec を作るより既存の正本文書を更新する。完了した一時 plan はリポジトリへ残さない。
+
+### Full lane
+
+次に影響する変更だけに使う。
+
+- 公開 ingest / egress wire contract
+- 認証・認可・秘密情報
+- custody・purge権威・data loss
+- DB migration・backup・restore・rollback
+- 外部に見える破壊的または不可逆な作用
+- 後から変更すると高価な互換性保証
+
+この lane では brainstorming、written design、implementation plan、TDD、独立レビュー、広い検証を
+使ってよい。ただし既存 ADR・契約文書へ収まる判断を新しい spec へ重複記載しない。
+
+### 共通規則
+
+- 現実的なリスクを覆う最も軽い lane を既定にする。
+- 動くコードと実行可能テストを、重複する説明文より優先する。
+- 既存決定の再記述だけを目的に spec や ADR を作らない。
+- `docs/superpowers/specs/` と `docs/superpowers/plans/` の履歴は現行指示ではない。
+- 通常は1レビューで終える。実質的な設計・実装変更があった場合だけ再レビューする。
+- 外部モデルレビューはユーザーの明示依頼時だけ行う。
+- プロセス成果物を、それが導く実装より大きくしない。
+- 完了報告には変更リスクに見合う fresh verification evidence を必ず添える。
 
 ## Roles and Authority
 

@@ -25,22 +25,9 @@ adapters は `core/engine` に依存せず、取り込みは `iotkit-ingest-clie
 
 ## Workflow
 
-標準フロー:
-
-```text
-brainstorming
-  -> written design + user review
-  -> writing-plans
-  -> test-driven-development
-  -> requesting-code-review / receiving-code-review
-  -> verification-before-completion
-  -> finishing-a-development-branch
-```
-
-ネイティブな役割 dispatch が利用できる場合、Main と reviewer は Sol/high、
-implementer と executor は Luna/max を意図する。Main は承認済み作業を実装・commit
-できる。worker は指定スコープだけを扱い、commit しない。push、PR、merge、release
-などの外部作用は別承認。
+開発laneの選択、skill利用、レビュー、成果物の規則は `AGENTS.md` だけを正本とし、
+ここへ重複記載しない。Main は承認済み作業を実装・commitできる。worker は指定スコープだけを
+扱い、commitしない。push、PR、merge、releaseなどの外部作用は別承認。
 
 ## Build and Verification
 
