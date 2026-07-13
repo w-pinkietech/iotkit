@@ -31,6 +31,20 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, logger *
 		logger = slog.Default()
 	}
 
+	handler := func(client mqtt.Client, message mqtt.Message) {
+		err := processor.Process(context.Background(), message.Topic(), message.Payload(), func(topic string, payload []byte) error {
+			token := client.Publish(topic, 1, false, payload)
+			if !token.WaitTimeout(15 * time.Second) {
+				return errors.New("accepted-through publish timed out")
+			}
+			return token.Error()
+		})
+		if err != nil {
+			logger.Error("MQTT record batch not acknowledged", "topic", message.Topic(), "error", err)
+		}
+	}
+	subscriptionResults := make(chan error, 1)
+
 	options := mqtt.NewClientOptions().
 		AddBroker(config.BrokerURL).
 		SetClientID(config.ClientID).
@@ -47,6 +61,19 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, logger *
 	options.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		logger.Warn("MQTT connection lost", "error", err)
 	})
+	options.SetOnConnectHandler(func(client mqtt.Client) {
+		token := client.Subscribe(recordsTopicFilter, 1, handler)
+		var err error
+		if !token.WaitTimeout(15 * time.Second) {
+			err = errors.New("MQTT subscribe timed out")
+		} else if tokenErr := token.Error(); tokenErr != nil {
+			err = fmt.Errorf("MQTT subscribe: %w", tokenErr)
+		}
+		if err == nil {
+			logger.Info("Site Server subscribed", "topic", recordsTopicFilter)
+		}
+		subscriptionResults <- err
+	})
 
 	client := mqtt.NewClient(options)
 	if token := client.Connect(); !token.WaitTimeout(15 * time.Second) {
@@ -56,27 +83,27 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, logger *
 	}
 	defer client.Disconnect(250)
 
-	handler := func(client mqtt.Client, message mqtt.Message) {
-		err := processor.Process(context.Background(), message.Topic(), message.Payload(), func(topic string, payload []byte) error {
-			token := client.Publish(topic, 1, false, payload)
-			if !token.WaitTimeout(15 * time.Second) {
-				return errors.New("accepted-through publish timed out")
-			}
-			return token.Error()
-		})
+	select {
+	case err := <-subscriptionResults:
 		if err != nil {
-			logger.Error("MQTT record batch not acknowledged", "topic", message.Topic(), "error", err)
+			return err
+		}
+	case <-time.After(15 * time.Second):
+		return errors.New("MQTT initial subscription did not complete")
+	case <-ctx.Done():
+		return nil
+	}
+
+	for {
+		select {
+		case err := <-subscriptionResults:
+			if err != nil {
+				return fmt.Errorf("MQTT resubscribe: %w", err)
+			}
+		case <-ctx.Done():
+			return nil
 		}
 	}
-	if token := client.Subscribe(recordsTopicFilter, 1, handler); !token.WaitTimeout(15 * time.Second) {
-		return errors.New("MQTT subscribe timed out")
-	} else if err := token.Error(); err != nil {
-		return fmt.Errorf("MQTT subscribe: %w", err)
-	}
-	logger.Info("Site Server subscribed", "topic", recordsTopicFilter)
-
-	<-ctx.Done()
-	return nil
 }
 
 func (config ClientConfig) validate() error {
