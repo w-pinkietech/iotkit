@@ -28,6 +28,8 @@ PUBACK alone is not that confirmation. Site durably accepts records, advances ea
 Node's `accepted-through` only after commit, and provides direct raw query today. It is
 also the IoTKit-side boundary for later site-local registry, semantic mapping such as
 `production`, and application export; those later capabilities are not implemented yet.
+Site owns that configurable sensor meaning; applications such as YokaKit own business masters
+and logic such as products, processes, OEE, alarms, UI, and notifications.
 
 ## What it does today
 

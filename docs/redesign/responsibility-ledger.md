@@ -61,7 +61,7 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 | 契約仕様書・SDK・適合試験ハーネス | リポジトリ資産(どの箱でもない) |
 | 出口credential発行権威 | MQTT endpointを運営する[3]のSite operator。MVPはEdge Nodeごとのstatic credentialとtopic ACL(D10) |
 | 複数Edge Nodeの集約・raw保存・cursor・site-level query | [3]IoTKit Site |
-| application接続・export境界 | [3]IoTKit Site。保存済みseriesのrouting・projectionを担うが、`production`等の業務意味はYokaKit等のapplicationが所有する |
+| application接続・export境界 | [3]IoTKit Site。保存済みseriesのrouting・projectionと`production`等の設定可能なセンサー意味付けを担う。YokaKit等はbusiness master、実績、OEE、alarm、UIを所有する |
 | 長期アーカイブ | [3] or [4] |
 | UI本体(静的ビルドの配布物。フレームワークは予算内で自由=D13決定1) | 配布物(Edgeが配信はする) |
 | OSレイヤ(A/Bパーティション機構・NTPデーモン・カーネルドライバ) | [2]内だがIoTKitアプリの外(OSイメージ/インストーラ) |

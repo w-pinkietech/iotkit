@@ -36,8 +36,10 @@ So a minimal Edge install is: flash a Pi, run the `iotkit-edge` daemon
 under systemd, keep `iotkit-edgectl` on the same Pi as a hand-run CLI, and wire
 adapters to sensors. A standalone site can stop there (D8: an upstream is
 optional). IoTKit Site adds durable aggregation, Edge Node cursors, direct raw
-query, and the application connection/export boundary. Anything that complicates
-this story needs a strong reason.
+query, a future site-local registry, configurable sensor meaning such as `production`, and the
+application-export boundary. Applications such as YokaKit consume those meanings and own business
+masters and logic such as products, processes, OEE, alarms, UI, and notifications. Anything that
+complicates this story needs a strong reason.
 
 ## Data flow
 
@@ -199,7 +201,7 @@ Approved next-slice non-Rust placement:
 
 | Component | Path | Responsibility (one line) |
 |---|---|---|
-| IoTKit Site | `iotkit-site/` | MQTT consumer, durable raw acceptance transaction, Edge Node cursor manager, accepted-through publisher, direct raw query CLI, and future site-local registry/semantic and application export boundary. |
+| IoTKit Site | `iotkit-site/` | MQTT consumer, durable raw acceptance transaction, Edge Node cursor manager, accepted-through publisher, direct raw query CLI, and future site-local registry, sensor semantic mapping, and application-export boundary. |
 | Cross-language fixtures | `testdata/egress/v1/` | Normative JSON examples decoded by both Rust and Go tests. |
 
 ### Layer rules (machine-checked)
@@ -280,7 +282,7 @@ checked.
 | A new control-plane HTTP API route | `iotkit-edge/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
 | An authenticated measurement-ingress HTTP binding | Shipped Plan 6 binding: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
 | A new CLI command | `iotkit-edgectl`, calling `core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
-| Site acceptance, query, site-local registry/semantic mapping, or application export behavior | `iotkit-site/`; communicate through the versioned MQTT wire contract and shared fixtures, never Edge internals. |
+| Site acceptance, query, site-local registry, sensor semantic mapping such as `production`, or application-export behavior | `iotkit-site/`; communicate through the versioned MQTT wire contract and shared fixtures, never Edge internals. Business masters and logic such as production records, OEE, and alarms stay in applications. |
 | Raw bus/pin access | `rpi4b-transport`. |
 | An Edge module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `core/<name>` crate.** IoTKit Edge is a composition root, not a home for domain logic. |
 

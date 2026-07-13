@@ -60,10 +60,10 @@ Site側のglobal record identityは次である。
 
 ## YokaKit boundary
 
-YokaKitはIoTKitのcanonical recordを消費する別applicationである。設備、工程、製品、作業者、生産状態、
-OEE、alarm文言、UIはYokaKitが所有する。IoTKitは`production`、`gantt-chart`等のYokaKit固有topicや
-table語彙をR10へ入れない。Siteのapplication exportは保存済みseriesのrouting・projectionを担うが、
-`production`等の業務意味を解釈しない。
+YokaKitはIoTKitのcanonical recordまたはSiteで意味付けされた出力を消費する別applicationである。
+Siteは保存済みseriesを`production`等の設定可能なセンサー意味へ対応付け、routing・projectionする。
+一方、設備・工程・製品・作業者のmaster、生産実績、OEE、alarm文言、UIはYokaKitが所有する。
+Siteの意味付けやYokaKit固有topic/table語彙はR10へ入れない。
 
 ## Deferred
 

@@ -62,7 +62,7 @@ IoTKit Siteは保存専用サービスではない。次をSiteの責任範囲�
 - 保存済みseriesを外部MQTTや他システムへ届けるapplication export境界
 - 将来のEdge接続状態、欠測状況などのsite-level集約
 
-旧IoTKitにあった、センサーと`production`等のMQTT topicを対応付ける機能は、EdgeではなくSiteのapplication exportに属する。Siteは`production`の業務意味を解釈せず、保存済みseriesから設定済み出力先へのルーティング・投影を担う。生産数、工程、OEE、alarm文言などの業務ロジックはYokaKit等のapplicationが所有する。
+旧IoTKitにあった、センサーと`production`等の意味やMQTT topicを対応付ける機能は、EdgeではなくSiteのapplication exportに属する。Siteは保存済みseriesへ設定可能なセンサー意味を付け、設定済み出力先へのルーティング・投影を担う。品番・工程master、生産実績、OEE、alarm文言などの業務データとロジックはYokaKit等のapplicationが所有する。
 
 今回の命名変更ではapplication exportの責任境界だけを明記し、MQTT Export機能そのものは実装しない。
 

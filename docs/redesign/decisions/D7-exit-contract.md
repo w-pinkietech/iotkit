@@ -59,8 +59,8 @@ annotationのみ(データは既に配送済みのため回収はしない——
 - `series_definition`同期、legacy metadata snapshot、commissioning smokeは最初の実機縦切りには
   含めない。Siteはraw canonical recordを保存し、Edge Nodeごとのcursor、site-level query、application
   export境界を持つ。series解釈はEdgeのR11または後続のversion付きmetadata契約で追加する。
-  Siteのapplication exportは保存済みseriesのrouting・projectionを担うが、`production`等の業務意味を
-  解釈しない。追加時はYokaKit固有labelやbusiness masterを含めない。
+  Siteのapplication exportは保存済みseriesのrouting・projectionに加え、`production`等の設定可能な
+  センサー意味付けを担う。追加時もYokaKit固有のbusiness masterやOEE等の業務ロジックは含めない。
 - **配送制御通知(annotationとは別レイヤ)**: gap/cursor_expired(決定6)等、**特定targetの配送状態
   についての通知**はストリームレコードではなく、pushバッチのメタデータ(帯域外)で運ぶ。
   **カーソルを消費しない**。全target共有のストリームにtarget固有の事実を混ぜない。

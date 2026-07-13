@@ -147,11 +147,11 @@ Plain MQTT requires `allow_insecure = true` and is only for local Docker testing
 
 ## YokaKit boundary
 
-IoTKit publishes canonical observations. YokaKit owns equipment/process mapping, production state,
-OEE, alarms, UI, and notifications. A YokaKit adapter may consume this stream and produce internal
-events, but YokaKit vocabulary does not enter R10 and YokaKit business success is not a custody ack.
-IoTKit Site is the application connection and export boundary: it may route or project stored series
-to configured outputs, but it does not interpret business meaning such as `production`.
+IoTKit publishes canonical observations. IoTKit Site is the future site-local boundary that maps
+stored series to configured sensor meanings and outputs such as `production`. That mapping does not
+enter R10, and downstream business success is not a custody ack. YokaKit consumes the mapped signal
+and owns business masters and logic such as products, processes, production records, OEE, alarms,
+UI, and notifications.
 
 ## Deferred
 
