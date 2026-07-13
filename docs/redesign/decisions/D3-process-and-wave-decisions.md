@@ -61,6 +61,34 @@ BravePI temperature sensor
 - Gateway、broker、Siteを個別に再起動しても同じ状態へ収束する。
 - Docker試験に加え、Raspberry Piと実センサーで一連の流れを再現できる。
 
+### 実機検証状況 (2026-07-13)
+
+Raspberry Pi (Debian 13 / arm64) とペアリング済みBravePI実機で、現在の
+`master` (`0c974f0`) のGateway入口を確認した。
+
+- `/dev/serial0` (`ttyAMA0`, 38400 8N1) から既存POCで、温度センサー
+  `246880020140018b` と接点入力センサー `246880020140018c` のframeをdecodeした。
+  温度、接点の0/1、RSSI、batteryが取得でき、decode errorは観測されなかった。
+- 温度センサーはGateway上で `hardware_id = ble:246880020140018b`、
+  `measurement_key = temperature_c` へ正規化された。未登録状態の45秒間に4観測が
+  sightingと`staged_readings`へ保存され、温度25.5625〜26.1875°C、RSSI -68〜-66 dBm、
+  battery 100%を確認した。
+- CLIでsightingを承認してdeviceをactive化した後、次の45秒間に4観測が非検疫の
+  `readings`へ保存され、対応する4行が`publication_log`へ同じ順序で作られた。
+  温度は26.0〜26.3125°Cだった。
+- 停止後のSQLiteに`PRAGMA quick_check`を実行し`ok`を確認した。試験終了後はGatewayが
+  停止し、UARTが解放されることも確認した。
+
+これにより `BravePI -> BLE Long Range -> mainboard -> UART -> Gateway -> SQLite
+(reading + publication log)` までは実機確認済みとなった。MQTT broker、Site raw SQLite、
+`accepted-through`、再送・再起動・停止中収集はこの実機試験には含めておらず、引き続き
+現在の実装ゲートの未完了条件である。接点入力はUART decodeまでの確認であり、Gatewayへの
+通常取り込みは温度経路の次に行う。
+
+実験用Piでの初回native release buildは、空のbuild cacheからRust toolchainと依存crateを
+最適化したため一時的にCPUを飽和させ、SSH応答も遅くなった。日常の実機反復はdebug buildを
+使い、正式配置用release binaryは開発機またはCIでarm64向けに作ることを優先する。
+
 ### このゲートでは作らないもの
 
 - BravePIのBLE、ペアリング、トランスミッタ管理、送信間隔/出力設定、Long Range到達距離の再検証

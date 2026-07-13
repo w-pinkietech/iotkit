@@ -98,7 +98,7 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Current implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI mainboard → UART → one Gateway → standard MQTT broker → one Go Site Server → raw SQLite → direct CLI query. It must survive component restarts and outages, replay idempotently, and advance purge eligibility only after validated `accepted-through`. **In progress.**
+- **Current implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI mainboard → UART → one Gateway → standard MQTT broker → one Go Site Server → raw SQLite → direct CLI query. The real-hardware path through Gateway SQLite and its publication log is verified; broker/Site delivery and outage/restart recovery remain. Purge eligibility must advance only after validated `accepted-through`. **In progress.**
 - **After the gate:** run a BravePI contact-input sensor as the second real sensor type, then choose adapter tooling and broader Wave 1 work from observed needs.
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
