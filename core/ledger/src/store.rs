@@ -826,6 +826,32 @@ pub fn current_generation(conn: &Connection) -> Result<i64, LedgerError> {
     .map_err(LedgerError::from)
 }
 
+/// Gateway機体identity。初回にUUIDv7を生成し、ledger epochとは独立して永続化する。
+pub fn gateway_identity(conn: &Connection) -> Result<String, LedgerError> {
+    if let Some(identity) = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'gateway_identity'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        return Ok(identity);
+    }
+
+    let candidate = uuid::Uuid::now_v7().to_string();
+    conn.execute(
+        "INSERT OR IGNORE INTO ledger_meta (key, value) VALUES ('gateway_identity', ?1)",
+        params![candidate],
+    )?;
+    conn.query_row(
+        "SELECT value FROM ledger_meta WHERE key = 'gateway_identity'",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(LedgerError::from)
+}
+
 /// 台帳エポック(D5決定3の複合カーソル (epoch, seq) の前半)。初回に生成し永続化。
 pub fn ledger_epoch(conn: &Connection) -> Result<String, LedgerError> {
     if let Some(v) = conn
@@ -1867,6 +1893,19 @@ mod tests {
             let e2 = ledger_epoch(conn).unwrap();
             assert_eq!(e1, e2);
             assert!(!e1.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn gateway_identity_is_generated_once_and_stable() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let first = gateway_identity(conn).unwrap();
+            let second = gateway_identity(conn).unwrap();
+            assert_eq!(first, second);
+            assert!(uuid::Uuid::parse_str(&first).is_ok());
             Ok(())
         })
         .unwrap();

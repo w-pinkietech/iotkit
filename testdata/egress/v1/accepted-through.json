@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "gateway_identity": "gateway-01",
+  "ledger_epoch": "epoch-01",
+  "publication_id": "gateway-01:epoch-01:1:1",
+  "accepted_through": 1
+}

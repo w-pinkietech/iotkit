@@ -1,6 +1,7 @@
 use iotkit_core_storage::Migration;
 
 pub mod store;
+pub mod wire;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PublishError {

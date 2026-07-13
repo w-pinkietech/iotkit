@@ -2,6 +2,7 @@
 //! adapter を起動し、core/engine に event を渡す。
 
 mod adapter_host;
+mod mqtt_publish_task;
 #[allow(dead_code)]
 mod publish_task;
 mod retention;
@@ -56,6 +57,7 @@ fn main() {
         api_gateway_name = %config.api.gateway_name,
         bravepi_enabled = config.bravepi.is_some(),
         rpi_local_enabled = config.rpi_local.is_some(),
+        mqtt_exit_enabled = config.mqtt_exit.is_some(),
         "effective config"
     );
     if let Some(bp) = &config.bravepi {
@@ -63,6 +65,15 @@ fn main() {
     }
     if let Some(rpi) = &config.rpi_local {
         tracing::info!(bus_path = %rpi.bus_path, poll_interval_ms = rpi.poll_interval_ms, "rpi_local config");
+    }
+    if let Some(mqtt) = &config.mqtt_exit {
+        tracing::info!(
+            host = %mqtt.host,
+            port = mqtt.port,
+            tls = !mqtt.allow_insecure,
+            ca_file = ?mqtt.ca_file,
+            "MQTT exit config"
+        );
     }
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -175,8 +186,27 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         db.clone(),
         Duration::from_secs(60),
     );
-    let _publish_task =
-        publish_task::spawn_publish_task(db.clone(), health_state.clone(), Duration::from_secs(30));
+    let mut publish_task = if let Some(mqtt_config) = config.mqtt_exit.clone() {
+        match mqtt_publish_task::spawn_mqtt_publish_task(
+            db.clone(),
+            health_state.clone(),
+            mqtt_config,
+        )
+        .await
+        {
+            Ok(task) => {
+                tracing::info!("MQTT exit publisher started");
+                Some(task)
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "failed to start MQTT exit publisher");
+                return false;
+            }
+        }
+    } else {
+        tracing::info!("MQTT exit publisher disabled");
+        None
+    };
 
     let mut api_shutdown = None;
     let mut api_join = None;
@@ -381,8 +411,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     // systemdの責務(R20コメント参照)であり、ここでは「健康でないまま動き続けない」ことだけ担保する。
     let mut collector_alive = true;
     let mut api_failed = false;
+    let mut mqtt_failed = false;
     let mut api_shutdown_requested = false;
-    let api_only_mode = config.api.enabled && host.is_empty();
+    let mqtt_task_running = publish_task.is_some();
+    let service_only_mode = host.is_empty() && (api_task_running || mqtt_task_running);
     let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
     let mut pending_restart_count = 0usize;
 
@@ -391,11 +423,11 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
         if host.is_empty()
             && should_stop_after_all_adapter_streams_closed(
                 pending_restart_count,
-                api_task_running,
-                api_only_mode,
+                api_task_running || mqtt_task_running,
+                service_only_mode,
             )
         {
-            log_fan_in_stop(api_only_mode, api_failed);
+            log_fan_in_stop(service_only_mode, api_failed);
             break;
         }
 
@@ -427,6 +459,15 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                         Err(e) => tracing::error!(error = %e, "control-plane API task panicked"),
                     }
                 }
+            }
+            mqtt_result = wait_for_mqtt_task(&mut publish_task), if mqtt_task_running => {
+                publish_task = None;
+                mqtt_failed = true;
+                match mqtt_result {
+                    Ok(()) => tracing::error!("MQTT exit publisher exited unexpectedly"),
+                    Err(error) => tracing::error!(error = %error, "MQTT exit publisher panicked"),
+                }
+                break;
             }
             Some(()) = ingest_exit_rx.recv(), if ingest_client_task_count > 0 => {
                 // クライアントタスク退出=コレクタ死亡(Closed)。取り込み全損なのでfail-fast
@@ -546,10 +587,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
                     None => {
                         if should_stop_after_all_adapter_streams_closed(
                             pending_restart_count,
-                            api_task_running,
-                            api_only_mode,
+                            api_task_running || mqtt_task_running,
+                            service_only_mode,
                         ) {
-                            log_fan_in_stop(api_only_mode, api_failed);
+                            log_fan_in_stop(service_only_mode, api_failed);
                             break;
                         }
                     }
@@ -578,6 +619,10 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
             }
         }
     }
+    if let Some(task) = publish_task.take() {
+        task.abort();
+        let _ = task.await;
+    }
     {
         let mut health = health_state.lock().expect("health state mutex poisoned");
         health.api = None;
@@ -587,7 +632,7 @@ async fn run(config: config::GatewayConfig, db: iotkit_core_storage::DbHandle) -
     let devices = engine.devices().await;
     tracing::info!(device_count = devices.len(), "Engine state at shutdown");
 
-    !should_exit_nonzero(collector_alive, api_failed)
+    !should_exit_nonzero(collector_alive, api_failed, mqtt_failed)
 }
 
 async fn wait_for_api_task(
@@ -595,6 +640,15 @@ async fn wait_for_api_task(
 ) -> Result<(), tokio::task::JoinError> {
     match api_join {
         Some(join) => join.await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn wait_for_mqtt_task(
+    publish_task: &mut Option<tokio::task::JoinHandle<()>>,
+) -> Result<(), tokio::task::JoinError> {
+    match publish_task {
+        Some(task) => task.await,
         None => std::future::pending().await,
     }
 }
@@ -656,22 +710,22 @@ fn start_rpi_local(
 
 fn should_stop_after_all_adapter_streams_closed(
     pending_restart_count: usize,
-    api_task_running: bool,
-    api_only_mode: bool,
+    background_service_running: bool,
+    service_only_mode: bool,
 ) -> bool {
-    pending_restart_count == 0 && (!api_only_mode || !api_task_running)
+    pending_restart_count == 0 && (!service_only_mode || !background_service_running)
 }
 
-fn should_exit_nonzero(collector_alive: bool, api_failed: bool) -> bool {
-    !collector_alive || api_failed
+fn should_exit_nonzero(collector_alive: bool, api_failed: bool, mqtt_failed: bool) -> bool {
+    !collector_alive || api_failed || mqtt_failed
 }
 
-fn log_fan_in_stop(api_only_mode: bool, api_failed: bool) {
-    match (api_only_mode, api_failed) {
+fn log_fan_in_stop(service_only_mode: bool, api_failed: bool) {
+    match (service_only_mode, api_failed) {
         (true, true) => tracing::error!(
-            "control-plane API task exited unexpectedly (API-only mode); exiting for restart"
+            "background service exited unexpectedly (service-only mode); exiting for restart"
         ),
-        (true, false) => tracing::info!("control-plane API task exited; API-only mode stopping"),
+        (true, false) => tracing::info!("background service exited; service-only mode stopping"),
         (false, true) => tracing::error!(
             "All adapter channels closed after control-plane API task failure; exiting for restart"
         ),
@@ -710,7 +764,7 @@ mod tests {
         );
         assert!(
             !should_stop_after_all_adapter_streams_closed(0, true, true),
-            "API-only mode must keep the fan-in loop alive until the API task exits"
+            "service-only mode must keep the fan-in loop alive until its background service exits"
         );
         assert!(
             should_stop_after_all_adapter_streams_closed(0, false, true),
@@ -721,16 +775,20 @@ mod tests {
     #[test]
     fn run_exit_status_reflects_collector_and_api_failures() {
         assert!(
-            !should_exit_nonzero(true, false),
+            !should_exit_nonzero(true, false, false),
             "ctrl_c and normal adapter closure should exit successfully"
         );
         assert!(
-            should_exit_nonzero(false, false),
+            should_exit_nonzero(false, false, false),
             "collector death remains fail-fast"
         );
         assert!(
-            should_exit_nonzero(true, true),
+            should_exit_nonzero(true, true, false),
             "unexpected API task exit in API-only mode should be fail-fast"
+        );
+        assert!(
+            should_exit_nonzero(true, false, true),
+            "unexpected MQTT publisher exit should be fail-fast"
         );
     }
 }

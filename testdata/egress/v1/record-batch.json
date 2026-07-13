@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "gateway_identity": "gateway-01",
+  "ledger_epoch": "epoch-01",
+  "publication_id": "gateway-01:epoch-01:1:1",
+  "cursor_start": 1,
+  "cursor_end": 1,
+  "records": [
+    {
+      "family": "measurement",
+      "schema_version": 1,
+      "epoch": "epoch-01",
+      "pub_seq": 1,
+      "series_key": "series-temperature-01",
+      "values": [21.5],
+      "event_time": 1720000000000,
+      "event_time_source": "received",
+      "time_source": "gateway",
+      "time_quality": "unsynced",
+      "received_at": 1720000000123,
+      "device_time": null
+    }
+  ]
+}

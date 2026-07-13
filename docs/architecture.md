@@ -1,8 +1,8 @@
 # Architecture
 
 IoTKit currently ships one Gateway Rust binary (`iotkit-gateway`) plus an operator CLI
-(`iotkit-gatewayctl`), backed by a single SQLite database. The next vertical slice adds a small,
-independently deployable Go Site Server backed by its own SQLite database and a standard MQTT broker.
+(`iotkit-gatewayctl`), backed by a single SQLite database, and a small independently deployable Go
+Site Server backed by its own SQLite database and a standard MQTT broker.
 It does not turn the Site Server into part of the Gateway process. The Gateway runs unattended on a
 Raspberry Pi under systemd. This document is the "get oriented in 10 minutes"
 map **and the canon for code placement**; the authoritative *why* is the
@@ -68,10 +68,10 @@ gains one. Anything that complicates this story needs a strong reason.
             Go Site Server ── durable accepted-through topic ──▶ authorizes purge
 ```
 
-The checked-in `publish_task` is a transitional HTTPS implementation from the earlier MVE. D9 makes
-MQTT QoS 1 the production exit binding. A broker PUBACK confirms transport receipt only; the Gateway
-retains its outbox until the Site Server commits raw records and publishes application-level
-`accepted-through`.
+`mqtt_publish_task` is the active production exit binding. The older `publish_task` HTTPS code is
+retained only as transitional code and is not spawned. A broker PUBACK confirms transport receipt
+only; the Gateway retains its outbox until the Site Server commits raw records and publishes
+application-level `accepted-through`.
 
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
 `iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
@@ -153,7 +153,7 @@ side-effect-free `/api/v1/ingest/validate` endpoint. Its principal, staging,
 deduplication, health, and episode-audit boundaries are distinct from the
 control API.
 
-The next slice is deliberately narrow: one paired BravePI temperature sensor through
+The current slice is deliberately narrow: one paired BravePI temperature sensor through
 the existing Long Range BLE/mainboard/UART path, one Gateway, one standard broker, one Go Site
 Server, raw SQLite storage, application-level accepted-through, and a direct CLI query. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
@@ -188,7 +188,7 @@ below mechanically (in `verify.sh` and CI).
 | `bravepi-mainboard-adapter` | `bravepi-mainboard-adapter` | BravePI-protocol adapter: transport + codec + sensor drivers → Envelopes. |
 | `rpi-local-adapter` | `rpi-local-adapter` | On-Pi I2C sensor adapter; thin wrapper over the polling runtime. |
 | `bravepi-poc` | `bravepi-mainboard-adapter/poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
-| `iotkit-gateway` | `iotkit-gateway` | **Binary.** Composition root: adapter supervision, push task, retention, health, HTTPS API. |
+| `iotkit-gateway` | `iotkit-gateway` | **Binary.** Composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
 | `iotkit-gatewayctl` | `iotkit-gatewayctl` | **Binary.** Operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
 
 Approved next-slice non-Rust placement:

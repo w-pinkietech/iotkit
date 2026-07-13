@@ -1,0 +1,33 @@
+services:
+  broker:
+    image: eclipse-mosquitto:2.0
+    ports:
+      - "127.0.0.1:18883:1883"
+    volumes:
+      - ./deploy/mosquitto/dev.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${IOTKIT_MOSQUITTO_ACL_FILE:-./deploy/mosquitto/dev.acl}:/mosquitto/config/acl:ro
+      - ${IOTKIT_MOSQUITTO_PASSWORD_FILE:?set IOTKIT_MOSQUITTO_PASSWORD_FILE}:/mosquitto/config/passwords:ro
+
+  site:
+    build:
+      context: ./iotkit-site-server
+    restart: on-failure
+    user: ${IOTKIT_DEV_UID:-1000}:${IOTKIT_DEV_GID:-1000}
+    depends_on:
+      - broker
+    command:
+      - serve
+      - --db
+      - /data/site.db
+      - --broker-url
+      - tcp://broker:1883
+      - --client-id
+      - iotkit-site-dev
+      - --username
+      - site
+      - --password-file
+      - /run/secrets/site-mqtt-password
+      - --allow-insecure
+    volumes:
+      - ${IOTKIT_SITE_DATA_DIR:?set IOTKIT_SITE_DATA_DIR}:/data
+      - ${IOTKIT_SITE_PASSWORD_FILE:?set IOTKIT_SITE_PASSWORD_FILE}:/run/secrets/site-mqtt-password:ro

@@ -28,6 +28,8 @@ pub struct RawConfig {
     pub adapters: RawAdaptersConfig,
     #[serde(default)]
     pub api: RawApiConfig,
+    #[serde(default)]
+    pub exit: RawExitConfig,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -53,6 +55,23 @@ pub struct RawApiConfig {
     pub enabled: Option<bool>,
     pub bind: Option<String>,
     pub gateway_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RawExitConfig {
+    pub mqtt: Option<RawMqttExitConfig>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RawMqttExitConfig {
+    pub enabled: Option<bool>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub password_file: Option<String>,
+    pub ca_file: Option<String>,
+    pub allow_insecure: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +102,7 @@ pub struct GatewayConfig {
     pub bravepi: Option<BravepiConfig>,
     pub rpi_local: Option<RpiLocalResolvedConfig>,
     pub api: ApiConfig,
+    pub mqtt_exit: Option<MqttExitConfig>,
 }
 
 #[derive(Debug)]
@@ -113,6 +133,15 @@ pub struct ApiConfig {
     pub enabled: bool,
     pub bind: SocketAddr,
     pub gateway_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MqttExitConfig {
+    pub host: String,
+    pub port: u16,
+    pub password_file: PathBuf,
+    pub ca_file: Option<PathBuf>,
+    pub allow_insecure: bool,
 }
 
 // ── Pipeline: load_raw ─────────────────────────────────
@@ -302,10 +331,11 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
     };
 
     let api = resolve_api(raw.api)?;
+    let mqtt_exit = resolve_mqtt_exit(raw.exit)?;
 
-    if bravepi.is_none() && rpi_local.is_none() && !api.enabled {
+    if bravepi.is_none() && rpi_local.is_none() && !api.enabled && mqtt_exit.is_none() {
         return Err(ConfigError::Validation(
-            "at least one adapter or api must be enabled".to_string(),
+            "at least one adapter, api, or MQTT exit must be enabled".to_string(),
         ));
     }
 
@@ -319,7 +349,47 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<GatewayConfig, Co
         bravepi,
         rpi_local,
         api,
+        mqtt_exit,
     })
+}
+
+fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, ConfigError> {
+    let Some(raw) = raw.mqtt else {
+        return Ok(None);
+    };
+    if !raw.enabled.unwrap_or(false) {
+        return Ok(None);
+    }
+
+    let host = raw.host.unwrap_or_else(|| "127.0.0.1".to_string());
+    if host.trim().is_empty() {
+        return Err(ConfigError::Validation(
+            "exit.mqtt.host must not be empty".to_string(),
+        ));
+    }
+    let password_file = raw
+        .password_file
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| {
+            ConfigError::Validation(
+                "exit.mqtt.password_file is required when MQTT exit is enabled".to_string(),
+            )
+        })?;
+
+    let port = raw.port.unwrap_or(8883);
+    if port == 0 {
+        return Err(ConfigError::Validation(
+            "exit.mqtt.port must be greater than zero".to_string(),
+        ));
+    }
+
+    Ok(Some(MqttExitConfig {
+        host,
+        port,
+        password_file: PathBuf::from(password_file),
+        ca_file: raw.ca_file.map(PathBuf::from),
+        allow_insecure: raw.allow_insecure.unwrap_or(false),
+    }))
 }
 
 fn resolve_api(raw: RawApiConfig) -> Result<ApiConfig, ConfigError> {
@@ -443,6 +513,13 @@ port = "/dev/ttyUSB0"
 enabled = true
 bus_path = "/dev/i2c-3"
 poll_interval_ms = 500
+
+[exit.mqtt]
+enabled = true
+host = "site.internal"
+port = 8883
+password_file = "/run/secrets/iotkit-mqtt-password"
+ca_file = "/etc/iotkit/site-ca.pem"
 "#;
         let raw: RawConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(raw.gateway.db_path.as_deref(), Some("test.db"));
@@ -453,6 +530,12 @@ poll_interval_ms = 500
         assert_eq!(rpi.enabled, Some(true));
         assert_eq!(rpi.bus_path.as_deref(), Some("/dev/i2c-3"));
         assert_eq!(rpi.poll_interval_ms, Some(500));
+        let mqtt = raw.exit.mqtt.unwrap();
+        assert_eq!(mqtt.host.as_deref(), Some("site.internal"));
+        assert_eq!(
+            mqtt.password_file.as_deref(),
+            Some("/run/secrets/iotkit-mqtt-password")
+        );
     }
 
     #[test]
@@ -714,6 +797,60 @@ poll_interval_ms = 500
         assert_eq!(bp.port, "/dev/ttyAMA0");
         // rpi_local disabled by default
         assert!(config.rpi_local.is_none());
+        assert!(config.mqtt_exit.is_none());
+    }
+
+    #[test]
+    fn resolve_mqtt_exit_uses_gateway_identity_as_implicit_username() {
+        let mut raw = raw_with_defaults();
+        raw.exit.mqtt = Some(RawMqttExitConfig {
+            enabled: Some(true),
+            host: Some("site.internal".to_string()),
+            port: Some(8883),
+            password_file: Some("/run/secrets/iotkit-mqtt-password".to_string()),
+            ca_file: Some("/etc/iotkit/site-ca.pem".to_string()),
+            allow_insecure: None,
+        });
+
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(
+            config.mqtt_exit,
+            Some(MqttExitConfig {
+                host: "site.internal".to_string(),
+                port: 8883,
+                password_file: PathBuf::from("/run/secrets/iotkit-mqtt-password"),
+                ca_file: Some(PathBuf::from("/etc/iotkit/site-ca.pem")),
+                allow_insecure: false,
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_mqtt_exit_requires_password_file() {
+        let mut raw = raw_with_defaults();
+        raw.exit.mqtt = Some(RawMqttExitConfig {
+            enabled: Some(true),
+            ..RawMqttExitConfig::default()
+        });
+
+        let result = resolve(raw, ConfigSource::DefaultsOnly);
+        assert!(
+            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("password_file"))
+        );
+    }
+
+    #[test]
+    fn resolve_mqtt_exit_rejects_zero_port() {
+        let mut raw = raw_with_defaults();
+        raw.exit.mqtt = Some(RawMqttExitConfig {
+            enabled: Some(true),
+            port: Some(0),
+            password_file: Some("/run/secrets/iotkit-mqtt-password".to_string()),
+            ..RawMqttExitConfig::default()
+        });
+
+        let result = resolve(raw, ConfigSource::DefaultsOnly);
+        assert!(matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("port")));
     }
 
     #[test]
@@ -883,8 +1020,29 @@ poll_interval_ms = 500
         raw.api.enabled = Some(false);
         let result = resolve(raw, ConfigSource::DefaultsOnly);
         assert!(
-            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter or api"))
+            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter, api, or MQTT exit"))
         );
+    }
+
+    #[test]
+    fn resolve_allows_mqtt_exit_only_mode() {
+        let mut raw = raw_with_defaults();
+        raw.adapters.bravepi = Some(RawBravepiConfig {
+            enabled: Some(false),
+            port: None,
+        });
+        raw.api.enabled = Some(false);
+        raw.exit.mqtt = Some(RawMqttExitConfig {
+            enabled: Some(true),
+            password_file: Some("/run/secrets/iotkit-mqtt-password".to_string()),
+            allow_insecure: Some(true),
+            ..RawMqttExitConfig::default()
+        });
+
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert!(config.bravepi.is_none());
+        assert!(!config.api.enabled);
+        assert!(config.mqtt_exit.is_some());
     }
 
     // ── load tests ─────────────────────────────────────

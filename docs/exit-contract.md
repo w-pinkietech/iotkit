@@ -1,7 +1,7 @@
 # Exit contract (R10)
 
-Status: Approved MQTT v1 target contract. The checked-in Gateway publisher remains transitional HTTPS
-until the MQTT slice is implemented.
+Status: Approved and implemented MQTT v1 target contract. The older HTTPS publisher is retained only
+as transitional code and is not started by the Gateway composition root.
 
 This contract defines how canonical records leave one Gateway and when that Gateway may transfer
 custody. Application meaning such as production, OEE, process, alarm text, or YokaKit state is not
@@ -129,6 +129,20 @@ cursor. MQTT PUBACK never advances this cursor and never authorizes retention pu
 The first implementation uses MQTT over TLS inside the selected tailnet, anonymous access disabled,
 and one static credential plus topic ACL per Gateway. Secrets are stored outside Git and never appear
 in argv, logs, Debug output, audit detail, or query output. D10 owns later authentication hardening.
+
+Gateway configuration names the broker and a credential file; the MQTT username is always the
+Gateway's generated `gateway_identity`:
+
+```toml
+[exit.mqtt]
+enabled = true
+host = "site.example.ts.net"
+port = 8883
+password_file = "/run/secrets/iotkit-mqtt-password"
+# ca_file = "/etc/iotkit/site-ca.pem" # optional custom CA; otherwise system roots
+```
+
+Plain MQTT requires `allow_insecure = true` and is only for local Docker testing.
 
 ## YokaKit boundary
 
