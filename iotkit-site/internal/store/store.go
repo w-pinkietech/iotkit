@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/w-pinkietech/iotkit-next/iotkit-site-server/internal/contract"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 	_ "modernc.org/sqlite"
 )
 
@@ -24,12 +24,12 @@ type Store struct {
 }
 
 type RawRecord struct {
-	GatewayIdentity string          `json:"gateway_identity"`
-	LedgerEpoch     string          `json:"ledger_epoch"`
-	PubSeq          int64           `json:"pub_seq"`
-	PublicationID   string          `json:"publication_id"`
-	Record          json.RawMessage `json:"record"`
-	ReceivedAt      int64           `json:"received_at"`
+	EdgeNodeID    string          `json:"edge_node_id"`
+	LedgerEpoch   string          `json:"ledger_epoch"`
+	PubSeq        int64           `json:"pub_seq"`
+	PublicationID string          `json:"publication_id"`
+	Record        json.RawMessage `json:"record"`
+	ReceivedAt    int64           `json:"received_at"`
 }
 
 func Open(path string) (*Store, error) {
@@ -51,26 +51,39 @@ func (store *Store) Close() error {
 }
 
 func (store *Store) initialize() error {
+	for _, table := range []string{"raw_records", "accepted_cursors"} {
+		var legacyColumns int
+		if err := store.db.QueryRow(
+			"SELECT count(*) FROM pragma_table_info(?) WHERE name = 'gateway_identity'",
+			table,
+		).Scan(&legacyColumns); err != nil {
+			return err
+		}
+		if legacyColumns > 0 {
+			return errors.New("unsupported pre-release Site database; recreate it")
+		}
+	}
+
 	_, err := store.db.Exec(`
 		PRAGMA journal_mode = WAL;
 		PRAGMA synchronous = FULL;
 		PRAGMA foreign_keys = ON;
 		CREATE TABLE IF NOT EXISTS raw_records (
-			gateway_identity TEXT NOT NULL,
+			edge_node_id TEXT NOT NULL,
 			ledger_epoch TEXT NOT NULL,
 			pub_seq INTEGER NOT NULL,
 			publication_id TEXT NOT NULL,
 			record_json BLOB NOT NULL,
 			record_sha256 BLOB NOT NULL,
 			received_at INTEGER NOT NULL,
-			PRIMARY KEY (gateway_identity, ledger_epoch, pub_seq)
+			PRIMARY KEY (edge_node_id, ledger_epoch, pub_seq)
 		);
 		CREATE TABLE IF NOT EXISTS accepted_cursors (
-			gateway_identity TEXT NOT NULL,
+			edge_node_id TEXT NOT NULL,
 			ledger_epoch TEXT NOT NULL,
 			accepted_through INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL,
-			PRIMARY KEY (gateway_identity, ledger_epoch)
+			PRIMARY KEY (edge_node_id, ledger_epoch)
 		);
 	`)
 	return err
@@ -88,7 +101,7 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	currentCursor, err := readCursor(ctx, tx, batch.GatewayIdentity, batch.LedgerEpoch)
+	currentCursor, err := readCursor(ctx, tx, batch.EdgeNodeID, batch.LedgerEpoch)
 	if err != nil {
 		return noAck, err
 	}
@@ -105,18 +118,18 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO raw_records (
-				gateway_identity, ledger_epoch, pub_seq, publication_id,
+				edge_node_id, ledger_epoch, pub_seq, publication_id,
 				record_json, record_sha256, received_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, batch.GatewayIdentity, batch.LedgerEpoch, pubSeq, batch.PublicationID, compact, fingerprint[:], now); err != nil {
+		`, batch.EdgeNodeID, batch.LedgerEpoch, pubSeq, batch.PublicationID, compact, fingerprint[:], now); err != nil {
 			return noAck, err
 		}
 
 		var storedFingerprint []byte
 		if err := tx.QueryRowContext(ctx, `
 			SELECT record_sha256 FROM raw_records
-			WHERE gateway_identity = ? AND ledger_epoch = ? AND pub_seq = ?
-		`, batch.GatewayIdentity, batch.LedgerEpoch, pubSeq).Scan(&storedFingerprint); err != nil {
+			WHERE edge_node_id = ? AND ledger_epoch = ? AND pub_seq = ?
+		`, batch.EdgeNodeID, batch.LedgerEpoch, pubSeq).Scan(&storedFingerprint); err != nil {
 			return noAck, err
 		}
 		if !bytes.Equal(storedFingerprint, fingerprint[:]) {
@@ -129,12 +142,12 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 		acceptedThrough = batch.CursorEnd
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO accepted_cursors (
-				gateway_identity, ledger_epoch, accepted_through, updated_at
+				edge_node_id, ledger_epoch, accepted_through, updated_at
 			) VALUES (?, ?, ?, ?)
-			ON CONFLICT(gateway_identity, ledger_epoch) DO UPDATE SET
+			ON CONFLICT(edge_node_id, ledger_epoch) DO UPDATE SET
 				accepted_through = excluded.accepted_through,
 				updated_at = excluded.updated_at
-		`, batch.GatewayIdentity, batch.LedgerEpoch, acceptedThrough, now); err != nil {
+		`, batch.EdgeNodeID, batch.LedgerEpoch, acceptedThrough, now); err != nil {
 			return noAck, err
 		}
 	}
@@ -144,7 +157,7 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 	}
 	return contract.AcceptedThrough{
 		SchemaVersion:   contract.SchemaVersion,
-		GatewayIdentity: batch.GatewayIdentity,
+		EdgeNodeID:      batch.EdgeNodeID,
 		LedgerEpoch:     batch.LedgerEpoch,
 		PublicationID:   batch.PublicationID,
 		AcceptedThrough: acceptedThrough,
@@ -156,9 +169,9 @@ func (store *Store) ListRawRecords(ctx context.Context, limit int) ([]RawRecord,
 		return nil, errors.New("raw record query limit must be between 1 and 10000")
 	}
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT gateway_identity, ledger_epoch, pub_seq, publication_id, record_json, received_at
+		SELECT edge_node_id, ledger_epoch, pub_seq, publication_id, record_json, received_at
 		FROM raw_records
-		ORDER BY received_at DESC, gateway_identity, ledger_epoch, pub_seq DESC
+		ORDER BY received_at DESC, edge_node_id, ledger_epoch, pub_seq DESC
 		LIMIT ?
 	`, limit)
 	if err != nil {
@@ -171,7 +184,7 @@ func (store *Store) ListRawRecords(ctx context.Context, limit int) ([]RawRecord,
 		var record RawRecord
 		var payload []byte
 		if err := rows.Scan(
-			&record.GatewayIdentity,
+			&record.EdgeNodeID,
 			&record.LedgerEpoch,
 			&record.PubSeq,
 			&record.PublicationID,
@@ -186,12 +199,12 @@ func (store *Store) ListRawRecords(ctx context.Context, limit int) ([]RawRecord,
 	return records, rows.Err()
 }
 
-func readCursor(ctx context.Context, tx *sql.Tx, gatewayIdentity, ledgerEpoch string) (int64, error) {
+func readCursor(ctx context.Context, tx *sql.Tx, edgeNodeID, ledgerEpoch string) (int64, error) {
 	var cursor int64
 	err := tx.QueryRowContext(ctx, `
 		SELECT accepted_through FROM accepted_cursors
-		WHERE gateway_identity = ? AND ledger_epoch = ?
-	`, gatewayIdentity, ledgerEpoch).Scan(&cursor)
+		WHERE edge_node_id = ? AND ledger_epoch = ?
+	`, edgeNodeID, ledgerEpoch).Scan(&cursor)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}

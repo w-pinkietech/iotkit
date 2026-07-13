@@ -14,8 +14,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/w-pinkietech/iotkit-next/iotkit-site-server/internal/mqttsite"
-	"github.com/w-pinkietech/iotkit-next/iotkit-site-server/internal/store"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/mqttsite"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
 func main() {
@@ -27,7 +27,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: iotkit-site-server <serve|query> [options]")
+		return errors.New("usage: iotkit-site <serve|query> [options]")
 	}
 	switch args[0] {
 	case "serve":

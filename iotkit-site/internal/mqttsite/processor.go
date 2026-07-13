@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/w-pinkietech/iotkit-next/iotkit-site-server/internal/contract"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 )
 
 type BatchStore interface {
@@ -27,7 +27,7 @@ func (processor Processor) Process(ctx context.Context, topic string, payload []
 	if publish == nil {
 		return errors.New("MQTT processor publish function is nil")
 	}
-	gatewayIdentity, err := recordsTopicGateway(topic)
+	edgeNodeID, err := recordsTopicEdgeNode(topic)
 	if err != nil {
 		return err
 	}
@@ -35,8 +35,8 @@ func (processor Processor) Process(ctx context.Context, topic string, payload []
 	if err != nil {
 		return err
 	}
-	if batch.GatewayIdentity != gatewayIdentity {
-		return errors.New("MQTT topic/body gateway identity mismatch")
+	if batch.EdgeNodeID != edgeNodeID {
+		return errors.New("MQTT topic/body edge_node_id mismatch")
 	}
 
 	ack, err := processor.Store.AcceptBatch(ctx, batch)
@@ -50,17 +50,17 @@ func (processor Processor) Process(ctx context.Context, topic string, payload []
 	if err != nil {
 		return err
 	}
-	ackTopic := "iotkit/v1/gateways/" + gatewayIdentity + "/accepted-through"
+	ackTopic := "iotkit/v1/edge-nodes/" + edgeNodeID + "/accepted-through"
 	return publish(ackTopic, ackPayload)
 }
 
-func recordsTopicGateway(topic string) (string, error) {
+func recordsTopicEdgeNode(topic string) (string, error) {
 	parts := strings.Split(topic, "/")
-	if len(parts) != 5 || parts[0] != "iotkit" || parts[1] != "v1" || parts[2] != "gateways" || parts[4] != "records" {
+	if len(parts) != 5 || parts[0] != "iotkit" || parts[1] != "v1" || parts[2] != "edge-nodes" || parts[4] != "records" {
 		return "", errors.New("unexpected MQTT records topic")
 	}
 	if parts[3] == "" || strings.ContainsAny(parts[3], "+#") {
-		return "", errors.New("invalid MQTT records topic gateway identity")
+		return "", errors.New("invalid MQTT records topic edge node ID")
 	}
 	return parts[3], nil
 }

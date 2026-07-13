@@ -10,12 +10,12 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/w-pinkietech/iotkit-next/iotkit-site-server/internal/contract"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 )
 
 func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
 	brokerURL := requireEnv(t, "IOTKIT_TEST_BROKER_URL")
-	passwordPath := requireEnv(t, "IOTKIT_TEST_GATEWAY_PASSWORD_FILE")
+	passwordPath := requireEnv(t, "IOTKIT_TEST_EDGE_PASSWORD_FILE")
 	passwordBytes, err := os.ReadFile(passwordPath)
 	if err != nil {
 		t.Fatal(err)
@@ -28,8 +28,8 @@ func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
 
 	options := mqtt.NewClientOptions().
 		AddBroker(brokerURL).
-		SetClientID("iotkit-gateway-integration-test").
-		SetUsername("gateway-01").
+		SetClientID("iotkit-edge-integration-test").
+		SetUsername("edge-node-01").
 		SetPassword(strings.TrimRight(string(passwordBytes), "\r\n"))
 	client := mqtt.NewClient(options)
 	if token := client.Connect(); !token.WaitTimeout(10 * time.Second) {
@@ -40,7 +40,7 @@ func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
 	defer client.Disconnect(250)
 
 	acks := make(chan []byte, 1)
-	ackTopic := "iotkit/v1/gateways/gateway-01/accepted-through"
+	ackTopic := "iotkit/v1/edge-nodes/edge-node-01/accepted-through"
 	if token := client.Subscribe(ackTopic, 1, func(_ mqtt.Client, message mqtt.Message) {
 		acks <- append([]byte(nil), message.Payload()...)
 	}); !token.WaitTimeout(10 * time.Second) {
@@ -49,7 +49,7 @@ func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recordsTopic := "iotkit/v1/gateways/gateway-01/records"
+	recordsTopic := "iotkit/v1/edge-nodes/edge-node-01/records"
 	publish := func() {
 		t.Helper()
 		if token := client.Publish(recordsTopic, 1, false, batchPayload); !token.WaitTimeout(5 * time.Second) {
@@ -70,7 +70,7 @@ func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ack.GatewayIdentity != "gateway-01" || ack.AcceptedThrough != 1 {
+			if ack.EdgeNodeID != "edge-node-01" || ack.AcceptedThrough != 1 {
 				t.Fatalf("unexpected accepted-through: %+v", ack)
 			}
 			return

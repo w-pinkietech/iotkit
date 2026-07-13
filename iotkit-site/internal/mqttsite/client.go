@@ -12,7 +12,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-const recordsTopicFilter = "iotkit/v1/gateways/+/records"
+const recordsTopicFilter = "iotkit/v1/edge-nodes/+/records"
 
 type ClientConfig struct {
 	BrokerURL     string
@@ -70,7 +70,7 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, logger *
 			err = fmt.Errorf("MQTT subscribe: %w", tokenErr)
 		}
 		if err == nil {
-			logger.Info("Site Server subscribed", "topic", recordsTopicFilter)
+			logger.Info("IoTKit Site subscribed", "topic", recordsTopicFilter)
 		}
 		subscriptionResults <- err
 	})

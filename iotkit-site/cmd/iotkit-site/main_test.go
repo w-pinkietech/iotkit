@@ -4,8 +4,19 @@ import (
 	"crypto/tls"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestRunUsageNamesIoTKitSite(t *testing.T) {
+	err := run(nil)
+	if err == nil || !strings.Contains(err.Error(), "usage: iotkit-site ") {
+		t.Fatalf("run error = %v, want iotkit-site usage", err)
+	}
+	if strings.Contains(err.Error(), "iotkit-site-server") {
+		t.Fatalf("run error retains old binary name: %v", err)
+	}
+}
 
 func TestLoadTLSConfigUsesSystemRootsWhenCAFileIsOmitted(t *testing.T) {
 	config, err := loadTLSConfig("")

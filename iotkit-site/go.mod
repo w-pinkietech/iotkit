@@ -1,4 +1,4 @@
-module github.com/w-pinkietech/iotkit-next/iotkit-site-server
+module github.com/w-pinkietech/iotkit-next/iotkit-site
 
 go 1.25.0
 

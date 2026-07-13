@@ -16,13 +16,13 @@ const (
 )
 
 type RecordBatch struct {
-	SchemaVersion   uint32            `json:"schema_version"`
-	EdgeNodeID      string            `json:"edge_node_id"`
-	LedgerEpoch     string            `json:"ledger_epoch"`
-	PublicationID   string            `json:"publication_id"`
-	CursorStart     int64             `json:"cursor_start"`
-	CursorEnd       int64             `json:"cursor_end"`
-	Records         []json.RawMessage `json:"records"`
+	SchemaVersion uint32            `json:"schema_version"`
+	EdgeNodeID    string            `json:"edge_node_id"`
+	LedgerEpoch   string            `json:"ledger_epoch"`
+	PublicationID string            `json:"publication_id"`
+	CursorStart   int64             `json:"cursor_start"`
+	CursorEnd     int64             `json:"cursor_end"`
+	Records       []json.RawMessage `json:"records"`
 }
 
 type AcceptedThrough struct {
