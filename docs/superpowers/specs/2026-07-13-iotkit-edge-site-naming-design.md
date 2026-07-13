@@ -1,6 +1,6 @@
 # IoTKit Edge / Site 命名変更設計
 
-Date: 2026-07-13  
+Date: 2026-07-13
 Status: 承認済み
 
 ## 目的
