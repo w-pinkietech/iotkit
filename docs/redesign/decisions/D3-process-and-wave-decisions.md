@@ -106,25 +106,6 @@ Edgeへの通常取り込みは温度経路の次に行う。
 最適化したため一時的にCPUを飽和させ、SSH応答も遅くなった。日常の実機反復はdebug buildを
 使い、正式配置用release binaryは開発機またはCIでarm64向けに作ることを優先する。
 
-### Edge / Site新名称での再作成確認 (2026-07-14)
-
-rename実装commit `c0826a0` を実験用Piの専用test copyへ同期し、旧実験labを破棄して新しい
-Edge DB、Site DB、MQTT credential、ACLを作り直した。旧`gateway_identity`、旧topic、旧credentialは
-再利用していない。新DBが生成した`edge_node_id`をMQTT usernameと
-`iotkit/v1/edge-nodes/{edge_node_id}/...`へ束縛した。
-
-- BravePI PoCで温度センサー`246880020140018b`のeventを5件decodeし、新Edge DBでは承認前の
-  `hardware_id = ble:246880020140018b`を`staged_readings`へ3件保存した。
-- `iotkit-edgectl`で同sightingを承認し、その`system_id`をactive化した。active化後の温度観測11件が
-  Edgeの非検疫`readings`と`publication_log`へ連続`pub_seq = 1..11`として保存された。
-- 新しい`iotkit-site` binaryをDockerで起動し、Site query CLIから同じ温度record 11件と
-  `edge_node_id` fieldを確認した。Site raw recordも`pub_seq = 1..11`で、Edge/Siteのcursorはともに11へ進んだ。
-- EdgeとSiteの`edge_node_id`、`ledger_epoch`は一致し、両DBの`PRAGMA quick_check`は`ok`だった。
-  検証後にEdgeをgraceful停止し、`/dev/serial0`が解放されたことも確認した。
-
-秘密値、password、private keyは検証記録へ保存していない。平文MQTTは同一Piのloopbackだけで使用し、
-実運用のTLS要件は変更しない。
-
 ### このゲートでは作らないもの
 
 - BravePIのBLE、ペアリング、トランスミッタ管理、送信間隔/出力設定、Long Range到達距離の再検証
