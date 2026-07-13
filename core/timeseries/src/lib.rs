@@ -956,8 +956,7 @@ mod v3_tests {
         let db = v3_db();
         db.with_conn_sync(|conn| {
             let received_at = 10_000_000;
-            let (event_time, source) =
-                insert_and_read_event_time(conn, received_at, None, "edge");
+            let (event_time, source) = insert_and_read_event_time(conn, received_at, None, "edge");
             assert_eq!(event_time, received_at);
             assert_eq!(source, "received_at");
             Ok(())

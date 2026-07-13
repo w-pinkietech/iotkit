@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use iotkit_core_storage::{DbHandle, Migration};
 use iotkit_edge::api::{ApiHandle, spawn_api_task};
-use iotkit_edge::config::{
-    ApiConfig, ConfigError, ConfigSource, RawApiConfig, RawConfig, resolve,
-};
+use iotkit_edge::config::{ApiConfig, ConfigError, ConfigSource, RawApiConfig, RawConfig, resolve};
 use iotkit_edge::health::HealthState;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -325,9 +323,7 @@ async fn known_restore_or_reset_state_blocks_control_listener_before_bind() {
 
     assert!(matches!(
         result,
-        Err(iotkit_edge::api::ApiError::NotReady(
-            "restore_in_progress"
-        ))
+        Err(iotkit_edge::api::ApiError::NotReady("restore_in_progress"))
     ));
 }
 

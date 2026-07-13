@@ -961,12 +961,7 @@ async fn run_pinned_status(
     }
 }
 
-async fn run_path_status(
-    running: &RunningEdge,
-    ca_path: &Path,
-    method: Method,
-    path: &str,
-) -> u16 {
+async fn run_path_status(running: &RunningEdge, ca_path: &Path, method: Method, path: &str) -> u16 {
     let method = method.as_str().to_owned();
     let output = shell(
         &format!(

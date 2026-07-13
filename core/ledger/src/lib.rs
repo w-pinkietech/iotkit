@@ -5,8 +5,8 @@ pub use ids::SystemId;
 pub use store::{
     CHANNEL_NA, DEFAULT_VARIANT, DeviceKind, DeviceRow, DeviceState, EventRow, LedgerError,
     NewDevice, ParsedSeriesKey, ReplaceOutcome, SeriesListRow, SeriesMeta, SeriesRow, SightingRow,
-    activate_device, approve_sighting, bump_generation, current_generation, ensure_series,
-    edge_node_id, expire_quarantined_devices, find_alive_by_hardware_id, find_series_by_key,
+    activate_device, approve_sighting, bump_generation, current_generation, edge_node_id,
+    ensure_series, expire_quarantined_devices, find_alive_by_hardware_id, find_series_by_key,
     find_series_meta, get_device, insert_device, ledger_epoch, list_devices, list_recent_events,
     list_series, list_series_for_device, list_sightings, parse_series_key, purge_sightings,
     record_event, record_sighting, release_series_quarantine_for_key_checked, renew_epoch,

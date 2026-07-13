@@ -1690,8 +1690,7 @@ mod tests {
 
     #[test]
     fn restore_device_time_ignores_age_ms_that_would_underflow() {
-        let (device_time, source) =
-            restore_device_time(i64::MIN, None, Some(1), TimeSource::Edge);
+        let (device_time, source) = restore_device_time(i64::MIN, None, Some(1), TimeSource::Edge);
         assert_eq!(device_time, None);
         assert_eq!(source, TimeSource::Edge);
     }

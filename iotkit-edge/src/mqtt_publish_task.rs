@@ -218,10 +218,7 @@ async fn handle_ack(
     Ok(true)
 }
 
-fn prepare_batch(
-    conn: &Connection,
-    edge_node_id: &str,
-) -> Result<Option<PreparedBatch>, String> {
+fn prepare_batch(conn: &Connection, edge_node_id: &str) -> Result<Option<PreparedBatch>, String> {
     let current_epoch =
         iotkit_core_ledger::ledger_epoch(conn).map_err(|error| error.to_string())?;
     let Some(target) = target_get(conn).map_err(|error| error.to_string())? else {
@@ -254,12 +251,7 @@ fn prepare_batch(
             schema_version: EGRESS_SCHEMA_VERSION,
             edge_node_id: edge_node_id.to_string(),
             ledger_epoch: current_epoch.clone(),
-            publication_id: publication_id(
-                edge_node_id,
-                &current_epoch,
-                cursor_start,
-                cursor_end,
-            ),
+            publication_id: publication_id(edge_node_id, &current_epoch, cursor_start, cursor_end),
             cursor_start,
             cursor_end,
             records,

@@ -261,10 +261,7 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
 /// Applies defaults to `None` fields, validates constraints,
 /// and returns `Err(ConfigError::Validation)` on invalid values.
 pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, ConfigError> {
-    let db_path = raw
-        .edge
-        .db_path
-        .unwrap_or_else(|| "iotkit.db".to_string());
+    let db_path = raw.edge.db_path.unwrap_or_else(|| "iotkit.db".to_string());
     if db_path.is_empty() {
         return Err(ConfigError::Validation(
             "db_path must not be empty".to_string(),
@@ -564,8 +561,7 @@ edge_name = "kitchen-edge"
 
     #[test]
     fn legacy_gateway_name_is_rejected() {
-        let result: Result<RawConfig, _> =
-            toml::from_str("[api]\ngateway_name = \"old-name\"");
+        let result: Result<RawConfig, _> = toml::from_str("[api]\ngateway_name = \"old-name\"");
         assert!(result.is_err());
     }
 

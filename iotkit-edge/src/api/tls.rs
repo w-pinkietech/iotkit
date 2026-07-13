@@ -297,9 +297,11 @@ mod tests {
             params.distinguished_name.get(&DnType::CommonName),
             Some(&DnValue::Utf8String("iotkit-edge".to_string()))
         );
-        assert!(params.subject_alt_names.contains(&SanType::DnsName(
-            "iotkit-edge.local".try_into().unwrap()
-        )));
+        assert!(
+            params
+                .subject_alt_names
+                .contains(&SanType::DnsName("iotkit-edge.local".try_into().unwrap()))
+        );
     }
 
     #[test]
