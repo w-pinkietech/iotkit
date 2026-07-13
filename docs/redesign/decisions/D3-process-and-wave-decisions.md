@@ -87,6 +87,14 @@ Siteまでの縦経路を確認した。
   購読をPahoの接続callbackへ移し、broker再起動をend-to-end試験へ追加した。修正版Siteは
   containerを再起動せず再購読し、その後の実機配送と`accepted-through`を完了した。
 
+2026-07-14にはEdge/Site命名変更後のcommit `c0826a0`を使い、実験用labを旧DB・旧設定・旧MQTT
+credentialごと削除して新構成から再作成した。新しい`edge_node_id`と専用credential/topic ACLを生成し、
+温度センサー`ble:246880020140018b`を新DBで承認・active化した。BravePI MainboardのUARTから受信した
+新しい温度観測11件が`pub_seq` 1〜11としてIoTKit Siteの11行へ同じ`edge_node_id`・`ledger_epoch`で
+保存され、Edgeの`accepted-through` cursorも11へ収束した。停止後のEdge DBとSite DBはともに
+`PRAGMA quick_check = ok`であり、Edge停止後にUARTが解放されたことも確認した。旧`gateway_identity`、
+旧`/gateways/` topic、旧credentialは再利用していない。
+
 これにより `BravePI Transmitter -> BLE Long Range -> BravePI Mainboard -> UART -> IoTKit Edge SQLite -> MQTT
 -> MQTT Broker -> IoTKit Site raw SQLite -> accepted-through -> Edge cursor` は実機確認済みとなった。
 平文MQTTは同一Piのloopbackだけを使う実験設定であり、実運用のTLS要件を緩和しない。
