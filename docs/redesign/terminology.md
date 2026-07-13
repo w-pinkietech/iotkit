@@ -17,7 +17,7 @@ Date: 2026-07-02
 |---|---|---|---|---|
 | [1] | デバイス | device | BravePI無線センサー端末、直結I2Cセンサー、第三者の自作デバイス(ESP32/PLC等) | 測定・作動する末端。ゲートウェイの配下 |
 | [2] | **IoTゲートウェイ**(外向き正式名。「ゲートウェイ」単独は内部略称) | IoT gateway / gateway | 現場に置くRaspberry Pi。IoTKit本体が動く | 責務台帳 R1〜R23 はすべてこの箱の責務。コード・APIの `gateway` / `gateway_identity` は不変 |
-| [3] | **サイトサーバー**(旧称「工場サーバー」廃止 2026-07-08) | site server | **単一サイトの責務**(Archival Store/Aggregator/Console)を担う箱。既定は制御室等サイト内LAN。敷地外で運用する**ホスト型**変種あり(D8決定1・D10決定7の条件下で正式)。Standaloneでは不在可、Site-managed(Gateway Pi 2台以上)では必須(D8決定1) | 中の論理ロール: Archival Store(預かり)/Site Aggregator+配り用ブローカー(再publish)/Site Console(D8決定3)。AIオペレーター、オンプレYokaKitもここに住める。1インスタンス=1サイト(相乗り禁止、D10決定7) |
+| [3] | **サイトサーバー**(旧称「工場サーバー」廃止 2026-07-08) | site server | 単一サイトの標準MQTT broker、Archival Store、application接続点を担う箱。Standaloneでは不在可、Site-managedでは必須(D8) | 初期実装はGo Site Server+SQLite。YokaKitは別applicationとして接続する |
 | [4] | クラウド | cloud | **site_idを跨ぐ上位層**(オプション)。商用クラウドに限らず、本社サーバールーム等もここ。※ホスト型[3]と同じデータセンターに同居しうるが、単一site_idに閉じるインスタンスは[3]である(役割基準) | クラウドLLM API、クラウドYokaKit、複数拠点統合・fleet管理・DR複製が住む。**サイト横断は必ずここでやる(サイトサーバー同士に上下関係を作らない)** |
 
 ### 禁止・注意語
@@ -122,46 +122,29 @@ Date: 2026-07-02
 
 | 用語 | 英語 | 定義 |
 |---|---|---|
-| Standalone | standalone | サイト内のGateway Piがちょうど1台の構成。YokaKit同梱可、上流接続・site server任意(D8決定1) |
-| Site-managed | site-managed | Gateway Piが2台以上でsite server[3]を必須とする構成。各PiはいずれもローカルSQLite/collector/出口を持つ完全ゲートウェイ(D8決定1・2) |
-| gateway_identity | — | Gateway Piの安定した外部同一性。初回自己構成で1回だけ生成し、共有イメージには焼き込まない。消費者側の大域レコード同一性 `(gateway_identity, epoch, seq)` の先頭成分(D8決定5)。台帳エポックとは別概念 |
-| Site Aggregator | site aggregator | site server内の**非権威**ロール。各PiのR10を読み投影・統合表示・運用管理する。custody transferしない(D8決定3) |
-| Archival Store(アーカイブ責任) | archival store / archival consumer | site server内の**custody受け手**ロール。各PiからR10 raw streamを受け耐久保存し、archival ackを返す。このackだけがPiのpurgeを許可(D8決定3。D2のアーカイブ責任消費者——ゲートウェイの台帳で指定する上流の預かり先——をsite server[3]に置いた形) |
-| archive_repair_hold | — | site archive損失/修復の検知中、対象 `gateway_identity`・範囲のGateway Pi purgeを修復完了まで止める保留フラグ。backfillで送り直すべき範囲を先に消さないため(D8決定4) |
-| active epoch台帳 | active epoch registry | site serverがGateway Piごとの現行epochを永続保持する台帳。stale epochは大小比較でなくこの台帳との一致で判定(RTCなし前提。D8決定5) |
-| archive_lost | — | Pi purge済みかつsite archive損失かつbackupなしの範囲に付す監査イベント。Gateway Piの `custody_lost` ではなくsite側の責務損失として区別(D8決定4) |
-| Site Console | site console | site server上の統合運用UI。gateway enrollment・alarm集約・snapshot vault・update orchestrationの操作面(D8決定1・8) |
+| Standalone | standalone | サイト内のGateway Piが1台で、上流接続とsite serverが任意の構成(D8) |
+| Site-managed | site-managed | 複数Gatewayを独立した完全GatewayとしてSite Serverへ接続する構成(D8) |
+| gateway_identity | — | Gateway Piの安定した外部同一性。消費者側の大域レコード同一性 `(gateway_identity, epoch, seq)` の先頭成分(D8) |
+| Site Aggregator | site aggregator | canonical recordをsite表示やapplication向けに投影する非custodialロール(D8) |
+| Archival Store(アーカイブ責任) | archival store / archival consumer | raw canonical recordを耐久保存しapplication custody ackを返すSiteロール。このackだけがGateway purgeを許可(D8/D9) |
+| archive_lost | — | Siteが一度custodyを取った後に失った範囲を表す監査事実。MVP後のhardening対象(D8) |
 
-## 出口MQTTバインディング(D9 2026-07-08)
+## 出口MQTTバインディング(D9 2026-07-13改訂)
 
 | 用語 | 英語 | 定義 |
 |---|---|---|
-| 出口MQTTバインディング | exit MQTT binding | 出口契約(R10)の第一波バインディング。IoTゲートウェイがtargetのMQTTエンドポイントへ有界バッチをpublish(QoS1)し、ackを「しまってから返すPUBACK」+補助topic明細で受ける(D9) |
-| 送信窓 | sending window | 未ack(未PUBACK)のin-flightバッチ数の上限。窓が埋まったら新規publishを止めoutboxに滞留(D9決定7) |
-| 補助topic(ack明細) | ack detail topic | `iotkit/v1/gateways/{gateway_identity}/ack-detail` 上でArchival Storeが返す `accepted_through` 正式水位。target_id/target_endpoint_id/publication_id/epoch相関必須、retained禁止、SUBACK後resync(D9決定2・2026-07-13具体化) |
-| snapshot ack | series snapshot acknowledgement | `series-snapshot-ack` 上のlegacy outbox metadata bootstrap専用応答。snapshot ID/hash、gateway/target/endpoint/epoch、snapshot through、registry revision、`purge_authority=false`を持ち、production水位を進めない(D9、2026-07-13追加) |
-| series定義同期 | series definition synchronization | R10の必須 `series_definition` family。R11メタデータ正本のうちseries解釈に必要なkey/unit/type/channel/variant/value semantics/revision/effective cursorだけをversion付きでSiteへ複製する。business label/masterは含めない(D7決定2、2026-07-13追加) |
-| 終端通知 | terminal notice | `iotkit/v1/gateways/{gateway_identity}/terminal-notice` で再送しても結果が変わらない失敗(決定的契約違反・custody_conflict)を伝える。受けたbatchはoutbox隔離+operator解決。一時的storage失敗には使わない(D9決定3・2026-07-13具体化) |
-| 非預かりターゲット | non-custodial target | 市販ブローカー等、custodyを移転しない出口先。PUBACKは配達確認どまり、逆圧・カーソル・gap通知は構造的に失われるベストエフォートの配り(D9決定5) |
-| 一級target / 購読者 | first-class target / subscriber | 消費者の二層。一級target=契約対応リスナー(store-then-ack)を実装しカーソル・完全性保証を受ける消費者。購読者=配り用ブローカーをsubscribeするだけのベストエフォート消費者(D9決定8) |
+| 出口MQTTバインディング | exit MQTT binding | Gatewayが標準brokerへ有界batchをQoS 1 publishするR10第一バインディング。broker PUBACKはtransport受領だけを表す(D9) |
+| application custody ack | application custody acknowledgement | Siteがraw recordと連続cursorを同一transactionでcommitした後、`accepted-through` topicへpublishする正式水位。これだけがGateway purgeを許可する(D9) |
+| 送信窓 | sending window | application custody ack待ちbatch数の上限。MVPは1。PUBACKでは窓を解放しない(D9) |
+| Archival Store | archival store | canonical recordを耐久保存してapplication custody ackを返すSiteの役割。標準broker自体はArchival Storeではない |
 
-## 出口認証(D10 2026-07-08)
+## 出口認証(D10 2026-07-13改訂)
 
 | 用語 | 英語 | 定義 |
 |---|---|---|
-| enrollment台帳(名簿) | enrollment ledger | site server[3]が保持する登録台帳: `gateway_identity`・鍵/証明書fingerprint・ledger epoch・site所属・credential束縛レコード。D8決定5の一意性検証・active epoch台帳と同居(D10決定1) |
-| 登録券 | enrollment ticket | 新Gateway Piを名簿に載せる単回使用のprovisioning束 {接続endpoint, サーバー公開鍵ピン, site_id, 単回使用秘密, 短TTL}。共有イメージ焼き込み禁止、人間承認必須(D10決定2) |
-| 束縛credential | bound credential | Pi・targetごとに1つの資格情報。`gateway_identity + target_id + target_endpoint_id + pinset + scope` へ束縛(URL文字列には束縛しない)。共有credential禁止(D10決定1) |
-| 2スロット(make-before-break) | two-slot rotation | targetごとにcredentialを2枠持ち、「新発行→疎通スモーク成功→旧失効」の順で更新する方式。スモーク成功が旧失効の事前条件(D10決定3) |
-| 無人再発行 | unattended re-issuance | 期限切れcredentialの非常口。箱から出ない鍵(登録済みfingerprintの鍵ペア/トンネル鍵)で認証→名簿照合→自動再発行+監査。人間の関与不要(D10決定3) |
-| 中間層 / 日常層 / 工事層 | routine / daily-tap / construction tier | 変更操作の権限3分類(D12決定3で正式化。照会はread-onlyスコープとして別軸)。**中間層**=AI可・必須条件つき(出口credential rotation・失効・無人再発行・トンネル鍵rotation=D10決定5、南向きの世話の一部=D12決定3。一括操作は昇格)。**日常層**=人間のタップ承認・AIは提案まで(device add・ペアリング窓・デバイストークン失効=D1/D11、較正確定・アラーム意味論・親再起動・DFU承認・流量クラス変更=D12決定3/D11決定8)。**工事層**=構造・経路の変更(target追加・削除、cloud target登録、archive designation変更、平文opt-in、enrollment承認、入口リスナー有効化/bind変更。人間のみ、AIトークンには構造的に発行不可)(動詞集合の正本=D10決定5・D11決定8・D12決定3) |
-| ホスト型サイトサーバー | hosted site server | site server[3]のソフトウェア一式を敷地外(クラウド/VPS)で運用する正式変種。成立条件(宣言済み `self_managed_static` / `managed_overlay` 経路MUST・WAN断耐久宣言・purge自動保留・VPS外DR・相乗り禁止)はD10決定7 |
-| 経路クラス規則 | path-class rule | 守りの強度を箱の設置場所でなく経路で決める規則。[2]↔[3]の全プレーンは、LAN内なら「廊下」ルール、インターネットを渡るなら宣言済み `self_managed_static` または `managed_overlay` 内MUST。外部管理VPNをplatformが一律禁止せず、現場が権威/到達/失効/復旧を選び記録する(D10決定7) |
-| 自己管理静的経路 | self-managed static path | `self_managed_static`。Gatewayごとの静的WireGuard等を現場が直接管理する経路プロファイル。peer鍵、AllowedIPs/FW、rotation/失効をIoTKit名簿/手順へ束縛(D10決定7) |
-| 管理overlay経路 | managed overlay path | `managed_overlay`。Tailscale等の外部control planeを持つoverlay VPNを現場判断で使う経路プロファイル。provider/admin/ACL/node admission/account recovery/rotation/revoke/restore/残余リスクを記録し、TLS pin・箱鍵mTLS・束縛credentialを省略しない(D10決定7、2026-07-13追加) |
-| トンネル鍵 | tunnel key | ホスト型の[2]↔[3]トンネル(WireGuard等)のピア鍵。Pi上で生成し公開鍵のみ名簿登録、期限なし(有効性=名簿照合)、rotation=中間層2スロット、失効=peer除去+MQTTセッション切断連動(D10決定7) |
-| credential_health | — | アラーム(旧称 `certificate_expiry`)。証明書・target資格情報・operator tokenの期限・rotation失敗・ピン不一致・2スロット片肺(D10) |
-| site_unreachable | — | ホスト型のアラーム。archival storeへの全Pi一斉不達(WAN断/トンネル断/VPS障害)。LAN内部分分断の `partial_partition` とは別事象(D10) |
+| Gateway credential | gateway credential | Gatewayごとに発行するstatic broker credential。共有禁止、Git/argv/log非掲載、当該Gateway topicだけをACLで許可(D10) |
+| 管理overlay経路 | managed overlay path | Tailscale等の外部control planeを持つ到達経路。MVPではtailnet内TLSを使うが、overlay identityだけをapplication認証にしない(D10) |
+| credential hardening | credential hardening | enrollment、短命化、rotation、無人再発行等の配布前候補。最初の1 Gateway実機スライスには含めない(D10) |
 
 ## 入口認証(D11 2026-07-08)
 
@@ -170,7 +153,7 @@ Date: 2026-07-02
 | 流量クラス | rate class | デバイス登録時に申告する想定流量の粗い段階(既定クラスあり)。容量設計=現場エンジニアの責任、執行=ソフトの責任、という分担の実体。クラス変更は人間のみ(D11決定4・8) |
 | 絞り | throttle | 流量クラス超過分を**非終端**の応答で退けるシステム自動執行。HTTP=429+Retry-After(耐久ackなし)、ack語彙上は `deferred`——終端 `rejected` には決して写像しない(spool持ち送信者のデータ破壊防止)。可逆・ヒステリシス付き自動解除・騒がしく(アラーム+R23+監査)(D11決定4) |
 | 対応の階段 | response ladder | 入口の事故対応の順序: 絞る(自動)→検疫(自動・既決)→トークン失効(人間のみ)。自動対応は必ず騒がしく行う(D11決定4) |
-| ペアリング窓 / 登録コード | pairing window / registration code | デバイス登録の儀式(D1既決)。登録コードはD10登録券の縮小版(単回使用・短TTL・窓内のみ有効)。窓は自動クローズ、開けっ放し禁止(D11決定6) |
+| ペアリング窓 / 登録コード | pairing window / registration code | デバイス登録の儀式(D1既決)。登録コードは単回使用・短TTL・窓内のみ有効。窓は自動クローズ、開けっ放し禁止(D11決定6) |
 | 入口リスナー既定オフ | ingress listener off-by-default | ネットワーク入口(HTTP/MQTT ingest)は既定で無効。有効化・bind変更・プロトコル追加は独立した工事層操作(device addの暗黙副作用にしない)。インターネット公開は禁止——遠隔地からのデータは別のIoTゲートウェイ[2]+出口契約で運ぶ(D11決定7) |
 | site_local_cidr | — | 入口リスナーのbind先を定義する明示設定(CIDR+許可インターフェース)。「LAN限定」の検証可能な実体。別拠点・第三者WiFi・VPN越しのプライベートアドレスは含めない(D11決定7) |
 | capacity_debt | — | 流量クラス申告合計が箱の実測体力を超えたまま、人間の明示承認で `device add`/クラス変更を通した記録。検算はPhase 6と操作のたびの両方で実行(D11決定4) |

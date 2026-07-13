@@ -1,10 +1,10 @@
 # Architecture
 
 IoTKit currently ships one Gateway Rust binary (`iotkit-gateway`) plus an operator CLI
-(`iotkit-gatewayctl`), backed by a single SQLite database. The approved minimum vertical slice adds
-an independently deployable Site Server binary/CLI backed by its own SQLite database; it does not
-turn the Site Server into part of the Gateway process. The Gateway runs unattended on a Raspberry Pi
-under systemd. This document is the "get oriented in 10 minutes"
+(`iotkit-gatewayctl`), backed by a single SQLite database. The next vertical slice adds a small,
+independently deployable Go Site Server backed by its own SQLite database and a standard MQTT broker.
+It does not turn the Site Server into part of the Gateway process. The Gateway runs unattended on a
+Raspberry Pi under systemd. This document is the "get oriented in 10 minutes"
 map **and the canon for code placement**; the authoritative *why* is the
 Japanese design corpus under `docs/redesign/` (decision records D1–D13,
 responsibility ledger R1–R23).
@@ -29,11 +29,9 @@ The design corpus describes four tiers of a deployment (terminology.md):
 hardware) → **[2] the IoT gateway** (Raspberry Pi, this repo) → **[3] the site
 server** (per-site aggregation; may be hosted off-premises) → **[4] cloud**.
 
-**The current crate map ships tier [2]; the approved next vertical slice also places tier [3]
-Site Server software in this repository as separately classified crates/binaries.** Tier [1] is
-hardware plus the ingest wire contract. Tier [3] consumes only the public exit contract and shared
-leaf primitives; it never depends on Gateway composition, adapter, collector, timeseries, publish,
-or control internals. Tier [4] remains external.
+**The current Cargo workspace ships tier [2].** Tier [3] is a separate Go program in this repository
+that consumes only the public MQTT exit contract; it does not import Gateway Rust packages or read
+the Gateway database. Tier [1] is hardware plus the ingest wire contract. Tier [4] remains external.
 So a minimal site install is: flash a Pi, run the `iotkit-gateway` daemon
 under systemd, keep `gatewayctl` on the same Pi as a hand-run CLI, wire
 adapters to sensors. A standalone site can stop there (D8: an upstream is
@@ -62,14 +60,18 @@ gains one. Anything that complicates this story needs a strong reason.
              │ R10 exit   │      │ R17 custody- │     │ R12 status   │
              │ contract   │      │ aware purge  │     │ JSON         │
              └─────┬──────┘      └──────────────┘     └──────────────┘
-                   │ MQTT QoS 1 (per-target credential, at-least-once)
+                   │ MQTT QoS 1 (transport PUBACK only)
                    ▼
-            custody-aware Site listener ── durable accepted-through ──▶ authorizes purge
+             standard MQTT broker
+                   │
+                   ▼
+            Go Site Server ── durable accepted-through topic ──▶ authorizes purge
 ```
 
-The checked-in `publish_task` is a transitional HTTPS implementation from the earlier MVE. D9 and
-the approved minimum Site Server design make MQTT QoS 1 the production exit binding; implementation
-migrates the single archive target and does not promise both production bindings.
+The checked-in `publish_task` is a transitional HTTPS implementation from the earlier MVE. D9 makes
+MQTT QoS 1 the production exit binding. A broker PUBACK confirms transport receipt only; the Gateway
+retains its outbox until the Site Server commits raw records and publishes application-level
+`accepted-through`.
 
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
 `iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
@@ -99,10 +101,11 @@ The gateway is a **buffer, not a warehouse**. A measurement's lifecycle:
    transaction, enqueues an outbox row in `publication_log` (only for
    non-quarantined measurements). Crash-consistent: you never get a reading
    without its outbox row, or vice versa.
-2. **Publish** — the publisher batches undelivered outbox rows and sends them to the custody-aware
-   MQTT endpoint with a per-target credential. The DB lock is **not** held across the network
-   round-trip. The transitional implementation still uses HTTPS until the approved migration lands.
-3. **Ack → cursor** — a valid ack (matching publication id, exact batch end)
+2. **Publish** — the publisher batches undelivered outbox rows and sends them through a standard
+   MQTT broker with a per-Gateway credential. The DB lock is **not** held across the network
+   round-trip. Broker PUBACK does not release application custody.
+3. **Ack → cursor** — after its SQLite commit, Site publishes a valid `accepted-through` ack
+   (matching Gateway, epoch, publication id, and batch bound), which
    advances the per-target cursor. The cursor is the consumer's durable
    watermark: "I have taken custody up to here."
 4. **Purge/degrade** — normal retention deletes archive-acknowledged data beyond the minimum floor.
@@ -140,7 +143,7 @@ network setup route or unauthenticated setup allowlist. The prescriptive rule:
 path.** Local-root ownership/recovery (and the separately specified factory-reset
 maintenance family) are explicit non-network exceptions, never API/UI/AI operations.
 
-## Current Plan 6 state
+## Current implementation state
 
 The repository currently ships the first network measurement path as a separate,
 default-off `iotkit-ingest-http` listener. It accepts authenticated JSON
@@ -150,10 +153,10 @@ side-effect-free `/api/v1/ingest/validate` endpoint. Its principal, staging,
 deduplication, health, and episode-audit boundaries are distinct from the
 control API.
 
-Plan 6.5 remains the pre-distribution owner of encrypted replacement backup containers and
-cross-filesystem restore-fence mechanics. MQTT exit + Site Server is the approved next vertical
-slice. MQTT ingest, pairing-window device registration, batch provisioning, and rich device UI
-remain later work.
+The next slice is deliberately narrow: one OPT3001, one Gateway, one standard broker, one Go Site
+Server, raw SQLite storage, application-level accepted-through, and a direct CLI query. Enrollment,
+credential rotation, Site backup/restore, projection, legacy HTTPS migration, multi-Gateway hardware,
+YokaKit integration, and UI are deferred until this path works on real hardware.
 
 ## Crate map
 
@@ -185,14 +188,12 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-gateway` | `iotkit-gateway` | **Binary.** Composition root: adapter supervision, push task, retention, health, HTTPS API. |
 | `iotkit-gatewayctl` | `iotkit-gatewayctl` | **Binary.** Operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
 
-Approved next-slice placements (added to the crate map and layer checker atomically when created):
+Approved next-slice non-Rust placement:
 
-| Planned crate | Tier/class | Responsibility (one line) |
+| Component | Path | Responsibility (one line) |
 |---|---|---|
-| `iotkit-egress-contract` | CONTRACT | Serde-only public R10 record/batch/ack-detail vocabulary; no Gateway or Site storage dependency. |
-| `iotkit-site-store` | SITE [3] | Enrollment registry, raw archival custody transaction, and rebuildable query projection. |
-| `iotkit-site-server` | SITE [3] binary | Custody-aware MQTT listener plus OS-authorized local Unix-socket read API; depends on the public egress contract and Site store, not Gateway internals. |
-| `iotkit-site-serverctl` | SITE [3] binary | Local construction/enrollment/admin CLI and bounded read-query client; no direct mutation SQL. |
+| Go Site Server | `iotkit-site-server/` | MQTT consumer, raw archival custody transaction, accepted-through publisher, and direct raw query CLI. |
+| Cross-language fixtures | `testdata/egress/v1/` | Normative JSON examples decoded by both Rust and Go tests. |
 
 ### Layer rules (machine-checked)
 
@@ -221,15 +222,11 @@ Approved next-slice placements (added to the crate map and layer checker atomica
    depend on `iotkit-gateway`; its internal allowlist is the ingest contract,
    collector boundary, storage/auth services (`core/ops`), and no other workspace
    crate. The gateway composes it, never the reverse.
-9. **`SITE` consumes contracts, not Gateway internals** — tier-[3] crates may depend on
-   `iotkit-egress-contract` and deliberately shared leaf/storage primitives, but never on
-   `iotkit-gateway`, adapters, `core/collector`, `core/timeseries`, `core/publish`, `core/engine`, or
-   Gateway control internals. Shared wire semantics graduate to CONTRACT; they are not imported from
-   a binary or copied into Site code.
+9. **Site consumes the wire contract, not Gateway internals** — the Go Site Server shares JSON
+   fixtures and schema semantics only. It never imports Gateway packages or opens the Gateway DB.
 
-Rule numbers match the `scripts/check-layers` error messages after the approved SITE rule lands.
-Gateway binaries and separately classified Site binaries may compose their allowed layers — with one
-exception: rule 7 pins the
+Rule numbers match the `scripts/check-layers` error messages. Gateway binaries may compose their
+allowed layers — with one exception: rule 7 pins the
 `core/supervision` dependent set, so even a binary (today: `iotkit-gatewayctl`)
 cannot pick up the frozen vocabulary without a deliberate rule-7 + canon update.
 Dev-dependencies are exempt (tests may cross layers); build-dependencies are
@@ -276,6 +273,7 @@ checked.
 | A new control-plane HTTP API route | `iotkit-gateway/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
 | An authenticated measurement-ingress HTTP binding | Shipped Plan 6 binding: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
 | A new CLI command | `iotkit-gatewayctl`, calling `core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
+| Site archival or query behavior | `iotkit-site-server/`; communicate through the versioned MQTT wire contract and shared fixtures, never Gateway internals. |
 | Raw bus/pin access | `rpi4b-transport`. |
 | A gateway module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `core/<name>` crate.** The gateway is a composition root, not a home for domain logic. |
 
@@ -312,9 +310,9 @@ Getting these right is most of the design (see D5, D7).
   custody-critical transactions must not lose an acked commit on power loss;
   NORMAL is reserved for reconstructable metadata, which today shares the same
   connection, so the whole connection runs FULL).
-- **The push task never holds the DB lock across HTTP.** It's three scopes:
-  build the batch (lock), POST + await ack (no lock), advance the cursor (lock).
-  A slow archive server cannot stall ingestion.
+- **The publisher never holds the DB lock across MQTT.** It builds the batch under the lock,
+  publishes and waits for application acknowledgement without the lock, then advances the cursor
+  under the lock. A slow broker or Site Server cannot hold the ingest DB mutex.
 - **The custody-critical retention purge is one Immediate transaction** (readings
   delete + outbox prune + dedup purge + quarantine expiry + audit), internally
   chunked so a large batch doesn't build an oversized SQL statement. Housekeeping

@@ -29,7 +29,7 @@
 | 作業者 worker | `workers`（`001_master_data.up.sql:85-92`）、稼働中は`producers`（`002_production_data.up.sql:84-95`） | センサー観測なし（HTTP `PUT /api/switch/{processId}/worker` で手動割当。`cmd/yokakit/main.go:612`） | IoTKit出口契約には無関係と推定（**未確認**: MQTT経由の作業者ID自動検出が将来的にありうるかは未確認） |
 | センサー sensor | `sensors`（`001_master_data.up.sql:112-123`） | `alarm`トピック | `identification_number`+`raspberry_pi_id`で解決（`internal/mqtt/resolver.go:130-157`） |
 | ON/OFF設定 on_off | `on_offs`（`001_master_data.up.sql:125-137`） | `onoff`トピック | `pin_number`+`raspberry_pi_id`で解決（`internal/mqtt/resolver.go:161-188`） |
-| ガントチャート信号 gantt_chart | `gantt_charts`（`006_gantt_chart.up.sql:2-18`） | `gantt-chart`トピック | `pin_number`+`raspberry_pi_id`で解決（`internal/mqtt/resolver.go:198-217`）。BASE(2)=基準信号(電源ON)、WORK(3)=稼働信号、`docs/superpowers/specs/2026-03-29-gantt-chart-design.md:39-46` |
+| ガントチャート信号 gantt_chart | `gantt_charts`（`006_gantt_chart.up.sql:2-18`） | `gantt-chart`トピック | `pin_number`+`raspberry_pi_id`で解決（`internal/mqtt/resolver.go:198-217`）。BASE(2)=基準信号(電源ON)、WORK(3)=稼働信号 |
 | 計画停止 planned outage | `planned_outages`（`001_master_data.up.sql:46-53`）、`process_planned_outages`, `production_planned_outages` | センサー観測なし。時刻ベースの管理者設定（`start_time`/`end_time` TIME型） | IoTKitからの観測は不要。純粋にYokaKit側マスタ設定（詳細は§5） |
 | 生産数 production count | `production_lines.count`（`002_production_data.up.sql:28-44`）、履歴は`productions`（`002_production_data.up.sql:57-73`） | `production`トピック | 装置は生の累積カウントを送る。差分計算はyokakit-next側で実施（後述§2） |
 | 不良数 defective count | `defective_productions`（`002_production_data.up.sql:76-82`） | `production`トピック（`lines.defective=true`のライン） | 良品/不良品は物理的に別ピン（別ライン）として区別。センサー側で良否判定済み |

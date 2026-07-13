@@ -75,7 +75,7 @@ There are three different authority layers:
 
 - `_legacy-remake/remake-plan.md`
 - `_legacy-remake/open-questions-adapter-architecture.md`
-- `docs/superpowers/specs/` and `docs/superpowers/plans/` (historical design records)
+- Historical implementation specs and plans remain available in Git history; they are not current authority.
 
 ## Important Design Direction
 

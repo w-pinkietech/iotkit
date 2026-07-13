@@ -34,8 +34,8 @@ R17劣化契約のパージ順序は
 ## 2. 初期化・運用開始(コミッショニング)
 
 以下は単一Gateway Pi(D8のStandalone)を前提とした標準手順である。**複数Gateway Piの現場(D8のSite-managed)では
-コミッショニングがトポロジで分岐する(D8決定6)。** また共有OSイメージには `gateway_identity`・TLS秘密鍵・トークンを
-焼き込まず、台ごとに固有な値はPhase 2の初回自己構成で生成する(D8決定5。大量複製イメージからの同一identity量産を防ぐ)。
+コミッショニングがトポロジで分岐する(D8)。** また共有OSイメージには `gateway_identity`・TLS秘密鍵・トークンを
+焼き込まず、台ごとに固有な値はPhase 2の初回自己構成で生成する(D8。大量複製イメージからの同一identity量産を防ぐ)。
 
 - Phase 0 準備: SDにOSイメージ(A/B構成済み)を焼く。オフィスで可
 - Phase 1 物理設置: RPi+HAT+電源+センサー配置
@@ -73,7 +73,7 @@ R17劣化契約のパージ順序は
 | 親デバイス(BravePIメインボード等)[1] | 配下子デバイスの一斉死活 | 一括replace+メンテナンスウィンドウ(D5ガードレール5) | 配下全子の区間欠測 |
 | ゲートウェイ[2]全損 | 上流/AI無応答+LED | 予備RPi+最新スナップショット復元(R22)→デバイス自動再認識 | 未配送outbox分+最終スナップショット以降の台帳変異を損失(明文で受け入れ) |
 | ゲートウェイ[2]部分故障 | 監督(R20) | 自動再起動→degraded+AI診断→操作カタログ | 当該アダプタの区間欠測 |
-| サイトサーバー[3] | ゲートウェイ無影響 | サーバー再構築+ハーネス再設定 | ゼロ——ただし**non-custodial serverに限る**。[3]がArchival Store等のcustodyを持つSite-managed構成では、custody状態ごとにD8決定7の復旧表で分ける |
+| サイトサーバー[3] | ゲートウェイ無影響 | サーバー再構築+接続再設定 | 未ack範囲はGatewayから再送。Siteが既にcustodyを取った範囲の損失はSite側`archive_lost`(D8) |
 | 上流断・NW断 | 接続状態機械 | 何もしない→復旧後カーソルから自動再送 | ゼロ(長期断のみ劣化契約) |
 
 設計思想: **どの箱が死んでも復旧は「交換して、スナップショットか自動再認識で戻す」に統一**。
@@ -105,10 +105,9 @@ Wave 0のR22(手動エクスポート)が曖昧なまま実装されると復旧
 2. **スナップショット内容**(manifest+`format_version` 付き、初版から):
    ①論理`gateway_identity` ②devices/series台帳 ③現場レジストリ ④較正値 ⑤desired設定 ⑥`secrets` セクション
    (TLS秘密鍵・per-deviceトークンハッシュ・operatorトークンの**失効済み監査metadata**・
-   **`self_managed_static` のトンネル秘密鍵**(ホスト型。D10 2026-07-08追加、2026-07-13経路profile明確化)。
-   `managed_overlay` providerのnode秘密/stateはIoTKit snapshotへ暗黙に取り込まず、D10 profileに記録した
-   provider側restore/re-enrollment手順で回復する。**Wave 1+**)。短命の束縛credentialは含めない——復元後に箱束縛鍵で認証して
-   無人再発行で取り直す(D10決定3・決定7)。
+   **`self_managed_static` のトンネル秘密鍵**。**Wave 1+**)。`managed_overlay` providerのnode秘密/stateと
+   MQTT broker credentialはsnapshotへ含めず、
+   復元後にSite operatorが再設定する(D10)。
    readings本体は対象外(custody transfer/outboxの領分)。
    **2026-07-12 Plan 6改訂:** per-deviceトークンは可用性優先で有効なまま引き継ぐ。これはStandaloneで
    snapshot取得後の失効が巻き戻り得ることを明示受容し、復元時に騒がしく報告する契約である。一方、

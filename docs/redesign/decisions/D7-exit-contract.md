@@ -1,6 +1,6 @@
 # D7: 出口契約(R10/R11)— 上流向き公開契約面
 
-Status: 確定 (2026-07-03。2026-07-13 Site Server自己完結queryのためseries_definition同期を追加)
+Status: 確定 (2026-07-03。2026-07-13 MQTT binding簡素化をD9へ反映)
 用語は [../terminology.md](../terminology.md)、責務は [../responsibility-ledger.md](../responsibility-ledger.md) に従う。
 設計キュー3への回答。入力 = [../inputs/2026-07-03-yokakit-consumer-catalog.md](../inputs/2026-07-03-yokakit-consumer-catalog.md)
 (YokaKit実コードからの消費者ニーズ棚卸し)。保留ADR 0028/0029/0032/0035 および 0030(出口側)を本決定で統合する。
@@ -45,7 +45,7 @@ annotationのみ(データは既に配送済みのため回収はしない——
 - **版交渉は購読(target登録)時に確定する**。ゲートウェイは合意したmajor版のレコードのみ配送する
   (「未知majorで停止」の検知点はレコード受信時ではなく登録時の交渉)。minorの未知フィールドは
   optionalフィールドの読み飛ばしのみ許容。
-- **初版で確定する4族**:
+- **初版で確定する2族**:
   - **measurement族**: series識別(D5のseries_key)+event_time(決定3)+値。**一時点=1レコード**。
     values配列は**単一seriesの1観測の値**(値型が `array<scalar,N>` の場合の固定長ベクトル。
     bool/intはf64正規化=D6決定10)であり、**多チャネル束ねでも時間方向ブロックでもない**
@@ -56,26 +56,9 @@ annotationのみ(データは既に配送済みのため回収はしない——
     予約(D12波及 2026-07-08): **device_maintenance**(親再起動等の保守イベント)/**counter_discontinuity**
     (カウンタ非連続)——スキーマ詳細はWave 1出口spec。
     購読外シリーズを参照するannotationは情報として無視してよい(消費者に契約上の義務を生まない)。
-  - **series_definition族**(2026-07-13追加): Site Serverがlive Gatewayへ逆向き照会せずmeasurementを
-    解釈できるよう、R11メタデータ正本のversion付き部分複製を共有seqで運ぶ。最低限
-    `series_key / definition_revision / effective_from_pub_seq / measurement_key / unit / value_type /
-    channel / series_variant / value_semantics / registry_revision`。新seriesの最初のmeasurementまたは
-    定義変更の影響を受けるmeasurementより**必ず前のpub_seq**で配送し、履歴を上書きしない。
-    Gatewayが正本、Site側は再構築可能な複製であり、user label・hardware_id・工程・品番・表示名・
-    YokaKit mappingは含めない。major契約上の必須familyであり読み飛ばし不可。
-    **既存outbox移行だけのbootstrap例外**: series_definition導入前に採番済みのmeasurementを
-    renumber/黙示再解釈しない。MQTT cutover凍結中に、保持outboxを解釈する全定義+
-    `snapshot_through_pub_seq`+registry revisionを持つhash済み `series_definition_snapshot` を先に
-    Siteへ耐久同期し、ack後にのみproduction batchを開始する。このsnapshotはpurge cursorを進めない。
-    ackはsnapshot ID/hash、gateway/target/endpoint/epoch、snapshot through、registry revision、
-    `purge_authority=false`を持つ専用の冪等 `series-snapshot-ack` で、response loss時はSUBACK後resyncが
-    保存済みsnapshot状態を返す。invalid/conflictはproduction cursorを進めずterminal、可逆的失敗は
-    no-ack/reconnectとする。
-    既存の歴史的定義を復元不能ならcutoverを停止し、現行定義を過去へ無音適用しない。新規/変更分は
-    通常どおりmeasurementより前の共有seqで流す。
-  - **commissioning_smoke族**(2026-07-13具体化): 実データと混同しない合成test record。通常の
-    publication seq/records stream/custody commitを通り、enrollment activationはこのrecordまでのformal
-    `accepted_through` 到達を要求する。既存backlogを飛び越えず、measurement query/業務投影から除外する。
+- `series_definition`同期、legacy metadata snapshot、commissioning smokeは最初の実機縦切りには
+  含めない。Siteはraw canonical recordを保存し、series解釈はGatewayのR11または後続のversion付き
+  metadata契約で追加する。追加時はYokaKit固有labelやbusiness masterを含めない。
 - **配送制御通知(annotationとは別レイヤ)**: gap/cursor_expired(決定6)等、**特定targetの配送状態
   についての通知**はストリームレコードではなく、pushバッチのメタデータ(帯域外)で運ぶ。
   **カーソルを消費しない**。全target共有のストリームにtarget固有の事実を混ぜない。
@@ -131,31 +114,29 @@ annotationのみ(データは既に配送済みのため回収はしない——
   **(D8波及 2026-07-07)** 複数Gateway Piの現場(Site-managed)では、消費者が保持する**global**なレコード同一性・
   cursor・dedup・ack水位・batch冪等キーを `gateway_identity` でスコープする——
   `global_record_identity = (gateway_identity, epoch, seq)`、batch dedup = `(gateway_identity, target_id, publication_id)`。
-  `epoch/seq`(や `publication_id`)を単独で消費者DBの主キー・再開位置に使ってはならない。詳細はD8決定5。
+  `epoch/seq`(や `publication_id`)を単独で消費者DBの主キー・再開位置に使ってはならない。詳細はD8。
 - `event_time` は観測時刻であり、**単調ではなく、カーソルでもない**。ackと購読再開はカーソルのみで
   行う。event_timeでack/再開すると遅着バックログを取りこぼす——契約で明示的に禁止する。
 - 消費者が表示・集計で時間軸に並べるのはevent_time(それが用途)。配送の完全性はカーソルが担う。
   二つの軸の役割分離が本決定の本体。
 
-## 決定5: 契約はトランスポート非依存。第一波バインディング = MQTT QoS1 (D9改訂 2026-07-08)
+## 決定5: 契約はトランスポート非依存。第一波バインディング = MQTT QoS1 (D9改訂 2026-07-13)
 
 - **契約の語彙(record family・(epoch,seq)カーソル・ack・publication_id)はトランスポート非依存に
   定義する。** バインディングは差し替え・追加が可能(D1「バインディング複数」原則の出口版)。
-- 第一波(D9改訂): ゲートウェイが登録済みの各target(決定6)のMQTTエンドポイントへ**有界バッチを
-  publish(QoS1)**し、ackは「しまってから返すPUBACK」+補助topicの `accepted_through` 明細で受ける。
-  **at-least-once + 冪等 `publication_id`**(バッチ単位)。再送権威はゲートウェイ側(outbox)。
-  詳細な意味論(成功専用PUBACK・累積等価・終端通知・session規律)は [D9](D9-exit-mqtt-binding.md)。
+- 第一波(D9改訂): ゲートウェイが標準MQTT brokerへ有界batchをQoS 1 publishする。
+  broker PUBACKはtransport受領だけを表し、custodyはSiteが耐久commit後に別topicへpublishする
+  application-level `accepted-through`で移転する。**at-least-once + 冪等 `publication_id`**とし、
+  再送権威はゲートウェイ側outboxである。詳細は[D9](D9-exit-mqtt-binding.md)。
   **HTTP push(旧第一波: POST+同期レスポンスack)は追加バインディング候補に降格**——契約語彙は不変のため、
   必要とする消費者が現れれば再設計なしで追加できる。
-- 接続の向きが常に外向き(ゲートウェイ→消費者)なのは不変。[3]LAN内でも[4]クラウドでもNAT/FWを
-  同じ形で通る。custody移転のack(=パージ許可, D2)が要求する「耐久保存の確認」は、汎用ブローカーの
-  QoSでは表現できない(「ブローカー到達」まで)——D9は**預かり先自身をMQTT終端(内蔵リスナー)にする**
-  ことでこれを満たす。ADR 0029の懸念への応答はD9「ADR 0029への応答」を参照。
+- 接続の向きが常に外向き(ゲートウェイ→broker)なのは不変。MQTT QoSだけではSiteの耐久保存を
+  表現しないため、正式purge水位をapplication ackとして分離する。
 - 将来のストリーミングバインディング(WebSocket/SSE等)は**追加**であって再設計にならない。
 - HTTP圧縮(gzip/zstd)の交渉(Accept-Encoding)はHTTPバインディング固有の規定。MQTT側のペイロード圧縮は
   Wave 1の出口設計specで扱う。
-- MQTT再publishは**custody ackの代替にしない**(D8決定9・D9決定8)。配り面(ベストエフォート購読)としての
-  再publishはD9決定8で正式化された。レガシーMQTT互換payloadへの変換はYokaKit投影アダプタ(ADR 0028)の
+- MQTT再publishは**custody ackの代替にしない**(D8/D9)。レガシーMQTT互換payloadへの変換は
+  YokaKit投影アダプタ(ADR 0028)の
   仕事であってコアの仕事ではない(不変)。
 
 ## 決定6: target registryとfan-out(ADR 0035統合)
@@ -163,9 +144,8 @@ annotationのみ(データは既に配送済みのため回収はしない——
 - 第一波はsingle-target。multi-target化の際は配送状態を **`target_id + publication_id` 粒度で分離**。
 - **(epoch, seq)カーソルはtarget単位で保持**。あるtargetのackが別targetの未配送状態を消すことは禁止。
 - **アーカイブ責任消費者フラグはtarget registryの属性**(D2: 台帳で1消費者を指定)。
-  **(D9波及 2026-07-08)** アーカイブ責任に指定できるtargetは、登録時疎通スモークにおいて
-  **合成テストパブリケーションが補助topic上の `accepted_through` 明細として往復した相手**に限る
-  (=契約実装の預かり係である応用層の証拠。市販ブローカーの誤指定を台帳側で構造的に塞ぐ。D9決定5)。
+  アーカイブ責任に指定できるtargetは、Site applicationが耐久保存後に正式な`accepted-through`を
+  返せる構成に限る。broker PUBACKだけを返すtargetはアーカイブ責任に指定できない。
 - **cursor_expired規律と復帰状態機械**: 非アーカイブtargetの遅延はパージを阻害しない(D2)。
   pushモデルではゲートウェイが各targetのカーソルを知っているため、targetのカーソルがパージ済み
   地平より古くなったことは**ゲートウェイが検知**し、次回push時に**gap通知(配送制御通知=決定2、
@@ -176,10 +156,8 @@ annotationのみ(データは既に配送済みのため回収はしない——
   - **非アーカイブtargetへの配送保証は「ローカル保持窓の範囲内」**であることを契約に明記。
 - **target登録の認証・認可(R19の出口面の骨子)**: target登録・購読フィルタ変更・アーカイブ責任
   フラグ操作は**R14の型付き操作**(権限段階+全操作監査+登録時の疎通スモークテスト必須)。
-  権限段階はD10決定5の2層(target登録・アーカイブフラグ付け替え=**工事層**——正本移転先の変更なので
-  人間のみ。credential rotation/失効=中間層でAIハーネス可)。push接続はMQTT over TLS+束縛credential
-  (`gateway_identity + target_id + target_endpoint_id + pinset + scope`。D10決定1、2026-07-08改訂——
-  旧記述のHTTP/URL前提はD9/D10で置き換え)。
+  target登録・アーカイブフラグ付け替えは正本移転先の変更なので人間の工事操作とする。MVPの接続は
+  MQTT over TLS、Gatewayごとのstatic credential、topic ACLを使う(D10)。
   ゲートウェイは登録されたtargetへ全測定データをpublishする以上、登録が認可なしなら1回の誤設定が
   全データ流出になる——無人現場で誰も気づかないため、契約定義v1から骨子を持つ(D3読み替え規則)。
 - target固有のpayload整形・transport詳細は投影境界の上(コア語彙に入れない)。
@@ -257,8 +235,7 @@ annotationのみ(データは既に配送済みのため回収はしない——
   - **現行サンプリング間隔**(D12決定4 2026-07-08): 沈黙検知する消費者の参照先。間隔変更が
     「偽の設備停止」として解釈されないための公開メタデータ。
   measurement族レコード自体は値の解釈情報を重複して運ばない。Gatewayローカル/対話照会の正本は
-  このR11面である。2026-07-13追加のR10 `series_definition` はSite Archival Storeが自己完結queryを
-  再構築するためのversion付き部分複製であり、subject label等を含むR11全体の代替ではない。
+  このR11面である。Siteへのversion付きmetadata同期は実機縦切り後の別契約とする。
 - R11最小実装は**readings v3+seriesモデル+レジストリ**を読む(旧sensor_readingsベースの
   既存query_readingsは対象外——計画4の旧テーブル削除で消える)。
 - ゲートウェイ自身の健全性(CPU温度/使用率等、旧heartbeatトピック相当)は**R12の面**から取得する

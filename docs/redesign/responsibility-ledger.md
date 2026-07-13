@@ -59,7 +59,7 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 | フリート管理・更新ロールアウト編成 | [3] or [4] |
 | 通知のリッチなエスカレーション(チャット・電話等) | [3] or [4] |
 | 契約仕様書・SDK・適合試験ハーネス | リポジトリ資産(どの箱でもない) |
-| credential発行権威(enrollment台帳・束縛credential発行。フルCA基盤は不採用=D3決定5/D10決定1) | [3](site_server)。cloud/external targetは当該endpointの終端者(D10決定4) |
+| 出口credential発行権威 | MQTT endpointを運営する[3]のSite operator。MVPはGatewayごとのstatic credentialとtopic ACL(D10) |
 | 長期アーカイブ | [3] or [4] |
 | UI本体(静的ビルドの配布物。フレームワークは予算内で自由=D13決定1) | 配布物(ゲートウェイが配信はする) |
 | OSレイヤ(A/Bパーティション機構・NTPデーモン・カーネルドライバ) | [2]内だがIoTKitアプリの外(OSイメージ/インストーラ) |
@@ -99,30 +99,20 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 
 ## D8波及(複数ゲートウェイ 2026-07-07)
 
-- **R10/R19の優先順位**: 複数Pi現場(Site-managed)ではR19の直近主戦場がR2入口認証からR10出口認証へ移る。
-  gateway enrollment・target credential binding・archive flag操作を先に設計する([decisions/D8-site-topology-multi-gateway.md](decisions/D8-site-topology-multi-gateway.md) 決定9)。
+- **R10/R19の優先順位**: 複数Pi現場(Site-managed)ではR10出口認証とtopic ACLを先に成立させる
+  ([D8](decisions/D8-site-topology-multi-gateway.md)、[D10](decisions/D10-exit-authentication.md))。
 - **R22の gateway_identity 発行**: 各Gateway Piは初回自己構成で `gateway_identity` を1回だけ生成し、
-  共有OSイメージには焼き込まない(D8決定5)。site serverはenrollmentで同一identityの重複登録を拒否する。
+  共有OSイメージには焼き込まない(D8)。
 - **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
-  Gateway Piの `custody_lost` ではなくsite側の `archive_lost` として記録する(custody境界の明確化。D8決定4)。
+  Gateway Piの `custody_lost` ではなくsite側の `archive_lost` として記録する(custody境界の明確化。D8)。
 
-## D10波及(出口認証・ホスト型 2026-07-08)
+## D10波及(出口認証 2026-07-13簡素化改訂)
 
 - **R19出口認証の設計本体**は [decisions/D10-exit-authentication.md](decisions/D10-exit-authentication.md)。
-  名簿(enrollment台帳)+束縛credential方式、登録券bootstrap、credentialの一生(短命/2スロット/無人再発行)、
-  発行権威の一般則(credential_authority)。
-- **R14権限段階の2層分割**(D8決定9改訂): 中間層=credential rotation・失効・無人再発行・トンネル鍵rotation
-  (AIハーネス可、スモーク+監査+レート上限+canary。一括失効は人間operator確認へ昇格)、
-  工事層=target追加・削除、cloud target登録、archive designation変更、平文opt-in、enrollment承認
-  (人間のみ。AIトークンには構造的に発行不可)。動詞集合の正本=D10決定5。
-  ※D12決定3(2026-07-08)で操作全体の写像は**3分類+read-onlyスコープ**(中間層/日常層/工事層)へ拡張——
-  本項の2層は出口credential操作内の分類として不変。
-- **AIハーネス=名前を持つ運用主体**: 専用service principal(権限段階=中間層まで)、監査に主体として記録、
-  自身の権限・監査設定は変更不可(D10決定6)。
-- **ホスト型サイトサーバーの経路クラス規則**: [2]↔[3]の全プレーンは、インターネットを渡るなら
-  宣言済み `self_managed_static` または `managed_overlay` 内MUST。外部管理VPNをplatformが一律禁止せず、
-  現場がcontrol-plane権威/ACL/失効/復旧を選び記録する。R2の悪意入力耐性とは別に、出口側リスナーの
-  公開面制限とTLS pin・箱鍵mTLS・束縛credentialをR19が持つ(D10決定7、2026-07-13改訂)。
+  MVPはTailscale内TLS、匿名禁止、Gatewayごとのstatic broker credential、topic ACLとする。
+- enrollment、短命credential、two-slot rotation、無人再発行、clone/restore fenceは配布前hardening候補であり、
+  最初の1 Gateway実機スライスの実装順や完了条件にしない。
+- overlayは到達経路であってapplication認証ではない。provider secretはIoTKitに保存しない。
 
 ## D11波及(入口認証・流入制御 2026-07-08)
 
@@ -132,9 +122,9 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 - **責任の境界**: 容量設計(ハード・通信経路・台数)は現場エンジニアの責任。ソフトは宣言(流量クラス)の
   保存・検算(Phase 6+device add/クラス変更のたび。超過は人間承認付き `capacity_debt`)・公平な執行(絞り)・
   正直な報告(アラーム+R23+監査)の番人に徹する。学習型の自動判定は不採用(D11決定1)。
-- **対応の階段**: 絞る=自動、検疫=自動(既決)、トークン失効=人間のみ(入口の失効=センサーの沈黙で
-  あり、出口と違い無人再発行経路がないため。D11決定3)。自動対応は必ず騒がしく行う。
-- **デバイストークンは長命が既定**(出口の短命と非対称)。漏洩は寿命でなくsubjectスコープ・ワンタップ
+- **対応の階段**: 絞る=自動、検疫=自動(既決)、トークン失効=人間のみ(入口の失効=センサーの沈黙に
+  なるため。D11決定3)。自動対応は必ず騒がしく行う。
+- **デバイストークンは長命が既定**。漏洩は寿命でなくsubjectスコープ・ワンタップ
   失効・流量クラス・LAN限定露出の4枚で受ける(D11決定3)。
 - **入口リスナー既定オフ+インターネット公開禁止**(D11決定7)。R2の「公開受信面」とは
   サイトLAN内の面を指す。

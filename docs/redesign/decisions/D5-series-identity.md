@@ -46,7 +46,7 @@ subject_id = system_id(確定。ADR 0013で未定だった粒度の解決)
   マルチゲートウェイでの名寄せは上流([3]/[4])の責務。同一デバイスが2ゲートウェイに見えたら2つのsystem_idで正しい。
   **(D8波及 2026-07-07)** 複数Gateway Piの現場(Site-managed)では、消費者が保持するレコード同一性・cursor・
   dedup・ack水位も同様に `gateway_identity` でスコープする(`(gateway_identity, epoch, seq)`)。`epoch/seq` 単独を
-  消費者側の主キー・再開位置に使ってはならない。詳細はD8決定5。
+  消費者側の主キー・再開位置に使ってはならない。詳細はD8。
 
 ## 決定2: hardware_idの2分類と継続性の意味論
 

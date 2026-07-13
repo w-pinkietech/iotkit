@@ -4,16 +4,16 @@ Status: **Optional operator guide** (2026-07-13)
 
 Codex Cloud は候補実装や調査を別環境で行うための任意ツールであり、通常のローカル開発
 パイプラインや `scripts/verify.sh` の一部ではない。Cloud の結果は候補としてローカルへ
-戻し、通常の Superpowers レビュー・検証・ブランチ完了フローへ合流させる。
+戻し、`AGENTS.md`のlaneと検証規則に従って扱う。
 
 ## Start or resume
 
 1. `AGENTS.md` でプロジェクト規則、不変条件、権限境界を読む。
-2. 対象タスクの spec/plan と、必要な `docs/redesign/` の決定文書を読む。
+2. 対象コード、公開契約、必要な `docs/redesign/` の決定文書を読む。
 3. `git status`, `git log -1`, 対象ファイルで作業状態を実物確認する。
 
-チャット、モデルの記憶、過去の handoff は補助情報であり、Git、現在の設計正本、
-明示的に選ばれた spec/plan より優先しない。
+チャット、モデルの記憶、過去の handoff は補助情報であり、Git、現在の設計正本、コード、
+実行可能テストより優先しない。
 
 ## Configure the Cloud environment
 
@@ -64,11 +64,11 @@ Best-of-N は attempt ごとの取得結果を確実に識別できないため�
 - Cloud agent は調査、実装、テストを候補ブランチ上で行える。
 - Cloud task URL、status、receipt、diff は運用診断と候補評価の材料であり、それだけで
   実装の正しさや merge 可否を証明しない。
-- ローカルへ戻した候補は、対象の Superpowers plan、code review、
-  `verification-before-completion`、`finishing-a-development-branch` に従う。
+- ローカルへ戻した候補は、`AGENTS.md`のlane、review、verification規則に従う。
 - push、PR、merge、release、追加 attempt の課金は、それぞれ別のユーザー承認を要する。
 - product decision と実装はこの repository に残す。外部 repository や会話だけを
   実装 authority にしない。
 
-セッション終了時は、継続に必要な設計判断と次の作業を該当 spec/plan または commit に残す。
+セッション終了時は、継続に必要な設計判断を正本文書またはcommitに残す。一時作業手順を
+永続文書として追加しない。
 一時的な task ID、receipt、診断 output は必要な期間だけ安全に保存する。
