@@ -37,21 +37,33 @@ pub fn preflight_edge_database(db_path: &Path) -> Result<(), StorageError> {
         return Ok(());
     }
 
-    if table_exists(&conn, "_iotkit_edge_format")? {
-        let marker_is_current = conn.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM _iotkit_edge_format
-                WHERE singleton = 1 AND format_version = 1
-            )",
-            [],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if marker_is_current {
-            return Ok(());
-        }
+    if table_exists(&conn, "_iotkit_edge_format")? && edge_format_marker_is_current(&conn)? {
+        return Ok(());
     }
 
     Err(StorageError::UnsupportedPreReleaseEdgeDatabase)
+}
+
+fn edge_format_marker_is_current(conn: &Connection) -> Result<bool, StorageError> {
+    let schema_is_exact = conn.query_row(
+        "SELECT COUNT(*) = 2
+             AND SUM(name = 'singleton' AND type = 'INTEGER' AND \"notnull\" = 1 AND pk = 1) = 1
+             AND SUM(name = 'format_version' AND type = 'INTEGER' AND \"notnull\" = 1 AND pk = 0) = 1
+         FROM pragma_table_info('_iotkit_edge_format')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !schema_is_exact {
+        return Ok(false);
+    }
+    Ok(conn.query_row(
+        "SELECT COUNT(*) = 1
+             AND MIN(singleton) = 1
+             AND MIN(format_version) = 1
+         FROM _iotkit_edge_format",
+        [],
+        |row| row.get(0),
+    )?)
 }
 
 fn table_exists(conn: &Connection, name: &str) -> Result<bool, StorageError> {
@@ -198,6 +210,26 @@ mod tests {
         create_identity_database(&db_path, Some("edge_node_id"));
 
         preflight_edge_database(&db_path).unwrap();
+    }
+
+    #[test]
+    fn cutover_preflight_rejects_ambiguous_marker_with_cutover_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("ambiguous-marker.db");
+        create_identity_database(&db_path, None);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("CREATE TABLE _iotkit_edge_format (unknown INTEGER);")
+            .unwrap();
+        drop(conn);
+        let bytes_before = std::fs::read(&db_path).unwrap();
+
+        let error = preflight_edge_database(&db_path).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "unsupported pre-release Edge database; recreate the Edge database"
+        );
+        assert_eq!(std::fs::read(db_path).unwrap(), bytes_before);
     }
 
     #[test]
