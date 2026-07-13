@@ -1,30 +1,30 @@
 # Exit contract (R10)
 
 Status: Approved and implemented MQTT v1 target contract. The older HTTPS publisher is retained only
-as transitional code and is not started by the Gateway composition root.
+as transitional code and is not started by the Edge composition root.
 
-This contract defines how canonical records leave one Gateway and when that Gateway may transfer
+This contract defines how canonical records leave one Edge Node and when that Edge Node may transfer
 custody. Application meaning such as production, OEE, process, alarm text, or YokaKit state is not
 part of this contract.
 
 ## Roles
 
-- **Gateway publisher** reads the durable outbox, publishes bounded batches, retries, and owns the
+- **Edge publisher** reads the durable outbox, publishes bounded batches, retries, and owns the
   local delivery cursor.
-- **Standard MQTT broker** transports QoS 1 messages. Its PUBACK confirms broker receipt only.
+- **MQTT Broker** transports QoS 1 messages. Its PUBACK confirms Broker receipt only.
 - **Site Archival Store** durably stores canonical records and the contiguous accepted-through
   cursor, then publishes the application custody acknowledgement.
 - **Application consumer** such as YokaKit reads canonical records and maps them into its own domain.
-  Its business result does not authorize Gateway purge.
+  Its business result does not authorize Edge purge.
 
 ## Topics
 
 ```text
-iotkit/v1/gateways/{gateway_identity}/records
-iotkit/v1/gateways/{gateway_identity}/accepted-through
+iotkit/v1/edge-nodes/{edge_node_id}/records
+iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
 ```
 
-Both topics use QoS 1 and MUST NOT be retained. ACLs restrict each Gateway to publishing its own
+Both topics use QoS 1 and MUST NOT be retained. ACLs restrict each Edge Node to publishing its own
 records and subscribing to its own acknowledgement. Application-specific topics are outside R10.
 
 ## Record batch
@@ -32,9 +32,9 @@ records and subscribing to its own acknowledgement. Application-specific topics 
 ```json
 {
   "schema_version": 1,
-  "gateway_identity": "gateway-01",
+  "edge_node_id": "edge-node-01",
   "ledger_epoch": "01J...",
-  "publication_id": "gateway-01:01J...:123:130",
+  "publication_id": "edge-node-01:01J...:123:130",
   "cursor_start": 123,
   "cursor_end": 130,
   "records": []
@@ -46,7 +46,7 @@ Requirements:
 - `cursor_start..cursor_end` is a non-empty contiguous publication range.
 - The first and last record `pub_seq` match the range, with no gaps or duplicates inside the batch.
 - Retry preserves the same publication ID, range, and record content.
-- Global record identity is `(gateway_identity, ledger_epoch, pub_seq)`.
+- Global record identity is `(edge_node_id, ledger_epoch, pub_seq)`.
 - Event time may be late or non-monotonic and is never a delivery cursor.
 - Version 1 limits a batch to 256 records and 1 MiB encoded size.
 - The initial publisher permits one application-unacknowledged batch at a time.
@@ -94,44 +94,44 @@ After storing a batch, Site publishes:
 ```json
 {
   "schema_version": 1,
-  "gateway_identity": "gateway-01",
+  "edge_node_id": "edge-node-01",
   "ledger_epoch": "01J...",
-  "publication_id": "gateway-01:01J...:123:130",
+  "publication_id": "edge-node-01:01J...:123:130",
   "accepted_through": 130
 }
 ```
 
 For a valid batch, Site performs one custody transaction:
 
-1. Authenticate the Gateway topic and validate version, identity, epoch, bounds, and contiguous range.
+1. Authenticate the Edge Node topic and validate version, identity, epoch, bounds, and contiguous range.
 2. Insert or idempotently verify every raw canonical record.
-3. Advance that Gateway and epoch's contiguous accepted-through cursor.
+3. Advance that Edge Node and epoch's contiguous accepted-through cursor.
 4. Commit the raw records and cursor atomically with durable SQLite settings.
 5. Only after commit, publish the correlated accepted-through message.
 
 SQL failure, ENOSPC, corruption, cancellation before commit, a gap, or a content conflict MUST NOT
 produce an accepted-through acknowledgement. A lost acknowledgement causes a harmless exact replay.
 
-Gateway validates schema version, topic/body Gateway identity, epoch, publication ID, monotonicity,
+Edge validates schema version, topic/body Edge Node identity, epoch, publication ID, monotonicity,
 and that `accepted_through` does not exceed the published batch. Only then may it advance its target
 cursor. MQTT PUBACK never advances this cursor and never authorizes retention purge.
 
 ## Retry and outage behavior
 
-- Gateway outbox is the retry authority and remains durable until application acknowledgement.
+- Edge outbox is the retry authority and remains durable until application acknowledgement.
 - Broker receipt may release MQTT protocol inflight state but not the application sending window.
-- If Site or the network is down, Gateway continues local collection and retains unacknowledged rows.
-- On reconnect, Gateway republishes the same batch until Site confirms the contiguous cursor.
+- If Site or the network is down, Edge continues local collection and retains unacknowledged rows.
+- On reconnect, Edge republishes the same batch until Site confirms the contiguous cursor.
 - Site exact replay verifies existing rows and republishes the already committed watermark.
 
 ## Authentication
 
 The first implementation uses MQTT over TLS inside the selected tailnet, anonymous access disabled,
-and one static credential plus topic ACL per Gateway. Secrets are stored outside Git and never appear
+and one static credential plus topic ACL per Edge Node. Secrets are stored outside Git and never appear
 in argv, logs, Debug output, audit detail, or query output. D10 owns later authentication hardening.
 
-Gateway configuration names the broker and a credential file; the MQTT username is always the
-Gateway's generated `gateway_identity`:
+Edge configuration names the Broker and a credential file; the MQTT username is always the
+Edge Node's generated `edge_node_id`:
 
 ```toml
 [exit.mqtt]
@@ -149,9 +149,11 @@ Plain MQTT requires `allow_insecure = true` and is only for local Docker testing
 IoTKit publishes canonical observations. YokaKit owns equipment/process mapping, production state,
 OEE, alarms, UI, and notifications. A YokaKit adapter may consume this stream and produce internal
 events, but YokaKit vocabulary does not enter R10 and YokaKit business success is not a custody ack.
+IoTKit Site is the application connection and export boundary: it may route or project stored series
+to configured outputs, but it does not interpret business meaning such as `production`.
 
 ## Deferred
 
-The following are outside the initial one-Gateway vertical slice: series-definition replication,
-terminal/gap repair protocol, multi-Gateway fleet operations, Site query projection, generic broker
+The following are outside the initial one-Edge-Node vertical slice: series-definition replication,
+terminal/gap repair protocol, multi-Edge fleet operations, Site query projection, generic Broker
 fan-out, legacy HTTPS migration, and alternative egress bindings.

@@ -1,7 +1,7 @@
-# ゲートウェイ責務台帳 (R1〜R23)
+# IoTKit Edge責務台帳 (R1〜R23)
 
 Status: 会話合意済み (2026-07-02)
-Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が全部死んでいても、この一台が果たすべき仕事」の台帳。
+Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部死んでいても、この一台が果たすべき仕事」の台帳。
 
 用語は [terminology.md](terminology.md) に従う。
 
@@ -47,28 +47,30 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 | R19 | セキュリティ境界 | 三方向(入口R2/出口R10/制御面R12-15)の認証認可、秘密管理、証明書期限監視、監査 | 新規 |
 | R20 | 監督 | アプリレベルのみ(アダプタ単位再起動、スタック検知、修復理由の記録、AIへのエスカレーション境界)。プロセスレベルはsystemd/HWウォッチドッグへ委譲 | 旧(i)縮小 |
 | R21 | 更新の受け入れと生存 | 更新の検証・ヘルス判定・既知良好状態へのロールバック。配布オーケストレーションは外部 | 新規 |
-| R22 | 機体アイデンティティと交換可能性 | ゲートウェイ自身のID、初回自己構成、箱の差し替え(バックアップ/リストア) | 新規 |
+| R22 | 機体アイデンティティと交換可能性 | Edge Node自身のID、初回自己構成、箱の差し替え(バックアップ/リストア) | 新規 |
 | R23 | 現場ローカル表示 | LED/ローカルステータス画面。全通信が死んだときの最後の観測手段(現場の人が写真を撮れば伝わる) | 新規 |
 
-## ゲートウェイの責務でないもの(住所付き)
+## Edgeの責務でないもの(住所付き)
 
 | 項目 | 住む場所 |
 |---|---|
-| AIオペレーター(LLM+runbook実行+診断ループ) | [3]サイトサーバー or [4]クラウド |
+| AIオペレーター(LLM+runbook実行+診断ループ) | [3]IoTKit Site or [4]クラウド |
 | YokaKit(生産管理アプリ) | [3] or [4] |
 | フリート管理・更新ロールアウト編成 | [3] or [4] |
 | 通知のリッチなエスカレーション(チャット・電話等) | [3] or [4] |
 | 契約仕様書・SDK・適合試験ハーネス | リポジトリ資産(どの箱でもない) |
-| 出口credential発行権威 | MQTT endpointを運営する[3]のSite operator。MVPはGatewayごとのstatic credentialとtopic ACL(D10) |
+| 出口credential発行権威 | MQTT endpointを運営する[3]のSite operator。MVPはEdge Nodeごとのstatic credentialとtopic ACL(D10) |
+| 複数Edge Nodeの集約・raw保存・cursor・site-level query | [3]IoTKit Site |
+| application接続・export境界 | [3]IoTKit Site。保存済みseriesのrouting・projectionを担うが、`production`等の業務意味はYokaKit等のapplicationが所有する |
 | 長期アーカイブ | [3] or [4] |
-| UI本体(静的ビルドの配布物。フレームワークは予算内で自由=D13決定1) | 配布物(ゲートウェイが配信はする) |
+| UI本体(静的ビルドの配布物。フレームワークは予算内で自由=D13決定1) | 配布物(Edgeが配信はする) |
 | OSレイヤ(A/Bパーティション機構・NTPデーモン・カーネルドライバ) | [2]内だがIoTKitアプリの外(OSイメージ/インストーラ) |
 | インストーラ・OSイメージ作成 | リポジトリ資産 |
 
 ## 意図的却下(設計判断として維持)
 
 - コンテナオーケストレーション(単一Rustバイナリ+systemdで足りる)
-- ゲートウェイ上のML推論
+- Edge上のML推論
 - フルCEP/ストリーム処理エンジン
 - クラウドとの双方向エンティティ同期
 - 中央デコードレジストリ(Lua transform等)— 正規化の責任は常に「つなぐ側」
@@ -97,21 +99,21 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 **Waveマーキング**: [decisions/D3-process-and-wave-decisions.md](decisions/D3-process-and-wave-decisions.md) 参照。
 台帳のR1〜R23は「契約上の責務の全体像」であり、実装順はWave分割に従う。
 
-## D8波及(複数ゲートウェイ 2026-07-07)
+## D8波及(複数Edge Node 2026-07-07)
 
 - **R10/R19の優先順位**: 複数Pi現場(Site-managed)ではR10出口認証とtopic ACLを先に成立させる
-  ([D8](decisions/D8-site-topology-multi-gateway.md)、[D10](decisions/D10-exit-authentication.md))。
-- **R22の gateway_identity 発行**: 各Gateway Piは初回自己構成で `gateway_identity` を1回だけ生成し、
+  ([D8](decisions/D8-site-topology-multi-edge.md)、[D10](decisions/D10-exit-authentication.md))。
+- **R22の edge_node_id 発行**: 各Edge Nodeは初回自己構成で `edge_node_id` を1回だけ生成し、
   共有OSイメージには焼き込まない(D8)。
 - **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
-  Gateway Piの `custody_lost` ではなくsite側の `archive_lost` として記録する(custody境界の明確化。D8)。
+  Edge側の `custody_lost` ではなくSite側の `archive_lost` として記録する(custody境界の明確化。D8)。
 
 ## D10波及(出口認証 2026-07-13簡素化改訂)
 
 - **R19出口認証の設計本体**は [decisions/D10-exit-authentication.md](decisions/D10-exit-authentication.md)。
-  MVPはTailscale内TLS、匿名禁止、Gatewayごとのstatic broker credential、topic ACLとする。
+  MVPはTailscale内TLS、匿名禁止、Edge Nodeごとのstatic Broker credential、topic ACLとする。
 - enrollment、短命credential、two-slot rotation、無人再発行、clone/restore fenceは配布前hardening候補であり、
-  最初の1 Gateway実機スライスの実装順や完了条件にしない。
+  最初の1 Edge Node実機スライスの実装順や完了条件にしない。
 - overlayは到達経路であってapplication認証ではない。provider secretはIoTKitに保存しない。
 
 ## D11波及(入口認証・流入制御 2026-07-08)
@@ -129,9 +131,9 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 - **入口リスナー既定オフ+インターネット公開禁止**(D11決定7)。R2の「公開受信面」とは
   サイトLAN内の面を指す。
 - **Plan 6初期所有権・復旧裁定(2026-07-12):** network box claimを廃止し、初期admin所有権は箱上の
-  local `gatewayctl`(物理/SSH root、非echo入力)だけで確立する。未所有中はnetwork API/UIをbindしない。
+  local `iotkit-edgectl`(物理/SSH root、非echo入力)だけで確立する。未所有中はnetwork API/UIをbindしない。
   admin recoveryは全operator/sessionを失効する非破壊操作。factory resetはSSH/local rootだけの全消去で、
-  API/AI/R14には載せない。R22 replacementはgateway identity/TLS/device-token continuityを維持する一方、
+  API/AI/R14には載せない。R22 replacementはEdge Node identity/TLS/device-token continuityを維持する一方、
   admin/operator/sessionを新auth epochで無効化する。device-tokenはsnapshot後の失効rollbackを明示受容し、
   復元時に騒がしく報告する。暗号化containerとDB/TLS世代fenceの実装はPlan 6.5。
 
@@ -152,22 +154,22 @@ Scope: **すべて配置[2]ゲートウェイ(RPi)の責務**。「他の箱が�
 
 | 判断 | 決定 |
 |---|---|
-| 通知(メール/外部MQTT publish) | ゲートウェイに最小限残す(R9のローカルアクションの一種、型付き)。上流やAIが死んでいても現場に届く。※メールは外部SMTP依存のため「上流死亡でも届く」が厳密に真なのは接点出力・LED。この限界は明記する。※接点出力の**駆動**はD12決定1(2026-07-08、ユーザー裁定)で今回の設計対象外へ繰り延べ——Wave 1の「上流死亡でも届く」はR23(ゲートウェイ自身のLED/ローカル画面)が受け持つ。将来の有効化条件はD12決定1 |
+| 通知(メール/外部MQTT publish) | Edgeに最小限残す(R9のローカルアクションの一種、型付き)。上流やAIが死んでいても現場に届く。※メールは外部SMTP依存のため「上流死亡でも届く」が厳密に真なのは接点出力・LED。この限界は明記する。※接点出力の**駆動**はD12決定1(2026-07-08、ユーザー裁定)で今回の設計対象外へ繰り延べ——Wave 1の「上流死亡でも届く」はR23(Edge自身のLED/ローカル画面)が受け持つ。将来の有効化条件はD12決定1 |
 | 振動解析(FFT/スペクトログラム) | 測定レジストリに契約だけ予約、実装は第二波 |
 | カメラライブ映像(MJPEG) | オプションsidecarとして存続。コア責務外を明記、第一波は設計のみ |
-| 履歴集計/帳票 | クエリ+範囲集計+CSVエクスポートまでゲートウェイ(R11)。Excel帳票・グラフ画像は上流アプリ |
+| 履歴集計/帳票 | Edgeではクエリ+範囲集計+CSVエクスポートまで(R11)。Siteはsite-level queryとapplication export境界を持つ。Excel帳票・グラフ画像は上流アプリ |
 
 ## 追加の設計原則(会話で確定 2026-07-02)
 
-### ゲートウェイはバッファであって、倉庫ではない
+### Edgeはバッファであって、倉庫ではない
 
-ゲートウェイ(RPi)は環境的・負荷的に死にやすい箱である前提に立ち、抱えるデータ量を常に最小化する。
+Edge(RPi)は環境的・負荷的に死にやすい箱である前提に立ち、抱えるデータ量を常に最小化する。
 
-- **測定データ**: **アーカイブ責任消費者**がackした分はパージ可能(他の消費者のackはパージ判断に関与しない=D2)。ただしack後も**最低保持フロア**(目安72h、設定可)を置く——上流の箱がゲートウェイより堅牢という保証はない。正常時のデータ残高≒フロア分のみ、断線時のみダムとして水位が上がる。残高上限はR17の劣化契約でキャップ。
+- **測定データ**: **アーカイブ責任消費者**がackした分はパージ可能(他の消費者のackはパージ判断に関与しない=D2)。ただしack後も**最低保持フロア**(目安72h、設定可)を置く——上流の箱がEdgeより堅牢という保証はない。正常時のデータ残高≒フロア分のみ、断線時のみダムとして水位が上がる。残高上限はR17の劣化契約でキャップ。
 - **小さいが致命的な状態**(デバイス台帳・desired設定・測定レジストリ・較正値): 上流がいれば状態スナップショットとして定期退避(R22の強化)。故障時は「新しいRPi+スナップショット流し込み」で交換完了。オフライン構成ではUSBエクスポートが代替。
-- **禁止事項**: 上流退避を正しさの条件にしない。上流ゼロでも生きられる(柱1)。位置づけは「上流がいるほどゲートウェイは軽く・死んでも痛くない。いなくても生きられる」。
+- **禁止事項**: 上流退避を正しさの条件にしない。上流ゼロでも生きられる(柱1)。位置づけは「上流がいるほどEdgeは軽く・死んでも痛くない。いなくても生きられる」。
 - **パージ順序とcustody_lost**: 劣化契約のパージ順序(ack済み→保管対象外→検疫滞留→未ack正本の4クラス。D7決定7で改訂)と、未ack正本パージ時のcustody_lost監査+出口annotation必須の規律はD2 §1「劣化契約との優先順位」に従う(2026-07-03)。
-- 長期アーカイブ・全量保存はゲートウェイの責務ではない([3]/[4]の消費者の仕事。出口契約は全量購読するアーカイバ消費者も特別扱いなしで受け入れられる)。
+- 長期アーカイブ・全量保存はEdgeの責務ではない([3]/[4]の消費者の仕事。出口契約は全量購読するアーカイバ消費者も特別扱いなしで受け入れられる)。
 
 ## 設計論点の状態
 
