@@ -169,7 +169,10 @@ impl From<iotkit_core_ledger::LedgerError> for OpError {
                 Self::PreconditionFailed(value.to_string())
             }
             iotkit_core_ledger::LedgerError::Storage(_)
-            | iotkit_core_ledger::LedgerError::Sqlite(_) => Self::Internal(value.to_string()),
+            | iotkit_core_ledger::LedgerError::Sqlite(_)
+            | iotkit_core_ledger::LedgerError::UnsupportedPreReleaseSchema => {
+                Self::Internal(value.to_string())
+            }
         }
     }
 }

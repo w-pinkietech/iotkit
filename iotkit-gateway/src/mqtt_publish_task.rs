@@ -20,7 +20,7 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 struct RuntimeConfig {
     connection: MqttExitConfig,
-    gateway_identity: String,
+    edge_node_id: String,
     password: String,
     ca: Option<Vec<u8>>,
 }
@@ -38,9 +38,9 @@ pub(crate) async fn spawn_mqtt_publish_task(
     let password = read_password(&config)?;
     let ca = read_ca(&config)?;
     let expected_endpoint = endpoint(&config);
-    let (gateway_identity, ()) = db
+    let (edge_node_id, ()) = db
         .with_conn(move |conn| {
-            let identity = iotkit_core_ledger::gateway_identity(conn)
+            let identity = iotkit_core_ledger::edge_node_id(conn)
                 .map_err(|error| storage_error(error.to_string()))?;
             ensure_target(conn, &expected_endpoint).map_err(storage_error)?;
             Ok((identity, ()))
@@ -50,7 +50,7 @@ pub(crate) async fn spawn_mqtt_publish_task(
 
     let runtime = RuntimeConfig {
         connection: config,
-        gateway_identity,
+        edge_node_id,
         password,
         ca,
     };
@@ -58,16 +58,16 @@ pub(crate) async fn spawn_mqtt_publish_task(
 }
 
 async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConfig) {
-    let records_topic = records_topic(&runtime.gateway_identity);
-    let ack_topic = ack_topic(&runtime.gateway_identity);
+    let records_topic = records_topic(&runtime.edge_node_id);
+    let ack_topic = ack_topic(&runtime.edge_node_id);
     let mut options = MqttOptions::new(
-        format!("iotkit-gateway-{}", runtime.gateway_identity),
+        client_id(&runtime.edge_node_id),
         runtime.connection.host.clone(),
         runtime.connection.port,
     );
     options.set_keep_alive(Duration::from_secs(30));
     options.set_clean_session(true);
-    options.set_credentials(&runtime.gateway_identity, &runtime.password);
+    options.set_credentials(&runtime.edge_node_id, &runtime.password);
     options.set_transport(if runtime.connection.allow_insecure {
         Transport::tcp()
     } else if let Some(ca) = runtime.ca {
@@ -98,7 +98,7 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                             &db,
                             &client,
                             &records_topic,
-                            &runtime.gateway_identity,
+                            &runtime.edge_node_id,
                             &mut inflight,
                         ).await {
                             tracing::warn!(error = %error, "MQTT publish attempt failed");
@@ -120,7 +120,7 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                                     &db,
                                     &client,
                                     &records_topic,
-                                    &runtime.gateway_identity,
+                                    &runtime.edge_node_id,
                                     &mut inflight,
                                 ).await {
                                     tracing::warn!(error = %error, "MQTT publish attempt failed");
@@ -149,7 +149,7 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                     &db,
                     &client,
                     &records_topic,
-                    &runtime.gateway_identity,
+                    &runtime.edge_node_id,
                     &mut inflight,
                 ).await {
                     tracing::warn!(error = %error, "MQTT publish retry failed");
@@ -164,11 +164,11 @@ async fn publish_current_or_next(
     db: &DbHandle,
     client: &AsyncClient,
     topic: &str,
-    gateway_identity: &str,
+    edge_node_id: &str,
     inflight: &mut Option<PreparedBatch>,
 ) -> Result<(), String> {
     if inflight.is_none() {
-        let identity = gateway_identity.to_string();
+        let identity = edge_node_id.to_string();
         *inflight = db
             .with_conn(move |conn| Ok::<_, StorageError>(prepare_batch(conn, &identity)))
             .await
@@ -220,7 +220,7 @@ async fn handle_ack(
 
 fn prepare_batch(
     conn: &Connection,
-    gateway_identity: &str,
+    edge_node_id: &str,
 ) -> Result<Option<PreparedBatch>, String> {
     let current_epoch =
         iotkit_core_ledger::ledger_epoch(conn).map_err(|error| error.to_string())?;
@@ -252,10 +252,10 @@ fn prepare_batch(
         let cursor_end = cursor_start + records.len() as i64 - 1;
         let batch = RecordBatch {
             schema_version: EGRESS_SCHEMA_VERSION,
-            gateway_identity: gateway_identity.to_string(),
+            edge_node_id: edge_node_id.to_string(),
             ledger_epoch: current_epoch.clone(),
             publication_id: publication_id(
-                gateway_identity,
+                edge_node_id,
                 &current_epoch,
                 cursor_start,
                 cursor_end,
@@ -368,12 +368,16 @@ fn endpoint(config: &MqttExitConfig) -> String {
     format!("{scheme}://{}:{}", config.host, config.port)
 }
 
-fn records_topic(gateway_identity: &str) -> String {
-    format!("iotkit/v1/gateways/{gateway_identity}/records")
+fn records_topic(edge_node_id: &str) -> String {
+    format!("iotkit/v1/edge-nodes/{edge_node_id}/records")
 }
 
-fn ack_topic(gateway_identity: &str) -> String {
-    format!("iotkit/v1/gateways/{gateway_identity}/accepted-through")
+fn ack_topic(edge_node_id: &str) -> String {
+    format!("iotkit/v1/edge-nodes/{edge_node_id}/accepted-through")
+}
+
+fn client_id(edge_node_id: &str) -> String {
+    format!("iotkit-edge-{edge_node_id}")
 }
 
 fn now_ms() -> i64 {
@@ -403,10 +407,10 @@ mod tests {
         iotkit_core_storage::init_db_memory(&all).unwrap()
     }
 
-    fn seed_annotation(conn: &Connection, gateway_identity: &str) -> (String, PreparedBatch) {
+    fn seed_annotation(conn: &Connection, edge_node_id: &str) -> (String, PreparedBatch) {
         conn.execute(
-            "INSERT INTO ledger_meta(key, value) VALUES('gateway_identity', ?1)",
-            [gateway_identity],
+            "INSERT INTO ledger_meta(key, value) VALUES('edge_node_id', ?1)",
+            [edge_node_id],
         )
         .unwrap();
         ensure_target(conn, "mqtt://broker:1883").unwrap();
@@ -419,23 +423,28 @@ mod tests {
             1,
         )
         .unwrap();
-        let prepared = prepare_batch(conn, gateway_identity).unwrap().unwrap();
+        let prepared = prepare_batch(conn, edge_node_id).unwrap().unwrap();
         (epoch, prepared)
     }
 
     #[test]
-    fn prepares_versioned_contiguous_batch_for_gateway_topic() {
+    fn prepares_versioned_contiguous_batch_for_edge_node_topic() {
         let db = test_db();
         db.with_conn_sync(|conn| {
-            let (_epoch, prepared) = seed_annotation(conn, "gateway-01");
+            let (_epoch, prepared) = seed_annotation(conn, "edge-01");
             assert_eq!(prepared.prior_cursor, 0);
             assert_eq!(prepared.batch.cursor_start, 1);
             assert_eq!(prepared.batch.cursor_end, 1);
-            assert_eq!(prepared.batch.gateway_identity, "gateway-01");
+            assert_eq!(prepared.batch.edge_node_id, "edge-01");
             assert_eq!(
-                records_topic("gateway-01"),
-                "iotkit/v1/gateways/gateway-01/records"
+                records_topic("edge-01"),
+                "iotkit/v1/edge-nodes/edge-01/records"
             );
+            assert_eq!(
+                ack_topic("edge-01"),
+                "iotkit/v1/edge-nodes/edge-01/accepted-through"
+            );
+            assert_eq!(client_id("edge-01"), "iotkit-edge-edge-01");
             prepared.batch.validate().unwrap();
             Ok(())
         })
@@ -446,10 +455,10 @@ mod tests {
     fn application_ack_advances_cursor_but_mismatch_does_not() {
         let db = test_db();
         db.with_conn_sync(|conn| {
-            let (epoch, prepared) = seed_annotation(conn, "gateway-01");
+            let (epoch, prepared) = seed_annotation(conn, "edge-01");
             let mut wrong = AcceptedThrough {
                 schema_version: EGRESS_SCHEMA_VERSION,
-                gateway_identity: "gateway-other".to_string(),
+                edge_node_id: "edge-other".to_string(),
                 ledger_epoch: epoch.clone(),
                 publication_id: prepared.batch.publication_id.clone(),
                 accepted_through: prepared.batch.cursor_end,
@@ -464,7 +473,7 @@ mod tests {
                 0
             );
 
-            wrong.gateway_identity = "gateway-01".to_string();
+            wrong.edge_node_id = "edge-01".to_string();
             wrong
                 .validate_for(&prepared.batch, prepared.prior_cursor)
                 .unwrap();

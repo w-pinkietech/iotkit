@@ -93,6 +93,14 @@ fn main() {
         }
     };
     if let Err(error) = db.with_conn_sync(|conn| {
+        iotkit_core_ledger::edge_node_id(conn)
+            .map(|_| ())
+            .map_err(ledger_to_storage_err)
+    }) {
+        tracing::error!(error = %error, db_path = %config.db_path, "failed to initialize Edge identity");
+        std::process::exit(1);
+    }
+    if let Err(error) = db.with_conn_sync(|conn| {
         iotkit_core_ops::reconcile_database_initialization_provenance(
             conn,
             db_path_for_init,
