@@ -20,10 +20,10 @@ commands. The handoff contains:
 - the configured source identifier for that token (normally the stable
   `principal_id`).
 
-The operator may use `gatewayctl device-credential issue` for the one-time
+The operator may use `iotkit-edgectl device-credential issue` for the one-time
 token. The operator must use the fingerprint returned by the construction-tier
 ingress TLS operation and hand the matching certificate from the selected
-`ingress-tls/generation-N` to the builder. `gatewayctl fingerprint` reports the
+`ingress-tls/generation-N` to the builder. `iotkit-edgectl fingerprint` reports the
 control-plane certificate; it is not an ingress trust anchor unless the
 operator has deliberately configured the exact same certificate for both
 listeners. The token is not written into a configuration file by IoTKit. The

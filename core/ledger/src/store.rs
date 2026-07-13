@@ -23,7 +23,7 @@ impl std::fmt::Display for LedgerError {
             Self::InvalidReplace(s) => write!(f, "invalid replace: {s}"),
             Self::UnsupportedPreReleaseSchema => write!(
                 f,
-                "unsupported pre-release Gateway database; recreate the Edge database"
+                "unsupported pre-release Edge database; recreate the Edge database"
             ),
             Self::Storage(e) => write!(f, "storage error: {e}"),
             Self::Sqlite(e) => write!(f, "sqlite error: {e}"),
@@ -1942,7 +1942,7 @@ mod tests {
             assert!(matches!(error, LedgerError::UnsupportedPreReleaseSchema));
             assert_eq!(
                 error.to_string(),
-                "unsupported pre-release Gateway database; recreate the Edge database"
+                "unsupported pre-release Edge database; recreate the Edge database"
             );
             assert_eq!(
                 conn.query_row(

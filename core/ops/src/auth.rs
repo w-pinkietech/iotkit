@@ -1231,7 +1231,7 @@ mod tests {
     #[test]
     fn external_initialization_marker_distinguishes_first_init_from_database_loss() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.db");
+        let path = dir.path().join("edge.db");
         let first = iotkit_core_storage::init_db(&path, &all_migrations()).unwrap();
         first
             .with_conn_sync(|conn| {

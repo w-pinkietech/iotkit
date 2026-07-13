@@ -15,7 +15,7 @@ Rules (see docs/architecture.md "Layer rules"):
   5. a NEW workspace crate must be classified here deliberately (unclassified = error)
   6. iotkit-ingest-client's workspace deps are exactly core/collector + the contract
   7. the frozen core/supervision vocabulary's non-dev dependent set is pinned
-  8. ingress cannot depend on the gateway/control-plane binary crate
+  8. ingress cannot depend on the Edge/control-plane binary crate
 
 Deliberate exception (do not "fix"): core/registry -> core/collector is dependency
 inversion — the collector owns the RegistryPolicy trait, the registry implements it.
@@ -110,7 +110,7 @@ def main() -> int:
         if name in ADAPTERS:
             if ENGINE in internal:
                 errors.append(f"{name} depends on {ENGINE} (rule 1: projection "
-                              f"machinery is the gateway's business)")
+                              f"machinery is the Edge composition root's business)")
             direct = internal & DATA_PLANE
             if direct:
                 errors.append(f"{name} depends on the data plane directly: "

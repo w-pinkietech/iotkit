@@ -1,13 +1,13 @@
-# IoTKit Gateway
+# IoTKit
 
-A small, data-integrity-first IoT gateway for the Raspberry Pi. Add a focused
-sensor adapter and IoTKit supplies durable collection, retry, and an explicit
-transfer of storage responsibility to the Site: data is not purge-eligible until
-the Site has durably stored it.
+An on-premises-first, data-integrity-focused IoT collection platform. Add a focused
+sensor adapter to IoTKit Edge and IoTKit supplies durable collection, retry, and an
+explicit transfer of storage responsibility to IoTKit Site: data is not purge-eligible
+until Site has durably stored it.
 
 > **Status: pre-1.0, not yet a public release.** The current milestone is one
-> paired BravePI temperature sensor, one Rust Gateway, one standard
-> MQTT broker, and one Go Site Server.
+> paired BravePI temperature sensor, one Rust IoTKit Edge, one standard
+> MQTT broker, and one Go IoTKit Site.
 > Broader Wave 1 work is frozen until this real-hardware path proves collection,
 > outage recovery, and storage-responsibility transfer. APIs, the on-disk schema,
 > and the wire contract may still change. See
@@ -21,33 +21,36 @@ measurement mapping; it does not own SQLite, MQTT, retry, retention, or
 authentication. IoTKit supplies those concerns once, keeps collecting through
 network outages, and recovers safely after power loss without silently losing data.
 
-IoTKit is deliberately boring about this: **one Rust binary + SQLite + systemd**,
-no on-gateway container orchestration, ML platform, or central rules engine. The
-gateway is a *buffer, not a warehouse* — it holds data until the Site confirms
-durable storage. MQTT PUBACK alone is not that confirmation.
+IoTKit Edge is deliberately boring about this: **one Rust binary + SQLite + systemd**,
+with no on-Edge container orchestration, ML platform, or central rules engine. Edge is
+a *buffer, not a warehouse* — it holds data until Site confirms durable storage. MQTT
+PUBACK alone is not that confirmation. Site durably accepts records, advances each Edge
+Node's `accepted-through` only after commit, and provides direct raw query today. It is
+also the IoTKit-side boundary for later site-local registry, semantic mapping such as
+`production`, and application export; those later capabilities are not implemented yet.
 
 ## What it does today
 
 ```
- sensor adapters ──▶ collector ──▶ SQLite (readings + outbox) ──▶ push task ──▶ archive consumer
-   (BravePI,          (dedup,        (durable, crash-safe)         (HTTPS,        (acks a cursor;
-    rpi-local)         normalize,                                   per-target     ack authorizes
-                       quarantine,                                  token, at-      purge)
-                       series id)                                   least-once)
+ BravePI Mainboard ──UART──▶ IoTKit Edge ──MQTT──▶ MQTT Broker ──▶ IoTKit Site
+                              │                                      │
+                              └─ SQLite readings + outbox             ├─ durable raw records
+                                                                     ├─ Edge Node cursors
+                                                                     └─ direct raw query
 ```
 
 - **Durable ingest** with crash consistency (power loss is a normal event, not an error).
 - **Series identity** that survives device rename and hardware swap (history isn't cut).
 - **Measurement registry** (standard vocabulary + site overrides) and row/series quarantine for unknown or out-of-range data.
-- **Exit contract (R10):** outbound HTTPS push to one archive consumer, at-least-once, with a per-target cursor; the consumer's ack is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
+- **Exit contract (R10):** MQTT delivery through a standard Broker to IoTKit Site, at-least-once, with a per-target cursor; Site's durable `accepted-through` is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
 - **Authenticated HTTP ingest (Plan 6):** a separate, default-off site-LAN TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See [docs/ingest-contract.md](docs/ingest-contract.md).
-- **Operator CLI** (`gatewayctl`) for the device ledger, measurement registry, snapshots/restore, and the archive target.
+- **Operator CLI** (`iotkit-edgectl`) for the device ledger, measurement registry, snapshots/restore, and the Site target.
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
 - The control-plane API is intended for private LAN reachability only. Use SSH port forwarding for Tailscale/CGNAT direct-access scenarios.
 
 > **Current Plan 6 boundary:** HTTP measurement ingest is implemented as a separate authenticated
 > listener and is disabled by default. An unowned, recovering, restore/reset-fenced, or TLS-invalid
-> gateway keeps network listeners unbound. Plan 6.5 is still required for encrypted replacement
+> Edge keeps network listeners unbound. Plan 6.5 is still required for encrypted replacement
 > backup containers and restore-fence carriage; MQTT, pairing windows, and batch provisioning are
 > future/separate deliverables.
 
@@ -74,7 +77,8 @@ all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows
 | `core/*` | The domain, one responsibility per crate: storage, ledger (device identity), timeseries, registry, collector (ingest), publish (outbox), ops (R14 typed operations & auth), types, engine (supervision) |
 | `iotkit-ingest-contract` / `iotkit-ingest-client` | The ingest wire contract (Envelope/Ack) and the client adapters use |
 | `*-adapter*` / `iotkit-sensor-drivers` / `rpi4b-transport` | Sensor adapters (BravePI mainboard, rpi-local), shared sensor-IC drivers and polling runtime, raw bus transport |
-| `iotkit-gateway` / `iotkit-gatewayctl` | The daemon and the operator CLI |
+| `iotkit-edge` / `iotkit-edgectl` | IoTKit Edge daemon and its operator CLI |
+| `iotkit-site` | IoTKit Site MQTT consumer, durable raw store, cursor manager, and query CLI |
 
 The full crate map, layer rules, and "where does new code go" placement table
 live in [docs/architecture.md](docs/architecture.md).
@@ -87,7 +91,7 @@ context-authority rules.
 
 - [docs/architecture.md](docs/architecture.md) — who this serves, crate map & placement rules, data flow, the custody loop, concurrency model.
 - [docs/ingest-contract.md](docs/ingest-contract.md) — normative device-builder HTTP envelope, authentication, acknowledgement, retry, validation, limits, and pinned-TLS journey.
-- [docs/exit-contract.md](docs/exit-contract.md) — what an archive consumer receives and must do (record schema, ack, cursor, epochs).
+- [docs/exit-contract.md](docs/exit-contract.md) — what IoTKit Site receives and must do (record schema, ack, cursor, epochs).
 
 The authoritative design corpus (decision records **D1–D13**, the **R1–R23**
 responsibility ledger) lives in [docs/redesign/](docs/redesign/) and is currently
@@ -98,7 +102,7 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Current implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI mainboard → UART → one Gateway → standard MQTT broker → one Go Site Server → raw SQLite → direct CLI query. This complete path, including application `accepted-through`, is verified on real hardware; failure injection and the remaining restart/outage matrix are still in progress. Purge eligibility advances only after validated `accepted-through`. **In progress.**
+- **Current implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. This complete path, including application `accepted-through`, is verified on real hardware; failure injection and the remaining restart/outage matrix are still in progress. Purge eligibility advances only after validated `accepted-through`. **In progress.**
 - **After the gate:** run a BravePI contact-input sensor as the second real sensor type, then choose adapter tooling and broader Wave 1 work from observed needs.
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.

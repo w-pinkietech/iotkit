@@ -292,7 +292,7 @@ async fn collector_death_exits_client_task() {
         "test-adapter",
         vec![item("ble:aa", "temperature_c", 21.5)],
     ));
-    // クライアントタスクはClosed検知で終了する(ゲートウェイのfail-fast検知点)
+    // クライアントタスクはClosed検知で終了する(IoTKit Edgeのfail-fast検知点)
     tokio::time::timeout(std::time::Duration::from_secs(5), client_handle)
         .await
         .expect("client task must exit after collector death")

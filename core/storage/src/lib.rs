@@ -1,4 +1,4 @@
-//! iotkit-core-storage: SQLite persistence infrastructure for the IoT gateway.
+//! iotkit-core-storage: SQLite persistence infrastructure for IoTKit Edge.
 
 mod error;
 mod handle;

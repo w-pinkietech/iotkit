@@ -23,8 +23,8 @@
 <!-- 凡例 -->
 <div style="display:flex;gap:12px;flex-wrap:wrap;margin:16px 0 24px">
   <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><span style="width:14px;height:14px;border-radius:4px;background:#16a34a;display:inline-block"></span>[1] デバイス</span>
-  <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><span style="width:14px;height:14px;border-radius:4px;background:#2563eb;display:inline-block"></span>[2] ゲートウェイ (RPi) — R1〜R23は全部ここ</span>
-  <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><span style="width:14px;height:14px;border-radius:4px;background:#9333ea;display:inline-block"></span>[3]/[4] 工場サーバー / クラウド</span>
+  <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><span style="width:14px;height:14px;border-radius:4px;background:#2563eb;display:inline-block"></span>[2] IoTKit Edge (RPi) — R1〜R23は全部ここ</span>
+  <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><span style="width:14px;height:14px;border-radius:4px;background:#9333ea;display:inline-block"></span>[3] IoTKit Site / [4] クラウド</span>
 </div>
 
 <!-- ============ LANE [1] デバイス ============ -->
@@ -32,7 +32,7 @@
   <div class="label" style="color:#16a34a">[1] デバイス層</div>
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
     <div style="flex:1;min-width:260px;border:1px solid rgba(22,163,74,.4);border-radius:8px;padding:10px 12px">
-      <strong>Ⓐ BravePI 無線温度センサー</strong>
+      <strong>Ⓐ BravePI Transmitter（温度センサー）</strong>
       <p style="margin:6px 0 0;font-size:13px">測って電波で送るだけ。出てくるのは<b>生バイト列</b> <code>01 A4 5C...</code>。デバイス側は何も知らなくてよい。</p>
     </div>
     <div style="flex:1;min-width:260px;border:1px solid rgba(22,163,74,.4);border-radius:8px;padding:10px 12px">
@@ -42,11 +42,11 @@
   </div>
 </div>
 
-<div style="text-align:center;font-size:20px;line-height:1;margin:2px 0">↓ <span style="font-size:12px">無線→UART受信基板(HAT)</span> &nbsp;&nbsp;&nbsp;&nbsp; ↓ <span style="font-size:12px">工場LAN (HTTPS/MQTT+per-deviceトークン)</span></div>
+<div style="text-align:center;font-size:20px;line-height:1;margin:2px 0">↓ <span style="font-size:12px">BLE Long Range→BravePI Mainboard→UART</span> &nbsp;&nbsp;&nbsp;&nbsp; ↓ <span style="font-size:12px">工場LAN (HTTPS/MQTT+per-deviceトークン)</span></div>
 
-<!-- ============ LANE [2] ゲートウェイ ============ -->
+<!-- ============ LANE [2] IoTKit Edge ============ -->
 <div style="border-left:5px solid #2563eb;background:rgba(37,99,235,.06);border-radius:8px;padding:14px 16px;margin-bottom:4px">
-  <div class="label" style="color:#2563eb">[2] ゲートウェイ (RPi・IoTKit本体)</div>
+  <div class="label" style="color:#2563eb">[2] IoTKit Edge (RPi・現場収集ノード)</div>
 
   <!-- 合流前: 2列 -->
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
@@ -95,7 +95,7 @@
     <b>④ コレクタ = 受理の権威+耐久点</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R8</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R6</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R16</span> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R17</span>
     <p style="margin:4px 0 0;font-size:13px"><b>台帳解決チェーンをコミット前に実行</b>(D5): 送信者+subject_hint → 台帳(R7) → system_id → <b>series_id</b>。デバイスはseriesを知らない——解決はコレクタの仕事であり、台帳の変異(replace-hardware等)も必ずコレクタ経由。続いて<b>契約検証</b>で3分岐(黙って捨てない): <b>スキーマ不一致</b>=rejected(理由コード+近い候補を提示)/ <b>未知measurement_key</b>=<b>検疫seriesを自動実体化</b>して受理(UIで後付けマッピング)/ <b>値域外</b>=検疫フラグ付き保存(下流に流さない)</p>
     <p style="margin:6px 0 0;font-size:13px">→ <b>dedup</b>(dedupキー=(認証済み送信者, envelope_id)。再送時にIDは不変 → <b>再送しても二重登録されない</b>)→ <b>received_at</b>を必ず付与(時刻は二本立て: デバイス申告時刻はオプショナル+time_sourceタグ)→ <b>SQLiteに同一トランザクションでコミット</b>: <b>現在状態</b>(最新値)+<b>直近履歴</b>(時系列)+<b>outbox</b>(配送待ち)。電源断があっても壊れない書き方。</p>
-    <p style="margin:6px 0 0;font-size:13px"><b>コミット完了後にのみack返却</b>(ack=耐久点): accepted / duplicate / rejected / deferred。ackはエンベロープ単位のステータス配列(バッチの部分受理。<b>未承認subject宛はdisposition: staged</b>=承認までの有界保持、⑤参照)。送信側の保持・再送は<b>SHOULD</b>(fire-and-forgetの軽量プロファイルも許容。ゲートウェイ側の重複排除は常に保証)。<b>deferredは一時的過負荷専用</b>。持続的逼迫はゲートウェイ側retention(R17劣化契約: 保持期間とディスク水位を管理し、古いものから間引き→パージ)で吸収</p>
+    <p style="margin:6px 0 0;font-size:13px"><b>コミット完了後にのみack返却</b>(ack=耐久点): accepted / duplicate / rejected / deferred。ackはエンベロープ単位のステータス配列(バッチの部分受理。<b>未承認subject宛はdisposition: staged</b>=承認までの有界保持、⑤参照)。送信側の保持・再送は<b>SHOULD</b>(fire-and-forgetの軽量プロファイルも許容。Edge側の重複排除は常に保証)。<b>deferredは一時的過負荷専用</b>。持続的逼迫はEdge側retention(R17劣化契約: 保持期間とディスク水位を管理し、古いものから間引き→パージ)で吸収</p>
   </div>
 
   <div style="text-align:center;margin:8px 0 4px;font-size:12.5px;opacity:.8">↓ <i>ここから下は<b>ack後の非同期後段処理</b>(ackはこれらを待たない)</i></div>
@@ -118,7 +118,7 @@
   <div style="text-align:center;line-height:1">↓</div>
   <div style="border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:9px 12px;margin:6px 0">
     <b>⑦ 出口配送 (publisher)</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R10</span>
-    <p style="margin:4px 0 0;font-size:13px">outboxから<b>消費者ごとのカーソル</b>で配送(at-least-once)。断線中は溜め、再接続後に続きから再送。YokaKitも他の誰かのアプリも同じ扱い</p>
+    <p style="margin:4px 0 0;font-size:13px">outboxから標準MQTT Broker経由でIoTKit Siteへ配送(at-least-once)。断線中は溜め、再接続後に続きから再送。BrokerのPUBACKではcursorを進めず、Siteの耐久保存後の<code>accepted-through</code>だけで進める</p>
   </div>
 
   <!-- 常時公開の横窓 -->
@@ -126,7 +126,7 @@
     <div style="font-size:12px;font-weight:700;opacity:.7;margin-bottom:6px">⑧ データの流れとは別に、常時公開している窓口(LAN内)</div>
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:240px;border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:8px 12px;font-size:13px">
-        <b>制御プレーン</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R12-R15</span><br>ヘルス・診断証拠・操作カタログ(dry-run付き)・設定。AIオペレーターとgatewayctlが叩く
+        <b>制御プレーン</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R12-R15</span><br>ヘルス・診断証拠・操作カタログ(dry-run付き)・設定。AIオペレーターとiotkit-edgectlが叩く
       </div>
       <div style="flex:1;min-width:240px;border:1px solid rgba(37,99,235,.35);border-radius:8px;padding:8px 12px;font-size:13px">
         <b>履歴クエリAPI</b> <span style="background:#2563eb;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px">R11</span><br>UI・AI・外部アプリ向けの読み出し(範囲集計・CSV)
@@ -139,11 +139,15 @@
 
 <!-- ============ LANE [3]/[4] ============ -->
 <div style="border-left:5px solid #9333ea;background:rgba(147,51,234,.07);border-radius:8px;padding:14px 16px">
-  <div class="label" style="color:#9333ea">[3] 工場サーバー / [4] クラウド</div>
+  <div class="label" style="color:#9333ea">[3] IoTKit Site / [4] クラウド・外部application</div>
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
     <div style="flex:1;min-width:260px;border:1px solid rgba(147,51,234,.4);border-radius:8px;padding:10px 12px">
-      <strong>⑨ YokaKit(特権なしの一消費者)</strong>
-      <p style="margin:6px 0 0;font-size:13px">出口契約でデータを受信し、publication_idで重複排除してack。生産管理・帳票・ダッシュボードはここの仕事</p>
+      <strong>⑨ IoTKit Site</strong>
+      <p style="margin:6px 0 0;font-size:13px">raw canonical recordとEdge Nodeごとのcursorを同一transactionで耐久保存し、その後に<code>accepted-through</code>を返す。現在はraw queryを提供し、将来のsite-local registry・<code>production</code>等への意味付け・application exportのIoTKit側境界になる</p>
+    </div>
+    <div style="flex:1;min-width:260px;border:1px solid rgba(147,51,234,.4);border-radius:8px;padding:10px 12px">
+      <strong>⑩ YokaKit(特権なしのapplication)</strong>
+      <p style="margin:6px 0 0;font-size:13px">Siteのapplication接続点からデータを受け取り、生産管理・帳票・ダッシュボード等の業務ロジックを所有する</p>
     </div>
     <div style="flex:1;min-width:260px;border:1px solid rgba(147,51,234,.4);border-radius:8px;padding:10px 12px">
       <strong>AIオペレーター(データ経路には関与しない)</strong>
