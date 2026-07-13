@@ -1,8 +1,10 @@
 # Architecture
 
-IoTKit is one Rust binary (`iotkit-gateway`) plus an operator CLI
-(`iotkit-gatewayctl`), backed by a single SQLite database. It runs unattended on
-a Raspberry Pi under systemd. This document is the "get oriented in 10 minutes"
+IoTKit currently ships one Gateway Rust binary (`iotkit-gateway`) plus an operator CLI
+(`iotkit-gatewayctl`), backed by a single SQLite database. The approved minimum vertical slice adds
+an independently deployable Site Server binary/CLI backed by its own SQLite database; it does not
+turn the Site Server into part of the Gateway process. The Gateway runs unattended on a Raspberry Pi
+under systemd. This document is the "get oriented in 10 minutes"
 map **and the canon for code placement**; the authoritative *why* is the
 Japanese design corpus under `docs/redesign/` (decision records D1–D13,
 responsibility ledger R1–R23).
@@ -27,11 +29,11 @@ The design corpus describes four tiers of a deployment (terminology.md):
 hardware) → **[2] the IoT gateway** (Raspberry Pi, this repo) → **[3] the site
 server** (per-site aggregation; may be hosted off-premises) → **[4] cloud**.
 
-**This repository ships software for tier [2] only**: the `iotkit-gateway`
-daemon and the `iotkit-gatewayctl` CLI, both installed on the gateway Pi.
-Tier [1] is hardware plus (for network devices, Wave 1) the ingest wire
-contract; tiers [3]/[4] are *consumers* of the exit contract
-([exit-contract.md](exit-contract.md)) — external software, not built here.
+**The current crate map ships tier [2]; the approved next vertical slice also places tier [3]
+Site Server software in this repository as separately classified crates/binaries.** Tier [1] is
+hardware plus the ingest wire contract. Tier [3] consumes only the public exit contract and shared
+leaf primitives; it never depends on Gateway composition, adapter, collector, timeseries, publish,
+or control internals. Tier [4] remains external.
 So a minimal site install is: flash a Pi, run the `iotkit-gateway` daemon
 under systemd, keep `gatewayctl` on the same Pi as a hand-run CLI, wire
 adapters to sensors. A standalone site can stop there (D8: an upstream is
@@ -60,10 +62,14 @@ gains one. Anything that complicates this story needs a strong reason.
              │ R10 exit   │      │ R17 custody- │     │ R12 status   │
              │ contract   │      │ aware purge  │     │ JSON         │
              └─────┬──────┘      └──────────────┘     └──────────────┘
-                   │ HTTPS POST (per-target token, at-least-once)
+                   │ MQTT QoS 1 (per-target credential, at-least-once)
                    ▼
-            archive consumer  ── ack (cursor) ──▶ authorizes purge
+            custody-aware Site listener ── durable accepted-through ──▶ authorizes purge
 ```
+
+The checked-in `publish_task` is a transitional HTTPS implementation from the earlier MVE. D9 and
+the approved minimum Site Server design make MQTT QoS 1 the production exit binding; implementation
+migrates the single archive target and does not promise both production bindings.
 
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
 `iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
@@ -93,16 +99,17 @@ The gateway is a **buffer, not a warehouse**. A measurement's lifecycle:
    transaction, enqueues an outbox row in `publication_log` (only for
    non-quarantined measurements). Crash-consistent: you never get a reading
    without its outbox row, or vice versa.
-2. **Push** — the push task batches undelivered outbox rows, POSTs them to the
-   archive consumer over HTTPS with a per-target bearer token, and waits for an
-   ack. The DB lock is **not** held across the network round-trip.
+2. **Publish** — the publisher batches undelivered outbox rows and sends them to the custody-aware
+   MQTT endpoint with a per-target credential. The DB lock is **not** held across the network
+   round-trip. The transitional implementation still uses HTTPS until the approved migration lands.
 3. **Ack → cursor** — a valid ack (matching publication id, exact batch end)
    advances the per-target cursor. The cursor is the consumer's durable
    watermark: "I have taken custody up to here."
-4. **Purge** — retention deletes readings that are (a) old enough (past a
-   retention floor) **and** (b) already acknowledged. Un-acknowledged originals
-   are *protected* even when old — losing them would break custody. Quarantined,
-   never-enqueued, and old-epoch rows are floor-purged normally.
+4. **Purge/degrade** — normal retention deletes archive-acknowledged data beyond the minimum floor.
+   Under pressure the authoritative D2/R17 order is: acknowledged data, out-of-custody-policy data,
+   unresolved quarantine, then unacknowledged originals only as the final explicit data-loss class.
+   Reaching the last class requires `custody_lost` audit plus a structured gap annotation; silent
+   deletion is forbidden.
 
 If the consumer is down, the cursor stops advancing, the backlog grows, and disk
 fills — at which point *new writes fail loudly* (`ENOSPC`). The gateway never
@@ -143,10 +150,10 @@ side-effect-free `/api/v1/ingest/validate` endpoint. Its principal, staging,
 deduplication, health, and episode-audit boundaries are distinct from the
 control API.
 
-Plan 6.5 remains the pre-distribution owner of encrypted replacement backup
-containers and cross-filesystem restore-fence mechanics. MQTT, pairing-window
-registration, batch provisioning, and rich device UI are not alternate current
-bindings; they require later approved work.
+Plan 6.5 remains the pre-distribution owner of encrypted replacement backup containers and
+cross-filesystem restore-fence mechanics. MQTT exit + Site Server is the approved next vertical
+slice. MQTT ingest, pairing-window device registration, batch provisioning, and rich device UI
+remain later work.
 
 ## Crate map
 
@@ -178,6 +185,15 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-gateway` | `iotkit-gateway` | **Binary.** Composition root: adapter supervision, push task, retention, health, HTTPS API. |
 | `iotkit-gatewayctl` | `iotkit-gatewayctl` | **Binary.** Operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
 
+Approved next-slice placements (added to the crate map and layer checker atomically when created):
+
+| Planned crate | Tier/class | Responsibility (one line) |
+|---|---|---|
+| `iotkit-egress-contract` | CONTRACT | Serde-only public R10 record/batch/ack-detail vocabulary; no Gateway or Site storage dependency. |
+| `iotkit-site-store` | SITE [3] | Enrollment registry, raw archival custody transaction, and rebuildable query projection. |
+| `iotkit-site-server` | SITE [3] binary | Custody-aware MQTT listener plus OS-authorized local Unix-socket read API; depends on the public egress contract and Site store, not Gateway internals. |
+| `iotkit-site-serverctl` | SITE [3] binary | Local construction/enrollment/admin CLI and bounded read-query client; no direct mutation SQL. |
+
 ### Layer rules (machine-checked)
 
 1. **Adapters never depend on `core/engine`** — projection machinery is the
@@ -205,9 +221,15 @@ below mechanically (in `verify.sh` and CI).
    depend on `iotkit-gateway`; its internal allowlist is the ingest contract,
    collector boundary, storage/auth services (`core/ops`), and no other workspace
    crate. The gateway composes it, never the reverse.
+9. **`SITE` consumes contracts, not Gateway internals** — tier-[3] crates may depend on
+   `iotkit-egress-contract` and deliberately shared leaf/storage primitives, but never on
+   `iotkit-gateway`, adapters, `core/collector`, `core/timeseries`, `core/publish`, `core/engine`, or
+   Gateway control internals. Shared wire semantics graduate to CONTRACT; they are not imported from
+   a binary or copied into Site code.
 
-Rule numbers match the `scripts/check-layers` error messages. Only the two
-**binaries** may depend on any layer — with one exception: rule 7 pins the
+Rule numbers match the `scripts/check-layers` error messages after the approved SITE rule lands.
+Gateway binaries and separately classified Site binaries may compose their allowed layers — with one
+exception: rule 7 pins the
 `core/supervision` dependent set, so even a binary (today: `iotkit-gatewayctl`)
 cannot pick up the frozen vocabulary without a deliberate rule-7 + canon update.
 Dev-dependencies are exempt (tests may cross layers); build-dependencies are

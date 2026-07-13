@@ -48,7 +48,8 @@ Gateway Piが2台以上必要なサイトはSite-managedとし、site server [3]
 **ホスト型**を正式変種とする。[3]/[4]の判定は物理配置ではなく役割で行う(保持する状態が単一の
 `site_id` に束縛される=[3]。terminology改訂)。
 
-成立条件はD10決定7に定める。要点: [2]↔[3]間の全プレーンをピン留め静的鍵トンネル内に通す(MUST)、
+成立条件はD10決定7に定める。要点: [2]↔[3]間の全プレーンを宣言済み
+`self_managed_static` または `managed_overlay` 経路プロファイル内に通す(MUST)、
 `required_wan_outage_days` の宣言とPhase 6検査、不達時のpurge自動保留(決定4)、VPS外DRバックアップ
 (purge条件にはしない)、WAN断中の現場ローカル可視化、1インスタンス=1サイト(相乗りは別決定)。
 
@@ -102,8 +103,9 @@ commitした後に返すarchival ackのみである。
 - 同一キーで**指紋が食い違う** → 冪等upsertを行わず**ハードエラーで拒否し、`custody_conflict`(侵害シグナル)として
   監査へ昇格**、operator復旧へ誘導する。この時点で正本は守られている——D2の`custody_lost`(未ack正本の実損。
   欠落annotation必須)とは**別のイベントクラス**であり、欠落annotationは発行しない。
-  決定7の「duplicate gateway_identity / stale epoch」行は、
-  正規のcert・epochを両機が提示して見分けがつかない同時起動サブケースを、この指紋照合で判別してfenceする。
+  決定7の「duplicate gateway_identity / stale epoch」行は、同時接続/lease oscillationまたは中身が分岐した
+  cloneを検知してfenceする。正規のcert・epoch・中身まで同じbyte cloneを元機停止後だけ使う場合は
+  non-clonable key/外部witnessなしに区別不能であり、MVPは防止を主張しない。
 
 ## 決定4: custody状態を明示する
 
@@ -258,13 +260,37 @@ D7は最低限のmulti-gateway消費者義務を定義する。site server固有
 | 部分LAN分断 | site serverから見えるGateway集合が期待一覧の一部のみ | 影響Piはローカル保持、未影響Piは通常継続 | 影響Pi保持上限まではゼロ。site viewは部分的 |
 | N台中1台のGateway Pi全損 | site R12、当該Pi無応答 | 当該PiのR22 snapshotから復元、旧機の回収/無効化 | 他Piは無影響。当該Piのsite archiveへ未ackだった正本は失われる(custody_lost)。R22スナップショットはreadings非含有のため新しい箱は喪失範囲を知り得ない——範囲の可視化は欠落annotationではなく、新epoch開始annotation+消費者側カーソル突合による(D7決定8) |
 | site serverとGateway Piの同時障害 | site全体無応答 | site serverをbackupから復元→各Piを復旧/再enrollment→水位ベクトル再照合 | 各Piの未ack正本はPi保持内なら残存。両者同時全損の範囲のみ損失(custody_lost) |
-| duplicate gateway_identity / stale epoch | enrollment検査、R10認証、epoch台帳不一致、payload指紋衝突(決定3) | stale側/指紋不一致側をfenceし、operator確認 | split-brain防止。見分けのつかない同時起動は指紋照合で判別しfence(無音上書きしない) |
+| duplicate gateway_identity / stale epoch | enrollment検査、R10認証、同時session/lease oscillation、epoch台帳不一致、payload指紋衝突(決定3) | stale側/観測可能な競合側をfenceし、operator確認 | split-brainの観測可能な同時/分岐ケースをfenceし無音上書きを防ぐ。元機停止後だけ使う完全byte cloneは区別不能(明示限界) |
 | site server交換 | site server無応答、復旧操作 | site backupから復元、各Piの水位ベクトルと再照合 | Pi保持内は各Piから再送可能 |
 | WAN断/トンネルpeer down(ホスト型) | `site_unreachable`(全Pi一斉不達。`partial_partition`とは別事象)、トンネルハンドシェイク失敗 | Piは収集継続。フロア長超過で不達時purge自動保留(決定4)が掛かる。回復後cursorから再送 | 宣言WAN断耐久日数の範囲はゼロ。超過時のみR17劣化契約 |
 | ホスト型site server(VPS)全損 | Piからは上記WAN断と区別不能。事業者障害通知/DR監視 | VPS外DRバックアップから復元 + 各Piからbounded backfill + `archive_repair_hold` | purge自動保留が効いた範囲は復旧可。保留前にpurge済みかつDR外の範囲は`archive_lost` |
 
 D2既存の「サイトサーバー[3]故障=データ影響ゼロ」は、non-custodial serverに限って正しい。
 Site-managedで[3]がArchival Storeを持つ場合は、上表のようにcustody状態ごとに分ける。
+
+### Site Archival Store復元フェンス(2026-07-13追加)
+
+古いSite DBは失効credential/ticket・clock high-water・accepted-throughを巻き戻し得るため、DB単体を
+通常起動pathへ置くだけのrestoreを禁止する。
+
+- root所有のSite generation anchorをDBおよび通常DB backup対象の外にdurable保存する。live DBの
+  `site_id + instance_generation` とanchorが一致し、`restore-in-progress` が無い場合だけnetwork listenerをbindする。
+- 公式backupはlive DBとして起動できないexport marker/manifestを持つ。restoreはlocal-root R14型付き操作で
+  staging検証→restore marker fsync→新instance generation採番→DB importとticket/pending/operational verifier/
+  session/clock状態の無効化→anchor fsync→marker解除の順。途中状態はnetwork-unboundを維持する。
+- 復元後は各Gatewayが箱鍵で再認証しactive epochとGateway側cursor/outbox保持範囲を照合するまでackを返さない。
+  再送可能範囲は `archive_repair_hold` 下でbackfillし、既にPi purge済みでrawにもbackupにも無い範囲は
+  `archive_lost` としてoperator確認付きで記録する。
+- Site TLS秘密鍵をbackupから回復する場合も、復元後fingerprintをlocal CLIに表示し独立経路でoperator確認する。
+  keyを回復できない場合は新pinsetへの工事操作であり、自動置換しない。
+- raw DBのroot権限による非公式差し替え、またはanchorを含むfull-disk rollbackは検出保証外。これを防ぐには
+  外部witness/非巻戻しhardwareが必要でありMVPでは採らない。通常運用はservice/DB権限で非root差し替えを拒否し、
+  support対象restoreを上記typed operationに限定する。
+- MVPではSite raw archiveの削除を提供しない。容量health/risk horizon、最終backup/restore検証時刻を
+  R12相当面に常時公開し、commissioningで宣言容量を検査する。projection cleanup/rebuildはrawを削除しない。
+- 公式backupは整合snapshot+manifest/hash/schema/site/export marker+Site TLS recovery materialを持つ
+  **非live artifact**であり、operator recovery secretで暗号化する。復元試験を実施していないbackupを
+  `verified` と表示しない。Site retention/削除policyは実測容量と法的/業務保持要求を得た後の別決定とする。
 
 ## 決定8: break-glassと必須アラーム
 

@@ -51,12 +51,14 @@ D7決定5は出口契約の第一波バインディングを外向きHTTP push�
   バッチN末尾seqまで進んだことと等価**(累積等価)。purge判断はこの等価水位で進めてよい。
   ギャップ発生時の等価則の失効と回復は決定3で定める。
 - **部分失敗は水位で表現する**: バッチ途中までしか保存できない事態(D8決定4の連続prefix規則)や
-  再接続世代を跨いだ歯抜けは、PUBACKでは表現せず、補助topic `ack/{gateway_identity}` 上の
+  再接続世代を跨いだ歯抜けは、PUBACKでは表現せず、補助topic
+  `iotkit/v1/gateways/{gateway_identity}/ack-detail` 上の
   `accepted_through=(gateway_identity, epoch, seq)` 明細で正確に伝える。
-- **再同期**: 接続確立時、Archival Storeは当該ゲートウェイの現行 `accepted_through` を補助topicへ
-  送る。ゲートウェイは自outboxの未ackプレフィックスからpublishを再開し、重複は冪等受理される。
+- **再同期**(2026-07-13具体化): ゲートウェイはack/terminal topicをSUBSCRIBEしてSUBACKを待ち、
+  `iotkit/v1/gateways/{gateway_identity}/resync-request` へ相関requestをpublishする。Archival Storeは
+  その後に現行 `accepted_through` をack-detailへ送る。ゲートウェイは自outboxの未ackプレフィックスからpublishを再開し、重複は冪等受理される。
   補助topic明細の取り込みは単調max(古い明細で水位を巻き戻さない)。
-- **補助topicの相関情報**: 明細には `target_id` / `publication_id` / `accepted_through` / epoch を
+- **補助topicの相関情報**: 明細には `target_id` / `target_endpoint_id` / `publication_id` / `accepted_through` / epoch を
   必ず含める(D7/D8のtargetスコープack・batch dedupとの整合)。
 - **Archival Storeの耐久設定**: raw record+ack cursorのcommitは `WAL + synchronous=FULL` 相当を
   **MUST**とする(D1のD8波及と同格。`NORMAL` だと「commit→PUBACK→電源断→巻き戻り」で
@@ -107,7 +109,17 @@ MQTT 3.1.1に否定応答はなく([MQTT-3.3.5-2])、順序topicのPUBACKは受�
   新規購読者への「古い値・古い水位の亡霊配信」を封じる。水位の再同期はretainedではなく
   決定2の接続時明細で行う。MQTT 5利用時のRetain Handlingにも依存しない。
 
+2026-07-13のSite Server最小構成では、legacy outbox用 `series-snapshot` の応答をproduction
+`ack-detail`と混同しない。`series-snapshot-ack` はsnapshot ID/hash、gateway/target/endpoint/epoch、
+`snapshot_through_pub_seq`、registry revision、`purge_authority=false` を持つ非retainedの冪等応答で、
+SUBACK後resyncはproduction水位と保存済みsnapshot状態の双方を返す。snapshotの決定的invalid/conflictは
+`object_kind=series_snapshot` とsnapshot ID/hashを持つtagged terminal variantを使い、production専用の
+publication/range fieldは持たず、production cursorを進めない。
+
 ## 決定5: 普通のブローカーに繋ぐ場合(非預かりターゲット) — できること・死ぬことを明記する
+
+この互換モードとSiteからのrepublishはD9の将来deliverableとして維持するが、2026-07-13の
+最小Gateway + Site Server MVPには含めない。MVPのMQTT endpointは預かりawareなSite内蔵listenerだけである。
 
 - IoTゲートウェイは市販ブローカー(Mosquitto等)にもそのままpublishできる(完成品としての使いやすさ)。
 - ただしそのPUBACKは「配達確認」であって「保管確認」ではないため、**custodyは移転しない**。
@@ -203,7 +215,10 @@ request/response可視性の毀損、である。本改訂の応答:
 
 ## 保留
 
-- topic名前空間の命名規則・ACL詳細・補助topicの再要求API詳細は、Wave 1の出口設計specで確定する。
+- ~~topic名前空間の命名規則・補助topicの再要求API詳細~~ → 2026-07-13最小Site Server設計で
+  `records / ack-detail / terminal-notice / resync-request / series-snapshot / series-snapshot-ack`
+  とSUBACK後resyncへ具体化。
+  ACLの実装詳細は同設計/実装計画で確定する。
 - 送信窓サイズ・ackタイムアウト・commit時間上限・group commit要否はWave 1で実測して確定する。
 - [3]側Archival Storeリスナー仕様の住処: 責務台帳R1-R23は[2]専用のため、D8が繰り延べた
   site-server決定群に載せる。

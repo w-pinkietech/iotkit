@@ -104,8 +104,10 @@ Wave 0のR22(手動エクスポート)が曖昧なまま実装されると復旧
    エポック不一致を見た消費者はreplay/backfill再交渉(D5決定3)。
 2. **スナップショット内容**(manifest+`format_version` 付き、初版から):
    ①論理`gateway_identity` ②devices/series台帳 ③現場レジストリ ④較正値 ⑤desired設定 ⑥`secrets` セクション
-   (TLS秘密鍵・per-deviceトークンハッシュ・operatorトークンの**失効済み監査metadata**・**トンネル秘密鍵(ホスト型。
-   D10 2026-07-08追加)**。**Wave 1+**)。短命の束縛credentialは含めない——復元後に箱束縛鍵で認証して
+   (TLS秘密鍵・per-deviceトークンハッシュ・operatorトークンの**失効済み監査metadata**・
+   **`self_managed_static` のトンネル秘密鍵**(ホスト型。D10 2026-07-08追加、2026-07-13経路profile明確化)。
+   `managed_overlay` providerのnode秘密/stateはIoTKit snapshotへ暗黙に取り込まず、D10 profileに記録した
+   provider側restore/re-enrollment手順で回復する。**Wave 1+**)。短命の束縛credentialは含めない——復元後に箱束縛鍵で認証して
    無人再発行で取り直す(D10決定3・決定7)。
    readings本体は対象外(custody transfer/outboxの領分)。
    **2026-07-12 Plan 6改訂:** per-deviceトークンは可用性優先で有効なまま引き継ぐ。これはStandaloneで

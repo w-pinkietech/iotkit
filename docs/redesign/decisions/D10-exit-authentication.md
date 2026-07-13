@@ -1,6 +1,6 @@
 # D10: 出口認証とホスト型サイトサーバー (R19第一波)
 
-Status: 決定 (2026-07-08)
+Status: 決定 (2026-07-08。2026-07-13 管理overlay VPN経路プロファイルを追加)
 用語は [../terminology.md](../terminology.md)、責務は [../responsibility-ledger.md](../responsibility-ledger.md) に従う。
 査読: 方式選定とホスト型裁定のそれぞれをクロスベンダー2社(codex gpt-5.5 / Claude Fable)に同一プロンプトで
 査読させ、一致指摘(経路クラス規則・credential一生の差し替え単位・登録券・WAN断耐久の検査化・公開面の制限)と
@@ -95,8 +95,18 @@ D8決定9により、R19の直近主戦場はR2入口認証からR10出口認証
 - **保管**: 名簿側はcredentialの**ハッシュのみ**保存する(名簿・siteバックアップの流出でbearer秘密が
   漏れないため)。Pi側のSD上平文保管は本脅威モデルでは受容する(高脅威現場向けの
   TPM/secure elementは保留)。
+- **認証時刻のrollback防御**: Siteはticketとoperational credentialで共通の非減少auth-time
+  high-waterを耐久化する。壁時計の後退を検出したらissue/rotate/replaceを停止し、期限切れcredentialを
+  復活させず、再起動後のbearer認証も監査済み時刻回復までfail closedにする。
+  最小構成では箱鍵はGateway同一性の確認に使えても時刻gateを迂回できず、監査済み時刻回復前に新しい
+  operational expiryを発行しない。接続中slotの残存寿命はmonotonic時間で短くなるだけとし、元の期限で
+  disconnectする。
 - **失効の伝搬**: MQTTは接続中credentialの失効を自然には伝えない。失効時は[3]の内蔵リスナーが
-  当該 `gateway_identity` の**活きたセッションを強制切断**する(D9決定4のClientId takeoverとは別目的)。
+  verifier/generationの無効化と冪等disconnect effectのenqueueを同一transactionでcommitし、当該
+  `gateway_identity` の**活きたセッションを強制切断**する(D9決定4のClientId takeoverとは別目的)。
+  物理disconnect前でも各PUBLISHは現行slot generationを再検査するため受理を継続できない。effectは
+  crash後に再実行する。管理overlayのnode除去は追加の外部作用であり、provider停止中でもローカル失効は
+  commit済みのまま有効である。
 - **廃棄との連動**: Gateway Piのdecommission(D8保留)は「当該identityの全credential失効+名簿の
   終端記録」を必須項目として含む。
 
@@ -156,13 +166,14 @@ D8決定9は「cloud target登録、archive flag変更、資格情報rotation/�
 
 - [2]↔[3]間の経路がサイト内LANに閉じるなら「廊下」ルール(既定)。
 - 経路がインターネットを渡るなら、**[2]↔[3]間の全プレーン**(R10データ・ack・enrollment・
-  制御面R12〜R15・R22スナップショット退避・コンソールアクセス)を**ピン留め静的鍵トンネル
-  (WireGuard等)内に通すことをMUST**とする。データ経路だけの規則にはしない——文面の隙間から
-  「コンソールはTLSだから素面公開でよい」という解釈を許さないため。
+  制御面R12〜R15・R22スナップショット退避・コンソールアクセス)を、下記の
+  `self_managed_static` または `managed_overlay` の**宣言済み経路プロファイル**内に通すことをMUSTとする。
+  プラットフォームは外部管理VPNを一律禁止しない。選択は現場の信頼・運用判断であり、IoTKitは
+  選択された権威・到達範囲・失効/復旧方法を記録し、アプリ層認証を省略させない。
 - **「廊下相当の回復」が意味するのは盗聴・改ざん耐性のみ**である。可用性・VPS側の耐久性・
   ホスティング事業者の管理者リスクは回復しない(それらは下記の受け入れコストと復旧設計で受ける)。
 
-### トンネルの規定(トンネル=新しい入口でもある)
+### `self_managed_static` の規定(トンネル=新しい入口でもある)
 
 トンネルは廊下の回復であると同時に、**外からサイトLANへ届く新しい経路**になりうる。次で最小化する。
 
@@ -186,6 +197,27 @@ D8決定9は「cloud target登録、archive flag変更、資格情報rotation/�
   フェンス(D2 §3.5)で止める(旧機回収/無効化のrunbook必須ステップは不変)。
 - インターネットへ直接開けるのは**トンネルポートのみ**。内蔵MQTTリスナー・Site Console・
   AI操作面の素面公開は禁止。VPS侵害・事業者障害・事業者管理者は「残る脅威」として明示する。
+
+### `managed_overlay` の規定(2026-07-13追加)
+
+Tailscale等の管理overlay VPNを現場が選択してよい。WireGuard系暗号を使うことだけでは
+`self_managed_static` と同じ信頼モデルにならないため、次を経路プロファイルの正本として記録する。
+
+- provider/profile識別子と管理control planeの権威、node admission/account recoveryの責任者。
+- Gateway/Siteの期待node identity、bind interface/address、許可destination port、ACLの管理者と
+  最終検証またはoperator attestationの時刻/版。
+- node/key rotation、失効、control-plane outage/compromise、Site/Gateway restore時の再登録手順。
+- 内蔵MQTT/enrollment面はoverlay addressのみにbindし、host firewall/overlay ACLで期待Gatewayから
+  定義済みportだけを許可する。subnet routingやSiteから現場LANへの新規到達はIoTKitの要件にしない。
+- overlay identityは到達制御のdefense in depthであり、アプリ層の権威ではない。MQTT TLS pin、
+  箱鍵mTLS enrollment、per-Gateway per-target束縛credential、topic ACL、監査は省略不可。
+- providerの設定を安定な機械可読面で検証できない場合、導入完了レポートは `verified` と主張せず
+  `operator_attested` と明示する。
+- node失効はoverlay側のnode除去/ACL閉鎖とMQTT live session切断を連動させる。外部control plane
+  侵害・管理account喪失・metadata露出・可用性は残余リスクとして現場が受容/復旧手順を持つ。
+
+最初の自宅Linux Site Server実機スライスは `managed_overlay` のTailscale tailnetを選ぶ。これは
+製品全体の既定VPNや特定vendor強制ではない。
 
 ### 受け入れコストと必須の手当て
 
@@ -264,4 +296,6 @@ ackを追加のpurge条件にする=条件の二重化**の却下である。ホ
 - ~~R2入口認証(第三者自作デバイスの公開受信面)の設計は後続~~ → **D11で確定**(2026-07-08。
   登録コード=登録券の縮小版、権限写像=D11決定8)。
 - topic名前空間・ACLの詳細はWave 1出口設計spec(D9保留と同じ住処)。
-- トンネル実装の選定(WireGuard前提で設計したが、同等のピン留め静的鍵トンネルであれば代替可)。
+- ~~トンネル実装の選定~~ → **2026-07-13解決**: 現場が `self_managed_static` または
+  `managed_overlay` を宣言して選ぶ。最初の自宅実機はTailscale tailnet。個別providerの安定な
+  機械検査面と運用runbookは各実装計画で具体化する。

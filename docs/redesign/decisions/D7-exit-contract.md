@@ -1,7 +1,6 @@
 # D7: 出口契約(R10/R11)— 上流向き公開契約面
 
-Status: 確定 (2026-07-03。codex中間レビュー2回=11件+Fable+codex並行最終レビュー=21論点+差分再検証4件を
-全て裁定・反映、ユーザー承認済み)
+Status: 確定 (2026-07-03。2026-07-13 Site Server自己完結queryのためseries_definition同期を追加)
 用語は [../terminology.md](../terminology.md)、責務は [../responsibility-ledger.md](../responsibility-ledger.md) に従う。
 設計キュー3への回答。入力 = [../inputs/2026-07-03-yokakit-consumer-catalog.md](../inputs/2026-07-03-yokakit-consumer-catalog.md)
 (YokaKit実コードからの消費者ニーズ棚卸し)。保留ADR 0028/0029/0032/0035 および 0030(出口側)を本決定で統合する。
@@ -46,7 +45,7 @@ annotationのみ(データは既に配送済みのため回収はしない——
 - **版交渉は購読(target登録)時に確定する**。ゲートウェイは合意したmajor版のレコードのみ配送する
   (「未知majorで停止」の検知点はレコード受信時ではなく登録時の交渉)。minorの未知フィールドは
   optionalフィールドの読み飛ばしのみ許容。
-- **初版で確定する2族**:
+- **初版で確定する4族**:
   - **measurement族**: series識別(D5のseries_key)+event_time(決定3)+値。**一時点=1レコード**。
     values配列は**単一seriesの1観測の値**(値型が `array<scalar,N>` の場合の固定長ベクトル。
     bool/intはf64正規化=D6決定10)であり、**多チャネル束ねでも時間方向ブロックでもない**
@@ -57,6 +56,26 @@ annotationのみ(データは既に配送済みのため回収はしない——
     予約(D12波及 2026-07-08): **device_maintenance**(親再起動等の保守イベント)/**counter_discontinuity**
     (カウンタ非連続)——スキーマ詳細はWave 1出口spec。
     購読外シリーズを参照するannotationは情報として無視してよい(消費者に契約上の義務を生まない)。
+  - **series_definition族**(2026-07-13追加): Site Serverがlive Gatewayへ逆向き照会せずmeasurementを
+    解釈できるよう、R11メタデータ正本のversion付き部分複製を共有seqで運ぶ。最低限
+    `series_key / definition_revision / effective_from_pub_seq / measurement_key / unit / value_type /
+    channel / series_variant / value_semantics / registry_revision`。新seriesの最初のmeasurementまたは
+    定義変更の影響を受けるmeasurementより**必ず前のpub_seq**で配送し、履歴を上書きしない。
+    Gatewayが正本、Site側は再構築可能な複製であり、user label・hardware_id・工程・品番・表示名・
+    YokaKit mappingは含めない。major契約上の必須familyであり読み飛ばし不可。
+    **既存outbox移行だけのbootstrap例外**: series_definition導入前に採番済みのmeasurementを
+    renumber/黙示再解釈しない。MQTT cutover凍結中に、保持outboxを解釈する全定義+
+    `snapshot_through_pub_seq`+registry revisionを持つhash済み `series_definition_snapshot` を先に
+    Siteへ耐久同期し、ack後にのみproduction batchを開始する。このsnapshotはpurge cursorを進めない。
+    ackはsnapshot ID/hash、gateway/target/endpoint/epoch、snapshot through、registry revision、
+    `purge_authority=false`を持つ専用の冪等 `series-snapshot-ack` で、response loss時はSUBACK後resyncが
+    保存済みsnapshot状態を返す。invalid/conflictはproduction cursorを進めずterminal、可逆的失敗は
+    no-ack/reconnectとする。
+    既存の歴史的定義を復元不能ならcutoverを停止し、現行定義を過去へ無音適用しない。新規/変更分は
+    通常どおりmeasurementより前の共有seqで流す。
+  - **commissioning_smoke族**(2026-07-13具体化): 実データと混同しない合成test record。通常の
+    publication seq/records stream/custody commitを通り、enrollment activationはこのrecordまでのformal
+    `accepted_through` 到達を要求する。既存backlogを飛び越えず、measurement query/業務投影から除外する。
 - **配送制御通知(annotationとは別レイヤ)**: gap/cursor_expired(決定6)等、**特定targetの配送状態
   についての通知**はストリームレコードではなく、pushバッチのメタデータ(帯域外)で運ぶ。
   **カーソルを消費しない**。全target共有のストリームにtarget固有の事実を混ぜない。
@@ -66,8 +85,6 @@ annotationのみ(データは既に配送済みのため回収はしない——
     (品番切替=バーコード)はこの宿題の消化に従属する。
   - 時系列ブロック/波形(高レート加速度・振動スペクトラム): D6の予約と接続。サンプル間隔・
     ブロック時刻規則を含む別契約として設計する。
-  - **合成テストパブリケーション**(D2 Phase 5の上流疎通スモーク): 消費者が実データと混同して
-    保存しないよう専用familyとして予約。
 
 ## 決定3: 時刻 = 正準event_time+出自併載
 
@@ -239,7 +256,9 @@ annotationのみ(データは既に配送済みのため回収はしない——
     対応付けるにはUUIDだけでは足りない(カタログ§6-4の解決キー構造が証拠)。
   - **現行サンプリング間隔**(D12決定4 2026-07-08): 沈黙検知する消費者の参照先。間隔変更が
     「偽の設備停止」として解釈されないための公開メタデータ。
-  measurement族レコードは値の解釈情報を運ばないので、この面がないと消費者は値を解釈できない。
+  measurement族レコード自体は値の解釈情報を重複して運ばない。Gatewayローカル/対話照会の正本は
+  このR11面である。2026-07-13追加のR10 `series_definition` はSite Archival Storeが自己完結queryを
+  再構築するためのversion付き部分複製であり、subject label等を含むR11全体の代替ではない。
 - R11最小実装は**readings v3+seriesモデル+レジストリ**を読む(旧sensor_readingsベースの
   既存query_readingsは対象外——計画4の旧テーブル削除で消える)。
 - ゲートウェイ自身の健全性(CPU温度/使用率等、旧heartbeatトピック相当)は**R12の面**から取得する

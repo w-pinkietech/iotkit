@@ -1,128 +1,264 @@
 # Exit contract (R10)
 
-How an **archive consumer** receives measurements from the gateway and what it
-must do. This is the contract implemented by the push task
-(`iotkit-gateway/src/publish_task.rs`) and the record types
-(`iotkit-gateway/src/record.rs`). The MVE supports a single archive target;
-multi-consumer, replay, and bounded backfill are future work.
+Status: **MQTT contract design candidate; final review pending** (D7/D9; 2026-07-13). The checked-in
+Gateway publisher is still the transitional HTTPS MVE until the planned MQTT migration lands; HTTPS
+behavior is not the production contract promised by this document.
+
+This document tells an exit consumer how canonical records leave a Gateway and what an Archival
+Store must prove before the Gateway may transfer custody.
 
 ## Roles
 
-- **Gateway** — buffers measurements and pushes them out. Holds custody until the
-  consumer acknowledges.
-- **Archive consumer** — an HTTPS endpoint that durably stores what it receives
-  and acknowledges a cursor. Its ack is what authorizes the gateway to purge.
+- **Gateway publisher** — reads the durable outbox, sends bounded batches, retries unchanged batches,
+  and maintains target delivery state.
+- **Egress binding** — maps the transport-independent contract onto MQTT QoS 1. It does not define
+  application meaning or custody policy.
+- **Archival Store** — a first-class target that durably stores canonical records and the contiguous
+  accepted-through cursor. Its formal ack is the only ack that may authorize Gateway purge.
+- **Application projection adapter** — an application-specific, rebuildable consumer such as
+  YokaKit. It is non-custodial unless separately implemented and designated as the Archival Store.
 
-The consumer has **no special privileges** — it is just one consumer of the
-contract (D7). It must be registered with `gatewayctl target add`, which requires
-an `https://` endpoint and a connectivity+auth smoke check before delivery is
-enabled.
+The first implementation supports one archive target. The identities and cursor rules remain scoped
+per target so later fan-out cannot let one consumer advance another consumer's state.
 
-## Delivery
+## MQTT binding
 
-The gateway POSTs batches to the target endpoint:
+The Gateway connects outward to the registered target using MQTT over TLS, QoS 1, a pinned Site
+certificate, and a per-Gateway/per-target bound credential. A general broker PUBACK is delivery
+confirmation only; an archival target must be the custody-aware listener described below.
 
+Version-1 namespace:
+
+```text
+iotkit/v1/gateways/{gateway_identity}/records
+iotkit/v1/gateways/{gateway_identity}/ack-detail
+iotkit/v1/gateways/{gateway_identity}/terminal-notice
+iotkit/v1/gateways/{gateway_identity}/resync-request
+iotkit/v1/gateways/{gateway_identity}/series-snapshot
+iotkit/v1/gateways/{gateway_identity}/series-snapshot-ack
 ```
-POST <endpoint_url>
-Authorization: Bearer <per-target token>
-Content-Type: application/json
 
+- Gateway publishes only to its `records`, `resync-request`, and bootstrap `series-snapshot` topics and subscribes only to its
+  `ack-detail`, `terminal-notice`, and `series-snapshot-ack` topics.
+- Topics and ack details are never retained.
+- Wildcard application publish, broker bridging, device-to-device routing, and application-specific
+  topics such as `production` are outside the canonical binding.
+- For production records, a pending enrollment attempt may publish only the exact contiguous range
+  `(accepted_through + 1)..=smoke_pub_seq` on its bound target/endpoint/epoch, under bounded
+  byte/count/inflight/time/retry limits. It cannot publish later records or another namespace. It
+  may additionally use only its bounded enrollment status, resync, and required legacy snapshot
+  control topics, none of which carries purge authority.
+
+## Batch
+
+A publish payload is a bounded canonical batch:
+
+```json
 {
-  "publication_id": "<target_id>:<epoch>:<cursor_start>:<cursor_end>",
-  "records": [ <record>, ... ]
+  "schema_version": 1,
+  "gateway_identity": "<stable gateway id>",
+  "ledger_epoch": "<restore generation>",
+  "target_id": "<logical target id>",
+  "target_endpoint_id": "<registered endpoint identity>",
+  "publication_id": "<deterministic target+epoch+range id>",
+  "cursor_start": 123,
+  "cursor_end": 130,
+  "records": ["<canonical measurement/series_definition/annotation records>"]
 }
 ```
 
-- **`publication_id`** is deterministic: `target_id:epoch:cursor_start:cursor_end`.
-  The same cursor range always produces the same id, so a crash-and-resend is
-  byte-identical and the consumer can dedupe.
-- **At-least-once.** After a crash between POST and cursor-advance, the gateway
-  re-sends the same range with the same `publication_id`. The consumer must
-  tolerate duplicates.
-- **Batches are bounded** by record count and a byte cap; a single record larger
-  than the cap is still delivered alone (never an empty stall).
-- **HTTPS only.** The gateway refuses to POST a bearer token to a non-`https://`
-  endpoint (enforced at every use site, not just at `target add`).
+- Delivery is **at least once**. Retry preserves `publication_id`, range, and record content.
+- Before first publish, Gateway durably records the exact canonical encoded payload plus binding
+  generation, endpoint, epoch, range, publication ID, payload fingerprint, contract version, and
+  versioned batch policy. Restart or
+  configuration change replays that exact attempt and payload until formal advancement or terminal
+  quarantine.
+- The range is contiguous in publication order. Event time is not a cursor and may be late or
+  non-monotonic.
+- Batches have configured record/byte/inflight limits. The listener keeps MQTT network/keepalive
+  processing alive while its bounded commit queue is backpressured.
+- Global record identity is `(gateway_identity, ledger_epoch, pub_seq)`. The Site Server also stores
+  a payload fingerprint. The same identity with different content is an integrity/custody conflict,
+  never last-write-wins.
 
-## Records
+## Record families
 
-Two families. **Record identity is `(epoch, pub_seq)`** — the consumer should
-idempotently upsert on that pair. `readings.seq` (the gateway's internal
-sequence) is never sent.
+### `measurement`
 
-### measurement
+One point in one stable series:
 
 ```json
 {
   "family": "measurement",
   "schema_version": 1,
-  "epoch": "<ledger epoch, UUIDv7>",
-  "pub_seq": 12345,
-  "series_key": "<system_id>:<measurement_key>:<channel|na>:<variant>",
-  "values": [ 21.5 ],
+  "pub_seq": 123,
+  "series_key": "<opaque stable series identity>",
+  "values": [21.5],
   "event_time": 1720000000000,
   "event_time_source": "device | gateway_adjusted | received_at",
   "time_source": "device_ntp | device_rtc | gateway | gateway_adjusted",
-  "time_quality": "<D1 time quality>",
+  "time_quality": "<contract value>",
   "received_at": 1720000000123,
   "device_time": 1720000000000
 }
 ```
 
-- `series_key` is the stable logical identity of the series (channel `-1` renders
-  as `na`). Treat it as an opaque key unless you have the gateway's series table.
-- `device_time` may be `null`.
+`device_time` may be null. Values must obey the registered type/unit/finite-value contract. A future
+derived series is a distinct series with immutable derivation provenance; it never overwrites its
+source observation.
 
-### annotation
+### `series_definition`
 
-Stream metadata sharing the same `pub_seq` sequence. Currently only `epoch_start`:
+Mandatory versioned metadata copied from the Gateway's authoritative R11 registry so the Site can
+interpret measurements without a live reverse query:
 
 ```json
 {
-  "family": "annotation",
+  "family": "series_definition",
   "schema_version": 1,
-  "epoch": "<new epoch>",
-  "pub_seq": 42,
-  "subtype": "epoch_start",
-  "prior_epoch": "<old epoch>"
+  "pub_seq": 122,
+  "series_key": "<opaque stable series identity>",
+  "definition_revision": 3,
+  "effective_from_pub_seq": 123,
+  "measurement_key": "illuminance_lux",
+  "unit": "lx",
+  "value_type": "float",
+  "channel": "na",
+  "series_variant": "raw",
+  "value_semantics": "calibrated",
+  "registry_revision": 7
 }
 ```
 
-## Acknowledgement
+The applicable definition precedes every affected measurement in publication order. History is
+immutable. Subject/user labels, hardware identity, process, part, order, and application mapping are
+not part of this family.
 
-The consumer responds to a batch POST with:
+Absent, late, conflicting, or invalid required definitions are deterministic
+`record_schema_invalid` failures: no custody ack, correlated terminal notice, and Gateway outbox
+quarantine. Site validates measurement type/unit/value against the applicable definition before raw
+custody commit.
+
+For retained publication rows created before this family existed, MQTT cutover first sends one
+immutable, hashed `series_definition_snapshot` containing all required definitions, registry revision,
+and `snapshot_through_pub_seq`. Site must durably acknowledge this snapshot before accepting production
+batches. It is bootstrap metadata and cannot advance the production/purge cursor. Later definition
+changes use normal earlier-pub-seq records. If historical definitions cannot be reconstructed, cutover
+stops rather than applying current metadata retroactively.
+
+Site acknowledges this bootstrap only on the non-retained `series-snapshot-ack` topic. The tagged
+ack contains `schema_version`, `snapshot_id`, snapshot hash, Gateway/target/endpoint/epoch,
+`snapshot_through_pub_seq`, `registry_revision`, and `purge_authority=false`. Resync returns this
+stored state after response loss. Transient failure produces no ack and a reconnect/retry;
+deterministic invalid/conflicting snapshot state produces a tagged terminal notice with
+`object_kind=series_snapshot`, snapshot ID/hash, and Gateway/target/endpoint/epoch correlations;
+production-only publication/range fields are absent. Neither case advances the production cursor.
+
+### `annotation`
+
+Stream/custody metadata shares the publication sequence. Version 1 includes `epoch_start` and the
+structured gap/custody annotations defined by D7. Commissioning smoke is a synthetic record in the
+normal production stream with a real pub_seq; activation requires the contiguous formal watermark to
+reach it, so it cannot skip a backlog. The custody transaction that first crosses the expected smoke
+sequence also activates the pending enrollment/credential slot. It is excluded from ordinary
+measurement queries.
+
+## Store, then acknowledge
+
+For a valid gap-free batch, the Archival Store:
+
+1. authenticates the Gateway/target/namespace and validates schema, epoch, range, size, and hashes;
+2. begins one custody-critical transaction;
+3. inserts or idempotently verifies all canonical records;
+4. advances that Gateway's contiguous `accepted_through` cursor in the same transaction;
+5. commits with durability equivalent to SQLite `WAL + synchronous=FULL`;
+6. only then emits MQTT PUBACK and publishes the formal ack detail.
+
+Example ack detail:
 
 ```json
-{ "publication_id": "<echo of the request publication_id>", "acked_pub_seq": <cursor_end> }
+{
+  "schema_version": 1,
+  "gateway_identity": "<stable gateway id>",
+  "target_id": "<logical target id>",
+  "target_endpoint_id": "<registered endpoint identity>",
+  "ledger_epoch": "<restore generation>",
+  "publication_id": "<echoed deterministic id>",
+  "accepted_through": 130
+}
 ```
 
-The gateway advances the target's cursor **only if**:
+The Gateway advances its target cursor only after validating every correlation field and a
+non-regressing accepted-through value for the current epoch. Under D9's gap-free cumulative-equivalent
+rule, a success PUBACK may confirm the just-committed batch; the explicit ack detail remains the
+inspectable/formal watermark and is resynchronized after reconnect.
 
-- `publication_id` matches the one it sent (this also confirms the epoch, since
-  the epoch is embedded in it), **and**
-- `acked_pub_seq == cursor_end` (all-or-nothing for the batch; partial ack is not
-  supported in the MVE), **and**
-- the HTTP status is 2xx.
+ENOSPC, corruption, SQL failure, cancellation before commit, invalid schema/range, partial storage,
+or payload conflict produces no success PUBACK and no accepted-through advancement. A transient
+storage failure is not a terminal rejection. Commit followed by response loss causes harmless replay.
 
-Anything else → the cursor does not move and the batch is retried with bounded
-backoff. The cursor never moves backward.
+## Epoch, restore, and clone behavior
 
-## Epochs and restore
+Formal Gateway restore preserves logical identity but mints a new ledger epoch. The Site Server keeps
+an active-epoch registry and reconciles the new epoch through the enrollment/recovery flow. Old-epoch
+sessions cannot advance the new epoch's cursor. Same identity/key/epoch oscillation or equal record
+identity with different content fences delivery for operator recovery.
 
-`epoch` fences restore generations. A snapshot restore (hardware swap) mints a
-**new** epoch and enqueues an `epoch_start` annotation carrying the `prior_epoch`.
-The consumer should treat a new epoch as a signal to re-baseline its cursor for
-this gateway: records under the new epoch start from the smallest `pub_seq`, and
-the consumer's old-epoch cursor no longer applies. The gateway cannot promise to
-re-deliver data from before the restore (that box is gone).
+Site restore starts network-unbound. A root-owned generation anchor outside the ordinary DB backup
+must match the live DB and no restore marker may exist before listeners bind. Official backup artifacts
+are non-live and import into a fresh generation through a local typed operation that invalidates
+tickets/pending/verifiers/sessions and reconciles each Gateway's box key, epoch, cursor, and retained
+range. Full-disk/root rollback that also restores the anchor requires an external witness to detect and
+is an explicit residual limitation.
 
-## Retention interaction (why the ack matters)
+## Query projections do not acknowledge custody
 
-The gateway purges a reading only when it is both **past a retention floor**
-(data-age based, default 90 days, minimum 7, configurable via
-`IOTKIT_RETENTION_DAYS`) **and already acknowledged** for the registered archive
-target. Un-acknowledged originals are protected even when old.
-So: **if you stop acking, the gateway stops purging** — the backlog grows and,
-under sustained pressure, new writes eventually fail with `ENOSPC` rather than
-silently dropping stored data. Keeping up with acks is how you keep the buffer
-drained.
+The Site query projector runs after raw archival commit. Its tables and checkpoint may be dropped and
+rebuilt from canonical raw records. Projection failure or lag cannot delay, synthesize, or replace the
+archival ack. Query responses expose the projection watermark/incomplete state.
+
+## Retention interaction
+
+Normal Gateway retention removes archive-acknowledged data only after the minimum retention floor.
+Under resource pressure the authoritative D2/R17 order is:
+
+1. archive-acknowledged data beyond the floor;
+2. data outside the configured custody policy;
+3. unresolved quarantine data; and
+4. unacknowledged originals only as the final explicit data-loss class.
+
+The fourth class requires a `custody_lost` audit event and a structured gap annotation. Silent
+deletion is forbidden. If the Archival Store stops acknowledging, the backlog and risk horizon must
+be visible; no ordinary broker PUBACK may make that backlog purgeable.
+
+Generic non-custodial brokers and Site republishing are deferred from the MVP. Version 1 implements
+only the custody-aware Site listener; later D9 broker compatibility cannot inherit archival or purge
+semantics from an ordinary PUBACK.
+
+## Terminal gaps and resynchronization
+
+- Queue saturation before a commit attempt delays admission/PUBACK while network keepalive continues.
+  Once an actual transient commit attempt fails, Site returns no PUBACK/terminal notice and explicitly
+  closes the connection after bounded cleanup; Gateway clean-reconnects and republishes from outbox.
+- Deterministic contract violations or payload conflicts return no PUBACK and emit a correlated,
+  stable-reason terminal notice. Production-record variant fields are `schema_version, gateway_identity, target_id,
+  target_endpoint_id, ledger_epoch, publication_id, cursor_start, cursor_end, reason_code,
+  diagnostic_id`; the snapshot variant is defined above. No secret/raw payload is included.
+  Version-1 terminal reasons are
+  `contract_major_unsupported`, `target_binding_mismatch`, `epoch_conflict`,
+  `publication_identity_mismatch`, `cursor_range_invalid`, `record_schema_invalid`, and
+  `payload_conflict`. Storage/timeout/overload errors are forbidden from this list. Gateway
+  quarantines the batch without deleting it and reconnects.
+- While a gap exists, later PUBACKs release only inflight capacity; formal `accepted_through` remains
+  before the gap and is the only purge watermark.
+- Clean MQTT sessions are used; the outbox is retry authority. Gateway waits for SUBACK on
+  ack/terminal/snapshot-ack subscriptions, then publishes a correlated resync request. Site returns
+  current watermark/terminal/snapshot state after subscription readiness. Request/response includes
+  fresh `request_id`, Gateway/target/endpoint/epoch correlations, the Gateway's local watermark, and
+  local snapshot ID/hash. Retained messages are forbidden.
+
+## Application compatibility
+
+Legacy `production`, `alarm`, `onoff`, `barcode`, and `gantt-chart` payloads are generated, if needed,
+by an application projection adapter outside Gateway Core. The canonical publisher never reshapes a
+record for a particular target or imports YokaKit business masters.

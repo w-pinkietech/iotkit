@@ -62,6 +62,8 @@ Date: 2026-07-02
 | エンベロープ | envelope | アダプタ/自作デバイス→コレクタ間の配送単位。安定ID(envelope_id)を持ち、再送しても安全 |
 | 取り込み契約 | ingest contract | エンベロープをコレクタに届けるための公開ワイヤ契約。バインディングは複数(プロセス内チャネル / UDS / HTTP / MQTT ingest専用リスナー)だが論理契約は一つ |
 | 正規化 | normalization | プロバイダ固有の生データ→測定レジストリ準拠の正規形への変換。アダプタ(=つなぐ側)の責任。**3段に分掌**: ①デコード(データシートの数学: 生値→物理量)=ドライバ、②measurement写像(measurement_key+channelへの写像)=アダプタランタイム、③現場較正(オフセット/倍率、現場設定の数学)=R9(コレクタ後段)。**series解決**(送信者アイデンティティ+subject_hint→台帳→system_id→series_id)は写像ではなく**コレクタの責務**(D5)。判定基準:「データシート由来の数学はドライバ、現場設定由来の数学はR9」 |
+| 派生系列プロセッサ | derived-series processor | R9のうち、受理済み観測から較正・累積count・時間集約等の**新しいseries**を決定的に生成する概念境界。元観測を上書きせず、導出revision/入力series/適用境界を持つ。名前だけを理由にcrate化しない |
+| ローカルルール評価器 | local rule evaluator | R9のうち、受理済み・非検疫の観測/状態へ型付き有界条件を評価し、型付きaction intentだけを生成する概念境界。I/Oや変更を直接行わず、実行はR14 dispatch・権限・監査・TTL/冪等性を通す。自由script/rule engineではない |
 | 測定レジストリ | measurement registry | 測定種別・単位・型の語彙の定義と版管理(R6)。正規化の目標形を定める権威。**二層構造**: 命名の典拠=標準語彙カタログ、受理の正本=現場レジストリ(D6) |
 | 標準語彙カタログ | standard vocabulary catalog | measurement_keyの命名・正準単位(UCUM)・値型・意味論クラス・物理限界値域・チャネル役割を定めるリポジトリ資産(ゲートウェイバイナリに同梱)。契約仕様書の一部として公開=柱2の実体。受理判定には直接使われない(診断・候補提示のみ)(D6決定1) |
 | 現場レジストリ | site registry | ゲートウェイDB内の測定レジストリ正本(D2)。カタログから有効化(copy-on-enable=コピーして固定)したエントリ+現場カスタム定義(`custom.`名前空間)+エイリアス表の合成。R8受理判定の唯一の参照先(D6) |
@@ -136,8 +138,10 @@ Date: 2026-07-02
 |---|---|---|
 | 出口MQTTバインディング | exit MQTT binding | 出口契約(R10)の第一波バインディング。IoTゲートウェイがtargetのMQTTエンドポイントへ有界バッチをpublish(QoS1)し、ackを「しまってから返すPUBACK」+補助topic明細で受ける(D9) |
 | 送信窓 | sending window | 未ack(未PUBACK)のin-flightバッチ数の上限。窓が埋まったら新規publishを止めoutboxに滞留(D9決定7) |
-| 補助topic(ack明細) | ack detail topic | `ack/{gateway_identity}` 上でArchival Storeが返す明細。`accepted_through` 水位(正式なpurge水位)・終端通知を運ぶ。target_id/publication_id/epoch相関必須、retained禁止、接続時に再同期(D9決定2・3) |
-| 終端通知 | terminal notice | 再送しても結果が変わらない失敗(決定的契約違反・custody_conflict)をゲートウェイへ伝える補助topicメッセージ。受けたバッチはoutbox隔離+operator解決(D9決定3)。一時的ストレージ失敗には使わない |
+| 補助topic(ack明細) | ack detail topic | `iotkit/v1/gateways/{gateway_identity}/ack-detail` 上でArchival Storeが返す `accepted_through` 正式水位。target_id/target_endpoint_id/publication_id/epoch相関必須、retained禁止、SUBACK後resync(D9決定2・2026-07-13具体化) |
+| snapshot ack | series snapshot acknowledgement | `series-snapshot-ack` 上のlegacy outbox metadata bootstrap専用応答。snapshot ID/hash、gateway/target/endpoint/epoch、snapshot through、registry revision、`purge_authority=false`を持ち、production水位を進めない(D9、2026-07-13追加) |
+| series定義同期 | series definition synchronization | R10の必須 `series_definition` family。R11メタデータ正本のうちseries解釈に必要なkey/unit/type/channel/variant/value semantics/revision/effective cursorだけをversion付きでSiteへ複製する。business label/masterは含めない(D7決定2、2026-07-13追加) |
+| 終端通知 | terminal notice | `iotkit/v1/gateways/{gateway_identity}/terminal-notice` で再送しても結果が変わらない失敗(決定的契約違反・custody_conflict)を伝える。受けたbatchはoutbox隔離+operator解決。一時的storage失敗には使わない(D9決定3・2026-07-13具体化) |
 | 非預かりターゲット | non-custodial target | 市販ブローカー等、custodyを移転しない出口先。PUBACKは配達確認どまり、逆圧・カーソル・gap通知は構造的に失われるベストエフォートの配り(D9決定5) |
 | 一級target / 購読者 | first-class target / subscriber | 消費者の二層。一級target=契約対応リスナー(store-then-ack)を実装しカーソル・完全性保証を受ける消費者。購読者=配り用ブローカーをsubscribeするだけのベストエフォート消費者(D9決定8) |
 
@@ -151,8 +155,10 @@ Date: 2026-07-02
 | 2スロット(make-before-break) | two-slot rotation | targetごとにcredentialを2枠持ち、「新発行→疎通スモーク成功→旧失効」の順で更新する方式。スモーク成功が旧失効の事前条件(D10決定3) |
 | 無人再発行 | unattended re-issuance | 期限切れcredentialの非常口。箱から出ない鍵(登録済みfingerprintの鍵ペア/トンネル鍵)で認証→名簿照合→自動再発行+監査。人間の関与不要(D10決定3) |
 | 中間層 / 日常層 / 工事層 | routine / daily-tap / construction tier | 変更操作の権限3分類(D12決定3で正式化。照会はread-onlyスコープとして別軸)。**中間層**=AI可・必須条件つき(出口credential rotation・失効・無人再発行・トンネル鍵rotation=D10決定5、南向きの世話の一部=D12決定3。一括操作は昇格)。**日常層**=人間のタップ承認・AIは提案まで(device add・ペアリング窓・デバイストークン失効=D1/D11、較正確定・アラーム意味論・親再起動・DFU承認・流量クラス変更=D12決定3/D11決定8)。**工事層**=構造・経路の変更(target追加・削除、cloud target登録、archive designation変更、平文opt-in、enrollment承認、入口リスナー有効化/bind変更。人間のみ、AIトークンには構造的に発行不可)(動詞集合の正本=D10決定5・D11決定8・D12決定3) |
-| ホスト型サイトサーバー | hosted site server | site server[3]のソフトウェア一式を敷地外(クラウド/VPS)で運用する正式変種。成立条件(トンネルMUST・WAN断耐久宣言・purge自動保留・VPS外DR・相乗り禁止)はD10決定7 |
-| 経路クラス規則 | path-class rule | 守りの強度を箱の設置場所でなく経路で決める規則。[2]↔[3]の全プレーンは、LAN内なら「廊下」ルール、インターネットを渡るならピン留め静的鍵トンネル内MUST(D10決定7) |
+| ホスト型サイトサーバー | hosted site server | site server[3]のソフトウェア一式を敷地外(クラウド/VPS)で運用する正式変種。成立条件(宣言済み `self_managed_static` / `managed_overlay` 経路MUST・WAN断耐久宣言・purge自動保留・VPS外DR・相乗り禁止)はD10決定7 |
+| 経路クラス規則 | path-class rule | 守りの強度を箱の設置場所でなく経路で決める規則。[2]↔[3]の全プレーンは、LAN内なら「廊下」ルール、インターネットを渡るなら宣言済み `self_managed_static` または `managed_overlay` 内MUST。外部管理VPNをplatformが一律禁止せず、現場が権威/到達/失効/復旧を選び記録する(D10決定7) |
+| 自己管理静的経路 | self-managed static path | `self_managed_static`。Gatewayごとの静的WireGuard等を現場が直接管理する経路プロファイル。peer鍵、AllowedIPs/FW、rotation/失効をIoTKit名簿/手順へ束縛(D10決定7) |
+| 管理overlay経路 | managed overlay path | `managed_overlay`。Tailscale等の外部control planeを持つoverlay VPNを現場判断で使う経路プロファイル。provider/admin/ACL/node admission/account recovery/rotation/revoke/restore/残余リスクを記録し、TLS pin・箱鍵mTLS・束縛credentialを省略しない(D10決定7、2026-07-13追加) |
 | トンネル鍵 | tunnel key | ホスト型の[2]↔[3]トンネル(WireGuard等)のピア鍵。Pi上で生成し公開鍵のみ名簿登録、期限なし(有効性=名簿照合)、rotation=中間層2スロット、失効=peer除去+MQTTセッション切断連動(D10決定7) |
 | credential_health | — | アラーム(旧称 `certificate_expiry`)。証明書・target資格情報・operator tokenの期限・rotation失敗・ピン不一致・2スロット片肺(D10) |
 | site_unreachable | — | ホスト型のアラーム。archival storeへの全Pi一斉不達(WAN断/トンネル断/VPS障害)。LAN内部分分断の `partial_partition` とは別事象(D10) |
