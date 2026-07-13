@@ -30,6 +30,30 @@ vocabulary であり、新規コードは依存を増やさない。
   ストレージ失敗には `rejected` を返さない（ack なし）。
 - 変更系操作は R14 dispatch 経由。SQL 直書きの変更経路を新設しない。
 
+## Experimental Raspberry Pi
+
+- 実験用PiのSSH接続先は `iotkit@iotkit`。
+- Codexの制限環境では、root所有の `/etc/ssh` 設定が `nobody:nobody` に見えることがあり、通常の
+  `ssh iotkit@iotkit` が次のエラーで開始前に失敗する。
+
+  ```text
+  Bad owner or permissions on /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf
+  ```
+
+- このエラーをPi側または開発PCの実際の権限不正と断定しない。`/etc/ssh`への`chown`、`chmod`、削除を
+  行わない。Codexからはsystem SSH configを読まない次の形を使う。
+
+  ```bash
+  ssh -F /dev/null iotkit@iotkit
+  ```
+
+- 自動調査では必要に応じて `BatchMode=yes`、短い`ConnectTimeout`、`/tmp`内の一時known-hosts fileを使う。
+  sandbox内で名前解決が拒否された場合だけ、同じ読み取り専用SSH commandを承認付きで再実行する。
+- 初回接続・診断は読み取り専用とし、Pi上のservice、package、設定、Docker container、UARTを変更または
+  openする前に、現在のタスクがその変更を許可しているか確認する。
+- 確認済みの基準状態: Debian 13 / arm64、`/dev/serial0 -> /dev/ttyAMA0`、`iotkit`は`dialout`所属。
+  BravePI信号は通常停止中なので、ユーザーが再開するまではUART frameが来ないことを異常扱いしない。
+
 ## Development Workflow
 
 Superpowers skills は任意の作業支援ツールであり、全変更に一律適用する必須パイプラインではない。
