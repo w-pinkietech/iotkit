@@ -6,14 +6,14 @@ git/disk/test. Never store secrets here.
 ## Reality
 
 - Repository: `iotkit-next`
-- Branch: `feature/codex-model-routing` in isolated worktree
-  `.worktrees/codex-model-routing`
-- Artifact/base HEAD: `81ae496371da2209f0f75b9d6bcb6ad0f8c83e74`
-- Active phase: Codex native model-routing implementation review is settled at C0/I0/M0 on the
-  corrected exact manifest. Final verification and the local atomic commit are the next actions.
-- Baseline `cargo build` passed. Baseline `scripts/verify.sh` passed with host permissions on
-  2026-07-13; the first sandboxed run failed only because loopback publish tests received
-  `EPERM`, and the unchanged suite passed when rerun outside that network sandbox.
+- Branch: `feature/plan6-task7` in isolated worktree `.worktrees/plan6-task7`
+- Artifact/base HEAD: `143b374eabfb6861f2f2540ecc0d96623f47be1e`
+- Active phase: Plan 6 Task 7 final integration is settled at C0/I0/M0 on the exact 45-blob
+  manifest. Final verification, the local atomic commit, and then a user integration choice are
+  the remaining actions; no push/PR/merge is authorized by this mission.
+- Baseline `cargo build --workspace` and host-permission `cargo test --workspace` passed on
+  2026-07-13. The sandboxed socket run failed only with `EPERM`; focused real-socket tests and
+  `scripts/verify.sh` passed outside that network sandbox.
 
 ## Mission
 
@@ -614,14 +614,52 @@ distribution gate. These choices are now being folded into canon and the formal 
   boundary; implementation, verification, review, and finding-fix work overlapped only where
   explicitly monitored. Documentation/commit time is measured separately at handoff. One fix4b
   dispatch was rejected before code execution by quota and is counted as one retry.
-- No push, PR, release, listener enablement, or Task 6 work is authorized or performed.
-  `INGRESS_READY=false` remains the required boundary.
+- At Task 5 settlement, no push, PR, release, listener enablement, or Task 6 work had been
+  performed. Later Task 6 work superseded the `INGRESS_READY=false` boundary and was merged as
+  `fa804f2`; this historical Task 5 entry is not current-state authority.
+
+## Plan 6 Task 7 settlement
+
+- **SETTLED for local commit** on base `143b374eabfb6861f2f2540ecc0d96623f47be1e`.
+  Task 7 publishes the normative authenticated HTTP ingest contract and executable three-command
+  builder journey, adds real TLS end-to-end custody/retry/validation/secret probes, and closes
+  listener lifecycle integration through deterministic real-socket supervisor tests.
+- Final exact 45-blob manifest SHA-256:
+  `0cfc8e00a3e6338bdcb00f33d7c0adbbbb8ddf93d568545baf3c84d37c5bde91`.
+  Fresh read-only Sol/high final result SHA-256:
+  `67c8b9d44033c0c9774514fc6e3e4b8440beb013bc7841a9e0208a05bf09659c`;
+  receipt SHA-256:
+  `9561feb13ebaf3f10fa54c4d958ecdc1c7426f752a980d4c9861e5d34fd48913`.
+  Verdict: **COMPLIANT / APPROVED / C0-I0-M0 / APPROVE**. No final acceptance requirement is
+  unproven.
+- Review/fix progression was C1/I3/M1, then C0/I1/M0 for same-bind TLS rotation, then
+  C0/I0/M2 for deterministic test inventory/ports and stale architecture wording, then C0/I0/M1
+  for the explicit listen backlog, and finally C0/I0/M0. Every implementation/fix session used
+  Luna/max; every independent review/confirmation used a fresh Sol/high read-only session.
+- Main verification passed the HTTP ingress suite (64/64 plus doctests), gateway ingress
+  supervision (8/8), Task 7 E2E (11/11), `git diff --check`, and full `scripts/verify.sh` including
+  formatting, layer rules, workspace tests, and Clippy `-D warnings`. Real listener/TLS tests ran
+  with host socket permission because the managed sandbox rejects socket creation with `EPERM`.
+
+### Plan 6 Task 7 timing
+
+- Exact dispatch-to-final-settlement boundary: **2h20m00s**, 2026-07-13 05:03:34–07:23:34 JST.
+  The Plan 6 design/plan was already settled before this boundary, so earlier planning/research is
+  not reallocated to Task 7.
+- Initial implementation: **24m35s** (one Luna/max run). Independent review: **20m42s exact**
+  across five fresh Sol/high rounds. Finding fixes and worker reverification: **1h17m40s exact**
+  across six Luna/max runs. The remaining **17m03s** is Main-focused diagnosis, manifest work,
+  host verification, and review dispatch between model receipts.
+- Documentation/final verification/local commit begins after 07:23:34 JST and ends at the
+  containing commit's committer timestamp. Total Task 7 elapsed is the 2h20m00s settlement
+  boundary plus that final interval. There were seven implementation/fix runs and five review
+  rounds; no push, PR, merge, release, or listener enablement occurred.
 
 ## Next executable work
 
-1. Run final verification and commit the settled model-routing unit locally. Then resume the
-   current Plan 6 work under Main/review Sol/high and implementation/execution Luna/max. Do not push
-   without separate user authority.
+1. Run the final verification and commit Task 7 locally. Then await the user's branch integration
+   choice. Plan 6 product implementation is complete through Task 7; Plan 6.5 or another roadmap
+   item requires a new user-directed mission. Do not push without separate user authority.
 
 ## Verification
 
@@ -629,6 +667,10 @@ distribution gate. These choices are now being folded into canon and the formal 
   including strict role preflight, missing/malformed/unknown-key fixtures, routing/lifecycle/race/
   stdin tests, all workspace tests, and Clippy `-D warnings`. Fresh Sol/high confirmation returned
   C0/I0/M0 on the corrected 19-blob manifest.
+- Plan 6 Task 7: Main-owned focused real-socket tests and `scripts/verify.sh` passed on the final
+  code; the exact 45-blob fresh Sol/high review returned C0/I0/M0 and APPROVE. Deterministic
+  injected inventory retains strict logical private-site validation while production entry points
+  continue to use OS inventory and bind the validated address with explicit backlog 128.
 - Plan 6 Task 5: Main-owned focused and full verification passed, including ten repeated
   real-socket header/idle-timeout probes; the final fresh no-context review returned C0/I0/M1
   with APPROVE on the exact staged tree and frozen hashes below.

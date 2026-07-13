@@ -195,6 +195,11 @@ pub struct HttpIngestService<C: MonotonicClock> {
     shared: Arc<Shared<C>>,
 }
 
+/// The single connection-capacity charge owned by one raw peer, including its TLS
+/// negotiation and HTTP protocol lifetime. The listener acquires it before starting
+/// negotiation and transfers it into [`HttpIngestService::serve_connection_with_permit`].
+pub(crate) type ConnectionPermit = OwnedSemaphorePermit;
+
 impl<C: MonotonicClock> Clone for HttpIngestService<C> {
     fn clone(&self) -> Self {
         Self {
@@ -331,20 +336,42 @@ impl<C: MonotonicClock> HttpIngestService<C> {
         }
     }
 
-    /// Serve a previously site-CIDR-validated stream with hard header and connection limits.
-    /// The listener readiness gate remains owned by the gateway composition boundary.
+    pub(crate) fn try_acquire_connection(&self) -> Result<ConnectionPermit, ServeConnectionError> {
+        match self.shared.connections.clone().try_acquire_owned() {
+            Ok(permit) => Ok(permit),
+            Err(_) => {
+                self.shared.admission.record_throttled_drop();
+                Err(ServeConnectionError::Busy)
+            }
+        }
+    }
+
+    /// Serve a previously site-CIDR-validated stream with hard header limits.
+    ///
+    /// Direct callers acquire the connection permit at this boundary. The listener
+    /// uses [`Self::try_acquire_connection`] before TLS and transfers that same permit
+    /// through [`Self::serve_connection_with_permit`], so negotiation and HTTP are
+    /// charged exactly once.
     pub async fn serve_connection(
         &self,
         stream: crate::AcceptedStream,
         observed_peer: std::net::SocketAddr,
     ) -> Result<(), ServeConnectionError> {
-        let _connection = match self.shared.connections.clone().try_acquire_owned() {
-            Ok(connection) => connection,
-            Err(_) => {
-                self.shared.admission.record_throttled_drop();
-                return Err(ServeConnectionError::Busy);
-            }
-        };
+        let connection = self.try_acquire_connection()?;
+        self.serve_connection_with_permit(stream, observed_peer, connection)
+            .await
+    }
+
+    /// Serve a stream while retaining the connection-capacity permit acquired before
+    /// TLS negotiation. This is crate-visible because only the transport listener can
+    /// validate the peer and perform the handshake before handing over the stream.
+    pub(crate) async fn serve_connection_with_permit(
+        &self,
+        stream: crate::AcceptedStream,
+        observed_peer: std::net::SocketAddr,
+        connection: ConnectionPermit,
+    ) -> Result<(), ServeConnectionError> {
+        let _connection = connection;
         let service = self.clone();
         let hyper_service = service_fn(move |request: Request<hyper::body::Incoming>| {
             let service = service.clone();

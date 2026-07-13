@@ -56,6 +56,59 @@ impl<T> ListenerTransition<T> {
         Ok(())
     }
 
+    /// Reserve a desired generation before external staging. Runtime state is unchanged until a
+    /// caller has completed the durable publication boundary and invokes one of the commit
+    /// methods below.
+    pub fn prepare_generation(&mut self, generation: u64) -> Result<(), TransitionError> {
+        self.observe_desired(generation)?;
+        if generation <= self.applied_generation {
+            return Err(TransitionError::GenerationNotNew);
+        }
+        Ok(())
+    }
+
+    /// Commits a generation whose existing listener object stayed bound while its runtime policy
+    /// was paused and replaced.
+    pub fn commit_reused_generation(&mut self, generation: u64) -> Result<(), TransitionError> {
+        if generation != self.desired_generation || generation <= self.applied_generation {
+            return Err(TransitionError::GenerationNotNew);
+        }
+        if self.active.is_none() {
+            return Err(TransitionError::GenerationRollback);
+        }
+        self.applied_generation = generation;
+        Ok(())
+    }
+
+    /// Commits a staged listener after durable publication and returns the prior listener for
+    /// orderly drain. The staged listener must already be active to external accepts.
+    pub fn commit_replaced_generation(
+        &mut self,
+        generation: u64,
+        active: T,
+    ) -> Result<Option<T>, TransitionError> {
+        if generation != self.desired_generation || generation <= self.applied_generation {
+            return Err(TransitionError::GenerationNotNew);
+        }
+        let old = self.active.replace(active);
+        self.applied_generation = generation;
+        Ok(old)
+    }
+
+    /// Commits a disabled generation after its prior listener has been paused and durable state
+    /// names the disabled desired configuration.
+    pub fn commit_disabled_generation(
+        &mut self,
+        generation: u64,
+    ) -> Result<Option<T>, TransitionError> {
+        if generation != self.desired_generation || generation < self.applied_generation {
+            return Err(TransitionError::GenerationRollback);
+        }
+        let old = self.active.take();
+        self.applied_generation = generation;
+        Ok(old)
+    }
+
     pub fn apply_generation<Tls, Prepared, E>(
         &mut self,
         generation: u64,
@@ -389,6 +442,31 @@ mod tests {
         assert_eq!(failed, Some(FakeListener("safe-2")));
         assert_eq!(state.active(), Some(&FakeListener("safe-1")));
         assert_eq!(state.applied_generation(), 1);
+    }
+
+    #[test]
+    fn paused_runtime_commit_methods_change_generation_only_after_publication() {
+        let mut state = ListenerTransition::default();
+        install_initial(&mut state);
+
+        state.prepare_generation(2).unwrap();
+        assert_eq!(state.applied_generation(), 1);
+        assert_eq!(state.active(), Some(&FakeListener("safe-1")));
+        state.commit_reused_generation(2).unwrap();
+        assert_eq!(state.applied_generation(), 2);
+
+        state.prepare_generation(3).unwrap();
+        let old = state
+            .commit_replaced_generation(3, FakeListener("safe-3"))
+            .unwrap();
+        assert_eq!(old, Some(FakeListener("safe-1")));
+        assert_eq!(state.active(), Some(&FakeListener("safe-3")));
+
+        state.prepare_generation(4).unwrap();
+        let old = state.commit_disabled_generation(4).unwrap();
+        assert_eq!(old, Some(FakeListener("safe-3")));
+        assert!(state.active().is_none());
+        assert_eq!(state.applied_generation(), 4);
     }
 
     #[test]

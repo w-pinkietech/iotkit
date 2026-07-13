@@ -544,6 +544,17 @@ fn apply_failure_retains_last_safe_generation_and_later_exact_apply_converges() 
         assert_eq!(failed.applied.as_ref().unwrap().bind_addr, "192.168.4.2:8444");
         assert_eq!(failed.last_error.as_deref(), Some("bind_failed"));
         assert!(matches!(iotkit_core_ops::mark_ingress_applied(conn, 1, None), Err(iotkit_core_ops::OpsError::Conflict)));
+        conn.execute_batch(
+            "CREATE TRIGGER ignore_ingress_applied_update
+             BEFORE UPDATE OF applied_generation ON ingress_listener_config
+             WHEN NEW.applied_generation > OLD.applied_generation
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )?;
+        assert!(matches!(
+            iotkit_core_ops::mark_ingress_applied(conn, 2, None),
+            Err(iotkit_core_ops::OpsError::Conflict)
+        ));
+        conn.execute_batch("DROP TRIGGER ignore_ingress_applied_update")?;
         iotkit_core_ops::mark_ingress_applied(conn, 2, None).unwrap();
         let applied = load_ingress_listener_config(conn).unwrap();
         assert_eq!(applied.applied.as_ref().unwrap().generation, 2);

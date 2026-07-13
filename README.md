@@ -33,14 +33,16 @@ durably taken custody of it.
 - **Series identity** that survives device rename and hardware swap (history isn't cut).
 - **Measurement registry** (standard vocabulary + site overrides) and row/series quarantine for unknown or out-of-range data.
 - **Exit contract (R10):** outbound HTTPS push to one archive consumer, at-least-once, with a per-target cursor; the consumer's ack is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
+- **Authenticated HTTP ingest (Plan 6):** a separate, default-off site-LAN TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See [docs/ingest-contract.md](docs/ingest-contract.md).
 - **Operator CLI** (`gatewayctl`) for the device ledger, measurement registry, snapshots/restore, and the archive target.
-- Fresh-DB restore re-enters setup mode; the admin passphrase must be set again after restore.
+- Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
 - The control-plane API is intended for private LAN reachability only. Use SSH port forwarding for Tailscale/CGNAT direct-access scenarios.
 
-> **Approved Plan 6 target (not implemented yet):** remove network setup and every unauthenticated
-> setup-mode operation. An unowned gateway will keep its API/UI unbound until a local TTY or
-> SSH-root `gatewayctl` action establishes ownership. Restore will require local admin recovery
-> and operator-token reissue; it will not reactivate admin/operator/session authority.
+> **Current Plan 6 boundary:** HTTP measurement ingest is implemented as a separate authenticated
+> listener and is disabled by default. An unowned, recovering, restore/reset-fenced, or TLS-invalid
+> gateway keeps network listeners unbound. Plan 6.5 is still required for encrypted replacement
+> backup containers and restore-fence carriage; MQTT, pairing windows, and batch provisioning are
+> future/separate deliverables.
 
 ## Build & test
 
@@ -77,6 +79,7 @@ context-authority rules.
 ## Architecture & contracts
 
 - [docs/architecture.md](docs/architecture.md) — who this serves, crate map & placement rules, data flow, the custody loop, concurrency model.
+- [docs/ingest-contract.md](docs/ingest-contract.md) — normative device-builder HTTP envelope, authentication, acknowledgement, retry, validation, limits, and pinned-TLS journey.
 - [docs/exit-contract.md](docs/exit-contract.md) — what an archive consumer receives and must do (record schema, ack, cursor, epochs).
 
 The authoritative design corpus (decision records **D1–D13**, the **R1–R23**
@@ -88,7 +91,7 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Wave 1 — "distributable to others":** exit contract (done, MVE), then default-off authenticated site-LAN ingress (HTTP/MQTT; never Internet-exposed), onboarding/quarantine UX, calibration, config authority. **In progress.**
+- **Wave 1 — "distributable to others":** exit contract (done, MVE), authenticated default-off site-LAN HTTP ingress (done for Plan 6), then MQTT, onboarding/quarantine UX, calibration, and config authority. **In progress.**
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 
 ## License
