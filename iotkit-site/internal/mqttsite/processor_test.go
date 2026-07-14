@@ -1,12 +1,16 @@
 package mqttsite
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
+	sitestore "github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
 type fakeStore struct {
@@ -20,9 +24,18 @@ func (store *fakeStore) AcceptBatch(_ context.Context, batch contract.RecordBatc
 	return store.ack, store.err
 }
 
-func validPayload(t *testing.T) []byte {
+func payloadWithMarker(t *testing.T, marker string) []byte {
 	t.Helper()
-	record := json.RawMessage(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1}`)
+	record, err := json.Marshal(map[string]any{
+		"family":         "measurement",
+		"schema_version": 1,
+		"epoch":          "epoch-01",
+		"pub_seq":        1,
+		"marker":         marker,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	payload, err := json.Marshal(contract.RecordBatch{
 		SchemaVersion: 1,
 		EdgeNodeID:    "edge-node-01",
@@ -36,6 +49,11 @@ func validPayload(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+func validPayload(t *testing.T) []byte {
+	t.Helper()
+	return payloadWithMarker(t, "original")
 }
 
 func TestProcessPublishesAckOnlyAfterStoreSuccess(t *testing.T) {
@@ -84,6 +102,101 @@ func TestProcessDoesNotPublishWhenStoreFails(t *testing.T) {
 	}
 	if called {
 		t.Fatal("accepted-through published despite store failure")
+	}
+}
+
+func TestProcessDoesNotPublishForRealStoreConflict(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "site.db")
+	archive, err := sitestore.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+
+	processor := Processor{Store: archive}
+	published := 0
+	publish := func(string, []byte) error {
+		published++
+		return nil
+	}
+	topic := "iotkit/v1/edge-nodes/edge-node-01/records"
+	if err := processor.Process(
+		context.Background(),
+		topic,
+		payloadWithMarker(t, "original"),
+		publish,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.Process(
+		context.Background(),
+		topic,
+		payloadWithMarker(t, "changed"),
+		publish,
+	); !errors.Is(err, sitestore.ErrConflict) {
+		t.Fatalf("conflicting Process error = %v, want ErrConflict", err)
+	}
+	if published != 1 {
+		t.Fatalf("accepted-through publishes = %d, want only the initial success", published)
+	}
+	records, err := archive.ListRawRecords(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || !bytes.Contains(records[0].Record, []byte(`"marker":"original"`)) {
+		t.Fatalf("stored record changed after conflict: %+v", records)
+	}
+}
+
+func TestProcessDoesNotPublishWhenRealStoreTransactionFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "site.db")
+	archive, err := sitestore.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+
+	injector, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = injector.Close() })
+	if _, err := injector.Exec(`
+		CREATE TRIGGER fail_cursor BEFORE INSERT ON accepted_cursors
+		BEGIN SELECT RAISE(ABORT, 'injected cursor failure'); END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	published := false
+	err = (Processor{Store: archive}).Process(
+		context.Background(),
+		"iotkit/v1/edge-nodes/edge-node-01/records",
+		validPayload(t),
+		func(string, []byte) error {
+			published = true
+			return nil
+		},
+	)
+	if err == nil {
+		t.Fatal("Process succeeded despite injected transaction failure")
+	}
+	if published {
+		t.Fatal("accepted-through published despite transaction failure")
+	}
+	records, err := archive.ListRawRecords(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("raw records survived failed transaction: %+v", records)
+	}
+	var cursors int
+	if err := injector.QueryRow("SELECT count(*) FROM accepted_cursors").Scan(&cursors); err != nil {
+		t.Fatal(err)
+	}
+	if cursors != 0 {
+		t.Fatalf("cursor rows survived failed transaction: %d", cursors)
 	}
 }
 

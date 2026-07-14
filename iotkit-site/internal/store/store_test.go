@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -168,6 +169,9 @@ func TestExactReplayIsIdempotent(t *testing.T) {
 	if got := store.testCount(t, "raw_records"); got != 1 {
 		t.Fatalf("raw record count = %d, want 1", got)
 	}
+	if got := store.testCursor(t); got != 1 {
+		t.Fatalf("cursor after exact replay = %d, want 1", got)
+	}
 }
 
 func TestConflictingReplayDoesNotAdvanceCursor(t *testing.T) {
@@ -176,9 +180,23 @@ func TestConflictingReplayDoesNotAdvanceCursor(t *testing.T) {
 	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
+	before, err := store.ListRawRecords(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("records before conflict = %d, want 1", len(before))
+	}
 	batch.Records[0] = json.RawMessage(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-temperature-01","values":[99]}`)
 	if _, err := store.AcceptBatch(context.Background(), batch); !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
+	}
+	after, err := store.ListRawRecords(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || !bytes.Equal(after[0].Record, before[0].Record) {
+		t.Fatalf("conflict replaced original record: before=%s after=%v", before[0].Record, after)
 	}
 	if got := store.testCursor(t); got != 1 {
 		t.Fatalf("cursor = %d, want 1", got)
@@ -198,6 +216,9 @@ func TestCursorWriteFailureRollsBackRawInsert(t *testing.T) {
 	}
 	if got := store.testCount(t, "raw_records"); got != 0 {
 		t.Fatalf("raw record count = %d, want rollback to 0", got)
+	}
+	if got := store.testCount(t, "accepted_cursors"); got != 0 {
+		t.Fatalf("cursor count = %d, want rollback to 0", got)
 	}
 }
 
