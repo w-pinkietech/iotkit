@@ -101,12 +101,31 @@ read-only cutover preflightが既存の`edge_node_id`を受理し、BravePI Main
 Site queryで同じ`edge_node_id`・`ledger_epoch`と`temperature_c`の3 recordを確認した。停止後のEdge DBと
 Site DBはともに`PRAGMA quick_check = ok`であり、Edge processの停止とUART解放も確認した。
 
+### Host耐障害検証状況 (2026-07-14)
+
+commit `0696d22`を使い、通常のEdge、Mosquitto、Siteだけでcustody失敗系とprocess境界の耐障害性を
+検証した。テスト専用の製品failpointは追加していない。
+
+- Siteの実SQLite transactionをtriggerで失敗させた場合、raw record、cursor、ackはいずれも0件のまま
+  だった。同じbatchの再送は1行のまま冪等で、同じidentityを異なる内容で再送した場合はconflictとなり、
+  元recordのbytesとcursorを保持して2つ目のackを返さなかった。
+- Brokerを停止した状態でEdge outboxへ300件を作成し、Edgeを再起動してもcursorが0、outboxが300件の
+  まま保たれることを確認した。BrokerとSiteの復旧後、256件上限により2 batch以上でcursorとSiteが
+  300へ収束した。
+- この試験で、IoTKitの1 MiB batch上限に対してMQTT clientの既定送信上限が10 KiBのままという不整合を
+  検出した。client上限を最大payloadとtopic/header overheadへ揃え、約42 KiBの先頭batchを正常送信した。
+- Brokerが利用可能なままSiteを停止し、`pub_seq` 301を追加してEdgeを再起動してもcursorは300から
+  進まなかった。Site復旧後は301へ収束した。その後、Edge再起動をまたぐ302、Broker再起動をまたぐ303、
+  Site再起動と通常retryをまたぐ304を順に確認した。
+- 最終状態はEdge cursor 304、Site raw record 304件、最小1、最大304、distinct 304であり、欠番と重複は
+  なかった。停止後のEdge DBとSite DBはいずれも`PRAGMA quick_check = ok`だった。
+
 これにより `BravePI Transmitter -> BLE Long Range -> BravePI Mainboard -> UART -> IoTKit Edge SQLite -> MQTT
 -> MQTT Broker -> IoTKit Site raw SQLite -> accepted-through -> Edge cursor` は実機確認済みとなった。
 平文MQTTは同一Piのloopbackだけを使う実験設定であり、実運用のTLS要件を緩和しない。
-SQLite commit失敗、内容conflict、全コンポーネントの再起動組合せ、長時間停止中の連続収集は
-引き続き現在の実装ゲートの未完了条件である。接点入力はUART decodeまでの確認であり、
-Edgeへの通常取り込みは温度経路の次に行う。
+長時間停止中の実センサー連続収集と、BravePI Mainboardを含む実機復旧の再確認は、引き続き現在の
+実装ゲートの未完了条件である。接点入力はUART decodeまでの確認であり、Edgeへの通常取り込みは
+温度経路の次に行う。
 
 実験用Piでの初回native release buildは、空のbuild cacheからRust toolchainと依存crateを
 最適化したため一時的にCPUを飽和させ、SSH応答も遅くなった。日常の実機反復はdebug buildを
