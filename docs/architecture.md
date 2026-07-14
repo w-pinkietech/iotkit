@@ -112,7 +112,8 @@ sequence, `occurred_at`, and `count`. Count is cumulative only within a mapping 
 to 1 for a new revision. It is an IoTKit event contract rather than a legacy device-address/pin
 payload. The semantic slice is implemented and its future-only `active_edge` path, QoS 1 outbox,
 application publish, and duplicate-publication idempotence are verified against a live Docker
-Mosquitto broker on the host. A BravePI-backed semantic run remains a separate hardware check.
+Mosquitto broker on the host. Combined with the existing BravePI-to-raw hardware evidence, this
+closes the slice without repeating the semantic path on the Pi.
 
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
 `iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
