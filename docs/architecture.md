@@ -80,6 +80,37 @@ retained only as transitional code and is not spawned. A broker PUBACK confirms 
 only; IoTKit Edge retains its outbox until IoTKit Site commits raw records and publishes
 application-level `accepted-through`.
 
+### Site semantic and application-export loop
+
+While `iotkit-site serve` consumes raw batches, an independent 250 ms convergence loop projects
+committed raw contact values, enqueues versioned application events in the Site outbox, and
+publishes pending rows at MQTT QoS 1. Only a successful PUBACK marks an outbox row published;
+failure or the 15-second timeout leaves it pending for a later tick. Projection, enqueue, and
+publish errors are logged without payloads or credentials and do not stop the loop.
+
+This is deliberately a two-stage failure boundary. The raw batch transaction and its
+`accepted-through` publish never wait for semantic projection or application export, so an
+application outage cannot hold Edge custody. Semantic mappings are future-only from each current
+Edge cursor, and MQTT routes are future-only from the current semantic-event boundary.
+
+Operators use typed Site store operations through JSON-producing CLI commands (the raw `query`
+command remains available):
+
+```bash
+iotkit-site mapping-set --db site.db --edge-node-id edge-node-01 \
+  --series-key '<series_key>' --meaning production_pulse \
+  --trigger-mode active_edge --active-value 1
+iotkit-site mapping-list --db site.db
+iotkit-site route-add --db site.db --mapping-id '<mapping_id>' \
+  --topic 'iotkit/v1/application/production-pulses'
+iotkit-site semantic-query --db site.db --limit 100
+```
+
+The application MQTT payload is contract v1: `schema_version`, stable `event_id`, `mapping_id`,
+`mapping_revision`, mapping-local `event_sequence`, `meaning`, source Edge Node/series/publication
+sequence, `occurred_at`, and cumulative `count`. It is an IoTKit event contract rather than a
+legacy device-address/pin payload.
+
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
 `iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
 binding is a separate, default-off authenticated HTTP/TLS listener:
@@ -162,10 +193,11 @@ control API.
 
 The current slice is deliberately narrow: one paired BravePI temperature sensor through
 the existing Long Range BLE/BravePI Mainboard/UART path, one IoTKit Edge, one standard MQTT Broker,
-one IoTKit Site, raw SQLite storage, application-level accepted-through, and a direct CLI query. BravePI owns
+one IoTKit Site, raw SQLite storage, application-level accepted-through, future-only semantic
+projection, a durable application MQTT outbox, and direct CLI queries. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
 BravePI Mainboard UART stream. Enrollment,
-credential rotation, Site backup/restore, projection, legacy HTTPS migration, multi-Edge-Node hardware,
+credential rotation, Site backup/restore, legacy HTTPS migration, multi-Edge-Node hardware,
 YokaKit integration, and UI are deferred until this path works on real hardware.
 
 ## Crate map
