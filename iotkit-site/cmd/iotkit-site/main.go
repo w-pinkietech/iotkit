@@ -28,7 +28,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: iotkit-site <serve|query|mapping-set|mapping-list|route-add|semantic-query> [options]")
+		return errors.New("usage: iotkit-site <serve|query|mapping-set|mapping-list|route-add|route-list|semantic-query> [options]")
 	}
 	switch args[0] {
 	case "serve":
@@ -41,6 +41,8 @@ func run(args []string) error {
 		return runMappingList(args[1:])
 	case "route-add":
 		return runRouteAdd(args[1:])
+	case "route-list":
+		return runRouteList(args[1:])
 	case "semantic-query":
 		return runSemanticQuery(args[1:])
 	default:
@@ -207,6 +209,24 @@ func runRouteAdd(args []string) error {
 		return err
 	}
 	return writeJSON(route)
+}
+
+func runRouteList(args []string) error {
+	flags := flag.NewFlagSet("route-list", flag.ContinueOnError)
+	dbPath := flags.String("db", "site.db", "Site SQLite path")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	archive, err := store.Open(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	statuses, err := archive.ListMQTTRouteStatuses(context.Background())
+	if err != nil {
+		return err
+	}
+	return writeJSON(statuses)
 }
 
 func runSemanticQuery(args []string) error {

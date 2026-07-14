@@ -178,6 +178,51 @@ func TestPendingMQTTExportRemainsUntilPublishedAndListIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestListMQTTRouteStatusesReportsDeliveryProgress(t *testing.T) {
+	store := openTestStore(t)
+	mapping := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	routeWithExports := putMQTTRoute(t, store, mapping.ID, "factory/a/production-pulses")
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, []float64{1}, []float64{1})
+	projectSemanticEvents(t, store)
+	if _, err := store.EnqueueMQTTExports(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	pending := listPendingMQTTExports(t, store)
+	if len(pending) != 2 {
+		t.Fatalf("pending = %#v, want two exports", pending)
+	}
+	if err := store.MarkMQTTExportPublished(context.Background(), pending[0].ExportID); err != nil {
+		t.Fatal(err)
+	}
+	routeWithoutExports := putMQTTRoute(t, store, mapping.ID, "factory/b/production-pulses")
+
+	statuses, err := store.ListMQTTRouteStatuses(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("statuses = %#v, want two routes", statuses)
+	}
+	byRouteID := make(map[string]MQTTRouteStatus, len(statuses))
+	for _, status := range statuses {
+		byRouteID[status.RouteID] = status
+	}
+	first := byRouteID[routeWithExports.RouteID]
+	if first.RouteID != routeWithExports.RouteID || first.MappingID != mapping.ID ||
+		first.StartAfterEventRowID != routeWithExports.StartAfterEventRowID ||
+		first.PendingCount != 1 || first.PublishedCount != 1 {
+		t.Fatalf("first status = %#v", first)
+	}
+	if first.OldestPendingAt == nil || *first.OldestPendingAt != pending[1].CreatedAt {
+		t.Fatalf("oldest pending = %v, want %d", first.OldestPendingAt, pending[1].CreatedAt)
+	}
+	second := byRouteID[routeWithoutExports.RouteID]
+	if second.RouteID != routeWithoutExports.RouteID || second.PendingCount != 0 ||
+		second.PublishedCount != 0 || second.OldestPendingAt != nil {
+		t.Fatalf("second status = %#v", second)
+	}
+}
+
 func TestListPendingMQTTExportsPreservesSameRouteEventOrder(t *testing.T) {
 	store := openTestStore(t)
 	mapping := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
