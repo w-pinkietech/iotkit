@@ -275,6 +275,9 @@ func TestPutSemanticMappingCapturesEveryExistingEpochCursor(t *testing.T) {
 	}) {
 		t.Fatalf("starts = %#v", got)
 	}
+	if got := store.testMappingEnds(t, mapping.ID, mapping.Revision); len(got) != 0 {
+		t.Fatalf("initial mapping ends = %#v, want none", got)
+	}
 }
 
 func TestPutSemanticMappingIDGenerationFailureDoesNotWriteMapping(t *testing.T) {
@@ -341,6 +344,44 @@ func TestPutSemanticMappingCreatesFutureOnlyRevision(t *testing.T) {
 	}
 }
 
+func TestPutSemanticMappingRevisionClosesOldCursorBoundary(t *testing.T) {
+	store := openTestStore(t)
+	acceptEpoch(t, store, "edge-node-01", "epoch-a", 1, 0)
+	first, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveSample,
+		ActiveValue: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.testMappingStarts(t, first.ID, first.Revision); !reflect.DeepEqual(got, map[string]int64{"epoch-a": 1}) {
+		t.Fatalf("first revision starts = %#v", got)
+	}
+	acceptEpoch(t, store, "edge-node-01", "epoch-a", 2, 1)
+	acceptEpoch(t, store, "edge-node-02", "epoch-other-edge", 1, 1)
+
+	second, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveEdge,
+		ActiveValue: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBoundary := map[string]int64{"epoch-a": 2}
+	if got := store.testMappingEnds(t, first.ID, first.Revision); !reflect.DeepEqual(got, wantBoundary) {
+		t.Fatalf("first revision ends = %#v, want %#v", got, wantBoundary)
+	}
+	if got := store.testMappingStarts(t, second.ID, second.Revision); !reflect.DeepEqual(got, wantBoundary) {
+		t.Fatalf("second revision starts = %#v, want %#v", got, wantBoundary)
+	}
+}
+
 func TestPutSemanticMappingRollsBackRevisionWhenStartSnapshotFails(t *testing.T) {
 	store := openTestStore(t)
 	acceptEpoch(t, store, "edge-node-01", "epoch-a", 1, 1)
@@ -375,6 +416,9 @@ func TestPutSemanticMappingRollsBackRevisionWhenStartSnapshotFails(t *testing.T)
 	}
 	if len(mappings) != 1 || mappings[0].ID != first.ID || !mappings[0].Active {
 		t.Fatalf("mappings after rollback = %#v", mappings)
+	}
+	if got := store.testMappingEnds(t, first.ID, first.Revision); len(got) != 0 {
+		t.Fatalf("mapping ends after rollback = %#v, want none", got)
 	}
 }
 
@@ -477,4 +521,31 @@ func (store *Store) testMappingStarts(t *testing.T, mappingID string, mappingRev
 		t.Fatal(err)
 	}
 	return starts
+}
+
+func (store *Store) testMappingEnds(t *testing.T, mappingID string, mappingRevision int64) map[string]int64 {
+	t.Helper()
+	rows, err := store.db.Query(`
+		SELECT ledger_epoch, end_at_pub_seq
+		FROM semantic_mapping_ends
+		WHERE mapping_id = ? AND mapping_revision = ?
+	`, mappingID, mappingRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	ends := make(map[string]int64)
+	for rows.Next() {
+		var ledgerEpoch string
+		var endAt int64
+		if err := rows.Scan(&ledgerEpoch, &endAt); err != nil {
+			t.Fatal(err)
+		}
+		ends[ledgerEpoch] = endAt
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return ends
 }

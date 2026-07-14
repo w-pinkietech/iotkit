@@ -109,6 +109,13 @@ func (store *Store) initialize() error {
 			start_after_pub_seq INTEGER NOT NULL,
 			PRIMARY KEY (mapping_id, mapping_revision, ledger_epoch)
 		);
+		CREATE TABLE IF NOT EXISTS semantic_mapping_ends (
+			mapping_id TEXT NOT NULL,
+			mapping_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			end_at_pub_seq INTEGER NOT NULL,
+			PRIMARY KEY (mapping_id, mapping_revision, ledger_epoch)
+		);
 	`)
 	return err
 }
@@ -127,6 +134,7 @@ func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.Mappin
 
 	var mappingID string
 	var revision int64
+	var previousRevision int64
 	err = tx.QueryRowContext(ctx, `
 		SELECT mapping_id, revision
 		FROM semantic_mappings
@@ -139,28 +147,23 @@ func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.Mappin
 		}
 		revision = 1
 	} else if err == nil {
+		previousRevision = revision
 		revision++
 	} else {
 		return noMapping, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE semantic_mappings
-		SET active = 0
-		WHERE edge_node_id = ? AND series_key = ? AND active = 1
-	`, spec.EdgeNodeID, spec.SeriesKey); err != nil {
-		return noMapping, err
-	}
-
-	createdAt := time.Now().UnixMilli()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO semantic_mappings (
-			mapping_id, revision, edge_node_id, series_key, meaning,
-			trigger_mode, active_value, active, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-	`, mappingID, revision, spec.EdgeNodeID, spec.SeriesKey, spec.Meaning,
-		spec.TriggerMode, spec.ActiveValue, createdAt); err != nil {
-		return noMapping, err
+	if previousRevision > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO semantic_mapping_ends (
+				mapping_id, mapping_revision, ledger_epoch, end_at_pub_seq
+			)
+			SELECT ?, ?, ledger_epoch, accepted_through
+			FROM accepted_cursors
+			WHERE edge_node_id = ?
+		`, mappingID, previousRevision, spec.EdgeNodeID); err != nil {
+			return noMapping, err
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, `
@@ -171,6 +174,27 @@ func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.Mappin
 		FROM accepted_cursors
 		WHERE edge_node_id = ?
 	`, mappingID, revision, spec.EdgeNodeID); err != nil {
+		return noMapping, err
+	}
+
+	if previousRevision > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE semantic_mappings
+			SET active = 0
+			WHERE mapping_id = ? AND revision = ? AND active = 1
+		`, mappingID, previousRevision); err != nil {
+			return noMapping, err
+		}
+	}
+
+	createdAt := time.Now().UnixMilli()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO semantic_mappings (
+			mapping_id, revision, edge_node_id, series_key, meaning,
+			trigger_mode, active_value, active, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+	`, mappingID, revision, spec.EdgeNodeID, spec.SeriesKey, spec.Meaning,
+		spec.TriggerMode, spec.ActiveValue, createdAt); err != nil {
 		return noMapping, err
 	}
 
