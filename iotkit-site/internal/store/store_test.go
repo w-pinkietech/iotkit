@@ -7,11 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
 )
+
+const contactSeries = "subject:contact_state:na:primary"
 
 func testBatch(t *testing.T) contract.RecordBatch {
 	t.Helper()
@@ -246,6 +250,138 @@ func TestListRawRecordsReturnsCommittedJSON(t *testing.T) {
 	}
 }
 
+func TestPutSemanticMappingCapturesEveryExistingEpochCursor(t *testing.T) {
+	store := openTestStore(t)
+	acceptEpoch(t, store, "edge-node-01", "epoch-a", 1, 0)
+	acceptEpoch(t, store, "edge-node-01", "epoch-b", 1, 1)
+	acceptEpoch(t, store, "edge-node-02", "epoch-other-edge", 1, 1)
+
+	mapping, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveSample,
+		ActiveValue: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(mapping.ID, "sm-") || len(mapping.ID) != len("sm-")+32 {
+		t.Fatalf("mapping ID = %q, want sm- followed by 128-bit hex", mapping.ID)
+	}
+	if got := store.testMappingStarts(t, mapping.ID, mapping.Revision); !reflect.DeepEqual(got, map[string]int64{
+		"epoch-a": 1,
+		"epoch-b": 1,
+	}) {
+		t.Fatalf("starts = %#v", got)
+	}
+}
+
+func TestPutSemanticMappingCreatesFutureOnlyRevision(t *testing.T) {
+	store := openTestStore(t)
+	first, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveSample,
+		ActiveValue: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveEdge,
+		ActiveValue: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || first.Revision != 1 || second.Revision != 2 {
+		t.Fatalf("revisions = %#v then %#v", first, second)
+	}
+
+	mappings, err := store.ListSemanticMappings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mappings) != 2 {
+		t.Fatalf("mapping count = %d, want 2", len(mappings))
+	}
+	if mappings[0].Active || !mappings[1].Active {
+		t.Fatalf("active revisions = %t then %t", mappings[0].Active, mappings[1].Active)
+	}
+	if mappings[1].TriggerMode != semantic.TriggerActiveEdge || mappings[1].ActiveValue != 0 {
+		t.Fatalf("second revision = %#v", mappings[1])
+	}
+}
+
+func TestPutSemanticMappingRollsBackRevisionWhenStartSnapshotFails(t *testing.T) {
+	store := openTestStore(t)
+	acceptEpoch(t, store, "edge-node-01", "epoch-a", 1, 1)
+	first, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveSample,
+		ActiveValue: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+		CREATE TRIGGER fail_mapping_start BEFORE INSERT ON semantic_mapping_starts
+		BEGIN SELECT RAISE(ABORT, 'injected mapping start failure'); END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveEdge,
+		ActiveValue: 1,
+	}); err == nil {
+		t.Fatal("PutSemanticMapping succeeded despite snapshot failure")
+	}
+	mappings, err := store.ListSemanticMappings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mappings) != 1 || mappings[0].ID != first.ID || !mappings[0].Active {
+		t.Fatalf("mappings after rollback = %#v", mappings)
+	}
+}
+
+func acceptEpoch(t *testing.T, store *Store, edgeNodeID, ledgerEpoch string, pubSeq, value int64) {
+	t.Helper()
+	record, err := json.Marshal(map[string]any{
+		"family":         "measurement",
+		"schema_version": 1,
+		"epoch":          ledgerEpoch,
+		"pub_seq":        pubSeq,
+		"series_key":     contactSeries,
+		"values":         []int64{value},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := contract.RecordBatch{
+		SchemaVersion: 1,
+		EdgeNodeID:    edgeNodeID,
+		LedgerEpoch:   ledgerEpoch,
+		PublicationID: contract.PublicationID(edgeNodeID, ledgerEpoch, pubSeq, pubSeq),
+		CursorStart:   pubSeq,
+		CursorEnd:     pubSeq,
+		Records:       []json.RawMessage{record},
+	}
+	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (store *Store) testCount(t *testing.T, table string) int {
 	t.Helper()
 	var count int
@@ -291,4 +427,31 @@ func (store *Store) testPrimaryKey(t *testing.T, table string) map[string]int {
 		t.Fatal(err)
 	}
 	return primaryKey
+}
+
+func (store *Store) testMappingStarts(t *testing.T, mappingID string, mappingRevision int64) map[string]int64 {
+	t.Helper()
+	rows, err := store.db.Query(`
+		SELECT ledger_epoch, start_after_pub_seq
+		FROM semantic_mapping_starts
+		WHERE mapping_id = ? AND mapping_revision = ?
+	`, mappingID, mappingRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	starts := make(map[string]int64)
+	for rows.Next() {
+		var ledgerEpoch string
+		var startAfter int64
+		if err := rows.Scan(&ledgerEpoch, &startAfter); err != nil {
+			t.Fatal(err)
+		}
+		starts[ledgerEpoch] = startAfter
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return starts
 }
