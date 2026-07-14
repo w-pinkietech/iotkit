@@ -52,3 +52,20 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+  site:
+    name: site go test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: iotkit-site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: iotkit-site/go.mod
+          cache-dependency-path: iotkit-site/go.sum
+
+      - name: Tests
+        run: go test ./...
