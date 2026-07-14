@@ -39,7 +39,7 @@ pub(crate) fn to_items(
         series_variant: None,
         values: reading.values.clone(),
         device_time_ms: None,
-        time_source: TimeSource::Gateway,
+        time_source: TimeSource::Edge,
         age_ms: None,
         rssi: None,
         battery_pct: None,

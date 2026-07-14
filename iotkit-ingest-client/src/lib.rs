@@ -81,7 +81,7 @@ mod inproc {
     }
 
     /// inprocクライアントタスクを起動する。タスクはコレクタ死亡(Closed)で退出し、
-    /// ゲートウェイはJoinHandleでそれを監視する(fail-fast=計画2のSubmitError分離の消費)。
+    /// IoTKit EdgeはJoinHandleでそれを監視する(fail-fast=計画2のSubmitError分離の消費)。
     ///
     /// 設計不変則(計画レビュー裁定反映):
     /// - バックオフ待機中も入力の吸い上げ(spoolへの排出+drop-oldest)を止めない
@@ -337,7 +337,7 @@ mod inproc {
                 series_variant: None,
                 values,
                 device_time_ms: None,
-                time_source: TimeSource::Gateway,
+                time_source: TimeSource::Edge,
                 age_ms: None,
                 rssi: None,
                 battery_pct: None,

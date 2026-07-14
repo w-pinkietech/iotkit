@@ -8,6 +8,7 @@ pub enum LedgerError {
     NotFound(String),
     InvalidId(String),
     InvalidReplace(String),
+    UnsupportedPreReleaseSchema,
     Storage(StorageError),
     Sqlite(rusqlite::Error),
 }
@@ -20,6 +21,10 @@ impl std::fmt::Display for LedgerError {
             Self::NotFound(w) => write!(f, "not found: {w}"),
             Self::InvalidId(s) => write!(f, "invalid system_id text: {s}"),
             Self::InvalidReplace(s) => write!(f, "invalid replace: {s}"),
+            Self::UnsupportedPreReleaseSchema => write!(
+                f,
+                "unsupported pre-release Edge database; recreate the Edge database"
+            ),
             Self::Storage(e) => write!(f, "storage error: {e}"),
             Self::Sqlite(e) => write!(f, "sqlite error: {e}"),
         }
@@ -826,11 +831,23 @@ pub fn current_generation(conn: &Connection) -> Result<i64, LedgerError> {
     .map_err(LedgerError::from)
 }
 
-/// Gateway機体identity。初回にUUIDv7を生成し、ledger epochとは独立して永続化する。
-pub fn gateway_identity(conn: &Connection) -> Result<String, LedgerError> {
-    if let Some(identity) = conn
+/// Edge Node機体identity。初回にUUIDv7を生成し、ledger epochとは独立して永続化する。
+pub fn edge_node_id(conn: &Connection) -> Result<String, LedgerError> {
+    if conn
         .query_row(
             "SELECT value FROM ledger_meta WHERE key = 'gateway_identity'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Err(LedgerError::UnsupportedPreReleaseSchema);
+    }
+
+    if let Some(identity) = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'edge_node_id'",
             [],
             |row| row.get::<_, String>(0),
         )
@@ -841,11 +858,11 @@ pub fn gateway_identity(conn: &Connection) -> Result<String, LedgerError> {
 
     let candidate = uuid::Uuid::now_v7().to_string();
     conn.execute(
-        "INSERT OR IGNORE INTO ledger_meta (key, value) VALUES ('gateway_identity', ?1)",
+        "INSERT OR IGNORE INTO ledger_meta (key, value) VALUES ('edge_node_id', ?1)",
         params![candidate],
     )?;
     conn.query_row(
-        "SELECT value FROM ledger_meta WHERE key = 'gateway_identity'",
+        "SELECT value FROM ledger_meta WHERE key = 'edge_node_id'",
         [],
         |row| row.get(0),
     )
@@ -1899,13 +1916,43 @@ mod tests {
     }
 
     #[test]
-    fn gateway_identity_is_generated_once_and_stable() {
+    fn edge_node_id_is_generated_once_and_stable() {
         let db = test_db();
         db.with_conn_sync(|conn| {
-            let first = gateway_identity(conn).unwrap();
-            let second = gateway_identity(conn).unwrap();
+            let first = edge_node_id(conn).unwrap();
+            let second = edge_node_id(conn).unwrap();
             assert_eq!(first, second);
-            assert!(uuid::Uuid::parse_str(&first).is_ok());
+            assert_eq!(uuid::Uuid::parse_str(&first).unwrap().get_version_num(), 7);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn legacy_gateway_identity_is_rejected() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ledger_meta (key, value) VALUES ('gateway_identity', 'legacy-id')",
+                [],
+            )
+            .unwrap();
+
+            let error = edge_node_id(conn).unwrap_err();
+            assert!(matches!(error, LedgerError::UnsupportedPreReleaseSchema));
+            assert_eq!(
+                error.to_string(),
+                "unsupported pre-release Edge database; recreate the Edge database"
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ledger_meta WHERE key = 'edge_node_id'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+                0
+            );
             Ok(())
         })
         .unwrap();

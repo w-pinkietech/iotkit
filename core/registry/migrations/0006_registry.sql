@@ -27,7 +27,7 @@ CREATE TABLE registry_aliases (
 );
 
 -- D6決定3/11: legacy_sensor_type移行シム(ワイヤエイリアスではない型付き対応表)。
--- 播種はレガシー移行(D2 Phase 3.5)時のみ。Wave 0のゲートウェイ起動では触らない。
+-- 播種はレガシー移行(D2 Phase 3.5)時のみ。Wave 0のEdge起動では触らない。
 CREATE TABLE legacy_sensor_type_map (
     sensor_type      INTEGER PRIMARY KEY,
     measurement_key  TEXT NOT NULL,

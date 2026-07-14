@@ -1,4 +1,4 @@
-/// Generation-aware, stage-before-switchover holder used by the gateway composition root.
+/// Generation-aware, stage-before-switchover holder used by the Edge composition root.
 ///
 /// The closures make each externally fallible phase explicit. Until all four succeed the old
 /// transport remains active and the applied generation does not move. The returned old transport

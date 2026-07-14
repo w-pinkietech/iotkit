@@ -4,15 +4,15 @@ Status: 確定 (2026-07-13、現在の実装ゲートを追記)
 
 ## 現在のプロダクト中心価値
 
-> IoTKitは、さまざまなセンサーを小さなadapterで簡単につなぎ、現場データを黙って失うことなく
-> Siteへ届けるIoT Gatewayである。
+> IoTKitは、さまざまなセンサーを小さなadapterで簡単につなぎ、IoTKit Edgeで現場データを
+> 黙って失うことなく収集・正規化・保全・再送し、IoTKit Siteへ届けるIoTデータ収集基盤である。
 
 この価値は次の2点の組み合わせにある。
 
 1. **adapterの作りやすさ**: adapter作者はセンサー固有の通信、設定、値の読み取り、measurementへの
    写像だけを担当する。SQLite、MQTT、再送、保管責任、retention、認証をadapterへ持ち込まない。
-2. **保管責任の確実な引き渡し**: Gatewayは観測を耐久保存し、Siteがraw recordを耐久保存したと確認できる
-   まで保持する。MQTT PUBACKだけではGatewayの保管責任を解除しない。
+2. **保管責任の確実な引き渡し**: Edgeは観測を耐久保存し、Siteがraw recordを耐久保存したと確認できる
+   まで保持する。MQTT PUBACKだけではEdgeの保管責任を解除しない。
 
 IoTKitは汎用IoTプラットフォーム、ダッシュボード、生産管理、独自MQTT brokerではない。R1〜R23と
 Wave 1/2は将来の責務地図であり、現在すべてを実装するバックログではない。
@@ -22,27 +22,27 @@ Wave 1/2は将来の責務地図であり、現在すべてを実装するバッ
 Wave 1の残項目を横に広げる前に、次の1本を完成させる。
 
 ```text
-BravePI temperature sensor
-  -> transmitter
+Temperature sensor
+  -> BravePI Transmitter
   -> BLE Long Range
-  -> BravePI mainboard
+  -> BravePI Mainboard
   -> UART
-  -> Rust Gateway on Raspberry Pi
+  -> IoTKit Edge on Raspberry Pi
   -> MQTT QoS 1
-  -> standard broker
-  -> Go Site Server
+  -> MQTT Broker
+  -> IoTKit Site
   -> raw SQLite
   -> direct CLI query
 ```
 
 ### 作るもの
 
-- BravePI mainboardのUARTを受動的に読む既存adapterと、温度frameのdecode。手元の機体は
+- BravePI MainboardのUARTを受動的に読む既存adapterと、温度frameのdecode。手元の機体は
   sensor type 261(MCP9600熱電対温度)と仮定して開始し、最初の実frameで型を確認する
 - `device_number`を安定したhardware identityとして扱い、RSSIとbatteryを観測へ引き継ぐ経路
-- Gatewayでのcanonical record化、readingとoutboxのatomic保存
-- GatewayのMQTT publish、`accepted-through`検証、cursor更新、保管責任に基づくretention
-- Mosquitto等の標準brokerと、Gatewayごとのstatic credential/topic ACL
+- Edgeでのcanonical record化、readingとoutboxのatomic保存
+- EdgeのMQTT publish、`accepted-through`検証、cursor更新、保管責任に基づくretention
+- Mosquitto等のMQTT Brokerと、Edge Nodeごとのstatic credential/topic ACL
 - Siteでのraw recordと連続cursorのatomic保存、commit後の`accepted-through` publish
 - 重複再送の冪等処理と、同一identity・異内容のconflict検出
 - Site raw dataの直接CLI query
@@ -50,49 +50,63 @@ BravePI temperature sensor
 
 ### 完了条件
 
-- ペアリング済みBravePI温度センサー1台の観測が、UART経由でGatewayとSiteの双方に記録される。
+- ペアリング済みBravePI Transmitter 1台の温度観測が、UART経由でEdgeとSiteの双方に記録される。
 - 実frameからsensor typeとpayloadを確認し、仮定と異なる場合も正しいdriverへ明示的に対応付ける。
 - `device_number`、RSSI、battery、温度値が期待どおりdecode・保存される。
-- GatewayまたはBravePI mainboardの再起動後、UART受信が自動的に復帰する。
-- 保持容量内では、Site、broker、ネットワークの停止中もGatewayが収集を継続し、復旧後に欠けなく再送する。
+- EdgeまたはBravePI Mainboardの再起動後、UART受信が自動的に復帰する。
+- 保持容量内では、Site、Broker、ネットワークの停止中もEdgeが収集を継続し、復旧後に欠けなく再送する。
 - 同じbatchの再送でSiteのraw rowが重複せず、異内容ならconflictとしてcursorを進めない。
 - SiteのSQLite commit失敗時は`accepted-through`を返さない。
-- MQTT PUBACKだけではGateway cursorやpurge eligibilityが進まず、検証済み`accepted-through`だけで進む。
-- Gateway、broker、Siteを個別に再起動しても同じ状態へ収束する。
+- MQTT PUBACKだけではEdge cursorやpurge eligibilityが進まず、検証済み`accepted-through`だけで進む。
+- Edge、Broker、Siteを個別に再起動しても同じ状態へ収束する。
 - Docker試験に加え、Raspberry Piと実センサーで一連の流れを再現できる。
 
 ### 実機検証状況 (2026-07-13)
 
-Raspberry Pi (Debian 13 / arm64) とペアリング済みBravePI実機で、現在のGatewayから
+Raspberry Pi (Debian 13 / arm64) とペアリング済みBravePI実機で、現在のEdgeから
 Siteまでの縦経路を確認した。
 
 - `/dev/serial0` (`ttyAMA0`, 38400 8N1) から既存POCで、温度センサー
   `246880020140018b` と接点入力センサー `246880020140018c` のframeをdecodeした。
   温度、接点の0/1、RSSI、batteryが取得でき、decode errorは観測されなかった。
-- 温度センサーはGateway上で `hardware_id = ble:246880020140018b`、
+- 温度センサーはEdge上で `hardware_id = ble:246880020140018b`、
   `measurement_key = temperature_c` へ正規化された。未登録状態の45秒間に4観測が
   sightingと`staged_readings`へ保存され、温度25.5625〜26.1875°C、RSSI -68〜-66 dBm、
   battery 100%を確認した。
 - CLIでsightingを承認してdeviceをactive化した後、次の45秒間に4観測が非検疫の
   `readings`へ保存され、対応する4行が`publication_log`へ同じ順序で作られた。
   温度は26.0〜26.3125°Cだった。
-- 停止後のSQLiteに`PRAGMA quick_check`を実行し`ok`を確認した。試験終了後はGatewayが
+- 停止後のSQLiteに`PRAGMA quick_check`を実行し`ok`を確認した。試験終了後はEdgeが
   停止し、UARTが解放されることも確認した。
-- 同じPi上の独立したDocker環境で、認証・topic ACL付きMosquittoとGo Site Serverを起動した。
-  Gatewayに保持されていた`pub_seq` 1〜8をMQTT QoS 1で送り、Site raw SQLiteの8行と、
-  Site commit後の`accepted-through = 8`によるGateway cursor更新を確認した。
+- 同じPi上の独立したDocker環境で、認証・topic ACL付きMosquittoとIoTKit Siteを起動した。
+  Edgeに保持されていた`pub_seq` 1〜8をMQTT QoS 1で送り、Site raw SQLiteの8行と、
+  Site commit後の`accepted-through = 8`によるEdge cursor更新を確認した。
 - UART収集とMQTT出口を同時に35秒動かし、新しい温度3観測が`pub_seq` 9〜11としてSiteへ
-  保存され、Gateway cursorも11へ進んだ。Site CLIからraw recordを直接照会できた。
+  保存され、Edge cursorも11へ進んだ。Site CLIからraw recordを直接照会できた。
 - broker再起動時、Siteが再接続後にrecords topicを再購読しない不具合を実機で発見した。
   購読をPahoの接続callbackへ移し、broker再起動をend-to-end試験へ追加した。修正版Siteは
   containerを再起動せず再購読し、その後の実機配送と`accepted-through`を完了した。
 
-これにより `BravePI -> BLE Long Range -> mainboard -> UART -> Gateway SQLite -> MQTT
--> broker -> Site raw SQLite -> accepted-through -> Gateway cursor` は実機確認済みとなった。
+2026-07-14にはEdge/Site命名変更後のcommit `c0826a0`を使い、実験用labを旧DB・旧設定・旧MQTT
+credentialごと削除して新構成から再作成した。新しい`edge_node_id`と専用credential/topic ACLを生成し、
+温度センサー`ble:246880020140018b`を新DBで承認・active化した。BravePI MainboardのUARTから受信した
+新しい温度観測11件が`pub_seq` 1〜11としてIoTKit Siteの11行へ同じ`edge_node_id`・`ledger_epoch`で
+保存され、Edgeの`accepted-through` cursorも11へ収束した。停止後のEdge DBとSite DBはともに
+`PRAGMA quick_check = ok`であり、Edge停止後にUARTが解放されたことも確認した。破棄したpre-releaseの
+identity key、topic namespace、credentialは再利用していない。
+
+同日の最終レビュー修正後commit `b6b9402`でも、上記の新形式DBを再作成せずに最終Edgeを起動した。
+read-only cutover preflightが既存の`edge_node_id`を受理し、BravePI MainboardのUARTから受信した
+温度3観測が`pub_seq` 12〜14としてSiteへ保存された。Edgeの`accepted-through` cursorは11から14へ進み、
+Site queryで同じ`edge_node_id`・`ledger_epoch`と`temperature_c`の3 recordを確認した。停止後のEdge DBと
+Site DBはともに`PRAGMA quick_check = ok`であり、Edge processの停止とUART解放も確認した。
+
+これにより `BravePI Transmitter -> BLE Long Range -> BravePI Mainboard -> UART -> IoTKit Edge SQLite -> MQTT
+-> MQTT Broker -> IoTKit Site raw SQLite -> accepted-through -> Edge cursor` は実機確認済みとなった。
 平文MQTTは同一Piのloopbackだけを使う実験設定であり、実運用のTLS要件を緩和しない。
 SQLite commit失敗、内容conflict、全コンポーネントの再起動組合せ、長時間停止中の連続収集は
 引き続き現在の実装ゲートの未完了条件である。接点入力はUART decodeまでの確認であり、
-Gatewayへの通常取り込みは温度経路の次に行う。
+Edgeへの通常取り込みは温度経路の次に行う。
 
 実験用Piでの初回native release buildは、空のbuild cacheからRust toolchainと依存crateを
 最適化したため一時的にCPUを飽和させ、SSH応答も遅くなった。日常の実機反復はdebug buildを
@@ -104,7 +118,7 @@ Gatewayへの通常取り込みは温度経路の次に行う。
 - BravePIへの取得要求、downlink command、接点出力
 - YokaKit連携、UI、dashboard、Site projection、cloud/fleet管理
 - 第三者デバイスingress、pairing、オンボーディングUI
-- credential enrollment/rotation、multi-Gateway運用、broker HA
+- credential enrollment/rotation、multi-Edge運用、MQTT Broker HA
 - Site backup/restore、archive repair、汎用fan-out
 - calibration UI、local rule、通知、南向きcommand/DFU
 - 汎用adapter SDK、adapter code generator、宣言型driver DSL
@@ -149,7 +163,7 @@ yokakit-next(Go+Vue、ほぼ完成)は**現状のままリファレンス消費�
 ## 決定4: 「第ゼロ波」(レガシー環境でのAI診断実証)は見送り
 
 価値は認めるが現実的でないと判断。柱3の価値検証は、Wave 1でAIハーネスを開発する際に
-自社現場(Wave 0稼働中のゲートウェイ)に対して行う。
+自社現場(Wave 0稼働中のEdge)に対して行う。
 
 ## 決定5: 制御プレーンの認証方式
 
@@ -157,7 +171,7 @@ yokakit-next(Go+Vue、ほぼ完成)は**現状のままリファレンス消費�
 mTLSは不採用(取り込み面のper-device mTLS不採用、CA基盤を作らない決定と整合)。
 ai-connectivity図のmTLS表記は本決定で上書き。
 ※**2026-07-12 Plan 6改訂**: D13由来のsetup-mode例外（未認証の閉集合）は廃止。
-未所有中はnetwork API/UIをbindせず、local `gatewayctl`で所有権確立後にoperatorトークン認証へ入る。
+未所有中はnetwork API/UIをbindせず、local `iotkit-edgectl`で所有権確立後にoperatorトークン認証へ入る。
 
 ## 設計課題キュー(レビューで確定した優先順)
 
@@ -187,7 +201,7 @@ ai-connectivity図のmTLS表記は本決定で上書き。
 
 - **Wave 0実装**: R1, R3, R6(初期語彙+検証最小), R7(台帳最小・CLI登録/承認+replace-hardware
   ガードレールCLI版=D5), R8, R11(範囲クエリ+CSV),
-  R12(ヘルスJSON最小), R16, R17(retention+水位), R18(スキーマ列のみ・値はgateway固定), R20, R22(手動export。
+  R12(ヘルスJSON最小), R16, R17(retention+水位), R18(スキーマ列のみ・値はedge固定), R20, R22(手動export。
   スナップショット形式とエポック規則はD2 §3.5「R22最小契約」に従う)
 - **境界の明文化(2026-07-02、外部レビュー指摘反映)**:
   - **R13**: Wave 0は**append-only監査イベント行(ledger_events)のみ**=R13の最小下地。

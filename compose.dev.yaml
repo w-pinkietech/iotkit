@@ -10,7 +10,7 @@ services:
 
   site:
     build:
-      context: ./iotkit-site-server
+      context: ./iotkit-site
     restart: on-failure
     user: ${IOTKIT_DEV_UID:-1000}:${IOTKIT_DEV_GID:-1000}
     depends_on:

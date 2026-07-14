@@ -1,9 +1,10 @@
 # CLAUDE.md
 
-Rust + tokio の Raspberry Pi 向け IoT ゲートウェイ。
+オンプレミス優先のIoTデータ収集基盤。現場側のRust + tokio製`IoTKit Edge`
+（Raspberry Pi向け）と、拠点側のGo製`IoTKit Site`からなる。
 
 ```text
-{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-gateway
+{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-edge
 ```
 
 adapters は `core/engine` に依存せず、取り込みは `iotkit-ingest-client` 経由 (D4)。

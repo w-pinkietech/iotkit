@@ -15,7 +15,7 @@ Rules (see docs/architecture.md "Layer rules"):
   5. a NEW workspace crate must be classified here deliberately (unclassified = error)
   6. iotkit-ingest-client's workspace deps are exactly core/collector + the contract
   7. the frozen core/supervision vocabulary's non-dev dependent set is pinned
-  8. ingress cannot depend on the gateway/control-plane binary crate
+  8. ingress cannot depend on the Edge/control-plane binary crate
 
 Deliberate exception (do not "fix"): core/registry -> core/collector is dependency
 inversion — the collector owns the RegistryPolicy trait, the registry implements it.
@@ -39,7 +39,7 @@ ADAPTERS = {
     "bravepi-mainboard-adapter", "bravepi-codec", "iotkit-sensor-drivers", "bravepi-poc",
     "rpi-local-adapter", "iotkit-polling-adapter-runtime", "rpi4b-transport",
 }
-BINARIES = {"iotkit-gateway", "iotkit-gatewayctl"}
+BINARIES = {"iotkit-edge", "iotkit-edgectl"}
 INGRESS = {"iotkit-ingest-http"}
 CONTRACT = "iotkit-ingest-contract"
 CLIENT = "iotkit-ingest-client"
@@ -53,7 +53,7 @@ CLASSIFIED = DATA_PLANE | ADAPTERS | BINARIES | INGRESS | {
 }
 SUPERVISION_DEPENDENTS = {
     "iotkit-core-engine",
-    "iotkit-gateway",
+    "iotkit-edge",
     "bravepi-mainboard-adapter",
     "bravepi-poc",
     "iotkit-polling-adapter-runtime",
@@ -88,7 +88,7 @@ def main() -> int:
             d["name"] for d in fixture_pkg["dependencies"] if d.get("kind") != "dev"
         }
         fixture_errors = ingress_edge_errors(fixture_pkg["name"], fixture_internal)
-        intended = "iotkit-gateway"
+        intended = "iotkit-edge"
         if len(fixture_errors) != 1 or intended not in fixture_errors[0]:
             errors.append(
                 "rule-8 negative fixture did not fail for its intended ingress -> "
@@ -110,7 +110,7 @@ def main() -> int:
         if name in ADAPTERS:
             if ENGINE in internal:
                 errors.append(f"{name} depends on {ENGINE} (rule 1: projection "
-                              f"machinery is the gateway's business)")
+                              f"machinery is the Edge composition root's business)")
             direct = internal & DATA_PLANE
             if direct:
                 errors.append(f"{name} depends on the data plane directly: "

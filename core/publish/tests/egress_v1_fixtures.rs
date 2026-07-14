@@ -7,7 +7,7 @@ const ACK_FIXTURE: &str = include_str!("../../../testdata/egress/v1/accepted-thr
 fn rust_decodes_and_validates_v1_batch_fixture() {
     let batch: RecordBatch = serde_json::from_str(BATCH_FIXTURE).unwrap();
     batch.validate().unwrap();
-    assert_eq!(batch.gateway_identity, "gateway-01");
+    assert_eq!(batch.edge_node_id, "edge-node-01");
     assert_eq!(batch.cursor_start, 1);
     assert_eq!(batch.cursor_end, 1);
     assert_eq!(batch.records.len(), 1);
@@ -21,11 +21,40 @@ fn rust_decodes_and_correlates_v1_ack_fixture() {
 }
 
 #[test]
-fn ack_for_another_gateway_is_rejected() {
+fn ack_for_another_edge_node_is_rejected() {
     let batch: RecordBatch = serde_json::from_str(BATCH_FIXTURE).unwrap();
     let mut ack: AcceptedThrough = serde_json::from_str(ACK_FIXTURE).unwrap();
-    ack.gateway_identity = "gateway-other".into();
+    ack.edge_node_id = "edge-node-other".into();
     assert!(ack.validate_for(&batch, 0).is_err());
+}
+
+#[test]
+fn batch_with_only_legacy_gateway_identity_is_rejected() {
+    let legacy = BATCH_FIXTURE.replace(
+        r#""edge_node_id": "edge-node-01""#,
+        r#""gateway_identity": "gateway-01""#,
+    );
+    assert!(serde_json::from_str::<RecordBatch>(&legacy).is_err());
+}
+
+#[test]
+fn batch_with_edge_node_id_and_legacy_gateway_identity_is_rejected() {
+    let mixed = BATCH_FIXTURE.replacen(
+        r#""edge_node_id": "edge-node-01""#,
+        r#""edge_node_id": "edge-node-01", "gateway_identity": "gateway-01""#,
+        1,
+    );
+    assert!(serde_json::from_str::<RecordBatch>(&mixed).is_err());
+}
+
+#[test]
+fn ack_with_edge_node_id_and_legacy_gateway_identity_is_rejected() {
+    let mixed = ACK_FIXTURE.replacen(
+        r#""edge_node_id": "edge-node-01""#,
+        r#""edge_node_id": "edge-node-01", "gateway_identity": "gateway-01""#,
+        1,
+    );
+    assert!(serde_json::from_str::<AcceptedThrough>(&mixed).is_err());
 }
 
 #[test]

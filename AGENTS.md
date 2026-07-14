@@ -2,13 +2,14 @@
 
 ## Project Context
 
-`iotkit-next` は旧 `iotkit` をゼロから作り直す Rust + tokio の IoT ゲートウェイ
-(Raspberry Pi 向け)。
+`iotkit-next` は旧 `iotkit` をゼロから作り直すオンプレミス優先のIoTデータ収集基盤。
+現場側のRust + tokio製`IoTKit Edge`（Raspberry Pi向け）と、拠点側のGo製
+`IoTKit Site`からなる。
 
 レイヤ:
 
 ```text
-{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-gateway
+{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-edge
 ```
 
 取り込み経路はアダプタ内クライアント (`iotkit-ingest-client`) が正 (D4)。

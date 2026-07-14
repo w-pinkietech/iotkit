@@ -13,17 +13,17 @@ site-LAN listener.
 An operator must complete the handoff before the device builder runs these
 commands. The handoff contains:
 
-- the enabled gateway URL, including the `https://` scheme and port;
+- the enabled Edge URL, including the `https://` scheme and port;
 - one current device bearer token, shown once by the operator's credential
   operation;
-- the selected ingress gateway public certificate saved as a PEM CA/trust-anchor file; and
+- the selected ingress Edge public certificate saved as a PEM CA/trust-anchor file; and
 - the configured source identifier for that token (normally the stable
   `principal_id`).
 
-The operator may use `gatewayctl device-credential issue` for the one-time
+The operator may use `iotkit-edgectl device-credential issue` for the one-time
 token. The operator must use the fingerprint returned by the construction-tier
 ingress TLS operation and hand the matching certificate from the selected
-`ingress-tls/generation-N` to the builder. `gatewayctl fingerprint` reports the
+`ingress-tls/generation-N` to the builder. `iotkit-edgectl fingerprint` reports the
 control-plane certificate; it is not an ingress trust anchor unless the
 operator has deliberately configured the exact same certificate for both
 listeners. The token is not written into a configuration file by IoTKit. The
@@ -35,12 +35,12 @@ Run these commands verbatim in one shell, with the handoff values present:
 
 ```sh
 export IOTKIT_URL="${IOTKIT_OPERATOR_URL:?set by operator handoff}" IOTKIT_TOKEN="${IOTKIT_OPERATOR_TOKEN:?set by operator handoff}" IOTKIT_CA="${IOTKIT_OPERATOR_CA:?set by operator handoff}" IOTKIT_SOURCE="${IOTKIT_OPERATOR_SOURCE:?set by operator handoff}" IOTKIT_ENVELOPE="${PWD}/one-envelope.json"
-printf '%s\n' '{"envelope_id":"builder-example-0001","source":"'"$IOTKIT_SOURCE"'","items":[{"measurement_key":"temperature_c","values":[21.5],"time_source":"gateway"}]}' > "$IOTKIT_ENVELOPE"
+printf '%s\n' '{"envelope_id":"builder-example-0001","source":"'"$IOTKIT_SOURCE"'","items":[{"measurement_key":"temperature_c","values":[21.5],"time_source":"edge"}]}' > "$IOTKIT_ENVELOPE"
 curl --fail-with-body --silent --show-error --cacert "$IOTKIT_CA" --header "Authorization: Bearer $IOTKIT_TOKEN" --header "Content-Type: application/json" --data-binary "@$IOTKIT_ENVELOPE" "$IOTKIT_URL/api/v1/ingest"
 ```
 
 The first command only exports handoff values into the current shell. The
-second writes one complete envelope. The third pins the gateway certificate
+second writes one complete envelope. The third pins the Edge certificate
 through `--cacert`; it must never be replaced with `--insecure`. An identical
 `envelope_id` and identical payload must be retained for every retry. A `200`
 acknowledgement is the only response in this journey that authorizes the sender
@@ -50,9 +50,9 @@ whether that copy is complete.
 ### ESP32 equivalent
 
 An ESP32 client uses the same HTTPS endpoint, bearer header, JSON envelope, and
-retry rules. Provision the gateway public certificate (or the approved public
+retry rules. Provision the Edge public certificate (or the approved public
 SPKI trust anchor) in the device's read-only trust store. Configure the TLS
-client to verify the gateway certificate and hostname on every connection, then
+client to verify the Edge certificate and hostname on every connection, then
 send `Authorization: Bearer <token>`. A bearer token without server
 authentication is not a supported setup. Do not disable certificate validation
 to make a first connection work.
@@ -72,7 +72,7 @@ to make a first connection work.
     {
       "measurement_key": "temperature_c",
       "values": [21.5],
-      "time_source": "gateway"
+      "time_source": "edge"
     }
   ]
 }
@@ -105,14 +105,14 @@ An empty `items` array is representable by the shipped type. `envelope_id` and
 | `series_variant` | JSON string or `null` | optional | No independent field limit; omitted uses the shipped receiver default `primary`. |
 | `values` | JSON array of finite numbers (`f64`) | required | Every number must be finite; registry declarations may impose the applicable value count/type. |
 | `device_time_ms` | JSON signed integer (`i64`) | optional | −9,223,372,036,854,775,808..=9,223,372,036,854,775,807 Unix milliseconds; absolute freshness applies when device time is used. |
-| `time_source` | JSON string enum | required | Exactly `device_ntp`, `device_rtc`, `gateway`, or `gateway_adjusted`; senders normally use `gateway_adjusted` only as receiver-produced provenance. |
+| `time_source` | JSON string enum | required | Exactly `device_ntp`, `device_rtc`, `edge`, or `edge_adjusted`; senders normally use `edge_adjusted` only as receiver-produced provenance. |
 | `age_ms` | JSON unsigned integer (`u64`) | optional | 0..=18,446,744,073,709,551,615; accepted relative ages must also be within the configured freshness window and fit receiver subtraction. |
 | `rssi` | JSON signed integer (`i16`) | optional | −32,768..=32,767; stored as optional radio metadata. |
 | `battery_pct` | JSON unsigned integer (`u8`) | optional | 0..=255; the shipped type does not add a separate 0..=100 validation. |
 
-`time_source: gateway` without an absolute device timestamp uses gateway
-receive time. A valid `age_ms` is reconstructed as gateway receive time minus
-the age and is recorded as `gateway_adjusted`; `device_time_ms` takes
+`time_source: edge` without an absolute device timestamp uses Edge
+receive time. A valid `age_ms` is reconstructed as Edge receive time minus
+the age and is recorded as `edge_adjusted`; `device_time_ms` takes
 precedence when both are supplied.
 
 ### Acknowledgement
@@ -180,7 +180,7 @@ The shipped v1 wire strings are fixed as follows:
 | `ItemStatus.kind` | `stored`, `item_rejected` |
 | `Disposition` | `durable`, `staged`, `quarantined` |
 | `QuarantineReason` | `out_of_range`, `unknown_key`, `undeclared_channel`, `device_quarantined` |
-| `TimeSource` | `device_ntp`, `device_rtc`, `gateway`, `gateway_adjusted` |
+| `TimeSource` | `device_ntp`, `device_rtc`, `edge`, `edge_adjusted` |
 | `ReasonCode` | `malformed_measurement_key`, `value_type_mismatch`, `unknown_subject`, `subject_scope_violation`, `batch_too_large`, `stale_timestamp`, `internal` |
 
 `internal` is a read-compatible legacy `ReasonCode` value and is not
@@ -202,7 +202,7 @@ The legacy `reason_code: "internal"` remains readable for old v1 data but is
 not emitted by this implementation. Storage and internal failures do not become
 `rejected`.
 
-An accepted acknowledgement means that the gateway reached its documented
+An accepted acknowledgement means that the Edge reached its documented
 durability point: the reading and its same-transaction downstream publication
 record, or the bounded staging/dedup state represented by the disposition, are
 durable. A duplicate means the original envelope claim is still within the
@@ -242,10 +242,10 @@ freshness window is 24 hours and the default future-skew allowance is 5
 minutes; deployments may choose smaller finite values within the implementation
 limits.
 
-| Input and gateway clock state | Result |
+| Input and Edge clock state | Result |
 | --- | --- |
-| No `device_time_ms`; `time_source: gateway` | Accept using gateway receive time. |
-| No absolute device time; finite `age_ms` within the window | Accept using receive time minus age and record `gateway_adjusted`. |
+| No `device_time_ms`; `time_source: edge` | Accept using Edge receive time. |
+| No absolute device time; finite `age_ms` within the window | Accept using receive time minus age and record `edge_adjusted`. |
 | `age_ms` outside the window or not representable | Terminal item rejection with a freshness reason; do not blind-retry unchanged input. |
 | `device_time_ms` while trusted wall time is available and timestamp is fresh | Compare against the trusted wall clock and accept or produce positional `stale_timestamp`. |
 | `device_time_ms` while trusted wall time is untrusted | `503` with no acknowledgement for the whole envelope; retain and retry unchanged after clock recovery. |
@@ -373,12 +373,12 @@ Current Plan 6 code provides the authenticated HTTP binding, bearer credential
 authority, bounded admission, TLS/private-LAN listener construction, freshness
 handling, side-effect-free validation, bounded staging/dedup state, health and
 episode audit hooks, and local recovery authority closure. It is intentionally a
-device-builder HTTP path, not a remotely claimable gateway setup path.
+device-builder HTTP path, not a remotely claimable Edge setup path.
 
 Plan 6.5 is still required before distribution for encrypted replacement backup
 containers and the cross-filesystem restore staging/fence mechanics. Until that
 work lands, legacy plaintext replacement snapshot export is unavailable once a
-device-token secret exists; the gateway must say so without emitting the token or
+device-token secret exists; the Edge must say so without emitting the token or
 its hash. State-only inspection is not a complete replacement backup.
 
 MQTT ingest, pairing-window registration, `signed_seq`, `provisioned_key`, batch
@@ -389,7 +389,7 @@ ways to bypass this HTTP token, TLS, subject, freshness, or custody contract.
 ## Recovery and operational meaning
 
 An unowned, locally recovering, restore-fenced, reset-fenced, or TLS-invalid
-gateway does not bind the control API or ingest listener. Local root recovery
+Edge does not bind the control API or ingest listener. Local root recovery
 must re-establish ownership; restore invalidates prior admin/operator/session
 authority and device auth generations are checked again. A device-token retry
 after a committed restore may be accepted again on the replacement because
@@ -397,6 +397,6 @@ readings and dedup claims are not restored; downstream idempotency and the new
 ledger epoch expose that possible duplicate.
 
 A credential response is one-shot. If it is lost, abandon/revoke the affected
-credential and issue another one; never ask the gateway to redisplay it. Human
+credential and issue another one; never ask the Edge to redisplay it. Human
 approval is required for issue, reissue, promotion, abandonment, and revoke
 operations that can silence a device.

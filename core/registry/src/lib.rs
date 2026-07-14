@@ -26,7 +26,7 @@ mod migration_tests {
     #[test]
     fn ledger_and_registry_migrations_apply() {
         // ledger+registry連結(1,3,5,6——集合差ベースのrunnerは番号の飛びを許容する)。
-        // timeseriesを含むゲートウェイ完全連結(1..6)の検証はTask 6のE2Eが担う。
+        // timeseriesを含むEdge完全連結(1..6)の検証はTask 6のE2Eが担う。
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
         all.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // 3, 5
         all.extend_from_slice(crate::MIGRATIONS); // 6

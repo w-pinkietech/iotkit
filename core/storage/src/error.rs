@@ -14,6 +14,8 @@ pub enum StorageError {
     SchemaVersionAhead { on_disk: u32, latest_known: u32 },
     /// Migration versions are not strictly ascending.
     InvalidMigrationOrder { first: u32, second: u32 },
+    /// Existing pre-release database predates the Edge identity cutover.
+    UnsupportedPreReleaseEdgeDatabase,
 }
 
 impl std::fmt::Display for StorageError {
@@ -39,6 +41,10 @@ impl std::fmt::Display for StorageError {
                     "migration versions not strictly ascending: v{first} >= v{second}"
                 )
             }
+            Self::UnsupportedPreReleaseEdgeDatabase => write!(
+                f,
+                "unsupported pre-release Edge database; recreate the Edge database"
+            ),
         }
     }
 }
@@ -51,6 +57,7 @@ impl std::error::Error for StorageError {
             Self::MigrationFailed { source, .. } => Some(source.as_ref()),
             Self::SchemaVersionAhead { .. } => None,
             Self::InvalidMigrationOrder { .. } => None,
+            Self::UnsupportedPreReleaseEdgeDatabase => None,
         }
     }
 }

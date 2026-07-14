@@ -42,10 +42,10 @@ subject_id = system_id(確定。ADR 0013で未定だった粒度の解決)
   item単位の `subject_hint = hardware_id` を申告(経路Cのトークン1:1では省略可)。
 - **粒度は初回登録で凍結される**: 個体識別型の多役割デバイス(1個体で2ラインを担う等)は、
   役割分離が予見されるなら細かく登録する。将来の分割操作は「継続」ではなく明示的な後継リンク付き断絶になる。
-- **スコープ宣言**: series同一性は**ゲートウェイ局所**。大域同一性は (gateway_identity, system_id)。
-  マルチゲートウェイでの名寄せは上流([3]/[4])の責務。同一デバイスが2ゲートウェイに見えたら2つのsystem_idで正しい。
-  **(D8波及 2026-07-07)** 複数Gateway Piの現場(Site-managed)では、消費者が保持するレコード同一性・cursor・
-  dedup・ack水位も同様に `gateway_identity` でスコープする(`(gateway_identity, epoch, seq)`)。`epoch/seq` 単独を
+- **スコープ宣言**: series同一性は**Edge Node局所**。大域同一性は `(edge_node_id, system_id)`。
+  複数Edge Node間の名寄せは上流([3]/[4])の責務。同一デバイスが2つのEdge Nodeに見えたら2つのsystem_idで正しい。
+  **(D8波及 2026-07-07)** 複数Edge Nodeの現場(Site-managed)では、消費者が保持するレコード同一性・cursor・
+  dedup・ack水位も同様に `edge_node_id` でスコープする(`(edge_node_id, epoch, seq)`)。`epoch/seq` 単独を
   消費者側の主キー・再開位置に使ってはならない。詳細はD8。
 
 ## 決定2: hardware_idの2分類と継続性の意味論
@@ -195,7 +195,7 @@ append-onlyイベント行。確認UI・ワンタップ差し戻し・R14カタ�
 - engine(EngineDeviceKey)はWave 0無改修(in-memory projectionのため)。
 - 新クレートは `core/ledger`。uuid crate(v7 feature)をworkspaceに追加。
 - **Wave 0の登録経路**(レビュー反映 2026-07-02): 経路B(位置定義)+経路A(目撃ステージング→
-  CLI承認 `gatewayctl device approve`)。検疫遷移は**時限自動失効+CLI解除のみ**(承認UIはWave 1)。
+  CLI承認 `iotkit-edgectl device approve`)。検疫遷移は**時限自動失効+CLI解除のみ**(承認UIはWave 1)。
   replace-hardwareは上記CLI版ガードレールで実装する。
 
 ## 宿題

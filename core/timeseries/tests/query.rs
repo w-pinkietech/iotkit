@@ -156,7 +156,7 @@ fn export_csv_quotes_string_columns_and_preserves_empty_optional_fields() {
                 series_id,
                 received_at_ms: 1000,
                 device_time_ms: None,
-                time_source: "gateway,edge".into(),
+                time_source: "edge,adjusted".into(),
                 values: vec![1.25],
                 rssi: None,
                 battery_pct: None,
@@ -177,7 +177,7 @@ fn export_csv_quotes_string_columns_and_preserves_empty_optional_fields() {
         );
         assert_eq!(
             lines[1],
-            "1,1000,received_at,1000,,\"gateway,edge\",unsynced,0,,,1.25,"
+            "1,1000,received_at,1000,,\"edge,adjusted\",unsynced,0,,,1.25,"
         );
         assert_eq!(
             lines[2],

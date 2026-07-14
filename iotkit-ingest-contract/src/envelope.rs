@@ -90,7 +90,7 @@ pub struct ReadingItem {
     /// validates the value directly against the configured freshness window;
     /// out-of-window and overflow-scale ages are terminally rejected. Only then
     /// does it reconstruct observation time as receive time minus the age and
-    /// record the effective source as [`TimeSource::GatewayAdjusted`]. When
+    /// record the effective source as [`TimeSource::EdgeAdjusted`]. When
     /// `device_time_ms` is present, it takes precedence and `age_ms` is ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub age_ms: Option<u64>,
@@ -111,7 +111,7 @@ pub struct ReadingItem {
 /// The provenance of an observation's timestamp.
 ///
 /// The receiver carries this tag into storage unless successful `age_ms`
-/// reconstruction replaces it with [`TimeSource::GatewayAdjusted`]. It uses
+/// reconstruction replaces it with [`TimeSource::EdgeAdjusted`]. It uses
 /// device or adjusted times as event-time candidates, falling back to its receive
 /// time when necessary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,15 +127,15 @@ pub enum TimeSource {
     /// The receiver considers the associated `device_time_ms` as the event time,
     /// subject to its timestamp-validity checks.
     DeviceRtc,
-    /// Timing is gateway-owned rather than taken from `device_time_ms`.
+    /// Timing is Edge-owned rather than taken from `device_time_ms`.
     ///
     /// With no device timestamp, a valid `age_ms` makes event time receive time
     /// minus `age_ms` and changes the effective source to
-    /// [`TimeSource::GatewayAdjusted`]. If `age_ms` is absent, the receiver uses
+    /// [`TimeSource::EdgeAdjusted`]. If `age_ms` is absent, the receiver uses
     /// receive time. An out-of-window or overflow-scale `age_ms` is rejected by
     /// freshness validation before reconstruction; it does not fall back to
-    /// receive time. A `device_time_ms` tagged `Gateway` is not used as event time.
-    Gateway,
+    /// receive time. A `device_time_ms` tagged `Edge` is not used as event time.
+    Edge,
     /// The effective source for an observation time reconstructed from relative age.
     ///
     /// The collector records this source after converting `age_ms` to `i64` and
@@ -143,7 +143,7 @@ pub enum TimeSource {
     /// direct age happens first, so out-of-window and overflow-scale values are
     /// terminally rejected rather than accepted through a receive-time fallback.
     /// The reconstructed timestamp is an event-time candidate.
-    GatewayAdjusted,
+    EdgeAdjusted,
 }
 
 #[cfg(test)]
@@ -163,7 +163,7 @@ mod tests {
                 series_variant: None,
                 values: vec![21.5],
                 device_time_ms: None,
-                time_source: TimeSource::Gateway,
+                time_source: TimeSource::Edge,
                 age_ms: None,
                 rssi: Some(-60),
                 battery_pct: Some(88),
@@ -176,8 +176,25 @@ mod tests {
         let e = sample_envelope();
         let json = serde_json::to_string(&e).unwrap();
         assert_eq!(serde_json::from_str::<Envelope>(&json).unwrap(), e);
+        assert!(json.contains("\"time_source\":\"edge\""));
         // オプショナル欄は省略される(ワイヤの軽さ)
         assert!(!json.contains("device_time_ms"));
+    }
+
+    #[test]
+    fn edge_adjusted_time_source_uses_edge_adjusted_wire_value() {
+        let json = serde_json::to_string(&TimeSource::EdgeAdjusted).unwrap();
+        assert_eq!(json, "\"edge_adjusted\"");
+        assert_eq!(
+            serde_json::from_str::<TimeSource>(&json).unwrap(),
+            TimeSource::EdgeAdjusted
+        );
+    }
+
+    #[test]
+    fn legacy_gateway_time_sources_are_rejected() {
+        assert!(serde_json::from_str::<TimeSource>("\"gateway\"").is_err());
+        assert!(serde_json::from_str::<TimeSource>("\"gateway_adjusted\"").is_err());
     }
 
     #[test]

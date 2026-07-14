@@ -309,7 +309,7 @@ pub fn verify_passphrase(phc: &str, plaintext: &str) -> bool {
 ///
 /// Mutation and audit INSERT atomicity is guaranteed by the caller's transaction:
 /// dispatch (Task 3) uses one Immediate Tx, while session/setup routes (Task 6)
-/// and gatewayctl (Task 9) create a Tx inside `with_conn`. This function does not
+/// and iotkit-edgectl (Task 9) create a Tx inside `with_conn`. This function does not
 /// open its own transaction, so it does not nest with the caller's Tx.
 pub fn issue_token(
     conn: &Connection,
@@ -481,7 +481,7 @@ pub fn authenticate(
 ///
 /// Mutation and audit INSERT atomicity is guaranteed by the caller's transaction:
 /// dispatch (Task 3) uses one Immediate Tx, while session/setup routes (Task 6)
-/// and gatewayctl (Task 9) create a Tx inside `with_conn`. This function does not
+/// and iotkit-edgectl (Task 9) create a Tx inside `with_conn`. This function does not
 /// open its own transaction, so it does not nest with the caller's Tx.
 pub fn revoke_token(conn: &Connection, token_id: &str, audit_actor: &str) -> Result<(), OpsError> {
     let changed = conn.execute(
@@ -1231,7 +1231,7 @@ mod tests {
     #[test]
     fn external_initialization_marker_distinguishes_first_init_from_database_loss() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.db");
+        let path = dir.path().join("edge.db");
         let first = iotkit_core_storage::init_db(&path, &all_migrations()).unwrap();
         first
             .with_conn_sync(|conn| {

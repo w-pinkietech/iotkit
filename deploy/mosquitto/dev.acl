@@ -1,7 +1,7 @@
-user gateway-01
-topic write iotkit/v1/gateways/gateway-01/records
-topic read iotkit/v1/gateways/gateway-01/accepted-through
+user edge-node-01
+topic write iotkit/v1/edge-nodes/edge-node-01/records
+topic read iotkit/v1/edge-nodes/edge-node-01/accepted-through
 
 user site
-topic read iotkit/v1/gateways/+/records
-topic write iotkit/v1/gateways/+/accepted-through
+topic read iotkit/v1/edge-nodes/+/records
+topic write iotkit/v1/edge-nodes/+/accepted-through

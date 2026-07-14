@@ -5,13 +5,13 @@ ALTER TABLE readings ADD COLUMN event_time_source TEXT NOT NULL DEFAULT 'receive
 UPDATE readings SET
     event_time = CASE
         WHEN device_time IS NOT NULL
-             AND time_source IN ('device_ntp','device_rtc','gateway_adjusted')
+             AND time_source IN ('device_ntp','device_rtc','edge_adjusted')
              AND device_time <= received_at + 300000
         THEN device_time ELSE received_at END,
     event_time_source = CASE
         WHEN device_time IS NOT NULL AND device_time <= received_at + 300000
              AND time_source IN ('device_ntp','device_rtc') THEN 'device'
         WHEN device_time IS NOT NULL AND device_time <= received_at + 300000
-             AND time_source = 'gateway_adjusted' THEN 'gateway_adjusted'
+             AND time_source = 'edge_adjusted' THEN 'edge_adjusted'
         ELSE 'received_at' END;
 CREATE INDEX idx_readings_series_event_time ON readings(series_id, event_time);

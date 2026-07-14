@@ -8,7 +8,7 @@ pub use error::TimeseriesError;
 use iotkit_core_storage::Migration;
 
 /// Timeseries migrations. Append to core/storage MIGRATIONS when assembling.
-/// (gateway側でv3=ledgerを間に挟んで連結する。versionは昇順検証があるため
+/// (Edge側でv3=ledgerを間に挟んで連結する。versionは昇順検証があるため
 /// 1, 3, 4, 5, 7, 8 の順に並べて渡す必要がある。)
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -377,8 +377,8 @@ pub fn insert_reading_v3(
 }
 
 /// D7決定3: event_time導出。device_time採用はtime_sourceがデバイス由来
-/// (device_ntp/device_rtc)またはgateway_adjusted(age_ms復元)のときのみ。
-/// time_source=gateway(デバイス時刻なしの申告)はdevice_time_msがあっても信頼しない(矛盾入力)。
+/// (device_ntp/device_rtc)またはedge_adjusted(age_ms復元)のときのみ。
+/// time_source=edge(デバイス時刻なしの申告)はdevice_time_msがあっても信頼しない(矛盾入力)。
 fn derive_event_time(
     received_at_ms: i64,
     device_time_ms: Option<i64>,
@@ -386,7 +386,7 @@ fn derive_event_time(
 ) -> (i64, &'static str) {
     let label = match time_source {
         "device_ntp" | "device_rtc" => "device",
-        "gateway_adjusted" => "gateway_adjusted",
+        "edge_adjusted" => "edge_adjusted",
         _ => return (received_at_ms, "received_at"),
     };
     match device_time_ms {
@@ -825,7 +825,7 @@ mod v3_tests {
                 series_id,
                 received_at_ms: 1000,
                 device_time_ms: None,
-                time_source: "gateway".into(),
+                time_source: "edge".into(),
                 values: vec![21.5],
                 rssi: None,
                 battery_pct: None,
@@ -884,7 +884,7 @@ mod v3_tests {
     }
 
     #[test]
-    fn event_time_gateway_adjusted_source() {
+    fn event_time_edge_adjusted_source() {
         let db = v3_db();
         db.with_conn_sync(|conn| {
             let received_at = 10_000_000;
@@ -892,22 +892,22 @@ mod v3_tests {
                 conn,
                 received_at,
                 Some(received_at - 5000),
-                "gateway_adjusted",
+                "edge_adjusted",
             );
             assert_eq!(event_time, received_at - 5000);
-            assert_eq!(source, "gateway_adjusted");
+            assert_eq!(source, "edge_adjusted");
             Ok(())
         })
         .unwrap();
     }
 
     #[test]
-    fn event_time_ignores_device_time_when_source_is_gateway() {
+    fn event_time_ignores_device_time_when_source_is_edge() {
         let db = v3_db();
         db.with_conn_sync(|conn| {
             let received_at = 10_000_000;
             let (event_time, source) =
-                insert_and_read_event_time(conn, received_at, Some(received_at - 5000), "gateway");
+                insert_and_read_event_time(conn, received_at, Some(received_at - 5000), "edge");
             assert_eq!(event_time, received_at);
             assert_eq!(source, "received_at");
             Ok(())
@@ -956,8 +956,7 @@ mod v3_tests {
         let db = v3_db();
         db.with_conn_sync(|conn| {
             let received_at = 10_000_000;
-            let (event_time, source) =
-                insert_and_read_event_time(conn, received_at, None, "gateway");
+            let (event_time, source) = insert_and_read_event_time(conn, received_at, None, "edge");
             assert_eq!(event_time, received_at);
             assert_eq!(source, "received_at");
             Ok(())
@@ -1353,10 +1352,10 @@ mod v3_tests {
         db.with_conn_sync(|conn| {
             let series_id = seed_series(conn);
             let rows = [
-                (1, 10_000_000, None, "gateway"),
+                (1, 10_000_000, None, "edge"),
                 (2, 10_000_000, Some(9_990_000), "device_ntp"),
                 (3, 10_000_000, Some(10_300_001), "device_ntp"),
-                (4, 10_000_000, Some(9_995_000), "gateway"),
+                (4, 10_000_000, Some(9_995_000), "edge"),
             ];
             for (seq, received_at, device_time, time_source) in rows {
                 conn.execute(
