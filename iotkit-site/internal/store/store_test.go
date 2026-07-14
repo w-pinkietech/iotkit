@@ -536,15 +536,24 @@ func TestProjectSemanticEventsOrdersInputsDeterministically(t *testing.T) {
 func TestProjectSemanticEventsRejectsInvalidInputWithoutAdvancingIt(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		values []float64
+		mutate func(map[string]any)
 	}{
-		{name: "non binary", values: []float64{2}},
-		{name: "non scalar", values: []float64{0, 1}},
+		{name: "non binary", mutate: func(record map[string]any) { record["values"] = []any{2} }},
+		{name: "non scalar", mutate: func(record map[string]any) { record["values"] = []any{0, 1} }},
+		{name: "null value", mutate: func(record map[string]any) { record["values"] = []any{nil} }},
+		{name: "wrong family", mutate: func(record map[string]any) { record["family"] = "annotation" }},
+		{name: "missing family", mutate: func(record map[string]any) { delete(record, "family") }},
+		{name: "missing event time", mutate: func(record map[string]any) { delete(record, "event_time") }},
+		{name: "null event time", mutate: func(record map[string]any) { record["event_time"] = nil }},
+		{name: "fractional event time", mutate: func(record map[string]any) { record["event_time"] = 1.5 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := openTestStore(t)
 			mapping := putSemanticMapping(t, store, semantic.TriggerActiveEdge, 1)
-			acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, []float64{0}, test.values)
+			baseline := contactRecord("epoch-a", 1, []any{0})
+			invalid := contactRecord("epoch-a", 2, []any{1})
+			test.mutate(invalid)
+			acceptContactRecords(t, store, "edge-node-01", "epoch-a", baseline, invalid)
 
 			if _, err := store.ProjectSemanticEvents(context.Background(), 100); err == nil {
 				t.Fatal("ProjectSemanticEvents accepted invalid contact input")
@@ -563,7 +572,48 @@ func TestProjectSemanticEventsRejectsInvalidInputWithoutAdvancingIt(t *testing.T
 			if lastValue != 0 || nextSequence != 1 {
 				t.Fatalf("state = last %d next %d, want last 0 next 1", lastValue, nextSequence)
 			}
+			if got := store.testCount(t, "semantic_events"); got != 0 {
+				t.Fatalf("semantic event count = %d, want 0", got)
+			}
 		})
+	}
+}
+
+func contactRecord(ledgerEpoch string, pubSeq int64, values []any) map[string]any {
+	return map[string]any{
+		"family":         "measurement",
+		"schema_version": 1,
+		"epoch":          ledgerEpoch,
+		"pub_seq":        pubSeq,
+		"series_key":     contactSeries,
+		"values":         values,
+		"event_time":     pubSeq * 1_000,
+	}
+}
+
+func acceptContactRecords(t *testing.T, store *Store, edgeNodeID, ledgerEpoch string, records ...map[string]any) {
+	t.Helper()
+	rawRecords := make([]json.RawMessage, 0, len(records))
+	for _, record := range records {
+		raw, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rawRecords = append(rawRecords, raw)
+	}
+	start := records[0]["pub_seq"].(int64)
+	end := start + int64(len(records)) - 1
+	batch := contract.RecordBatch{
+		SchemaVersion: 1,
+		EdgeNodeID:    edgeNodeID,
+		LedgerEpoch:   ledgerEpoch,
+		PublicationID: contract.PublicationID(edgeNodeID, ledgerEpoch, start, end),
+		CursorStart:   start,
+		CursorEnd:     end,
+		Records:       rawRecords,
+	}
+	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+		t.Fatal(err)
 	}
 }
 

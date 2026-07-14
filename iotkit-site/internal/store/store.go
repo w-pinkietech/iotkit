@@ -515,23 +515,38 @@ func semanticCandidateEligible(ctx context.Context, tx *sql.Tx, candidate semant
 
 func decodeSemanticContact(record []byte) (int, int64, error) {
 	var measurement struct {
+		Family    json.RawMessage   `json:"family"`
 		Values    []json.RawMessage `json:"values"`
-		EventTime int64             `json:"event_time"`
+		EventTime json.RawMessage   `json:"event_time"`
 	}
 	if err := json.Unmarshal(record, &measurement); err != nil {
 		return 0, 0, err
 	}
+	var family string
+	if len(measurement.Family) == 0 || bytes.Equal(measurement.Family, []byte("null")) {
+		return 0, 0, errors.New("semantic input family must be measurement")
+	}
+	if err := json.Unmarshal(measurement.Family, &family); err != nil || family != "measurement" {
+		return 0, 0, errors.New("semantic input family must be measurement")
+	}
 	if len(measurement.Values) != 1 {
 		return 0, 0, errors.New("contact values must contain exactly one scalar")
 	}
-	var value float64
-	if err := json.Unmarshal(measurement.Values[0], &value); err != nil {
+	value, err := json.Number(measurement.Values[0]).Float64()
+	if err != nil {
 		return 0, 0, errors.New("contact value must be a number")
 	}
 	if value != 0 && value != 1 {
 		return 0, 0, errors.New("contact value must be 0 or 1")
 	}
-	return int(value), measurement.EventTime, nil
+	if len(measurement.EventTime) == 0 || bytes.Equal(measurement.EventTime, []byte("null")) {
+		return 0, 0, errors.New("event_time must be present and non-null")
+	}
+	var eventTime int64
+	if err := json.Unmarshal(measurement.EventTime, &eventTime); err != nil {
+		return 0, 0, errors.New("event_time must be an integer")
+	}
+	return int(value), eventTime, nil
 }
 
 func semanticEventID(mappingID string, revision int64, edgeNodeID, ledgerEpoch string, pubSeq int64) string {
