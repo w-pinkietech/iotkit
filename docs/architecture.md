@@ -110,7 +110,9 @@ The application MQTT payload is contract v1: `schema_version`, stable `event_id`
 `mapping_revision`, revision-local `event_sequence`, `meaning`, source Edge Node/series/publication
 sequence, `occurred_at`, and `count`. Count is cumulative only within a mapping revision and resets
 to 1 for a new revision. It is an IoTKit event contract rather than a legacy device-address/pin
-payload. The semantic slice is implemented; live-broker verification remains pending.
+payload. The semantic slice is implemented and its future-only `active_edge` path, QoS 1 outbox,
+application publish, and duplicate-publication idempotence are verified against a live Docker
+Mosquitto broker on the host. A BravePI-backed semantic run remains a separate hardware check.
 
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
 `iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
