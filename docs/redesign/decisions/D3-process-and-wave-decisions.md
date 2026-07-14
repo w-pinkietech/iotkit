@@ -184,6 +184,26 @@ future-onlyで割り当て、`active_sample`または`active_edge`でsemantic ev
 MQTT exporterからapplicationへ配送する最小実装とする。1 source seriesにつきactiveな意味は1つ、
 backfillは行わない。adapter templateやSDKはIoTKitの中心機能より後に置く。
 
+### Site semantic sliceのhost live-broker検証 (2026-07-15)
+
+Docker上のMosquitto 2.0.22とIoTKit Siteを一時環境で起動し、疑似Edge、Site、application subscriberを
+別user・topic単位ACLで分離した。接点seriesへ`production_pulse / active_edge / active_value=1`を設定し、
+次の順序でfuture-only境界からapplication配送までを確認した。
+
+1. mapping作成前にpublication 1 (`0`)を受理し、mappingとMQTT routeを作成した。
+2. publication 2 (`0`)はmapping後のbaselineとなり、semantic eventを生成しなかった。
+3. publication 3 (`1`)でinactiveからactiveへのedgeを作り、`accepted-through=3`、
+   `event_sequence=1`、`source_pub_seq=3`、`count=1`を確認した。
+4. semantic eventは1行、QoS 1のMQTT outboxはpublish済み1行となり、application topicで同じ
+   `event_id`のcontract v1 payloadを受信した。
+5. publication 3を同一内容で再送してもraw record、semantic event、outboxの行数は3/1/1から増えなかった。
+
+MQTTはat-least-onceであるため配送回数をexactly-onceとは扱わず、重複時も安定した`event_id`で識別する。
+この検証はhost上のlive-broker happy path、mappingのfuture-only、`active_edge` baseline、QoS 1 publish、
+同一publication再送の冪等性を対象とする。BravePIからraw保存までの経路は既に実機確認済みのため、
+semantic pathをPiで重ねて確認することは完了条件にしない。broker停止中のpending保持、mapping revision境界、
+route作成前eventの非配送は今回再検証せず、既存focused testの範囲に残す。
+
 ### BravePIとの責任境界
 
 - センサー、トランスミッタ、BLE Long Range、ペアリング、メインボード上の端末管理はBravePIの責任とする。
