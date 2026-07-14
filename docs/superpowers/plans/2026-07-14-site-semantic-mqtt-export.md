@@ -277,8 +277,9 @@ Commit: `feat: project site semantic events`
 **Files:**
 - Create: `iotkit-site/internal/applicationcontract/production_pulse.go`
 - Create: `iotkit-site/internal/applicationcontract/production_pulse_test.go`
-- Modify: `iotkit-site/internal/store/store.go`
-- Modify: `iotkit-site/internal/store/store_test.go`
+- Create: `iotkit-site/internal/store/mqtt_export.go`
+- Create: `iotkit-site/internal/store/mqtt_export_test.go`
+- Modify: `iotkit-site/internal/store/store.go` (schema initialization only)
 
 **Interfaces:**
 - Produces `applicationcontract.ProductionPulseV1` and strict `Validate`.
