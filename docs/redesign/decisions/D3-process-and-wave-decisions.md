@@ -120,12 +120,30 @@ commit `0696d22`を使い、通常のEdge、Mosquitto、Siteだけでcustody失�
 - 最終状態はEdge cursor 304、Site raw record 304件、最小1、最大304、distinct 304であり、欠番と重複は
   なかった。停止後のEdge DBとSite DBはいずれも`PRAGMA quick_check = ok`だった。
 
+### 実機耐障害検証状況 (2026-07-14)
+
+commit `3efd599`のsourceをRaspberry Pi (arm64)へ同期してdebug buildし、温度センサー
+`ble:246880020140018b`とBravePI Mainboardを使って、hostでは代替できないUART復旧だけを確認した。
+
+- 開始時はEdge停止、Broker/Site稼働、Edge readings 18件、current-epoch `pub_seq`最大18、Edge cursorと
+  Site raw recordは17だった。Edge/Site DBはいずれも`PRAGMA quick_check = ok`だった。
+- Broker/Siteを停止して最新Edgeを起動すると、cursor 17のままreadingsは18から22へ増えた。さらに
+  EdgeをSIGINTで停止して再起動し、修復操作なしでreadingsが26から32へ増えたため、downstream停止中の
+  SQLite収集継続とEdge再起動後のUART再取得を確認した。
+- Broker/Site復旧後、停止中のrecordを再送してEdge cursorとSiteが17から39以上へ追いついた。その間も
+  UART収集は継続し、新しいrecordだけが通常の短い送信待ちになった。
+- ユーザーがBravePI Mainboardを一度power cycleした。再投入直後の基準readings 117から35秒後に123へ
+  増え、再ペアリング、設定修復、DB修復、device再承認なしで`temperature_c`受信が自動復帰した。
+- 最終的にEdge readings 127件、current-epoch `pub_seq`最大127、validated `accepted-through` cursor 127、
+  Site raw record 127件（最小1、最大127、distinct 127）へ収束した。Edge/Site DBはいずれも
+  `PRAGMA quick_check = ok`であり、EdgeをSIGINTで停止した後にUARTが解放された。Broker/Site、lab、
+  credential、source copyは削除していない。
+
 これにより `BravePI Transmitter -> BLE Long Range -> BravePI Mainboard -> UART -> IoTKit Edge SQLite -> MQTT
 -> MQTT Broker -> IoTKit Site raw SQLite -> accepted-through -> Edge cursor` は実機確認済みとなった。
 平文MQTTは同一Piのloopbackだけを使う実験設定であり、実運用のTLS要件を緩和しない。
-長時間停止中の実センサー連続収集と、BravePI Mainboardを含む実機復旧の再確認は、引き続き現在の
-実装ゲートの未完了条件である。接点入力はUART decodeまでの確認であり、Edgeへの通常取り込みは
-温度経路の次に行う。
+保持容量に近づく長時間停止中の実センサー連続収集は、引き続き現在の実装ゲートの未完了条件である。
+接点入力はUART decodeまでの確認であり、Edgeへの通常取り込みは温度経路の次に行う。
 
 実験用Piでの初回native release buildは、空のbuild cacheからRust toolchainと依存crateを
 最適化したため一時的にCPUを飽和させ、SSH応答も遅くなった。日常の実機反復はdebug buildを
