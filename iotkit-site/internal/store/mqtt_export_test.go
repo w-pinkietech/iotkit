@@ -204,6 +204,59 @@ func TestListPendingMQTTExportsPreservesSameRouteEventOrder(t *testing.T) {
 	}
 }
 
+func TestListPendingMQTTExportsFairlyIncludesIndependentRouteWithinLimit(t *testing.T) {
+	store := openTestStore(t)
+	mapping := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	routeA := putMQTTRoute(t, store, mapping.ID, "factory/a/production-pulses")
+	olderSamples := make([][]float64, 257)
+	for index := range olderSamples {
+		olderSamples[index] = []float64{1}
+	}
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, olderSamples[:256]...)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 257, olderSamples[256])
+	if _, err := store.ProjectSemanticEvents(context.Background(), 1_000); err != nil {
+		t.Fatal(err)
+	}
+	routeB := putMQTTRoute(t, store, mapping.ID, "factory/b/production-pulses")
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 258, []float64{1})
+	if _, err := store.ProjectSemanticEvents(context.Background(), 1_000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnqueueMQTTExports(context.Background(), 1_000); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := store.ListPendingMQTTExports(context.Background(), 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 256 {
+		t.Fatalf("pending count = %d, want 256", len(pending))
+	}
+	foundRouteB := false
+	var previousASequence int64
+	for _, export := range pending {
+		switch export.RouteID {
+		case routeA.RouteID:
+			var payload applicationcontract.ProductionPulseV1
+			if err := json.Unmarshal(export.PayloadJSON, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.EventSequence != previousASequence+1 {
+				t.Fatalf("route A event sequence = %d after %d, want in-order pending events", payload.EventSequence, previousASequence)
+			}
+			previousASequence = payload.EventSequence
+		case routeB.RouteID:
+			foundRouteB = true
+		default:
+			t.Fatalf("unexpected route %q", export.RouteID)
+		}
+	}
+	if !foundRouteB {
+		t.Fatal("newer independent route B was starved by route A fetch window")
+	}
+}
+
 func projectSemanticEvents(t *testing.T, store *Store) {
 	t.Helper()
 	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {
