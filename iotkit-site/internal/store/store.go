@@ -568,6 +568,9 @@ func decodeSemanticContact(record []byte) (int, int64, error) {
 	if err := json.Unmarshal(measurement.EventTime, &eventTime); err != nil {
 		return 0, 0, errors.New("event_time must be an integer")
 	}
+	if eventTime < 0 {
+		return 0, 0, errors.New("event_time must be non-negative")
+	}
 	return int(value), eventTime, nil
 }
 

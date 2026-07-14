@@ -546,6 +546,7 @@ func TestProjectSemanticEventsRejectsInvalidInputWithoutAdvancingIt(t *testing.T
 		{name: "missing event time", mutate: func(record map[string]any) { delete(record, "event_time") }},
 		{name: "null event time", mutate: func(record map[string]any) { record["event_time"] = nil }},
 		{name: "fractional event time", mutate: func(record map[string]any) { record["event_time"] = 1.5 }},
+		{name: "negative event time", mutate: func(record map[string]any) { record["event_time"] = -1 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := openTestStore(t)
