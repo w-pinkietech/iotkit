@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
@@ -126,6 +128,61 @@ func TestRouteAddRejectsInvalidTopicBeforeCreatingDatabase(t *testing.T) {
 		t.Fatal("route-add accepted invalid MQTT topic")
 	}
 	assertPathDoesNotExist(t, dbPath)
+}
+
+func TestRouteListWritesDeliveryStatusJSON(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "site.db")
+	archive, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := archive.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   "contact-series-01",
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveEdge,
+		ActiveValue: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := archive.PutMQTTRoute(context.Background(), mapping.ID, "factory/production-pulses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "route-list.json")
+	output, err := os.Create(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = output
+	t.Cleanup(func() { os.Stdout = originalStdout })
+	if err := run([]string{"route-list", "--db", dbPath}); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = originalStdout
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	encoded, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statuses []store.MQTTRouteStatus
+	if err := json.Unmarshal(encoded, &statuses); err != nil {
+		t.Fatalf("decode route-list output %s: %v", encoded, err)
+	}
+	if len(statuses) != 1 || statuses[0].RouteID != route.RouteID ||
+		statuses[0].MappingID != mapping.ID || statuses[0].PendingCount != 0 ||
+		statuses[0].PublishedCount != 0 || statuses[0].OldestPendingAt != nil {
+		t.Fatalf("statuses = %#v", statuses)
+	}
 }
 
 func assertPathDoesNotExist(t *testing.T, path string) {

@@ -32,6 +32,13 @@ type MQTTRouteSpec struct {
 	Topic     string
 }
 
+type MQTTRouteStatus struct {
+	MQTTRoute
+	PendingCount    int64  `json:"pending_count"`
+	PublishedCount  int64  `json:"published_count"`
+	OldestPendingAt *int64 `json:"oldest_pending_at"`
+}
+
 func (spec MQTTRouteSpec) Validate() error {
 	if strings.TrimSpace(spec.MappingID) == "" {
 		return errors.New("mapping ID must be non-empty")
@@ -135,6 +142,56 @@ func readMQTTRoute(ctx context.Context, tx *sql.Tx, mappingID, topic string) (MQ
 	)
 	route.QoS = byte(qos)
 	return route, err
+}
+
+func (store *Store) ListMQTTRouteStatuses(ctx context.Context) ([]MQTTRouteStatus, error) {
+	rows, err := store.db.QueryContext(ctx, `
+		SELECT routes.route_id, routes.mapping_id, routes.topic, routes.qos,
+			routes.start_after_event_row_id, routes.active, routes.created_at,
+			COALESCE(SUM(CASE
+				WHEN outbox.export_id IS NOT NULL AND outbox.published_at IS NULL THEN 1
+				ELSE 0
+			END), 0) AS pending_count,
+			COALESCE(SUM(CASE WHEN outbox.published_at IS NOT NULL THEN 1 ELSE 0 END), 0)
+				AS published_count,
+			MIN(CASE WHEN outbox.published_at IS NULL THEN outbox.created_at END)
+				AS oldest_pending_at
+		FROM mqtt_routes AS routes
+		LEFT JOIN mqtt_export_outbox AS outbox ON outbox.route_id = routes.route_id
+		GROUP BY routes.route_id
+		ORDER BY routes.created_at, routes.route_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	statuses := make([]MQTTRouteStatus, 0)
+	for rows.Next() {
+		var status MQTTRouteStatus
+		var qos int
+		var oldestPendingAt sql.NullInt64
+		if err := rows.Scan(
+			&status.RouteID,
+			&status.MappingID,
+			&status.Topic,
+			&qos,
+			&status.StartAfterEventRowID,
+			&status.Active,
+			&status.CreatedAt,
+			&status.PendingCount,
+			&status.PublishedCount,
+			&oldestPendingAt,
+		); err != nil {
+			return nil, err
+		}
+		status.QoS = byte(qos)
+		if oldestPendingAt.Valid {
+			status.OldestPendingAt = &oldestPendingAt.Int64
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, rows.Err()
 }
 
 func validateMQTTTopic(topic string) error {

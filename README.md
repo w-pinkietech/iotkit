@@ -63,6 +63,7 @@ iotkit-site mapping-set --db site.db --edge-node-id edge-node-01 \
 iotkit-site mapping-list --db site.db
 iotkit-site route-add --db site.db --mapping-id '<mapping_id>' \
   --topic 'iotkit/v1/application/production-pulses'
+iotkit-site route-list --db site.db
 iotkit-site semantic-query --db site.db --limit 100
 iotkit-site query --db site.db --limit 100
 ```
@@ -73,6 +74,8 @@ current semantic event boundary: neither command backfills older data. Raw accep
 second, independent stage. Projection or application delivery failure therefore does not delay
 raw custody acknowledgement. Failed or timed-out QoS 1 publishes remain pending, and are marked
 published only after broker PUBACK.
+`route-list` reports each route's mapping, future-only start boundary, pending and published
+counts, and the oldest pending timestamp without changing delivery state.
 
 The application payload is JSON contract v1 (`schema_version: 1`) with `event_id`, mapping ID and
 revision, revision-local `event_sequence`, `meaning: "production_pulse"`, source Edge Node/series/
