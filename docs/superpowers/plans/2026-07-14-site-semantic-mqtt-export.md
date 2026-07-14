@@ -18,6 +18,8 @@
 - `active_sample`はactiveなsampleごとにeventを生成する。
 - mapping作成前のraw recordを処理しない。backfill API/CLIを作らない。
 - mapping改訂はfuture-onlyとし、改訂前eventを書き換えない。
+- mapping改訂時は旧revisionの終了cursorと新revisionの開始cursorを同じtransactionで固定し、
+  projectorが遅延していても改訂前にaccept済みのrawを落としたり新revisionで解釈したりしない。
 - 1つのmappingから複数MQTT routeへfan-outできる。route追加前のeventは送らない。
 - MQTT payloadは新しいversion付きIoTKit契約とし、旧`ipAddress`/`pinNumber`を復活させない。
 - deliveryはat-least-onceとし、consumerがdedupできる安定`event_id`を必ず含める。
@@ -128,9 +130,16 @@ CREATE TABLE IF NOT EXISTS semantic_mapping_starts (
   start_after_pub_seq INTEGER NOT NULL,
   PRIMARY KEY(mapping_id, mapping_revision, ledger_epoch)
 );
+CREATE TABLE IF NOT EXISTS semantic_mapping_ends (
+  mapping_id TEXT NOT NULL,
+  mapping_revision INTEGER NOT NULL,
+  ledger_epoch TEXT NOT NULL,
+  end_at_pub_seq INTEGER NOT NULL,
+  PRIMARY KEY(mapping_id, mapping_revision, ledger_epoch)
+);
 ```
 
-`PutSemanticMapping`は同じsourceの旧active revisionをdeactivateし、同じ`mapping_id`のrevisionを1増やす。初回IDは`crypto/rand`の128bitをhex化した`sm-...`とする。同一transactionで当該Edgeの全`accepted_cursors`を`semantic_mapping_starts`へsnapshotする。
+`PutSemanticMapping`は同じsourceの旧active revisionをdeactivateし、同じ`mapping_id`のrevisionを1増やす。初回IDは`crypto/rand`の128bitをhex化した`sm-...`とする。改訂時は同一transactionで当該Edgeの全`accepted_cursors`を旧revisionの`semantic_mapping_ends`と新revisionの`semantic_mapping_starts`へ同じ境界としてsnapshotする。初回作成時はstartsだけをsnapshotする。
 
 - [ ] **Step 6: focused testを通してcommitする**
 
@@ -203,6 +212,17 @@ func TestProjectSemanticEventsIsFutureOnlyAndIdempotent(t *testing.T) {
     assertEventSequences(t, events, mapping, []int64{1, 2})
     assertSourcePubSeqs(t, events, []int64{2, 4})
 }
+
+func TestProjectSemanticEventsClosesOldRevisionWithoutDroppingLaggedRaw(t *testing.T) {
+    store := openTestStore(t)
+    first := putActiveSampleMapping(t, store)
+    accept(t, store, batch("edge-node-01", "epoch-a", 1, contact(1, 1)))
+    second := reviseAsActiveEdgeMapping(t, store)
+    accept(t, store, batch("edge-node-01", "epoch-a", 2, contact(2, 0), contact(3, 1)))
+    if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil { t.Fatal(err) }
+    assertRevisionSourcePubSeqs(t, listEvents(t, store), first.Revision, []int64{1})
+    assertRevisionSourcePubSeqs(t, listEvents(t, store), second.Revision, []int64{3})
+}
 ```
 
 - [ ] **Step 5: processing tablesとprojectorを実装する**
@@ -240,7 +260,7 @@ CREATE TABLE IF NOT EXISTS semantic_events (
 );
 ```
 
-projectorはactive mappingごとに、`semantic_results`未登録かつstart snapshotより後のmatching rawを`received_at, ledger_epoch, pub_seq`順で読む。`values`がscalar 0/1でないrecordは結果を進めずerrorを返す。各入力についてstate更新、result、必要ならevent insertを同じtransactionで行う。`event_id`は`sha256(mapping_id, revision, edge_node_id, ledger_epoch, pub_seq)`のlowercase hexとする。
+projectorはactive revisionに加え、終了cursorまで未処理rawが残るinactive revisionも対象にする。各epochでstart snapshotより後、かつinactive revisionではend snapshot以下のmatching rawを`received_at, ledger_epoch, pub_seq`順で読む。inactive revisionにend snapshotがないepochは対象外とする。`semantic_results`登録済みrawは再処理しない。`values`がscalar 0/1でないrecordは結果を進めずerrorを返す。各入力についてstate更新、result、必要ならevent insertを同じtransactionで行う。`event_id`は`sha256(mapping_id, revision, edge_node_id, ledger_epoch, pub_seq)`のlowercase hexとする。
 
 - [ ] **Step 6: focused testを通してcommitする**
 
