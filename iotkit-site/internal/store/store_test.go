@@ -422,6 +422,208 @@ func TestPutSemanticMappingRollsBackRevisionWhenStartSnapshotFails(t *testing.T)
 	}
 }
 
+func TestProjectSemanticEventsIsFutureOnlyAndIdempotent(t *testing.T) {
+	store := openTestStore(t)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, []float64{1})
+	mapping := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 2,
+		[]float64{1}, []float64{0}, []float64{1})
+
+	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	first := listSemanticEvents(t, store)
+	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	second := listSemanticEvents(t, store)
+
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("events changed after idempotent projection: first=%#v second=%#v", first, second)
+	}
+	if len(first) != 2 {
+		t.Fatalf("events = %#v, want two", first)
+	}
+	for index, event := range first {
+		if event.MappingID != mapping.ID || event.MappingRevision != mapping.Revision {
+			t.Fatalf("event mapping = %#v, want %s revision %d", event, mapping.ID, mapping.Revision)
+		}
+		if event.EventSequence != int64(index+1) {
+			t.Fatalf("event sequence = %d, want %d", event.EventSequence, index+1)
+		}
+		if len(event.EventID) != 64 || strings.ToLower(event.EventID) != event.EventID {
+			t.Fatalf("event ID = %q, want lowercase SHA-256 hex", event.EventID)
+		}
+	}
+	if first[0].SourcePubSeq != 2 || first[1].SourcePubSeq != 4 {
+		t.Fatalf("source pub seqs = %d, %d; want 2, 4", first[0].SourcePubSeq, first[1].SourcePubSeq)
+	}
+}
+
+func TestProjectSemanticEventsClosesOldRevisionWithoutDroppingLaggedRaw(t *testing.T) {
+	store := openTestStore(t)
+	first := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, []float64{1})
+	second := putSemanticMapping(t, store, semantic.TriggerActiveEdge, 1)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 2, []float64{0}, []float64{1})
+
+	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	events := listSemanticEvents(t, store)
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want two", events)
+	}
+	if events[0].MappingRevision != first.Revision || events[0].SourcePubSeq != 1 {
+		t.Fatalf("old revision event = %#v, want revision %d pub_seq 1", events[0], first.Revision)
+	}
+	if events[1].MappingRevision != second.Revision || events[1].SourcePubSeq != 3 {
+		t.Fatalf("new revision event = %#v, want revision %d pub_seq 3", events[1], second.Revision)
+	}
+}
+
+func TestProjectSemanticEventsDoesNotExtendInactiveRevisionIntoNewEpoch(t *testing.T) {
+	store := openTestStore(t)
+	first := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	second := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-new", 1, []float64{1})
+
+	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	events := listSemanticEvents(t, store)
+	if len(events) != 1 || events[0].MappingRevision != second.Revision || events[0].SourcePubSeq != 1 {
+		t.Fatalf("events = %#v, want only new revision %d", events, second.Revision)
+	}
+	if events[0].MappingRevision == first.Revision {
+		t.Fatalf("new epoch was projected under inactive revision %d", first.Revision)
+	}
+}
+
+func TestProjectSemanticEventsActiveEdgeStoresFirstSampleAsBaseline(t *testing.T) {
+	store := openTestStore(t)
+	putSemanticMapping(t, store, semantic.TriggerActiveEdge, 1)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1,
+		[]float64{1}, []float64{1}, []float64{0}, []float64{1})
+
+	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	events := listSemanticEvents(t, store)
+	if len(events) != 1 || events[0].SourcePubSeq != 4 {
+		t.Fatalf("events = %#v, want only transition at pub_seq 4", events)
+	}
+}
+
+func TestProjectSemanticEventsOrdersInputsDeterministically(t *testing.T) {
+	store := openTestStore(t)
+	putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	acceptContactBatch(t, store, "edge-node-01", "epoch-b", 1, []float64{1})
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, []float64{1})
+	if _, err := store.db.Exec(`UPDATE raw_records SET received_at = 100`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	events := listSemanticEvents(t, store)
+	if len(events) != 2 || events[0].LedgerEpoch != "epoch-a" || events[1].LedgerEpoch != "epoch-b" {
+		t.Fatalf("event order = %#v, want epoch-a then epoch-b", events)
+	}
+}
+
+func TestProjectSemanticEventsRejectsInvalidInputWithoutAdvancingIt(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values []float64
+	}{
+		{name: "non binary", values: []float64{2}},
+		{name: "non scalar", values: []float64{0, 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(t)
+			mapping := putSemanticMapping(t, store, semantic.TriggerActiveEdge, 1)
+			acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, []float64{0}, test.values)
+
+			if _, err := store.ProjectSemanticEvents(context.Background(), 100); err == nil {
+				t.Fatal("ProjectSemanticEvents accepted invalid contact input")
+			}
+			if got := store.testCount(t, "semantic_results"); got != 1 {
+				t.Fatalf("semantic result count = %d, want only valid baseline", got)
+			}
+			var lastValue, nextSequence int64
+			if err := store.db.QueryRow(`
+				SELECT last_value, next_event_sequence
+				FROM semantic_mapping_state
+				WHERE mapping_id = ? AND mapping_revision = ?
+			`, mapping.ID, mapping.Revision).Scan(&lastValue, &nextSequence); err != nil {
+				t.Fatal(err)
+			}
+			if lastValue != 0 || nextSequence != 1 {
+				t.Fatalf("state = last %d next %d, want last 0 next 1", lastValue, nextSequence)
+			}
+		})
+	}
+}
+
+func putSemanticMapping(t *testing.T, store *Store, mode semantic.TriggerMode, activeValue int) semantic.Mapping {
+	t.Helper()
+	mapping, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: mode,
+		ActiveValue: activeValue,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mapping
+}
+
+func acceptContactBatch(t *testing.T, store *Store, edgeNodeID, ledgerEpoch string, start int64, samples ...[]float64) {
+	t.Helper()
+	records := make([]json.RawMessage, 0, len(samples))
+	for index, values := range samples {
+		pubSeq := start + int64(index)
+		record, err := json.Marshal(map[string]any{
+			"family":         "measurement",
+			"schema_version": 1,
+			"epoch":          ledgerEpoch,
+			"pub_seq":        pubSeq,
+			"series_key":     contactSeries,
+			"values":         values,
+			"event_time":     pubSeq * 1_000,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, record)
+	}
+	batch := contract.RecordBatch{
+		SchemaVersion: 1,
+		EdgeNodeID:    edgeNodeID,
+		LedgerEpoch:   ledgerEpoch,
+		PublicationID: contract.PublicationID(edgeNodeID, ledgerEpoch, start, start+int64(len(records))-1),
+		CursorStart:   start,
+		CursorEnd:     start + int64(len(records)) - 1,
+		Records:       records,
+	}
+	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func listSemanticEvents(t *testing.T, store *Store) []SemanticEvent {
+	t.Helper()
+	events, err := store.ListSemanticEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
 func acceptEpoch(t *testing.T, store *Store, edgeNodeID, ledgerEpoch string, pubSeq, value int64) {
 	t.Helper()
 	record, err := json.Marshal(map[string]any{

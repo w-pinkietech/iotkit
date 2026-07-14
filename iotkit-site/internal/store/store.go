@@ -35,6 +35,20 @@ type RawRecord struct {
 	ReceivedAt    int64           `json:"received_at"`
 }
 
+type SemanticEvent struct {
+	EventID         string           `json:"event_id"`
+	MappingID       string           `json:"mapping_id"`
+	MappingRevision int64            `json:"mapping_revision"`
+	EventSequence   int64            `json:"event_sequence"`
+	Meaning         semantic.Meaning `json:"meaning"`
+	EdgeNodeID      string           `json:"edge_node_id"`
+	LedgerEpoch     string           `json:"ledger_epoch"`
+	SourcePubSeq    int64            `json:"source_pub_seq"`
+	SourceSeriesKey string           `json:"source_series_key"`
+	OccurredAt      int64            `json:"occurred_at"`
+	CreatedAt       int64            `json:"created_at"`
+}
+
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -115,6 +129,36 @@ func (store *Store) initialize() error {
 			ledger_epoch TEXT NOT NULL,
 			end_at_pub_seq INTEGER NOT NULL,
 			PRIMARY KEY (mapping_id, mapping_revision, ledger_epoch)
+		);
+		CREATE TABLE IF NOT EXISTS semantic_mapping_state (
+			mapping_id TEXT NOT NULL,
+			mapping_revision INTEGER NOT NULL,
+			last_value INTEGER,
+			next_event_sequence INTEGER NOT NULL,
+			PRIMARY KEY (mapping_id, mapping_revision)
+		);
+		CREATE TABLE IF NOT EXISTS semantic_results (
+			mapping_id TEXT NOT NULL,
+			mapping_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			pub_seq INTEGER NOT NULL,
+			emitted_event_id TEXT,
+			PRIMARY KEY (mapping_id, mapping_revision, ledger_epoch, pub_seq)
+		);
+		CREATE TABLE IF NOT EXISTS semantic_events (
+			event_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT NOT NULL UNIQUE,
+			mapping_id TEXT NOT NULL,
+			mapping_revision INTEGER NOT NULL,
+			event_sequence INTEGER NOT NULL,
+			meaning TEXT NOT NULL,
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			source_pub_seq INTEGER NOT NULL,
+			source_series_key TEXT NOT NULL,
+			occurred_at INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE (mapping_id, mapping_revision, event_sequence)
 		);
 	`)
 	return err
@@ -241,6 +285,299 @@ func (store *Store) ListSemanticMappings(ctx context.Context) ([]semantic.Mappin
 		mappings = append(mappings, mapping)
 	}
 	return mappings, rows.Err()
+}
+
+type semanticCandidate struct {
+	MappingID       string
+	MappingRevision int64
+	Meaning         semantic.Meaning
+	TriggerMode     semantic.TriggerMode
+	ActiveValue     int
+	EdgeNodeID      string
+	SeriesKey       string
+	LedgerEpoch     string
+	PubSeq          int64
+	Record          []byte
+}
+
+func (store *Store) ProjectSemanticEvents(ctx context.Context, limit int) (int, error) {
+	if limit < 1 || limit > 10_000 {
+		return 0, errors.New("semantic projection limit must be between 1 and 10000")
+	}
+
+	candidates, err := store.listSemanticCandidates(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	processed := 0
+	for _, candidate := range candidates {
+		projected, err := store.projectSemanticCandidate(ctx, candidate)
+		if err != nil {
+			return processed, err
+		}
+		if projected {
+			processed++
+		}
+	}
+	return processed, nil
+}
+
+func (store *Store) listSemanticCandidates(ctx context.Context, limit int) ([]semanticCandidate, error) {
+	rows, err := store.db.QueryContext(ctx, `
+		SELECT m.mapping_id, m.revision, m.meaning, m.trigger_mode, m.active_value,
+			m.edge_node_id, m.series_key, r.ledger_epoch, r.pub_seq, r.record_json
+		FROM semantic_mappings AS m
+		JOIN raw_records AS r
+			ON r.edge_node_id = m.edge_node_id
+		LEFT JOIN semantic_mapping_starts AS starts
+			ON starts.mapping_id = m.mapping_id
+			AND starts.mapping_revision = m.revision
+			AND starts.ledger_epoch = r.ledger_epoch
+		LEFT JOIN semantic_mapping_ends AS ends
+			ON ends.mapping_id = m.mapping_id
+			AND ends.mapping_revision = m.revision
+			AND ends.ledger_epoch = r.ledger_epoch
+		WHERE json_extract(CAST(r.record_json AS TEXT), '$.series_key') = m.series_key
+			AND r.pub_seq > COALESCE(starts.start_after_pub_seq, 0)
+			AND (
+				m.active = 1
+				OR (ends.end_at_pub_seq IS NOT NULL AND r.pub_seq <= ends.end_at_pub_seq)
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM semantic_results AS results
+				WHERE results.mapping_id = m.mapping_id
+					AND results.mapping_revision = m.revision
+					AND results.ledger_epoch = r.ledger_epoch
+					AND results.pub_seq = r.pub_seq
+			)
+		ORDER BY m.mapping_id, m.revision, r.received_at, r.ledger_epoch, r.pub_seq
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	candidates := make([]semanticCandidate, 0)
+	for rows.Next() {
+		var candidate semanticCandidate
+		if err := rows.Scan(
+			&candidate.MappingID,
+			&candidate.MappingRevision,
+			&candidate.Meaning,
+			&candidate.TriggerMode,
+			&candidate.ActiveValue,
+			&candidate.EdgeNodeID,
+			&candidate.SeriesKey,
+			&candidate.LedgerEpoch,
+			&candidate.PubSeq,
+			&candidate.Record,
+		); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, rows.Err()
+}
+
+func (store *Store) projectSemanticCandidate(ctx context.Context, candidate semanticCandidate) (bool, error) {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	eligible, err := semanticCandidateEligible(ctx, tx, candidate)
+	if err != nil {
+		return false, err
+	}
+	if !eligible {
+		return false, nil
+	}
+
+	current, occurredAt, err := decodeSemanticContact(candidate.Record)
+	if err != nil {
+		return false, fmt.Errorf(
+			"project semantic input %s revision %d %s/%d: %w",
+			candidate.MappingID, candidate.MappingRevision, candidate.LedgerEpoch, candidate.PubSeq, err,
+		)
+	}
+
+	var lastValue sql.NullInt64
+	var nextEventSequence int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT last_value, next_event_sequence
+		FROM semantic_mapping_state
+		WHERE mapping_id = ? AND mapping_revision = ?
+	`, candidate.MappingID, candidate.MappingRevision).Scan(&lastValue, &nextEventSequence)
+	if errors.Is(err, sql.ErrNoRows) {
+		nextEventSequence = 1
+	} else if err != nil {
+		return false, err
+	}
+
+	var previous *int
+	if lastValue.Valid {
+		value := int(lastValue.Int64)
+		previous = &value
+	}
+	emit, nextValue, err := semantic.Evaluate(candidate.TriggerMode, candidate.ActiveValue, previous, current)
+	if err != nil {
+		return false, err
+	}
+
+	var emittedEventID any
+	if emit {
+		eventID := semanticEventID(
+			candidate.MappingID,
+			candidate.MappingRevision,
+			candidate.EdgeNodeID,
+			candidate.LedgerEpoch,
+			candidate.PubSeq,
+		)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO semantic_events (
+				event_id, mapping_id, mapping_revision, event_sequence, meaning,
+				edge_node_id, ledger_epoch, source_pub_seq, source_series_key,
+				occurred_at, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, eventID, candidate.MappingID, candidate.MappingRevision, nextEventSequence,
+			candidate.Meaning, candidate.EdgeNodeID, candidate.LedgerEpoch, candidate.PubSeq,
+			candidate.SeriesKey, occurredAt, time.Now().UnixMilli()); err != nil {
+			return false, err
+		}
+		emittedEventID = eventID
+		nextEventSequence++
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO semantic_mapping_state (
+			mapping_id, mapping_revision, last_value, next_event_sequence
+		) VALUES (?, ?, ?, ?)
+		ON CONFLICT(mapping_id, mapping_revision) DO UPDATE SET
+			last_value = excluded.last_value,
+			next_event_sequence = excluded.next_event_sequence
+	`, candidate.MappingID, candidate.MappingRevision, nextValue, nextEventSequence); err != nil {
+		return false, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO semantic_results (
+			mapping_id, mapping_revision, ledger_epoch, pub_seq, emitted_event_id
+		) VALUES (?, ?, ?, ?, ?)
+	`, candidate.MappingID, candidate.MappingRevision, candidate.LedgerEpoch,
+		candidate.PubSeq, emittedEventID); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func semanticCandidateEligible(ctx context.Context, tx *sql.Tx, candidate semanticCandidate) (bool, error) {
+	var eligible int
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM semantic_mappings AS m
+			LEFT JOIN semantic_mapping_starts AS starts
+				ON starts.mapping_id = m.mapping_id
+				AND starts.mapping_revision = m.revision
+				AND starts.ledger_epoch = ?
+			LEFT JOIN semantic_mapping_ends AS ends
+				ON ends.mapping_id = m.mapping_id
+				AND ends.mapping_revision = m.revision
+				AND ends.ledger_epoch = ?
+			WHERE m.mapping_id = ? AND m.revision = ?
+				AND ? > COALESCE(starts.start_after_pub_seq, 0)
+				AND (
+					m.active = 1
+					OR (ends.end_at_pub_seq IS NOT NULL AND ? <= ends.end_at_pub_seq)
+				)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM semantic_results AS results
+					WHERE results.mapping_id = m.mapping_id
+						AND results.mapping_revision = m.revision
+						AND results.ledger_epoch = ?
+						AND results.pub_seq = ?
+				)
+		)
+	`, candidate.LedgerEpoch, candidate.LedgerEpoch, candidate.MappingID,
+		candidate.MappingRevision, candidate.PubSeq, candidate.PubSeq,
+		candidate.LedgerEpoch, candidate.PubSeq).Scan(&eligible)
+	return eligible == 1, err
+}
+
+func decodeSemanticContact(record []byte) (int, int64, error) {
+	var measurement struct {
+		Values    []json.RawMessage `json:"values"`
+		EventTime int64             `json:"event_time"`
+	}
+	if err := json.Unmarshal(record, &measurement); err != nil {
+		return 0, 0, err
+	}
+	if len(measurement.Values) != 1 {
+		return 0, 0, errors.New("contact values must contain exactly one scalar")
+	}
+	var value float64
+	if err := json.Unmarshal(measurement.Values[0], &value); err != nil {
+		return 0, 0, errors.New("contact value must be a number")
+	}
+	if value != 0 && value != 1 {
+		return 0, 0, errors.New("contact value must be 0 or 1")
+	}
+	return int(value), measurement.EventTime, nil
+}
+
+func semanticEventID(mappingID string, revision int64, edgeNodeID, ledgerEpoch string, pubSeq int64) string {
+	digest := sha256.New()
+	_, _ = fmt.Fprintf(digest, "%s\x00%d\x00%s\x00%s\x00%d", mappingID, revision, edgeNodeID, ledgerEpoch, pubSeq)
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func (store *Store) ListSemanticEvents(ctx context.Context, limit int) ([]SemanticEvent, error) {
+	if limit < 1 || limit > 10_000 {
+		return nil, errors.New("semantic event query limit must be between 1 and 10000")
+	}
+	rows, err := store.db.QueryContext(ctx, `
+		SELECT event_id, mapping_id, mapping_revision, event_sequence, meaning,
+			edge_node_id, ledger_epoch, source_pub_seq, source_series_key,
+			occurred_at, created_at
+		FROM semantic_events
+		ORDER BY event_row_id
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]SemanticEvent, 0)
+	for rows.Next() {
+		var event SemanticEvent
+		if err := rows.Scan(
+			&event.EventID,
+			&event.MappingID,
+			&event.MappingRevision,
+			&event.EventSequence,
+			&event.Meaning,
+			&event.EdgeNodeID,
+			&event.LedgerEpoch,
+			&event.SourcePubSeq,
+			&event.SourceSeriesKey,
+			&event.OccurredAt,
+			&event.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 var newSemanticMappingID = generateSemanticMappingID
