@@ -134,6 +134,9 @@ func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.Mappin
 	`, spec.EdgeNodeID, spec.SeriesKey).Scan(&mappingID, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		mappingID, err = newSemanticMappingID()
+		if err != nil {
+			return noMapping, err
+		}
 		revision = 1
 	} else if err == nil {
 		revision++
@@ -216,7 +219,9 @@ func (store *Store) ListSemanticMappings(ctx context.Context) ([]semantic.Mappin
 	return mappings, rows.Err()
 }
 
-func newSemanticMappingID() (string, error) {
+var newSemanticMappingID = generateSemanticMappingID
+
+func generateSemanticMappingID() (string, error) {
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		return "", err

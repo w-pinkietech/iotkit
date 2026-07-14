@@ -277,6 +277,29 @@ func TestPutSemanticMappingCapturesEveryExistingEpochCursor(t *testing.T) {
 	}
 }
 
+func TestPutSemanticMappingIDGenerationFailureDoesNotWriteMapping(t *testing.T) {
+	store := openTestStore(t)
+	generationErr := errors.New("injected semantic mapping ID generation failure")
+	originalGenerator := newSemanticMappingID
+	newSemanticMappingID = func() (string, error) {
+		return "", generationErr
+	}
+	t.Cleanup(func() { newSemanticMappingID = originalGenerator })
+
+	if _, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-01",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveSample,
+		ActiveValue: 1,
+	}); !errors.Is(err, generationErr) {
+		t.Fatalf("error = %v, want %v", err, generationErr)
+	}
+	if got := store.testCount(t, "semantic_mappings"); got != 0 {
+		t.Fatalf("semantic mapping count = %d, want 0", got)
+	}
+}
+
 func TestPutSemanticMappingCreatesFutureOnlyRevision(t *testing.T) {
 	store := openTestStore(t)
 	first, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
