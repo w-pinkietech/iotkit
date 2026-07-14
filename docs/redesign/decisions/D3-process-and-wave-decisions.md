@@ -201,8 +201,13 @@ Docker上のMosquitto 2.0.22とIoTKit Siteを一時環境で起動し、疑似Ed
 MQTTはat-least-onceであるため配送回数をexactly-onceとは扱わず、重複時も安定した`event_id`で識別する。
 この検証はhost上のlive-broker happy path、mappingのfuture-only、`active_edge` baseline、QoS 1 publish、
 同一publication再送の冪等性を対象とする。BravePIからraw保存までの経路は既に実機確認済みのため、
-semantic pathをPiで重ねて確認することは完了条件にしない。broker停止中のpending保持、mapping revision境界、
-route作成前eventの非配送は今回再検証せず、既存focused testの範囲に残す。
+semantic pathをPiで重ねて確認することは完了条件にしない。
+
+同日、broker停止中のsemantic MQTT outbox復旧もhost上で確認した。brokerを停止した状態でactive edgeの
+raw recordをSite storeへ受理すると、semantic event 1行と`published_at IS NULL`のoutbox 1行が生成・保持された。
+同じSite processを維持してbrokerを復旧すると、QoS 1でapplication subscriberへ同じ`event_id`が1回届き、
+outboxのpendingは1件から0件へ収束した。mapping revision境界とroute作成前eventの非配送は今回再検証せず、
+既存focused testの範囲に残す。
 
 ### BravePIとの責任境界
 
