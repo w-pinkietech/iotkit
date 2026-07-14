@@ -160,6 +160,28 @@ func (store *Store) initialize() error {
 			created_at INTEGER NOT NULL,
 			UNIQUE (mapping_id, mapping_revision, event_sequence)
 		);
+		CREATE TABLE IF NOT EXISTS mqtt_routes (
+			route_id TEXT PRIMARY KEY,
+			mapping_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			qos INTEGER NOT NULL CHECK(qos = 1),
+			start_after_event_row_id INTEGER NOT NULL,
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			UNIQUE (mapping_id, topic)
+		);
+		CREATE TABLE IF NOT EXISTS mqtt_export_outbox (
+			export_id TEXT PRIMARY KEY,
+			route_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			qos INTEGER NOT NULL,
+			payload_json BLOB NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			published_at INTEGER,
+			created_at INTEGER NOT NULL,
+			UNIQUE (route_id, event_id)
+		);
 	`)
 	return err
 }
