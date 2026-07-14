@@ -143,11 +143,11 @@
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
     <div style="flex:1;min-width:260px;border:1px solid rgba(147,51,234,.4);border-radius:8px;padding:10px 12px">
       <strong>⑨ IoTKit Site</strong>
-      <p style="margin:6px 0 0;font-size:13px">raw canonical recordとEdge Nodeごとのcursorを同一transactionで耐久保存し、その後に<code>accepted-through</code>を返す。現在はraw queryを提供し、将来のsite-local registry・<code>production</code>等への意味付け・application exportのIoTKit側境界になる</p>
+      <p style="margin:6px 0 0;font-size:13px">raw canonical recordとEdge Nodeごとのcursorを同一transactionで耐久保存し、その後に<code>accepted-through</code>を返す。query、<code>production_pulse</code>等へのfuture-only意味付け、application exportのIoTKit側境界になる</p>
     </div>
     <div style="flex:1;min-width:260px;border:1px solid rgba(147,51,234,.4);border-radius:8px;padding:10px 12px">
       <strong>⑩ YokaKit(特権なしのapplication)</strong>
-      <p style="margin:6px 0 0;font-size:13px">Siteのapplication接続点からデータを受け取り、生産管理・帳票・ダッシュボード等の業務ロジックを所有する</p>
+      <p style="margin:6px 0 0;font-size:13px">Siteのapplication接続点から意味付け済みイベントを受け取り、生産実績・帳票・ダッシュボード等の業務ロジックを所有する</p>
     </div>
     <div style="flex:1;min-width:260px;border:1px solid rgba(147,51,234,.4);border-radius:8px;padding:10px 12px">
       <strong>AIオペレーター(データ経路には関与しない)</strong>

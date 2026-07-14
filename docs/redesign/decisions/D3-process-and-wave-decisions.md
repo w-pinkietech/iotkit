@@ -179,9 +179,10 @@ UARTで0/1信号をdecode済みであり、必要時の軽い実信号確認に�
 
 既に実装済みのHTTP ingress、control API、operation catalog等は削除しないが、このゲートの完了条件から外し、
 必要な保守以外の機能追加を止める。既存のrpi-local/OPT3001経路も維持するが、このゲートの完了条件には
-含めない。ゲート完了後の次スライスは、Siteでcanonical sensor seriesへ`production`等の設定可能な意味を
-割り当てる機能の設計とする。adapter templateやSDKはIoTKitの中心機能より後に置き、実績から必要性を
-判断する。
+含めない。ゲート完了後の次スライスは、Siteでcanonical sensor seriesへ`production_pulse`の意味を
+future-onlyで割り当て、`active_sample`または`active_edge`でsemantic eventへ変換し、独立した
+MQTT exporterからapplicationへ配送する最小実装とする。1 source seriesにつきactiveな意味は1つ、
+backfillは行わない。adapter templateやSDKはIoTKitの中心機能より後に置く。
 
 ### BravePIとの責任境界
 

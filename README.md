@@ -8,8 +8,9 @@ until Site has durably stored it.
 > **Status: pre-1.0, not yet a public release.** The first milestone—one paired
 > BravePI temperature sensor, one Rust IoTKit Edge, one standard MQTT broker,
 > and one Go IoTKit Site—is complete, including outage recovery and explicit
-> storage-responsibility transfer. The next slice is the design of configurable,
-> site-local sensor meaning. APIs, the on-disk schema, and the wire contract may
+> storage-responsibility transfer. The next slice adds future-only semantic mapping
+> and a durable MQTT application exporter at Site. APIs, the
+> on-disk schema, and the wire contract may
 > still change. See
 > [Roadmap](#roadmap).
 
@@ -26,10 +27,10 @@ with no on-Edge container orchestration, ML platform, or central rules engine. E
 a *buffer, not a warehouse* — it holds data until Site confirms durable storage. MQTT
 PUBACK alone is not that confirmation. Site durably accepts records, advances each Edge
 Node's `accepted-through` only after commit, and provides direct raw query today. It is
-also the IoTKit-side boundary for later site-local registry, semantic mapping such as
-`production`, and application export; those later capabilities are not implemented yet.
-Site owns that configurable sensor meaning; applications such as YokaKit own business masters
-and logic such as products, processes, OEE, alarms, UI, and notifications.
+also the IoTKit-side boundary for archive query, configurable sensor meaning, and application
+export. Site maps a stored series to one typed meaning such as `production_pulse`, then a
+separate exporter converts semantic events to an application-facing MQTT contract. Applications
+such as YokaKit own products, processes, OEE, alarms, business UI, and notifications.
 
 ## What it does today
 
@@ -105,7 +106,7 @@ it's the "why", for deep dives.
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
 - **First implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. The real-hardware path, restart/outage matrix, storage failure injection, bounded-capacity behavior, and application `accepted-through` are verified. Purge eligibility advances only after validated `accepted-through`. **Done.**
-- **Next:** design the Site-local registry that assigns configurable sensor meaning such as `production` without moving application business logic into IoTKit. BravePI contact input needs only a light real-signal confirmation; adapter tooling follows later, after observed need.
+- **Next:** implement the smallest Site semantic slice: one active meaning per source series, `production_pulse`, explicit `active_sample`/`active_edge` trigger modes, no backfill, and a separate durable MQTT exporter. Adapter tooling follows later, after observed need.
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 

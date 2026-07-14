@@ -16,7 +16,8 @@ IoTKitは2つの配置を認める。
 
 - 2台以上のEdge Nodeを置く場合も、各Piは完全なEdge Nodeである。
 - 代表Pi、親Edge Node、中央collectorは置かない。
-- IoTKit SiteはMQTT Broker、Archival Store、Edge Nodeごとのcursor、site-level query、application接続・export境界を提供する。
+- IoTKit SiteはMQTT Broker、Archival Store、Edge Nodeごとのcursor、site-level query、設定可能な
+  センサー意味付け、application接続・export境界を提供する。
 - IoTKit Siteはsensor busを読まず、Edgeのcollectorやregistryの権威を奪わない。
 - cloudは任意の上位層であり、Siteによる保管責任引受の必須条件ではない。
 
@@ -61,9 +62,9 @@ Site側のglobal record identityは次である。
 ## YokaKit boundary
 
 YokaKitはIoTKitのcanonical recordまたはSiteで意味付けされた出力を消費する別applicationである。
-Siteは保存済みseriesを`production`等の設定可能なセンサー意味へ対応付け、routing・projectionする。
+Siteは保存済みseriesを`production_pulse`等の設定可能なセンサー意味へ対応付け、routing・projectionする。
 一方、設備・工程・製品・作業者のmaster、生産実績、OEE、alarm文言、UIはYokaKitが所有する。
-Siteの意味付けやYokaKit固有topic/table語彙はR10へ入れない。
+YokaKit固有topic/table語彙はR10へ入れない。
 
 ## Deferred
 
