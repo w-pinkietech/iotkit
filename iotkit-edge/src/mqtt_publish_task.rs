@@ -17,6 +17,7 @@ use rusqlite::Connection;
 const TARGET_ID: &str = "site";
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
 
 struct RuntimeConfig {
     connection: MqttExitConfig,
@@ -65,6 +66,7 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
         runtime.connection.host.clone(),
         runtime.connection.port,
     );
+    configure_packet_limits(&mut options, &records_topic, &ack_topic);
     options.set_keep_alive(Duration::from_secs(30));
     options.set_clean_session(true);
     options.set_credentials(&runtime.edge_node_id, &runtime.password);
@@ -372,6 +374,15 @@ fn client_id(edge_node_id: &str) -> String {
     format!("iotkit-edge-{edge_node_id}")
 }
 
+fn configure_packet_limits(options: &mut MqttOptions, records_topic: &str, ack_topic: &str) {
+    let limit = mqtt_packet_limit(records_topic, ack_topic);
+    options.set_max_packet_size(limit, limit);
+}
+
+fn mqtt_packet_limit(records_topic: &str, ack_topic: &str) -> usize {
+    MAX_BATCH_BYTES + records_topic.len().max(ack_topic.len()) + MQTT_PACKET_OVERHEAD_BYTES
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -441,6 +452,21 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn mqtt_client_accepts_the_wire_batch_limit_plus_protocol_overhead() {
+        let records_topic = records_topic("edge-01");
+        let ack_topic = ack_topic("edge-01");
+        let mut options = MqttOptions::new("test-client", "localhost", 1883);
+
+        configure_packet_limits(&mut options, &records_topic, &ack_topic);
+
+        assert!(options.max_packet_size() > MAX_BATCH_BYTES);
+        assert_eq!(
+            options.max_packet_size(),
+            mqtt_packet_limit(&records_topic, &ack_topic)
+        );
     }
 
     #[test]
