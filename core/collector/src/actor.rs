@@ -2177,6 +2177,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_capacity_exhaustion_is_atomic_and_retryable_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("capacity.db");
+        let db = iotkit_core_storage::init_db(&db_path, &migration_set()).unwrap();
+        register_active(&db, "ble:capacity");
+        db.with_conn_sync(|conn| {
+            iotkit_core_publish::store::target_insert(
+                conn,
+                &iotkit_core_publish::store::TargetRow {
+                    target_id: "site".into(),
+                    endpoint_url: "mqtt://site".into(),
+                    credential_token: String::new(),
+                    archive_responsible: true,
+                    schema_version: 1,
+                    cursor_epoch: None,
+                    cursor_pub_seq: 0,
+                },
+                1,
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        let (collector, handle) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
+        collector
+            .submit(env("capacity-000000", "ble:capacity", "temperature_c"))
+            .await
+            .unwrap();
+
+        let page_limit: i64 = db
+            .with_conn_sync(|conn| {
+                let page_count: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+                let requested = page_count + 8;
+                conn.pragma_update(None, "max_page_count", requested)?;
+                conn.query_row("PRAGMA max_page_count", [], |row| row.get::<_, i64>(0))
+                    .map_err(iotkit_core_storage::StorageError::from)
+            })
+            .unwrap();
+
+        let mut accepted = 1_i64;
+        let failed_envelope_id = loop {
+            let envelope_id = format!("capacity-{accepted:06}");
+            match collector
+                .submit(env(&envelope_id, "ble:capacity", "temperature_c"))
+                .await
+            {
+                Ok(ack) => {
+                    assert!(matches!(ack.status, AckStatus::Accepted { .. }));
+                    accepted += 1;
+                    assert!(accepted < 10_000, "capacity limit was not reached");
+                }
+                Err(SubmitError::NoAck) => break envelope_id,
+                Err(other) => panic!("unexpected submit error at capacity: {other:?}"),
+            }
+        };
+
+        let state_before_reopen = db
+            .with_conn_sync(|conn| {
+                let readings: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?;
+                let outbox: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM publication_log WHERE kind='measurement'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let dedup: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id='principal:test-adapter'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let target = iotkit_core_publish::store::target_get(conn)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?
+                    .unwrap();
+                let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+                let page_count: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+                Ok((
+                    readings,
+                    outbox,
+                    dedup,
+                    target.cursor_pub_seq,
+                    check,
+                    page_count,
+                ))
+            })
+            .unwrap();
+        let (readings, outbox, dedup, cursor, check, page_count) = state_before_reopen;
+        assert!(accepted > 1, "capacity test must retain a real backlog");
+        assert!(
+            page_count <= page_limit,
+            "SQLite must not grow beyond the configured page limit"
+        );
+        assert_eq!(
+            (readings, outbox, dedup, cursor, check),
+            (accepted, accepted, accepted, 0, "ok".to_string()),
+            "the failed envelope must leave no partial reading, outbox, or dedup claim"
+        );
+
+        db.with_conn_sync(|conn| {
+            conn.pragma_update(None, "max_page_count", page_limit + 1_024)?;
+            Ok(())
+        })
+        .unwrap();
+        drop(collector);
+        handle.await.unwrap();
+        drop(db);
+
+        let reopened = iotkit_core_storage::init_db(&db_path, &migration_set()).unwrap();
+        let state_after_reopen = reopened
+            .with_conn_sync(|conn| {
+                let readings: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?;
+                let outbox: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM publication_log WHERE kind='measurement'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+                Ok((readings, outbox, check))
+            })
+            .unwrap();
+        assert_eq!(state_after_reopen, (accepted, accepted, "ok".to_string()));
+
+        let (restarted_collector, restarted_handle) =
+            Collector::spawn(reopened.clone(), Arc::new(PermissiveRegistry), 16);
+        let retry = restarted_collector
+            .submit(env(&failed_envelope_id, "ble:capacity", "temperature_c"))
+            .await
+            .unwrap();
+        assert!(matches!(retry.status, AckStatus::Accepted { .. }));
+
+        let recovered_state = reopened
+            .with_conn_sync(|conn| {
+                let readings: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))?;
+                let outbox: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM publication_log WHERE kind='measurement'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let dedup: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM ingest_dedup WHERE sender_id='principal:test-adapter'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((readings, outbox, dedup))
+            })
+            .unwrap();
+        assert_eq!(recovered_state, (accepted + 1, accepted + 1, accepted + 1));
+
+        drop(restarted_collector);
+        restarted_handle.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn opportunistic_purge_fires_through_actor_and_respects_ttl() {
         // purge_dedup_before自体は別途ユニットテスト済み。ここではアクター経由で発火することを
         // 検証する: purge_interval_ms=0を注入し、処理成功のたびに必ずパージ判定が真になるように

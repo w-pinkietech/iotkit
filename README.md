@@ -5,12 +5,12 @@ sensor adapter to IoTKit Edge and IoTKit supplies durable collection, retry, and
 explicit transfer of storage responsibility to IoTKit Site: data is not purge-eligible
 until Site has durably stored it.
 
-> **Status: pre-1.0, not yet a public release.** The current milestone is one
-> paired BravePI temperature sensor, one Rust IoTKit Edge, one standard
-> MQTT broker, and one Go IoTKit Site.
-> Broader Wave 1 work is frozen until this real-hardware path proves collection,
-> outage recovery, and storage-responsibility transfer. APIs, the on-disk schema,
-> and the wire contract may still change. See
+> **Status: pre-1.0, not yet a public release.** The first milestone—one paired
+> BravePI temperature sensor, one Rust IoTKit Edge, one standard MQTT broker,
+> and one Go IoTKit Site—is complete, including outage recovery and explicit
+> storage-responsibility transfer. The next slice is the design of configurable,
+> site-local sensor meaning. APIs, the on-disk schema, and the wire contract may
+> still change. See
 > [Roadmap](#roadmap).
 
 ## Why
@@ -104,8 +104,8 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Current implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. This complete path, including application `accepted-through`, is verified on real hardware; failure injection and the remaining restart/outage matrix are still in progress. Purge eligibility advances only after validated `accepted-through`. **In progress.**
-- **After the gate:** run a BravePI contact-input sensor as the second real sensor type, then choose adapter tooling and broader Wave 1 work from observed needs.
+- **First implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. The real-hardware path, restart/outage matrix, storage failure injection, bounded-capacity behavior, and application `accepted-through` are verified. Purge eligibility advances only after validated `accepted-through`. **Done.**
+- **Next:** design the Site-local registry that assigns configurable sensor meaning such as `production` without moving application business logic into IoTKit. BravePI contact input needs only a light real-signal confirmation; adapter tooling follows later, after observed need.
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 

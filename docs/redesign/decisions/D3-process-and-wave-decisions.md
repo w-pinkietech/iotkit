@@ -1,6 +1,6 @@
 # D3: プロセス決定とWave分割
 
-Status: 確定 (2026-07-13、現在の実装ゲートを追記)
+Status: 確定 (2026-07-14、最初の実装ゲート完了と次スライスを追記)
 
 ## 現在のプロダクト中心価値
 
@@ -17,9 +17,9 @@ Status: 確定 (2026-07-13、現在の実装ゲートを追記)
 IoTKitは汎用IoTプラットフォーム、ダッシュボード、生産管理、独自MQTT brokerではない。R1〜R23と
 Wave 1/2は将来の責務地図であり、現在すべてを実装するバックログではない。
 
-## 現在の実装ゲート: 最初の実機縦切り
+## 最初の実装ゲート: 実機縦切り (完了)
 
-Wave 1の残項目を横に広げる前に、次の1本を完成させる。
+Wave 1の残項目を横に広げる前に、次の1本を完成させた。
 
 ```text
 Temperature sensor
@@ -139,11 +139,28 @@ commit `3efd599`のsourceをRaspberry Pi (arm64)へ同期してdebug buildし、
   `PRAGMA quick_check = ok`であり、EdgeをSIGINTで停止した後にUARTが解放された。Broker/Site、lab、
   credential、source copyは削除していない。
 
+### Host容量境界検証状況 (2026-07-14)
+
+実時間のRaspberry Pi容量枯渇やSDカードへの不要な書き込み負荷を避け、オンディスクSQLiteの
+`max_page_count`を初期DBより8 pageだけ大きく設定して、実際のCollector transactionを容量境界まで
+繰り返した。テスト専用の製品failpointやSQLによるreading直挿入は使っていない。
+
+- Siteをarchive-responsible target、cursor 0とした状態で、90 envelopeのreading、measurement outbox、
+  ingest dedup claimをそれぞれ90件までatomicに保存した。次のenvelopeはSQLite容量不足により
+  `SubmitError::NoAck`となった。
+- 失敗後も3テーブルの件数は90/90/90で一致し、失敗したenvelopeの部分行やdedup claimは残らなかった。
+  Site cursorは0のままで、DBは設定したpage上限を超えず、`PRAGMA quick_check = ok`だった。
+- 上限を広げてCollectorを停止し、同じDBを再オープンしても90/90件のreading/outboxを保持していた。
+  失敗した同一envelopeを再送すると受理され、reading、outbox、dedupは91/91/91へ回復した。
+- 続けて通常のEdge、Mosquitto、Siteによる耐障害scriptを新規環境で再実行し、Edge/Site再起動、
+  Broker再起動、Site単独停止をまたいで304 recordが欠番・重複なく再収束した。
+
 これにより `BravePI Transmitter -> BLE Long Range -> BravePI Mainboard -> UART -> IoTKit Edge SQLite -> MQTT
 -> MQTT Broker -> IoTKit Site raw SQLite -> accepted-through -> Edge cursor` は実機確認済みとなった。
 平文MQTTは同一Piのloopbackだけを使う実験設定であり、実運用のTLS要件を緩和しない。
-保持容量に近づく長時間停止中の実センサー連続収集は、引き続き現在の実装ゲートの未完了条件である。
-接点入力はUART decodeまでの確認であり、Edgeへの通常取り込みは温度経路の次に行う。
+実機での下流停止中収集・UART復帰、hostでの決定的な容量境界、通常process群での再送収束を組み合わせ、
+最初の実装ゲートは完了とする。Raspberry Piを実容量近くまで埋める長時間試験は行わない。接点入力は
+UARTで0/1信号をdecode済みであり、必要時の軽い実信号確認に留める。
 
 実験用Piでの初回native release buildは、空のbuild cacheからRust toolchainと依存crateを
 最適化したため一時的にCPUを飽和させ、SSH応答も遅くなった。日常の実機反復はdebug buildを
@@ -162,8 +179,9 @@ commit `3efd599`のsourceをRaspberry Pi (arm64)へ同期してdebug buildし、
 
 既に実装済みのHTTP ingress、control API、operation catalog等は削除しないが、このゲートの完了条件から外し、
 必要な保守以外の機能追加を止める。既存のrpi-local/OPT3001経路も維持するが、このゲートの完了条件には
-含めない。最初の実機縦切り後、手元のBravePI接点入力センサーを2種類目として実機確認し、その実績から
-adapter templateやSDKの必要性を判断する。
+含めない。ゲート完了後の次スライスは、Siteでcanonical sensor seriesへ`production`等の設定可能な意味を
+割り当てる機能の設計とする。adapter templateやSDKはIoTKitの中心機能より後に置き、実績から必要性を
+判断する。
 
 ### BravePIとの責任境界
 
@@ -172,7 +190,7 @@ adapter templateやSDKの必要性を判断する。
 - ペアリング済み端末のデータはメインボードからUARTへ自動送出される前提とする。
 - IoTKitの責任はUART streamの受信から始まり、frame decode、正規化、耐久保存、Siteへの引き渡しを担う。
 
-以下のWave分割は長期ロードマップと既存決定の参照用に維持する。現在の実装順は上記ゲートを優先する。
+以下のWave分割は長期ロードマップと既存決定の参照用に維持する。ゲート完了後は上記の次スライスを優先する。
 
 ## 決定1: 3段階Wave分割を採用
 
