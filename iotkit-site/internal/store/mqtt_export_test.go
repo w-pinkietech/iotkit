@@ -178,6 +178,32 @@ func TestPendingMQTTExportRemainsUntilPublishedAndListIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestListPendingMQTTExportsPreservesSameRouteEventOrder(t *testing.T) {
+	store := openTestStore(t)
+	mapping := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	putMQTTRoute(t, store, mapping.ID, "factory/production-pulses")
+	acceptContactBatch(t, store, "edge-node-01", "epoch-a", 1, []float64{1}, []float64{1})
+	projectSemanticEvents(t, store)
+	if _, err := store.EnqueueMQTTExports(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	events := listSemanticEvents(t, store)
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want two", events)
+	}
+	if _, err := store.db.Exec(`
+		UPDATE mqtt_export_outbox
+		SET created_at = CASE event_id WHEN ? THEN 200 ELSE 100 END
+	`, events[0].EventID); err != nil {
+		t.Fatal(err)
+	}
+
+	pending := listPendingMQTTExports(t, store)
+	if len(pending) != 2 || pending[0].EventID != events[0].EventID || pending[1].EventID != events[1].EventID {
+		t.Fatalf("pending event order = %#v, want semantic event row order", pending)
+	}
+}
+
 func projectSemanticEvents(t *testing.T, store *Store) {
 	t.Helper()
 	if _, err := store.ProjectSemanticEvents(context.Background(), 100); err != nil {

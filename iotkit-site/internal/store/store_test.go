@@ -580,6 +580,60 @@ func TestProjectSemanticEventsRejectsInvalidInputWithoutAdvancingIt(t *testing.T
 	}
 }
 
+func TestProjectSemanticEventsIsolatesPoisonMappingAndFairlyProcessesIndependentMapping(t *testing.T) {
+	store := openTestStore(t)
+	originalGenerator := newSemanticMappingID
+	ids := []string{"sm-a-poison", "sm-z-valid"}
+	newSemanticMappingID = func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+	t.Cleanup(func() { newSemanticMappingID = originalGenerator })
+
+	poison := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
+	valid, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+		EdgeNodeID:  "edge-node-02",
+		SeriesKey:   contactSeries,
+		Meaning:     semantic.MeaningProductionPulse,
+		TriggerMode: semantic.TriggerActiveSample,
+		ActiveValue: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptContactRecords(t, store, "edge-node-01", "epoch-poison",
+		contactRecord("epoch-poison", 1, []any{2}),
+		contactRecord("epoch-poison", 2, []any{1}),
+		contactRecord("epoch-poison", 3, []any{1}),
+	)
+	acceptContactRecords(t, store, "edge-node-02", "epoch-valid",
+		contactRecord("epoch-valid", 1, []any{1}),
+	)
+
+	processed, err := store.ProjectSemanticEvents(context.Background(), 3)
+	if err == nil {
+		t.Fatal("ProjectSemanticEvents succeeded despite poison mapping")
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want one independent valid input", processed)
+	}
+	var poisonResults int
+	if err := store.db.QueryRow(`
+		SELECT count(*) FROM semantic_results
+		WHERE mapping_id = ? AND mapping_revision = ?
+	`, poison.ID, poison.Revision).Scan(&poisonResults); err != nil {
+		t.Fatal(err)
+	}
+	if poisonResults != 0 {
+		t.Fatalf("poison mapping results = %d, want 0", poisonResults)
+	}
+	events := listSemanticEvents(t, store)
+	if len(events) != 1 || events[0].MappingID != valid.ID || events[0].EventSequence != 1 {
+		t.Fatalf("events = %#v, want only independent valid mapping event", events)
+	}
+}
+
 func contactRecord(ledgerEpoch string, pubSeq int64, values []any) map[string]any {
 	return map[string]any{
 		"family":         "measurement",

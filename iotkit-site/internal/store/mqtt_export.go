@@ -280,10 +280,12 @@ func (store *Store) ListPendingMQTTExports(ctx context.Context, limit int) ([]Pe
 		return nil, errors.New("pending MQTT export query limit must be between 1 and 10000")
 	}
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT export_id, route_id, event_id, topic, qos, payload_json, attempts, created_at
-		FROM mqtt_export_outbox
-		WHERE published_at IS NULL
-		ORDER BY created_at, topic, export_id
+		SELECT outbox.export_id, outbox.route_id, outbox.event_id, outbox.topic,
+			outbox.qos, outbox.payload_json, outbox.attempts, outbox.created_at
+		FROM mqtt_export_outbox AS outbox
+		JOIN semantic_events AS events ON events.event_id = outbox.event_id
+		WHERE outbox.published_at IS NULL
+		ORDER BY events.event_row_id, outbox.topic, outbox.route_id, outbox.export_id
 		LIMIT ?
 	`, limit)
 	if err != nil {

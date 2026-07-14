@@ -75,8 +75,9 @@ raw custody acknowledgement. Failed or timed-out QoS 1 publishes remain pending,
 published only after broker PUBACK.
 
 The application payload is JSON contract v1 (`schema_version: 1`) with `event_id`, mapping ID and
-revision, mapping-local `event_sequence`, `meaning: "production_pulse"`, source Edge Node/series/
-publication sequence, `occurred_at`, and cumulative `count`. It contains no broker credentials.
+revision, revision-local `event_sequence`, `meaning: "production_pulse"`, source Edge Node/series/
+publication sequence, `occurred_at`, and `count`. The count is cumulative only within one mapping
+revision and resets to 1 when a new revision begins. It contains no broker credentials.
 
 > **Current Plan 6 boundary:** HTTP measurement ingest is implemented as a separate authenticated
 > listener and is disabled by default. An unowned, recovering, restore/reset-fenced, or TLS-invalid

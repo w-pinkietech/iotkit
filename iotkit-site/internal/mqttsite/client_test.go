@@ -24,6 +24,8 @@ func (token *fakePublishToken) Error() error          { return token.err }
 type fakeExportQueue struct {
 	pending   []store.PendingMQTTExport
 	marked    int
+	markedIDs []string
+	markErrs  map[string]error
 	projected int
 	enqueued  int
 	listed    int
@@ -34,8 +36,12 @@ func (queue *fakeExportQueue) ListPendingMQTTExports(context.Context, int) ([]st
 	return queue.pending, nil
 }
 
-func (queue *fakeExportQueue) MarkMQTTExportPublished(context.Context, string) error {
+func (queue *fakeExportQueue) MarkMQTTExportPublished(_ context.Context, exportID string) error {
+	if err := queue.markErrs[exportID]; err != nil {
+		return err
+	}
 	queue.marked++
+	queue.markedIDs = append(queue.markedIDs, exportID)
 	return nil
 }
 
@@ -76,6 +82,41 @@ func TestPahoPublishExpiredWholeOperationDeadlineDoesNotWaitAgain(t *testing.T) 
 	}
 }
 
+func TestPahoPublishWholeOperationDeadlineIncludesBlockedPublishCall(t *testing.T) {
+	releasePublish := make(chan struct{})
+	publishStarted := make(chan struct{})
+	publishReleased := make(chan struct{})
+	deadline := time.Now().Add(30 * time.Millisecond)
+	started := time.Now()
+	err := publishWithDeadline(context.Background(), func() publishToken {
+		close(publishStarted)
+		<-releasePublish
+		close(publishReleased)
+		done := make(chan struct{})
+		close(done)
+		return &fakePublishToken{done: done}
+	}, deadline)
+	elapsed := time.Since(started)
+
+	select {
+	case <-publishStarted:
+	default:
+		t.Fatal("publish call did not start")
+	}
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("blocked publish error = %v, want timeout", err)
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("blocked publish returned after %s, want bounded by injected deadline", elapsed)
+	}
+	close(releasePublish)
+	select {
+	case <-publishReleased:
+	case <-time.After(time.Second):
+		t.Fatal("blocked fake publish did not release")
+	}
+}
+
 func TestExportLoopMarksPublishedOnlyAfterPublishSuccess(t *testing.T) {
 	queue := &fakeExportQueue{pending: []store.PendingMQTTExport{{
 		ExportID:    "export-01",
@@ -105,6 +146,58 @@ func TestExportLoopMarksPublishedOnlyAfterPublishSuccess(t *testing.T) {
 	}
 	if queue.marked != 1 {
 		t.Fatalf("successful publish marked %d exports", queue.marked)
+	}
+}
+
+func TestExportLoopIsolatesFailedRouteAndPreservesOtherRoutes(t *testing.T) {
+	queue := &fakeExportQueue{pending: []store.PendingMQTTExport{
+		{ExportID: "route-a-1", RouteID: "route-a", Topic: "factory/a", QoS: 1},
+		{ExportID: "route-b-1", RouteID: "route-b", Topic: "factory/b", QoS: 1},
+		{ExportID: "route-a-2", RouteID: "route-a", Topic: "factory/a", QoS: 1},
+	}}
+	published := make([]string, 0)
+	err := publishPending(context.Background(), queue, func(topic string, _ byte, _ []byte) error {
+		published = append(published, topic)
+		if topic == "factory/a" {
+			return errors.New("route A unavailable")
+		}
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "route-a-1") {
+		t.Fatalf("publishPending error = %v, want route A failure", err)
+	}
+	if got, want := strings.Join(published, ","), "factory/a,factory/b"; got != want {
+		t.Fatalf("published topics = %s, want %s", got, want)
+	}
+	if got, want := strings.Join(queue.markedIDs, ","), "route-b-1"; got != want {
+		t.Fatalf("marked exports = %s, want %s", got, want)
+	}
+}
+
+func TestExportLoopAggregatesQoSAndMarkFailuresAcrossRoutes(t *testing.T) {
+	queue := &fakeExportQueue{
+		pending: []store.PendingMQTTExport{
+			{ExportID: "route-a-1", RouteID: "route-a", Topic: "factory/a", QoS: 0},
+			{ExportID: "route-b-1", RouteID: "route-b", Topic: "factory/b", QoS: 1},
+			{ExportID: "route-c-1", RouteID: "route-c", Topic: "factory/c", QoS: 1},
+			{ExportID: "route-a-2", RouteID: "route-a", Topic: "factory/a", QoS: 1},
+			{ExportID: "route-b-2", RouteID: "route-b", Topic: "factory/b", QoS: 1},
+		},
+		markErrs: map[string]error{"route-b-1": errors.New("mark unavailable")},
+	}
+	published := make([]string, 0)
+	err := publishPending(context.Background(), queue, func(topic string, _ byte, _ []byte) error {
+		published = append(published, topic)
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "route-a-1") || !strings.Contains(err.Error(), "route-b-1") {
+		t.Fatalf("publishPending error = %v, want aggregated QoS and mark failures", err)
+	}
+	if got, want := strings.Join(published, ","), "factory/b,factory/c"; got != want {
+		t.Fatalf("published topics = %s, want %s", got, want)
+	}
+	if got, want := strings.Join(queue.markedIDs, ","), "route-c-1"; got != want {
+		t.Fatalf("marked exports = %s, want %s", got, want)
 	}
 }
 

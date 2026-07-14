@@ -333,48 +333,73 @@ func (store *Store) ProjectSemanticEvents(ctx context.Context, limit int) (int, 
 	}
 
 	processed := 0
+	type mappingRevision struct {
+		id       string
+		revision int64
+	}
+	failedMappings := make(map[mappingRevision]struct{})
+	var projectionErrors []error
 	for _, candidate := range candidates {
+		key := mappingRevision{id: candidate.MappingID, revision: candidate.MappingRevision}
+		if _, failed := failedMappings[key]; failed {
+			continue
+		}
 		projected, err := store.projectSemanticCandidate(ctx, candidate)
 		if err != nil {
-			return processed, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
+			failedMappings[key] = struct{}{}
+			projectionErrors = append(projectionErrors, err)
+			continue
 		}
 		if projected {
 			processed++
 		}
 	}
-	return processed, nil
+	return processed, errors.Join(projectionErrors...)
 }
 
 func (store *Store) listSemanticCandidates(ctx context.Context, limit int) ([]semanticCandidate, error) {
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT m.mapping_id, m.revision, m.meaning, m.trigger_mode, m.active_value,
-			m.edge_node_id, m.series_key, r.ledger_epoch, r.pub_seq, r.record_json
-		FROM semantic_mappings AS m
-		JOIN raw_records AS r
-			ON r.edge_node_id = m.edge_node_id
-		LEFT JOIN semantic_mapping_starts AS starts
-			ON starts.mapping_id = m.mapping_id
-			AND starts.mapping_revision = m.revision
-			AND starts.ledger_epoch = r.ledger_epoch
-		LEFT JOIN semantic_mapping_ends AS ends
-			ON ends.mapping_id = m.mapping_id
-			AND ends.mapping_revision = m.revision
-			AND ends.ledger_epoch = r.ledger_epoch
-		WHERE json_extract(CAST(r.record_json AS TEXT), '$.series_key') = m.series_key
-			AND r.pub_seq > COALESCE(starts.start_after_pub_seq, 0)
-			AND (
-				m.active = 1
-				OR (ends.end_at_pub_seq IS NOT NULL AND r.pub_seq <= ends.end_at_pub_seq)
-			)
-			AND NOT EXISTS (
-				SELECT 1
-				FROM semantic_results AS results
-				WHERE results.mapping_id = m.mapping_id
-					AND results.mapping_revision = m.revision
-					AND results.ledger_epoch = r.ledger_epoch
-					AND results.pub_seq = r.pub_seq
-			)
-		ORDER BY m.mapping_id, m.revision, r.received_at, r.ledger_epoch, r.pub_seq
+		WITH ranked_candidates AS (
+			SELECT m.mapping_id, m.revision, m.meaning, m.trigger_mode, m.active_value,
+				m.edge_node_id, m.series_key, r.ledger_epoch, r.pub_seq, r.record_json,
+				r.received_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY m.mapping_id, m.revision
+					ORDER BY r.received_at, r.ledger_epoch, r.pub_seq
+				) AS candidate_rank
+			FROM semantic_mappings AS m
+			JOIN raw_records AS r
+				ON r.edge_node_id = m.edge_node_id
+			LEFT JOIN semantic_mapping_starts AS starts
+				ON starts.mapping_id = m.mapping_id
+				AND starts.mapping_revision = m.revision
+				AND starts.ledger_epoch = r.ledger_epoch
+			LEFT JOIN semantic_mapping_ends AS ends
+				ON ends.mapping_id = m.mapping_id
+				AND ends.mapping_revision = m.revision
+				AND ends.ledger_epoch = r.ledger_epoch
+			WHERE json_extract(CAST(r.record_json AS TEXT), '$.series_key') = m.series_key
+				AND r.pub_seq > COALESCE(starts.start_after_pub_seq, 0)
+				AND (
+					m.active = 1
+					OR (ends.end_at_pub_seq IS NOT NULL AND r.pub_seq <= ends.end_at_pub_seq)
+				)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM semantic_results AS results
+					WHERE results.mapping_id = m.mapping_id
+						AND results.mapping_revision = m.revision
+						AND results.ledger_epoch = r.ledger_epoch
+						AND results.pub_seq = r.pub_seq
+				)
+		)
+		SELECT mapping_id, revision, meaning, trigger_mode, active_value,
+			edge_node_id, series_key, ledger_epoch, pub_seq, record_json
+		FROM ranked_candidates
+		ORDER BY candidate_rank, mapping_id, revision, received_at, ledger_epoch, pub_seq
 		LIMIT ?
 	`, limit)
 	if err != nil {

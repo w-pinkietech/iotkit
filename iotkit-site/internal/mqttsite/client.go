@@ -148,7 +148,29 @@ func newClientOptions(config ClientConfig) *mqtt.ClientOptions {
 
 func publishWithTimeout(ctx context.Context, publish func() publishToken) error {
 	deadline := time.Now().Add(publishAcknowledgementTTL)
-	return waitForPublishCompletion(ctx, publish(), deadline)
+	return publishWithDeadline(ctx, publish, deadline)
+}
+
+func publishWithDeadline(ctx context.Context, publish func() publishToken, deadline time.Time) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return errors.New("MQTT publish timed out")
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	tokens := make(chan publishToken, 1)
+	go func() {
+		tokens <- publish()
+	}()
+
+	select {
+	case token := <-tokens:
+		return waitForPublishCompletion(ctx, token, deadline)
+	case <-timer.C:
+		return errors.New("MQTT publish timed out")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func waitForPublishCompletion(ctx context.Context, token publishToken, deadline time.Time) error {
@@ -194,21 +216,40 @@ func publishPending(ctx context.Context, queue pendingExportQueue, publish expor
 	if err != nil {
 		return fmt.Errorf("list pending MQTT exports: %w", err)
 	}
+	failedRoutes := make(map[string]struct{})
+	var publishErrors []error
 	for _, item := range pending {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if _, failed := failedRoutes[item.RouteID]; failed {
+			continue
+		}
 		if item.QoS != 1 {
-			return fmt.Errorf("MQTT export %q has unsupported QoS %d", item.ExportID, item.QoS)
+			failedRoutes[item.RouteID] = struct{}{}
+			publishErrors = append(publishErrors,
+				fmt.Errorf("MQTT export %q has unsupported QoS %d", item.ExportID, item.QoS))
+			continue
 		}
 		if err := publish(item.Topic, 1, item.PayloadJSON); err != nil {
-			return fmt.Errorf("publish MQTT export %q: %w", item.ExportID, err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			failedRoutes[item.RouteID] = struct{}{}
+			publishErrors = append(publishErrors,
+				fmt.Errorf("publish MQTT export %q: %w", item.ExportID, err))
+			continue
 		}
 		if err := queue.MarkMQTTExportPublished(ctx, item.ExportID); err != nil {
-			return fmt.Errorf("mark MQTT export %q published: %w", item.ExportID, err)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			failedRoutes[item.RouteID] = struct{}{}
+			publishErrors = append(publishErrors,
+				fmt.Errorf("mark MQTT export %q published: %w", item.ExportID, err))
 		}
 	}
-	return nil
+	return errors.Join(publishErrors...)
 }
 
 func (config ClientConfig) validate() error {
