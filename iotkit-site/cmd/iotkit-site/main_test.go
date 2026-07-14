@@ -90,3 +90,49 @@ func TestMappingSetAcceptsExplicitZeroActiveValue(t *testing.T) {
 		t.Fatalf("mappings = %+v", mappings)
 	}
 }
+
+func TestMappingSetRejectsInvalidSpecBeforeCreatingDatabase(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+	}{
+		{name: "active value", flags: []string{"--meaning", "production_pulse", "--trigger-mode", "active_sample", "--active-value", "2"}},
+		{name: "meaning", flags: []string{"--meaning", "unsupported", "--trigger-mode", "active_sample", "--active-value", "1"}},
+		{name: "trigger mode", flags: []string{"--meaning", "production_pulse", "--trigger-mode", "unsupported", "--active-value", "1"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "site.db")
+			args := []string{
+				"mapping-set", "--db", dbPath,
+				"--edge-node-id", "edge-node-01",
+				"--series-key", "contact-series-01",
+			}
+			if err := run(append(args, test.flags...)); err == nil {
+				t.Fatal("mapping-set accepted invalid semantic mapping")
+			}
+			assertPathDoesNotExist(t, dbPath)
+		})
+	}
+}
+
+func TestRouteAddRejectsInvalidTopicBeforeCreatingDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "site.db")
+	if err := run([]string{
+		"route-add", "--db", dbPath,
+		"--mapping-id", "sm-not-created",
+		"--topic", "/invalid/topic",
+	}); err == nil {
+		t.Fatal("route-add accepted invalid MQTT topic")
+	}
+	assertPathDoesNotExist(t, dbPath)
+}
+
+func assertPathDoesNotExist(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("invalid command created %s", path)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+}

@@ -133,7 +133,7 @@ it's the "why", for deep dives.
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
 - **First implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. The real-hardware path, restart/outage matrix, storage failure injection, bounded-capacity behavior, and application `accepted-through` are verified. Purge eligibility advances only after validated `accepted-through`. **Done.**
-- **Site semantic slice:** one active meaning per source series, `production_pulse`, explicit `active_sample`/`active_edge` trigger modes, no backfill, and a separate durable MQTT exporter. **Done.** Adapter tooling follows later, after observed need.
+- **Site semantic slice:** one active meaning per source series, `production_pulse`, explicit `active_sample`/`active_edge` trigger modes, no backfill, and a separate durable MQTT exporter. **Implemented; live-broker verification pending.** Adapter tooling follows later, after observed need.
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 

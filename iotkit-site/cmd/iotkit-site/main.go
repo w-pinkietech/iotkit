@@ -138,19 +138,23 @@ func runMappingSet(args []string) error {
 	if *activeValue == -1 {
 		return errors.New("--active-value is required")
 	}
+	spec := semantic.MappingSpec{
+		EdgeNodeID:  *edgeNodeID,
+		SeriesKey:   *seriesKey,
+		Meaning:     semantic.Meaning(*meaning),
+		TriggerMode: semantic.TriggerMode(*triggerMode),
+		ActiveValue: *activeValue,
+	}
+	if err := spec.Validate(); err != nil {
+		return err
+	}
 
 	archive, err := store.Open(*dbPath)
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
-	mapping, err := archive.PutSemanticMapping(context.Background(), semantic.MappingSpec{
-		EdgeNodeID:  *edgeNodeID,
-		SeriesKey:   *seriesKey,
-		Meaning:     semantic.Meaning(*meaning),
-		TriggerMode: semantic.TriggerMode(*triggerMode),
-		ActiveValue: *activeValue,
-	})
+	mapping, err := archive.PutSemanticMapping(context.Background(), spec)
 	if err != nil {
 		return err
 	}
@@ -188,6 +192,10 @@ func runRouteAdd(args []string) error {
 	}
 	if *topic == "" {
 		return errors.New("--topic is required")
+	}
+	spec := store.MQTTRouteSpec{MappingID: *mappingID, Topic: *topic}
+	if err := spec.Validate(); err != nil {
+		return err
 	}
 	archive, err := store.Open(*dbPath)
 	if err != nil {

@@ -27,6 +27,18 @@ type MQTTRoute struct {
 	CreatedAt            int64  `json:"created_at"`
 }
 
+type MQTTRouteSpec struct {
+	MappingID string
+	Topic     string
+}
+
+func (spec MQTTRouteSpec) Validate() error {
+	if strings.TrimSpace(spec.MappingID) == "" {
+		return errors.New("mapping ID must be non-empty")
+	}
+	return validateMQTTTopic(spec.Topic)
+}
+
 type PendingMQTTExport struct {
 	ExportID    string          `json:"export_id"`
 	RouteID     string          `json:"route_id"`
@@ -40,10 +52,7 @@ type PendingMQTTExport struct {
 
 func (store *Store) PutMQTTRoute(ctx context.Context, mappingID, topic string) (MQTTRoute, error) {
 	var noRoute MQTTRoute
-	if strings.TrimSpace(mappingID) == "" {
-		return noRoute, errors.New("mapping ID must be non-empty")
-	}
-	if err := validateMQTTTopic(topic); err != nil {
+	if err := (MQTTRouteSpec{MappingID: mappingID, Topic: topic}).Validate(); err != nil {
 		return noRoute, err
 	}
 

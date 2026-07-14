@@ -43,6 +43,11 @@ type ExportQueue interface {
 
 type exportPublish func(topic string, qos byte, payload []byte) error
 
+type publishToken interface {
+	Done() <-chan struct{}
+	Error() error
+}
+
 func Run(ctx context.Context, config ClientConfig, processor Processor, queue ExportQueue, logger *slog.Logger) error {
 	if err := config.validate(); err != nil {
 		return err
@@ -56,11 +61,9 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, queue Ex
 
 	handler := func(client mqtt.Client, message mqtt.Message) {
 		err := processor.Process(context.Background(), message.Topic(), message.Payload(), func(topic string, payload []byte) error {
-			token := client.Publish(topic, 1, false, payload)
-			if !token.WaitTimeout(15 * time.Second) {
-				return errors.New("accepted-through publish timed out")
-			}
-			return token.Error()
+			return publishWithTimeout(context.Background(), func() publishToken {
+				return client.Publish(topic, 1, false, payload)
+			})
 		})
 		if err != nil {
 			logger.Error("MQTT record batch not acknowledged", "topic", message.Topic(), "error", err)
@@ -68,19 +71,7 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, queue Ex
 	}
 	subscriptionResults := make(chan error, 1)
 
-	options := mqtt.NewClientOptions().
-		AddBroker(config.BrokerURL).
-		SetClientID(config.ClientID).
-		SetUsername(config.Username).
-		SetPassword(config.Password).
-		SetCleanSession(true).
-		SetAutoReconnect(true).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(time.Second).
-		SetOrderMatters(false)
-	if config.TLSConfig != nil {
-		options.SetTLSConfig(config.TLSConfig)
-	}
+	options := newClientOptions(config)
 	options.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		logger.Warn("MQTT connection lost", "error", err)
 	})
@@ -127,21 +118,53 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, queue Ex
 			}
 		case <-ticker.C:
 			convergeExports(ctx, queue, func(topic string, qos byte, payload []byte) error {
-				token := client.Publish(topic, qos, false, payload)
-				timer := time.NewTimer(publishAcknowledgementTTL)
-				defer timer.Stop()
-				select {
-				case <-token.Done():
-					return token.Error()
-				case <-timer.C:
-					return errors.New("MQTT application export publish timed out")
-				case <-ctx.Done():
-					return ctx.Err()
-				}
+				return publishWithTimeout(ctx, func() publishToken {
+					return client.Publish(topic, qos, false, payload)
+				})
 			}, logger)
 		case <-ctx.Done():
 			return nil
 		}
+	}
+}
+
+func newClientOptions(config ClientConfig) *mqtt.ClientOptions {
+	options := mqtt.NewClientOptions().
+		AddBroker(config.BrokerURL).
+		SetClientID(config.ClientID).
+		SetUsername(config.Username).
+		SetPassword(config.Password).
+		SetCleanSession(true).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(time.Second).
+		SetOrderMatters(false).
+		SetWriteTimeout(publishAcknowledgementTTL)
+	if config.TLSConfig != nil {
+		options.SetTLSConfig(config.TLSConfig)
+	}
+	return options
+}
+
+func publishWithTimeout(ctx context.Context, publish func() publishToken) error {
+	deadline := time.Now().Add(publishAcknowledgementTTL)
+	return waitForPublishCompletion(ctx, publish(), deadline)
+}
+
+func waitForPublishCompletion(ctx context.Context, token publishToken, deadline time.Time) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return errors.New("MQTT publish timed out")
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-token.Done():
+		return token.Error()
+	case <-timer.C:
+		return errors.New("MQTT publish timed out")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
