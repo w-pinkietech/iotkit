@@ -14,7 +14,8 @@ part of this contract.
 - **MQTT Broker** transports QoS 1 messages. Its PUBACK confirms Broker receipt only.
 - **IoTKit Site** durably accepts canonical records, advances the contiguous accepted-through
   cursor, then publishes the application custody acknowledgement. It also provides direct raw query
-  today and is the future site-local registry/semantic and application export boundary.
+  today and is the future site-local semantic and application export boundary. Semantic projection
+  and exporter failure never weaken or roll back raw custody acceptance.
 - **Application consumer** such as YokaKit reads canonical records and maps them into its own domain.
   Its business result does not authorize Edge purge.
 

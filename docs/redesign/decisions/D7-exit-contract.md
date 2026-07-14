@@ -59,8 +59,9 @@ annotationのみ(データは既に配送済みのため回収はしない——
 - `series_definition`同期、legacy metadata snapshot、commissioning smokeは最初の実機縦切りには
   含めない。Siteはraw canonical recordを保存し、Edge Nodeごとのcursor、site-level query、application
   export境界を持つ。series解釈はEdgeのR11または後続のversion付きmetadata契約で追加する。
-  Siteのapplication exportは保存済みseriesのrouting・projectionに加え、`production`等の設定可能な
-  センサー意味付けを担う。追加時もYokaKit固有のbusiness masterやOEE等の業務ロジックは含めない。
+  Siteのapplication exportは保存済みseriesを`production_pulse`等の型付き意味へfuture-onlyで
+  projectionし、独立したexporterへ渡す。YokaKit固有のbusiness master、production record、OEE等は
+  含めない。
 - **配送制御通知(annotationとは別レイヤ)**: gap/cursor_expired(決定6)等、**特定targetの配送状態
   についての通知**はストリームレコードではなく、pushバッチのメタデータ(帯域外)で運ぶ。
   **カーソルを消費しない**。全target共有のストリームにtarget固有の事実を混ぜない。
@@ -249,8 +250,9 @@ annotationのみ(データは既に配送済みのため回収はしない——
 
 ## 境界の明確化(非目標)
 
-- 派生イベント生成(stale通知・ダウンタイム・アンドン)はコアの仕事ではない(決定1)。
-  汎用の派生が本当に必要になったらコアの外(共有ライブラリ/別サービス)で。
+- stale通知・ダウンタイム・アンドン等の業務判断を含む派生イベント生成はコアの仕事ではない。
+  Siteの意味付けはセンサー信号を`production_pulse`等の汎用application-facing eventへ対応付けるところまでとし、
+  生産実績やOEEを生成しない。
 - Slack通知等のファンアウトは消費者内部の副作用(カタログ§3補足)。
 - デバイスへの制御コマンド送信(南向き)は本契約の範囲外(キュー5)。yokakit-nextは
   MQTTをPublishしない=現消費者に双方向要求は存在しない(カタログ§2)。

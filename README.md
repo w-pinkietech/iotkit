@@ -5,12 +5,13 @@ sensor adapter to IoTKit Edge and IoTKit supplies durable collection, retry, and
 explicit transfer of storage responsibility to IoTKit Site: data is not purge-eligible
 until Site has durably stored it.
 
-> **Status: pre-1.0, not yet a public release.** The current milestone is one
-> paired BravePI temperature sensor, one Rust IoTKit Edge, one standard
-> MQTT broker, and one Go IoTKit Site.
-> Broader Wave 1 work is frozen until this real-hardware path proves collection,
-> outage recovery, and storage-responsibility transfer. APIs, the on-disk schema,
-> and the wire contract may still change. See
+> **Status: pre-1.0, not yet a public release.** The first milestone—one paired
+> BravePI temperature sensor, one Rust IoTKit Edge, one standard MQTT broker,
+> and one Go IoTKit Site—is complete, including outage recovery and explicit
+> storage-responsibility transfer. Site also provides future-only semantic mapping
+> and a durable MQTT application exporter. APIs, the
+> on-disk schema, and the wire contract may
+> still change. See
 > [Roadmap](#roadmap).
 
 ## Why
@@ -26,10 +27,10 @@ with no on-Edge container orchestration, ML platform, or central rules engine. E
 a *buffer, not a warehouse* — it holds data until Site confirms durable storage. MQTT
 PUBACK alone is not that confirmation. Site durably accepts records, advances each Edge
 Node's `accepted-through` only after commit, and provides direct raw query today. It is
-also the IoTKit-side boundary for later site-local registry, semantic mapping such as
-`production`, and application export; those later capabilities are not implemented yet.
-Site owns that configurable sensor meaning; applications such as YokaKit own business masters
-and logic such as products, processes, OEE, alarms, UI, and notifications.
+also the IoTKit-side boundary for archive query, configurable sensor meaning, and application
+export. Site maps a stored series to one typed meaning such as `production_pulse`, then a
+separate exporter converts semantic events to an application-facing MQTT contract. Applications
+such as YokaKit own products, processes, OEE, alarms, business UI, and notifications.
 
 ## What it does today
 
@@ -38,7 +39,8 @@ and logic such as products, processes, OEE, alarms, UI, and notifications.
                               │                                      │
                               └─ SQLite readings + outbox             ├─ durable raw records
                                                                      ├─ Edge Node cursors
-                                                                     └─ direct raw query
+                                                                     ├─ direct raw/semantic query
+                                                                     └─ semantic MQTT outbox
 ```
 
 - **Durable ingest** with crash consistency (power loss is a normal event, not an error).
@@ -49,6 +51,33 @@ and logic such as products, processes, OEE, alarms, UI, and notifications.
 - **Operator CLI** (`iotkit-edgectl`) for the device ledger, measurement registry, snapshots/restore, and the Site target.
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
 - The control-plane API is intended for private LAN reachability only. Use SSH port forwarding for Tailscale/CGNAT direct-access scenarios.
+
+### Site semantic export
+
+Configure a source series and then add an application route with the Site CLI:
+
+```bash
+iotkit-site mapping-set --db site.db --edge-node-id edge-node-01 \
+  --series-key '<series_key>' --meaning production_pulse \
+  --trigger-mode active_sample --active-value 1
+iotkit-site mapping-list --db site.db
+iotkit-site route-add --db site.db --mapping-id '<mapping_id>' \
+  --topic 'iotkit/v1/application/production-pulses'
+iotkit-site semantic-query --db site.db --limit 100
+iotkit-site query --db site.db --limit 100
+```
+
+Mappings start after the source's current accepted cursor, and routes start after the
+current semantic event boundary: neither command backfills older data. Raw acceptance and
+`accepted-through` are one failure stage; semantic projection and the application outbox are a
+second, independent stage. Projection or application delivery failure therefore does not delay
+raw custody acknowledgement. Failed or timed-out QoS 1 publishes remain pending, and are marked
+published only after broker PUBACK.
+
+The application payload is JSON contract v1 (`schema_version: 1`) with `event_id`, mapping ID and
+revision, revision-local `event_sequence`, `meaning: "production_pulse"`, source Edge Node/series/
+publication sequence, `occurred_at`, and `count`. The count is cumulative only within one mapping
+revision and resets to 1 when a new revision begins. It contains no broker credentials.
 
 > **Current Plan 6 boundary:** HTTP measurement ingest is implemented as a separate authenticated
 > listener and is disabled by default. An unowned, recovering, restore/reset-fenced, or TLS-invalid
@@ -80,7 +109,7 @@ all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows
 | `iotkit-ingest-contract` / `iotkit-ingest-client` | The ingest wire contract (Envelope/Ack) and the client adapters use |
 | `*-adapter*` / `iotkit-sensor-drivers` / `rpi4b-transport` | Sensor adapters (BravePI mainboard, rpi-local), shared sensor-IC drivers and polling runtime, raw bus transport |
 | `iotkit-edge` / `iotkit-edgectl` | IoTKit Edge daemon and its operator CLI |
-| `iotkit-site` | IoTKit Site MQTT consumer, durable raw store, cursor manager, and query CLI |
+| `iotkit-site` | IoTKit Site MQTT consumer, durable raw/semantic store, cursor manager, application exporter, and query/configuration CLI |
 
 The full crate map, layer rules, and "where does new code go" placement table
 live in [docs/architecture.md](docs/architecture.md).
@@ -104,8 +133,8 @@ it's the "why", for deep dives.
 ## Roadmap
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
-- **Current implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. This complete path, including application `accepted-through`, is verified on real hardware; failure injection and the remaining restart/outage matrix are still in progress. Purge eligibility advances only after validated `accepted-through`. **In progress.**
-- **After the gate:** run a BravePI contact-input sensor as the second real sensor type, then choose adapter tooling and broader Wave 1 work from observed needs.
+- **First implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. The real-hardware path, restart/outage matrix, storage failure injection, bounded-capacity behavior, and application `accepted-through` are verified. Purge eligibility advances only after validated `accepted-through`. **Done.**
+- **Site semantic slice:** one active meaning per source series, `production_pulse`, explicit `active_sample`/`active_edge` trigger modes, no backfill, and a separate durable MQTT exporter. **Implemented; live-broker verification pending.** Adapter tooling follows later, after observed need.
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 

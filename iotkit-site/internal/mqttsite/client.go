@@ -10,9 +10,15 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
-const recordsTopicFilter = "iotkit/v1/edge-nodes/+/records"
+const (
+	recordsTopicFilter        = "iotkit/v1/edge-nodes/+/records"
+	convergenceInterval       = 250 * time.Millisecond
+	convergenceBatchSize      = 256
+	publishAcknowledgementTTL = 15 * time.Second
+)
 
 type ClientConfig struct {
 	BrokerURL     string
@@ -23,9 +29,31 @@ type ClientConfig struct {
 	AllowInsecure bool
 }
 
-func Run(ctx context.Context, config ClientConfig, processor Processor, logger *slog.Logger) error {
+type pendingExportQueue interface {
+	ListPendingMQTTExports(context.Context, int) ([]store.PendingMQTTExport, error)
+	MarkMQTTExportPublished(context.Context, string) error
+}
+
+type ExportQueue interface {
+	ListPendingMQTTExports(context.Context, int) ([]store.PendingMQTTExport, error)
+	MarkMQTTExportPublished(context.Context, string) error
+	ProjectSemanticEvents(context.Context, int) (int, error)
+	EnqueueMQTTExports(context.Context, int) (int, error)
+}
+
+type exportPublish func(topic string, qos byte, payload []byte) error
+
+type publishToken interface {
+	Done() <-chan struct{}
+	Error() error
+}
+
+func Run(ctx context.Context, config ClientConfig, processor Processor, queue ExportQueue, logger *slog.Logger) error {
 	if err := config.validate(); err != nil {
 		return err
+	}
+	if queue == nil {
+		return errors.New("MQTT export queue is nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -33,11 +61,9 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, logger *
 
 	handler := func(client mqtt.Client, message mqtt.Message) {
 		err := processor.Process(context.Background(), message.Topic(), message.Payload(), func(topic string, payload []byte) error {
-			token := client.Publish(topic, 1, false, payload)
-			if !token.WaitTimeout(15 * time.Second) {
-				return errors.New("accepted-through publish timed out")
-			}
-			return token.Error()
+			return publishWithTimeout(context.Background(), func() publishToken {
+				return client.Publish(topic, 1, false, payload)
+			})
 		})
 		if err != nil {
 			logger.Error("MQTT record batch not acknowledged", "topic", message.Topic(), "error", err)
@@ -45,19 +71,7 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, logger *
 	}
 	subscriptionResults := make(chan error, 1)
 
-	options := mqtt.NewClientOptions().
-		AddBroker(config.BrokerURL).
-		SetClientID(config.ClientID).
-		SetUsername(config.Username).
-		SetPassword(config.Password).
-		SetCleanSession(true).
-		SetAutoReconnect(true).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(time.Second).
-		SetOrderMatters(false)
-	if config.TLSConfig != nil {
-		options.SetTLSConfig(config.TLSConfig)
-	}
+	options := newClientOptions(config)
 	options.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		logger.Warn("MQTT connection lost", "error", err)
 	})
@@ -94,16 +108,148 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, logger *
 		return nil
 	}
 
+	ticker := time.NewTicker(convergenceInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case err := <-subscriptionResults:
 			if err != nil {
 				return fmt.Errorf("MQTT resubscribe: %w", err)
 			}
+		case <-ticker.C:
+			convergeExports(ctx, queue, func(topic string, qos byte, payload []byte) error {
+				return publishWithTimeout(ctx, func() publishToken {
+					return client.Publish(topic, qos, false, payload)
+				})
+			}, logger)
 		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+func newClientOptions(config ClientConfig) *mqtt.ClientOptions {
+	options := mqtt.NewClientOptions().
+		AddBroker(config.BrokerURL).
+		SetClientID(config.ClientID).
+		SetUsername(config.Username).
+		SetPassword(config.Password).
+		SetCleanSession(true).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(time.Second).
+		SetOrderMatters(false).
+		SetWriteTimeout(publishAcknowledgementTTL)
+	if config.TLSConfig != nil {
+		options.SetTLSConfig(config.TLSConfig)
+	}
+	return options
+}
+
+func publishWithTimeout(ctx context.Context, publish func() publishToken) error {
+	deadline := time.Now().Add(publishAcknowledgementTTL)
+	return publishWithDeadline(ctx, publish, deadline)
+}
+
+func publishWithDeadline(ctx context.Context, publish func() publishToken, deadline time.Time) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return errors.New("MQTT publish timed out")
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	tokens := make(chan publishToken, 1)
+	go func() {
+		tokens <- publish()
+	}()
+
+	select {
+	case token := <-tokens:
+		return waitForPublishCompletion(ctx, token, deadline)
+	case <-timer.C:
+		return errors.New("MQTT publish timed out")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func waitForPublishCompletion(ctx context.Context, token publishToken, deadline time.Time) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return errors.New("MQTT publish timed out")
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-token.Done():
+		return token.Error()
+	case <-timer.C:
+		return errors.New("MQTT publish timed out")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func convergeExports(ctx context.Context, queue ExportQueue, publish exportPublish, logger *slog.Logger) {
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := queue.ProjectSemanticEvents(ctx, convergenceBatchSize); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Error("semantic projection failed", "error", err)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := queue.EnqueueMQTTExports(ctx, convergenceBatchSize); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Error("MQTT export enqueue failed", "error", err)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if err := publishPending(ctx, queue, publish); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Error("MQTT application export failed", "error", err)
+	}
+}
+
+func publishPending(ctx context.Context, queue pendingExportQueue, publish exportPublish) error {
+	pending, err := queue.ListPendingMQTTExports(ctx, convergenceBatchSize)
+	if err != nil {
+		return fmt.Errorf("list pending MQTT exports: %w", err)
+	}
+	failedRoutes := make(map[string]struct{})
+	var publishErrors []error
+	for _, item := range pending {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, failed := failedRoutes[item.RouteID]; failed {
+			continue
+		}
+		if item.QoS != 1 {
+			failedRoutes[item.RouteID] = struct{}{}
+			publishErrors = append(publishErrors,
+				fmt.Errorf("MQTT export %q has unsupported QoS %d", item.ExportID, item.QoS))
+			continue
+		}
+		if err := publish(item.Topic, 1, item.PayloadJSON); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			failedRoutes[item.RouteID] = struct{}{}
+			publishErrors = append(publishErrors,
+				fmt.Errorf("publish MQTT export %q: %w", item.ExportID, err))
+			continue
+		}
+		if err := queue.MarkMQTTExportPublished(ctx, item.ExportID); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			failedRoutes[item.RouteID] = struct{}{}
+			publishErrors = append(publishErrors,
+				fmt.Errorf("mark MQTT export %q published: %w", item.ExportID, err))
+		}
+	}
+	return errors.Join(publishErrors...)
 }
 
 func (config ClientConfig) validate() error {

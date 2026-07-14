@@ -36,9 +36,10 @@ So a minimal Edge install is: flash a Pi, run the `iotkit-edge` daemon
 under systemd, keep `iotkit-edgectl` on the same Pi as a hand-run CLI, and wire
 adapters to sensors. A standalone site can stop there (D8: an upstream is
 optional). IoTKit Site adds durable aggregation, Edge Node cursors, direct raw
-query, a future site-local registry, configurable sensor meaning such as `production`, and the
-application-export boundary. Applications such as YokaKit consume those meanings and own business
-masters and logic such as products, processes, OEE, alarms, UI, and notifications. Anything that
+query, configurable site-local sensor meaning, and the application-export boundary. Site maps one
+stored series to one typed meaning such as `production_pulse`; a separate exporter converts the
+result to an application-facing MQTT contract. Applications such as YokaKit own business masters
+and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
 complicates this story needs a strong reason.
 
 ## Data flow
@@ -78,6 +79,38 @@ Inside Edge, the adapter and collector normalize and durably enqueue observation
 retained only as transitional code and is not spawned. A broker PUBACK confirms transport receipt
 only; IoTKit Edge retains its outbox until IoTKit Site commits raw records and publishes
 application-level `accepted-through`.
+
+### Site semantic and application-export loop
+
+While `iotkit-site serve` consumes raw batches, an independent 250 ms convergence loop projects
+committed raw contact values, enqueues versioned application events in the Site outbox, and
+publishes pending rows at MQTT QoS 1. Only a successful PUBACK marks an outbox row published;
+failure or the 15-second timeout leaves it pending for a later tick. Projection, enqueue, and
+publish errors are logged without payloads or credentials and do not stop the loop.
+
+This is deliberately a two-stage failure boundary. The raw batch transaction and its
+`accepted-through` publish never wait for semantic projection or application export, so an
+application outage cannot hold Edge custody. Semantic mappings are future-only from each current
+Edge cursor, and MQTT routes are future-only from the current semantic-event boundary.
+
+Operators use typed Site store operations through JSON-producing CLI commands (the raw `query`
+command remains available):
+
+```bash
+iotkit-site mapping-set --db site.db --edge-node-id edge-node-01 \
+  --series-key '<series_key>' --meaning production_pulse \
+  --trigger-mode active_edge --active-value 1
+iotkit-site mapping-list --db site.db
+iotkit-site route-add --db site.db --mapping-id '<mapping_id>' \
+  --topic 'iotkit/v1/application/production-pulses'
+iotkit-site semantic-query --db site.db --limit 100
+```
+
+The application MQTT payload is contract v1: `schema_version`, stable `event_id`, `mapping_id`,
+`mapping_revision`, revision-local `event_sequence`, `meaning`, source Edge Node/series/publication
+sequence, `occurred_at`, and `count`. Count is cumulative only within a mapping revision and resets
+to 1 for a new revision. It is an IoTKit event contract rather than a legacy device-address/pin
+payload. The semantic slice is implemented; live-broker verification remains pending.
 
 Adapters speak the **ingest contract** (`Envelope`/`Ack`, crate
 `iotkit-ingest-contract`) through `iotkit-ingest-client`. The current network
@@ -161,10 +194,11 @@ control API.
 
 The current slice is deliberately narrow: one paired BravePI temperature sensor through
 the existing Long Range BLE/BravePI Mainboard/UART path, one IoTKit Edge, one standard MQTT Broker,
-one IoTKit Site, raw SQLite storage, application-level accepted-through, and a direct CLI query. BravePI owns
+one IoTKit Site, raw SQLite storage, application-level accepted-through, future-only semantic
+projection, a durable application MQTT outbox, and direct CLI queries. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
 BravePI Mainboard UART stream. Enrollment,
-credential rotation, Site backup/restore, projection, legacy HTTPS migration, multi-Edge-Node hardware,
+credential rotation, Site backup/restore, legacy HTTPS migration, multi-Edge-Node hardware,
 YokaKit integration, and UI are deferred until this path works on real hardware.
 
 ## Crate map
@@ -201,7 +235,7 @@ Approved next-slice non-Rust placement:
 
 | Component | Path | Responsibility (one line) |
 |---|---|---|
-| IoTKit Site | `iotkit-site/` | MQTT consumer, durable raw acceptance transaction, Edge Node cursor manager, accepted-through publisher, direct raw query CLI, and future site-local registry, sensor semantic mapping, and application-export boundary. |
+| IoTKit Site | `iotkit-site/` | MQTT consumer, durable raw acceptance, Edge Node cursor manager, accepted-through publisher, query, future-only semantic projection, and durable MQTT application export. |
 | Cross-language fixtures | `testdata/egress/v1/` | Normative JSON examples decoded by both Rust and Go tests. |
 
 ### Layer rules (machine-checked)
@@ -282,7 +316,7 @@ checked.
 | A new control-plane HTTP API route | `iotkit-edge/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
 | An authenticated measurement-ingress HTTP binding | Shipped Plan 6 binding: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
 | A new CLI command | `iotkit-edgectl`, calling `core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
-| Site acceptance, query, site-local registry, sensor semantic mapping such as `production`, or application-export behavior | `iotkit-site/`; communicate through the versioned MQTT wire contract and shared fixtures, never Edge internals. Business masters and logic such as production records, OEE, and alarms stay in applications. |
+| Site acceptance, query, sensor semantic mapping, or application-export behavior | `iotkit-site/`; communicate through versioned MQTT contracts and shared fixtures, never Edge internals. Business masters, production records, OEE, and alarms stay in applications. |
 | Raw bus/pin access | `rpi4b-transport`. |
 | An Edge module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `core/<name>` crate.** IoTKit Edge is a composition root, not a home for domain logic. |
 
