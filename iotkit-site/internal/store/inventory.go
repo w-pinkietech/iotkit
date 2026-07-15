@@ -13,12 +13,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
 
-type inventorySourceCandidate struct {
-	edgeNodeID string
-	seriesKey  string
+type pendingInventoryEpoch struct {
+	edgeNodeID      string
+	ledgerEpoch     string
+	lastPubSeq      int64
+	acceptedThrough int64
+}
+
+type pendingInventoryRecord struct {
+	edgeNodeID  string
+	ledgerEpoch string
+	pubSeq      int64
+	record      []byte
+	receivedAt  int64
 }
 
 func newResourceRef(prefix string) (string, error) {
@@ -56,8 +67,8 @@ func ensureSignalSourceTx(
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO site_signals (
-			signal_ref, edge_node_id, series_key, system_id, created_at
-		) VALUES (?, ?, ?, ?, ?)
+			signal_ref, edge_node_id, series_key, system_id, last_received_at, created_at
+		) VALUES (?, ?, ?, ?, NULL, ?)
 		ON CONFLICT(edge_node_id, series_key) DO UPDATE SET
 			system_id = COALESCE(excluded.system_id, site_signals.system_id)
 	`, signalRef, edgeNodeID, seriesKey, systemID, time.Now().UnixMilli())
@@ -68,40 +79,11 @@ func (store *Store) ReconcileInventorySources(ctx context.Context, limit int) (i
 	if limit < 1 || limit > 1000 {
 		return 0, errors.New("inventory reconciliation limit must be between 1 and 1000")
 	}
-	rows, err := store.db.QueryContext(ctx, `
-		SELECT r.edge_node_id,
-			json_extract(CAST(r.record_json AS TEXT), '$.series_key') AS series_key
-		FROM raw_records AS r
-		WHERE json_extract(CAST(r.record_json AS TEXT), '$.family') = 'measurement'
-			AND json_type(CAST(r.record_json AS TEXT), '$.series_key') = 'text'
-			AND NOT EXISTS (
-				SELECT 1 FROM site_signals AS signal
-				WHERE signal.edge_node_id = r.edge_node_id
-					AND signal.series_key = json_extract(CAST(r.record_json AS TEXT), '$.series_key')
-			)
-		GROUP BY r.edge_node_id, series_key
-		ORDER BY r.edge_node_id, series_key
-		LIMIT ?
-	`, limit)
+	records, err := store.listPendingInventoryRecords(ctx, limit)
 	if err != nil {
 		return 0, err
 	}
-	candidates := make([]inventorySourceCandidate, 0)
-	for rows.Next() {
-		var candidate inventorySourceCandidate
-		if err := rows.Scan(&candidate.edgeNodeID, &candidate.seriesKey); err != nil {
-			_ = rows.Close()
-			return 0, err
-		}
-		candidates = append(candidates, candidate)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, err
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	if len(candidates) == 0 {
+	if len(records) == 0 {
 		return 0, nil
 	}
 
@@ -110,38 +92,173 @@ func (store *Store) ReconcileInventorySources(ctx context.Context, limit int) (i
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, candidate := range candidates {
-		var systemID *string
-		if parsed, ok := systemIDFromSeriesKey(candidate.seriesKey); ok {
-			systemID = &parsed
-			if err := ensureDeviceSourceTx(ctx, tx, candidate.edgeNodeID, parsed); err != nil {
-				return 0, err
-			}
+	cursorUpdates := make(map[string]pendingInventoryRecord)
+	for _, record := range records {
+		cursorUpdates[record.edgeNodeID+"\x00"+record.ledgerEpoch] = record
+		seriesKey, systemID, measurement := inventoryMeasurementIdentity(record.record)
+		if !measurement {
+			continue
+		}
+		if err := ensureDeviceSourceTx(ctx, tx, record.edgeNodeID, systemID); err != nil {
+			return 0, err
 		}
 		if err := ensureSignalSourceTx(
 			ctx,
 			tx,
-			candidate.edgeNodeID,
-			candidate.seriesKey,
-			systemID,
+			record.edgeNodeID,
+			seriesKey,
+			&systemID,
 		); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE site_signals
+			SET last_received_at = CASE
+				WHEN last_received_at IS NULL OR last_received_at < ? THEN ?
+				ELSE last_received_at
+			END
+			WHERE edge_node_id = ? AND series_key = ?
+		`, record.receivedAt, record.receivedAt, record.edgeNodeID, seriesKey); err != nil {
+			return 0, err
+		}
+		current, valid := decodeInventoryMeasurement(record.record, record.receivedAt)
+		if !valid {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO signal_current_values (
+				edge_node_id, series_key, values_json, event_time,
+				site_received_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(edge_node_id, series_key) DO UPDATE SET
+				values_json = excluded.values_json,
+				event_time = excluded.event_time,
+				site_received_at = excluded.site_received_at,
+				updated_at = excluded.updated_at
+			WHERE excluded.site_received_at >= signal_current_values.site_received_at
+		`, record.edgeNodeID, seriesKey, []byte(current.Values), current.EventTime,
+			current.SiteReceivedAt, time.Now().UnixMilli()); err != nil {
+			return 0, err
+		}
+	}
+	for _, record := range cursorUpdates {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO inventory_projection_cursors (
+				edge_node_id, ledger_epoch, last_pub_seq, updated_at
+			) VALUES (?, ?, ?, ?)
+			ON CONFLICT(edge_node_id, ledger_epoch) DO UPDATE SET
+				last_pub_seq = excluded.last_pub_seq,
+				updated_at = excluded.updated_at
+		`, record.edgeNodeID, record.ledgerEpoch, record.pubSeq, time.Now().UnixMilli()); err != nil {
 			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return len(candidates), nil
+	return len(records), nil
 }
 
-func systemIDFromSeriesKey(seriesKey string) (string, bool) {
-	systemID, _, found := strings.Cut(seriesKey, ":")
-	if !found || len(systemID) != 36 || systemID[8] != '-' || systemID[13] != '-' ||
-		systemID[18] != '-' || systemID[23] != '-' {
-		return "", false
+func (store *Store) listPendingInventoryRecords(
+	ctx context.Context,
+	limit int,
+) ([]pendingInventoryRecord, error) {
+	rows, err := store.db.QueryContext(ctx, `
+		SELECT accepted.edge_node_id, accepted.ledger_epoch,
+			COALESCE(projected.last_pub_seq, 0), accepted.accepted_through
+		FROM accepted_cursors AS accepted
+		LEFT JOIN inventory_projection_cursors AS projected
+			ON projected.edge_node_id = accepted.edge_node_id
+			AND projected.ledger_epoch = accepted.ledger_epoch
+		WHERE accepted.accepted_through > COALESCE(projected.last_pub_seq, 0)
+		ORDER BY accepted.updated_at, accepted.edge_node_id, accepted.ledger_epoch
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
 	}
-	decoded, err := hex.DecodeString(strings.ReplaceAll(systemID, "-", ""))
-	return systemID, err == nil && len(decoded) == 16
+	epochs := make([]pendingInventoryEpoch, 0)
+	for rows.Next() {
+		var epoch pendingInventoryEpoch
+		if err := rows.Scan(
+			&epoch.edgeNodeID,
+			&epoch.ledgerEpoch,
+			&epoch.lastPubSeq,
+			&epoch.acceptedThrough,
+		); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		epochs = append(epochs, epoch)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	records := make([]pendingInventoryRecord, 0, limit)
+	for _, epoch := range epochs {
+		remaining := limit - len(records)
+		if remaining == 0 {
+			break
+		}
+		rows, err := store.db.QueryContext(ctx, `
+			SELECT pub_seq, record_json, received_at
+			FROM raw_records
+			WHERE edge_node_id = ? AND ledger_epoch = ?
+				AND pub_seq > ? AND pub_seq <= ?
+			ORDER BY pub_seq
+			LIMIT ?
+		`, epoch.edgeNodeID, epoch.ledgerEpoch, epoch.lastPubSeq,
+			epoch.acceptedThrough, remaining)
+		if err != nil {
+			return nil, err
+		}
+		before := len(records)
+		for rows.Next() {
+			record := pendingInventoryRecord{
+				edgeNodeID:  epoch.edgeNodeID,
+				ledgerEpoch: epoch.ledgerEpoch,
+			}
+			if err := rows.Scan(&record.pubSeq, &record.record, &record.receivedAt); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			records = append(records, record)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if len(records) == before {
+			return nil, fmt.Errorf(
+				"inventory projection raw gap for edge %q epoch %q after %d",
+				epoch.edgeNodeID,
+				epoch.ledgerEpoch,
+				epoch.lastPubSeq,
+			)
+		}
+	}
+	return records, nil
+}
+
+func inventoryMeasurementIdentity(record []byte) (string, string, bool) {
+	var header struct {
+		Family    string `json:"family"`
+		SeriesKey string `json:"series_key"`
+	}
+	if err := json.Unmarshal(record, &header); err != nil || header.Family != "measurement" {
+		return "", "", false
+	}
+	identity, err := contract.ParseSeriesKey(header.SeriesKey)
+	if err != nil {
+		return "", "", false
+	}
+	return header.SeriesKey, identity.SystemID, true
 }
 
 func (store *Store) ListInventoryDevices(
@@ -159,8 +276,12 @@ func (store *Store) ListInventoryDevices(
 			profile.revision,
 			COALESCE(descriptor.presence, 'unknown'),
 			COALESCE(descriptor.state, 'unknown'),
-			source.edge_node_id,
-			source.system_id
+			(
+				SELECT MAX(signal.last_received_at)
+				FROM site_signals AS signal
+				WHERE signal.edge_node_id = source.edge_node_id
+					AND signal.system_id = source.system_id
+			)
 		FROM site_devices AS source
 		LEFT JOIN device_profiles AS profile
 			ON profile.edge_node_id = source.edge_node_id
@@ -176,48 +297,31 @@ func (store *Store) ListInventoryDevices(
 		return nil, err
 	}
 	defer rows.Close()
-	type deviceRow struct {
-		summary    siteapp.DeviceSummary
-		edgeNodeID string
-		systemID   string
-	}
-	resultRows := make([]deviceRow, 0)
+	result := make([]siteapp.DeviceSummary, 0)
 	for rows.Next() {
-		var row deviceRow
+		var summary siteapp.DeviceSummary
 		var revision sql.NullInt64
+		var lastReceivedAt sql.NullInt64
 		if err := rows.Scan(
-			&row.summary.DeviceRef,
-			&row.summary.DisplayName,
-			&row.summary.Location,
+			&summary.DeviceRef,
+			&summary.DisplayName,
+			&summary.Location,
 			&revision,
-			&row.summary.DescriptorPresence,
-			&row.summary.DeviceState,
-			&row.edgeNodeID,
-			&row.systemID,
+			&summary.DescriptorPresence,
+			&summary.DeviceState,
+			&lastReceivedAt,
 		); err != nil {
 			return nil, err
 		}
 		if revision.Valid {
-			row.summary.ProfileRevision = &revision.Int64
+			summary.ProfileRevision = &revision.Int64
 		}
-		resultRows = append(resultRows, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	result := make([]siteapp.DeviceSummary, 0, len(resultRows))
-	for _, row := range resultRows {
-		lastReceivedAt, err := store.latestDeviceReceivedAt(ctx, row.edgeNodeID, row.systemID)
-		if err != nil {
-			return nil, err
+		if lastReceivedAt.Valid {
+			summary.LastReceivedAt = &lastReceivedAt.Int64
 		}
-		row.summary.LastReceivedAt = lastReceivedAt
-		result = append(result, row.summary)
+		result = append(result, summary)
 	}
-	return result, nil
+	return result, rows.Err()
 }
 
 func (store *Store) ListInventorySignals(
@@ -242,8 +346,10 @@ func (store *Store) ListInventorySignals(
 					AND mapping.series_key = source.series_key
 					AND mapping.active = 1
 			),
-			source.edge_node_id,
-			source.series_key
+			source.last_received_at,
+			current.values_json,
+			current.event_time,
+			current.site_received_at
 		FROM site_signals AS source
 		LEFT JOIN site_devices AS device
 			ON device.edge_node_id = source.edge_node_id
@@ -254,6 +360,9 @@ func (store *Store) ListInventorySignals(
 		LEFT JOIN descriptor_signals AS descriptor
 			ON descriptor.edge_node_id = source.edge_node_id
 			AND descriptor.series_key = source.series_key
+		LEFT JOIN signal_current_values AS current
+			ON current.edge_node_id = source.edge_node_id
+			AND current.series_key = source.series_key
 		WHERE source.signal_ref > ?
 		ORDER BY source.signal_ref
 		LIMIT ?
@@ -262,137 +371,58 @@ func (store *Store) ListInventorySignals(
 		return nil, err
 	}
 	defer rows.Close()
-	type signalRow struct {
-		summary    siteapp.SignalSummary
-		edgeNodeID string
-		seriesKey  string
-	}
-	resultRows := make([]signalRow, 0)
+	result := make([]siteapp.SignalSummary, 0)
 	for rows.Next() {
-		var row signalRow
+		var summary siteapp.SignalSummary
 		var deviceRef sql.NullString
 		var revision sql.NullInt64
 		var unit sql.NullString
 		var valueType sql.NullString
+		var lastReceivedAt sql.NullInt64
+		var values []byte
+		var eventTime sql.NullInt64
+		var siteReceivedAt sql.NullInt64
 		if err := rows.Scan(
-			&row.summary.SignalRef,
+			&summary.SignalRef,
 			&deviceRef,
-			&row.summary.DisplayName,
+			&summary.DisplayName,
 			&revision,
-			&row.summary.DescriptorPresence,
+			&summary.DescriptorPresence,
 			&unit,
 			&valueType,
-			&row.summary.HasSemanticMapping,
-			&row.edgeNodeID,
-			&row.seriesKey,
+			&summary.HasSemanticMapping,
+			&lastReceivedAt,
+			&values,
+			&eventTime,
+			&siteReceivedAt,
 		); err != nil {
 			return nil, err
 		}
 		if deviceRef.Valid {
-			row.summary.DeviceRef = &deviceRef.String
+			summary.DeviceRef = &deviceRef.String
 		}
 		if revision.Valid {
-			row.summary.ProfileRevision = &revision.Int64
+			summary.ProfileRevision = &revision.Int64
 		}
 		if unit.Valid {
-			row.summary.Unit = &unit.String
+			summary.Unit = &unit.String
 		}
 		if valueType.Valid {
-			row.summary.ValueType = &valueType.String
+			summary.ValueType = &valueType.String
 		}
-		resultRows = append(resultRows, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	result := make([]siteapp.SignalSummary, 0, len(resultRows))
-	for _, row := range resultRows {
-		latest, err := store.latestValidMeasurement(ctx, row.edgeNodeID, row.seriesKey)
-		if err != nil {
-			return nil, err
+		if lastReceivedAt.Valid {
+			summary.LastReceivedAt = &lastReceivedAt.Int64
 		}
-		row.summary.Latest = latest
-		result = append(result, row.summary)
-	}
-	return result, nil
-}
-
-func (store *Store) latestDeviceReceivedAt(
-	ctx context.Context,
-	edgeNodeID string,
-	systemID string,
-) (*int64, error) {
-	rows, err := store.db.QueryContext(ctx, `
-		SELECT series_key FROM site_signals
-		WHERE edge_node_id = ? AND system_id = ?
-		ORDER BY signal_ref
-	`, edgeNodeID, systemID)
-	if err != nil {
-		return nil, err
-	}
-	seriesKeys := make([]string, 0)
-	for rows.Next() {
-		var seriesKey string
-		if err := rows.Scan(&seriesKey); err != nil {
-			_ = rows.Close()
-			return nil, err
+		if eventTime.Valid && siteReceivedAt.Valid && values != nil {
+			summary.Latest = &siteapp.LatestMeasurement{
+				Values:         append(json.RawMessage(nil), values...),
+				EventTime:      eventTime.Int64,
+				SiteReceivedAt: siteReceivedAt.Int64,
+			}
 		}
-		seriesKeys = append(seriesKeys, seriesKey)
+		result = append(result, summary)
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	var latestReceivedAt *int64
-	for _, seriesKey := range seriesKeys {
-		measurement, err := store.latestValidMeasurement(ctx, edgeNodeID, seriesKey)
-		if err != nil {
-			return nil, err
-		}
-		if measurement != nil &&
-			(latestReceivedAt == nil || measurement.SiteReceivedAt > *latestReceivedAt) {
-			value := measurement.SiteReceivedAt
-			latestReceivedAt = &value
-		}
-	}
-	return latestReceivedAt, nil
-}
-
-func (store *Store) latestValidMeasurement(
-	ctx context.Context,
-	edgeNodeID string,
-	seriesKey string,
-) (*siteapp.LatestMeasurement, error) {
-	rows, err := store.db.QueryContext(ctx, `
-		SELECT record_json, received_at
-		FROM raw_records
-		WHERE edge_node_id = ?
-			AND json_extract(CAST(record_json AS TEXT), '$.family') = 'measurement'
-			AND json_extract(CAST(record_json AS TEXT), '$.series_key') = ?
-		ORDER BY received_at DESC, ledger_epoch DESC, pub_seq DESC
-		LIMIT 32
-	`, edgeNodeID, seriesKey)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var record []byte
-		var siteReceivedAt int64
-		if err := rows.Scan(&record, &siteReceivedAt); err != nil {
-			return nil, err
-		}
-		measurement, valid := decodeInventoryMeasurement(record, siteReceivedAt)
-		if valid {
-			return &measurement, nil
-		}
-	}
-	return nil, rows.Err()
+	return result, rows.Err()
 }
 
 func decodeInventoryMeasurement(

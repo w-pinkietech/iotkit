@@ -173,7 +173,26 @@ var schemaMigrations = []migration{
 			edge_node_id TEXT NOT NULL,
 			series_key TEXT NOT NULL,
 			system_id TEXT,
+			last_received_at INTEGER,
 			created_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, series_key)
+		);
+		CREATE INDEX IF NOT EXISTS ix_site_signals_device
+			ON site_signals(edge_node_id, system_id, signal_ref);
+		CREATE TABLE IF NOT EXISTS inventory_projection_cursors (
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			last_pub_seq INTEGER NOT NULL CHECK(last_pub_seq >= 0),
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, ledger_epoch)
+		);
+		CREATE TABLE IF NOT EXISTS signal_current_values (
+			edge_node_id TEXT NOT NULL,
+			series_key TEXT NOT NULL,
+			values_json BLOB NOT NULL CHECK(json_valid(values_json)),
+			event_time INTEGER NOT NULL CHECK(event_time >= 0),
+			site_received_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
 			PRIMARY KEY (edge_node_id, series_key)
 		);
 		CREATE TABLE IF NOT EXISTS device_profiles (
@@ -196,8 +215,10 @@ var schemaMigrations = []migration{
 		INSERT OR IGNORE INTO site_devices(device_ref, edge_node_id, system_id, created_at)
 		SELECT 'dev_' || lower(hex(randomblob(16))), edge_node_id, system_id, updated_at
 		FROM descriptor_devices;
-		INSERT OR IGNORE INTO site_signals(signal_ref, edge_node_id, series_key, system_id, created_at)
-		SELECT 'sig_' || lower(hex(randomblob(16))), edge_node_id, series_key, system_id, updated_at
+		INSERT OR IGNORE INTO site_signals(
+			signal_ref, edge_node_id, series_key, system_id, last_received_at, created_at
+		)
+		SELECT 'sig_' || lower(hex(randomblob(16))), edge_node_id, series_key, system_id, NULL, updated_at
 		FROM descriptor_signals;
 	`},
 }
