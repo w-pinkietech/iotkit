@@ -26,6 +26,7 @@
 - Create: `core/ledger/migrations/0018_descriptor_metadata.sql`
 - Create: `core/registry/migrations/0019_descriptor_revision.sql`
 - Create: `core/publish/src/descriptor.rs`
+- Create: `iotkit-edge/src/descriptor_snapshot.rs`
 - Create: `testdata/egress/v1/descriptor-snapshot.json`
 - Modify: `core/ledger/src/{lib.rs,store.rs}`
 - Modify: `core/registry/src/lib.rs`
@@ -33,13 +34,13 @@
 
 **Interfaces:**
 - `set_presentation_identifier(conn, system_id, Option<&str>) -> Result<(), LedgerError>` validates a short printable identifier and changes no identity semantics.
-- `build_descriptor_snapshot(conn, edge_node_id) -> Result<DescriptorSnapshot, PublishError>` returns deterministically ordered devices/signals.
+- `iotkit_edge::descriptor_snapshot::build_descriptor_snapshot(conn, edge_node_id) -> Result<DescriptorSnapshot, PublishError>` composes ledger and registry without adding a core dependency cycle.
 - `DescriptorSnapshot::encode_bounded() -> Result<Vec<u8>, PublishError>` rejects payloads above 1 MiB.
 
-- [ ] Add failing migration tests proving existing Edge data survives, descriptor revision is initialized, and relevant device/series/registry mutations increment it in the same transaction.
-- [ ] Add failing contract tests for the shared fixture, deterministic ordering, resolved registry metadata, optional identifier, unknown fields, invalid identifier, and 1 MiB rejection.
-- [ ] Implement migrations, identifier validation/storage, and snapshot builder with no hardware/provider/secret fields.
-- [ ] Run focused ledger/registry/publish tests and commit this independently testable contract.
+- [x] Add failing migration tests proving existing Edge data survives, descriptor revision is initialized, and relevant device/series/registry mutations increment it in the same transaction.
+- [x] Add failing contract tests for the shared fixture, deterministic ordering, resolved registry metadata, optional identifier, unknown fields, invalid identifier, and 1 MiB rejection.
+- [x] Implement migrations, identifier validation/storage, and snapshot builder with no hardware/provider/secret fields.
+- [x] Run focused ledger/registry/publish tests and commit this independently testable contract.
 
 ### Task 2: Edge MQTT retained publication and deployment binding
 
@@ -104,4 +105,3 @@
 - [ ] Run `go test ./... -count=1` for `iotkit-site` in the existing Go Docker image.
 - [ ] Run `scripts/test-site-bootstrap.sh` and the Docker MQTT vertical slice.
 - [ ] Run `git diff --check`, inspect `git status`, and report any intentionally omitted Pi test (no hardware behavior changed).
-

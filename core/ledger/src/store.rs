@@ -92,6 +92,7 @@ impl DeviceState {
 pub struct DeviceRow {
     pub system_id: SystemId,
     pub hardware_id: String,
+    pub presentation_identifier: Option<String>,
     pub user_label: Option<String>,
     pub parent: Option<SystemId>,
     pub kind: DeviceKind,
@@ -260,11 +261,52 @@ fn row_to_device(row: &rusqlite::Row<'_>) -> Result<DeviceRow, rusqlite::Error> 
         kind: DeviceKind::from_db(&row.get::<_, String>(4)?),
         state: DeviceState::from_db(&row.get::<_, String>(5)?),
         declaration_version: row.get(6)?,
+        presentation_identifier: row.get(7)?,
     })
 }
 
-const DEVICE_COLS: &str =
-    "system_id, hardware_id, user_label, parent_system_id, kind, state, declaration_version";
+const DEVICE_COLS: &str = "system_id, hardware_id, user_label, parent_system_id, kind, state, declaration_version, presentation_identifier";
+
+pub fn descriptor_revision(conn: &Connection) -> Result<u64, LedgerError> {
+    let value = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'descriptor_revision'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| LedgerError::NotFound("descriptor_revision".into()))?;
+    value.parse::<u64>().map_err(|_| {
+        LedgerError::InvalidId("descriptor_revision is not an unsigned integer".into())
+    })
+}
+
+pub fn set_presentation_identifier(
+    conn: &Connection,
+    system_id: &SystemId,
+    identifier: Option<&str>,
+) -> Result<(), LedgerError> {
+    if let Some(value) = identifier
+        && (value.is_empty() || value.len() > 64 || value.chars().any(char::is_control))
+    {
+        return Err(LedgerError::InvalidId(
+            "presentation_identifier must be 1-64 UTF-8 bytes without control characters".into(),
+        ));
+    }
+    let changed = conn.execute(
+        "UPDATE devices
+         SET presentation_identifier = ?1
+         WHERE system_id = ?2 AND presentation_identifier IS NOT ?1",
+        params![identifier, system_id.as_bytes().to_vec()],
+    )?;
+    if changed == 0 && get_device(conn, system_id)?.is_none() {
+        return Err(LedgerError::NotFound(format!(
+            "device {}",
+            system_id.to_text()
+        )));
+    }
+    Ok(())
+}
 
 /// append-only監査イベント(R13最小下地)への行追記。registryクレート等の外部呼び出し用公開面。
 pub fn record_event(

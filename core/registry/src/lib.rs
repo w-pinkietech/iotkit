@@ -15,11 +15,18 @@ pub use store::{
 
 use iotkit_core_storage::Migration;
 
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 6,
-    label: "registry",
-    sql: include_str!("../migrations/0006_registry.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 6,
+        label: "registry",
+        sql: include_str!("../migrations/0006_registry.sql"),
+    },
+    Migration {
+        version: 19,
+        label: "descriptor_revision",
+        sql: include_str!("../migrations/0019_descriptor_revision.sql"),
+    },
+];
 
 #[cfg(test)]
 mod migration_tests {
