@@ -446,12 +446,25 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
             "restore target is not empty: ingest_dedup_maintenance contains runtime state".into(),
         );
     }
+    let canonical_descriptor_revision: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ledger_meta
+         WHERE key='descriptor_revision' AND value='1')",
+        [],
+        |row| row.get(0),
+    )?;
+    let ledger_meta_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM ledger_meta", [], |row| row.get(0))?;
+    if !canonical_descriptor_revision || ledger_meta_rows != 1 {
+        return Err(
+            "restore target is not empty: ledger_meta contains identity or descriptor state".into(),
+        );
+    }
 
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_schema
          WHERE type = 'table'
            AND name NOT LIKE 'sqlite_%'
-           AND name NOT IN ('_schema_version', '_iotkit_edge_format', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config', 'ingest_dedup_maintenance')
+           AND name NOT IN ('_schema_version', '_iotkit_edge_format', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config', 'ingest_dedup_maintenance', 'ledger_meta')
          ORDER BY name",
     )?;
     let tables = stmt

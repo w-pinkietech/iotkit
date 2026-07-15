@@ -279,6 +279,7 @@ fn restore_pristine_check_includes_principal_material_generation_and_runtime_con
         "UPDATE device_capacity SET stale_after_ms=2 WHERE id=1",
         "UPDATE ingress_listener_config SET desired_generation=1,bind_addr='192.168.1.2:8444',interface='eth0',site_local_cidrs='[\"192.168.1.0/24\"]' WHERE id=1",
         "UPDATE ingest_dedup_maintenance SET degraded=1,last_failure_at=1 WHERE id=1",
+        "UPDATE ledger_meta SET value='2' WHERE key='descriptor_revision'",
         "INSERT INTO ingress_tls_material (id,generation,fingerprint,approved_at,approved_by) VALUES (1,1,'test',1,'test')",
     ]
     .into_iter()
@@ -1760,7 +1761,9 @@ fn existing_empty_db_gets_edge_migration_version_set() {
         .unwrap();
     assert_eq!(
         versions,
-        vec![1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        vec![
+            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        ]
     );
     let edge_node_id: String = conn
         .query_row(
@@ -3500,7 +3503,8 @@ fn snapshot_restore_authority_failure_rolls_back_restored_state_and_epochs() {
                 conn.query_row("SELECT COUNT(*) FROM ledger_meta", [], |row| row.get(0))?;
             let events: i64 =
                 conn.query_row("SELECT COUNT(*) FROM ledger_events", [], |row| row.get(0))?;
-            assert_eq!((devices, ledger_meta, events), (0, 0, 0));
+            assert_eq!((devices, ledger_meta, events), (0, 1, 0));
+            assert_eq!(iotkit_core_ledger::descriptor_revision(conn).unwrap(), 1);
             assert_eq!(
                 iotkit_core_ops::ownership_state(conn).unwrap(),
                 iotkit_core_ops::OwnershipState::Unowned
