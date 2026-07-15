@@ -61,6 +61,12 @@ func TestRecordsTopicFilterUsesEdgeNodes(t *testing.T) {
 	}
 }
 
+func TestDescriptorTopicFilterUsesEdgeNodes(t *testing.T) {
+	if descriptorsTopicFilter != "iotkit/v1/edge-nodes/+/descriptors" {
+		t.Fatalf("descriptors topic filter = %q", descriptorsTopicFilter)
+	}
+}
+
 func TestPahoPublishUsesWholeOperationWriteTimeout(t *testing.T) {
 	options := newClientOptions(ClientConfig{
 		BrokerURL: "tcp://127.0.0.1:1883",

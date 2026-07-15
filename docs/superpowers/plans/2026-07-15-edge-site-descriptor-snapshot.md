@@ -57,10 +57,10 @@
 - MQTT task publishes the current snapshot after every connection and republishes only when the persisted `(ledger_epoch, descriptor_revision)` changes while connected.
 
 - [x] Add failing binding/runtime tests proving exact topic derivation, the QoS 1 retained binding, reconnect republish, and changed-revision republish.
-- [ ] Prove retained delivery and descriptor-error isolation from records in the Docker vertical slice after Site subscription lands.
+- [x] Prove retained delivery and descriptor-error isolation from records in the Docker vertical slice after Site subscription lands.
 - [x] Implement publication without coupling descriptor success to records subscription, batch delivery, or acknowledgement handling.
 - [x] Add descriptor read/write ACLs to development and generated production configuration; update bootstrap validation for the new non-secret binding fields.
-- [ ] Extend the Docker MQTT vertical slice to observe the retained descriptor independently of record custody.
+- [x] Extend the Docker MQTT vertical slice to observe the retained descriptor independently of record custody.
 - [x] Run focused Rust and production bootstrap tests; run the retained MQTT vertical slice after Site subscription lands, then commit each independently testable part.
 
 ### Task 3: Site descriptor contract and durable replica
@@ -94,10 +94,10 @@
 - Site subscribes to both `+/records` and `+/descriptors` at QoS 1 and routes each message to its independent processor path.
 - Descriptor errors are logged without publishing `accepted-through`; record behavior remains unchanged.
 
-- [ ] Add failing client/processor tests for exact descriptor topic matching, valid apply, invalid descriptor isolation, and records continuing after descriptor failure.
-- [ ] Implement multi-topic subscription and store application.
-- [ ] Update canonical contract/auth/architecture text with the implemented fields, ACLs, retained semantics, and failure isolation; mark this spec slice implemented without duplicating it elsewhere.
-- [ ] Run all Site tests and focused MQTT integration tests, then commit.
+- [x] Add failing client/processor tests for exact descriptor topic matching, valid apply, invalid descriptor isolation, and records continuing after descriptor failure.
+- [x] Implement multi-topic subscription and store application.
+- [x] Update canonical contract/auth/architecture text with the implemented fields, ACLs, retained semantics, and failure isolation; mark this spec slice implemented without duplicating it elsewhere.
+- [x] Run focused Site tests and the retained MQTT/custody vertical slice, then commit.
 
 ### Task 5: Review and full verification
 

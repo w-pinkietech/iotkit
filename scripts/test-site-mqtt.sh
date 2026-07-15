@@ -6,6 +6,8 @@ project="iotkit-mqtt-test-$$"
 scratch=$(mktemp -d)
 edge_pid=""
 
+command -v sqlite3 >/dev/null || { echo "required command missing: sqlite3" >&2; exit 1; }
+
 export IOTKIT_MOSQUITTO_PASSWORD_FILE="$scratch/passwords"
 export IOTKIT_MOSQUITTO_ACL_FILE="$scratch/acl"
 export IOTKIT_SITE_PASSWORD_FILE="$scratch/site-password"
@@ -128,6 +130,40 @@ EOF
 
 "$repo_root/target/debug/iotkit-edge" --config "$scratch/edge.toml" >"$scratch/edge.log" 2>&1 &
 edge_pid=$!
+
+docker run --rm --user "$(id -u):$(id -g)" \
+  --network "${project}_default" \
+  -e HOME=/tmp \
+  -e GOMODCACHE=/tmp/gomodcache \
+  -e GOCACHE=/tmp/gocache \
+  -e IOTKIT_TEST_BROKER_URL=tcp://broker:1883 \
+  -e IOTKIT_TEST_SITE_PASSWORD_FILE=/run/iotkit-test/site-password \
+  -e IOTKIT_TEST_EDGE_NODE_ID="$edge_node_id" \
+  -v /tmp/iotkit-go-mod:/tmp/gomodcache \
+  -v /tmp/iotkit-go-cache:/tmp/gocache \
+  -v "$repo_root:/src" \
+  -v "$scratch:/run/iotkit-test:ro" \
+  -w /src/iotkit-site \
+  golang:1.25-bookworm \
+  go test -tags=integration ./internal/mqttsite \
+    -run TestMQTTRetainedDescriptorIsAvailableToLateSubscriber -count=1
+
+descriptor_stored=false
+for _ in $(seq 1 30); do
+  descriptor_count=$(sqlite3 "$IOTKIT_SITE_DATA_DIR/site.db" \
+    "SELECT count(*) FROM edge_descriptor_state WHERE edge_node_id='$edge_node_id'" 2>/dev/null || true)
+  if [[ "$descriptor_count" == "1" ]]; then
+    descriptor_stored=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$descriptor_stored" != true ]]; then
+  docker compose -p "$project" -f "$repo_root/compose.dev.yaml" logs broker site
+  sed -n '1,240p' "$scratch/edge.log"
+  echo "Site did not durably replicate the Edge descriptor" >&2
+  exit 1
+fi
 
 smoke_output=""
 for _ in $(seq 1 60); do
