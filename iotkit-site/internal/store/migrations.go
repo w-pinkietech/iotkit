@@ -123,6 +123,43 @@ var schemaMigrations = []migration{
 			summary_json BLOB NOT NULL CHECK(json_valid(summary_json))
 		);
 	`},
+	{version: 3, sql: `
+		CREATE TABLE IF NOT EXISTS edge_descriptor_state (
+			edge_node_id TEXT PRIMARY KEY,
+			ledger_epoch TEXT NOT NULL,
+			descriptor_revision INTEGER NOT NULL CHECK(descriptor_revision > 0),
+			content_sha256 BLOB NOT NULL CHECK(length(content_sha256) = 32),
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS descriptor_devices (
+			edge_node_id TEXT NOT NULL,
+			system_id TEXT NOT NULL,
+			identifier TEXT,
+			state TEXT NOT NULL CHECK(state IN ('quarantined', 'active', 'retired')),
+			presence TEXT NOT NULL CHECK(presence IN ('current', 'stale')),
+			descriptor_revision INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, system_id)
+		);
+		CREATE TABLE IF NOT EXISTS descriptor_signals (
+			edge_node_id TEXT NOT NULL,
+			series_key TEXT NOT NULL,
+			system_id TEXT NOT NULL,
+			measurement_key TEXT NOT NULL,
+			channel_index INTEGER,
+			variant TEXT NOT NULL,
+			unit TEXT,
+			value_type TEXT NOT NULL CHECK(value_type IN ('float', 'int', 'bool', 'record')),
+			presence TEXT NOT NULL CHECK(presence IN ('current', 'stale')),
+			descriptor_revision INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, series_key)
+		);
+		CREATE INDEX IF NOT EXISTS ix_descriptor_devices_presence
+			ON descriptor_devices(edge_node_id, presence, system_id);
+		CREATE INDEX IF NOT EXISTS ix_descriptor_signals_presence
+			ON descriptor_signals(edge_node_id, presence, series_key);
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

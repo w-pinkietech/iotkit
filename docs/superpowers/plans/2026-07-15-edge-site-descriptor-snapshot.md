@@ -77,10 +77,10 @@
 - `Store.ApplyDescriptorSnapshot(ctx, snapshot) (DescriptorApplyResult, error)` atomically updates the current replica.
 - Result distinguishes `applied`, `idempotent`, and `stale_ignored`; same-revision content conflict returns a typed error after writing a secret-free system audit event.
 
-- [ ] Add failing strict-decoder tests using the shared fixture plus malformed identity, state, series-key, duplicate, unknown-field, and oversize cases.
-- [ ] Add failing migration/store tests for first apply, idempotent replay, lower revision ignore, same-revision conflict audit, epoch replacement, and missing-entry stale marking.
-- [ ] Implement schema v3 and atomic apply without touching raw, cursor, mapping, semantic event, or output tables.
-- [ ] Run focused Site contract/store tests and commit.
+- [x] Add failing strict-decoder tests using the shared fixture plus malformed identity, state, series-key, duplicate, unknown-field, and oversize cases.
+- [x] Add failing migration/store tests for first apply, idempotent replay, lower revision ignore, same-revision conflict audit, epoch replacement, and missing-entry stale marking.
+- [x] Implement schema v3 and atomic apply without touching raw, cursor, mapping, semantic event, or output tables.
+- [x] Run focused Site contract/store tests and commit.
 
 ### Task 4: Site MQTT subscription and canonical documentation
 
