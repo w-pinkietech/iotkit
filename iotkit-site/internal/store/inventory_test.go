@@ -94,6 +94,87 @@ func TestReconcileInventorySourcesCreatesMeasurementFirstPlaceholder(t *testing.
 	}
 }
 
+func TestReconcileInventorySourcesSkipsNonCanonicalSeriesAndAdvancesProgress(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.AcceptBatch(context.Background(), testBatch(t)); err != nil {
+		t.Fatal(err)
+	}
+	processed, err := store.ReconcileInventorySources(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+	if got := testTableCount(t, store.db, "site_signals"); got != 0 {
+		t.Fatalf("non-canonical signal sources = %d, want 0", got)
+	}
+	processed, err = store.ReconcileInventorySources(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 0 {
+		t.Fatalf("reprocessed rows = %d, want 0", processed)
+	}
+	var lastPubSeq int64
+	if err := store.db.QueryRow(`
+		SELECT last_pub_seq FROM inventory_projection_cursors
+		WHERE edge_node_id = 'edge-node-01' AND ledger_epoch = 'epoch-01'
+	`).Scan(&lastPubSeq); err != nil {
+		t.Fatal(err)
+	}
+	if lastPubSeq != 1 {
+		t.Fatalf("projection cursor = %d, want 1", lastPubSeq)
+	}
+}
+
+func TestReconcileInventorySourcesProcessesAtMostLimitAndResumes(t *testing.T) {
+	store := openTestStore(t)
+	records := []json.RawMessage{
+		inventoryMeasurementRecord(t, 1, inventorySeriesKey, []any{20.0}, 1000),
+		inventoryMeasurementRecord(t, 2, inventorySeriesKey, []any{21.0}, 2000),
+		inventoryMeasurementRecord(t, 3, inventorySeriesKey, []any{22.0}, 3000),
+	}
+	batch := contract.RecordBatch{
+		SchemaVersion: 1,
+		EdgeNodeID:    "edge-node-01",
+		LedgerEpoch:   "epoch-01",
+		PublicationID: contract.PublicationID("edge-node-01", "epoch-01", 1, 3),
+		CursorStart:   1,
+		CursorEnd:     3,
+		Records:       records,
+	}
+	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	for wantCursor := int64(1); wantCursor <= 3; wantCursor++ {
+		processed, err := store.ReconcileInventorySources(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if processed != 1 {
+			t.Fatalf("processed at cursor %d = %d, want 1", wantCursor, processed)
+		}
+		var cursor int64
+		if err := store.db.QueryRow(`
+			SELECT last_pub_seq FROM inventory_projection_cursors
+			WHERE edge_node_id = 'edge-node-01' AND ledger_epoch = 'epoch-01'
+		`).Scan(&cursor); err != nil {
+			t.Fatal(err)
+		}
+		if cursor != wantCursor {
+			t.Fatalf("projection cursor = %d, want %d", cursor, wantCursor)
+		}
+	}
+	processed, err := store.ReconcileInventorySources(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed after convergence = %d, want 0", processed)
+	}
+}
+
 func TestListInventorySummariesJoinProfilesWithoutSourceIdentity(t *testing.T) {
 	store := openTestStore(t)
 	snapshot := descriptorFixture(t)
@@ -171,6 +252,22 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
 	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.db.Exec(`
+		UPDATE raw_records
+		SET received_at = CASE pub_seq
+			WHEN 1 THEN 1000
+			WHEN 2 THEN 2000
+			WHEN 3 THEN 3000
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReconcileInventorySources(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM raw_records`); err != nil {
+		t.Fatal(err)
+	}
 
 	signals, err := store.ListInventorySignals(context.Background(), 10, "")
 	if err != nil {
@@ -179,15 +276,19 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
 	if len(signals) != 1 || signals[0].Latest == nil {
 		t.Fatalf("signals = %#v", signals)
 	}
-	if string(signals[0].Latest.Values) != `[21.5]` || signals[0].Latest.EventTime != 2000 {
+	if string(signals[0].Latest.Values) != `[21.5]` || signals[0].Latest.EventTime != 2000 ||
+		signals[0].Latest.SiteReceivedAt != 2000 {
 		t.Fatalf("latest = %#v", signals[0].Latest)
+	}
+	if signals[0].LastReceivedAt == nil || *signals[0].LastReceivedAt != 3000 {
+		t.Fatalf("signal last received = %#v, want 3000", signals[0].LastReceivedAt)
 	}
 	devices, err := store.ListInventoryDevices(context.Background(), 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if devices[0].LastReceivedAt == nil || *devices[0].LastReceivedAt != signals[0].Latest.SiteReceivedAt {
-		t.Fatalf("device last received = %#v, signal latest = %#v", devices[0].LastReceivedAt, signals[0].Latest)
+	if devices[0].LastReceivedAt == nil || *devices[0].LastReceivedAt != 3000 {
+		t.Fatalf("device last received = %#v, want 3000", devices[0].LastReceivedAt)
 	}
 }
 

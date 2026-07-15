@@ -89,7 +89,24 @@ CREATE TABLE IF NOT EXISTS site_signals (
     edge_node_id TEXT NOT NULL,
     series_key TEXT NOT NULL,
     system_id TEXT,
+    last_received_at INTEGER,
     created_at INTEGER NOT NULL,
+    PRIMARY KEY (edge_node_id, series_key)
+);
+CREATE TABLE IF NOT EXISTS inventory_projection_cursors (
+    edge_node_id TEXT NOT NULL,
+    ledger_epoch TEXT NOT NULL,
+    last_pub_seq INTEGER NOT NULL CHECK(last_pub_seq >= 0),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (edge_node_id, ledger_epoch)
+);
+CREATE TABLE IF NOT EXISTS signal_current_values (
+    edge_node_id TEXT NOT NULL,
+    series_key TEXT NOT NULL,
+    values_json BLOB NOT NULL CHECK(json_valid(values_json)),
+    event_time INTEGER NOT NULL CHECK(event_time >= 0),
+    site_received_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
     PRIMARY KEY (edge_node_id, series_key)
 );
 CREATE TABLE IF NOT EXISTS device_profiles (
@@ -142,7 +159,11 @@ func TestReconcileInventorySourcesCreatesMeasurementFirstPlaceholder(t *testing.
 
 - [x] **Step 5: bounded reconciliationを実装しMQTT convergenceへ接続する**
 
-`ReconcileInventorySources`はlimit 1〜1000だけを許可し、`raw_records`の`family = measurement`かつ文字列`series_key`をsource単位で列挙する。canonical `series_key`の先頭UUIDを`system_id`としてdevice sourceも作り、signal sourceはdescriptor不在でも作る。ref生成・insertは一transactionで行い、既存refを更新しない。
+`ReconcileInventorySources`はlimit 1〜1000だけを許可し、`accepted_cursors`と独立した
+`inventory_projection_cursors`の差分から、主キーrange queryで最大limit件のraw recordだけを読む。
+非measurementと非canonical `series_key`はsourceを作らずcursorだけを進める。canonical measurementは
+device/signal source、validな最新値、validityと独立した最終受信時刻、projection cursorを一transactionで
+更新し、既存refを変更しない。これによりraw custodyへprojection failureを結合せず、履歴全走査も行わない。
 
 `mqttsite.ExportQueue`へ次を追加し、`convergeExports`の最初に呼ぶ。失敗は`inventory reconciliation failed`として記録するが、semantic projectionとMQTT exportを継続する。
 
@@ -314,6 +335,7 @@ type SignalSummary struct {
     Unit          *string            `json:"unit"`
     ValueType     *string            `json:"value_type"`
     Latest        *LatestMeasurement `json:"latest"`
+    LastReceivedAt *int64            `json:"last_received_at"`
     HasSemanticMapping bool          `json:"has_semantic_mapping"`
 }
 ```
@@ -328,7 +350,7 @@ Expected: read model methodまたはsummary型未定義でFAIL。
 
 - [x] **Step 3: descriptor・profile・mappingを結合するbounded queryを実装する**
 
-`ListInventoryDevices` / `ListInventorySignals`は`ref > afterRef ORDER BY ref LIMIT ?`を使う。descriptorがないsourceはpresence `unknown`、signalからdeviceへ解決できない場合は`DeviceRef = nil`とする。device最終受信時刻はそのdeviceに属するsignalのmeasurement `raw_records.received_at`最大値を返す。
+`ListInventoryDevices` / `ListInventorySignals`は`ref > afterRef ORDER BY ref LIMIT ?`を使う。descriptorがないsourceはpresence `unknown`、signalからdeviceへ解決できない場合は`DeviceRef = nil`とする。device最終受信時刻はmaterializedされたsignalの`last_received_at`最大値をset-wiseに返し、一覧queryからraw履歴を走査しない。
 
 - [x] **Step 4: latest valid measurement選択の失敗testを書く**
 
@@ -339,13 +361,13 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
     store := openTestStore(t)
     applyDescriptor(t, store)
     acceptMeasurements(t, store,
-        validMeasurement(1, canonicalSeriesKey, []float64{20.0}, 1000),
-        malformedMeasurement(2, canonicalSeriesKey),
-        validMeasurement(3, canonicalSeriesKey, []float64{21.5}, 3000),
+		validMeasurement(1, canonicalSeriesKey, []float64{20.0}, 1000),
+		validMeasurement(2, canonicalSeriesKey, []float64{21.5}, 2000),
+		malformedMeasurement(3, canonicalSeriesKey),
     )
     signals, err := store.ListInventorySignals(context.Background(), 10, "")
     if err != nil { t.Fatal(err) }
-    if string(signals[0].Latest.Values) != `[21.5]` || signals[0].Latest.EventTime != 3000 {
+    if string(signals[0].Latest.Values) != `[21.5]` || signals[0].Latest.EventTime != 2000 {
         t.Fatalf("latest = %#v", signals[0].Latest)
     }
 }
@@ -353,7 +375,10 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
 
 - [x] **Step 5: bounded latest-value decoderを実装する**
 
-signalごとに新しい順で最大32件のmeasurement candidateを読み、`family == "measurement"`、非空の有限number配列`values`、非負integer `event_time`を満たす最初のrecordだけを採用する。candidate上限内にvalid値がなければ`Latest=nil`とし、一覧全体を失敗させない。measurement時刻からdescriptor presenceや故障状態を推測しない。
+bounded projection内で`family == "measurement"`、非空の有限number配列`values`、非負integer
+`event_time`を満たすrecordだけを`signal_current_values`へmaterializeする。不正なmeasurementは最新値を
+上書きしないが、sourceの`last_received_at`は更新する。一覧はこのtableをjoinするだけとし、measurement時刻から
+descriptor presenceや故障状態を推測しない。
 
 - [x] **Step 6: application service read境界を実装する**
 
@@ -385,4 +410,5 @@ Commit: `feat: expose site inventory read model`
 - Identity: application serviceの公開型はopaque refだけを持ち、source identityとidentifierを含まない。
 - Mutation: profile更新はtyped dispatcher、revision precondition、同一transaction監査を必須にした。
 - Measurement-first: descriptorが未到着でもplaceholder signalと最新値を作れ、後着descriptorで同じrefをenrichする。
+- Bounded work: raw recordはdurable projection cursorにより最大1回処理し、一覧はraw履歴を走査しない。
 - Verification: 実装中はfocused Go tests、全体/Docker/Piはこの内部スライスでは繰り返さない。

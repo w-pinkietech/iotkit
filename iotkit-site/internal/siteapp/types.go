@@ -114,6 +114,7 @@ type SignalSummary struct {
 	Unit               *string            `json:"unit"`
 	ValueType          *string            `json:"value_type"`
 	Latest             *LatestMeasurement `json:"latest"`
+	LastReceivedAt     *int64             `json:"last_received_at"`
 	HasSemanticMapping bool               `json:"has_semantic_mapping"`
 }
 

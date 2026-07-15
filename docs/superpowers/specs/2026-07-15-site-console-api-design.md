@@ -211,8 +211,9 @@ Site-local profileはdescriptor複製と別tableに持つ。
 工場、工程、ラインの階層masterは作らない。`location`は例えば
 `第2工場・プレスライン出口`という一つの自由記述であり、YokaKit等のbusiness hierarchyと同期しない。
 
-current-value read modelは最新のvalid measurementをsignalごとに参照し、値、unit、event time、Site受信時刻を
-返す。event-only接点は長時間無通信でも故障とは限らないため、初版はmeasurement時刻だけから`stale`や
+current-value read modelはcursor付きのbounded projectionで最新のvalid measurementをsignalごとにmaterializeし、
+値、unit、event time、Site受信時刻を返す。validityと独立した最終受信時刻も保持し、一覧表示でraw履歴を
+走査しない。event-only接点は長時間無通信でも故障とは限らないため、初版はmeasurement時刻だけから`stale`や
 故障を断定しない。descriptorの`current/stale/retired`と、measurementの`never received/last received at`を
 別field・別表示にする。将来adapterが明示的liveness契約を提供するまで、両者を一つの「正常」に畳まない。
 descriptorやprofileの欠落はraw custody、ack、semantic projectorを停止させない。

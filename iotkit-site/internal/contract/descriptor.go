@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -36,6 +37,39 @@ type DescriptorSignal struct {
 	Variant        string  `json:"variant"`
 	Unit           *string `json:"unit"`
 	ValueType      string  `json:"value_type"`
+}
+
+type SeriesIdentity struct {
+	SystemID       string
+	MeasurementKey string
+	ChannelIndex   *int32
+	Variant        string
+}
+
+func ParseSeriesKey(seriesKey string) (SeriesIdentity, error) {
+	var noIdentity SeriesIdentity
+	if strings.IndexFunc(seriesKey, unicode.IsControl) >= 0 {
+		return noIdentity, fmt.Errorf("invalid series_key: control character")
+	}
+	parts := strings.Split(seriesKey, ":")
+	if len(parts) != 4 || !validUUID(parts[0]) || parts[1] == "" || parts[3] == "" {
+		return noIdentity, fmt.Errorf("invalid series_key: expected canonical four-part identity")
+	}
+	var channelIndex *int32
+	if parts[2] != "na" {
+		parsed, err := strconv.ParseInt(parts[2], 10, 32)
+		if err != nil || parsed < 0 || strconv.FormatInt(parsed, 10) != parts[2] {
+			return noIdentity, fmt.Errorf("invalid series_key: non-canonical channel")
+		}
+		value := int32(parsed)
+		channelIndex = &value
+	}
+	return SeriesIdentity{
+		SystemID:       parts[0],
+		MeasurementKey: parts[1],
+		ChannelIndex:   channelIndex,
+		Variant:        parts[3],
+	}, nil
 }
 
 func DecodeDescriptorSnapshot(payload []byte) (DescriptorSnapshot, error) {
@@ -94,17 +128,11 @@ func (snapshot DescriptorSnapshot) Validate() error {
 		if _, exists := deviceIDs[signal.SystemID]; !exists {
 			return descriptorInvalid("signal references an unknown device")
 		}
-		if signal.MeasurementKey == "" || strings.Contains(signal.MeasurementKey, ":") ||
-			signal.Variant == "" || strings.Contains(signal.Variant, ":") ||
-			(signal.ChannelIndex != nil && *signal.ChannelIndex < 0) {
-			return descriptorInvalid("invalid signal identity")
-		}
-		channel := "na"
-		if signal.ChannelIndex != nil {
-			channel = fmt.Sprintf("%d", *signal.ChannelIndex)
-		}
-		expected := fmt.Sprintf("%s:%s:%s:%s", signal.SystemID, signal.MeasurementKey, channel, signal.Variant)
-		if signal.SeriesKey != expected {
+		identity, err := ParseSeriesKey(signal.SeriesKey)
+		if err != nil || identity.SystemID != signal.SystemID ||
+			identity.MeasurementKey != signal.MeasurementKey ||
+			identity.Variant != signal.Variant ||
+			!sameChannelIndex(identity.ChannelIndex, signal.ChannelIndex) {
 			return descriptorInvalid("series_key does not match signal identity")
 		}
 		if _, duplicate := seriesKeys[signal.SeriesKey]; duplicate {
@@ -119,6 +147,13 @@ func (snapshot DescriptorSnapshot) Validate() error {
 		}
 	}
 	return nil
+}
+
+func sameChannelIndex(left, right *int32) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (snapshot DescriptorSnapshot) ContentSHA256() ([sha256.Size]byte, error) {

@@ -93,3 +93,27 @@ func TestDecodeDescriptorSnapshotRejectsMalformedIdentityStateAndDuplicates(t *t
 		})
 	}
 }
+
+func TestParseSeriesKeyAcceptsOnlyCanonicalIdentity(t *testing.T) {
+	valid := "018f0000-0000-7000-8000-000000000001:temperature:2:primary"
+	identity, err := ParseSeriesKey(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.SystemID != "018f0000-0000-7000-8000-000000000001" ||
+		identity.MeasurementKey != "temperature" || identity.ChannelIndex == nil ||
+		*identity.ChannelIndex != 2 || identity.Variant != "primary" {
+		t.Fatalf("identity = %#v", identity)
+	}
+	for _, invalid := range []string{
+		"not-a-uuid:temperature:na:primary",
+		"018f0000-0000-7000-8000-000000000001::na:primary",
+		"018f0000-0000-7000-8000-000000000001:temperature:02:primary",
+		"018f0000-0000-7000-8000-000000000001:temperature:-1:primary",
+		"018f0000-0000-7000-8000-000000000001:temperature:na:",
+	} {
+		if _, err := ParseSeriesKey(invalid); err == nil {
+			t.Fatalf("non-canonical series key %q was accepted", invalid)
+		}
+	}
+}
