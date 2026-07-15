@@ -25,3 +25,28 @@ BEGIN
     WHERE key = 'descriptor_revision';
 END;
 
+CREATE TRIGGER descriptor_registry_alias_insert
+AFTER INSERT ON registry_aliases
+BEGIN
+    UPDATE ledger_meta
+    SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+    WHERE key = 'descriptor_revision';
+END;
+
+CREATE TRIGGER descriptor_registry_alias_delete
+AFTER DELETE ON registry_aliases
+BEGIN
+    UPDATE ledger_meta
+    SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+    WHERE key = 'descriptor_revision';
+END;
+
+CREATE TRIGGER descriptor_registry_alias_update
+AFTER UPDATE OF alias, measurement_key ON registry_aliases
+WHEN OLD.alias IS NOT NEW.alias
+  OR OLD.measurement_key IS NOT NEW.measurement_key
+BEGIN
+    UPDATE ledger_meta
+    SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+    WHERE key = 'descriptor_revision';
+END;

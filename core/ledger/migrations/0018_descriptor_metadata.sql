@@ -56,4 +56,3 @@ BEGIN
     SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
     WHERE key = 'descriptor_revision';
 END;
-

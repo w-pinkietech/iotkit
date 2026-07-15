@@ -4,7 +4,7 @@
 
 **Goal:** Edgeのadapter-neutralなデバイス・信号descriptorをretained MQTTで配信し、Siteがraw custodyとは独立に検証・複製できるようにする。
 
-**Architecture:** Edge ledger/registryを正本とし、`core/publish`がcomplete snapshotを組み立てる。Edge MQTT taskはrecordsとは別topicへQoS 1 retained publishし、Siteはstrict contract validation後にSQLiteへrevision-awareに反映する。descriptorの失敗はrecords受理、`accepted-through`、semantic projectionを止めない。
+**Architecture:** Edge ledger/registryを正本とし、Edgeが`core/publish`のwire型を使ってcomplete snapshotを組み立てる。Edge MQTT taskはrecordsとは別topicへQoS 1 retained publishし、Siteはstrict contract validation後にSQLiteへrevision-awareに反映する。descriptorの失敗はrecords受理、`accepted-through`、semantic projectionを止めない。
 
 **Tech Stack:** Rust 2024, rusqlite, rumqttc, Go 1.25, modernc SQLite, Paho MQTT, Mosquitto 2.
 
