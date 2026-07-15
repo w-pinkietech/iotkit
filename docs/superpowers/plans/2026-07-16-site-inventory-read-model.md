@@ -284,7 +284,7 @@ Commit: `feat: manage site inventory profiles`
 - Produces: `siteapp.DeviceSummary`, `siteapp.SignalSummary`, `siteapp.LatestMeasurement`, `siteapp.PageRequest`
 - Consumes: Task 1 source refsとTask 2 profile
 
-- [ ] **Step 1: source identityを露出しない一覧型とpaginationの失敗testを書く**
+- [x] **Step 1: source identityを露出しない一覧型とpaginationの失敗testを書く**
 
 ```go
 type PageRequest struct {
@@ -320,17 +320,17 @@ type SignalSummary struct {
 
 testはref昇順、`AfterRef` exclusive、limit 1〜100、未設定profileは空文字とnil revision、summaryをJSON化しても`edge_node_id`、`system_id`、`series_key`、`identifier`が存在しないことを検査する。
 
-- [ ] **Step 2: testがread method未実装で失敗することを確認する**
+- [x] **Step 2: testがread method未実装で失敗することを確認する**
 
 Run: `cd iotkit-site && env GOPATH=/tmp/iotkit-next-go-path GOCACHE=/tmp/iotkit-next-go-cache go test ./internal/store -run 'TestListInventory(Device|Signal)'`
 
 Expected: read model methodまたはsummary型未定義でFAIL。
 
-- [ ] **Step 3: descriptor・profile・mappingを結合するbounded queryを実装する**
+- [x] **Step 3: descriptor・profile・mappingを結合するbounded queryを実装する**
 
 `ListInventoryDevices` / `ListInventorySignals`は`ref > afterRef ORDER BY ref LIMIT ?`を使う。descriptorがないsourceはpresence `unknown`、signalからdeviceへ解決できない場合は`DeviceRef = nil`とする。device最終受信時刻はそのdeviceに属するsignalのmeasurement `raw_records.received_at`最大値を返す。
 
-- [ ] **Step 4: latest valid measurement選択の失敗testを書く**
+- [x] **Step 4: latest valid measurement選択の失敗testを書く**
 
 同一signalへ古いvalid measurement、より新しいmalformed measurement、最新のvalid measurementを保存し、read modelが最新validだけを返すことを検査する。descriptor先着では`Latest=nil`、measurement先着ではpresence `unknown`と最新値が返ることも検査する。
 
@@ -351,11 +351,11 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: bounded latest-value decoderを実装する**
+- [x] **Step 5: bounded latest-value decoderを実装する**
 
 signalごとに新しい順で最大32件のmeasurement candidateを読み、`family == "measurement"`、非空の有限number配列`values`、非負integer `event_time`を満たす最初のrecordだけを採用する。candidate上限内にvalid値がなければ`Latest=nil`とし、一覧全体を失敗させない。measurement時刻からdescriptor presenceや故障状態を推測しない。
 
-- [ ] **Step 6: application service read境界を実装する**
+- [x] **Step 6: application service read境界を実装する**
 
 Repositoryへ次を追加し、`Service.ListDevices` / `ListSignals`はlimitを1〜100で先に検証して委譲する。
 
@@ -366,7 +366,7 @@ ListInventorySignals(context.Context, int, string) ([]SignalSummary, error)
 
 fake repository testでinvalid limit時にrepositoryが呼ばれないことと、返却型にsource identityがないことを確認する。
 
-- [ ] **Step 7: focused testsを通し、設計書の実装状態を更新してcommitする**
+- [x] **Step 7: focused testsを通し、設計書の実装状態を更新してcommitする**
 
 `docs/superpowers/specs/2026-07-15-site-console-api-design.md`のdescriptor実装状態を「public ref、profile、current-value read modelまで実装済み。HTTP APIとHTMLは後続スライス」に更新する。
 
