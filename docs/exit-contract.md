@@ -148,9 +148,11 @@ cursor. MQTT PUBACK never advances this cursor and never authorizes retention pu
 
 ## Authentication
 
-The first implementation uses MQTT over TLS inside the selected tailnet, anonymous access disabled,
-and one static credential plus topic ACL per Edge Node. Secrets are stored outside Git and never appear
-in argv, logs, Debug output, audit detail, or query output. D10 owns later authentication hardening.
+The first implementation uses MQTT over TLS on an operator-provided IP path, anonymous access
+disabled, and one static credential plus topic ACL per Edge Node. The path may be a site LAN, VPN,
+private routed network, or another deployment-specific route; IoTKit requires no VPN product.
+Secrets are stored outside Git and never appear in argv, logs, Debug output, audit detail, or query
+output. D10 owns later authentication hardening.
 
 Edge configuration names the Broker and a credential file; the MQTT username is always the
 Edge Node's generated `edge_node_id`:

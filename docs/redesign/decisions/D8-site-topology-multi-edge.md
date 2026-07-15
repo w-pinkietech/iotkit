@@ -53,7 +53,7 @@ Site側のglobal record identityは次である。
 
 ## Failure behavior
 
-- Site、Broker、overlay停止中も各Edge Nodeはローカル収集を継続し、未ack outboxを保持する。
+- Site、Broker、network経路停止中も各Edge Nodeはローカル収集を継続し、未ack outboxを保持する。
 - 復旧後は各Edge Nodeが独立に再送し、accepted-throughへ収束する。
 - SiteのSQL失敗、ENOSPC、corruptionではapplication ackを返さない。
 - 一部Edge Nodeだけ不達の場合、Siteは欠けたEdge Nodeを明示し、site集計を完全値として表示しない。

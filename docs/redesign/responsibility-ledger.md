@@ -108,13 +108,15 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 - **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
   Edge側の `custody_lost` ではなくSite側の `archive_lost` として記録する(custody境界の明確化。D8)。
 
-## D10波及(出口認証 2026-07-13簡素化改訂)
+## D10波及(出口認証 2026-07-15 network方式非依存改訂)
 
 - **R19出口認証の設計本体**は [decisions/D10-exit-authentication.md](decisions/D10-exit-authentication.md)。
-  MVPはTailscale内TLS、匿名禁止、Edge Nodeごとのstatic Broker credential、topic ACLとする。
+  MVPはoperatorが用意するIP経路上のMQTT TLS、匿名禁止、Edge Nodeごとのstatic Broker credential、
+  topic ACLとする。VPNと特定network製品は必須にしない。
 - enrollment、短命credential、two-slot rotation、無人再発行、clone/restore fenceは配布前hardening候補であり、
   最初の1 Edge Node実機スライスの実装順や完了条件にしない。
-- overlayは到達経路であってapplication認証ではない。provider secretはIoTKitに保存しない。
+- LAN、拠点間回線、VPN等は到達経路であってapplication認証ではない。VPN利用時もprovider secretはIoTKitに
+  保存しない。
 
 ## D11波及(入口認証・流入制御 2026-07-08)
 

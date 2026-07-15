@@ -1,7 +1,7 @@
 # IoTKit / YokaKit 再設計 用語集
 
 Status: 会話合意済み (living document)
-Updated: 2026-07-14
+Updated: 2026-07-15
 
 この文書は再設計に関わるすべての文書・コード・会話で使う統一語彙を定める。
 ここにない語を新しく使うときは、まずこの文書に追加する。
@@ -143,7 +143,7 @@ Updated: 2026-07-14
 | 用語 | 英語 | 定義 |
 |---|---|---|
 | Edge Node credential | edge node credential | Edge Nodeごとに発行するstatic Broker credential。共有禁止、Git/argv/log非掲載、当該Edge NodeのtopicだけをACLで許可(D10) |
-| 管理overlay経路 | managed overlay path | Tailscale等の外部control planeを持つ到達経路。MVPではtailnet内TLSを使うが、overlay identityだけをapplication認証にしない(D10) |
+| 管理overlay経路 | managed overlay path | Tailscale等の外部control planeを持つ任意の到達経路。IoTKitの必須要件ではなく、利用時もoverlay identityだけをapplication認証にしない(D10) |
 | credential hardening | credential hardening | enrollment、短命化、rotation、無人再発行等の配布前候補。最初の1 Edge Node実機スライスには含めない(D10) |
 
 ## 入口認証(D11 2026-07-08)
