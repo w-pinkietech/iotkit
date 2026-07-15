@@ -1466,6 +1466,53 @@ fn missing_db_path_is_error_and_does_not_create_empty_db() {
 }
 
 #[test]
+fn init_creates_fresh_database_and_reports_identity_as_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("edge.db");
+
+    let stdout = assert_success(run(&["--db", db_path.to_str().unwrap(), "init"]));
+
+    let reported: Value = serde_json::from_str(&stdout).unwrap();
+    let edge_node_id = reported["edge_node_id"].as_str().unwrap();
+    let ledger_epoch = reported["ledger_epoch"].as_str().unwrap();
+    assert!(!edge_node_id.is_empty());
+    assert!(!ledger_epoch.is_empty());
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let stored_edge_node_id: String = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'edge_node_id'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(edge_node_id, stored_edge_node_id);
+    assert_eq!(
+        ledger_epoch,
+        iotkit_core_ledger::ledger_epoch(&conn).unwrap()
+    );
+}
+
+#[test]
+fn init_refuses_existing_database_without_changing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("edge.db");
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| Ok(iotkit_core_ledger::edge_node_id(conn).unwrap()))
+        .unwrap();
+    drop(db);
+    let bytes_before = std::fs::read(&db_path).unwrap();
+
+    let stderr = assert_failure(run(&["--db", db_path.to_str().unwrap(), "init"]));
+
+    assert!(
+        stderr.contains("init requires an absent database"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
+}
+
+#[test]
 fn mutate_command_without_db_argument_or_env_is_error() {
     let dir = tempfile::tempdir().unwrap();
     let fallback_path = dir.path().join("iotkit.db");

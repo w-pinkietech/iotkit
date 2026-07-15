@@ -28,6 +28,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Init,
     Sightings {
         #[command(subcommand)]
         command: SightingsCommand,
@@ -129,6 +130,7 @@ fn main() {
 
 fn run() -> AppResult<()> {
     let cli = Cli::parse();
+    let initializing = matches!(&cli.command, Command::Init);
     let restoring_snapshot = matches!(
         &cli.command,
         Command::Snapshot {
@@ -144,12 +146,13 @@ fn run() -> AppResult<()> {
         } => Some(args.db.clone()),
         _ => None,
     };
-    let allow_missing_db = matches!(
-        &cli.command,
-        Command::Snapshot {
-            command: cmd::snapshot::SnapshotCommand::Restore(args),
-        } if args.create
-    );
+    let allow_missing_db = initializing
+        || matches!(
+            &cli.command,
+            Command::Snapshot {
+                command: cmd::snapshot::SnapshotCommand::Restore(args),
+            } if args.create
+        );
     let db_path = restore_target
         .or(cli.db)
         .or_else(|| std::env::var_os("IOTKIT_DB_PATH").map(PathBuf::from));
@@ -195,12 +198,19 @@ fn run() -> AppResult<()> {
             .create_new(true)
             .open(&db_path)
             .map_err(|error| {
-                format!(
-                    "restore --create requires an absent target created exclusively by restore ({}): {error}",
-                    db_path.display()
-                )
+                if initializing {
+                    format!(
+                        "init requires an absent database ({}): {error}",
+                        db_path.display()
+                    )
+                } else {
+                    format!(
+                        "restore --create requires an absent target created exclusively by restore ({}): {error}",
+                        db_path.display()
+                    )
+                }
             })?;
-        created_target = Some(CreatedRestoreTarget::new(db_path.clone()));
+        created_target = Some(CreatedDatabaseTarget::new(db_path.clone()));
     }
 
     let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -273,13 +283,13 @@ fn reconcile_database_initialization_provenance(
     })
 }
 
-struct CreatedRestoreTarget {
+struct CreatedDatabaseTarget {
     path: PathBuf,
     committed: bool,
     marker_existed: bool,
 }
 
-impl CreatedRestoreTarget {
+impl CreatedDatabaseTarget {
     fn new(path: PathBuf) -> Self {
         let marker_existed = iotkit_core_ops::database_initialization_marker_path(&path).exists();
         Self {
@@ -290,7 +300,7 @@ impl CreatedRestoreTarget {
     }
 }
 
-impl Drop for CreatedRestoreTarget {
+impl Drop for CreatedDatabaseTarget {
     fn drop(&mut self) {
         let committed_receipt = rusqlite::Connection::open_with_flags(
             &self.path,
@@ -322,7 +332,10 @@ impl Drop for CreatedRestoreTarget {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => {
-                    eprintln!("failed to clean restore target {}: {error}", path.display())
+                    eprintln!(
+                        "failed to clean database target {}: {error}",
+                        path.display()
+                    )
                 }
             }
         }
@@ -335,6 +348,18 @@ fn dispatch(
     command: Command,
 ) -> AppResult<()> {
     match command {
+        Command::Init => {
+            let edge_node_id = iotkit_core_ledger::edge_node_id(conn)?;
+            let ledger_epoch = iotkit_core_ledger::ledger_epoch(conn)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "edge_node_id": edge_node_id,
+                    "ledger_epoch": ledger_epoch,
+                }))?
+            );
+            Ok(())
+        }
         Command::Sightings { command } => match command {
             SightingsCommand::List => cmd::devices::run_list_sightings(conn),
         },

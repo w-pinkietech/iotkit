@@ -52,6 +52,15 @@ such as YokaKit own products, processes, OEE, alarms, business UI, and notificat
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
 - The control-plane API is intended for private LAN reachability only. Use SSH port forwarding for Tailscale/CGNAT direct-access scenarios.
 
+### Edge initialization
+
+Create a fresh Edge database and print its generated identity. The command refuses an existing
+database instead of modifying it:
+
+```bash
+iotkit-edgectl --db edge.db init
+```
+
 ### Site semantic export
 
 Configure a source series and then add an application route with the Site CLI:
