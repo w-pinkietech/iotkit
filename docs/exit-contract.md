@@ -160,7 +160,7 @@ Edge Node's generated `edge_node_id`:
 ```toml
 [exit.mqtt]
 enabled = true
-host = "site.example.ts.net"
+host = "mqtt.site.example"
 port = 8883
 password_file = "/run/secrets/iotkit-mqtt-password"
 # ca_file = "/etc/iotkit/site-ca.pem" # optional custom CA; otherwise system roots

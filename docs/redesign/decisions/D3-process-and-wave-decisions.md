@@ -219,6 +219,21 @@ raw recordをSite storeへ受理すると、semantic event 1行と`published_at 
 outboxのpendingは1件から0件へ収束した。mapping revision境界とroute作成前eventの非配送は今回再検証せず、
 既存focused testの範囲に残す。
 
+### 実運用形Site bootstrap検証 (2026-07-15)
+
+EdgeをRaspberry Pi上のnative process、標準BrokerとSiteをLinux Site host上のDocker Composeとする導入経路を
+追加した。`iotkit-edgectl mqtt-binding`の非secret JSON、明示したBroker hostname/bind address、operatorが
+用意したserver certificate/key/CAから、匿名禁止設定、Edge Node単位のexact topic ACL、hash済みBroker
+password database、Site credential、Edgeへ安全に引き渡すcredential/CA/TOML fragmentを生成する。
+VPNや特定network製品、certificate発行はこのbootstrapの要件・責務に含めない。
+
+一時的な新規Edge DBと自己署名test CAを使い、生成した構成で実際のMQTT TLS接続、Site raw耐久保存、
+`accepted-through`、commissioning smokeの`delivered`までを確認した。また、余分なsecret fieldを含むbinding、
+group/world readableなprivate key、hostnameとbind addressの不一致、certificate SAN不一致、Git repository内の
+出力先を拒否し、失敗時に部分出力やsecret診断を残さないことを検査した。生成fileはすべて0600、directoryは
+0700で、Composeのrender結果とargv/envへ平文credentialを展開しない。既存出力先の上書きも拒否するため、
+credential rotationとin-place upgradeは明示的な別作業のままとする。
+
 ### BravePIとの責任境界
 
 - センサー、トランスミッタ、BLE Long Range、ペアリング、メインボード上の端末管理はBravePIの責任とする。

@@ -1,0 +1,66 @@
+services:
+  broker:
+    image: eclipse-mosquitto:2.0
+    restart: unless-stopped
+    user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"
+    ports:
+      - "${IOTKIT_BROKER_BIND:?}:${IOTKIT_BROKER_PORT:?}:8883"
+    volumes:
+      - type: bind
+        source: ${IOTKIT_MOSQUITTO_CONFIG_FILE:?}
+        target: /mosquitto/config/mosquitto.conf
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_MOSQUITTO_ACL_FILE:?}
+        target: /mosquitto/config/acl
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_MOSQUITTO_PASSWORD_FILE:?}
+        target: /mosquitto/config/passwords
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_BROKER_CERT_FILE:?}
+        target: /mosquitto/config/tls/server.pem
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_BROKER_KEY_FILE:?}
+        target: /mosquitto/config/tls/server.key
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_BROKER_DATA_DIR:?}
+        target: /mosquitto/data
+
+  site:
+    build:
+      context: ../iotkit-site
+    restart: unless-stopped
+    user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"
+    network_mode: host
+    depends_on:
+      - broker
+    command:
+      - serve
+      - --db
+      - /data/site.db
+      - --broker-url
+      - ssl://${IOTKIT_BROKER_HOST:?}:${IOTKIT_BROKER_PORT:?}
+      - --client-id
+      - iotkit-site
+      - --username
+      - site
+      - --password-file
+      - /run/iotkit/site-mqtt-password
+      - --ca-file
+      - /run/iotkit/broker-ca.pem
+    volumes:
+      - type: bind
+        source: ${IOTKIT_SITE_DATA_DIR:?}
+        target: /data
+      - type: bind
+        source: ${IOTKIT_SITE_PASSWORD_FILE:?}
+        target: /run/iotkit/site-mqtt-password
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_BROKER_CA_FILE:?}
+        target: /run/iotkit/broker-ca.pem
+        read_only: true

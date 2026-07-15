@@ -50,7 +50,7 @@ such as YokaKit own products, processes, OEE, alarms, business UI, and notificat
 - **Authenticated HTTP ingest (Plan 6):** a separate, default-off site-LAN TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See [docs/ingest-contract.md](docs/ingest-contract.md).
 - **Operator CLI** (`iotkit-edgectl`) for the device ledger, measurement registry, snapshots/restore, and the Site target.
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
-- The control-plane API is intended for private LAN reachability only. Use SSH port forwarding for Tailscale/CGNAT direct-access scenarios.
+- The control-plane API is intended for private LAN reachability only. Use SSH port forwarding when the deployment's private routed path does not provide direct client reachability.
 
 ### Edge initialization
 
@@ -79,6 +79,52 @@ iotkit-edgectl --db edge.db smoke status \
 `delivered` means the normal MQTT record reached Site durable raw storage and its correlated
 `accepted-through` advanced the Edge cursor. The smoke record is not a sensor measurement and is
 excluded from semantic projection.
+
+### Site deployment bootstrap
+
+The production-shaped deployment runs Edge natively on its Raspberry Pi and runs the standard
+Broker plus Site with Docker Compose on a Linux Site host. Prepare an existing server certificate,
+private key, and CA file; certificate issuance, DNS, firewall rules, and any optional VPN remain the
+Site operator's responsibility. The Broker hostname must resolve on the Site host to the explicit
+bind address, and the certificate must cover that hostname.
+
+First export the non-secret binding from the initialized Edge and transfer that JSON to the Site
+operator:
+
+```bash
+iotkit-edgectl --db /var/lib/iotkit/edge.db mqtt-binding > edge-mqtt-binding.json
+```
+
+From a repository clone on the Site host, run the bootstrap as the non-root account that will run
+Compose. The output directory must be new, outside the Git repository, and below an existing
+operator-owned parent directory:
+
+```bash
+install_root="$HOME/.local/share/iotkit/site-01"
+mkdir -p "$(dirname "$install_root")"
+scripts/bootstrap-site.sh \
+  --binding ./edge-mqtt-binding.json \
+  --output-dir "$install_root" \
+  --broker-host mqtt.site.example \
+  --broker-bind 192.0.2.10 \
+  --tls-cert /secure/path/server-fullchain.pem \
+  --tls-key /secure/path/server.key \
+  --tls-ca /secure/path/broker-ca.pem \
+  --site-publish-topic iotkit/v1/application/production-pulses
+docker compose --env-file "$install_root/site.env" \
+  -f deploy/compose.site.yaml up --build --detach
+```
+
+The generator creates an anonymous-disabled Broker configuration, an Edge-specific ACL and hashed
+password database, the Site secret, and `edge-handoff/`. Securely transfer the three handoff files
+to the Edge. Install `mqtt-password` and `broker-ca.pem` at the paths named by
+`edge-mqtt.toml`, owned by the Edge service account with mode `0600`, and merge the TOML fragment
+into the Edge configuration before restarting Edge. Remove the Site host's `edge-handoff/` copy
+after successful transfer. Credentials never belong in argv, environment variables, logs, or Git.
+
+Run the commissioning smoke commands above after startup. A later bootstrap invocation refuses to
+replace its output directory; credential rotation and in-place upgrades remain explicit operator
+work rather than an implicit regeneration side effect.
 
 ### Site semantic export
 

@@ -42,6 +42,14 @@ result to an application-facing MQTT contract. Applications such as YokaKit own 
 and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
 complicates this story needs a strong reason.
 
+The production-shaped installation keeps Edge native on its Raspberry Pi and runs the standard
+Broker plus Site in Docker on a Linux Site host. `scripts/bootstrap-site.sh` consumes the
+non-secret `iotkit-edgectl mqtt-binding` document and operator-provided TLS material, then creates
+an anonymous-disabled Broker, exact per-Edge-Node ACLs, owner-only credential files, and a small
+Edge handoff. It does not issue certificates, configure DNS/firewalls/VPNs, or modify the Edge.
+`deploy/compose.site.yaml` consumes only generated file paths and non-secret network settings; it
+does not place MQTT credentials in Compose environment values or argv.
+
 ## Data flow
 
 The deployed BravePI path is `BravePI Mainboard -> UART -> IoTKit Edge -> MQTT Broker -> IoTKit Site`.
@@ -205,7 +213,8 @@ the existing Long Range BLE/BravePI Mainboard/UART path, one IoTKit Edge, one st
 one IoTKit Site, raw SQLite storage, application-level accepted-through, future-only semantic
 projection, a durable application MQTT outbox, and direct CLI queries. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
-BravePI Mainboard UART stream. Enrollment,
+BravePI Mainboard UART stream. A production-shaped one-Edge bootstrap exists for the Broker/Site
+TLS boundary, but certificate issuance, enrollment,
 credential rotation, Site backup/restore, legacy HTTPS migration, multi-Edge-Node hardware,
 YokaKit integration, and UI are deferred until this path works on real hardware.
 
