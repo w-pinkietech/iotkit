@@ -32,6 +32,11 @@ type pendingInventoryRecord struct {
 	receivedAt  int64
 }
 
+type inventoryEpochKey struct {
+	edgeNodeID  string
+	ledgerEpoch string
+}
+
 func newResourceRef(prefix string) (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
@@ -92,9 +97,12 @@ func (store *Store) ReconcileInventorySources(ctx context.Context, limit int) (i
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	cursorUpdates := make(map[string]pendingInventoryRecord)
+	cursorUpdates := make(map[inventoryEpochKey]pendingInventoryRecord)
 	for _, record := range records {
-		cursorUpdates[record.edgeNodeID+"\x00"+record.ledgerEpoch] = record
+		cursorUpdates[inventoryEpochKey{
+			edgeNodeID:  record.edgeNodeID,
+			ledgerEpoch: record.ledgerEpoch,
+		}] = record
 		seriesKey, systemID, measurement := inventoryMeasurementIdentity(record.record)
 		if !measurement {
 			continue
@@ -119,6 +127,16 @@ func (store *Store) ReconcileInventorySources(ctx context.Context, limit int) (i
 			END
 			WHERE edge_node_id = ? AND series_key = ?
 		`, record.receivedAt, record.receivedAt, record.edgeNodeID, seriesKey); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE site_devices
+			SET last_received_at = CASE
+				WHEN last_received_at IS NULL OR last_received_at < ? THEN ?
+				ELSE last_received_at
+			END
+			WHERE edge_node_id = ? AND system_id = ?
+		`, record.receivedAt, record.receivedAt, record.edgeNodeID, systemID); err != nil {
 			return 0, err
 		}
 		current, valid := decodeInventoryMeasurement(record.record, record.receivedAt)
@@ -276,12 +294,7 @@ func (store *Store) ListInventoryDevices(
 			profile.revision,
 			COALESCE(descriptor.presence, 'unknown'),
 			COALESCE(descriptor.state, 'unknown'),
-			(
-				SELECT MAX(signal.last_received_at)
-				FROM site_signals AS signal
-				WHERE signal.edge_node_id = source.edge_node_id
-					AND signal.system_id = source.system_id
-			)
+			source.last_received_at
 		FROM site_devices AS source
 		LEFT JOIN device_profiles AS profile
 			ON profile.edge_node_id = source.edge_node_id
