@@ -38,7 +38,7 @@
 - Produces: durable `site_devices` / `site_signals` schema version 4
 - Preserves: `Store.AcceptBatch`のsignatureとack behavior
 
-- [ ] **Step 1: migrationとstable refの失敗testを書く**
+- [x] **Step 1: migrationとstable refの失敗testを書く**
 
 `inventory_test.go`でdescriptorを適用し、同じsourceに対する再適用・DB再open後もrefが変わらないこと、refが`dev_` / `sig_`と32桁hexであることを検査する。
 
@@ -66,13 +66,13 @@ func TestDescriptorInventoryRefsAreStableAcrossReplayAndReopen(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: testを実行してschemaとquery未実装で失敗することを確認する**
+- [x] **Step 2: testを実行してschemaとquery未実装で失敗することを確認する**
 
 Run: `cd iotkit-site && env GOPATH=/tmp/iotkit-next-go-path GOCACHE=/tmp/iotkit-next-go-cache go test ./internal/store -run 'TestDescriptorInventoryRefsAreStable'`
 
 Expected: `site_devices`または`site_signals` table不在でFAIL。
 
-- [ ] **Step 3: schema version 4とref生成helperを実装する**
+- [x] **Step 3: schema version 4とref生成helperを実装する**
 
 `migrations.go`へ次を追加する。既存descriptor rowはmigration時にbackfillし、profile tableはTask 2で利用する。
 
@@ -119,7 +119,7 @@ FROM descriptor_signals;
 
 `inventory.go`へ`newResourceRef(prefix string) (string, error)`を置き、`crypto/rand.Read`した16 bytesをhex化する。descriptor適用transactionはsnapshot rowを書き込む前に`ensureDeviceSourceTx` / `ensureSignalSourceTx`を呼び、既存refを変更しない。
 
-- [ ] **Step 4: measurement先着placeholderの失敗testを書く**
+- [x] **Step 4: measurement先着placeholderの失敗testを書く**
 
 canonical `series_key`を持つraw batchだけを先に受理し、`ReconcileInventorySources`後にdescriptorなしのdevice/signal sourceが作られることを検査する。非measurement recordと不正な`series_key`はraw受理を妨げずinventory対象外になることも検査する。
 
@@ -140,7 +140,7 @@ func TestReconcileInventorySourcesCreatesMeasurementFirstPlaceholder(t *testing.
 }
 ```
 
-- [ ] **Step 5: bounded reconciliationを実装しMQTT convergenceへ接続する**
+- [x] **Step 5: bounded reconciliationを実装しMQTT convergenceへ接続する**
 
 `ReconcileInventorySources`はlimit 1〜1000だけを許可し、`raw_records`の`family = measurement`かつ文字列`series_key`をsource単位で列挙する。canonical `series_key`の先頭UUIDを`system_id`としてdevice sourceも作り、signal sourceはdescriptor不在でも作る。ref生成・insertは一transactionで行い、既存refを更新しない。
 
@@ -156,7 +156,7 @@ type ExportQueue interface {
 }
 ```
 
-- [ ] **Step 6: focused testsを通してcommitする**
+- [x] **Step 6: focused testsを通してcommitする**
 
 Run: `cd iotkit-site && env GOPATH=/tmp/iotkit-next-go-path GOCACHE=/tmp/iotkit-next-go-cache go test ./internal/store ./internal/mqttsite`
 

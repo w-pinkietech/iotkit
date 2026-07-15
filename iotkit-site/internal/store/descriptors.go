@@ -121,6 +121,22 @@ func (store *Store) ApplyDescriptorSnapshot(
 	}
 
 	now := time.Now().UnixMilli()
+	for _, device := range snapshot.Devices {
+		if err := ensureDeviceSourceTx(ctx, tx, snapshot.EdgeNodeID, device.SystemID); err != nil {
+			return DescriptorApplyResult{}, err
+		}
+	}
+	for _, signal := range snapshot.Signals {
+		if err := ensureSignalSourceTx(
+			ctx,
+			tx,
+			snapshot.EdgeNodeID,
+			signal.SeriesKey,
+			&signal.SystemID,
+		); err != nil {
+			return DescriptorApplyResult{}, err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE descriptor_devices SET presence = 'stale', updated_at = ?
 		WHERE edge_node_id = ? AND presence != 'stale'

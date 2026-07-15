@@ -160,6 +160,46 @@ var schemaMigrations = []migration{
 		CREATE INDEX IF NOT EXISTS ix_descriptor_signals_presence
 			ON descriptor_signals(edge_node_id, presence, series_key);
 	`},
+	{version: 4, sql: `
+		CREATE TABLE IF NOT EXISTS site_devices (
+			device_ref TEXT NOT NULL UNIQUE,
+			edge_node_id TEXT NOT NULL,
+			system_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, system_id)
+		);
+		CREATE TABLE IF NOT EXISTS site_signals (
+			signal_ref TEXT NOT NULL UNIQUE,
+			edge_node_id TEXT NOT NULL,
+			series_key TEXT NOT NULL,
+			system_id TEXT,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, series_key)
+		);
+		CREATE TABLE IF NOT EXISTS device_profiles (
+			edge_node_id TEXT NOT NULL,
+			system_id TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			location TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, system_id)
+		);
+		CREATE TABLE IF NOT EXISTS signal_profiles (
+			edge_node_id TEXT NOT NULL,
+			series_key TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (edge_node_id, series_key)
+		);
+		INSERT OR IGNORE INTO site_devices(device_ref, edge_node_id, system_id, created_at)
+		SELECT 'dev_' || lower(hex(randomblob(16))), edge_node_id, system_id, updated_at
+		FROM descriptor_devices;
+		INSERT OR IGNORE INTO site_signals(signal_ref, edge_node_id, series_key, system_id, created_at)
+		SELECT 'sig_' || lower(hex(randomblob(16))), edge_node_id, series_key, system_id, updated_at
+		FROM descriptor_signals;
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {
