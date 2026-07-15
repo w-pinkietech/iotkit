@@ -3,6 +3,7 @@ package contract
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -111,6 +112,9 @@ func TestParseSeriesKeyAcceptsOnlyCanonicalIdentity(t *testing.T) {
 		"018f0000-0000-7000-8000-000000000001:temperature:02:primary",
 		"018f0000-0000-7000-8000-000000000001:temperature:-1:primary",
 		"018f0000-0000-7000-8000-000000000001:temperature:na:",
+		"018f0000-0000-7000-8000-000000000001:Temperature:na:primary",
+		"018f0000-0000-7000-8000-000000000001:a..b:na:primary",
+		"018f0000-0000-7000-8000-000000000001:" + strings.Repeat("a", 65) + ":na:primary",
 	} {
 		if _, err := ParseSeriesKey(invalid); err == nil {
 			t.Fatalf("non-canonical series key %q was accepted", invalid)

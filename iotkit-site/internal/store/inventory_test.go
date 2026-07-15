@@ -265,6 +265,15 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
 	if _, err := store.ReconcileInventorySources(context.Background(), 100); err != nil {
 		t.Fatal(err)
 	}
+	var materializedDeviceLast int64
+	if err := store.db.QueryRow(`
+		SELECT last_received_at FROM site_devices LIMIT 1
+	`).Scan(&materializedDeviceLast); err != nil {
+		t.Fatal(err)
+	}
+	if materializedDeviceLast != 3000 {
+		t.Fatalf("materialized device last received = %d, want 3000", materializedDeviceLast)
+	}
 	if _, err := store.db.Exec(`DELETE FROM raw_records`); err != nil {
 		t.Fatal(err)
 	}

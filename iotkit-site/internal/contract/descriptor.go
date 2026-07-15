@@ -52,7 +52,7 @@ func ParseSeriesKey(seriesKey string) (SeriesIdentity, error) {
 		return noIdentity, fmt.Errorf("invalid series_key: control character")
 	}
 	parts := strings.Split(seriesKey, ":")
-	if len(parts) != 4 || !validUUID(parts[0]) || parts[1] == "" || parts[3] == "" {
+	if len(parts) != 4 || !validUUID(parts[0]) || !validMeasurementKey(parts[1]) || parts[3] == "" {
 		return noIdentity, fmt.Errorf("invalid series_key: expected canonical four-part identity")
 	}
 	var channelIndex *int32
@@ -70,6 +70,35 @@ func ParseSeriesKey(seriesKey string) (SeriesIdentity, error) {
 		ChannelIndex:   channelIndex,
 		Variant:        parts[3],
 	}, nil
+}
+
+func validMeasurementKey(key string) bool {
+	if len(key) == 0 || len(key) > 64 {
+		return false
+	}
+	segmentStart := true
+	for index := 0; index < len(key); index++ {
+		character := key[index]
+		if character == '.' {
+			if segmentStart {
+				return false
+			}
+			segmentStart = true
+			continue
+		}
+		if segmentStart {
+			if character < 'a' || character > 'z' {
+				return false
+			}
+			segmentStart = false
+			continue
+		}
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') && character != '_' {
+			return false
+		}
+	}
+	return !segmentStart
 }
 
 func DecodeDescriptorSnapshot(payload []byte) (DescriptorSnapshot, error) {

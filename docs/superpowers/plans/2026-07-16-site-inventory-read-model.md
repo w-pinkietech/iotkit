@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS site_devices (
     device_ref TEXT NOT NULL UNIQUE,
     edge_node_id TEXT NOT NULL,
     system_id TEXT NOT NULL,
+    last_received_at INTEGER,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (edge_node_id, system_id)
 );
@@ -350,7 +351,7 @@ Expected: read model methodまたはsummary型未定義でFAIL。
 
 - [x] **Step 3: descriptor・profile・mappingを結合するbounded queryを実装する**
 
-`ListInventoryDevices` / `ListInventorySignals`は`ref > afterRef ORDER BY ref LIMIT ?`を使う。descriptorがないsourceはpresence `unknown`、signalからdeviceへ解決できない場合は`DeviceRef = nil`とする。device最終受信時刻はmaterializedされたsignalの`last_received_at`最大値をset-wiseに返し、一覧queryからraw履歴を走査しない。
+`ListInventoryDevices` / `ListInventorySignals`は`ref > afterRef ORDER BY ref LIMIT ?`を使う。descriptorがないsourceはpresence `unknown`、signalからdeviceへ解決できない場合は`DeviceRef = nil`とする。deviceとsignalの最終受信時刻はbounded projectionが各source rowへ直接materializeし、一覧queryからraw履歴や配下signalを走査しない。
 
 - [x] **Step 4: latest valid measurement選択の失敗testを書く**
 

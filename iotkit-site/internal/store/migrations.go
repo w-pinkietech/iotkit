@@ -165,6 +165,7 @@ var schemaMigrations = []migration{
 			device_ref TEXT NOT NULL UNIQUE,
 			edge_node_id TEXT NOT NULL,
 			system_id TEXT NOT NULL,
+			last_received_at INTEGER,
 			created_at INTEGER NOT NULL,
 			PRIMARY KEY (edge_node_id, system_id)
 		);
