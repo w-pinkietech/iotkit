@@ -32,6 +32,17 @@ struct PreparedBatch {
     prior_cursor: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DescriptorIdentity {
+    ledger_epoch: String,
+    descriptor_revision: u64,
+}
+
+struct PreparedDescriptor {
+    identity: DescriptorIdentity,
+    payload: Vec<u8>,
+}
+
 pub(crate) async fn spawn_mqtt_publish_task(
     db: DbHandle,
     health: Arc<Mutex<HealthState>>,
@@ -64,13 +75,14 @@ pub(crate) async fn spawn_mqtt_publish_task(
 async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConfig) {
     let records_topic = runtime.binding.records_topic.clone();
     let ack_topic = runtime.binding.accepted_through_topic.clone();
+    let descriptor_topic = runtime.binding.descriptor_topic.clone();
     let qos = mqtt_qos(&runtime.binding);
     let mut options = MqttOptions::new(
         runtime.binding.client_id.clone(),
         runtime.connection.host.clone(),
         runtime.connection.port,
     );
-    configure_packet_limits(&mut options, &records_topic, &ack_topic);
+    configure_packet_limits(&mut options, &records_topic, &ack_topic, &descriptor_topic);
     options.set_keep_alive(Duration::from_secs(30));
     options.set_clean_session(true);
     options.set_credentials(&runtime.binding.username, &runtime.password);
@@ -87,6 +99,7 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut subscribed = false;
     let mut inflight: Option<PreparedBatch> = None;
+    let mut published_descriptor: Option<DescriptorIdentity> = None;
 
     loop {
         tokio::select! {
@@ -94,8 +107,20 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                 match event {
                     Ok(Event::Incoming(Incoming::ConnAck(_))) => {
                         subscribed = false;
+                        published_descriptor = None;
                         if let Err(error) = client.subscribe(&ack_topic, qos).await {
                             tracing::warn!(error = %error, "failed to queue MQTT acknowledgement subscription");
+                        }
+                        if let Err(error) = publish_descriptor_if_changed(
+                            &db,
+                            &client,
+                            &descriptor_topic,
+                            &runtime.binding.edge_node_id,
+                            qos,
+                            runtime.binding.descriptor_retain,
+                            &mut published_descriptor,
+                        ).await {
+                            tracing::warn!(error = %error, "MQTT descriptor publish attempt failed");
                         }
                     }
                     Ok(Event::Incoming(Incoming::SubAck(_))) => {
@@ -149,12 +174,24 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                     }
                     Err(error) => {
                         subscribed = false;
+                        published_descriptor = None;
                         tracing::warn!(error = %error, "MQTT connection event loop failed; reconnecting");
                         tokio::time::sleep(RECONNECT_DELAY).await;
                     }
                 }
             }
             _ = retry.tick(), if subscribed => {
+                if let Err(error) = publish_descriptor_if_changed(
+                    &db,
+                    &client,
+                    &descriptor_topic,
+                    &runtime.binding.edge_node_id,
+                    qos,
+                    runtime.binding.descriptor_retain,
+                    &mut published_descriptor,
+                ).await {
+                    tracing::warn!(error = %error, "MQTT descriptor publish retry failed");
+                }
                 if let Err(error) = publish_current_or_next(
                     &db,
                     &client,
@@ -170,6 +207,54 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
             }
         }
     }
+}
+
+async fn publish_descriptor_if_changed(
+    db: &DbHandle,
+    client: &AsyncClient,
+    topic: &str,
+    edge_node_id: &str,
+    qos: QoS,
+    retain: bool,
+    published: &mut Option<DescriptorIdentity>,
+) -> Result<(), String> {
+    let identity = edge_node_id.to_string();
+    let previous = published.clone();
+    let prepared = db
+        .with_conn(move |conn| {
+            Ok::<_, StorageError>(prepare_descriptor(conn, &identity, previous.as_ref()))
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+    let Some(prepared) = prepared else {
+        return Ok(());
+    };
+    client
+        .publish(topic, qos, retain, prepared.payload)
+        .await
+        .map_err(|error| error.to_string())?;
+    *published = Some(prepared.identity);
+    Ok(())
+}
+
+fn prepare_descriptor(
+    conn: &Connection,
+    edge_node_id: &str,
+    previous: Option<&DescriptorIdentity>,
+) -> Result<Option<PreparedDescriptor>, String> {
+    let snapshot = iotkit_edge::descriptor_snapshot::build_descriptor_snapshot(conn, edge_node_id)
+        .map_err(|error| error.to_string())?;
+    let identity = DescriptorIdentity {
+        ledger_epoch: snapshot.ledger_epoch.clone(),
+        descriptor_revision: snapshot.descriptor_revision,
+    };
+    if previous == Some(&identity) {
+        return Ok(None);
+    }
+    let payload = snapshot
+        .encode_bounded()
+        .map_err(|error| error.to_string())?;
+    Ok(Some(PreparedDescriptor { identity, payload }))
 }
 
 async fn publish_current_or_next(
@@ -383,13 +468,23 @@ fn mqtt_qos_for_v1() -> QoS {
     QoS::AtLeastOnce
 }
 
-fn configure_packet_limits(options: &mut MqttOptions, records_topic: &str, ack_topic: &str) {
-    let limit = mqtt_packet_limit(records_topic, ack_topic);
+fn configure_packet_limits(
+    options: &mut MqttOptions,
+    records_topic: &str,
+    ack_topic: &str,
+    descriptor_topic: &str,
+) {
+    let limit = mqtt_packet_limit(records_topic, ack_topic, descriptor_topic);
     options.set_max_packet_size(limit, limit);
 }
 
-fn mqtt_packet_limit(records_topic: &str, ack_topic: &str) -> usize {
-    MAX_BATCH_BYTES + records_topic.len().max(ack_topic.len()) + MQTT_PACKET_OVERHEAD_BYTES
+fn mqtt_packet_limit(records_topic: &str, ack_topic: &str, descriptor_topic: &str) -> usize {
+    MAX_BATCH_BYTES
+        + records_topic
+            .len()
+            .max(ack_topic.len())
+            .max(descriptor_topic.len())
+        + MQTT_PACKET_OVERHEAD_BYTES
 }
 
 fn now_ms() -> i64 {
@@ -469,15 +564,52 @@ mod tests {
         let binding = MqttBinding::for_edge("edge-01").unwrap();
         let records_topic = binding.records_topic;
         let ack_topic = binding.accepted_through_topic;
+        let descriptor_topic = binding.descriptor_topic;
         let mut options = MqttOptions::new("test-client", "localhost", 1883);
 
-        configure_packet_limits(&mut options, &records_topic, &ack_topic);
+        configure_packet_limits(&mut options, &records_topic, &ack_topic, &descriptor_topic);
 
         assert!(options.max_packet_size() > MAX_BATCH_BYTES);
         assert_eq!(
             options.max_packet_size(),
-            mqtt_packet_limit(&records_topic, &ack_topic)
+            mqtt_packet_limit(&records_topic, &ack_topic, &descriptor_topic)
         );
+    }
+
+    #[test]
+    fn descriptor_preparation_is_revision_aware_and_reconnect_safe() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ledger_meta(key, value) VALUES
+                    ('edge_node_id', 'edge-01'), ('epoch', 'epoch-01')",
+                [],
+            )
+            .unwrap();
+            let first = prepare_descriptor(conn, "edge-01", None).unwrap().unwrap();
+            assert_eq!(first.identity.ledger_epoch, "epoch-01");
+            assert!(
+                prepare_descriptor(conn, "edge-01", Some(&first.identity))
+                    .unwrap()
+                    .is_none()
+            );
+
+            conn.execute(
+                "INSERT INTO devices (system_id, hardware_id, kind, state, created_at)
+                 VALUES (?1, 'test-device', 'individual', 'active', 1)",
+                [vec![1_u8; 16]],
+            )
+            .unwrap();
+            let changed = prepare_descriptor(conn, "edge-01", Some(&first.identity))
+                .unwrap()
+                .unwrap();
+            assert!(changed.identity.descriptor_revision > first.identity.descriptor_revision);
+
+            let reconnect = prepare_descriptor(conn, "edge-01", None).unwrap().unwrap();
+            assert_eq!(reconnect.identity, changed.identity);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

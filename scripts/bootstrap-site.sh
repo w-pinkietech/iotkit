@@ -125,16 +125,18 @@ getent ahostsv4 "$broker_host" | awk '{print $1}' | grep -Fxq "$broker_bind" \
 
 jq -e '
   (keys | sort) == [
-    "accepted_through_topic", "client_id", "edge_node_id", "qos",
-    "records_topic", "retain", "username"
+    "accepted_through_topic", "client_id", "descriptor_retain", "descriptor_topic",
+    "edge_node_id", "qos", "records_topic", "retain", "username"
   ]
   and (.edge_node_id | type == "string" and length > 0)
   and .username == .edge_node_id
   and .client_id == ("iotkit-edge-" + .edge_node_id)
   and .records_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/records")
   and .accepted_through_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/accepted-through")
+  and .descriptor_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/descriptors")
   and .qos == 1
   and .retain == false
+  and .descriptor_retain == true
 ' "$binding" >/dev/null || fail "binding file is not an exact iotkit-edgectl mqtt-binding document"
 edge_node_id=$(jq -er '.edge_node_id' "$binding")
 [[ "$edge_node_id" =~ ^[A-Za-z0-9._-]{1,128}$ ]] \
@@ -205,10 +207,12 @@ EOF
 cat >"$stage/mosquitto/acl" <<EOF
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
+topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
 topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/descriptors
 topic write iotkit/v1/edge-nodes/+/accepted-through
 EOF
 for topic in "${site_publish_topics[@]}"; do

@@ -1,7 +1,9 @@
 user edge-node-01
 topic write iotkit/v1/edge-nodes/edge-node-01/records
+topic write iotkit/v1/edge-nodes/edge-node-01/descriptors
 topic read iotkit/v1/edge-nodes/edge-node-01/accepted-through
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/descriptors
 topic write iotkit/v1/edge-nodes/+/accepted-through
