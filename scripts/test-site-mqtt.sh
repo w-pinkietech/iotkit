@@ -44,7 +44,6 @@ edge_ack_topic=$(jq -er '.accepted_through_topic | select(type == "string" and l
 jq -e --arg edge_node_id "$edge_node_id" \
   '.edge_node_id == $edge_node_id and .username == $edge_node_id and .qos == 1 and .retain == false and (.client_id | type == "string" and length > 0)' \
   <<<"$binding_output" >/dev/null
-sqlite3 "$scratch/edge.db" "INSERT INTO publication_log(epoch,kind,subtype,annotation_json,created_at) SELECT value,'annotation','epoch_start','{\"prior_epoch\":\"integration-prior\"}',unixepoch('subsec')*1000 FROM ledger_meta WHERE key='epoch'"
 
 cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
 user edge-node-01
@@ -126,12 +125,33 @@ EOF
 "$repo_root/target/debug/iotkit-edge" --config "$scratch/edge.toml" >"$scratch/edge.log" 2>&1 &
 edge_pid=$!
 
+smoke_output=""
+for _ in $(seq 1 60); do
+  if smoke_output=$("$repo_root/target/debug/iotkit-edgectl" \
+    --db "$scratch/edge.db" smoke enqueue 2>"$scratch/smoke-enqueue.err"); then
+    break
+  fi
+  sleep 1
+done
+if [[ -z "$smoke_output" ]]; then
+  sed -n '1,240p' "$scratch/edge.log"
+  sed -n '1,120p' "$scratch/smoke-enqueue.err"
+  echo "Commissioning smoke could not be enqueued" >&2
+  exit 1
+fi
+smoke_test_id=$(jq -er '.test_id | select(type == "string" and length > 0)' <<<"$smoke_output")
+smoke_epoch=$(jq -er '.ledger_epoch | select(type == "string" and length > 0)' <<<"$smoke_output")
+smoke_pub_seq=$(jq -er '.pub_seq | select(type == "number" and . > 0)' <<<"$smoke_output")
+
 delivered=false
 for _ in $(seq 1 60); do
-  cursor=$(sqlite3 "$scratch/edge.db" "SELECT cursor_pub_seq FROM target_registry WHERE target_id='site'" 2>/dev/null || true)
+  status_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" smoke status \
+    --ledger-epoch "$smoke_epoch" --pub-seq "$smoke_pub_seq" 2>/dev/null || true)
   query_output=$(docker compose -p "$project" -f "$repo_root/compose.dev.yaml" exec -T site \
     iotkit-site query --db /data/site.db --limit 10 2>/dev/null || true)
-  if [[ "$cursor" == "1" ]] && grep -q "\"edge_node_id\": \"$edge_node_id\"" <<<"$query_output"; then
+  if jq -e --argjson pub_seq "$smoke_pub_seq" \
+    '.status == "delivered" and .accepted_through >= $pub_seq' <<<"$status_output" >/dev/null 2>&1 \
+    && grep -Fq "$smoke_test_id" <<<"$query_output"; then
     delivered=true
     break
   fi

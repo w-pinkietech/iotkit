@@ -6,6 +6,7 @@ mod cmd {
     pub mod query;
     pub mod registry;
     pub mod replace;
+    pub mod smoke;
     pub mod snapshot;
     pub mod target;
     pub mod time;
@@ -31,6 +32,10 @@ enum Command {
     Init,
     Identity,
     MqttBinding,
+    Smoke {
+        #[command(subcommand)]
+        command: cmd::smoke::SmokeCommand,
+    },
     Sightings {
         #[command(subcommand)]
         command: SightingsCommand,
@@ -134,6 +139,12 @@ fn run() -> AppResult<()> {
     let cli = Cli::parse();
     let initializing = matches!(&cli.command, Command::Init);
     let reading_identity = matches!(&cli.command, Command::Identity | Command::MqttBinding);
+    let reading_smoke_status = matches!(
+        &cli.command,
+        Command::Smoke {
+            command: cmd::smoke::SmokeCommand::Status(_),
+        }
+    );
     let restoring_snapshot = matches!(
         &cli.command,
         Command::Snapshot {
@@ -167,7 +178,7 @@ fn run() -> AppResult<()> {
         return Err(format!("database file does not exist: {}", db_path.display()).into());
     }
     iotkit_core_storage::preflight_edge_database(&db_path)?;
-    if reading_identity {
+    if reading_identity || reading_smoke_status {
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -181,7 +192,10 @@ fn run() -> AppResult<()> {
                 println!("{}", serde_json::to_string_pretty(&binding)?);
                 Ok(())
             }
-            _ => unreachable!("read-only identity command match was checked"),
+            Command::Smoke {
+                command: cmd::smoke::SmokeCommand::Status(args),
+            } => cmd::smoke::run_status(&conn, &identity, args),
+            _ => unreachable!("read-only command match was checked"),
         };
     }
     if matches!(
@@ -411,6 +425,12 @@ fn dispatch(
         Command::Identity | Command::MqttBinding => {
             unreachable!("read-only identity commands do not enter the write dispatcher")
         }
+        Command::Smoke { command } => match command {
+            cmd::smoke::SmokeCommand::Enqueue => cmd::smoke::run_enqueue(conn),
+            cmd::smoke::SmokeCommand::Status(_) => {
+                unreachable!("read-only smoke status does not enter the write dispatcher")
+            }
+        },
         Command::Sightings { command } => match command {
             SightingsCommand::List => cmd::devices::run_list_sightings(conn),
         },

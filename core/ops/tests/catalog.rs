@@ -15,6 +15,7 @@ fn all_migrations() -> Vec<Migration> {
     let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
     all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
     all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+    all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
     all.extend_from_slice(iotkit_core_ops::MIGRATIONS);
     all.sort_by_key(|m| m.version);
     all
@@ -96,6 +97,23 @@ fn matrix_params(conn: &Connection, op: &str, bulk: bool) -> Value {
             enable_temperature(conn);
             json!({"key":"temp","resolution":{"alias_to":"temperature_c"}})
         }
+        ("exit.commissioning_smoke.enqueue", false) => {
+            iotkit_core_publish::store::target_insert(
+                conn,
+                &iotkit_core_publish::store::TargetRow {
+                    target_id: "site".into(),
+                    endpoint_url: "mqtt://broker:1883".into(),
+                    credential_token: String::new(),
+                    archive_responsible: true,
+                    schema_version: 1,
+                    cursor_epoch: None,
+                    cursor_pub_seq: 0,
+                },
+                1,
+            )
+            .unwrap();
+            json!({})
+        }
         ("device.approve_sighting", false) => {
             record_sighting(conn, "rpi-local:default:i2c:0x60", "test").unwrap();
             json!({"hardware_ids":["rpi-local:default:i2c:0x60"]})
@@ -139,6 +157,7 @@ enum Expected {
 
 const MATRIX_CASES: &[(&str, bool, Tier)] = &[
     ("registry.resolve_unknown_key", false, Tier::Daily),
+    ("exit.commissioning_smoke.enqueue", false, Tier::Daily),
     ("device.approve_sighting", false, Tier::Daily),
     ("device.approve_sighting", true, Tier::Construction),
     ("device.retire", false, Tier::Daily),

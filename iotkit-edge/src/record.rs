@@ -29,6 +29,21 @@ pub struct AnnotationRecord {
     pub prior_epoch: String,
 }
 
+#[derive(serde::Serialize)]
+pub struct CommissioningSmokeRecord {
+    pub family: &'static str,
+    pub schema_version: u32,
+    pub epoch: String,
+    pub pub_seq: i64,
+    pub test_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommissioningSmokePayload {
+    test_id: String,
+}
+
 pub fn materialize_batch(
     conn: &rusqlite::Connection,
     rows: &[iotkit_core_publish::store::OutboxRow],
@@ -38,11 +53,33 @@ pub fn materialize_batch(
         let v = match row.kind.as_str() {
             "measurement" => materialize_measurement(conn, row)?,
             "annotation" => materialize_annotation(row)?,
+            "commissioning_smoke" => materialize_commissioning_smoke(row)?,
             _ => return Err(format!("unknown outbox kind: {}", row.kind)),
         };
         records.push(v);
     }
     Ok(records)
+}
+
+fn materialize_commissioning_smoke(
+    row: &iotkit_core_publish::store::OutboxRow,
+) -> Result<serde_json::Value, String> {
+    let payload_json = row
+        .annotation_json
+        .as_deref()
+        .ok_or_else(|| "commissioning smoke missing payload".to_string())?;
+    let payload: CommissioningSmokePayload =
+        serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
+    iotkit_core_publish::store::validate_commissioning_smoke_test_id(&payload.test_id)
+        .map_err(|error| error.to_string())?;
+    let record = CommissioningSmokeRecord {
+        family: "commissioning_smoke",
+        schema_version: SCHEMA_VERSION,
+        epoch: row.epoch.clone(),
+        pub_seq: row.pub_seq,
+        test_id: payload.test_id,
+    };
+    serde_json::to_value(record).map_err(|error| error.to_string())
 }
 
 fn materialize_measurement(
@@ -305,6 +342,55 @@ mod tests {
                 Some("epoch_start")
             );
             assert_eq!(a.get("prior_epoch").and_then(|v| v.as_str()), Some("OLD"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_builds_commissioning_smoke_record() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let smoke = iotkit_core_publish::store::OutboxRow {
+                pub_seq: 7,
+                epoch: "E".into(),
+                kind: "commissioning_smoke".into(),
+                subtype: None,
+                reading_seq: None,
+                annotation_json: Some(
+                    r#"{"test_id":"smoke-0123456789abcdef0123456789abcdef"}"#.into(),
+                ),
+            };
+
+            let records = materialize_batch(conn, &[smoke]).unwrap();
+            assert_eq!(
+                records,
+                vec![serde_json::json!({
+                    "family": "commissioning_smoke",
+                    "schema_version": 1,
+                    "epoch": "E",
+                    "pub_seq": 7,
+                    "test_id": "smoke-0123456789abcdef0123456789abcdef",
+                })]
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn materialize_batch_rejects_malformed_commissioning_smoke() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            for payload in [
+                r#"{}"#,
+                r#"{"test_id":"smoke-short"}"#,
+                r#"{"test_id":"smoke-0123456789abcdef0123456789abcdef","extra":true}"#,
+            ] {
+                let mut smoke = outbox_row("commissioning_smoke");
+                smoke.annotation_json = Some(payload.into());
+                assert!(materialize_batch(conn, &[smoke]).is_err());
+            }
             Ok(())
         })
         .unwrap();

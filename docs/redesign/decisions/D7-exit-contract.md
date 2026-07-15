@@ -45,7 +45,7 @@ annotationのみ(データは既に配送済みのため回収はしない——
 - **版交渉は購読(target登録)時に確定する**。Edgeは合意したmajor版のレコードのみ配送する
   (「未知majorで停止」の検知点はレコード受信時ではなく登録時の交渉)。minorの未知フィールドは
   optionalフィールドの読み飛ばしのみ許容。
-- **初版で確定する2族**:
+- **version 1で確定する3族**:
   - **measurement族**: series識別(D5のseries_key)+event_time(決定3)+値。**一時点=1レコード**。
     values配列は**単一seriesの1観測の値**(値型が `array<scalar,N>` の場合の固定長ベクトル。
     bool/intはf64正規化=D6決定10)であり、**多チャネル束ねでも時間方向ブロックでもない**
@@ -56,7 +56,11 @@ annotationのみ(データは既に配送済みのため回収はしない——
     予約(D12波及 2026-07-08): **device_maintenance**(親再起動等の保守イベント)/**counter_discontinuity**
     (カウンタ非連続)——スキーマ詳細はWave 1出口spec。
     購読外シリーズを参照するannotationは情報として無視してよい(消費者に契約上の義務を生まない)。
-- `series_definition`同期、legacy metadata snapshot、commissioning smokeは最初の実機縦切りには
+- **commissioning_smoke族(optional、2026-07-15追加)**: 物理センサー由来を偽らず、通常outbox、MQTT、
+  Site raw耐久保存、`accepted-through`を導入時に検査する合成レコード。`test_id`は`smoke-`接頭辞付き
+  128bit小文字hex。device登録、測定レジストリ、検疫、semantic projectionを通らず、特別なtopicやackも
+  作らない。不要な消費者は読み飛ばしてよい追加的familyであり、必須情報を運ばない。
+- `series_definition`同期、legacy metadata snapshotは最初の実機縦切りには
   含めない。Siteはraw canonical recordを保存し、Edge Nodeごとのcursor、site-level query、application
   export境界を持つ。series解釈はEdgeのR11または後続のversion付きmetadata契約で追加する。
   Siteのapplication exportは保存済みseriesを`production_pulse`等の型付き意味へfuture-onlyで
@@ -294,7 +298,7 @@ adr-inventory.mdの処置案を本決定で具体化した。各ADR本文への�
 | publication_idの採番規則・バッチ組成固定規則 | Wave 1設計スペック |
 | event_time実体化列+インデックス(readings v3改訂)——R11範囲クエリ(event_time基準)の前提 | **Wave 0/計画4**の設計スペック |
 | 未来方向許容ズレの既定値 | 設計スペック段階 |
-| annotation族・配送制御通知・合成テストfamilyの具体スキーマ、契約表現形式(JSONスキーマ置き場) | 設計スペック段階 |
+| annotation族・配送制御通知の追加スキーマ、契約表現形式(JSONスキーマ置き場) | 設計スペック段階 |
 | topic名前空間・ACLの詳細(認証認可の本体はD10で確定 2026-07-08) | Wave 1出口設計スペック |
 | 保管対象ポリシー・フィルタ・アーカイブフラグの操作面(宣言・放棄のCLI/UI) | R14操作カタログ(計画4以降) |
 | per-target配送状態のR12公開形式 | R12設計スペック(Wave 1) |

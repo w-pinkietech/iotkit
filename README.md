@@ -66,6 +66,20 @@ iotkit-edgectl --db edge.db mqtt-binding
 The latter two commands are read-only. `mqtt-binding` reports the username, client ID, topics,
 QoS, and retain flag used by Edge, but never creates or displays a credential.
 
+After Broker, Site, and Edge are running, enqueue a synthetic commissioning record and check the
+durable Site acknowledgement without reading either SQLite schema:
+
+```bash
+smoke=$(iotkit-edgectl --db edge.db smoke enqueue)
+iotkit-edgectl --db edge.db smoke status \
+  --ledger-epoch "$(jq -r .ledger_epoch <<<"$smoke")" \
+  --pub-seq "$(jq -r .pub_seq <<<"$smoke")"
+```
+
+`delivered` means the normal MQTT record reached Site durable raw storage and its correlated
+`accepted-through` advanced the Edge cursor. The smoke record is not a sensor measurement and is
+excluded from semantic projection.
+
 ### Site semantic export
 
 Configure a source series and then add an application route with the Site CLI:

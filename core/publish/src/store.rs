@@ -72,6 +72,41 @@ pub fn enqueue_annotation(
     }
 }
 
+pub fn enqueue_commissioning_smoke(
+    conn: &Connection,
+    epoch: &str,
+    test_id: &str,
+    now_ms: i64,
+) -> Result<i64, PublishError> {
+    validate_commissioning_smoke_test_id(test_id)?;
+    let payload_json = serde_json::to_string(&serde_json::json!({"test_id": test_id}))
+        .map_err(|error| PublishError::Invalid(error.to_string()))?;
+    conn.execute(
+        "INSERT INTO publication_log(epoch, kind, annotation_json, created_at)
+         VALUES(?1, 'commissioning_smoke', ?2, ?3)",
+        params![epoch, payload_json, now_ms],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn validate_commissioning_smoke_test_id(test_id: &str) -> Result<(), PublishError> {
+    let Some(random) = test_id.strip_prefix("smoke-") else {
+        return Err(PublishError::Invalid(
+            "commissioning smoke test_id must start with smoke-".into(),
+        ));
+    };
+    if random.len() != 32
+        || !random
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(PublishError::Invalid(
+            "commissioning smoke test_id must contain 128-bit lowercase hex".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn select_batch(
     conn: &Connection,
     epoch: &str,
@@ -366,6 +401,43 @@ mod tests {
         assert!(a.is_some());
         let b = enqueue_annotation(&conn, "epoch-A", "epoch_start", "{}", 2).unwrap();
         assert!(b.is_none(), "二重 enqueue は UNIQUE で None");
+    }
+
+    #[test]
+    fn enqueue_commissioning_smoke_keeps_test_identity_in_the_outbox() {
+        let conn = crate::tests_support::open();
+
+        let pub_seq = enqueue_commissioning_smoke(
+            &conn,
+            "epoch-A",
+            "smoke-0123456789abcdef0123456789abcdef",
+            42,
+        )
+        .unwrap();
+
+        let rows = select_batch(&conn, "epoch-A", 0, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pub_seq, pub_seq);
+        assert_eq!(rows[0].kind, "commissioning_smoke");
+        assert_eq!(rows[0].subtype, None);
+        assert_eq!(rows[0].reading_seq, None);
+        assert_eq!(
+            rows[0].annotation_json.as_deref(),
+            Some(r#"{"test_id":"smoke-0123456789abcdef0123456789abcdef"}"#)
+        );
+    }
+
+    #[test]
+    fn enqueue_commissioning_smoke_rejects_invalid_test_identity_without_writing() {
+        let conn = crate::tests_support::open();
+        for test_id in [
+            "0123456789abcdef0123456789abcdef",
+            "smoke-short",
+            "smoke-0123456789ABCDEF0123456789ABCDEF",
+        ] {
+            assert!(enqueue_commissioning_smoke(&conn, "epoch-A", test_id, 42).is_err());
+        }
+        assert!(select_batch(&conn, "epoch-A", 0, 10).unwrap().is_empty());
     }
 
     #[test]

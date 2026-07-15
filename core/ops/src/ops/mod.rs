@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::{OpDescriptor, OpError};
 
+mod commissioning_ops;
 mod credential_ops;
 mod device_ops;
 mod ingress_listener_ops;
@@ -16,6 +17,7 @@ pub fn standard_catalog() -> &'static [OpDescriptor] {
         .get_or_init(|| {
             let mut catalog = vec![
                 registry_ops::resolve_unknown_key_descriptor(),
+                commissioning_ops::enqueue_smoke_descriptor(),
                 device_ops::approve_sighting_descriptor(),
                 device_ops::pin_sighting_descriptor(),
                 device_ops::retire_descriptor(),

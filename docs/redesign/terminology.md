@@ -100,7 +100,7 @@ Updated: 2026-07-14
 | 接続状態機械 | connection state machine | 上流接続のonline/offline/degraded遷移管理。R10(再送)とR12(状態公開)に属する |
 | time_source | — | 時刻の**出所**タグ: device_ntp / device_rtc / edge / edge_adjusted(D1)。時刻品質(確度: synced/holdover/unsynced、R18)とは直交する別タグ |
 | publication_id | — | 出口契約の**バッチ再送の冪等キー**(消費者側dedup用)。レコード同一性ではない——同一性は `(epoch, seq)`(D7決定4) |
-| record family | — | 出口ストリームのレコード種別タグ+スキーマ版。初版はmeasurement/annotationの2族、予約=文字列観測・時系列ブロック/波形・合成テスト。未知familyの読み飛ばしはoptional familyに限る(D7決定2) |
+| record family | — | 出口ストリームのレコード種別タグ+スキーマ版。version 1はmeasurement/annotationとoptionalなcommissioning_smoke、予約=文字列観測・時系列ブロック/波形。未知familyの読み飛ばしはoptional familyに限る(D7決定2) |
 | publication log | — | 出口ストリームの採番権威。全record familyが共有する単調増加seq((epoch, seq)カーソルの実体)。readingsの内部挿入順とは別——検疫行は解除まで採番されない(D7決定4) |
 | publication snapshot | — | 消費者再構築用の現在状態スナップショット(対応するseq水位を刻印)。R22スナップショット(高機密資産・readings非含有)とは**別語・別物**(D7決定8) |
 | event_time | — | 出口レコードの正準イベント時刻。導出規則=device_time→age_ms復元(edge_adjusted)→received_at、妥当窓検査は未来方向のみ(D7決定3)。観測時刻であり単調ではない——順序・カーソルには使わない(D7決定4) |

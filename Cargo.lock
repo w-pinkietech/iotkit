@@ -972,6 +972,7 @@ dependencies = [
  "base64",
  "getrandom 0.4.2",
  "iotkit-core-ledger",
+ "iotkit-core-publish",
  "iotkit-core-registry",
  "iotkit-core-storage",
  "iotkit-core-timeseries",

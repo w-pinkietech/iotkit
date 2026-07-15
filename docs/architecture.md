@@ -144,7 +144,7 @@ IoTKit Edge is a **buffer, not a warehouse**. A measurement's lifecycle:
    non-quarantined measurements). Crash-consistent: you never get a reading
    without its outbox row, or vice versa.
 2. **Publish** — the publisher batches undelivered outbox rows and sends them through a standard
-   MQTT broker with a per-Edge-Node credential. The DB lock is **not** held across the network
+MQTT broker with a per-Edge-Node credential. The DB lock is **not** held across the network
    round-trip. Broker PUBACK does not release application custody.
 3. **Ack → cursor** — after its SQLite commit, Site publishes a valid `accepted-through` ack
    (matching Edge Node, epoch, publication id, and batch bound), which
@@ -160,6 +160,11 @@ If the consumer is down, the cursor stops advancing, the backlog grows, and disk
 fills — at which point *new writes fail loudly* (`ENOSPC`). IoTKit Edge never
 silently drops stored data to make room. (Graceful active back-pressure is future
 work; today the contract is "safe, not graceful" under sustained pressure.)
+
+Installers can enqueue the optional `commissioning_smoke` record through the R14 operation-backed
+`iotkit-edgectl smoke enqueue` command and compare its epoch/publication sequence with the
+`accepted-through` cursor through `smoke status`. This verifies the normal custody path without
+direct SQLite access or pretending that a physical sensor produced a measurement.
 
 ## Control plane
 

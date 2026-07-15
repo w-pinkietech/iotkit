@@ -89,6 +89,26 @@ publication sequence as measurements and therefore participate in the same conti
 Additional record families require a versioned contract change. They are not added merely to mirror
 an application table or MQTT topic.
 
+### Commissioning smoke (optional)
+
+```json
+{
+  "family": "commissioning_smoke",
+  "schema_version": 1,
+  "epoch": "01J...",
+  "pub_seq": 131,
+  "test_id": "smoke-0123456789abcdef0123456789abcdef"
+}
+```
+
+This optional family proves the normal Edge outbox, MQTT, Site durable raw storage, and
+`accepted-through` path without claiming that a physical sensor produced a measurement.
+`test_id` is a freshly generated 128-bit lowercase hexadecimal identifier prefixed with `smoke-`.
+The record bypasses device registration, measurement-registry, quarantine, and semantic projection;
+it is never a sensor value or an application event. Consumers that do not perform commissioning may
+ignore this optional family. It uses the same publication sequence and acknowledgement contract as
+every other raw record and has no special topic or acknowledgement.
+
 ## Application custody acknowledgement
 
 After storing a batch, Site publishes:

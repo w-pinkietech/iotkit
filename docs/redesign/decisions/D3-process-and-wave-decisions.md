@@ -203,6 +203,16 @@ MQTTはat-least-onceであるため配送回数をexactly-onceとは扱わず、
 同一publication再送の冪等性を対象とする。BravePIからraw保存までの経路は既に実機確認済みのため、
 semantic pathをPiで重ねて確認することは完了条件にしない。
 
+### クリーン導入commissioning smoke検証 (2026-07-15)
+
+予約済みだったoptional `commissioning_smoke` familyを出口契約v1へ具体化し、公開CLIだけで合成レコードを
+enqueueして配送状態を確認できるようにした。新規Edge DBを初期化し、通常のEdge、Mosquitto、SiteをDockerの
+一時環境で起動した後、`iotkit-edgectl smoke enqueue`が返したepoch/pub_seqを`smoke status`へ渡した。
+レコードは通常outboxとEdge固有topicを通ってSite raw SQLiteへ耐久保存され、同じtest_idをSite queryで確認し、
+相関した`accepted-through`によってstatusが`pending`から`delivered`へ進んだ。テストスクリプトから
+`publication_log`への直接INSERTと`target_registry`の直接cursor参照は除去した。物理センサー値、device登録、
+検疫、semantic mapping、application eventはこの合成レコードに関与しない。
+
 同日、broker停止中のsemantic MQTT outbox復旧もhost上で確認した。brokerを停止した状態でactive edgeの
 raw recordをSite storeへ受理すると、semantic event 1行と`published_at IS NULL`のoutbox 1行が生成・保持された。
 同じSite processを維持してbrokerを復旧すると、QoS 1でapplication subscriberへ同じ`event_id`が1回届き、

@@ -1573,6 +1573,115 @@ fn mqtt_binding_reports_only_non_secret_d9_connection_metadata() {
 }
 
 #[test]
+fn commissioning_smoke_enqueue_and_status_use_public_cli_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("edge.db");
+    let initialized: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "init",
+    ])))
+    .unwrap();
+    let epoch = initialized["ledger_epoch"].as_str().unwrap();
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        iotkit_core_publish::store::target_insert(
+            conn,
+            &iotkit_core_publish::store::TargetRow {
+                target_id: "site".into(),
+                endpoint_url: "mqtt://broker:1883".into(),
+                credential_token: String::new(),
+                archive_responsible: true,
+                schema_version: 1,
+                cursor_epoch: None,
+                cursor_pub_seq: 0,
+            },
+            1,
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    drop(db);
+
+    let enqueued: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "smoke",
+        "enqueue",
+    ])))
+    .unwrap();
+    assert_eq!(enqueued["target_id"], "site");
+    assert_eq!(enqueued["ledger_epoch"], epoch);
+    let pub_seq = enqueued["pub_seq"].as_i64().unwrap();
+    let pub_seq_arg = pub_seq.to_string();
+    let test_id = enqueued["test_id"].as_str().unwrap();
+    assert!(test_id.starts_with("smoke-"));
+
+    let pending: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "smoke",
+        "status",
+        "--ledger-epoch",
+        epoch,
+        "--pub-seq",
+        &pub_seq_arg,
+    ])))
+    .unwrap();
+    assert_eq!(pending["status"], "pending");
+    assert_eq!(pending["accepted_through"], 0);
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    iotkit_core_publish::store::target_advance_cursor(&conn, "site", epoch, pub_seq).unwrap();
+    drop(conn);
+    let bytes_before_status = std::fs::read(&db_path).unwrap();
+
+    let delivered: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "smoke",
+        "status",
+        "--ledger-epoch",
+        epoch,
+        "--pub-seq",
+        &pub_seq_arg,
+    ])))
+    .unwrap();
+    assert_eq!(delivered["status"], "delivered");
+    assert_eq!(delivered["accepted_through"], pub_seq);
+    assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before_status);
+}
+
+#[test]
+fn commissioning_smoke_enqueue_requires_the_runtime_mqtt_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("edge.db");
+    assert_success(run(&["--db", db_path.to_str().unwrap(), "init"]));
+
+    let stderr = assert_failure(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "smoke",
+        "enqueue",
+    ]));
+
+    assert!(
+        stderr.contains("start Edge with MQTT exit enabled first"),
+        "{stderr}"
+    );
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM publication_log WHERE kind='commissioning_smoke'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
 fn read_only_identity_commands_refuse_missing_or_uninitialized_database_without_creation() {
     for command in ["identity", "mqtt-binding"] {
         let dir = tempfile::tempdir().unwrap();

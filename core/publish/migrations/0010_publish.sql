@@ -2,10 +2,10 @@
 CREATE TABLE publication_log (
     pub_seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     epoch           TEXT    NOT NULL,
-    kind            TEXT    NOT NULL,              -- 'measurement' | 'annotation'
-    subtype         TEXT,                          -- annotation: 'epoch_start'。measurement は NULL
-    reading_seq     INTEGER,                       -- measurement: readings.seq 参照。annotation は NULL
-    annotation_json TEXT,                          -- annotation: inline payload。measurement は NULL
+    kind            TEXT    NOT NULL,              -- measurement | annotation | commissioning_smoke
+    subtype         TEXT,                          -- annotation: epoch_start。その他は NULL
+    reading_seq     INTEGER,                       -- measurement: readings.seq 参照。その他は NULL
+    annotation_json TEXT,                          -- annotation / commissioning_smoke inline payload
     created_at      INTEGER NOT NULL
 );
 -- epoch_start の二重 enqueue を DB 制約で排除(spec §5.2/§8 冪等)
