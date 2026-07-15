@@ -2,6 +2,7 @@ package siteapp
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"unicode"
@@ -35,6 +36,22 @@ type PutLegacyMQTTRoute struct {
 
 func (PutLegacyMQTTRoute) isSiteOperation() {}
 
+type UpdateDeviceProfile struct {
+	DeviceRef    string
+	Input        DeviceProfileInput
+	Precondition RevisionPrecondition
+}
+
+func (UpdateDeviceProfile) isSiteOperation() {}
+
+type UpdateSignalProfile struct {
+	SignalRef    string
+	Input        SignalProfileInput
+	Precondition RevisionPrecondition
+}
+
+func (UpdateSignalProfile) isSiteOperation() {}
+
 func (operation PutLegacyMQTTRoute) Validate() error {
 	return validateLegacyMQTTRoute(operation.MappingID, operation.Topic)
 }
@@ -52,6 +69,8 @@ type LegacyMQTTRoute struct {
 type Result struct {
 	SemanticMapping *semantic.Mapping
 	LegacyMQTTRoute *LegacyMQTTRoute
+	DeviceProfile   *DeviceProfile
+	SignalProfile   *SignalProfile
 }
 
 type Repository interface {
@@ -60,6 +79,8 @@ type Repository interface {
 	ListSemanticMappings(context.Context) ([]semantic.Mapping, error)
 	ListAuditEvents(context.Context, int) ([]AuditEvent, error)
 	ApplyLegacyMQTTRoute(context.Context, Actor, string, string) (LegacyMQTTRoute, error)
+	UpdateDeviceProfile(context.Context, Actor, string, DeviceProfileInput, RevisionPrecondition) (DeviceProfile, error)
+	UpdateSignalProfile(context.Context, Actor, string, SignalProfileInput, RevisionPrecondition) (SignalProfile, error)
 }
 
 type Service struct {
@@ -120,9 +141,59 @@ func (service *Service) Dispatch(ctx context.Context, actor Actor, operation Ope
 			return noResult, err
 		}
 		return Result{LegacyMQTTRoute: &route}, nil
+	case UpdateDeviceProfile:
+		if err := validateResourceRef(operation.DeviceRef, "dev_"); err != nil {
+			return noResult, err
+		}
+		if err := operation.Input.Validate(); err != nil {
+			return noResult, err
+		}
+		profile, err := service.repository.UpdateDeviceProfile(
+			ctx,
+			actor,
+			operation.DeviceRef,
+			operation.Input,
+			operation.Precondition,
+		)
+		if err != nil {
+			return noResult, err
+		}
+		return Result{DeviceProfile: &profile}, nil
+	case UpdateSignalProfile:
+		if err := validateResourceRef(operation.SignalRef, "sig_"); err != nil {
+			return noResult, err
+		}
+		if err := operation.Input.Validate(); err != nil {
+			return noResult, err
+		}
+		profile, err := service.repository.UpdateSignalProfile(
+			ctx,
+			actor,
+			operation.SignalRef,
+			operation.Input,
+			operation.Precondition,
+		)
+		if err != nil {
+			return noResult, err
+		}
+		return Result{SignalProfile: &profile}, nil
 	default:
 		return noResult, errors.New("unsupported Site operation")
 	}
+}
+
+func validateResourceRef(ref, prefix string) error {
+	if !strings.HasPrefix(ref, prefix) {
+		return errors.New("invalid Site resource ref")
+	}
+	randomPart := strings.TrimPrefix(ref, prefix)
+	if len(randomPart) != 32 {
+		return errors.New("invalid Site resource ref")
+	}
+	if _, err := hex.DecodeString(randomPart); err != nil {
+		return errors.New("invalid Site resource ref")
+	}
+	return nil
 }
 
 func validateLegacyMQTTRoute(mappingID, topic string) error {
