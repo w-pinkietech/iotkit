@@ -804,6 +804,24 @@ mod v3_tests {
         .unwrap()
     }
 
+    fn seed_series_before_v8(conn: &rusqlite::Connection) -> i64 {
+        conn.execute(
+            "INSERT INTO devices (
+                system_id, hardware_id, kind, state, created_at
+             ) VALUES (?1, 'ble:aa', 'individual', 'active', 0)",
+            rusqlite::params![vec![1_u8; 16]],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO series (
+                system_id, measurement_key, channel_index, variant, created_at
+             ) VALUES (?1, 'temperature_c', -1, 'primary', 0)",
+            rusqlite::params![vec![1_u8; 16]],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
     #[test]
     fn claim_envelope_detects_duplicates() {
         let db = v3_db();
@@ -1350,7 +1368,9 @@ mod v3_tests {
     fn migration_v8_backfills_event_time_from_real_rows() {
         let db = db_before_v8();
         db.with_conn_sync(|conn| {
-            let series_id = seed_series(conn);
+            // Reproduce an actual pre-v8 schema. Current ledger helpers select columns
+            // introduced by later migrations and must not be used to seed old schemas.
+            let series_id = seed_series_before_v8(conn);
             let rows = [
                 (1, 10_000_000, None, "edge"),
                 (2, 10_000_000, Some(9_990_000), "device_ntp"),
