@@ -124,7 +124,7 @@ pub fn publication_id(
     format!("{edge_node_id}:{ledger_epoch}:{cursor_start}:{cursor_end}")
 }
 
-fn validate_topic_segment(name: &str, value: &str) -> Result<(), WireError> {
+pub(crate) fn validate_topic_segment(name: &str, value: &str) -> Result<(), WireError> {
     validate_identity_component(name, value)?;
     if value.contains(['/', '+', '#']) {
         return invalid(&format!("{name} is not a safe MQTT topic segment"));

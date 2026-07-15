@@ -59,7 +59,12 @@ database instead of modifying it:
 
 ```bash
 iotkit-edgectl --db edge.db init
+iotkit-edgectl --db edge.db identity
+iotkit-edgectl --db edge.db mqtt-binding
 ```
+
+The latter two commands are read-only. `mqtt-binding` reports the username, client ID, topics,
+QoS, and retain flag used by Edge, but never creates or displays a credential.
 
 ### Site semantic export
 

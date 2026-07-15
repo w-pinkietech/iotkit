@@ -29,6 +29,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Init,
+    Identity,
+    MqttBinding,
     Sightings {
         #[command(subcommand)]
         command: SightingsCommand,
@@ -131,6 +133,7 @@ fn main() {
 fn run() -> AppResult<()> {
     let cli = Cli::parse();
     let initializing = matches!(&cli.command, Command::Init);
+    let reading_identity = matches!(&cli.command, Command::Identity | Command::MqttBinding);
     let restoring_snapshot = matches!(
         &cli.command,
         Command::Snapshot {
@@ -164,6 +167,23 @@ fn run() -> AppResult<()> {
         return Err(format!("database file does not exist: {}", db_path.display()).into());
     }
     iotkit_core_storage::preflight_edge_database(&db_path)?;
+    if reading_identity {
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let identity = load_initialized_identity(&conn)?;
+        return match cli.command {
+            Command::Identity => write_identity(&identity),
+            Command::MqttBinding => {
+                let binding =
+                    iotkit_core_publish::mqtt::MqttBinding::for_edge(&identity.edge_node_id)?;
+                println!("{}", serde_json::to_string_pretty(&binding)?);
+                Ok(())
+            }
+            _ => unreachable!("read-only identity command match was checked"),
+        };
+    }
     if matches!(
         &cli.command,
         Command::Snapshot {
@@ -254,6 +274,38 @@ fn ensure_edge_node_id(
             .map(|_| ())
             .map_err(ledger_to_storage_err)
     })
+}
+
+fn load_initialized_identity(
+    conn: &rusqlite::Connection,
+) -> AppResult<iotkit_core_ledger::EdgeIdentity> {
+    let has_ledger_meta = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ledger_meta')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !has_ledger_meta {
+        return Err("Edge identity is not initialized; create a new database with `iotkit-edgectl --db <path> init`".into());
+    }
+    match iotkit_core_ledger::load_edge_identity(conn) {
+        Ok(identity) => Ok(identity),
+        Err(iotkit_core_ledger::LedgerError::NotFound(_)) => Err(
+            "Edge identity is not initialized; create a new database with `iotkit-edgectl --db <path> init`"
+                .into(),
+        ),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_identity(identity: &iotkit_core_ledger::EdgeIdentity) -> AppResult<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "edge_node_id": identity.edge_node_id,
+            "ledger_epoch": identity.ledger_epoch,
+        }))?
+    );
+    Ok(())
 }
 
 fn ledger_to_storage_err(
@@ -351,14 +403,13 @@ fn dispatch(
         Command::Init => {
             let edge_node_id = iotkit_core_ledger::edge_node_id(conn)?;
             let ledger_epoch = iotkit_core_ledger::ledger_epoch(conn)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "edge_node_id": edge_node_id,
-                    "ledger_epoch": ledger_epoch,
-                }))?
-            );
-            Ok(())
+            write_identity(&iotkit_core_ledger::EdgeIdentity {
+                edge_node_id,
+                ledger_epoch,
+            })
+        }
+        Command::Identity | Command::MqttBinding => {
+            unreachable!("read-only identity commands do not enter the write dispatcher")
         }
         Command::Sightings { command } => match command {
             SightingsCommand::List => cmd::devices::run_list_sightings(conn),

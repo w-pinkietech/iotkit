@@ -1,5 +1,6 @@
 use iotkit_core_storage::Migration;
 
+pub mod mqtt;
 pub mod store;
 pub mod wire;
 

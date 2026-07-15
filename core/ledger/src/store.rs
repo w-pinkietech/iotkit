@@ -131,6 +131,12 @@ pub struct SeriesListRow {
     pub user_label: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeIdentity {
+    pub edge_node_id: String,
+    pub ledger_epoch: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SightingRow {
     pub hardware_id: String,
@@ -867,6 +873,41 @@ pub fn edge_node_id(conn: &Connection) -> Result<String, LedgerError> {
         |row| row.get(0),
     )
     .map_err(LedgerError::from)
+}
+
+/// Return an initialized Edge identity without generating or changing either value.
+pub fn load_edge_identity(conn: &Connection) -> Result<EdgeIdentity, LedgerError> {
+    if conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'gateway_identity'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Err(LedgerError::UnsupportedPreReleaseSchema);
+    }
+    let edge_node_id = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'edge_node_id'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| LedgerError::NotFound("edge_node_id".into()))?;
+    let ledger_epoch = conn
+        .query_row(
+            "SELECT value FROM ledger_meta WHERE key = 'epoch'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| LedgerError::NotFound("ledger_epoch".into()))?;
+    Ok(EdgeIdentity {
+        edge_node_id,
+        ledger_epoch,
+    })
 }
 
 /// 台帳エポック(D5決定3の複合カーソル (epoch, seq) の前半)。初回に生成し永続化。
@@ -1923,6 +1964,48 @@ mod tests {
             let second = edge_node_id(conn).unwrap();
             assert_eq!(first, second);
             assert_eq!(uuid::Uuid::parse_str(&first).unwrap().get_version_num(), 7);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn load_edge_identity_returns_existing_values_without_writing() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let edge_node_id = edge_node_id(conn).unwrap();
+            let ledger_epoch = ledger_epoch(conn).unwrap();
+            let changes_before = conn.total_changes();
+
+            let identity = load_edge_identity(conn).unwrap();
+
+            assert_eq!(identity.edge_node_id, edge_node_id);
+            assert_eq!(identity.ledger_epoch, ledger_epoch);
+            assert_eq!(conn.total_changes(), changes_before);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn load_edge_identity_does_not_generate_missing_values() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            let changes_before = conn.total_changes();
+
+            let error = load_edge_identity(conn).unwrap_err();
+
+            assert!(matches!(error, LedgerError::NotFound(_)));
+            assert_eq!(conn.total_changes(), changes_before);
+            assert_eq!(
+                conn.query_row::<i64, _, _>(
+                    "SELECT COUNT(*) FROM ledger_meta WHERE key IN ('edge_node_id', 'epoch')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+                0
+            );
             Ok(())
         })
         .unwrap();

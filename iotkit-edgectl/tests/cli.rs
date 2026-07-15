@@ -1513,6 +1513,105 @@ fn init_refuses_existing_database_without_changing_it() {
 }
 
 #[test]
+fn identity_reports_initialized_values_without_changing_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("edge.db");
+    let initialized: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "init",
+    ])))
+    .unwrap();
+    let bytes_before = std::fs::read(&db_path).unwrap();
+
+    let reported: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "identity",
+    ])))
+    .unwrap();
+
+    assert_eq!(reported, initialized);
+    assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
+}
+
+#[test]
+fn mqtt_binding_reports_only_non_secret_d9_connection_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("edge.db");
+    let initialized: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "init",
+    ])))
+    .unwrap();
+    let edge_node_id = initialized["edge_node_id"].as_str().unwrap();
+    let bytes_before = std::fs::read(&db_path).unwrap();
+
+    let reported: Value = serde_json::from_str(&assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "mqtt-binding",
+    ])))
+    .unwrap();
+
+    assert_eq!(reported.as_object().unwrap().len(), 7);
+    assert_eq!(reported["edge_node_id"], edge_node_id);
+    assert_eq!(reported["username"], edge_node_id);
+    assert_eq!(reported["client_id"], format!("iotkit-edge-{edge_node_id}"));
+    assert_eq!(
+        reported["records_topic"],
+        format!("iotkit/v1/edge-nodes/{edge_node_id}/records")
+    );
+    assert_eq!(
+        reported["accepted_through_topic"],
+        format!("iotkit/v1/edge-nodes/{edge_node_id}/accepted-through")
+    );
+    assert_eq!(reported["qos"], 1);
+    assert_eq!(reported["retain"], false);
+    assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
+}
+
+#[test]
+fn read_only_identity_commands_refuse_missing_or_uninitialized_database_without_creation() {
+    for command in ["identity", "mqtt-binding"] {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join("missing.db");
+        let missing = assert_failure(run(&["--db", missing_path.to_str().unwrap(), command]));
+        assert!(
+            missing.contains("database file does not exist"),
+            "{missing}"
+        );
+        assert!(!missing_path.exists());
+
+        let empty_path = dir.path().join("empty.db");
+        std::fs::File::create(&empty_path).unwrap();
+        let bytes_before = std::fs::read(&empty_path).unwrap();
+        let uninitialized = assert_failure(run(&["--db", empty_path.to_str().unwrap(), command]));
+        assert!(
+            uninitialized.contains("Edge identity is not initialized"),
+            "{uninitialized}"
+        );
+        assert_eq!(std::fs::read(&empty_path).unwrap(), bytes_before);
+    }
+}
+
+#[test]
+fn read_only_identity_commands_reject_legacy_database_without_mutation() {
+    for command in ["identity", "mqtt-binding"] {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("gateway.db");
+        create_pre_cutover_cli_database(&db_path, Some("gateway_identity"));
+        let bytes_before = std::fs::read(&db_path).unwrap();
+
+        let stderr = assert_failure(run(&["--db", db_path.to_str().unwrap(), command]));
+
+        assert!(stderr.contains("unsupported pre-release"), "{stderr}");
+        assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
+    }
+}
+
+#[test]
 fn mutate_command_without_db_argument_or_env_is_error() {
     let dir = tempfile::tempdir().unwrap();
     let fallback_path = dir.path().join("iotkit.db");

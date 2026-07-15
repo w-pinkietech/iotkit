@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use iotkit_core_publish::mqtt::MqttBinding;
 use iotkit_core_publish::store::{
     TargetRow, effective_cursor, select_batch, target_advance_cursor, target_get, target_insert,
 };
@@ -21,7 +22,7 @@ const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
 
 struct RuntimeConfig {
     connection: MqttExitConfig,
-    edge_node_id: String,
+    binding: MqttBinding,
     password: String,
     ca: Option<Vec<u8>>,
 }
@@ -39,19 +40,21 @@ pub(crate) async fn spawn_mqtt_publish_task(
     let password = read_password(&config)?;
     let ca = read_ca(&config)?;
     let expected_endpoint = endpoint(&config);
-    let (edge_node_id, ()) = db
+    let (binding, ()) = db
         .with_conn(move |conn| {
             let identity = iotkit_core_ledger::edge_node_id(conn)
                 .map_err(|error| storage_error(error.to_string()))?;
+            let binding = MqttBinding::for_edge(&identity)
+                .map_err(|error| storage_error(error.to_string()))?;
             ensure_target(conn, &expected_endpoint).map_err(storage_error)?;
-            Ok((identity, ()))
+            Ok((binding, ()))
         })
         .await
         .map_err(|error| error.to_string())?;
 
     let runtime = RuntimeConfig {
         connection: config,
-        edge_node_id,
+        binding,
         password,
         ca,
     };
@@ -59,17 +62,18 @@ pub(crate) async fn spawn_mqtt_publish_task(
 }
 
 async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConfig) {
-    let records_topic = records_topic(&runtime.edge_node_id);
-    let ack_topic = ack_topic(&runtime.edge_node_id);
+    let records_topic = runtime.binding.records_topic.clone();
+    let ack_topic = runtime.binding.accepted_through_topic.clone();
+    let qos = mqtt_qos(&runtime.binding);
     let mut options = MqttOptions::new(
-        client_id(&runtime.edge_node_id),
+        runtime.binding.client_id.clone(),
         runtime.connection.host.clone(),
         runtime.connection.port,
     );
     configure_packet_limits(&mut options, &records_topic, &ack_topic);
     options.set_keep_alive(Duration::from_secs(30));
     options.set_clean_session(true);
-    options.set_credentials(&runtime.edge_node_id, &runtime.password);
+    options.set_credentials(&runtime.binding.username, &runtime.password);
     options.set_transport(if runtime.connection.allow_insecure {
         Transport::tcp()
     } else if let Some(ca) = runtime.ca {
@@ -90,7 +94,7 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                 match event {
                     Ok(Event::Incoming(Incoming::ConnAck(_))) => {
                         subscribed = false;
-                        if let Err(error) = client.subscribe(&ack_topic, QoS::AtLeastOnce).await {
+                        if let Err(error) = client.subscribe(&ack_topic, qos).await {
                             tracing::warn!(error = %error, "failed to queue MQTT acknowledgement subscription");
                         }
                     }
@@ -100,7 +104,9 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                             &db,
                             &client,
                             &records_topic,
-                            &runtime.edge_node_id,
+                            &runtime.binding.edge_node_id,
+                            qos,
+                            runtime.binding.retain,
                             &mut inflight,
                         ).await {
                             tracing::warn!(error = %error, "MQTT publish attempt failed");
@@ -122,7 +128,9 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                                     &db,
                                     &client,
                                     &records_topic,
-                                    &runtime.edge_node_id,
+                                    &runtime.binding.edge_node_id,
+                                    qos,
+                                    runtime.binding.retain,
                                     &mut inflight,
                                 ).await {
                                     tracing::warn!(error = %error, "MQTT publish attempt failed");
@@ -151,7 +159,9 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                     &db,
                     &client,
                     &records_topic,
-                    &runtime.edge_node_id,
+                    &runtime.binding.edge_node_id,
+                    qos,
+                    runtime.binding.retain,
                     &mut inflight,
                 ).await {
                     tracing::warn!(error = %error, "MQTT publish retry failed");
@@ -167,6 +177,8 @@ async fn publish_current_or_next(
     client: &AsyncClient,
     topic: &str,
     edge_node_id: &str,
+    qos: QoS,
+    retain: bool,
     inflight: &mut Option<PreparedBatch>,
 ) -> Result<(), String> {
     if inflight.is_none() {
@@ -181,7 +193,7 @@ async fn publish_current_or_next(
     };
     let payload = serde_json::to_vec(&prepared.batch).map_err(|error| error.to_string())?;
     client
-        .publish(topic, QoS::AtLeastOnce, false, payload)
+        .publish(topic, qos, retain, payload)
         .await
         .map_err(|error| error.to_string())
 }
@@ -362,16 +374,13 @@ fn endpoint(config: &MqttExitConfig) -> String {
     format!("{scheme}://{}:{}", config.host, config.port)
 }
 
-fn records_topic(edge_node_id: &str) -> String {
-    format!("iotkit/v1/edge-nodes/{edge_node_id}/records")
+fn mqtt_qos(binding: &MqttBinding) -> QoS {
+    debug_assert_eq!(binding.qos, 1);
+    mqtt_qos_for_v1()
 }
 
-fn ack_topic(edge_node_id: &str) -> String {
-    format!("iotkit/v1/edge-nodes/{edge_node_id}/accepted-through")
-}
-
-fn client_id(edge_node_id: &str) -> String {
-    format!("iotkit-edge-{edge_node_id}")
+fn mqtt_qos_for_v1() -> QoS {
+    QoS::AtLeastOnce
 }
 
 fn configure_packet_limits(options: &mut MqttOptions, records_topic: &str, ack_topic: &str) {
@@ -439,15 +448,16 @@ mod tests {
             assert_eq!(prepared.batch.cursor_start, 1);
             assert_eq!(prepared.batch.cursor_end, 1);
             assert_eq!(prepared.batch.edge_node_id, "edge-01");
+            let binding = MqttBinding::for_edge("edge-01").unwrap();
             assert_eq!(
-                records_topic("edge-01"),
+                binding.records_topic,
                 "iotkit/v1/edge-nodes/edge-01/records"
             );
             assert_eq!(
-                ack_topic("edge-01"),
+                binding.accepted_through_topic,
                 "iotkit/v1/edge-nodes/edge-01/accepted-through"
             );
-            assert_eq!(client_id("edge-01"), "iotkit-edge-edge-01");
+            assert_eq!(binding.client_id, "iotkit-edge-edge-01");
             prepared.batch.validate().unwrap();
             Ok(())
         })
@@ -456,8 +466,9 @@ mod tests {
 
     #[test]
     fn mqtt_client_accepts_the_wire_batch_limit_plus_protocol_overhead() {
-        let records_topic = records_topic("edge-01");
-        let ack_topic = ack_topic("edge-01");
+        let binding = MqttBinding::for_edge("edge-01").unwrap();
+        let records_topic = binding.records_topic;
+        let ack_topic = binding.accepted_through_topic;
         let mut options = MqttOptions::new("test-client", "localhost", 1883);
 
         configure_packet_limits(&mut options, &records_topic, &ack_topic);

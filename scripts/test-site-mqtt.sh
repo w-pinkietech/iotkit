@@ -33,9 +33,17 @@ chmod 600 "$IOTKIT_SITE_PASSWORD_FILE" "$scratch/edge-password"
 jq --version >/dev/null
 cargo build --manifest-path "$repo_root/Cargo.toml" -p iotkit-edge -p iotkit-edgectl
 
-init_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" init)
-edge_node_id=$(jq -er '.edge_node_id | select(type == "string" and length > 0)' <<<"$init_output")
-jq -er '.ledger_epoch | select(type == "string" and length > 0)' <<<"$init_output" >/dev/null
+"$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" init >/dev/null
+identity_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" identity)
+edge_node_id=$(jq -er '.edge_node_id | select(type == "string" and length > 0)' <<<"$identity_output")
+jq -er '.ledger_epoch | select(type == "string" and length > 0)' <<<"$identity_output" >/dev/null
+binding_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" mqtt-binding)
+edge_username=$(jq -er '.username | select(type == "string" and length > 0)' <<<"$binding_output")
+edge_records_topic=$(jq -er '.records_topic | select(type == "string" and length > 0)' <<<"$binding_output")
+edge_ack_topic=$(jq -er '.accepted_through_topic | select(type == "string" and length > 0)' <<<"$binding_output")
+jq -e --arg edge_node_id "$edge_node_id" \
+  '.edge_node_id == $edge_node_id and .username == $edge_node_id and .qos == 1 and .retain == false and (.client_id | type == "string" and length > 0)' \
+  <<<"$binding_output" >/dev/null
 sqlite3 "$scratch/edge.db" "INSERT INTO publication_log(epoch,kind,subtype,annotation_json,created_at) SELECT value,'annotation','epoch_start','{\"prior_epoch\":\"integration-prior\"}',unixepoch('subsec')*1000 FROM ledger_meta WHERE key='epoch'"
 
 cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
@@ -43,9 +51,9 @@ user edge-node-01
 topic write iotkit/v1/edge-nodes/edge-node-01/records
 topic read iotkit/v1/edge-nodes/edge-node-01/accepted-through
 
-user $edge_node_id
-topic write iotkit/v1/edge-nodes/$edge_node_id/records
-topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
+user $edge_username
+topic write $edge_records_topic
+topic read $edge_ack_topic
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
@@ -57,7 +65,7 @@ printf 'site:' >"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 tr -d '\n' <"$IOTKIT_SITE_PASSWORD_FILE" >>"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 printf '\nedge-node-01:' >>"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 tr -d '\n' <"$scratch/edge-password" >>"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
-printf '\n%s:' "$edge_node_id" >>"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
+printf '\n%s:' "$edge_username" >>"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 tr -d '\n' <"$scratch/edge-password" >>"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 printf '\n' >>"$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 chmod 600 "$IOTKIT_MOSQUITTO_PASSWORD_FILE"
