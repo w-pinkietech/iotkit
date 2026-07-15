@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "edge_node_id": "edge-node-01",
+  "ledger_epoch": "epoch-01",
+  "descriptor_revision": 4,
+  "complete": true,
+  "devices": [
+    {
+      "system_id": "018f0000-0000-7000-8000-000000000001",
+      "identifier": "01234567",
+      "state": "active"
+    }
+  ],
+  "signals": [
+    {
+      "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+      "system_id": "018f0000-0000-7000-8000-000000000001",
+      "measurement_key": "contact_state",
+      "channel_index": null,
+      "variant": "primary",
+      "unit": null,
+      "value_type": "bool"
+    }
+  ]
+}

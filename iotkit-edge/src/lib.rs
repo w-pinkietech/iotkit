@@ -1,5 +1,6 @@
 pub mod api;
 pub mod config;
+pub mod descriptor_snapshot;
 pub mod epoch_start;
 pub mod health;
 pub mod ingress;
