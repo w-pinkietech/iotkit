@@ -618,7 +618,10 @@ fn last_used_is_throttled_and_health_is_aggregate_bounded_and_actionable() {
                 r.get(0)
             })
             .unwrap();
-        assert!(updated > first);
+        assert!(
+            updated > 100,
+            "the deliberately stale last_used_at value must be refreshed"
+        );
         let health = stale_credential_health(conn, updated.saturating_add(60_001), 60_000).unwrap();
         assert_eq!(health.active_count, 1);
         assert_eq!(health.stale_count, 1);
