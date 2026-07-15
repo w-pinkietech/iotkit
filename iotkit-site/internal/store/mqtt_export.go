@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/applicationcontract"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
 
 const mqttExportQoS = 1
@@ -68,26 +69,34 @@ func (store *Store) PutMQTTRoute(ctx context.Context, mappingID, topic string) (
 		return noRoute, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	route, _, err := putMQTTRouteTx(ctx, tx, mappingID, topic)
+	if err != nil {
+		return noRoute, err
+	}
+	if err := tx.Commit(); err != nil {
+		return noRoute, err
+	}
+	return route, nil
+}
 
+func putMQTTRouteTx(ctx context.Context, tx *sql.Tx, mappingID, topic string) (MQTTRoute, bool, error) {
+	var noRoute MQTTRoute
 	existing, err := readMQTTRoute(ctx, tx, mappingID, topic)
 	if err == nil {
-		if err := tx.Commit(); err != nil {
-			return noRoute, err
-		}
-		return existing, nil
+		return existing, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return noRoute, err
+		return noRoute, false, err
 	}
 
 	var mappingExists int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM semantic_mappings WHERE mapping_id = ?)
 	`, mappingID).Scan(&mappingExists); err != nil {
-		return noRoute, err
+		return noRoute, false, err
 	}
 	if mappingExists != 1 {
-		return noRoute, fmt.Errorf("semantic mapping %q does not exist", mappingID)
+		return noRoute, false, fmt.Errorf("semantic mapping %q does not exist", mappingID)
 	}
 
 	var startAfterEventRowID int64
@@ -96,11 +105,11 @@ func (store *Store) PutMQTTRoute(ctx context.Context, mappingID, topic string) (
 		FROM semantic_events
 		WHERE mapping_id = ?
 	`, mappingID).Scan(&startAfterEventRowID); err != nil {
-		return noRoute, err
+		return noRoute, false, err
 	}
 	routeID, err := generateMQTTRouteID()
 	if err != nil {
-		return noRoute, err
+		return noRoute, false, err
 	}
 	createdAt := time.Now().UnixMilli()
 	if _, err := tx.ExecContext(ctx, `
@@ -108,10 +117,7 @@ func (store *Store) PutMQTTRoute(ctx context.Context, mappingID, topic string) (
 			route_id, mapping_id, topic, qos, start_after_event_row_id, active, created_at
 		) VALUES (?, ?, ?, ?, ?, 1, ?)
 	`, routeID, mappingID, topic, mqttExportQoS, startAfterEventRowID, createdAt); err != nil {
-		return noRoute, err
-	}
-	if err := tx.Commit(); err != nil {
-		return noRoute, err
+		return noRoute, false, err
 	}
 	return MQTTRoute{
 		RouteID:              routeID,
@@ -121,6 +127,68 @@ func (store *Store) PutMQTTRoute(ctx context.Context, mappingID, topic string) (
 		StartAfterEventRowID: startAfterEventRowID,
 		Active:               true,
 		CreatedAt:            createdAt,
+	}, true, nil
+}
+
+func (store *Store) ApplyLegacyMQTTRoute(
+	ctx context.Context,
+	actor siteapp.Actor,
+	mappingID string,
+	topic string,
+) (siteapp.LegacyMQTTRoute, error) {
+	var noRoute siteapp.LegacyMQTTRoute
+	if err := actor.Validate(); err != nil {
+		return noRoute, err
+	}
+	if err := (MQTTRouteSpec{MappingID: mappingID, Topic: topic}).Validate(); err != nil {
+		return noRoute, err
+	}
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return noRoute, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	route, created, err := putMQTTRouteTx(ctx, tx, mappingID, topic)
+	if err != nil {
+		return noRoute, err
+	}
+	summary, err := json.Marshal(struct {
+		MappingID string `json:"mapping_id"`
+		Topic     string `json:"topic"`
+		QoS       byte   `json:"qos"`
+		Created   bool   `json:"created"`
+	}{
+		MappingID: route.MappingID,
+		Topic:     route.Topic,
+		QoS:       route.QoS,
+		Created:   created,
+	})
+	if err != nil {
+		return noRoute, err
+	}
+	if err := insertAuditEventTx(ctx, tx, siteapp.AuditEvent{
+		OccurredAt:  time.Now().UnixMilli(),
+		ActorClass:  actor.Class,
+		ActorRef:    actor.Ref,
+		Operation:   "legacy_mqtt_route.put",
+		ResourceRef: route.RouteID,
+		Outcome:     auditOutcomeSuccess,
+		Summary:     summary,
+	}); err != nil {
+		return noRoute, err
+	}
+	if err := tx.Commit(); err != nil {
+		return noRoute, err
+	}
+	return siteapp.LegacyMQTTRoute{
+		RouteID:              route.RouteID,
+		MappingID:            route.MappingID,
+		Topic:                route.Topic,
+		QoS:                  int(route.QoS),
+		StartAfterEventRowID: route.StartAfterEventRowID,
+		Active:               route.Active,
+		CreatedAt:            route.CreatedAt,
 	}, nil
 }
 

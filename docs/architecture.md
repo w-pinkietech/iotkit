@@ -101,13 +101,16 @@ This is deliberately a two-stage failure boundary. The raw batch transaction and
 application outage cannot hold Edge custody. Semantic mappings are future-only from each current
 Edge cursor, and MQTT routes are future-only from the current semantic-event boundary.
 
-Operators use typed Site store operations through JSON-producing CLI commands (the raw `query`
-command remains available):
+Operators use JSON-producing CLI commands backed by the typed Site application-service dispatcher
+(the raw `query` command remains available). Semantic mapping changes and the legacy MQTT route
+command commit their success audit in the same SQLite transaction as the setting change:
 
 ```bash
 iotkit-site mapping-set --db site.db --edge-node-id edge-node-01 \
   --series-key '<series_key>' --meaning production_pulse \
   --trigger-mode active_edge --active-value 1
+iotkit-site mapping-deactivate --db site.db --edge-node-id edge-node-01 \
+  --series-key '<series_key>'
 iotkit-site mapping-list --db site.db
 iotkit-site route-add --db site.db --mapping-id '<mapping_id>' \
   --topic 'iotkit/v1/application/production-pulses'

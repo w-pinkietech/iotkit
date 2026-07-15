@@ -49,6 +49,26 @@ func TestDispatchRoutesPutAndDeactivateOperations(t *testing.T) {
 	}
 }
 
+func TestDispatchRoutesLegacyMQTTRouteOperation(t *testing.T) {
+	repository := &fakeRepository{legacyRoute: LegacyMQTTRoute{
+		RouteID:   "mr-01",
+		MappingID: "sm-01",
+		Topic:     "factory/production-pulses",
+		QoS:       1,
+	}}
+	service := NewService(repository)
+	result, err := service.Dispatch(context.Background(), LocalCLIActor(), PutLegacyMQTTRoute{
+		MappingID: "sm-01",
+		Topic:     "factory/production-pulses",
+	})
+	if err != nil || result.LegacyMQTTRoute == nil {
+		t.Fatalf("route result = %#v, err = %v", result, err)
+	}
+	if repository.routeCalls != 1 {
+		t.Fatalf("repository route calls = %d", repository.routeCalls)
+	}
+}
+
 func TestDispatchRejectsInvalidMappingBeforeRepositoryMutation(t *testing.T) {
 	repository := &fakeRepository{}
 	service := NewService(repository)
@@ -87,6 +107,8 @@ type fakeRepository struct {
 	applyCalls      int
 	deactivateCalls int
 	auditCalls      int
+	routeCalls      int
+	legacyRoute     LegacyMQTTRoute
 }
 
 func (repository *fakeRepository) ApplySemanticMapping(
@@ -119,4 +141,14 @@ func (repository *fakeRepository) ListSemanticMappings(context.Context) ([]seman
 func (repository *fakeRepository) ListAuditEvents(context.Context, int) ([]AuditEvent, error) {
 	repository.auditCalls++
 	return nil, nil
+}
+
+func (repository *fakeRepository) ApplyLegacyMQTTRoute(
+	context.Context,
+	Actor,
+	string,
+	string,
+) (LegacyMQTTRoute, error) {
+	repository.routeCalls++
+	return repository.legacyRoute, nil
 }

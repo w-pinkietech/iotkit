@@ -10,7 +10,80 @@ import (
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/applicationcontract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
+
+func TestApplyLegacyMQTTRouteCommitsAudit(t *testing.T) {
+	store := openTestStore(t)
+	mapping, err := store.ApplySemanticMapping(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		semantic.MappingSpec{
+			EdgeNodeID:  "edge-node-01",
+			SeriesKey:   contactSeries,
+			Meaning:     semantic.MeaningProductionPulse,
+			TriggerMode: semantic.TriggerActiveSample,
+			ActiveValue: 1,
+		},
+		siteapp.RevisionPrecondition{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := store.ApplyLegacyMQTTRoute(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		mapping.ID,
+		"factory/production-pulses",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ListAuditEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Operation != "legacy_mqtt_route.put" || events[0].ResourceRef != route.RouteID {
+		t.Fatalf("audit events = %#v", events)
+	}
+}
+
+func TestApplyLegacyMQTTRouteRollsBackWhenAuditInsertFails(t *testing.T) {
+	store := openTestStore(t)
+	mapping, err := store.ApplySemanticMapping(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		semantic.MappingSpec{
+			EdgeNodeID:  "edge-node-01",
+			SeriesKey:   contactSeries,
+			Meaning:     semantic.MeaningProductionPulse,
+			TriggerMode: semantic.TriggerActiveSample,
+			ActiveValue: 1,
+		},
+		siteapp.RevisionPrecondition{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+		CREATE TRIGGER fail_route_audit BEFORE INSERT ON audit_events
+		BEGIN SELECT RAISE(ABORT, 'injected route audit failure'); END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.ApplyLegacyMQTTRoute(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		mapping.ID,
+		"factory/production-pulses",
+	)
+	if err == nil {
+		t.Fatal("route mutation succeeded despite audit failure")
+	}
+	if got := store.testCount(t, "mqtt_routes"); got != 0 {
+		t.Fatalf("route count = %d, want 0", got)
+	}
+}
 
 func TestPutMQTTRouteRejectsInvalidTopicAndUnknownMapping(t *testing.T) {
 	store := openTestStore(t)

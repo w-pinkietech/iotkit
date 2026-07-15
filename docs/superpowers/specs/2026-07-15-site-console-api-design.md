@@ -1,7 +1,7 @@
 # IoTKit Site Console / API設計
 
 Date: 2026-07-15
-Status: Draft for final approval
+Status: Approved; implementation in progress
 
 ## 目的と正本
 

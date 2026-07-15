@@ -28,8 +28,30 @@ type DeactivateSemanticMapping struct {
 
 func (DeactivateSemanticMapping) isSiteOperation() {}
 
+type PutLegacyMQTTRoute struct {
+	MappingID string
+	Topic     string
+}
+
+func (PutLegacyMQTTRoute) isSiteOperation() {}
+
+func (operation PutLegacyMQTTRoute) Validate() error {
+	return validateLegacyMQTTRoute(operation.MappingID, operation.Topic)
+}
+
+type LegacyMQTTRoute struct {
+	RouteID              string `json:"route_id"`
+	MappingID            string `json:"mapping_id"`
+	Topic                string `json:"topic"`
+	QoS                  int    `json:"qos"`
+	StartAfterEventRowID int64  `json:"start_after_event_row_id"`
+	Active               bool   `json:"active"`
+	CreatedAt            int64  `json:"created_at"`
+}
+
 type Result struct {
 	SemanticMapping *semantic.Mapping
+	LegacyMQTTRoute *LegacyMQTTRoute
 }
 
 type Repository interface {
@@ -37,6 +59,7 @@ type Repository interface {
 	DeactivateSemanticMapping(context.Context, Actor, string, string, RevisionPrecondition) (semantic.Mapping, error)
 	ListSemanticMappings(context.Context) ([]semantic.Mapping, error)
 	ListAuditEvents(context.Context, int) ([]AuditEvent, error)
+	ApplyLegacyMQTTRoute(context.Context, Actor, string, string) (LegacyMQTTRoute, error)
 }
 
 type Service struct {
@@ -83,9 +106,42 @@ func (service *Service) Dispatch(ctx context.Context, actor Actor, operation Ope
 			return noResult, err
 		}
 		return Result{SemanticMapping: &mapping}, nil
+	case PutLegacyMQTTRoute:
+		if err := operation.Validate(); err != nil {
+			return noResult, err
+		}
+		route, err := service.repository.ApplyLegacyMQTTRoute(
+			ctx,
+			actor,
+			operation.MappingID,
+			operation.Topic,
+		)
+		if err != nil {
+			return noResult, err
+		}
+		return Result{LegacyMQTTRoute: &route}, nil
 	default:
 		return noResult, errors.New("unsupported Site operation")
 	}
+}
+
+func validateLegacyMQTTRoute(mappingID, topic string) error {
+	if strings.TrimSpace(mappingID) == "" {
+		return errors.New("mapping_id must not be empty")
+	}
+	if strings.TrimSpace(topic) == "" {
+		return errors.New("MQTT topic must not be empty")
+	}
+	if strings.HasPrefix(topic, "/") || strings.HasSuffix(topic, "/") {
+		return errors.New("MQTT topic must not start or end with /")
+	}
+	if strings.ContainsAny(topic, "+#") {
+		return errors.New("MQTT topic must not contain wildcards")
+	}
+	if strings.IndexFunc(mappingID, unicode.IsControl) >= 0 || strings.IndexFunc(topic, unicode.IsControl) >= 0 {
+		return errors.New("legacy MQTT route must not contain control characters")
+	}
+	return nil
 }
 
 func (service *Service) ListSemanticMappings(ctx context.Context) ([]semantic.Mapping, error) {

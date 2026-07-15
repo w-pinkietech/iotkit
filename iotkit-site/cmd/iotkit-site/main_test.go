@@ -93,6 +93,67 @@ func TestMappingSetAcceptsExplicitZeroActiveValue(t *testing.T) {
 	}
 }
 
+func TestMappingSetRouteAddAndDeactivateUseAuditedApplicationService(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "site.db")
+	if err := run([]string{
+		"mapping-set", "--db", dbPath,
+		"--edge-node-id", "edge-node-01",
+		"--series-key", "contact-series-01",
+		"--meaning", "production_pulse",
+		"--trigger-mode", "active_edge",
+		"--active-value", "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappings, err := archive.ListSemanticMappings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("mappings = %#v", mappings)
+	}
+	if err := run([]string{
+		"route-add", "--db", dbPath,
+		"--mapping-id", mappings[0].ID,
+		"--topic", "factory/production-pulses",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{
+		"mapping-deactivate", "--db", dbPath,
+		"--edge-node-id", "edge-node-01",
+		"--series-key", "contact-series-01",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err = store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+	events, err := archive.ListAuditEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("audit events = %d, want 3", len(events))
+	}
+	if events[0].Operation != "semantic_mapping.deactivate" ||
+		events[1].Operation != "legacy_mqtt_route.put" ||
+		events[2].Operation != "semantic_mapping.put" {
+		t.Fatalf("audit events = %#v", events)
+	}
+}
+
 func TestMappingSetRejectsInvalidSpecBeforeCreatingDatabase(t *testing.T) {
 	tests := []struct {
 		name  string

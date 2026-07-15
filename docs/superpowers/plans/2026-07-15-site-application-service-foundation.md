@@ -454,6 +454,10 @@ Commit: `feat: add site operation dispatcher`
 **Files:**
 - Modify: `iotkit-site/cmd/iotkit-site/main.go`
 - Modify: `iotkit-site/cmd/iotkit-site/main_test.go`
+- Modify: `iotkit-site/internal/siteapp/service.go`
+- Modify: `iotkit-site/internal/siteapp/service_test.go`
+- Modify: `iotkit-site/internal/store/mqtt_export.go`
+- Modify: `iotkit-site/internal/store/mqtt_export_test.go`
 - Modify: `docs/architecture.md`
 - Modify: `docs/superpowers/specs/2026-07-15-site-console-api-design.md`
 
@@ -461,12 +465,13 @@ Commit: `feat: add site operation dispatcher`
 - Consumes: `siteapp.NewService(store)` and `Service.Dispatch`
 - Produces: existing `mapping-set` behavior through typed dispatch
 - Produces: `mapping-deactivate --edge-node-id --series-key`
+- Produces: existing `route-add` behavior through typed `PutLegacyMQTTRoute` dispatch
 - Preserves: existing `mapping-list`, raw query, route, semantic query output
 
 - [ ] **Step 1: CLI mapping変更が監査される失敗testを書く**
 
 ```go
-func TestMappingSetAndDeactivateUseAuditedApplicationService(t *testing.T) {
+func TestMappingSetRouteAddAndDeactivateUseAuditedApplicationService(t *testing.T) {
     dbPath := filepath.Join(t.TempDir(), "site.db")
     setArgs := []string{
         "mapping-set", "--db", dbPath,
@@ -474,14 +479,20 @@ func TestMappingSetAndDeactivateUseAuditedApplicationService(t *testing.T) {
         "--meaning", "production_pulse", "--trigger-mode", "active_edge", "--active-value", "1",
     }
     if err := run(setArgs); err != nil { t.Fatal(err) }
+    archive, err := store.Open(dbPath)
+    if err != nil { t.Fatal(err) }
+    mappings, err := archive.ListSemanticMappings(context.Background())
+    if err != nil { t.Fatal(err) }
+    if err := archive.Close(); err != nil { t.Fatal(err) }
+    if err := run([]string{"route-add", "--db", dbPath, "--mapping-id", mappings[0].ID, "--topic", "factory/production-pulses"}); err != nil { t.Fatal(err) }
     if err := run([]string{"mapping-deactivate", "--db", dbPath, "--edge-node-id", "edge-node-01", "--series-key", "contact-series-01"}); err != nil { t.Fatal(err) }
 
-    archive, err := store.Open(dbPath)
+    archive, err = store.Open(dbPath)
     if err != nil { t.Fatal(err) }
     defer archive.Close()
     events, err := archive.ListAuditEvents(context.Background(), 10)
     if err != nil { t.Fatal(err) }
-    if len(events) != 2 { t.Fatalf("audit events = %d, want 2", len(events)) }
+    if len(events) != 3 { t.Fatalf("audit events = %d, want 3", len(events)) }
 }
 ```
 
@@ -501,7 +512,7 @@ func openSiteService(dbPath string) (*siteapp.Service, *store.Store, error) {
 }
 ```
 
-`runMappingSet`はflagと`semantic.MappingSpec`を組み立て、`service.Dispatch(ctx, siteapp.LocalCLIActor(), siteapp.PutSemanticMapping{Spec: spec})`だけを呼ぶ。`runMappingDeactivate`も同じ経路で`DeactivateSemanticMapping`をdispatchする。`runMappingList`は`service.ListSemanticMappings`へ移す。CLI adapterから`archive.ApplySemanticMapping`、`archive.DeactivateSemanticMapping`を直接呼ばない。
+`runMappingSet`はflagと`semantic.MappingSpec`を組み立て、`service.Dispatch(ctx, siteapp.LocalCLIActor(), siteapp.PutSemanticMapping{Spec: spec})`だけを呼ぶ。`runMappingDeactivate`も同じ経路で`DeactivateSemanticMapping`をdispatchする。`runRouteAdd`は`PutLegacyMQTTRoute{MappingID: mappingID, Topic: topic}`をdispatchする。`runMappingList`は`service.ListSemanticMappings`へ移す。CLI adapterから`archive.ApplySemanticMapping`、`archive.DeactivateSemanticMapping`、`archive.PutMQTTRoute`を直接呼ばない。
 
 - [ ] **Step 4: usage、architecture、spec statusを実挙動へ更新する**
 

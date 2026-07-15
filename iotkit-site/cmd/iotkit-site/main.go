@@ -16,6 +16,7 @@ import (
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/mqttsite"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
@@ -28,7 +29,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: iotkit-site <serve|query|mapping-set|mapping-list|route-add|route-list|semantic-query> [options]")
+		return errors.New("usage: iotkit-site <serve|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]")
 	}
 	switch args[0] {
 	case "serve":
@@ -37,6 +38,8 @@ func run(args []string) error {
 		return runQuery(args[1:])
 	case "mapping-set":
 		return runMappingSet(args[1:])
+	case "mapping-deactivate":
+		return runMappingDeactivate(args[1:])
 	case "mapping-list":
 		return runMappingList(args[1:])
 	case "route-add":
@@ -151,16 +154,50 @@ func runMappingSet(args []string) error {
 		return err
 	}
 
-	archive, err := store.Open(*dbPath)
+	service, archive, err := openSiteService(*dbPath)
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
-	mapping, err := archive.PutSemanticMapping(context.Background(), spec)
+	result, err := service.Dispatch(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		siteapp.PutSemanticMapping{Spec: spec},
+	)
 	if err != nil {
 		return err
 	}
-	return writeJSON(mapping)
+	return writeJSON(result.SemanticMapping)
+}
+
+func runMappingDeactivate(args []string) error {
+	flags := flag.NewFlagSet("mapping-deactivate", flag.ContinueOnError)
+	dbPath := flags.String("db", "site.db", "Site SQLite path")
+	edgeNodeID := flags.String("edge-node-id", "", "source Edge Node ID")
+	seriesKey := flags.String("series-key", "", "source series key")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *edgeNodeID == "" {
+		return errors.New("--edge-node-id is required")
+	}
+	if *seriesKey == "" {
+		return errors.New("--series-key is required")
+	}
+	service, archive, err := openSiteService(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	result, err := service.Dispatch(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		siteapp.DeactivateSemanticMapping{EdgeNodeID: *edgeNodeID, SeriesKey: *seriesKey},
+	)
+	if err != nil {
+		return err
+	}
+	return writeJSON(result.SemanticMapping)
 }
 
 func runMappingList(args []string) error {
@@ -169,12 +206,12 @@ func runMappingList(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	archive, err := store.Open(*dbPath)
+	service, archive, err := openSiteService(*dbPath)
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
-	mappings, err := archive.ListSemanticMappings(context.Background())
+	mappings, err := service.ListSemanticMappings(context.Background())
 	if err != nil {
 		return err
 	}
@@ -195,20 +232,20 @@ func runRouteAdd(args []string) error {
 	if *topic == "" {
 		return errors.New("--topic is required")
 	}
-	spec := store.MQTTRouteSpec{MappingID: *mappingID, Topic: *topic}
-	if err := spec.Validate(); err != nil {
+	operation := siteapp.PutLegacyMQTTRoute{MappingID: *mappingID, Topic: *topic}
+	if err := operation.Validate(); err != nil {
 		return err
 	}
-	archive, err := store.Open(*dbPath)
+	service, archive, err := openSiteService(*dbPath)
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
-	route, err := archive.PutMQTTRoute(context.Background(), *mappingID, *topic)
+	result, err := service.Dispatch(context.Background(), siteapp.LocalCLIActor(), operation)
 	if err != nil {
 		return err
 	}
-	return writeJSON(route)
+	return writeJSON(result.LegacyMQTTRoute)
 }
 
 func runRouteList(args []string) error {
@@ -252,6 +289,14 @@ func writeJSON(value any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
+}
+
+func openSiteService(dbPath string) (*siteapp.Service, *store.Store, error) {
+	archive, err := store.Open(dbPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return siteapp.NewService(archive), archive, nil
 }
 
 func loadTLSConfig(caFile string) (*tls.Config, error) {
