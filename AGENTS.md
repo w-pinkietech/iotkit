@@ -29,7 +29,9 @@ vocabulary であり、新規コードは依存を増やさない。
 - 秘密情報（トークン、credential、鍵）を Debug 出力、ログ、エラー、監査記録に載せない。
 - データを黙って失わない。ack の意味は D1 に従う。`rejected` は決定的違反専用で、
   ストレージ失敗には `rejected` を返さない（ack なし）。
-- 変更系操作は R14 dispatch 経由。SQL 直書きの変更経路を新設しない。
+- 変更系操作は所有componentの R14 typed dispatch 経由。Edgeは`core/ops`、SiteはSite
+  application service内のtyped operation dispatcherを使う。API/UI/CLIからSQLへ直書きする
+  変更経路を新設しない。
 
 ## Experimental Raspberry Pi
 

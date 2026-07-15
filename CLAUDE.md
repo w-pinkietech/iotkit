@@ -22,7 +22,8 @@ adapters は `core/engine` に依存せず、取り込みは `iotkit-ingest-clie
 
 - 秘密情報を Debug 出力、ログ、エラー、監査記録へ載せない。
 - データを黙って失わない。ストレージ失敗は custody ack を生まない。
-- 変更系操作は R14 dispatch 経由。新しい direct-SQL mutation path を作らない。
+- 変更系操作は所有componentの R14 typed dispatch 経由。Edgeは`core/ops`、SiteはSite
+  application service内のtyped operation dispatcherを使い、新しいdirect-SQL mutation pathを作らない。
 
 ## Workflow
 

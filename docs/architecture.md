@@ -328,7 +328,8 @@ checked.
 | A new sensor-IC conversion (usable by several adapters) | `iotkit-sensor-drivers` |
 | A new sensor family / device protocol | A **new top-level `*-adapter` crate**; build on `iotkit-polling-adapter-runtime` if it's bus polling. Never inside `core/*` or IoTKit Edge. |
 | A change to the ingest wire (envelope fields, ack semantics, reason codes) | `iotkit-ingest-contract` **only**, with its conformance tests; consumers adapt. The wire is the contract — the Rust types follow it, not vice versa. |
-| A new operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |
+| A new Edge operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |
+| A new Site operator / UI operation that changes state | A typed operation in the Site application-service dispatcher, the Site implementation of R14. HTTP, HTML, and CLI remain thin adapters and never write SQL directly. |
 | A new table / column | A migration in the **owning** `core/*` crate's version slice (the binaries concatenate the slices; the `core/storage` harness applies them by set difference). |
 | A new control-plane HTTP API route | `iotkit-edge/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
 | An authenticated measurement-ingress HTTP binding | Shipped Plan 6 binding: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
