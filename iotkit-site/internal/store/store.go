@@ -68,6 +68,20 @@ func (store *Store) Close() error {
 }
 
 func (store *Store) initialize() error {
+	if err := store.rejectLegacyGatewaySchema(); err != nil {
+		return err
+	}
+	if _, err := store.db.Exec(`
+		PRAGMA journal_mode = WAL;
+		PRAGMA synchronous = FULL;
+		PRAGMA foreign_keys = ON;
+	`); err != nil {
+		return err
+	}
+	return applyMigrations(context.Background(), store.db)
+}
+
+func (store *Store) rejectLegacyGatewaySchema() error {
 	for _, table := range []string{"raw_records", "accepted_cursors"} {
 		var legacyColumns int
 		if err := store.db.QueryRow(
@@ -80,110 +94,7 @@ func (store *Store) initialize() error {
 			return errors.New("unsupported pre-release Site database; recreate it")
 		}
 	}
-
-	_, err := store.db.Exec(`
-		PRAGMA journal_mode = WAL;
-		PRAGMA synchronous = FULL;
-		PRAGMA foreign_keys = ON;
-		CREATE TABLE IF NOT EXISTS raw_records (
-			edge_node_id TEXT NOT NULL,
-			ledger_epoch TEXT NOT NULL,
-			pub_seq INTEGER NOT NULL,
-			publication_id TEXT NOT NULL,
-			record_json BLOB NOT NULL,
-			record_sha256 BLOB NOT NULL,
-			received_at INTEGER NOT NULL,
-			PRIMARY KEY (edge_node_id, ledger_epoch, pub_seq)
-		);
-		CREATE TABLE IF NOT EXISTS accepted_cursors (
-			edge_node_id TEXT NOT NULL,
-			ledger_epoch TEXT NOT NULL,
-			accepted_through INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			PRIMARY KEY (edge_node_id, ledger_epoch)
-		);
-		CREATE TABLE IF NOT EXISTS semantic_mappings (
-			mapping_id TEXT NOT NULL,
-			revision INTEGER NOT NULL,
-			edge_node_id TEXT NOT NULL,
-			series_key TEXT NOT NULL,
-			meaning TEXT NOT NULL CHECK(meaning = 'production_pulse'),
-			trigger_mode TEXT NOT NULL CHECK(trigger_mode IN ('active_sample', 'active_edge')),
-			active_value INTEGER NOT NULL CHECK(active_value IN (0, 1)),
-			active INTEGER NOT NULL CHECK(active IN (0, 1)),
-			created_at INTEGER NOT NULL,
-			PRIMARY KEY (mapping_id, revision)
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS ux_semantic_one_active_per_source
-			ON semantic_mappings(edge_node_id, series_key) WHERE active = 1;
-		CREATE TABLE IF NOT EXISTS semantic_mapping_starts (
-			mapping_id TEXT NOT NULL,
-			mapping_revision INTEGER NOT NULL,
-			ledger_epoch TEXT NOT NULL,
-			start_after_pub_seq INTEGER NOT NULL,
-			PRIMARY KEY (mapping_id, mapping_revision, ledger_epoch)
-		);
-		CREATE TABLE IF NOT EXISTS semantic_mapping_ends (
-			mapping_id TEXT NOT NULL,
-			mapping_revision INTEGER NOT NULL,
-			ledger_epoch TEXT NOT NULL,
-			end_at_pub_seq INTEGER NOT NULL,
-			PRIMARY KEY (mapping_id, mapping_revision, ledger_epoch)
-		);
-		CREATE TABLE IF NOT EXISTS semantic_mapping_state (
-			mapping_id TEXT NOT NULL,
-			mapping_revision INTEGER NOT NULL,
-			last_value INTEGER,
-			next_event_sequence INTEGER NOT NULL,
-			PRIMARY KEY (mapping_id, mapping_revision)
-		);
-		CREATE TABLE IF NOT EXISTS semantic_results (
-			mapping_id TEXT NOT NULL,
-			mapping_revision INTEGER NOT NULL,
-			ledger_epoch TEXT NOT NULL,
-			pub_seq INTEGER NOT NULL,
-			emitted_event_id TEXT,
-			PRIMARY KEY (mapping_id, mapping_revision, ledger_epoch, pub_seq)
-		);
-		CREATE TABLE IF NOT EXISTS semantic_events (
-			event_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			event_id TEXT NOT NULL UNIQUE,
-			mapping_id TEXT NOT NULL,
-			mapping_revision INTEGER NOT NULL,
-			event_sequence INTEGER NOT NULL,
-			meaning TEXT NOT NULL,
-			edge_node_id TEXT NOT NULL,
-			ledger_epoch TEXT NOT NULL,
-			source_pub_seq INTEGER NOT NULL,
-			source_series_key TEXT NOT NULL,
-			occurred_at INTEGER NOT NULL,
-			created_at INTEGER NOT NULL,
-			UNIQUE (mapping_id, mapping_revision, event_sequence)
-		);
-		CREATE TABLE IF NOT EXISTS mqtt_routes (
-			route_id TEXT PRIMARY KEY,
-			mapping_id TEXT NOT NULL,
-			topic TEXT NOT NULL,
-			qos INTEGER NOT NULL CHECK(qos = 1),
-			start_after_event_row_id INTEGER NOT NULL,
-			active INTEGER NOT NULL CHECK(active IN (0, 1)),
-			created_at INTEGER NOT NULL,
-			UNIQUE (mapping_id, topic)
-		);
-		CREATE TABLE IF NOT EXISTS mqtt_export_outbox (
-			export_id TEXT PRIMARY KEY,
-			route_id TEXT NOT NULL,
-			event_id TEXT NOT NULL,
-			topic TEXT NOT NULL,
-			qos INTEGER NOT NULL,
-			payload_json BLOB NOT NULL,
-			attempts INTEGER NOT NULL DEFAULT 0,
-			published_at INTEGER,
-			created_at INTEGER NOT NULL,
-			UNIQUE (route_id, event_id)
-		);
-	`)
-	return err
+	return nil
 }
 
 func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.MappingSpec) (semantic.Mapping, error) {
