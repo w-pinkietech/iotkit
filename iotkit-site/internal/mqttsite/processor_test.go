@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -14,14 +15,77 @@ import (
 )
 
 type fakeStore struct {
-	ack     contract.AcceptedThrough
-	err     error
-	batches []contract.RecordBatch
+	ack           contract.AcceptedThrough
+	err           error
+	batches       []contract.RecordBatch
+	descriptors   []contract.DescriptorSnapshot
+	descriptorErr error
 }
 
 func (store *fakeStore) AcceptBatch(_ context.Context, batch contract.RecordBatch) (contract.AcceptedThrough, error) {
 	store.batches = append(store.batches, batch)
 	return store.ack, store.err
+}
+
+func (store *fakeStore) ApplyDescriptorSnapshot(_ context.Context, snapshot contract.DescriptorSnapshot) (sitestore.DescriptorApplyResult, error) {
+	store.descriptors = append(store.descriptors, snapshot)
+	return sitestore.DescriptorApplyResult{Status: sitestore.DescriptorApplied}, store.descriptorErr
+}
+
+func descriptorPayload(t *testing.T) []byte {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "egress", "v1", "descriptor-snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func TestProcessAppliesDescriptorWithoutPublishingAcknowledgement(t *testing.T) {
+	store := &fakeStore{}
+	published := false
+	err := (Processor{Store: store}).Process(
+		context.Background(),
+		"iotkit/v1/edge-nodes/edge-node-01/descriptors",
+		descriptorPayload(t),
+		func(string, []byte) error {
+			published = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.descriptors) != 1 || store.descriptors[0].DescriptorRevision != 4 {
+		t.Fatalf("descriptors = %#v", store.descriptors)
+	}
+	if published {
+		t.Fatal("descriptor processing published accepted-through")
+	}
+}
+
+func TestDescriptorFailureDoesNotPreventLaterRecordCustody(t *testing.T) {
+	store := &fakeStore{
+		descriptorErr: errors.New("descriptor database unavailable"),
+		ack: contract.AcceptedThrough{
+			SchemaVersion: 1, EdgeNodeID: "edge-node-01", LedgerEpoch: "epoch-01",
+			PublicationID: "edge-node-01:epoch-01:1:1", AcceptedThrough: 1,
+		},
+	}
+	processor := Processor{Store: store}
+	if err := processor.Process(context.Background(), "iotkit/v1/edge-nodes/edge-node-01/descriptors", descriptorPayload(t), nil); err == nil {
+		t.Fatal("descriptor failure was hidden")
+	}
+	published := 0
+	if err := processor.Process(context.Background(), "iotkit/v1/edge-nodes/edge-node-01/records", validPayload(t), func(string, []byte) error {
+		published++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.batches) != 1 || published != 1 {
+		t.Fatalf("record custody after descriptor failure: batches=%d published=%d", len(store.batches), published)
+	}
 }
 
 func payloadWithMarker(t *testing.T, marker string) []byte {

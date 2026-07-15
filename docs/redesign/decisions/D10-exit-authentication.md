@@ -12,7 +12,9 @@ MVPの認証は次に限定する。
 
 - brokerは匿名接続を禁止する。
 - Edge Nodeごとにstatic credentialを1つ発行する。共有credentialを使わない。
-- usernameは`edge_node_id`へ束縛し、ACLは当該Edge Nodeのrecords publishとaccepted-through subscribeだけを許可する。
+- usernameは`edge_node_id`へ束縛し、ACLは当該Edge Nodeのrecords/descriptors publishと
+  accepted-through subscribeだけを許可する。Siteは全Edge Nodeのrecords/descriptors readと
+  accepted-through writeだけを持つ。
 - brokerはTLSを使い、operatorが明示したinterface/addressだけへbindする。意図しないnetwork interfaceへ
   公開しない。
 - credentialはargv、環境変数、ログ、Debug、監査detail、query outputへ出さない。

@@ -24,10 +24,26 @@ part of this contract.
 ```text
 iotkit/v1/edge-nodes/{edge_node_id}/records
 iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
+iotkit/v1/edge-nodes/{edge_node_id}/descriptors
 ```
 
-Both topics use QoS 1 and MUST NOT be retained. ACLs restrict each Edge Node to publishing its own
-records and subscribing to its own acknowledgement. Application-specific topics are outside R10.
+`records` and `accepted-through` use QoS 1 and MUST NOT be retained. `descriptors` uses QoS 1 and
+MUST be retained; it is a complete current-state replica, not a custody stream. ACLs restrict each
+Edge Node to publishing its own records/descriptors and subscribing to its own acknowledgement.
+Application-specific topics are outside R10.
+
+## Descriptor snapshot
+
+The descriptor topic carries schema version 1 complete snapshots of Edge-owned device and signal
+metadata. Edge publishes after every MQTT connection and whenever the persisted descriptor revision
+changes. The encoded snapshot is limited to 1 MiB and is rejected rather than truncated.
+
+It contains stable `system_id`/`series_key`, an optional non-authoritative display identifier,
+device state, measurement key, channel, variant, canonical unit, and value type. It never contains
+hardware/provider identifiers, credentials, or adapter payloads. Site validates the composite
+series identity and durably replicates the snapshot. Lower revisions in one ledger epoch are ignored;
+equal revisions with different content are conflicts. A descriptor failure never authorizes purge,
+prevents raw acceptance, or suppresses `accepted-through`.
 
 ## Record batch
 

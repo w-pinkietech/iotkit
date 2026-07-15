@@ -105,6 +105,9 @@ CA選択、trust install、certificate更新を代行しない。
 
 ## Edge descriptor snapshot
 
+Implementation status: Edgeの永続revisionとsnapshot生成、retained MQTT binding/ACL、Siteのstrict decodeと
+revision-aware durable replicaまで実装済み。public ref、profile、current-value read modelは後続スライス。
+
 ### 必要性と責任境界
 
 現在のmeasurement recordは`edge_node_id`、`series_key`、値、時刻だけを持つ。Siteは

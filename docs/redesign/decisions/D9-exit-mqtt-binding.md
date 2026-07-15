@@ -1,6 +1,6 @@
 # D9: 出口契約の第一バインディングは標準MQTT
 
-Status: 確定、2026-07-13簡素化改訂
+Status: 確定、2026-07-15 descriptor current-state複製追加
 
 ## 決定
 
@@ -25,15 +25,18 @@ MQTT PUBACKとapplication-levelの保管完了確認は異なる。
 
 ## Topic
 
-Version 1の最小namespaceは次の2つである。
+Version 1のcustody namespace 2つと、現在状態複製1つは次のとおりである。
 
 ```text
 iotkit/v1/edge-nodes/{edge_node_id}/records
 iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
+iotkit/v1/edge-nodes/{edge_node_id}/descriptors
 ```
 
-どちらもQoS 1、non-retainedとする。Edgeは自分のrecordsへだけpublishし、自分の
-accepted-throughだけをsubscribeできる。IoTKit Siteは逆の権限を持つ。wildcard application publish、
+recordsとaccepted-throughはQoS 1、non-retainedとする。descriptorsはQoS 1、retainedのcomplete
+current-state snapshotで、custody、cursor、purge権威を持たない。Edgeは自分のrecords/descriptorsへだけ
+publishし、自分のaccepted-throughだけをsubscribeできる。IoTKit Siteは逆の権限を持つ。descriptorの
+decode/保存失敗はraw受理とaccepted-throughを止めない。wildcard application publish、
 device-to-device routing、`production`等のapplication固有topicはIoTKitの出口契約に含めない。
 
 ## 配送と保管責任

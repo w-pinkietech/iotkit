@@ -15,6 +15,7 @@ import (
 
 const (
 	recordsTopicFilter        = "iotkit/v1/edge-nodes/+/records"
+	descriptorsTopicFilter    = "iotkit/v1/edge-nodes/+/descriptors"
 	convergenceInterval       = 250 * time.Millisecond
 	convergenceBatchSize      = 256
 	publishAcknowledgementTTL = 15 * time.Second
@@ -66,7 +67,7 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, queue Ex
 			})
 		})
 		if err != nil {
-			logger.Error("MQTT record batch not acknowledged", "topic", message.Topic(), "error", err)
+			logger.Error("MQTT message processing failed", "topic", message.Topic(), "error", err)
 		}
 	}
 	subscriptionResults := make(chan error, 1)
@@ -76,7 +77,10 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, queue Ex
 		logger.Warn("MQTT connection lost", "error", err)
 	})
 	options.SetOnConnectHandler(func(client mqtt.Client) {
-		token := client.Subscribe(recordsTopicFilter, 1, handler)
+		token := client.SubscribeMultiple(map[string]byte{
+			recordsTopicFilter:     1,
+			descriptorsTopicFilter: 1,
+		}, handler)
 		var err error
 		if !token.WaitTimeout(15 * time.Second) {
 			err = errors.New("MQTT subscribe timed out")
@@ -84,7 +88,7 @@ func Run(ctx context.Context, config ClientConfig, processor Processor, queue Ex
 			err = fmt.Errorf("MQTT subscribe: %w", tokenErr)
 		}
 		if err == nil {
-			logger.Info("IoTKit Site subscribed", "topic", recordsTopicFilter)
+			logger.Info("IoTKit Site subscribed", "topics", []string{recordsTopicFilter, descriptorsTopicFilter})
 		}
 		subscriptionResults <- err
 	})

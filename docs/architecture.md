@@ -36,7 +36,7 @@ So a minimal Edge install is: flash a Pi, run the `iotkit-edge` daemon
 under systemd, keep `iotkit-edgectl` on the same Pi as a hand-run CLI, and wire
 adapters to sensors. A standalone site can stop there (D8: an upstream is
 optional). IoTKit Site adds durable aggregation, Edge Node cursors, direct raw
-query, configurable site-local sensor meaning, and the application-export boundary. Site maps one
+query, Edge descriptor replica, configurable site-local sensor meaning, and the application-export boundary. Site maps one
 stored series to one typed meaning such as `production_pulse`; a separate exporter converts the
 result to an application-facing MQTT contract. Applications such as YokaKit own business masters
 and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
@@ -82,6 +82,10 @@ Inside Edge, the adapter and collector normalize and durably enqueue observation
                    ▼
              IoTKit Site ── durable accepted-through topic ──▶ authorizes purge
 ```
+
+Edgeは同じBroker上のEdge Node固有`descriptors` topicへ、ledger/registryから組み立てた1 MiB以下の
+complete snapshotをQoS 1 retainedで送る。Siteはrevision/epochを検証して専用tableへ複製する。この経路は
+publication outbox、raw transaction、accepted-through cursorと結合せず、失敗してもcustody処理を継続する。
 
 `mqtt_publish_task` is the active production exit binding. The older `publish_task` HTTPS code is
 retained only as transitional code and is not spawned. A broker PUBACK confirms transport receipt
