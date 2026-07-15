@@ -22,13 +22,20 @@ func (token *fakePublishToken) Done() <-chan struct{} { return token.done }
 func (token *fakePublishToken) Error() error          { return token.err }
 
 type fakeExportQueue struct {
-	pending   []store.PendingMQTTExport
-	marked    int
-	markedIDs []string
-	markErrs  map[string]error
-	projected int
-	enqueued  int
-	listed    int
+	pending      []store.PendingMQTTExport
+	marked       int
+	markedIDs    []string
+	markErrs     map[string]error
+	projected    int
+	reconciled   int
+	reconcileErr error
+	enqueued     int
+	listed       int
+}
+
+func (queue *fakeExportQueue) ReconcileInventorySources(context.Context, int) (int, error) {
+	queue.reconciled++
+	return 0, queue.reconcileErr
 }
 
 func (queue *fakeExportQueue) ListPendingMQTTExports(context.Context, int) ([]store.PendingMQTTExport, error) {
@@ -217,7 +224,22 @@ func TestConvergenceStopsBeforeWorkWhenContextIsCanceled(t *testing.T) {
 		return nil
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	if queue.projected != 0 || queue.enqueued != 0 || queue.listed != 0 || published != 0 || queue.marked != 0 {
+	if queue.reconciled != 0 || queue.projected != 0 || queue.enqueued != 0 || queue.listed != 0 || published != 0 || queue.marked != 0 {
 		t.Fatalf("canceled convergence performed work: %+v, published=%d", queue, published)
+	}
+}
+
+func TestConvergenceReconcilesInventoryWithoutBlockingSemanticWork(t *testing.T) {
+	queue := &fakeExportQueue{reconcileErr: errors.New("inventory unavailable")}
+	convergeExports(
+		context.Background(),
+		queue,
+		func(string, byte, []byte) error { return nil },
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	if queue.reconciled != 1 || queue.projected != 1 || queue.enqueued != 1 {
+		t.Fatalf("convergence calls = reconcile %d, project %d, enqueue %d",
+			queue.reconciled, queue.projected, queue.enqueued)
 	}
 }

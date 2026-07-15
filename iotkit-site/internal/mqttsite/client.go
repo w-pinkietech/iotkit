@@ -38,6 +38,7 @@ type pendingExportQueue interface {
 type ExportQueue interface {
 	ListPendingMQTTExports(context.Context, int) ([]store.PendingMQTTExport, error)
 	MarkMQTTExportPublished(context.Context, string) error
+	ReconcileInventorySources(context.Context, int) (int, error)
 	ProjectSemanticEvents(context.Context, int) (int, error)
 	EnqueueMQTTExports(context.Context, int) (int, error)
 }
@@ -195,6 +196,12 @@ func waitForPublishCompletion(ctx context.Context, token publishToken, deadline 
 }
 
 func convergeExports(ctx context.Context, queue ExportQueue, publish exportPublish, logger *slog.Logger) {
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := queue.ReconcileInventorySources(ctx, convergenceBatchSize); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Error("inventory reconciliation failed", "error", err)
+	}
 	if ctx.Err() != nil {
 		return
 	}
