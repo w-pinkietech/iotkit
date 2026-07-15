@@ -161,6 +161,37 @@ func TestListAuditEventsRejectsUnboundedLimit(t *testing.T) {
 	}
 }
 
+func TestListInventoryValidatesPageBeforeRepositoryQuery(t *testing.T) {
+	repository := &fakeRepository{}
+	service := NewService(repository)
+	if _, err := service.ListDevices(context.Background(), PageRequest{Limit: 101}); err == nil {
+		t.Fatal("device page limit 101 was accepted")
+	}
+	if _, err := service.ListSignals(context.Background(), PageRequest{Limit: 0}); err == nil {
+		t.Fatal("signal page limit 0 was accepted")
+	}
+	if repository.deviceListCalls != 0 || repository.signalListCalls != 0 {
+		t.Fatalf("inventory repository calls = device %d, signal %d",
+			repository.deviceListCalls, repository.signalListCalls)
+	}
+}
+
+func TestListInventoryDelegatesBoundedPage(t *testing.T) {
+	repository := &fakeRepository{
+		devices: []DeviceSummary{{DeviceRef: "dev_00000000000000000000000000000001"}},
+		signals: []SignalSummary{{SignalRef: "sig_00000000000000000000000000000001"}},
+	}
+	service := NewService(repository)
+	devices, err := service.ListDevices(context.Background(), PageRequest{Limit: 10})
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
+	signals, err := service.ListSignals(context.Background(), PageRequest{Limit: 10})
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+}
+
 func validSpec() semantic.MappingSpec {
 	return semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
@@ -182,6 +213,28 @@ type fakeRepository struct {
 	signalProfile      SignalProfile
 	deviceProfileCalls int
 	signalProfileCalls int
+	devices            []DeviceSummary
+	signals            []SignalSummary
+	deviceListCalls    int
+	signalListCalls    int
+}
+
+func (repository *fakeRepository) ListInventoryDevices(
+	context.Context,
+	int,
+	string,
+) ([]DeviceSummary, error) {
+	repository.deviceListCalls++
+	return repository.devices, nil
+}
+
+func (repository *fakeRepository) ListInventorySignals(
+	context.Context,
+	int,
+	string,
+) ([]SignalSummary, error) {
+	repository.signalListCalls++
+	return repository.signals, nil
 }
 
 func (repository *fakeRepository) UpdateDeviceProfile(

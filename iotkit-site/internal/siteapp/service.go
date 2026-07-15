@@ -81,6 +81,8 @@ type Repository interface {
 	ApplyLegacyMQTTRoute(context.Context, Actor, string, string) (LegacyMQTTRoute, error)
 	UpdateDeviceProfile(context.Context, Actor, string, DeviceProfileInput, RevisionPrecondition) (DeviceProfile, error)
 	UpdateSignalProfile(context.Context, Actor, string, SignalProfileInput, RevisionPrecondition) (SignalProfile, error)
+	ListInventoryDevices(context.Context, int, string) ([]DeviceSummary, error)
+	ListInventorySignals(context.Context, int, string) ([]SignalSummary, error)
 }
 
 type Service struct {
@@ -224,6 +226,30 @@ func (service *Service) ListAuditEvents(ctx context.Context, limit int) ([]Audit
 		return nil, errors.New("audit event limit must be between 1 and 100")
 	}
 	return service.repository.ListAuditEvents(ctx, limit)
+}
+
+func (service *Service) ListDevices(ctx context.Context, page PageRequest) ([]DeviceSummary, error) {
+	if err := validateInventoryPageRequest(page, "dev_"); err != nil {
+		return nil, err
+	}
+	return service.repository.ListInventoryDevices(ctx, page.Limit, page.AfterRef)
+}
+
+func (service *Service) ListSignals(ctx context.Context, page PageRequest) ([]SignalSummary, error) {
+	if err := validateInventoryPageRequest(page, "sig_"); err != nil {
+		return nil, err
+	}
+	return service.repository.ListInventorySignals(ctx, page.Limit, page.AfterRef)
+}
+
+func validateInventoryPageRequest(page PageRequest, prefix string) error {
+	if page.Limit < 1 || page.Limit > 100 {
+		return errors.New("inventory page limit must be between 1 and 100")
+	}
+	if page.AfterRef != "" {
+		return validateResourceRef(page.AfterRef, prefix)
+	}
+	return nil
 }
 
 func validateSourceIdentity(edgeNodeID, seriesKey string) error {

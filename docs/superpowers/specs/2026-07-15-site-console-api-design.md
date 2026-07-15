@@ -105,8 +105,9 @@ CA選択、trust install、certificate更新を代行しない。
 
 ## Edge descriptor snapshot
 
-Implementation status: Edgeの永続revisionとsnapshot生成、retained MQTT binding/ACL、Siteのstrict decodeと
-revision-aware durable replicaまで実装済み。public ref、profile、current-value read modelは後続スライス。
+Implementation status: Edgeの永続revisionとsnapshot生成、retained MQTT binding/ACL、Siteのstrict decode、
+revision-aware durable replica、public ref、Site-local profile、current-value read modelまで実装済み。
+HTTP APIとSite Console HTMLは後続スライス。
 
 ### 必要性と責任境界
 

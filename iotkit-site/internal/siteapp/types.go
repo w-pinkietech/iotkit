@@ -84,6 +84,39 @@ type SignalProfile struct {
 	UpdatedAt   int64  `json:"updated_at"`
 }
 
+type PageRequest struct {
+	Limit    int
+	AfterRef string
+}
+
+type LatestMeasurement struct {
+	Values         json.RawMessage `json:"values"`
+	EventTime      int64           `json:"event_time"`
+	SiteReceivedAt int64           `json:"site_received_at"`
+}
+
+type DeviceSummary struct {
+	DeviceRef          string `json:"device_ref"`
+	DisplayName        string `json:"display_name"`
+	Location           string `json:"location"`
+	ProfileRevision    *int64 `json:"profile_revision"`
+	DescriptorPresence string `json:"descriptor_presence"`
+	DeviceState        string `json:"device_state"`
+	LastReceivedAt     *int64 `json:"last_received_at"`
+}
+
+type SignalSummary struct {
+	SignalRef          string             `json:"signal_ref"`
+	DeviceRef          *string            `json:"device_ref"`
+	DisplayName        string             `json:"display_name"`
+	ProfileRevision    *int64             `json:"profile_revision"`
+	DescriptorPresence string             `json:"descriptor_presence"`
+	Unit               *string            `json:"unit"`
+	ValueType          *string            `json:"value_type"`
+	Latest             *LatestMeasurement `json:"latest"`
+	HasSemanticMapping bool               `json:"has_semantic_mapping"`
+}
+
 func validateProfileText(name, value string, maxBytes int) error {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
