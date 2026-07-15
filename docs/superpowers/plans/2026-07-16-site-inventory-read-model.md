@@ -181,7 +181,7 @@ Commit: `feat: reconcile site inventory sources`
 - Produces: `Store.UpdateDeviceProfile(...)`, `Store.UpdateSignalProfile(...)`
 - Consumes: Task 1の`site_devices` / `site_signals`
 
-- [ ] **Step 1: profile mutation・revision・監査の失敗testを書く**
+- [x] **Step 1: profile mutation・revision・監査の失敗testを書く**
 
 ```go
 func TestUpdateDeviceProfileCommitsRevisionAndAuditAtomically(t *testing.T) {
@@ -205,13 +205,13 @@ func TestUpdateDeviceProfileCommitsRevisionAndAuditAtomically(t *testing.T) {
 
 同様にsignal profile、誤revisionで`siteapp.ErrRevisionMismatch`、存在しないrefで`siteapp.ErrNotFound`、audit insert trigger失敗時にprofileもrollbackするtestを書く。
 
-- [ ] **Step 2: focused testが未定義型・methodで失敗することを確認する**
+- [x] **Step 2: focused testが未定義型・methodで失敗することを確認する**
 
 Run: `cd iotkit-site && env GOPATH=/tmp/iotkit-next-go-path GOCACHE=/tmp/iotkit-next-go-cache go test ./internal/store -run 'TestUpdate(Device|Signal)Profile'`
 
 Expected: profile型または更新method未定義でFAIL。
 
-- [ ] **Step 3: profile型、validation、repository mutationを実装する**
+- [x] **Step 3: profile型、validation、repository mutationを実装する**
 
 ```go
 type DeviceProfileInput struct {
@@ -236,7 +236,7 @@ type SignalProfile struct {
 
 表示名はtrim後1〜128 bytes、locationはtrim後1〜256 bytes、control characterなしとする。repositoryはrefからsource identityを解決し、現在revisionへ`RevisionPrecondition`を適用し、upsertと秘密を含まない成功監査を同じtransactionでcommitする。
 
-- [ ] **Step 4: typed dispatcherの失敗testを書く**
+- [x] **Step 4: typed dispatcherの失敗testを書く**
 
 `UpdateDeviceProfile`と`UpdateSignalProfile`がactor・inputをrepository呼出し前に検証し、`Result.DeviceProfile` / `Result.SignalProfile`を返すことをfake repositoryで検査する。
 
@@ -256,11 +256,11 @@ type UpdateSignalProfile struct {
 func (UpdateSignalProfile) isSiteOperation() {}
 ```
 
-- [ ] **Step 5: dispatcherとrepository interfaceを実装する**
+- [x] **Step 5: dispatcherとrepository interfaceを実装する**
 
 `Service.Dispatch`のtype switchへ2 operationを追加する。source identityをoperationやResultへ入れず、resource refだけを境界にする。
 
-- [ ] **Step 6: focused testsを通してcommitする**
+- [x] **Step 6: focused testsを通してcommitする**
 
 Run: `cd iotkit-site && env GOPATH=/tmp/iotkit-next-go-path GOCACHE=/tmp/iotkit-next-go-cache go test ./internal/siteapp ./internal/store`
 

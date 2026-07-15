@@ -85,7 +85,7 @@ func TestReconcileInventorySourcesCreatesMeasurementFirstPlaceholder(t *testing.
 func testTableCount(t *testing.T, db *sql.DB, table string) int {
 	t.Helper()
 	switch table {
-	case "site_devices", "site_signals", "descriptor_signals":
+	case "site_devices", "site_signals", "descriptor_signals", "signal_profiles":
 	default:
 		t.Fatalf("unsupported count table %q", table)
 	}
