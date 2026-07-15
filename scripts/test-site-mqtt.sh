@@ -41,21 +41,25 @@ binding_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db
 edge_username=$(jq -er '.username | select(type == "string" and length > 0)' <<<"$binding_output")
 edge_records_topic=$(jq -er '.records_topic | select(type == "string" and length > 0)' <<<"$binding_output")
 edge_ack_topic=$(jq -er '.accepted_through_topic | select(type == "string" and length > 0)' <<<"$binding_output")
+edge_descriptor_topic=$(jq -er '.descriptor_topic | select(type == "string" and length > 0)' <<<"$binding_output")
 jq -e --arg edge_node_id "$edge_node_id" \
-  '.edge_node_id == $edge_node_id and .username == $edge_node_id and .qos == 1 and .retain == false and (.client_id | type == "string" and length > 0)' \
+  '.edge_node_id == $edge_node_id and .username == $edge_node_id and .qos == 1 and .retain == false and .descriptor_retain == true and (.client_id | type == "string" and length > 0)' \
   <<<"$binding_output" >/dev/null
 
 cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
 user edge-node-01
 topic write iotkit/v1/edge-nodes/edge-node-01/records
+topic write iotkit/v1/edge-nodes/edge-node-01/descriptors
 topic read iotkit/v1/edge-nodes/edge-node-01/accepted-through
 
 user $edge_username
 topic write $edge_records_topic
+topic write $edge_descriptor_topic
 topic read $edge_ack_topic
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/descriptors
 topic write iotkit/v1/edge-nodes/+/accepted-through
 EOF
 chmod 644 "$IOTKIT_MOSQUITTO_ACL_FILE"

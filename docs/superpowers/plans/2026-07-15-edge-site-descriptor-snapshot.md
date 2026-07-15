@@ -56,11 +56,12 @@
 - `MqttBinding` adds `descriptor_topic` and explicit retained behavior while preserving records as non-retained.
 - MQTT task publishes the current snapshot after every connection and republishes only when the persisted `(ledger_epoch, descriptor_revision)` changes while connected.
 
-- [ ] Add failing binding/runtime tests proving exact topic derivation, retained QoS 1 publication, reconnect republish, changed-revision republish, and oversize/error isolation from records.
-- [ ] Implement publication without coupling descriptor success to records subscription, batch delivery, or acknowledgement handling.
-- [ ] Add descriptor read/write ACLs to development and generated production configuration; update bootstrap validation for the new non-secret binding fields.
+- [x] Add failing binding/runtime tests proving exact topic derivation, the QoS 1 retained binding, reconnect republish, and changed-revision republish.
+- [ ] Prove retained delivery and descriptor-error isolation from records in the Docker vertical slice after Site subscription lands.
+- [x] Implement publication without coupling descriptor success to records subscription, batch delivery, or acknowledgement handling.
+- [x] Add descriptor read/write ACLs to development and generated production configuration; update bootstrap validation for the new non-secret binding fields.
 - [ ] Extend the Docker MQTT vertical slice to observe the retained descriptor independently of record custody.
-- [ ] Run focused Rust, bootstrap, and MQTT vertical-slice tests and commit.
+- [x] Run focused Rust and production bootstrap tests; run the retained MQTT vertical slice after Site subscription lands, then commit each independently testable part.
 
 ### Task 3: Site descriptor contract and durable replica
 

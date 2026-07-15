@@ -192,10 +192,12 @@ fi
 cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
+topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
 topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/descriptors
 topic write iotkit/v1/edge-nodes/+/accepted-through
 EOF
 chmod 644 "$IOTKIT_MOSQUITTO_ACL_FILE"
