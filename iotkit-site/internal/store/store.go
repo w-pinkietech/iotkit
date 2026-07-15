@@ -14,6 +14,7 @@ import (
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 	_ "modernc.org/sqlite"
 )
 
@@ -108,22 +109,44 @@ func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.Mappin
 		return noMapping, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	mapping, err := putSemanticMappingTx(ctx, tx, spec, siteapp.RevisionPrecondition{})
+	if err != nil {
+		return noMapping, err
+	}
+	if err := tx.Commit(); err != nil {
+		return noMapping, err
+	}
+	return mapping, nil
+}
 
+func putSemanticMappingTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	spec semantic.MappingSpec,
+	precondition siteapp.RevisionPrecondition,
+) (semantic.Mapping, error) {
+	var noMapping semantic.Mapping
 	var mappingID string
 	var revision int64
 	var previousRevision int64
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT mapping_id, revision
 		FROM semantic_mappings
 		WHERE edge_node_id = ? AND series_key = ? AND active = 1
 	`, spec.EdgeNodeID, spec.SeriesKey).Scan(&mappingID, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
+		if err := checkRevisionPrecondition(precondition, false, 0); err != nil {
+			return noMapping, err
+		}
 		mappingID, err = newSemanticMappingID()
 		if err != nil {
 			return noMapping, err
 		}
 		revision = 1
 	} else if err == nil {
+		if err := checkRevisionPrecondition(precondition, true, revision); err != nil {
+			return noMapping, err
+		}
 		previousRevision = revision
 		revision++
 	} else {
@@ -175,9 +198,6 @@ func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.Mappin
 		return noMapping, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return noMapping, err
-	}
 	return semantic.Mapping{
 		ID:          mappingID,
 		Revision:    revision,
@@ -185,6 +205,22 @@ func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.Mappin
 		Active:      true,
 		CreatedAt:   createdAt,
 	}, nil
+}
+
+func checkRevisionPrecondition(precondition siteapp.RevisionPrecondition, exists bool, revision int64) error {
+	if precondition.Expected == nil {
+		return nil
+	}
+	if !exists {
+		if *precondition.Expected == 0 {
+			return nil
+		}
+		return siteapp.ErrRevisionMismatch
+	}
+	if *precondition.Expected != revision {
+		return siteapp.ErrRevisionMismatch
+	}
+	return nil
 }
 
 func (store *Store) ListSemanticMappings(ctx context.Context) ([]semantic.Mapping, error) {
