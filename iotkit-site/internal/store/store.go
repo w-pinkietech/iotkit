@@ -98,27 +98,6 @@ func (store *Store) rejectLegacyGatewaySchema() error {
 	return nil
 }
 
-func (store *Store) PutSemanticMapping(ctx context.Context, spec semantic.MappingSpec) (semantic.Mapping, error) {
-	var noMapping semantic.Mapping
-	if err := spec.Validate(); err != nil {
-		return noMapping, err
-	}
-
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return noMapping, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	mapping, err := putSemanticMappingTx(ctx, tx, spec, siteapp.RevisionPrecondition{})
-	if err != nil {
-		return noMapping, err
-	}
-	if err := tx.Commit(); err != nil {
-		return noMapping, err
-	}
-	return mapping, nil
-}
-
 func putSemanticMappingTx(
 	ctx context.Context,
 	tx *sql.Tx,

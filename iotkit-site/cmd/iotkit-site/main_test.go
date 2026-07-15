@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
@@ -197,17 +198,19 @@ func TestRouteListWritesDeliveryStatusJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mapping, err := archive.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	mapping, err := archive.ApplySemanticMapping(context.Background(), siteapp.LocalCLIActor(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   "contact-series-01",
 		Meaning:     semantic.MeaningProductionPulse,
 		TriggerMode: semantic.TriggerActiveEdge,
 		ActiveValue: 1,
-	})
+	}, siteapp.RevisionPrecondition{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	route, err := archive.PutMQTTRoute(context.Background(), mapping.ID, "factory/production-pulses")
+	route, err := archive.ApplyLegacyMQTTRoute(
+		context.Background(), siteapp.LocalCLIActor(), mapping.ID, "factory/production-pulses",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

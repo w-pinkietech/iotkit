@@ -58,27 +58,6 @@ type PendingMQTTExport struct {
 	CreatedAt   int64           `json:"created_at"`
 }
 
-func (store *Store) PutMQTTRoute(ctx context.Context, mappingID, topic string) (MQTTRoute, error) {
-	var noRoute MQTTRoute
-	if err := (MQTTRouteSpec{MappingID: mappingID, Topic: topic}).Validate(); err != nil {
-		return noRoute, err
-	}
-
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return noRoute, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	route, _, err := putMQTTRouteTx(ctx, tx, mappingID, topic)
-	if err != nil {
-		return noRoute, err
-	}
-	if err := tx.Commit(); err != nil {
-		return noRoute, err
-	}
-	return route, nil
-}
-
 func putMQTTRouteTx(ctx context.Context, tx *sql.Tx, mappingID, topic string) (MQTTRoute, bool, error) {
 	var noRoute MQTTRoute
 	existing, err := readMQTTRoute(ctx, tx, mappingID, topic)

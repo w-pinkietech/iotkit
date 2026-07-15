@@ -91,12 +91,12 @@ func TestPutMQTTRouteRejectsInvalidTopicAndUnknownMapping(t *testing.T) {
 
 	for _, topic := range []string{"", " ", "/factory/pulses", "factory/pulses/", "factory/+/pulses", "factory/#"} {
 		t.Run(topic, func(t *testing.T) {
-			if _, err := store.PutMQTTRoute(context.Background(), mapping.ID, topic); err == nil {
+			if _, err := putMQTTRouteForTest(store, context.Background(), mapping.ID, topic); err == nil {
 				t.Fatalf("PutMQTTRoute accepted topic %q", topic)
 			}
 		})
 	}
-	if _, err := store.PutMQTTRoute(context.Background(), "sm-unknown", "factory/pulses"); err == nil {
+	if _, err := putMQTTRouteForTest(store, context.Background(), "sm-unknown", "factory/pulses"); err == nil {
 		t.Fatal("PutMQTTRoute accepted an unknown mapping")
 	}
 	if got := store.testCount(t, "mqtt_routes"); got != 0 {
@@ -384,7 +384,7 @@ func projectSemanticEvents(t *testing.T, store *Store) {
 
 func putMQTTRoute(t *testing.T, store *Store, mappingID, topic string) MQTTRoute {
 	t.Helper()
-	route, err := store.PutMQTTRoute(context.Background(), mappingID, topic)
+	route, err := putMQTTRouteForTest(store, context.Background(), mappingID, topic)
 	if err != nil {
 		t.Fatal(err)
 	}

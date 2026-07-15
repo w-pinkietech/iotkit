@@ -13,9 +13,34 @@ import (
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
 
 const contactSeries = "subject:contact_state:na:primary"
+
+func putSemanticMappingForTest(
+	store *Store,
+	ctx context.Context,
+	spec semantic.MappingSpec,
+) (semantic.Mapping, error) {
+	return store.ApplySemanticMapping(ctx, siteapp.LocalCLIActor(), spec, siteapp.RevisionPrecondition{})
+}
+
+func putMQTTRouteForTest(store *Store, ctx context.Context, mappingID, topic string) (MQTTRoute, error) {
+	route, err := store.ApplyLegacyMQTTRoute(ctx, siteapp.LocalCLIActor(), mappingID, topic)
+	if err != nil {
+		return MQTTRoute{}, err
+	}
+	return MQTTRoute{
+		RouteID:              route.RouteID,
+		MappingID:            route.MappingID,
+		Topic:                route.Topic,
+		QoS:                  byte(route.QoS),
+		StartAfterEventRowID: route.StartAfterEventRowID,
+		Active:               route.Active,
+		CreatedAt:            route.CreatedAt,
+	}, nil
+}
 
 func testBatch(t *testing.T) contract.RecordBatch {
 	t.Helper()
@@ -256,7 +281,7 @@ func TestPutSemanticMappingCapturesEveryExistingEpochCursor(t *testing.T) {
 	acceptEpoch(t, store, "edge-node-01", "epoch-b", 1, 1)
 	acceptEpoch(t, store, "edge-node-02", "epoch-other-edge", 1, 1)
 
-	mapping, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	mapping, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -289,7 +314,7 @@ func TestPutSemanticMappingIDGenerationFailureDoesNotWriteMapping(t *testing.T) 
 	}
 	t.Cleanup(func() { newSemanticMappingID = originalGenerator })
 
-	if _, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	if _, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -305,7 +330,7 @@ func TestPutSemanticMappingIDGenerationFailureDoesNotWriteMapping(t *testing.T) 
 
 func TestPutSemanticMappingCreatesFutureOnlyRevision(t *testing.T) {
 	store := openTestStore(t)
-	first, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	first, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -315,7 +340,7 @@ func TestPutSemanticMappingCreatesFutureOnlyRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	second, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -347,7 +372,7 @@ func TestPutSemanticMappingCreatesFutureOnlyRevision(t *testing.T) {
 func TestPutSemanticMappingRevisionClosesOldCursorBoundary(t *testing.T) {
 	store := openTestStore(t)
 	acceptEpoch(t, store, "edge-node-01", "epoch-a", 1, 0)
-	first, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	first, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -363,7 +388,7 @@ func TestPutSemanticMappingRevisionClosesOldCursorBoundary(t *testing.T) {
 	acceptEpoch(t, store, "edge-node-01", "epoch-a", 2, 1)
 	acceptEpoch(t, store, "edge-node-02", "epoch-other-edge", 1, 1)
 
-	second, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	second, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -385,7 +410,7 @@ func TestPutSemanticMappingRevisionClosesOldCursorBoundary(t *testing.T) {
 func TestPutSemanticMappingRollsBackRevisionWhenStartSnapshotFails(t *testing.T) {
 	store := openTestStore(t)
 	acceptEpoch(t, store, "edge-node-01", "epoch-a", 1, 1)
-	first, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	first, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -401,7 +426,7 @@ func TestPutSemanticMappingRollsBackRevisionWhenStartSnapshotFails(t *testing.T)
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	if _, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -592,7 +617,7 @@ func TestProjectSemanticEventsIsolatesPoisonMappingAndFairlyProcessesIndependent
 	t.Cleanup(func() { newSemanticMappingID = originalGenerator })
 
 	poison := putSemanticMapping(t, store, semantic.TriggerActiveSample, 1)
-	valid, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	valid, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-02",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
@@ -674,7 +699,7 @@ func acceptContactRecords(t *testing.T, store *Store, edgeNodeID, ledgerEpoch st
 
 func putSemanticMapping(t *testing.T, store *Store, mode semantic.TriggerMode, activeValue int) semantic.Mapping {
 	t.Helper()
-	mapping, err := store.PutSemanticMapping(context.Background(), semantic.MappingSpec{
+	mapping, err := putSemanticMappingForTest(store, context.Background(), semantic.MappingSpec{
 		EdgeNodeID:  "edge-node-01",
 		SeriesKey:   contactSeries,
 		Meaning:     semantic.MeaningProductionPulse,
