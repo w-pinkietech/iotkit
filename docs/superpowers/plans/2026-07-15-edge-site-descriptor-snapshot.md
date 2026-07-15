@@ -101,8 +101,8 @@
 
 ### Task 5: Review and full verification
 
-- [ ] Review the diff against the approved Site Console/API descriptor section and the invariants in `AGENTS.md`.
-- [ ] Run `scripts/verify.sh` because Rust product behavior and migrations changed.
-- [ ] Run `go test ./... -count=1` for `iotkit-site` in the existing Go Docker image.
-- [ ] Run `scripts/test-site-bootstrap.sh` and the Docker MQTT vertical slice.
-- [ ] Run `git diff --check`, inspect `git status`, and report any intentionally omitted Pi test (no hardware behavior changed).
+- [x] Review the diff against the approved Site Console/API descriptor section and the invariants in `AGENTS.md`.
+- [x] Run `scripts/verify.sh` because Rust product behavior and migrations changed.
+- [x] Run `go test ./... -count=1` for `iotkit-site` in the existing Go Docker image.
+- [x] Run `scripts/test-site-bootstrap.sh` and the Docker MQTT vertical slice.
+- [x] Run `git diff --check`, inspect `git status`, and report any intentionally omitted Pi test (no hardware behavior changed).
