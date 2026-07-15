@@ -30,55 +30,12 @@ openssl rand -hex 24 >"$IOTKIT_SITE_PASSWORD_FILE"
 openssl rand -hex 24 >"$scratch/edge-password"
 chmod 600 "$IOTKIT_SITE_PASSWORD_FILE" "$scratch/edge-password"
 
-cargo build --manifest-path "$repo_root/Cargo.toml" -p iotkit-edge --bin iotkit-edge
+jq --version >/dev/null
+cargo build --manifest-path "$repo_root/Cargo.toml" -p iotkit-edge -p iotkit-edgectl
 
-cat >"$scratch/init.toml" <<EOF
-[edge]
-db_path = "$scratch/edge.db"
-health_json_path = "$scratch/health.json"
-
-[adapters.bravepi]
-enabled = false
-
-[adapters.rpi_local]
-enabled = false
-
-[api]
-enabled = false
-
-[exit.mqtt]
-enabled = true
-host = "127.0.0.1"
-port = 18883
-password_file = "$scratch/edge-password"
-allow_insecure = true
-EOF
-
-"$repo_root/target/debug/iotkit-edge" --config "$scratch/init.toml" >"$scratch/edge-init.log" 2>&1 &
-edge_pid=$!
-initialized=false
-for _ in $(seq 1 100); do
-  if sqlite3 "$scratch/edge.db" "SELECT value FROM ledger_meta WHERE key='edge_node_id'" 2>/dev/null | grep -q .; then
-    initialized=true
-    break
-  fi
-  if ! kill -0 "$edge_pid" 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
-if [[ "$initialized" != true ]] || ! kill -0 "$edge_pid" 2>/dev/null; then
-  wait "$edge_pid" 2>/dev/null || true
-  edge_pid=""
-  sed -n '1,240p' "$scratch/edge-init.log"
-  echo "Edge database initialization failed" >&2
-  exit 1
-fi
-kill -INT "$edge_pid"
-wait "$edge_pid"
-edge_pid=""
-
-edge_node_id=$(sqlite3 "$scratch/edge.db" "SELECT value FROM ledger_meta WHERE key='edge_node_id'")
+init_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" init)
+edge_node_id=$(jq -er '.edge_node_id | select(type == "string" and length > 0)' <<<"$init_output")
+jq -er '.ledger_epoch | select(type == "string" and length > 0)' <<<"$init_output" >/dev/null
 sqlite3 "$scratch/edge.db" "INSERT INTO publication_log(epoch,kind,subtype,annotation_json,created_at) SELECT value,'annotation','epoch_start','{\"prior_epoch\":\"integration-prior\"}',unixepoch('subsec')*1000 FROM ledger_meta WHERE key='epoch'"
 
 cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
