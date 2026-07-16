@@ -17,9 +17,6 @@ done
 scratch=$(mktemp -d /tmp/iotkit-mqtt-security.XXXXXX)
 broker="iotkit-mqtt-security-$$"
 expired_broker="iotkit-mqtt-security-expired-$$"
-tls_port=$((30000 + $$ % 10000))
-expired_port=$((tls_port + 1))
-unused_port=$((tls_port + 2))
 started_containers=()
 
 cleanup() {
@@ -40,19 +37,19 @@ expect_success() {
   fi
 }
 
-expect_rejected() {
-  local label=$1 status
-  shift
+expect_status_and_error() {
+  local label=$1 expected_status=$2 expected_error=$3 status
+  shift 3
   set +e
   "$@" >"$scratch/$label.stdout" 2>"$scratch/$label.stderr"
   status=$?
   set -e
-  if ((status == 0)); then
-    echo "expected MQTT rejection: $label" >&2
+  if ((status != expected_status)); then
+    echo "unexpected MQTT rejection status: $label" >&2
     exit 1
   fi
-  if ((status == 124)); then
-    echo "MQTT rejection timed out without an explicit result: $label" >&2
+  if ! grep -Fq "$expected_error" "$scratch/$label.stderr"; then
+    echo "unexpected MQTT rejection class: $label" >&2
     exit 1
   fi
 }
@@ -74,14 +71,33 @@ expect_publish_denied() {
   fi
 }
 
+expect_tls_rejected() {
+  local label=$1 expected_error=$2 status
+  shift 2
+  set +e
+  "$@" >"$scratch/$label.stdout" 2>"$scratch/$label.stderr"
+  status=$?
+  set -e
+  if ((status == 0 || status == 124)); then
+    echo "TLS probe did not return an explicit rejection: $label" >&2
+    exit 1
+  fi
+  if ! grep -Eqi "$expected_error" "$scratch/$label.stdout" "$scratch/$label.stderr"; then
+    echo "TLS probe returned the wrong rejection class: $label" >&2
+    exit 1
+  fi
+}
+
 mqtt_client() {
   local home=$1 command=$2
   shift 2
   timeout 8s docker run --rm --network host \
     --user "$(id -u):$(id -g)" \
     -e "HOME=/work/clients/$home" \
+    -e "IOTKIT_CAPTURE_LABEL=$home" \
     -v "$scratch:/work:ro" \
-    "$IOTKIT_MOSQUITTO_IMAGE" "$command" "$@"
+    -v "$scratch/process:/capture" \
+    "$IOTKIT_MOSQUITTO_IMAGE" /work/client-process-probe.sh "$command" "$@"
 }
 
 write_client_config() {
@@ -120,12 +136,12 @@ write_plain_config() {
 }
 
 start_broker() {
-  local name=$1 port=$2 cert=$3 key=$4
+  local name=$1 cert=$2 key=$3
   docker run --detach --name "$name" \
     --user "$(id -u):$(id -g)" \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
-    -p "127.0.0.1:$port:8883" \
+    -p "127.0.0.1::8883" \
     -v "$scratch/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
     -v "$scratch/acl:/mosquitto/config/acl:ro" \
     -v "$scratch/passwords.db:/mosquitto/config/passwords:ro" \
@@ -134,6 +150,84 @@ start_broker() {
     "$IOTKIT_MOSQUITTO_IMAGE" >/dev/null
   started_containers+=("$name")
 }
+
+published_port() {
+  local mapping
+  mapping=$(docker port "$1" 8883/tcp)
+  [[ "$mapping" == 127.0.0.1:* ]] || {
+    echo "Broker published an unexpected address: $1" >&2
+    exit 1
+  }
+  printf '%s\n' "${mapping##*:}"
+}
+
+tls_probe() {
+  timeout 8s openssl s_client -brief "$@" </dev/null
+}
+
+assert_cross_namespace_subscription_isolated() {
+  local marker="edge-b-ack-probe-$$"
+  local unauthorized_pid authorized_pid unauthorized_status authorized_status
+
+  mqtt_client edge-a mosquitto_sub -h localhost -p "$tls_port" -W 3 -C 1 \
+    -i acl-edge-a-sub -t iotkit/v1/edge-nodes/edge-b/accepted-through \
+    >"$scratch/edge-a-reads-edge-b-ack.stdout" \
+    2>"$scratch/edge-a-reads-edge-b-ack.stderr" &
+  unauthorized_pid=$!
+  mqtt_client edge-b mosquitto_sub -h localhost -p "$tls_port" -W 3 -C 1 \
+    -i acl-edge-b-sub -t iotkit/v1/edge-nodes/edge-b/accepted-through \
+    >"$scratch/edge-b-reads-own-ack.stdout" \
+    2>"$scratch/edge-b-reads-own-ack.stderr" &
+  authorized_pid=$!
+
+  subscriptions_ready=false
+  for _ in $(seq 1 30); do
+    broker_log=$(docker logs "$broker" 2>&1)
+    if grep -Fq 'Received SUBSCRIBE from acl-edge-a-sub' <<<"$broker_log" \
+      && grep -Fq 'Received SUBSCRIBE from acl-edge-b-sub' <<<"$broker_log"; then
+      subscriptions_ready=true
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$subscriptions_ready" != true ]]; then
+    echo "MQTT ACL probe subscribers did not become ready" >&2
+    exit 1
+  fi
+
+  expect_success site-publishes-edge-b-ack mqtt_client site mosquitto_pub \
+    -h localhost -p "$tls_port" -q 1 \
+    -t iotkit/v1/edge-nodes/edge-b/accepted-through -m "$marker"
+
+  set +e
+  wait "$authorized_pid"
+  authorized_status=$?
+  wait "$unauthorized_pid"
+  unauthorized_status=$?
+  set -e
+
+  if ((authorized_status != 0)) \
+    || ! grep -Fxq "$marker" "$scratch/edge-b-reads-own-ack.stdout"; then
+    echo "authorized Edge B did not receive the controlled acknowledgement" >&2
+    exit 1
+  fi
+  if ((unauthorized_status != 27)) \
+    || ! grep -Fq 'Timed out' "$scratch/edge-a-reads-edge-b-ack.stderr" \
+    || [[ -s "$scratch/edge-a-reads-edge-b-ack.stdout" ]]; then
+    echo "Edge A cross-namespace subscription was not isolated" >&2
+    exit 1
+  fi
+}
+
+mkdir -p "$scratch/process"
+cat >"$scratch/client-process-probe.sh" <<'EOF'
+#!/bin/sh
+set -eu
+tr '\000' '\n' <"/proc/$$/cmdline" >"/capture/$IOTKIT_CAPTURE_LABEL.cmdline"
+tr '\000' '\n' <"/proc/$$/environ" >"/capture/$IOTKIT_CAPTURE_LABEL.environ"
+exec "$@"
+EOF
+chmod 700 "$scratch/client-process-probe.sh"
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
   -subj '/CN=IoTKit MQTT Security Test CA' \
@@ -243,16 +337,16 @@ log_type all
 EOF
 
 write_client_config edge-a edge-a "$edge_a_password" ca.pem
+write_client_config edge-b edge-b "$edge_b_password" ca.pem
 write_client_config edge-a-wrong edge-a "$wrong_password" ca.pem
-write_client_config edge-a-wrong-ca edge-a "$edge_a_password" unrelated-ca.pem
 write_client_config site site "$site_password" ca.pem
-write_client_config expired edge-a "$edge_a_password" ca.pem
 write_anonymous_tls_config anonymous
 write_plain_config plaintext
 
-start_broker "$broker" "$tls_port" "$scratch/server.pem" "$scratch/server.key"
-start_broker "$expired_broker" "$expired_port" \
-  "$scratch/expired-server.pem" "$scratch/expired-server.key"
+start_broker "$broker" "$scratch/server.pem" "$scratch/server.key"
+start_broker "$expired_broker" "$scratch/expired-server.pem" "$scratch/expired-server.key"
+tls_port=$(published_port "$broker")
+expired_port=$(published_port "$expired_broker")
 
 broker_ready=false
 for _ in $(seq 1 30); do
@@ -274,42 +368,47 @@ expect_success edge-a-own-records mqtt_client edge-a mosquitto_pub \
 expect_success site-own-ack mqtt_client site mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/accepted-through -m '{}'
-expect_rejected anonymous mqtt_client anonymous mosquitto_pub \
+expect_status_and_error anonymous 135 'Connection error: Not authorized' \
+  mqtt_client anonymous mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 -t test/anonymous -m '{}'
-expect_rejected wrong-password mqtt_client edge-a-wrong mosquitto_pub \
+expect_status_and_error wrong-password 135 'Connection error: Not authorized' \
+  mqtt_client edge-a-wrong mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
 expect_publish_denied edge-a-writes-edge-b mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-b/records -m '{}'
-expect_rejected edge-a-reads-edge-b-ack mqtt_client edge-a mosquitto_sub \
-  -h localhost -p "$tls_port" -W 3 \
-  -t iotkit/v1/edge-nodes/edge-b/accepted-through
+assert_cross_namespace_subscription_isolated
 expect_publish_denied site-writes-edge-records mqtt_client site mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
-expect_rejected wrong-ca mqtt_client edge-a-wrong-ca mosquitto_pub \
-  -h localhost -p "$tls_port" -q 1 \
-  -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
-expect_rejected wrong-hostname mqtt_client edge-a mosquitto_pub \
-  -h 127.0.0.1 -p "$tls_port" -q 1 \
-  -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
-expect_rejected expired-certificate mqtt_client expired mosquitto_pub \
-  -h localhost -p "$expired_port" -q 1 \
-  -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
-expect_rejected plaintext-to-tls mqtt_client plaintext mosquitto_pub \
+expect_tls_rejected wrong-ca 'unable to get local issuer certificate|self-signed certificate' \
+  tls_probe -connect "localhost:$tls_port" -servername localhost \
+  -CAfile "$scratch/unrelated-ca.pem" -verify_return_error -verify_hostname localhost
+expect_tls_rejected wrong-hostname 'hostname mismatch' \
+  tls_probe -connect "localhost:$tls_port" -servername localhost \
+  -CAfile "$scratch/ca.pem" -verify_return_error -verify_hostname 127.0.0.1
+expect_tls_rejected expired-certificate 'certificate has expired' \
+  tls_probe -connect "localhost:$expired_port" -servername localhost \
+  -CAfile "$scratch/ca.pem" -verify_return_error -verify_hostname localhost
+expect_status_and_error plaintext-to-tls 7 'Error: The connection was lost.' \
+  mqtt_client plaintext mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 -t test/plaintext -m '{}'
-expect_rejected no-plaintext-listener mqtt_client plaintext mosquitto_pub \
-  -h localhost -p "$unused_port" -q 1 -t test/plaintext -m '{}'
 
 docker logs "$broker" >"$scratch/broker.log" 2>&1
 docker logs "$expired_broker" >"$scratch/expired-broker.log" 2>&1
+grep -Fq 'wrong version number' "$scratch/broker.log" || {
+  echo "plaintext probe did not reach the TLS-only listener" >&2
+  exit 1
+}
 for secret_file in "$scratch"/passwords/*.txt; do
   secret=$(<"$secret_file")
   if grep -Fq "$secret" "$scratch"/*.stdout \
     || grep -Fq "$secret" "$scratch"/*.stderr \
     || grep -Fq "$secret" "$scratch/broker.log" \
-    || grep -Fq "$secret" "$scratch/expired-broker.log"; then
+    || grep -Fq "$secret" "$scratch/expired-broker.log" \
+    || grep -Fq "$secret" "$scratch/process"/*.cmdline \
+    || grep -Fq "$secret" "$scratch/process"/*.environ; then
     echo "MQTT credential leaked into diagnostics" >&2
     exit 1
   fi

@@ -44,19 +44,26 @@ func TestRunServeRejectsInvalidTLSModeCombinations(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name string
-		args []string
+		name        string
+		args        []string
+		errorSubstr string
 	}{
-		{name: "unknown", args: []string{"--trust-mode", "automatic"}},
-		{name: "system roots with bundle", args: []string{"--trust-mode", "system_roots", "--ca-file", "ca.pem"}},
-		{name: "bundle without file", args: []string{"--trust-mode", "bundle_only"}},
+		{name: "unknown", args: []string{"--trust-mode", "automatic"}, errorSubstr: "unsupported MQTT trust mode"},
+		{name: "system roots with bundle", args: []string{"--trust-mode", "system_roots", "--ca-file", "ca.pem"}, errorSubstr: "does not accept"},
+		{name: "bundle without file", args: []string{"--trust-mode", "bundle_only"}, errorSubstr: "requires a CA file"},
+		{name: "plaintext with trust mode", args: []string{"--allow-insecure", "--trust-mode", "system_roots"}, errorSubstr: "cannot be combined"},
+		{name: "plaintext with CA file", args: []string{"--allow-insecure", "--ca-file", "ca.pem"}, errorSubstr: "cannot be combined"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "site.db")
 			args := []string{"serve", "--db", dbPath, "--password-file", passwordFile}
-			if err := run(append(args, test.args...)); err == nil {
+			err := run(append(args, test.args...))
+			if err == nil {
 				t.Fatal("invalid TLS configuration was accepted")
+			}
+			if !strings.Contains(err.Error(), test.errorSubstr) {
+				t.Fatalf("run serve error = %v, want %q", err, test.errorSubstr)
 			}
 			assertPathDoesNotExist(t, dbPath)
 		})

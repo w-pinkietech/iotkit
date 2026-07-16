@@ -65,6 +65,9 @@ func runServe(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if *allowInsecure && (*trustMode != "" || *caFile != "") {
+		return errors.New("--allow-insecure cannot be combined with --trust-mode or --ca-file")
+	}
 	if *passwordFile == "" {
 		return errors.New("--password-file is required")
 	}
