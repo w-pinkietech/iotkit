@@ -2,6 +2,9 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck disable=SC1091
+source "$repo_root/deploy/mosquitto-image.env"
+export IOTKIT_MOSQUITTO_IMAGE
 project="iotkit-mqtt-test-$$"
 scratch=$(mktemp -d)
 edge_pid=""
@@ -77,7 +80,7 @@ chmod 600 "$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$scratch:/work" \
-  eclipse-mosquitto:2.0 \
+  "$IOTKIT_MOSQUITTO_IMAGE" \
   mosquitto_passwd -U /work/passwords
 chmod 644 "$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 

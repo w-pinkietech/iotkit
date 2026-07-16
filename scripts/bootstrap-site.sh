@@ -5,6 +5,8 @@ umask 077
 
 script_path=$(realpath "${BASH_SOURCE[0]}")
 repo_root=$(cd "$(dirname "$script_path")/.." && pwd -P)
+# shellcheck disable=SC1091
+source "$repo_root/deploy/mosquitto-image.env"
 binding=""
 output_dir=""
 broker_host=""
@@ -199,6 +201,12 @@ certfile /mosquitto/config/tls/server.pem
 keyfile /mosquitto/config/tls/server.key
 tls_version tlsv1.2
 require_certificate false
+message_size_limit 1048576
+max_packet_size 1114112
+max_inflight_messages 20
+max_queued_messages 1000
+max_connections 128
+memory_limit 268435456
 persistence true
 persistence_location /mosquitto/data/
 log_dest stdout
@@ -225,7 +233,7 @@ printf '\n%s:' "$edge_node_id" >>"$stage/mosquitto/passwords"
 tr -d '\r\n' <"$stage/edge-handoff/mqtt-password" >>"$stage/mosquitto/passwords"
 printf '\n' >>"$stage/mosquitto/passwords"
 docker run --rm --user "$(id -u):$(id -g)" \
-  -v "$stage/mosquitto:/work" eclipse-mosquitto:2.0 \
+  -v "$stage/mosquitto:/work" "$IOTKIT_MOSQUITTO_IMAGE" \
   mosquitto_passwd -U /work/passwords >/dev/null
 
 cat >"$stage/edge-handoff/edge-mqtt.toml" <<EOF
@@ -242,6 +250,7 @@ EOF
 cat >"$stage/site.env" <<EOF
 IOTKIT_RUNTIME_UID=$(id -u)
 IOTKIT_RUNTIME_GID=$(id -g)
+IOTKIT_MOSQUITTO_IMAGE=$IOTKIT_MOSQUITTO_IMAGE
 IOTKIT_BROKER_HOST=$broker_host
 IOTKIT_BROKER_BIND=$broker_bind
 IOTKIT_BROKER_PORT=$broker_port

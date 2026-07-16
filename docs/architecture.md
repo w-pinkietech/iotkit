@@ -55,6 +55,11 @@ does not place MQTT credentials in Compose environment values or argv. A split d
 produce separate Broker-host, Site-client, and per-Edge-client artifacts. Site has its own Broker
 principal and credential even when it is co-located with the Broker.
 
+`deploy/mosquitto-image.env` is the repository's single source for the verified Mosquitto patch
+release used by production generation, Compose, and integration tests. Updating that exact patch
+reference requires the MQTT security matrix and the normal final verification gate; floating
+major/minor tags are not production inputs.
+
 ## Data flow
 
 The deployed BravePI path is `BravePI Mainboard -> UART -> IoTKit Edge -> MQTT Broker -> IoTKit Site`.

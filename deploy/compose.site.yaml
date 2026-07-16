@@ -1,8 +1,14 @@
 services:
   broker:
-    image: eclipse-mosquitto:2.0
+    image: "${IOTKIT_MOSQUITTO_IMAGE:?}"
     restart: unless-stopped
     user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"
+    mem_limit: 268435456
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "${IOTKIT_BROKER_BIND:?}:${IOTKIT_BROKER_PORT:?}:8883"
     volumes:
