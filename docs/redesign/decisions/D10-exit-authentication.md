@@ -109,6 +109,10 @@ internet非公開を前提にMVP baselineとして採用する。mTLSを延期�
 - 平文credential handoffは所有者限定regular fileとして扱い、受領確認後の元bundle削除、backup除外または
   暗号化、紛失時失効を導入手順へ含める。
 
+`scripts/test-mqtt-security.sh`は、匿名、誤password、別Edge namespace、Siteの過大権限、誤CA、誤hostname、
+期限切れleaf certificate、平文接続、診断へのsecret漏洩を実Brokerに対して検査する。profile lifecycle、
+credential失効、firewall、disk監視、certificate自動更新の完了証拠ではない。
+
 ## Deferred hardening
 
 以下はMVPの完了条件ではない。
