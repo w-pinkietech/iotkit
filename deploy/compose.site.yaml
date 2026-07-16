@@ -50,6 +50,8 @@ services:
       - site
       - --password-file
       - /run/iotkit/site-mqtt-password
+      - --trust-mode
+      - bundle_only
       - --ca-file
       - /run/iotkit/broker-ca.pem
     volumes:

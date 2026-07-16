@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -24,26 +23,43 @@ func TestRunUsageNamesIoTKitSite(t *testing.T) {
 	}
 }
 
-func TestLoadTLSConfigUsesSystemRootsWhenCAFileIsOmitted(t *testing.T) {
-	config, err := loadTLSConfig("")
-	if err != nil {
+func TestRunServeRequiresExplicitTLSMode(t *testing.T) {
+	dir := t.TempDir()
+	passwordFile := filepath.Join(dir, "password")
+	if err := os.WriteFile(passwordFile, []byte("test-password\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if config == nil || config.MinVersion != tls.VersionTLS12 {
-		t.Fatalf("unexpected TLS config: %#v", config)
+	dbPath := filepath.Join(dir, "site.db")
+	err := run([]string{"serve", "--db", dbPath, "--password-file", passwordFile})
+	if err == nil || !strings.Contains(err.Error(), "--trust-mode") {
+		t.Fatalf("run serve error = %v", err)
 	}
-	if config.RootCAs != nil {
-		t.Fatal("system root selection should remain delegated to crypto/tls")
-	}
+	assertPathDoesNotExist(t, dbPath)
 }
 
-func TestLoadTLSConfigRejectsFileWithoutCertificates(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "not-a-ca.pem")
-	if err := os.WriteFile(path, []byte("not a certificate"), 0o600); err != nil {
+func TestRunServeRejectsInvalidTLSModeCombinations(t *testing.T) {
+	dir := t.TempDir()
+	passwordFile := filepath.Join(dir, "password")
+	if err := os.WriteFile(passwordFile, []byte("test-password\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadTLSConfig(path); err == nil {
-		t.Fatal("invalid CA file was accepted")
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "unknown", args: []string{"--trust-mode", "automatic"}},
+		{name: "system roots with bundle", args: []string{"--trust-mode", "system_roots", "--ca-file", "ca.pem"}},
+		{name: "bundle without file", args: []string{"--trust-mode", "bundle_only"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "site.db")
+			args := []string{"serve", "--db", dbPath, "--password-file", passwordFile}
+			if err := run(append(args, test.args...)); err == nil {
+				t.Fatal("invalid TLS configuration was accepted")
+			}
+			assertPathDoesNotExist(t, dbPath)
+		})
 	}
 }
 
