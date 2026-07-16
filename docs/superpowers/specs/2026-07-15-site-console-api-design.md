@@ -1,7 +1,7 @@
 # IoTKit Site Console / API設計
 
 Date: 2026-07-15
-Status: Approved baseline; legacy capability inheritance under review
+Status: Approved baseline; Broker deployment/Console boundary revised 2026-07-16
 
 ## 目的と正本
 
@@ -17,7 +17,7 @@ Status: Approved baseline; legacy capability inheritance under review
 - デバイスと信号へ人間向けの名前と設置場所を付ける。
 - 接点信号をfuture-onlyで`production_pulse`へ意味付けする。
 - 実信号による保存前previewでカウント条件を確認する。
-- Site単位の汎用MQTT出力を、内蔵Broker方式または外部Broker方式から選ぶ。
+- Site単位の汎用MQTT出力について、使用中profile、接続・配送状態、certificate期限を確認する。
 
 旧IoTKitは現場要求に応じて現在値、realtime chart、履歴検索、CSV/Excel、camera、threshold、通知、
 host操作まで拡大した。この履歴を単なるlegacy burdenとして扱わず、利用者の仕事を示す要求証拠として
@@ -66,7 +66,7 @@ IoTKitはYokaKitを内包しない。YokaKitは汎用MQTT出力を利用し得�
 | 履歴の期間検索・集約chart | 形を変えて継承 | Site raw/queryから有界rangeを返す。全履歴scanや無制限series比較を許さない | 初期候補 |
 | CSV/Excel download・graph画像保存 | 一部継承 | 汎用CSVを正とし、秘密/internal identityを除外する。Excel専用生成と画像保存は追加価値を確認する | CSVは初期候補、他は後続 |
 | 接点count・threshold立上り/立下り | 形を変えて継承 | future-only semantic mapping/evaluatorへ移し、初版`production_pulse`から汎用thresholdへ拡張可能にする | pulseは初期、汎用thresholdは後続 |
-| MQTT broker/topic設定・送信 | 形を変えて継承 | Site単位のversioned output candidate/test/activateとoutboxで扱う | 初期 |
+| MQTT broker/topic設定・送信 | 形を変えて継承 | Broker connectionはlocal CLIの完全profile、topic意味契約はSite設定、配送はversioned outputとoutboxで扱う | 初期 |
 | email宛先・threshold mail | 要求を保持して保留 | MQTT consumerへ任せるかoptional notifierを持つか、低費用・単体完結性を含めて別判断する | 保留 |
 | 接点出力・外部機器駆動 | 要求を保持して分離 | generic typed command/downlinkが必要。adapter固有commandをSite semantic処理へ直結しない | 後続 |
 | storage空き容量・保存停止表示 | 継承 | Site/Edge statusへ明示し、容量不足を正常表示で隠さない | 初期 |
@@ -439,7 +439,8 @@ HTML/API responseにはstrict CSP（`default-src 'self'`を基礎にinline scrip
 4. `信号`: display name、現在値、unit、最終受信、意味付け有無
 5. `信号設定`: identifier照合、名前、カウント条件、live preview、保存
 6. `ログ`: signalと期間による有界検索、chart/table、汎用CSV export
-7. `出力`: mode、非秘密接続情報、candidate test、active/draining/pending状態
+7. `出力`: 使用中profile名、接続・配送確認、実TLSで観測したcertificate期限、active/draining/pending状態
+   （接続変更、別host Brokerの更新job表示なし）
 8. `監査`: 設定変更履歴
 9. `システム情報`: version、license、診断reference。再起動、DB初期化、secret表示は置かない
 
@@ -474,38 +475,31 @@ read-only mountし、Siteから変更できない境界を維持する。
   Git外・0700 directoryのone-time handoffとして渡す
 - external modeのSite publisher: operatorがusername、password file、CA fileをowner-only deployment fileとして
   設置し、Siteへread-only mountする
-- UI/HTTP API: mode、endpoint、topic、credential installed有無、接続状態だけを扱う
+- UI/HTTP API: 使用中profile名、credential installed有無、接続・配送状態、certificate期限だけをreadする
 - password、private key、secret file内容: HTML、API、SQLite、argv、environment、log、auditへ入れない
 - 再発行、失効、rotation: 初版はlocal CLI / deployment作業。Web UIは後続
 
-APIとDBはsecret pathそのものではなく、deploymentが許可した固定`credential_ref` / `tls_profile_ref`だけを
-参照する。任意filesystem pathをUIから指定させない。
+connection profileはendpoint、TLS server name、CA/trust ref、主体固有credential ref、client ID、principal
+roleを一体としてversion固定する。Site/Edge/Brokerが同一hostにあることを前提にせず、各client hostへ
+必要なprofileをlocal CLIでinstallする。APIとDBはsecret pathそのものではなく固定profile refだけを参照し、
+任意filesystem path、endpoint、CA、credential、client IDをUIから指定・変更させない。
 
 embedded modeのexact topicはdeployment allowlistへ事前登録する。bootstrap/local CLIはSite userのexact
 write ACL、application subscriberのexact read ACL、password DBを同時生成し、必要なBroker reload/restartと
-接続切断をoperator作業として扱う。UIで未準備topicを自由入力させない。external modeもdeploymentが許可した
-endpoint/topic/profileだけをcandidateにできる。
+接続切断をoperator作業として扱う。external modeもlocal CLIでinstall済みの完全なprofileだけを使う。
+Broker接続profileは初版Consoleで選択・切替せず、topicのsemantic contract設定とBroker plumbingを混同しない。
 
-### Candidate、test、activate
+### Local CLIによるcandidate、test、activate
 
-```text
-GET    /api/v1/output
-PUT    /api/v1/output/candidate
-DELETE /api/v1/output/candidate
-POST   /api/v1/output/candidate/test
-POST   /api/v1/output/candidate/activate
-```
+初版Console/APIは`GET /api/v1/output`の非秘密read modelだけを公開し、Broker profileのcandidate作成、test、
+activateをHTTP mutationとして公開しない。導入管理者はSite hostのlocal CLIから同じSite application serviceの
+typed operationを使う。CLIはprofile digestとrevisionを表示し、candidateの作成・削除・test・activateに
+expected revisionを必須とする。activate transaction内でも、成功testが同一profile revision・同一content
+digestで直近10分以内であることを再検査する。
 
-すべてsettings sessionを要求する。`GET /output`はactive revision、candidate、connection、draining revision、
-pending/failed countを返すが秘密を返さない。candidate PUTは非秘密設定だけを保存し、ETag/If-Matchを使う。
-
-candidateのPUT、DELETE、test、activateはすべてcandidate ETag / `If-Match`を必須とする。activate
-transaction内でも、成功testが同一candidate revision・同一content digestで直近10分以内であることを
-再検査する。
-
-testはDNS、TCP、TLS hostname/CA、MQTT authentication、CONNACKまでを確認する。外部Brokerのexact publish
-ACLを無害に確認できる標準手段はないため、通常application topicへtest payloadを混ぜない。画面には
-「接続確認」であり、最初のevent deliveryまでpublish ACLを証明しないことを明示する。candidate内容が
+testはSite hostからDNS、TCP、TLS hostname/CA、MQTT authentication、CONNACKまでを確認する。外部Brokerの
+exact publish ACLを無害に確認できる標準手段はないため、通常application topicへtest payloadを混ぜない。
+Consoleは`接続確認済み`と、最初のevent delivery/PUBACK後の`配送確認済み`を区別する。candidate内容が
 変わればtest結果を無効化し、activateには直近10分以内の同一candidate test成功を要求する。
 
 output revisionはmode、endpoint、exact topic、`credential_ref`、`tls_profile_ref`をimmutableに束縛する。
@@ -539,8 +533,8 @@ consumerはstable `event_id`でdedupできる。output outageや失敗がraw cus
 - descriptor巻き戻し/conflict: 適用せず監査し、既存profile/mappingを保持する。
 - profile/mapping validation失敗: transactionをcommitせず、field errorを返す。
 - preview対象signal停止: heartbeatを続け、TTLで終了する。実event/outboxは生まない。
-- output candidate test失敗: active outputを変更しない。
-- output activate transaction失敗: old/new境界を一切変更しない。
+- local output candidate test失敗: active outputを変更しない。
+- local output activate transaction失敗: old/new境界を一切変更しない。
 - output publish失敗: pendingを保持し、bounded retry/backoffと状態表示を行う。
 - Site DB failure: mutationを失敗させ、成功表示や監査だけを残さない。
 - Caddy/certificate failure: HTTPへfallbackせず、local CLI healthで診断できる。
@@ -561,8 +555,11 @@ serviceへ移し、Site Console journeyが成立した後に、重複する低�
 activateする。migrationは件数と境界を表示・監査し、旧eventを新outputへ再配送しない。公開前の使い捨て環境では、
 operatorが明示的にDB再作成を選べるが、製品が自動削除してはならない。
 
-production deploymentはCaddy、Site、Brokerの責務を分ける。Caddy data、Site data、Mosquitto data、TLS、
-password/ACL、handoffを別の永続領域とし、secretをCompose environmentやrendered configへ展開しない。
+production deploymentはCaddy、Site、Brokerの責務を分ける。BrokerとSiteの同居は任意で、別host配置では
+Broker-host artifact、Site client profile、per-Edge client profileを分離する。Caddy data、Site data、
+Mosquitto data、TLS、password/ACL、handoffを別の永続領域とし、secretをCompose environmentやrendered
+configへ展開しない。Mosquitto server certificate lifecycleはBroker host上のdomain非依存componentが担い、
+Consoleは非秘密statusだけをreadする。
 
 ## Verification方針
 
@@ -580,7 +577,7 @@ password/ACL、handoffを別の永続領域とし、secretをCompose environment
 - output: candidate test非破壊、atomic cutover、old drain/new future-only、failure retry、local abandon監査、
   credential非露出
 - HTML:主要journeyのhandler/component test、内部語とsecretの非表示、keyboard操作
-- Docker: CaddyだけがHTTPS公開、backend非公開、descriptor retained収束、embedded/external output切替、
+- Docker: CaddyだけがHTTPS公開、backend非公開、descriptor retained収束、local CLIによるembedded/external output切替、
   Site/Broker restart後のpending収束
 
 Raspberry Piではdescriptor publisherが実台帳からBravePI Transmitterの人間向けidentifierと温度/接点signalを
@@ -600,7 +597,8 @@ Site Console E2Eを一度まとめて実行する。失敗後は原因箇所のf
 - previewが実信号を表示するが、semantic event、outbox、MQTTへ書かない。
 - Edge descriptor snapshotが製品固有schemaなしでidentifierとsignal metadataをSiteへ収束させる。
 - Site固有profile/mappingがdescriptor更新、Edge restart、retireで消えない。
-- embedded/external Brokerを選べ、candidate testとatomic future-only cutoverを経て配送できる。
+- local CLIでembedded/external Broker profileをcandidate testし、atomic future-only cutoverを経て配送できる。
+  Consoleは使用中profileと接続・配送状態をreadするだけで切替操作を持たない。
 - 旧output pendingは旧revisionへdrainし、黙った移送、損失、二重enqueueがない。
 - credential、private key、passphraseがUI、API、DB payload、log、audit、Gitへ出ない。
 - raw custodyと`accepted-through`がdescriptor、UI、semantic、output failureから独立して継続する。

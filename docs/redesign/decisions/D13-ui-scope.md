@@ -15,9 +15,16 @@ UIは既存のtyped operationとread modelの薄いclientであり、UIだけの
 - Edgeの構成・台帳・target操作: `iotkit-edgectl`
 - Edgeの状態確認: health JSONとCLI query
 - Site raw archive確認とsemantic mapping設定: IoTKit Site CLI
-- Broker設定とstatic credential: Site operatorがGit外の設定fileで管理
+- Broker設定、connection profile、static credential、certificate: 導入管理者が各Broker/Site/Edge hostの
+  local CLIとGit外の所有者限定fileで管理
 
 credential、token、private keyをargv、URL、ログ、監査detail、query outputへ出さない。
+
+Site ConsoleはBroker connection profileを登録・編集・選択・切替しない。endpoint、TLS server name、CA、
+credential、client ID、ACL、certificate更新方式はdeployment設定であり、Consoleは使用中profile名、接続状態、
+実TLS接続で観測したcertificate期限と最終観測時刻、`接続確認済み`/`配送確認済み`/`要対応`の非秘密statusだけを
+表示する。別host Broker内部の更新job成否は表示せず、Broker hostのlocal診断で扱う。
+BrokerとSiteの同一host配置をUIの前提にしない。再設定とrollbackは対象hostのlocal CLIで行う。
 
 ## Application boundary
 
@@ -49,7 +56,8 @@ YokaKit固有payloadをIoTKitへ持ち込んだりしない。barcodeを品番�
 - Edge Web UIの拡張
 - Site Console
 - enrollment wizard
-- fleet operation、credential rotation UI
+- Broker接続変更・certificate/credential rotation UI
+- fleet operation
 - 業務charts、業務dashboards、notifications（汎用monitor/logはSite Console設計で扱う）
 - AI operator UI
 - multi-Edge aggregate health
