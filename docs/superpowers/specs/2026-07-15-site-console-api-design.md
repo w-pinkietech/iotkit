@@ -1,7 +1,7 @@
 # IoTKit Site Console / API設計
 
 Date: 2026-07-15
-Status: Approved; implementation in progress
+Status: Approved baseline; legacy capability inheritance under review
 
 ## 目的と正本
 
@@ -18,6 +18,11 @@ Status: Approved; implementation in progress
 - 接点信号をfuture-onlyで`production_pulse`へ意味付けする。
 - 実信号による保存前previewでカウント条件を確認する。
 - Site単位の汎用MQTT出力を、内蔵Broker方式または外部Broker方式から選ぶ。
+
+旧IoTKitは現場要求に応じて現在値、realtime chart、履歴検索、CSV/Excel、camera、threshold、通知、
+host操作まで拡大した。この履歴を単なるlegacy burdenとして扱わず、利用者の仕事を示す要求証拠として
+再評価する。継承するのはoperator capabilityであり、Node-RED、AngularJS、InfluxDB、固定port、
+BravePI/BraveJIG固有分岐等の実現方法ではない。
 
 IoTKitはYokaKitを内包しない。YokaKitは汎用MQTT出力を利用し得る外部applicationの
 一つであり、Siteの共通schema、画面、設定名、認証、運用手順へYokaKit固有語彙を
@@ -36,10 +41,67 @@ IoTKitはYokaKitを内包しない。YokaKitは汎用MQTT出力を利用し得�
 - credential、CA、証明書、Broker ACLのWeb UI発行・rotation
 - SPA、Node-RED Dashboard、CDN依存、Node.js必須build
 - MQTT descriptorのdelta、chunk、履歴replay、能力graph、双方向編集
+- 生産KPI、OEE、品番/工程別chart等の業務dashboard
+- camera録画、画像保管、画像認識、遠隔監視camera製品相当の機能
+- 外部application向けcamera stream、埋め込みmedia API、cross-origin camera配信
 
 外部applicationとの正規データ連携境界はMQTTである。HTTP APIはSite Consoleと
 ローカル運用のための管理面であり、`/api/v1`はそのwire versionであって、外部連携
 製品契約を意味しない。
+
+## 旧IoTKit operator capability継承表
+
+分類は「旧画面を再現するか」ではなく、「現場担当者の仕事をIoTKitのどこで継続するか」を表す。
+`初期`はSite Consoleの最初の製品journeyへ含める候補、`後続`は要求を維持した上で別スライスにするもの、
+`保留`は利用実態または責任境界の追加判断が必要なものとする。
+
+| 旧operator capability | 継承判断 | 新しい責任境界 | 時期 |
+|---|---|---|---|
+| 登録済みdevice一覧・detail | 形を変えて継承 | adapter/Edge descriptorで発見し、Site profileで名前・locationを付ける。source IDは通常画面へ出さない | 初期 |
+| device追加・access type選択 | 形を変えて継承 | 製品別formで手登録せず、adapter導入とdescriptor収束を正とする。未対応sensor追加はadapter開発体験で扱う | 初期/後続 |
+| device削除 | 形を変えて継承 | hard deleteせずretire/stale化し、raw、profile、mappingを保持する | 初期 |
+| sensor名、unit、表示桁、offset | 一部継承 | 名前はSite profile、unit/value typeはdescriptor所有。表示桁と校正offsetは意味と適用地点を別設計する | 名前は初期、他は保留 |
+| 現在値一覧・自動更新 | 継承 | bounded current-value read modelを低頻度pollingし、表示中pageだけ更新する | 初期 |
+| realtime chart・接点変化表示 | 形を変えて継承 | 設置・稼働確認に必要な短いrecent windowだけを表示し、業務dashboardにしない | 初期候補 |
+| 履歴の期間検索・集約chart | 形を変えて継承 | Site raw/queryから有界rangeを返す。全履歴scanや無制限series比較を許さない | 初期候補 |
+| CSV/Excel download・graph画像保存 | 一部継承 | 汎用CSVを正とし、秘密/internal identityを除外する。Excel専用生成と画像保存は追加価値を確認する | CSVは初期候補、他は後続 |
+| 接点count・threshold立上り/立下り | 形を変えて継承 | future-only semantic mapping/evaluatorへ移し、初版`production_pulse`から汎用thresholdへ拡張可能にする | pulseは初期、汎用thresholdは後続 |
+| MQTT broker/topic設定・送信 | 形を変えて継承 | Site単位のversioned output candidate/test/activateとoutboxで扱う | 初期 |
+| email宛先・threshold mail | 要求を保持して保留 | MQTT consumerへ任せるかoptional notifierを持つか、低費用・単体完結性を含めて別判断する | 保留 |
+| 接点出力・外部機器駆動 | 要求を保持して分離 | generic typed command/downlinkが必要。adapter固有commandをSite semantic処理へ直結しない | 後続 |
+| storage空き容量・保存停止表示 | 継承 | Site/Edge statusへ明示し、容量不足を正常表示で隠さない | 初期 |
+| USB camera live view | 形を変えて継承 | optional Edge camera serviceのHTTP mediaをSite/Caddy HTTPS originから中継。MQTTは能力/health metadataだけ | Site Consoleの初期候補 |
+| cameraの外部application出力 | 要求を保持して後続 | 初期版では公開media APIやcross-origin埋め込みを作らない。stable camera identityとmedia service分離だけを維持する | 後続 |
+| camera録画・画像認識 | 外部/後続へ分離 | IoTKit初版をvideo platformにしない。必要時はmedia保存契約とapplicationを別設計する | 対象外 |
+| barcode reader入力 | optional adapterとして後続 | 既存現場は別systemからYokaKitへ直接MQTT送信する。IoTKit直結が必要な場合だけD1 v2 + D7出口familyを設計する | 初期対象外 |
+| BravePI transmitter/router/module設定、DFU、省電力 | adapter固有面へ分離 | IoTKit共通Site Consoleへ製品固有語彙を持ち込まない | 共通UI対象外 |
+| browser時刻によるhost時刻変更 | 実現方法を廃止 | deploymentのNTP/時刻同期とhealth表示へ置換する | Web UI対象外 |
+| system再起動・shutdown | operator面へ分離 | local CLI/service managerで扱い、匿名Site UIからhost権限を持たせない | Web UI対象外 |
+| DB初期化 | Web実現を廃止 | backup/restore/明示的local recovery手順へ置換し、通常UIへ破壊操作を置かない | Web UI対象外 |
+| Swagger、version、license | 一部継承 | version/license/diagnostic refはsystem情報、API schemaは開発成果物として分離する | versionは初期、Swaggerは対象外 |
+
+camera live viewは旧IoTKitの公式要件と実装証拠がある。barcode readerは旧IoTKit標準UIの抽出証拠ではなく、
+既存YokaKitのMQTT入力とユーザーが示した現場要求を根拠に、この表へ追加した新しい継承要求である。
+
+この表の`初期候補`と`保留`は実装承認ではない。range query、camera metadata、文字列観測等の公開wire、
+custody、retentionへ波及する項目は、それぞれの正本をFull laneで改訂してから実装する。
+
+## 観測種類の境界
+
+Site Consoleは数値sensorだけをIoTKitと定義しない。将来を含む入力を次の三つに分ける。
+
+- measurement: 温度、圧力、照度、接点状態等のscalar/fixed vector時系列
+- discrete event: barcode読取、button押下等の有界文字列/離散観測
+- media: camera live stream、将来のsnapshot等
+
+measurementは既存record/custodyを使う。discrete eventをIoTKitへ直接取り込む場合はD1 v2/D7で
+取り込みと出口を同時に決める。
+media byte列はmeasurement recordやMQTT brokerへ流さず、独立media serviceと明示的なretentionを持つ。
+三者のfailureは相互にraw custodyを停止させない。
+
+初期版のmedia consumerはSite Consoleだけである。将来、外部applicationが映像を組み込む場合は、管理用
+HTTP APIを流用せず、認証、認可、同時視聴数、帯域、CORS/CSP、監査を含むversion付きmedia contractを
+別途設計する。
 
 ## 選択した構成
 
@@ -367,18 +429,29 @@ HTML/API responseにはstrict CSP（`default-src 'self'`を基礎にinline scrip
 
 ## Site Console画面
 
-初版は次の小さな画面構成とする。
+旧機能継承の棚卸しを踏まえ、画面構成は次を候補とする。`モニター`、`ログ`、camera widgetの
+初版範囲は、bounded query/media contractを決めてから確定する。設定unlockは独立した常設画面ではなく、
+変更操作を始めるときのsession開始導線とする。
 
-1. `状態`: Site、Edge、最終受信、MQTT出力、要確認件数
-2. `デバイス`: display name、location、状態、最終受信
-3. `信号`: display name、現在値、unit、最終受信、意味付け有無
-4. `信号設定`: identifier照合、名前、カウント条件、live preview、保存
-5. `出力`: mode、非秘密接続情報、candidate test、active/draining/pending状態
-6. `監査`: 設定変更履歴
+1. `状態`: Site、Edge、最終受信、storage、MQTT出力、要確認件数
+2. `モニター`: 現在値、接点状態、短いrecent trend、optional camera live view
+3. `デバイス`: display name、location、descriptor状態、最終受信
+4. `信号`: display name、現在値、unit、最終受信、意味付け有無
+5. `信号設定`: identifier照合、名前、カウント条件、live preview、保存
+6. `ログ`: signalと期間による有界検索、chart/table、汎用CSV export
+7. `出力`: mode、非秘密接続情報、candidate test、active/draining/pending状態
+8. `監査`: 設定変更履歴
+9. `システム情報`: version、license、診断reference。再起動、DB初期化、secret表示は置かない
 
 日本語を既定とし、内部語の`active_edge`、`active_sample`、`series_key`、`ledger_epoch`を通常画面へ出さない。
 大きな操作領域、明確な確認文、入力例、成功/失敗後の次行動を示す。identifierと診断IDは設定unlock後の
 物理照合欄にだけ表示する。
+
+実装順は、既にread modelがある`状態`、`デバイス`、`信号`の匿名read surfaceを最初に通す。その後、
+recent trend/log queryの負荷上限とCSV field contractを決めて`モニター`、`ログ`を追加する。cameraは
+Edge media serviceとSite proxyのcontractが成立した時点で`モニター`のoptional widgetとして加える。
+設定、preview、output、auditは同じapplication service/API境界を利用し、read surfaceと別のmutation pathを
+作らない。
 
 ## 汎用MQTT出力
 
