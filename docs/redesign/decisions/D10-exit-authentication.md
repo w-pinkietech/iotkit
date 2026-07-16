@@ -1,6 +1,6 @@
 # D10: 出口認証と経路
 
-Status: 確定、2026-07-16 Broker分離・接続profile・証明書運用境界を追記
+Status: 確定、2026-07-16 Broker分離・接続profile・MVP認証baselineを追記
 
 ## 決定
 
@@ -90,6 +90,25 @@ IoTKitへ保存しない。networkまたはVPN上のnode identityだけをEdge N
 - brokerまたはnetwork経路の停止中もIoTKit Edgeはoutboxを保持する。
 - credential喪失時はoperatorが新しいcredentialを発行し、Edge設定を更新する。データcursorはcredentialと独立して維持する。
 
+## MVP security gate
+
+server TLSと主体固有static credentialは、管理された工場LAN、小規模fleet、telemetry中心、Brokerの
+internet非公開を前提にMVP baselineとして採用する。mTLSを延期する代わりに、production投入前に次を満たす。
+
+- trust modeを`system roots`と`指定bundleのみ`に明示分離する。私設/固定CA profileでsystem rootsへ暗黙に
+  追加して信頼範囲を広げない。TLS hostname検証を無効化しない。
+- credentialの発行、安全なhandoff、install、test、activate、失効、再発行、廃止、rollbackをlocal CLIと
+  手順で成立させる。失効時はpassword/ACL reloadだけで既接続clientが切断されると仮定せず、対象切断または
+  Broker restartまで確認する。
+- anonymous、誤password、別Edge namespace、過大権限、誤CA、誤hostname、期限切れcertificate、平文listenerを
+  拒否するnegative integration testを持つ。secretがconfig render、argv、環境変数、log、errorへ出ないことも
+  検査する。
+- wire contractに比例したpacket/message、connection、inflight/queue、memory/disk上限と監視をproduction
+  Broker profileへ置き、firewall/network segmentでも到達元を限定する。
+- Mosquitto image/binaryを検証済みpatch versionまたはdigestへ固定し、更新手順を持つ。
+- 平文credential handoffは所有者限定regular fileとして扱い、受領確認後の元bundle削除、backup除外または
+  暗号化、紛失時失効を導入手順へ含める。
+
 ## Deferred hardening
 
 以下はMVPの完了条件ではない。
@@ -103,5 +122,14 @@ IoTKitへ保存しない。networkまたはVPN上のnode identityだけをEdge N
 - Site backup/restore時のcredential reconciliation
 - fleet enrollment、canary rotation、decommission automation
 
-複数Edge Nodeを第三者へ配布する段階で、実際の設置journeyと脅威モデルを基に別途判断する。それまでは
-この一覧を実装計画へ展開しない。
+mTLSは不採用として削除せず、次のいずれかが成立した時点で、hardware-bound keyを含む同等以上のdevice
+authenticationと比較して必須化を再判断する。
+
+- Brokerをinternet、第三者network、共有WANへ直接公開する。
+- 第三者へ多数のEdgeを配布し、個別passwordの安全な配布・失効を運用で保証できない。
+- 制御、安全性に関わるtopic、またはclone耐性を必要とする。
+- 顧客、規制、接続先外部Brokerがclient certificateを要求する。
+
+通常fileに置いたmTLS private keyは盗難・複製されたstatic passwordと同様にcloneでき、侵害済みEdge、Broker
+侵害、過大ACL、DoSを解決しない。clone耐性が要件ならTPM/secure element等へのkey固定も要件に含める。
+上記triggerがない間は、mTLS発行・更新・失効・CA rolloverをMVP実装計画へ展開しない。

@@ -108,7 +108,7 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 - **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
   Edge側の `custody_lost` ではなくSite側の `archive_lost` として記録する(custody境界の明確化。D8)。
 
-## D10波及(出口認証 2026-07-16 Broker分離・接続profile追記)
+## D10波及(出口認証 2026-07-16 Broker分離・MVP認証baseline追記)
 
 - **R19出口認証の設計本体**は [decisions/D10-exit-authentication.md](decisions/D10-exit-authentication.md)。
   MVPはoperatorが用意するIP経路上のMQTT TLS、匿名禁止、Edge Nodeごとのstatic Broker credential、
@@ -118,8 +118,12 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
   束縛する。profileは対象hostのlocal CLIと所有者限定fileでinstallし、Site Consoleから変更・切替しない。
 - Broker server certificate lifecycleはBroker host上のdomain非依存運用componentが担う。通常のleaf更新と
   trust anchor/CA移行を分離し、Consoleは非秘密statusだけを表示する。
+- mTLSなしのMVPは、明示trust mode、credential失効journey、negative auth/TLS test、Broker resource limit、
+  Mosquitto version固定、handoff custodyをproduction gateとして初めて許容する。
 - enrollment、短命credential、two-slot rotation、無人再発行、clone/restore fenceは配布前hardening候補であり、
   最初の1 Edge Node実機スライスの実装順や完了条件にしない。
+- mTLSはinternet/第三者networkへの直接公開、多数の第三者配布、制御・安全topic、clone耐性、顧客・規制・
+  外部Broker要求のいずれかで再判断する。clone耐性にはhardware-bound keyも必要とする。
 - LAN、拠点間回線、VPN等は到達経路であってapplication認証ではない。VPN利用時もprovider secretはIoTKitに
   保存しない。
 
