@@ -10,7 +10,7 @@ use iotkit_core_publish::wire::{
     publication_id,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
-use iotkit_edge::config::MqttExitConfig;
+use iotkit_edge::config::{MqttExitConfig, MqttTrustMode};
 use iotkit_edge::health::HealthState;
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, Transport};
 use rusqlite::Connection;
@@ -440,14 +440,13 @@ fn read_password(config: &MqttExitConfig) -> Result<String, String> {
 }
 
 fn read_ca(config: &MqttExitConfig) -> Result<Option<Vec<u8>>, String> {
-    config
-        .ca_file
-        .as_ref()
-        .map(|path| {
-            std::fs::read(path)
-                .map_err(|error| format!("failed to read MQTT CA file {}: {error}", path.display()))
-        })
-        .transpose()
+    match (&config.trust_mode, &config.ca_file) {
+        (MqttTrustMode::SystemRoots, None) => Ok(None),
+        (MqttTrustMode::BundleOnly, Some(path)) => std::fs::read(path)
+            .map(Some)
+            .map_err(|error| format!("failed to read MQTT CA file {}: {error}", path.display())),
+        _ => Err("invalid resolved MQTT trust configuration".to_string()),
+    }
 }
 
 fn endpoint(config: &MqttExitConfig) -> String {

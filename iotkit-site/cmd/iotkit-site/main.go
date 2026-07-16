@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -60,10 +59,14 @@ func runServe(args []string) error {
 	clientID := flags.String("client-id", "iotkit-site", "MQTT client ID")
 	username := flags.String("username", "", "MQTT username")
 	passwordFile := flags.String("password-file", "", "file containing MQTT password")
-	caFile := flags.String("ca-file", "", "optional PEM CA file")
+	trustMode := flags.String("trust-mode", "", "MQTT TLS trust mode: system_roots or bundle_only")
+	caFile := flags.String("ca-file", "", "PEM CA bundle for bundle_only trust")
 	allowInsecure := flags.Bool("allow-insecure", false, "allow plain MQTT for local tests")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *allowInsecure && (*trustMode != "" || *caFile != "") {
+		return errors.New("--allow-insecure cannot be combined with --trust-mode or --ca-file")
 	}
 	if *passwordFile == "" {
 		return errors.New("--password-file is required")
@@ -76,9 +79,15 @@ func runServe(args []string) error {
 	if password == "" {
 		return errors.New("MQTT password file is empty")
 	}
-	tlsConfig, err := loadTLSConfig(*caFile)
-	if err != nil {
-		return err
+	var tlsConfig *tls.Config
+	if !*allowInsecure {
+		if *trustMode == "" {
+			return errors.New("--trust-mode is required unless --allow-insecure is used")
+		}
+		tlsConfig, err = mqttsite.LoadTLSConfig(mqttsite.TrustMode(*trustMode), *caFile)
+		if err != nil {
+			return err
+		}
 	}
 
 	archive, err := store.Open(*dbPath)
@@ -297,22 +306,4 @@ func openSiteService(dbPath string) (*siteapp.Service, *store.Store, error) {
 		return nil, nil, err
 	}
 	return siteapp.NewService(archive), archive, nil
-}
-
-func loadTLSConfig(caFile string) (*tls.Config, error) {
-	if caFile == "" {
-		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
-	}
-	roots, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, err
-	}
-	pem, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, err
-	}
-	if !roots.AppendCertsFromPEM(pem) {
-		return nil, errors.New("CA file contains no certificates")
-	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, nil
 }

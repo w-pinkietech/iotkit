@@ -178,10 +178,24 @@ grep -Fq 'allow_anonymous false' "$output/mosquitto/mosquitto.conf"
 grep -Fq 'listener 8883 0.0.0.0' "$output/mosquitto/mosquitto.conf"
 grep -Fq "IOTKIT_BROKER_BIND=127.0.0.1" "$output/site.env"
 grep -Fq "IOTKIT_BROKER_PORT=$port" "$output/site.env"
+grep -Fxq 'IOTKIT_MOSQUITTO_IMAGE=eclipse-mosquitto:2.0.22' "$output/site.env"
+for setting in \
+  'message_size_limit 1048576' \
+  'max_packet_size 1114112' \
+  'max_inflight_messages 20' \
+  'max_queued_messages 1000' \
+  'max_connections 128' \
+  'memory_limit 268435456'; do
+  grep -Fxq "$setting" "$output/mosquitto/mosquitto.conf" || {
+    echo "missing Mosquitto limit: $setting" >&2
+    exit 1
+  }
+done
 grep -Fq 'allow_insecure' "$output/edge-handoff/edge-mqtt.toml" && {
   echo "production Edge fragment enables insecure MQTT" >&2
   exit 1
 }
+grep -Fxq 'trust_mode = "bundle_only"' "$output/edge-handoff/edge-mqtt.toml"
 
 site_password=$(<"$output/secrets/site-mqtt-password")
 edge_password=$(<"$output/edge-handoff/mqtt-password")
@@ -201,6 +215,11 @@ fi
 
 docker compose --env-file "$output/site.env" -p "$project" \
   -f "$repo_root/deploy/compose.site.yaml" config >"$scratch/compose.rendered"
+grep -Fq 'image: eclipse-mosquitto:2.0.22' "$scratch/compose.rendered"
+grep -Fq 'no-new-privileges:true' "$scratch/compose.rendered"
+grep -Fq 'pids_limit: 128' "$scratch/compose.rendered"
+grep -Eq 'mem_limit: ("?268435456"?|256m)' "$scratch/compose.rendered"
+grep -A2 -F 'cap_drop:' "$scratch/compose.rendered" | grep -Fq 'ALL'
 if grep -Fq "$site_password" "$scratch/compose.rendered" \
   || grep -Fq "$edge_password" "$scratch/compose.rendered"; then
   echo "plaintext credential leaked into rendered Compose config" >&2

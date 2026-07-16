@@ -70,6 +70,7 @@ pub struct RawMqttExitConfig {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub password_file: Option<String>,
+    pub trust_mode: Option<String>,
     pub ca_file: Option<String>,
     pub allow_insecure: Option<bool>,
 }
@@ -136,10 +137,17 @@ pub struct ApiConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MqttTrustMode {
+    SystemRoots,
+    BundleOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MqttExitConfig {
     pub host: String,
     pub port: u16,
     pub password_file: PathBuf,
+    pub trust_mode: MqttTrustMode,
     pub ca_file: Option<PathBuf>,
     pub allow_insecure: bool,
 }
@@ -380,12 +388,51 @@ fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, Confi
         ));
     }
 
+    let allow_insecure = raw.allow_insecure.unwrap_or(false);
+    let (trust_mode, ca_file) = if allow_insecure {
+        if raw.trust_mode.is_some() || raw.ca_file.is_some() {
+            return Err(ConfigError::Validation(
+                "exit.mqtt.allow_insecure cannot be combined with trust_mode or ca_file"
+                    .to_string(),
+            ));
+        }
+        (MqttTrustMode::SystemRoots, None)
+    } else {
+        match (raw.trust_mode.as_deref(), raw.ca_file) {
+            (Some("system_roots"), None) => (MqttTrustMode::SystemRoots, None),
+            (Some("system_roots"), Some(_)) => {
+                return Err(ConfigError::Validation(
+                    "exit.mqtt.ca_file is forbidden with system_roots".to_string(),
+                ));
+            }
+            (Some("bundle_only"), Some(path)) if !path.trim().is_empty() => {
+                (MqttTrustMode::BundleOnly, Some(PathBuf::from(path)))
+            }
+            (Some("bundle_only"), _) => {
+                return Err(ConfigError::Validation(
+                    "exit.mqtt.ca_file is required with bundle_only".to_string(),
+                ));
+            }
+            (Some(other), _) => {
+                return Err(ConfigError::Validation(format!(
+                    "exit.mqtt.trust_mode must be system_roots or bundle_only, got {other:?}"
+                )));
+            }
+            (None, _) => {
+                return Err(ConfigError::Validation(
+                    "exit.mqtt.trust_mode is required when TLS is enabled".to_string(),
+                ));
+            }
+        }
+    };
+
     Ok(Some(MqttExitConfig {
         host,
         port,
         password_file: PathBuf::from(password_file),
-        ca_file: raw.ca_file.map(PathBuf::from),
-        allow_insecure: raw.allow_insecure.unwrap_or(false),
+        trust_mode,
+        ca_file,
+        allow_insecure,
     }))
 }
 
@@ -516,6 +563,7 @@ enabled = true
 host = "site.internal"
 port = 8883
 password_file = "/run/secrets/iotkit-mqtt-password"
+trust_mode = "bundle_only"
 ca_file = "/etc/iotkit/site-ca.pem"
 
 [api]
@@ -821,6 +869,7 @@ edge_name = "kitchen-edge"
             host: Some("site.internal".to_string()),
             port: Some(8883),
             password_file: Some("/run/secrets/iotkit-mqtt-password".to_string()),
+            trust_mode: Some("bundle_only".to_string()),
             ca_file: Some("/etc/iotkit/site-ca.pem".to_string()),
             allow_insecure: None,
         });
@@ -832,9 +881,61 @@ edge_name = "kitchen-edge"
                 host: "site.internal".to_string(),
                 port: 8883,
                 password_file: PathBuf::from("/run/secrets/iotkit-mqtt-password"),
+                trust_mode: MqttTrustMode::BundleOnly,
                 ca_file: Some(PathBuf::from("/etc/iotkit/site-ca.pem")),
                 allow_insecure: false,
             })
+        );
+    }
+
+    #[test]
+    fn resolve_mqtt_exit_requires_explicit_trust_mode_for_tls() {
+        let mut raw = raw_with_defaults();
+        raw.exit.mqtt = Some(RawMqttExitConfig {
+            enabled: Some(true),
+            password_file: Some("/run/secrets/mqtt-password".into()),
+            ..RawMqttExitConfig::default()
+        });
+        assert!(matches!(
+            resolve(raw, ConfigSource::DefaultsOnly),
+            Err(ConfigError::Validation(message)) if message.contains("trust_mode")
+        ));
+    }
+
+    #[test]
+    fn resolve_mqtt_exit_rejects_ambiguous_trust_inputs() {
+        for (trust_mode, ca_file) in [
+            ("system_roots", Some("/etc/iotkit/ca.pem")),
+            ("bundle_only", None),
+            ("automatic", None),
+        ] {
+            let mut raw = raw_with_defaults();
+            raw.exit.mqtt = Some(RawMqttExitConfig {
+                enabled: Some(true),
+                password_file: Some("/run/secrets/mqtt-password".into()),
+                trust_mode: Some(trust_mode.into()),
+                ca_file: ca_file.map(str::to_owned),
+                ..RawMqttExitConfig::default()
+            });
+            assert!(resolve(raw, ConfigSource::DefaultsOnly).is_err());
+        }
+    }
+
+    #[test]
+    fn resolve_mqtt_exit_accepts_bundle_only() {
+        let mut raw = raw_with_defaults();
+        raw.exit.mqtt = Some(RawMqttExitConfig {
+            enabled: Some(true),
+            host: Some("broker.factory.example".into()),
+            password_file: Some("/run/secrets/mqtt-password".into()),
+            trust_mode: Some("bundle_only".into()),
+            ca_file: Some("/etc/iotkit/broker-ca.pem".into()),
+            ..RawMqttExitConfig::default()
+        });
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(
+            config.mqtt_exit.unwrap().trust_mode,
+            MqttTrustMode::BundleOnly
         );
     }
 

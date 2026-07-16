@@ -42,13 +42,23 @@ result to an application-facing MQTT contract. Applications such as YokaKit own 
 and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
 complicates this story needs a strong reason.
 
-The production-shaped installation keeps Edge native on its Raspberry Pi and runs the standard
-Broker plus Site in Docker on a Linux Site host. `scripts/bootstrap-site.sh` consumes the
+The current production-shaped reference installation keeps Edge native on its Raspberry Pi and
+co-locates the standard Broker plus Site in Docker on one Linux host. Co-location is not a product
+requirement: the Broker and Site may run on separate hosts and communicate only through the same
+authenticated MQTT/TLS contract, without a shared filesystem or Compose project. The current
+`scripts/bootstrap-site.sh` consumes the
 non-secret `iotkit-edgectl mqtt-binding` document and operator-provided TLS material, then creates
 an anonymous-disabled Broker, exact per-Edge-Node ACLs, owner-only credential files, and a small
 Edge handoff. It does not issue certificates, configure DNS/firewalls/VPNs, or modify the Edge.
 `deploy/compose.site.yaml` consumes only generated file paths and non-secret network settings; it
-does not place MQTT credentials in Compose environment values or argv.
+does not place MQTT credentials in Compose environment values or argv. A split deployment must
+produce separate Broker-host, Site-client, and per-Edge-client artifacts. Site has its own Broker
+principal and credential even when it is co-located with the Broker.
+
+`deploy/mosquitto-image.env` is the repository's single source for the verified Mosquitto patch
+release used by production generation, Compose, and integration tests. Updating that exact patch
+reference requires the MQTT security matrix and the normal final verification gate; floating
+major/minor tags are not production inputs.
 
 ## Data flow
 
@@ -221,9 +231,10 @@ one IoTKit Site, raw SQLite storage, application-level accepted-through, future-
 projection, a durable application MQTT outbox, and direct CLI queries. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
 BravePI Mainboard UART stream. A production-shaped one-Edge bootstrap exists for the Broker/Site
-TLS boundary, but certificate issuance, enrollment,
-credential rotation, Site backup/restore, legacy HTTPS migration, multi-Edge-Node hardware,
-YokaKit integration, and UI are deferred until this path works on real hardware.
+TLS boundary. Automatic Broker certificate issuance/renewal is now designed as a Broker-host
+operations component but is not implemented in this slice. Enrollment, credential rotation,
+Site backup/restore, legacy HTTPS migration, multi-Edge-Node hardware, YokaKit integration, and UI
+remain later implementation work.
 
 ## Crate map
 
