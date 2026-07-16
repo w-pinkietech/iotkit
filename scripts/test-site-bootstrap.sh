@@ -182,6 +182,7 @@ grep -Fq 'allow_insecure' "$output/edge-handoff/edge-mqtt.toml" && {
   echo "production Edge fragment enables insecure MQTT" >&2
   exit 1
 }
+grep -Fxq 'trust_mode = "bundle_only"' "$output/edge-handoff/edge-mqtt.toml"
 
 site_password=$(<"$output/secrets/site-mqtt-password")
 edge_password=$(<"$output/edge-handoff/mqtt-password")

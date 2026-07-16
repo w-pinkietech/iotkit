@@ -235,6 +235,7 @@ enabled = true
 host = "$broker_host"
 port = $broker_port
 password_file = "/etc/iotkit/mqtt-password"
+trust_mode = "bundle_only"
 ca_file = "/etc/iotkit/broker-ca.pem"
 EOF
 
