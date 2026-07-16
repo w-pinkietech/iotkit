@@ -55,8 +55,8 @@ expect_status_and_error() {
 }
 
 expect_publish_denied() {
-  local label=$1 status
-  shift
+  local label=$1 expected_topic=$2 status broker_log
+  shift 2
   set +e
   "$@" >"$scratch/$label.stdout" 2>"$scratch/$label.stderr"
   status=$?
@@ -67,6 +67,11 @@ expect_publish_denied() {
   fi
   if ! grep -Fq 'failed: Not authorized.' "$scratch/$label.stderr"; then
     echo "MQTT publish did not return an explicit Not authorized result: $label" >&2
+    exit 1
+  fi
+  broker_log=$(docker logs "$broker" 2>&1)
+  if ! grep -F 'Denied PUBLISH' <<<"$broker_log" | grep -Fq "'$expected_topic'"; then
+    echo "Broker did not record the expected publish denial: $label" >&2
     exit 1
   fi
 }
@@ -89,12 +94,15 @@ expect_tls_rejected() {
 }
 
 mqtt_client() {
-  local home=$1 command=$2
+  local home=$1 command=$2 capture_path capture_label
   shift 2
+  capture_path=$(mktemp "$scratch/process/$home.XXXXXX")
+  capture_label=$(basename "$capture_path")
+  rm -f "$capture_path"
   timeout 8s docker run --rm --network host \
     --user "$(id -u):$(id -g)" \
     -e "HOME=/work/clients/$home" \
-    -e "IOTKIT_CAPTURE_LABEL=$home" \
+    -e "IOTKIT_CAPTURE_LABEL=$capture_label" \
     -v "$scratch:/work:ro" \
     -v "$scratch/process:/capture" \
     "$IOTKIT_MOSQUITTO_IMAGE" /work/client-process-probe.sh "$command" "$@"
@@ -375,11 +383,13 @@ expect_status_and_error wrong-password 135 'Connection error: Not authorized' \
   mqtt_client edge-a-wrong mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
-expect_publish_denied edge-a-writes-edge-b mqtt_client edge-a mosquitto_pub \
+expect_publish_denied edge-a-writes-edge-b \
+  iotkit/v1/edge-nodes/edge-b/records mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-b/records -m '{}'
 assert_cross_namespace_subscription_isolated
-expect_publish_denied site-writes-edge-records mqtt_client site mosquitto_pub \
+expect_publish_denied site-writes-edge-records \
+  iotkit/v1/edge-nodes/edge-a/records mqtt_client site mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
 expect_tls_rejected wrong-ca 'unable to get local issuer certificate|self-signed certificate' \
