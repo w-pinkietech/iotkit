@@ -358,6 +358,10 @@ func (store *Store) ListInventorySignals(
 				WHERE mapping.edge_node_id = source.edge_node_id
 					AND mapping.series_key = source.series_key
 					AND mapping.active = 1
+			) OR EXISTS (
+				SELECT 1 FROM semantic_definitions_v2 AS definition
+				WHERE definition.signal_ref = source.signal_ref
+					AND definition.active = 1
 			),
 			source.last_received_at,
 			current.values_json,

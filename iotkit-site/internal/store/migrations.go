@@ -276,6 +276,96 @@ var schemaMigrations = []migration{
 		ALTER TABLE site_accounts
 			ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0);
 	`},
+	{version: 7, sql: `
+		CREATE TABLE semantic_definitions_v2 (
+			definition_id TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			signal_ref TEXT NOT NULL,
+			edge_node_id TEXT NOT NULL,
+			series_key TEXT NOT NULL,
+			series_id TEXT NOT NULL,
+			spec_json BLOB NOT NULL CHECK(json_valid(spec_json)),
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (definition_id, revision)
+		);
+		CREATE UNIQUE INDEX ux_semantic_definition_active_signal
+			ON semantic_definitions_v2(signal_ref) WHERE active = 1;
+		CREATE TABLE semantic_definition_starts_v2 (
+			definition_id TEXT NOT NULL,
+			definition_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			start_after_pub_seq INTEGER NOT NULL,
+			PRIMARY KEY (definition_id, definition_revision, ledger_epoch)
+		);
+		CREATE TABLE semantic_definition_ends_v2 (
+			definition_id TEXT NOT NULL,
+			definition_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			end_at_pub_seq INTEGER NOT NULL,
+			PRIMARY KEY (definition_id, definition_revision, ledger_epoch)
+		);
+		CREATE TABLE semantic_definition_state_v2 (
+			definition_id TEXT NOT NULL,
+			definition_revision INTEGER NOT NULL,
+			initialized INTEGER NOT NULL CHECK(initialized IN (0, 1)),
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			counter INTEGER NOT NULL CHECK(counter >= 0),
+			next_sequence INTEGER NOT NULL CHECK(next_sequence > 0),
+			PRIMARY KEY (definition_id, definition_revision)
+		);
+		CREATE TABLE semantic_results_v2 (
+			definition_id TEXT NOT NULL,
+			definition_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			pub_seq INTEGER NOT NULL,
+			observation_id TEXT,
+			PRIMARY KEY (definition_id, definition_revision, ledger_epoch, pub_seq)
+		);
+		CREATE TABLE semantic_observations_v2 (
+			observation_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			observation_id TEXT NOT NULL UNIQUE,
+			series_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL CHECK(sequence > 0),
+			definition_id TEXT NOT NULL,
+			definition_revision INTEGER NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN ('numeric', 'boolean', 'cumulative_counter', 'alarm')),
+			value_json BLOB NOT NULL CHECK(json_valid(value_json)),
+			signal_ref TEXT NOT NULL,
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			source_pub_seq INTEGER NOT NULL CHECK(source_pub_seq > 0),
+			observed_at INTEGER NOT NULL CHECK(observed_at >= 0),
+			created_at INTEGER NOT NULL,
+			UNIQUE (definition_id, definition_revision, sequence)
+		);
+	`},
+	{version: 8, sql: `
+		CREATE TABLE yokakit_routes (
+			route_id TEXT PRIMARY KEY,
+			definition_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			signal_id TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN ('production', 'onoff', 'gantt_chart', 'alarm')),
+			reason TEXT NOT NULL,
+			start_after_observation_row_id INTEGER NOT NULL CHECK(start_after_observation_row_id >= 0),
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			UNIQUE(source_id, signal_id)
+		);
+		CREATE TABLE output_outbox_v2 (
+			export_id TEXT PRIMARY KEY,
+			route_id TEXT NOT NULL,
+			observation_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			qos INTEGER NOT NULL CHECK(qos = 1),
+			payload_json BLOB NOT NULL CHECK(json_valid(payload_json)),
+			attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+			created_at INTEGER NOT NULL,
+			published_at INTEGER,
+			UNIQUE(route_id, observation_id)
+		);
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

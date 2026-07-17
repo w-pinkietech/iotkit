@@ -17,8 +17,8 @@ func TestOpenCreatesLocalAccountSchema(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 6 {
-		t.Fatalf("schema version = %d, want 6", version)
+	if version != 8 {
+		t.Fatalf("schema version = %d, want 8", version)
 	}
 	for _, table := range []string{"site_accounts", "site_sessions"} {
 		var got int

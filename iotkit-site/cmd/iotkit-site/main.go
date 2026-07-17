@@ -177,6 +177,14 @@ func runServe(args []string) error {
 	httpListen := flags.String("http-listen", "127.0.0.1:8080", "private Site HTTP listen address")
 	publicOrigin := flags.String("public-origin", "", "public Caddy HTTPS origin")
 	developmentHTTP := flags.Bool("development-http", false, "allow loopback HTTP origin for development")
+	certificateFile := flags.String("broker-certificate-file", "", "broker certificate shown in Console status")
+	outputBrokerURL := flags.String("output-broker-url", "", "external application MQTT broker URL")
+	outputClientID := flags.String("output-client-id", "iotkit-site-output", "external MQTT client ID")
+	outputUsername := flags.String("output-username", "", "external MQTT username")
+	outputPasswordFile := flags.String("output-password-file", "", "file containing external MQTT password")
+	outputTrustMode := flags.String("output-trust-mode", "", "external MQTT TLS trust mode")
+	outputCAFile := flags.String("output-ca-file", "", "external MQTT PEM CA bundle")
+	outputAllowInsecure := flags.Bool("output-allow-insecure", false, "allow plain external MQTT for local tests")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -204,6 +212,37 @@ func runServe(args []string) error {
 			return err
 		}
 	}
+	var outputConfig *mqttsite.ClientConfig
+	if *outputBrokerURL != "" {
+		if *outputUsername == "" || *outputPasswordFile == "" {
+			return errors.New("--output-username and --output-password-file are required with --output-broker-url")
+		}
+		outputPasswordBytes, err := os.ReadFile(*outputPasswordFile)
+		if err != nil {
+			return fmt.Errorf("read external MQTT password file: %w", err)
+		}
+		outputPassword := strings.TrimRight(string(outputPasswordBytes), "\r\n")
+		if outputPassword == "" {
+			return errors.New("external MQTT password file is empty")
+		}
+		var outputTLS *tls.Config
+		if !*outputAllowInsecure {
+			if *outputTrustMode == "" {
+				return errors.New("--output-trust-mode is required for TLS external MQTT")
+			}
+			outputTLS, err = mqttsite.LoadTLSConfig(
+				mqttsite.TrustMode(*outputTrustMode), *outputCAFile,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		outputConfig = &mqttsite.ClientConfig{
+			BrokerURL: *outputBrokerURL, ClientID: *outputClientID,
+			Username: *outputUsername, Password: outputPassword,
+			TLSConfig: outputTLS, AllowInsecure: *outputAllowInsecure,
+		}
+	}
 	if *publicOrigin == "" {
 		return errors.New("--public-origin is required")
 	}
@@ -227,6 +266,7 @@ func runServe(args []string) error {
 		Sessions:        sessions,
 		PublicOrigin:    *publicOrigin,
 		DevelopmentHTTP: *developmentHTTP,
+		CertificateFile: *certificateFile,
 	})
 	if err != nil {
 		return fmt.Errorf("initialize Site HTTP: %w", err)
@@ -244,7 +284,11 @@ func runServe(args []string) error {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 * 1024,
 	}
-	errorsCh := make(chan error, 2)
+	processCount := 2
+	if outputConfig != nil {
+		processCount++
+	}
+	errorsCh := make(chan error, processCount)
 	go func() {
 		err := httpServer.ListenAndServe()
 		if errors.Is(err, http.ErrServerClosed) {
@@ -253,15 +297,31 @@ func runServe(args []string) error {
 		errorsCh <- err
 	}()
 	go func() {
-		errorsCh <- mqttsite.Run(runCtx, mqttsite.ClientConfig{
+		config := mqttsite.ClientConfig{
 			BrokerURL:     *brokerURL,
 			ClientID:      *clientID,
 			Username:      *username,
 			Password:      password,
 			TLSConfig:     tlsConfig,
 			AllowInsecure: *allowInsecure,
-		}, mqttsite.Processor{Store: archive}, archive, slog.Default())
+		}
+		if outputConfig != nil {
+			errorsCh <- mqttsite.RunIngest(
+				runCtx, config, mqttsite.Processor{Store: archive},
+				archive, slog.Default(),
+			)
+			return
+		}
+		errorsCh <- mqttsite.Run(
+			runCtx, config, mqttsite.Processor{Store: archive},
+			archive, slog.Default(),
+		)
 	}()
+	if outputConfig != nil {
+		go func() {
+			errorsCh <- mqttsite.RunOutput(runCtx, *outputConfig, archive, slog.Default())
+		}()
+	}
 	runErr := <-errorsCh
 	cancel()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

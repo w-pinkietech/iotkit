@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/sitesession"
@@ -36,17 +38,23 @@ type Config struct {
 	Sessions        *sitesession.Manager
 	PublicOrigin    string
 	DevelopmentHTTP bool
+	CertificateFile string
 }
 
 type Server struct {
-	store         *store.Store
-	site          *siteapp.Service
-	accounts      *siteapp.AccountService
-	sessions      *sitesession.Manager
-	publicOrigin  string
-	secureCookies bool
-	templates     *template.Template
-	mux           *http.ServeMux
+	store           *store.Store
+	site            *siteapp.Service
+	accounts        *siteapp.AccountService
+	semantics       *siteapp.SemanticService
+	sessions        *sitesession.Manager
+	publicOrigin    string
+	secureCookies   bool
+	templates       *template.Template
+	mux             *http.ServeMux
+	previewMu       sync.Mutex
+	previews        map[string]*semanticPreview
+	now             func() time.Time
+	certificateFile string
 }
 
 type requestAuth struct {
@@ -88,14 +96,18 @@ func New(config Config) (*Server, error) {
 		return nil, fmt.Errorf("parse Site templates: %w", err)
 	}
 	server := &Server{
-		store:         config.Store,
-		site:          config.Site,
-		accounts:      config.Accounts,
-		sessions:      config.Sessions,
-		publicOrigin:  strings.TrimSuffix(config.PublicOrigin, "/"),
-		secureCookies: !config.DevelopmentHTTP,
-		templates:     templates,
-		mux:           http.NewServeMux(),
+		store:           config.Store,
+		site:            config.Site,
+		accounts:        config.Accounts,
+		semantics:       siteapp.NewSemanticService(config.Store),
+		sessions:        config.Sessions,
+		publicOrigin:    strings.TrimSuffix(config.PublicOrigin, "/"),
+		secureCookies:   !config.DevelopmentHTTP,
+		templates:       templates,
+		mux:             http.NewServeMux(),
+		previews:        make(map[string]*semanticPreview),
+		now:             time.Now,
+		certificateFile: config.CertificateFile,
 	}
 	server.routes()
 	return server, nil
@@ -105,13 +117,41 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /", server.root)
 	server.mux.HandleFunc("GET /login", server.loginPage)
 	server.mux.HandleFunc("POST /login", server.loginForm)
+	server.mux.HandleFunc("GET /password", server.passwordPage)
+	server.mux.HandleFunc("POST /password", server.passwordForm)
 	server.mux.HandleFunc("GET /status", server.statusPage)
+	server.mux.HandleFunc("GET /monitor", server.consolePage)
+	server.mux.HandleFunc("GET /devices", server.consolePage)
+	server.mux.HandleFunc("GET /signals", server.consolePage)
+	server.mux.HandleFunc("GET /logs", server.consolePage)
+	server.mux.HandleFunc("GET /output", server.consolePage)
+	server.mux.HandleFunc("GET /audit", server.consolePage)
+	server.mux.HandleFunc("GET /accounts", server.consolePage)
+	server.mux.HandleFunc("POST /console/devices/{device_ref}/profile", server.consoleDeviceProfile)
+	server.mux.HandleFunc("POST /console/signals/{signal_ref}/profile", server.consoleSignalProfile)
+	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic", server.consoleSemantic)
+	server.mux.HandleFunc("POST /console/outputs/yokakit", server.consoleYokaKitOutput)
+	server.mux.HandleFunc("POST /console/accounts", server.consoleAccount)
 	server.mux.HandleFunc("GET /static/site.css", server.stylesheet)
 	server.mux.HandleFunc("POST /api/v1/session", server.createSession)
 	server.mux.HandleFunc("GET /api/v1/session", server.getSession)
 	server.mux.HandleFunc("DELETE /api/v1/session", server.deleteSession)
 	server.mux.HandleFunc("GET /api/v1/devices", server.listDevices)
 	server.mux.HandleFunc("GET /api/v1/signals", server.listSignals)
+	server.mux.HandleFunc("PUT /api/v1/devices/{device_ref}/profile", server.putDeviceProfile)
+	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/profile", server.putSignalProfile)
+	server.mux.HandleFunc("GET /api/v1/semantic-definitions", server.listSemanticDefinitions)
+	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/semantic-definition", server.putSemanticDefinition)
+	server.mux.HandleFunc("DELETE /api/v1/signals/{signal_ref}/semantic-definition", server.deleteSemanticDefinition)
+	server.mux.HandleFunc("GET /api/v1/outputs/yokakit", server.listYokaKitOutputs)
+	server.mux.HandleFunc("POST /api/v1/outputs/yokakit", server.createYokaKitOutput)
+	server.mux.HandleFunc("GET /api/v1/audit-events", server.listAuditEvents)
+	server.mux.HandleFunc("GET /api/v1/accounts", server.listAccounts)
+	server.mux.HandleFunc("POST /api/v1/accounts", server.createAccount)
+	server.mux.HandleFunc("POST /api/v1/session/password", server.changeOwnPassword)
+	server.mux.HandleFunc("POST /api/v1/mapping-previews", server.createMappingPreview)
+	server.mux.HandleFunc("GET /api/v1/mapping-previews/{preview_id}", server.getMappingPreview)
+	server.mux.HandleFunc("DELETE /api/v1/mapping-previews/{preview_id}", server.deleteMappingPreview)
 }
 
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -173,20 +213,7 @@ func (server *Server) loginForm(response http.ResponseWriter, request *http.Requ
 }
 
 func (server *Server) statusPage(response http.ResponseWriter, request *http.Request) {
-	auth, ok := server.requireBrowserAuth(response, request)
-	if !ok {
-		return
-	}
-	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := server.templates.ExecuteTemplate(response, "status.html", struct {
-		DisplayName string
-		Role        siteapp.AccountRole
-	}{
-		DisplayName: auth.account.DisplayName,
-		Role:        auth.account.Role,
-	}); err != nil {
-		http.Error(response, "画面を表示できません", http.StatusInternalServerError)
-	}
+	server.consolePage(response, request)
 }
 
 func (server *Server) stylesheet(response http.ResponseWriter, _ *http.Request) {
