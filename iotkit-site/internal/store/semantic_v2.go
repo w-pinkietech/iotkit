@@ -294,9 +294,11 @@ func (store *Store) ProjectSemanticObservations(
 		}
 		if err := store.projectSemanticV2Candidate(ctx, candidate); err != nil {
 			failedDefinitions[key] = struct{}{}
+			store.recordSemanticV2Failure(ctx, candidate, err)
 			projectionErrors = append(projectionErrors, err)
 			continue
 		}
+		store.clearSemanticV2Failure(ctx, candidate)
 		processed++
 	}
 	return processed, errors.Join(projectionErrors...)
@@ -307,10 +309,15 @@ func (store *Store) listSemanticV2Candidates(
 	limit int,
 ) ([]semanticV2Candidate, error) {
 	rows, err := store.db.QueryContext(ctx, `
+		WITH candidates AS (
 		SELECT definition.definition_id, definition.revision,
 			definition.signal_ref, definition.edge_node_id, definition.series_key,
 			definition.series_id, definition.spec_json,
-			raw.ledger_epoch, raw.pub_seq, raw.record_json
+			raw.ledger_epoch, raw.pub_seq, raw.record_json, raw.received_at,
+			ROW_NUMBER() OVER (
+				PARTITION BY definition.definition_id, definition.revision
+				ORDER BY raw.received_at, raw.ledger_epoch, raw.pub_seq
+			) AS definition_rank
 		FROM semantic_definitions_v2 AS definition
 		JOIN raw_records AS raw
 			ON raw.edge_node_id = definition.edge_node_id
@@ -337,8 +344,12 @@ func (store *Store) listSemanticV2Candidates(
 					AND result.ledger_epoch = raw.ledger_epoch
 					AND result.pub_seq = raw.pub_seq
 			)
-		ORDER BY raw.received_at, raw.ledger_epoch, raw.pub_seq,
-			definition.definition_id, definition.revision
+		)
+		SELECT definition_id, revision, signal_ref, edge_node_id, series_key,
+			series_id, spec_json, ledger_epoch, pub_seq, record_json
+		FROM candidates
+		ORDER BY definition_rank, received_at, ledger_epoch, pub_seq,
+			definition_id, revision
 		LIMIT ?
 	`, limit)
 	if err != nil {
@@ -365,6 +376,47 @@ func (store *Store) listSemanticV2Candidates(
 		candidates = append(candidates, candidate)
 	}
 	return candidates, rows.Err()
+}
+
+func (store *Store) recordSemanticV2Failure(
+	ctx context.Context,
+	candidate semanticV2Candidate,
+	projectionErr error,
+) {
+	message := projectionErr.Error()
+	if len(message) > 256 {
+		message = message[:256]
+	}
+	_, _ = store.db.ExecContext(ctx, `
+		INSERT INTO semantic_projection_failures_v2 (
+			definition_id, definition_revision, ledger_epoch, pub_seq,
+			error_text, attempts, last_failed_at
+		) VALUES (?, ?, ?, ?, ?, 1, ?)
+		ON CONFLICT(definition_id, definition_revision, ledger_epoch, pub_seq)
+		DO UPDATE SET error_text = excluded.error_text,
+			attempts = attempts + 1, last_failed_at = excluded.last_failed_at
+	`, candidate.DefinitionID, candidate.DefinitionRevision,
+		candidate.LedgerEpoch, candidate.PubSeq, message, time.Now().UnixMilli())
+}
+
+func (store *Store) clearSemanticV2Failure(
+	ctx context.Context,
+	candidate semanticV2Candidate,
+) {
+	_, _ = store.db.ExecContext(ctx, `
+		DELETE FROM semantic_projection_failures_v2
+		WHERE definition_id = ? AND definition_revision = ?
+			AND ledger_epoch = ? AND pub_seq = ?
+	`, candidate.DefinitionID, candidate.DefinitionRevision,
+		candidate.LedgerEpoch, candidate.PubSeq)
+}
+
+func (store *Store) SemanticProjectionFailureCount(ctx context.Context) (int64, error) {
+	var count int64
+	err := store.db.QueryRowContext(
+		ctx, `SELECT count(*) FROM semantic_projection_failures_v2`,
+	).Scan(&count)
+	return count, err
 }
 
 func (store *Store) projectSemanticV2Candidate(

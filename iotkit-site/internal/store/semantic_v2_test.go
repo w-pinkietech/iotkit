@@ -180,6 +180,50 @@ func TestSemanticDefinitionsKeepTwoEdgesIsolated(t *testing.T) {
 	}
 }
 
+func TestSemanticProjectionRecordsPoisonAndContinuesIndependentDefinition(t *testing.T) {
+	archive := openTestStore(t)
+	ctx := context.Background()
+	for _, edgeNodeID := range []string{"edge-node-01", "edge-node-02"} {
+		acceptSemanticBatch(t, archive, edgeNodeID, "epoch-a", 1, []float64{0})
+	}
+	if _, err := archive.ReconcileInventorySources(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	signals, err := archive.ListInventorySignals(ctx, 100, "")
+	if err != nil || len(signals) != 2 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	for _, signal := range signals {
+		if _, err := archive.ApplySemanticDefinition(
+			ctx, siteapp.LocalCLIActor(), signal.SignalRef,
+			semantics.DefinitionSpec{
+				Kind: semantics.KindBoolean, Scale: 1,
+				Condition: semantics.Condition{
+					Mode: semantics.ConditionBoolean, BoolValue: true,
+				},
+			}, siteapp.RevisionPrecondition{},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acceptSemanticBatch(t, archive, "edge-node-01", "epoch-a", 2, []float64{0, 1})
+	acceptSemanticBatch(t, archive, "edge-node-02", "epoch-a", 2, []float64{1})
+	if _, err := archive.ProjectSemanticObservations(ctx, 100); err == nil {
+		t.Fatal("poison semantic input did not report an error")
+	}
+	observations, err := archive.ListSemanticObservations(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].EdgeNodeID != "edge-node-02" {
+		t.Fatalf("independent projection observations=%#v", observations)
+	}
+	failures, err := archive.SemanticProjectionFailureCount(ctx)
+	if err != nil || failures != 1 {
+		t.Fatalf("projection failures=%d err=%v", failures, err)
+	}
+}
+
 func acceptSemanticBatch(
 	t *testing.T,
 	archive *Store,

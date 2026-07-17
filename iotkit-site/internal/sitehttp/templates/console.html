@@ -28,6 +28,7 @@
         <article><h2>受信中の信号</h2><strong>{{len .Signals}}</strong></article>
         <article><h2>要設定</h2><strong>{{range .Signals}}{{if not .HasSemanticMapping}}● {{end}}{{end}}</strong></article>
         <article><h2>通信証明書</h2>{{if .Certificate.Available}}<strong class="{{if .Certificate.NeedsAction}}warn{{else}}ok{{end}}">残り {{.Certificate.DaysRemaining}} 日</strong><p>{{.Certificate.NotAfter}} まで</p>{{else}}<strong class="warn">要確認</strong>{{end}}</article>
+        <article><h2>意味付け処理</h2>{{if eq .ProjectionFailures 0}}<strong class="ok">正常</strong>{{else}}<strong class="warn">要対応 {{.ProjectionFailures}}件</strong>{{end}}</article>
       </section>
       {{end}}
       {{if or (eq .Page "monitor") (eq .Page "signals")}}
@@ -61,7 +62,7 @@
         {{if $.IsAdmin}}<form method="post" action="/console/devices/{{.DeviceRef}}/profile"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}"><label>表示名<input name="display_name" value="{{.DisplayName}}" required></label><label>設置場所<input name="location" value="{{.Location}}" required></label><button>保存</button></form>{{end}}</article>{{else}}<p>デバイスはまだありません。</p>{{end}}</div>
       {{end}}
       {{if eq .Page "output"}}
-      <div class="table-wrap"><table><thead><tr><th>送信元ID</th><th>信号ID</th><th>用途</th><th>状態</th></tr></thead><tbody>{{range .Outputs}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.Kind}}</td><td>{{if .Active}}有効{{else}}停止{{end}}</td></tr>{{else}}<tr><td colspan="4">出力先はまだありません。</td></tr>{{end}}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>送信元ID</th><th>信号ID</th><th>用途</th><th>未送信</th><th>送信済み</th><th>状態</th></tr></thead><tbody>{{range .Outputs}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.Kind}}</td><td>{{.PendingCount}}</td><td>{{.PublishedCount}}</td><td>{{if .Active}}有効{{else}}停止{{end}}</td></tr>{{else}}<tr><td colspan="6">出力先はまだありません。</td></tr>{{end}}</tbody></table></div>
       {{if .IsAdmin}}<article><h2>YokaKitへの出力を追加</h2><form method="post" action="/console/outputs/yokakit"><input type="hidden" name="_csrf" value="{{.CSRF}}">
         <label>意味付け<select name="definition_id">{{range .Definitions}}{{if .Active}}<option value="{{.ID}}">{{.SignalRef}} / {{.Kind}}</option>{{end}}{{end}}</select></label>
         <label>送信元ID<input name="source_id" pattern="[a-z0-9-]+" required></label><label>信号ID<input name="signal_id" pattern="[a-z0-9-]+" required></label>

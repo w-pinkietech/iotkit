@@ -366,6 +366,18 @@ var schemaMigrations = []migration{
 			UNIQUE(route_id, observation_id)
 		);
 	`},
+	{version: 9, sql: `
+		CREATE TABLE semantic_projection_failures_v2 (
+			definition_id TEXT NOT NULL,
+			definition_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			pub_seq INTEGER NOT NULL,
+			error_text TEXT NOT NULL,
+			attempts INTEGER NOT NULL CHECK(attempts > 0),
+			last_failed_at INTEGER NOT NULL,
+			PRIMARY KEY (definition_id, definition_revision, ledger_epoch, pub_seq)
+		);
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

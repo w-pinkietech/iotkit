@@ -15,21 +15,22 @@ import (
 )
 
 type consoleData struct {
-	Page        string
-	Title       string
-	DisplayName string
-	Role        siteapp.AccountRole
-	IsAdmin     bool
-	IsOwner     bool
-	CSRF        string
-	Devices     []siteapp.DeviceSummary
-	Signals     []siteapp.SignalSummary
-	Definitions []semantics.Definition
-	Outputs     []store.YokaKitRoute
-	Audit       []siteapp.AuditEvent
-	Accounts    []siteapp.Account
-	Raw         any
-	Certificate certificateStatus
+	Page               string
+	Title              string
+	DisplayName        string
+	Role               siteapp.AccountRole
+	IsAdmin            bool
+	IsOwner            bool
+	CSRF               string
+	Devices            []siteapp.DeviceSummary
+	Signals            []siteapp.SignalSummary
+	Definitions        []semantics.Definition
+	Outputs            []store.YokaKitRoute
+	Audit              []siteapp.AuditEvent
+	Accounts           []siteapp.Account
+	Raw                any
+	Certificate        certificateStatus
+	ProjectionFailures int64
 }
 
 type certificateStatus struct {
@@ -77,6 +78,11 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		)
 		if err == nil && page == "signals" {
 			data.Definitions, err = server.semantics.List(request.Context())
+		}
+		if err == nil && page == "status" {
+			data.ProjectionFailures, err = server.store.SemanticProjectionFailureCount(
+				request.Context(),
+			)
 		}
 	case "devices":
 		data.Devices, err = server.site.ListDevices(

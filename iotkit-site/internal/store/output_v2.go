@@ -22,6 +22,8 @@ type YokaKitRoute struct {
 	StartAfterObservationRowID int64                     `json:"start_after_observation_row_id"`
 	Active                     bool                      `json:"active"`
 	CreatedAt                  int64                     `json:"created_at"`
+	PendingCount               int64                     `json:"pending_count"`
+	PublishedCount             int64                     `json:"published_count"`
 }
 
 func (store *Store) ApplyYokaKitRoute(
@@ -118,9 +120,17 @@ func (store *Store) ApplyYokaKitRoute(
 
 func (store *Store) ListYokaKitRoutes(ctx context.Context) ([]YokaKitRoute, error) {
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT route_id, definition_id, source_id, signal_id, kind, reason,
-			start_after_observation_row_id, active, created_at
-		FROM yokakit_routes ORDER BY created_at, route_id
+		SELECT route.route_id, route.definition_id, route.source_id,
+			route.signal_id, route.kind, route.reason,
+			route.start_after_observation_row_id, route.active, route.created_at,
+			COALESCE(SUM(CASE WHEN outbox.export_id IS NOT NULL
+				AND outbox.published_at IS NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN outbox.published_at IS NOT NULL
+				THEN 1 ELSE 0 END), 0)
+		FROM yokakit_routes AS route
+		LEFT JOIN output_outbox_v2 AS outbox ON outbox.route_id = route.route_id
+		GROUP BY route.route_id
+		ORDER BY route.created_at, route.route_id
 	`)
 	if err != nil {
 		return nil, err
@@ -132,7 +142,8 @@ func (store *Store) ListYokaKitRoutes(ctx context.Context) ([]YokaKitRoute, erro
 		if err := rows.Scan(
 			&route.RouteID, &route.DefinitionID, &route.SourceID, &route.SignalID,
 			&route.Kind, &route.Reason, &route.StartAfterObservationRowID,
-			&route.Active, &route.CreatedAt,
+			&route.Active, &route.CreatedAt, &route.PendingCount,
+			&route.PublishedCount,
 		); err != nil {
 			return nil, err
 		}
