@@ -1,7 +1,7 @@
 # IoTKit Site Console / API設計
 
 Date: 2026-07-15
-Status: Approved baseline; Broker deployment/Console boundary revised 2026-07-16
+Status: Approved baseline; local account authentication revised 2026-07-18
 
 ## 目的と正本
 
@@ -76,7 +76,7 @@ IoTKitはYokaKitを内包しない。YokaKitは汎用MQTT出力を利用し得�
 | barcode reader入力 | optional adapterとして後続 | 既存現場は別systemからYokaKitへ直接MQTT送信する。IoTKit直結が必要な場合だけD1 v2 + D7出口familyを設計する | 初期対象外 |
 | BravePI transmitter/router/module設定、DFU、省電力 | adapter固有面へ分離 | IoTKit共通Site Consoleへ製品固有語彙を持ち込まない | 共通UI対象外 |
 | browser時刻によるhost時刻変更 | 実現方法を廃止 | deploymentのNTP/時刻同期とhealth表示へ置換する | Web UI対象外 |
-| system再起動・shutdown | operator面へ分離 | local CLI/service managerで扱い、匿名Site UIからhost権限を持たせない | Web UI対象外 |
+| system再起動・shutdown | operator面へ分離 | local CLI/service managerで扱い、Site UIからhost権限を持たせない | Web UI対象外 |
 | DB初期化 | Web実現を廃止 | backup/restore/明示的local recovery手順へ置換し、通常UIへ破壊操作を置かない | Web UI対象外 |
 | Swagger、version、license | 一部継承 | version/license/diagnostic refはsystem情報、API schemaは開発成果物として分離する | versionは初期、Swaggerは対象外 |
 
@@ -137,7 +137,7 @@ service内に持ち、precondition、settings権限、監査を統一する。�
 `AGENTS.md`、`CLAUDE.md`、`docs/architecture.md`の曖昧だった全component共通表現をこの境界へ揃える改訂を伴う。
 
 通常のCLIをHTTP API wrapperにはしない。Site daemonやCaddyが停止していても、ローカルで
-診断、passphrase reset、未配送出力の明示的abandonを行える必要があるためである。通常CLIと
+診断、account recovery、未配送出力の明示的abandonを行える必要があるためである。通常CLIと
 HTTP APIは同じapplication serviceを利用し、networkへ出さないlocal recoveryだけを明示的な
 例外とする。
 
@@ -299,7 +299,7 @@ payloadを監査detailへ入れない。
 
 ## HTTP API v1
 
-### 匿名read surface
+### 認証済みread surface
 
 ```text
 GET /api/v1/status
@@ -307,38 +307,74 @@ GET /api/v1/devices
 GET /api/v1/signals
 ```
 
-この現場向け製品では、工場LAN内の日常利用の摩擦を下げるため、匿名でdisplay name、location、現在値、
-最終受信時刻、正常/要確認、semantic mapping有無まで表示する。生産状況を推測し得る情報であることを
-認識した上での製品判断である。匿名responseにidentifier、source identity、raw JSON、履歴、Broker endpoint、
-credential、audit detailを含めない。
+Site Consoleと`/api/v1`はloginを必須とし、匿名でデバイス、信号、現在値、稼働状態を公開しない。
+未認証で公開するのはlogin pageに必要な静的assetと、private backendの生存確認に限定した内容なしの
+health endpointだけとする。閲覧者にもidentifier、source identity、raw JSON、Broker endpoint、credentialを
+返さず、診断情報と監査detailは権限に応じて制限する。
 
 全responseは`Cache-Control: no-store`、同一origin限定、CORS default denyとする。Site UI backendを
 factory LANへ直接公開せず、CaddyのHTTPS originからだけ利用する。
 
 `/devices`と`/signals`はopaque cursor、default limit 50、最大100、`device_ref` / `signal_ref`昇順の
 安定paginationを持つ。pollingは一覧全件ではなく、表示中pageまたは`updated_after`差分だけを更新する。
-未設定profileは匿名画面で`未設定のデバイス` / `未設定の信号`と表示し、内部IDをfallback表示しない。
+未設定profileは閲覧画面で`未設定のデバイス` / `未設定の信号`と表示し、内部IDをfallback表示しない。
 
-### Settings session
+### Local accountとsession
 
 ```text
-POST   /api/v1/settings-session
-GET    /api/v1/settings-session
-DELETE /api/v1/settings-session
+POST   /api/v1/session
+GET    /api/v1/session
+DELETE /api/v1/session
+
+GET    /api/v1/accounts
+POST   /api/v1/accounts
+PUT    /api/v1/accounts/{account_ref}
+POST   /api/v1/accounts/{account_ref}/password-reset
+POST   /api/v1/password
 ```
 
-`POST`は共有settings passphraseをArgon2id hashと比較し、成功時にrandom bearer tokenを発行する。browserへ
-渡すbearer token、DBへ保存するtoken hash、監査と画面へ出せる非秘密`session_ref`は別々に生成する。cookieは
-productionで`Secure; HttpOnly; SameSite=Strict`、idle expiry 30分、absolute expiry 8時間とする。
-`GET`はunlock状態と期限だけを返し、`DELETE`はlockする。passphrase変更/resetは全sessionを失効する。
+初期版はKeycloak等の外部identity providerを必要としないSite内蔵accountを使う。accountはimmutableな
+`account_ref`、再利用しない`login_id`、変更可能な`display_name`、role、状態を持つ。roleは次の3種類とする。
 
-全mutationとlogoutはCSRF tokenとOrigin検査を必須とする。passphrase試行はsourceごとに有界化し、成功・
-失敗を秘密なしで監査する。Argon2id検証はSite全体で同時2件までとし、検証待ちqueueも有界化する。共有
-passphraseのため個人識別を主張せず、network mutation actorは非秘密`session_ref`、CLI actorは
-`local_cli`とする。bearer tokenとtoken hashをaudit responseへ出さない。
+- `viewer`: 状態、モニター、デバイス、信号、ログを閲覧できる。
+- `admin`: viewer権限に加え、profile、semantic mapping、output割り当てを変更できる。
+- `system_admin`: admin権限に加え、accountの発行、role変更、無効化、password resetを行える。
 
-初回所有権確立と忘れたpassphraseのresetはSite host上のlocal CLIだけで行う。passphrase未設定状態で
-設定APIをLANへ開放しない。開発loopback profileだけcookieのSecure要件を緩和できる。
+Broker endpoint、credential、CA/certificate、connection profileのinstall・切替はaccount roleによらず
+Web UIの権限外であり、deployment/local CLI境界を維持する。
+
+最初のsystem adminはSite host上のlocal CLIでだけ作成する。未所有状態ではlogin以外のConsole/APIを
+利用できず、ネットワーク上の初期account作成APIは提供しない。2人目以降はsystem adminがConsoleから
+login ID、表示名、role、一時passwordを指定して発行する。一時passwordのaccountは初回login後のpassword
+変更以外を行えない。メールアドレス、メール招待、メールによるpassword resetは初期版に持たない。
+login IDは3〜64文字のASCII英小文字、数字、`.`、`_`、`-`に限定し、英大文字入力は小文字へ正規化する。
+表示名は1〜128文字の自由入力とし、login IDとは別に変更できる。
+
+passwordは12〜128文字とし、空白と日本語を許可する。文字種の組み合わせ、定期変更、過去password履歴は
+要求しない。Argon2idはsalt 16 byte、hash 32 byte、memory 64 MiB、iterations 3、parallelism 1を初期値とし、
+algorithmとparameterをhashと一緒に保存して将来rehashできるようにする。検証はSite全体で同時2件まで、
+待ちqueueも有界化する。login失敗はsourceとlogin IDの双方で段階的に遅延・rate limitし、accountの存在を
+区別できない同一errorを返す。
+
+login成功時に32 byte以上のrandom session tokenを発行し、DBにはSHA-256 hashだけを保存する。browserへ
+渡すtoken、DBのtoken hash、画面と監査へ出せる`session_ref`は別々に生成する。cookieはproductionで
+`Secure; HttpOnly; SameSite=Strict`、idle expiry 8時間、absolute expiry 24時間とし、永続login optionは
+設けない。password変更・reset、account無効化、role変更は対象accountの全sessionを失効する。
+
+全mutationとlogoutはCSRF tokenとOrigin検査を必須とする。認証成功・失敗、account管理、password変更・reset、
+session失効をsecretなしで監査する。network actorは`account_ref`、CLI actorは`local_cli`とし、token、
+token hash、password hashをresponse、log、auditへ出さない。開発loopback profileだけcookieのSecure要件を
+緩和できる。
+
+accountは削除せず無効化し、login IDを再利用しない。無効化は既存sessionを直ちに失効させる。最後の有効な
+system adminを無効化または降格できない。通常accountのpasswordはsystem adminが一時passwordへresetし、
+本人へ初回変更を要求する。全system adminがlogin不能な場合だけ、Site host上のlocal CLIでsystem adminを
+作成またはresetし、対象accountのsessionを失効する。passwordをargv、環境変数、logへ載せず、対話入力または
+owner-only fileから受け取る。
+
+初期版はlocal accountだけを実装するが、HTTP層は認証結果を`account_ref`とroleからなるprincipalへ変換して
+application serviceへ渡す。将来OIDC/Keycloakを追加する場合も、外部subjectとlocal accountのlink、緊急時の
+local access、provider停止時の方針を別設計し、既存の認可判定を置き換えない。
 
 ### Profileとsemantic mapping
 
@@ -354,7 +390,7 @@ PUT    /api/v1/signals/{signal_ref}/semantic-mapping
 DELETE /api/v1/signals/{signal_ref}/semantic-mapping
 ```
 
-個別GETと全mutationはsettings sessionを要求する。GETはresource `ETag`を返し、PUT/DELETEは
+個別GETと全mutationはaccount sessionを要求し、mutationは`admin`以上に限定する。GETはresource `ETag`を返し、PUT/DELETEは
 `If-Match`を必須とする。欠落は`428 Precondition Required`、revision不一致は
 `412 Precondition Failed`とし、複数画面からの無音上書きを防ぐ。
 
@@ -377,7 +413,7 @@ GET    /api/v1/mapping-previews/{preview_id}/events
 DELETE /api/v1/mapping-previews/{preview_id}
 ```
 
-previewはsettings sessionに束縛したmemory-only resourceである。POST時点のsource cursorより後に届く
+previewはaccount sessionに束縛したmemory-only resourceである。POST時点のsource cursorより後に届く
 対象signalだけを、production evaluatorのpure functionで評価する。semantic mapping table、event、outbox、
 MQTTへ一切書かない。
 
@@ -397,8 +433,9 @@ MQTTへ一切書かない。
 GET /api/v1/audit-events?cursor=...&limit=...
 ```
 
-settings sessionを要求し、limitは1〜100、default 50とする。操作時刻、actor class/session ID、operation、
-resource ref、成功/失敗、secretを除いた要約を返す。個人名を返さない。
+`admin`以上を要求し、limitは1〜100、default 50とする。操作時刻、actor account、operation、
+resource ref、成功/失敗、secretを除いた要約を返す。accountを無効化しても過去操作を追跡できるよう、
+監査はimmutableな`account_ref`と操作時点のlogin ID/表示名を保持する。
 
 成功mutationの変更監査はmutationと同じtransactionでcommitする。認証拒否とtransaction開始前のvalidation
 拒否は、元mutationとは別のbounded security/operation auditへ記録する。DB自体が書けない失敗ではdurable auditを
@@ -419,8 +456,9 @@ JSON API errorは次の形に統一する。
 }
 ```
 
-validationは400、未unlockは401、CSRF/権限は403、不在は404、rate limitは429、内部失敗は500/503を使う。
-error、log、request ID相関情報へpassphrase、credential、private key、payload全文を出さない。body、header、
+validationは400、未認証は401、CSRF/権限は403、不在は404、rate limitは429、内部失敗は500/503を使う。
+error、log、request ID相関情報へpassword、password hash、session token、credential、private key、
+payload全文を出さない。body、header、
 SSE、query、同時request、read limitを有界化する。
 
 HTML/API responseにはstrict CSP（`default-src 'self'`を基礎にinline script禁止）、
@@ -430,8 +468,8 @@ HTML/API responseにはstrict CSP（`default-src 'self'`を基礎にinline scrip
 ## Site Console画面
 
 旧機能継承の棚卸しを踏まえ、画面構成は次を候補とする。`モニター`、`ログ`、camera widgetの
-初版範囲は、bounded query/media contractを決めてから確定する。設定unlockは独立した常設画面ではなく、
-変更操作を始めるときのsession開始導線とする。
+初版範囲は、bounded query/media contractを決めてから確定する。全画面でloginを要求し、
+roleによって変更操作とaccount管理の導線を出し分ける。
 
 1. `状態`: Site、Edge、最終受信、storage、MQTT出力、要確認件数
 2. `モニター`: 現在値、接点状態、短いrecent trend、optional camera live view
@@ -442,13 +480,15 @@ HTML/API responseにはstrict CSP（`default-src 'self'`を基礎にinline scrip
 7. `出力`: 使用中profile名、接続・配送確認、実TLSで観測したcertificate期限、active/draining/pending状態
    （接続変更、別host Brokerの更新job表示なし）
 8. `監査`: 設定変更履歴
-9. `システム情報`: version、license、診断reference。再起動、DB初期化、secret表示は置かない
+9. `アカウント`: system adminだけが発行、role変更、無効化、password resetを行う
+10. `システム情報`: version、license、診断reference。再起動、DB初期化、secret表示は置かない
 
 日本語を既定とし、内部語の`active_edge`、`active_sample`、`series_key`、`ledger_epoch`を通常画面へ出さない。
-大きな操作領域、明確な確認文、入力例、成功/失敗後の次行動を示す。identifierと診断IDは設定unlock後の
+大きな操作領域、明確な確認文、入力例、成功/失敗後の次行動を示す。identifierと診断IDは`admin`以上の
 物理照合欄にだけ表示する。
 
-実装順は、既にread modelがある`状態`、`デバイス`、`信号`の匿名read surfaceを最初に通す。その後、
+実装順は、local account/sessionとlogin画面を先に通し、既にread modelがある`状態`、`デバイス`、`信号`の
+認証済みread surfaceを接続する。その後、
 recent trend/log queryの負荷上限とCSV field contractを決めて`モニター`、`ログ`を追加する。cameraは
 Edge media serviceとSite proxyのcontractが成立した時点で`モニター`のoptional widgetとして加える。
 設定、preview、output、auditは同じapplication service/API境界を利用し、read surfaceと別のmutation pathを
@@ -541,7 +581,7 @@ consumerはstable `event_id`でdedupできる。output outageや失敗がraw cus
 
 ## Migrationと配置
 
-Site SQLiteはschema migrationを導入し、descriptor cache、public refs、profiles、settings auth/session、audit、
+Site SQLiteはschema migrationを導入し、descriptor cache、public refs、profiles、local accounts/sessions、audit、
 output revisions/cutoverを追加する。既存raw、cursor、semantic mapping/event/outboxを破棄しない。新tableは
 Site Storeが所有するが、migration SQLとapplication queryを分離してtest可能にする。
 
@@ -571,8 +611,9 @@ Consoleは非秘密statusだけをreadする。
 - application service: profile revision、future-only mapping put/delete、同transaction監査
 - descriptor: strict decode、series_key整合、revision rollback/conflict、reconnect同一snapshot、stale化、
   measurement先着/descriptor先着
-- auth: Argon2id、rate limit、cookie、idle/absolute expiry、CSRF、Origin、reset全session失効
-- API: anonymous field absence、no-store/CORS deny、ETag/If-Match、error contract、bounded pagination
+- auth: Argon2id、3 role、初回password変更、rate limit、cookie、idle/absolute expiry、CSRF、Origin、
+  password変更/reset・無効化・role変更による全session失効、最後のsystem admin保護、CLI復旧
+- API: 全read認証、role認可、秘密field absence、no-store/CORS deny、ETag/If-Match、error contract、bounded pagination
 - preview: POST後だけ、2 mode × 2 target value、pure/no-write、ownership、TTL、limit、restart破棄
 - output: candidate test非破壊、atomic cutover、old drain/new future-only、failure retry、local abandon監査、
   credential非露出
@@ -591,15 +632,16 @@ Site Console E2Eを一度まとめて実行する。失敗後は原因箇所のf
 ## 完了条件
 
 - 工場LANのWindows browserからCaddy HTTPS経由でSite Consoleを使える。
-- 匿名の日常画面でデバイス/信号の名前、location、現在値、受信状態を確認でき、secret/internal identityは
-  露出しない。
-- settings unlock後に名前、location、接点の2方式/ON-OFFを設定でき、全mutationがrevision保護と監査を持つ。
+- 個人accountでlogin後、roleに応じてデバイス/信号の名前、location、現在値、受信状態を確認でき、
+  secret/internal identityは露出しない。
+- admin以上が名前、location、接点の2方式/ON-OFFを設定でき、全mutationがrevision保護と個人単位の監査を持つ。
+- system adminがaccountを発行、role変更、無効化、password resetでき、初期所有権と緊急復旧はlocal CLIで行える。
 - previewが実信号を表示するが、semantic event、outbox、MQTTへ書かない。
 - Edge descriptor snapshotが製品固有schemaなしでidentifierとsignal metadataをSiteへ収束させる。
 - Site固有profile/mappingがdescriptor更新、Edge restart、retireで消えない。
 - local CLIでembedded/external Broker profileをcandidate testし、atomic future-only cutoverを経て配送できる。
   Consoleは使用中profileと接続・配送状態をreadするだけで切替操作を持たない。
 - 旧output pendingは旧revisionへdrainし、黙った移送、損失、二重enqueueがない。
-- credential、private key、passphraseがUI、API、DB payload、log、audit、Gitへ出ない。
+- credential、private key、password、password hash、session tokenがUI、API、log、audit、Gitへ出ない。
 - raw custodyと`accepted-through`がdescriptor、UI、semantic、output failureから独立して継続する。
 - focused testと最終一回の全体検証が成功する。
