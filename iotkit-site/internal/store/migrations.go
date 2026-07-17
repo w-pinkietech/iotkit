@@ -222,6 +222,56 @@ var schemaMigrations = []migration{
 		SELECT 'sig_' || lower(hex(randomblob(16))), edge_node_id, series_key, system_id, NULL, updated_at
 		FROM descriptor_signals;
 	`},
+	{version: 5, sql: `
+		CREATE TABLE IF NOT EXISTS site_accounts (
+			account_ref TEXT PRIMARY KEY,
+			login_id TEXT NOT NULL,
+			login_id_normalized TEXT NOT NULL UNIQUE,
+			display_name TEXT NOT NULL,
+			password_phc TEXT NOT NULL,
+			role TEXT NOT NULL CHECK(role IN ('viewer', 'admin', 'system_admin')),
+			state TEXT NOT NULL CHECK(state IN ('active', 'disabled')),
+			must_change_password INTEGER NOT NULL CHECK(must_change_password IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			disabled_at INTEGER
+		);
+		CREATE TABLE IF NOT EXISTS site_sessions (
+			session_ref TEXT PRIMARY KEY,
+			token_sha256 BLOB NOT NULL UNIQUE CHECK(length(token_sha256) = 32),
+			csrf_sha256 BLOB NOT NULL CHECK(length(csrf_sha256) = 32),
+			account_ref TEXT NOT NULL REFERENCES site_accounts(account_ref),
+			issued_at INTEGER NOT NULL,
+			last_seen_at INTEGER NOT NULL,
+			idle_expires_at INTEGER NOT NULL,
+			absolute_expires_at INTEGER NOT NULL,
+			revoked_at INTEGER
+		);
+		CREATE INDEX IF NOT EXISTS ix_site_sessions_account_active
+			ON site_sessions(account_ref, revoked_at);
+
+		ALTER TABLE audit_events RENAME TO audit_events_v4;
+		CREATE TABLE audit_events (
+			audit_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			occurred_at INTEGER NOT NULL,
+			actor_class TEXT NOT NULL CHECK(actor_class IN ('local_cli', 'settings_session', 'account', 'system')),
+			actor_ref TEXT NOT NULL,
+			actor_login_id TEXT,
+			actor_display_name TEXT,
+			operation TEXT NOT NULL,
+			resource_ref TEXT NOT NULL,
+			outcome TEXT NOT NULL CHECK(outcome IN ('success', 'failure')),
+			summary_json BLOB NOT NULL CHECK(json_valid(summary_json))
+		);
+		INSERT INTO audit_events (
+			audit_row_id, occurred_at, actor_class, actor_ref,
+			operation, resource_ref, outcome, summary_json
+		)
+		SELECT audit_row_id, occurred_at, actor_class, actor_ref,
+			operation, resource_ref, outcome, summary_json
+		FROM audit_events_v4;
+		DROP TABLE audit_events_v4;
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {
