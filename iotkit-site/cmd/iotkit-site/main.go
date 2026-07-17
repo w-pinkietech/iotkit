@@ -8,14 +8,19 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/mqttsite"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/sitehttp"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/sitesession"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
@@ -169,6 +174,9 @@ func runServe(args []string) error {
 	trustMode := flags.String("trust-mode", "", "MQTT TLS trust mode: system_roots or bundle_only")
 	caFile := flags.String("ca-file", "", "PEM CA bundle for bundle_only trust")
 	allowInsecure := flags.Bool("allow-insecure", false, "allow plain MQTT for local tests")
+	httpListen := flags.String("http-listen", "127.0.0.1:8080", "private Site HTTP listen address")
+	publicOrigin := flags.String("public-origin", "", "public Caddy HTTPS origin")
+	developmentHTTP := flags.Bool("development-http", false, "allow loopback HTTP origin for development")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -196,22 +204,85 @@ func runServe(args []string) error {
 			return err
 		}
 	}
+	if *publicOrigin == "" {
+		return errors.New("--public-origin is required")
+	}
+	if err := validatePrivateHTTPListen(*httpListen); err != nil {
+		return err
+	}
 
 	archive, err := store.Open(*dbPath)
 	if err != nil {
 		return fmt.Errorf("open Site store: %w", err)
 	}
 	defer archive.Close()
+	sessions, err := sitesession.NewManager(archive, sitesession.Options{})
+	if err != nil {
+		return fmt.Errorf("initialize Site sessions: %w", err)
+	}
+	httpHandler, err := sitehttp.New(sitehttp.Config{
+		Store:           archive,
+		Site:            siteapp.NewService(archive),
+		Accounts:        siteapp.NewAccountService(archive),
+		Sessions:        sessions,
+		PublicOrigin:    *publicOrigin,
+		DevelopmentHTTP: *developmentHTTP,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize Site HTTP: %w", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return mqttsite.Run(ctx, mqttsite.ClientConfig{
-		BrokerURL:     *brokerURL,
-		ClientID:      *clientID,
-		Username:      *username,
-		Password:      password,
-		TLSConfig:     tlsConfig,
-		AllowInsecure: *allowInsecure,
-	}, mqttsite.Processor{Store: archive}, archive, slog.Default())
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	httpServer := &http.Server{
+		Addr:              *httpListen,
+		Handler:           httpHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 * 1024,
+	}
+	errorsCh := make(chan error, 2)
+	go func() {
+		err := httpServer.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		errorsCh <- err
+	}()
+	go func() {
+		errorsCh <- mqttsite.Run(runCtx, mqttsite.ClientConfig{
+			BrokerURL:     *brokerURL,
+			ClientID:      *clientID,
+			Username:      *username,
+			Password:      password,
+			TLSConfig:     tlsConfig,
+			AllowInsecure: *allowInsecure,
+		}, mqttsite.Processor{Store: archive}, archive, slog.Default())
+	}()
+	runErr := <-errorsCh
+	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	shutdownErr := httpServer.Shutdown(shutdownCtx)
+	if runErr != nil {
+		return runErr
+	}
+	return shutdownErr
+}
+
+func validatePrivateHTTPListen(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return errors.New("--http-listen must be a host:port address")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("--http-listen must use a loopback address")
+	}
+	return nil
 }
 
 func runQuery(args []string) error {

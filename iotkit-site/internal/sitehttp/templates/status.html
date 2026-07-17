@@ -1,0 +1,38 @@
+{{define "status.html"}}
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>状態 | IoTKit</title>
+  <link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+  <header class="topbar">
+    <p class="brand">PINKIETECH <span>IoTKit</span></p>
+    <p>{{.DisplayName}}</p>
+  </header>
+  <div class="layout">
+    <nav aria-label="メインメニュー">
+      <a class="active" href="/status">状態</a>
+      <a href="/monitor">モニター</a>
+      <a href="/devices">デバイス</a>
+      <a href="/signals">信号</a>
+      <a href="/logs">ログ</a>
+      <a href="/output">出力</a>
+      <a href="/audit">監査</a>
+      <a href="/accounts">アカウント</a>
+    </nav>
+    <main>
+      <p class="eyebrow">SITE STATUS</p>
+      <h1>現場の状態</h1>
+      <section class="status-grid">
+        <article><h2>Site</h2><strong class="ok">稼働中</strong></article>
+        <article><h2>センサー</h2><strong>確認準備中</strong></article>
+        <article><h2>データ出力</h2><strong>確認準備中</strong></article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
+{{end}}

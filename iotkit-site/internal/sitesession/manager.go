@@ -279,6 +279,26 @@ func (manager *Manager) ValidateCSRF(active store.ActiveSession, token string) b
 		subtle.ConstantTimeCompare(actual[:], active.CSRFSHA256) == 1
 }
 
+func (manager *Manager) ValidateSessionCSRF(
+	ctx context.Context,
+	sessionToken string,
+	csrfToken string,
+) bool {
+	if sessionToken == "" || csrfToken == "" {
+		return false
+	}
+	tokenHash := sha256.Sum256([]byte(sessionToken))
+	active, err := manager.store.GetActiveSessionByTokenHash(
+		ctx,
+		tokenHash[:],
+		manager.now().UnixMilli(),
+	)
+	if err != nil {
+		return false
+	}
+	return manager.ValidateCSRF(active, csrfToken)
+}
+
 func principalFromAccount(account store.AccountRecord, sessionRef string) Principal {
 	return Principal{
 		AccountRef:         account.AccountRef,
