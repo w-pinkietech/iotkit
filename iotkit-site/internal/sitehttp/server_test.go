@@ -153,6 +153,37 @@ func TestTemporaryPasswordSessionCanOnlyReadSessionAndChangePassword(t *testing.
 	}
 }
 
+func TestViewerCannotChangeProfilesMeaningsOutputsOrAccounts(t *testing.T) {
+	server := newTestServer(t, false)
+	sessionCookie, csrf := loginTestAccount(t, server)
+	for _, test := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPut, "/api/v1/devices/dev_00000000000000000000000000000000/profile",
+			`{"display_name":"変更","location":"現場"}`},
+		{http.MethodPut, "/api/v1/signals/sig_00000000000000000000000000000000/semantic-definition",
+			`{"kind":"numeric","scale":1,"offset":0,"condition":{"mode":"","bool_value":false,"threshold":0,"hysteresis":0},"trigger":""}`},
+		{http.MethodPost, "/api/v1/outputs/yokakit",
+			`{"definition_id":"sem_example","source_id":"iotkit-01","signal_id":"x","kind":"onoff","reason":""}`},
+		{http.MethodPost, "/api/v1/accounts",
+			`{"login_id":"other","display_name":"別担当","role":"viewer","temporary_password":"十分に長い 仮パスワード です"}`},
+	} {
+		request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", testOrigin)
+		request.Header.Set("X-CSRF-Token", csrf)
+		request.AddCookie(sessionCookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s %s status=%d body=%s",
+				test.method, test.path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestConsoleRequiresLoginAndUsesJapaneseOperatorLanguage(t *testing.T) {
 	server := newTestServer(t, false)
 	request := httptest.NewRequest(http.MethodGet, "/status", nil)

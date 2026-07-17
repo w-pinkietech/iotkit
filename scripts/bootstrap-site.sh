@@ -12,6 +12,7 @@ output_dir=""
 broker_host=""
 broker_bind=""
 broker_port="8883"
+site_https_port="443"
 tls_cert=""
 tls_key=""
 tls_ca=""
@@ -25,6 +26,7 @@ usage: bootstrap-site.sh \
   --broker-host mqtt.example.internal \
   --broker-bind 192.0.2.10 \
   [--broker-port 8883] \
+  [--site-https-port 443] \
   --tls-cert server-fullchain.pem \
   --tls-key server.key \
   --tls-ca client-trust-ca.pem \
@@ -39,7 +41,7 @@ fail() {
 
 while (($#)); do
   case "$1" in
-    --binding|--output-dir|--broker-host|--broker-bind|--broker-port|--tls-cert|--tls-key|--tls-ca|--site-publish-topic)
+    --binding|--output-dir|--broker-host|--broker-bind|--broker-port|--site-https-port|--tls-cert|--tls-key|--tls-ca|--site-publish-topic)
       (($# >= 2)) || { usage; exit 2; }
       case "$1" in
         --binding) binding=$2 ;;
@@ -47,6 +49,7 @@ while (($#)); do
         --broker-host) broker_host=$2 ;;
         --broker-bind) broker_bind=$2 ;;
         --broker-port) broker_port=$2 ;;
+        --site-https-port) site_https_port=$2 ;;
         --tls-cert) tls_cert=$2 ;;
         --tls-key) tls_key=$2 ;;
         --tls-ca) tls_ca=$2 ;;
@@ -122,6 +125,8 @@ validate_hostname "$broker_host" || fail "broker host must be a valid DNS hostna
 validate_ipv4 "$broker_bind" || fail "broker bind must be an explicit IPv4 address"
 [[ "$broker_port" =~ ^[0-9]+$ ]] && ((broker_port >= 1 && broker_port <= 65535)) \
   || fail "broker port must be between 1 and 65535"
+[[ "$site_https_port" =~ ^[0-9]+$ ]] && ((site_https_port >= 1 && site_https_port <= 65535)) \
+  || fail "Site HTTPS port must be between 1 and 65535"
 getent ahostsv4 "$broker_host" | awk '{print $1}' | grep -Fxq "$broker_bind" \
   || fail "broker host must resolve to the configured bind address on the Site host"
 
@@ -181,8 +186,10 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -m 700 "$stage"
-mkdir -m 700 "$stage/mosquitto" "$stage/secrets" "$stage/tls" \
+mkdir -m 700 "$stage/mosquitto" "$stage/caddy" "$stage/systemd" "$stage/secrets" "$stage/tls" \
   "$stage/edge-handoff" "$stage/data" "$stage/data/site" "$stage/data/mosquitto"
+mkdir -m 700 "$stage/data/caddy"
+mkdir -m 755 "$stage/data/acme-webroot"
 cp "$binding" "$stage/edge-binding.json"
 cp "$tls_cert" "$stage/tls/server.pem"
 cp "$tls_key" "$stage/tls/server.key"
@@ -222,6 +229,8 @@ user site
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic write iotkit/v1/edge-nodes/+/accepted-through
+
+user site-output
 EOF
 for topic in "${site_publish_topics[@]}"; do
   printf 'topic write %s\n' "$topic" >>"$stage/mosquitto/acl"
@@ -229,6 +238,9 @@ done
 
 printf 'site:' >"$stage/mosquitto/passwords"
 tr -d '\r\n' <"$stage/secrets/site-mqtt-password" >>"$stage/mosquitto/passwords"
+openssl rand -hex 24 >"$stage/secrets/output-mqtt-password"
+printf '\nsite-output:' >>"$stage/mosquitto/passwords"
+tr -d '\r\n' <"$stage/secrets/output-mqtt-password" >>"$stage/mosquitto/passwords"
 printf '\n%s:' "$edge_node_id" >>"$stage/mosquitto/passwords"
 tr -d '\r\n' <"$stage/edge-handoff/mqtt-password" >>"$stage/mosquitto/passwords"
 printf '\n' >>"$stage/mosquitto/passwords"
@@ -252,20 +264,86 @@ IOTKIT_RUNTIME_UID=$(id -u)
 IOTKIT_RUNTIME_GID=$(id -g)
 IOTKIT_MOSQUITTO_IMAGE=$IOTKIT_MOSQUITTO_IMAGE
 IOTKIT_BROKER_HOST=$broker_host
+IOTKIT_SITE_HOST=$broker_host
+IOTKIT_SITE_ORIGIN=https://$broker_host:$site_https_port
 IOTKIT_BROKER_BIND=$broker_bind
 IOTKIT_BROKER_PORT=$broker_port
 IOTKIT_MOSQUITTO_CONFIG_FILE=$output_dir/mosquitto/mosquitto.conf
 IOTKIT_MOSQUITTO_ACL_FILE=$output_dir/mosquitto/acl
 IOTKIT_MOSQUITTO_PASSWORD_FILE=$output_dir/mosquitto/passwords
+IOTKIT_MOSQUITTO_DIR=$output_dir/mosquitto
 IOTKIT_BROKER_CERT_FILE=$output_dir/tls/server.pem
 IOTKIT_BROKER_KEY_FILE=$output_dir/tls/server.key
 IOTKIT_BROKER_CA_FILE=$output_dir/tls/ca.pem
+IOTKIT_BROKER_TLS_DIR=$output_dir/tls
 IOTKIT_BROKER_DATA_DIR=$output_dir/data/mosquitto
 IOTKIT_SITE_PASSWORD_FILE=$output_dir/secrets/site-mqtt-password
 IOTKIT_SITE_DATA_DIR=$output_dir/data/site
+IOTKIT_OUTPUT_BROKER_URL=ssl://$broker_host:$broker_port
+IOTKIT_OUTPUT_CLIENT_ID=iotkit-site-output
+IOTKIT_OUTPUT_USERNAME=site-output
+IOTKIT_OUTPUT_PASSWORD_FILE=$output_dir/secrets/output-mqtt-password
+IOTKIT_OUTPUT_CA_FILE=$output_dir/tls/ca.pem
+IOTKIT_CADDY_CONFIG_FILE=$output_dir/caddy/Caddyfile
+IOTKIT_CADDY_DATA_DIR=$output_dir/data/caddy
+IOTKIT_ACME_WEBROOT=$output_dir/data/acme-webroot
+EOF
+
+cat >"$stage/caddy/Caddyfile" <<EOF
+https://$broker_host:$site_https_port {
+	handle /.well-known/acme-challenge/* {
+		root * /srv/acme
+		file_server
+	}
+	tls /etc/caddy/tls/server.pem /etc/caddy/tls/server.key
+	reverse_proxy 127.0.0.1:8080
+	header {
+		Strict-Transport-Security "max-age=31536000"
+	}
+}
+EOF
+
+cat >"$stage/broker-cert.env" <<EOF
+IOTKIT_CERT_DOMAIN=$broker_host
+IOTKIT_CERT_FILE=$output_dir/tls/server.pem
+IOTKIT_CERT_KEY_FILE=$output_dir/tls/server.key
+IOTKIT_CERT_CA_FILE=$output_dir/tls/ca.pem
+IOTKIT_CERT_SITE_ENV=$output_dir/site.env
+IOTKIT_CERT_COMPOSE_FILE=$repo_root/deploy/compose.site.yaml
+IOTKIT_CERT_BROKER_PORT=$broker_port
+IOTKIT_CERT_SITE_HTTPS_PORT=$site_https_port
+IOTKIT_CERT_SITE_PASSWORD_FILE=$output_dir/secrets/site-mqtt-password
+IOTKIT_CERT_LEGO_PATH=$output_dir/data/lego
+IOTKIT_CERT_LEGO_WEBROOT=$output_dir/data/acme-webroot
+IOTKIT_CERT_LEGO_CHALLENGE=http
+EOF
+
+cat >"$stage/systemd/iotkit-broker-cert-renew.service" <<EOF
+[Unit]
+Description=Renew and safely activate the IoTKit MQTT certificate
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=$(id -un)
+ExecStart=$repo_root/scripts/iotkit-broker-cert renew --config $output_dir/broker-cert.env
+EOF
+
+cat >"$stage/systemd/iotkit-broker-cert-renew.timer" <<'EOF'
+[Unit]
+Description=Check the IoTKit MQTT certificate every day
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 EOF
 
 find "$stage" -type d -exec chmod 700 {} +
+chmod 755 "$stage/data/acme-webroot"
 find "$stage" -type f -exec chmod 600 {} +
 mv "$stage" "$output_dir"
 committed=true
@@ -274,3 +352,4 @@ trap - EXIT
 echo "IoTKit Site bootstrap created: $output_dir"
 echo "Start Site: docker compose --env-file $output_dir/site.env -f $repo_root/deploy/compose.site.yaml up --build --detach"
 echo "Edge handoff directory (contains a plaintext credential): $output_dir/edge-handoff"
+echo "Certificate timer templates: $output_dir/systemd (enable after ACME settings are added to broker-cert.env)"

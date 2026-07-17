@@ -5,11 +5,9 @@ sensor adapter to IoTKit Edge and IoTKit supplies durable collection, retry, and
 explicit transfer of storage responsibility to IoTKit Site: data is not purge-eligible
 until Site has durably stored it.
 
-> **Status: pre-1.0, not yet a public release.** The first milestone—one paired
-> BravePI temperature sensor, one Rust IoTKit Edge, one standard MQTT broker,
-> and one Go IoTKit Site—is complete, including outage recovery and explicit
-> storage-responsibility transfer. Site also provides future-only semantic mapping
-> and a durable MQTT application exporter. APIs, the
+> **Status: v1 release candidate.** The complete path—BravePI temperature/contact,
+> one or more Rust IoTKit Edges, a standard MQTT broker, authenticated Site Console,
+> future-only semantic mapping, and durable YokaKit MQTT output—is implemented. APIs, the
 > on-disk schema, and the wire contract may
 > still change. See
 > [Roadmap](#roadmap).
@@ -28,8 +26,9 @@ a *buffer, not a warehouse* — it holds data until Site confirms durable storag
 PUBACK alone is not that confirmation. Site durably accepts records, advances each Edge
 Node's `accepted-through` only after commit, and provides direct raw query today. It is
 also the IoTKit-side boundary for archive query, configurable sensor meaning, and application
-export. Site maps a stored series to one typed meaning such as `production_pulse`, then a
-separate exporter converts semantic events to an application-facing MQTT contract. Applications
+export. Site maps a stored signal to generic numeric, boolean, cumulative-value, or
+alarm semantics, then a separate Output Adapter converts observations to an
+application-facing MQTT contract. Applications
 such as YokaKit own products, processes, OEE, alarms, business UI, and notifications.
 
 ## What it does today
@@ -110,7 +109,8 @@ scripts/bootstrap-site.sh \
   --tls-cert /secure/path/server-fullchain.pem \
   --tls-key /secure/path/server.key \
   --tls-ca /secure/path/broker-ca.pem \
-  --site-publish-topic iotkit/v1/application/production-pulses
+  --site-publish-topic 'yokakit/v1/sources/iotkit-01/signals/press-count/observations' \
+  --site-publish-topic 'yokakit/v1/sources/iotkit-01/status'
 docker compose --env-file "$install_root/site.env" \
   -f deploy/compose.site.yaml up --build --detach
 ```
@@ -122,45 +122,46 @@ to the Edge. Install `mqtt-password` and `broker-ca.pem` at the paths named by
 into the Edge configuration before restarting Edge. Remove the Site host's `edge-handoff/` copy
 after successful transfer. Credentials never belong in argv, environment variables, logs, or Git.
 
-Run the commissioning smoke commands above after startup. A later bootstrap invocation refuses to
-replace its output directory; credential rotation and in-place upgrades remain explicit operator
-work rather than an implicit regeneration side effect.
-
-### Site semantic export
-
-Configure a source series and then add an application route with the Site CLI:
+Create the first Site owner from the Site host using an owner-only temporary file:
 
 ```bash
-iotkit-site mapping-set --db site.db --edge-node-id edge-node-01 \
-  --series-key '<series_key>' --meaning production_pulse \
-  --trigger-mode active_sample --active-value 1
-iotkit-site mapping-list --db site.db
-iotkit-site route-add --db site.db --mapping-id '<mapping_id>' \
-  --topic 'iotkit/v1/application/production-pulses'
-iotkit-site route-list --db site.db
-iotkit-site semantic-query --db site.db --limit 100
-iotkit-site query --db site.db --limit 100
+install -m 600 /dev/null "$install_root/secrets/initial-admin-password"
+# Write the initial password without putting it in shell history.
+docker compose --env-file "$install_root/site.env" -f deploy/compose.site.yaml run --rm \
+  -v "$install_root/secrets/initial-admin-password:/run/iotkit/admin-password:ro" \
+  site account bootstrap --db /data/site.db --login-id admin \
+  --display-name 'システム管理者' --password-file /run/iotkit/admin-password
+rm "$install_root/secrets/initial-admin-password"
 ```
 
-Mappings start after the source's current accepted cursor, and routes start after the
-current semantic event boundary: neither command backfills older data. Raw acceptance and
-`accepted-through` are one failure stage; semantic projection and the application outbox are a
-second, independent stage. Projection or application delivery failure therefore does not delay
-raw custody acknowledgement. Failed or timed-out QoS 1 publishes remain pending, and are marked
-published only after broker PUBACK.
-`route-list` reports each route's mapping, future-only start boundary, pending and published
-counts, and the oldest pending timestamp without changing delivery state.
+Open `IOTKIT_SITE_ORIGIN` from a Windows browser. Caddy is the only LAN-facing
+HTTPS endpoint; Site's HTTP listener remains on `127.0.0.1`. All screens require
+login. `viewer` can inspect, `admin` can configure devices/signals/meaning/output,
+and `system_admin` can additionally issue accounts.
 
-The application payload is JSON contract v1 (`schema_version: 1`) with `event_id`, mapping ID and
-revision, revision-local `event_sequence`, `meaning: "production_pulse"`, source Edge Node/series/
-publication sequence, `occurred_at`, and `count`. The count is cumulative only within one mapping
-revision and resets to 1 when a new revision begins. It contains no broker credentials.
+Run the commissioning smoke commands above after startup. A later bootstrap
+invocation refuses to replace its output directory. See
+[Site installation and recovery](docs/site-operations.md) for diagnosis,
+password recovery, certificate renewal, and rollback behavior.
 
-> **Current Plan 6 boundary:** HTTP measurement ingest is implemented as a separate authenticated
-> listener and is disabled by default. An unowned, recovering, restore/reset-fenced, or TLS-invalid
-> Edge keeps network listeners unbound. Plan 6.5 is still required for encrypted replacement
-> backup containers and restore-fence carriage; MQTT, pairing windows, and batch provisioning are
-> future/separate deliverables.
+### Site semantics and application output
+
+Use the Console's **信号** screen to set correction, threshold/hysteresis, boolean
+state, cumulative-value counting, or alarm behavior. A five-minute live preview
+uses only observations received after preview start and never writes a mapping or
+output event. Saving starts a new future-only revision; old raw records are not
+silently recalculated.
+
+Use **出力** to bind a generic semantic definition to a YokaKit `source-id`,
+`signal-id`, and purpose (`production`, `onoff`, `gantt_chart`, or `alarm`).
+IoTKit's cumulative value becomes YokaKit `kind=production` only inside this
+adapter. Output is QoS 1 and remains in the Site outbox until broker PUBACK.
+YokaKit status is published separately as a retained source status.
+
+The internal Edge/Site broker and external application broker may be different.
+Install their endpoint, trust bundle, client ID, and credential as deployment
+configuration. Pass the external profile with the `--output-*` `serve` flags;
+the Console intentionally displays status but cannot change broker credentials.
 
 ## Build & test
 
@@ -211,7 +212,7 @@ it's the "why", for deep dives.
 
 - **Wave 0 — "runs at our own site":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
 - **First implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge → standard MQTT Broker → IoTKit Site → raw SQLite → direct CLI query. The real-hardware path, restart/outage matrix, storage failure injection, bounded-capacity behavior, and application `accepted-through` are verified. Purge eligibility advances only after validated `accepted-through`. **Done.**
-- **Site semantic slice:** one active meaning per source series, `production_pulse`, explicit `active_sample`/`active_edge` trigger modes, no backfill, and a separate durable MQTT exporter. **Implemented and verified against a live Docker Mosquitto broker on the host.** The already-verified BravePI-to-raw path and this raw-to-application check together close the slice; adapter tooling follows later, after observed need.
+- **Site semantic and output slice:** generic numeric/boolean/cumulative/alarm meaning, live preview, no backfill, durable Output Adapter boundary, and the accepted YokaKit source/signal observation contract. **Implemented.**
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 

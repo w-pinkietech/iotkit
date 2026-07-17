@@ -288,7 +288,7 @@ func (store *Store) ListInventoryDevices(
 		return nil, err
 	}
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT source.device_ref,
+		SELECT source.device_ref, source.edge_node_id,
 			COALESCE(profile.display_name, ''),
 			COALESCE(profile.location, ''),
 			profile.revision,
@@ -317,6 +317,7 @@ func (store *Store) ListInventoryDevices(
 		var lastReceivedAt sql.NullInt64
 		if err := rows.Scan(
 			&summary.DeviceRef,
+			&summary.Edge,
 			&summary.DisplayName,
 			&summary.Location,
 			&revision,
@@ -346,13 +347,14 @@ func (store *Store) ListInventorySignals(
 		return nil, err
 	}
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT source.signal_ref,
+		SELECT source.signal_ref, source.edge_node_id,
 			device.device_ref,
 			COALESCE(profile.display_name, ''),
 			profile.revision,
 			COALESCE(descriptor.presence, 'unknown'),
 			descriptor.unit,
 			descriptor.value_type,
+			descriptor.measurement_key,
 			EXISTS (
 				SELECT 1 FROM semantic_mappings AS mapping
 				WHERE mapping.edge_node_id = source.edge_node_id
@@ -395,18 +397,21 @@ func (store *Store) ListInventorySignals(
 		var revision sql.NullInt64
 		var unit sql.NullString
 		var valueType sql.NullString
+		var sensorType sql.NullString
 		var lastReceivedAt sql.NullInt64
 		var values []byte
 		var eventTime sql.NullInt64
 		var siteReceivedAt sql.NullInt64
 		if err := rows.Scan(
 			&summary.SignalRef,
+			&summary.Edge,
 			&deviceRef,
 			&summary.DisplayName,
 			&revision,
 			&summary.DescriptorPresence,
 			&unit,
 			&valueType,
+			&sensorType,
 			&summary.HasSemanticMapping,
 			&lastReceivedAt,
 			&values,
@@ -427,8 +432,19 @@ func (store *Store) ListInventorySignals(
 		if valueType.Valid {
 			summary.ValueType = &valueType.String
 		}
+		if sensorType.Valid {
+			summary.SensorType = &sensorType.String
+		}
 		if lastReceivedAt.Valid {
 			summary.LastReceivedAt = &lastReceivedAt.Int64
+			if time.Now().UnixMilli()-lastReceivedAt.Int64 >
+				int64(5*time.Minute/time.Millisecond) {
+				summary.ReceiptStatus = "stale"
+			} else {
+				summary.ReceiptStatus = "receiving"
+			}
+		} else {
+			summary.ReceiptStatus = "never_received"
 		}
 		if eventTime.Valid && siteReceivedAt.Valid && values != nil {
 			summary.Latest = &siteapp.LatestMeasurement{

@@ -31,18 +31,18 @@
       </section>
       {{end}}
       {{if or (eq .Page "monitor") (eq .Page "signals")}}
-      <div class="table-wrap"><table><thead><tr><th>信号</th><th>現在値</th><th>単位</th><th>最終受信</th><th>設定</th></tr></thead><tbody>
-      {{range .Signals}}<tr><td>{{if .DisplayName}}{{.DisplayName}}{{else}}未設定の信号{{end}}</td>
+      <div class="table-wrap"><table><thead><tr><th>信号</th><th>Edge</th><th>センサー種類</th><th>現在値</th><th>単位</th><th>受信状態</th><th>設定</th></tr></thead><tbody>
+      {{range .Signals}}<tr><td>{{if .DisplayName}}{{.DisplayName}}{{else}}未設定の信号{{end}}</td><td>{{.Edge}}</td><td>{{if .SensorType}}{{.SensorType}}{{else}}確認中{{end}}</td>
         <td>{{if .Latest}}{{printf "%s" .Latest.Values}}{{else}}—{{end}}</td>
-        <td>{{if .Unit}}{{.Unit}}{{else}}—{{end}}</td><td>{{if .LastReceivedAt}}{{.LastReceivedAt}}{{else}}未受信{{end}}</td>
+        <td>{{if .Unit}}{{.Unit}}{{else}}—{{end}}</td><td>{{if eq .ReceiptStatus "receiving"}}受信中{{else if eq .ReceiptStatus "stale"}}停止・古い{{else}}未受信{{end}}</td>
         <td>{{if .HasSemanticMapping}}設定済み{{else}}未設定{{end}}</td></tr>
       {{if and $.IsAdmin (eq $.Page "signals")}}
-      <tr><td colspan="5"><details><summary>表示と意味付けを設定</summary>
+      <tr><td colspan="7"><details><summary>表示と意味付けを設定</summary>
         <form method="post" action="/console/signals/{{.SignalRef}}/profile">
           <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
           <label>表示名<input name="display_name" value="{{.DisplayName}}" required></label><button>表示名を保存</button>
         </form>
-        <form method="post" action="/console/signals/{{.SignalRef}}/semantic">
+        <form class="semantic-form" data-signal-ref="{{.SignalRef}}" method="post" action="/console/signals/{{.SignalRef}}/semantic">
           <input type="hidden" name="_csrf" value="{{$.CSRF}}">
           <label>用途<select name="kind"><option value="numeric">数値</option><option value="boolean">状態</option><option value="cumulative_counter">累積値</option><option value="alarm">アラーム</option></select></label>
           <label>補正倍率<input name="scale" type="number" step="any" value="1"></label>
@@ -51,13 +51,13 @@
           <label>しきい値<input name="threshold" type="number" step="any" value="0"></label>
           <label>戻り幅<input name="hysteresis" type="number" step="any" value="0"></label>
           <label>累積方法<select name="trigger"><option value="">なし</option><option value="on_transition">OFFからONで加算</option><option value="on_notification">ON受信ごとに加算</option></select></label>
-          <button>意味付けを保存</button>
-        </form></details></td></tr>{{end}}{{else}}<tr><td colspan="5">信号はまだありません。</td></tr>{{end}}
+          <button type="button" class="secondary preview-button">実信号プレビューを開始</button><pre class="preview-output">保存前に、新しく届く実信号で確認できます。</pre><button>意味付けを保存</button>
+        </form></details></td></tr>{{end}}{{else}}<tr><td colspan="7">信号はまだありません。</td></tr>{{end}}
       </tbody></table></div>
       {{end}}
       {{if eq .Page "devices"}}
       <div class="cards">{{range .Devices}}<article><h2>{{if .DisplayName}}{{.DisplayName}}{{else}}未設定のデバイス{{end}}</h2>
-        <p>設置場所: {{if .Location}}{{.Location}}{{else}}未設定{{end}}</p><p>状態: {{.DeviceState}}</p>
+        <p>Edge: {{.Edge}}</p><p>設置場所: {{if .Location}}{{.Location}}{{else}}未設定{{end}}</p><p>状態: {{.DeviceState}}</p>
         {{if $.IsAdmin}}<form method="post" action="/console/devices/{{.DeviceRef}}/profile"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}"><label>表示名<input name="display_name" value="{{.DisplayName}}" required></label><label>設置場所<input name="location" value="{{.Location}}" required></label><button>保存</button></form>{{end}}</article>{{else}}<p>デバイスはまだありません。</p>{{end}}</div>
       {{end}}
       {{if eq .Page "output"}}
@@ -75,6 +75,7 @@
       {{if eq .Page "logs"}}<pre class="log">{{printf "%v" .Raw}}</pre>{{end}}
     </main>
   </div>
+  <script src="/static/console.js" defer></script>
 </body>
 </html>
 {{end}}

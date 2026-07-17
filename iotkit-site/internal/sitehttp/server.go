@@ -133,6 +133,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /console/outputs/yokakit", server.consoleYokaKitOutput)
 	server.mux.HandleFunc("POST /console/accounts", server.consoleAccount)
 	server.mux.HandleFunc("GET /static/site.css", server.stylesheet)
+	server.mux.HandleFunc("GET /static/console.js", server.consoleScript)
 	server.mux.HandleFunc("POST /api/v1/session", server.createSession)
 	server.mux.HandleFunc("GET /api/v1/session", server.getSession)
 	server.mux.HandleFunc("DELETE /api/v1/session", server.deleteSession)
@@ -223,6 +224,16 @@ func (server *Server) stylesheet(response http.ResponseWriter, _ *http.Request) 
 		return
 	}
 	response.Header().Set("Content-Type", "text/css; charset=utf-8")
+	_, _ = response.Write(content)
+}
+
+func (server *Server) consoleScript(response http.ResponseWriter, _ *http.Request) {
+	content, err := assets.ReadFile("static/console.js")
+	if err != nil {
+		http.NotFound(response, nil)
+		return
+	}
+	response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	_, _ = response.Write(content)
 }
 

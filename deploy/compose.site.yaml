@@ -13,24 +13,12 @@ services:
       - "${IOTKIT_BROKER_BIND:?}:${IOTKIT_BROKER_PORT:?}:8883"
     volumes:
       - type: bind
-        source: ${IOTKIT_MOSQUITTO_CONFIG_FILE:?}
-        target: /mosquitto/config/mosquitto.conf
+        source: ${IOTKIT_MOSQUITTO_DIR:?}
+        target: /mosquitto/config
         read_only: true
       - type: bind
-        source: ${IOTKIT_MOSQUITTO_ACL_FILE:?}
-        target: /mosquitto/config/acl
-        read_only: true
-      - type: bind
-        source: ${IOTKIT_MOSQUITTO_PASSWORD_FILE:?}
-        target: /mosquitto/config/passwords
-        read_only: true
-      - type: bind
-        source: ${IOTKIT_BROKER_CERT_FILE:?}
-        target: /mosquitto/config/tls/server.pem
-        read_only: true
-      - type: bind
-        source: ${IOTKIT_BROKER_KEY_FILE:?}
-        target: /mosquitto/config/tls/server.key
+        source: ${IOTKIT_BROKER_TLS_DIR:?}
+        target: /mosquitto/config/tls
         read_only: true
       - type: bind
         source: ${IOTKIT_BROKER_DATA_DIR:?}
@@ -59,7 +47,25 @@ services:
       - --trust-mode
       - bundle_only
       - --ca-file
-      - /run/iotkit/broker-ca.pem
+      - /run/iotkit/broker-tls/ca.pem
+      - --http-listen
+      - 127.0.0.1:8080
+      - --public-origin
+      - ${IOTKIT_SITE_ORIGIN:?}
+      - --broker-certificate-file
+      - /run/iotkit/broker-tls/server.pem
+      - --output-broker-url
+      - ${IOTKIT_OUTPUT_BROKER_URL:?}
+      - --output-client-id
+      - ${IOTKIT_OUTPUT_CLIENT_ID:?}
+      - --output-username
+      - ${IOTKIT_OUTPUT_USERNAME:?}
+      - --output-password-file
+      - /run/iotkit/output-mqtt-password
+      - --output-trust-mode
+      - bundle_only
+      - --output-ca-file
+      - /run/iotkit/output-ca.pem
     volumes:
       - type: bind
         source: ${IOTKIT_SITE_DATA_DIR:?}
@@ -69,6 +75,41 @@ services:
         target: /run/iotkit/site-mqtt-password
         read_only: true
       - type: bind
-        source: ${IOTKIT_BROKER_CA_FILE:?}
-        target: /run/iotkit/broker-ca.pem
+        source: ${IOTKIT_BROKER_TLS_DIR:?}
+        target: /run/iotkit/broker-tls
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_OUTPUT_PASSWORD_FILE:?}
+        target: /run/iotkit/output-mqtt-password
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_OUTPUT_CA_FILE:?}
+        target: /run/iotkit/output-ca.pem
+        read_only: true
+
+  caddy:
+    image: "caddy:2.10.2"
+    restart: unless-stopped
+    network_mode: host
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: ${IOTKIT_CADDY_CONFIG_FILE:?}
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_BROKER_TLS_DIR:?}
+        target: /etc/caddy/tls
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_CADDY_DATA_DIR:?}
+        target: /data
+      - type: bind
+        source: ${IOTKIT_ACME_WEBROOT:?}
+        target: /srv/acme
         read_only: true

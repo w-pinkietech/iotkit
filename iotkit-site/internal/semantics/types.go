@@ -104,11 +104,11 @@ type State struct {
 }
 
 type Result struct {
-	Emitted    bool
-	Number     *float64
-	Boolean    *bool
-	Integer    *int64
-	Calibrated float64
+	Emitted    bool     `json:"emitted"`
+	Number     *float64 `json:"number,omitempty"`
+	Boolean    *bool    `json:"boolean,omitempty"`
+	Integer    *int64   `json:"integer,omitempty"`
+	Calibrated float64  `json:"calibrated"`
 }
 
 type Definition struct {

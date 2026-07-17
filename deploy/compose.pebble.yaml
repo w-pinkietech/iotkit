@@ -1,0 +1,39 @@
+services:
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:v2.10.1
+    command:
+      - pebble
+      - -config
+      - /test/config/pebble-config.json
+      - -strict
+      - -dnsserver
+      - ${IOTKIT_PEBBLE_CHALL_IP:?}:8053
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"
+      PEBBLE_VA_ALWAYS_VALID: "0"
+    ports:
+      - "${IOTKIT_PEBBLE_PORT:?}:14000"
+    networks:
+      acme:
+        ipv4_address: ${IOTKIT_PEBBLE_IP:?}
+
+  challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:v2.10.1
+    command:
+      - pebble-challtestsrv
+      - -defaultIPv6
+      - ""
+      - -defaultIPv4
+      - ${IOTKIT_PEBBLE_CHALL_IP:?}
+    ports:
+      - "${IOTKIT_PEBBLE_MGMT_PORT:?}:8055"
+      - "${IOTKIT_PEBBLE_DNS_PORT:?}:8053/udp"
+    networks:
+      acme:
+        ipv4_address: ${IOTKIT_PEBBLE_CHALL_IP:?}
+
+networks:
+  acme:
+    ipam:
+      config:
+        - subnet: ${IOTKIT_PEBBLE_SUBNET:?}

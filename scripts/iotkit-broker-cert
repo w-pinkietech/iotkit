@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+usage() {
+  echo "usage: iotkit-broker-cert <status|install|renew> --config FILE [--cert FILE --key FILE --ca FILE]" >&2
+}
+
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+command_name=${1:-}
+shift || true
+config=""
+cert=""
+key=""
+ca=""
+while (($#)); do
+  case "$1" in
+    --config) config=${2:-}; shift 2 ;;
+    --cert) cert=${2:-}; shift 2 ;;
+    --key) key=${2:-}; shift 2 ;;
+    --ca) ca=${2:-}; shift 2 ;;
+    *) usage; fail "unknown argument: $1" ;;
+  esac
+done
+[[ -n "$command_name" && -n "$config" && -f "$config" ]] || { usage; exit 2; }
+config=$(realpath "$config")
+[[ "$(stat -c %a "$config")" =~ ^(600|400)$ ]] || fail "certificate config must be owner-only"
+# shellcheck disable=SC1090
+source "$config"
+
+for variable in IOTKIT_CERT_DOMAIN IOTKIT_CERT_FILE IOTKIT_CERT_KEY_FILE \
+  IOTKIT_CERT_CA_FILE IOTKIT_CERT_SITE_ENV IOTKIT_CERT_COMPOSE_FILE \
+  IOTKIT_CERT_BROKER_PORT IOTKIT_CERT_SITE_PASSWORD_FILE; do
+  [[ -n "${!variable:-}" ]] || fail "missing $variable in certificate config"
+done
+
+validate_bundle() {
+  local input_cert=$1 input_key=$2 input_ca=$3
+  openssl x509 -in "$input_cert" -noout >/dev/null 2>&1 || fail "certificate is not valid PEM X.509"
+  openssl pkey -in "$input_key" -noout >/dev/null 2>&1 || fail "private key is not readable"
+  openssl x509 -in "$input_ca" -noout >/dev/null 2>&1 || fail "CA bundle is not valid PEM X.509"
+  openssl verify -CAfile "$input_ca" "$input_cert" >/dev/null 2>&1 || fail "certificate does not verify with CA bundle"
+  openssl x509 -in "$input_cert" -noout -checkhost "$IOTKIT_CERT_DOMAIN" >/dev/null 2>&1 \
+    || fail "certificate does not cover configured broker hostname"
+  openssl x509 -in "$input_cert" -noout -checkend 86400 >/dev/null 2>&1 \
+    || fail "certificate expires within 24 hours"
+  local cert_key private_key
+  cert_key=$(openssl x509 -in "$input_cert" -pubkey -noout |
+    openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256)
+  private_key=$(openssl pkey -in "$input_key" -pubout -outform DER 2>/dev/null |
+    openssl dgst -sha256)
+  [[ "$cert_key" == "$private_key" ]] || fail "certificate and private key do not match"
+}
+
+status() {
+  validate_bundle "$IOTKIT_CERT_FILE" "$IOTKIT_CERT_KEY_FILE" "$IOTKIT_CERT_CA_FILE"
+  local enddate epoch now remaining
+  enddate=$(openssl x509 -in "$IOTKIT_CERT_FILE" -noout -enddate | cut -d= -f2-)
+  epoch=$(date -d "$enddate" +%s)
+  now=$(date +%s)
+  remaining=$(( (epoch - now) / 86400 ))
+  printf '{"domain":"%s","not_after":"%s","days_remaining":%d,"state":"valid"}\n' \
+    "$IOTKIT_CERT_DOMAIN" "$enddate" "$remaining"
+}
+
+reload_and_probe() {
+  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
+    -f "$IOTKIT_CERT_COMPOSE_FILE" kill -s HUP broker >/dev/null
+  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
+    -f "$IOTKIT_CERT_COMPOSE_FILE" restart site >/dev/null
+  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
+    -f "$IOTKIT_CERT_COMPOSE_FILE" exec -T caddy \
+    caddy reload --config /etc/caddy/Caddyfile >/dev/null
+  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
+    -f "$IOTKIT_CERT_COMPOSE_FILE" exec -T site \
+    sh -c 'test -r /run/iotkit/broker-tls/ca.pem' >/dev/null
+  timeout 15 openssl s_client -connect "$IOTKIT_CERT_DOMAIN:$IOTKIT_CERT_BROKER_PORT" \
+    -servername "$IOTKIT_CERT_DOMAIN" -CAfile "$IOTKIT_CERT_CA_FILE" \
+    -verify_return_error </dev/null 2>/dev/null |
+    grep -Fq 'Verify return code: 0 (ok)'
+  timeout 15 openssl s_client -connect "$IOTKIT_CERT_DOMAIN:${IOTKIT_CERT_SITE_HTTPS_PORT:-443}" \
+    -servername "$IOTKIT_CERT_DOMAIN" -CAfile "$IOTKIT_CERT_CA_FILE" \
+    -verify_return_error </dev/null 2>/dev/null |
+    grep -Fq 'Verify return code: 0 (ok)'
+}
+
+install_bundle() {
+  local input_cert=$1 input_key=$2 input_ca=$3
+  validate_bundle "$input_cert" "$input_key" "$input_ca"
+  local directory backup stage
+  directory=$(dirname "$IOTKIT_CERT_FILE")
+  backup="$directory/.cert-backup.$$"
+  stage="$directory/.cert-stage.$$"
+  mkdir -m 700 "$backup" "$stage"
+  cp "$IOTKIT_CERT_FILE" "$backup/server.pem"
+  cp "$IOTKIT_CERT_KEY_FILE" "$backup/server.key"
+  cp "$IOTKIT_CERT_CA_FILE" "$backup/ca.pem"
+  cp "$input_cert" "$stage/server.pem"
+  cp "$input_key" "$stage/server.key"
+  cp "$input_ca" "$stage/ca.pem"
+  chmod 600 "$stage"/*
+  mv "$stage/server.pem" "$IOTKIT_CERT_FILE"
+  mv "$stage/server.key" "$IOTKIT_CERT_KEY_FILE"
+  mv "$stage/ca.pem" "$IOTKIT_CERT_CA_FILE"
+  rmdir "$stage"
+  if ! reload_and_probe; then
+    mv "$backup/server.pem" "$IOTKIT_CERT_FILE"
+    mv "$backup/server.key" "$IOTKIT_CERT_KEY_FILE"
+    mv "$backup/ca.pem" "$IOTKIT_CERT_CA_FILE"
+    rmdir "$backup"
+    docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
+      -f "$IOTKIT_CERT_COMPOSE_FILE" kill -s HUP broker >/dev/null || true
+    docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
+      -f "$IOTKIT_CERT_COMPOSE_FILE" restart site >/dev/null || true
+    docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
+      -f "$IOTKIT_CERT_COMPOSE_FILE" exec -T caddy \
+      caddy reload --config /etc/caddy/Caddyfile >/dev/null || true
+    fail "new certificate probe failed; previous bundle restored"
+  fi
+  rm -rf "$backup"
+  status
+}
+
+case "$command_name" in
+  status)
+    status
+    ;;
+  install)
+    [[ -n "$cert" && -n "$key" && -n "$ca" ]] || fail "install requires --cert, --key, and --ca"
+    install_bundle "$cert" "$key" "$ca"
+    ;;
+  renew)
+    for variable in IOTKIT_CERT_LEGO_PATH IOTKIT_CERT_LEGO_EMAIL IOTKIT_CERT_LEGO_SERVER; do
+      [[ -n "${!variable:-}" ]] || fail "missing $variable for ACME renewal"
+    done
+    command -v lego >/dev/null || fail "lego is required for ACME renewal"
+    mkdir -p "$IOTKIT_CERT_LEGO_PATH"
+    challenge=${IOTKIT_CERT_LEGO_CHALLENGE:-http}
+    challenge_args=()
+    case "$challenge" in
+      http)
+        [[ -n "${IOTKIT_CERT_LEGO_WEBROOT:-}" ]] || fail "HTTP ACME requires IOTKIT_CERT_LEGO_WEBROOT"
+        challenge_args=(--http --http.webroot "$IOTKIT_CERT_LEGO_WEBROOT")
+        ;;
+      dns)
+        [[ -n "${IOTKIT_CERT_LEGO_DNS_PROVIDER:-}" ]] || fail "DNS ACME requires IOTKIT_CERT_LEGO_DNS_PROVIDER"
+        challenge_args=(--dns "$IOTKIT_CERT_LEGO_DNS_PROVIDER")
+        if [[ -n "${IOTKIT_CERT_LEGO_DNS_RESOLVERS:-}" ]]; then
+          challenge_args+=(--dns.resolvers "$IOTKIT_CERT_LEGO_DNS_RESOLVERS")
+        fi
+        ;;
+      *) fail "unsupported ACME challenge: $challenge" ;;
+    esac
+    lego --path "$IOTKIT_CERT_LEGO_PATH" --server "$IOTKIT_CERT_LEGO_SERVER" \
+      --email "$IOTKIT_CERT_LEGO_EMAIL" --domains "$IOTKIT_CERT_DOMAIN" \
+      --accept-tos "${challenge_args[@]}" run
+    lego_cert="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.crt"
+    lego_key="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.key"
+    lego_issuer="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.issuer.crt"
+    install_bundle "$lego_cert" "$lego_key" "$lego_issuer"
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

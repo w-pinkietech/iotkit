@@ -28,6 +28,16 @@ echo "== go test ./... =="
 if [[ "$full" == true ]]; then
   echo "== scripts/test-mqtt-security.sh =="
   scripts/test-mqtt-security.sh
+  echo "== scripts/test-broker-cert.sh =="
+  scripts/test-broker-cert.sh
+  echo "== scripts/test-broker-cert-pebble.sh =="
+  scripts/test-broker-cert-pebble.sh
+  echo "== scripts/test-site-mqtt.sh =="
+  scripts/test-site-mqtt.sh
+  echo "== scripts/test-site-resilience.sh =="
+  scripts/test-site-resilience.sh
+  echo "== scripts/test-site-bootstrap.sh =="
+  scripts/test-site-bootstrap.sh
 fi
 
 echo "✔ verify.sh PASS"

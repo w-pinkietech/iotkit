@@ -115,6 +115,7 @@ type LatestMeasurement struct {
 
 type DeviceSummary struct {
 	DeviceRef          string `json:"device_ref"`
+	Edge               string `json:"edge"`
 	DisplayName        string `json:"display_name"`
 	Location           string `json:"location"`
 	ProfileRevision    *int64 `json:"profile_revision"`
@@ -125,15 +126,18 @@ type DeviceSummary struct {
 
 type SignalSummary struct {
 	SignalRef          string             `json:"signal_ref"`
+	Edge               string             `json:"edge"`
 	DeviceRef          *string            `json:"device_ref"`
 	DisplayName        string             `json:"display_name"`
 	ProfileRevision    *int64             `json:"profile_revision"`
 	DescriptorPresence string             `json:"descriptor_presence"`
 	Unit               *string            `json:"unit"`
 	ValueType          *string            `json:"value_type"`
+	SensorType         *string            `json:"sensor_type"`
 	Latest             *LatestMeasurement `json:"latest"`
 	LastReceivedAt     *int64             `json:"last_received_at"`
 	HasSemanticMapping bool               `json:"has_semantic_mapping"`
+	ReceiptStatus      string             `json:"receipt_status"`
 }
 
 func validateProfileText(name, value string, maxBytes int) error {
