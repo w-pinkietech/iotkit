@@ -10,6 +10,9 @@ import (
 var (
 	ErrNotFound         = errors.New("Site resource not found")
 	ErrRevisionMismatch = errors.New("Site resource revision mismatch")
+	ErrForbidden        = errors.New("Site operation is forbidden")
+	ErrAlreadyOwned     = errors.New("Site already has an owner")
+	ErrLastSystemAdmin  = errors.New("the last active system administrator cannot be changed")
 )
 
 type ActorClass string
@@ -17,20 +20,27 @@ type ActorClass string
 const (
 	ActorLocalCLI        ActorClass = "local_cli"
 	ActorSettingsSession ActorClass = "settings_session"
+	ActorAccount         ActorClass = "account"
 	ActorSystem          ActorClass = "system"
 )
 
 type Actor struct {
 	Class ActorClass
 	Ref   string
+	Role  AccountRole
 }
 
 func LocalCLIActor() Actor {
 	return Actor{Class: ActorLocalCLI, Ref: "local_cli"}
 }
 
+func AccountActor(accountRef string, role AccountRole) Actor {
+	return Actor{Class: ActorAccount, Ref: accountRef, Role: role}
+}
+
 func (actor Actor) Validate() error {
-	if actor.Class != ActorLocalCLI && actor.Class != ActorSettingsSession && actor.Class != ActorSystem {
+	if actor.Class != ActorLocalCLI && actor.Class != ActorSettingsSession &&
+		actor.Class != ActorAccount && actor.Class != ActorSystem {
 		return errors.New("unsupported Site actor class")
 	}
 	if strings.TrimSpace(actor.Ref) == "" {
@@ -41,6 +51,14 @@ func (actor Actor) Validate() error {
 	}
 	if strings.IndexFunc(actor.Ref, unicode.IsControl) >= 0 {
 		return errors.New("Site actor ref must not contain control characters")
+	}
+	if actor.Class == ActorAccount {
+		if err := validateResourceRef(actor.Ref, "acct_"); err != nil {
+			return err
+		}
+		if !actor.Role.Valid() {
+			return errors.New("Site account actor role is invalid")
+		}
 	}
 	return nil
 }
@@ -133,12 +151,14 @@ func validateProfileText(name, value string, maxBytes int) error {
 }
 
 type AuditEvent struct {
-	AuditRowID  int64           `json:"audit_row_id"`
-	OccurredAt  int64           `json:"occurred_at"`
-	ActorClass  ActorClass      `json:"actor_class"`
-	ActorRef    string          `json:"actor_ref"`
-	Operation   string          `json:"operation"`
-	ResourceRef string          `json:"resource_ref"`
-	Outcome     string          `json:"outcome"`
-	Summary     json.RawMessage `json:"summary"`
+	AuditRowID       int64           `json:"audit_row_id"`
+	OccurredAt       int64           `json:"occurred_at"`
+	ActorClass       ActorClass      `json:"actor_class"`
+	ActorRef         string          `json:"actor_ref"`
+	ActorLoginID     *string         `json:"actor_login_id"`
+	ActorDisplayName *string         `json:"actor_display_name"`
+	Operation        string          `json:"operation"`
+	ResourceRef      string          `json:"resource_ref"`
+	Outcome          string          `json:"outcome"`
+	Summary          json.RawMessage `json:"summary"`
 }

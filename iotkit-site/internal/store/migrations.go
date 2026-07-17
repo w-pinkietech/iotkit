@@ -272,6 +272,10 @@ var schemaMigrations = []migration{
 		FROM audit_events_v4;
 		DROP TABLE audit_events_v4;
 	`},
+	{version: 6, sql: `
+		ALTER TABLE site_accounts
+			ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0);
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

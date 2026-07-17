@@ -272,6 +272,101 @@ func TestRouteListWritesDeliveryStatusJSON(t *testing.T) {
 	}
 }
 
+func TestAccountBootstrapAndRecoveryUseOwnerOnlyPasswordFiles(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "site.db")
+	initialPasswordFile := filepath.Join(dir, "initial-password")
+	if err := os.WriteFile(
+		initialPasswordFile,
+		[]byte("初期所有者の 十分に長いパスワード\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{
+		"account", "bootstrap",
+		"--db", dbPath,
+		"--login-id", "Site.Owner",
+		"--display-name", "サイト管理者",
+		"--password-file", initialPasswordFile,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := archive.GetAccountByLoginID(context.Background(), "site.owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Role != store.AccountRoleSystemAdmin || account.MustChangePassword {
+		t.Fatalf("bootstrapped account = %#v", account)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveryPasswordFile := filepath.Join(dir, "recovery-password")
+	if err := os.WriteFile(
+		recoveryPasswordFile,
+		[]byte("復旧後に使う 十分に長いパスワード\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{
+		"account", "recover",
+		"--db", dbPath,
+		"--login-id", "site.owner",
+		"--password-file", recoveryPasswordFile,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	archive, err = store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+	recovered, err := archive.GetAccountByLoginID(context.Background(), "site.owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.PasswordPHC == account.PasswordPHC || recovered.MustChangePassword {
+		t.Fatalf("recovered account = %#v", recovered)
+	}
+}
+
+func TestAccountCommandRejectsPasswordInArgvAndUnsafePasswordFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "site.db")
+	if err := run([]string{
+		"account", "bootstrap",
+		"--db", dbPath,
+		"--login-id", "site.owner",
+		"--display-name", "サイト管理者",
+		"--password", "argvへ載せてはいけないパスワード",
+	}); err == nil || !strings.Contains(err.Error(), "not defined") {
+		t.Fatalf("argv password error = %v", err)
+	}
+	assertPathDoesNotExist(t, dbPath)
+
+	passwordFile := filepath.Join(t.TempDir(), "unsafe-password")
+	if err := os.WriteFile(passwordFile, []byte("十分に長いパスワードです\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{
+		"account", "bootstrap",
+		"--db", dbPath,
+		"--login-id", "site.owner",
+		"--display-name", "サイト管理者",
+		"--password-file", passwordFile,
+	}); err == nil || !strings.Contains(err.Error(), "owner-only") {
+		t.Fatalf("unsafe password file error = %v", err)
+	}
+	assertPathDoesNotExist(t, dbPath)
+}
+
 func assertPathDoesNotExist(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err == nil {

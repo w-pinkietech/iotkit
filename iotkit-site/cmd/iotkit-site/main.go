@@ -28,11 +28,13 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: iotkit-site <serve|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]")
+		return errors.New("usage: iotkit-site <serve|account|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]")
 	}
 	switch args[0] {
 	case "serve":
 		return runServe(args[1:])
+	case "account":
+		return runAccount(args[1:])
 	case "query":
 		return runQuery(args[1:])
 	case "mapping-set":
@@ -50,6 +52,111 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runAccount(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: iotkit-site account <bootstrap|recover> [options]")
+	}
+	switch args[0] {
+	case "bootstrap":
+		return runAccountBootstrap(args[1:])
+	case "recover":
+		return runAccountRecover(args[1:])
+	default:
+		return fmt.Errorf("unknown account command %q", args[0])
+	}
+}
+
+func runAccountBootstrap(args []string) error {
+	flags := flag.NewFlagSet("account bootstrap", flag.ContinueOnError)
+	dbPath := flags.String("db", "site.db", "Site SQLite path")
+	loginID := flags.String("login-id", "", "initial system administrator login ID")
+	displayName := flags.String("display-name", "", "initial system administrator display name")
+	passwordFile := flags.String("password-file", "", "owner-only file containing the password")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *loginID == "" || *displayName == "" || *passwordFile == "" {
+		return errors.New("--login-id, --display-name, and --password-file are required")
+	}
+	password, err := readOwnerOnlySecret(*passwordFile)
+	if err != nil {
+		return err
+	}
+	service, archive, err := openAccountService(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	result, err := service.DispatchAccount(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		siteapp.CreateInitialSystemAdmin{
+			LoginID:     *loginID,
+			DisplayName: *displayName,
+			Password:    password,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	return writeJSON(result.Account)
+}
+
+func runAccountRecover(args []string) error {
+	flags := flag.NewFlagSet("account recover", flag.ContinueOnError)
+	dbPath := flags.String("db", "site.db", "Site SQLite path")
+	loginID := flags.String("login-id", "", "system administrator login ID")
+	passwordFile := flags.String("password-file", "", "owner-only file containing the new password")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *loginID == "" || *passwordFile == "" {
+		return errors.New("--login-id and --password-file are required")
+	}
+	password, err := readOwnerOnlySecret(*passwordFile)
+	if err != nil {
+		return err
+	}
+	service, archive, err := openAccountService(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	result, err := service.DispatchAccount(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		siteapp.RecoverSystemAdminPassword{LoginID: *loginID, Password: password},
+	)
+	if err != nil {
+		return err
+	}
+	return writeJSON(result.Account)
+}
+
+func readOwnerOnlySecret(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat password file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("password file must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", errors.New("password file must be owner-only")
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read password file: %w", err)
+	}
+	password := string(value)
+	password = strings.TrimSuffix(password, "\n")
+	password = strings.TrimSuffix(password, "\r")
+	if password == "" {
+		return "", errors.New("password file is empty")
+	}
+	return password, nil
 }
 
 func runServe(args []string) error {
@@ -306,4 +413,12 @@ func openSiteService(dbPath string) (*siteapp.Service, *store.Store, error) {
 		return nil, nil, err
 	}
 	return siteapp.NewService(archive), archive, nil
+}
+
+func openAccountService(dbPath string) (*siteapp.AccountService, *store.Store, error) {
+	archive, err := store.Open(dbPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return siteapp.NewAccountService(archive), archive, nil
 }

@@ -13,7 +13,20 @@ import (
 
 const (
 	auditOutcomeSuccess = "success"
+	auditOutcomeFailure = "failure"
 )
+
+func (store *Store) RecordAuditEvent(ctx context.Context, event siteapp.AuditEvent) error {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := insertAuditEventTx(ctx, tx, event); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
 func (store *Store) ApplySemanticMapping(
 	ctx context.Context,
@@ -156,11 +169,28 @@ func (store *Store) DeactivateSemanticMapping(
 }
 
 func insertAuditEventTx(ctx context.Context, tx *sql.Tx, event siteapp.AuditEvent) error {
+	var actorLoginID any
+	var actorDisplayName any
+	if event.ActorClass == siteapp.ActorAccount {
+		var loginID string
+		var displayName string
+		if err := tx.QueryRowContext(ctx, `
+			SELECT login_id, display_name
+			FROM site_accounts
+			WHERE account_ref = ?
+		`, event.ActorRef).Scan(&loginID, &displayName); err != nil {
+			return err
+		}
+		actorLoginID = loginID
+		actorDisplayName = displayName
+	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO audit_events (
-			occurred_at, actor_class, actor_ref, operation, resource_ref, outcome, summary_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, event.OccurredAt, event.ActorClass, event.ActorRef, event.Operation,
+			occurred_at, actor_class, actor_ref, actor_login_id, actor_display_name,
+			operation, resource_ref, outcome, summary_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, event.OccurredAt, event.ActorClass, event.ActorRef,
+		actorLoginID, actorDisplayName, event.Operation,
 		event.ResourceRef, event.Outcome, []byte(event.Summary))
 	return err
 }
@@ -170,7 +200,8 @@ func (store *Store) ListAuditEvents(ctx context.Context, limit int) ([]siteapp.A
 		return nil, errors.New("audit event limit must be between 1 and 100")
 	}
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT audit_row_id, occurred_at, actor_class, actor_ref, operation,
+		SELECT audit_row_id, occurred_at, actor_class, actor_ref,
+			actor_login_id, actor_display_name, operation,
 			resource_ref, outcome, summary_json
 		FROM audit_events
 		ORDER BY audit_row_id DESC
@@ -184,11 +215,15 @@ func (store *Store) ListAuditEvents(ctx context.Context, limit int) ([]siteapp.A
 	events := make([]siteapp.AuditEvent, 0)
 	for rows.Next() {
 		var event siteapp.AuditEvent
+		var actorLoginID sql.NullString
+		var actorDisplayName sql.NullString
 		if err := rows.Scan(
 			&event.AuditRowID,
 			&event.OccurredAt,
 			&event.ActorClass,
 			&event.ActorRef,
+			&actorLoginID,
+			&actorDisplayName,
 			&event.Operation,
 			&event.ResourceRef,
 			&event.Outcome,
@@ -196,7 +231,16 @@ func (store *Store) ListAuditEvents(ctx context.Context, limit int) ([]siteapp.A
 		); err != nil {
 			return nil, err
 		}
+		event.ActorLoginID = nullableString(actorLoginID)
+		event.ActorDisplayName = nullableString(actorDisplayName)
 		events = append(events, event)
 	}
 	return events, rows.Err()
+}
+
+func nullableString(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
 }
