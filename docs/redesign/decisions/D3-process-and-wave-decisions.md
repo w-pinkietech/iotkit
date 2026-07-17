@@ -1,6 +1,6 @@
 # D3: プロセス決定とWave分割
 
-Status: 確定 (2026-07-14、最初の実装ゲート完了と次スライスを追記)
+Status: 確定 (2026-07-18、v1ゴールと完了条件を追記)
 
 ## 現在のプロダクト中心価値
 
@@ -16,6 +16,75 @@ Status: 確定 (2026-07-14、最初の実装ゲート完了と次スライスを
 
 IoTKitは汎用IoTプラットフォーム、ダッシュボード、生産管理、独自MQTT brokerではない。R1〜R23と
 Wave 1/2は将来の責務地図であり、現在すべてを実装するバックログではない。
+
+## v1ゴール
+
+> PinkieTechの導入支援を受けた1つの工場で、IT専任ではない現場担当者が、センサーの状態と
+> 現在値を確認し、用途に応じた意味付けを設定し、外部applicationへMQTTで継続的にデータを
+> 渡せる。通信断、再起動、一時的な障害が起きても、耐久保存したデータを黙って失わず、
+> Site Consoleと手順書から状態確認と復旧ができる。
+
+対象topologyは、1つのIoTKit Siteに1台以上のIoTKit Edgeとする。1工場内の複数EdgeはSiteが扱う。
+複数工場を横断した統合管理はYokaKit等の上位applicationの責務であり、IoTKit v1へ含めない。
+
+完了判定は、機能の存在だけでなく、各条件に対応する実行可能test、画面、CLI出力または手順と、
+最後の新規導入シナリオを証拠にする。focused testを開発中に使い、全体testと実機を含む最終ゲートは
+変更をまとめた後に一度実行する。
+
+### v1完了条件
+
+| 領域 | 完了条件 | 必要な証拠 |
+|---|---|---|
+| 新規導入 | 既存DB、設定、credentialを流用せず、新しいLinux Site hostとRaspberry PiへEdge、Broker、Siteを導入できる。最初の`system_admin`をSite hostのlocal CLIで作成し、commissioning smokeをSite受理まで通せる。完全無人導入と、IoTKitによるLAN、DNS、router、firewall構築は要求しない | 新規一時環境の導入test、公開CLIの出力、1ページから辿れる導入・診断手順 |
+| 実センサーとadapter境界 | BravePI MainboardのUARTから温度と接点入力を取得し、Edgeで耐久保存してSiteへ渡せる。BravePI固有処理はadapter内へ閉じ、疑似adapterまたは別adapterが同じingest契約を使える | Raspberry PiとBravePIによる温度・接点の実信号証拠、host上のadapter境界test |
+| 複数Edge | 1つのSiteへ複数Edgeを同時接続でき、identity、credential、topic、raw record、cursor、表示が混ざらない | BravePI実機Edge 1台の試験に加え、host上で疑似Edge 2台を同時接続する統合test |
+| Site Console | 工場LANのWindows browserからCaddy HTTPS経由で利用できる。全画面でloginを要求し、個人accountと`viewer`、`admin`、`system_admin`を分離する。Edge、device、signal、sensor type、現在値、最終受信時刻、停止・古い・未設定状態を日本語で確認でき、表示名と設置場所を設定できる。変更者と変更内容を監査できる | browser E2E、権限negative test、監査と秘密非表示test、現場担当者役による操作確認 |
+| Siteでの意味付け | IoTKitの汎用語彙として、数値の現在値、booleanの現在状態、接点・光等から作る累積値、補正、しきい値による状態・alarmを扱える。設定はfuture-onlyで、過去値を暗黙に再計算しない。保存前に実信号previewで挙動を確認できる | evaluatorの境界test、Console/API E2E、mapping revisionとfuture-only test |
+| 外部application出力 | Siteの意味付けと、出力先固有のpayload変換を分離し、Output Adapterを追加できる。YokaKit Adapterは合意済みの`source-id`、`signal-id`、observation contractを使い、IoTKitの累積値を`kind=production`へ、boolean状態を`onoff`または`gantt_chart`へ、alarm判定を`alarm`へ変換し、source statusも送れる。barcodeはIoTKit v1で直接取り込まない | YokaKit契約fixture、YokaKitとのconsumer contract test、YokaKit非依存のOutput Adapter境界test |
+| 配送と保管責任 | Edgeが耐久保存したrecordはSiteの`accepted-through`まで保持する。Siteが受理したraw recordは再起動後も残る。外部出力eventはMQTT PUBACKまでSite outboxへ残り、at-least-once再送時に同じeventを識別できる | Edge/Site/Broker再起動、経路断、重複、DB書込失敗、outbox再送・収束test |
+| MQTTと証明書 | MQTTはTLS、匿名禁止、主体ごとのcredential、exact topic ACLを使う。Mosquitto server certificate lifecycleはIoTKitの意味付けやYokaKitに依存しないBroker-host運用componentが担う。完成済みbundleのinstall経路と`lego` ACME経路を持ち、検証、原子的切替、reload、新規TLS/MQTT probe、失敗時rollback、期限statusまで自動化する | 実Brokerの認証・ACL・TLS negative matrix、Pebbleを使う自動更新test、更新失敗とrollback test、期限status |
+| Siteの認証と復旧 | password、credential、秘密鍵をlog、監査、画面、Gitへ出さない。初期所有権と緊急password復旧はSite hostのlocal CLIだけで行い、sessionを失効できる。Site ConsoleはHTTPS失敗時にHTTPへfallbackしない | account/session統合test、secret scan、local CLI復旧test、Caddy障害test |
+
+「データを黙って失わない」の検証境界は次とする。
+
+1. Edgeのingest transactionが成功したrecordは、Siteが同じrecordを耐久保存して有効な
+   `accepted-through`を返すまでEdgeが保持する。
+2. Edgeで容量不足等により耐久保存できなかった入力は成功応答せず、operatorが診断できる状態を残す。
+3. Siteが受理したraw recordとcursorは同じtransactionで確定し、commit失敗時は
+   `accepted-through`を返さない。
+4. Siteのapplication eventは、出力先BrokerのPUBACKまでoutboxへ残す。application固有の業務処理成功を
+   IoTKitの配送成功とは偽らない。
+
+### v1最終リリースゲート
+
+新規環境から、次の一本を通す。
+
+```text
+BravePI温度・接点
+  -> IoTKit Edge
+  -> MQTT Broker
+  -> IoTKit Site raw保存
+  -> Site Consoleで現在値と状態を確認
+  -> 累積値・boolean状態・alarmを設定
+  -> YokaKit Adapterから合意済みMQTT契約で出力
+  -> Edge/Site/Broker再起動と通信断
+  -> 復旧後にraw cursorと未配送outboxが収束
+```
+
+この実機Edge 1台のシナリオに、host上の疑似Edge 2台同時接続、Site DB書込失敗、MQTT認証失敗、
+誤CA・誤hostname・期限切れcertificate、sensor信号停止、password紛失時のlocal CLI復旧を加える。
+現場担当者役がWindows browserからloginし、現在値確認、意味付け、出力確認、障害状態の把握を
+手順書どおり完了できた時点でv1完成とする。
+
+### v1に含めないもの
+
+- 複数工場の統合管理とYokaKitの業務機能
+- camera映像の外部出力とbarcodeのIoTKit直接取り込み
+- OTA、fleet更新、MQTT Broker HA、完全無人導入
+- あらゆるsensorのadapterとadapter code generator
+- mTLS必須化、Keycloak/OIDC連携、短命credentialの完全自動rotation
+- Site ConsoleからのBroker endpoint、certificate、credential、ACLの作成・編集・切替
+- IoTKitによるLAN、DNS、router、firewall、VPN構築
 
 ## 最初の実装ゲート: 実機縦切り (完了)
 
@@ -179,10 +248,11 @@ UARTで0/1信号をdecode済みであり、必要時の軽い実信号確認に�
 
 既に実装済みのHTTP ingress、control API、operation catalog等は削除しないが、このゲートの完了条件から外し、
 必要な保守以外の機能追加を止める。既存のrpi-local/OPT3001経路も維持するが、このゲートの完了条件には
-含めない。ゲート完了後の次スライスは、Siteでcanonical sensor seriesへ`production_pulse`の意味を
-future-onlyで割り当て、`active_sample`または`active_edge`でsemantic eventへ変換し、独立した
-MQTT exporterからapplicationへ配送する最小実装とする。1 source seriesにつきactiveな意味は1つ、
-backfillは行わない。adapter templateやSDKはIoTKitの中心機能より後に置く。
+含めない。ゲート完了直後の実装スライスでは、Siteでcanonical sensor seriesへ当時の
+`production_pulse`という意味をfuture-onlyで割り当て、`active_sample`または`active_edge`でsemantic
+eventへ変換し、独立したMQTT exporterからapplicationへ配送する最小経路を作った。1 source seriesにつき
+activeな意味は1つ、backfillは行わない。v1ではこの製品内部語を汎用的な「累積値」へ置き換え、
+YokaKit Adapterだけが`kind=production`へ変換する。adapter templateやSDKはIoTKitの中心機能より後に置く。
 
 ### Site semantic sliceのhost live-broker検証 (2026-07-15)
 
@@ -260,11 +330,12 @@ credential rotationとin-place upgradeは明示的な別作業のままとする
 最初の外部消費者または外部デバイス作者が現れるまで、D1の凍結リストは
 「破壊的変更には移行ノートを書く」規律に緩める。買い手ゼロの時点での完全凍結は負債。
 
-## 決定3: YokaKit再設計の凍結
+## 決定3: YokaKitは独立した参照consumerとする
 
-yokakit-next(Go+Vue、ほぼ完成)は**現状のままリファレンス消費者**として使い、
-ゼロからの再設計はIoTKit Wave 1出荷後に判断する。
-例外: **機能カタログ抽出**(現場価値の棚卸し)だけは出口契約設計の入力として並行実施可。
+当初の「YokaKit再設計を凍結する」という判断は、2026-07-17のYokaKit MQTT Purpose-Bound Signal
+Contract合意により更新した。YokaKitはIoTKitに依存せず、合意済みMQTT契約を満たす任意の送信softwareから
+入力を受ける。IoTKitもYokaKitをcore、Siteの汎用semantic model、adapter境界へ組み込まず、
+YokaKit Output Adapterだけが同契約への変換を担う。
 
 ## 決定4: 「第ゼロ波」(レガシー環境でのAI診断実証)は見送り
 
