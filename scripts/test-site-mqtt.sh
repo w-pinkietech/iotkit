@@ -2,6 +2,9 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cargo_target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
+go_mod_cache=${IOTKIT_TEST_GO_MOD_CACHE:-${GOMODCACHE:-/tmp/iotkit-go-mod}}
+go_build_cache=${IOTKIT_TEST_GO_BUILD_CACHE:-${GOCACHE:-/tmp/iotkit-go-cache}}
 # shellcheck disable=SC1091
 source "$repo_root/deploy/mosquitto-image.env"
 export IOTKIT_MOSQUITTO_IMAGE
@@ -18,6 +21,7 @@ export IOTKIT_SITE_DATA_DIR="$scratch/data"
 export IOTKIT_DEV_UID="$(id -u)"
 export IOTKIT_DEV_GID="$(id -g)"
 mkdir -p "$IOTKIT_SITE_DATA_DIR"
+mkdir -p "$go_mod_cache" "$go_build_cache"
 chmod 700 "$scratch"
 chmod 755 "$IOTKIT_SITE_DATA_DIR"
 
@@ -38,11 +42,11 @@ chmod 600 "$IOTKIT_SITE_PASSWORD_FILE" "$scratch/edge-password"
 jq --version >/dev/null
 cargo build --manifest-path "$repo_root/Cargo.toml" -p iotkit-edge -p iotkit-edgectl
 
-"$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" init >/dev/null
-identity_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" identity)
+"$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge.db" init >/dev/null
+identity_output=$("$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge.db" identity)
 edge_node_id=$(jq -er '.edge_node_id | select(type == "string" and length > 0)' <<<"$identity_output")
 jq -er '.ledger_epoch | select(type == "string" and length > 0)' <<<"$identity_output" >/dev/null
-binding_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" mqtt-binding)
+binding_output=$("$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge.db" mqtt-binding)
 edge_username=$(jq -er '.username | select(type == "string" and length > 0)' <<<"$binding_output")
 edge_records_topic=$(jq -er '.records_topic | select(type == "string" and length > 0)' <<<"$binding_output")
 edge_ack_topic=$(jq -er '.accepted_through_topic | select(type == "string" and length > 0)' <<<"$binding_output")
@@ -86,20 +90,23 @@ chmod 644 "$IOTKIT_MOSQUITTO_PASSWORD_FILE"
 
 docker compose -p "$project" -f "$repo_root/compose.dev.yaml" up --build --detach
 
-docker run --rm --user "$(id -u):$(id -g)" \
+if ! docker run --rm --user "$(id -u):$(id -g)" \
   --network "${project}_default" \
   -e HOME=/tmp \
   -e GOMODCACHE=/tmp/gomodcache \
   -e GOCACHE=/tmp/gocache \
   -e IOTKIT_TEST_BROKER_URL=tcp://broker:1883 \
   -e IOTKIT_TEST_EDGE_PASSWORD_FILE=/run/iotkit-test/edge-password \
-  -v /tmp/iotkit-go-mod:/tmp/gomodcache \
-  -v /tmp/iotkit-go-cache:/tmp/gocache \
+  -v "$go_mod_cache:/tmp/gomodcache" \
+  -v "$go_build_cache:/tmp/gocache" \
   -v "$repo_root:/src" \
   -v "$scratch:/run/iotkit-test:ro" \
   -w /src/iotkit-site \
   golang:1.25-bookworm \
-  go test -tags=integration ./internal/mqttsite -run TestMQTTFixtureGetsApplicationAcknowledgement -count=1
+  go test -tags=integration ./internal/mqttsite -run TestMQTTFixtureGetsApplicationAcknowledgement -count=1; then
+  docker compose -p "$project" -f "$repo_root/compose.dev.yaml" logs broker site
+  exit 1
+fi
 
 query_output=$(docker compose -p "$project" -f "$repo_root/compose.dev.yaml" exec -T site \
   iotkit-site query --db /data/site.db --limit 10)
@@ -131,10 +138,10 @@ password_file = "$scratch/edge-password"
 allow_insecure = true
 EOF
 
-"$repo_root/target/debug/iotkit-edge" --config "$scratch/edge.toml" >"$scratch/edge.log" 2>&1 &
+"$cargo_target_dir/debug/iotkit-edge" --config "$scratch/edge.toml" >"$scratch/edge.log" 2>&1 &
 edge_pid=$!
 
-docker run --rm --user "$(id -u):$(id -g)" \
+if ! docker run --rm --user "$(id -u):$(id -g)" \
   --network "${project}_default" \
   -e HOME=/tmp \
   -e GOMODCACHE=/tmp/gomodcache \
@@ -142,14 +149,18 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e IOTKIT_TEST_BROKER_URL=tcp://broker:1883 \
   -e IOTKIT_TEST_SITE_PASSWORD_FILE=/run/iotkit-test/site-password \
   -e IOTKIT_TEST_EDGE_NODE_ID="$edge_node_id" \
-  -v /tmp/iotkit-go-mod:/tmp/gomodcache \
-  -v /tmp/iotkit-go-cache:/tmp/gocache \
+  -v "$go_mod_cache:/tmp/gomodcache" \
+  -v "$go_build_cache:/tmp/gocache" \
   -v "$repo_root:/src" \
   -v "$scratch:/run/iotkit-test:ro" \
   -w /src/iotkit-site \
   golang:1.25-bookworm \
   go test -tags=integration ./internal/mqttsite \
-    -run TestMQTTRetainedDescriptorIsAvailableToLateSubscriber -count=1
+    -run TestMQTTRetainedDescriptorIsAvailableToLateSubscriber -count=1; then
+  docker compose -p "$project" -f "$repo_root/compose.dev.yaml" logs broker site
+  sed -n '1,240p' "$scratch/edge.log"
+  exit 1
+fi
 
 descriptor_stored=false
 for _ in $(seq 1 30); do
@@ -170,7 +181,7 @@ fi
 
 smoke_output=""
 for _ in $(seq 1 60); do
-  if smoke_output=$("$repo_root/target/debug/iotkit-edgectl" \
+  if smoke_output=$("$cargo_target_dir/debug/iotkit-edgectl" \
     --db "$scratch/edge.db" smoke enqueue 2>"$scratch/smoke-enqueue.err"); then
     break
   fi
@@ -188,7 +199,7 @@ smoke_pub_seq=$(jq -er '.pub_seq | select(type == "number" and . > 0)' <<<"$smok
 
 delivered=false
 for _ in $(seq 1 60); do
-  status_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" smoke status \
+  status_output=$("$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge.db" smoke status \
     --ledger-epoch "$smoke_epoch" --pub-seq "$smoke_pub_seq" 2>/dev/null || true)
   query_output=$(docker compose -p "$project" -f "$repo_root/compose.dev.yaml" exec -T site \
     iotkit-site query --db /data/site.db --limit 10 2>/dev/null || true)

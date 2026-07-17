@@ -82,10 +82,10 @@ excluded from semantic projection.
 ### Site deployment bootstrap
 
 The production-shaped deployment runs Edge natively on its Raspberry Pi and runs the standard
-Broker plus Site with Docker Compose on a Linux Site host. Prepare an existing server certificate,
-private key, and CA file; certificate issuance, DNS, firewall rules, and any optional VPN remain the
-Site operator's responsibility. The Broker hostname must resolve on the Site host to the explicit
-bind address, and the certificate must cover that hostname.
+Broker plus Site with Docker Compose on a Linux Site host. Prepare an existing full-chain server
+certificate, private key, and root trust bundle; certificate issuance, DNS, firewall rules, and any
+optional VPN remain the Site operator's responsibility. The Broker hostname must resolve on the
+Site host to the explicit bind address, and the certificate must cover that hostname.
 
 First export the non-secret binding from the initialized Edge and transfer that JSON to the Site
 operator:

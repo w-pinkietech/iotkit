@@ -186,7 +186,8 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -m 700 "$stage"
-mkdir -m 700 "$stage/mosquitto" "$stage/caddy" "$stage/systemd" "$stage/secrets" "$stage/tls" \
+mkdir -m 700 "$stage/mosquitto" "$stage/mosquitto/tls" "$stage/caddy" \
+  "$stage/systemd" "$stage/secrets" "$stage/tls" \
   "$stage/edge-handoff" "$stage/data" "$stage/data/site" "$stage/data/mosquitto"
 mkdir -m 700 "$stage/data/caddy"
 mkdir -m 755 "$stage/data/acme-webroot"
@@ -259,7 +260,9 @@ trust_mode = "bundle_only"
 ca_file = "/etc/iotkit/broker-ca.pem"
 EOF
 
+compose_project="iotkit-site-$(printf '%s' "$output_dir" | sha256sum | cut -c1-12)"
 cat >"$stage/site.env" <<EOF
+COMPOSE_PROJECT_NAME=$compose_project
 IOTKIT_RUNTIME_UID=$(id -u)
 IOTKIT_RUNTIME_GID=$(id -g)
 IOTKIT_MOSQUITTO_IMAGE=$IOTKIT_MOSQUITTO_IMAGE
@@ -313,6 +316,7 @@ IOTKIT_CERT_COMPOSE_FILE=$repo_root/deploy/compose.site.yaml
 IOTKIT_CERT_BROKER_PORT=$broker_port
 IOTKIT_CERT_SITE_HTTPS_PORT=$site_https_port
 IOTKIT_CERT_SITE_PASSWORD_FILE=$output_dir/secrets/site-mqtt-password
+IOTKIT_CERT_COMPOSE_PROJECT=$compose_project
 IOTKIT_CERT_LEGO_PATH=$output_dir/data/lego
 IOTKIT_CERT_LEGO_WEBROOT=$output_dir/data/acme-webroot
 IOTKIT_CERT_LEGO_CHALLENGE=http

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cargo_target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
 scratch=$(mktemp -d)
 output="$scratch/site-install"
 project="iotkit-site-bootstrap-test-$$"
@@ -48,9 +49,21 @@ openssl x509 -req -days 2 -in "$scratch/wrong-host.csr" -CA "$scratch/ca.pem" \
   -out "$scratch/wrong-host.pem" >/dev/null 2>&1
 chmod 600 "$scratch/ca.key" "$scratch/server.key" "$scratch/wrong-host.key"
 
+issue_localhost_certificate() {
+  local name=$1
+  openssl req -newkey rsa:2048 -nodes -subj '/CN=localhost' \
+    -keyout "$scratch/$name.key" -out "$scratch/$name.csr" >/dev/null 2>&1
+  printf 'subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n' \
+    >"$scratch/$name.ext"
+  openssl x509 -req -days 2 -in "$scratch/$name.csr" -CA "$scratch/ca.pem" \
+    -CAkey "$scratch/ca.key" -CAcreateserial -extfile "$scratch/$name.ext" \
+    -out "$scratch/$name.pem" >/dev/null 2>&1
+  chmod 600 "$scratch/$name.key"
+}
+
 cargo build --manifest-path "$repo_root/Cargo.toml" -p iotkit-edge -p iotkit-edgectl
-"$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" init >/dev/null
-"$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" mqtt-binding \
+"$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge.db" init >/dev/null
+"$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge.db" mqtt-binding \
   >"$scratch/binding.json"
 
 expect_bootstrap_failure() {
@@ -136,6 +149,8 @@ fi
   --tls-key "$scratch/server.key" \
   --tls-ca "$scratch/ca.pem" \
   --site-publish-topic iotkit/v1/application/production-pulses >/dev/null
+project=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$output/site.env")
+[[ -n "$project" ]] || { echo "bootstrap did not assign a Compose project" >&2; exit 1; }
 
 site_env_before=$(sha256sum "$output/site.env")
 if "$repo_root/scripts/bootstrap-site.sh" \
@@ -177,8 +192,8 @@ for path in \
   }
 done
 
-"$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge2.db" init >/dev/null
-"$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge2.db" mqtt-binding \
+"$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge2.db" init >/dev/null
+"$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge2.db" mqtt-binding \
   >"$scratch/binding2.json"
 "$repo_root/scripts/add-site-edge.sh" \
   --binding "$scratch/binding2.json" --site-dir "$output" >/dev/null
@@ -273,6 +288,10 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ "${login_code:-}" == 201 ]] || {
+  docker compose --env-file "$output/site.env" -p "$project" \
+    -f "$repo_root/deploy/compose.site.yaml" ps --all || true
+  docker compose --env-file "$output/site.env" -p "$project" \
+    -f "$repo_root/deploy/compose.site.yaml" logs caddy site broker || true
   echo "Caddy HTTPS Site login failed: ${login_code:-no response}" >&2
   exit 1
 }
@@ -284,6 +303,45 @@ if curl -sS "http://localhost:$site_port/status" 2>/dev/null |
   echo "Site Console was served as plaintext HTTP" >&2
   exit 1
 fi
+
+issue_localhost_certificate rotated
+"$repo_root/scripts/iotkit-broker-cert" install --config "$output/broker-cert.env" \
+  --cert "$scratch/rotated.pem" --key "$scratch/rotated.key" --ca "$scratch/ca.pem" \
+  >"$scratch/cert-install.json"
+jq -e '.domain == "localhost" and .state == "valid"' "$scratch/cert-install.json" >/dev/null
+cmp -s "$scratch/rotated.pem" "$output/tls/server.pem"
+
+issue_localhost_certificate rollback-candidate
+bundle_before=$(sha256sum "$output/tls/server.pem" "$output/tls/server.key" "$output/tls/ca.pem")
+cp "$output/broker-cert.env" "$scratch/rollback-cert.env"
+sed -i "s/^IOTKIT_CERT_BROKER_PORT=.*/IOTKIT_CERT_BROKER_PORT=$((port + 10000))/" \
+  "$scratch/rollback-cert.env"
+chmod 600 "$scratch/rollback-cert.env"
+if "$repo_root/scripts/iotkit-broker-cert" install --config "$scratch/rollback-cert.env" \
+  --cert "$scratch/rollback-candidate.pem" --key "$scratch/rollback-candidate.key" \
+  --ca "$scratch/ca.pem" >"$scratch/rollback.stdout" 2>"$scratch/rollback.stderr"; then
+  echo "certificate install unexpectedly passed a failed MQTT probe" >&2
+  exit 1
+fi
+[[ "$(sha256sum "$output/tls/server.pem" "$output/tls/server.key" "$output/tls/ca.pem")" \
+  == "$bundle_before" ]] || {
+  echo "certificate rollback did not restore the previous bundle" >&2
+  exit 1
+}
+grep -Fq 'previous bundle restored' "$scratch/rollback.stderr"
+if grep -Fq -- "$(cat "$scratch/rollback-candidate.key")" \
+  "$scratch/rollback.stdout" "$scratch/rollback.stderr"; then
+  echo "certificate rollback diagnostics leaked a private key" >&2
+  exit 1
+fi
+active_serial=$(timeout 15 openssl s_client -connect "localhost:$port" \
+  -servername localhost -CAfile "$scratch/ca.pem" </dev/null 2>/dev/null |
+  openssl x509 -noout -serial)
+expected_serial=$(openssl x509 -in "$scratch/rotated.pem" -noout -serial)
+[[ "$active_serial" == "$expected_serial" ]] || {
+  echo "broker did not resume with the restored certificate" >&2
+  exit 1
+}
 
 cat >"$scratch/edge.toml" <<EOF
 [edge]
@@ -304,7 +362,7 @@ sed \
   -e "s|/etc/iotkit/broker-ca.pem|$output/edge-handoff/broker-ca.pem|" \
   "$output/edge-handoff/edge-mqtt.toml" >>"$scratch/edge.toml"
 
-"$repo_root/target/debug/iotkit-edge" --config "$scratch/edge.toml" \
+"$cargo_target_dir/debug/iotkit-edge" --config "$scratch/edge.toml" \
   >"$scratch/edge.log" 2>&1 &
 edge_pid=$!
 
@@ -326,13 +384,13 @@ sed \
   -e "s|/etc/iotkit/mqtt-password|$output/edge-handoff/$edge_node_id2/mqtt-password|" \
   -e "s|/etc/iotkit/broker-ca.pem|$output/edge-handoff/$edge_node_id2/broker-ca.pem|" \
   "$output/edge-handoff/$edge_node_id2/edge-mqtt.toml" >>"$scratch/edge2.toml"
-"$repo_root/target/debug/iotkit-edge" --config "$scratch/edge2.toml" \
+"$cargo_target_dir/debug/iotkit-edge" --config "$scratch/edge2.toml" \
   >"$scratch/edge2.log" 2>&1 &
 edge2_pid=$!
 
 smoke_output=""
 for _ in $(seq 1 60); do
-  if smoke_output=$("$repo_root/target/debug/iotkit-edgectl" \
+  if smoke_output=$("$cargo_target_dir/debug/iotkit-edgectl" \
     --db "$scratch/edge.db" smoke enqueue 2>/dev/null); then
     break
   fi
@@ -347,7 +405,7 @@ done
 }
 smoke_output2=""
 for _ in $(seq 1 60); do
-  if smoke_output2=$("$repo_root/target/debug/iotkit-edgectl" \
+  if smoke_output2=$("$cargo_target_dir/debug/iotkit-edgectl" \
     --db "$scratch/edge2.db" smoke enqueue 2>/dev/null); then
     break
   fi
@@ -367,9 +425,9 @@ smoke_test_id2=$(jq -er '.test_id' <<<"$smoke_output2")
 
 delivered=false
 for _ in $(seq 1 60); do
-  status_output=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge.db" smoke status \
+  status_output=$("$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge.db" smoke status \
     --ledger-epoch "$smoke_epoch" --pub-seq "$smoke_pub_seq" 2>/dev/null || true)
-  status_output2=$("$repo_root/target/debug/iotkit-edgectl" --db "$scratch/edge2.db" smoke status \
+  status_output2=$("$cargo_target_dir/debug/iotkit-edgectl" --db "$scratch/edge2.db" smoke status \
     --ledger-epoch "$smoke_epoch2" --pub-seq "$smoke_pub_seq2" 2>/dev/null || true)
   query_output=$(docker compose --env-file "$output/site.env" -p "$project" \
     -f "$repo_root/deploy/compose.site.yaml" exec -T site \

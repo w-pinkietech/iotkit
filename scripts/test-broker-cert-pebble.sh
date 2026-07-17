@@ -9,6 +9,7 @@ octet=$((20 + $$ % 180))
 export IOTKIT_PEBBLE_PORT=$base_port
 export IOTKIT_PEBBLE_MGMT_PORT=$((base_port + 1))
 export IOTKIT_PEBBLE_DNS_PORT=$((base_port + 2))
+export IOTKIT_PEBBLE_CA_PORT=$((base_port + 3))
 export IOTKIT_PEBBLE_SUBNET="10.31.$octet.0/24"
 export IOTKIT_PEBBLE_IP="10.31.$octet.2"
 export IOTKIT_PEBBLE_CHALL_IP="10.31.$octet.3"
@@ -31,6 +32,8 @@ done
 curl -ksSf "https://127.0.0.1:$IOTKIT_PEBBLE_PORT/dir" >/dev/null
 docker compose -p "$project" -f "$repo_root/deploy/compose.pebble.yaml" \
   cp pebble:/test/certs/pebble.minica.pem "$scratch/pebble.minica.pem"
+curl -ksSf "https://127.0.0.1:$IOTKIT_PEBBLE_CA_PORT/roots/0" \
+  >"$scratch/pebble-root.pem"
 
 mkdir -p "$scratch/bin" "$scratch/lego"
 GOBIN="$scratch/bin" GOMODCACHE="${GOMODCACHE:-$scratch/go-mod}" \
@@ -65,7 +68,8 @@ export CHALLTESTSRV_URL="http://127.0.0.1:$IOTKIT_PEBBLE_MGMT_PORT"
 "$scratch/bin/lego" --path "$scratch/lego" \
   --server "https://localhost:$IOTKIT_PEBBLE_PORT/dir" \
   --email test@iotkit.invalid --domains localhost --accept-tos \
-  --dns exec --dns.resolvers "127.0.0.1:$IOTKIT_PEBBLE_DNS_PORT" run
+  --dns exec --dns.resolvers "127.0.0.1:$IOTKIT_PEBBLE_DNS_PORT" \
+  --dns.propagation-wait 1s run
 
 cert="$scratch/lego/certificates/localhost.crt"
 key="$scratch/lego/certificates/localhost.key"
@@ -77,7 +81,7 @@ cat >"$scratch/cert.env" <<EOF
 IOTKIT_CERT_DOMAIN=localhost
 IOTKIT_CERT_FILE=$cert
 IOTKIT_CERT_KEY_FILE=$key
-IOTKIT_CERT_CA_FILE=$issuer
+IOTKIT_CERT_CA_FILE=$scratch/pebble-root.pem
 IOTKIT_CERT_SITE_ENV=$scratch/site.env
 IOTKIT_CERT_COMPOSE_FILE=$scratch/compose.yaml
 IOTKIT_CERT_BROKER_PORT=18883
@@ -92,7 +96,8 @@ serial_before=$(openssl x509 -in "$cert" -noout -serial)
   --server "https://localhost:$IOTKIT_PEBBLE_PORT/dir" \
   --email test@iotkit.invalid --domains localhost \
   --dns exec --dns.resolvers "127.0.0.1:$IOTKIT_PEBBLE_DNS_PORT" \
-  renew --days 100
+  --dns.propagation-wait 1s \
+  renew --days 100 --ari-disable --no-random-sleep
 serial_after=$(openssl x509 -in "$cert" -noout -serial)
 [[ "$serial_before" != "$serial_after" ]] || {
   echo "Pebble renewal did not replace the certificate" >&2

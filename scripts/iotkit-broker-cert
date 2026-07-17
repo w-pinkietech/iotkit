@@ -38,12 +38,18 @@ for variable in IOTKIT_CERT_DOMAIN IOTKIT_CERT_FILE IOTKIT_CERT_KEY_FILE \
   [[ -n "${!variable:-}" ]] || fail "missing $variable in certificate config"
 done
 
+compose_args=(--env-file "$IOTKIT_CERT_SITE_ENV" -f "$IOTKIT_CERT_COMPOSE_FILE")
+if [[ -n "${IOTKIT_CERT_COMPOSE_PROJECT:-}" ]]; then
+  compose_args+=(-p "$IOTKIT_CERT_COMPOSE_PROJECT")
+fi
+
 validate_bundle() {
   local input_cert=$1 input_key=$2 input_ca=$3
   openssl x509 -in "$input_cert" -noout >/dev/null 2>&1 || fail "certificate is not valid PEM X.509"
   openssl pkey -in "$input_key" -noout >/dev/null 2>&1 || fail "private key is not readable"
   openssl x509 -in "$input_ca" -noout >/dev/null 2>&1 || fail "CA bundle is not valid PEM X.509"
-  openssl verify -CAfile "$input_ca" "$input_cert" >/dev/null 2>&1 || fail "certificate does not verify with CA bundle"
+  openssl verify -CAfile "$input_ca" -untrusted "$input_cert" "$input_cert" >/dev/null 2>&1 \
+    || fail "certificate does not verify with CA bundle"
   openssl x509 -in "$input_cert" -noout -checkhost "$IOTKIT_CERT_DOMAIN" >/dev/null 2>&1 \
     || fail "certificate does not cover configured broker hostname"
   openssl x509 -in "$input_cert" -noout -checkend 86400 >/dev/null 2>&1 \
@@ -68,24 +74,20 @@ status() {
 }
 
 reload_and_probe() {
-  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
-    -f "$IOTKIT_CERT_COMPOSE_FILE" kill -s HUP broker >/dev/null
-  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
-    -f "$IOTKIT_CERT_COMPOSE_FILE" restart site >/dev/null
-  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
-    -f "$IOTKIT_CERT_COMPOSE_FILE" exec -T caddy \
-    caddy reload --config /etc/caddy/Caddyfile >/dev/null
-  docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
-    -f "$IOTKIT_CERT_COMPOSE_FILE" exec -T site \
-    sh -c 'test -r /run/iotkit/broker-tls/ca.pem' >/dev/null
+  docker compose "${compose_args[@]}" kill -s HUP broker >/dev/null || return 1
+  docker compose "${compose_args[@]}" restart site >/dev/null || return 1
+  docker compose "${compose_args[@]}" exec -T caddy \
+    caddy reload --config /etc/caddy/Caddyfile >/dev/null || return 1
+  docker compose "${compose_args[@]}" exec -T site \
+    sh -c 'test -r /run/iotkit/broker-tls/ca.pem' >/dev/null || return 1
   timeout 15 openssl s_client -connect "$IOTKIT_CERT_DOMAIN:$IOTKIT_CERT_BROKER_PORT" \
     -servername "$IOTKIT_CERT_DOMAIN" -CAfile "$IOTKIT_CERT_CA_FILE" \
     -verify_return_error </dev/null 2>/dev/null |
-    grep -Fq 'Verify return code: 0 (ok)'
+    grep -Fq 'Verify return code: 0 (ok)' || return 1
   timeout 15 openssl s_client -connect "$IOTKIT_CERT_DOMAIN:${IOTKIT_CERT_SITE_HTTPS_PORT:-443}" \
     -servername "$IOTKIT_CERT_DOMAIN" -CAfile "$IOTKIT_CERT_CA_FILE" \
     -verify_return_error </dev/null 2>/dev/null |
-    grep -Fq 'Verify return code: 0 (ok)'
+    grep -Fq 'Verify return code: 0 (ok)' || return 1
 }
 
 install_bundle() {
@@ -112,12 +114,9 @@ install_bundle() {
     mv "$backup/server.key" "$IOTKIT_CERT_KEY_FILE"
     mv "$backup/ca.pem" "$IOTKIT_CERT_CA_FILE"
     rmdir "$backup"
-    docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
-      -f "$IOTKIT_CERT_COMPOSE_FILE" kill -s HUP broker >/dev/null || true
-    docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
-      -f "$IOTKIT_CERT_COMPOSE_FILE" restart site >/dev/null || true
-    docker compose --env-file "$IOTKIT_CERT_SITE_ENV" \
-      -f "$IOTKIT_CERT_COMPOSE_FILE" exec -T caddy \
+    docker compose "${compose_args[@]}" kill -s HUP broker >/dev/null || true
+    docker compose "${compose_args[@]}" restart site >/dev/null || true
+    docker compose "${compose_args[@]}" exec -T caddy \
       caddy reload --config /etc/caddy/Caddyfile >/dev/null || true
     fail "new certificate probe failed; previous bundle restored"
   fi
@@ -160,8 +159,7 @@ case "$command_name" in
       --accept-tos "${challenge_args[@]}" run
     lego_cert="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.crt"
     lego_key="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.key"
-    lego_issuer="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.issuer.crt"
-    install_bundle "$lego_cert" "$lego_key" "$lego_issuer"
+    install_bundle "$lego_cert" "$lego_key" "$IOTKIT_CERT_CA_FILE"
     ;;
   *)
     usage

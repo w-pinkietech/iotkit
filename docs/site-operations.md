@@ -6,8 +6,8 @@ factory router, DNS, IP address allocation, firewall, or VPN.
 ## 1. Install
 
 1. Give every Edge a different `edge_node_id` and export its `mqtt-binding`.
-2. Prepare a DNS name and a certificate/key/issuer bundle that covers the Site
-   host. The key file must be owner-only.
+2. Prepare a DNS name, a full-chain server certificate, its private key, and a
+   root trust bundle that covers the Site host. The key file must be owner-only.
 3. Run `scripts/bootstrap-site.sh` for the first Edge. Add exact YokaKit
    observation and status topics with repeated `--site-publish-topic`.
 4. Start `deploy/compose.site.yaml`.
@@ -41,9 +41,10 @@ YokaKit. It manages the Mosquitto/Caddy certificate bundle on the broker host.
   files; reloads Mosquitto; restarts Site so trust changes are read; reloads
   Caddy; then probes new MQTT TLS and HTTPS connections.
 - A failed probe restores the previous three files and reloads the services.
-- `renew` asks the configured ACME server through `lego`, then uses the same
-  validated install path. HTTP-01 uses Caddy's ACME webroot. DNS-01 is selected
-  by setting `IOTKIT_CERT_LEGO_CHALLENGE=dns`,
+- `renew` asks the configured ACME server through `lego`, keeps the configured
+  root trust bundle, then uses the same validated install path for the new
+  full-chain certificate and key. HTTP-01 uses Caddy's ACME webroot. DNS-01 is
+  selected by setting `IOTKIT_CERT_LEGO_CHALLENGE=dns`,
   `IOTKIT_CERT_LEGO_DNS_PROVIDER`, and the provider's credential environment.
 - Copy the generated systemd service/timer into `/etc/systemd/system`, add the
   ACME email/server settings to owner-only `broker-cert.env`, then enable the
@@ -51,7 +52,10 @@ YokaKit. It manages the Mosquitto/Caddy certificate bundle on the broker host.
   unattended.
 
 The initial DNS, ACME account choice, and provider credential remain installation
-work. The Console shows expiry but does not issue or replace certificates.
+work. `IOTKIT_CERT_CA_FILE` must contain the root certificates trusted by Edge
+and Site; an intermediate certificate emitted by `lego` is not a replacement
+for that trust bundle. The Console shows expiry but does not issue or replace
+certificates.
 
 ## 4. Account recovery
 

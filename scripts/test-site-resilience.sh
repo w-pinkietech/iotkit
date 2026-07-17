@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cargo_target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
 # shellcheck disable=SC1091
 source "$repo_root/deploy/mosquitto-image.env"
 export IOTKIT_MOSQUITTO_IMAGE
@@ -51,7 +52,7 @@ trap cleanup EXIT
 
 start_edge() {
   edge_run=$((edge_run + 1))
-  "$repo_root/target/debug/iotkit-edge" --config "$scratch/edge.toml" \
+  "$cargo_target_dir/debug/iotkit-edge" --config "$scratch/edge.toml" \
     >"$scratch/edge-$edge_run.log" 2>&1 &
   edge_pid=$!
 }

@@ -28,6 +28,9 @@ services:
       - --password-file
       - /run/secrets/site-mqtt-password
       - --allow-insecure
+      - --public-origin
+      - http://127.0.0.1:8080
+      - --development-http
     volumes:
       - ${IOTKIT_SITE_DATA_DIR:?set IOTKIT_SITE_DATA_DIR}:/data
       - ${IOTKIT_SITE_PASSWORD_FILE:?set IOTKIT_SITE_PASSWORD_FILE}:/run/secrets/site-mqtt-password:ro

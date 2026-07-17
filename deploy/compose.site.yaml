@@ -90,7 +90,11 @@ services:
   caddy:
     image: "caddy:2.10.2"
     restart: unless-stopped
+    user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"
     network_mode: host
+    environment:
+      XDG_CONFIG_HOME: /data/config
+      XDG_DATA_HOME: /data
     cap_drop:
       - ALL
     cap_add:

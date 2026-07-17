@@ -1,8 +1,7 @@
 services:
   pebble:
-    image: ghcr.io/letsencrypt/pebble:v2.10.1
+    image: ghcr.io/letsencrypt/pebble:2.10.1
     command:
-      - pebble
       - -config
       - /test/config/pebble-config.json
       - -strict
@@ -13,14 +12,14 @@ services:
       PEBBLE_VA_ALWAYS_VALID: "0"
     ports:
       - "${IOTKIT_PEBBLE_PORT:?}:14000"
+      - "${IOTKIT_PEBBLE_CA_PORT:?}:15000"
     networks:
       acme:
         ipv4_address: ${IOTKIT_PEBBLE_IP:?}
 
   challtestsrv:
-    image: ghcr.io/letsencrypt/pebble-challtestsrv:v2.10.1
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:2.10.1
     command:
-      - pebble-challtestsrv
       - -defaultIPv6
       - ""
       - -defaultIPv4
