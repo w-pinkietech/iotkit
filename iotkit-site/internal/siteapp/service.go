@@ -52,6 +52,13 @@ type UpdateSignalProfile struct {
 
 func (UpdateSignalProfile) isSiteOperation() {}
 
+type ActivateEdge struct {
+	EdgeRef      string
+	Precondition RevisionPrecondition
+}
+
+func (ActivateEdge) isSiteOperation() {}
+
 func (operation PutLegacyMQTTRoute) Validate() error {
 	return validateLegacyMQTTRoute(operation.MappingID, operation.Topic)
 }
@@ -71,6 +78,7 @@ type Result struct {
 	LegacyMQTTRoute *LegacyMQTTRoute
 	DeviceProfile   *DeviceProfile
 	SignalProfile   *SignalProfile
+	Edge            *Edge
 }
 
 type Repository interface {
@@ -84,6 +92,8 @@ type Repository interface {
 	ListInventoryDevices(context.Context, int, string) ([]DeviceSummary, error)
 	ListInventorySignals(context.Context, int, string) ([]SignalSummary, error)
 	ListSetupDevices(context.Context, int) ([]SetupDeviceSource, error)
+	ListEdges(context.Context) ([]Edge, error)
+	RequestEdgeActivation(context.Context, Actor, string, RevisionPrecondition) (Edge, error)
 }
 
 type Service struct {
@@ -180,6 +190,25 @@ func (service *Service) Dispatch(ctx context.Context, actor Actor, operation Ope
 			return noResult, err
 		}
 		return Result{SignalProfile: &profile}, nil
+	case ActivateEdge:
+		if actor.Class == ActorAccount &&
+			actor.Role != AccountRoleAdmin &&
+			actor.Role != AccountRoleSystemAdmin {
+			return noResult, ErrForbidden
+		}
+		if err := validateResourceRef(operation.EdgeRef, "edge_"); err != nil {
+			return noResult, err
+		}
+		edge, err := service.repository.RequestEdgeActivation(
+			ctx,
+			actor,
+			operation.EdgeRef,
+			operation.Precondition,
+		)
+		if err != nil {
+			return noResult, err
+		}
+		return Result{Edge: &edge}, nil
 	default:
 		return noResult, errors.New("unsupported Site operation")
 	}
@@ -227,6 +256,10 @@ func (service *Service) ListAuditEvents(ctx context.Context, limit int) ([]Audit
 		return nil, errors.New("audit event limit must be between 1 and 100")
 	}
 	return service.repository.ListAuditEvents(ctx, limit)
+}
+
+func (service *Service) ListEdges(ctx context.Context) ([]Edge, error) {
+	return service.repository.ListEdges(ctx)
 }
 
 func (service *Service) ListDevices(ctx context.Context, page PageRequest) ([]DeviceSummary, error) {

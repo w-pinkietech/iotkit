@@ -32,6 +32,54 @@ type consoleSignalView struct {
 	Definition        *semantics.Definition
 }
 
+type consoleEdgeView struct {
+	siteapp.Edge
+	Name                string
+	LocationLabel       string
+	StateLabel          string
+	StateClass          string
+	LastCommunication   string
+	LastCommunicationAt string
+	LastResult          string
+	CanActivate         bool
+}
+
+func newConsoleEdgeViews(edges []siteapp.Edge, now time.Time) []consoleEdgeView {
+	views := make([]consoleEdgeView, 0, len(edges))
+	for _, edge := range edges {
+		view := consoleEdgeView{
+			Edge:          edge,
+			Name:          edge.DisplayName,
+			LocationLabel: edge.Location,
+			CanActivate:   edge.State == siteapp.EdgeDiscovered,
+		}
+		if view.Name == "" {
+			view.Name = "名前未設定のEdge"
+		}
+		if view.LocationLabel == "" {
+			view.LocationLabel = "設置場所 未設定"
+		}
+		view.LastCommunication, view.LastCommunicationAt = displayAge(
+			edge.LastDescriptorAt, now,
+		)
+		view.LastResult, _ = displayAge(edge.LastResultAt, now)
+		switch edge.State {
+		case siteapp.EdgeDiscovered:
+			view.StateLabel, view.StateClass = "未登録", "needs-setup"
+		case siteapp.EdgeActivating:
+			view.StateLabel, view.StateClass = "登録処理中", "stale"
+		case siteapp.EdgeActive:
+			view.StateLabel, view.StateClass = "登録済み", "configured"
+		case siteapp.EdgeRecoveryHold:
+			view.StateLabel, view.StateClass = "復旧確認待ち", "stale"
+		default:
+			view.StateLabel, view.StateClass = "状態不明", "stale"
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
 type consoleSetupDeviceView struct {
 	siteapp.SetupDevice
 	Name              string

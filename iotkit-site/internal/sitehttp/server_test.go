@@ -48,6 +48,115 @@ func TestAuthenticatedAPIDeniesAnonymousInventoryAndSetsSecurityHeaders(t *testi
 	}
 }
 
+func TestEdgeActivationAPIRequiresAdminAndQueuesActivation(t *testing.T) {
+	adminServer, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	edge := seedDiscoveredEdge(t, archive)
+
+	unauthorized := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/edges/"+edge.EdgeRef+"/activation",
+		nil,
+	)
+	unauthorizedResponse := httptest.NewRecorder()
+	adminServer.ServeHTTP(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorizedResponse.Code)
+	}
+
+	viewerServer, viewerArchive := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	viewerEdge := seedDiscoveredEdge(t, viewerArchive)
+	viewerCookie, viewerCSRF := loginTestAccount(t, viewerServer)
+	viewerRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/edges/"+viewerEdge.EdgeRef+"/activation",
+		nil,
+	)
+	viewerRequest.AddCookie(viewerCookie)
+	viewerRequest.Header.Set("Origin", testOrigin)
+	viewerRequest.Header.Set("X-CSRF-Token", viewerCSRF)
+	viewerResponse := httptest.NewRecorder()
+	viewerServer.ServeHTTP(viewerResponse, viewerRequest)
+	if viewerResponse.Code != http.StatusForbidden {
+		t.Fatalf("viewer status = %d, body=%s",
+			viewerResponse.Code, viewerResponse.Body.String())
+	}
+
+	adminCookie, adminCSRF := loginTestAccount(t, adminServer)
+	adminRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/edges/"+edge.EdgeRef+"/activation",
+		nil,
+	)
+	adminRequest.AddCookie(adminCookie)
+	adminRequest.Header.Set("Origin", testOrigin)
+	adminRequest.Header.Set("X-CSRF-Token", adminCSRF)
+	adminRequest.Header.Set("If-Match", revisionETag(edge.Revision))
+	adminResponse := httptest.NewRecorder()
+	adminServer.ServeHTTP(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusAccepted {
+		t.Fatalf("admin status = %d, body=%s",
+			adminResponse.Code, adminResponse.Body.String())
+	}
+	var activated siteapp.Edge
+	if err := json.Unmarshal(adminResponse.Body.Bytes(), &activated); err != nil {
+		t.Fatal(err)
+	}
+	if activated.State != siteapp.EdgeActivating ||
+		strings.Contains(adminResponse.Body.String(), "activation_id") {
+		t.Fatalf("activated Edge = %#v", activated)
+	}
+	commands, err := archive.ListPendingActivationCommands(
+		context.Background(), 10,
+	)
+	if err != nil || len(commands) != 1 {
+		t.Fatalf("commands = %#v, err = %v", commands, err)
+	}
+}
+
+func TestEdgesConsoleShowsEdgeAsParentOfDevices(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	edge := seedDiscoveredEdge(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/edges", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		"Edge管理",
+		"未登録",
+		"1台のデバイス",
+		"1件のセンサー",
+		"最終通信",
+		edge.LedgerEpoch,
+		"Edgeを登録",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Edge console missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		"activation_id",
+		"request_json",
+		"result_json",
+		"接続中",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("Edge console exposes forbidden term %q", forbidden)
+		}
+	}
+}
+
 func TestLoginCreatesStrictCookiesAndAllowsInventoryRead(t *testing.T) {
 	server := newTestServer(t, false)
 	body := `{"login_id":"operator","password":"現場担当者の 十分に長いパスワード"}`
@@ -969,6 +1078,38 @@ func newTestServerFixture(
 	return handler, archive
 }
 
+func seedDiscoveredEdge(t *testing.T, archive *store.Store) siteapp.Edge {
+	t.Helper()
+	snapshot := contract.DescriptorSnapshot{
+		SchemaVersion:      1,
+		EdgeNodeID:         "factory-edge-01",
+		LedgerEpoch:        "epoch-01",
+		DescriptorRevision: 1,
+		Complete:           true,
+		Devices: []contract.DescriptorDevice{{
+			SystemID: "018f0000-0000-7000-8000-000000000001",
+			State:    "active",
+		}},
+		Signals: []contract.DescriptorSignal{{
+			SeriesKey:      "018f0000-0000-7000-8000-000000000001:temperature_c:na:primary",
+			SystemID:       "018f0000-0000-7000-8000-000000000001",
+			MeasurementKey: "temperature_c",
+			Variant:        "primary",
+			ValueType:      "float",
+		}},
+	}
+	if _, err := archive.ApplyDescriptorSnapshot(
+		context.Background(), snapshot,
+	); err != nil {
+		t.Fatal(err)
+	}
+	edges, err := archive.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("edges = %#v, err = %v", edges, err)
+	}
+	return edges[0]
+}
+
 func seedSetupDevice(t *testing.T, archive *store.Store) {
 	t.Helper()
 	const (
@@ -998,6 +1139,43 @@ func seedSetupDevice(t *testing.T, archive *store.Store) {
 		}},
 	}
 	if _, err := archive.ApplyDescriptorSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	edges, err := archive.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("edges = %#v, err = %v", edges, err)
+	}
+	expected := edges[0].Revision
+	if _, err := archive.RequestEdgeActivation(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		edges[0].EdgeRef,
+		siteapp.RevisionPrecondition{Expected: &expected},
+	); err != nil {
+		t.Fatal(err)
+	}
+	commands, err := archive.ListPendingActivationCommands(context.Background(), 1)
+	if err != nil || len(commands) != 1 {
+		t.Fatalf("activation commands = %#v, err = %v", commands, err)
+	}
+	activationRequest, err := contract.DecodeActivationRequest(commands[0].PayloadJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ApplyActivationResult(
+		context.Background(),
+		contract.ActivationResult{
+			SchemaVersion:            contract.SchemaVersion,
+			ActivationID:             activationRequest.ActivationID,
+			SiteID:                   activationRequest.SiteID,
+			EdgeNodeID:               activationRequest.EdgeNodeID,
+			LedgerEpoch:              activationRequest.ExpectedLedgerEpoch,
+			Status:                   "applied",
+			DiscardThroughReadingSeq: 0,
+			FirstPublicationSeq:      1,
+			AppliedAt:                activationRequest.IssuedAt + 1,
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	record := json.RawMessage(

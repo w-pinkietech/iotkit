@@ -27,6 +27,8 @@ type consoleData struct {
 	IsOwner            bool
 	CSRF               string
 	Devices            []siteapp.DeviceSummary
+	Edges              []siteapp.Edge
+	EdgeRows           []consoleEdgeView
 	Signals            []siteapp.SignalSummary
 	DeviceRows         []consoleDeviceView
 	SignalRows         []consoleSignalView
@@ -66,7 +68,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	}
 	titles := map[string]string{
 		"status": "現場の概要", "monitor": "センサーの現在値", "devices": "デバイス管理",
-		"setup": "デバイス管理", "signals": "センサー設定",
+		"setup": "デバイス管理", "edges": "Edge管理", "signals": "センサー設定",
 		"logs": "受信履歴", "output": "外部出力",
 		"audit": "変更履歴", "accounts": "アカウント", "system": "システム",
 	}
@@ -74,6 +76,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		"status":   "現場のセンサーとデータの流れを、ひと目で確認できます。",
 		"monitor":  "各センサーから最後に届いた値と受信状態を確認します。",
 		"setup":    "デバイスごとに、接続されたセンサーの名前・種類・単位を登録します。",
+		"edges":    "Siteへデータを送るEdgeの登録状態と最終通信を確認します。",
 		"devices":  "現場に設置したデバイスの名前と場所を管理します。",
 		"signals":  "センサーから届く値の補正・判定・累積方法を設定します。",
 		"logs":     "Siteが受け取った直近のデータを時系列で確認します。",
@@ -108,6 +111,11 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	}
 	var err error
 	switch page {
+	case "edges":
+		data.Edges, err = server.site.ListEdges(request.Context())
+		if err == nil {
+			data.EdgeRows = newConsoleEdgeViews(data.Edges, server.now())
+		}
 	case "status", "monitor", "signals":
 		data.Signals, err = server.site.ListSignals(
 			request.Context(), siteapp.PageRequest{Limit: 100},
@@ -121,6 +129,14 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			)
 			if err == nil {
 				data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
+			}
+			if err == nil {
+				data.Edges, err = server.site.ListEdges(request.Context())
+				for _, edge := range data.Edges {
+					if edge.State == siteapp.EdgeActive {
+						data.EdgeCount++
+					}
+				}
 			}
 		}
 		data.SignalRows = newConsoleSignalViews(data.Signals, data.Definitions, server.now())
@@ -219,9 +235,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 }
 
 func (data *consoleData) summarizeSignals() {
-	edges := make(map[string]struct{})
 	for _, signal := range data.SignalRows {
-		edges[signal.Edge] = struct{}{}
 		switch signal.StatusClass {
 		case "receiving":
 			data.ReceivingCount++
@@ -230,7 +244,6 @@ func (data *consoleData) summarizeSignals() {
 		}
 	}
 	data.AttentionCount += int(data.ProjectionFailures)
-	data.EdgeCount = len(edges)
 }
 
 func roleLabel(role siteapp.AccountRole) string {
@@ -283,6 +296,27 @@ func (server *Server) consoleDeviceProfile(response http.ResponseWriter, request
 		Precondition: siteapp.RevisionPrecondition{Expected: expected},
 	})
 	server.consoleMutationResult(response, request, consoleReturnTarget(request, "/devices"), err)
+}
+
+func (server *Server) consoleEdgeActivation(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	_, err := server.site.Dispatch(
+		request.Context(),
+		server.actor(auth),
+		siteapp.ActivateEdge{
+			EdgeRef: request.PathValue("edge_ref"),
+			Precondition: siteapp.RevisionPrecondition{
+				Expected: formRevision(request),
+			},
+		},
+	)
+	server.consoleMutationResult(response, request, "/edges", err)
 }
 
 func (server *Server) consoleSignalProfile(response http.ResponseWriter, request *http.Request) {

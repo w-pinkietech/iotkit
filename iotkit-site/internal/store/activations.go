@@ -20,28 +20,16 @@ var (
 	ErrActivationConflict = errors.New("Edge activation result conflict")
 )
 
-type EdgeActivationState string
+type EdgeActivationState = siteapp.EdgeState
 
 const (
-	EdgeDiscovered   EdgeActivationState = "discovered"
-	EdgeActivating   EdgeActivationState = "activating"
-	EdgeActive       EdgeActivationState = "active"
-	EdgeRecoveryHold EdgeActivationState = "recovery_hold"
+	EdgeDiscovered   = siteapp.EdgeDiscovered
+	EdgeActivating   = siteapp.EdgeActivating
+	EdgeActive       = siteapp.EdgeActive
+	EdgeRecoveryHold = siteapp.EdgeRecoveryHold
 )
 
-type EdgeActivation struct {
-	EdgeRef          string              `json:"edge_ref"`
-	EdgeNodeID       string              `json:"edge_node_id"`
-	LedgerEpoch      string              `json:"ledger_epoch"`
-	State            EdgeActivationState `json:"state"`
-	ActivationID     string              `json:"activation_id,omitempty"`
-	GrantRevision    uint64              `json:"grant_revision"`
-	DisplayName      string              `json:"display_name"`
-	Location         string              `json:"location"`
-	Revision         int64               `json:"revision"`
-	LastDescriptorAt *int64              `json:"last_descriptor_at,omitempty"`
-	LastResultAt     *int64              `json:"last_result_at,omitempty"`
-}
+type EdgeActivation = siteapp.Edge
 
 type ActivationCommand struct {
 	ActivationID string          `json:"activation_id"`
@@ -57,7 +45,13 @@ func (store *Store) ListEdges(ctx context.Context) ([]EdgeActivation, error) {
 		SELECT edge_ref, edge_node_id, ledger_epoch, state,
 			COALESCE(activation_id, ''), grant_revision,
 			display_name, location, revision,
-			last_descriptor_at, last_result_at
+			last_descriptor_at, last_result_at,
+			(SELECT COUNT(*) FROM descriptor_devices d
+				WHERE d.edge_node_id = edge_activations.edge_node_id
+					AND d.presence = 'current'),
+			(SELECT COUNT(*) FROM descriptor_signals s
+				WHERE s.edge_node_id = edge_activations.edge_node_id
+					AND s.presence = 'current')
 		FROM edge_activations
 		ORDER BY created_at, edge_ref
 	`)
@@ -391,7 +385,13 @@ func loadEdgeByRefTx(
 		SELECT edge_ref, edge_node_id, ledger_epoch, state,
 			COALESCE(activation_id, ''), grant_revision,
 			display_name, location, revision,
-			last_descriptor_at, last_result_at
+			last_descriptor_at, last_result_at,
+			(SELECT COUNT(*) FROM descriptor_devices d
+				WHERE d.edge_node_id = edge_activations.edge_node_id
+					AND d.presence = 'current'),
+			(SELECT COUNT(*) FROM descriptor_signals s
+				WHERE s.edge_node_id = edge_activations.edge_node_id
+					AND s.presence = 'current')
 		FROM edge_activations
 		WHERE edge_ref = ?
 	`, edgeRef)
@@ -410,7 +410,7 @@ func scanEdge(scanner edgeScanner) (EdgeActivation, error) {
 		&edge.EdgeRef, &edge.EdgeNodeID, &edge.LedgerEpoch, &edge.State,
 		&edge.ActivationID, &edge.GrantRevision,
 		&edge.DisplayName, &edge.Location, &edge.Revision,
-		&lastDescriptor, &lastResult,
+		&lastDescriptor, &lastResult, &edge.DeviceCount, &edge.SensorCount,
 	); err != nil {
 		return edge, err
 	}

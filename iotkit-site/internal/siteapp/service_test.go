@@ -2,6 +2,7 @@ package siteapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -18,6 +19,69 @@ func TestProfileInputValidationMeasuresTrimmedTextAndRejectsControls(t *testing.
 	input.DisplayName = "温度\n"
 	if err := input.Validate(); err == nil {
 		t.Fatal("profile text containing a control character was accepted")
+	}
+}
+
+func TestActivateEdgeRequiresAnAdministrator(t *testing.T) {
+	repository := &fakeRepository{}
+	service := NewService(repository)
+	expected := int64(1)
+
+	_, err := service.Dispatch(
+		context.Background(),
+		AccountActor(
+			"acct_00000000000000000000000000000001",
+			AccountRoleViewer,
+		),
+		ActivateEdge{
+			EdgeRef: "edge_00000000000000000000000000000001",
+			Precondition: RevisionPrecondition{
+				Expected: &expected,
+			},
+		},
+	)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("Dispatch error = %v, want ErrForbidden", err)
+	}
+	if repository.activateEdgeCalls != 0 {
+		t.Fatalf("activation calls = %d, want 0", repository.activateEdgeCalls)
+	}
+}
+
+func TestAdministratorCanActivateAndListEdges(t *testing.T) {
+	edge := Edge{
+		EdgeRef:     "edge_00000000000000000000000000000001",
+		EdgeNodeID:  "factory-edge-01",
+		LedgerEpoch: "epoch-01",
+		State:       EdgeActivating,
+		Revision:    2,
+	}
+	repository := &fakeRepository{edges: []Edge{edge}, edge: edge}
+	service := NewService(repository)
+	expected := int64(1)
+
+	result, err := service.Dispatch(
+		context.Background(),
+		AccountActor(
+			"acct_00000000000000000000000000000001",
+			AccountRoleAdmin,
+		),
+		ActivateEdge{
+			EdgeRef: edge.EdgeRef,
+			Precondition: RevisionPrecondition{
+				Expected: &expected,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Edge == nil || result.Edge.EdgeRef != edge.EdgeRef {
+		t.Fatalf("result = %#v", result)
+	}
+	edges, err := service.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 || edges[0].EdgeRef != edge.EdgeRef {
+		t.Fatalf("edges = %#v, err = %v", edges, err)
 	}
 }
 
@@ -318,6 +382,23 @@ type fakeRepository struct {
 	setupDevices       []SetupDeviceSource
 	deviceListCalls    int
 	signalListCalls    int
+	edges              []Edge
+	edge               Edge
+	activateEdgeCalls  int
+}
+
+func (repository *fakeRepository) ListEdges(context.Context) ([]Edge, error) {
+	return repository.edges, nil
+}
+
+func (repository *fakeRepository) RequestEdgeActivation(
+	context.Context,
+	Actor,
+	string,
+	RevisionPrecondition,
+) (Edge, error) {
+	repository.activateEdgeCalls++
+	return repository.edge, nil
 }
 
 func (repository *fakeRepository) ListSetupDevices(

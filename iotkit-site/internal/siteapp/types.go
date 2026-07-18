@@ -67,6 +67,31 @@ type RevisionPrecondition struct {
 	Expected *int64
 }
 
+type EdgeState string
+
+const (
+	EdgeDiscovered   EdgeState = "discovered"
+	EdgeActivating   EdgeState = "activating"
+	EdgeActive       EdgeState = "active"
+	EdgeRecoveryHold EdgeState = "recovery_hold"
+)
+
+type Edge struct {
+	EdgeRef          string    `json:"edge_ref"`
+	EdgeNodeID       string    `json:"edge_node_id"`
+	LedgerEpoch      string    `json:"ledger_epoch"`
+	State            EdgeState `json:"state"`
+	ActivationID     string    `json:"-"`
+	GrantRevision    uint64    `json:"-"`
+	DisplayName      string    `json:"display_name"`
+	Location         string    `json:"location"`
+	DeviceCount      int64     `json:"device_count"`
+	SensorCount      int64     `json:"sensor_count"`
+	Revision         int64     `json:"revision"`
+	LastDescriptorAt *int64    `json:"last_descriptor_at,omitempty"`
+	LastResultAt     *int64    `json:"last_result_at,omitempty"`
+}
+
 type DeviceProfileInput struct {
 	DisplayName string
 	Location    string

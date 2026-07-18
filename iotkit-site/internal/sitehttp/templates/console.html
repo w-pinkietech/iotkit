@@ -23,6 +23,7 @@
       <a href="/logs" {{if eq .Page "logs"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">↕</span>受信履歴</a>
 
       <p class="nav-heading">設定</p>
+      <a href="/edges" {{if eq .Page "edges"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">◇</span>Edge管理</a>
       <a href="/setup" {{if or (eq .Page "setup") (eq .Page "devices")}}class="active" aria-current="page"{{end}}><span class="nav-symbol">＋</span>デバイス管理</a>
       <a href="/signals" {{if eq .Page "signals"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌁</span>センサー設定</a>
       <a href="/output" {{if eq .Page "output"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">→</span>外部出力</a>
@@ -74,7 +75,7 @@
         <article class="metric-card"><span class="metric-label">受信中</span><strong>{{.ReceivingCount}}</strong><small>件のセンサー</small></article>
         <article class="metric-card"><span class="metric-label">要確認</span><strong>{{.AttentionCount}}</strong><small>停止・未受信</small></article>
         <article class="metric-card"><span class="metric-label">登録待ち</span><strong>{{.SetupPendingCount}}</strong><small>台の新しいデバイス</small></article>
-        <article class="metric-card"><span class="metric-label">接続中のEdge</span><strong>{{.EdgeCount}}</strong><small>台</small></article>
+        <article class="metric-card"><span class="metric-label">登録済みのEdge</span><strong>{{.EdgeCount}}</strong><small>台</small></article>
       </section>
 
       <section class="content-section">
@@ -88,12 +89,46 @@
       <section class="content-section">
         <div class="section-heading"><div><p class="section-kicker">FLOW</p><h2>データの流れ</h2><p>センサーから外部アプリまでの現在の経路です。</p></div></div>
         <div class="flow-strip">
-          <div class="flow-step complete"><span>1</span><strong>Edge</strong><small>{{.EdgeCount}}台から受信</small></div>
+          <div class="flow-step complete"><span>1</span><strong>Edge</strong><small>{{.EdgeCount}}台を登録済み</small></div>
           <i aria-hidden="true">→</i>
           <div class="flow-step complete"><span>2</span><strong>IoTKit Site</strong><small>保存・値の変換</small></div>
           <i aria-hidden="true">→</i>
           <div class="flow-step {{if .Outputs}}complete{{else}}pending{{end}}"><span>3</span><strong>外部アプリ</strong><small>{{if .Outputs}}出力設定あり{{else}}出力未設定{{end}}</small></div>
         </div>
+      </section>
+      {{end}}
+
+      {{if eq .Page "edges"}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>Edgeの状態を確認できます。登録には設定管理者の権限が必要です。</span></div>{{end}}
+      <section class="device-grid">
+        {{range .EdgeRows}}
+        <article class="device-card">
+          <header><span class="device-illustration" aria-hidden="true">◇</span><div><p class="section-kicker">EDGE</p><h2>{{.Name}}</h2><p>{{.LocationLabel}}</p></div><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></header>
+          <dl class="detail-list">
+            <div><dt>配下のデバイス</dt><dd>{{.DeviceCount}}台のデバイス</dd></div>
+            <div><dt>配下のセンサー</dt><dd>{{.SensorCount}}件のセンサー</dd></div>
+            <div><dt>最終通信</dt><dd title="{{.LastCommunicationAt}}">{{.LastCommunication}}</dd></div>
+            {{if .LastResultAt}}<div><dt>登録結果の最終受信</dt><dd>{{.LastResult}}</dd></div>{{end}}
+          </dl>
+          <details class="setting-panel">
+            <summary>診断情報</summary>
+            <dl class="detail-list">
+              <div><dt>Edge識別子</dt><dd class="mono">{{.EdgeNodeID}}</dd></div>
+              <div><dt>データ世代</dt><dd class="mono">{{.LedgerEpoch}}</dd></div>
+            </dl>
+          </details>
+          {{if and $.IsAdmin .CanActivate}}
+          <form method="post" action="/console/edges/{{.EdgeRef}}/activation" class="setting-panel">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="revision" value="{{.Revision}}">
+            <p class="metadata-warning">登録前にEdgeが保持していた値はSiteへ送られません。登録完了後に受信した値から保存を始めます。</p>
+            <button type="submit">Edgeを登録</button>
+          </form>
+          {{end}}
+        </article>
+        {{else}}
+        {{template "empty-state" "Edgeはまだ見つかっていません。Edgeから接続情報が届くと、ここへ表示されます。"}}
+        {{end}}
       </section>
       {{end}}
 

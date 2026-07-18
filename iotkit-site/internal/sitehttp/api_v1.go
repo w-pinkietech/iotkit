@@ -11,6 +11,41 @@ import (
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
 
+func (server *Server) listEdges(response http.ResponseWriter, request *http.Request) {
+	if _, ok := server.requireAPIAuth(response, request, false); !ok {
+		return
+	}
+	edges, err := server.site.ListEdges(request.Context())
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Items []siteapp.Edge `json:"items"`
+	}{edges})
+}
+
+func (server *Server) activateEdge(response http.ResponseWriter, request *http.Request) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	result, err := server.site.Dispatch(
+		request.Context(),
+		server.actor(auth),
+		siteapp.ActivateEdge{
+			EdgeRef:      request.PathValue("edge_ref"),
+			Precondition: revisionPrecondition(request),
+		},
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(result.Edge.Revision))
+	writeJSON(response, http.StatusAccepted, result.Edge)
+}
+
 func (server *Server) putDeviceProfile(response http.ResponseWriter, request *http.Request) {
 	auth, ok := server.requireAdminMutation(response, request)
 	if !ok {
