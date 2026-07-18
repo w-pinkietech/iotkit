@@ -52,7 +52,7 @@ type Server struct {
 	templates       *template.Template
 	mux             *http.ServeMux
 	previewMu       sync.Mutex
-	previews        map[string]*semanticPreview
+	previewCache    map[string]cachedPreviewWindow
 	now             func() time.Time
 	certificateFile string
 }
@@ -105,7 +105,7 @@ func New(config Config) (*Server, error) {
 		secureCookies:   !config.DevelopmentHTTP,
 		templates:       templates,
 		mux:             http.NewServeMux(),
-		previews:        make(map[string]*semanticPreview),
+		previewCache:    make(map[string]cachedPreviewWindow),
 		now:             time.Now,
 		certificateFile: config.CertificateFile,
 	}
@@ -168,8 +168,6 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /api/v1/accounts", server.createAccount)
 	server.mux.HandleFunc("POST /api/v1/session/password", server.changeOwnPassword)
 	server.mux.HandleFunc("POST /api/v1/mapping-previews", server.createMappingPreview)
-	server.mux.HandleFunc("GET /api/v1/mapping-previews/{preview_id}", server.getMappingPreview)
-	server.mux.HandleFunc("DELETE /api/v1/mapping-previews/{preview_id}", server.deleteMappingPreview)
 }
 
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {

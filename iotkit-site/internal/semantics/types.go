@@ -139,10 +139,3 @@ type Observation struct {
 	ObservedAt         int64           `json:"observed_at"`
 	CreatedAt          int64           `json:"created_at"`
 }
-
-type PreviewSample struct {
-	SourcePubSeq int64   `json:"source_pub_seq"`
-	ObservedAt   int64   `json:"observed_at"`
-	Input        float64 `json:"input"`
-	Result       Result  `json:"result"`
-}

@@ -553,10 +553,17 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 		`name="display_name"`,
 		`name="kind"`,
 		`name="return_to" value="` + path + `"`,
+		`data-setting-simulation`,
+		`data-preview-chart`,
+		`name="preview_test_value"`,
+		"受信値と設定結果",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("sensor detail missing %q: %s", want, body)
 		}
+	}
+	if strings.Contains(body, "preview-button") {
+		t.Fatalf("sensor detail still contains the start/stop preview: %s", body)
 	}
 }
 
@@ -585,6 +592,8 @@ func TestSensorDetailViewerSeesFactsWithoutMutationControls(t *testing.T) {
 		"factory-edge-01",
 		"temperature_c",
 		"24.8",
+		`data-setting-simulation`,
+		`data-preview-chart`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("viewer sensor detail missing %q: %s", want, body)
@@ -594,9 +603,210 @@ func TestSensorDetailViewerSeesFactsWithoutMutationControls(t *testing.T) {
 		`action="/console/signals/`,
 		`name="display_name"`,
 		`name="kind"`,
+		`name="preview_test_value"`,
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("viewer sensor detail exposes %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestMappingPreviewReturnsBoundedHistoryAndTestValueWithoutWriting(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	beforeRaw, err := archive.ListRawRecords(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeAudit, err := archive.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	body := bytes.NewBufferString(`{
+		"signal_ref":"` + signals[0].SignalRef + `",
+		"spec":{"kind":"numeric","scale":2,"offset":1,
+			"condition":{"mode":"","bool_value":false,"threshold":0,"hysteresis":0},
+			"trigger":""},
+		"test_value":10
+	}`)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/mapping-previews",
+		body,
+	)
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", csrf)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var preview struct {
+		Kind       semantics.Kind           `json:"kind"`
+		InputCount int                      `json:"input_count"`
+		PlotCount  int                      `json:"plot_count"`
+		Points     []semantics.PreviewPoint `json:"points"`
+		TestResult *semantics.Result        `json:"test_result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Kind != semantics.KindNumeric ||
+		preview.InputCount != 1 ||
+		preview.PlotCount != 1 ||
+		len(preview.Points) != 1 ||
+		preview.Points[0].Input != 24.8 ||
+		preview.Points[0].Calibrated != 50.6 ||
+		preview.TestResult == nil ||
+		preview.TestResult.Calibrated != 21 {
+		t.Fatalf("preview = %#v", preview)
+	}
+	afterRaw, err := archive.ListRawRecords(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterAudit, err := archive.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterRaw) != len(beforeRaw) || len(afterAudit) != len(beforeAudit)+1 {
+		t.Fatalf(
+			"preview mutated state: raw %d -> %d, audit before login %d -> after preview %d",
+			len(beforeRaw), len(afterRaw), len(beforeAudit), len(afterAudit),
+		)
+	}
+}
+
+func TestMappingPreviewViewerUsesSavedDefinitionButCannotSubmitDraft(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	if _, err := archive.ApplySemanticDefinition(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		semantics.DefinitionSpec{Kind: semantics.KindNumeric, Scale: 1},
+		siteapp.RevisionPrecondition{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+
+	for _, test := range []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "saved definition",
+			body:       `{"signal_ref":"` + signals[0].SignalRef + `"}`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "draft",
+			body: `{"signal_ref":"` + signals[0].SignalRef +
+				`","spec":{"kind":"numeric","scale":1,"offset":0,` +
+				`"condition":{"mode":"","bool_value":false,"threshold":0,"hysteresis":0},` +
+				`"trigger":""}}`,
+			wantStatus: http.StatusForbidden,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/mapping-previews",
+				strings.NewReader(test.body),
+			)
+			request.AddCookie(cookie)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Origin", testOrigin)
+			request.Header.Set("X-CSRF-Token", csrf)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf(
+					"status = %d, want %d; body=%s",
+					response.Code,
+					test.wantStatus,
+					response.Body.String(),
+				)
+			}
+		})
+	}
+}
+
+func TestMappingPreviewInvalidDraftNamesTheField(t *testing.T) {
+	server, _ := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	cookie, csrf := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/mapping-previews",
+		strings.NewReader(`{
+			"signal_ref":"sig_00000000000000000000000000000000",
+			"spec":{"kind":"numeric","scale":0,"offset":0,
+				"condition":{"mode":"","bool_value":false,"threshold":0,"hysteresis":0},
+				"trigger":""}
+		}`),
+	)
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", csrf)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var failure errorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Error.Field == nil || *failure.Error.Field != "scale" {
+		t.Fatalf("error = %#v", failure.Error)
+	}
+}
+
+func TestConsoleScriptSupportsAutomaticSettingSimulation(t *testing.T) {
+	server := newTestServer(t, false)
+	request := httptest.NewRequest(http.MethodGet, "/static/console.js", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	script := response.Body.String()
+	for _, want := range []string{
+		"[data-setting-simulation]",
+		"/api/v1/mapping-previews",
+		"AbortController",
+		"setTimeout(refresh, 300)",
+		"setInterval(() =>",
+		"createElementNS",
+		"chart-range-result",
+		"chart-line-counter",
+		"point.received_at",
+		`document.visibilityState === "visible"`,
+		"previewUnavailable",
+		"failure.error.field",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("console script missing %q", want)
 		}
 	}
 }

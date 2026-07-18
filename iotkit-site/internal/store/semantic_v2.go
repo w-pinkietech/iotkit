@@ -587,65 +587,96 @@ func (store *Store) ListSemanticObservations(
 	return observations, rows.Err()
 }
 
-type SemanticPreviewInput struct {
-	RawRowID     int64
-	SourcePubSeq int64
-	ObservedAt   int64
-	Value        float64
+const (
+	PreviewTruncatedByTime       = "time"
+	PreviewTruncatedByInputCount = "input_count"
+)
+
+type SemanticPreviewWindow struct {
+	Inputs      []semantics.PreviewInput
+	WindowStart int64
+	WindowEnd   int64
+	TruncatedBy string
 }
 
-func (store *Store) SemanticPreviewBoundary(
+func (store *Store) ListSemanticPreviewWindow(
 	ctx context.Context,
 	signalRef string,
-) (int64, error) {
-	var boundary int64
-	err := store.db.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(raw.raw_row_id), 0)
-		FROM site_signals AS signal
-		LEFT JOIN raw_records AS raw
-			ON raw.edge_node_id = signal.edge_node_id
-			AND json_extract(raw.record_json, '$.series_key') = signal.series_key
-		WHERE signal.signal_ref = ?
-	`, signalRef).Scan(&boundary)
-	return boundary, err
-}
-
-func (store *Store) ListSemanticPreviewInputs(
-	ctx context.Context,
-	signalRef string,
-	afterRawRowID int64,
+	sinceReceivedAt int64,
 	limit int,
-) ([]SemanticPreviewInput, error) {
-	if limit < 1 || limit > 100 {
-		return nil, errors.New("semantic preview limit must be between 1 and 100")
+) (SemanticPreviewWindow, error) {
+	if limit < 1 || limit > 20_000 {
+		return SemanticPreviewWindow{},
+			errors.New("semantic preview limit must be between 1 and 20000")
 	}
+	var exists int
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM site_signals WHERE signal_ref = ?
+		)
+	`, signalRef).Scan(&exists); err != nil {
+		return SemanticPreviewWindow{}, err
+	}
+	if exists != 1 {
+		return SemanticPreviewWindow{}, siteapp.ErrNotFound
+	}
+
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT raw.raw_row_id, raw.pub_seq,
-			json_extract(raw.record_json, '$.event_time'),
-			json_extract(raw.record_json, '$.values[0]')
+		SELECT raw.received_at, json_extract(raw.record_json, '$.values[0]')
 		FROM site_signals AS signal
 		JOIN raw_records AS raw
 			ON raw.edge_node_id = signal.edge_node_id
 			AND json_extract(raw.record_json, '$.series_key') = signal.series_key
-		WHERE signal.signal_ref = ? AND raw.raw_row_id > ?
-			AND json_type(raw.record_json, '$.event_time') = 'integer'
+		WHERE signal.signal_ref = ? AND raw.received_at >= ?
 			AND json_type(raw.record_json, '$.values[0]') IN ('integer', 'real')
-		ORDER BY raw.raw_row_id
+		ORDER BY raw.received_at DESC, raw.ledger_epoch DESC, raw.pub_seq DESC
 		LIMIT ?
-	`, signalRef, afterRawRowID, limit)
+	`, signalRef, sinceReceivedAt, limit+1)
 	if err != nil {
-		return nil, err
+		return SemanticPreviewWindow{}, err
 	}
 	defer rows.Close()
-	var inputs []SemanticPreviewInput
+	descending := make([]semantics.PreviewInput, 0, limit+1)
 	for rows.Next() {
-		var input SemanticPreviewInput
-		if err := rows.Scan(
-			&input.RawRowID, &input.SourcePubSeq, &input.ObservedAt, &input.Value,
-		); err != nil {
-			return nil, err
+		var input semantics.PreviewInput
+		if err := rows.Scan(&input.ReceivedAt, &input.Value); err != nil {
+			return SemanticPreviewWindow{}, err
 		}
-		inputs = append(inputs, input)
+		descending = append(descending, input)
 	}
-	return inputs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return SemanticPreviewWindow{}, err
+	}
+
+	window := SemanticPreviewWindow{}
+	if len(descending) > limit {
+		window.TruncatedBy = PreviewTruncatedByInputCount
+		descending = descending[:limit]
+	} else {
+		var hasOlder int
+		if err := store.db.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM site_signals AS signal
+				JOIN raw_records AS raw
+					ON raw.edge_node_id = signal.edge_node_id
+					AND json_extract(raw.record_json, '$.series_key') = signal.series_key
+				WHERE signal.signal_ref = ? AND raw.received_at < ?
+			)
+		`, signalRef, sinceReceivedAt).Scan(&hasOlder); err != nil {
+			return SemanticPreviewWindow{}, err
+		}
+		if hasOlder == 1 {
+			window.TruncatedBy = PreviewTruncatedByTime
+		}
+	}
+	window.Inputs = make([]semantics.PreviewInput, len(descending))
+	for index := range descending {
+		window.Inputs[len(descending)-1-index] = descending[index]
+	}
+	if len(window.Inputs) > 0 {
+		window.WindowStart = window.Inputs[0].ReceivedAt
+		window.WindowEnd = window.Inputs[len(window.Inputs)-1].ReceivedAt
+	}
+	return window, nil
 }
