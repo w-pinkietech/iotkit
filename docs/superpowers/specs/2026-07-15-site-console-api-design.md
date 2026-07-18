@@ -408,24 +408,36 @@ DELETEも現在cursorを終了境界にしてfuture-onlyでdeactivateし、raw�
 ### Mapping preview
 
 ```text
-POST   /api/v1/mapping-previews
-GET    /api/v1/mapping-previews/{preview_id}/events
-DELETE /api/v1/mapping-previews/{preview_id}
+POST /api/v1/mapping-previews
 ```
 
-previewはaccount sessionに束縛したmemory-only resourceである。POST時点のsource cursorより後に届く
-対象signalだけを、production evaluatorのpure functionで評価する。semantic mapping table、event、outbox、
-MQTTへ一切書かない。
+previewは対象signal、任意の保存前設定案、任意の試験値を受け取るstatelessな試算APIとする。設定案を省略した場合は
+保存済みのactive definitionを使う。Siteが保管している
+受信開始以降のrawから直近最大1時間、かつ新しい順に最大20,000件を取得し、受信順へ戻してSite semantic evaluatorと
+同じpure functionで評価する。時刻が同じ入力はcustody順で安定に並べる。累積値の先頭入力は保存直後と同じく
+baselineとして扱い、加算しない。
 
-- TTL 5分
-- 1 session同時1件、Site全体同時5件
-- 最大100 input event
-- 128 bit random preview IDとsession ownership検査
-- logout、session expiry、Site restart、signal identity/descriptor revision不整合で終了
-- SSE heartbeat 15秒、event size/countを有界化
+応答は最大300描画点とし、数値の短いピーク、boolean・alarm・累積値の変化点を保つ。次の表示情報も返す。
 
-設備を動かせない場合、preview未実施でもwarning付きでmappingを保存できる。「過去分は数えない」「保存後の
-信号から有効」を画面に明示する。
+- 実際に評価した開始・終了時刻
+- input件数と描画点数
+- 1時間または20,000件のどちらで表示範囲を打ち切ったか
+- rawと変換後の系列、しきい値、表示範囲内の累積結果
+- 試験値を指定した場合の変換値と状態判定
+
+同じsignalのraw取得結果は短時間だけ共有cacheできるが、設定案と試算結果はrequest内に閉じる。request body、
+設定値、応答を有界化し、Consoleは入力停止から約300ms後に再試算する。受信中の自動更新は最大1秒に1回とし、
+新しいraw rowを検出したらraw cacheを更新する。新しいrequestを始めるときは同じ画面の古いrequestを中止する。
+横軸にはSite受信時刻を使い、設備時計のずれや再送で線が逆行しないようにする。
+
+保存済み設定だけを使うpreviewは`viewer`以上、保存前の設定案を指定するpreviewは`admin`以上とする。POSTは
+account session、CSRF、signal存在確認を必須とする。不正な設定はfield errorを返す。previewはsemantic mapping table、
+event、outbox、MQTT、audit、rawへ一切書かず、失敗してもraw custodyと意味付け処理を止めない。
+
+このpreviewは過去rawを画面内で試算するだけである。mapping保存は現在のaccepted cursorを開始境界にするfuture-only
+操作のままとし、過去のsemantic eventや外部出力を生成しない。「過去分は数えない」「累積結果は表示範囲内の試算」
+「保存後の信号から有効」を画面に明示する。設備を動かせない場合、rawが0件でも試験値を使って確認でき、preview未実施
+でもwarning付きでmappingを保存できる。
 
 ### Audit
 
