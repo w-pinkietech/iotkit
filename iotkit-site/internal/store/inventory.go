@@ -289,6 +289,7 @@ func (store *Store) ListInventoryDevices(
 	}
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT source.device_ref, source.edge_node_id,
+			descriptor.identifier,
 			COALESCE(profile.display_name, ''),
 			COALESCE(profile.location, ''),
 			profile.revision,
@@ -313,11 +314,13 @@ func (store *Store) ListInventoryDevices(
 	result := make([]siteapp.DeviceSummary, 0)
 	for rows.Next() {
 		var summary siteapp.DeviceSummary
+		var identifier sql.NullString
 		var revision sql.NullInt64
 		var lastReceivedAt sql.NullInt64
 		if err := rows.Scan(
 			&summary.DeviceRef,
 			&summary.Edge,
+			&identifier,
 			&summary.DisplayName,
 			&summary.Location,
 			&revision,
@@ -326,6 +329,9 @@ func (store *Store) ListInventoryDevices(
 			&lastReceivedAt,
 		); err != nil {
 			return nil, err
+		}
+		if identifier.Valid {
+			summary.Identifier = &identifier.String
 		}
 		if revision.Valid {
 			summary.ProfileRevision = &revision.Int64
@@ -351,10 +357,18 @@ func (store *Store) ListInventorySignals(
 			device.device_ref,
 			COALESCE(profile.display_name, ''),
 			profile.revision,
+			profile.display_sensor_type,
+			profile.display_sensor_type_label,
+			profile.display_value_kind,
+			profile.display_unit_mode,
+			profile.display_unit,
+			profile.decimal_places,
+			profile.updated_at,
 			COALESCE(descriptor.presence, 'unknown'),
 			descriptor.unit,
 			descriptor.value_type,
 			descriptor.measurement_key,
+			descriptor.channel_index,
 			EXISTS (
 				SELECT 1 FROM semantic_mappings AS mapping
 				WHERE mapping.edge_node_id = source.edge_node_id
@@ -395,9 +409,17 @@ func (store *Store) ListInventorySignals(
 		var summary siteapp.SignalSummary
 		var deviceRef sql.NullString
 		var revision sql.NullInt64
+		var profileSensorType sql.NullString
+		var profileSensorTypeLabel sql.NullString
+		var profileValueKind sql.NullString
+		var profileUnitMode sql.NullString
+		var profileUnit sql.NullString
+		var profileDecimalPlaces sql.NullInt64
+		var profileUpdatedAt sql.NullInt64
 		var unit sql.NullString
 		var valueType sql.NullString
 		var sensorType sql.NullString
+		var channelIndex sql.NullInt64
 		var lastReceivedAt sql.NullInt64
 		var values []byte
 		var eventTime sql.NullInt64
@@ -409,10 +431,18 @@ func (store *Store) ListInventorySignals(
 			&deviceRef,
 			&summary.DisplayName,
 			&revision,
+			&profileSensorType,
+			&profileSensorTypeLabel,
+			&profileValueKind,
+			&profileUnitMode,
+			&profileUnit,
+			&profileDecimalPlaces,
+			&profileUpdatedAt,
 			&summary.DescriptorPresence,
 			&unit,
 			&valueType,
 			&sensorType,
+			&channelIndex,
 			&summary.HasSemanticMapping,
 			&lastReceivedAt,
 			&values,
@@ -426,6 +456,18 @@ func (store *Store) ListInventorySignals(
 		}
 		if revision.Valid {
 			summary.ProfileRevision = &revision.Int64
+			summary.Profile = &siteapp.SignalProfile{
+				SignalRef:              summary.SignalRef,
+				DisplayName:            summary.DisplayName,
+				DisplaySensorType:      profileSensorType.String,
+				DisplaySensorTypeLabel: profileSensorTypeLabel.String,
+				DisplayValueKind:       profileValueKind.String,
+				DisplayUnitMode:        profileUnitMode.String,
+				DisplayUnit:            profileUnit.String,
+				DecimalPlaces:          int(profileDecimalPlaces.Int64),
+				Revision:               revision.Int64,
+				UpdatedAt:              profileUpdatedAt.Int64,
+			}
 		}
 		if unit.Valid {
 			summary.Unit = &unit.String
@@ -435,6 +477,10 @@ func (store *Store) ListInventorySignals(
 		}
 		if sensorType.Valid {
 			summary.SensorType = &sensorType.String
+		}
+		if channelIndex.Valid {
+			value := int32(channelIndex.Int64)
+			summary.ChannelIndex = &value
 		}
 		if lastReceivedAt.Valid {
 			summary.LastReceivedAt = &lastReceivedAt.Int64
@@ -457,6 +503,66 @@ func (store *Store) ListInventorySignals(
 		result = append(result, summary)
 	}
 	return result, rows.Err()
+}
+
+func (store *Store) ListSetupDevices(
+	ctx context.Context,
+	limit int,
+) ([]siteapp.SetupDeviceSource, error) {
+	devices, err := store.ListInventoryDevices(ctx, limit, "")
+	if err != nil {
+		return nil, err
+	}
+	const (
+		signalPageSize  = 100
+		maxSetupSignals = 1000
+	)
+	signals := make([]siteapp.SignalSummary, 0, signalPageSize)
+	afterRef := ""
+	for len(signals) < maxSetupSignals {
+		page, err := store.ListInventorySignals(ctx, signalPageSize, afterRef)
+		if err != nil {
+			return nil, err
+		}
+		signals = append(signals, page...)
+		if len(page) < signalPageSize {
+			break
+		}
+		afterRef = page[len(page)-1].SignalRef
+	}
+	if len(signals) == maxSetupSignals {
+		extra, err := store.ListInventorySignals(ctx, 1, afterRef)
+		if err != nil {
+			return nil, err
+		}
+		if len(extra) > 0 {
+			return nil, errors.New("setup inventory exceeds 1000 signal limit")
+		}
+	}
+	indexByRef := make(map[string]int, len(devices))
+	result := make([]siteapp.SetupDeviceSource, 0, len(devices))
+	for _, device := range devices {
+		indexByRef[device.DeviceRef] = len(result)
+		result = append(result, siteapp.SetupDeviceSource{
+			Device:     device,
+			Identifier: device.Identifier,
+		})
+	}
+	for _, signal := range signals {
+		if signal.DeviceRef == nil {
+			continue
+		}
+		index, exists := indexByRef[*signal.DeviceRef]
+		if !exists {
+			continue
+		}
+		result[index].Signals = append(result[index].Signals, siteapp.SetupSignalSource{
+			Signal:       signal,
+			ChannelIndex: signal.ChannelIndex,
+			Profile:      signal.Profile,
+		})
+	}
+	return result, nil
 }
 
 func decodeInventoryMeasurement(

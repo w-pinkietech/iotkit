@@ -49,6 +49,41 @@
   filterTable("signal-table");
   filterTable("log-table");
 
+  const toggleSignalProfileFields = (form) => {
+    const sensorType = form.querySelector("[data-sensor-type]");
+    const customLabel = form.querySelector("[data-custom-sensor-label]");
+    const valueKind = form.querySelector("[data-value-kind]");
+    const unitMode = form.querySelector("[data-unit-mode]");
+    const unitField = form.querySelector("[data-display-unit]");
+    const decimalField = form.querySelector("[data-decimal-places]");
+    const update = () => {
+      if (customLabel) {
+        customLabel.hidden = sensorType?.value !== "custom";
+        const input = customLabel.querySelector("input");
+        if (input) input.required = sensorType?.value === "custom";
+      }
+      if (valueKind?.value === "boolean") {
+        if (unitMode) unitMode.value = "dimensionless";
+        const unitInput = unitField?.querySelector("input");
+        if (unitInput) unitInput.value = "";
+        const decimalInput = decimalField?.querySelector("input");
+        if (decimalInput) decimalInput.value = "0";
+      }
+      const hasUnit = unitMode?.value === "unit" && valueKind?.value !== "boolean";
+      if (unitField) unitField.hidden = !hasUnit;
+      const unitInput = unitField?.querySelector("input");
+      if (unitInput) unitInput.required = hasUnit;
+      if (decimalField) decimalField.hidden = valueKind?.value === "boolean";
+    };
+    sensorType?.addEventListener("change", update);
+    valueKind?.addEventListener("change", update);
+    unitMode?.addEventListener("change", update);
+    update();
+  };
+  for (const form of document.querySelectorAll("form[data-signal-profile]")) {
+    toggleSignalProfileFields(form);
+  }
+
   const toggleSemanticFields = (form) => {
     const kind = form.querySelector("[data-semantic-kind]");
     const fields = form.querySelector("[data-condition-fields]");
@@ -82,7 +117,7 @@
         });
       }
       previewID = "";
-      button.textContent = "実信号で確認する";
+      button.textContent = "実際のセンサー値で確認する";
     };
 
     button.addEventListener("click", async () => {
@@ -138,7 +173,7 @@
                 }`,
               )
               .join("\n")
-          : "新しい信号を待っています。センサーを動かすと、ここに結果が表示されます。";
+          : "新しい値を待っています。センサーを動かすと、ここに結果が表示されます。";
       };
       await refresh();
       timer = window.setInterval(refresh, 2000);

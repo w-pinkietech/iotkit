@@ -50,14 +50,37 @@ func TestUpdateSignalProfileCommitsRevisionAndAudit(t *testing.T) {
 		context.Background(),
 		siteapp.LocalCLIActor(),
 		testSourceRef(t, store.db, "site_signals", "signal_ref"),
-		siteapp.SignalProfileInput{DisplayName: "乾燥炉入口温度"},
+		testSignalProfileInput(),
 		siteapp.RevisionPrecondition{Expected: &expected},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Revision != 1 || profile.DisplayName != "乾燥炉入口温度" {
+	if profile.Revision != 1 || profile.DisplayName != "乾燥炉入口温度" ||
+		profile.DisplaySensorType != "temperature" ||
+		profile.DisplayValueKind != "numeric" ||
+		profile.DisplayUnitMode != "unit" || profile.DisplayUnit != "°C" ||
+		profile.DecimalPlaces != 1 || !profile.Complete() {
 		t.Fatalf("profile = %#v", profile)
+	}
+	var (
+		sensorType    string
+		valueKind     string
+		unitMode      string
+		unit          string
+		decimalPlaces int
+	)
+	if err := store.db.QueryRow(`
+		SELECT display_sensor_type, display_value_kind, display_unit_mode,
+			display_unit, decimal_places
+		FROM signal_profiles
+	`).Scan(&sensorType, &valueKind, &unitMode, &unit, &decimalPlaces); err != nil {
+		t.Fatal(err)
+	}
+	if sensorType != "temperature" || valueKind != "numeric" ||
+		unitMode != "unit" || unit != "°C" || decimalPlaces != 1 {
+		t.Fatalf("stored profile = %q %q %q %q %d",
+			sensorType, valueKind, unitMode, unit, decimalPlaces)
 	}
 	events, err := store.ListAuditEvents(context.Background(), 10)
 	if err != nil {
@@ -85,7 +108,7 @@ func TestUpdateSignalProfileRollsBackWhenAuditInsertFails(t *testing.T) {
 		context.Background(),
 		siteapp.LocalCLIActor(),
 		testSourceRef(t, store.db, "site_signals", "signal_ref"),
-		siteapp.SignalProfileInput{DisplayName: "乾燥炉入口温度"},
+		testSignalProfileInput(),
 		siteapp.RevisionPrecondition{},
 	)
 	if err == nil {
@@ -93,6 +116,17 @@ func TestUpdateSignalProfileRollsBackWhenAuditInsertFails(t *testing.T) {
 	}
 	if got := testTableCount(t, store.db, "signal_profiles"); got != 0 {
 		t.Fatalf("signal profiles = %d, want 0", got)
+	}
+}
+
+func testSignalProfileInput() siteapp.SignalProfileInput {
+	return siteapp.SignalProfileInput{
+		DisplayName:       "乾燥炉入口温度",
+		DisplaySensorType: "temperature",
+		DisplayValueKind:  "numeric",
+		DisplayUnitMode:   "unit",
+		DisplayUnit:       "°C",
+		DecimalPlaces:     1,
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -192,7 +193,12 @@ func TestListInventorySummariesJoinProfilesWithoutSourceIdentity(t *testing.T) {
 	}
 	if _, err := store.UpdateSignalProfile(
 		context.Background(), siteapp.LocalCLIActor(), signalRef,
-		siteapp.SignalProfileInput{DisplayName: "生産接点"},
+		siteapp.SignalProfileInput{
+			DisplayName:       "生産接点",
+			DisplaySensorType: "contact",
+			DisplayValueKind:  "boolean",
+			DisplayUnitMode:   "dimensionless",
+		},
 		siteapp.RevisionPrecondition{},
 	); err != nil {
 		t.Fatal(err)
@@ -221,10 +227,100 @@ func TestListInventorySummariesJoinProfilesWithoutSourceIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"edge_node_id", "system_id", "series_key", "identifier"} {
+	for _, forbidden := range []string{
+		"edge_node_id", "system_id", "series_key", "identifier",
+		"device_display_name", "device_location",
+	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("inventory JSON exposes %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestListSetupDevicesGroupsSignalsAndIncludesSetupFacts(t *testing.T) {
+	store := openTestStore(t)
+	snapshot := descriptorFixture(t)
+	systemID := snapshot.Devices[0].SystemID
+	channel := int32(1)
+	unit := "Cel"
+	snapshot.Signals = append(snapshot.Signals, contract.DescriptorSignal{
+		SeriesKey:      systemID + ":temperature_c:1:primary",
+		SystemID:       systemID,
+		MeasurementKey: "temperature_c",
+		ChannelIndex:   &channel,
+		Variant:        "primary",
+		Unit:           &unit,
+		ValueType:      "float",
+	})
+	if _, err := store.ApplyDescriptorSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	signalRef := testSourceRef(t, store.db, "site_signals", "signal_ref")
+	if _, err := store.UpdateSignalProfile(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signalRef,
+		siteapp.SignalProfileInput{
+			DisplayName:       "接点入力",
+			DisplaySensorType: "contact",
+			DisplayValueKind:  "boolean",
+			DisplayUnitMode:   "dimensionless",
+		},
+		siteapp.RevisionPrecondition{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	devices, err := store.ListSetupDevices(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].Identifier == nil ||
+		*devices[0].Identifier != "01234567" || len(devices[0].Signals) != 2 {
+		t.Fatalf("setup devices = %#v", devices)
+	}
+	var foundProfile, foundChannel bool
+	for _, signal := range devices[0].Signals {
+		if signal.Profile != nil && signal.Profile.DisplayName == "接点入力" &&
+			signal.Profile.Complete() {
+			foundProfile = true
+		}
+		if signal.ChannelIndex != nil && *signal.ChannelIndex == 1 &&
+			signal.Signal.SensorType != nil &&
+			*signal.Signal.SensorType == "temperature_c" {
+			foundChannel = true
+		}
+	}
+	if !foundProfile || !foundChannel {
+		t.Fatalf("grouped setup signals = %#v", devices[0].Signals)
+	}
+}
+
+func TestListSetupDevicesDoesNotSilentlyTruncateAfterOneSignalPage(t *testing.T) {
+	store := openTestStore(t)
+	snapshot := descriptorFixture(t)
+	systemID := snapshot.Devices[0].SystemID
+	for index := int32(0); index < 100; index++ {
+		channel := index
+		snapshot.Signals = append(snapshot.Signals, contract.DescriptorSignal{
+			SeriesKey:      fmt.Sprintf("%s:temperature_c:%d:primary", systemID, index),
+			SystemID:       systemID,
+			MeasurementKey: "temperature_c",
+			ChannelIndex:   &channel,
+			Variant:        "primary",
+			ValueType:      "float",
+		})
+	}
+	if _, err := store.ApplyDescriptorSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := store.ListSetupDevices(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || len(devices[0].Signals) != 101 {
+		t.Fatalf("setup signal count = %d, want 101; devices=%d",
+			len(devices[0].Signals), len(devices))
 	}
 }
 

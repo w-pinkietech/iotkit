@@ -378,6 +378,21 @@ var schemaMigrations = []migration{
 			PRIMARY KEY (definition_id, definition_revision, ledger_epoch, pub_seq)
 		);
 	`},
+	{version: 10, sql: `
+		ALTER TABLE signal_profiles
+			ADD COLUMN display_sensor_type TEXT NOT NULL DEFAULT '';
+		ALTER TABLE signal_profiles
+			ADD COLUMN display_sensor_type_label TEXT NOT NULL DEFAULT '';
+		ALTER TABLE signal_profiles
+			ADD COLUMN display_value_kind TEXT NOT NULL DEFAULT '';
+		ALTER TABLE signal_profiles
+			ADD COLUMN display_unit_mode TEXT NOT NULL DEFAULT '';
+		ALTER TABLE signal_profiles
+			ADD COLUMN display_unit TEXT NOT NULL DEFAULT '';
+		ALTER TABLE signal_profiles
+			ADD COLUMN decimal_places INTEGER NOT NULL DEFAULT 0
+			CHECK(decimal_places BETWEEN 0 AND 6);
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

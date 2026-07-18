@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/outputadapter"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantics"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
@@ -216,6 +217,89 @@ func TestViewerCannotChangeProfilesMeaningsOutputsOrAccounts(t *testing.T) {
 	}
 }
 
+func TestSetupAPIRestrictsPhysicalIdentifierToAdministrators(t *testing.T) {
+	viewerServer, viewerStore := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	seedSetupDevice(t, viewerStore)
+	viewerCookie, _ := loginTestAccount(t, viewerServer)
+	viewerRequest := httptest.NewRequest(http.MethodGet, "/api/v1/setup/devices", nil)
+	viewerRequest.AddCookie(viewerCookie)
+	viewerResponse := httptest.NewRecorder()
+	viewerServer.ServeHTTP(viewerResponse, viewerRequest)
+	if viewerResponse.Code != http.StatusForbidden {
+		t.Fatalf("viewer setup status = %d, want 403; body=%s",
+			viewerResponse.Code, viewerResponse.Body.String())
+	}
+
+	adminServer, adminStore := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, adminStore)
+	adminCookie, _ := loginTestAccount(t, adminServer)
+	adminRequest := httptest.NewRequest(http.MethodGet, "/api/v1/setup/devices", nil)
+	adminRequest.AddCookie(adminCookie)
+	adminResponse := httptest.NewRecorder()
+	adminServer.ServeHTTP(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusOK {
+		t.Fatalf("admin setup status = %d, body=%s",
+			adminResponse.Code, adminResponse.Body.String())
+	}
+	body := adminResponse.Body.String()
+	for _, want := range []string{
+		`"identifier":"BP-01234567"`,
+		`"display_sensor_type":"temperature"`,
+		`"profile_complete":false`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("setup response missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"018f0000-0000-7000-8000-000000000001", "series_key"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("setup response exposes %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestSignalProfileV2APIStoresDisplayMetadata(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err=%v", signals, err)
+	}
+	sessionCookie, csrf := loginTestAccount(t, server)
+	body := `{
+		"display_name":"乾燥炉入口温度",
+		"display_sensor_type":"temperature",
+		"display_sensor_type_label":"",
+		"display_value_kind":"numeric",
+		"display_unit_mode":"unit",
+		"display_unit":"°C",
+		"decimal_places":1
+	}`
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/signals/"+signals[0].SignalRef+"/profile",
+		strings.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("If-Match", "*")
+	request.AddCookie(sessionCookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("profile status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"display_unit":"°C"`) ||
+		!strings.Contains(response.Body.String(), `"decimal_places":1`) {
+		t.Fatalf("profile response = %s", response.Body.String())
+	}
+}
+
 func TestConsoleRequiresLoginAndUsesJapaneseOperatorLanguage(t *testing.T) {
 	server := newTestServer(t, false)
 	request := httptest.NewRequest(http.MethodGet, "/status", nil)
@@ -297,19 +381,28 @@ func TestConsoleUsesOperatorFocusedInformationArchitecture(t *testing.T) {
 			path:        "/status",
 			pageTitle:   "現場の概要",
 			activeLabel: "概要",
-			mustContain: []string{"現在の信号", "要確認", "データの流れ"},
+			mustContain: []string{"センサーの現在値", "要確認", "データの流れ"},
 		},
 		{
 			path:        "/monitor",
-			pageTitle:   "現在の信号",
-			activeLabel: "現在の信号",
-			mustContain: []string{"受信状態", "センサー種別", "最終受信"},
+			pageTitle:   "センサーの現在値",
+			activeLabel: "センサー",
+			mustContain: []string{
+				"<th>センサー</th>", "<th>種類</th>", "<th>現在値</th>",
+				"受信状態", "最終受信",
+			},
+		},
+		{
+			path:        "/setup",
+			pageTitle:   "デバイス管理",
+			activeLabel: "デバイス管理",
+			mustContain: []string{"デバイスごとに", "閲覧のみ"},
 		},
 		{
 			path:        "/signals",
-			pageTitle:   "信号の設定",
-			activeLabel: "信号の設定",
-			mustContain: []string{"表示名と意味付け", "閲覧のみ"},
+			pageTitle:   "センサー設定",
+			activeLabel: "センサー設定",
+			mustContain: []string{"数値・状態・累積値・アラーム", "閲覧のみ"},
 		},
 	}
 	for _, test := range tests {
@@ -337,6 +430,255 @@ func TestConsoleUsesOperatorFocusedInformationArchitecture(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConsoleCallsSignalsSensorsAndKeepsDevicesDistinct(t *testing.T) {
+	server := newTestServer(t, false)
+	sessionCookie, _ := loginTestAccount(t, server)
+	for _, path := range []string{
+		"/status", "/monitor", "/setup", "/signals", "/logs", "/output", "/system",
+	} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			request.AddCookie(sessionCookie)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			body := response.Body.String()
+			if strings.Contains(body, "信号") {
+				t.Fatalf("%s exposes signal term: %s", path, body)
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/setup", nil)
+	request.AddCookie(sessionCookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if !strings.Contains(response.Body.String(), "デバイス管理") {
+		t.Fatalf("setup does not preserve device terminology: %s", response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/monitor", nil)
+	request.AddCookie(sessionCookie)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if strings.Contains(response.Body.String(), "<th>値</th>") {
+		t.Fatalf("monitor incorrectly splits a sensor into a separate value entity: %s",
+			response.Body.String())
+	}
+}
+
+func TestSetupConsoleShowsLiveFactsAndLimitsPhysicalIdentifier(t *testing.T) {
+	viewerServer, viewerStore := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	seedSetupDevice(t, viewerStore)
+	viewerCookie, _ := loginTestAccount(t, viewerServer)
+	viewerRequest := httptest.NewRequest(http.MethodGet, "/setup", nil)
+	viewerRequest.AddCookie(viewerCookie)
+	viewerResponse := httptest.NewRecorder()
+	viewerServer.ServeHTTP(viewerResponse, viewerRequest)
+	if viewerResponse.Code != http.StatusOK {
+		t.Fatalf("viewer setup status=%d body=%s",
+			viewerResponse.Code, viewerResponse.Body.String())
+	}
+	viewerBody := viewerResponse.Body.String()
+	for _, want := range []string{
+		"デバイス管理",
+		"24.8",
+		"temperature_c",
+		"Adapterから届いた情報",
+		"閲覧のみ",
+	} {
+		if !strings.Contains(viewerBody, want) {
+			t.Fatalf("viewer setup missing %q: %s", want, viewerBody)
+		}
+	}
+	if strings.Contains(viewerBody, "BP-01234567") ||
+		strings.Contains(viewerBody, `name="display_sensor_type"`) {
+		t.Fatalf("viewer setup exposes admin controls or identifier: %s", viewerBody)
+	}
+
+	adminServer, adminStore := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, adminStore)
+	adminCookie, _ := loginTestAccount(t, adminServer)
+	adminRequest := httptest.NewRequest(http.MethodGet, "/setup", nil)
+	adminRequest.AddCookie(adminCookie)
+	adminResponse := httptest.NewRecorder()
+	adminServer.ServeHTTP(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusOK {
+		t.Fatalf("admin setup status=%d body=%s",
+			adminResponse.Code, adminResponse.Body.String())
+	}
+	adminBody := adminResponse.Body.String()
+	for _, want := range []string{
+		"BP-01234567",
+		`name="display_sensor_type"`,
+		`name="display_value_kind"`,
+		`name="display_unit_mode"`,
+		`name="decimal_places"`,
+	} {
+		if !strings.Contains(adminBody, want) {
+			t.Fatalf("admin setup missing %q: %s", want, adminBody)
+		}
+	}
+}
+
+func TestStatusHighlightsNewDeviceWithoutCallingItBroken(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleViewer)
+	seedSetupDevice(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/status", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+	for _, want := range []string{
+		"新しいデバイスが見つかりました",
+		"登録内容を確認",
+		`href="/setup"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("status missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "大きな問題は見つかっていません") {
+		t.Fatalf("status contradicts pending setup: %s", body)
+	}
+}
+
+func TestDeviceStopsBeingRegistrationPendingAfterDeviceProfileSave(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	devices, err := archive.ListInventoryDevices(context.Background(), 10, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices=%#v err=%v", devices, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	form := url.Values{
+		"_csrf":        {csrf},
+		"return_to":    {"/setup"},
+		"display_name": {"BravePI Mainboard 1"},
+		"location":     {"第1工場 乾燥工程"},
+	}
+	saveRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/console/devices/"+devices[0].DeviceRef+"/profile",
+		strings.NewReader(form.Encode()),
+	)
+	saveRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	saveRequest.Header.Set("Origin", testOrigin)
+	saveRequest.AddCookie(cookie)
+	saveResponse := httptest.NewRecorder()
+	server.ServeHTTP(saveResponse, saveRequest)
+	if saveResponse.Code != http.StatusSeeOther {
+		t.Fatalf("device save=%d body=%s", saveResponse.Code, saveResponse.Body.String())
+	}
+
+	setupRequest := httptest.NewRequest(http.MethodGet, "/setup", nil)
+	setupRequest.AddCookie(cookie)
+	setupResponse := httptest.NewRecorder()
+	server.ServeHTTP(setupResponse, setupRequest)
+	setupBody := setupResponse.Body.String()
+	for _, want := range []string{
+		"0<small>台のデバイスが登録待ち",
+		"センサーを設定",
+		"確認して保存",
+	} {
+		if !strings.Contains(setupBody, want) {
+			t.Fatalf("setup missing %q after device save: %s", want, setupBody)
+		}
+	}
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/status", nil)
+	statusRequest.AddCookie(cookie)
+	statusResponse := httptest.NewRecorder()
+	server.ServeHTTP(statusResponse, statusRequest)
+	statusBody := statusResponse.Body.String()
+	if strings.Contains(statusBody, "新しいデバイスが見つかりました") {
+		t.Fatalf("saved device is still reported as new: %s", statusBody)
+	}
+}
+
+func TestSetupConsoleSavesProfilesAndUpdatesMonitor(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	devices, err := archive.ListInventoryDevices(context.Background(), 10, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices=%#v err=%v", devices, err)
+	}
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	postForm := func(path string, values url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		values.Set("_csrf", csrf)
+		values.Set("return_to", "/setup")
+		request := httptest.NewRequest(
+			http.MethodPost,
+			path,
+			strings.NewReader(values.Encode()),
+		)
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", testOrigin)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	deviceResponse := postForm(
+		"/console/devices/"+devices[0].DeviceRef+"/profile",
+		url.Values{
+			"display_name": {"乾燥炉入口センサー"},
+			"location":     {"第1工場 乾燥工程"},
+		},
+	)
+	if deviceResponse.Code != http.StatusSeeOther ||
+		deviceResponse.Header().Get("Location") != "/setup?saved=1" {
+		t.Fatalf("device save=%d location=%q body=%s",
+			deviceResponse.Code, deviceResponse.Header().Get("Location"),
+			deviceResponse.Body.String())
+	}
+	signalResponse := postForm(
+		"/console/signals/"+signals[0].SignalRef+"/profile",
+		url.Values{
+			"display_name":        {"乾燥炉入口 温度"},
+			"display_sensor_type": {"temperature"},
+			"display_value_kind":  {"numeric"},
+			"display_unit_mode":   {"unit"},
+			"display_unit":        {"°C"},
+			"decimal_places":      {"2"},
+		},
+	)
+	if signalResponse.Code != http.StatusSeeOther ||
+		signalResponse.Header().Get("Location") != "/setup?saved=1" {
+		t.Fatalf("signal save=%d location=%q body=%s",
+			signalResponse.Code, signalResponse.Header().Get("Location"),
+			signalResponse.Body.String())
+	}
+	setupRequest := httptest.NewRequest(http.MethodGet, "/setup", nil)
+	setupRequest.AddCookie(cookie)
+	setupResponse := httptest.NewRecorder()
+	server.ServeHTTP(setupResponse, setupRequest)
+	if !strings.Contains(setupResponse.Body.String(), "登録済み") {
+		t.Fatalf("setup did not become ready: %s", setupResponse.Body.String())
+	}
+	monitorRequest := httptest.NewRequest(http.MethodGet, "/monitor", nil)
+	monitorRequest.AddCookie(cookie)
+	monitorResponse := httptest.NewRecorder()
+	server.ServeHTTP(monitorResponse, monitorRequest)
+	for _, want := range []string{"乾燥炉入口 温度", "24.80", "°C"} {
+		if !strings.Contains(monitorResponse.Body.String(), want) {
+			t.Fatalf("monitor missing %q: %s", want, monitorResponse.Body.String())
+		}
 	}
 }
 
@@ -394,6 +736,33 @@ func TestConsoleSignalViewFormatsValuesForOperators(t *testing.T) {
 	}
 }
 
+func TestConsoleSignalViewUsesCompletedProfileForEffectiveDisplay(t *testing.T) {
+	now := time.Date(2026, 7, 18, 9, 0, 0, 0, time.Local)
+	descriptorUnit := "Cel"
+	descriptorType := "temperature_c"
+	descriptorValueType := "float"
+	view := newConsoleSignalView(siteapp.SignalSummary{
+		DisplayName: "電圧入力",
+		Unit:        &descriptorUnit,
+		SensorType:  &descriptorType,
+		ValueType:   &descriptorValueType,
+		Profile: &siteapp.SignalProfile{
+			DisplayName:       "電圧入力",
+			DisplaySensorType: "voltage",
+			DisplayValueKind:  "numeric",
+			DisplayUnitMode:   "unit",
+			DisplayUnit:       "V",
+			DecimalPlaces:     2,
+			Revision:          1,
+		},
+		Latest: &siteapp.LatestMeasurement{Values: json.RawMessage(`[24.8]`)},
+	}, now)
+	if view.Value != "24.80" || view.Unit != "V" ||
+		view.SensorType != "電圧" || view.SettingLabel != "設定済み" {
+		t.Fatalf("profile display view = %#v", view)
+	}
+}
+
 func TestConsoleLogViewUsesSignalNameAndUnit(t *testing.T) {
 	unit := "Cel"
 	valueType := "float"
@@ -415,7 +784,7 @@ func TestConsoleLogViewUsesSignalNameAndUnit(t *testing.T) {
 			Unit: "°C",
 		}},
 	)
-	if len(views) != 1 || views[0].Signal != "乾燥炉 温度" ||
+	if len(views) != 1 || views[0].Sensor != "乾燥炉 温度" ||
 		views[0].Value != "24.8" || views[0].Unit != "°C" {
 		t.Fatalf("log views = %#v", views)
 	}
@@ -486,10 +855,10 @@ func TestConsoleOutputOptionsUseOperatorNamesInsteadOfResourceRefs(t *testing.T)
 			SignalSummary: siteapp.SignalSummary{
 				SignalRef: "sig_00000000000000000000000000000001",
 			},
-			Name: "ライン1 完了信号",
+			Name: "ライン1 完了",
 		}},
 	)
-	if len(options) != 1 || options[0].Name != "ライン1 完了信号" ||
+	if len(options) != 1 || options[0].Name != "ライン1 完了" ||
 		options[0].Kind != "累積値" ||
 		strings.Contains(options[0].Name, "sig_") {
 		t.Fatalf("options = %#v", options)
@@ -534,8 +903,8 @@ func TestConsoleChangeHistoryOmitsLoginNoiseAndNamesSemanticChanges(t *testing.T
 		},
 	})
 
-	if len(views) != 1 || views[0].Operation != "意味付けを保存" ||
-		views[0].Resource != "信号の意味付け" {
+	if len(views) != 1 || views[0].Operation != "センサー設定を保存" ||
+		views[0].Resource != "センサー設定" {
 		t.Fatalf("views = %#v", views)
 	}
 }
@@ -549,6 +918,15 @@ func newTestServerWithRole(
 	mustChangePassword bool,
 	role siteapp.AccountRole,
 ) http.Handler {
+	server, _ := newTestServerFixture(t, mustChangePassword, role)
+	return server
+}
+
+func newTestServerFixture(
+	t *testing.T,
+	mustChangePassword bool,
+	role siteapp.AccountRole,
+) (http.Handler, *store.Store) {
 	t.Helper()
 	archive, err := store.Open(filepath.Join(t.TempDir(), "site.db"))
 	if err != nil {
@@ -588,7 +966,60 @@ func newTestServerWithRole(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return handler
+	return handler, archive
+}
+
+func seedSetupDevice(t *testing.T, archive *store.Store) {
+	t.Helper()
+	const (
+		systemID  = "018f0000-0000-7000-8000-000000000001"
+		seriesKey = systemID + ":temperature_c:na:primary"
+	)
+	identifier := "BP-01234567"
+	unit := "Cel"
+	snapshot := contract.DescriptorSnapshot{
+		SchemaVersion:      1,
+		EdgeNodeID:         "factory-edge-01",
+		LedgerEpoch:        "epoch-01",
+		DescriptorRevision: 1,
+		Complete:           true,
+		Devices: []contract.DescriptorDevice{{
+			SystemID:   systemID,
+			Identifier: &identifier,
+			State:      "active",
+		}},
+		Signals: []contract.DescriptorSignal{{
+			SeriesKey:      seriesKey,
+			SystemID:       systemID,
+			MeasurementKey: "temperature_c",
+			Variant:        "primary",
+			Unit:           &unit,
+			ValueType:      "float",
+		}},
+	}
+	if _, err := archive.ApplyDescriptorSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	record := json.RawMessage(
+		`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,` +
+			`"series_key":"` + seriesKey + `","values":[24.8],"event_time":1000}`,
+	)
+	batch := contract.RecordBatch{
+		SchemaVersion: 1,
+		EdgeNodeID:    "factory-edge-01",
+		LedgerEpoch:   "epoch-01",
+		PublicationID: contract.PublicationID("factory-edge-01", "epoch-01", 1, 1),
+		CursorStart:   1,
+		CursorEnd:     1,
+		Records:       []json.RawMessage{record},
+	}
+	if _, err := archive.AcceptBatch(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := archive.ReconcileInventorySources(context.Background(), 100); err != nil ||
+		processed != 1 {
+		t.Fatalf("reconcile processed=%d err=%v", processed, err)
+	}
 }
 
 func loginTestAccount(t *testing.T, server http.Handler) (*http.Cookie, string) {

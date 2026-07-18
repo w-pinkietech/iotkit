@@ -30,6 +30,7 @@ type consoleData struct {
 	Signals            []siteapp.SignalSummary
 	DeviceRows         []consoleDeviceView
 	SignalRows         []consoleSignalView
+	SetupRows          []consoleSetupDeviceView
 	LogRows            []consoleLogView
 	AuditRows          []consoleAuditView
 	Definitions        []semantics.Definition
@@ -43,6 +44,7 @@ type consoleData struct {
 	ReceivingCount     int
 	AttentionCount     int
 	UnconfiguredCount  int
+	SetupPendingCount  int
 	EdgeCount          int
 }
 
@@ -63,17 +65,19 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		page = "status"
 	}
 	titles := map[string]string{
-		"status": "現場の概要", "monitor": "現在の信号", "devices": "設置機器",
-		"signals": "信号の設定", "logs": "受信履歴", "output": "外部出力",
+		"status": "現場の概要", "monitor": "センサーの現在値", "devices": "デバイス管理",
+		"setup": "デバイス管理", "signals": "センサー設定",
+		"logs": "受信履歴", "output": "外部出力",
 		"audit": "変更履歴", "accounts": "アカウント", "system": "システム",
 	}
 	descriptions := map[string]string{
 		"status":   "現場のセンサーとデータの流れを、ひと目で確認できます。",
 		"monitor":  "各センサーから最後に届いた値と受信状態を確認します。",
-		"devices":  "現場に設置した機器の名前と場所を管理します。",
-		"signals":  "信号の表示名と、IoTKitでの扱い方を設定します。",
+		"setup":    "デバイスごとに、接続されたセンサーの名前・種類・単位を登録します。",
+		"devices":  "現場に設置したデバイスの名前と場所を管理します。",
+		"signals":  "センサーから届く値の補正・判定・累積方法を設定します。",
 		"logs":     "Siteが受け取った直近のデータを時系列で確認します。",
-		"output":   "意味付けしたデータが外部アプリへ渡っているか確認します。",
+		"output":   "使い方を設定した値が外部アプリへ渡っているか確認します。",
 		"audit":    "誰が、いつ、どの設定を変更したか確認します。",
 		"accounts": "Consoleへログインできる担当者と権限を管理します。",
 		"system":   "Siteと通信証明書の状態を確認します。",
@@ -128,6 +132,21 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		for _, device := range data.Devices {
 			data.DeviceRows = append(data.DeviceRows, newConsoleDeviceView(device, server.now()))
 		}
+	case "setup":
+		var setupDevices []siteapp.SetupDevice
+		setupDevices, err = server.site.ListSetupDevices(
+			request.Context(),
+			server.actor(auth),
+			100,
+		)
+		if err == nil {
+			data.SetupRows = newConsoleSetupDeviceViews(setupDevices, server.now())
+			for _, device := range setupDevices {
+				if device.State == siteapp.SetupWaitingForDevice {
+					data.SetupPendingCount++
+				}
+			}
+		}
 	case "logs":
 		var records []store.RawRecord
 		records, err = server.store.ListRawRecords(request.Context(), 100)
@@ -169,6 +188,26 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	case "system":
 		data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
 	}
+	if err == nil && page == "status" {
+		var setupDevices []siteapp.SetupDevice
+		setupDevices, err = server.site.ListSetupDevices(
+			request.Context(),
+			server.actor(auth),
+			100,
+		)
+		if err == nil {
+			for _, device := range setupDevices {
+				if device.State == siteapp.SetupWaitingForDevice {
+					data.SetupPendingCount++
+				}
+				for _, signal := range device.Signals {
+					if !signal.ProfileComplete {
+						data.UnconfiguredCount++
+					}
+				}
+			}
+		}
+	}
 	if err != nil {
 		http.Error(response, "画面の情報を取得できません", http.StatusInternalServerError)
 		return
@@ -188,9 +227,6 @@ func (data *consoleData) summarizeSignals() {
 			data.ReceivingCount++
 		case "stale", "never":
 			data.AttentionCount++
-		}
-		if !signal.HasSemanticMapping {
-			data.UnconfiguredCount++
 		}
 	}
 	data.AttentionCount += int(data.ProjectionFailures)
@@ -246,7 +282,7 @@ func (server *Server) consoleDeviceProfile(response http.ResponseWriter, request
 		},
 		Precondition: siteapp.RevisionPrecondition{Expected: expected},
 	})
-	server.consoleMutationResult(response, request, "/devices", err)
+	server.consoleMutationResult(response, request, consoleReturnTarget(request, "/devices"), err)
 }
 
 func (server *Server) consoleSignalProfile(response http.ResponseWriter, request *http.Request) {
@@ -257,11 +293,35 @@ func (server *Server) consoleSignalProfile(response http.ResponseWriter, request
 	_, err := server.site.Dispatch(request.Context(), server.actor(auth), siteapp.UpdateSignalProfile{
 		SignalRef: request.PathValue("signal_ref"),
 		Input: siteapp.SignalProfileInput{
-			DisplayName: request.FormValue("display_name"),
+			DisplayName:            request.FormValue("display_name"),
+			DisplaySensorType:      request.FormValue("display_sensor_type"),
+			DisplaySensorTypeLabel: request.FormValue("display_sensor_type_label"),
+			DisplayValueKind:       request.FormValue("display_value_kind"),
+			DisplayUnitMode:        request.FormValue("display_unit_mode"),
+			DisplayUnit:            request.FormValue("display_unit"),
+			DecimalPlaces:          formInt(request, "decimal_places"),
 		},
 		Precondition: siteapp.RevisionPrecondition{Expected: formRevision(request)},
 	})
-	server.consoleMutationResult(response, request, "/signals", err)
+	server.consoleMutationResult(response, request, consoleReturnTarget(request, "/signals"), err)
+}
+
+func consoleReturnTarget(request *http.Request, fallback string) string {
+	switch request.FormValue("return_to") {
+	case "/setup":
+		return "/setup"
+	case "/signals":
+		return "/signals"
+	case "/devices":
+		return "/devices"
+	default:
+		return fallback
+	}
+}
+
+func formInt(request *http.Request, name string) int {
+	value, _ := strconv.Atoi(request.FormValue(name))
+	return value
 }
 
 func (server *Server) consoleSemantic(response http.ResponseWriter, request *http.Request) {

@@ -83,6 +83,7 @@ type Repository interface {
 	UpdateSignalProfile(context.Context, Actor, string, SignalProfileInput, RevisionPrecondition) (SignalProfile, error)
 	ListInventoryDevices(context.Context, int, string) ([]DeviceSummary, error)
 	ListInventorySignals(context.Context, int, string) ([]SignalSummary, error)
+	ListSetupDevices(context.Context, int) ([]SetupDeviceSource, error)
 }
 
 type Service struct {
