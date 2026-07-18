@@ -49,6 +49,12 @@
   filterTable("signal-table");
   filterTable("log-table");
 
+  document.addEventListener("click", (event) => {
+    const row = event.target.closest("tr[data-href]");
+    if (!row || event.target.closest("a, button, input, select, textarea")) return;
+    window.location.assign(row.dataset.href);
+  });
+
   const toggleSignalProfileFields = (form) => {
     const sensorType = form.querySelector("[data-sensor-type]");
     const customLabel = form.querySelector("[data-custom-sensor-label]");

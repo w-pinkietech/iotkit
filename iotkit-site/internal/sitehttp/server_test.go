@@ -1317,6 +1317,15 @@ func TestConsoleSignalViewFormatsValuesForOperators(t *testing.T) {
 	if contact.Value != "ON" || contact.SensorType != "接点入力" {
 		t.Fatalf("contact view = %#v", contact)
 	}
+
+	dimensionless := "1"
+	waiting := newConsoleSignalView(siteapp.SignalSummary{
+		Unit: &dimensionless,
+	}, now)
+	if waiting.Value != "—" || waiting.Unit != "" ||
+		waiting.SourceUnit != "1" {
+		t.Fatalf("waiting signal view = %#v", waiting)
+	}
 }
 
 func TestConsoleSignalViewUsesCompletedProfileForEffectiveDisplay(t *testing.T) {
