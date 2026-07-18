@@ -175,6 +175,7 @@ func TestConsoleEquipmentViewsGroupDevicesUnderTheirEdge(t *testing.T) {
 	rows := newConsoleEquipmentViews(edges, devices, now)
 
 	if len(rows) != 2 || len(rows[0].Devices) != 1 ||
+		rows[0].Name != "edge-a" ||
 		rows[0].Devices[0].Device.DeviceRef != "dev_a" ||
 		rows[0].DevicePendingCount != 1 ||
 		rows[0].SensorPendingCount != 1 ||
@@ -202,7 +203,8 @@ func TestEquipmentConsoleShowsEdgeDeviceSensorJourney(t *testing.T) {
 	server, archive := newTestServerFixture(
 		t, false, siteapp.AccountRoleAdmin,
 	)
-	seedDiscoveredEdge(t, archive)
+	seedSetupDevice(t, archive)
+	seedAdditionalDiscoveredEdge(t, archive)
 	cookie, _ := loginTestAccount(t, server)
 	request := httptest.NewRequest(http.MethodGet, "/equipment", nil)
 	request.AddCookie(cookie)
@@ -225,6 +227,44 @@ func TestEquipmentConsoleShowsEdgeDeviceSensorJourney(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("equipment page missing %q: %s", want, body)
+		}
+	}
+	for _, want := range []string{
+		`class="equipment-journey"`,
+		`class="equipment-edge`,
+		`class="equipment-device`,
+		`class="equipment-sensor`,
+		`data-signal-profile`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("equipment page missing visual contract %q: %s", want, body)
+		}
+	}
+}
+
+func TestEquipmentConsoleRequiresEdgeRegistrationBeforeDeviceSetup(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedDiscoveredEdge(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/equipment", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	if !strings.Contains(body, "Edgeを登録") ||
+		!strings.Contains(body, "Edgeの登録完了後にデバイスを確認できます") {
+		t.Fatalf("unregistered Edge does not explain the next step: %s", body)
+	}
+	for _, forbidden := range []string{
+		`action="/console/devices/`,
+		`action="/console/signals/`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("unregistered Edge exposes setup form %q: %s", forbidden, body)
 		}
 	}
 }
@@ -1253,6 +1293,49 @@ func seedDiscoveredEdge(t *testing.T, archive *store.Store) siteapp.Edge {
 		t.Fatalf("edges = %#v, err = %v", edges, err)
 	}
 	return edges[0]
+}
+
+func seedAdditionalDiscoveredEdge(t *testing.T, archive *store.Store) siteapp.Edge {
+	t.Helper()
+	const systemID = "018f0000-0000-7000-8000-000000000002"
+	identifier := "BP-87654321"
+	unit := "1"
+	if _, err := archive.ApplyDescriptorSnapshot(
+		context.Background(),
+		contract.DescriptorSnapshot{
+			SchemaVersion:      1,
+			EdgeNodeID:         "assembly-edge-02",
+			LedgerEpoch:        "epoch-02",
+			DescriptorRevision: 1,
+			Complete:           true,
+			Devices: []contract.DescriptorDevice{{
+				SystemID:   systemID,
+				Identifier: &identifier,
+				State:      "active",
+			}},
+			Signals: []contract.DescriptorSignal{{
+				SeriesKey:      systemID + ":contact_state:na:primary",
+				SystemID:       systemID,
+				MeasurementKey: "contact_state",
+				Variant:        "primary",
+				Unit:           &unit,
+				ValueType:      "bool",
+			}},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	edges, err := archive.ListEdges(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edge := range edges {
+		if edge.EdgeNodeID == "assembly-edge-02" {
+			return edge
+		}
+	}
+	t.Fatal("additional discovered Edge was not listed")
+	return siteapp.Edge{}
 }
 
 func seedSetupDevice(t *testing.T, archive *store.Store) {

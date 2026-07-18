@@ -100,26 +100,25 @@
       {{if eq .Page "equipment"}}
       {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>Edge、デバイス、センサーの状態と現在値を確認できます。登録内容の変更には設定管理者の権限が必要です。</span></div>{{end}}
 
-      <section class="setup-intro">
-        <div>
+      <section class="equipment-journey">
+        <div class="equipment-journey-copy">
           <p class="section-kicker">INSTALLATION JOURNEY</p>
           <h2>現場の機器を利用できる状態にします</h2>
           <p>Edgeから順に確認します。設定済みの項目はそのまま残し、必要な場所だけ変更できます。</p>
         </div>
-        <strong>4<small>段階で利用開始</small></strong>
+        <ol>
+          <li><span>1</span><div><strong>Edgeを登録</strong><small>Siteとの正式な通信を開始</small></div></li>
+          <li><span>2</span><div><strong>デバイスを登録</strong><small>現場の名前と設置場所</small></div></li>
+          <li><span>3</span><div><strong>センサーを設定</strong><small>種類・単位・値の見せ方</small></div></li>
+          <li><span>4</span><div><strong>現在値を確認</strong><small>現場の値と更新時刻</small></div></li>
+        </ol>
       </section>
-      <ol class="setup-progress">
-        <li><span>1</span><div><strong>Edgeを登録</strong><small>Siteとの正式な通信を開始</small></div></li>
-        <li><span>2</span><div><strong>デバイスを登録</strong><small>現場の名前と設置場所</small></div></li>
-        <li><span>3</span><div><strong>センサーを設定</strong><small>種類・単位・値の見せ方</small></div></li>
-        <li><span>4</span><div><strong>現在値を確認</strong><small>現場の値と更新時刻</small></div></li>
-      </ol>
 
       {{if .EquipmentRows}}
-      <div class="setup-device-list">
+      <div class="equipment-list">
         {{range .EquipmentRows}}
-        <article class="setup-device-card">
-          <header class="setup-device-header">
+        <article class="equipment-edge equipment-edge--{{.StateClass}}">
+          <header class="equipment-edge-header">
             <span class="device-illustration" aria-hidden="true">◇</span>
             <div>
               <p class="section-kicker">EDGE</p>
@@ -128,7 +127,7 @@
             </div>
             <span class="status-pill {{.StateClass}}">{{.StateLabel}}</span>
           </header>
-          <dl class="setup-device-facts">
+          <dl class="equipment-facts">
             <div><dt>デバイス</dt><dd>{{len .Devices}}台</dd></div>
             <div><dt>センサー</dt><dd>{{.SensorCount}}件</dd></div>
             <div><dt>最終通信</dt><dd title="{{.LastCommunicationAt}}">{{.LastCommunication}}</dd></div>
@@ -160,11 +159,11 @@
             </dl>
           </details>
 
-          {{if .Devices}}
-          <div class="setup-signal-list">
+          {{if and (eq .State "active") .Devices}}
+          <div class="equipment-device-list">
             {{range .Devices}}
-            <section class="setup-signal-card">
-              <header>
+            <section class="equipment-device">
+              <header class="equipment-device-header">
                 <div>
                   <p class="section-kicker">DEVICE</p>
                   <h3>{{.Name}}</h3>
@@ -172,7 +171,7 @@
                 </div>
                 <span class="status-pill {{.StateClass}}">{{.StateLabel}}</span>
               </header>
-              <dl class="setup-device-facts">
+              <dl class="equipment-facts">
                 <div><dt>最終受信</dt><dd title="{{.LastReceivedTitle}}">{{.LastReceived}}</dd></div>
                 <div><dt>接続情報</dt><dd>{{if eq .Device.DescriptorPresence "current"}}Adapterから受信済み{{else}}確認が必要{{end}}</dd></div>
                 <div><dt>センサー</dt><dd>{{len .Signals}}件</dd></div>
@@ -180,7 +179,9 @@
               </dl>
 
               {{if $.IsAdmin}}
-              <form method="post" action="/console/devices/{{.Device.DeviceRef}}/profile" class="setup-device-form">
+              <details class="equipment-editor" {{if not .Device.ProfileRevision}}open{{end}}>
+                <summary>{{if .Device.ProfileRevision}}デバイス名と設置場所を変更{{else}}デバイス名と設置場所を登録{{end}}</summary>
+              <form method="post" action="/console/devices/{{.Device.DeviceRef}}/profile">
                 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
                 <input type="hidden" name="return_to" value="/equipment">
                 <input type="hidden" name="revision" value="{{if .Device.ProfileRevision}}{{.Device.ProfileRevision}}{{end}}">
@@ -190,11 +191,12 @@
                 </div>
                 <button type="submit" class="secondary">デバイス情報を保存</button>
               </form>
+              </details>
               {{end}}
 
-              <div class="setup-signal-list">
+              <div class="equipment-sensor-list">
                 {{range .Signals}}
-                <section class="setup-signal-card">
+                <section class="equipment-sensor">
                   <header>
                     <div><p class="section-kicker">SENSOR</p><h3>{{if .FormProfile.DisplayName}}{{.FormProfile.DisplayName}}{{else}}名前未設定のセンサー{{end}}</h3></div>
                     <div class="setup-live-value"><span>現在の受信値</span><strong>{{.RawValue}}{{if .RawUnit}} <small>{{.RawUnit}}</small>{{end}}</strong><small title="{{.LastReceivedTitle}}">{{.LastReceived}}</small></div>
@@ -210,6 +212,8 @@
                   </div>
                   {{if .MissingMessage}}<p class="metadata-warning">{{.MissingMessage}}</p>{{end}}
                   {{if $.IsAdmin}}
+                  <details class="equipment-editor" {{if not .ProfileComplete}}open{{end}}>
+                    <summary>{{if .ProfileComplete}}センサーの基本情報を変更{{else}}センサーの基本情報を登録{{end}}</summary>
                   <form method="post" action="/console/signals/{{.Signal.SignalRef}}/profile" class="setup-signal-form" data-signal-profile>
                     <input type="hidden" name="_csrf" value="{{$.CSRF}}">
                     <input type="hidden" name="return_to" value="/equipment">
@@ -252,6 +256,7 @@
                     </div>
                     <button type="submit">センサーの基本情報を保存</button>
                   </form>
+                  </details>
                   {{end}}
                 </section>
                 {{end}}
@@ -276,7 +281,7 @@
       {{end}}
 
       {{if .OrphanDevices}}
-      <section class="content-section">
+      <section class="content-section equipment-orphans">
         <div class="feedback error-feedback"><span aria-hidden="true">!</span>所属するEdgeを確認できないデバイスがあります。データを削除せず、診断対象として隔離表示しています。</div>
         {{range .OrphanDevices}}
         <article class="device-card">
