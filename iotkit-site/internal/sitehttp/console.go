@@ -67,6 +67,16 @@ type certificateStatus struct {
 	NeedsAction   bool
 }
 
+func (server *Server) consoleSensorsRedirect(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireBrowserAuth(response, request); !ok {
+		return
+	}
+	http.Redirect(response, request, "/sensors", http.StatusSeeOther)
+}
+
 func (server *Server) consolePage(response http.ResponseWriter, request *http.Request) {
 	auth, ok := server.requireBrowserAuth(response, request)
 	if !ok {

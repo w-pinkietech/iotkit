@@ -465,6 +465,61 @@ func TestSensorRoutesReturnNotFoundForUnknownDetail(t *testing.T) {
 	}
 }
 
+func TestSensorListShowsCurrentValuesAndLinksWithoutSettings(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/sensors", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	for _, want := range []string{
+		"センサー一覧",
+		"24.8",
+		"factory-edge-01",
+		`href="/sensors/` + signals[0].SignalRef + `"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("sensor list missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`action="/console/signals/`,
+		`name="display_name"`,
+		`name="kind"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("sensor list exposes setting %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestLegacySensorConsoleRoutesRedirectToSensorList(t *testing.T) {
+	server := newTestServerWithRole(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	cookie, _ := loginTestAccount(t, server)
+	for _, path := range []string{"/monitor", "/signals"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusSeeOther ||
+			response.Header().Get("Location") != "/sensors" {
+			t.Fatalf("%s response = %d location=%q",
+				path, response.Code, response.Header().Get("Location"))
+		}
+	}
+}
+
 func TestConsoleNavigationUsesEquipmentJourney(t *testing.T) {
 	server := newTestServer(t, false)
 	cookie, _ := loginTestAccount(t, server)
