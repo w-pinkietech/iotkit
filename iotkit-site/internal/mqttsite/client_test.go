@@ -33,6 +33,32 @@ type fakeExportQueue struct {
 	listed       int
 }
 
+type fakeActivationQueue struct {
+	fakeExportQueue
+	commands       []store.ActivationCommand
+	attemptedIDs   []string
+	attemptedAt    []int64
+	listErr        error
+	markAttemptErr error
+}
+
+func (queue *fakeActivationQueue) ListPendingActivationCommands(
+	context.Context,
+	int,
+) ([]store.ActivationCommand, error) {
+	return queue.commands, queue.listErr
+}
+
+func (queue *fakeActivationQueue) MarkActivationCommandAttempt(
+	_ context.Context,
+	activationID string,
+	at int64,
+) error {
+	queue.attemptedIDs = append(queue.attemptedIDs, activationID)
+	queue.attemptedAt = append(queue.attemptedAt, at)
+	return queue.markAttemptErr
+}
+
 func (queue *fakeExportQueue) ReconcileInventorySources(context.Context, int) (int, error) {
 	queue.reconciled++
 	return 0, queue.reconcileErr
@@ -71,6 +97,68 @@ func TestRecordsTopicFilterUsesEdgeNodes(t *testing.T) {
 func TestDescriptorTopicFilterUsesEdgeNodes(t *testing.T) {
 	if descriptorsTopicFilter != "iotkit/v1/edge-nodes/+/descriptors" {
 		t.Fatalf("descriptors topic filter = %q", descriptorsTopicFilter)
+	}
+}
+
+func TestActivationResultTopicFilterUsesEdgeNodes(t *testing.T) {
+	if activationResultTopicFilter != "iotkit/v1/edge-nodes/+/activation/result" {
+		t.Fatalf("activation result topic filter = %q", activationResultTopicFilter)
+	}
+}
+
+func TestActivationCommandPublishRetriesUntilResultAndNeverCompletesOnPUBACK(t *testing.T) {
+	queue := &fakeActivationQueue{commands: []store.ActivationCommand{{
+		ActivationID: "act-0123456789abcdef0123456789abcdef",
+		Topic:        "iotkit/v1/edge-nodes/edge-node-01/activation/request",
+		PayloadJSON:  []byte(`{"schema_version":1}`),
+	}}}
+	var topics []string
+
+	for range 2 {
+		err := publishPendingActivationCommands(
+			context.Background(),
+			queue,
+			func(topic string, qos byte, retained bool, _ []byte) error {
+				topics = append(topics, topic)
+				if qos != 1 || retained {
+					t.Fatalf("activation publish qos=%d retained=%t", qos, retained)
+				}
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(topics) != 2 || len(queue.attemptedIDs) != 2 {
+		t.Fatalf("topics=%v attempts=%v", topics, queue.attemptedIDs)
+	}
+	if queue.commands[0].ActivationID != "act-0123456789abcdef0123456789abcdef" {
+		t.Fatal("PUBACK unexpectedly completed the durable command")
+	}
+}
+
+func TestActivationCommandPublishFailureDoesNotRecordAttempt(t *testing.T) {
+	queue := &fakeActivationQueue{commands: []store.ActivationCommand{{
+		ActivationID: "act-0123456789abcdef0123456789abcdef",
+		Topic:        "iotkit/v1/edge-nodes/edge-node-01/activation/request",
+		PayloadJSON:  []byte(`{"schema_version":1}`),
+	}}}
+
+	err := publishPendingActivationCommands(
+		context.Background(),
+		queue,
+		func(string, byte, bool, []byte) error {
+			return errors.New("broker unavailable")
+		},
+	)
+
+	if err == nil {
+		t.Fatal("activation publish failure was hidden")
+	}
+	if len(queue.attemptedIDs) != 0 {
+		t.Fatalf("attempts = %v", queue.attemptedIDs)
 	}
 }
 

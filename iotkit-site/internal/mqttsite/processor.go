@@ -19,9 +19,14 @@ type DescriptorStore interface {
 	ApplyDescriptorSnapshot(context.Context, contract.DescriptorSnapshot) (store.DescriptorApplyResult, error)
 }
 
+type ActivationStore interface {
+	ApplyActivationResult(context.Context, contract.ActivationResult) (store.EdgeActivation, error)
+}
+
 type MessageStore interface {
 	BatchStore
 	DescriptorStore
+	ActivationStore
 }
 
 type Publish func(topic string, payload []byte) error
@@ -43,6 +48,17 @@ func (processor Processor) Process(ctx context.Context, topic string, payload []
 			return errors.New("MQTT topic/body edge_node_id mismatch")
 		}
 		_, err = processor.Store.ApplyDescriptorSnapshot(ctx, snapshot)
+		return err
+	}
+	if edgeNodeID, err := activationResultTopicEdgeNode(topic); err == nil {
+		result, err := contract.DecodeActivationResult(payload)
+		if err != nil {
+			return err
+		}
+		if err := result.ValidateTopicEdge(edgeNodeID); err != nil {
+			return err
+		}
+		_, err = processor.Store.ApplyActivationResult(ctx, result)
 		return err
 	}
 	edgeNodeID, err := recordsTopicEdgeNode(topic)
@@ -81,6 +97,22 @@ func recordsTopicEdgeNode(topic string) (string, error) {
 
 func descriptorsTopicEdgeNode(topic string) (string, error) {
 	return topicEdgeNode(topic, "descriptors")
+}
+
+func activationResultTopicEdgeNode(topic string) (string, error) {
+	parts := strings.Split(topic, "/")
+	if len(parts) != 6 ||
+		parts[0] != "iotkit" ||
+		parts[1] != "v1" ||
+		parts[2] != "edge-nodes" ||
+		parts[4] != "activation" ||
+		parts[5] != "result" {
+		return "", errors.New("unexpected MQTT activation result topic")
+	}
+	if parts[3] == "" || strings.ContainsAny(parts[3], "+#") {
+		return "", errors.New("invalid MQTT activation result topic edge node ID")
+	}
+	return parts[3], nil
 }
 
 func topicEdgeNode(topic string, suffix string) (string, error) {
