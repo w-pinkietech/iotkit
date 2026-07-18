@@ -390,6 +390,7 @@ func TestConsoleReturnTargetAllowsOnlyEquipmentDetailPaths(t *testing.T) {
 		"/equipment",
 		"/equipment/edges/edge_0123456789abcdef0123456789abcdef",
 		"/equipment/devices/dev_0123456789abcdef0123456789abcdef",
+		"/sensors/sig_0123456789abcdef0123456789abcdef",
 	}
 	for _, target := range valid {
 		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
@@ -410,6 +411,10 @@ func TestConsoleReturnTargetAllowsOnlyEquipmentDetailPaths(t *testing.T) {
 		"/equipment/devices/dev_not-a-resource-ref",
 		"/equipment/edges/edge_a/extra",
 		"/equipment/edges/edge_a?changed=1",
+		"/sensors/",
+		"/sensors/sig_",
+		"/sensors/sig_0123456789abcdef0123456789abcdef/extra",
+		"/sensors/sig_0123456789abcdef0123456789abcdef?changed=1",
 	}
 	for _, target := range invalid {
 		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
@@ -520,6 +525,82 @@ func TestLegacySensorConsoleRoutesRedirectToSensorList(t *testing.T) {
 	}
 }
 
+func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	path := "/sensors/" + signals[0].SignalRef
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	for _, want := range []string{
+		`class="sensor-detail"`,
+		`class="sensor-detail-current`,
+		"factory-edge-01",
+		"temperature_c",
+		"24.8",
+		`action="/console/signals/` + signals[0].SignalRef + `/profile"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/semantic"`,
+		`name="display_name"`,
+		`name="kind"`,
+		`name="return_to" value="` + path + `"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("sensor detail missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestSensorDetailViewerSeesFactsWithoutMutationControls(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/"+signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	for _, want := range []string{
+		"閲覧のみ",
+		"factory-edge-01",
+		"temperature_c",
+		"24.8",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("viewer sensor detail missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`action="/console/signals/`,
+		`name="display_name"`,
+		`name="kind"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("viewer sensor detail exposes %q: %s", forbidden, body)
+		}
+	}
+}
+
 func TestConsoleNavigationUsesEquipmentJourney(t *testing.T) {
 	server := newTestServer(t, false)
 	cookie, _ := loginTestAccount(t, server)
@@ -543,7 +624,8 @@ func TestConsoleNavigationUsesEquipmentJourney(t *testing.T) {
 		}
 	}
 	if !strings.Contains(body, `</span>機器管理`) ||
-		!strings.Contains(body, `</span>値の変換`) {
+		!strings.Contains(body, `</span>センサー一覧`) ||
+		strings.Contains(body, `</span>値の変換`) {
 		t.Fatalf("navigation does not use equipment journey: %s", body)
 	}
 }
@@ -884,9 +966,9 @@ func TestConsoleUsesOperatorFocusedInformationArchitecture(t *testing.T) {
 			mustContain: []string{"センサーの現在値", "要確認", "データの流れ"},
 		},
 		{
-			path:        "/monitor",
-			pageTitle:   "センサーの現在値",
-			activeLabel: "センサー",
+			path:        "/sensors",
+			pageTitle:   "センサー一覧",
+			activeLabel: "センサー一覧",
 			mustContain: []string{
 				"<th>センサー</th>", "<th>種類</th>", "<th>現在値</th>",
 				"受信状態", "最終受信",
@@ -903,12 +985,6 @@ func TestConsoleUsesOperatorFocusedInformationArchitecture(t *testing.T) {
 			pageTitle:   "デバイス管理",
 			activeLabel: "",
 			mustContain: []string{"デバイスごとに", "閲覧のみ"},
-		},
-		{
-			path:        "/signals",
-			pageTitle:   "値の変換",
-			activeLabel: "値の変換",
-			mustContain: []string{"数値・状態・累積値・アラーム", "閲覧のみ"},
 		},
 	}
 	for _, test := range tests {
@@ -944,7 +1020,7 @@ func TestConsoleCallsSignalsSensorsAndKeepsDevicesDistinct(t *testing.T) {
 	server := newTestServer(t, false)
 	sessionCookie, _ := loginTestAccount(t, server)
 	for _, path := range []string{
-		"/status", "/monitor", "/equipment", "/setup", "/signals", "/logs", "/output", "/system",
+		"/status", "/sensors", "/equipment", "/setup", "/logs", "/output", "/system",
 	} {
 		t.Run(path, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -1178,13 +1254,13 @@ func TestSetupConsoleSavesProfilesAndUpdatesMonitor(t *testing.T) {
 	if !strings.Contains(setupResponse.Body.String(), "登録済み") {
 		t.Fatalf("setup did not become ready: %s", setupResponse.Body.String())
 	}
-	monitorRequest := httptest.NewRequest(http.MethodGet, "/monitor", nil)
-	monitorRequest.AddCookie(cookie)
-	monitorResponse := httptest.NewRecorder()
-	server.ServeHTTP(monitorResponse, monitorRequest)
+	sensorsRequest := httptest.NewRequest(http.MethodGet, "/sensors", nil)
+	sensorsRequest.AddCookie(cookie)
+	sensorsResponse := httptest.NewRecorder()
+	server.ServeHTTP(sensorsResponse, sensorsRequest)
 	for _, want := range []string{"乾燥炉入口 温度", "24.80", "°C"} {
-		if !strings.Contains(monitorResponse.Body.String(), want) {
-			t.Fatalf("monitor missing %q: %s", want, monitorResponse.Body.String())
+		if !strings.Contains(sensorsResponse.Body.String(), want) {
+			t.Fatalf("sensor list missing %q: %s", want, sensorsResponse.Body.String())
 		}
 	}
 }

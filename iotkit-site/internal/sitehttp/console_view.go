@@ -30,6 +30,12 @@ type consoleSignalView struct {
 	MeaningClass      string
 	FormProfile       siteapp.SignalProfileInput
 	Definition        *semantics.Definition
+	SourceSensorType  string
+	SourceValueType   string
+	SourceUnit        string
+	ChannelLabel      string
+	DeviceName        string
+	DeviceLocation    string
 }
 
 type consoleEdgeView struct {
@@ -220,6 +226,19 @@ func newConsoleSignalView(
 		SettingClass:  "needs-setup",
 		MeaningLabel:  "未設定",
 		MeaningClass:  "needs-setup",
+		SourceSensorType: pointerText(
+			summary.SensorType,
+			"未通知",
+		),
+		SourceValueType: displayValueType(summary.ValueType),
+		SourceUnit:      displayUnit(summary.Unit),
+		ChannelLabel:    "なし",
+	}
+	if view.SourceUnit == "" {
+		view.SourceUnit = "通知なし"
+	}
+	if summary.ChannelIndex != nil {
+		view.ChannelLabel = strconv.FormatInt(int64(*summary.ChannelIndex), 10)
 	}
 	view.FormProfile, _ = siteapp.SignalProfileCandidate(summary)
 	if summary.Profile != nil {
@@ -277,6 +296,33 @@ func newConsoleSignalView(
 		view.StatusClass = "never"
 	}
 	return view
+}
+
+func attachConsoleSignalDevices(
+	signals []consoleSignalView,
+	devices []siteapp.DeviceSummary,
+) {
+	deviceByRef := make(map[string]siteapp.DeviceSummary, len(devices))
+	for _, device := range devices {
+		deviceByRef[device.DeviceRef] = device
+	}
+	for index := range signals {
+		if signals[index].DeviceRef == nil {
+			continue
+		}
+		device, exists := deviceByRef[*signals[index].DeviceRef]
+		if !exists {
+			continue
+		}
+		signals[index].DeviceName = device.DisplayName
+		if signals[index].DeviceName == "" {
+			signals[index].DeviceName = "名前未設定のデバイス"
+		}
+		signals[index].DeviceLocation = device.Location
+		if signals[index].DeviceLocation == "" {
+			signals[index].DeviceLocation = "設置場所 未設定"
+		}
+	}
 }
 
 func newConsoleSetupDeviceViews(

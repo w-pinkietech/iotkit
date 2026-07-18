@@ -255,6 +255,16 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			}
 		}
 		data.SignalRows = newConsoleSignalViews(data.Signals, data.Definitions, server.now())
+		if err == nil && page == "sensors" {
+			var devices []siteapp.DeviceSummary
+			devices, err = server.site.ListDevices(
+				request.Context(),
+				siteapp.PageRequest{Limit: 100},
+			)
+			if err == nil {
+				attachConsoleSignalDevices(data.SignalRows, devices)
+			}
+		}
 		if signalRef := request.PathValue("signal_ref"); signalRef != "" {
 			data.SensorView = "detail"
 			for index := range data.SignalRows {
@@ -267,6 +277,8 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				http.NotFound(response, request)
 				return
 			}
+			data.Title = data.SelectedSignal.Name
+			data.Description = "現在値と受信元を確認し、このセンサーの設定を管理します。"
 		}
 		data.summarizeSignals()
 	case "devices":
@@ -478,6 +490,9 @@ func consoleReturnTarget(request *http.Request, fallback string) string {
 	if safeEquipmentReturnTarget(target) {
 		return target
 	}
+	if safeSensorReturnTarget(target) {
+		return target
+	}
 	switch target {
 	case "/equipment":
 		return "/equipment"
@@ -490,6 +505,16 @@ func consoleReturnTarget(request *http.Request, fallback string) string {
 	default:
 		return fallback
 	}
+}
+
+func safeSensorReturnTarget(target string) bool {
+	if strings.ContainsAny(target, "?#\\") || strings.HasPrefix(target, "//") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
+	return len(parts) == 2 &&
+		parts[0] == "sensors" &&
+		validConsoleResourceRef(parts[1], "sig_")
 }
 
 func safeEquipmentReturnTarget(target string) bool {
@@ -553,7 +578,15 @@ func (server *Server) consoleSemantic(response http.ResponseWriter, request *htt
 		request.Context(), server.actor(auth), request.PathValue("signal_ref"),
 		spec, siteapp.RevisionPrecondition{Expected: formRevision(request)},
 	)
-	server.consoleMutationResult(response, request, "/signals", err)
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(
+			request,
+			"/sensors/"+request.PathValue("signal_ref"),
+		),
+		err,
+	)
 }
 
 func (server *Server) consoleYokaKitOutput(response http.ResponseWriter, request *http.Request) {
