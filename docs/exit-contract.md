@@ -1,7 +1,8 @@
 # Exit contract (R10)
 
-Status: Approved and implemented MQTT v1 target contract. The older HTTPS publisher is retained only
-as transitional code and is not started by the Edge composition root.
+Status: Approved MQTT v1 target contract. The records/descriptors/accepted-through custody path is
+implemented. The Site activation extension is approved but not yet implemented. The older HTTPS
+publisher is retained only as transitional code and is not started by the Edge composition root.
 
 This contract defines how canonical records leave one Edge Node and when that Edge Node may transfer
 custody. Application meaning such as production, OEE, process, alarm text, or YokaKit state is not
@@ -25,12 +26,80 @@ part of this contract.
 iotkit/v1/edge-nodes/{edge_node_id}/records
 iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
 iotkit/v1/edge-nodes/{edge_node_id}/descriptors
+iotkit/v1/edge-nodes/{edge_node_id}/activation/request
+iotkit/v1/edge-nodes/{edge_node_id}/activation/result
 ```
 
 `records` and `accepted-through` use QoS 1 and MUST NOT be retained. `descriptors` uses QoS 1 and
-MUST be retained; it is a complete current-state replica, not a custody stream. ACLs restrict each
-Edge Node to publishing its own records/descriptors and subscribing to its own acknowledgement.
-Application-specific topics are outside R10.
+MUST be retained; it is a complete current-state replica, not a custody stream. `activation/request`
+and `activation/result` use QoS 1 and MUST NOT be retained. Site durably retries an activation
+request until the correlated application result is committed; MQTT PUBACK is never activation
+completion. ACLs restrict each Edge Node to publishing its own records/descriptors/activation result
+and subscribing to its own acknowledgement/activation request. Application-specific topics are
+outside R10.
+
+## Site activation and publication admission
+
+Broker enrollment and Site activation are separate.
+
+- **Broker enrollment** gives an Edge Node its connection profile, static credential, and exact
+  topic ACL. It is an installation operation on the Broker and Edge hosts.
+- **Site activation** is an authenticated Site Console operation that authorizes one exact
+  `(edge_node_id, ledger_epoch)` incarnation to begin a new Site custody stream.
+
+A Broker-enrolled but inactive Edge publishes its descriptor and receives activation requests. It
+MUST NOT publish records. It may durably keep normalized pre-activation readings for local
+commissioning preview, but MUST NOT assign them a `pub_seq` or insert any record family into the
+publication outbox. Those readings are not R10 canonical publication records and are never eligible
+for later replay to Site.
+
+An administrator activation transaction durably records `site_id`, a unique `activation_id`, the
+exact Edge Node and ledger epoch, actor audit, and a retryable command outbox before publishing:
+
+```json
+{
+  "schema_version": 1,
+  "activation_id": "act-0123456789abcdef0123456789abcdef",
+  "site_id": "site-0123456789abcdef0123456789abcdef",
+  "edge_node_id": "edge-node-01",
+  "expected_ledger_epoch": "01J...",
+  "grant_revision": 1,
+  "issued_at": 1720000000000
+}
+```
+
+The Edge applies a request in the same SQLite write serialization used by collection. It validates
+the exact identity and epoch, verifies that the publication log and its allocation sequence have
+never been used, freezes the pre-activation `readings.seq` boundary once, persists the activation
+receipt, and opens publication admission for future transactions. Every publication enqueue path,
+including measurement, annotation, epoch start, commissioning smoke, and later quarantine release,
+MUST use this durable admission gate. Replaying the same activation ID returns the same result and
+never recomputes the boundary. A different activation ID for an active Edge is rejected.
+
+```json
+{
+  "schema_version": 1,
+  "activation_id": "act-0123456789abcdef0123456789abcdef",
+  "site_id": "site-0123456789abcdef0123456789abcdef",
+  "edge_node_id": "edge-node-01",
+  "ledger_epoch": "01J...",
+  "status": "applied",
+  "discard_through_reading_seq": 842,
+  "first_publication_seq": 1,
+  "applied_at": 1720000001000
+}
+```
+
+The frozen prefix becomes immediately ineligible for normal query and publication. Physical row
+deletion is restartable, bounded Edge-local cleanup and is not an activation completion condition.
+It never changes the boundary. `accepted-through` remains the only authority to advance or purge
+the post-activation official publication outbox.
+
+Site states are `discovered`, `activating`, `active`, and `recovery_hold`. It accepts records only
+after committing the matching activation result and entering `active`. Activation state validation,
+exact epoch validation, raw insertion, fingerprint verification, and cursor advance belong to the
+same custody transaction. A record received before activation completion is stored nowhere and
+receives no acknowledgement; normal Edge replay converges after Site becomes active.
 
 ## Descriptor snapshot
 
@@ -42,8 +111,9 @@ It contains stable `system_id`/`series_key`, an optional non-authoritative displ
 device state, measurement key, channel, variant, canonical unit, and value type. It never contains
 hardware/provider identifiers, credentials, or adapter payloads. Site validates the composite
 series identity and durably replicates the snapshot. Lower revisions in one ledger epoch are ignored;
-equal revisions with different content are conflicts. A descriptor failure never authorizes purge,
-prevents raw acceptance, or suppresses `accepted-through`.
+equal revisions with different content are conflicts. A descriptor may discover an inactive Edge
+but never activates it. A descriptor failure never authorizes purge, changes publication admission,
+or suppresses `accepted-through` for an already active Edge.
 
 ## Record batch
 
@@ -68,6 +138,7 @@ Requirements:
 - Event time may be late or non-monotonic and is never a delivery cursor.
 - Version 1 limits a batch to 256 records and 1 MiB encoded size.
 - The initial publisher permits one application-unacknowledged batch at a time.
+- A newly activated stream starts at `pub_seq=1`; there is no implicit or fabricated prefix.
 
 `publication_id` is a deterministic correlation and replay identity. Site stores a fingerprint of
 the received record content. Receiving different content for an existing global record identity is
@@ -141,7 +212,8 @@ After storing a batch, Site publishes:
 
 For a valid batch, Site performs one custody transaction:
 
-1. Authenticate the Edge Node topic and validate version, identity, epoch, bounds, and contiguous range.
+1. Authenticate the Edge Node topic and validate active Site admission, version, identity, exact
+   activated epoch, bounds, and contiguous range.
 2. Insert or idempotently verify every raw canonical record.
 3. Advance that Edge Node and epoch's contiguous accepted-through cursor.
 4. Commit the raw records and cursor atomically with durable SQLite settings.
@@ -157,7 +229,11 @@ cursor. MQTT PUBACK never advances this cursor and never authorizes retention pu
 ## Retry and outage behavior
 
 - Edge outbox is the retry authority and remains durable until application acknowledgement.
+- Site activation-command outbox and Edge activation receipt are the retry authorities for
+  activation. Broker session state is not.
 - Broker receipt may release MQTT protocol inflight state but not the application sending window.
+- While inactive, Edge continues bounded local commissioning collection without creating an R10
+  publication backlog.
 - If Site or the network is down, Edge continues local collection and retains unacknowledged rows.
 - On reconnect, Edge republishes the same batch until Site confirms the contiguous cursor.
 - Site exact replay verifies existing rows and republishes the already committed watermark.
@@ -194,6 +270,8 @@ UI, and notifications.
 
 ## Deferred
 
-The following are outside the initial one-Edge-Node vertical slice: series-definition replication,
-terminal/gap repair protocol, multi-Edge fleet operations, Site query projection, generic Broker
-fan-out, legacy HTTPS migration, and alternative egress bindings.
+The following are deferred: deactivation/reactivation, Site transfer, Edge Node ID reuse, clone
+detection, automatic adoption of an existing standalone outbox, same-epoch `stream_start_after`,
+terminal/gap repair protocol, multi-Edge fleet operations, generic Broker fan-out, legacy HTTPS
+migration, and alternative egress bindings. Ambiguous legacy or restored state enters
+`recovery_hold`; it is never auto-activated or remotely cleaned.

@@ -1,6 +1,6 @@
 # D9: 出口契約の第一バインディングは標準MQTT
 
-Status: 確定、2026-07-15 descriptor current-state複製追加
+Status: 確定、2026-07-18 Site activation admission追加
 
 ## 決定
 
@@ -25,19 +25,40 @@ MQTT PUBACKとapplication-levelの保管完了確認は異なる。
 
 ## Topic
 
-Version 1のcustody namespace 2つと、現在状態複製1つは次のとおりである。
+Version 1のcustody namespace 2つ、現在状態複製1つ、Site activation 2つは次のとおりである。
 
 ```text
 iotkit/v1/edge-nodes/{edge_node_id}/records
 iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
 iotkit/v1/edge-nodes/{edge_node_id}/descriptors
+iotkit/v1/edge-nodes/{edge_node_id}/activation/request
+iotkit/v1/edge-nodes/{edge_node_id}/activation/result
 ```
 
 recordsとaccepted-throughはQoS 1、non-retainedとする。descriptorsはQoS 1、retainedのcomplete
-current-state snapshotで、custody、cursor、purge権威を持たない。Edgeは自分のrecords/descriptorsへだけ
-publishし、自分のaccepted-throughだけをsubscribeできる。IoTKit Siteは逆の権限を持つ。descriptorの
-decode/保存失敗はraw受理とaccepted-throughを止めない。wildcard application publish、
+current-state snapshotで、custody、cursor、activation権威、purge権威を持たない。activation/requestと
+activation/resultはQoS 1、non-retainedとし、両端のdurable stateからapplication結果まで再送する。
+Edgeは自分のrecords/descriptors/activation resultだけをpublishし、自分のaccepted-through/activation request
+だけをsubscribeできる。IoTKit Siteは逆の権限を持つ。descriptorのdecode/保存失敗は、登録済みEdgeの
+raw受理とaccepted-throughを止めない。wildcard application publish、
 device-to-device routing、`production`等のapplication固有topicはIoTKitの出口契約に含めない。
+
+## Broker enrollmentとSite activation
+
+Broker credential/ACLを発行するenrollmentと、Siteが収集開始を承認するactivationを分離する。Brokerへ接続
+できることはSite raw historyへの参加許可を意味しない。
+
+- 未登録Edgeはdescriptorだけを送信し、観測を`readings`へローカル保存できるがpublication logへ採番しない。
+- SiteはdescriptorからEdgeを`discovered`として表示し、adminのtyped operationで一意なactivation IDと
+  exact `(edge_node_id, ledger_epoch)` grant、監査、command outboxを同一transactionへcommitする。
+- Edgeはcollectorと同じSQLite write serializationで境界を一度だけ確定し、将来のingest transactionだけを
+  publicationへ入れる。publication log、AUTOINCREMENT sequence、target cursorが未使用でなければ初回
+  activationを拒否し、remote cleanupやsequence巻き戻しを行わない。
+- Siteはmatching activation resultをcommitして`active`になった後だけrecordsを受理する。状態・epoch検査は
+  raw/cursor transaction内で行い、未登録recordsへackしない。
+- activation前prefixは即時にpublication/query対象外となり、物理削除は固定境界を使う再開可能なEdge-local
+  cleanupとする。activation result、通常再接続、credential更新は削除権威ではない。
+- post-activation outboxは従来どおり、validated `accepted-through`だけでcursorとpurge eligibilityを進める。
 
 ## 配送と保管責任
 
@@ -49,6 +70,8 @@ device-to-device routing、`production`等のapplication固有topicはIoTKitの�
 - commit後のack消失は同一batch再送と冪等確認で回復する。
 - 最初の実装はapplication ack待ちbatchを1つに制限する。PUBACKはこの窓を解放しない。
 - accepted-throughは連続prefixだけを表し、gapを飛び越えない。
+- 初回activation後の正式publicationは`pub_seq=1`から始まる。保存していないprefixを
+  accepted-throughや別epochで偽装しない。
 
 ## Broker and availability
 
@@ -70,5 +93,8 @@ custom listener、manual PUBACK、独自keepalive/session/backpressure implement
 - multi-Edge運用最適化
 - HTTPSからMQTTへの既存target移行
 - MQTT Broker HA
+- deactivation/reactivation、Site間移動、Edge Node ID再利用
+- 既存standalone outboxの自動adoptionとsame-epoch `stream_start_after`
+- clone検知とSite restore generation fence
 
 これらはペアリング済みBravePI Transmitter 1台 + 1 Edge Node + 1 Siteの実機縦切り後に、観測された必要性から決める。

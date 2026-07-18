@@ -1,6 +1,6 @@
 # D13: UI scope
 
-Status: 確定、2026-07-16 旧IoTKit operator capability継承方針追記
+Status: 確定、2026-07-18 Site Edge activation追記
 
 ## Decision
 
@@ -25,6 +25,12 @@ credential、client ID、ACL、certificate更新方式はdeployment設定であ�
 実TLS接続で観測したcertificate期限と最終観測時刻、`接続確認済み`/`配送確認済み`/`要対応`の非秘密statusだけを
 表示する。別host Broker内部の更新job成否は表示せず、Broker hostのlocal診断で扱う。
 BrokerとSiteの同一host配置をUIの前提にしない。再設定とrollbackは対象hostのlocal CLIで行う。
+
+Site Consoleはdescriptorで発見したEdgeを、deviceとは別階層で表示する。`接続設定済み`、`未登録`、
+`登録処理中`、`登録済み`、`復旧確認待ち`を区別し、adminだけが初回Site activationを実行できる。
+activationは既存Site application serviceのtyped operationを使い、Edge表示名、設置場所、exact ledger epoch、
+操作状態、最終結果、登録前ローカル値が正式履歴へ入らないことを表示する。credential、ACL、endpoint、
+certificateは表示用statusを除き操作しない。
 
 ## Application boundary
 
@@ -54,9 +60,8 @@ YokaKit固有payloadをIoTKitへ持ち込んだりしない。barcodeを品番�
 ## Deferred
 
 - Edge Web UIの拡張
-- Site Console
-- enrollment wizard
 - Broker接続変更・certificate/credential rotation UI
+- deactivation/reactivation、Site transfer、legacy Edge adoption wizard
 - fleet operation
 - 業務charts、業務dashboards、notifications（汎用monitor/logはSite Console設計で扱う）
 - AI operator UI
