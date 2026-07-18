@@ -107,6 +107,141 @@
       </section>
       {{end}}
 
+      {{if and (eq .Page "sensors") (eq .SensorView "detail")}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>現在値と設定内容を確認できます。変更には設定管理者の権限が必要です。</span></div>{{end}}
+      {{with .SelectedSignal}}
+      <div class="sensor-detail">
+        <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/sensors">センサー一覧</a><span aria-hidden="true">/</span><strong>{{.Name}}</strong></nav>
+
+        <section class="sensor-detail-current sensor-detail-current--{{.StatusClass}}">
+          <header>
+            <div><p class="section-kicker">SENSOR</p><h2>{{.Name}}</h2><p>{{.SensorType}}</p></div>
+            <span class="status-pill {{.StatusClass}}">{{.StatusLabel}}</span>
+          </header>
+          <div class="sensor-detail-measurement">
+            <span>現在の値</span>
+            <strong>{{.Value}}{{if .Unit}} <small>{{.Unit}}</small>{{end}}</strong>
+            <small title="{{.LastReceivedTitle}}">最終受信 {{.LastReceived}}</small>
+          </div>
+        </section>
+
+        <section class="content-section sensor-detail-source">
+          <div class="section-heading"><div><p class="section-kicker">SOURCE</p><h2>接続元</h2><p>この値が、どのEdgeとデバイスから届いているかを確認できます。</p></div></div>
+          <dl class="sensor-detail-facts">
+            <div><dt>Edge</dt><dd>{{.Edge}}</dd></div>
+            <div><dt>デバイス</dt><dd>{{if .DeviceName}}{{if .DeviceRef}}<a href="/equipment/devices/{{.DeviceRef}}">{{.DeviceName}}</a>{{else}}{{.DeviceName}}{{end}}{{else}}確認できません{{end}}</dd></div>
+            <div><dt>データ種類</dt><dd class="mono">{{.SourceSensorType}}</dd></div>
+            <div><dt>値の形式</dt><dd>{{.SourceValueType}}</dd></div>
+            <div><dt>通知された単位</dt><dd>{{.SourceUnit}}</dd></div>
+            <div><dt>チャンネル</dt><dd>{{.ChannelLabel}}</dd></div>
+          </dl>
+        </section>
+
+        <div class="sensor-detail-settings">
+          <section class="content-section sensor-detail-setting-card">
+            <div class="section-heading"><div><p class="section-kicker">DISPLAY</p><h2>名前と表示</h2><p>現場で分かる名前・種類・単位を設定します。</p></div>{{if .Profile}}{{if .Profile.Complete}}<span class="status-pill configured">設定済み</span>{{end}}{{end}}</div>
+            {{if $.IsAdmin}}
+            <form method="post" action="/console/signals/{{.SignalRef}}/profile" class="setup-signal-form" data-signal-profile>
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+              <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
+              <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
+              <label><span>センサー名</span><input name="display_name" value="{{.FormProfile.DisplayName}}" placeholder="例：乾燥炉入口 温度" required></label>
+              <div class="form-row">
+                <label><span>センサーの種類</span><select name="display_sensor_type" data-sensor-type required>
+                  <option value="">選択してください</option>
+                  <option value="temperature" {{if eq .FormProfile.DisplaySensorType "temperature"}}selected{{end}}>温度</option>
+                  <option value="contact" {{if eq .FormProfile.DisplaySensorType "contact"}}selected{{end}}>接点入力</option>
+                  <option value="illuminance" {{if eq .FormProfile.DisplaySensorType "illuminance"}}selected{{end}}>光</option>
+                  <option value="distance" {{if eq .FormProfile.DisplaySensorType "distance"}}selected{{end}}>距離</option>
+                  <option value="voltage" {{if eq .FormProfile.DisplaySensorType "voltage"}}selected{{end}}>電圧</option>
+                  <option value="current" {{if eq .FormProfile.DisplaySensorType "current"}}selected{{end}}>電流</option>
+                  <option value="pressure" {{if eq .FormProfile.DisplaySensorType "pressure"}}selected{{end}}>圧力</option>
+                  <option value="humidity" {{if eq .FormProfile.DisplaySensorType "humidity"}}selected{{end}}>湿度</option>
+                  <option value="acceleration" {{if eq .FormProfile.DisplaySensorType "acceleration"}}selected{{end}}>加速度</option>
+                  <option value="custom" {{if eq .FormProfile.DisplaySensorType "custom"}}selected{{end}}>その他</option>
+                </select></label>
+                <label data-custom-sensor-label><span>「その他」の表示名</span><input name="display_sensor_type_label" value="{{.FormProfile.DisplaySensorTypeLabel}}" placeholder="例：流量"></label>
+              </div>
+              <div class="form-row">
+                <label><span>値の見せ方</span><select name="display_value_kind" data-value-kind required>
+                  <option value="numeric" {{if eq .FormProfile.DisplayValueKind "numeric"}}selected{{end}}>数値</option>
+                  <option value="boolean" {{if eq .FormProfile.DisplayValueKind "boolean"}}selected{{end}}>ON / OFF</option>
+                </select></label>
+                <label><span>単位の扱い</span><select name="display_unit_mode" data-unit-mode required>
+                  <option value="">選択してください</option>
+                  <option value="unit" {{if eq .FormProfile.DisplayUnitMode "unit"}}selected{{end}}>単位を表示する</option>
+                  <option value="dimensionless" {{if eq .FormProfile.DisplayUnitMode "dimensionless"}}selected{{end}}>単位なし</option>
+                </select></label>
+              </div>
+              <div class="form-row">
+                <label data-display-unit><span>表示単位</span><input name="display_unit" value="{{.FormProfile.DisplayUnit}}" maxlength="32" placeholder="例：°C"></label>
+                <label data-decimal-places><span>小数点以下の桁数</span><input name="decimal_places" type="number" min="0" max="6" value="{{.FormProfile.DecimalPlaces}}" required></label>
+              </div>
+              <button type="submit">名前と表示を保存</button>
+            </form>
+            {{else}}
+            <dl class="detail-list sensor-setting-summary">
+              <div><dt>センサー名</dt><dd>{{.Name}}</dd></div>
+              <div><dt>種類</dt><dd>{{.SensorType}}</dd></div>
+              <div><dt>表示単位</dt><dd>{{if .Unit}}{{.Unit}}{{else}}なし{{end}}</dd></div>
+            </dl>
+            {{end}}
+          </section>
+
+          <section class="content-section sensor-detail-setting-card">
+            <div class="section-heading"><div><p class="section-kicker">CONVERSION</p><h2>値の変換</h2><p>補正し、状態・累積値・アラームとして扱う方法を設定します。</p></div><span class="status-pill {{.MeaningClass}}">{{.MeaningLabel}}</span></div>
+            {{if $.IsAdmin}}
+            <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" method="post" action="/console/signals/{{.SignalRef}}/semantic">
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+              <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
+              <input type="hidden" name="revision" value="{{if .Definition}}{{.Definition.Revision}}{{end}}">
+              <label><span>用途</span><select name="kind" data-semantic-kind>
+                <option value="numeric" {{if and .Definition (eq .Definition.Kind "numeric")}}selected{{end}}>数値をそのまま使う</option>
+                <option value="boolean" {{if and .Definition (eq .Definition.Kind "boolean")}}selected{{end}}>ON/OFF状態にする</option>
+                <option value="cumulative_counter" {{if and .Definition (eq .Definition.Kind "cumulative_counter")}}selected{{end}}>累積値として数える</option>
+                <option value="alarm" {{if and .Definition (eq .Definition.Kind "alarm")}}selected{{end}}>しきい値でアラームにする</option>
+              </select></label>
+              <div class="form-row">
+                <label><span>補正倍率</span><input name="scale" type="number" step="any" value="{{if .Definition}}{{.Definition.Scale}}{{else}}1{{end}}"></label>
+                <label><span>補正加算</span><input name="offset" type="number" step="any" value="{{if .Definition}}{{.Definition.Offset}}{{else}}0{{end}}"></label>
+              </div>
+              <div class="conditional-fields" data-condition-fields>
+                <label><span>判定方法</span><select name="condition">
+                  <option value="">判定しない</option>
+                  <option value="boolean_equals" {{if and .Definition (eq .Definition.Condition.Mode "boolean_equals")}}selected{{end}}>入力値がON/OFFと一致</option>
+                  <option value="above" {{if and .Definition (eq .Definition.Condition.Mode "above")}}selected{{end}}>しきい値以上</option>
+                  <option value="below" {{if and .Definition (eq .Definition.Condition.Mode "below")}}selected{{end}}>しきい値以下</option>
+                </select></label>
+                <label><span>接点入力で判定する状態</span><select name="bool_value">
+                  <option value="true" {{if or (not .Definition) .Definition.Condition.BoolValue}}selected{{end}}>ONのとき</option>
+                  <option value="false" {{if and .Definition (not .Definition.Condition.BoolValue)}}selected{{end}}>OFFのとき</option>
+                </select></label>
+                <div class="form-row">
+                  <label><span>しきい値</span><input name="threshold" type="number" step="any" value="{{if .Definition}}{{.Definition.Condition.Threshold}}{{else}}0{{end}}"></label>
+                  <label><span>戻り幅</span><input name="hysteresis" type="number" step="any" min="0" value="{{if .Definition}}{{.Definition.Condition.Hysteresis}}{{else}}0{{end}}"></label>
+                </div>
+                <label><span>累積するタイミング</span><select name="trigger">
+                  <option value="">累積しない</option>
+                  <option value="on_transition" {{if and .Definition (eq .Definition.Trigger "on_transition")}}selected{{end}}>OFFからONになった時だけ</option>
+                  <option value="on_notification" {{if and .Definition (eq .Definition.Trigger "on_notification")}}selected{{end}}>ONを受信するたび</option>
+                </select></label>
+              </div>
+              <button type="button" class="preview-button secondary">実際のセンサー値で確認する</button>
+              <div class="preview-output" role="status">保存前に、新しく届くセンサー値で動きを確認できます。</div>
+              <button type="submit">値の変換を保存</button>
+            </form>
+            {{else}}
+            <dl class="detail-list sensor-setting-summary">
+              <div><dt>設定状態</dt><dd>{{.MeaningLabel}}</dd></div>
+              {{if .Definition}}<div><dt>用途</dt><dd>{{.Definition.Kind}}</dd></div><div><dt>補正</dt><dd>× {{.Definition.Scale}} ＋ {{.Definition.Offset}}</dd></div>{{end}}
+            </dl>
+            {{end}}
+          </section>
+        </div>
+      </div>
+      {{end}}
+      {{end}}
+
       {{if eq .Page "equipment"}}
       {{if eq .EquipmentView "list"}}
       {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>Edgeと配下の機器の状態を確認できます。</span></div>{{end}}
