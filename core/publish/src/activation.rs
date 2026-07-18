@@ -498,6 +498,10 @@ mod tests {
             )
             .is_err()
         );
+        assert_eq!(
+            crate::store::enqueue_measurement(&conn, EPOCH, 3, 1_720_000_010_001).unwrap(),
+            1
+        );
     }
 
     #[test]

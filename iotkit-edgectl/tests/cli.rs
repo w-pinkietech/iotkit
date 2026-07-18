@@ -1556,7 +1556,7 @@ fn mqtt_binding_reports_only_non_secret_d9_connection_metadata() {
     ])))
     .unwrap();
 
-    assert_eq!(reported.as_object().unwrap().len(), 9);
+    assert_eq!(reported.as_object().unwrap().len(), 11);
     assert_eq!(reported["edge_node_id"], edge_node_id);
     assert_eq!(reported["username"], edge_node_id);
     assert_eq!(reported["client_id"], format!("iotkit-edge-{edge_node_id}"));
@@ -1571,6 +1571,14 @@ fn mqtt_binding_reports_only_non_secret_d9_connection_metadata() {
     assert_eq!(
         reported["descriptor_topic"],
         format!("iotkit/v1/edge-nodes/{edge_node_id}/descriptors")
+    );
+    assert_eq!(
+        reported["activation_request_topic"],
+        format!("iotkit/v1/edge-nodes/{edge_node_id}/activation/request")
+    );
+    assert_eq!(
+        reported["activation_result_topic"],
+        format!("iotkit/v1/edge-nodes/{edge_node_id}/activation/result")
     );
     assert_eq!(reported["qos"], 1);
     assert_eq!(reported["retain"], false);
@@ -1762,7 +1770,7 @@ fn existing_empty_db_gets_edge_migration_version_set() {
     assert_eq!(
         versions,
         vec![
-            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
         ]
     );
     let edge_node_id: String = conn

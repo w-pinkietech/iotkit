@@ -42,6 +42,7 @@ pub fn enqueue_measurement(
     reading_seq: i64,
     now_ms: i64,
 ) -> Result<i64, PublishError> {
+    require_publication_admitted(conn)?;
     conn.execute(
         "INSERT INTO publication_log(epoch, kind, reading_seq, created_at)
          VALUES(?1, 'measurement', ?2, ?3)",
@@ -57,6 +58,7 @@ pub fn enqueue_annotation(
     payload_json: &str,
     now_ms: i64,
 ) -> Result<Option<i64>, PublishError> {
+    require_publication_admitted(conn)?;
     match conn.execute(
         "INSERT INTO publication_log(epoch, kind, subtype, annotation_json, created_at)
          VALUES(?1, 'annotation', ?2, ?3, ?4)",
@@ -79,6 +81,7 @@ pub fn enqueue_commissioning_smoke(
     now_ms: i64,
 ) -> Result<i64, PublishError> {
     validate_commissioning_smoke_test_id(test_id)?;
+    require_publication_admitted(conn)?;
     let payload_json = serde_json::to_string(&serde_json::json!({"test_id": test_id}))
         .map_err(|error| PublishError::Invalid(error.to_string()))?;
     conn.execute(
@@ -102,6 +105,15 @@ pub fn validate_commissioning_smoke_test_id(test_id: &str) -> Result<(), Publish
     {
         return Err(PublishError::Invalid(
             "commissioning smoke test_id must contain 128-bit lowercase hex".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_publication_admitted(conn: &Connection) -> Result<(), PublishError> {
+    if !crate::activation::publication_admitted(conn)? {
+        return Err(PublishError::Invalid(
+            "Site activation has not admitted publication".into(),
         ));
     }
     Ok(())
@@ -437,6 +449,38 @@ mod tests {
         ] {
             assert!(enqueue_commissioning_smoke(&conn, "epoch-A", test_id, 42).is_err());
         }
+        assert!(select_batch(&conn, "epoch-A", 0, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn discovery_only_rejects_every_direct_publication_enqueue() {
+        let conn = crate::tests_support::open();
+        crate::activation::install_site_target(
+            &conn,
+            &TargetRow {
+                target_id: "site".into(),
+                endpoint_url: "mqtts://broker.example.test:8883".into(),
+                credential_token: String::new(),
+                archive_responsible: true,
+                schema_version: 1,
+                cursor_epoch: None,
+                cursor_pub_seq: 0,
+            },
+            1,
+        )
+        .unwrap();
+
+        assert!(enqueue_measurement(&conn, "epoch-A", 1, 2).is_err());
+        assert!(enqueue_annotation(&conn, "epoch-A", "epoch_start", "{}", 2).is_err());
+        assert!(
+            enqueue_commissioning_smoke(
+                &conn,
+                "epoch-A",
+                "smoke-0123456789abcdef0123456789abcdef",
+                2
+            )
+            .is_err()
+        );
         assert!(select_batch(&conn, "epoch-A", 0, 10).unwrap().is_empty());
     }
 

@@ -2,6 +2,15 @@ use rusqlite::OptionalExtension;
 
 pub fn maybe_enqueue_epoch_start(conn: &rusqlite::Connection) -> Result<(), String> {
     let current_epoch = iotkit_core_ledger::ledger_epoch(conn).map_err(|e| e.to_string())?;
+    if !iotkit_core_publish::activation::publication_admitted(conn)
+        .map_err(|error| error.to_string())?
+    {
+        tracing::debug!(
+            epoch = %current_epoch,
+            "skipping epoch_start annotation until Site activation"
+        );
+        return Ok(());
+    }
     let detail: Option<String> = conn
         .query_row(
             "SELECT detail
@@ -131,6 +140,31 @@ mod tests {
     fn fresh_renew_null_old_epoch_does_not_enqueue() {
         let conn = migrated_conn();
         let _epoch = iotkit_core_ledger::renew_epoch(&conn).unwrap();
+
+        maybe_enqueue_epoch_start(&conn).unwrap();
+
+        assert_eq!(epoch_start_count(&conn), 0);
+    }
+
+    #[test]
+    fn discovery_only_skips_epoch_start_publication() {
+        let conn = migrated_conn();
+        let _prior_epoch = iotkit_core_ledger::ledger_epoch(&conn).unwrap();
+        let _current_epoch = iotkit_core_ledger::renew_epoch(&conn).unwrap();
+        iotkit_core_publish::activation::install_site_target(
+            &conn,
+            &iotkit_core_publish::store::TargetRow {
+                target_id: "site".into(),
+                endpoint_url: "mqtts://broker.example.test:8883".into(),
+                credential_token: String::new(),
+                archive_responsible: true,
+                schema_version: 1,
+                cursor_epoch: None,
+                cursor_pub_seq: 0,
+            },
+            1,
+        )
+        .unwrap();
 
         maybe_enqueue_epoch_start(&conn).unwrap();
 

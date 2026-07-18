@@ -974,7 +974,9 @@ fn process_item(
         quarantined: row_quarantined,
     };
     let seq = ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
-    if !row_quarantined {
+    if !row_quarantined
+        && iotkit_core_publish::activation::publication_admitted(conn).map_err(|e| e.to_string())?
+    {
         iotkit_core_publish::store::enqueue_measurement(
             conn,
             context.epoch,
@@ -1454,6 +1456,58 @@ mod tests {
             quarantined_outbox, 0,
             "quarantined readings must not be enqueued"
         );
+    }
+
+    #[test]
+    fn discovery_only_reading_is_durable_without_a_publication_identity() {
+        let db = test_db();
+        register_active(&db, "ble:activation-preview");
+        db.with_conn_sync(|conn| {
+            iotkit_core_publish::activation::install_site_target(
+                conn,
+                &iotkit_core_publish::store::TargetRow {
+                    target_id: "site".into(),
+                    endpoint_url: "mqtts://broker.example.test:8883".into(),
+                    credential_token: String::new(),
+                    archive_responsible: true,
+                    schema_version: 1,
+                    cursor_epoch: None,
+                    cursor_pub_seq: 0,
+                },
+                1,
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let mut cache = ResolutionCache::default();
+        let envelope = env(
+            "e-activation-preview",
+            "ble:activation-preview",
+            "temperature_c",
+        );
+
+        let ack = db
+            .with_conn_sync(|conn| {
+                Ok(process_test(conn, &mut cache, &PermissiveRegistry, &envelope).unwrap())
+            })
+            .unwrap();
+
+        assert!(matches!(ack.status,
+        AckStatus::Accepted { ref items }
+        if matches!(items[0], ItemStatus::Stored {
+            disposition: Disposition::Durable,
+            quarantine_reason: None,
+        })));
+        let counts: (i64, i64) = db
+            .with_conn_sync(|conn| {
+                Ok((
+                    conn.query_row("SELECT count(*) FROM readings", [], |row| row.get(0))?,
+                    conn.query_row("SELECT count(*) FROM publication_log", [], |row| row.get(0))?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(counts, (1, 0));
     }
 
     #[test]

@@ -459,12 +459,34 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
             "restore target is not empty: ledger_meta contains identity or descriptor state".into(),
         );
     }
+    let canonical_site_activation: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM site_activation
+         WHERE singleton = 1
+           AND state = 'standalone'
+           AND site_id IS NULL
+           AND activation_id IS NULL
+           AND ledger_epoch IS NULL
+           AND discard_through_reading_seq IS NULL
+           AND cleanup_through_reading_seq = 0
+           AND request_json IS NULL
+           AND result_json IS NULL
+           AND activated_at IS NULL)",
+        [],
+        |row| row.get(0),
+    )?;
+    let site_activation_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM site_activation", [], |row| row.get(0))?;
+    if !canonical_site_activation || site_activation_rows != 1 {
+        return Err(
+            "restore target is not empty: Site activation contains enrollment state".into(),
+        );
+    }
 
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_schema
          WHERE type = 'table'
            AND name NOT LIKE 'sqlite_%'
-           AND name NOT IN ('_schema_version', '_iotkit_edge_format', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config', 'ingest_dedup_maintenance', 'ledger_meta')
+           AND name NOT IN ('_schema_version', '_iotkit_edge_format', 'auth_state', 'device_flow_classes', 'device_capacity', 'ingress_listener_config', 'ingest_dedup_maintenance', 'ledger_meta', 'site_activation')
          ORDER BY name",
     )?;
     let tables = stmt

@@ -24,6 +24,11 @@ pub fn enqueue_smoke_descriptor() -> OpDescriptor {
 }
 
 fn preconditions(tx: &Transaction<'_>, _ctx: &OpContext<'_>) -> Result<(), OpError> {
+    if !iotkit_core_publish::activation::publication_admitted(tx).map_err(publish_error)? {
+        return Err(OpError::PreconditionFailed(
+            "Site activation is required before commissioning smoke".into(),
+        ));
+    }
     let target = target_get(tx).map_err(publish_error)?;
     match target {
         Some(target)
