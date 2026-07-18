@@ -29,6 +29,8 @@ type consoleData struct {
 	Devices            []siteapp.DeviceSummary
 	Edges              []siteapp.Edge
 	EdgeRows           []consoleEdgeView
+	EquipmentRows      []consoleEquipmentEdgeView
+	OrphanDevices      []consoleSetupDeviceView
 	Signals            []siteapp.SignalSummary
 	DeviceRows         []consoleDeviceView
 	SignalRows         []consoleSignalView
@@ -48,6 +50,7 @@ type consoleData struct {
 	UnconfiguredCount  int
 	SetupPendingCount  int
 	EdgeCount          int
+	EdgePendingCount   int
 }
 
 type certificateStatus struct {
@@ -68,13 +71,16 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	}
 	titles := map[string]string{
 		"status": "現場の概要", "monitor": "センサーの現在値", "devices": "デバイス管理",
-		"setup": "デバイス管理", "edges": "Edge管理", "signals": "センサー設定",
-		"logs": "受信履歴", "output": "外部出力",
+		"equipment": "機器管理", "setup": "デバイス管理", "edges": "Edge管理",
+		"signals": "値の変換",
+		"logs":    "受信履歴", "output": "外部出力",
 		"audit": "変更履歴", "accounts": "アカウント", "system": "システム",
 	}
 	descriptions := map[string]string{
-		"status":   "現場のセンサーとデータの流れを、ひと目で確認できます。",
-		"monitor":  "各センサーから最後に届いた値と受信状態を確認します。",
+		"status":  "現場のセンサーとデータの流れを、ひと目で確認できます。",
+		"monitor": "各センサーから最後に届いた値と受信状態を確認します。",
+		"equipment": "Edge、デバイス、センサーのつながりを確認し、" +
+			"現場で使うための基本情報を設定します。",
 		"setup":    "デバイスごとに、接続されたセンサーの名前・種類・単位を登録します。",
 		"edges":    "Siteへデータを送るEdgeの登録状態と最終通信を確認します。",
 		"devices":  "現場に設置したデバイスの名前と場所を管理します。",
@@ -111,6 +117,45 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	}
 	var err error
 	switch page {
+	case "equipment":
+		data.Edges, err = server.site.ListEdges(request.Context())
+		var setupDevices []siteapp.SetupDevice
+		if err == nil {
+			setupDevices, err = server.site.ListSetupDevices(
+				request.Context(),
+				server.actor(auth),
+				100,
+			)
+		}
+		if err == nil {
+			data.EquipmentRows = newConsoleEquipmentViews(
+				data.Edges,
+				setupDevices,
+				server.now(),
+			)
+			data.OrphanDevices = newConsoleOrphanDeviceViews(
+				data.Edges,
+				setupDevices,
+				server.now(),
+			)
+			for _, edge := range data.Edges {
+				if edge.State == siteapp.EdgeActive {
+					data.EdgeCount++
+				} else {
+					data.EdgePendingCount++
+				}
+			}
+			for _, device := range setupDevices {
+				if device.State == siteapp.SetupWaitingForDevice {
+					data.SetupPendingCount++
+				}
+				for _, signal := range device.Signals {
+					if !signal.ProfileComplete {
+						data.UnconfiguredCount++
+					}
+				}
+			}
+		}
 	case "edges":
 		data.Edges, err = server.site.ListEdges(request.Context())
 		if err == nil {
@@ -135,6 +180,8 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				for _, edge := range data.Edges {
 					if edge.State == siteapp.EdgeActive {
 						data.EdgeCount++
+					} else {
+						data.EdgePendingCount++
 					}
 				}
 			}
@@ -316,7 +363,12 @@ func (server *Server) consoleEdgeActivation(
 			},
 		},
 	)
-	server.consoleMutationResult(response, request, "/edges", err)
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(request, "/edges"),
+		err,
+	)
 }
 
 func (server *Server) consoleSignalProfile(response http.ResponseWriter, request *http.Request) {
@@ -342,6 +394,8 @@ func (server *Server) consoleSignalProfile(response http.ResponseWriter, request
 
 func consoleReturnTarget(request *http.Request, fallback string) string {
 	switch request.FormValue("return_to") {
+	case "/equipment":
+		return "/equipment"
 	case "/setup":
 		return "/setup"
 	case "/signals":

@@ -198,6 +198,103 @@ func TestConsoleOrphanDeviceViewsKeepDevicesWithoutMatchingEdge(t *testing.T) {
 	}
 }
 
+func TestEquipmentConsoleShowsEdgeDeviceSensorJourney(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedDiscoveredEdge(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/equipment", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		"機器管理",
+		"Edgeを登録",
+		"デバイス名",
+		"センサー名",
+		"登録前にEdgeが保持していた値",
+		`href="/signals"`,
+		"値の変換",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("equipment page missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestEquipmentConsoleViewerSeesHierarchyWithoutMutationControls(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	seedSetupDevice(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/equipment", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		"factory-edge-01",
+		"名前未設定のデバイス",
+		"名前未設定のセンサー",
+		"24.8",
+		"閲覧のみ",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("viewer equipment page missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`action="/console/edges/`,
+		`name="display_name"`,
+		"BP-01234567",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("viewer equipment page exposes %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestConsoleNavigationUsesEquipmentJourney(t *testing.T) {
+	server := newTestServer(t, false)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/status", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	if count := strings.Count(body, `href="/equipment"`); count != 1 {
+		t.Fatalf("equipment navigation links = %d, want 1: %s", count, body)
+	}
+	for _, forbidden := range []string{
+		`</span>Edge管理`,
+		`</span>デバイス管理`,
+		`</span>センサー設定`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("navigation still exposes %q: %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, `</span>機器管理`) ||
+		!strings.Contains(body, `</span>値の変換`) {
+		t.Fatalf("navigation does not use equipment journey: %s", body)
+	}
+}
+
 func TestLoginCreatesStrictCookiesAndAllowsInventoryRead(t *testing.T) {
 	server := newTestServer(t, false)
 	body := `{"login_id":"operator","password":"現場担当者の 十分に長いパスワード"}`
@@ -543,15 +640,21 @@ func TestConsoleUsesOperatorFocusedInformationArchitecture(t *testing.T) {
 			},
 		},
 		{
+			path:        "/equipment",
+			pageTitle:   "機器管理",
+			activeLabel: "機器管理",
+			mustContain: []string{"Edgeから順に", "閲覧のみ"},
+		},
+		{
 			path:        "/setup",
 			pageTitle:   "デバイス管理",
-			activeLabel: "デバイス管理",
+			activeLabel: "",
 			mustContain: []string{"デバイスごとに", "閲覧のみ"},
 		},
 		{
 			path:        "/signals",
-			pageTitle:   "センサー設定",
-			activeLabel: "センサー設定",
+			pageTitle:   "値の変換",
+			activeLabel: "値の変換",
 			mustContain: []string{"数値・状態・累積値・アラーム", "閲覧のみ"},
 		},
 	}
@@ -570,8 +673,9 @@ func TestConsoleUsesOperatorFocusedInformationArchitecture(t *testing.T) {
 			if !strings.Contains(body, "<h1>"+test.pageTitle+"</h1>") {
 				t.Fatalf("page does not use title %q: %s", test.pageTitle, body)
 			}
-			if !strings.Contains(body, `aria-current="page"`) ||
-				!strings.Contains(body, `</span>`+test.activeLabel) {
+			if test.activeLabel != "" &&
+				(!strings.Contains(body, `aria-current="page"`) ||
+					!strings.Contains(body, `</span>`+test.activeLabel)) {
 				t.Fatalf("page does not mark %q as active navigation", test.activeLabel)
 			}
 			for _, text := range test.mustContain {
@@ -587,7 +691,7 @@ func TestConsoleCallsSignalsSensorsAndKeepsDevicesDistinct(t *testing.T) {
 	server := newTestServer(t, false)
 	sessionCookie, _ := loginTestAccount(t, server)
 	for _, path := range []string{
-		"/status", "/monitor", "/setup", "/signals", "/logs", "/output", "/system",
+		"/status", "/monitor", "/equipment", "/setup", "/signals", "/logs", "/output", "/system",
 	} {
 		t.Run(path, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -691,8 +795,8 @@ func TestStatusHighlightsNewDeviceWithoutCallingItBroken(t *testing.T) {
 	body := response.Body.String()
 	for _, want := range []string{
 		"新しいデバイスが見つかりました",
-		"登録内容を確認",
-		`href="/setup"`,
+		"機器管理",
+		`href="/equipment"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("status missing %q: %s", want, body)
