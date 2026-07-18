@@ -157,6 +157,47 @@ func TestEdgesConsoleShowsEdgeAsParentOfDevices(t *testing.T) {
 	}
 }
 
+func TestConsoleEquipmentViewsGroupDevicesUnderTheirEdge(t *testing.T) {
+	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	edges := []siteapp.Edge{
+		{EdgeNodeID: "edge-a", State: siteapp.EdgeActive},
+		{EdgeNodeID: "edge-b", State: siteapp.EdgeDiscovered},
+	}
+	devices := []siteapp.SetupDevice{{
+		Device: siteapp.DeviceSummary{Edge: "edge-a", DeviceRef: "dev_a"},
+		State:  siteapp.SetupWaitingForDevice,
+		Signals: []siteapp.SetupSignal{{
+			Signal:          siteapp.SignalSummary{SignalRef: "sig_a"},
+			ProfileComplete: false,
+		}},
+	}}
+
+	rows := newConsoleEquipmentViews(edges, devices, now)
+
+	if len(rows) != 2 || len(rows[0].Devices) != 1 ||
+		rows[0].Devices[0].Device.DeviceRef != "dev_a" ||
+		rows[0].DevicePendingCount != 1 ||
+		rows[0].SensorPendingCount != 1 ||
+		len(rows[1].Devices) != 0 {
+		t.Fatalf("equipment rows = %#v", rows)
+	}
+}
+
+func TestConsoleOrphanDeviceViewsKeepDevicesWithoutMatchingEdge(t *testing.T) {
+	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	edges := []siteapp.Edge{{EdgeNodeID: "edge-a", State: siteapp.EdgeActive}}
+	devices := []siteapp.SetupDevice{
+		{Device: siteapp.DeviceSummary{Edge: "edge-a", DeviceRef: "dev_a"}},
+		{Device: siteapp.DeviceSummary{Edge: "missing-edge", DeviceRef: "dev_orphan"}},
+	}
+
+	rows := newConsoleOrphanDeviceViews(edges, devices, now)
+
+	if len(rows) != 1 || rows[0].Device.DeviceRef != "dev_orphan" {
+		t.Fatalf("orphan device rows = %#v", rows)
+	}
+}
+
 func TestLoginCreatesStrictCookiesAndAllowsInventoryRead(t *testing.T) {
 	server := newTestServer(t, false)
 	body := `{"login_id":"operator","password":"現場担当者の 十分に長いパスワード"}`

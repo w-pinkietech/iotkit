@@ -80,6 +80,67 @@ func newConsoleEdgeViews(edges []siteapp.Edge, now time.Time) []consoleEdgeView 
 	return views
 }
 
+type consoleEquipmentEdgeView struct {
+	consoleEdgeView
+	Devices            []consoleSetupDeviceView
+	DevicePendingCount int
+	SensorPendingCount int
+}
+
+func newConsoleEquipmentViews(
+	edges []siteapp.Edge,
+	devices []siteapp.SetupDevice,
+	now time.Time,
+) []consoleEquipmentEdgeView {
+	devicesByEdge := make(map[string][]siteapp.SetupDevice)
+	for _, device := range devices {
+		devicesByEdge[device.Device.Edge] = append(
+			devicesByEdge[device.Device.Edge],
+			device,
+		)
+	}
+
+	edgeViews := newConsoleEdgeViews(edges, now)
+	views := make([]consoleEquipmentEdgeView, 0, len(edgeViews))
+	for _, edge := range edgeViews {
+		edgeDevices := devicesByEdge[edge.EdgeNodeID]
+		view := consoleEquipmentEdgeView{
+			consoleEdgeView: edge,
+			Devices:         newConsoleSetupDeviceViews(edgeDevices, now),
+		}
+		for _, device := range edgeDevices {
+			if device.State == siteapp.SetupWaitingForDevice {
+				view.DevicePendingCount++
+			}
+			for _, signal := range device.Signals {
+				if !signal.ProfileComplete {
+					view.SensorPendingCount++
+				}
+			}
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func newConsoleOrphanDeviceViews(
+	edges []siteapp.Edge,
+	devices []siteapp.SetupDevice,
+	now time.Time,
+) []consoleSetupDeviceView {
+	knownEdges := make(map[string]struct{}, len(edges))
+	for _, edge := range edges {
+		knownEdges[edge.EdgeNodeID] = struct{}{}
+	}
+	orphans := make([]siteapp.SetupDevice, 0)
+	for _, device := range devices {
+		if _, exists := knownEdges[device.Device.Edge]; !exists {
+			orphans = append(orphans, device)
+		}
+	}
+	return newConsoleSetupDeviceViews(orphans, now)
+}
+
 type consoleSetupDeviceView struct {
 	siteapp.SetupDevice
 	Name              string
