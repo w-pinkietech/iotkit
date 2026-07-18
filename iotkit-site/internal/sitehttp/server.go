@@ -122,6 +122,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /password", server.passwordForm)
 	server.mux.HandleFunc("GET /status", server.statusPage)
 	server.mux.HandleFunc("GET /monitor", server.consolePage)
+	server.mux.HandleFunc("GET /equipment", server.consolePage)
 	server.mux.HandleFunc("GET /setup", server.consolePage)
 	server.mux.HandleFunc("GET /edges", server.consolePage)
 	server.mux.HandleFunc("GET /devices", server.consolePage)
