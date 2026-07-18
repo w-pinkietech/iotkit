@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/outputadapter"
@@ -31,9 +32,15 @@ type consoleData struct {
 	EdgeRows           []consoleEdgeView
 	EquipmentRows      []consoleEquipmentEdgeView
 	OrphanDevices      []consoleSetupDeviceView
+	EquipmentView      string
+	SelectedEdge       *consoleEquipmentEdgeView
+	SelectedDevice     *consoleSetupDeviceView
+	SelectedDeviceEdge *consoleEquipmentEdgeView
 	Signals            []siteapp.SignalSummary
 	DeviceRows         []consoleDeviceView
 	SignalRows         []consoleSignalView
+	SensorView         string
+	SelectedSignal     *consoleSignalView
 	SetupRows          []consoleSetupDeviceView
 	LogRows            []consoleLogView
 	AuditRows          []consoleAuditView
@@ -66,12 +73,19 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		return
 	}
 	page := request.URL.Path[1:]
+	if request.PathValue("edge_ref") != "" || request.PathValue("device_ref") != "" {
+		page = "equipment"
+	}
+	if request.PathValue("signal_ref") != "" {
+		page = "sensors"
+	}
 	if page == "" {
 		page = "status"
 	}
 	titles := map[string]string{
 		"status": "現場の概要", "monitor": "センサーの現在値", "devices": "デバイス管理",
 		"equipment": "機器管理", "setup": "デバイス管理", "edges": "Edge管理",
+		"sensors": "センサー一覧",
 		"signals": "値の変換",
 		"logs":    "受信履歴", "output": "外部出力",
 		"audit": "変更履歴", "accounts": "アカウント", "system": "システム",
@@ -81,6 +95,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		"monitor": "各センサーから最後に届いた値と受信状態を確認します。",
 		"equipment": "Edge、デバイス、センサーのつながりを確認し、" +
 			"現場で使うための基本情報を設定します。",
+		"sensors":  "各センサーの現在値を確認し、詳細から設定できます。",
 		"setup":    "デバイスごとに、接続されたセンサーの名前・種類・単位を登録します。",
 		"edges":    "Siteへデータを送るEdgeの登録状態と最終通信を確認します。",
 		"devices":  "現場に設置したデバイスの名前と場所を管理します。",
@@ -118,6 +133,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	var err error
 	switch page {
 	case "equipment":
+		data.EquipmentView = "list"
 		data.Edges, err = server.site.ListEdges(request.Context())
 		var setupDevices []siteapp.SetupDevice
 		if err == nil {
@@ -138,6 +154,47 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				setupDevices,
 				server.now(),
 			)
+			if edgeRef := request.PathValue("edge_ref"); edgeRef != "" {
+				data.EquipmentView = "edge"
+				for index := range data.EquipmentRows {
+					if data.EquipmentRows[index].EdgeRef == edgeRef {
+						data.SelectedEdge = &data.EquipmentRows[index]
+						break
+					}
+				}
+				if data.SelectedEdge == nil {
+					http.NotFound(response, request)
+					return
+				}
+			}
+			if deviceRef := request.PathValue("device_ref"); deviceRef != "" {
+				data.EquipmentView = "device"
+				for edgeIndex := range data.EquipmentRows {
+					for deviceIndex := range data.EquipmentRows[edgeIndex].Devices {
+						device := &data.EquipmentRows[edgeIndex].Devices[deviceIndex]
+						if device.Device.DeviceRef == deviceRef {
+							data.SelectedDevice = device
+							data.SelectedDeviceEdge = &data.EquipmentRows[edgeIndex]
+							break
+						}
+					}
+					if data.SelectedDevice != nil {
+						break
+					}
+				}
+				if data.SelectedDevice == nil {
+					for index := range data.OrphanDevices {
+						if data.OrphanDevices[index].Device.DeviceRef == deviceRef {
+							data.SelectedDevice = &data.OrphanDevices[index]
+							break
+						}
+					}
+				}
+				if data.SelectedDevice == nil {
+					http.NotFound(response, request)
+					return
+				}
+			}
 			for _, edge := range data.Edges {
 				if edge.State == siteapp.EdgeActive {
 					data.EdgeCount++
@@ -161,11 +218,12 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		if err == nil {
 			data.EdgeRows = newConsoleEdgeViews(data.Edges, server.now())
 		}
-	case "status", "monitor", "signals":
+	case "status", "monitor", "signals", "sensors":
+		data.SensorView = "list"
 		data.Signals, err = server.site.ListSignals(
 			request.Context(), siteapp.PageRequest{Limit: 100},
 		)
-		if err == nil && (page == "signals" || page == "status") {
+		if err == nil && (page == "signals" || page == "status" || page == "sensors") {
 			data.Definitions, err = server.semantics.List(request.Context())
 		}
 		if err == nil && page == "status" {
@@ -187,6 +245,19 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			}
 		}
 		data.SignalRows = newConsoleSignalViews(data.Signals, data.Definitions, server.now())
+		if signalRef := request.PathValue("signal_ref"); signalRef != "" {
+			data.SensorView = "detail"
+			for index := range data.SignalRows {
+				if data.SignalRows[index].SignalRef == signalRef {
+					data.SelectedSignal = &data.SignalRows[index]
+					break
+				}
+			}
+			if data.SelectedSignal == nil {
+				http.NotFound(response, request)
+				return
+			}
+		}
 		data.summarizeSignals()
 	case "devices":
 		data.Devices, err = server.site.ListDevices(
@@ -393,7 +464,11 @@ func (server *Server) consoleSignalProfile(response http.ResponseWriter, request
 }
 
 func consoleReturnTarget(request *http.Request, fallback string) string {
-	switch request.FormValue("return_to") {
+	target := request.FormValue("return_to")
+	if safeEquipmentReturnTarget(target) {
+		return target
+	}
+	switch target {
 	case "/equipment":
 		return "/equipment"
 	case "/setup":
@@ -405,6 +480,40 @@ func consoleReturnTarget(request *http.Request, fallback string) string {
 	default:
 		return fallback
 	}
+}
+
+func safeEquipmentReturnTarget(target string) bool {
+	if target == "/equipment" {
+		return true
+	}
+	if strings.ContainsAny(target, "?#\\") || strings.HasPrefix(target, "//") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
+	if len(parts) != 3 || parts[0] != "equipment" || parts[2] == "" {
+		return false
+	}
+	switch parts[1] {
+	case "edges":
+		return validConsoleResourceRef(parts[2], "edge_")
+	case "devices":
+		return validConsoleResourceRef(parts[2], "dev_")
+	default:
+		return false
+	}
+}
+
+func validConsoleResourceRef(value, prefix string) bool {
+	if len(value) != len(prefix)+32 || !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	for _, character := range value[len(prefix):] {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func formInt(request *http.Request, name string) int {
