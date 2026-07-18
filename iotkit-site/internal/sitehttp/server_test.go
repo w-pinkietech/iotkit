@@ -199,7 +199,80 @@ func TestConsoleOrphanDeviceViewsKeepDevicesWithoutMatchingEdge(t *testing.T) {
 	}
 }
 
-func TestEquipmentConsoleShowsEdgeDeviceSensorJourney(t *testing.T) {
+func TestEquipmentDetailRoutesResolveKnownResources(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	edges, err := archive.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("edges = %#v, err = %v", edges, err)
+	}
+	devices, err := archive.ListInventoryDevices(context.Background(), 100, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
+
+	for _, path := range []string{
+		"/equipment/edges/" + edges[0].EdgeRef,
+		"/equipment/devices/" + devices[0].DeviceRef,
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body=%s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestEquipmentDetailRoutesReturnNotFoundForUnknownResources(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedDiscoveredEdge(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	for _, path := range []string{
+		"/equipment/edges/edge_00000000000000000000000000000000",
+		"/equipment/devices/dev_00000000000000000000000000000000",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404; body=%s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestEquipmentDetailRoutesAllowViewerAccess(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	seedSetupDevice(t, archive)
+	edges, err := archive.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("edges = %#v, err = %v", edges, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/equipment/edges/"+edges[0].EdgeRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestEquipmentListShowsEdgeSummariesWithoutNestedSettings(t *testing.T) {
 	server, archive := newTestServerFixture(
 		t, false, siteapp.AccountRoleAdmin,
 	)
@@ -209,101 +282,186 @@ func TestEquipmentConsoleShowsEdgeDeviceSensorJourney(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/equipment", nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
-
 	server.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
-	}
 	body := response.Body.String()
 	for _, want := range []string{
-		"機器管理",
-		"Edgeを登録",
-		"デバイス名",
-		"センサー名",
-		"登録前にEdgeが保持していた値",
-		`href="/signals"`,
-		"値の変換",
+		`class="equipment-overview"`,
+		"factory-edge-01",
+		"assembly-edge-02",
+		"1台",
+		"1件",
+		`href="/equipment/edges/`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("equipment page missing %q: %s", want, body)
+			t.Fatalf("equipment list missing %q: %s", want, body)
 		}
 	}
-	for _, want := range []string{
-		`class="equipment-journey"`,
-		`class="equipment-edge`,
-		`class="equipment-device`,
-		`class="equipment-sensor`,
+	for _, forbidden := range []string{
+		`action="/console/devices/`,
+		`action="/console/signals/`,
 		`data-signal-profile`,
 	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("equipment page missing visual contract %q: %s", want, body)
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("equipment list exposes nested setting %q: %s", forbidden, body)
 		}
 	}
 }
 
-func TestEquipmentConsoleRequiresEdgeRegistrationBeforeDeviceSetup(t *testing.T) {
+func TestEquipmentEdgeDetailShowsDeviceSummaryLinks(t *testing.T) {
 	server, archive := newTestServerFixture(
 		t, false, siteapp.AccountRoleAdmin,
 	)
-	seedDiscoveredEdge(t, archive)
+	seedSetupDevice(t, archive)
+	edges, err := archive.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("edges = %#v, err = %v", edges, err)
+	}
+	devices, err := archive.ListInventoryDevices(context.Background(), 100, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
 	cookie, _ := loginTestAccount(t, server)
-	request := httptest.NewRequest(http.MethodGet, "/equipment", nil)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/equipment/edges/"+edges[0].EdgeRef,
+		nil,
+	)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
-
 	server.ServeHTTP(response, request)
 
 	body := response.Body.String()
-	if !strings.Contains(body, "Edgeを登録") ||
-		!strings.Contains(body, "Edgeの登録完了後にデバイスを確認できます") {
-		t.Fatalf("unregistered Edge does not explain the next step: %s", body)
+	for _, want := range []string{
+		`class="equipment-breadcrumb"`,
+		`class="equipment-detail-header`,
+		`class="equipment-device-table"`,
+		`href="/equipment/devices/` + devices[0].DeviceRef + `"`,
+		"名前未設定のデバイス",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Edge detail missing %q: %s", want, body)
+		}
 	}
 	for _, forbidden := range []string{
 		`action="/console/devices/`,
 		`action="/console/signals/`,
 	} {
 		if strings.Contains(body, forbidden) {
-			t.Fatalf("unregistered Edge exposes setup form %q: %s", forbidden, body)
+			t.Fatalf("Edge detail exposes nested setting %q: %s", forbidden, body)
 		}
 	}
 }
 
-func TestEquipmentConsoleViewerSeesHierarchyWithoutMutationControls(t *testing.T) {
+func TestEquipmentDeviceDetailContainsDeviceAndSensorSettings(t *testing.T) {
 	server, archive := newTestServerFixture(
-		t, false, siteapp.AccountRoleViewer,
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	devices, err := archive.ListInventoryDevices(context.Background(), 100, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	path := "/equipment/devices/" + devices[0].DeviceRef
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	for _, want := range []string{
+		`class="equipment-breadcrumb"`,
+		`class="equipment-sensor-grid"`,
+		`action="/console/devices/` + devices[0].DeviceRef + `/profile"`,
+		`action="/console/signals/`,
+		`name="return_to" value="` + path + `"`,
+		"24.8",
+		"温度",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("device detail missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestConsoleReturnTargetAllowsOnlyEquipmentDetailPaths(t *testing.T) {
+	valid := []string{
+		"/equipment",
+		"/equipment/edges/edge_0123456789abcdef0123456789abcdef",
+		"/equipment/devices/dev_0123456789abcdef0123456789abcdef",
+	}
+	for _, target := range valid {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+			url.Values{"return_to": {target}}.Encode(),
+		))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if got := consoleReturnTarget(request, "/signals"); got != target {
+			t.Errorf("consoleReturnTarget(%q) = %q", target, got)
+		}
+	}
+
+	invalid := []string{
+		"https://example.test/equipment",
+		"//example.test/equipment",
+		"/equipment/edges/",
+		"/equipment/devices/",
+		"/equipment/edges/edge_",
+		"/equipment/devices/dev_not-a-resource-ref",
+		"/equipment/edges/edge_a/extra",
+		"/equipment/edges/edge_a?changed=1",
+	}
+	for _, target := range invalid {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+			url.Values{"return_to": {target}}.Encode(),
+		))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if got := consoleReturnTarget(request, "/signals"); got != "/signals" {
+			t.Errorf("consoleReturnTarget(%q) = %q, want fallback", target, got)
+		}
+	}
+}
+
+func TestSensorRoutesResolveListAndKnownDetail(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	for _, path := range []string{
+		"/sensors",
+		"/sensors/" + signals[0].SignalRef,
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body=%s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestSensorRoutesReturnNotFoundForUnknownDetail(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
 	)
 	seedSetupDevice(t, archive)
 	cookie, _ := loginTestAccount(t, server)
-	request := httptest.NewRequest(http.MethodGet, "/equipment", nil)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/sig_00000000000000000000000000000000",
+		nil,
+	)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
-
 	server.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
-	}
-	body := response.Body.String()
-	for _, want := range []string{
-		"factory-edge-01",
-		"名前未設定のデバイス",
-		"名前未設定のセンサー",
-		"24.8",
-		"閲覧のみ",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("viewer equipment page missing %q: %s", want, body)
-		}
-	}
-	for _, forbidden := range []string{
-		`action="/console/edges/`,
-		`name="display_name"`,
-		"BP-01234567",
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("viewer equipment page exposes %q: %s", forbidden, body)
-		}
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -683,7 +841,7 @@ func TestConsoleUsesOperatorFocusedInformationArchitecture(t *testing.T) {
 			path:        "/equipment",
 			pageTitle:   "機器管理",
 			activeLabel: "機器管理",
-			mustContain: []string{"Edgeから順に", "閲覧のみ"},
+			mustContain: []string{"確認や設定を行うEdgeを選んでください", "閲覧のみ"},
 		},
 		{
 			path:        "/setup",
