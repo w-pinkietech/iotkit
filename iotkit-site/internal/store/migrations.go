@@ -478,6 +478,16 @@ var schemaMigrations = []migration{
 			revision = edge_activations.revision + 1,
 			updated_at = excluded.updated_at;
 	`},
+	{version: 12, sql: `
+		CREATE INDEX idx_raw_records_signal_preview
+		ON raw_records(
+			edge_node_id,
+			json_extract(record_json, '$.series_key'),
+			received_at DESC,
+			ledger_epoch DESC,
+			pub_seq DESC
+		);
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

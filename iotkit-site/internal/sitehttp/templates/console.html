@@ -125,6 +125,42 @@
           </div>
         </section>
 
+        <section class="content-section sensor-setting-simulation"
+          data-setting-simulation
+          data-signal-ref="{{.SignalRef}}"
+          data-unit="{{.Unit}}"
+          data-can-edit="{{if $.IsAdmin}}true{{else}}false{{end}}">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">SETTING PREVIEW</p>
+              <h2>受信値と設定結果</h2>
+              <p>届いている値へ設定を当てはめ、保存前に結果を確認できます。</p>
+            </div>
+            <span class="simulation-live"><i aria-hidden="true"></i>自動更新</span>
+          </div>
+          <div class="simulation-summary">
+            <strong data-preview-range>受信データを読み込んでいます</strong>
+            <span data-preview-count>設定を変更すると自動で再計算します。</span>
+          </div>
+          <div class="simulation-chart-wrap">
+            <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値と設定結果のグラフ">
+              <text x="380" y="130" text-anchor="middle">受信データを読み込んでいます</text>
+            </svg>
+          </div>
+          <div class="simulation-legend" aria-label="グラフの凡例">
+            <span><i class="legend-raw"></i>受信値</span>
+            <span><i class="legend-result"></i>設定結果</span>
+            <span><i class="legend-threshold"></i>しきい値</span>
+          </div>
+          <p class="simulation-message" data-preview-message role="status">読み込み中です。</p>
+          {{if $.IsAdmin}}
+          <div class="simulation-test">
+            <label><span>試す値</span><input name="preview_test_value" type="number" step="any" inputmode="decimal" placeholder="例：28.5"></label>
+            <div><span>この値なら</span><strong data-preview-test-result>値を入力すると結果を確認できます</strong></div>
+          </div>
+          {{end}}
+        </section>
+
         <section class="content-section sensor-detail-source">
           <div class="section-heading"><div><p class="section-kicker">SOURCE</p><h2>接続元</h2><p>この値が、どのEdgeとデバイスから届いているかを確認できます。</p></div></div>
           <dl class="sensor-detail-facts">
@@ -226,8 +262,6 @@
                   <option value="on_notification" {{if and .Definition (eq .Definition.Trigger "on_notification")}}selected{{end}}>ONを受信するたび</option>
                 </select></label>
               </div>
-              <button type="button" class="preview-button secondary">実際のセンサー値で確認する</button>
-              <div class="preview-output" role="status">保存前に、新しく届くセンサー値で動きを確認できます。</div>
               <button type="submit">値の変換を保存</button>
             </form>
             {{else}}
@@ -865,8 +899,6 @@
                   <option value="on_notification" {{if and .Definition (eq .Definition.Trigger "on_notification")}}selected{{end}}>ONを受信するたび</option>
                 </select></label>
               </div>
-              <button type="button" class="preview-button secondary">実際のセンサー値で確認する</button>
-              <div class="preview-output" role="status">保存前に、新しく届くセンサー値で動きを確認できます。</div>
               <button type="submit">センサー設定を保存</button>
             </form>
           </div>

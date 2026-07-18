@@ -87,6 +87,22 @@ func TestOpenCreatesEdgeNodeIdentitySchema(t *testing.T) {
 	}
 }
 
+func TestOpenCreatesBoundedPreviewLookupIndex(t *testing.T) {
+	store := openTestStore(t)
+	var definition string
+	if err := store.db.QueryRow(`
+		SELECT sql FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_raw_records_signal_preview'
+	`).Scan(&definition); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"edge_node_id", "json_extract", "series_key", "received_at"} {
+		if !strings.Contains(definition, want) {
+			t.Fatalf("preview index missing %q: %s", want, definition)
+		}
+	}
+}
+
 func TestOpenRejectsLegacyGatewayIdentitySchemaBeforeCreatingTables(t *testing.T) {
 	tests := []struct {
 		name            string

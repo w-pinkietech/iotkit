@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -10,6 +11,81 @@ import (
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantics"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
+
+func TestListSemanticPreviewWindowUsesLatestBoundedInputsInCustodyOrder(t *testing.T) {
+	archive := openTestStore(t)
+	acceptSemanticBatch(
+		t,
+		archive,
+		"edge-node-01",
+		"epoch-a",
+		1,
+		[]float64{1},
+		[]float64{2},
+		[]float64{3},
+		[]float64{4},
+		[]float64{5},
+	)
+	signalRef := reconcileSingleSignal(t, archive)
+	if _, err := archive.db.Exec(`
+		UPDATE raw_records SET received_at = pub_seq * 1000
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	window, err := archive.ListSemanticPreviewWindow(
+		context.Background(),
+		signalRef,
+		2_000,
+		3,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(window.Inputs) != 3 ||
+		window.Inputs[0].Value != 3 ||
+		window.Inputs[2].Value != 5 {
+		t.Fatalf("preview inputs = %#v", window.Inputs)
+	}
+	if window.WindowStart != 3_000 || window.WindowEnd != 5_000 ||
+		window.TruncatedBy != PreviewTruncatedByInputCount {
+		t.Fatalf("preview window = %#v", window)
+	}
+
+	timeWindow, err := archive.ListSemanticPreviewWindow(
+		context.Background(),
+		signalRef,
+		4_000,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeWindow.Inputs) != 2 ||
+		timeWindow.TruncatedBy != PreviewTruncatedByTime {
+		t.Fatalf("time-limited preview window = %#v", timeWindow)
+	}
+}
+
+func TestListSemanticPreviewWindowRejectsUnknownSignalAndInvalidLimit(t *testing.T) {
+	archive := openTestStore(t)
+	if _, err := archive.ListSemanticPreviewWindow(
+		context.Background(),
+		"sig_00000000000000000000000000000000",
+		0,
+		100,
+	); !errors.Is(err, siteapp.ErrNotFound) {
+		t.Fatalf("unknown signal error = %v", err)
+	}
+	if _, err := archive.ListSemanticPreviewWindow(
+		context.Background(),
+		"sig_00000000000000000000000000000000",
+		0,
+		0,
+	); err == nil {
+		t.Fatal("zero preview limit was accepted")
+	}
+}
 
 func TestSemanticDefinitionIsFutureOnlyAndProjectionIsIdempotent(t *testing.T) {
 	archive := openTestStore(t)
