@@ -54,7 +54,7 @@ func newConsoleEdgeViews(edges []siteapp.Edge, now time.Time) []consoleEdgeView 
 			CanActivate:   edge.State == siteapp.EdgeDiscovered,
 		}
 		if view.Name == "" {
-			view.Name = "名前未設定のEdge"
+			view.Name = edge.EdgeNodeID
 		}
 		if view.LocationLabel == "" {
 			view.LocationLabel = "設置場所 未設定"
