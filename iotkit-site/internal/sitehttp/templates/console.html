@@ -19,12 +19,11 @@
     <nav class="side-nav" aria-label="メインメニュー">
       <p class="nav-heading">現場を見る</p>
       <a href="/status" {{if eq .Page "status"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌂</span>概要</a>
-      <a href="/monitor" {{if eq .Page "monitor"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">●</span>センサー</a>
+      <a href="/sensors" {{if eq .Page "sensors"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">●</span>センサー一覧</a>
       <a href="/logs" {{if eq .Page "logs"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">↕</span>受信履歴</a>
 
       <p class="nav-heading">設定</p>
       <a href="/equipment" {{if eq .Page "equipment"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">◇</span>機器管理</a>
-      <a href="/signals" {{if eq .Page "signals"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌁</span>値の変換</a>
       <a href="/output" {{if eq .Page "output"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">→</span>外部出力</a>
 
       <p class="nav-heading">管理</p>
@@ -56,7 +55,7 @@
           <h1>{{.Title}}</h1>
           <p class="page-description">{{.Description}}</p>
         </div>
-        {{if eq .Page "monitor"}}<a class="button secondary" href="/monitor">最新の状態に更新</a>{{end}}
+        {{if and (eq .Page "sensors") (eq .SensorView "list")}}<a class="button secondary" href="/sensors">最新の状態に更新</a>{{end}}
       </header>
       {{if .Notice}}<div class="feedback success-feedback" role="status"><span aria-hidden="true">✓</span>{{.Notice}}</div>{{end}}
       {{if .PageError}}<div class="feedback error-feedback" role="alert"><span aria-hidden="true">!</span>{{.PageError}}</div>{{end}}
@@ -80,7 +79,7 @@
       <section class="content-section">
         <div class="section-heading">
           <div><p class="section-kicker">LIVE</p><h2>センサーの現在値</h2><p>現場から最後に届いた値です。</p></div>
-          <a href="/monitor">すべてのセンサーを見る</a>
+          <a href="/sensors">すべてのセンサーを見る</a>
         </div>
         {{template "signal-table" .}}
       </section>
@@ -97,7 +96,225 @@
       </section>
       {{end}}
 
+      {{if and (eq .Page "sensors") (eq .SensorView "list")}}
+      <section class="toolbar" aria-label="センサーの絞り込み">
+        <label class="search-field"><span>センサーを探す</span><input type="search" data-table-search="signal-table" placeholder="センサー名、Edge、種類"></label>
+        <label><span>受信状態</span><select data-table-status="signal-table"><option value="">すべて</option><option value="receiving">受信中</option><option value="stale">停止・古い</option><option value="never">未受信</option></select></label>
+        <div class="toolbar-summary"><strong data-table-count="signal-table">{{len .SignalRows}}</strong><span>件のセンサー</span></div>
+      </section>
+      <section class="content-section flush sensor-list-table">
+        {{template "signal-table" .}}
+      </section>
+      {{end}}
+
       {{if eq .Page "equipment"}}
+      {{if eq .EquipmentView "list"}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>Edgeと配下の機器の状態を確認できます。</span></div>{{end}}
+      <section class="equipment-overview">
+        <header class="section-heading">
+          <div>
+            <p class="section-kicker">EQUIPMENT</p>
+            <h2>接続されているEdge</h2>
+            <p>確認や設定を行うEdgeを選んでください。</p>
+          </div>
+          <div class="equipment-overview-count"><strong>{{len .EquipmentRows}}</strong><span>台</span></div>
+        </header>
+        {{if .EquipmentRows}}
+        <div class="equipment-overview-list">
+          <div class="equipment-row equipment-row--head" aria-hidden="true">
+            <span>Edge</span><span>状態</span><span>機器</span><span>センサー</span><span>最終通信</span><span></span>
+          </div>
+          {{range .EquipmentRows}}
+          <a class="equipment-row" href="/equipment/edges/{{.EdgeRef}}">
+            <span class="equipment-row-name"><i aria-hidden="true">◇</i><span><strong>{{.Name}}</strong><small>{{.LocationLabel}}</small></span></span>
+            <span><b class="status-pill {{.StateClass}}">{{.StateLabel}}</b></span>
+            <span data-label="デバイス">{{len .Devices}}台</span>
+            <span data-label="センサー">{{.SensorCount}}件</span>
+            <span data-label="最終通信" title="{{.LastCommunicationAt}}">{{.LastCommunication}}</span>
+            <span class="equipment-row-arrow" aria-hidden="true">›</span>
+          </a>
+          {{end}}
+        </div>
+        {{else}}
+        {{template "empty-state" "Edgeはまだ見つかっていません。Edgeを起動し、Siteと同じBrokerへ接続すると表示されます。"}}
+        {{end}}
+      </section>
+      {{if .OrphanDevices}}
+      <section class="content-section equipment-orphans">
+        <div class="feedback error-feedback"><span aria-hidden="true">!</span>所属するEdgeを確認できない機器が{{len .OrphanDevices}}台あります。</div>
+      </section>
+      {{end}}
+
+      {{else if eq .EquipmentView "edge"}}
+      {{with .SelectedEdge}}
+      <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/equipment">機器管理</a><span aria-hidden="true">/</span><strong>{{.Name}}</strong></nav>
+      <section class="equipment-detail-header equipment-detail-header--{{.StateClass}}">
+        <div class="equipment-detail-identity">
+          <span class="equipment-detail-icon" aria-hidden="true">◇</span>
+          <div><p class="section-kicker">EDGE</p><h2>{{.Name}}</h2><p>{{.LocationLabel}}</p></div>
+        </div>
+        <span class="status-pill {{.StateClass}}">{{.StateLabel}}</span>
+      </section>
+      <dl class="equipment-detail-facts">
+        <div><dt>デバイス</dt><dd>{{len .Devices}}台</dd></div>
+        <div><dt>センサー</dt><dd>{{.SensorCount}}件</dd></div>
+        <div><dt>最終通信</dt><dd title="{{.LastCommunicationAt}}">{{.LastCommunication}}</dd></div>
+        <div><dt>残りの設定</dt><dd>デバイス {{.DevicePendingCount}}件 / センサー {{.SensorPendingCount}}件</dd></div>
+      </dl>
+
+      {{if and $.IsAdmin .CanActivate}}
+      <section class="equipment-action-card">
+        <div><h3>このEdgeを登録します</h3><p>登録前にEdgeが保持していた値は破棄され、登録完了後の値から正式な履歴として保存します。</p></div>
+        <form method="post" action="/console/edges/{{.EdgeRef}}/activation">
+          <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="return_to" value="/equipment/edges/{{.EdgeRef}}">
+          <input type="hidden" name="revision" value="{{.Revision}}">
+          <button type="submit">Edgeを登録</button>
+        </form>
+      </section>
+      {{end}}
+      {{if eq .State "activating"}}<div class="permission-note"><strong>登録処理中</strong><span>Edgeからの完了通知を待っています。</span></div>{{end}}
+      {{if eq .State "recovery_hold"}}<div class="feedback error-feedback"><span aria-hidden="true">!</span>Edgeのデータ世代が変わりました。復旧確認が必要です。</div>{{end}}
+
+      <section class="content-section">
+        <div class="section-heading"><div><p class="section-kicker">DEVICES</p><h2>このEdgeのデバイス</h2><p>デバイスを選ぶと、名前・設置場所・センサーを確認できます。</p></div></div>
+        {{if and (eq .State "active") .Devices}}
+        <div class="equipment-device-table">
+          {{range .Devices}}
+          <a href="/equipment/devices/{{.Device.DeviceRef}}">
+            <span class="equipment-device-name"><i aria-hidden="true">▣</i><span><strong>{{.Name}}</strong><small>{{.LocationLabel}}</small></span></span>
+            <span><b class="status-pill {{.StateClass}}">{{.StateLabel}}</b></span>
+            <span data-label="センサー">{{len .Signals}}件のセンサー</span>
+            <span data-label="最終受信" title="{{.LastReceivedTitle}}">{{.LastReceived}}</span>
+            <span aria-hidden="true">›</span>
+          </a>
+          {{end}}
+        </div>
+        {{else}}
+        <div class="empty-state"><span aria-hidden="true">＋</span><p>{{if eq .State "active"}}このEdgeからデバイス情報が届くと表示されます。{{else}}Edgeの登録完了後にデバイスを確認できます。{{end}}</p></div>
+        {{end}}
+      </section>
+      <details class="equipment-diagnostics">
+        <summary>Edgeの診断情報</summary>
+        <dl class="detail-list">
+          <div><dt>Edge識別子</dt><dd class="mono">{{.EdgeNodeID}}</dd></div>
+          <div><dt>データ世代</dt><dd class="mono">{{.LedgerEpoch}}</dd></div>
+          {{if .LastResultAt}}<div><dt>登録結果の最終受信</dt><dd>{{.LastResult}}</dd></div>{{end}}
+        </dl>
+      </details>
+      {{end}}
+
+      {{else if eq .EquipmentView "device"}}
+      {{with .SelectedDevice}}
+      <nav class="equipment-breadcrumb" aria-label="現在位置">
+        <a href="/equipment">機器管理</a><span aria-hidden="true">/</span>
+        {{with $.SelectedDeviceEdge}}<a href="/equipment/edges/{{.EdgeRef}}">{{.Name}}</a><span aria-hidden="true">/</span>{{end}}
+        <strong>{{.Name}}</strong>
+      </nav>
+      <section class="equipment-detail-header">
+        <div class="equipment-detail-identity">
+          <span class="equipment-detail-icon equipment-detail-icon--device" aria-hidden="true">▣</span>
+          <div><p class="section-kicker">DEVICE</p><h2>{{.Name}}</h2><p>{{.LocationLabel}}</p></div>
+        </div>
+        <span class="status-pill {{.StateClass}}">{{.StateLabel}}</span>
+      </section>
+      <dl class="equipment-detail-facts">
+        <div><dt>センサー</dt><dd>{{len .Signals}}件</dd></div>
+        <div><dt>最終受信</dt><dd title="{{.LastReceivedTitle}}">{{.LastReceived}}</dd></div>
+        <div><dt>接続情報</dt><dd>{{if eq .Device.DescriptorPresence "current"}}受信済み{{else}}確認が必要{{end}}</dd></div>
+        {{if and $.IsAdmin .Identifier}}<div><dt>現物との照合番号</dt><dd class="mono">{{.Identifier}}</dd></div>{{end}}
+      </dl>
+
+      {{if $.IsAdmin}}
+      <details class="equipment-editor equipment-editor--device" {{if not .Device.ProfileRevision}}open{{end}}>
+        <summary>{{if .Device.ProfileRevision}}デバイス名と設置場所を変更{{else}}デバイス名と設置場所を登録{{end}}</summary>
+        <form method="post" action="/console/devices/{{.Device.DeviceRef}}/profile">
+          <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="return_to" value="/equipment/devices/{{.Device.DeviceRef}}">
+          <input type="hidden" name="revision" value="{{if .Device.ProfileRevision}}{{.Device.ProfileRevision}}{{end}}">
+          <div class="form-row">
+            <label><span>デバイス名</span><input name="display_name" value="{{.Device.DisplayName}}" placeholder="例：乾燥炉入口 BravePI" required></label>
+            <label><span>設置場所</span><input name="location" value="{{.Device.Location}}" placeholder="例：第1工場 乾燥工程" required></label>
+          </div>
+          <button type="submit" class="secondary">デバイス情報を保存</button>
+        </form>
+      </details>
+      {{end}}
+
+      <section class="content-section equipment-sensors">
+        <div class="section-heading"><div><p class="section-kicker">SENSORS</p><h2>接続されているセンサー</h2><p>届いている値を確認し、現場で分かる名前と単位を設定します。</p></div></div>
+        <div class="equipment-sensor-grid">
+          {{range .Signals}}
+          <article class="equipment-sensor-card">
+            <header>
+              <div><p class="section-kicker">{{.MeasurementKey}}</p><h3>{{if .FormProfile.DisplayName}}{{.FormProfile.DisplayName}}{{else}}名前未設定のセンサー{{end}}</h3></div>
+              {{if .ProfileComplete}}<span class="status-pill configured">設定済み</span>{{else}}<span class="status-pill needs-setup">要設定</span>{{end}}
+            </header>
+            <div class="sensor-current-value">
+              <span>現在の値</span>
+              <strong>{{.RawValue}}{{if .RawUnit}} <small>{{.RawUnit}}</small>{{end}}</strong>
+              <small title="{{.LastReceivedTitle}}">{{.LastReceived}}</small>
+            </div>
+            <dl class="sensor-source-facts">
+              <div><dt>値の形式</dt><dd>{{.ValueTypeLabel}}</dd></div>
+              <div><dt>通知された単位</dt><dd>{{if .RawUnit}}{{.RawUnit}}{{else}}なし{{end}}</dd></div>
+              <div><dt>チャンネル</dt><dd>{{.ChannelLabel}}</dd></div>
+            </dl>
+            {{if .MissingMessage}}<p class="metadata-warning">{{.MissingMessage}}</p>{{end}}
+            {{if $.IsAdmin}}
+            <details class="equipment-editor" {{if not .ProfileComplete}}open{{end}}>
+              <summary>{{if .ProfileComplete}}センサー設定を変更{{else}}センサーを設定{{end}}</summary>
+              <form method="post" action="/console/signals/{{.Signal.SignalRef}}/profile" class="setup-signal-form" data-signal-profile>
+                <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+                <input type="hidden" name="return_to" value="/equipment/devices/{{$.SelectedDevice.Device.DeviceRef}}">
+                <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
+                <label><span>センサー名</span><input name="display_name" value="{{.FormProfile.DisplayName}}" placeholder="例：乾燥炉入口 温度" required></label>
+                <div class="form-row">
+                  <label><span>センサーの種類</span><select name="display_sensor_type" data-sensor-type required>
+                    <option value="">選択してください</option>
+                    <option value="temperature" {{if eq .FormProfile.DisplaySensorType "temperature"}}selected{{end}}>温度</option>
+                    <option value="contact" {{if eq .FormProfile.DisplaySensorType "contact"}}selected{{end}}>接点入力</option>
+                    <option value="illuminance" {{if eq .FormProfile.DisplaySensorType "illuminance"}}selected{{end}}>光</option>
+                    <option value="distance" {{if eq .FormProfile.DisplaySensorType "distance"}}selected{{end}}>距離</option>
+                    <option value="voltage" {{if eq .FormProfile.DisplaySensorType "voltage"}}selected{{end}}>電圧</option>
+                    <option value="current" {{if eq .FormProfile.DisplaySensorType "current"}}selected{{end}}>電流</option>
+                    <option value="pressure" {{if eq .FormProfile.DisplaySensorType "pressure"}}selected{{end}}>圧力</option>
+                    <option value="humidity" {{if eq .FormProfile.DisplaySensorType "humidity"}}selected{{end}}>湿度</option>
+                    <option value="acceleration" {{if eq .FormProfile.DisplaySensorType "acceleration"}}selected{{end}}>加速度</option>
+                    <option value="custom" {{if eq .FormProfile.DisplaySensorType "custom"}}selected{{end}}>その他</option>
+                  </select></label>
+                  <label data-custom-sensor-label><span>「その他」の表示名</span><input name="display_sensor_type_label" value="{{.FormProfile.DisplaySensorTypeLabel}}" placeholder="例：流量"></label>
+                </div>
+                <div class="form-row">
+                  <label><span>値の見せ方</span><select name="display_value_kind" data-value-kind required>
+                    <option value="numeric" {{if eq .FormProfile.DisplayValueKind "numeric"}}selected{{end}}>数値</option>
+                    <option value="boolean" {{if eq .FormProfile.DisplayValueKind "boolean"}}selected{{end}}>ON / OFF</option>
+                  </select></label>
+                  <label><span>単位の扱い</span><select name="display_unit_mode" data-unit-mode required>
+                    <option value="">選択してください</option>
+                    <option value="unit" {{if eq .FormProfile.DisplayUnitMode "unit"}}selected{{end}}>単位を表示する</option>
+                    <option value="dimensionless" {{if eq .FormProfile.DisplayUnitMode "dimensionless"}}selected{{end}}>単位なし</option>
+                  </select></label>
+                </div>
+                <div class="form-row">
+                  <label data-display-unit><span>表示単位</span><input name="display_unit" value="{{.FormProfile.DisplayUnit}}" maxlength="32" placeholder="例：°C"></label>
+                  <label data-decimal-places><span>小数点以下の桁数</span><input name="decimal_places" type="number" min="0" max="6" value="{{.FormProfile.DecimalPlaces}}" required></label>
+                </div>
+                <button type="submit">センサー設定を保存</button>
+              </form>
+            </details>
+            {{end}}
+          </article>
+          {{else}}
+          {{template "empty-state" "この機器からセンサー情報が届くと表示されます。"}}
+          {{end}}
+        </div>
+      </section>
+      {{if eq .State "ready"}}<footer class="setup-next-step"><span>✓ この機器の基本設定は完了しています。</span><span><a href="/monitor">現在値を見る</a> · <a href="/signals">値の変換</a></span></footer>{{end}}
+      {{end}}
+      {{end}}
+
+      {{if eq .EquipmentView "legacy"}}
       {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>Edge、デバイス、センサーの状態と現在値を確認できます。登録内容の変更には設定管理者の権限が必要です。</span></div>{{end}}
 
       <section class="equipment-journey">
@@ -292,6 +509,7 @@
       </section>
       {{end}}
       {{end}}
+      {{end}}
 
       {{if eq .Page "edges"}}
       {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>Edgeの状態を確認できます。登録には設定管理者の権限が必要です。</span></div>{{end}}
@@ -429,17 +647,6 @@
       {{else}}
       {{template "empty-state" "デバイスはまだ見つかっていません。Edgeから初めてデータが届くと、ここへ自動的に表示されます。"}}
       {{end}}
-      {{end}}
-
-      {{if eq .Page "monitor"}}
-      <section class="toolbar" aria-label="センサーの絞り込み">
-        <label class="search-field"><span>センサーを探す</span><input type="search" data-table-search="signal-table" placeholder="センサー名、Edge、種類"></label>
-        <label><span>受信状態</span><select data-table-status="signal-table"><option value="">すべて</option><option value="receiving">受信中</option><option value="stale">停止・古い</option><option value="never">未受信</option></select></label>
-        <div class="toolbar-summary"><strong data-table-count="signal-table">{{len .SignalRows}}</strong><span>件のセンサー</span></div>
-      </section>
-      <section class="content-section flush">
-        {{template "signal-table" .}}
-      </section>
       {{end}}
 
       {{if eq .Page "devices"}}
@@ -654,8 +861,8 @@
     <thead><tr><th>センサー</th><th>種類</th><th>Edge</th><th>現在値</th><th>受信状態</th><th>最終受信</th></tr></thead>
     <tbody>
     {{range .SignalRows}}
-    <tr data-status="{{.StatusClass}}">
-      <td><strong>{{.Name}}</strong><small class="table-subtext">{{.SettingLabel}}</small></td>
+    <tr data-status="{{.StatusClass}}" data-href="/sensors/{{.SignalRef}}">
+      <td><a href="/sensors/{{.SignalRef}}"><strong>{{.Name}}</strong><small class="table-subtext">{{.SettingLabel}}</small></a></td>
       <td><span class="sensor-type">{{.SensorType}}</span></td>
       <td>{{.Edge}}</td>
       <td><span class="measurement">{{.Value}}</span>{{if .Unit}} <span class="measurement-unit">{{.Unit}}</span>{{end}}</td>
