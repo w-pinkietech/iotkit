@@ -67,7 +67,7 @@ func TestReconcileInventorySourcesCreatesMeasurementFirstPlaceholder(t *testing.
 		t.Fatal(err)
 	}
 	batch.Records[0] = encoded
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 	count, err := store.ReconcileInventorySources(context.Background(), 100)
@@ -97,7 +97,7 @@ func TestReconcileInventorySourcesCreatesMeasurementFirstPlaceholder(t *testing.
 
 func TestReconcileInventorySourcesSkipsNonCanonicalSeriesAndAdvancesProgress(t *testing.T) {
 	store := openTestStore(t)
-	if _, err := store.AcceptBatch(context.Background(), testBatch(t)); err != nil {
+	if _, err := acceptBatchForTest(t, store, testBatch(t)); err != nil {
 		t.Fatal(err)
 	}
 	processed, err := store.ReconcileInventorySources(context.Background(), 1)
@@ -145,7 +145,7 @@ func TestReconcileInventorySourcesProcessesAtMostLimitAndResumes(t *testing.T) {
 		CursorEnd:     3,
 		Records:       records,
 	}
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 	for wantCursor := int64(1); wantCursor <= 3; wantCursor++ {
@@ -345,7 +345,7 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
 		CursorEnd:     3,
 		Records:       records,
 	}
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(`

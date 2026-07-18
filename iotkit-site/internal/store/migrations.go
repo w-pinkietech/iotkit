@@ -393,6 +393,91 @@ var schemaMigrations = []migration{
 			ADD COLUMN decimal_places INTEGER NOT NULL DEFAULT 0
 			CHECK(decimal_places BETWEEN 0 AND 6);
 	`},
+	{version: 11, sql: `
+		CREATE TABLE site_meta (
+			singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+			site_id TEXT NOT NULL UNIQUE,
+			created_at INTEGER NOT NULL
+		);
+		INSERT INTO site_meta(singleton, site_id, created_at)
+		VALUES(1, 'site-' || lower(hex(randomblob(16))), unixepoch('subsec') * 1000);
+
+		CREATE TABLE edge_activations (
+			edge_ref TEXT PRIMARY KEY,
+			edge_node_id TEXT NOT NULL UNIQUE,
+			ledger_epoch TEXT NOT NULL,
+			state TEXT NOT NULL CHECK(state IN (
+				'discovered', 'activating', 'active', 'recovery_hold'
+			)),
+			activation_id TEXT UNIQUE,
+			grant_revision INTEGER NOT NULL DEFAULT 0 CHECK(grant_revision >= 0),
+			display_name TEXT NOT NULL DEFAULT '',
+			location TEXT NOT NULL DEFAULT '',
+			request_json BLOB CHECK(request_json IS NULL OR json_valid(request_json)),
+			result_json BLOB CHECK(result_json IS NULL OR json_valid(result_json)),
+			revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+			last_descriptor_at INTEGER,
+			last_result_at INTEGER,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+
+		CREATE TABLE activation_command_outbox (
+			activation_id TEXT PRIMARY KEY,
+			topic TEXT NOT NULL,
+			payload_json BLOB NOT NULL CHECK(json_valid(payload_json)),
+			attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+			last_attempt_at INTEGER,
+			created_at INTEGER NOT NULL,
+			completed_at INTEGER
+		);
+
+		INSERT INTO edge_activations(
+			edge_ref, edge_node_id, ledger_epoch, state,
+			revision, last_descriptor_at, created_at, updated_at
+		)
+		SELECT
+			'edge_' || lower(hex(randomblob(16))),
+			edge_node_id,
+			ledger_epoch,
+			'discovered',
+			1,
+			updated_at,
+			updated_at,
+			updated_at
+		FROM edge_descriptor_state;
+
+		WITH custody_epochs AS (
+			SELECT edge_node_id, ledger_epoch FROM raw_records
+			UNION
+			SELECT edge_node_id, ledger_epoch FROM accepted_cursors
+		),
+		custody_summary AS (
+			SELECT edge_node_id, MIN(ledger_epoch) AS ledger_epoch,
+				COUNT(DISTINCT ledger_epoch) AS epoch_count
+			FROM custody_epochs
+			GROUP BY edge_node_id
+		)
+		INSERT INTO edge_activations(
+			edge_ref, edge_node_id, ledger_epoch, state,
+			revision, created_at, updated_at
+		)
+		SELECT
+			'edge_' || lower(hex(randomblob(16))),
+			edge_node_id,
+			ledger_epoch,
+			CASE WHEN epoch_count = 1 THEN 'active' ELSE 'recovery_hold' END,
+			1,
+			unixepoch('subsec') * 1000,
+			unixepoch('subsec') * 1000
+		FROM custody_summary
+		WHERE true
+		ON CONFLICT(edge_node_id) DO UPDATE SET
+			ledger_epoch = excluded.ledger_epoch,
+			state = excluded.state,
+			revision = edge_activations.revision + 1,
+			updated_at = excluded.updated_at;
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {
