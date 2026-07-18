@@ -1,9 +1,13 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use iotkit_core_publish::activation::{
+    ActivationRequest, apply_activation, cleanup_pre_activation_batch, install_site_target,
+    publication_admitted,
+};
 use iotkit_core_publish::mqtt::MqttBinding;
 use iotkit_core_publish::store::{
-    TargetRow, effective_cursor, select_batch, target_advance_cursor, target_get, target_insert,
+    TargetRow, effective_cursor, select_batch, target_advance_cursor, target_get,
 };
 use iotkit_core_publish::wire::{
     AcceptedThrough, EGRESS_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_RECORDS, RecordBatch,
@@ -12,7 +16,9 @@ use iotkit_core_publish::wire::{
 use iotkit_core_storage::{DbHandle, StorageError};
 use iotkit_edge::config::{MqttExitConfig, MqttTrustMode};
 use iotkit_edge::health::HealthState;
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, Transport};
+use rumqttc::{
+    AsyncClient, Event, Incoming, MqttOptions, QoS, SubscribeFilter, SubscribeReasonCode, Transport,
+};
 use rusqlite::Connection;
 
 const TARGET_ID: &str = "site";
@@ -76,6 +82,8 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
     let records_topic = runtime.binding.records_topic.clone();
     let ack_topic = runtime.binding.accepted_through_topic.clone();
     let descriptor_topic = runtime.binding.descriptor_topic.clone();
+    let activation_request_topic = runtime.binding.activation_request_topic.clone();
+    let activation_result_topic = runtime.binding.activation_result_topic.clone();
     let qos = mqtt_qos(&runtime.binding);
     let mut options = MqttOptions::new(
         runtime.binding.client_id.clone(),
@@ -108,8 +116,11 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                     Ok(Event::Incoming(Incoming::ConnAck(_))) => {
                         subscribed = false;
                         published_descriptor = None;
-                        if let Err(error) = client.subscribe(&ack_topic, qos).await {
-                            tracing::warn!(error = %error, "failed to queue MQTT acknowledgement subscription");
+                        if let Err(error) = client
+                            .subscribe_many(subscription_filters(&runtime.binding, qos))
+                            .await
+                        {
+                            tracing::warn!(error = %error, "failed to queue MQTT control subscriptions");
                         }
                         if let Err(error) = publish_descriptor_if_changed(
                             &db,
@@ -123,8 +134,15 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                             tracing::warn!(error = %error, "MQTT descriptor publish attempt failed");
                         }
                     }
-                    Ok(Event::Incoming(Incoming::SubAck(_))) => {
-                        subscribed = true;
+                    Ok(Event::Incoming(Incoming::SubAck(ack))) => {
+                        subscribed = ack.return_codes.len() == 2
+                            && ack.return_codes.iter().all(|code| {
+                                matches!(code, SubscribeReasonCode::Success(QoS::AtLeastOnce))
+                            });
+                        if !subscribed {
+                            tracing::warn!("MQTT Broker rejected one or more control subscriptions");
+                            continue;
+                        }
                         if let Err(error) = publish_current_or_next(
                             &db,
                             &client,
@@ -139,6 +157,47 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                         }
                     }
                     Ok(Event::Incoming(Incoming::Publish(message))) => {
+                        if message.topic == activation_request_topic {
+                            match handle_activation_request(
+                                &db,
+                                &activation_request_topic,
+                                &message.topic,
+                                &message.payload,
+                            ).await {
+                                Ok(payload) => {
+                                    if let Err(error) = client
+                                        .publish(
+                                            &activation_result_topic,
+                                            qos,
+                                            false,
+                                            payload,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(error = %error, "MQTT activation result publish attempt failed");
+                                    }
+                                    if let Err(error) = publish_current_or_next(
+                                        &db,
+                                        &client,
+                                        &records_topic,
+                                        &runtime.binding.edge_node_id,
+                                        qos,
+                                        runtime.binding.retain,
+                                        &mut inflight,
+                                    ).await {
+                                        tracing::warn!(error = %error, "MQTT post-activation publish attempt failed");
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::warn!(
+                                        topic = %message.topic,
+                                        error = %error,
+                                        "invalid MQTT activation request"
+                                    );
+                                }
+                            }
+                            continue;
+                        }
                         let result = handle_ack(
                             &db,
                             &ack_topic,
@@ -204,9 +263,61 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                     tracing::warn!(error = %error, "MQTT publish retry failed");
                     super::publish_task::refresh_publish_health(&db, &health, &Err(error)).await;
                 }
+                if let Err(error) = cleanup_activation_prefix(&db).await {
+                    tracing::warn!(error = %error, "pre-activation reading cleanup failed");
+                }
             }
         }
     }
+}
+
+fn subscription_filters(binding: &MqttBinding, qos: QoS) -> Vec<SubscribeFilter> {
+    vec![
+        SubscribeFilter::new(binding.accepted_through_topic.clone(), qos),
+        SubscribeFilter::new(binding.activation_request_topic.clone(), qos),
+    ]
+}
+
+async fn handle_activation_request(
+    db: &DbHandle,
+    expected_topic: &str,
+    actual_topic: &str,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    let expected_topic = expected_topic.to_string();
+    let actual_topic = actual_topic.to_string();
+    let payload = payload.to_vec();
+    db.with_conn(move |conn| {
+        apply_activation_request(conn, &expected_topic, &actual_topic, &payload, now_ms())
+            .map_err(storage_error)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+fn apply_activation_request(
+    conn: &Connection,
+    expected_topic: &str,
+    actual_topic: &str,
+    payload: &[u8],
+    applied_at: i64,
+) -> Result<Vec<u8>, String> {
+    if actual_topic != expected_topic {
+        return Err("activation request arrived on an unexpected topic".into());
+    }
+    let request = ActivationRequest::decode(payload).map_err(|error| error.to_string())?;
+    let result = apply_activation(conn, &request, applied_at).map_err(|error| error.to_string())?;
+    result.encode().map_err(|error| error.to_string())
+}
+
+async fn cleanup_activation_prefix(db: &DbHandle) -> Result<(), String> {
+    db.with_conn(|conn| {
+        cleanup_pre_activation_batch(conn, 5_000)
+            .map(|_| ())
+            .map_err(|error| storage_error(error.to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 async fn publish_descriptor_if_changed(
@@ -318,6 +429,9 @@ async fn handle_ack(
 }
 
 fn prepare_batch(conn: &Connection, edge_node_id: &str) -> Result<Option<PreparedBatch>, String> {
+    if !publication_admitted(conn).map_err(|error| error.to_string())? {
+        return Ok(None);
+    }
     let current_epoch =
         iotkit_core_ledger::ledger_epoch(conn).map_err(|error| error.to_string())?;
     let Some(target) = target_get(conn).map_err(|error| error.to_string())? else {
@@ -396,7 +510,7 @@ fn apply_ack(
 
 fn ensure_target(conn: &Connection, expected_endpoint: &str) -> Result<(), String> {
     match target_get(conn).map_err(|error| error.to_string())? {
-        None => target_insert(
+        None => install_site_target(
             conn,
             &TargetRow {
                 target_id: TARGET_ID.to_string(),
@@ -502,6 +616,9 @@ fn storage_error(message: String) -> StorageError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iotkit_core_publish::activation::{
+        ActivationRequest, ActivationResult, ActivationState, activation_state,
+    };
 
     fn test_db() -> DbHandle {
         let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -521,6 +638,16 @@ mod tests {
         .unwrap();
         ensure_target(conn, "mqtt://broker:1883").unwrap();
         let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+        let request = ActivationRequest {
+            schema_version: 1,
+            activation_id: "act-0123456789abcdef0123456789abcdef".into(),
+            site_id: "site-0123456789abcdef0123456789abcdef".into(),
+            edge_node_id: edge_node_id.into(),
+            expected_ledger_epoch: epoch.clone(),
+            grant_revision: 1,
+            issued_at: 1,
+        };
+        apply_activation(conn, &request, 2).unwrap();
         iotkit_core_publish::store::enqueue_annotation(
             conn,
             &epoch,
@@ -657,7 +784,7 @@ mod tests {
     fn existing_legacy_target_is_not_silently_rewritten() {
         let db = test_db();
         db.with_conn_sync(|conn| {
-            target_insert(
+            iotkit_core_publish::store::target_insert(
                 conn,
                 &TargetRow {
                     target_id: "legacy".to_string(),
@@ -675,6 +802,114 @@ mod tests {
             let target = target_get(conn).unwrap().unwrap();
             assert_eq!(target.target_id, "legacy");
             assert_eq!(target.endpoint_url, "https://legacy.invalid/push");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn new_mqtt_target_enters_discovery_only_and_subscribes_to_both_control_topics() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ledger_meta(key, value) VALUES
+                    ('edge_node_id', 'edge-01'), ('epoch', 'epoch-01')",
+                [],
+            )
+            .unwrap();
+
+            ensure_target(conn, "mqtt://broker:1883").unwrap();
+
+            assert_eq!(
+                activation_state(conn).unwrap(),
+                ActivationState::DiscoveryOnly
+            );
+            assert!(prepare_batch(conn, "edge-01").unwrap().is_none());
+            let binding = MqttBinding::for_edge("edge-01").unwrap();
+            let filters = subscription_filters(&binding, QoS::AtLeastOnce);
+            assert_eq!(filters.len(), 2);
+            assert_eq!(filters[0].path, binding.accepted_through_topic);
+            assert_eq!(filters[1].path, binding.activation_request_topic);
+            assert!(filters.iter().all(|filter| filter.qos == QoS::AtLeastOnce));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn activation_request_is_durable_idempotent_and_opens_pub_seq_one() {
+        let db = test_db();
+        db.with_conn_sync(|conn| {
+            conn.execute(
+                "INSERT INTO ledger_meta(key, value) VALUES
+                    ('edge_node_id', 'edge-01'), ('epoch', 'epoch-01')",
+                [],
+            )
+            .unwrap();
+            ensure_target(conn, "mqtt://broker:1883").unwrap();
+            let binding = MqttBinding::for_edge("edge-01").unwrap();
+            let request = ActivationRequest {
+                schema_version: 1,
+                activation_id: "act-0123456789abcdef0123456789abcdef".into(),
+                site_id: "site-0123456789abcdef0123456789abcdef".into(),
+                edge_node_id: "edge-01".into(),
+                expected_ledger_epoch: "epoch-01".into(),
+                grant_revision: 1,
+                issued_at: 10,
+            };
+            let payload = serde_json::to_vec(&request).unwrap();
+
+            let first = apply_activation_request(
+                conn,
+                &binding.activation_request_topic,
+                &binding.activation_request_topic,
+                &payload,
+                20,
+            )
+            .unwrap();
+            let duplicate = apply_activation_request(
+                conn,
+                &binding.activation_request_topic,
+                &binding.activation_request_topic,
+                &payload,
+                99,
+            )
+            .unwrap();
+
+            assert_eq!(duplicate, first);
+            let result = ActivationResult::decode(&first).unwrap();
+            assert_eq!(result.applied_at, 20);
+            assert_eq!(result.first_publication_seq, 1);
+            assert_eq!(activation_state(conn).unwrap(), ActivationState::Active);
+            assert!(
+                apply_activation_request(
+                    conn,
+                    &binding.activation_request_topic,
+                    "iotkit/v1/edge-nodes/edge-other/activation/request",
+                    &payload,
+                    100,
+                )
+                .is_err()
+            );
+
+            let pub_seq = iotkit_core_publish::store::enqueue_annotation(
+                conn,
+                "epoch-01",
+                "epoch_start",
+                r#"{"prior_epoch":"old-epoch"}"#,
+                21,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(pub_seq, 1);
+            assert_eq!(
+                prepare_batch(conn, "edge-01")
+                    .unwrap()
+                    .unwrap()
+                    .batch
+                    .cursor_start,
+                1
+            );
             Ok(())
         })
         .unwrap();

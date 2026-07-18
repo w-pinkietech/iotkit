@@ -25,8 +25,9 @@ done
 
 jq -e '
   (keys | sort) == [
-    "accepted_through_topic", "client_id", "descriptor_retain", "descriptor_topic",
-    "edge_node_id", "qos", "records_topic", "retain", "username"
+    "accepted_through_topic", "activation_request_topic", "activation_result_topic",
+    "client_id", "descriptor_retain", "descriptor_topic", "edge_node_id", "qos",
+    "records_topic", "retain", "username"
   ]
   and (.edge_node_id | type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))
   and .username == .edge_node_id
@@ -34,6 +35,8 @@ jq -e '
   and .records_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/records")
   and .accepted_through_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/accepted-through")
   and .descriptor_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/descriptors")
+  and .activation_request_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/request")
+  and .activation_result_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/result")
   and .qos == 1 and .retain == false and .descriptor_retain == true
 ' "$binding" >/dev/null || { echo "binding is not an exact IoTKit Edge MQTT binding" >&2; exit 1; }
 
@@ -70,7 +73,9 @@ cat >>"$stage/acl" <<EOF
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
+topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
 topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
+topic read iotkit/v1/edge-nodes/$edge_node_id/activation/request
 EOF
 printf '%s:' "$edge_node_id" >"$stage/new-password"
 tr -d '\r\n' <"$stage/handoff/mqtt-password" >>"$stage/new-password"

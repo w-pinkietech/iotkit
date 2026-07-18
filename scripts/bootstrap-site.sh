@@ -132,8 +132,9 @@ getent ahostsv4 "$broker_host" | awk '{print $1}' | grep -Fxq "$broker_bind" \
 
 jq -e '
   (keys | sort) == [
-    "accepted_through_topic", "client_id", "descriptor_retain", "descriptor_topic",
-    "edge_node_id", "qos", "records_topic", "retain", "username"
+    "accepted_through_topic", "activation_request_topic", "activation_result_topic",
+    "client_id", "descriptor_retain", "descriptor_topic", "edge_node_id", "qos",
+    "records_topic", "retain", "username"
   ]
   and (.edge_node_id | type == "string" and length > 0)
   and .username == .edge_node_id
@@ -141,6 +142,8 @@ jq -e '
   and .records_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/records")
   and .accepted_through_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/accepted-through")
   and .descriptor_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/descriptors")
+  and .activation_request_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/request")
+  and .activation_result_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/result")
   and .qos == 1
   and .retain == false
   and .descriptor_retain == true
@@ -224,12 +227,16 @@ cat >"$stage/mosquitto/acl" <<EOF
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
+topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
 topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
+topic read iotkit/v1/edge-nodes/$edge_node_id/activation/request
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
+topic read iotkit/v1/edge-nodes/+/activation/result
 topic write iotkit/v1/edge-nodes/+/accepted-through
+topic write iotkit/v1/edge-nodes/+/activation/request
 
 user site-output
 EOF
