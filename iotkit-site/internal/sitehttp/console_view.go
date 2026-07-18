@@ -26,7 +26,83 @@ type consoleSignalView struct {
 	StatusClass       string
 	SettingLabel      string
 	SettingClass      string
+	MeaningLabel      string
+	MeaningClass      string
+	FormProfile       siteapp.SignalProfileInput
 	Definition        *semantics.Definition
+}
+
+type consoleEdgeView struct {
+	siteapp.Edge
+	Name                string
+	LocationLabel       string
+	StateLabel          string
+	StateClass          string
+	LastCommunication   string
+	LastCommunicationAt string
+	LastResult          string
+	CanActivate         bool
+}
+
+func newConsoleEdgeViews(edges []siteapp.Edge, now time.Time) []consoleEdgeView {
+	views := make([]consoleEdgeView, 0, len(edges))
+	for _, edge := range edges {
+		view := consoleEdgeView{
+			Edge:          edge,
+			Name:          edge.DisplayName,
+			LocationLabel: edge.Location,
+			CanActivate:   edge.State == siteapp.EdgeDiscovered,
+		}
+		if view.Name == "" {
+			view.Name = "名前未設定のEdge"
+		}
+		if view.LocationLabel == "" {
+			view.LocationLabel = "設置場所 未設定"
+		}
+		view.LastCommunication, view.LastCommunicationAt = displayAge(
+			edge.LastDescriptorAt, now,
+		)
+		view.LastResult, _ = displayAge(edge.LastResultAt, now)
+		switch edge.State {
+		case siteapp.EdgeDiscovered:
+			view.StateLabel, view.StateClass = "未登録", "needs-setup"
+		case siteapp.EdgeActivating:
+			view.StateLabel, view.StateClass = "登録処理中", "stale"
+		case siteapp.EdgeActive:
+			view.StateLabel, view.StateClass = "登録済み", "configured"
+		case siteapp.EdgeRecoveryHold:
+			view.StateLabel, view.StateClass = "復旧確認待ち", "stale"
+		default:
+			view.StateLabel, view.StateClass = "状態不明", "stale"
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+type consoleSetupDeviceView struct {
+	siteapp.SetupDevice
+	Name              string
+	LocationLabel     string
+	StateLabel        string
+	StateClass        string
+	LastReceived      string
+	LastReceivedTitle string
+	Signals           []consoleSetupSignalView
+}
+
+type consoleSetupSignalView struct {
+	siteapp.SetupSignal
+	RawValue          string
+	RawUnit           string
+	MeasurementKey    string
+	ValueTypeLabel    string
+	ChannelLabel      string
+	LastReceived      string
+	LastReceivedTitle string
+	FormProfile       siteapp.SignalProfileInput
+	ProfileRevision   *int64
+	MissingMessage    string
 }
 
 type consoleDeviceView struct {
@@ -42,7 +118,7 @@ type consoleDeviceView struct {
 type consoleLogView struct {
 	ReceivedAt string
 	Edge       string
-	Signal     string
+	Sensor     string
 	Value      string
 	Unit       string
 }
@@ -81,16 +157,51 @@ func newConsoleSignalView(
 		SensorType:    displaySensorType(summary.SensorType),
 		SettingLabel:  "未設定",
 		SettingClass:  "needs-setup",
+		MeaningLabel:  "未設定",
+		MeaningClass:  "needs-setup",
 	}
-	if view.Name == "" {
-		view.Name = "未設定の信号"
+	view.FormProfile, _ = siteapp.SignalProfileCandidate(summary)
+	if summary.Profile != nil {
+		if summary.Profile.DisplayName != "" {
+			view.FormProfile.DisplayName = summary.Profile.DisplayName
+		}
+		if summary.Profile.DisplaySensorType != "" {
+			view.FormProfile.DisplaySensorType = summary.Profile.DisplaySensorType
+			view.FormProfile.DisplaySensorTypeLabel = summary.Profile.DisplaySensorTypeLabel
+			view.FormProfile.DisplayValueKind = summary.Profile.DisplayValueKind
+			view.FormProfile.DisplayUnitMode = summary.Profile.DisplayUnitMode
+			view.FormProfile.DisplayUnit = summary.Profile.DisplayUnit
+			view.FormProfile.DecimalPlaces = summary.Profile.DecimalPlaces
+		}
 	}
-	if summary.Latest != nil {
-		view.Value = displayValues(summary.Latest.Values, summary.ValueType)
-	}
-	if summary.HasSemanticMapping {
+	profileComplete := summary.Profile != nil && summary.Profile.Complete()
+	if profileComplete {
+		profile := summary.Profile
+		view.Name = profile.DisplayName
+		view.Unit = ""
+		if profile.DisplayUnitMode == "unit" {
+			view.Unit = displayUnit(&profile.DisplayUnit)
+		}
+		view.SensorType = displayProfileSensorType(profile)
+		valueType := "float"
+		if profile.DisplayValueKind == "boolean" {
+			valueType = "bool"
+		}
+		if summary.Latest != nil {
+			view.Value = displayValuesWithPrecision(
+				summary.Latest.Values,
+				&valueType,
+				profile.DecimalPlaces,
+			)
+		}
 		view.SettingLabel = "設定済み"
 		view.SettingClass = "configured"
+	}
+	if view.Name == "" {
+		view.Name = "名前未設定のセンサー"
+	}
+	if summary.Latest != nil && !profileComplete {
+		view.Value = displayValues(summary.Latest.Values, summary.ValueType)
 	}
 	view.LastReceived, view.LastReceivedTitle = displayAge(summary.LastReceivedAt, now)
 	switch summary.ReceiptStatus {
@@ -103,6 +214,94 @@ func newConsoleSignalView(
 	default:
 		view.StatusLabel = "未受信"
 		view.StatusClass = "never"
+	}
+	return view
+}
+
+func newConsoleSetupDeviceViews(
+	devices []siteapp.SetupDevice,
+	now time.Time,
+) []consoleSetupDeviceView {
+	views := make([]consoleSetupDeviceView, 0, len(devices))
+	for _, device := range devices {
+		view := consoleSetupDeviceView{
+			SetupDevice:   device,
+			Name:          device.Device.DisplayName,
+			LocationLabel: device.Device.Location,
+		}
+		if view.Name == "" {
+			view.Name = "名前未設定のデバイス"
+		}
+		if view.LocationLabel == "" {
+			view.LocationLabel = "設置場所 未設定"
+		}
+		view.LastReceived, view.LastReceivedTitle = displayAge(
+			device.Device.LastReceivedAt,
+			now,
+		)
+		switch device.State {
+		case siteapp.SetupReady:
+			view.StateLabel, view.StateClass = "登録済み", "configured"
+		case siteapp.SetupWaitingForDevice:
+			view.StateLabel, view.StateClass = "デバイス情報を入力", "needs-setup"
+		case siteapp.SetupMetadataMissing:
+			view.StateLabel, view.StateClass = "種類・単位を確認", "needs-setup"
+		default:
+			view.StateLabel, view.StateClass = "センサーを設定", "needs-setup"
+		}
+		for _, signal := range device.Signals {
+			view.Signals = append(
+				view.Signals,
+				newConsoleSetupSignalView(signal, now),
+			)
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func newConsoleSetupSignalView(
+	signal siteapp.SetupSignal,
+	now time.Time,
+) consoleSetupSignalView {
+	view := consoleSetupSignalView{
+		SetupSignal:    signal,
+		RawValue:       "—",
+		RawUnit:        displayUnit(signal.Signal.Unit),
+		MeasurementKey: pointerText(signal.Signal.SensorType, "未通知"),
+		ValueTypeLabel: displayValueType(signal.Signal.ValueType),
+		ChannelLabel:   "なし",
+		FormProfile:    signal.Candidate,
+	}
+	if signal.Signal.Latest != nil {
+		view.RawValue = displayValues(
+			signal.Signal.Latest.Values,
+			signal.Signal.ValueType,
+		)
+	}
+	if signal.ChannelIndex != nil {
+		view.ChannelLabel = strconv.FormatInt(int64(*signal.ChannelIndex), 10)
+	}
+	view.LastReceived, view.LastReceivedTitle = displayAge(
+		signal.Signal.LastReceivedAt,
+		now,
+	)
+	if signal.Profile != nil {
+		view.ProfileRevision = &signal.Profile.Revision
+		if signal.Profile.DisplayName != "" {
+			view.FormProfile.DisplayName = signal.Profile.DisplayName
+		}
+		if signal.Profile.DisplaySensorType != "" {
+			view.FormProfile.DisplaySensorType = signal.Profile.DisplaySensorType
+			view.FormProfile.DisplaySensorTypeLabel = signal.Profile.DisplaySensorTypeLabel
+			view.FormProfile.DisplayValueKind = signal.Profile.DisplayValueKind
+			view.FormProfile.DisplayUnitMode = signal.Profile.DisplayUnitMode
+			view.FormProfile.DisplayUnit = signal.Profile.DisplayUnit
+			view.FormProfile.DecimalPlaces = signal.Profile.DecimalPlaces
+		}
+	}
+	if len(signal.CandidateMissing) > 0 {
+		view.MissingMessage = "Adapterから種類・単位が届いていません。現場で確認して入力してください。"
 	}
 	return view
 }
@@ -122,6 +321,10 @@ func newConsoleSignalViews(
 	for _, summary := range summaries {
 		view := newConsoleSignalView(summary, now)
 		view.Definition = definitionBySignal[summary.SignalRef]
+		if view.Definition != nil {
+			view.MeaningLabel = "設定済み"
+			view.MeaningClass = "configured"
+		}
 		views = append(views, view)
 	}
 	return views
@@ -137,7 +340,7 @@ func newConsoleDeviceView(
 		LocationLabel: summary.Location,
 	}
 	if view.Name == "" {
-		view.Name = "未設定のデバイス"
+		view.Name = "名前未設定のデバイス"
 	}
 	if view.LocationLabel == "" {
 		view.LocationLabel = "設置場所 未設定"
@@ -179,18 +382,30 @@ func newConsoleLogViews(
 		var payload measurement
 		_ = json.Unmarshal(record.Record, &payload)
 		signal, found := signalBySeries[payload.SeriesKey]
-		name := "未設定の信号"
+		sensorName := "名前未設定のセンサー"
 		value := displayValues(payload.Values, nil)
 		unit := ""
 		if found {
-			name = signal.Name
-			value = displayValues(payload.Values, signal.ValueType)
+			sensorName = signal.Name
+			valueType := signal.ValueType
+			precision := -1
+			if signal.Profile != nil && signal.Profile.Complete() {
+				precision = signal.Profile.DecimalPlaces
+				if signal.Profile.DisplayValueKind == "boolean" {
+					booleanType := "bool"
+					valueType = &booleanType
+				} else {
+					numericType := "float"
+					valueType = &numericType
+				}
+			}
+			value = displayValuesWithPrecision(payload.Values, valueType, precision)
 			unit = signal.Unit
 		}
 		views = append(views, consoleLogView{
 			ReceivedAt: displayDateTime(record.ReceivedAt),
 			Edge:       record.EdgeNodeID,
-			Signal:     name,
+			Sensor:     sensorName,
 			Value:      value,
 			Unit:       unit,
 		})
@@ -239,7 +454,7 @@ func newConsoleDefinitionOptions(
 		}
 		name := nameBySignal[definition.SignalRef]
 		if name == "" {
-			name = "未設定の信号"
+			name = "名前未設定のセンサー"
 		}
 		options = append(options, consoleDefinitionOption{
 			ID: definition.ID, Name: name, Kind: displaySemanticKind(definition.Kind),
@@ -308,6 +523,14 @@ func displayActor(actor siteapp.ActorClass) string {
 }
 
 func displayValues(raw json.RawMessage, valueType *string) string {
+	return displayValuesWithPrecision(raw, valueType, -1)
+}
+
+func displayValuesWithPrecision(
+	raw json.RawMessage,
+	valueType *string,
+	decimalPlaces int,
+) string {
 	if len(raw) == 0 {
 		return "—"
 	}
@@ -319,12 +542,12 @@ func displayValues(raw json.RawMessage, valueType *string) string {
 	}
 	formatted := make([]string, 0, len(values))
 	for _, value := range values {
-		formatted = append(formatted, displayValue(value, valueType))
+		formatted = append(formatted, displayValue(value, valueType, decimalPlaces))
 	}
 	return strings.Join(formatted, " / ")
 }
 
-func displayValue(value any, valueType *string) string {
+func displayValue(value any, valueType *string, decimalPlaces int) string {
 	if valueType != nil && *valueType == "bool" {
 		switch typed := value.(type) {
 		case bool:
@@ -344,6 +567,9 @@ func displayValue(value any, valueType *string) string {
 	case json.Number:
 		number, err := typed.Float64()
 		if err == nil {
+			if decimalPlaces >= 0 {
+				return strconv.FormatFloat(number, 'f', decimalPlaces, 64)
+			}
 			rounded := math.Round(number*1_000_000) / 1_000_000
 			return strconv.FormatFloat(rounded, 'f', -1, 64)
 		}
@@ -358,6 +584,36 @@ func displayValue(value any, valueType *string) string {
 	default:
 		return fmt.Sprint(typed)
 	}
+}
+
+func displayProfileSensorType(profile *siteapp.SignalProfile) string {
+	if profile.DisplaySensorType == "custom" {
+		return profile.DisplaySensorTypeLabel
+	}
+	value := profile.DisplaySensorType
+	return displaySensorType(&value)
+}
+
+func displayValueType(valueType *string) string {
+	switch pointerText(valueType, "") {
+	case "bool":
+		return "ON / OFF"
+	case "float":
+		return "数値（小数）"
+	case "int":
+		return "数値（整数）"
+	case "record":
+		return "複合値"
+	default:
+		return "未通知"
+	}
+}
+
+func pointerText(value *string, fallback string) string {
+	if value == nil || *value == "" {
+		return fallback
+	}
+	return *value
 }
 
 func displayUnit(unit *string) string {
@@ -387,6 +643,16 @@ func displaySensorType(sensorType *string) string {
 		return "光"
 	case "humidity", "relative_humidity":
 		return "湿度"
+	case "voltage", "voltage_mv":
+		return "電圧"
+	case "current", "current_ma":
+		return "電流"
+	case "distance", "distance_mm":
+		return "距離"
+	case "pressure", "differential_pressure_pa":
+		return "圧力"
+	case "acceleration", "acceleration_mg":
+		return "加速度"
 	default:
 		return strings.ReplaceAll(*sensorType, "_", " ")
 	}
@@ -420,9 +686,9 @@ func displayDateTime(timestamp int64) string {
 func displayOperation(operation string) string {
 	labels := map[string]string{
 		"device_profile.update":          "デバイス情報を変更",
-		"signal_profile.update":          "信号名を変更",
-		"semantic_definition.put":        "意味付けを保存",
-		"semantic_definition.deactivate": "意味付けを停止",
+		"signal_profile.update":          "センサー表示を変更",
+		"semantic_definition.put":        "センサー設定を保存",
+		"semantic_definition.deactivate": "センサー設定を停止",
 		"yokakit_route.create":           "外部出力を追加",
 		"account.create":                 "アカウントを発行",
 		"account.update":                 "アカウント情報を変更",
@@ -443,9 +709,9 @@ func displayResource(resource string) string {
 	case strings.HasPrefix(resource, "dev_"):
 		return "デバイス"
 	case strings.HasPrefix(resource, "sig_"):
-		return "信号"
+		return "センサー"
 	case strings.HasPrefix(resource, "sem_"):
-		return "信号の意味付け"
+		return "センサー設定"
 	case strings.HasPrefix(resource, "acct_"):
 		return "アカウント"
 	case strings.HasPrefix(resource, "out_"):

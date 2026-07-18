@@ -2,6 +2,7 @@ package siteapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,12 +10,164 @@ import (
 )
 
 func TestProfileInputValidationMeasuresTrimmedTextAndRejectsControls(t *testing.T) {
-	input := SignalProfileInput{DisplayName: strings.Repeat(" ", 200) + "温度"}
+	input := validSignalProfileInput()
+	input.DisplayName = strings.Repeat(" ", 200) + "温度"
 	if err := input.Validate(); err != nil {
 		t.Fatalf("trimmed profile text was rejected: %v", err)
 	}
-	if err := (SignalProfileInput{DisplayName: "温度\n"}).Validate(); err == nil {
+	input = validSignalProfileInput()
+	input.DisplayName = "温度\n"
+	if err := input.Validate(); err == nil {
 		t.Fatal("profile text containing a control character was accepted")
+	}
+}
+
+func TestActivateEdgeRequiresAnAdministrator(t *testing.T) {
+	repository := &fakeRepository{}
+	service := NewService(repository)
+	expected := int64(1)
+
+	_, err := service.Dispatch(
+		context.Background(),
+		AccountActor(
+			"acct_00000000000000000000000000000001",
+			AccountRoleViewer,
+		),
+		ActivateEdge{
+			EdgeRef: "edge_00000000000000000000000000000001",
+			Precondition: RevisionPrecondition{
+				Expected: &expected,
+			},
+		},
+	)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("Dispatch error = %v, want ErrForbidden", err)
+	}
+	if repository.activateEdgeCalls != 0 {
+		t.Fatalf("activation calls = %d, want 0", repository.activateEdgeCalls)
+	}
+}
+
+func TestAdministratorCanActivateAndListEdges(t *testing.T) {
+	edge := Edge{
+		EdgeRef:     "edge_00000000000000000000000000000001",
+		EdgeNodeID:  "factory-edge-01",
+		LedgerEpoch: "epoch-01",
+		State:       EdgeActivating,
+		Revision:    2,
+	}
+	repository := &fakeRepository{edges: []Edge{edge}, edge: edge}
+	service := NewService(repository)
+	expected := int64(1)
+
+	result, err := service.Dispatch(
+		context.Background(),
+		AccountActor(
+			"acct_00000000000000000000000000000001",
+			AccountRoleAdmin,
+		),
+		ActivateEdge{
+			EdgeRef: edge.EdgeRef,
+			Precondition: RevisionPrecondition{
+				Expected: &expected,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Edge == nil || result.Edge.EdgeRef != edge.EdgeRef {
+		t.Fatalf("result = %#v", result)
+	}
+	edges, err := service.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 || edges[0].EdgeRef != edge.EdgeRef {
+		t.Fatalf("edges = %#v, err = %v", edges, err)
+	}
+}
+
+func TestSignalProfileV2Validation(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*SignalProfileInput)
+		wantErr bool
+	}{
+		{name: "temperature numeric with unit"},
+		{
+			name: "contact boolean without unit",
+			mutate: func(input *SignalProfileInput) {
+				input.DisplaySensorType = "contact"
+				input.DisplayValueKind = "boolean"
+				input.DisplayUnitMode = "dimensionless"
+				input.DisplayUnit = ""
+				input.DecimalPlaces = 0
+			},
+		},
+		{
+			name: "unknown sensor type",
+			mutate: func(input *SignalProfileInput) {
+				input.DisplaySensorType = "vendor_magic"
+			},
+			wantErr: true,
+		},
+		{
+			name: "custom without label",
+			mutate: func(input *SignalProfileInput) {
+				input.DisplaySensorType = "custom"
+				input.DisplaySensorTypeLabel = ""
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown value kind",
+			mutate: func(input *SignalProfileInput) {
+				input.DisplayValueKind = "record"
+			},
+			wantErr: true,
+		},
+		{
+			name: "boolean with unit",
+			mutate: func(input *SignalProfileInput) {
+				input.DisplayValueKind = "boolean"
+				input.DisplayUnitMode = "unit"
+			},
+			wantErr: true,
+		},
+		{
+			name: "numeric unit mode without unit",
+			mutate: func(input *SignalProfileInput) {
+				input.DisplayUnit = ""
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative decimal places",
+			mutate: func(input *SignalProfileInput) {
+				input.DecimalPlaces = -1
+			},
+			wantErr: true,
+		},
+		{
+			name: "too many decimal places",
+			mutate: func(input *SignalProfileInput) {
+				input.DecimalPlaces = 7
+			},
+			wantErr: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := validSignalProfileInput()
+			if test.mutate != nil {
+				test.mutate(&input)
+			}
+			err := input.Validate()
+			if test.wantErr && err == nil {
+				t.Fatal("invalid signal profile was accepted")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("valid signal profile was rejected: %v", err)
+			}
+		})
 	}
 }
 
@@ -107,7 +260,7 @@ func TestDispatchRoutesInventoryProfileOperations(t *testing.T) {
 		LocalCLIActor(),
 		UpdateSignalProfile{
 			SignalRef: signalRef,
-			Input:     SignalProfileInput{DisplayName: "乾燥炉入口温度"},
+			Input:     validSignalProfileInput(),
 		},
 	)
 	if err != nil || signalResult.SignalProfile == nil {
@@ -116,6 +269,17 @@ func TestDispatchRoutesInventoryProfileOperations(t *testing.T) {
 	if repository.deviceProfileCalls != 1 || repository.signalProfileCalls != 1 {
 		t.Fatalf("profile calls = device %d, signal %d",
 			repository.deviceProfileCalls, repository.signalProfileCalls)
+	}
+}
+
+func validSignalProfileInput() SignalProfileInput {
+	return SignalProfileInput{
+		DisplayName:       "乾燥炉入口温度",
+		DisplaySensorType: "temperature",
+		DisplayValueKind:  "numeric",
+		DisplayUnitMode:   "unit",
+		DisplayUnit:       "°C",
+		DecimalPlaces:     1,
 	}
 }
 
@@ -215,8 +379,33 @@ type fakeRepository struct {
 	signalProfileCalls int
 	devices            []DeviceSummary
 	signals            []SignalSummary
+	setupDevices       []SetupDeviceSource
 	deviceListCalls    int
 	signalListCalls    int
+	edges              []Edge
+	edge               Edge
+	activateEdgeCalls  int
+}
+
+func (repository *fakeRepository) ListEdges(context.Context) ([]Edge, error) {
+	return repository.edges, nil
+}
+
+func (repository *fakeRepository) RequestEdgeActivation(
+	context.Context,
+	Actor,
+	string,
+	RevisionPrecondition,
+) (Edge, error) {
+	repository.activateEdgeCalls++
+	return repository.edge, nil
+}
+
+func (repository *fakeRepository) ListSetupDevices(
+	context.Context,
+	int,
+) ([]SetupDeviceSource, error) {
+	return repository.setupDevices, nil
 }
 
 func (repository *fakeRepository) ListInventoryDevices(

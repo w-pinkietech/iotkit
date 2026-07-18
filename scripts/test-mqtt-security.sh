@@ -227,6 +227,80 @@ assert_cross_namespace_subscription_isolated() {
   fi
 }
 
+assert_activation_subscription_isolated() {
+  local marker="edge-b-activation-probe-$$"
+  local unauthorized_pid authorized_pid unauthorized_status authorized_status
+
+  mqtt_client edge-a mosquitto_sub -h localhost -p "$tls_port" -W 3 -C 1 \
+    -i acl-edge-a-activation-sub \
+    -t iotkit/v1/edge-nodes/edge-b/activation/request \
+    >"$scratch/edge-a-reads-edge-b-activation.stdout" \
+    2>"$scratch/edge-a-reads-edge-b-activation.stderr" &
+  unauthorized_pid=$!
+  mqtt_client edge-b mosquitto_sub -h localhost -p "$tls_port" -W 3 -C 1 \
+    -i acl-edge-b-activation-sub \
+    -t iotkit/v1/edge-nodes/edge-b/activation/request \
+    >"$scratch/edge-b-reads-own-activation.stdout" \
+    2>"$scratch/edge-b-reads-own-activation.stderr" &
+  authorized_pid=$!
+
+  subscriptions_ready=false
+  for _ in $(seq 1 30); do
+    broker_log=$(docker logs "$broker" 2>&1)
+    if grep -Fq 'Received SUBSCRIBE from acl-edge-a-activation-sub' <<<"$broker_log" \
+      && grep -Fq 'Received SUBSCRIBE from acl-edge-b-activation-sub' <<<"$broker_log"; then
+      subscriptions_ready=true
+      break
+    fi
+    sleep 0.1
+  done
+  [[ "$subscriptions_ready" == true ]] || {
+    echo "activation ACL probe subscribers did not become ready" >&2
+    exit 1
+  }
+
+  expect_success site-publishes-edge-b-activation mqtt_client site mosquitto_pub \
+    -h localhost -p "$tls_port" -q 1 \
+    -t iotkit/v1/edge-nodes/edge-b/activation/request -m "$marker"
+
+  set +e
+  wait "$authorized_pid"
+  authorized_status=$?
+  wait "$unauthorized_pid"
+  unauthorized_status=$?
+  set -e
+  if ((authorized_status != 0)) \
+    || ! grep -Fxq "$marker" "$scratch/edge-b-reads-own-activation.stdout"; then
+    echo "authorized Edge B did not receive its activation request" >&2
+    exit 1
+  fi
+  if ((unauthorized_status != 27)) \
+    || ! grep -Fq 'Timed out' "$scratch/edge-a-reads-edge-b-activation.stderr" \
+    || [[ -s "$scratch/edge-a-reads-edge-b-activation.stdout" ]]; then
+    echo "Edge A cross-namespace activation subscription was not isolated" >&2
+    exit 1
+  fi
+}
+
+assert_activation_request_is_nonretained() {
+  local marker="nonretained-activation-probe-$$" status
+  expect_success site-publishes-nonretained-activation mqtt_client site mosquitto_pub \
+    -h localhost -p "$tls_port" -q 1 \
+    -t iotkit/v1/edge-nodes/edge-a/activation/request -m "$marker"
+  set +e
+  mqtt_client edge-a mosquitto_sub -h localhost -p "$tls_port" -W 2 -C 1 \
+    -i activation-late-subscriber \
+    -t iotkit/v1/edge-nodes/edge-a/activation/request \
+    >"$scratch/activation-late-subscriber.stdout" \
+    2>"$scratch/activation-late-subscriber.stderr"
+  status=$?
+  set -e
+  if ((status != 27)) || [[ -s "$scratch/activation-late-subscriber.stdout" ]]; then
+    echo "activation request was unexpectedly retained" >&2
+    exit 1
+  fi
+}
+
 mkdir -p "$scratch/process"
 cat >"$scratch/client-process-probe.sh" <<'EOF'
 #!/bin/sh
@@ -310,17 +384,23 @@ cat >"$scratch/acl" <<'EOF'
 user edge-a
 topic write iotkit/v1/edge-nodes/edge-a/records
 topic write iotkit/v1/edge-nodes/edge-a/descriptors
+topic write iotkit/v1/edge-nodes/edge-a/activation/result
 topic read iotkit/v1/edge-nodes/edge-a/accepted-through
+topic read iotkit/v1/edge-nodes/edge-a/activation/request
 
 user edge-b
 topic write iotkit/v1/edge-nodes/edge-b/records
 topic write iotkit/v1/edge-nodes/edge-b/descriptors
+topic write iotkit/v1/edge-nodes/edge-b/activation/result
 topic read iotkit/v1/edge-nodes/edge-b/accepted-through
+topic read iotkit/v1/edge-nodes/edge-b/activation/request
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
+topic read iotkit/v1/edge-nodes/+/activation/result
 topic write iotkit/v1/edge-nodes/+/accepted-through
+topic write iotkit/v1/edge-nodes/+/activation/request
 EOF
 
 cat >"$scratch/mosquitto.conf" <<'EOF'
@@ -376,6 +456,12 @@ expect_success edge-a-own-records mqtt_client edge-a mosquitto_pub \
 expect_success site-own-ack mqtt_client site mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/accepted-through -m '{}'
+expect_success edge-a-own-activation-result mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/activation/result -m '{}'
+expect_success site-own-activation-request mqtt_client site mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/activation/request -m '{}'
 expect_status_and_error anonymous 135 'Connection error: Not authorized' \
   mqtt_client anonymous mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 -t test/anonymous -m '{}'
@@ -388,10 +474,24 @@ expect_publish_denied edge-a-writes-edge-b \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-b/records -m '{}'
 assert_cross_namespace_subscription_isolated
+assert_activation_subscription_isolated
+assert_activation_request_is_nonretained
 expect_publish_denied site-writes-edge-records \
   iotkit/v1/edge-nodes/edge-a/records mqtt_client site mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
+expect_publish_denied edge-a-writes-edge-b-activation-result \
+  iotkit/v1/edge-nodes/edge-b/activation/result mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-b/activation/result -m '{}'
+expect_publish_denied edge-a-writes-activation-request \
+  iotkit/v1/edge-nodes/edge-a/activation/request mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/activation/request -m '{}'
+expect_publish_denied site-writes-activation-result \
+  iotkit/v1/edge-nodes/edge-a/activation/result mqtt_client site mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/activation/result -m '{}'
 expect_tls_rejected wrong-ca 'unable to get local issuer certificate|self-signed certificate' \
   tls_probe -connect "localhost:$tls_port" -servername localhost \
   -CAfile "$scratch/unrelated-ca.pem" -verify_return_error -verify_hostname localhost

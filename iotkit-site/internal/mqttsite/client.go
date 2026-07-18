@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	recordsTopicFilter        = "iotkit/v1/edge-nodes/+/records"
-	descriptorsTopicFilter    = "iotkit/v1/edge-nodes/+/descriptors"
-	convergenceInterval       = 250 * time.Millisecond
-	convergenceBatchSize      = 256
-	publishAcknowledgementTTL = 15 * time.Second
-	statusPublishInterval     = 30 * time.Second
+	recordsTopicFilter          = "iotkit/v1/edge-nodes/+/records"
+	descriptorsTopicFilter      = "iotkit/v1/edge-nodes/+/descriptors"
+	activationResultTopicFilter = "iotkit/v1/edge-nodes/+/activation/result"
+	convergenceInterval         = 250 * time.Millisecond
+	convergenceBatchSize        = 256
+	publishAcknowledgementTTL   = 15 * time.Second
+	statusPublishInterval       = 30 * time.Second
 )
 
 type ClientConfig struct {
@@ -50,11 +51,17 @@ type genericExportQueue interface {
 	EnqueueOutputExports(context.Context, int) (int, error)
 }
 
+type activationCommandQueue interface {
+	ListPendingActivationCommands(context.Context, int) ([]store.ActivationCommand, error)
+	MarkActivationCommandAttempt(context.Context, string, int64) error
+}
+
 type yokakitStatusQueue interface {
 	ListYokaKitSourceIDs(context.Context) ([]string, error)
 }
 
 type exportPublish func(topic string, qos byte, payload []byte) error
+type activationPublish func(topic string, qos byte, retained bool, payload []byte) error
 
 type publishToken interface {
 	Done() <-chan struct{}
@@ -105,8 +112,9 @@ func runSite(
 	})
 	options.SetOnConnectHandler(func(client mqtt.Client) {
 		token := client.SubscribeMultiple(map[string]byte{
-			recordsTopicFilter:     1,
-			descriptorsTopicFilter: 1,
+			recordsTopicFilter:          1,
+			descriptorsTopicFilter:      1,
+			activationResultTopicFilter: 1,
 		}, handler)
 		var err error
 		if !token.WaitTimeout(15 * time.Second) {
@@ -115,7 +123,11 @@ func runSite(
 			err = fmt.Errorf("MQTT subscribe: %w", tokenErr)
 		}
 		if err == nil {
-			logger.Info("IoTKit Site subscribed", "topics", []string{recordsTopicFilter, descriptorsTopicFilter})
+			logger.Info("IoTKit Site subscribed", "topics", []string{
+				recordsTopicFilter,
+				descriptorsTopicFilter,
+				activationResultTopicFilter,
+			})
 		}
 		subscriptionResults <- err
 	})
@@ -157,6 +169,19 @@ func runSite(
 				return fmt.Errorf("MQTT resubscribe: %w", err)
 			}
 		case <-ticker.C:
+			if activationQueue, ok := queue.(activationCommandQueue); ok {
+				if err := publishPendingActivationCommands(
+					ctx,
+					activationQueue,
+					func(topic string, qos byte, retained bool, payload []byte) error {
+						return publishWithTimeout(ctx, func() publishToken {
+							return client.Publish(topic, qos, retained, payload)
+						})
+					},
+				); err != nil && !errors.Is(err, context.Canceled) {
+					logger.Error("MQTT Edge activation command failed", "error", err)
+				}
+			}
 			convergeSite(ctx, queue, logger)
 			if publishOutputs {
 				if err := publishPending(ctx, queue, func(topic string, qos byte, payload []byte) error {
@@ -401,6 +426,47 @@ func publishPending(ctx context.Context, queue pendingExportQueue, publish expor
 			failedRoutes[item.RouteID] = struct{}{}
 			publishErrors = append(publishErrors,
 				fmt.Errorf("mark MQTT export %q published: %w", item.ExportID, err))
+		}
+	}
+	return errors.Join(publishErrors...)
+}
+
+func publishPendingActivationCommands(
+	ctx context.Context,
+	queue activationCommandQueue,
+	publish activationPublish,
+) error {
+	pending, err := queue.ListPendingActivationCommands(ctx, convergenceBatchSize)
+	if err != nil {
+		return fmt.Errorf("list pending Edge activation commands: %w", err)
+	}
+	var publishErrors []error
+	for _, command := range pending {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := publish(command.Topic, 1, false, command.PayloadJSON); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			publishErrors = append(
+				publishErrors,
+				fmt.Errorf("publish Edge activation command %q: %w", command.ActivationID, err),
+			)
+			continue
+		}
+		if err := queue.MarkActivationCommandAttempt(
+			ctx,
+			command.ActivationID,
+			time.Now().UnixMilli(),
+		); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			publishErrors = append(
+				publishErrors,
+				fmt.Errorf("record Edge activation attempt %q: %w", command.ActivationID, err),
+			)
 		}
 	}
 	return errors.Join(publishErrors...)

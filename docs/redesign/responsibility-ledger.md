@@ -103,12 +103,14 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 
 - **R10/R19の優先順位**: 複数Pi現場(Site-managed)ではR10出口認証とtopic ACLを先に成立させる
   ([D8](decisions/D8-site-topology-multi-edge.md)、[D10](decisions/D10-exit-authentication.md))。
+- Broker enrollmentはMQTT通信許可、Site activationはexact ledger incarnationの将来publication受理許可であり、
+  同一操作にしない。activation前のローカル確認値はoutboxへ採番せず、Site custodyへ移さない。
 - **R22の edge_node_id 発行**: 各Edge Nodeは初回自己構成で `edge_node_id` を1回だけ生成し、
   共有OSイメージには焼き込まない(D8)。
 - **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
   Edge側の `custody_lost` ではなくSite側の `archive_lost` として記録する(custody境界の明確化。D8)。
 
-## D10波及(出口認証 2026-07-16 Broker分離・MVP認証baseline追記)
+## D10波及(出口認証 2026-07-18 Site activation ACL追記)
 
 - **R19出口認証の設計本体**は [decisions/D10-exit-authentication.md](decisions/D10-exit-authentication.md)。
   MVPはoperatorが用意するIP経路上のMQTT TLS、匿名禁止、Edge Nodeごとのstatic Broker credential、
@@ -116,6 +118,8 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
   deploymentであり要件ではなく、別host配置でも同じ認証契約を使う。
 - endpoint、TLS server name、trust、主体固有credential、client ID、principal roleは一つのconnection profileに
   束縛する。profileは対象hostのlocal CLIと所有者限定fileでinstallし、Site Consoleから変更・切替しない。
+- Edge ACLはown records/descriptors/activation result publishとown accepted-through/activation request
+  subscribeに限定し、Siteは逆方向を持つ。activation request/resultはQoS 1 non-retainedで、DB状態から再送する。
 - Broker server certificate lifecycleはBroker host上のdomain非依存運用componentが担う。通常のleaf更新と
   trust anchor/CA移行を分離し、Consoleは非秘密statusだけを表示する。
 - mTLSなしのMVPは、明示trust mode、credential失効journey、negative auth/TLS test、Broker resource limit、

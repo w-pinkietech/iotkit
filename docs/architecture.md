@@ -68,8 +68,8 @@ Inside Edge, the adapter and collector normalize and durably enqueue observation
 ```
   ┌─────────────┐    Envelope       ┌───────────────┐
   │  adapters   │ ────────────────▶ │   collector   │  R8: dedup, series resolution,
-  │ (BravePI,   │  (in-process      │   (ingest)    │      quarantine decision, and —
-  │  rpi-local) │   ingest client)  └──────┬────────┘      in the SAME tx — outbox enqueue
+  │ (BravePI,   │  (in-process      │   (ingest)    │      quarantine and activation admission;
+  │  rpi-local) │   ingest client)  └──────┬────────┘      active records enqueue in the SAME tx
   └─────────────┘                          │
                                            ▼  one Immediate transaction
                               ┌────────────────────────────┐
@@ -96,6 +96,13 @@ Inside Edge, the adapter and collector normalize and durably enqueue observation
 Edgeは同じBroker上のEdge Node固有`descriptors` topicへ、ledger/registryから組み立てた1 MiB以下の
 complete snapshotをQoS 1 retainedで送る。Siteはrevision/epochを検証して専用tableへ複製する。この経路は
 publication outbox、raw transaction、accepted-through cursorと結合せず、失敗してもcustody処理を継続する。
+
+Broker enrollment済みでもSite activation前のEdgeは、正規化済み観測をEdgeローカルへ保持するだけで
+publication logへ採番せず、recordsを送信しない。SiteはdescriptorからEdgeを発見し、admin typed operationで
+exact ledger epochをactivationする。Edgeはcollectorと同じSQLite write serializationで境界を一度だけ固定し、
+それ以後のingestだけをoutboxへ入れる。Siteはmatching activation resultをcommitしてactiveになった後だけ、
+activation検査、raw保存、cursor更新を同じtransactionで行う。登録前prefixの物理削除は固定境界を使う
+Edge-local cleanupであり、accepted-throughの意味やpost-activation purge権威を変更しない。
 
 `mqtt_publish_task` is the active production exit binding. The older `publish_task` HTTPS code is
 retained only as transitional code and is not spawned. A broker PUBACK confirms transport receipt
@@ -250,8 +257,8 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-core-engine` | `core/engine` | In-memory device-state projection consuming the frozen `AdapterEvent` vocabulary from `core/supervision`. Depends only on `types` and `supervision`; adapters must never depend on it. |
 | `iotkit-core-ledger` | `core/ledger` | Device ledger: `system_id` issuance, series identity, sightings, epochs, audit events. |
 | `iotkit-core-timeseries` | `core/timeseries` | `readings` + staged readings persistence, event-time derivation, queries. |
-| `iotkit-core-publish` | `core/publish` | Exit-contract data layer: `publication_log` (outbox), `target_registry`, cursors. |
-| `iotkit-core-collector` | `core/collector` | Ingest actor: dedup, series resolution, quarantine decision, same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
+| `iotkit-core-publish` | `core/publish` | Exit-contract data layer: Site activation admission, `publication_log` (outbox), `target_registry`, cursors. |
+| `iotkit-core-collector` | `core/collector` | Ingest actor: dedup, series resolution, quarantine and activation admission, active-record same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
 | `iotkit-core-registry` | `core/registry` | D6 measurement registry (standard catalog + site overrides); implements `RegistryPolicy`. |
 | `iotkit-core-ops` | `core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
 | `iotkit-ingest-client` | `iotkit-ingest-client` | The ingest-contract client adapters use (D4). In-process binding for official adapters; network device builders use the separate HTTP binding. MQTT remains future. |

@@ -175,10 +175,6 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
         })
         .await
         .expect("ledger epoch");
-    db.with_conn(|conn| Ok(epoch_start::maybe_enqueue_epoch_start(conn)))
-        .await
-        .expect("epoch_start annotation")
-        .expect("epoch_start annotation");
     let _retention_task = retention::spawn_retention_task(
         db.clone(),
         db_path.clone(),
@@ -219,6 +215,10 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
         tracing::info!("MQTT exit publisher disabled");
         None
     };
+    db.with_conn(|conn| Ok(epoch_start::maybe_enqueue_epoch_start(conn)))
+        .await
+        .expect("epoch_start annotation")
+        .expect("epoch_start annotation");
 
     let mut api_shutdown = None;
     let mut api_join = None;

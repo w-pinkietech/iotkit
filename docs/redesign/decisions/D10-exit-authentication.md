@@ -1,6 +1,6 @@
 # D10: 出口認証と経路
 
-Status: 確定、2026-07-16 Broker分離・接続profile・MVP認証baselineを追記
+Status: 確定、2026-07-18 Site activation ACL追記
 
 ## 決定
 
@@ -13,9 +13,9 @@ MVPの認証は次に限定する。
 - brokerは匿名接続を禁止する。
 - Edge Nodeごとにstatic credentialを1つ発行する。共有credentialを使わない。SiteにもEdgeとは別の
   Site固有credentialを発行し、全主体でcredentialを共有しない。
-- usernameは`edge_node_id`へ束縛し、ACLは当該Edge Nodeのrecords/descriptors publishと
-  accepted-through subscribeだけを許可する。Siteは全Edge Nodeのrecords/descriptors readと
-  accepted-through writeだけを持つ。
+- usernameは`edge_node_id`へ束縛し、ACLは当該Edge Nodeのrecords/descriptors/activation result publishと
+  accepted-through/activation request subscribeだけを許可する。Siteは全Edge Nodeの
+  records/descriptors/activation result readとaccepted-through/activation request writeだけを持つ。
 - brokerはTLSを使い、operatorが明示したinterface/addressだけへbindする。意図しないnetwork interfaceへ
   公開しない。
 - credentialはargv、環境変数、ログ、Debug、監査detail、query outputへ出さない。
@@ -49,6 +49,10 @@ Edgeは初回自己構成で`edge_node_id`を生成した後、Broker operator�
 handoff bundleを生成する。初版はSite ConsoleからEdgeへ遠隔配布せず、各Edgeのlocal CLIでhandoffを
 適用する。SiteはSite固有profileを別に受け取り、Brokerと同居していてもnetwork clientとして認証する。
 Siteから外部Brokerへpublishする場合も、外部Broker用の別profileをSite hostへinstallする。
+
+このBroker enrollmentは通信許可であり、Site raw historyへの参加許可ではない。Site activationは、既に
+認証されたEdgeのexact ledger incarnationへ将来のrecords受理を許可する独立したapplication操作である。
+Consoleはactivation IDとSite DB上のgrantを作るが、Broker credentialやACLを変更しない。
 
 接続testはDNS、TCP、TLS chain/server name、MQTT authentication、CONNACKまでを確認する。EdgeからSiteへの
 最終commissioningは、実recordがSiteへ耐久保存され`accepted-through`がEdgeへ返るまで確認する。Siteから
@@ -86,6 +90,8 @@ IoTKitへ保存しない。networkまたはVPN上のnode identityだけをEdge N
 ## Failure behavior
 
 - 認証失敗やACL違反ではpublicationをSite custodyとして扱わない。
+- 認証に成功しても、Site activationが未完了またはledger epochが不一致ならrecordsを保存せずackしない。
+- activation request/resultのPUBACK、retained descriptor、通常再接続はactivation完了やデータ削除を意味しない。
 - credential失効後はbroker接続を拒否または切断する。
 - brokerまたはnetwork経路の停止中もIoTKit Edgeはoutboxを保持する。
 - credential喪失時はoperatorが新しいcredentialを発行し、Edge設定を更新する。データcursorはcredentialと独立して維持する。
@@ -125,6 +131,7 @@ credential失効、firewall、disk監視、certificate自動更新の完了証�
 - clone detectionとgeneration anchor
 - Site backup/restore時のcredential reconciliation
 - fleet enrollment、canary rotation、decommission automation
+- deactivation/reactivation、Site transfer、Edge Node ID reuse
 
 mTLSは不採用として削除せず、次のいずれかが成立した時点で、hardware-bound keyを含む同等以上のdevice
 authenticationと比較して必須化を再判断する。

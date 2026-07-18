@@ -19,12 +19,13 @@
     <nav class="side-nav" aria-label="メインメニュー">
       <p class="nav-heading">現場を見る</p>
       <a href="/status" {{if eq .Page "status"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌂</span>概要</a>
-      <a href="/monitor" {{if eq .Page "monitor"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">●</span>現在の信号</a>
+      <a href="/monitor" {{if eq .Page "monitor"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">●</span>センサー</a>
       <a href="/logs" {{if eq .Page "logs"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">↕</span>受信履歴</a>
 
       <p class="nav-heading">設定</p>
-      <a href="/devices" {{if eq .Page "devices"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">□</span>設置機器</a>
-      <a href="/signals" {{if eq .Page "signals"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌁</span>信号の設定</a>
+      <a href="/edges" {{if eq .Page "edges"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">◇</span>Edge管理</a>
+      <a href="/setup" {{if or (eq .Page "setup") (eq .Page "devices")}}class="active" aria-current="page"{{end}}><span class="nav-symbol">＋</span>デバイス管理</a>
+      <a href="/signals" {{if eq .Page "signals"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌁</span>センサー設定</a>
       <a href="/output" {{if eq .Page "output"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">→</span>外部出力</a>
 
       <p class="nav-heading">管理</p>
@@ -62,25 +63,25 @@
       {{if .PageError}}<div class="feedback error-feedback" role="alert"><span aria-hidden="true">!</span>{{.PageError}}</div>{{end}}
 
       {{if eq .Page "status"}}
-      <section class="health-banner {{if gt .AttentionCount 0}}attention{{else}}healthy{{end}}" aria-label="現場の状態">
-        <span class="health-icon" aria-hidden="true">{{if gt .AttentionCount 0}}!{{else}}✓{{end}}</span>
+      <section class="health-banner {{if or (gt .AttentionCount 0) (gt .SetupPendingCount 0)}}attention{{else}}healthy{{end}}" aria-label="現場の状態">
+        <span class="health-icon" aria-hidden="true">{{if or (gt .AttentionCount 0) (gt .SetupPendingCount 0)}}!{{else}}✓{{end}}</span>
         <div>
-          <strong>{{if gt .AttentionCount 0}}確認が必要な項目があります{{else}}センサーデータを受信しています{{end}}</strong>
-          <p>{{if gt .AttentionCount 0}}停止した信号や未設定の信号を下の一覧で確認してください。{{else}}Siteとセンサーの間で大きな問題は見つかっていません。{{end}}</p>
+          <strong>{{if gt .SetupPendingCount 0}}新しいデバイスが見つかりました{{else if gt .AttentionCount 0}}確認が必要な項目があります{{else}}センサーデータを受信しています{{end}}</strong>
+          <p>{{if gt .SetupPendingCount 0}}値は受信できています。<a href="/setup">登録内容を確認</a>して、現場で使う名前・種類・単位を設定してください。{{else if gt .AttentionCount 0}}停止または未受信のセンサーを下の一覧で確認してください。{{else}}Siteとセンサーの間で大きな問題は見つかっていません。{{end}}</p>
         </div>
       </section>
 
       <section class="metric-grid" aria-label="集計">
-        <article class="metric-card"><span class="metric-label">受信中</span><strong>{{.ReceivingCount}}</strong><small>件の信号</small></article>
+        <article class="metric-card"><span class="metric-label">受信中</span><strong>{{.ReceivingCount}}</strong><small>件のセンサー</small></article>
         <article class="metric-card"><span class="metric-label">要確認</span><strong>{{.AttentionCount}}</strong><small>停止・未受信</small></article>
-        <article class="metric-card"><span class="metric-label">意味付け未設定</span><strong>{{.UnconfiguredCount}}</strong><small>件の信号</small></article>
-        <article class="metric-card"><span class="metric-label">接続中のEdge</span><strong>{{.EdgeCount}}</strong><small>台</small></article>
+        <article class="metric-card"><span class="metric-label">登録待ち</span><strong>{{.SetupPendingCount}}</strong><small>台の新しいデバイス</small></article>
+        <article class="metric-card"><span class="metric-label">登録済みのEdge</span><strong>{{.EdgeCount}}</strong><small>台</small></article>
       </section>
 
       <section class="content-section">
         <div class="section-heading">
-          <div><p class="section-kicker">LIVE</p><h2>現在の信号</h2><p>現場から最後に届いた値です。</p></div>
-          <a href="/monitor">すべての信号を見る</a>
+          <div><p class="section-kicker">LIVE</p><h2>センサーの現在値</h2><p>現場から最後に届いた値です。</p></div>
+          <a href="/monitor">すべてのセンサーを見る</a>
         </div>
         {{template "signal-table" .}}
       </section>
@@ -88,20 +89,158 @@
       <section class="content-section">
         <div class="section-heading"><div><p class="section-kicker">FLOW</p><h2>データの流れ</h2><p>センサーから外部アプリまでの現在の経路です。</p></div></div>
         <div class="flow-strip">
-          <div class="flow-step complete"><span>1</span><strong>Edge</strong><small>{{.EdgeCount}}台から受信</small></div>
+          <div class="flow-step complete"><span>1</span><strong>Edge</strong><small>{{.EdgeCount}}台を登録済み</small></div>
           <i aria-hidden="true">→</i>
-          <div class="flow-step complete"><span>2</span><strong>IoTKit Site</strong><small>保存・意味付け</small></div>
+          <div class="flow-step complete"><span>2</span><strong>IoTKit Site</strong><small>保存・値の変換</small></div>
           <i aria-hidden="true">→</i>
           <div class="flow-step {{if .Outputs}}complete{{else}}pending{{end}}"><span>3</span><strong>外部アプリ</strong><small>{{if .Outputs}}出力設定あり{{else}}出力未設定{{end}}</small></div>
         </div>
       </section>
       {{end}}
 
+      {{if eq .Page "edges"}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>Edgeの状態を確認できます。登録には設定管理者の権限が必要です。</span></div>{{end}}
+      <section class="device-grid">
+        {{range .EdgeRows}}
+        <article class="device-card">
+          <header><span class="device-illustration" aria-hidden="true">◇</span><div><p class="section-kicker">EDGE</p><h2>{{.Name}}</h2><p>{{.LocationLabel}}</p></div><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></header>
+          <dl class="detail-list">
+            <div><dt>配下のデバイス</dt><dd>{{.DeviceCount}}台のデバイス</dd></div>
+            <div><dt>配下のセンサー</dt><dd>{{.SensorCount}}件のセンサー</dd></div>
+            <div><dt>最終通信</dt><dd title="{{.LastCommunicationAt}}">{{.LastCommunication}}</dd></div>
+            {{if .LastResultAt}}<div><dt>登録結果の最終受信</dt><dd>{{.LastResult}}</dd></div>{{end}}
+          </dl>
+          <details class="setting-panel">
+            <summary>診断情報</summary>
+            <dl class="detail-list">
+              <div><dt>Edge識別子</dt><dd class="mono">{{.EdgeNodeID}}</dd></div>
+              <div><dt>データ世代</dt><dd class="mono">{{.LedgerEpoch}}</dd></div>
+            </dl>
+          </details>
+          {{if and $.IsAdmin .CanActivate}}
+          <form method="post" action="/console/edges/{{.EdgeRef}}/activation" class="setting-panel">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="revision" value="{{.Revision}}">
+            <p class="metadata-warning">登録前にEdgeが保持していた値はSiteへ送られません。登録完了後に受信した値から保存を始めます。</p>
+            <button type="submit">Edgeを登録</button>
+          </form>
+          {{end}}
+        </article>
+        {{else}}
+        {{template "empty-state" "Edgeはまだ見つかっていません。Edgeから接続情報が届くと、ここへ表示されます。"}}
+        {{end}}
+      </section>
+      {{end}}
+
+      {{if eq .Page "setup"}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>受信値と登録状況を確認できます。登録内容の変更には設定管理者の権限が必要です。</span></div>{{end}}
+      {{if .SetupRows}}
+      <section class="setup-intro">
+        <div><p class="section-kicker">DEVICE SETUP</p><h2>実際のセンサーを動かして確認します</h2><p>一つのデバイスに複数のセンサーが接続されている場合も、デバイスごとにまとめています。Adapterから届いた情報を確認し、現場で使う名前・種類・単位を登録します。</p></div>
+        <strong>{{.SetupPendingCount}}<small>台のデバイスが登録待ち</small></strong>
+      </section>
+      <div class="setup-device-list">
+        {{range .SetupRows}}
+        <article class="setup-device-card">
+          <header class="setup-device-header">
+            <span class="device-illustration" aria-hidden="true">▣</span>
+            <div><p class="section-kicker">DEVICE</p><h2>{{.Name}}</h2><p>{{.LocationLabel}} · {{.Device.Edge}}</p></div>
+            <span class="status-pill {{.StateClass}}">{{.StateLabel}}</span>
+          </header>
+          <dl class="setup-device-facts">
+            <div><dt>最終受信</dt><dd title="{{.LastReceivedTitle}}">{{.LastReceived}}</dd></div>
+            <div><dt>接続情報</dt><dd>{{if eq .Device.DescriptorPresence "current"}}Adapterから受信済み{{else}}確認が必要{{end}}</dd></div>
+            {{if .Identifier}}<div><dt>現物との照合番号</dt><dd class="mono">{{.Identifier}}</dd></div>{{end}}
+          </dl>
+
+          {{if $.IsAdmin}}
+          <form method="post" action="/console/devices/{{.Device.DeviceRef}}/profile" class="setup-device-form">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="return_to" value="/setup">
+            <input type="hidden" name="revision" value="{{if .Device.ProfileRevision}}{{.Device.ProfileRevision}}{{end}}">
+            <div class="form-row">
+              <label><span>デバイス名</span><input name="display_name" value="{{.Device.DisplayName}}" placeholder="例：乾燥炉入口 BravePI" required></label>
+              <label><span>設置場所</span><input name="location" value="{{.Device.Location}}" placeholder="例：第1工場 乾燥工程" required></label>
+            </div>
+            <button type="submit" class="secondary">デバイス情報を保存</button>
+          </form>
+          {{end}}
+
+          <div class="setup-signal-list">
+            {{range .Signals}}
+            <section class="setup-signal-card">
+              <header>
+                <div><p class="section-kicker">SENSOR</p><h3>{{if .FormProfile.DisplayName}}{{.FormProfile.DisplayName}}{{else}}名前未設定のセンサー{{end}}</h3></div>
+                <div class="setup-live-value"><span>現在の受信値</span><strong>{{.RawValue}}{{if .RawUnit}} <small>{{.RawUnit}}</small>{{end}}</strong><small title="{{.LastReceivedTitle}}">{{.LastReceived}}</small></div>
+              </header>
+              <div class="provenance-panel">
+                <h4>Adapterから届いた情報</h4>
+                <dl>
+                  <div><dt>データ種類</dt><dd class="mono">{{.MeasurementKey}}</dd></div>
+                  <div><dt>値の形式</dt><dd>{{.ValueTypeLabel}}</dd></div>
+                  <div><dt>単位</dt><dd>{{if .RawUnit}}{{.RawUnit}}{{else}}通知なし{{end}}</dd></div>
+                  <div><dt>チャンネル</dt><dd>{{.ChannelLabel}}</dd></div>
+                </dl>
+              </div>
+              {{if .MissingMessage}}<p class="metadata-warning">{{.MissingMessage}}</p>{{end}}
+              {{if $.IsAdmin}}
+              <form method="post" action="/console/signals/{{.Signal.SignalRef}}/profile" class="setup-signal-form" data-signal-profile>
+                <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+                <input type="hidden" name="return_to" value="/setup">
+                <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
+                <div class="setup-form-heading"><div><h4>このセンサーの表示</h4><p>候補を確認し、現場の人に分かる内容で保存してください。</p></div>{{if .ProfileComplete}}<span class="status-pill configured">設定済み</span>{{else}}<span class="status-pill needs-setup">確認して保存</span>{{end}}</div>
+                <label><span>センサー名</span><input name="display_name" value="{{.FormProfile.DisplayName}}" placeholder="例：乾燥炉入口 温度" required></label>
+                <div class="form-row">
+                  <label><span>センサーの種類</span><select name="display_sensor_type" data-sensor-type required>
+                    <option value="">選択してください</option>
+                    <option value="temperature" {{if eq .FormProfile.DisplaySensorType "temperature"}}selected{{end}}>温度</option>
+                    <option value="contact" {{if eq .FormProfile.DisplaySensorType "contact"}}selected{{end}}>接点入力</option>
+                    <option value="illuminance" {{if eq .FormProfile.DisplaySensorType "illuminance"}}selected{{end}}>光</option>
+                    <option value="distance" {{if eq .FormProfile.DisplaySensorType "distance"}}selected{{end}}>距離</option>
+                    <option value="voltage" {{if eq .FormProfile.DisplaySensorType "voltage"}}selected{{end}}>電圧</option>
+                    <option value="current" {{if eq .FormProfile.DisplaySensorType "current"}}selected{{end}}>電流</option>
+                    <option value="pressure" {{if eq .FormProfile.DisplaySensorType "pressure"}}selected{{end}}>圧力</option>
+                    <option value="humidity" {{if eq .FormProfile.DisplaySensorType "humidity"}}selected{{end}}>湿度</option>
+                    <option value="acceleration" {{if eq .FormProfile.DisplaySensorType "acceleration"}}selected{{end}}>加速度</option>
+                    <option value="custom" {{if eq .FormProfile.DisplaySensorType "custom"}}selected{{end}}>その他</option>
+                  </select></label>
+                  <label data-custom-sensor-label><span>「その他」の表示名</span><input name="display_sensor_type_label" value="{{.FormProfile.DisplaySensorTypeLabel}}" placeholder="例：流量"></label>
+                </div>
+                <div class="form-row">
+                  <label><span>値の見せ方</span><select name="display_value_kind" data-value-kind required>
+                    <option value="numeric" {{if eq .FormProfile.DisplayValueKind "numeric"}}selected{{end}}>数値</option>
+                    <option value="boolean" {{if eq .FormProfile.DisplayValueKind "boolean"}}selected{{end}}>ON / OFF</option>
+                  </select></label>
+                  <label><span>単位の扱い</span><select name="display_unit_mode" data-unit-mode required>
+                    <option value="">選択してください</option>
+                    <option value="unit" {{if eq .FormProfile.DisplayUnitMode "unit"}}selected{{end}}>単位を表示する</option>
+                    <option value="dimensionless" {{if eq .FormProfile.DisplayUnitMode "dimensionless"}}selected{{end}}>単位なし</option>
+                  </select></label>
+                </div>
+                <div class="form-row">
+                  <label data-display-unit><span>表示単位</span><input name="display_unit" value="{{.FormProfile.DisplayUnit}}" maxlength="32" placeholder="例：°C"></label>
+                  <label data-decimal-places><span>小数点以下の桁数</span><input name="decimal_places" type="number" min="0" max="6" value="{{.FormProfile.DecimalPlaces}}" required></label>
+                </div>
+                <button type="submit">このセンサーを保存</button>
+              </form>
+              {{end}}
+            </section>
+            {{end}}
+          </div>
+          {{if eq .State "ready"}}<footer class="setup-next-step"><span>✓ このデバイスのセンサー設定は完了しています。</span><a href="/signals">補正・判定を設定する</a></footer>{{end}}
+        </article>
+        {{end}}
+      </div>
+      {{else}}
+      {{template "empty-state" "デバイスはまだ見つかっていません。Edgeから初めてデータが届くと、ここへ自動的に表示されます。"}}
+      {{end}}
+      {{end}}
+
       {{if eq .Page "monitor"}}
-      <section class="toolbar" aria-label="信号の絞り込み">
-        <label class="search-field"><span>信号を探す</span><input type="search" data-table-search="signal-table" placeholder="信号名、Edge、センサー種別"></label>
+      <section class="toolbar" aria-label="センサーの絞り込み">
+        <label class="search-field"><span>センサーを探す</span><input type="search" data-table-search="signal-table" placeholder="センサー名、Edge、種類"></label>
         <label><span>受信状態</span><select data-table-status="signal-table"><option value="">すべて</option><option value="receiving">受信中</option><option value="stale">停止・古い</option><option value="never">未受信</option></select></label>
-        <div class="toolbar-summary"><strong data-table-count="signal-table">{{len .SignalRows}}</strong><span>件の信号</span></div>
+        <div class="toolbar-summary"><strong data-table-count="signal-table">{{len .SignalRows}}</strong><span>件のセンサー</span></div>
       </section>
       <section class="content-section flush">
         {{template "signal-table" .}}
@@ -109,7 +248,7 @@
       {{end}}
 
       {{if eq .Page "devices"}}
-      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>名前や設置場所の変更には設定管理者の権限が必要です。</span></div>{{end}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>デバイス名や設置場所の変更には設定管理者の権限が必要です。</span></div>{{end}}
       <section class="device-grid">
         {{range .DeviceRows}}
         <article class="device-card">
@@ -120,11 +259,11 @@
           </dl>
           {{if $.IsAdmin}}
           <details class="setting-panel">
-            <summary>名前と設置場所を変更</summary>
+            <summary>デバイス名と設置場所を変更</summary>
             <form method="post" action="/console/devices/{{.DeviceRef}}/profile">
               <input type="hidden" name="_csrf" value="{{$.CSRF}}">
               <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
-              <label><span>表示名</span><input name="display_name" value="{{.DisplayName}}" placeholder="例：乾燥炉 温度センサー" required></label>
+              <label><span>デバイス名</span><input name="display_name" value="{{.DisplayName}}" placeholder="例：乾燥炉入口 BravePI" required></label>
               <label><span>設置場所</span><input name="location" value="{{.Location}}" placeholder="例：第1工場 乾燥工程" required></label>
               <button type="submit">変更を保存</button>
             </form>
@@ -132,39 +271,31 @@
           {{end}}
         </article>
         {{else}}
-        {{template "empty-state" "設置機器はまだ見つかっていません。Edgeから信号が届くと、ここに表示されます。"}}
+        {{template "empty-state" "デバイスはまだ見つかっていません。Edgeからデータが届くと、ここに表示されます。"}}
         {{end}}
       </section>
       {{end}}
 
       {{if eq .Page "signals"}}
-      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>表示名と意味付けの変更には設定管理者の権限が必要です。</span></div>{{end}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>補正・判定・累積方法を変更するには設定管理者の権限が必要です。</span></div>{{end}}
       <section class="section-heading standalone">
-        <div><p class="section-kicker">SETTINGS</p><h2>表示名と意味付け</h2><p>現在値は「現在の信号」で確認し、ここでは各信号の扱い方だけを設定します。</p></div>
+        <div><p class="section-kicker">SENSOR RULES</p><h2>数値・状態・累積値・アラーム</h2><p>センサーから届いた値を、そのまま使うか、状態・累積値・アラームへ変換します。名前や単位は「デバイス管理」で変更できます。</p></div>
       </section>
       <div class="settings-list">
         {{range .SignalRows}}
         <article class="signal-setting-card">
           <header>
             <div><span class="sensor-type">{{.SensorType}}</span><h2>{{.Name}}</h2><p>{{.Edge}} · 現在値 <strong>{{.Value}}{{if .Unit}} <small>{{.Unit}}</small>{{end}}</strong></p></div>
-            <span class="status-pill {{.SettingClass}}">{{.SettingLabel}}</span>
+            <span class="status-pill {{.MeaningClass}}">{{.MeaningLabel}}</span>
           </header>
           {{if $.IsAdmin}}
           <details class="signal-config">
-          <summary>この信号を設定する</summary>
-          <div class="setting-columns">
-            <form method="post" action="/console/signals/{{.SignalRef}}/profile" class="compact-form">
-              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-              <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
-              <h3>画面での名前</h3>
-              <p>現場の人が識別しやすい名前を付けます。</p>
-              <label><span>表示名</span><input name="display_name" value="{{.DisplayName}}" placeholder="例：ライン1 完了信号" required></label>
-              <button type="submit" class="secondary">名前を保存</button>
-            </form>
+          <summary>このセンサーを設定する</summary>
+          <div class="semantic-setting">
             <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" method="post" action="/console/signals/{{.SignalRef}}/semantic">
               <input type="hidden" name="_csrf" value="{{$.CSRF}}">
               <input type="hidden" name="revision" value="{{if .Definition}}{{.Definition.Revision}}{{end}}">
-              <h3>IoTKitでの扱い方</h3>
+              <h3>届いた値をどう扱うか</h3>
               <p>値をそのまま使うか、状態・累積値・アラームへ変換します。</p>
               <label><span>用途</span><select name="kind" data-semantic-kind>
                 <option value="numeric" {{if and .Definition (eq .Definition.Kind "numeric")}}selected{{end}}>数値をそのまま使う</option>
@@ -197,29 +328,29 @@
                   <option value="on_notification" {{if and .Definition (eq .Definition.Trigger "on_notification")}}selected{{end}}>ONを受信するたび</option>
                 </select></label>
               </div>
-              <button type="button" class="preview-button secondary">実信号で確認する</button>
-              <div class="preview-output" role="status">保存前に、新しく届く実信号で動きを確認できます。</div>
-              <button type="submit">意味付けを保存</button>
+              <button type="button" class="preview-button secondary">実際のセンサー値で確認する</button>
+              <div class="preview-output" role="status">保存前に、新しく届くセンサー値で動きを確認できます。</div>
+              <button type="submit">センサー設定を保存</button>
             </form>
           </div>
           </details>
           {{end}}
         </article>
         {{else}}
-        {{template "empty-state" "設定できる信号はまだありません。Edgeから信号が届くと、ここに表示されます。"}}
+        {{template "empty-state" "設定できるセンサーはまだありません。デバイスの登録が完了すると、ここに表示されます。"}}
         {{end}}
       </div>
       {{end}}
 
       {{if eq .Page "logs"}}
       <section class="toolbar" aria-label="受信履歴の絞り込み">
-        <label class="search-field"><span>履歴を探す</span><input type="search" data-table-search="log-table" placeholder="信号名、Edge"></label>
+        <label class="search-field"><span>履歴を探す</span><input type="search" data-table-search="log-table" placeholder="センサー名、Edge"></label>
         <div class="toolbar-summary"><strong data-table-count="log-table">{{len .LogRows}}</strong><span>件を表示</span></div>
       </section>
       <section class="content-section flush">
         <div class="table-wrap">
-          <table id="log-table"><thead><tr><th>受信日時</th><th>信号</th><th>Edge</th><th>受信値</th></tr></thead>
-          <tbody>{{range .LogRows}}<tr><td class="mono">{{.ReceivedAt}}</td><td><strong>{{.Signal}}</strong></td><td>{{.Edge}}</td><td class="measurement compact">{{.Value}} {{.Unit}}</td></tr>{{else}}<tr class="empty-row"><td colspan="4">受信履歴はまだありません。</td></tr>{{end}}</tbody></table>
+          <table id="log-table"><thead><tr><th>受信日時</th><th>センサー</th><th>Edge</th><th>受信値</th></tr></thead>
+          <tbody>{{range .LogRows}}<tr><td class="mono">{{.ReceivedAt}}</td><td><strong>{{.Sensor}}</strong></td><td>{{.Edge}}</td><td class="measurement compact">{{.Value}} {{.Unit}}</td></tr>{{else}}<tr class="empty-row"><td colspan="4">受信履歴はまだありません。</td></tr>{{end}}</tbody></table>
         </div>
       </section>
       {{end}}
@@ -231,18 +362,18 @@
       </section>
       <section class="content-section">
         <div class="section-heading"><div><p class="section-kicker">ROUTES</p><h2>登録済みの出力</h2></div></div>
-        <div class="table-wrap"><table><thead><tr><th>送信元</th><th>信号</th><th>外部での用途</th><th>配送状況</th><th>状態</th></tr></thead>
+        <div class="table-wrap"><table><thead><tr><th>送信元</th><th>送る値</th><th>外部での用途</th><th>配送状況</th><th>状態</th></tr></thead>
           <tbody>{{range .OutputRows}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.KindLabel}}</td><td><strong>{{.PublishedCount}}</strong>件送信 / {{.PendingCount}}件待ち</td><td><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></td></tr>{{else}}<tr class="empty-row"><td colspan="5">登録済みの出力はありません。</td></tr>{{end}}</tbody>
         </table></div>
       </section>
       {{if .IsAdmin}}
       {{if .OutputDefinitions}}
       <section class="form-card narrow">
-        <div class="section-heading"><div><p class="section-kicker">ADD OUTPUT</p><h2>YokaKitへの出力を追加</h2><p>意味付け済みの信号を、YokaKitが受け取れる用途へ対応付けます。</p></div></div>
+        <div class="section-heading"><div><p class="section-kicker">ADD OUTPUT</p><h2>YokaKitへの出力を追加</h2><p>使い方を設定した値を、YokaKitが受け取れる用途へ対応付けます。</p></div></div>
         <form method="post" action="/console/outputs/yokakit">
           <input type="hidden" name="_csrf" value="{{.CSRF}}">
-          <label><span>送る信号</span><select name="definition_id" required><option value="">選択してください</option>{{range .OutputDefinitions}}<option value="{{.ID}}">{{.Name}} — {{.Kind}}</option>{{end}}</select></label>
-          <div class="form-row"><label><span>送信元ID</span><input name="source_id" pattern="[a-z0-9-]+" placeholder="factory-line-1" required><small>英小文字・数字・ハイフン</small></label><label><span>信号ID</span><input name="signal_id" pattern="[a-z0-9-]+" placeholder="completed-count" required><small>外部アプリで識別する名前</small></label></div>
+          <label><span>送る値</span><select name="definition_id" required><option value="">選択してください</option>{{range .OutputDefinitions}}<option value="{{.ID}}">{{.Name}} — {{.Kind}}</option>{{end}}</select></label>
+          <div class="form-row"><label><span>送信元ID</span><input name="source_id" pattern="[a-z0-9-]+" placeholder="factory-line-1" required><small>英小文字・数字・ハイフン</small></label><label><span>値のID</span><input name="signal_id" pattern="[a-z0-9-]+" placeholder="completed-count" required><small>外部アプリで識別する名前</small></label></div>
           <label><span>YokaKitでの用途</span><select name="kind"><option value="production">生産の累積値</option><option value="onoff">ON/OFF状態</option><option value="gantt_chart">稼働状態</option><option value="alarm">アラーム</option></select></label>
           <label><span>アラーム理由（アラームの場合のみ）</span><input name="reason" placeholder="例：温度上限を超過"></label>
           <button type="submit">出力を追加</button>
@@ -250,8 +381,8 @@
       </section>
       {{else}}
       <section class="guidance-card next-action">
-        <div><p class="section-kicker">NEXT STEP</p><h2>先に信号の意味付けを設定してください</h2><p>外部へ送るには、数値・状態・累積値・アラームのいずれかを信号へ設定する必要があります。</p></div>
-        <a class="button" href="/signals">信号の設定へ進む</a>
+        <div><p class="section-kicker">NEXT STEP</p><h2>先にセンサー設定を完了してください</h2><p>外部へ送るには、数値・状態・累積値・アラームのいずれかをセンサーへ設定する必要があります。</p></div>
+        <a class="button" href="/signals">センサー設定へ進む</a>
       </section>
       {{end}}
       {{end}}
@@ -312,7 +443,7 @@
         <article class="system-card"><span class="system-icon">⌁</span><div><h2>通信証明書</h2>{{if .Certificate.Available}}<strong class="{{if .Certificate.NeedsAction}}warn-text{{else}}ok-text{{end}}">有効期限まで {{.Certificate.DaysRemaining}}日</strong><p>{{.Certificate.NotAfter}} まで有効です。</p>{{else}}<strong class="warn-text">Consoleでは確認できません</strong><p>導入時の証明書設定と運用コマンドを確認してください。</p>{{end}}</div></article>
         <article class="system-card"><span class="system-icon">↗</span><div><h2>外部出力</h2><strong>{{len .Outputs}}件</strong><p>MQTTの接続先や認証情報は、この画面から変更できません。</p></div></article>
       </section>
-      <section class="guidance-card"><h2>問題が起きたとき</h2><ol><li>「現在の信号」で停止・古い信号を確認する</li><li>「受信履歴」で最後に届いた時刻を確認する</li><li>復旧しない場合は導入担当者へ、Edge名と発生時刻を伝える</li></ol></section>
+      <section class="guidance-card"><h2>問題が起きたとき</h2><ol><li>「センサー」で停止・古い値を確認する</li><li>「受信履歴」で最後に届いた時刻を確認する</li><li>復旧しない場合は導入担当者へ、Edge名と発生時刻を伝える</li></ol></section>
       {{end}}
     </main>
   </div>
@@ -325,7 +456,7 @@
 {{define "signal-table"}}
 <div class="table-wrap signal-table-wrap">
   <table id="signal-table">
-    <thead><tr><th>信号</th><th>センサー種別</th><th>Edge</th><th>現在値</th><th>受信状態</th><th>最終受信</th></tr></thead>
+    <thead><tr><th>センサー</th><th>種類</th><th>Edge</th><th>現在値</th><th>受信状態</th><th>最終受信</th></tr></thead>
     <tbody>
     {{range .SignalRows}}
     <tr data-status="{{.StatusClass}}">
@@ -336,7 +467,7 @@
       <td><span class="status-pill {{.StatusClass}}"><i aria-hidden="true"></i>{{.StatusLabel}}</span></td>
       <td title="{{.LastReceivedTitle}}">{{.LastReceived}}</td>
     </tr>
-    {{else}}<tr class="empty-row"><td colspan="6">信号はまだありません。Edgeからデータが届くと、ここに現在値が表示されます。</td></tr>{{end}}
+    {{else}}<tr class="empty-row"><td colspan="6">センサーはまだありません。Edgeからデータが届くと、ここに現在値が表示されます。</td></tr>{{end}}
     </tbody>
   </table>
 </div>

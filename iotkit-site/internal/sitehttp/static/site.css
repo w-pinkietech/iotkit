@@ -276,10 +276,52 @@ td strong { color: var(--ink); font-weight: 600; }
 .signal-setting-card .sensor-type { margin-bottom: 8px; }
 .signal-setting-card header strong { color: var(--ink); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .9rem; }
 .setting-columns { display: grid; grid-template-columns: minmax(260px, .72fr) minmax(420px, 1.28fr); gap: 16px; padding-top: 20px; }
+.semantic-setting { max-width: 860px; margin-left: auto; padding-top: 20px; }
 .signal-config { margin-top: 0; }
 .signal-config > summary { display: flex; min-height: 52px; align-items: center; justify-content: flex-end; color: var(--ink); font-size: .82rem; font-weight: 600; cursor: pointer; }
 .signal-config > summary::before { content: "＋"; margin-right: 8px; color: var(--orange-dark); font-size: 1rem; }
 .signal-config[open] > summary::before { content: "−"; }
+
+/* Device onboarding */
+.setup-intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 20px; padding: 22px 24px; border: 1px solid #b6dddc; border-radius: var(--radius); background: var(--teal-soft); }
+.setup-intro h2 { margin-bottom: 3px; }
+.setup-intro p:not(.section-kicker) { max-width: 760px; margin: 0; color: var(--ink-soft); font-size: .84rem; }
+.setup-intro > strong { display: grid; min-width: 112px; color: var(--teal-dark); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 2rem; font-weight: 500; text-align: right; }
+.setup-intro > strong small { color: var(--muted); font-family: inherit; font-size: .7rem; font-weight: 500; }
+.setup-device-list { display: grid; gap: 20px; }
+.setup-device-card { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.setup-device-header { display: flex; align-items: flex-start; gap: 14px; padding: 24px 24px 18px; }
+.setup-device-header > div { flex: 1; min-width: 0; }
+.setup-device-header h2 { margin-bottom: 2px; }
+.setup-device-header p:not(.section-kicker) { margin: 0; color: var(--muted); font-size: .78rem; }
+.setup-device-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 0 24px 20px; }
+.setup-device-facts > div { padding: 12px 14px; border: 1px solid var(--line); border-right: 0; background: #fafafa; }
+.setup-device-facts > div:first-child { border-radius: 8px 0 0 8px; }
+.setup-device-facts > div:last-child { border-right: 1px solid var(--line); border-radius: 0 8px 8px 0; }
+.setup-device-facts dt { color: var(--muted); font-size: .7rem; }
+.setup-device-facts dd { margin: 2px 0 0; font-size: .82rem; font-weight: 600; }
+.setup-device-form { margin: 0 24px 24px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.setup-device-form button { justify-self: start; }
+.setup-signal-list { display: grid; gap: 1px; border-top: 1px solid var(--line); background: var(--line); }
+.setup-signal-card { padding: 24px; background: var(--surface); }
+.setup-signal-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+.setup-live-value { display: grid; justify-items: end; line-height: 1.35; }
+.setup-live-value > span, .setup-live-value > small { color: var(--muted); font-size: .7rem; }
+.setup-live-value strong { color: var(--ink); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 1.8rem; font-weight: 500; }
+.setup-live-value strong small { color: var(--muted); font-size: .82rem; }
+.provenance-panel { padding: 16px; border-left: 3px solid var(--teal); border-radius: 4px; background: var(--teal-soft); }
+.provenance-panel h4, .setup-signal-form h4 { margin: 0 0 10px; font-size: .82rem; }
+.provenance-panel dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.provenance-panel dt { color: var(--muted); font-size: .68rem; }
+.provenance-panel dd { margin: 2px 0 0; overflow-wrap: anywhere; font-size: .8rem; font-weight: 600; }
+.metadata-warning { margin: 12px 0 0; padding: 10px 12px; border-radius: 6px; color: var(--warning); background: var(--warning-soft); font-size: .78rem; }
+.setup-signal-form { margin-top: 16px; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: #fafafa; }
+.setup-form-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.setup-form-heading h4 { margin-bottom: 2px; }
+.setup-form-heading p { margin: 0; color: var(--muted); font-size: .76rem; }
+.setup-signal-form button { justify-self: start; }
+.setup-next-step { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 24px; color: var(--success); background: var(--success-soft); font-size: .8rem; font-weight: 600; }
+.setup-next-step a { color: var(--ink); text-underline-offset: 4px; }
 
 /* System */
 .system-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -307,6 +349,7 @@ td strong { color: var(--ink); font-weight: 600; }
 @media (max-width: 1100px) {
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .setting-columns { grid-template-columns: 1fr; }
+  .provenance-panel dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .system-grid { grid-template-columns: 1fr; }
 }
 
@@ -328,6 +371,13 @@ td strong { color: var(--ink); font-weight: 600; }
   .toolbar-summary { justify-content: flex-start; }
   .form-row { grid-template-columns: 1fr; }
   .device-grid { grid-template-columns: 1fr; }
+  .setup-intro, .setup-signal-card > header, .setup-next-step { align-items: flex-start; flex-direction: column; }
+  .setup-intro > strong { text-align: left; }
+  .setup-device-facts { grid-template-columns: 1fr; }
+  .setup-device-facts > div { border-right: 1px solid var(--line); border-bottom: 0; }
+  .setup-device-facts > div:first-child { border-radius: 8px 8px 0 0; }
+  .setup-device-facts > div:last-child { border-bottom: 1px solid var(--line); border-radius: 0 0 8px 8px; }
+  .setup-live-value { justify-items: start; }
   .permission-note { flex-direction: column; gap: 2px; }
   .content-section { padding: 18px; }
   .content-section.flush { padding: 0; }
@@ -338,6 +388,10 @@ td strong { color: var(--ink); font-weight: 600; }
 
 @media (max-width: 460px) {
   .device-card, .signal-setting-card, .system-card, .guidance-card, .form-card { padding: 18px; }
+  .setup-device-header, .setup-signal-card { padding: 18px; }
+  .setup-device-facts { padding: 0 18px 18px; }
+  .setup-device-form { margin: 0 18px 18px; }
+  .provenance-panel dl { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

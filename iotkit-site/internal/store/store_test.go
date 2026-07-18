@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
@@ -169,9 +170,31 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
+func acceptBatchForTest(
+	t *testing.T,
+	store *Store,
+	batch contract.RecordBatch,
+) (contract.AcceptedThrough, error) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	if _, err := store.db.Exec(`
+		INSERT INTO edge_activations(
+			edge_ref, edge_node_id, ledger_epoch, state,
+			revision, created_at, updated_at
+		) VALUES('edge_' || lower(hex(randomblob(16))), ?, ?, 'active', 1, ?, ?)
+		ON CONFLICT(edge_node_id) DO UPDATE SET
+			ledger_epoch = excluded.ledger_epoch,
+			state = 'active',
+			updated_at = excluded.updated_at
+	`, batch.EdgeNodeID, batch.LedgerEpoch, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return store.AcceptBatch(context.Background(), batch)
+}
+
 func TestAcceptBatchCommitsRawRecordAndCursor(t *testing.T) {
 	store := openTestStore(t)
-	ack, err := store.AcceptBatch(context.Background(), testBatch(t))
+	ack, err := acceptBatchForTest(t, store, testBatch(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,10 +212,10 @@ func TestAcceptBatchCommitsRawRecordAndCursor(t *testing.T) {
 func TestExactReplayIsIdempotent(t *testing.T) {
 	store := openTestStore(t)
 	batch := testBatch(t)
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 	if got := store.testCount(t, "raw_records"); got != 1 {
@@ -206,7 +229,7 @@ func TestExactReplayIsIdempotent(t *testing.T) {
 func TestConflictingReplayDoesNotAdvanceCursor(t *testing.T) {
 	store := openTestStore(t)
 	batch := testBatch(t)
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.ListRawRecords(context.Background(), 10)
@@ -217,7 +240,7 @@ func TestConflictingReplayDoesNotAdvanceCursor(t *testing.T) {
 		t.Fatalf("records before conflict = %d, want 1", len(before))
 	}
 	batch.Records[0] = json.RawMessage(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-temperature-01","values":[99]}`)
-	if _, err := store.AcceptBatch(context.Background(), batch); !errors.Is(err, ErrConflict) {
+	if _, err := acceptBatchForTest(t, store, batch); !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
 	}
 	after, err := store.ListRawRecords(context.Background(), 10)
@@ -240,7 +263,7 @@ func TestCursorWriteFailureRollsBackRawInsert(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AcceptBatch(context.Background(), testBatch(t)); err == nil {
+	if _, err := acceptBatchForTest(t, store, testBatch(t)); err == nil {
 		t.Fatal("AcceptBatch succeeded despite cursor failure")
 	}
 	if got := store.testCount(t, "raw_records"); got != 0 {
@@ -253,7 +276,7 @@ func TestCursorWriteFailureRollsBackRawInsert(t *testing.T) {
 
 func TestListRawRecordsReturnsCommittedJSON(t *testing.T) {
 	store := openTestStore(t)
-	if _, err := store.AcceptBatch(context.Background(), testBatch(t)); err != nil {
+	if _, err := acceptBatchForTest(t, store, testBatch(t)); err != nil {
 		t.Fatal(err)
 	}
 	records, err := store.ListRawRecords(context.Background(), 10)
@@ -692,7 +715,7 @@ func acceptContactRecords(t *testing.T, store *Store, edgeNodeID, ledgerEpoch st
 		CursorEnd:     end,
 		Records:       rawRecords,
 	}
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -740,7 +763,7 @@ func acceptContactBatch(t *testing.T, store *Store, edgeNodeID, ledgerEpoch stri
 		CursorEnd:     start + int64(len(records)) - 1,
 		Records:       records,
 	}
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -776,7 +799,7 @@ func acceptEpoch(t *testing.T, store *Store, edgeNodeID, ledgerEpoch string, pub
 		CursorEnd:     pubSeq,
 		Records:       []json.RawMessage{record},
 	}
-	if _, err := store.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, store, batch); err != nil {
 		t.Fatal(err)
 	}
 }

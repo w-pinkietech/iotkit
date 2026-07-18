@@ -121,6 +121,15 @@ func (store *Store) ApplyDescriptorSnapshot(
 	}
 
 	now := time.Now().UnixMilli()
+	if err := discoverEdgeTx(
+		ctx,
+		tx,
+		snapshot.EdgeNodeID,
+		snapshot.LedgerEpoch,
+		now,
+	); err != nil {
+		return DescriptorApplyResult{}, err
+	}
 	for _, device := range snapshot.Devices {
 		if err := ensureDeviceSourceTx(ctx, tx, snapshot.EdgeNodeID, device.SystemID); err != nil {
 			return DescriptorApplyResult{}, err

@@ -73,8 +73,8 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 9 {
-		t.Fatalf("schema version = %d, want 9", version)
+	if version != 11 {
+		t.Fatalf("schema version = %d, want 11", version)
 	}
 	if got := testTableCount(t, store.db, "site_devices"); got != 1 {
 		t.Fatalf("backfilled devices = %d, want 1", got)
@@ -98,5 +98,127 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	}
 	if len(signals) != 1 || signals[0].Latest == nil || signals[0].Latest.EventTime != 1500 {
 		t.Fatalf("migrated signals = %#v", signals)
+	}
+}
+
+func TestActivationMigrationFailsClosedForAmbiguousLegacyEpochs(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		epochs    []string
+		wantState EdgeActivationState
+		wantEpoch string
+	}{
+		{
+			name:      "one legacy custody epoch remains active",
+			epochs:    []string{"epoch-a"},
+			wantState: EdgeActive,
+			wantEpoch: "epoch-a",
+		},
+		{
+			name:      "multiple legacy custody epochs require recovery",
+			epochs:    []string{"epoch-a", "epoch-b"},
+			wantState: EdgeRecoveryHold,
+			wantEpoch: "epoch-a",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "legacy-activation.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, migration := range schemaMigrations {
+				if migration.version > 10 {
+					break
+				}
+				if _, err := db.Exec(migration.sql); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", migration.version)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for index, epoch := range test.epochs {
+				if _, err := db.Exec(`
+					INSERT INTO accepted_cursors(
+						edge_node_id, ledger_epoch, accepted_through, updated_at
+					) VALUES('edge-legacy', ?, ?, 1)
+				`, epoch, index+1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			store, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			edges, err := store.ListEdges(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(edges) != 1 || edges[0].State != test.wantState ||
+				edges[0].LedgerEpoch != test.wantEpoch {
+				t.Fatalf("edges = %#v", edges)
+			}
+		})
+	}
+}
+
+func TestSignalProfileV2MigrationPreservesLegacyProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range schemaMigrations {
+		if migration.version > 9 {
+			break
+		}
+		if _, err := db.Exec(migration.sql); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", migration.version)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO signal_profiles (
+			edge_node_id, series_key, display_name, revision, updated_at
+		) VALUES ('edge-node-01', 'legacy-series', '旧温度表示', 3, 1000)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var (
+		displayName       string
+		displaySensorType string
+		displayValueKind  string
+		revision          int64
+	)
+	if err := store.db.QueryRow(`
+		SELECT display_name, display_sensor_type, display_value_kind, revision
+		FROM signal_profiles
+		WHERE edge_node_id = 'edge-node-01' AND series_key = 'legacy-series'
+	`).Scan(&displayName, &displaySensorType, &displayValueKind, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if displayName != "旧温度表示" || revision != 3 {
+		t.Fatalf("legacy profile changed: name=%q revision=%d", displayName, revision)
+	}
+	if displaySensorType != "" || displayValueKind != "" {
+		t.Fatalf("legacy profile was silently completed: sensor=%q kind=%q",
+			displaySensorType, displayValueKind)
 	}
 }

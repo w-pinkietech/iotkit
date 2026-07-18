@@ -593,6 +593,19 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var active int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM edge_activations
+			WHERE edge_node_id = ? AND ledger_epoch = ? AND state = 'active'
+		)
+	`, batch.EdgeNodeID, batch.LedgerEpoch).Scan(&active); err != nil {
+		return noAck, err
+	}
+	if active != 1 {
+		return noAck, ErrEdgeNotActive
+	}
+
 	currentCursor, err := readCursor(ctx, tx, batch.EdgeNodeID, batch.LedgerEpoch)
 	if err != nil {
 		return noAck, err

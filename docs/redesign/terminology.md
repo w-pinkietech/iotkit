@@ -1,7 +1,7 @@
 # IoTKit / YokaKit 再設計 用語集
 
 Status: 会話合意済み (living document)
-Updated: 2026-07-15
+Updated: 2026-07-18
 
 この文書は再設計に関わるすべての文書・コード・会話で使う統一語彙を定める。
 ここにない語を新しく使うときは、まずこの文書に追加する。
@@ -137,6 +137,9 @@ Updated: 2026-07-15
 | 保管完了確認 | application custody acknowledgement | Siteがraw recordと連続cursorを同一transactionでcommitした後、`accepted-through` topicへpublishする正式水位。これだけがEdge purgeを許可する(D9) |
 | 送信窓 | sending window | 保管完了確認待ちbatch数の上限。MVPは1。PUBACKでは窓を解放しない(D9) |
 | Archival Store | archival store | canonical recordを耐久保存して保管完了確認を返すSiteの役割。MQTT Broker自体はArchival Storeではない |
+| Broker enrollment | broker enrollment | Edge固有credential、exact topic ACL、接続profileをBroker/Edge hostへ導入し、MQTT通信を許可する操作。Site raw historyへの参加許可ではない(D9/D10) |
+| Site activation | site activation | Site adminがdescriptorで発見したexact `(edge_node_id, ledger_epoch)`について、activation後のpublication受理を一度だけ許可する操作。Broker設定変更ではない(D8/D9/D13) |
+| 登録前ローカル値 | pre-activation local reading | Edgeへ耐久保存されるがpublication logへ採番されず、Site custody・履歴・後日replayの対象にならないcommissioning確認値(D8/D9) |
 
 ## 出口認証(D10 2026-07-13改訂)
 

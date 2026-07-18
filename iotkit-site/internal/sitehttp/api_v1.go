@@ -11,6 +11,41 @@ import (
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
 
+func (server *Server) listEdges(response http.ResponseWriter, request *http.Request) {
+	if _, ok := server.requireAPIAuth(response, request, false); !ok {
+		return
+	}
+	edges, err := server.site.ListEdges(request.Context())
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Items []siteapp.Edge `json:"items"`
+	}{edges})
+}
+
+func (server *Server) activateEdge(response http.ResponseWriter, request *http.Request) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	result, err := server.site.Dispatch(
+		request.Context(),
+		server.actor(auth),
+		siteapp.ActivateEdge{
+			EdgeRef:      request.PathValue("edge_ref"),
+			Precondition: revisionPrecondition(request),
+		},
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(result.Edge.Revision))
+	writeJSON(response, http.StatusAccepted, result.Edge)
+}
+
 func (server *Server) putDeviceProfile(response http.ResponseWriter, request *http.Request) {
 	auth, ok := server.requireAdminMutation(response, request)
 	if !ok {
@@ -46,15 +81,29 @@ func (server *Server) putSignalProfile(response http.ResponseWriter, request *ht
 		return
 	}
 	var input struct {
-		DisplayName string `json:"display_name"`
+		DisplayName            string `json:"display_name"`
+		DisplaySensorType      string `json:"display_sensor_type"`
+		DisplaySensorTypeLabel string `json:"display_sensor_type_label"`
+		DisplayValueKind       string `json:"display_value_kind"`
+		DisplayUnitMode        string `json:"display_unit_mode"`
+		DisplayUnit            string `json:"display_unit"`
+		DecimalPlaces          int    `json:"decimal_places"`
 	}
 	if err := decodeJSON(response, request, &input); err != nil {
 		server.badRequest(response)
 		return
 	}
 	result, err := server.site.Dispatch(request.Context(), server.actor(auth), siteapp.UpdateSignalProfile{
-		SignalRef:    request.PathValue("signal_ref"),
-		Input:        siteapp.SignalProfileInput{DisplayName: input.DisplayName},
+		SignalRef: request.PathValue("signal_ref"),
+		Input: siteapp.SignalProfileInput{
+			DisplayName:            input.DisplayName,
+			DisplaySensorType:      input.DisplaySensorType,
+			DisplaySensorTypeLabel: input.DisplaySensorTypeLabel,
+			DisplayValueKind:       input.DisplayValueKind,
+			DisplayUnitMode:        input.DisplayUnitMode,
+			DisplayUnit:            input.DisplayUnit,
+			DecimalPlaces:          input.DecimalPlaces,
+		},
 		Precondition: revisionPrecondition(request),
 	})
 	if err != nil {
@@ -63,6 +112,30 @@ func (server *Server) putSignalProfile(response http.ResponseWriter, request *ht
 	}
 	response.Header().Set("ETag", revisionETag(result.SignalProfile.Revision))
 	writeJSON(response, http.StatusOK, result.SignalProfile)
+}
+
+func (server *Server) listSetupDevices(response http.ResponseWriter, request *http.Request) {
+	auth, ok := server.requireAPIAuth(response, request, false)
+	if !ok {
+		return
+	}
+	if auth.account.Role != siteapp.AccountRoleAdmin &&
+		auth.account.Role != siteapp.AccountRoleSystemAdmin {
+		server.operationError(response, siteapp.ErrForbidden)
+		return
+	}
+	devices, err := server.site.ListSetupDevices(
+		request.Context(),
+		server.actor(auth),
+		100,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Items []siteapp.SetupDevice `json:"items"`
+	}{devices})
 }
 
 func (server *Server) listSemanticDefinitions(response http.ResponseWriter, request *http.Request) {

@@ -150,27 +150,67 @@ func (store *Store) UpdateSignalProfile(
 		return noProfile, err
 	}
 
+	sensorTypeLabel := strings.TrimSpace(input.DisplaySensorTypeLabel)
+	if input.DisplaySensorType != "custom" {
+		sensorTypeLabel = ""
+	}
+	displayUnit := strings.TrimSpace(input.DisplayUnit)
+	if input.DisplayUnitMode == "dimensionless" {
+		displayUnit = ""
+	}
 	profile := siteapp.SignalProfile{
-		SignalRef:   signalRef,
-		DisplayName: strings.TrimSpace(input.DisplayName),
-		Revision:    currentRevision + 1,
-		UpdatedAt:   time.Now().UnixMilli(),
+		SignalRef:              signalRef,
+		DisplayName:            strings.TrimSpace(input.DisplayName),
+		DisplaySensorType:      input.DisplaySensorType,
+		DisplaySensorTypeLabel: sensorTypeLabel,
+		DisplayValueKind:       input.DisplayValueKind,
+		DisplayUnitMode:        input.DisplayUnitMode,
+		DisplayUnit:            displayUnit,
+		DecimalPlaces:          input.DecimalPlaces,
+		Revision:               currentRevision + 1,
+		UpdatedAt:              time.Now().UnixMilli(),
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO signal_profiles (
-			edge_node_id, series_key, display_name, revision, updated_at
-		) VALUES (?, ?, ?, ?, ?)
+			edge_node_id, series_key, display_name, display_sensor_type,
+			display_sensor_type_label, display_value_kind, display_unit_mode,
+			display_unit, decimal_places, revision, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(edge_node_id, series_key) DO UPDATE SET
 			display_name = excluded.display_name,
+			display_sensor_type = excluded.display_sensor_type,
+			display_sensor_type_label = excluded.display_sensor_type_label,
+			display_value_kind = excluded.display_value_kind,
+			display_unit_mode = excluded.display_unit_mode,
+			display_unit = excluded.display_unit,
+			decimal_places = excluded.decimal_places,
 			revision = excluded.revision,
 			updated_at = excluded.updated_at
-	`, edgeNodeID, seriesKey, profile.DisplayName, profile.Revision, profile.UpdatedAt); err != nil {
+	`, edgeNodeID, seriesKey, profile.DisplayName, profile.DisplaySensorType,
+		profile.DisplaySensorTypeLabel, profile.DisplayValueKind,
+		profile.DisplayUnitMode, profile.DisplayUnit, profile.DecimalPlaces,
+		profile.Revision, profile.UpdatedAt); err != nil {
 		return noProfile, err
 	}
 	summary, err := json.Marshal(struct {
-		DisplayName string `json:"display_name"`
-		Revision    int64  `json:"revision"`
-	}{profile.DisplayName, profile.Revision})
+		DisplayName            string `json:"display_name"`
+		DisplaySensorType      string `json:"display_sensor_type"`
+		DisplaySensorTypeLabel string `json:"display_sensor_type_label"`
+		DisplayValueKind       string `json:"display_value_kind"`
+		DisplayUnitMode        string `json:"display_unit_mode"`
+		DisplayUnit            string `json:"display_unit"`
+		DecimalPlaces          int    `json:"decimal_places"`
+		Revision               int64  `json:"revision"`
+	}{
+		profile.DisplayName,
+		profile.DisplaySensorType,
+		profile.DisplaySensorTypeLabel,
+		profile.DisplayValueKind,
+		profile.DisplayUnitMode,
+		profile.DisplayUnit,
+		profile.DecimalPlaces,
+		profile.Revision,
+	})
 	if err != nil {
 		return noProfile, err
 	}

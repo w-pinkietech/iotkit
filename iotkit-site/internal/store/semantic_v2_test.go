@@ -264,7 +264,7 @@ func acceptSemanticBatch(
 		CursorEnd:   start + int64(len(records)) - 1,
 		Records:     records,
 	}
-	if _, err := archive.AcceptBatch(context.Background(), batch); err != nil {
+	if _, err := acceptBatchForTest(t, archive, batch); err != nil {
 		t.Fatal(err)
 	}
 }

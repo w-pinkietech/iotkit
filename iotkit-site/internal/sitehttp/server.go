@@ -122,6 +122,8 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /password", server.passwordForm)
 	server.mux.HandleFunc("GET /status", server.statusPage)
 	server.mux.HandleFunc("GET /monitor", server.consolePage)
+	server.mux.HandleFunc("GET /setup", server.consolePage)
+	server.mux.HandleFunc("GET /edges", server.consolePage)
 	server.mux.HandleFunc("GET /devices", server.consolePage)
 	server.mux.HandleFunc("GET /signals", server.consolePage)
 	server.mux.HandleFunc("GET /logs", server.consolePage)
@@ -130,6 +132,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /accounts", server.consolePage)
 	server.mux.HandleFunc("GET /system", server.consolePage)
 	server.mux.HandleFunc("POST /console/devices/{device_ref}/profile", server.consoleDeviceProfile)
+	server.mux.HandleFunc("POST /console/edges/{edge_ref}/activation", server.consoleEdgeActivation)
 	server.mux.HandleFunc("POST /console/signals/{signal_ref}/profile", server.consoleSignalProfile)
 	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic", server.consoleSemantic)
 	server.mux.HandleFunc("POST /console/outputs/yokakit", server.consoleYokaKitOutput)
@@ -144,7 +147,10 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /api/v1/session", server.getSession)
 	server.mux.HandleFunc("DELETE /api/v1/session", server.deleteSession)
 	server.mux.HandleFunc("GET /api/v1/devices", server.listDevices)
+	server.mux.HandleFunc("GET /api/v1/edges", server.listEdges)
+	server.mux.HandleFunc("POST /api/v1/edges/{edge_ref}/activation", server.activateEdge)
 	server.mux.HandleFunc("GET /api/v1/signals", server.listSignals)
+	server.mux.HandleFunc("GET /api/v1/setup/devices", server.listSetupDevices)
 	server.mux.HandleFunc("PUT /api/v1/devices/{device_ref}/profile", server.putDeviceProfile)
 	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/profile", server.putSignalProfile)
 	server.mux.HandleFunc("GET /api/v1/semantic-definitions", server.listSemanticDefinitions)
@@ -385,7 +391,7 @@ func (server *Server) listSignals(response http.ResponseWriter, request *http.Re
 	signals, err := server.site.ListSignals(request.Context(), page)
 	if err != nil {
 		server.writeError(response, http.StatusInternalServerError, "internal_error",
-			"信号一覧を取得できません。", nil)
+			"センサー一覧を取得できません。", nil)
 		return
 	}
 	writeJSON(response, http.StatusOK, struct {

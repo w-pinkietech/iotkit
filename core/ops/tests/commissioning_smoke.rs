@@ -100,3 +100,30 @@ fn commissioning_smoke_dispatch_enqueues_audited_test_record() {
     })
     .unwrap();
 }
+
+#[test]
+fn commissioning_smoke_rejects_a_discovery_only_edge() {
+    let db = iotkit_core_storage::init_db_memory(&migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+        iotkit_core_publish::activation::install_site_target(
+            conn,
+            &TargetRow {
+                target_id: "site".into(),
+                endpoint_url: "mqtts://broker.example.test:8883".into(),
+                credential_token: String::new(),
+                archive_responsible: true,
+                schema_version: 1,
+                cursor_epoch: None,
+                cursor_pub_seq: 0,
+            },
+            1,
+        )
+        .unwrap();
+
+        assert!(dispatch(conn, standard_catalog(), request(false)).is_err());
+        assert!(select_batch(conn, &epoch, 0, 10).unwrap().is_empty());
+        Ok(())
+    })
+    .unwrap();
+}

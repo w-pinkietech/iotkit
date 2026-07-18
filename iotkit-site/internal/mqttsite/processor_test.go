@@ -11,15 +11,26 @@ import (
 	"testing"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 	sitestore "github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
 type fakeStore struct {
-	ack           contract.AcceptedThrough
-	err           error
-	batches       []contract.RecordBatch
-	descriptors   []contract.DescriptorSnapshot
-	descriptorErr error
+	ack               contract.AcceptedThrough
+	err               error
+	batches           []contract.RecordBatch
+	descriptors       []contract.DescriptorSnapshot
+	descriptorErr     error
+	activationResults []contract.ActivationResult
+	activationErr     error
+}
+
+func (store *fakeStore) ApplyActivationResult(
+	_ context.Context,
+	result contract.ActivationResult,
+) (sitestore.EdgeActivation, error) {
+	store.activationResults = append(store.activationResults, result)
+	return sitestore.EdgeActivation{State: sitestore.EdgeActive}, store.activationErr
 }
 
 func (store *fakeStore) AcceptBatch(_ context.Context, batch contract.RecordBatch) (contract.AcceptedThrough, error) {
@@ -61,6 +72,79 @@ func TestProcessAppliesDescriptorWithoutPublishingAcknowledgement(t *testing.T) 
 	}
 	if published {
 		t.Fatal("descriptor processing published accepted-through")
+	}
+}
+
+func TestProcessAppliesActivationResultWithoutPublishingCustodyAcknowledgement(t *testing.T) {
+	store := &fakeStore{}
+	result := contract.ActivationResult{
+		SchemaVersion:            1,
+		ActivationID:             "act-0123456789abcdef0123456789abcdef",
+		SiteID:                   "site-0123456789abcdef0123456789abcdef",
+		EdgeNodeID:               "edge-node-01",
+		LedgerEpoch:              "epoch-01",
+		Status:                   "applied",
+		DiscardThroughReadingSeq: 4,
+		FirstPublicationSeq:      1,
+		AppliedAt:                20,
+	}
+	payload, err := result.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := false
+
+	err = (Processor{Store: store}).Process(
+		context.Background(),
+		"iotkit/v1/edge-nodes/edge-node-01/activation/result",
+		payload,
+		func(string, []byte) error {
+			published = true
+			return nil
+		},
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.activationResults) != 1 || store.activationResults[0] != result {
+		t.Fatalf("activation results = %#v", store.activationResults)
+	}
+	if published {
+		t.Fatal("activation result processing published accepted-through")
+	}
+}
+
+func TestProcessRejectsActivationTopicBodyMismatchWithoutApplying(t *testing.T) {
+	store := &fakeStore{}
+	result := contract.ActivationResult{
+		SchemaVersion:            1,
+		ActivationID:             "act-0123456789abcdef0123456789abcdef",
+		SiteID:                   "site-0123456789abcdef0123456789abcdef",
+		EdgeNodeID:               "edge-node-01",
+		LedgerEpoch:              "epoch-01",
+		Status:                   "applied",
+		DiscardThroughReadingSeq: 0,
+		FirstPublicationSeq:      1,
+		AppliedAt:                20,
+	}
+	payload, err := result.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = (Processor{Store: store}).Process(
+		context.Background(),
+		"iotkit/v1/edge-nodes/edge-other/activation/result",
+		payload,
+		nil,
+	)
+
+	if err == nil {
+		t.Fatal("activation topic/body mismatch was accepted")
+	}
+	if len(store.activationResults) != 0 {
+		t.Fatalf("activation results = %#v", store.activationResults)
 	}
 }
 
@@ -120,6 +204,51 @@ func validPayload(t *testing.T) []byte {
 	return payloadWithMarker(t, "original")
 }
 
+func activateRealStore(t *testing.T, archive *sitestore.Store) {
+	t.Helper()
+	snapshot, err := contract.DecodeDescriptorSnapshot(descriptorPayload(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ApplyDescriptorSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	edges, err := archive.ListEdges(context.Background())
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("edges = %#v, %v", edges, err)
+	}
+	requested, err := archive.RequestEdgeActivation(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		edges[0].EdgeRef,
+		siteapp.RevisionPrecondition{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands, err := archive.ListPendingActivationCommands(context.Background(), 10)
+	if err != nil || len(commands) != 1 {
+		t.Fatalf("commands = %#v, %v", commands, err)
+	}
+	request, err := contract.DecodeActivationRequest(commands[0].PayloadJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ApplyActivationResult(context.Background(), contract.ActivationResult{
+		SchemaVersion:            1,
+		ActivationID:             requested.ActivationID,
+		SiteID:                   request.SiteID,
+		EdgeNodeID:               request.EdgeNodeID,
+		LedgerEpoch:              request.ExpectedLedgerEpoch,
+		Status:                   "applied",
+		DiscardThroughReadingSeq: 0,
+		FirstPublicationSeq:      1,
+		AppliedAt:                request.IssuedAt + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProcessPublishesAckOnlyAfterStoreSuccess(t *testing.T) {
 	store := &fakeStore{ack: contract.AcceptedThrough{
 		SchemaVersion:   1,
@@ -176,6 +305,7 @@ func TestProcessDoesNotPublishForRealStoreConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = archive.Close() })
+	activateRealStore(t, archive)
 
 	processor := Processor{Store: archive}
 	published := 0
@@ -219,6 +349,7 @@ func TestProcessDoesNotPublishWhenRealStoreTransactionFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = archive.Close() })
+	activateRealStore(t, archive)
 
 	injector, err := sql.Open("sqlite", dbPath)
 	if err != nil {

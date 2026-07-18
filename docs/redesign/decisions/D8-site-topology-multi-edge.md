@@ -1,6 +1,6 @@
 # D8: Site topology and multi-Edge boundary
 
-Status: 確定、2026-07-13簡素化改訂
+Status: 確定、2026-07-18 Site activation境界追記
 
 ## Topology
 
@@ -25,6 +25,11 @@ IoTKitは2つの配置を認める。
 引き渡しを証明する。これはmulti-Edge運用UI、fleet管理、
 一括enrollmentを実装する意味ではない。
 
+Site-managed構成では、各Edge NodeのBroker enrollmentとSite activationを分離する。Broker credentialとACLは
+導入担当者が各hostのlocal手順で配布する。Site Consoleはdescriptorで発見したEdgeをadminが一度だけ
+activationし、そのexact ledger incarnationについて将来のpublicationを受け入れる。ConsoleはBroker設定、
+credential、ACLを作成・変更しない。
+
 ## Custody roles
 
 - **IoTKit Edge**: 観測を耐久保存し、保管完了確認までoutboxを保持する。
@@ -36,6 +41,9 @@ IoTKitは2つの配置を認める。
 
 Site query projectionやapplication exportが壊れても、Archival Storeが引き受けたraw recordの保管責任とEdge cursorを
 巻き戻したり進めたりしない。
+
+activation前のローカル確認値はpublication outboxへ採番されず、Site Archival Storeが引き受けるcanonical
+publicationではない。activation境界より後にpublicationへ入ったrecordだけが上記custodyの対象になる。
 
 ## Identity and ordering
 
@@ -54,6 +62,7 @@ Site側のglobal record identityは次である。
 ## Failure behavior
 
 - Site、Broker、network経路停止中も各Edge Nodeはローカル収集を継続し、未ack outboxを保持する。
+- 未登録Edgeはboundedなローカル確認値だけを保持し、Site向けoutboxを作らない。
 - 復旧後は各Edge Nodeが独立に再送し、accepted-throughへ収束する。
 - SiteのSQL失敗、ENOSPC、corruptionではapplication ackを返さない。
 - 一部Edge Nodeだけ不達の場合、Siteは欠けたEdge Nodeを明示し、site集計を完全値として表示しない。
@@ -71,8 +80,8 @@ YokaKit固有topic/table語彙はR10へ入れない。
 次は最初の実機縦切りの完了条件ではない。
 
 - fleet enrollmentとduplicate Edge Node recovery
-- Site Consoleと統合承認UI
 - credential rotation/decommission automation
+- deactivation/reactivation、Site間移動、既存standalone outboxの自動adoption
 - Site backup/restore、generation anchor、archive repair orchestration
 - multi-Edge capacity planningとpartial-partition UI
 - site-wide snapshot、cloud federation、HA

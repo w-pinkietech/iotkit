@@ -1,5 +1,6 @@
 use iotkit_core_storage::Migration;
 
+pub mod activation;
 pub mod descriptor;
 pub mod mqtt;
 pub mod store;
@@ -15,11 +16,18 @@ pub enum PublishError {
     Invalid(String),
 }
 
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 10,
-    label: "publish",
-    sql: include_str!("../migrations/0010_publish.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 10,
+        label: "publish",
+        sql: include_str!("../migrations/0010_publish.sql"),
+    },
+    Migration {
+        version: 20,
+        label: "site_activation",
+        sql: include_str!("../migrations/0020_site_activation.sql"),
+    },
+];
 
 #[cfg(test)]
 pub(crate) mod tests_support {
