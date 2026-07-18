@@ -13,8 +13,19 @@ factory router, DNS, IP address allocation, firewall, or VPN.
 4. Start `deploy/compose.site.yaml`.
 5. Create the first `system_admin` with `iotkit-site account bootstrap` and an
    owner-only password file. Delete that file afterwards.
-6. Transfer each generated Edge handoff through a protected channel and run the
-   commissioning smoke. Do not copy an old database or credential into a new Site.
+6. Transfer each generated Edge handoff through a protected channel. This
+   Broker enrollment only gives the Edge its MQTT connection and exact-topic
+   permissions; it does not authorize Site raw-data custody.
+7. Start the Edge and wait for it to appear as **未登録** in **Edge管理**. Confirm
+   the expected Edge name or diagnostic identity and data generation, then use
+   **Edgeを登録**. Only a settings administrator or system administrator can do
+   this.
+8. Wait for **登録済み**, then run the commissioning smoke. Configure the sensor
+   display and meaning only after the smoke is durably accepted.
+
+Do not copy an old database or credential into a new Site. Registration is a
+one-time operation for a fresh publication stream. Values collected before
+registration remain outside Site custody and are not replayed after approval.
 
 The generated Caddy endpoint serves HTTPS and proxies only to Site's loopback
 HTTP listener. If HTTPS is broken, IoTKit does not expose a plaintext LAN
@@ -23,6 +34,9 @@ fallback.
 ## 2. Daily checks
 
 - **状態**: Site, signal count, missing meaning, and certificate days remaining.
+- **Edge管理**: discovery, registration, the last descriptor communication, and
+  the exact data generation used for diagnosis. **登録済み** is an authorization
+  state; it does not mean the Edge is currently online.
 - **モニター**: current value and last receipt. A stopped or old signal must be
   investigated at the sensor, adapter, Edge, broker, then Site—in that order.
 - **出力**: active purpose-bound routes. Pending output is not deleted until
@@ -81,3 +95,25 @@ Git.
 6. Check Site's output queue. Retry uses the same observation identity.
 7. After recovery, confirm raw cursor and pending output converge before
    deleting any retained data.
+
+## 6. Edge registration recovery
+
+- **未登録** means Site has seen an Edge descriptor but will reject its record
+  batches without acknowledging them.
+- **登録処理中** is durable. Broker, Site, or Edge restart does not require a
+  second registration; the same request is retried until the matching Edge
+  result is committed.
+- **復旧確認待ち** means the descriptor, stored generation, or activation result
+  conflicted. Preserve both databases and investigate identity or restore
+  history. Do not delete rows, issue a second Edge identity, or edit the state
+  table to make the warning disappear.
+- A fresh activation is rejected when the Edge publication stream has ever
+  allocated an outbox sequence. IoTKit v1 does not adopt an existing standalone
+  outbox, reactivate an Edge, transfer it between Sites, or reuse an identity.
+- Registration does not create, rotate, or revoke MQTT credentials and does not
+  replace Broker enrollment. Credential recovery remains a separate deployment
+  operation.
+- Registration freezes a local reading boundary and removes the old prefix in
+  bounded background work. This makes the rows unavailable to normal IoTKit
+  processing, but it is not a promise of forensic physical erasure from SQLite
+  pages, backups, or storage media.

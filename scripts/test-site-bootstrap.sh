@@ -299,6 +299,8 @@ done
   echo "Caddy HTTPS Site login failed: ${login_code:-no response}" >&2
   exit 1
 }
+csrf_token=$(jq -er '.csrf_token | select(type == "string" and length > 0)' \
+  "$scratch/login-response.json")
 curl -sS --cacert "$scratch/ca.pem" -b "$scratch/cookies" \
   "https://localhost:$site_port/status" |
   grep -Fq '現場の状態'
@@ -391,6 +393,69 @@ sed \
 "$cargo_target_dir/debug/iotkit-edge" --config "$scratch/edge2.toml" \
   >"$scratch/edge2.log" 2>&1 &
 edge2_pid=$!
+
+edges_discovered=false
+for _ in $(seq 1 60); do
+  curl -sS --cacert "$scratch/ca.pem" -b "$scratch/cookies" \
+    "https://localhost:$site_port/api/v1/edges" \
+    >"$scratch/edges.json"
+  if jq -e --arg first "$edge_node_id" --arg second "$edge_node_id2" \
+    '.items | length == 2
+      and any(.[]; .edge_node_id == $first and .state == "discovered")
+      and any(.[]; .edge_node_id == $second and .state == "discovered")' \
+    "$scratch/edges.json" >/dev/null; then
+    edges_discovered=true
+    break
+  fi
+  sleep 1
+done
+[[ "$edges_discovered" == true ]] || {
+  docker compose --env-file "$output/site.env" -p "$project" \
+    -f "$repo_root/deploy/compose.site.yaml" logs broker site
+  echo "fresh Edges were not discovered as unregistered" >&2
+  exit 1
+}
+
+while IFS=$'\t' read -r edge_ref revision; do
+  activation_code=$(curl -sS --cacert "$scratch/ca.pem" \
+    -b "$scratch/cookies" -o "$scratch/activation-response.json" -w '%{http_code}' \
+    -X POST \
+    -H "Origin: https://localhost:$site_port" \
+    -H "X-CSRF-Token: $csrf_token" \
+    -H "If-Match: \"$revision\"" \
+    "https://localhost:$site_port/api/v1/edges/$edge_ref/activation")
+  [[ "$activation_code" == 202 ]] || {
+    echo "Edge activation API failed: HTTP $activation_code" >&2
+    exit 1
+  }
+  if jq -e 'has("activation_id") or has("grant_revision")' \
+    "$scratch/activation-response.json" >/dev/null; then
+    echo "Edge activation API exposed internal command fields" >&2
+    exit 1
+  fi
+done < <(jq -r '.items[] | [.edge_ref, (.revision | tostring)] | @tsv' \
+  "$scratch/edges.json")
+
+edges_active=false
+for _ in $(seq 1 60); do
+  curl -sS --cacert "$scratch/ca.pem" -b "$scratch/cookies" \
+    "https://localhost:$site_port/api/v1/edges" \
+    >"$scratch/edges.json"
+  if jq -e '.items | length == 2 and all(.[]; .state == "active")' \
+    "$scratch/edges.json" >/dev/null; then
+    edges_active=true
+    break
+  fi
+  sleep 1
+done
+[[ "$edges_active" == true ]] || {
+  docker compose --env-file "$output/site.env" -p "$project" \
+    -f "$repo_root/deploy/compose.site.yaml" logs broker site
+  sed -n '1,200p' "$scratch/edge.log"
+  sed -n '1,200p' "$scratch/edge2.log"
+  echo "Edge activation did not converge" >&2
+  exit 1
+}
 
 smoke_output=""
 for _ in $(seq 1 60); do

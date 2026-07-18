@@ -59,17 +59,23 @@ cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
 user edge-node-01
 topic write iotkit/v1/edge-nodes/edge-node-01/records
 topic write iotkit/v1/edge-nodes/edge-node-01/descriptors
+topic write iotkit/v1/edge-nodes/edge-node-01/activation/result
 topic read iotkit/v1/edge-nodes/edge-node-01/accepted-through
+topic read iotkit/v1/edge-nodes/edge-node-01/activation/request
 
 user $edge_username
 topic write $edge_records_topic
 topic write $edge_descriptor_topic
+topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
 topic read $edge_ack_topic
+topic read iotkit/v1/edge-nodes/$edge_node_id/activation/request
 
 user site
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
+topic read iotkit/v1/edge-nodes/+/activation/result
 topic write iotkit/v1/edge-nodes/+/accepted-through
+topic write iotkit/v1/edge-nodes/+/activation/request
 EOF
 chmod 644 "$IOTKIT_MOSQUITTO_ACL_FILE"
 
@@ -103,14 +109,18 @@ if ! docker run --rm --user "$(id -u):$(id -g)" \
   -v "$scratch:/run/iotkit-test:ro" \
   -w /src/iotkit-site \
   golang:1.25-bookworm \
-  go test -tags=integration ./internal/mqttsite -run TestMQTTFixtureGetsApplicationAcknowledgement -count=1; then
+  go test -tags=integration ./internal/mqttsite \
+    -run TestMQTTPreActivationFixtureGetsNoApplicationAcknowledgement -count=1; then
   docker compose -p "$project" -f "$repo_root/compose.dev.yaml" logs broker site
   exit 1
 fi
 
 query_output=$(docker compose -p "$project" -f "$repo_root/compose.dev.yaml" exec -T site \
   iotkit-site query --db /data/site.db --limit 10)
-grep -q '"pub_seq": 1' <<<"$query_output"
+if grep -q '"pub_seq": 1' <<<"$query_output"; then
+  echo "Site accepted a pre-activation record" >&2
+  exit 1
+fi
 
 # Site uses a clean MQTT session, so a broker restart must be followed by a
 # fresh records subscription before the real Edge batch is published.
@@ -178,6 +188,76 @@ if [[ "$descriptor_stored" != true ]]; then
   echo "Site did not durably replicate the Edge descriptor" >&2
   exit 1
 fi
+
+now_ms=$(date +%s%3N)
+sqlite3 "$scratch/edge.db" <<SQL
+PRAGMA foreign_keys = ON;
+INSERT INTO devices(system_id, hardware_id, kind, state, created_at)
+VALUES(X'0123456789abcdef0123456789abcdef', 'vertical-preactivation',
+       'individual', 'active', $now_ms);
+INSERT INTO series(
+  system_id, measurement_key, channel_index, variant, quarantined,
+  value_semantics, unit, created_at, calibration_review
+) VALUES(
+  X'0123456789abcdef0123456789abcdef', 'temperature_c', -1, 'primary', 0,
+  'calibrated', 'Cel', $now_ms, 0
+);
+INSERT INTO readings(
+  series_id, received_at, time_source, time_quality, values_json,
+  quarantined, event_time, event_time_source
+) VALUES(
+  last_insert_rowid(), $now_ms, 'edge', 'unsynced', '[19.5]',
+  0, $now_ms, 'received_at'
+);
+SQL
+[[ "$(sqlite3 "$scratch/edge.db" 'SELECT count(*) FROM readings')" == "1" ]]
+[[ "$(sqlite3 "$scratch/edge.db" 'SELECT count(*) FROM publication_log')" == "0" ]]
+
+if ! docker run --rm --user "$(id -u):$(id -g)" \
+  --network "${project}_default" \
+  -e HOME=/tmp \
+  -e GOMODCACHE=/tmp/gomodcache \
+  -e GOCACHE=/tmp/gocache \
+  -e IOTKIT_TEST_SITE_DB=/run/iotkit-test/data/site.db \
+  -e IOTKIT_TEST_EDGE_NODE_ID="$edge_node_id" \
+  -v "$go_mod_cache:/tmp/gomodcache" \
+  -v "$go_build_cache:/tmp/gocache" \
+  -v "$repo_root:/src" \
+  -v "$scratch:/run/iotkit-test:rw" \
+  -w /src/iotkit-site \
+  golang:1.25-bookworm \
+  go test -tags=integration ./internal/mqttsite \
+    -run TestSiteActivationCommandConvergesWithEdge -count=1; then
+  docker compose -p "$project" -f "$repo_root/compose.dev.yaml" logs broker site
+  sed -n '1,240p' "$scratch/edge.log"
+  exit 1
+fi
+
+cleanup_complete=false
+for _ in $(seq 1 30); do
+  activation_state=$(sqlite3 "$scratch/edge.db" \
+    "SELECT state || ':' || discard_through_reading_seq FROM site_activation")
+  reading_count=$(sqlite3 "$scratch/edge.db" 'SELECT count(*) FROM readings')
+  if [[ "$activation_state" == "active:1" && "$reading_count" == "0" ]]; then
+    cleanup_complete=true
+    break
+  fi
+  sleep 0.2
+done
+[[ "$cleanup_complete" == true ]] || {
+  echo "pre-activation boundary did not converge or clean up" >&2
+  exit 1
+}
+
+kill -INT "$edge_pid"
+wait "$edge_pid"
+edge_pid=""
+"$cargo_target_dir/debug/iotkit-edge" --config "$scratch/edge.toml" \
+  >>"$scratch/edge.log" 2>&1 &
+edge_pid=$!
+sleep 1
+[[ "$(sqlite3 "$scratch/edge.db" \
+  "SELECT state || ':' || discard_through_reading_seq FROM site_activation")" == "active:1" ]]
 
 smoke_output=""
 for _ in $(seq 1 60); do

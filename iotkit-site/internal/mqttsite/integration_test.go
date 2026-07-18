@@ -3,6 +3,7 @@
 package mqttsite
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,12 +12,21 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
 
-func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
+func TestMQTTPreActivationFixtureGetsNoApplicationAcknowledgement(t *testing.T) {
 	brokerURL := requireEnv(t, "IOTKIT_TEST_BROKER_URL")
 	passwordPath := requireEnv(t, "IOTKIT_TEST_EDGE_PASSWORD_FILE")
 	passwordBytes, err := os.ReadFile(passwordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptorPath := filepath.Join(
+		"..", "..", "..", "testdata", "egress", "v1", "descriptor-snapshot.json",
+	)
+	descriptorPayload, err := os.ReadFile(descriptorPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +60,14 @@ func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
 	}
 
 	recordsTopic := "iotkit/v1/edge-nodes/edge-node-01/records"
+	descriptorTopic := "iotkit/v1/edge-nodes/edge-node-01/descriptors"
+	if token := client.Publish(
+		descriptorTopic, 1, true, descriptorPayload,
+	); !token.WaitTimeout(5 * time.Second) {
+		t.Fatal("MQTT descriptor publish timeout")
+	} else if err := token.Error(); err != nil {
+		t.Fatal(err)
+	}
 	publish := func() {
 		t.Helper()
 		if token := client.Publish(recordsTopic, 1, false, batchPayload); !token.WaitTimeout(5 * time.Second) {
@@ -61,23 +79,16 @@ func TestMQTTFixtureGetsApplicationAcknowledgement(t *testing.T) {
 	publish()
 	retry := time.NewTicker(500 * time.Millisecond)
 	defer retry.Stop()
-	deadline := time.NewTimer(15 * time.Second)
+	deadline := time.NewTimer(3 * time.Second)
 	defer deadline.Stop()
 	for {
 		select {
 		case payload := <-acks:
-			ack, err := contract.DecodeAcceptedThrough(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ack.EdgeNodeID != "edge-node-01" || ack.AcceptedThrough != 1 {
-				t.Fatalf("unexpected accepted-through: %+v", ack)
-			}
-			return
+			t.Fatalf("pre-activation record was acknowledged: %s", payload)
 		case <-retry.C:
 			publish()
 		case <-deadline.C:
-			t.Fatal("application accepted-through timeout")
+			return
 		}
 	}
 }
@@ -127,6 +138,79 @@ func TestMQTTRetainedDescriptorIsAvailableToLateSubscriber(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("retained descriptor timeout")
 	}
+}
+
+func TestSiteActivationCommandConvergesWithEdge(t *testing.T) {
+	siteDB := requireEnv(t, "IOTKIT_TEST_SITE_DB")
+	edgeNodeID := requireEnv(t, "IOTKIT_TEST_EDGE_NODE_ID")
+	archive, err := store.Open(siteDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+
+	var edge siteapp.Edge
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		edges, listErr := archive.ListEdges(context.Background())
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		for _, candidate := range edges {
+			if candidate.EdgeNodeID == edgeNodeID {
+				edge = candidate
+				break
+			}
+		}
+		if edge.EdgeRef != "" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if edge.EdgeRef == "" {
+		t.Fatalf("Edge %q was not discovered", edgeNodeID)
+	}
+	expected := edge.Revision
+	requested, err := archive.RequestEdgeActivation(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		edge.EdgeRef,
+		siteapp.RevisionPrecondition{Expected: &expected},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := archive.RequestEdgeActivation(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		edge.EdgeRef,
+		siteapp.RevisionPrecondition{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.ActivationID != requested.ActivationID {
+		t.Fatalf("duplicate changed activation identity: %#v %#v", requested, duplicate)
+	}
+
+	deadline = time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		edges, listErr := archive.ListEdges(context.Background())
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		for _, candidate := range edges {
+			if candidate.EdgeNodeID == edgeNodeID &&
+				candidate.State == siteapp.EdgeActive {
+				if candidate.ActivationID != requested.ActivationID {
+					t.Fatalf("active Edge changed activation identity: %#v", candidate)
+				}
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Edge %q activation did not converge", edgeNodeID)
 }
 
 func requireEnv(t *testing.T, name string) string {

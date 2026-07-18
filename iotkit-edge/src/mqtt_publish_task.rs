@@ -307,6 +307,7 @@ fn apply_activation_request(
     }
     let request = ActivationRequest::decode(payload).map_err(|error| error.to_string())?;
     let result = apply_activation(conn, &request, applied_at).map_err(|error| error.to_string())?;
+    cleanup_pre_activation_batch(conn, 5_000).map_err(|error| error.to_string())?;
     result.encode().map_err(|error| error.to_string())
 }
 
@@ -847,6 +848,25 @@ mod tests {
             )
             .unwrap();
             ensure_target(conn, "mqtt://broker:1883").unwrap();
+            conn.execute(
+                "INSERT INTO devices(system_id, hardware_id, kind, state, created_at)
+                 VALUES(zeroblob(16), 'preactivation-device', 'individual', 'active', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO series(system_id, measurement_key, created_at)
+                 VALUES(zeroblob(16), 'temperature_c', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO readings(
+                    series_id, received_at, time_source, values_json
+                 ) VALUES(1, 1, 'edge', '[19.5]')",
+                [],
+            )
+            .unwrap();
             let binding = MqttBinding::for_edge("edge-01").unwrap();
             let request = ActivationRequest {
                 schema_version: 1,
@@ -879,8 +899,17 @@ mod tests {
             assert_eq!(duplicate, first);
             let result = ActivationResult::decode(&first).unwrap();
             assert_eq!(result.applied_at, 20);
+            assert_eq!(result.discard_through_reading_seq, 1);
             assert_eq!(result.first_publication_seq, 1);
             assert_eq!(activation_state(conn).unwrap(), ActivationState::Active);
+            assert_eq!(
+                conn.query_row("SELECT count(*) FROM readings", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+                0,
+                "activation handling should start bounded prefix cleanup immediately"
+            );
             assert!(
                 apply_activation_request(
                     conn,

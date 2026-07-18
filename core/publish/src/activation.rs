@@ -389,7 +389,7 @@ fn invalid<T>(message: &str) -> Result<T, PublishError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivationRequest, ActivationState, activation_state, apply_activation,
+        ActivationRequest, ActivationResult, ActivationState, activation_state, apply_activation,
         cleanup_pre_activation_batch, install_site_target,
     };
     use crate::store::TargetRow;
@@ -603,6 +603,58 @@ mod tests {
         ] {
             assert!(ActivationRequest::decode(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn shared_activation_fixtures_match_the_edge_contract() {
+        let valid_request = ActivationRequest::decode(include_bytes!(
+            "../../../testdata/egress/v1/activation-request.json"
+        ))
+        .unwrap();
+        let valid_result = ActivationResult::decode(include_bytes!(
+            "../../../testdata/egress/v1/activation-result.json"
+        ))
+        .unwrap();
+        assert_eq!(valid_request.edge_node_id, valid_result.edge_node_id);
+        assert_eq!(
+            valid_request.expected_ledger_epoch,
+            valid_result.ledger_epoch
+        );
+        for invalid in [
+            include_bytes!("../../../testdata/egress/v1/activation-request-malformed-id.json")
+                .as_slice(),
+            include_bytes!("../../../testdata/egress/v1/activation-request-unknown-field.json")
+                .as_slice(),
+        ] {
+            assert!(ActivationRequest::decode(invalid).is_err());
+        }
+        assert!(
+            ActivationResult::decode(include_bytes!(
+                "../../../testdata/egress/v1/activation-result-first-seq-2.json"
+            ))
+            .is_err()
+        );
+
+        let conn = discovery_only();
+        for contextual_mismatch in [
+            include_bytes!("../../../testdata/egress/v1/activation-request-wrong-edge.json")
+                .as_slice(),
+            include_bytes!("../../../testdata/egress/v1/activation-request-wrong-epoch.json")
+                .as_slice(),
+        ] {
+            let request = ActivationRequest::decode(contextual_mismatch).unwrap();
+            assert!(apply_activation(&conn, &request, 1_720_000_001_000).is_err());
+        }
+        let original = ActivationRequest::decode(include_bytes!(
+            "../../../testdata/egress/v1/activation-request.json"
+        ))
+        .unwrap();
+        apply_activation(&conn, &original, 1_720_000_001_000).unwrap();
+        let conflicting = ActivationRequest::decode(include_bytes!(
+            "../../../testdata/egress/v1/activation-request-conflicting-id.json"
+        ))
+        .unwrap();
+        assert!(apply_activation(&conn, &conflicting, 1_720_000_002_000).is_err());
     }
 
     #[test]

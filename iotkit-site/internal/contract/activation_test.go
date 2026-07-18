@@ -3,6 +3,8 @@ package contract
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -112,5 +114,52 @@ func TestActivationResultEncodingIsStableForRetry(t *testing.T) {
 	}
 	if !bytes.Equal(first, second) {
 		t.Fatalf("activation result encoding changed: %s != %s", first, second)
+	}
+}
+
+func TestSharedActivationFixturesMatchTheSiteContract(t *testing.T) {
+	fixture := func(name string) []byte {
+		t.Helper()
+		payload, err := os.ReadFile(filepath.Join(
+			"..", "..", "..", "testdata", "egress", "v1", name,
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	request, err := DecodeActivationRequest(fixture("activation-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := DecodeActivationResult(fixture("activation-result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.EdgeNodeID != result.EdgeNodeID ||
+		request.ExpectedLedgerEpoch != result.LedgerEpoch {
+		t.Fatalf("request/result identity mismatch: %#v %#v", request, result)
+	}
+	for _, name := range []string{
+		"activation-request-malformed-id.json",
+		"activation-request-unknown-field.json",
+	} {
+		if _, err := DecodeActivationRequest(fixture(name)); err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+	if _, err := DecodeActivationResult(
+		fixture("activation-result-first-seq-2.json"),
+	); err == nil {
+		t.Fatal("activation result beginning at pub_seq 2 was accepted")
+	}
+	for _, name := range []string{
+		"activation-request-wrong-edge.json",
+		"activation-request-wrong-epoch.json",
+		"activation-request-conflicting-id.json",
+	} {
+		if _, err := DecodeActivationRequest(fixture(name)); err != nil {
+			t.Fatalf("%s must be schema-valid for contextual rejection: %v", name, err)
+		}
 	}
 }
