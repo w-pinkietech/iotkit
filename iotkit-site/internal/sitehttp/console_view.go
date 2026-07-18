@@ -283,6 +283,9 @@ func newConsoleSignalView(
 	if summary.Latest != nil && !profileComplete {
 		view.Value = displayValues(summary.Latest.Values, summary.ValueType)
 	}
+	if summary.Latest == nil {
+		view.Unit = ""
+	}
 	view.LastReceived, view.LastReceivedTitle = displayAge(summary.LastReceivedAt, now)
 	switch summary.ReceiptStatus {
 	case "receiving":

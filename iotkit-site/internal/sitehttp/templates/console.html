@@ -445,7 +445,7 @@
           {{end}}
         </div>
       </section>
-      {{if eq .State "ready"}}<footer class="setup-next-step"><span>✓ この機器の基本設定は完了しています。</span><span><a href="/monitor">現在値を見る</a> · <a href="/signals">値の変換</a></span></footer>{{end}}
+      {{if eq .State "ready"}}<footer class="setup-next-step"><span>✓ この機器の基本設定は完了しています。</span><a href="/sensors">センサー一覧を見る</a></footer>{{end}}
       {{end}}
       {{end}}
 
@@ -616,7 +616,7 @@
               {{if eq .State "ready"}}
               <footer class="setup-next-step">
                 <span>✓ このデバイスの基本設定は完了しています。</span>
-                <span><a href="/monitor">現在値を見る</a> · <a href="/signals">値の変換</a></span>
+                <a href="/sensors">センサー一覧を見る</a>
               </footer>
               {{end}}
             </section>
@@ -775,7 +775,7 @@
             </section>
             {{end}}
           </div>
-          {{if eq .State "ready"}}<footer class="setup-next-step"><span>✓ このデバイスのセンサー設定は完了しています。</span><a href="/signals">補正・判定を設定する</a></footer>{{end}}
+          {{if eq .State "ready"}}<footer class="setup-next-step"><span>✓ このデバイスのセンサー設定は完了しています。</span><a href="/sensors">センサー一覧を見る</a></footer>{{end}}
         </article>
         {{end}}
       </div>
@@ -919,7 +919,7 @@
       {{else}}
       <section class="guidance-card next-action">
         <div><p class="section-kicker">NEXT STEP</p><h2>先にセンサー設定を完了してください</h2><p>外部へ送るには、数値・状態・累積値・アラームのいずれかをセンサーへ設定する必要があります。</p></div>
-        <a class="button" href="/signals">センサー設定へ進む</a>
+        <a class="button" href="/sensors">センサー一覧へ進む</a>
       </section>
       {{end}}
       {{end}}
@@ -997,12 +997,12 @@
     <tbody>
     {{range .SignalRows}}
     <tr data-status="{{.StatusClass}}" data-href="/sensors/{{.SignalRef}}">
-      <td><a href="/sensors/{{.SignalRef}}"><strong>{{.Name}}</strong><small class="table-subtext">{{.SettingLabel}}</small></a></td>
-      <td><span class="sensor-type">{{.SensorType}}</span></td>
-      <td>{{.Edge}}</td>
-      <td><span class="measurement">{{.Value}}</span>{{if .Unit}} <span class="measurement-unit">{{.Unit}}</span>{{end}}</td>
-      <td><span class="status-pill {{.StatusClass}}"><i aria-hidden="true"></i>{{.StatusLabel}}</span></td>
-      <td title="{{.LastReceivedTitle}}">{{.LastReceived}}</td>
+      <td data-label="センサー"><a href="/sensors/{{.SignalRef}}"><strong>{{.Name}}</strong><small class="table-subtext">{{.SettingLabel}}</small></a></td>
+      <td data-label="種類"><span class="sensor-type">{{.SensorType}}</span></td>
+      <td data-label="Edge">{{.Edge}}</td>
+      <td data-label="現在値"><span class="measurement">{{.Value}}</span>{{if .Unit}} <span class="measurement-unit">{{.Unit}}</span>{{end}}</td>
+      <td data-label="受信状態"><span class="status-pill {{.StatusClass}}"><i aria-hidden="true"></i>{{.StatusLabel}}</span></td>
+      <td data-label="最終受信" title="{{.LastReceivedTitle}}">{{.LastReceived}}</td>
     </tr>
     {{else}}<tr class="empty-row"><td colspan="6">センサーはまだありません。Edgeからデータが届くと、ここに現在値が表示されます。</td></tr>{{end}}
     </tbody>
