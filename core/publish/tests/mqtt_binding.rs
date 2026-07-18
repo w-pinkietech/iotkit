@@ -19,6 +19,14 @@ fn mqtt_binding_derives_the_d9_identity_and_topics() {
         binding.descriptor_topic,
         "iotkit/v1/edge-nodes/edge-node-01/descriptors"
     );
+    assert_eq!(
+        binding.activation_request_topic,
+        "iotkit/v1/edge-nodes/edge-node-01/activation/request"
+    );
+    assert_eq!(
+        binding.activation_result_topic,
+        "iotkit/v1/edge-nodes/edge-node-01/activation/result"
+    );
     assert_eq!(binding.qos, 1);
     assert!(!binding.retain);
     assert!(binding.descriptor_retain);
