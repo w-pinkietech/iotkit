@@ -4,79 +4,342 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>{{.Title}} | IoTKit</title>
   <link rel="stylesheet" href="/static/site.css">
 </head>
-<body>
-  <header class="topbar">
-    <p class="brand">PINKIETECH <span>IoTKit</span></p>
-    <p>{{.DisplayName}} <small>{{.Role}}</small></p>
-  </header>
-  <div class="layout">
-    <nav aria-label="メインメニュー">
-      <a href="/status">状態</a><a href="/monitor">モニター</a>
-      <a href="/devices">デバイス</a><a href="/signals">信号</a>
-      <a href="/logs">ログ</a><a href="/output">出力</a>
-      <a href="/audit">監査</a><a href="/accounts">アカウント</a>
+<body class="console-shell" data-console-page="{{.Page}}">
+  <a class="skip-link" href="#main-content">本文へ移動</a>
+  <aside class="sidebar" id="sidebar">
+    <a class="product-mark" href="/status" aria-label="IoTKit 現場の概要">
+      <img src="/static/pinkietech-mark.svg" alt="">
+      <span><strong>IoTKit</strong><small>Site Console</small></span>
+    </a>
+
+    <nav class="side-nav" aria-label="メインメニュー">
+      <p class="nav-heading">現場を見る</p>
+      <a href="/status" {{if eq .Page "status"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌂</span>概要</a>
+      <a href="/monitor" {{if eq .Page "monitor"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">●</span>現在の信号</a>
+      <a href="/logs" {{if eq .Page "logs"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">↕</span>受信履歴</a>
+
+      <p class="nav-heading">設定</p>
+      <a href="/devices" {{if eq .Page "devices"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">□</span>設置機器</a>
+      <a href="/signals" {{if eq .Page "signals"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⌁</span>信号の設定</a>
+      <a href="/output" {{if eq .Page "output"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">→</span>外部出力</a>
+
+      <p class="nav-heading">管理</p>
+      <a href="/audit" {{if eq .Page "audit"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">✓</span>変更履歴</a>
+      {{if .IsOwner}}<a href="/accounts" {{if eq .Page "accounts"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">♙</span>アカウント</a>{{end}}
+      <a href="/system" {{if eq .Page "system"}}class="active" aria-current="page"{{end}}><span class="nav-symbol">⚙</span>システム</a>
     </nav>
-    <main>
-      <p class="eyebrow">IOTKIT SITE</p>
-      <h1>{{.Title}}</h1>
+
+    <div class="sidebar-user">
+      <span class="avatar" aria-hidden="true">人</span>
+      <span class="user-copy"><strong>{{.DisplayName}}</strong><small>{{.RoleLabel}}</small></span>
+      <form method="post" action="/logout" class="logout-form">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <button type="submit" title="ログアウト"><span aria-hidden="true">↪</span><span class="sr-only">ログアウト</span></button>
+      </form>
+    </div>
+  </aside>
+
+  <div class="console-area">
+    <header class="mobile-header">
+      <button class="menu-button" type="button" aria-controls="sidebar" aria-expanded="false"><span aria-hidden="true">☰</span><span class="sr-only">メニューを開く</span></button>
+      <span>IoTKit Site Console</span>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">IOTKIT SITE</p>
+          <h1>{{.Title}}</h1>
+          <p class="page-description">{{.Description}}</p>
+        </div>
+        {{if eq .Page "monitor"}}<a class="button secondary" href="/monitor">最新の状態に更新</a>{{end}}
+      </header>
+      {{if .Notice}}<div class="feedback success-feedback" role="status"><span aria-hidden="true">✓</span>{{.Notice}}</div>{{end}}
+      {{if .PageError}}<div class="feedback error-feedback" role="alert"><span aria-hidden="true">!</span>{{.PageError}}</div>{{end}}
+
       {{if eq .Page "status"}}
-      <section class="status-grid">
-        <article><h2>Site</h2><strong class="ok">稼働中</strong></article>
-        <article><h2>受信中の信号</h2><strong>{{len .Signals}}</strong></article>
-        <article><h2>要設定</h2><strong>{{range .Signals}}{{if not .HasSemanticMapping}}● {{end}}{{end}}</strong></article>
-        <article><h2>通信証明書</h2>{{if .Certificate.Available}}<strong class="{{if .Certificate.NeedsAction}}warn{{else}}ok{{end}}">残り {{.Certificate.DaysRemaining}} 日</strong><p>{{.Certificate.NotAfter}} まで</p>{{else}}<strong class="warn">要確認</strong>{{end}}</article>
-        <article><h2>意味付け処理</h2>{{if eq .ProjectionFailures 0}}<strong class="ok">正常</strong>{{else}}<strong class="warn">要対応 {{.ProjectionFailures}}件</strong>{{end}}</article>
+      <section class="health-banner {{if gt .AttentionCount 0}}attention{{else}}healthy{{end}}" aria-label="現場の状態">
+        <span class="health-icon" aria-hidden="true">{{if gt .AttentionCount 0}}!{{else}}✓{{end}}</span>
+        <div>
+          <strong>{{if gt .AttentionCount 0}}確認が必要な項目があります{{else}}センサーデータを受信しています{{end}}</strong>
+          <p>{{if gt .AttentionCount 0}}停止した信号や未設定の信号を下の一覧で確認してください。{{else}}Siteとセンサーの間で大きな問題は見つかっていません。{{end}}</p>
+        </div>
+      </section>
+
+      <section class="metric-grid" aria-label="集計">
+        <article class="metric-card"><span class="metric-label">受信中</span><strong>{{.ReceivingCount}}</strong><small>件の信号</small></article>
+        <article class="metric-card"><span class="metric-label">要確認</span><strong>{{.AttentionCount}}</strong><small>停止・未受信</small></article>
+        <article class="metric-card"><span class="metric-label">意味付け未設定</span><strong>{{.UnconfiguredCount}}</strong><small>件の信号</small></article>
+        <article class="metric-card"><span class="metric-label">接続中のEdge</span><strong>{{.EdgeCount}}</strong><small>台</small></article>
+      </section>
+
+      <section class="content-section">
+        <div class="section-heading">
+          <div><p class="section-kicker">LIVE</p><h2>現在の信号</h2><p>現場から最後に届いた値です。</p></div>
+          <a href="/monitor">すべての信号を見る</a>
+        </div>
+        {{template "signal-table" .}}
+      </section>
+
+      <section class="content-section">
+        <div class="section-heading"><div><p class="section-kicker">FLOW</p><h2>データの流れ</h2><p>センサーから外部アプリまでの現在の経路です。</p></div></div>
+        <div class="flow-strip">
+          <div class="flow-step complete"><span>1</span><strong>Edge</strong><small>{{.EdgeCount}}台から受信</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="flow-step complete"><span>2</span><strong>IoTKit Site</strong><small>保存・意味付け</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="flow-step {{if .Outputs}}complete{{else}}pending{{end}}"><span>3</span><strong>外部アプリ</strong><small>{{if .Outputs}}出力設定あり{{else}}出力未設定{{end}}</small></div>
+        </div>
       </section>
       {{end}}
-      {{if or (eq .Page "monitor") (eq .Page "signals")}}
-      <div class="table-wrap"><table><thead><tr><th>信号</th><th>Edge</th><th>センサー種類</th><th>現在値</th><th>単位</th><th>受信状態</th><th>設定</th></tr></thead><tbody>
-      {{range .Signals}}<tr><td>{{if .DisplayName}}{{.DisplayName}}{{else}}未設定の信号{{end}}</td><td>{{.Edge}}</td><td>{{if .SensorType}}{{.SensorType}}{{else}}確認中{{end}}</td>
-        <td>{{if .Latest}}{{printf "%s" .Latest.Values}}{{else}}—{{end}}</td>
-        <td>{{if .Unit}}{{.Unit}}{{else}}—{{end}}</td><td>{{if eq .ReceiptStatus "receiving"}}受信中{{else if eq .ReceiptStatus "stale"}}停止・古い{{else}}未受信{{end}}</td>
-        <td>{{if .HasSemanticMapping}}設定済み{{else}}未設定{{end}}</td></tr>
-      {{if and $.IsAdmin (eq $.Page "signals")}}
-      <tr><td colspan="7"><details><summary>表示と意味付けを設定</summary>
-        <form method="post" action="/console/signals/{{.SignalRef}}/profile">
-          <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
-          <label>表示名<input name="display_name" value="{{.DisplayName}}" required></label><button>表示名を保存</button>
-        </form>
-        <form class="semantic-form" data-signal-ref="{{.SignalRef}}" method="post" action="/console/signals/{{.SignalRef}}/semantic">
-          <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-          <label>用途<select name="kind"><option value="numeric">数値</option><option value="boolean">状態</option><option value="cumulative_counter">累積値</option><option value="alarm">アラーム</option></select></label>
-          <label>補正倍率<input name="scale" type="number" step="any" value="1"></label>
-          <label>補正加算<input name="offset" type="number" step="any" value="0"></label>
-          <label>判定<select name="condition"><option value="">なし</option><option value="boolean_equals">0/1</option><option value="above">しきい値以上</option><option value="below">しきい値以下</option></select></label>
-          <label>しきい値<input name="threshold" type="number" step="any" value="0"></label>
-          <label>戻り幅<input name="hysteresis" type="number" step="any" value="0"></label>
-          <label>累積方法<select name="trigger"><option value="">なし</option><option value="on_transition">OFFからONで加算</option><option value="on_notification">ON受信ごとに加算</option></select></label>
-          <button type="button" class="secondary preview-button">実信号プレビューを開始</button><pre class="preview-output">保存前に、新しく届く実信号で確認できます。</pre><button>意味付けを保存</button>
-        </form></details></td></tr>{{end}}{{else}}<tr><td colspan="7">信号はまだありません。</td></tr>{{end}}
-      </tbody></table></div>
+
+      {{if eq .Page "monitor"}}
+      <section class="toolbar" aria-label="信号の絞り込み">
+        <label class="search-field"><span>信号を探す</span><input type="search" data-table-search="signal-table" placeholder="信号名、Edge、センサー種別"></label>
+        <label><span>受信状態</span><select data-table-status="signal-table"><option value="">すべて</option><option value="receiving">受信中</option><option value="stale">停止・古い</option><option value="never">未受信</option></select></label>
+        <div class="toolbar-summary"><strong data-table-count="signal-table">{{len .SignalRows}}</strong><span>件の信号</span></div>
+      </section>
+      <section class="content-section flush">
+        {{template "signal-table" .}}
+      </section>
       {{end}}
+
       {{if eq .Page "devices"}}
-      <div class="cards">{{range .Devices}}<article><h2>{{if .DisplayName}}{{.DisplayName}}{{else}}未設定のデバイス{{end}}</h2>
-        <p>Edge: {{.Edge}}</p><p>設置場所: {{if .Location}}{{.Location}}{{else}}未設定{{end}}</p><p>状態: {{.DeviceState}}</p>
-        {{if $.IsAdmin}}<form method="post" action="/console/devices/{{.DeviceRef}}/profile"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}"><label>表示名<input name="display_name" value="{{.DisplayName}}" required></label><label>設置場所<input name="location" value="{{.Location}}" required></label><button>保存</button></form>{{end}}</article>{{else}}<p>デバイスはまだありません。</p>{{end}}</div>
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>名前や設置場所の変更には設定管理者の権限が必要です。</span></div>{{end}}
+      <section class="device-grid">
+        {{range .DeviceRows}}
+        <article class="device-card">
+          <header><span class="device-illustration" aria-hidden="true">▣</span><div><h2>{{.Name}}</h2><p>{{.LocationLabel}}</p></div><span class="status-pill {{.StatusClass}}">{{.StatusLabel}}</span></header>
+          <dl class="detail-list">
+            <div><dt>接続先Edge</dt><dd>{{.Edge}}</dd></div>
+            <div><dt>最終受信</dt><dd title="{{.LastReceivedTitle}}">{{.LastReceived}}</dd></div>
+          </dl>
+          {{if $.IsAdmin}}
+          <details class="setting-panel">
+            <summary>名前と設置場所を変更</summary>
+            <form method="post" action="/console/devices/{{.DeviceRef}}/profile">
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+              <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
+              <label><span>表示名</span><input name="display_name" value="{{.DisplayName}}" placeholder="例：乾燥炉 温度センサー" required></label>
+              <label><span>設置場所</span><input name="location" value="{{.Location}}" placeholder="例：第1工場 乾燥工程" required></label>
+              <button type="submit">変更を保存</button>
+            </form>
+          </details>
+          {{end}}
+        </article>
+        {{else}}
+        {{template "empty-state" "設置機器はまだ見つかっていません。Edgeから信号が届くと、ここに表示されます。"}}
+        {{end}}
+      </section>
       {{end}}
+
+      {{if eq .Page "signals"}}
+      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>表示名と意味付けの変更には設定管理者の権限が必要です。</span></div>{{end}}
+      <section class="section-heading standalone">
+        <div><p class="section-kicker">SETTINGS</p><h2>表示名と意味付け</h2><p>現在値は「現在の信号」で確認し、ここでは各信号の扱い方だけを設定します。</p></div>
+      </section>
+      <div class="settings-list">
+        {{range .SignalRows}}
+        <article class="signal-setting-card">
+          <header>
+            <div><span class="sensor-type">{{.SensorType}}</span><h2>{{.Name}}</h2><p>{{.Edge}} · 現在値 <strong>{{.Value}}{{if .Unit}} <small>{{.Unit}}</small>{{end}}</strong></p></div>
+            <span class="status-pill {{.SettingClass}}">{{.SettingLabel}}</span>
+          </header>
+          {{if $.IsAdmin}}
+          <details class="signal-config">
+          <summary>この信号を設定する</summary>
+          <div class="setting-columns">
+            <form method="post" action="/console/signals/{{.SignalRef}}/profile" class="compact-form">
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+              <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
+              <h3>画面での名前</h3>
+              <p>現場の人が識別しやすい名前を付けます。</p>
+              <label><span>表示名</span><input name="display_name" value="{{.DisplayName}}" placeholder="例：ライン1 完了信号" required></label>
+              <button type="submit" class="secondary">名前を保存</button>
+            </form>
+            <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" method="post" action="/console/signals/{{.SignalRef}}/semantic">
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+              <input type="hidden" name="revision" value="{{if .Definition}}{{.Definition.Revision}}{{end}}">
+              <h3>IoTKitでの扱い方</h3>
+              <p>値をそのまま使うか、状態・累積値・アラームへ変換します。</p>
+              <label><span>用途</span><select name="kind" data-semantic-kind>
+                <option value="numeric" {{if and .Definition (eq .Definition.Kind "numeric")}}selected{{end}}>数値をそのまま使う</option>
+                <option value="boolean" {{if and .Definition (eq .Definition.Kind "boolean")}}selected{{end}}>ON/OFF状態にする</option>
+                <option value="cumulative_counter" {{if and .Definition (eq .Definition.Kind "cumulative_counter")}}selected{{end}}>累積値として数える</option>
+                <option value="alarm" {{if and .Definition (eq .Definition.Kind "alarm")}}selected{{end}}>しきい値でアラームにする</option>
+              </select></label>
+              <div class="form-row">
+                <label><span>補正倍率</span><input name="scale" type="number" step="any" value="{{if .Definition}}{{.Definition.Scale}}{{else}}1{{end}}"></label>
+                <label><span>補正加算</span><input name="offset" type="number" step="any" value="{{if .Definition}}{{.Definition.Offset}}{{else}}0{{end}}"></label>
+              </div>
+              <div class="conditional-fields" data-condition-fields>
+                <label><span>判定方法</span><select name="condition">
+                  <option value="">判定しない</option>
+                  <option value="boolean_equals" {{if and .Definition (eq .Definition.Condition.Mode "boolean_equals")}}selected{{end}}>入力値がON/OFFと一致</option>
+                  <option value="above" {{if and .Definition (eq .Definition.Condition.Mode "above")}}selected{{end}}>しきい値以上</option>
+                  <option value="below" {{if and .Definition (eq .Definition.Condition.Mode "below")}}selected{{end}}>しきい値以下</option>
+                </select></label>
+                <label><span>接点入力で判定する状態</span><select name="bool_value">
+                  <option value="true" {{if or (not .Definition) .Definition.Condition.BoolValue}}selected{{end}}>ONのとき</option>
+                  <option value="false" {{if and .Definition (not .Definition.Condition.BoolValue)}}selected{{end}}>OFFのとき</option>
+                </select></label>
+                <div class="form-row">
+                  <label><span>しきい値</span><input name="threshold" type="number" step="any" value="{{if .Definition}}{{.Definition.Condition.Threshold}}{{else}}0{{end}}"></label>
+                  <label><span>戻り幅</span><input name="hysteresis" type="number" step="any" min="0" value="{{if .Definition}}{{.Definition.Condition.Hysteresis}}{{else}}0{{end}}"></label>
+                </div>
+                <label><span>累積するタイミング</span><select name="trigger">
+                  <option value="">累積しない</option>
+                  <option value="on_transition" {{if and .Definition (eq .Definition.Trigger "on_transition")}}selected{{end}}>OFFからONになった時だけ</option>
+                  <option value="on_notification" {{if and .Definition (eq .Definition.Trigger "on_notification")}}selected{{end}}>ONを受信するたび</option>
+                </select></label>
+              </div>
+              <button type="button" class="preview-button secondary">実信号で確認する</button>
+              <div class="preview-output" role="status">保存前に、新しく届く実信号で動きを確認できます。</div>
+              <button type="submit">意味付けを保存</button>
+            </form>
+          </div>
+          </details>
+          {{end}}
+        </article>
+        {{else}}
+        {{template "empty-state" "設定できる信号はまだありません。Edgeから信号が届くと、ここに表示されます。"}}
+        {{end}}
+      </div>
+      {{end}}
+
+      {{if eq .Page "logs"}}
+      <section class="toolbar" aria-label="受信履歴の絞り込み">
+        <label class="search-field"><span>履歴を探す</span><input type="search" data-table-search="log-table" placeholder="信号名、Edge"></label>
+        <div class="toolbar-summary"><strong data-table-count="log-table">{{len .LogRows}}</strong><span>件を表示</span></div>
+      </section>
+      <section class="content-section flush">
+        <div class="table-wrap">
+          <table id="log-table"><thead><tr><th>受信日時</th><th>信号</th><th>Edge</th><th>受信値</th></tr></thead>
+          <tbody>{{range .LogRows}}<tr><td class="mono">{{.ReceivedAt}}</td><td><strong>{{.Signal}}</strong></td><td>{{.Edge}}</td><td class="measurement compact">{{.Value}} {{.Unit}}</td></tr>{{else}}<tr class="empty-row"><td colspan="4">受信履歴はまだありません。</td></tr>{{end}}</tbody></table>
+        </div>
+      </section>
+      {{end}}
+
       {{if eq .Page "output"}}
-      <div class="table-wrap"><table><thead><tr><th>送信元ID</th><th>信号ID</th><th>用途</th><th>未送信</th><th>送信済み</th><th>状態</th></tr></thead><tbody>{{range .Outputs}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.Kind}}</td><td>{{.PendingCount}}</td><td>{{.PublishedCount}}</td><td>{{if .Active}}有効{{else}}停止{{end}}</td></tr>{{else}}<tr><td colspan="6">出力先はまだありません。</td></tr>{{end}}</tbody></table></div>
-      {{if .IsAdmin}}<article><h2>YokaKitへの出力を追加</h2><form method="post" action="/console/outputs/yokakit"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-        <label>意味付け<select name="definition_id">{{range .Definitions}}{{if .Active}}<option value="{{.ID}}">{{.SignalRef}} / {{.Kind}}</option>{{end}}{{end}}</select></label>
-        <label>送信元ID<input name="source_id" pattern="[a-z0-9-]+" required></label><label>信号ID<input name="signal_id" pattern="[a-z0-9-]+" required></label>
-        <label>YokaKitでの用途<select name="kind"><option value="production">生産累積値</option><option value="onoff">ON/OFF</option><option value="gantt_chart">稼働状態</option><option value="alarm">アラーム</option></select></label>
-        <label>アラーム理由<input name="reason"></label><button>出力を追加</button></form></article>{{end}}
+      <section class="health-banner {{if .Outputs}}healthy{{else}}attention{{end}}">
+        <span class="health-icon" aria-hidden="true">{{if .Outputs}}✓{{else}}!{{end}}</span>
+        <div><strong>{{if .Outputs}}外部出力が設定されています{{else}}外部出力はまだ設定されていません{{end}}</strong><p>ここでは送るデータの対応だけを管理します。MQTTの接続先や証明書は導入設定で管理します。</p></div>
+      </section>
+      <section class="content-section">
+        <div class="section-heading"><div><p class="section-kicker">ROUTES</p><h2>登録済みの出力</h2></div></div>
+        <div class="table-wrap"><table><thead><tr><th>送信元</th><th>信号</th><th>外部での用途</th><th>配送状況</th><th>状態</th></tr></thead>
+          <tbody>{{range .OutputRows}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.KindLabel}}</td><td><strong>{{.PublishedCount}}</strong>件送信 / {{.PendingCount}}件待ち</td><td><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></td></tr>{{else}}<tr class="empty-row"><td colspan="5">登録済みの出力はありません。</td></tr>{{end}}</tbody>
+        </table></div>
+      </section>
+      {{if .IsAdmin}}
+      {{if .OutputDefinitions}}
+      <section class="form-card narrow">
+        <div class="section-heading"><div><p class="section-kicker">ADD OUTPUT</p><h2>YokaKitへの出力を追加</h2><p>意味付け済みの信号を、YokaKitが受け取れる用途へ対応付けます。</p></div></div>
+        <form method="post" action="/console/outputs/yokakit">
+          <input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <label><span>送る信号</span><select name="definition_id" required><option value="">選択してください</option>{{range .OutputDefinitions}}<option value="{{.ID}}">{{.Name}} — {{.Kind}}</option>{{end}}</select></label>
+          <div class="form-row"><label><span>送信元ID</span><input name="source_id" pattern="[a-z0-9-]+" placeholder="factory-line-1" required><small>英小文字・数字・ハイフン</small></label><label><span>信号ID</span><input name="signal_id" pattern="[a-z0-9-]+" placeholder="completed-count" required><small>外部アプリで識別する名前</small></label></div>
+          <label><span>YokaKitでの用途</span><select name="kind"><option value="production">生産の累積値</option><option value="onoff">ON/OFF状態</option><option value="gantt_chart">稼働状態</option><option value="alarm">アラーム</option></select></label>
+          <label><span>アラーム理由（アラームの場合のみ）</span><input name="reason" placeholder="例：温度上限を超過"></label>
+          <button type="submit">出力を追加</button>
+        </form>
+      </section>
+      {{else}}
+      <section class="guidance-card next-action">
+        <div><p class="section-kicker">NEXT STEP</p><h2>先に信号の意味付けを設定してください</h2><p>外部へ送るには、数値・状態・累積値・アラームのいずれかを信号へ設定する必要があります。</p></div>
+        <a class="button" href="/signals">信号の設定へ進む</a>
+      </section>
       {{end}}
-      {{if eq .Page "audit"}}<div class="table-wrap"><table><thead><tr><th>日時</th><th>変更者</th><th>操作</th><th>対象</th></tr></thead><tbody>{{range .Audit}}<tr><td>{{.OccurredAt}}</td><td>{{if .ActorDisplayName}}{{.ActorDisplayName}}{{else}}{{.ActorClass}}{{end}}</td><td>{{.Operation}}</td><td>{{.ResourceRef}}</td></tr>{{else}}<tr><td colspan="4">変更履歴はありません。</td></tr>{{end}}</tbody></table></div>{{end}}
-      {{if eq .Page "accounts"}}{{if .IsOwner}}<div class="table-wrap"><table><thead><tr><th>ログインID</th><th>名前</th><th>権限</th><th>状態</th></tr></thead><tbody>{{range .Accounts}}<tr><td>{{.LoginID}}</td><td>{{.DisplayName}}</td><td>{{.Role}}</td><td>{{.State}}</td></tr>{{end}}</tbody></table></div>
-      <article><h2>アカウントを発行</h2><form method="post" action="/console/accounts"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>ログインID<input name="login_id" required></label><label>名前<input name="display_name" required></label><label>権限<select name="role"><option value="viewer">閲覧</option><option value="admin">設定管理</option><option value="system_admin">システム管理</option></select></label><label>仮パスワード<input name="temporary_password" type="password" required></label><button>発行</button></form></article>
-      {{else}}<p>アカウント管理はシステム管理者だけが利用できます。</p>{{end}}{{end}}
-      {{if eq .Page "logs"}}<pre class="log">{{printf "%v" .Raw}}</pre>{{end}}
+      {{end}}
+      {{end}}
+
+      {{if eq .Page "audit"}}
+      <section class="content-section flush">
+        <div class="table-wrap"><table><thead><tr><th>日時</th><th>担当者</th><th>変更内容</th><th>対象</th><th>結果</th></tr></thead>
+          <tbody>{{range .AuditRows}}<tr><td class="mono">{{.OccurredAt}}</td><td>{{.Actor}}</td><td><strong>{{.Operation}}</strong></td><td>{{.Resource}}</td><td><span class="status-pill {{.OutcomeClass}}">{{.Outcome}}</span></td></tr>{{else}}<tr class="empty-row"><td colspan="5">変更履歴はまだありません。</td></tr>{{end}}</tbody>
+        </table></div>
+      </section>
+      {{end}}
+
+      {{if eq .Page "accounts"}}
+      {{if .IsOwner}}
+      <section class="content-section">
+        <div class="section-heading"><div><p class="section-kicker">MEMBERS</p><h2>登録済みアカウント</h2></div></div>
+        <div class="table-wrap"><table><thead><tr><th>名前</th><th>ログインID</th><th>権限</th><th>状態</th><th>管理</th></tr></thead>
+          <tbody>{{range .Accounts}}<tr><td><strong>{{.DisplayName}}</strong></td><td class="mono">{{.LoginID}}</td><td>{{if eq .Role "system_admin"}}システム管理者{{else if eq .Role "admin"}}設定管理者{{else}}閲覧担当者{{end}}</td><td><span class="status-pill {{if eq .State "active"}}receiving{{else}}never{{end}}">{{if eq .State "active"}}有効{{else}}無効{{end}}</span></td>
+          <td><details class="account-menu"><summary>管理する</summary><div class="account-actions">
+            <form method="post" action="/console/accounts/{{.AccountRef}}">
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}">
+              <h3>名前と権限を変更</h3>
+              <label><span>担当者名</span><input name="display_name" value="{{.DisplayName}}" required></label>
+              <label><span>権限</span><select name="role"><option value="viewer" {{if eq .Role "viewer"}}selected{{end}}>閲覧担当者</option><option value="admin" {{if eq .Role "admin"}}selected{{end}}>設定管理者</option><option value="system_admin" {{if eq .Role "system_admin"}}selected{{end}}>システム管理者</option></select></label>
+              <button type="submit" class="secondary">変更を保存</button>
+            </form>
+            <form method="post" action="/console/accounts/{{.AccountRef}}/password">
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}">
+              <h3>仮パスワードを再発行</h3>
+              <p>次回ログイン時に、本人のパスワードへ変更してもらいます。</p>
+              <label><span>新しい仮パスワード</span><input type="password" name="temporary_password" autocomplete="new-password" required></label>
+              <button type="submit" class="secondary">仮パスワードを設定</button>
+            </form>
+            {{if eq .State "active"}}<form method="post" action="/console/accounts/{{.AccountRef}}/disable" class="danger-zone">
+              <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{.Revision}}">
+              <h3>アカウントを無効にする</h3><p>この担当者はログインできなくなり、現在のログイン状態も終了します。</p>
+              <button type="submit" class="danger-button">無効にする</button>
+            </form>{{end}}
+          </div></details></td></tr>{{end}}</tbody>
+        </table></div>
+      </section>
+      <section class="form-card narrow">
+        <div class="section-heading"><div><p class="section-kicker">NEW ACCOUNT</p><h2>アカウントを発行</h2><p>仮パスワードは本人へ安全な方法で伝えてください。</p></div></div>
+        <form method="post" action="/console/accounts"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+          <div class="form-row"><label><span>担当者名</span><input name="display_name" placeholder="例：製造1課 山田" required></label><label><span>ログインID</span><input name="login_id" autocomplete="off" placeholder="yamada" required></label></div>
+          <label><span>権限</span><select name="role"><option value="viewer">閲覧担当者 — 状態を見る</option><option value="admin">設定管理者 — センサー設定も変更する</option><option value="system_admin">システム管理者 — アカウントも管理する</option></select></label>
+          <label><span>仮パスワード</span><input name="temporary_password" type="password" autocomplete="new-password" required></label>
+          <button type="submit">アカウントを発行</button>
+        </form>
+      </section>
+      {{else}}{{template "empty-state" "アカウント管理はシステム管理者だけが利用できます。"}}{{end}}
+      {{end}}
+
+      {{if eq .Page "system"}}
+      <section class="system-grid">
+        <article class="system-card"><span class="system-icon">●</span><div><h2>IoTKit Site</h2><strong class="ok-text">稼働中</strong><p>Consoleとデータ保存サービスは動作しています。</p></div></article>
+        <article class="system-card"><span class="system-icon">⌁</span><div><h2>通信証明書</h2>{{if .Certificate.Available}}<strong class="{{if .Certificate.NeedsAction}}warn-text{{else}}ok-text{{end}}">有効期限まで {{.Certificate.DaysRemaining}}日</strong><p>{{.Certificate.NotAfter}} まで有効です。</p>{{else}}<strong class="warn-text">Consoleでは確認できません</strong><p>導入時の証明書設定と運用コマンドを確認してください。</p>{{end}}</div></article>
+        <article class="system-card"><span class="system-icon">↗</span><div><h2>外部出力</h2><strong>{{len .Outputs}}件</strong><p>MQTTの接続先や認証情報は、この画面から変更できません。</p></div></article>
+      </section>
+      <section class="guidance-card"><h2>問題が起きたとき</h2><ol><li>「現在の信号」で停止・古い信号を確認する</li><li>「受信履歴」で最後に届いた時刻を確認する</li><li>復旧しない場合は導入担当者へ、Edge名と発生時刻を伝える</li></ol></section>
+      {{end}}
     </main>
   </div>
+  <div class="mobile-overlay" hidden></div>
   <script src="/static/console.js" defer></script>
 </body>
 </html>
 {{end}}
+
+{{define "signal-table"}}
+<div class="table-wrap signal-table-wrap">
+  <table id="signal-table">
+    <thead><tr><th>信号</th><th>センサー種別</th><th>Edge</th><th>現在値</th><th>受信状態</th><th>最終受信</th></tr></thead>
+    <tbody>
+    {{range .SignalRows}}
+    <tr data-status="{{.StatusClass}}">
+      <td><strong>{{.Name}}</strong><small class="table-subtext">{{.SettingLabel}}</small></td>
+      <td><span class="sensor-type">{{.SensorType}}</span></td>
+      <td>{{.Edge}}</td>
+      <td><span class="measurement">{{.Value}}</span>{{if .Unit}} <span class="measurement-unit">{{.Unit}}</span>{{end}}</td>
+      <td><span class="status-pill {{.StatusClass}}"><i aria-hidden="true"></i>{{.StatusLabel}}</span></td>
+      <td title="{{.LastReceivedTitle}}">{{.LastReceived}}</td>
+    </tr>
+    {{else}}<tr class="empty-row"><td colspan="6">信号はまだありません。Edgeからデータが届くと、ここに現在値が表示されます。</td></tr>{{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{define "empty-state"}}<div class="empty-state"><span aria-hidden="true">○</span><strong>{{.}}</strong></div>{{end}}

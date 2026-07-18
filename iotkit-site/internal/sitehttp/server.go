@@ -117,6 +117,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /", server.root)
 	server.mux.HandleFunc("GET /login", server.loginPage)
 	server.mux.HandleFunc("POST /login", server.loginForm)
+	server.mux.HandleFunc("POST /logout", server.logoutForm)
 	server.mux.HandleFunc("GET /password", server.passwordPage)
 	server.mux.HandleFunc("POST /password", server.passwordForm)
 	server.mux.HandleFunc("GET /status", server.statusPage)
@@ -127,13 +128,18 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /output", server.consolePage)
 	server.mux.HandleFunc("GET /audit", server.consolePage)
 	server.mux.HandleFunc("GET /accounts", server.consolePage)
+	server.mux.HandleFunc("GET /system", server.consolePage)
 	server.mux.HandleFunc("POST /console/devices/{device_ref}/profile", server.consoleDeviceProfile)
 	server.mux.HandleFunc("POST /console/signals/{signal_ref}/profile", server.consoleSignalProfile)
 	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic", server.consoleSemantic)
 	server.mux.HandleFunc("POST /console/outputs/yokakit", server.consoleYokaKitOutput)
 	server.mux.HandleFunc("POST /console/accounts", server.consoleAccount)
+	server.mux.HandleFunc("POST /console/accounts/{account_ref}", server.consoleAccountUpdate)
+	server.mux.HandleFunc("POST /console/accounts/{account_ref}/disable", server.consoleAccountDisable)
+	server.mux.HandleFunc("POST /console/accounts/{account_ref}/password", server.consoleAccountPassword)
 	server.mux.HandleFunc("GET /static/site.css", server.stylesheet)
 	server.mux.HandleFunc("GET /static/console.js", server.consoleScript)
+	server.mux.HandleFunc("GET /static/pinkietech-mark.svg", server.brandMark)
 	server.mux.HandleFunc("POST /api/v1/session", server.createSession)
 	server.mux.HandleFunc("GET /api/v1/session", server.getSession)
 	server.mux.HandleFunc("DELETE /api/v1/session", server.deleteSession)
@@ -167,7 +173,7 @@ func setSecurityHeaders(header http.Header) {
 			"object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Frame-Options", "DENY")
-	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("Referrer-Policy", "same-origin")
 }
 
 func (server *Server) root(response http.ResponseWriter, request *http.Request) {
@@ -213,6 +219,25 @@ func (server *Server) loginForm(response http.ResponseWriter, request *http.Requ
 	http.Redirect(response, request, target, http.StatusSeeOther)
 }
 
+func (server *Server) logoutForm(response http.ResponseWriter, request *http.Request) {
+	auth, err := server.authenticate(request)
+	if err != nil {
+		server.clearSessionCookies(response)
+		http.Redirect(response, request, "/login", http.StatusSeeOther)
+		return
+	}
+	if !server.authorizeMutation(response, request, auth.token) {
+		return
+	}
+	if err := server.sessions.Logout(request.Context(), auth.token); err != nil {
+		http.Error(response, "ログアウトできませんでした。もう一度お試しください。",
+			http.StatusInternalServerError)
+		return
+	}
+	server.clearSessionCookies(response)
+	http.Redirect(response, request, "/login", http.StatusSeeOther)
+}
+
 func (server *Server) statusPage(response http.ResponseWriter, request *http.Request) {
 	server.consolePage(response, request)
 }
@@ -234,6 +259,16 @@ func (server *Server) consoleScript(response http.ResponseWriter, _ *http.Reques
 		return
 	}
 	response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	_, _ = response.Write(content)
+}
+
+func (server *Server) brandMark(response http.ResponseWriter, _ *http.Request) {
+	content, err := assets.ReadFile("static/pinkietech-mark.svg")
+	if err != nil {
+		http.NotFound(response, nil)
+		return
+	}
+	response.Header().Set("Content-Type", "image/svg+xml")
 	_, _ = response.Write(content)
 }
 
@@ -428,7 +463,14 @@ func (server *Server) authorizeMutation(
 }
 
 func (server *Server) validOrigin(request *http.Request) bool {
-	return request.Header.Get("Origin") == server.publicOrigin
+	if origin := request.Header.Get("Origin"); origin != "" {
+		return origin == server.publicOrigin
+	}
+	referer, err := url.Parse(request.Referer())
+	if err != nil || referer.Scheme == "" || referer.Host == "" {
+		return false
+	}
+	return referer.Scheme+"://"+referer.Host == server.publicOrigin
 }
 
 func (server *Server) setSessionCookies(response http.ResponseWriter, session sitesession.Session) {

@@ -126,6 +126,7 @@ type DeviceSummary struct {
 
 type SignalSummary struct {
 	SignalRef          string             `json:"signal_ref"`
+	SeriesKey          string             `json:"-"`
 	Edge               string             `json:"edge"`
 	DeviceRef          *string            `json:"device_ref"`
 	DisplayName        string             `json:"display_name"`

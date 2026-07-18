@@ -347,7 +347,7 @@ func (store *Store) ListInventorySignals(
 		return nil, err
 	}
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT source.signal_ref, source.edge_node_id,
+		SELECT source.signal_ref, source.series_key, source.edge_node_id,
 			device.device_ref,
 			COALESCE(profile.display_name, ''),
 			profile.revision,
@@ -404,6 +404,7 @@ func (store *Store) ListInventorySignals(
 		var siteReceivedAt sql.NullInt64
 		if err := rows.Scan(
 			&summary.SignalRef,
+			&summary.SeriesKey,
 			&summary.Edge,
 			&deviceRef,
 			&summary.DisplayName,

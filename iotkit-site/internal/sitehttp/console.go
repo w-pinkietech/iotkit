@@ -17,20 +17,33 @@ import (
 type consoleData struct {
 	Page               string
 	Title              string
+	Description        string
+	Notice             string
+	PageError          string
 	DisplayName        string
 	Role               siteapp.AccountRole
+	RoleLabel          string
 	IsAdmin            bool
 	IsOwner            bool
 	CSRF               string
 	Devices            []siteapp.DeviceSummary
 	Signals            []siteapp.SignalSummary
+	DeviceRows         []consoleDeviceView
+	SignalRows         []consoleSignalView
+	LogRows            []consoleLogView
+	AuditRows          []consoleAuditView
 	Definitions        []semantics.Definition
+	OutputDefinitions  []consoleDefinitionOption
 	Outputs            []store.YokaKitRoute
+	OutputRows         []consoleOutputView
 	Audit              []siteapp.AuditEvent
 	Accounts           []siteapp.Account
-	Raw                any
 	Certificate        certificateStatus
 	ProjectionFailures int64
+	ReceivingCount     int
+	AttentionCount     int
+	UnconfiguredCount  int
+	EdgeCount          int
 }
 
 type certificateStatus struct {
@@ -50,9 +63,20 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		page = "status"
 	}
 	titles := map[string]string{
-		"status": "現場の状態", "monitor": "モニター", "devices": "デバイス",
-		"signals": "信号", "logs": "受信ログ", "output": "外部出力",
-		"audit": "変更履歴", "accounts": "アカウント",
+		"status": "現場の概要", "monitor": "現在の信号", "devices": "設置機器",
+		"signals": "信号の設定", "logs": "受信履歴", "output": "外部出力",
+		"audit": "変更履歴", "accounts": "アカウント", "system": "システム",
+	}
+	descriptions := map[string]string{
+		"status":   "現場のセンサーとデータの流れを、ひと目で確認できます。",
+		"monitor":  "各センサーから最後に届いた値と受信状態を確認します。",
+		"devices":  "現場に設置した機器の名前と場所を管理します。",
+		"signals":  "信号の表示名と、IoTKitでの扱い方を設定します。",
+		"logs":     "Siteが受け取った直近のデータを時系列で確認します。",
+		"output":   "意味付けしたデータが外部アプリへ渡っているか確認します。",
+		"audit":    "誰が、いつ、どの設定を変更したか確認します。",
+		"accounts": "Consoleへログインできる担当者と権限を管理します。",
+		"system":   "Siteと通信証明書の状態を確認します。",
 	}
 	title, exists := titles[page]
 	if !exists {
@@ -60,11 +84,19 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		return
 	}
 	data := consoleData{
-		Page: page, Title: title, DisplayName: auth.account.DisplayName,
-		Role: auth.account.Role,
+		Page: page, Title: title, Description: descriptions[page],
+		DisplayName: auth.account.DisplayName,
+		Role:        auth.account.Role,
+		RoleLabel:   roleLabel(auth.account.Role),
 		IsAdmin: auth.account.Role == siteapp.AccountRoleAdmin ||
 			auth.account.Role == siteapp.AccountRoleSystemAdmin,
 		IsOwner: auth.account.Role == siteapp.AccountRoleSystemAdmin,
+	}
+	if request.URL.Query().Get("saved") == "1" {
+		data.Notice = "変更を保存しました。"
+	}
+	if request.URL.Query().Get("error") == "save" {
+		data.PageError = "保存できませんでした。入力内容を確認し、画面を再読み込みしてもう一度お試しください。"
 	}
 	data.Certificate = server.readCertificateStatus()
 	if cookie, err := request.Cookie(csrfCookieName); err == nil {
@@ -76,33 +108,66 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		data.Signals, err = server.site.ListSignals(
 			request.Context(), siteapp.PageRequest{Limit: 100},
 		)
-		if err == nil && page == "signals" {
+		if err == nil && (page == "signals" || page == "status") {
 			data.Definitions, err = server.semantics.List(request.Context())
 		}
 		if err == nil && page == "status" {
 			data.ProjectionFailures, err = server.store.SemanticProjectionFailureCount(
 				request.Context(),
 			)
+			if err == nil {
+				data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
+			}
 		}
+		data.SignalRows = newConsoleSignalViews(data.Signals, data.Definitions, server.now())
+		data.summarizeSignals()
 	case "devices":
 		data.Devices, err = server.site.ListDevices(
 			request.Context(), siteapp.PageRequest{Limit: 100},
 		)
+		for _, device := range data.Devices {
+			data.DeviceRows = append(data.DeviceRows, newConsoleDeviceView(device, server.now()))
+		}
 	case "logs":
-		data.Raw, err = server.store.ListRawRecords(request.Context(), 100)
+		var records []store.RawRecord
+		records, err = server.store.ListRawRecords(request.Context(), 100)
+		if err == nil {
+			data.Signals, err = server.site.ListSignals(
+				request.Context(), siteapp.PageRequest{Limit: 100},
+			)
+		}
+		if err == nil {
+			data.SignalRows = newConsoleSignalViews(data.Signals, nil, server.now())
+			data.LogRows = newConsoleLogViews(records, data.SignalRows)
+		}
 	case "output":
 		data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
+		data.OutputRows = newConsoleOutputViews(data.Outputs)
 		if err == nil {
 			data.Definitions, err = server.semantics.List(request.Context())
 		}
+		if err == nil {
+			data.Signals, err = server.site.ListSignals(
+				request.Context(), siteapp.PageRequest{Limit: 100},
+			)
+		}
+		if err == nil {
+			data.SignalRows = newConsoleSignalViews(data.Signals, data.Definitions, server.now())
+			data.OutputDefinitions = newConsoleDefinitionOptions(
+				data.Definitions, data.SignalRows,
+			)
+		}
 	case "audit":
 		data.Audit, err = server.site.ListAuditEvents(request.Context(), 100)
+		data.AuditRows = newConsoleAuditViews(data.Audit)
 	case "accounts":
 		if data.IsOwner {
 			data.Accounts, err = server.accounts.ListAccounts(
 				request.Context(), server.actor(auth),
 			)
 		}
+	case "system":
+		data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
 	}
 	if err != nil {
 		http.Error(response, "画面の情報を取得できません", http.StatusInternalServerError)
@@ -111,6 +176,35 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := server.templates.ExecuteTemplate(response, "console.html", data); err != nil {
 		http.Error(response, "画面を表示できません", http.StatusInternalServerError)
+	}
+}
+
+func (data *consoleData) summarizeSignals() {
+	edges := make(map[string]struct{})
+	for _, signal := range data.SignalRows {
+		edges[signal.Edge] = struct{}{}
+		switch signal.StatusClass {
+		case "receiving":
+			data.ReceivingCount++
+		case "stale", "never":
+			data.AttentionCount++
+		}
+		if !signal.HasSemanticMapping {
+			data.UnconfiguredCount++
+		}
+	}
+	data.AttentionCount += int(data.ProjectionFailures)
+	data.EdgeCount = len(edges)
+}
+
+func roleLabel(role siteapp.AccountRole) string {
+	switch role {
+	case siteapp.AccountRoleSystemAdmin:
+		return "システム管理者"
+	case siteapp.AccountRoleAdmin:
+		return "設定管理者"
+	default:
+		return "閲覧担当者"
 	}
 }
 
@@ -213,7 +307,7 @@ func (server *Server) consoleYokaKitOutput(response http.ResponseWriter, request
 }
 
 func (server *Server) consoleAccount(response http.ResponseWriter, request *http.Request) {
-	auth, ok := server.requireBrowserMutation(response, request, false)
+	auth, ok := server.requireBrowserOwnerMutation(response, request)
 	if !ok {
 		return
 	}
@@ -226,6 +320,87 @@ func (server *Server) consoleAccount(response http.ResponseWriter, request *http
 		},
 	)
 	server.consoleMutationResult(response, request, "/accounts", err)
+}
+
+func (server *Server) consoleAccountUpdate(response http.ResponseWriter, request *http.Request) {
+	auth, ok := server.requireBrowserOwnerMutation(response, request)
+	if !ok {
+		return
+	}
+	revision := formRevision(request)
+	if revision == nil {
+		http.Error(response, "画面を再読み込みして、もう一度操作してください。",
+			http.StatusPreconditionFailed)
+		return
+	}
+	_, err := server.accounts.DispatchAccount(
+		request.Context(), server.actor(auth), siteapp.UpdateAccount{
+			AccountRef:       request.PathValue("account_ref"),
+			DisplayName:      request.FormValue("display_name"),
+			Role:             siteapp.AccountRole(request.FormValue("role")),
+			ExpectedRevision: *revision,
+		},
+	)
+	server.consoleMutationResult(response, request, "/accounts", err)
+}
+
+func (server *Server) consoleAccountDisable(response http.ResponseWriter, request *http.Request) {
+	auth, ok := server.requireBrowserOwnerMutation(response, request)
+	if !ok {
+		return
+	}
+	revision := formRevision(request)
+	if revision == nil {
+		http.Error(response, "画面を再読み込みして、もう一度操作してください。",
+			http.StatusPreconditionFailed)
+		return
+	}
+	_, err := server.accounts.DispatchAccount(
+		request.Context(), server.actor(auth), siteapp.DisableAccount{
+			AccountRef:       request.PathValue("account_ref"),
+			ExpectedRevision: *revision,
+		},
+	)
+	server.consoleMutationResult(response, request, "/accounts", err)
+}
+
+func (server *Server) consoleAccountPassword(response http.ResponseWriter, request *http.Request) {
+	auth, ok := server.requireBrowserOwnerMutation(response, request)
+	if !ok {
+		return
+	}
+	revision := formRevision(request)
+	if revision == nil {
+		http.Error(response, "画面を再読み込みして、もう一度操作してください。",
+			http.StatusPreconditionFailed)
+		return
+	}
+	_, err := server.accounts.DispatchAccount(
+		request.Context(), server.actor(auth), siteapp.ResetAccountPassword{
+			AccountRef:        request.PathValue("account_ref"),
+			TemporaryPassword: request.FormValue("temporary_password"),
+			ExpectedRevision:  *revision,
+		},
+	)
+	server.consoleMutationResult(response, request, "/accounts", err)
+}
+
+func (server *Server) requireBrowserOwnerMutation(
+	response http.ResponseWriter,
+	request *http.Request,
+) (requestAuth, bool) {
+	auth, ok := server.requireBrowserAuth(response, request)
+	if !ok {
+		return requestAuth{}, false
+	}
+	if !server.authorizeMutation(response, request, auth.token) {
+		return requestAuth{}, false
+	}
+	if auth.account.Role != siteapp.AccountRoleSystemAdmin {
+		http.Error(response, "この操作を行う権限がありません。", http.StatusForbidden)
+		return requestAuth{}, false
+	}
+	return auth, true
 }
 
 func (server *Server) requireBrowserMutation(
@@ -254,11 +429,10 @@ func (server *Server) consoleMutationResult(
 	err error,
 ) {
 	if err != nil {
-		http.Error(response, "保存できませんでした。入力内容と更新状況を確認してください。",
-			http.StatusBadRequest)
+		http.Redirect(response, request, target+"?error=save", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(response, request, target, http.StatusSeeOther)
+	http.Redirect(response, request, target+"?saved=1", http.StatusSeeOther)
 }
 
 func formRevision(request *http.Request) *int64 {
