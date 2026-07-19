@@ -15,13 +15,14 @@ const (
 	KindAlarm             Kind = "alarm"
 )
 
-type ConditionMode string
+type DetectorMode string
 
 const (
-	ConditionNone    ConditionMode = ""
-	ConditionBoolean ConditionMode = "boolean_equals"
-	ConditionAbove   ConditionMode = "above"
-	ConditionBelow   ConditionMode = "below"
+	DetectorNone              DetectorMode = ""
+	DetectorBooleanHighActive DetectorMode = "boolean_high_active"
+	DetectorBooleanLowActive  DetectorMode = "boolean_low_active"
+	DetectorHighActive        DetectorMode = "high_active"
+	DetectorLowActive         DetectorMode = "low_active"
 )
 
 type TriggerMode string
@@ -31,19 +32,72 @@ const (
 	TriggerActiveSample TriggerMode = "on_notification"
 )
 
-type Condition struct {
-	Mode       ConditionMode `json:"mode"`
-	BoolValue  bool          `json:"bool_value"`
-	Threshold  float64       `json:"threshold"`
-	Hysteresis float64       `json:"hysteresis"`
+const maxDebounceMS = int64(300_000)
+
+type Detector struct {
+	Mode           DetectorMode `json:"mode"`
+	RiseThreshold  float64      `json:"rise_threshold"`
+	FallThreshold  float64      `json:"fall_threshold"`
+	RiseDebounceMS int64        `json:"rise_debounce_ms"`
+	FallDebounceMS int64        `json:"fall_debounce_ms"`
 }
 
 type DefinitionSpec struct {
-	Kind      Kind        `json:"kind"`
-	Scale     float64     `json:"scale"`
-	Offset    float64     `json:"offset"`
-	Condition Condition   `json:"condition"`
-	Trigger   TriggerMode `json:"trigger"`
+	Kind     Kind        `json:"kind"`
+	Scale    float64     `json:"scale"`
+	Offset   float64     `json:"offset"`
+	Detector Detector    `json:"detector"`
+	Trigger  TriggerMode `json:"trigger"`
+}
+
+// UnmarshalJSON keeps existing Site databases readable while new writes use the
+// explicit rising/falling detector contract.
+func (spec *DefinitionSpec) UnmarshalJSON(data []byte) error {
+	type wireSpec struct {
+		Kind      Kind     `json:"kind"`
+		Scale     float64  `json:"scale"`
+		Offset    float64  `json:"offset"`
+		Detector  Detector `json:"detector"`
+		Condition struct {
+			Mode       string  `json:"mode"`
+			BoolValue  bool    `json:"bool_value"`
+			Threshold  float64 `json:"threshold"`
+			Hysteresis float64 `json:"hysteresis"`
+		} `json:"condition"`
+		Trigger TriggerMode `json:"trigger"`
+	}
+	var wire wireSpec
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*spec = DefinitionSpec{
+		Kind: wire.Kind, Scale: wire.Scale, Offset: wire.Offset,
+		Detector: wire.Detector, Trigger: wire.Trigger,
+	}
+	if spec.Detector.Mode != DetectorNone || wire.Condition.Mode == "" {
+		return nil
+	}
+	switch wire.Condition.Mode {
+	case "boolean_equals":
+		if wire.Condition.BoolValue {
+			spec.Detector.Mode = DetectorBooleanHighActive
+		} else {
+			spec.Detector.Mode = DetectorBooleanLowActive
+		}
+	case "above":
+		spec.Detector = Detector{
+			Mode:          DetectorHighActive,
+			RiseThreshold: wire.Condition.Threshold,
+			FallThreshold: wire.Condition.Threshold - wire.Condition.Hysteresis,
+		}
+	case "below":
+		spec.Detector = Detector{
+			Mode:          DetectorLowActive,
+			RiseThreshold: wire.Condition.Threshold + wire.Condition.Hysteresis,
+			FallThreshold: wire.Condition.Threshold,
+		}
+	}
+	return nil
 }
 
 func (spec DefinitionSpec) Validate() error {
@@ -53,32 +107,39 @@ func (spec DefinitionSpec) Validate() error {
 	if !finite(spec.Offset) {
 		return errors.New("semantic offset must be finite")
 	}
-	if !finite(spec.Condition.Threshold) || !finite(spec.Condition.Hysteresis) ||
-		spec.Condition.Hysteresis < 0 {
-		return errors.New("semantic threshold and hysteresis must be finite and non-negative")
+	if !finite(spec.Detector.RiseThreshold) || !finite(spec.Detector.FallThreshold) {
+		return errors.New("semantic detector thresholds must be finite")
+	}
+	if spec.Detector.RiseDebounceMS < 0 || spec.Detector.RiseDebounceMS > maxDebounceMS ||
+		spec.Detector.FallDebounceMS < 0 || spec.Detector.FallDebounceMS > maxDebounceMS {
+		return errors.New("semantic detector debounce must be between 0 and 300000 milliseconds")
+	}
+	if analogDetector(spec.Detector.Mode) &&
+		spec.Detector.FallThreshold > spec.Detector.RiseThreshold {
+		return errors.New("semantic falling threshold cannot exceed rising threshold")
 	}
 	switch spec.Kind {
 	case KindNumeric:
-		if spec.Condition.Mode != ConditionNone || spec.Trigger != "" {
-			return errors.New("numeric semantic definition cannot have a condition or trigger")
+		if spec.Detector.Mode != DetectorNone || spec.Trigger != "" {
+			return errors.New("numeric semantic definition cannot have a detector or trigger")
 		}
 	case KindBoolean:
-		if !validCondition(spec.Condition.Mode) || spec.Condition.Mode == ConditionNone {
-			return errors.New("boolean semantic definition requires a condition")
+		if !validDetector(spec.Detector.Mode) {
+			return errors.New("boolean semantic definition requires a detector")
 		}
 		if spec.Trigger != "" {
 			return errors.New("boolean semantic definition cannot have a trigger")
 		}
 	case KindCumulativeCounter:
-		if !validCondition(spec.Condition.Mode) || spec.Condition.Mode == ConditionNone {
-			return errors.New("cumulative counter requires a condition")
+		if !validDetector(spec.Detector.Mode) {
+			return errors.New("cumulative counter requires a detector")
 		}
 		if spec.Trigger != TriggerTransition && spec.Trigger != TriggerActiveSample {
 			return errors.New("cumulative counter requires a supported trigger")
 		}
 	case KindAlarm:
-		if spec.Condition.Mode != ConditionAbove && spec.Condition.Mode != ConditionBelow {
-			return errors.New("alarm semantic definition requires an above or below threshold")
+		if !validDetector(spec.Detector.Mode) {
+			return errors.New("alarm semantic definition requires a detector")
 		}
 		if spec.Trigger != "" {
 			return errors.New("alarm semantic definition cannot have a trigger")
@@ -89,8 +150,15 @@ func (spec DefinitionSpec) Validate() error {
 	return nil
 }
 
-func validCondition(mode ConditionMode) bool {
-	return mode == ConditionBoolean || mode == ConditionAbove || mode == ConditionBelow
+func validDetector(mode DetectorMode) bool {
+	return mode == DetectorBooleanHighActive ||
+		mode == DetectorBooleanLowActive ||
+		mode == DetectorHighActive ||
+		mode == DetectorLowActive
+}
+
+func analogDetector(mode DetectorMode) bool {
+	return mode == DetectorHighActive || mode == DetectorLowActive
 }
 
 func finite(value float64) bool {
@@ -98,9 +166,12 @@ func finite(value float64) bool {
 }
 
 type State struct {
-	Initialized bool
-	Active      bool
-	Counter     int64
+	Initialized   bool
+	Active        bool
+	Counter       int64
+	Pending       bool
+	PendingActive bool
+	PendingSince  int64
 }
 
 type Result struct {

@@ -251,6 +251,76 @@ func (store *Store) DeactivateSemanticDefinition(
 	return definition, nil
 }
 
+func (store *Store) ResetSemanticCounter(
+	ctx context.Context,
+	actor siteapp.Actor,
+	signalRef string,
+	precondition siteapp.RevisionPrecondition,
+) (semantics.Definition, error) {
+	var noDefinition semantics.Definition
+	if err := actor.Validate(); err != nil {
+		return noDefinition, err
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return noDefinition, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var definition semantics.Definition
+	var specJSON []byte
+	if err := tx.QueryRowContext(ctx, `
+		SELECT definition_id, revision, signal_ref, edge_node_id, series_key,
+			series_id, spec_json, active, created_at
+		FROM semantic_definitions_v2
+		WHERE signal_ref = ? AND active = 1
+	`, signalRef).Scan(
+		&definition.ID, &definition.Revision, &definition.SignalRef,
+		&definition.EdgeNodeID, &definition.SeriesKey, &definition.SeriesID,
+		&specJSON, &definition.Active, &definition.CreatedAt,
+	); errors.Is(err, sql.ErrNoRows) {
+		return noDefinition, siteapp.ErrNotFound
+	} else if err != nil {
+		return noDefinition, err
+	}
+	if err := json.Unmarshal(specJSON, &definition.DefinitionSpec); err != nil {
+		return noDefinition, err
+	}
+	if definition.Kind != semantics.KindCumulativeCounter {
+		return noDefinition, errors.New("semantic definition is not a cumulative counter")
+	}
+	if err := checkRevisionPrecondition(
+		precondition, true, definition.Revision,
+	); err != nil {
+		return noDefinition, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO semantic_definition_state_v2 (
+			definition_id, definition_revision, initialized, active,
+			counter, next_sequence, pending, pending_active, pending_since
+		) VALUES (?, ?, 0, 0, 0, 1, 0, 0, 0)
+		ON CONFLICT(definition_id, definition_revision) DO UPDATE SET
+			counter = 0
+	`, definition.ID, definition.Revision); err != nil {
+		return noDefinition, err
+	}
+	if err := insertAuditEventTx(ctx, tx, siteapp.AuditEvent{
+		OccurredAt:  time.Now().UnixMilli(),
+		ActorClass:  actor.Class,
+		ActorRef:    actor.Ref,
+		Operation:   "semantic_counter.reset",
+		ResourceRef: definition.ID,
+		Outcome:     auditOutcomeSuccess,
+		Summary:     json.RawMessage(`{"counter":0}`),
+	}); err != nil {
+		return noDefinition, err
+	}
+	if err := tx.Commit(); err != nil {
+		return noDefinition, err
+	}
+	return definition, nil
+}
+
 func scanSemanticDefinition(row rowScanner) (semantics.Definition, error) {
 	var definition semantics.Definition
 	var specJSON []byte
@@ -451,7 +521,8 @@ func (store *Store) projectSemanticV2Candidate(
 	var initialized bool
 	var active bool
 	err = tx.QueryRowContext(ctx, `
-		SELECT initialized, active, counter, next_sequence
+		SELECT initialized, active, counter, next_sequence,
+			pending, pending_active, pending_since
 		FROM semantic_definition_state_v2
 		WHERE definition_id = ? AND definition_revision = ?
 	`, candidate.DefinitionID, candidate.DefinitionRevision).Scan(
@@ -459,13 +530,18 @@ func (store *Store) projectSemanticV2Candidate(
 		&active,
 		&state.Counter,
 		&nextSequence,
+		&state.Pending,
+		&state.PendingActive,
+		&state.PendingSince,
 	)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	state.Initialized = initialized
 	state.Active = active
-	result, nextState, err := semantics.Evaluate(spec, state, record.Values[0])
+	result, nextState, err := semantics.EvaluateAt(
+		spec, state, record.Values[0], *record.EventTime,
+	)
 	if err != nil {
 		return err
 	}
@@ -512,15 +588,19 @@ func (store *Store) projectSemanticV2Candidate(
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO semantic_definition_state_v2 (
 			definition_id, definition_revision, initialized, active,
-			counter, next_sequence
-		) VALUES (?, ?, ?, ?, ?, ?)
+			counter, next_sequence, pending, pending_active, pending_since
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(definition_id, definition_revision) DO UPDATE SET
 			initialized = excluded.initialized,
 			active = excluded.active,
 			counter = excluded.counter,
-			next_sequence = excluded.next_sequence
+			next_sequence = excluded.next_sequence,
+			pending = excluded.pending,
+			pending_active = excluded.pending_active,
+			pending_since = excluded.pending_since
 	`, candidate.DefinitionID, candidate.DefinitionRevision,
-		nextState.Initialized, nextState.Active, nextState.Counter, nextSequence); err != nil {
+		nextState.Initialized, nextState.Active, nextState.Counter, nextSequence,
+		nextState.Pending, nextState.PendingActive, nextState.PendingSince); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -622,7 +702,9 @@ func (store *Store) ListSemanticPreviewWindow(
 	}
 
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT raw.received_at, json_extract(raw.record_json, '$.values[0]')
+		SELECT raw.received_at,
+			CAST(json_extract(raw.record_json, '$.event_time') AS INTEGER),
+			json_extract(raw.record_json, '$.values[0]')
 		FROM site_signals AS signal
 		JOIN raw_records AS raw
 			ON raw.edge_node_id = signal.edge_node_id
@@ -639,7 +721,9 @@ func (store *Store) ListSemanticPreviewWindow(
 	descending := make([]semantics.PreviewInput, 0, limit+1)
 	for rows.Next() {
 		var input semantics.PreviewInput
-		if err := rows.Scan(&input.ReceivedAt, &input.Value); err != nil {
+		if err := rows.Scan(
+			&input.ReceivedAt, &input.ObservedAt, &input.Value,
+		); err != nil {
 			return SemanticPreviewWindow{}, err
 		}
 		descending = append(descending, input)

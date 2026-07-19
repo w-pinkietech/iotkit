@@ -469,6 +469,11 @@ func (server *Server) consoleSignalProfile(response http.ResponseWriter, request
 	if !ok {
 		return
 	}
+	displayUnitMode := request.FormValue("display_unit_mode")
+	displayUnit := request.FormValue("display_unit")
+	if displayUnitMode == "dimensionless" {
+		displayUnit = ""
+	}
 	_, err := server.site.Dispatch(request.Context(), server.actor(auth), siteapp.UpdateSignalProfile{
 		SignalRef: request.PathValue("signal_ref"),
 		Input: siteapp.SignalProfileInput{
@@ -476,8 +481,8 @@ func (server *Server) consoleSignalProfile(response http.ResponseWriter, request
 			DisplaySensorType:      request.FormValue("display_sensor_type"),
 			DisplaySensorTypeLabel: request.FormValue("display_sensor_type_label"),
 			DisplayValueKind:       request.FormValue("display_value_kind"),
-			DisplayUnitMode:        request.FormValue("display_unit_mode"),
-			DisplayUnit:            request.FormValue("display_unit"),
+			DisplayUnitMode:        displayUnitMode,
+			DisplayUnit:            displayUnit,
 			DecimalPlaces:          formInt(request, "decimal_places"),
 		},
 		Precondition: siteapp.RevisionPrecondition{Expected: formRevision(request)},
@@ -563,20 +568,52 @@ func (server *Server) consoleSemantic(response http.ResponseWriter, request *htt
 	}
 	scale, _ := strconv.ParseFloat(request.FormValue("scale"), 64)
 	offset, _ := strconv.ParseFloat(request.FormValue("offset"), 64)
-	threshold, _ := strconv.ParseFloat(request.FormValue("threshold"), 64)
-	hysteresis, _ := strconv.ParseFloat(request.FormValue("hysteresis"), 64)
+	riseThreshold, _ := strconv.ParseFloat(request.FormValue("rise_threshold"), 64)
+	fallThreshold, _ := strconv.ParseFloat(request.FormValue("fall_threshold"), 64)
+	riseDebounceSeconds, _ := strconv.ParseFloat(
+		request.FormValue("rise_debounce_seconds"), 64,
+	)
+	fallDebounceSeconds, _ := strconv.ParseFloat(
+		request.FormValue("fall_debounce_seconds"), 64,
+	)
 	spec := semantics.DefinitionSpec{
 		Kind: semantics.Kind(request.FormValue("kind")), Scale: scale, Offset: offset,
-		Condition: semantics.Condition{
-			Mode:      semantics.ConditionMode(request.FormValue("condition")),
-			BoolValue: request.FormValue("bool_value") != "false",
-			Threshold: threshold, Hysteresis: hysteresis,
+		Detector: semantics.Detector{
+			Mode:          semantics.DetectorMode(request.FormValue("detector_mode")),
+			RiseThreshold: riseThreshold, FallThreshold: fallThreshold,
+			RiseDebounceMS: int64(riseDebounceSeconds * 1000),
+			FallDebounceMS: int64(fallDebounceSeconds * 1000),
 		},
 		Trigger: semantics.TriggerMode(request.FormValue("trigger")),
 	}
 	_, err := server.semantics.Put(
 		request.Context(), server.actor(auth), request.PathValue("signal_ref"),
 		spec, siteapp.RevisionPrecondition{Expected: formRevision(request)},
+	)
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(
+			request,
+			"/sensors/"+request.PathValue("signal_ref"),
+		),
+		err,
+	)
+}
+
+func (server *Server) consoleSemanticCounterReset(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	_, err := server.semantics.ResetCounter(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("signal_ref"),
+		siteapp.RevisionPrecondition{Expected: formRevision(request)},
 	)
 	server.consoleMutationResult(
 		response,

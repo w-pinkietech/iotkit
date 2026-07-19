@@ -22,10 +22,20 @@ func TestSetupCandidateUsesClosedDescriptorMapping(t *testing.T) {
 			measurementKey: "temperature_c",
 			valueType:      "float",
 			unit:           stringPointer("Cel"),
-			wantSensorType: "temperature",
+			wantSensorType: "thermocouple",
 			wantValueKind:  "numeric",
 			wantUnitMode:   "unit",
 			wantUnit:       "Cel",
+		},
+		{
+			name:           "illuminance descriptor",
+			measurementKey: "illuminance_lux",
+			valueType:      "float",
+			unit:           stringPointer("lx"),
+			wantSensorType: "illuminance",
+			wantValueKind:  "numeric",
+			wantUnitMode:   "unit",
+			wantUnit:       "lx",
 		},
 		{
 			name:           "contact descriptor",
@@ -73,8 +83,8 @@ func TestSetupStateIsDerivedFromProfilesAndMetadata(t *testing.T) {
 	deviceRevision := int64(1)
 	complete := SignalProfile{
 		SignalRef:         "sig_00000000000000000000000000000001",
-		DisplayName:       "温度",
-		DisplaySensorType: "temperature",
+		DisplayName:       "炉内熱電対",
+		DisplaySensorType: "thermocouple",
 		DisplayValueKind:  "numeric",
 		DisplayUnitMode:   "unit",
 		DisplayUnit:       "°C",

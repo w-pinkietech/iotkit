@@ -78,7 +78,11 @@
       const hasUnit = unitMode?.value === "unit" && valueKind?.value !== "boolean";
       if (unitField) unitField.hidden = !hasUnit;
       const unitInput = unitField?.querySelector("input");
-      if (unitInput) unitInput.required = hasUnit;
+      if (unitInput) {
+        unitInput.required = hasUnit;
+        unitInput.disabled = !hasUnit;
+        if (!hasUnit) unitInput.value = "";
+      }
       if (decimalField) decimalField.hidden = valueKind?.value === "boolean";
     };
     sensorType?.addEventListener("change", update);
@@ -92,14 +96,46 @@
 
   const toggleSemanticFields = (form) => {
     const kind = form.querySelector("[data-semantic-kind]");
-    const fields = form.querySelector("[data-condition-fields]");
-    if (!kind || !fields) return;
-    const update = () => {
-      const needsCondition = kind.value !== "numeric";
-      fields.hidden = !needsCondition;
-      fields.querySelectorAll("input, select").forEach((field) => {
-        field.disabled = !needsCondition;
+    const detectorFields = form.querySelector("[data-semantic-detector]");
+    const detector = form.elements.detector_mode;
+    const thresholds = form.querySelector("[data-semantic-thresholds]");
+    const triggerFields = form.querySelector("[data-semantic-trigger]");
+    const trigger = form.elements.trigger;
+    const booleanInput = form.dataset.booleanInput === "true";
+    if (!kind || !detectorFields || !detector || !triggerFields || !trigger) return;
+    const toggleFields = (container, visible) => {
+      if (!container) return;
+      container.hidden = !visible;
+      container.querySelectorAll("input, select").forEach((field) => {
+        field.disabled = !visible;
       });
+    };
+    const update = () => {
+      const selectedKind = kind.value;
+      const needsDetector = selectedKind !== "numeric";
+      const countsValues = selectedKind === "cumulative_counter";
+      toggleFields(detectorFields, needsDetector);
+      toggleFields(triggerFields, countsValues);
+      for (const option of detector.options) {
+        const matchesInput = booleanInput
+          ? option.hasAttribute("data-detector-boolean")
+          : option.hasAttribute("data-detector-analog");
+        option.hidden = !matchesInput;
+        option.disabled = !matchesInput;
+      }
+      const selected = detector.selectedOptions[0];
+      if (needsDetector && (!selected || selected.disabled)) {
+        detector.value = booleanInput ? "boolean_high_active" : "high_active";
+      } else if (!needsDetector) {
+        detector.value = "";
+      }
+      toggleFields(thresholds, needsDetector && !booleanInput);
+
+      if (countsValues && !["on_transition", "on_notification"].includes(trigger.value)) {
+        trigger.value = "on_transition";
+      } else if (!countsValues) {
+        trigger.value = "";
+      }
     };
     kind.addEventListener("change", update);
     update();
@@ -122,6 +158,8 @@
   const finite = (value) => Number.isFinite(Number(value));
   const formatNumber = (value) =>
     Number(value).toLocaleString("ja-JP", {maximumFractionDigits: 3});
+  const formatPreviewCurrentValue = (value, valueKind) =>
+    valueKind === "boolean" ? (Number(value) === 0 ? "OFF" : "ON") : formatNumber(value);
   const formatDuration = (start, end) => {
     const milliseconds = Math.max(0, Number(end) - Number(start));
     if (milliseconds < 60_000) return `${Math.max(1, Math.round(milliseconds / 1000))}秒`;
@@ -131,11 +169,12 @@
     kind: form.elements.kind.value,
     scale: number(form, "scale"),
     offset: number(form, "offset"),
-    condition: {
-      mode: form.elements.condition?.value || "",
-      bool_value: form.elements.bool_value?.value !== "false",
-      threshold: number(form, "threshold"),
-      hysteresis: number(form, "hysteresis"),
+    detector: {
+      mode: form.elements.detector_mode?.value || "",
+      rise_threshold: number(form, "rise_threshold"),
+      fall_threshold: number(form, "fall_threshold"),
+      rise_debounce_ms: Math.round(number(form, "rise_debounce_seconds") * 1000),
+      fall_debounce_ms: Math.round(number(form, "fall_debounce_seconds") * 1000),
     },
     trigger: form.elements.trigger?.value || "",
   });
@@ -180,7 +219,8 @@
         if (finite(value)) values.push(Number(value));
       }
     }
-    if (finite(payload.threshold)) values.push(Number(payload.threshold));
+    if (finite(payload.rise_threshold)) values.push(Number(payload.rise_threshold));
+    if (finite(payload.fall_threshold)) values.push(Number(payload.fall_threshold));
     let minValue = Math.min(...values);
     let maxValue = Math.max(...values);
     if (minValue === maxValue) {
@@ -227,8 +267,9 @@
       label.textContent = formatNumber(maxValue - (index * (maxValue - minValue)) / 4);
     }
 
-    if (finite(payload.threshold)) {
-      const thresholdY = y(payload.threshold);
+    const drawThreshold = (value, labelText) => {
+      if (!finite(value)) return;
+      const thresholdY = y(value);
       addSVG(svg, "line", {
         x1: left,
         x2: width - right,
@@ -242,8 +283,10 @@
         "text-anchor": "end",
         class: "chart-threshold-label",
       });
-      label.textContent = `しきい値 ${formatNumber(payload.threshold)}`;
-    }
+      label.textContent = `${labelText} ${formatNumber(value)}`;
+    };
+    drawThreshold(payload.rise_threshold, "立上り");
+    drawThreshold(payload.fall_threshold, "立下り");
 
     points.forEach((point, index) => {
       if (point.sample_count > 1) {
@@ -360,6 +403,11 @@
     const count = panel.querySelector("[data-preview-count]");
     const message = panel.querySelector("[data-preview-message]");
     const chart = panel.querySelector("[data-preview-chart]");
+    const currentValue = panel.querySelector("[data-preview-current-value]");
+    const currentReceived = panel.querySelector("[data-preview-current-received]");
+    const valueKind = document.querySelector(
+      'form[data-signal-profile] [name="display_value_kind"]',
+    );
     let controller;
     let debounce = 0;
     let previewUnavailable = false;
@@ -405,6 +453,21 @@
         }
         const payload = await response.json();
         renderPreviewChart(chart, payload);
+        const latest = payload.points?.at(-1);
+        if (latest && currentValue) {
+          currentValue.textContent = formatPreviewCurrentValue(latest.input, valueKind?.value);
+        }
+        if (latest && currentReceived) {
+          const elapsed = Math.max(0, Date.now() - Number(latest.received_at));
+          const relative =
+            elapsed < 5_000
+              ? "たった今"
+              : elapsed < 60_000
+                ? `${Math.floor(elapsed / 1_000)}秒前`
+                : `${Math.floor(elapsed / 60_000)}分前`;
+          currentReceived.textContent = `最終受信 ${relative}`;
+          currentReceived.title = new Date(latest.received_at).toLocaleString("ja-JP");
+        }
         if (payload.input_count === 0) {
           range.textContent = "受信データはまだありません";
           count.textContent = "試す値で設定結果を確認できます。";

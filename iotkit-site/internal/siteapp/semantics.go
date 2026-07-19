@@ -21,6 +21,12 @@ type SemanticRepository interface {
 		string,
 		RevisionPrecondition,
 	) (semantics.Definition, error)
+	ResetSemanticCounter(
+		context.Context,
+		Actor,
+		string,
+		RevisionPrecondition,
+	) (semantics.Definition, error)
 	ListSemanticDefinitions(context.Context) ([]semantics.Definition, error)
 }
 
@@ -68,6 +74,24 @@ func (service *SemanticService) Deactivate(
 		return semantics.Definition{}, err
 	}
 	return service.repository.DeactivateSemanticDefinition(
+		ctx, actor, signalRef, precondition,
+	)
+}
+
+func (service *SemanticService) ResetCounter(
+	ctx context.Context,
+	actor Actor,
+	signalRef string,
+	precondition RevisionPrecondition,
+) (semantics.Definition, error) {
+	if actor.Class != ActorAccount ||
+		(actor.Role != AccountRoleAdmin && actor.Role != AccountRoleSystemAdmin) {
+		return semantics.Definition{}, ErrForbidden
+	}
+	if err := validateResourceRef(signalRef, "sig_"); err != nil {
+		return semantics.Definition{}, err
+	}
+	return service.repository.ResetSemanticCounter(
 		ctx, actor, signalRef, precondition,
 	)
 }

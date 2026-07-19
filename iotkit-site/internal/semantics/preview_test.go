@@ -46,9 +46,8 @@ func TestBuildPreviewEvaluatesCumulativeInputBeforeSummarizing(t *testing.T) {
 	spec := DefinitionSpec{
 		Kind:  KindCumulativeCounter,
 		Scale: 1,
-		Condition: Condition{
-			Mode:      ConditionBoolean,
-			BoolValue: true,
+		Detector: Detector{
+			Mode: DetectorBooleanHighActive,
 		},
 		Trigger: TriggerTransition,
 	}

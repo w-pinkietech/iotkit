@@ -4,6 +4,7 @@ import "errors"
 
 type PreviewInput struct {
 	ReceivedAt int64   `json:"received_at"`
+	ObservedAt int64   `json:"observed_at,omitempty"`
 	Value      float64 `json:"value"`
 }
 
@@ -47,7 +48,11 @@ func BuildPreview(
 	state := State{}
 	for _, input := range inputs {
 		previous := state
-		result, next, err := Evaluate(spec, state, input.Value)
+		observedAt := input.ObservedAt
+		if observedAt == 0 {
+			observedAt = input.ReceivedAt
+		}
+		result, next, err := EvaluateAt(spec, state, input.Value, observedAt)
 		if err != nil {
 			return Preview{}, err
 		}

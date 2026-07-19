@@ -74,26 +74,31 @@ func (server *Server) createMappingPreview(
 		server.badRequest(response)
 		return
 	}
-	var threshold *float64
-	if spec.Condition.Mode == semantics.ConditionAbove ||
-		spec.Condition.Mode == semantics.ConditionBelow {
-		value := spec.Condition.Threshold
-		threshold = &value
+	var riseThreshold *float64
+	var fallThreshold *float64
+	if spec.Detector.Mode == semantics.DetectorHighActive ||
+		spec.Detector.Mode == semantics.DetectorLowActive {
+		rise := spec.Detector.RiseThreshold
+		fall := spec.Detector.FallThreshold
+		riseThreshold = &rise
+		fallThreshold = &fall
 	}
 	writeJSON(response, http.StatusOK, struct {
 		Kind semantics.Kind `json:"kind"`
 		semantics.Preview
-		WindowStart int64    `json:"window_start,omitempty"`
-		WindowEnd   int64    `json:"window_end,omitempty"`
-		TruncatedBy string   `json:"truncated_by,omitempty"`
-		Threshold   *float64 `json:"threshold,omitempty"`
+		WindowStart   int64    `json:"window_start,omitempty"`
+		WindowEnd     int64    `json:"window_end,omitempty"`
+		TruncatedBy   string   `json:"truncated_by,omitempty"`
+		RiseThreshold *float64 `json:"rise_threshold,omitempty"`
+		FallThreshold *float64 `json:"fall_threshold,omitempty"`
 	}{
-		Kind:        spec.Kind,
-		Preview:     preview,
-		WindowStart: window.WindowStart,
-		WindowEnd:   window.WindowEnd,
-		TruncatedBy: window.TruncatedBy,
-		Threshold:   threshold,
+		Kind:          spec.Kind,
+		Preview:       preview,
+		WindowStart:   window.WindowStart,
+		WindowEnd:     window.WindowEnd,
+		TruncatedBy:   window.TruncatedBy,
+		RiseThreshold: riseThreshold,
+		FallThreshold: fallThreshold,
 	})
 }
 
@@ -131,32 +136,36 @@ func previewSpecValidationField(spec semantics.DefinitionSpec) (string, error) {
 	if !previewFinite(spec.Offset) {
 		return "offset", err
 	}
-	if !previewFinite(spec.Condition.Threshold) {
-		return "threshold", err
+	if !previewFinite(spec.Detector.RiseThreshold) {
+		return "rise_threshold", err
 	}
-	if !previewFinite(spec.Condition.Hysteresis) ||
-		spec.Condition.Hysteresis < 0 {
-		return "hysteresis", err
+	if !previewFinite(spec.Detector.FallThreshold) {
+		return "fall_threshold", err
+	}
+	if spec.Detector.RiseDebounceMS < 0 ||
+		spec.Detector.RiseDebounceMS > 300_000 {
+		return "rise_debounce_seconds", err
+	}
+	if spec.Detector.FallDebounceMS < 0 ||
+		spec.Detector.FallDebounceMS > 300_000 {
+		return "fall_debounce_seconds", err
 	}
 	switch spec.Kind {
 	case semantics.KindNumeric:
 		return "kind", err
 	case semantics.KindBoolean:
-		if !previewConditionSupported(spec.Condition.Mode) ||
-			spec.Condition.Mode == semantics.ConditionNone {
-			return "condition", err
+		if !previewDetectorSupported(spec.Detector.Mode) {
+			return "detector_mode", err
 		}
 		return "kind", err
 	case semantics.KindCumulativeCounter:
-		if !previewConditionSupported(spec.Condition.Mode) ||
-			spec.Condition.Mode == semantics.ConditionNone {
-			return "condition", err
+		if !previewDetectorSupported(spec.Detector.Mode) {
+			return "detector_mode", err
 		}
 		return "trigger", err
 	case semantics.KindAlarm:
-		if spec.Condition.Mode != semantics.ConditionAbove &&
-			spec.Condition.Mode != semantics.ConditionBelow {
-			return "condition", err
+		if !previewDetectorSupported(spec.Detector.Mode) {
+			return "detector_mode", err
 		}
 		return "kind", err
 	default:
@@ -164,10 +173,11 @@ func previewSpecValidationField(spec semantics.DefinitionSpec) (string, error) {
 	}
 }
 
-func previewConditionSupported(mode semantics.ConditionMode) bool {
-	return mode == semantics.ConditionBoolean ||
-		mode == semantics.ConditionAbove ||
-		mode == semantics.ConditionBelow
+func previewDetectorSupported(mode semantics.DetectorMode) bool {
+	return mode == semantics.DetectorBooleanHighActive ||
+		mode == semantics.DetectorBooleanLowActive ||
+		mode == semantics.DetectorHighActive ||
+		mode == semantics.DetectorLowActive
 }
 
 func previewFinite(value float64) bool {

@@ -60,14 +60,15 @@ IoTKitはYokaKitを内包しない。YokaKitは汎用MQTT出力を利用し得�
 | 登録済みdevice一覧・detail | 形を変えて継承 | adapter/Edge descriptorで発見し、Site profileで名前・locationを付ける。source IDは通常画面へ出さない | 初期 |
 | device追加・access type選択 | 形を変えて継承 | 製品別formで手登録せず、adapter導入とdescriptor収束を正とする。未対応sensor追加はadapter開発体験で扱う | 初期/後続 |
 | device削除 | 形を変えて継承 | hard deleteせずretire/stale化し、raw、profile、mappingを保持する | 初期 |
-| sensor名、unit、表示桁、offset | 一部継承 | 名前はSite profile、unit/value typeはdescriptor所有。表示桁と校正offsetは意味と適用地点を別設計する | 名前は初期、他は保留 |
+| sensor名、unit、表示桁、offset、ADC倍率 | 形を変えて継承 | 名前・表示unit・表示桁はSite profile、校正offsetと倍率はfuture-only semantic definitionで扱う | 初期 |
+| 熱電対型 | 形を変えて継承 | 対応Adapterが設定を受け付ける場合のEdge Adapter設定。BravePI Mainboardの製品固有設定は既存の管理方法を維持する | Adapter設定時 |
 | 現在値一覧・自動更新 | 継承 | bounded current-value read modelを低頻度pollingし、表示中pageだけ更新する | 初期 |
 | realtime chart・接点変化表示 | 形を変えて継承 | 設置・稼働確認に必要な短いrecent windowだけを表示し、業務dashboardにしない | 初期候補 |
 | 履歴の期間検索・集約chart | 形を変えて継承 | Site raw/queryから有界rangeを返す。全履歴scanや無制限series比較を許さない | 初期候補 |
 | CSV/Excel download・graph画像保存 | 一部継承 | 汎用CSVを正とし、秘密/internal identityを除外する。Excel専用生成と画像保存は追加価値を確認する | CSVは初期候補、他は後続 |
-| 接点count・threshold立上り/立下り | 形を変えて継承 | future-only semantic mapping/evaluatorへ移し、初版`production_pulse`から汎用thresholdへ拡張可能にする | pulseは初期、汎用thresholdは後続 |
+| 接点count・threshold立上り/立下り | 形を変えて継承 | future-only semantic definitionへ移し、上下しきい値、上下debounce、有効側、累積方法を汎用センサー判定として扱う | 初期 |
 | MQTT broker/topic設定・送信 | 形を変えて継承 | Broker connectionはlocal CLIの完全profile、topic意味契約はSite設定、配送はversioned outputとoutboxで扱う | 初期 |
-| email宛先・threshold mail | 要求を保持して保留 | MQTT consumerへ任せるかoptional notifierを持つか、低費用・単体完結性を含めて別判断する | 保留 |
+| email宛先・threshold mail | 要求を保持して分離 | semantic observationを入力にするoptional notifier route / adapterとして扱い、センサー判定DBへ宛先を埋め込まない | 後続 |
 | 接点出力・外部機器駆動 | 要求を保持して分離 | generic typed command/downlinkが必要。adapter固有commandをSite semantic処理へ直結しない | 後続 |
 | storage空き容量・保存停止表示 | 継承 | Site/Edge statusへ明示し、容量不足を正常表示で隠さない | 初期 |
 | USB camera live view | 形を変えて継承 | optional Edge camera serviceのHTTP mediaをSite/Caddy HTTPS originから中継。MQTTは能力/health metadataだけ | Site Consoleの初期候補 |
@@ -385,25 +386,30 @@ PUT /api/v1/devices/{device_ref}/profile
 GET /api/v1/signals/{signal_ref}/profile
 PUT /api/v1/signals/{signal_ref}/profile
 
-GET    /api/v1/signals/{signal_ref}/semantic-mapping
-PUT    /api/v1/signals/{signal_ref}/semantic-mapping
-DELETE /api/v1/signals/{signal_ref}/semantic-mapping
+GET    /api/v1/semantic-definitions
+PUT    /api/v1/signals/{signal_ref}/semantic-definition
+DELETE /api/v1/signals/{signal_ref}/semantic-definition
+POST   /api/v1/signals/{signal_ref}/semantic-counter/reset
 ```
 
 個別GETと全mutationはaccount sessionを要求し、mutationは`admin`以上に限定する。GETはresource `ETag`を返し、PUT/DELETEは
 `If-Match`を必須とする。欠落は`428 Precondition Required`、revision不一致は
 `412 Precondition Failed`とし、複数画面からの無音上書きを防ぐ。
 
-初版meaningは`production_pulse`だけで、作業者は内部語を見ず次を必須選択する。暗黙defaultは作らない。
+semantic definitionは、数値、ON/OFF、累積値、alarmを扱う。状態判定を伴うdefinitionは次を
+必須選択し、暗黙defaultをAPI契約に持たない。
 
-- `on_transition`: 対象状態へ変化した瞬間に1個
-- `on_notification`: 対象状態の通知を受信するたびに1個
-- `target_value`: ON (`1`) またはOFF (`0`)
+- `detector.mode`: boolean high/low active、またはanalog high/low active
+- `rise_threshold` / `fall_threshold`: analog入力の上下しきい値
+- `rise_debounce_ms` / `fall_debounce_ms`: 各方向0〜300秒の確定待ち
+- `on_transition`: 有効状態へ変化した瞬間に1加算
+- `on_notification`: 有効状態の通知を受信するたびに1加算
 
-内部では既存`active_edge` / `active_sample`へ対応する。BravePI専用の反対値補完を共通semantic処理へ
-入れない。PUTは現在のaccepted cursorを開始境界にした新mapping revisionを作り、設定前rawを処理しない。
+BravePI専用の反対値補完を共通semantic処理へ入れない。PUTは現在のaccepted cursorを開始境界にした
+新definition revisionを作り、設定前rawを処理しない。
 DELETEも現在cursorを終了境界にしてfuture-onlyでdeactivateし、raw、既存semantic event、既にenqueue済みの
-出力を削除しない。
+出力を削除しない。counter resetはdefinition revisionを変更せず、現在の永続counterだけを0にして
+監査記録へ残す。
 
 ### Mapping preview
 

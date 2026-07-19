@@ -34,8 +34,8 @@ func TestV1TwoEdgeSemanticOutputJourneySurvivesRestart(t *testing.T) {
 			ctx, siteapp.LocalCLIActor(), signal.SignalRef,
 			semantics.DefinitionSpec{
 				Kind: semantics.KindBoolean, Scale: 1,
-				Condition: semantics.Condition{
-					Mode: semantics.ConditionBoolean, BoolValue: true,
+				Detector: semantics.Detector{
+					Mode: semantics.DetectorBooleanHighActive,
 				},
 			}, siteapp.RevisionPrecondition{},
 		)

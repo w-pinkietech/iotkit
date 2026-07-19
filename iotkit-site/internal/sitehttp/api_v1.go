@@ -193,6 +193,25 @@ func (server *Server) deleteSemanticDefinition(response http.ResponseWriter, req
 	writeJSON(response, http.StatusOK, definition)
 }
 
+func (server *Server) resetSemanticCounter(response http.ResponseWriter, request *http.Request) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	definition, err := server.semantics.ResetCounter(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("signal_ref"),
+		revisionPrecondition(request),
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(definition.Revision))
+	writeJSON(response, http.StatusOK, definition)
+}
+
 func (server *Server) listYokaKitOutputs(response http.ResponseWriter, request *http.Request) {
 	if _, ok := server.requireAPIAuth(response, request, false); !ok {
 		return

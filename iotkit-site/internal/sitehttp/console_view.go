@@ -16,26 +16,29 @@ import (
 
 type consoleSignalView struct {
 	siteapp.SignalSummary
-	Name              string
-	Value             string
-	Unit              string
-	SensorType        string
-	LastReceived      string
-	LastReceivedTitle string
-	StatusLabel       string
-	StatusClass       string
-	SettingLabel      string
-	SettingClass      string
-	MeaningLabel      string
-	MeaningClass      string
-	FormProfile       siteapp.SignalProfileInput
-	Definition        *semantics.Definition
-	SourceSensorType  string
-	SourceValueType   string
-	SourceUnit        string
-	ChannelLabel      string
-	DeviceName        string
-	DeviceLocation    string
+	Name                string
+	Value               string
+	Unit                string
+	SensorType          string
+	LastReceived        string
+	LastReceivedTitle   string
+	StatusLabel         string
+	StatusClass         string
+	SettingLabel        string
+	SettingClass        string
+	MeaningLabel        string
+	MeaningClass        string
+	FormProfile         siteapp.SignalProfileInput
+	Definition          *semantics.Definition
+	SourceSensorType    string
+	SourceValueType     string
+	SourceUnit          string
+	ChannelLabel        string
+	DeviceName          string
+	DeviceLocation      string
+	InputIsBoolean      bool
+	RiseDebounceSeconds string
+	FallDebounceSeconds string
 }
 
 type consoleEdgeView struct {
@@ -246,7 +249,9 @@ func newConsoleSignalView(
 			view.FormProfile.DisplayName = summary.Profile.DisplayName
 		}
 		if summary.Profile.DisplaySensorType != "" {
-			view.FormProfile.DisplaySensorType = summary.Profile.DisplaySensorType
+			view.FormProfile.DisplaySensorType = normalizeDisplaySensorType(
+				summary.Profile.DisplaySensorType,
+			)
 			view.FormProfile.DisplaySensorTypeLabel = summary.Profile.DisplaySensorTypeLabel
 			view.FormProfile.DisplayValueKind = summary.Profile.DisplayValueKind
 			view.FormProfile.DisplayUnitMode = summary.Profile.DisplayUnitMode
@@ -402,7 +407,9 @@ func newConsoleSetupSignalView(
 			view.FormProfile.DisplayName = signal.Profile.DisplayName
 		}
 		if signal.Profile.DisplaySensorType != "" {
-			view.FormProfile.DisplaySensorType = signal.Profile.DisplaySensorType
+			view.FormProfile.DisplaySensorType = normalizeDisplaySensorType(
+				signal.Profile.DisplaySensorType,
+			)
 			view.FormProfile.DisplaySensorTypeLabel = signal.Profile.DisplaySensorTypeLabel
 			view.FormProfile.DisplayValueKind = signal.Profile.DisplayValueKind
 			view.FormProfile.DisplayUnitMode = signal.Profile.DisplayUnitMode
@@ -431,13 +438,26 @@ func newConsoleSignalViews(
 	for _, summary := range summaries {
 		view := newConsoleSignalView(summary, now)
 		view.Definition = definitionBySignal[summary.SignalRef]
+		view.InputIsBoolean = view.FormProfile.DisplayValueKind == "boolean"
+		view.RiseDebounceSeconds = "0"
+		view.FallDebounceSeconds = "0"
 		if view.Definition != nil {
 			view.MeaningLabel = "設定済み"
 			view.MeaningClass = "configured"
+			view.RiseDebounceSeconds = formatMillisecondsAsSeconds(
+				view.Definition.Detector.RiseDebounceMS,
+			)
+			view.FallDebounceSeconds = formatMillisecondsAsSeconds(
+				view.Definition.Detector.FallDebounceMS,
+			)
 		}
 		views = append(views, view)
 	}
 	return views
+}
+
+func formatMillisecondsAsSeconds(milliseconds int64) string {
+	return strconv.FormatFloat(float64(milliseconds)/1000, 'f', -1, 64)
 }
 
 func newConsoleDeviceView(
@@ -704,6 +724,13 @@ func displayProfileSensorType(profile *siteapp.SignalProfile) string {
 	return displaySensorType(&value)
 }
 
+func normalizeDisplaySensorType(value string) string {
+	if value == "temperature" {
+		return "thermocouple"
+	}
+	return value
+}
+
 func displayValueType(valueType *string) string {
 	switch pointerText(valueType, "") {
 	case "bool":
@@ -745,12 +772,12 @@ func displaySensorType(sensorType *string) string {
 		return "種類を確認中"
 	}
 	switch strings.ToLower(*sensorType) {
-	case "temperature", "temperature_c", "air_temperature":
-		return "温度"
+	case "thermocouple", "temperature", "temperature_c", "air_temperature":
+		return "熱電対"
 	case "contact", "contact_state", "digital_input":
 		return "接点入力"
-	case "light", "illuminance", "illuminance_lx":
-		return "光"
+	case "light", "illuminance", "illuminance_lx", "illuminance_lux":
+		return "照度"
 	case "humidity", "relative_humidity":
 		return "湿度"
 	case "voltage", "voltage_mv":
@@ -799,6 +826,7 @@ func displayOperation(operation string) string {
 		"signal_profile.update":          "センサー表示を変更",
 		"semantic_definition.put":        "センサー設定を保存",
 		"semantic_definition.deactivate": "センサー設定を停止",
+		"semantic_counter.reset":         "累積値を0に戻す",
 		"yokakit_route.create":           "外部出力を追加",
 		"account.create":                 "アカウントを発行",
 		"account.update":                 "アカウント情報を変更",

@@ -488,6 +488,17 @@ var schemaMigrations = []migration{
 			pub_seq DESC
 		);
 	`},
+	{version: 13, sql: `
+		ALTER TABLE semantic_definition_state_v2
+			ADD COLUMN pending INTEGER NOT NULL DEFAULT 0
+			CHECK(pending IN (0, 1));
+		ALTER TABLE semantic_definition_state_v2
+			ADD COLUMN pending_active INTEGER NOT NULL DEFAULT 0
+			CHECK(pending_active IN (0, 1));
+		ALTER TABLE semantic_definition_state_v2
+			ADD COLUMN pending_since INTEGER NOT NULL DEFAULT 0
+			CHECK(pending_since >= 0);
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

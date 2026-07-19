@@ -544,7 +544,14 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 	body := response.Body.String()
 	for _, want := range []string{
 		`class="sensor-detail"`,
-		`class="sensor-detail-current`,
+		`class="sensor-setting-workspace"`,
+		`class="sensor-detail-settings sensor-setting-controls"`,
+		`class="content-section sensor-settings-panel"`,
+		`class="sensor-setting-preview"`,
+		`class="sensor-preview-current`,
+		`data-preview-current-value`,
+		`data-preview-current-received`,
+		`<details class="sensor-source-details">`,
 		"factory-edge-01",
 		"temperature_c",
 		"24.8",
@@ -552,6 +559,17 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 		`action="/console/signals/` + signals[0].SignalRef + `/semantic"`,
 		`name="display_name"`,
 		`name="kind"`,
+		`value="thermocouple"`,
+		`>熱電対</option>`,
+		`>照度</option>`,
+		`受信した値をどうするか`,
+		`data-semantic-detector`,
+		`name="rise_threshold"`,
+		`name="fall_threshold"`,
+		`name="rise_debounce_seconds"`,
+		`name="fall_debounce_seconds"`,
+		`data-semantic-trigger hidden`,
+		`状態がOFFからONに変わったとき`,
 		`name="return_to" value="` + path + `"`,
 		`data-setting-simulation`,
 		`data-preview-chart`,
@@ -564,6 +582,12 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 	}
 	if strings.Contains(body, "preview-button") {
 		t.Fatalf("sensor detail still contains the start/stop preview: %s", body)
+	}
+	if strings.Contains(body, `class="setting-flow-step"`) {
+		t.Fatalf("sensor detail still contains the space-consuming flow steps: %s", body)
+	}
+	if strings.Contains(body, "累積するタイミング") {
+		t.Fatalf("sensor detail still exposes the internal trigger wording: %s", body)
 	}
 }
 
@@ -688,6 +712,54 @@ func TestMappingPreviewReturnsBoundedHistoryAndTestValueWithoutWriting(t *testin
 	}
 }
 
+func TestConsoleSavesExplicitRisingAndFallingSensorRule(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	form := url.Values{
+		"_csrf":                 {csrf},
+		"return_to":             {"/sensors/" + signals[0].SignalRef},
+		"kind":                  {"cumulative_counter"},
+		"scale":                 {"1"},
+		"offset":                {"0"},
+		"detector_mode":         {"low_active"},
+		"rise_threshold":        {"80"},
+		"fall_threshold":        {"20"},
+		"rise_debounce_seconds": {"1.5"},
+		"fall_debounce_seconds": {"2.5"},
+		"trigger":               {"on_transition"},
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/console/signals/"+signals[0].SignalRef+"/semantic",
+		strings.NewReader(form.Encode()),
+	)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", testOrigin)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	definitions, err := archive.ListSemanticDefinitions(context.Background())
+	if err != nil || len(definitions) != 1 {
+		t.Fatalf("definitions=%#v err=%v", definitions, err)
+	}
+	detector := definitions[0].Detector
+	if detector.Mode != semantics.DetectorLowActive ||
+		detector.RiseThreshold != 80 ||
+		detector.FallThreshold != 20 ||
+		detector.RiseDebounceMS != 1_500 ||
+		detector.FallDebounceMS != 2_500 {
+		t.Fatalf("detector=%#v", detector)
+	}
+}
+
 func TestMappingPreviewViewerUsesSavedDefinitionButCannotSubmitDraft(t *testing.T) {
 	server, archive := newTestServerFixture(
 		t, false, siteapp.AccountRoleViewer,
@@ -801,6 +873,8 @@ func TestConsoleScriptSupportsAutomaticSettingSimulation(t *testing.T) {
 		"chart-range-result",
 		"chart-line-counter",
 		"point.received_at",
+		"formatPreviewCurrentValue",
+		`[name="display_value_kind"]`,
 		`document.visibilityState === "visible"`,
 		"previewUnavailable",
 		"failure.error.field",
@@ -1040,7 +1114,7 @@ func TestSetupAPIRestrictsPhysicalIdentifierToAdministrators(t *testing.T) {
 	body := adminResponse.Body.String()
 	for _, want := range []string{
 		`"identifier":"BP-01234567"`,
-		`"display_sensor_type":"temperature"`,
+		`"display_sensor_type":"thermocouple"`,
 		`"profile_complete":false`,
 	} {
 		if !strings.Contains(body, want) {
@@ -1475,6 +1549,51 @@ func TestSetupConsoleSavesProfilesAndUpdatesMonitor(t *testing.T) {
 	}
 }
 
+func TestConsoleSignalProfileIgnoresHiddenUnitWhenUnitDisplayIsDisabled(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	returnTo := "/sensors/" + signals[0].SignalRef
+	values := url.Values{
+		"_csrf":               {csrf},
+		"return_to":           {returnTo},
+		"display_name":        {"乾燥炉入口 温度"},
+		"display_sensor_type": {"temperature"},
+		"display_value_kind":  {"numeric"},
+		"display_unit_mode":   {"dimensionless"},
+		"display_unit":        {"Cel"},
+		"decimal_places":      {"1"},
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/console/signals/"+signals[0].SignalRef+"/profile",
+		strings.NewReader(values.Encode()),
+	)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", testOrigin)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusSeeOther ||
+		response.Header().Get("Location") != returnTo+"?saved=1" {
+		t.Fatalf("signal save=%d location=%q body=%s",
+			response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	updated, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(updated) != 1 || updated[0].Profile == nil {
+		t.Fatalf("updated signals=%#v err=%v", updated, err)
+	}
+	if updated[0].Profile.DisplayUnitMode != "dimensionless" ||
+		updated[0].Profile.DisplayUnit != "" {
+		t.Fatalf("profile=%#v", updated[0].Profile)
+	}
+}
+
 func TestConsoleServesOfficialBrandMark(t *testing.T) {
 	server := newTestServer(t, false)
 	request := httptest.NewRequest(http.MethodGet, "/static/pinkietech-mark.svg", nil)
@@ -1512,7 +1631,7 @@ func TestConsoleSignalViewFormatsValuesForOperators(t *testing.T) {
 		ReceiptStatus:  "receiving",
 	}, now)
 	if temperature.Value != "24.9" || temperature.Unit != "°C" ||
-		temperature.SensorType != "温度" || temperature.LastReceived != "2分前" ||
+		temperature.SensorType != "熱電対" || temperature.LastReceived != "2分前" ||
 		temperature.StatusLabel != "受信中" {
 		t.Fatalf("temperature view = %#v", temperature)
 	}
@@ -1526,6 +1645,14 @@ func TestConsoleSignalViewFormatsValuesForOperators(t *testing.T) {
 	}, now)
 	if contact.Value != "ON" || contact.SensorType != "接点入力" {
 		t.Fatalf("contact view = %#v", contact)
+	}
+
+	illuminanceType := "illuminance_lux"
+	illuminance := newConsoleSignalView(siteapp.SignalSummary{
+		SensorType: &illuminanceType,
+	}, now)
+	if illuminance.SensorType != "照度" {
+		t.Fatalf("illuminance view = %#v", illuminance)
 	}
 
 	dimensionless := "1"

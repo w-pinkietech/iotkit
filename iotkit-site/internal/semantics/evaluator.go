@@ -8,9 +8,21 @@ import (
 const maxSafeInteger = int64(9_007_199_254_740_991)
 
 func Evaluate(spec DefinitionSpec, state State, input float64) (Result, State, error) {
+	return EvaluateAt(spec, state, input, 0)
+}
+
+func EvaluateAt(
+	spec DefinitionSpec,
+	state State,
+	input float64,
+	receivedAt int64,
+) (Result, State, error) {
 	var noResult Result
 	if err := spec.Validate(); err != nil {
 		return noResult, state, err
+	}
+	if receivedAt < 0 {
+		return noResult, state, errors.New("semantic received time must be non-negative")
 	}
 	if !finite(input) {
 		return noResult, state, errors.New("semantic input must be finite")
@@ -29,26 +41,53 @@ func Evaluate(spec DefinitionSpec, state State, input float64) (Result, State, e
 		return result, state, nil
 	}
 
-	active, err := evaluateCondition(spec.Condition, state, calibrated)
+	active, err := evaluateDetector(spec.Detector, state, calibrated)
 	if err != nil {
 		return noResult, state, err
 	}
 	wasInitialized := state.Initialized
 	previousActive := state.Active
+	if !wasInitialized {
+		state.Initialized = true
+		state.Active = active
+		state.Pending = false
+		return emitInitial(spec, result, state)
+	}
+
+	if active == state.Active {
+		state.Pending = false
+	} else {
+		debounce := transitionDebounce(spec.Detector, active)
+		switch {
+		case debounce == 0:
+			state.Active = active
+			state.Pending = false
+		case !state.Pending || state.PendingActive != active:
+			state.Pending = true
+			state.PendingActive = active
+			state.PendingSince = receivedAt
+			return result, state, nil
+		case receivedAt < state.PendingSince:
+			state.PendingSince = receivedAt
+			return result, state, nil
+		case receivedAt-state.PendingSince < debounce:
+			return result, state, nil
+		default:
+			state.Active = active
+			state.Pending = false
+		}
+	}
 	state.Initialized = true
-	state.Active = active
+	active = state.Active
 
 	switch spec.Kind {
 	case KindBoolean, KindAlarm:
-		if !wasInitialized || previousActive != active {
+		if previousActive != active {
 			value := active
 			result.Emitted = true
 			result.Boolean = &value
 		}
 	case KindCumulativeCounter:
-		if !wasInitialized {
-			return result, state, nil
-		}
 		shouldIncrement := spec.Trigger == TriggerActiveSample && active ||
 			spec.Trigger == TriggerTransition && !previousActive && active
 		if !shouldIncrement {
@@ -67,26 +106,55 @@ func Evaluate(spec DefinitionSpec, state State, input float64) (Result, State, e
 	return result, state, nil
 }
 
-func evaluateCondition(condition Condition, state State, value float64) (bool, error) {
-	switch condition.Mode {
-	case ConditionBoolean:
+func emitInitial(spec DefinitionSpec, result Result, state State) (Result, State, error) {
+	switch spec.Kind {
+	case KindBoolean, KindAlarm:
+		value := state.Active
+		result.Emitted = true
+		result.Boolean = &value
+	case KindCumulativeCounter:
+		// The first received value establishes the baseline and is never counted.
+	default:
+		return Result{}, state, errors.New("unsupported semantic definition kind")
+	}
+	return result, state, nil
+}
+
+func evaluateDetector(detector Detector, state State, value float64) (bool, error) {
+	switch detector.Mode {
+	case DetectorBooleanHighActive, DetectorBooleanLowActive:
 		if value != 0 && value != 1 {
 			return false, errors.New("boolean semantic input must be 0 or 1 after correction")
 		}
-		return (value == 1) == condition.BoolValue, nil
-	case ConditionAbove:
-		if state.Initialized && state.Active {
-			return value > condition.Threshold-condition.Hysteresis, nil
+		if detector.Mode == DetectorBooleanHighActive {
+			return value == 1, nil
 		}
-		return value >= condition.Threshold, nil
-	case ConditionBelow:
+		return value == 0, nil
+	case DetectorHighActive:
 		if state.Initialized && state.Active {
-			return value < condition.Threshold+condition.Hysteresis, nil
+			return value > detector.FallThreshold, nil
 		}
-		return value <= condition.Threshold, nil
+		return value >= detector.RiseThreshold, nil
+	case DetectorLowActive:
+		if state.Initialized && state.Active {
+			return value < detector.RiseThreshold, nil
+		}
+		return value <= detector.FallThreshold, nil
 	default:
-		return false, errors.New("unsupported semantic condition")
+		return false, errors.New("unsupported semantic detector")
 	}
+}
+
+func transitionDebounce(detector Detector, targetActive bool) int64 {
+	risingSignal := targetActive
+	if detector.Mode == DetectorLowActive ||
+		detector.Mode == DetectorBooleanLowActive {
+		risingSignal = !targetActive
+	}
+	if risingSignal {
+		return detector.RiseDebounceMS
+	}
+	return detector.FallDebounceMS
 }
 
 func IsSafeInteger(value float64) bool {

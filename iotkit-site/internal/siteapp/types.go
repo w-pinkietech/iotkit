@@ -119,7 +119,7 @@ func (input SignalProfileInput) Validate() error {
 		return err
 	}
 	switch input.DisplaySensorType {
-	case "temperature", "contact", "illuminance", "distance", "voltage",
+	case "thermocouple", "temperature", "contact", "illuminance", "distance", "voltage",
 		"current", "pressure", "humidity", "acceleration":
 	case "custom":
 		if err := validateProfileText(

@@ -38,7 +38,7 @@ type descriptorCandidate struct {
 }
 
 var descriptorCandidates = map[string]descriptorCandidate{
-	"temperature_c":             {sensorType: "temperature", valueKind: "numeric", unit: "°C"},
+	"temperature_c":             {sensorType: "thermocouple", valueKind: "numeric", unit: "°C"},
 	"contact_state":             {sensorType: "contact", valueKind: "boolean"},
 	"illuminance_lux":           {sensorType: "illuminance", valueKind: "numeric", unit: "lx"},
 	"distance_mm":               {sensorType: "distance", valueKind: "numeric", unit: "mm"},

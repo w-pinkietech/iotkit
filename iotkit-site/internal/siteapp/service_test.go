@@ -91,7 +91,7 @@ func TestSignalProfileV2Validation(t *testing.T) {
 		mutate  func(*SignalProfileInput)
 		wantErr bool
 	}{
-		{name: "temperature numeric with unit"},
+		{name: "thermocouple numeric with unit"},
 		{
 			name: "contact boolean without unit",
 			mutate: func(input *SignalProfileInput) {
@@ -274,8 +274,8 @@ func TestDispatchRoutesInventoryProfileOperations(t *testing.T) {
 
 func validSignalProfileInput() SignalProfileInput {
 	return SignalProfileInput{
-		DisplayName:       "乾燥炉入口温度",
-		DisplaySensorType: "temperature",
+		DisplayName:       "乾燥炉入口熱電対",
+		DisplaySensorType: "thermocouple",
 		DisplayValueKind:  "numeric",
 		DisplayUnitMode:   "unit",
 		DisplayUnit:       "°C",

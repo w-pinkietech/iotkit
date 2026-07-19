@@ -100,9 +100,8 @@ func TestSemanticDefinitionIsFutureOnlyAndProjectionIsIdempotent(t *testing.T) {
 		semantics.DefinitionSpec{
 			Kind:  semantics.KindBoolean,
 			Scale: 1,
-			Condition: semantics.Condition{
-				Mode:      semantics.ConditionBoolean,
-				BoolValue: true,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
 			},
 		},
 		siteapp.RevisionPrecondition{},
@@ -167,9 +166,8 @@ func TestCumulativeDefinitionUsesBaselineAndPersistsCounter(t *testing.T) {
 		semantics.DefinitionSpec{
 			Kind:  semantics.KindCumulativeCounter,
 			Scale: 1,
-			Condition: semantics.Condition{
-				Mode:      semantics.ConditionBoolean,
-				BoolValue: true,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
 			},
 			Trigger: semantics.TriggerTransition,
 		},
@@ -231,9 +229,8 @@ func TestSemanticDefinitionsKeepTwoEdgesIsolated(t *testing.T) {
 			semantics.DefinitionSpec{
 				Kind:  semantics.KindBoolean,
 				Scale: 1,
-				Condition: semantics.Condition{
-					Mode:      semantics.ConditionBoolean,
-					BoolValue: true,
+				Detector: semantics.Detector{
+					Mode: semantics.DetectorBooleanHighActive,
 				},
 			},
 			siteapp.RevisionPrecondition{},
@@ -274,8 +271,8 @@ func TestSemanticProjectionRecordsPoisonAndContinuesIndependentDefinition(t *tes
 			ctx, siteapp.LocalCLIActor(), signal.SignalRef,
 			semantics.DefinitionSpec{
 				Kind: semantics.KindBoolean, Scale: 1,
-				Condition: semantics.Condition{
-					Mode: semantics.ConditionBoolean, BoolValue: true,
+				Detector: semantics.Detector{
+					Mode: semantics.DetectorBooleanHighActive,
 				},
 			}, siteapp.RevisionPrecondition{},
 		); err != nil {
@@ -297,6 +294,134 @@ func TestSemanticProjectionRecordsPoisonAndContinuesIndependentDefinition(t *tes
 	failures, err := archive.SemanticProjectionFailureCount(ctx)
 	if err != nil || failures != 1 {
 		t.Fatalf("projection failures=%d err=%v", failures, err)
+	}
+}
+
+func TestSemanticProjectionPersistsPendingDebounceAcrossRuns(t *testing.T) {
+	archive := openTestStore(t)
+	ctx := context.Background()
+	acceptSemanticBatch(t, archive, "edge-node-01", "epoch-a", 1, []float64{0})
+	signalRef := reconcileSingleSignal(t, archive)
+	if _, err := archive.ApplySemanticDefinition(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		semantics.DefinitionSpec{
+			Kind:  semantics.KindBoolean,
+			Scale: 1,
+			Detector: semantics.Detector{
+				Mode:           semantics.DetectorBooleanHighActive,
+				RiseDebounceMS: 1_000,
+			},
+		},
+		siteapp.RevisionPrecondition{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	acceptSemanticBatch(
+		t, archive, "edge-node-01", "epoch-a", 2,
+		[]float64{0}, []float64{1}, []float64{1},
+	)
+	if _, err := archive.db.Exec(`
+		UPDATE raw_records SET received_at = pub_seq * 1000
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ProjectSemanticObservations(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	var pending bool
+	var pendingActive bool
+	var pendingSince int64
+	if err := archive.db.QueryRow(`
+		SELECT pending, pending_active, pending_since
+		FROM semantic_definition_state_v2
+	`).Scan(&pending, &pendingActive, &pendingSince); err != nil {
+		t.Fatal(err)
+	}
+	if !pending || !pendingActive || pendingSince != 3_000 {
+		t.Fatalf(
+			"pending=%v active=%v since=%d",
+			pending, pendingActive, pendingSince,
+		)
+	}
+	if _, err := archive.ProjectSemanticObservations(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	observations, err := archive.ListSemanticObservations(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 2 {
+		t.Fatalf("observations = %#v, want baseline and confirmed transition", observations)
+	}
+	var active bool
+	if err := json.Unmarshal(observations[1].Value, &active); err != nil || !active {
+		t.Fatalf("confirmed value=%s err=%v", observations[1].Value, err)
+	}
+}
+
+func TestResetSemanticCounterKeepsDefinitionRevisionAndWritesAudit(t *testing.T) {
+	archive := openTestStore(t)
+	ctx := context.Background()
+	acceptSemanticBatch(t, archive, "edge-node-01", "epoch-a", 1, []float64{0})
+	signalRef := reconcileSingleSignal(t, archive)
+	definition, err := archive.ApplySemanticDefinition(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		semantics.DefinitionSpec{
+			Kind:  semantics.KindCumulativeCounter,
+			Scale: 1,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+			Trigger: semantics.TriggerTransition,
+		},
+		siteapp.RevisionPrecondition{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptSemanticBatch(
+		t, archive, "edge-node-01", "epoch-a", 2,
+		[]float64{0}, []float64{1},
+	)
+	if _, err := archive.ProjectSemanticObservations(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	reset, err := archive.ResetSemanticCounter(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		siteapp.RevisionPrecondition{Expected: &definition.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset.Revision != definition.Revision {
+		t.Fatalf("reset changed definition revision from %d to %d", definition.Revision, reset.Revision)
+	}
+	var counter int64
+	if err := archive.db.QueryRow(`
+		SELECT counter FROM semantic_definition_state_v2
+		WHERE definition_id = ? AND definition_revision = ?
+	`, definition.ID, definition.Revision).Scan(&counter); err != nil {
+		t.Fatal(err)
+	}
+	if counter != 0 {
+		t.Fatalf("counter after reset = %d", counter)
+	}
+	var auditCount int
+	if err := archive.db.QueryRow(`
+		SELECT count(*) FROM audit_events
+		WHERE operation = 'semantic_counter.reset'
+			AND resource_ref = ?
+	`, definition.ID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("reset audit count = %d", auditCount)
 	}
 }
 

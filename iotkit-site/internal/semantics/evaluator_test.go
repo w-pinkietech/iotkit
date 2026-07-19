@@ -1,6 +1,7 @@
 package semantics
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -27,10 +28,10 @@ func TestEvaluateBooleanThresholdUsesHysteresisAndEmitsChanges(t *testing.T) {
 	spec := DefinitionSpec{
 		Kind:  KindBoolean,
 		Scale: 1,
-		Condition: Condition{
-			Mode:       ConditionAbove,
-			Threshold:  100,
-			Hysteresis: 10,
+		Detector: Detector{
+			Mode:          DetectorHighActive,
+			RiseThreshold: 100,
+			FallThreshold: 90,
 		},
 	}
 	result, state, err := Evaluate(spec, State{}, 95)
@@ -87,9 +88,8 @@ func TestEvaluateCumulativeCounterSupportsTransitionAndActiveSample(t *testing.T
 			spec := DefinitionSpec{
 				Kind:  KindCumulativeCounter,
 				Scale: 1,
-				Condition: Condition{
-					Mode:      ConditionBoolean,
-					BoolValue: true,
+				Detector: Detector{
+					Mode: DetectorBooleanHighActive,
 				},
 				Trigger: test.trigger,
 			}
@@ -124,9 +124,10 @@ func TestEvaluateAlarmEmitsInitialStateAndTransitions(t *testing.T) {
 	spec := DefinitionSpec{
 		Kind:  KindAlarm,
 		Scale: 1,
-		Condition: Condition{
-			Mode:      ConditionBelow,
-			Threshold: 5,
+		Detector: Detector{
+			Mode:          DetectorLowActive,
+			RiseThreshold: 5,
+			FallThreshold: 5,
 		},
 	}
 	state := State{}
@@ -158,9 +159,14 @@ func TestEvaluateAlarmEmitsInitialStateAndTransitions(t *testing.T) {
 func TestDefinitionValidationRejectsInvalidCombinationsAndNonFiniteInput(t *testing.T) {
 	for _, spec := range []DefinitionSpec{
 		{Kind: KindNumeric, Scale: 0},
-		{Kind: KindCumulativeCounter, Scale: 1, Condition: Condition{Mode: ConditionNone}},
-		{Kind: KindCumulativeCounter, Scale: 1, Condition: Condition{Mode: ConditionBoolean}},
-		{Kind: KindAlarm, Scale: 1, Condition: Condition{Mode: ConditionAbove, Hysteresis: -1}},
+		{Kind: KindCumulativeCounter, Scale: 1},
+		{Kind: KindCumulativeCounter, Scale: 1, Detector: Detector{Mode: DetectorBooleanHighActive}},
+		{Kind: KindAlarm, Scale: 1, Detector: Detector{
+			Mode: DetectorHighActive, RiseThreshold: 1, FallThreshold: 2,
+		}},
+		{Kind: KindBoolean, Scale: 1, Detector: Detector{
+			Mode: DetectorHighActive, RiseDebounceMS: maxDebounceMS + 1,
+		}},
 	} {
 		if err := spec.Validate(); err == nil {
 			t.Fatalf("invalid spec was accepted: %#v", spec)
@@ -168,5 +174,102 @@ func TestDefinitionValidationRejectsInvalidCombinationsAndNonFiniteInput(t *test
 	}
 	if _, _, err := Evaluate(DefinitionSpec{Kind: KindNumeric, Scale: 1}, State{}, math.NaN()); err == nil {
 		t.Fatal("NaN input was accepted")
+	}
+}
+
+func TestEvaluateAtUsesIndependentRiseAndFallDebounce(t *testing.T) {
+	spec := DefinitionSpec{
+		Kind:  KindBoolean,
+		Scale: 1,
+		Detector: Detector{
+			Mode:           DetectorHighActive,
+			RiseThreshold:  10,
+			FallThreshold:  4,
+			RiseDebounceMS: 2_000,
+			FallDebounceMS: 3_000,
+		},
+	}
+	result, state, err := EvaluateAt(spec, State{}, 0, 1_000)
+	if err != nil || !result.Emitted || state.Active {
+		t.Fatalf("initial result=%#v state=%#v err=%v", result, state, err)
+	}
+	result, state, err = EvaluateAt(spec, state, 11, 2_000)
+	if err != nil || result.Emitted || !state.Pending || !state.PendingActive {
+		t.Fatalf("rise start result=%#v state=%#v err=%v", result, state, err)
+	}
+	result, state, err = EvaluateAt(spec, state, 9, 3_000)
+	if err != nil || result.Emitted || state.Pending {
+		t.Fatalf("cancelled rise result=%#v state=%#v err=%v", result, state, err)
+	}
+	_, state, _ = EvaluateAt(spec, state, 12, 4_000)
+	result, state, err = EvaluateAt(spec, state, 12, 6_000)
+	if err != nil || !result.Emitted || result.Boolean == nil || !*result.Boolean ||
+		!state.Active || state.Pending {
+		t.Fatalf("confirmed rise result=%#v state=%#v err=%v", result, state, err)
+	}
+	_, state, _ = EvaluateAt(spec, state, 3, 7_000)
+	result, state, err = EvaluateAt(spec, state, 3, 9_999)
+	if err != nil || result.Emitted || !state.Active || !state.Pending {
+		t.Fatalf("early fall result=%#v state=%#v err=%v", result, state, err)
+	}
+	result, state, err = EvaluateAt(spec, state, 3, 10_000)
+	if err != nil || !result.Emitted || result.Boolean == nil || *result.Boolean ||
+		state.Active || state.Pending {
+		t.Fatalf("confirmed fall result=%#v state=%#v err=%v", result, state, err)
+	}
+}
+
+func TestEvaluateAtLowActiveCountsFallingTransition(t *testing.T) {
+	spec := DefinitionSpec{
+		Kind:  KindCumulativeCounter,
+		Scale: 1,
+		Detector: Detector{
+			Mode:          DetectorLowActive,
+			RiseThreshold: 8,
+			FallThreshold: 2,
+		},
+		Trigger: TriggerTransition,
+	}
+	state := State{}
+	for index, input := range []float64{10, 1, 1, 9, 0} {
+		result, next, err := EvaluateAt(spec, state, input, int64(index*1000))
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = next
+		if index == 1 && (!result.Emitted || result.Integer == nil || *result.Integer != 1) {
+			t.Fatalf("first falling transition = %#v", result)
+		}
+	}
+	if state.Counter != 2 {
+		t.Fatalf("counter = %d, want 2", state.Counter)
+	}
+}
+
+func TestDefinitionSpecReadsLegacyThresholdContract(t *testing.T) {
+	var high DefinitionSpec
+	if err := json.Unmarshal([]byte(`{
+		"kind":"boolean","scale":1,"offset":0,
+		"condition":{"mode":"above","threshold":100,"hysteresis":10},
+		"trigger":""
+	}`), &high); err != nil {
+		t.Fatal(err)
+	}
+	if high.Detector.Mode != DetectorHighActive ||
+		high.Detector.RiseThreshold != 100 ||
+		high.Detector.FallThreshold != 90 {
+		t.Fatalf("legacy high detector = %#v", high.Detector)
+	}
+
+	var low DefinitionSpec
+	if err := json.Unmarshal([]byte(`{
+		"kind":"cumulative_counter","scale":1,"offset":0,
+		"condition":{"mode":"boolean_equals","bool_value":false},
+		"trigger":"on_transition"
+	}`), &low); err != nil {
+		t.Fatal(err)
+	}
+	if low.Detector.Mode != DetectorBooleanLowActive {
+		t.Fatalf("legacy boolean detector = %#v", low.Detector)
 	}
 }

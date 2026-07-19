@@ -83,12 +83,27 @@ Site semantic definitionが管理する。
 - scale
 - offset
 - 数値、ON/OFF、累積値、alarm
-- threshold
-- hysteresis
-- target state
-- trigger
+- 入力上昇時のしきい値と確定待ち時間
+- 入力下降時のしきい値と確定待ち時間
+- High側とLow側のどちらを有効状態とするか
+- 有効状態への変化を数えるか、有効な受信ごとに数えるか
 
 表示用profileへ変換ロジックを埋め込まない。生値とsemantic変換後の値を別に示す。
+旧IoTKitの`hysteresisHigh`、`hysteresisLow`、`debounceHigh`、`debounceLow`、
+`toggle`はこの判定ルールへ移す。確定待ち時間中の状態はDBへ保存し、Site再起動で失わない。
+設定変更は従来どおりfuture-onlyとし、過去のraw recordやsemantic observationを書き換えない。
+
+旧IoTKitの設定項目を同じ画面・同じDB表へ戻すこと自体は目的にしない。責務は次へ分ける。
+
+- ADC倍率とoffset: semantic definitionの入力補正
+- 立ち上がり、立ち下がり、各debounce、入力反転: semantic definitionの状態判定
+- clear count: semantic counterに対する監査付き操作
+- MQTT topicと追加payload: 外部出力route / adapter
+- メール、接点出力の初期値・反転・連動先、撮影: 通知・action route / adapter
+- 熱電対型: 対応Adapterが設定を受け付ける場合だけEdge側のAdapter設定
+
+BravePI Mainboardとtransmitterのペアリングや熱電対型設定をSiteから行わない。既存iOSアプリと
+Mainboardで管理される製品固有操作を、Site semantic definitionへ混ぜない。
 
 ### 4.4 外部出力
 
@@ -229,16 +244,20 @@ Excel専用出力とgraph画像保存は要求として保持するがCSVより�
 
 - numeric
 - boolean
-- threshold above/below
-- hysteresis
-- debounce
+- rising threshold / falling threshold
+- rising debounce / falling debounce
+- high-active / low-active
 - transition/notification trigger
 - cumulative counter
+- counter reset
 - alarm
 - 実信号preview
 - future-only開始境界
 
 画面は「用途」だけで抽象化せず、入力、判定、結果を示す。
+debounceは、条件が継続したことを次の受信値で確認して状態を確定する。サンプル間隔より短い
+debounceを指定しても、確認前に推測で状態を変更しない。これはrawの受信順に再現でき、再起動や
+backlog処理でも同じ結果になる。
 
 ### 6.6 外部出力
 
@@ -378,7 +397,7 @@ descriptor候補を使う。ただし候補だけでは「設定済み」にし�
 
 `display_sensor_type`は初版で次の閉じた候補と`custom`を持つ。
 
-- temperature
+- thermocouple
 - contact
 - illuminance
 - distance
@@ -401,7 +420,7 @@ descriptorからの候補変換は閉じた対応表にする。
 
 | descriptor measurement key | 表示分類候補 | 値型候補 | 単位候補 |
 | --- | --- | --- | --- |
-| `temperature_c` | `temperature` | `numeric` | `°C` |
+| `temperature_c` | `thermocouple` | `numeric` | `°C` |
 | `contact_state` | `contact` | `boolean` | 単位なし |
 | `illuminance_lux` | `illuminance` | `numeric` | `lx` |
 | `distance_mm` | `distance` | `numeric` | `mm` |
@@ -414,6 +433,11 @@ descriptorからの候補変換は閉じた対応表にする。
 表にないmeasurement keyは勝手に分類せず、`custom`を候補にして表示分類名の入力を要求する。
 descriptorにcanonical unitがある場合は上表の単位よりdescriptorを優先して候補表示する。
 候補は入力支援であり、保存済みprofileを自動更新しない。
+
+通常画面ではセンサーの物理的な種類と測定対象を混同しない。初版で扱う温度入力は
+「熱電対」と表示し、Adapterから届く`temperature_c`は接続元の測定キーとして別に表示する。
+既存DBの`temperature`は互換入力として受理するが、画面では「熱電対」と読み替え、
+次回保存時に`thermocouple`へ正規化する。「光」は測定量として確立した「照度」と表示する。
 
 ### 8.4 登録状態
 
