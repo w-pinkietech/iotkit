@@ -1,0 +1,29 @@
+{
+  "adapter_id": "iotkit.mqtt-json.v1",
+  "config": {
+    "schema_version": 1,
+    "topic": "factory/line-a/production"
+  },
+  "observation": {
+    "observation_id": "d36cb7b3-7010-43b3-afc6-1931ed705dea",
+    "series_id": "a921df88-6af2-46ca-a5f1-f346bf4433bb",
+    "sequence": 42,
+    "observed_at": 1784190000123,
+    "kind": "cumulative_value",
+    "value": 1524
+  },
+  "publication": {
+    "topic": "factory/line-a/production",
+    "qos": 1,
+    "retain": false,
+    "payload": {
+      "schema_version": 1,
+      "observation_id": "d36cb7b3-7010-43b3-afc6-1931ed705dea",
+      "series_id": "a921df88-6af2-46ca-a5f1-f346bf4433bb",
+      "sequence": 42,
+      "observed_at": 1784190000123,
+      "kind": "cumulative_value",
+      "value": 1524
+    }
+  }
+}

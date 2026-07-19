@@ -207,6 +207,13 @@ v1では次を必須とする。
 `retain`は外部contractが決める。通常のObservationは原則`false`、source status等の別契約では
 `true`を選べる。
 
+組み込みAdapterの共有fixtureは`testdata/output/v1/`に置く。fixtureはAdapter ID、version付き設定、
+汎用Observation、期待するtopic、QoS、retain、payloadを一組で固定する。
+`scripts/test-site-output.sh`は実Mosquittoに対して汎用JSONとYokaKitの両routeを配送し、Broker停止中は
+outboxへ残ること、再起動後に同じexport identityがPUBACK済みへ収束することを検証する。
+YokaKit repositoryを隣接checkoutした環境では、`scripts/test-yokakit-consumer-contract.sh`が同じfixtureを
+YokaKitの実decoderへ渡し、送信側とconsumer側のcontract driftを検出する。
+
 ## 9. IoTKit MQTT JSON v1 binding
 
 `iotkit.mqtt-json.v1`は、特定applicationに依存しないIoTKit共通JSONをexact MQTT topicへ出力する。

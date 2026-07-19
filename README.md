@@ -173,6 +173,12 @@ cargo build --workspace
 cargo test  --workspace      # ~530 tests; 2 hardware-only tests are #[ignore]d
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
+
+# Docker Mosquittoによる外部Output Adapter/PUBACK/再接続ゲート
+scripts/test-site-output.sh
+
+# 隣接するYokaKit checkoutとのconsumer contractゲート
+scripts/test-yokakit-consumer-contract.sh
 ```
 
 CI additionally checks the crate layer rules (`scripts/check-layers`) and runs
