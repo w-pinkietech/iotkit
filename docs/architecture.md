@@ -18,7 +18,7 @@ makes life worse for one of them, that is a review finding, not a taste issue.
 |---|---|---|
 | **Site installers & operators** | The install story, `iotkit-edgectl`, the API/UI, error messages | They can tell *what to install on which device and how to assemble a site* from one page. Errors name the thing to check next. Defaults are safe; nothing silently loses data; a Pi is fast enough. |
 | **Self-made-device builders** (ESP32 hobbyists, plant engineers — often not Rust readers) | The ingest **wire contract only** | Onboarding stays a curl-3-lines experience. Contract docs never require reading Rust. Rejections come back with a reason code they can act on. |
-| **Adapter developers** (Rust) | `core/types`, `iotkit-ingest-client`, `iotkit-polling-adapter-runtime`, an existing adapter as template | The adapter boundary is obvious; a new sensor family means a new adapter crate, not core surgery. No knowledge of storage/ledger internals needed. |
+| **Adapter developers** (Rust) | `core/types`, `iotkit-input-adapter-host-api`, `iotkit-input-adapter-testkit`, `iotkit-polling-adapter-runtime`, an existing adapter as template | The adapter boundary is obvious; a new sensor family means a new adapter crate, not core surgery. No knowledge of storage/ledger internals needed. |
 | **Core contributors** (Rust) | `core/*`, IoTKit Edge, tests | The crate map fits in one screen. Layer rules are machine-checked, not tribal. Each crate has one responsibility; tests read as the executable spec. |
 | **Data consumers** (dashboards, Node-RED, analytics) | The **exit contract** | The record schema, ack rules, and cursor semantics are documented and versioned; no schema surprises. |
 
@@ -173,6 +173,14 @@ machine-enforced for **new crate dependents**: `scripts/check-layers` rule 7
 pins the complete dependent set. Reviews still police usage growth inside the
 existing dependent crates (D4/D12 decision 8).
 
+The implemented compile-time northbound extension boundary for official in-process
+sensor adapters is [Input Adapter host contract v1](input-adapter-contract.md). Adapter type,
+configured instance, diagnostic source, receiver-owned principal, observed
+subject, and ledger-owned system identity remain separate. The shared runtime
+host/composition API carries no `AdapterEvent`/`AdapterCommand`; Edge-private factories
+and package-private legacy projections isolate the frozen vocabulary while Edge retains principal creation,
+configuration authority, restart policy, and health aggregation.
+
 ## The custody loop (the core idea)
 
 IoTKit Edge is a **buffer, not a warehouse**. A measurement's lifecycle:
@@ -251,7 +259,7 @@ remain later implementation work.
 
 ## Crate map
 
-Twenty-two crates, five layers. `scripts/check-layers` enforces the layer rules
+Twenty-four crates, five layers. `scripts/check-layers` enforces the layer rules
 below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
@@ -268,8 +276,10 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-core-registry` | `core/registry` | D6 measurement registry (standard catalog + site overrides); implements `RegistryPolicy`. |
 | `iotkit-core-ops` | `core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
 | `iotkit-ingest-client` | `iotkit-ingest-client` | The ingest-contract client adapters use (D4). In-process binding for official adapters; network device builders use the separate HTTP binding. MQTT remains future. |
+| `iotkit-input-adapter-host-api` | `iotkit-input-adapter-host-api` | Supervision-free official adapter composition API: validated identities, source-bound ingest, delivery receipts/retry, bounded diagnostics/activity, completion, and shutdown. |
+| `iotkit-input-adapter-testkit` | `iotkit-input-adapter-testkit` | Dev-only conformance assertions and a non-catalog two-subject/two-measurement reference adapter. |
 | `iotkit-ingest-http` | `iotkit-ingest-http` | **INGRESS.** Listener parsing, exposure/TLS validation, accepted-peer checks, and transport construction; never control-API routes or measurement domain logic. |
-| `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Shared scaffolding for I2C-bus polling sensor adapters. |
+| `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Supervision- and ingest-free shared polling engine for I2C-bus adapters; emits decoded observations and lifecycle facts. |
 | `rpi4b-transport` | `rpi4b-transport` | Raw bus access (serial/I2C/GPIO/SPI/PWM/USB). Bytes and pin states, zero protocol knowledge. |
 | `iotkit-sensor-drivers` | `iotkit-sensor-drivers` | Vendor-neutral per-sensor-IC conversion drivers, input-source-agnostic (shared by multiple adapters). |
 | `bravepi-codec` | `bravepi-mainboard-adapter/codec` | BravePI frame encoding/decoding. |
@@ -315,6 +325,9 @@ Approved next-slice non-Rust placement:
    crate. IoTKit Edge composes it, never the reverse.
 9. **Site consumes the wire contract, not Edge internals** — IoTKit Site shares JSON
    fixtures and schema semantics only. It never imports Edge packages or opens the Edge DB.
+10. **Input-adapter supervision reachability is checked transitively** —
+   RPi-local and the polling runtime must not reach `core/supervision` through
+   helper crates. Only BravePI may reach it for its frozen, separate care path.
 
 Rule numbers match the `scripts/check-layers` error messages. Edge binaries may compose their
 allowed layers — with one exception: rule 7 pins the

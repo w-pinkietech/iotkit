@@ -1,7 +1,6 @@
-//! BravePiFrame → AdapterEvent 変換。純粋関数、状態なし。
+//! BravePiFrame → supervision-free decoded event. Pure and stateless.
 
-use iotkit_core_supervision::AdapterEvent;
-use iotkit_core_types::{DeviceKey, SensorIdentity};
+use iotkit_core_types::{DeviceKey, SensorIdentity, SensorReading};
 
 use bravepi_codec::BravePiFrame;
 use iotkit_sensor_drivers::UartSample;
@@ -9,13 +8,28 @@ use iotkit_sensor_drivers::UartSample;
 use crate::BravepiConnection;
 use crate::registry::lookup_handler;
 
-/// BravePiFrame を AdapterEvent に変換する。
+#[derive(Debug)]
+pub(crate) enum DecodedEvent {
+    SensorData {
+        device_key: DeviceKey,
+        reading: SensorReading,
+        rssi: Option<i16>,
+        battery_pct: Option<u8>,
+        observed_at: std::time::SystemTime,
+    },
+    AdapterError {
+        device_key: Option<DeviceKey>,
+        error: String,
+    },
+}
+
+/// BravePiFrame を package-private decoded event に変換する。
 /// SensorData フレームの場合は SensorIdentity も返す (DeviceDiscovered 用)。
-/// None を返す場合、そのフレームは core に通知する必要がない。
+/// None means the frame has no northbound observation.
 pub(crate) fn frame_to_event(
     frame: BravePiFrame,
     port_path: &str,
-) -> Option<(AdapterEvent, Option<SensorIdentity>)> {
+) -> Option<(DecodedEvent, Option<SensorIdentity>)> {
     match frame {
         BravePiFrame::Sensor(s) => {
             let handler = lookup_handler(s.sensor_type_raw).or_else(|| {
@@ -42,12 +56,12 @@ pub(crate) fn frame_to_event(
             let reading = (handler.decode_uart)(sample);
             let identity = (handler.identity)(conn_info);
 
-            let event = AdapterEvent::SensorData {
+            let event = DecodedEvent::SensorData {
                 device_key,
                 reading,
                 rssi: Some(s.rssi as i16),
                 battery_pct: Some(s.battery),
-                ingested_at: std::time::SystemTime::now(),
+                observed_at: std::time::SystemTime::now(),
             };
 
             Some((event, Some(identity)))
@@ -77,7 +91,7 @@ pub(crate) fn frame_to_event(
                 })
             };
             Some((
-                AdapterEvent::AdapterError {
+                DecodedEvent::AdapterError {
                     device_key,
                     error: format!("Decode error (type={}): {}", sensor_type_raw, reason),
                 },

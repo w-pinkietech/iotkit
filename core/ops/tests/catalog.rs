@@ -27,6 +27,7 @@ fn actor(kind: ActorKind, ceiling: Tier) -> Actor {
             ActorKind::Human => "tok_human".to_string(),
             ActorKind::Ai => "tok_ai".to_string(),
             ActorKind::LocalCli => "local_cli".to_string(),
+            ActorKind::System => "system:test".to_string(),
         },
         actor_kind: kind,
         tier_ceiling: ceiling,

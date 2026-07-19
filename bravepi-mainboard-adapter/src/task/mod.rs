@@ -7,9 +7,10 @@ mod convert;
 pub(crate) mod event_loop;
 mod handle;
 pub(crate) mod ingest_map;
+mod legacy_projection;
 mod serial_source;
 
-pub use handle::{AdapterHandle, AdapterParts, ShutdownHandle, start};
+pub use handle::{AdapterHandle, AdapterParts, ShutdownHandle, descriptor, start, start_host};
 
 #[cfg(test)]
 mod convert_test;

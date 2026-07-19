@@ -1,10 +1,12 @@
 use iotkit_core_ledger::{
-    DeviceKind, DeviceState, SystemId, approve_sighting, get_device, retire_device,
+    DeviceKind, DeviceState, NewDevice, SystemId, approve_sighting, find_alive_by_hardware_id,
+    get_device, insert_device, retire_device,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
-use crate::{OpContext, OpDescriptor, OpError, Tier};
+use crate::{ActorKind, OpContext, OpDescriptor, OpError, Tier};
 
 use super::{required_string_array, target_string_array};
 
@@ -104,6 +106,177 @@ pub fn retire_descriptor() -> OpDescriptor {
         execute: retire_execute,
         secret_execute: None,
     }
+}
+
+pub fn reconcile_positional_inventory_descriptor() -> OpDescriptor {
+    OpDescriptor {
+        name: crate::POSITIONAL_INVENTORY_RECONCILE_OP,
+        tier: Tier::Daily,
+        bulk_escalates: false,
+        changes_state: true,
+        params_schema: positional_inventory_schema,
+        targets: positional_inventory_targets,
+        preconditions: positional_inventory_preconditions,
+        dry_run: positional_inventory_dry_run,
+        execute: positional_inventory_execute,
+        secret_execute: None,
+    }
+}
+
+#[derive(Debug)]
+struct PositionalInventoryIntent {
+    hardware_id: String,
+    user_label: Option<String>,
+}
+
+fn positional_inventory_schema() -> Value {
+    json!({ "required": ["devices"] })
+}
+
+fn positional_inventory_targets(params: &Value) -> Vec<String> {
+    params
+        .get("devices")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|device| device.get("hardware_id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn positional_inventory_intents(
+    ctx: &OpContext<'_>,
+) -> Result<Vec<PositionalInventoryIntent>, OpError> {
+    let devices = ctx
+        .params
+        .get("devices")
+        .and_then(Value::as_array)
+        .ok_or_else(|| OpError::Validation("devices must be an array".into()))?;
+    if devices.is_empty() {
+        return Err(OpError::Validation(
+            "positional inventory must not be empty".into(),
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    devices
+        .iter()
+        .map(|device| {
+            let device = device
+                .as_object()
+                .ok_or_else(|| OpError::Validation("devices entries must be objects".into()))?;
+            if device
+                .keys()
+                .any(|key| !matches!(key.as_str(), "hardware_id" | "user_label"))
+            {
+                return Err(OpError::Validation(
+                    "undeclared positional inventory field".into(),
+                ));
+            }
+            let hardware_id = device
+                .get("hardware_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    OpError::Validation("devices hardware_id must be a non-empty string".into())
+                })?
+                .to_owned();
+            if !seen.insert(hardware_id.clone()) {
+                return Err(OpError::Validation(
+                    "duplicate positional inventory hardware_id".into(),
+                ));
+            }
+            let user_label = match device.get("user_label") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) => Some(value.clone()),
+                Some(_) => {
+                    return Err(OpError::Validation(
+                        "devices user_label must be a string or null".into(),
+                    ));
+                }
+            };
+            Ok(PositionalInventoryIntent {
+                hardware_id,
+                user_label,
+            })
+        })
+        .collect()
+}
+
+fn positional_inventory_preconditions(
+    tx: &Transaction<'_>,
+    ctx: &OpContext<'_>,
+) -> Result<(), OpError> {
+    if ctx.actor_kind != ActorKind::System {
+        return Err(OpError::Forbidden("system_actor_required".into()));
+    }
+    for intent in positional_inventory_intents(ctx)? {
+        if let Some(existing) = find_alive_by_hardware_id(tx, &intent.hardware_id)?
+            && existing.kind != DeviceKind::Positional
+        {
+            return Err(OpError::PreconditionFailed(
+                "positional_inventory_kind_conflict".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn positional_inventory_dry_run(
+    tx: &Transaction<'_>,
+    ctx: &OpContext<'_>,
+) -> Result<Value, OpError> {
+    let mut create = Vec::new();
+    let mut existing = Vec::new();
+    for intent in positional_inventory_intents(ctx)? {
+        match find_alive_by_hardware_id(tx, &intent.hardware_id)? {
+            Some(row) => existing.push(json!({
+                "hardware_id": intent.hardware_id,
+                "system_id": row.system_id.to_text(),
+            })),
+            None => create.push(intent.hardware_id),
+        }
+    }
+    Ok(json!({
+        "would": "reconcile_positional_inventory",
+        "create": create,
+        "existing": existing,
+    }))
+}
+
+fn positional_inventory_execute(
+    tx: &Transaction<'_>,
+    ctx: &OpContext<'_>,
+) -> Result<Value, OpError> {
+    let mut created = Vec::new();
+    let mut existing = Vec::new();
+    for intent in positional_inventory_intents(ctx)? {
+        if let Some(row) = find_alive_by_hardware_id(tx, &intent.hardware_id)? {
+            existing.push(json!({
+                "hardware_id": intent.hardware_id,
+                "system_id": row.system_id.to_text(),
+            }));
+            continue;
+        }
+        let system_id = insert_device(
+            tx,
+            &NewDevice {
+                hardware_id: intent.hardware_id.clone(),
+                user_label: intent.user_label,
+                parent: None,
+                kind: DeviceKind::Positional,
+                initial_state: DeviceState::Active,
+            },
+        )?;
+        created.push(json!({
+            "hardware_id": intent.hardware_id,
+            "system_id": system_id.to_text(),
+        }));
+    }
+    Ok(json!({
+        "created": created,
+        "existing": existing,
+    }))
 }
 
 fn hardware_schema() -> Value {

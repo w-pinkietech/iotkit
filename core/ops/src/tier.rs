@@ -57,6 +57,7 @@ pub enum ActorKind {
     Human,
     Ai,
     LocalCli,
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

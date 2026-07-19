@@ -1,6 +1,5 @@
 //! iotkit-polling-adapter-runtime: shared scaffolding for I2C-bus polling sensor adapters.
 
-mod ingest_map;
 mod polling_loop;
 
 use std::collections::HashSet;
@@ -9,8 +8,42 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use iotkit_core_supervision::{AdapterCommand, AdapterEvent};
 use iotkit_core_types::{AdapterId, SensorIdentity, SensorReading};
+
+#[derive(Debug)]
+pub enum PollingEvent {
+    DeviceDiscovered {
+        device_key: iotkit_core_types::DeviceKey,
+        identity: SensorIdentity,
+    },
+    SensorData {
+        device_key: iotkit_core_types::DeviceKey,
+        reading: SensorReading,
+        rssi: Option<i16>,
+        battery_pct: Option<u8>,
+        ingested_at: std::time::SystemTime,
+    },
+    DeviceLost {
+        device_key: iotkit_core_types::DeviceKey,
+        reason: String,
+    },
+    AdapterError {
+        device_key: Option<iotkit_core_types::DeviceKey>,
+        error: String,
+    },
+}
+
+#[derive(Debug)]
+enum PollingCommand {
+    Shutdown,
+    #[cfg(test)]
+    Unsupported {
+        device_key: iotkit_core_types::DeviceKey,
+    },
+}
+
+use PollingCommand as AdapterCommand;
+use PollingEvent as AdapterEvent;
 
 // ── SensorDriver trait ────────────────────────────────────
 
@@ -76,8 +109,8 @@ pub struct SensorTargetConfig {
 /// Handle returned by [`start`]. Owns the background task and channels.
 pub struct AdapterHandle {
     pub id: AdapterId,
-    pub event_rx: mpsc::Receiver<AdapterEvent>,
-    pub command_tx: mpsc::Sender<AdapterCommand>,
+    pub event_rx: mpsc::Receiver<PollingEvent>,
+    command_tx: mpsc::Sender<AdapterCommand>,
     task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -103,7 +136,7 @@ impl AdapterHandle {
 /// Parts returned by [`AdapterHandle::into_parts`].
 pub struct AdapterParts {
     pub id: AdapterId,
-    pub event_rx: mpsc::Receiver<AdapterEvent>,
+    pub event_rx: mpsc::Receiver<PollingEvent>,
     pub shutdown: ShutdownHandle,
 }
 
@@ -183,7 +216,7 @@ pub fn validate_config(config: &PollingAdapterConfig) -> Result<(), String> {
 pub fn start(
     id: AdapterId,
     config: PollingAdapterConfig,
-    ingest: Option<iotkit_ingest_client::IngestClient>,
+    _legacy_ingest_removed: Option<()>,
 ) -> Result<AdapterHandle, std::io::Error> {
     validate_config(&config).map_err(std::io::Error::other)?;
 
@@ -200,7 +233,7 @@ pub fn start(
 
     let task_handle = tokio::spawn(polling_loop::polling_loop(
         id.clone(),
-        ingest,
+        None,
         config,
         event_tx,
         command_rx,

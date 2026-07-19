@@ -27,17 +27,18 @@ pub fn new_envelope(source: &str, items: Vec<ReadingItem>) -> Envelope {
 
 #[cfg(feature = "inproc")]
 pub use inproc::{
-    IngestClient, IngestClientError, IngestClientEvent, IngestClientFull, channel_for_test,
-    spawn_inproc, spawn_inproc_observed,
+    AbandonReason, DeliveryOutcome, DeliveryReceipt, EnqueuedEnvelope, IngestClient,
+    IngestClientError, IngestClientEvent, IngestClientFull, QueueSubmitError, RetryHandle,
+    TestEnvelopeReceiver, channel_for_test, spawn_inproc, spawn_inproc_observed,
 };
 
 #[cfg(feature = "inproc")]
 mod inproc {
     use super::*;
     use iotkit_core_collector::{Collector, IngestPrincipal, IngestRequest, SubmitError};
-    use iotkit_ingest_contract::{AckStatus, ItemStatus};
+    use iotkit_ingest_contract::{AckStatus, EnvelopeAck, ItemStatus};
     use std::collections::VecDeque;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
 
     /// 非ブロッキング投入の失敗理由。
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,28 +57,172 @@ mod inproc {
         SubmitNoAck,
     }
 
+    /// Why a queued envelope stopped being owned by this client before a final Ack.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AbandonReason {
+        SpoolOverflow,
+        ClientShutdown,
+        CollectorClosed,
+    }
+
+    /// Opaque ownership token for retrying the exact immutable envelope.
+    pub struct RetryHandle {
+        envelope: Envelope,
+    }
+
+    impl std::fmt::Debug for RetryHandle {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("RetryHandle")
+                .field("envelope_id", &self.envelope.envelope_id)
+                .field("source", &self.envelope.source)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl RetryHandle {
+        pub fn envelope_id(&self) -> &str {
+            &self.envelope.envelope_id
+        }
+
+        pub fn source(&self) -> &str {
+            &self.envelope.source
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum DeliveryOutcome {
+        Final(EnvelopeAck),
+        AbandonedBeforeFinal {
+            reason: AbandonReason,
+            retry: RetryHandle,
+        },
+    }
+
+    pub struct DeliveryReceipt {
+        rx: oneshot::Receiver<DeliveryOutcome>,
+    }
+
+    impl std::fmt::Debug for DeliveryReceipt {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("DeliveryReceipt").finish_non_exhaustive()
+        }
+    }
+
+    impl DeliveryReceipt {
+        /// Wait for either the receiver's final Ack or explicit loss of client custody.
+        pub async fn wait(self) -> DeliveryOutcome {
+            self.rx
+                .await
+                .expect("ingest receipt sender dropped without resolving its outcome")
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct EnqueuedEnvelope {
+        pub envelope_id: String,
+        pub delivery: DeliveryReceipt,
+    }
+
+    #[derive(Debug)]
+    pub enum QueueSubmitError {
+        Full(RetryHandle),
+        Closed(RetryHandle),
+    }
+
+    struct Submission {
+        envelope: Envelope,
+        receipt: Option<oneshot::Sender<DeliveryOutcome>>,
+    }
+
+    struct SpoolEntry {
+        request: IngestRequest,
+        receipt: Option<oneshot::Sender<DeliveryOutcome>>,
+    }
+
     /// アダプタランタイムが持つ送信ハンドル。非ブロッキング(ポーリングループ/イベントループを
     /// コレクタの都合で止めない)。
     #[derive(Clone)]
     pub struct IngestClient {
-        tx: mpsc::Sender<Envelope>,
+        tx: mpsc::Sender<Submission>,
+    }
+
+    pub struct TestEnvelopeReceiver {
+        rx: mpsc::Receiver<Submission>,
+    }
+
+    impl TestEnvelopeReceiver {
+        pub async fn recv(&mut self) -> Option<Envelope> {
+            self.rx.recv().await.map(|submission| submission.envelope)
+        }
+
+        pub fn try_recv(&mut self) -> Result<Envelope, mpsc::error::TryRecvError> {
+            self.rx.try_recv().map(|submission| submission.envelope)
+        }
+    }
+
+    impl Drop for TestEnvelopeReceiver {
+        fn drop(&mut self) {
+            self.rx.close();
+        }
     }
 
     impl IngestClient {
         /// Submit sender-owned wire data. The receiver-bound principal is added
         /// behind this handle and cannot be selected by the adapter.
         pub fn try_submit(&self, envelope: Envelope) -> Result<(), IngestClientError> {
-            self.tx.try_send(envelope).map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => IngestClientError::Full,
-                mpsc::error::TrySendError::Closed(_) => IngestClientError::Closed,
-            })
+            self.tx
+                .try_send(Submission {
+                    envelope,
+                    receipt: None,
+                })
+                .map_err(|e| match e {
+                    mpsc::error::TrySendError::Full(_) => IngestClientError::Full,
+                    mpsc::error::TrySendError::Closed(_) => IngestClientError::Closed,
+                })
+        }
+
+        pub fn try_submit_with_receipt(
+            &self,
+            envelope: Envelope,
+        ) -> Result<EnqueuedEnvelope, QueueSubmitError> {
+            let envelope_id = envelope.envelope_id.clone();
+            let (tx, rx) = oneshot::channel();
+            let submission = Submission {
+                envelope,
+                receipt: Some(tx),
+            };
+            self.tx
+                .try_send(submission)
+                .map(|()| EnqueuedEnvelope {
+                    envelope_id,
+                    delivery: DeliveryReceipt { rx },
+                })
+                .map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(submission) => {
+                        QueueSubmitError::Full(RetryHandle {
+                            envelope: submission.envelope,
+                        })
+                    }
+                    mpsc::error::TrySendError::Closed(submission) => {
+                        QueueSubmitError::Closed(RetryHandle {
+                            envelope: submission.envelope,
+                        })
+                    }
+                })
+        }
+
+        pub fn try_retry_with_receipt(
+            &self,
+            retry: RetryHandle,
+        ) -> Result<EnqueuedEnvelope, QueueSubmitError> {
+            self.try_submit_with_receipt(retry.envelope)
         }
     }
 
     /// テスト用: 実タスクなしでEnvelopeを捕捉する受け口を返す。
-    pub fn channel_for_test(cap: usize) -> (IngestClient, mpsc::Receiver<Envelope>) {
-        let (tx, rx) = mpsc::channel(cap);
-        (IngestClient { tx }, rx)
+    pub fn channel_for_test(cap: usize) -> (IngestClient, TestEnvelopeReceiver) {
+        let (tx, rx) = mpsc::channel::<Submission>(cap);
+        (IngestClient { tx }, TestEnvelopeReceiver { rx })
     }
 
     /// inprocクライアントタスクを起動する。タスクはコレクタ死亡(Closed)で退出し、
@@ -113,9 +258,9 @@ mod inproc {
         spool_cap: usize,
         observer: Option<mpsc::UnboundedSender<IngestClientEvent>>,
     ) -> (IngestClient, tokio::task::JoinHandle<()>) {
-        let (tx, mut rx) = mpsc::channel::<Envelope>(queue_cap);
+        let (tx, mut rx) = mpsc::channel::<Submission>(queue_cap);
         let handle = tokio::spawn(async move {
-            let mut spool: VecDeque<IngestRequest> = VecDeque::new();
+            let mut spool: VecDeque<SpoolEntry> = VecDeque::new();
             let mut backoff_until: Option<tokio::time::Instant> = None;
             let mut attempt = 0usize;
             loop {
@@ -124,8 +269,8 @@ mod inproc {
                     && backoff_until.is_none_or(|t| tokio::time::Instant::now() >= t);
                 if ready {
                     let request = spool.front().expect("spool non-empty");
-                    let envelope = &request.envelope;
-                    match collector.submit(request.clone()).await {
+                    let envelope = &request.request.envelope;
+                    match collector.submit(request.request.clone()).await {
                         Ok(ack) if matches!(ack.status, AckStatus::Deferred) => {
                             // inprocでは返らないが、将来バインディング共用のため意味論どおり
                             // 不変再試行する(D1)
@@ -138,7 +283,11 @@ mod inproc {
                         }
                         Ok(ack) => {
                             log_ack(&ack.status, &envelope.envelope_id);
-                            spool.pop_front();
+                            if let Some(mut completed) = spool.pop_front()
+                                && let Some(receipt) = completed.receipt.take()
+                            {
+                                let _ = receipt.send(DeliveryOutcome::Final(ack));
+                            }
                             attempt = 0;
                             backoff_until = None;
                         }
@@ -183,6 +332,7 @@ mod inproc {
                                 spooled = spool.len(),
                                 "collector closed; ingest client exiting (supervisor will fail-fast)"
                             );
+                            abandon_all(&mut spool, &mut rx, AbandonReason::CollectorClosed);
                             return;
                         }
                     }
@@ -192,30 +342,36 @@ mod inproc {
                 if let Some(deadline) = backoff_until {
                     tokio::select! {
                         maybe = rx.recv() => match maybe {
-                            Some(envelope) => push_bounded(
+                            Some(submission) => push_bounded(
                                 &mut spool,
-                                IngestRequest { principal: principal.clone(), envelope },
+                                submission,
+                                &principal,
                                 spool_cap,
                                 observer.as_ref(),
                             ),
-                            None => { shutdown_note(&spool); return; }
+                            None => {
+                                abandon_all(
+                                    &mut spool,
+                                    &mut rx,
+                                    AbandonReason::ClientShutdown,
+                                );
+                                return;
+                            }
                         },
                         _ = tokio::time::sleep_until(deadline) => { backoff_until = None; }
                     }
                 } else {
                     // ここに来るのはspoolが空の場合のみ
                     match rx.recv().await {
-                        Some(envelope) => push_bounded(
+                        Some(submission) => push_bounded(
                             &mut spool,
-                            IngestRequest {
-                                principal: principal.clone(),
-                                envelope,
-                            },
+                            submission,
+                            &principal,
                             spool_cap,
                             observer.as_ref(),
                         ),
                         None => {
-                            shutdown_note(&spool);
+                            abandon_all(&mut spool, &mut rx, AbandonReason::ClientShutdown);
                             return;
                         }
                     }
@@ -226,22 +382,42 @@ mod inproc {
     }
 
     fn push_bounded(
-        spool: &mut VecDeque<IngestRequest>,
-        e: IngestRequest,
+        spool: &mut VecDeque<SpoolEntry>,
+        submission: Submission,
+        principal: &IngestPrincipal,
         cap: usize,
         observer: Option<&mpsc::UnboundedSender<IngestClientEvent>>,
     ) {
         if spool.len() >= cap {
             let dropped = spool.pop_front();
             tracing::warn!(
-                envelope_id = dropped.as_ref().map(|d| d.envelope.envelope_id.as_str()),
+                envelope_id = dropped
+                    .as_ref()
+                    .map(|d| d.request.envelope.envelope_id.as_str()),
                 "ingest spool overflow: dropping oldest (bounded spool, D1 lightweight profile)"
             );
+            if let Some(mut dropped) = dropped
+                && let Some(receipt) = dropped.receipt.take()
+            {
+                let retry = RetryHandle {
+                    envelope: dropped.request.envelope,
+                };
+                let _ = receipt.send(DeliveryOutcome::AbandonedBeforeFinal {
+                    reason: AbandonReason::SpoolOverflow,
+                    retry,
+                });
+            }
             if let Some(observer) = observer {
                 notify(observer, IngestClientEvent::SpoolOverflow);
             }
         }
-        spool.push_back(e);
+        spool.push_back(SpoolEntry {
+            request: IngestRequest {
+                principal: principal.clone(),
+                envelope: submission.envelope,
+            },
+            receipt: submission.receipt,
+        });
     }
 
     fn notify(observer: &mpsc::UnboundedSender<IngestClientEvent>, event: IngestClientEvent) {
@@ -273,12 +449,39 @@ mod inproc {
             Some(tokio::time::Instant::now() + std::time::Duration::from_millis(base + jitter));
     }
 
-    fn shutdown_note(spool: &VecDeque<IngestRequest>) {
+    fn shutdown_note(spool: &VecDeque<SpoolEntry>) {
         if !spool.is_empty() {
             tracing::warn!(
                 spooled = spool.len(),
                 "ingest client shutting down with unsent envelopes (memory spool, D1 lightweight profile)"
             );
+        }
+    }
+
+    fn abandon_all(
+        spool: &mut VecDeque<SpoolEntry>,
+        rx: &mut mpsc::Receiver<Submission>,
+        reason: AbandonReason,
+    ) {
+        // Close admission before draining so a racing sender cannot enqueue a
+        // receipt after the final try_recv observes an empty queue.
+        rx.close();
+        while let Ok(submission) = rx.try_recv() {
+            if let Some(receipt) = submission.receipt {
+                let retry = RetryHandle {
+                    envelope: submission.envelope,
+                };
+                let _ = receipt.send(DeliveryOutcome::AbandonedBeforeFinal { reason, retry });
+            }
+        }
+        shutdown_note(spool);
+        while let Some(mut entry) = spool.pop_front() {
+            if let Some(receipt) = entry.receipt.take() {
+                let retry = RetryHandle {
+                    envelope: entry.request.envelope,
+                };
+                let _ = receipt.send(DeliveryOutcome::AbandonedBeforeFinal { reason, retry });
+            }
         }
     }
 
@@ -371,6 +574,56 @@ mod inproc {
                     .unwrap_err(),
                 IngestClientError::Closed
             );
+        }
+
+        #[tokio::test]
+        async fn receipt_submit_returns_same_envelope_as_retry_handle_when_full_or_closed() {
+            let (client, mut rx) = channel_for_test(1);
+            client
+                .try_submit(new_envelope("test", vec![item(vec![1.0])]))
+                .unwrap();
+
+            let full_envelope = new_envelope("test", vec![item(vec![2.0])]);
+            let full_id = full_envelope.envelope_id.clone();
+            let QueueSubmitError::Full(full_retry) = client
+                .try_submit_with_receipt(full_envelope)
+                .expect_err("second item must see the bounded queue as full")
+            else {
+                panic!("expected full");
+            };
+            assert_eq!(full_retry.envelope_id(), full_id);
+            assert_eq!(full_retry.source(), "test");
+
+            rx.recv().await.expect("first item should remain queued");
+            drop(rx);
+
+            let closed_envelope = new_envelope("test", vec![item(vec![3.0])]);
+            let closed_id = closed_envelope.envelope_id.clone();
+            let QueueSubmitError::Closed(closed_retry) = client
+                .try_submit_with_receipt(closed_envelope)
+                .expect_err("closed queue must return retry ownership")
+            else {
+                panic!("expected closed");
+            };
+            assert_eq!(closed_retry.envelope_id(), closed_id);
+        }
+
+        #[test]
+        fn abandonment_closes_front_door_before_draining_receipts() {
+            let (client, mut rx) = channel_for_test(1);
+            let mut spool = VecDeque::new();
+
+            abandon_all(&mut spool, &mut rx.rx, AbandonReason::CollectorClosed);
+
+            let envelope = new_envelope("test", vec![item(vec![1.0])]);
+            let envelope_id = envelope.envelope_id.clone();
+            let QueueSubmitError::Closed(retry) = client
+                .try_submit_with_receipt(envelope)
+                .expect_err("abandonment must close admission before its final drain")
+            else {
+                panic!("expected closed");
+            };
+            assert_eq!(retry.envelope_id(), envelope_id);
         }
     }
 }

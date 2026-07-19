@@ -6,7 +6,27 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub struct AdapterHealth {
     pub id: String,
     pub alive: bool,
+    pub status: AdapterRuntimeStatus,
     pub last_event_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterRuntimeStatus {
+    Running,
+    Restarting,
+    Exhausted,
+    Stopped,
+}
+
+impl AdapterRuntimeStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Restarting => "restarting",
+            Self::Exhausted => "exhausted",
+            Self::Stopped => "stopped",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -432,22 +452,45 @@ impl HealthState {
         match self.adapters.iter_mut().find(|a| a.id == id) {
             Some(adapter) => {
                 adapter.alive = true;
+                adapter.status = AdapterRuntimeStatus::Running;
                 adapter.last_event_at = Some(at_ms);
             }
             None => self.adapters.push(AdapterHealth {
                 id: id.to_string(),
                 alive: true,
+                status: AdapterRuntimeStatus::Running,
                 last_event_at: Some(at_ms),
             }),
         }
     }
 
+    pub fn note_adapter_running(&mut self, id: &str) {
+        self.note_adapter_status(id, AdapterRuntimeStatus::Running);
+    }
+
+    pub fn note_adapter_restarting(&mut self, id: &str) {
+        self.note_adapter_status(id, AdapterRuntimeStatus::Restarting);
+    }
+
+    pub fn note_adapter_exhausted(&mut self, id: &str) {
+        self.note_adapter_status(id, AdapterRuntimeStatus::Exhausted);
+    }
+
     pub fn note_adapter_closed(&mut self, id: &str) {
+        self.note_adapter_status(id, AdapterRuntimeStatus::Stopped);
+    }
+
+    fn note_adapter_status(&mut self, id: &str, status: AdapterRuntimeStatus) {
+        let alive = status == AdapterRuntimeStatus::Running;
         match self.adapters.iter_mut().find(|a| a.id == id) {
-            Some(adapter) => adapter.alive = false,
+            Some(adapter) => {
+                adapter.alive = alive;
+                adapter.status = status;
+            }
             None => self.adapters.push(AdapterHealth {
                 id: id.to_string(),
-                alive: false,
+                alive,
+                status,
                 last_event_at: None,
             }),
         }
@@ -555,7 +598,10 @@ pub fn render_health_json(epoch: &str, state: &HealthState) -> String {
         .adapters
         .iter()
         .take(64)
-        .map(|adapter| serde_json::json!({"id":bounded_health_text(&adapter.id),"alive":adapter.alive,"last_event_at":adapter.last_event_at}))
+        .map(|adapter| {
+            serde_json::json!({"id":bounded_health_text(&adapter.id),"alive":adapter.alive,
+            "status":adapter.status.as_str(),"last_event_at":adapter.last_event_at})
+        })
         .collect::<Vec<_>>();
     let publish = state
         .publish
@@ -668,6 +714,7 @@ mod tests {
             adapters: vec![AdapterHealth {
                 id: "bravepi-mainboard".to_string(),
                 alive: true,
+                status: AdapterRuntimeStatus::Running,
                 last_event_at: Some(1234),
             }],
             db: DbHealth {
@@ -717,6 +764,23 @@ mod tests {
             "iotkit-edgectl time confirm"
         );
         assert!(json.contains(r#""uptime_s":10"#) || json.contains(r#""uptime_s":11"#));
+    }
+
+    #[test]
+    fn adapter_health_separates_runtime_state_from_last_activity() {
+        let mut state = HealthState::new(90);
+        state.note_adapter_running("line_a");
+        assert_eq!(state.adapters[0].status, AdapterRuntimeStatus::Running);
+        assert_eq!(state.adapters[0].last_event_at, None);
+
+        state.note_adapter_event("line_a", 42);
+        state.note_adapter_restarting("line_a");
+        assert_eq!(state.adapters[0].status, AdapterRuntimeStatus::Restarting);
+        assert_eq!(state.adapters[0].last_event_at, Some(42));
+
+        state.note_adapter_exhausted("line_a");
+        assert_eq!(state.adapters[0].status, AdapterRuntimeStatus::Exhausted);
+        assert!(!state.adapters[0].alive);
     }
 
     #[test]
@@ -1012,6 +1076,7 @@ mod tests {
                     format!("adapter-{i}")
                 },
                 alive: true,
+                status: AdapterRuntimeStatus::Running,
                 last_event_at: Some(i),
             });
             state.publish.push(TargetDeliveryHealth {

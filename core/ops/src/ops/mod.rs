@@ -20,6 +20,7 @@ pub fn standard_catalog() -> &'static [OpDescriptor] {
                 commissioning_ops::enqueue_smoke_descriptor(),
                 device_ops::approve_sighting_descriptor(),
                 device_ops::pin_sighting_descriptor(),
+                device_ops::reconcile_positional_inventory_descriptor(),
                 device_ops::retire_descriptor(),
                 token_ops::issue_descriptor(),
                 token_ops::revoke_descriptor(),

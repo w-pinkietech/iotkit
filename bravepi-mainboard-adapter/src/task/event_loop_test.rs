@@ -5,7 +5,8 @@ use iotkit_core_types::{DeviceKey, SensorType};
 use iotkit_ingest_client::channel_for_test;
 use tokio::sync::mpsc;
 
-use super::event_loop::event_loop;
+use super::event_loop::{DecodedObservation, RuntimeEvent, decoded_event_loop};
+use super::legacy_projection::event_loop;
 use crate::transport::TransportError;
 
 /// Build raw frame bytes for a BravePI config frame.
@@ -54,6 +55,61 @@ fn build_sensor_frame_bytes(
     frame.push(0x00); // flag = no continuation
     frame.extend_from_slice(&payload);
     frame
+}
+
+#[tokio::test]
+async fn decoded_runtime_emits_observation_without_legacy_projection() {
+    let (bytes_tx, bytes_rx) = mpsc::channel(16);
+    let (event_tx, mut event_rx) = mpsc::channel(16);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (write_tx, _write_rx) = mpsc::channel::<Vec<u8>>(16);
+
+    let handle = tokio::spawn(decoded_event_loop(
+        "/dev/test".into(),
+        bytes_rx,
+        event_tx,
+        command_rx,
+        write_tx,
+    ));
+    bytes_tx
+        .send(Ok(build_sensor_frame_bytes(
+            0x246880020140018b,
+            261,
+            -60,
+            95,
+            1,
+            &[0x00, 0x80, 0xb3, 0x41],
+        )))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        event_rx.recv().await,
+        Some(RuntimeEvent::DeviceDiscovered { .. })
+    ));
+    let Some(RuntimeEvent::Observation(DecodedObservation {
+        device_key,
+        reading,
+        rssi,
+        battery_pct,
+        ..
+    })) = event_rx.recv().await
+    else {
+        panic!("decoded runtime must emit a package-private observation");
+    };
+    assert_eq!(
+        device_key.as_str(),
+        "bravepi-mainboard:246880020140018b:temperature"
+    );
+    assert_eq!(reading.sensor_type, SensorType::Temperature);
+    assert_eq!(rssi, Some(-60));
+    assert_eq!(battery_pct, Some(95));
+
+    command_tx
+        .send(super::event_loop::RuntimeCommand::Shutdown)
+        .await
+        .unwrap();
+    handle.await.unwrap();
 }
 
 #[tokio::test]

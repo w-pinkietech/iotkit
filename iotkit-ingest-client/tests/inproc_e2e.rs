@@ -5,7 +5,10 @@
 use iotkit_core_collector::Collector;
 use iotkit_core_ledger as ledger;
 use iotkit_core_registry::SqliteRegistry;
-use iotkit_ingest_client::{IngestClientEvent, new_envelope, spawn_inproc, spawn_inproc_observed};
+use iotkit_ingest_client::{
+    AbandonReason, DeliveryOutcome, IngestClientEvent, new_envelope, spawn_inproc,
+    spawn_inproc_observed,
+};
 use iotkit_ingest_contract::*;
 use std::sync::Arc;
 
@@ -104,6 +107,25 @@ async fn accepted_envelope_reaches_readings() {
     );
     client.try_submit(e).unwrap();
     wait_for_readings(&db, 1).await;
+}
+
+#[tokio::test]
+async fn retained_receipt_resolves_with_exact_final_ack() {
+    let db = full_db();
+    register_active(&db, "ble:aa");
+    let (collector, issuer, _ch) = Collector::spawn_composed(db, Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, _h) = spawn_inproc(collector, principal, 16, 64);
+    let envelope = new_envelope("test-adapter", vec![item("ble:aa", "temperature_c", 21.5)]);
+    let id = envelope.envelope_id.clone();
+    let enqueued = client.try_submit_with_receipt(envelope).unwrap();
+
+    assert_eq!(enqueued.envelope_id, id);
+    let DeliveryOutcome::Final(ack) = enqueued.delivery.wait().await else {
+        panic!("accepted ingest must have a final acknowledgement");
+    };
+    assert_eq!(ack.envelope_id, id);
+    assert!(matches!(ack.status, AckStatus::Accepted { .. }));
 }
 
 #[tokio::test]
@@ -279,6 +301,43 @@ async fn spool_overflow_drops_oldest_and_keeps_newest() {
 }
 
 #[tokio::test]
+async fn spool_overflow_resolves_evicted_receipt_with_unchanged_retry() {
+    let db = full_db();
+    register_active(&db, "ble:aa");
+    db.with_conn_sync(|conn| {
+        conn.execute_batch(
+            "CREATE TRIGGER fail_all_receipts BEFORE INSERT ON ingest_dedup
+             BEGIN SELECT RAISE(ABORT, 'down'); END;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let (collector, issuer, _ch) = Collector::spawn_composed(db, Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, _h) = spawn_inproc(collector, principal, 16, 1);
+
+    let first = new_envelope("test-adapter", vec![item("ble:aa", "temperature_c", 20.0)]);
+    let first_id = first.envelope_id.clone();
+    let first = client.try_submit_with_receipt(first).unwrap();
+    client
+        .try_submit_with_receipt(new_envelope(
+            "test-adapter",
+            vec![item("ble:aa", "temperature_c", 21.0)],
+        ))
+        .unwrap();
+
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), first.delivery.wait())
+        .await
+        .expect("oldest receipt must resolve");
+    let DeliveryOutcome::AbandonedBeforeFinal { reason, retry } = outcome else {
+        panic!("overflow is not a final acknowledgement");
+    };
+    assert_eq!(reason, AbandonReason::SpoolOverflow);
+    assert_eq!(retry.envelope_id(), first_id);
+    assert_eq!(retry.source(), "test-adapter");
+}
+
+#[tokio::test]
 async fn collector_death_exits_client_task() {
     // コレクタのJoinHandleをabort → submitがClosed → クライアントタスクが退出する
     let db = full_db();
@@ -297,6 +356,61 @@ async fn collector_death_exits_client_task() {
         .await
         .expect("client task must exit after collector death")
         .expect("client task must not panic");
+}
+
+#[tokio::test]
+async fn collector_death_resolves_retained_receipt_before_client_task_exits() {
+    let db = full_db();
+    register_active(&db, "ble:aa");
+    let (collector, issuer, collector_handle) =
+        Collector::spawn_composed(db, Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, client_handle) = spawn_inproc(collector, principal, 16, 64);
+    collector_handle.abort();
+
+    let enqueued = client
+        .try_submit_with_receipt(new_envelope(
+            "test-adapter",
+            vec![item("ble:aa", "temperature_c", 21.5)],
+        ))
+        .unwrap();
+    let DeliveryOutcome::AbandonedBeforeFinal { reason, .. } = enqueued.delivery.wait().await
+    else {
+        panic!("collector death cannot manufacture a final acknowledgement");
+    };
+    assert_eq!(reason, AbandonReason::CollectorClosed);
+    client_handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn dropping_every_client_resolves_spooled_receipt_as_client_shutdown() {
+    let db = full_db();
+    register_active(&db, "ble:aa");
+    db.with_conn_sync(|conn| {
+        conn.execute_batch(
+            "CREATE TRIGGER fail_shutdown BEFORE INSERT ON ingest_dedup
+             BEGIN SELECT RAISE(ABORT, 'down'); END;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let (collector, issuer, _ch) = Collector::spawn_composed(db, Arc::new(SqliteRegistry), 16);
+    let principal = issuer.official_adapter("principal:test-adapter", "test-adapter");
+    let (client, client_handle) = spawn_inproc(collector, principal, 16, 64);
+    let enqueued = client
+        .try_submit_with_receipt(new_envelope(
+            "test-adapter",
+            vec![item("ble:aa", "temperature_c", 21.5)],
+        ))
+        .unwrap();
+    drop(client);
+
+    let DeliveryOutcome::AbandonedBeforeFinal { reason, .. } = enqueued.delivery.wait().await
+    else {
+        panic!("client shutdown cannot manufacture a final acknowledgement");
+    };
+    assert_eq!(reason, AbandonReason::ClientShutdown);
+    client_handle.await.unwrap();
 }
 
 #[test]

@@ -12,6 +12,8 @@ use iotkit_core_engine::EngineEvent;
 use iotkit_core_supervision::AdapterEvent;
 use iotkit_core_types::AdapterId;
 
+const ADAPTER_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Event yielded by [`AdapterHost::next_event`].
 pub enum AdapterHostEvent {
     /// A data event from an adapter.
@@ -79,6 +81,10 @@ impl AdapterHost {
         self.streams.is_empty()
     }
 
+    pub fn contains(&self, id: &AdapterId) -> bool {
+        self.streams.contains_key(id) || self.adapters.iter().any(|adapter| adapter.id == *id)
+    }
+
     /// Returns the next event from any registered adapter, or `None` if all
     /// adapters have closed.
     pub async fn next_event(&mut self) -> Option<AdapterHostEvent> {
@@ -98,15 +104,31 @@ impl AdapterHost {
     /// invokes its shutdown closure, before moving to the next adapter.
     /// Errors are logged, not propagated.
     pub async fn shutdown_all(&mut self) {
+        self.shutdown_all_with_timeout(ADAPTER_SHUTDOWN_TIMEOUT)
+            .await;
+    }
+
+    async fn shutdown_all_with_timeout(&mut self, timeout: std::time::Duration) {
         for adapter in self.adapters.iter_mut().rev() {
             self.streams.remove(&adapter.id);
-            if let Some(shutdown_fn) = adapter.shutdown_fn.take()
-                && let Err(e) = shutdown_fn().await
-            {
-                tracing::error!(
-                    adapter = %adapter.id, error = %e,
-                    "Adapter shutdown error"
-                );
+            if let Some(shutdown_fn) = adapter.shutdown_fn.take() {
+                match tokio::time::timeout(timeout, shutdown_fn()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::error!(
+                            adapter = %adapter.id,
+                            %error,
+                            "Adapter shutdown error"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::error!(
+                            adapter = %adapter.id,
+                            timeout_ms = timeout.as_millis() as u64,
+                            "Adapter shutdown timed out"
+                        );
+                    }
+                }
             }
         }
     }
@@ -281,6 +303,23 @@ mod tests {
         host.shutdown_all().await;
         let recorded = order.lock().unwrap().clone();
         assert_eq!(recorded, vec!["third", "second", "first"]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_timeout_bounds_a_stuck_adapter() {
+        let mut host = AdapterHost::new();
+        let (_tx, rx) = mpsc::channel::<AdapterEvent>(1);
+        host.register(AdapterId::new("stuck"), rx, || {
+            Box::pin(std::future::pending())
+        })
+        .unwrap();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            host.shutdown_all_with_timeout(std::time::Duration::from_millis(1)),
+        )
+        .await
+        .expect("host-owned shutdown deadline must complete");
     }
 
     #[tokio::test]

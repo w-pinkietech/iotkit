@@ -12,13 +12,14 @@ Status: 確定 (2026-07-02、3レンズレビュー済み: 概念整合/Rust実�
 |---|---|---|---|
 | ドライバ | 物理(transport+コーデック+デコード)。南向きencodeも含む | 取り込み契約(ドライバSPIには従う) | rpi4b-transport, bravepi-codec, iotkit-sensor-drivers |
 | アダプタランタイム | 両者の間(スケジューリング、状態機械、panic隔離、measurement写像=measurement_key+channel、南向きディスパッチ)。series解決はコレクタ=D5 | 契約もICも知らない | iotkit-polling-adapter-runtime(ポーリング型)、BravePI event_loop(イベント駆動型) |
-| 取り込みクライアント | 取り込み契約(エンベロープ/ack/spool)。北向き専用 | ハードウェア | **現存しない(空席)**。D1移行フェーズ1-2で新設 |
+| 取り込みクライアント | 取り込み契約(エンベロープ/ack/spool)。北向き専用 | ハードウェア | `iotkit-ingest-client`。公式in-process adapterへprincipal-bound clientを注入 |
 
 ## レビューの評決と根拠
 
 - 業界比較: EdgeXのDevice Service分割(SDK+protocol driver)、Home Assistant ADR-0004
   (「ドライバはHAを知らないPyPIライブラリに」)、Linux IIO/Zephyrのtransport分離と**三重に同型**。
-- Rust実装: 既存クレートへの写像はほぼ完全。**リネーム不要**。取り込みクライアントだけが空席。
+- Rust実装: 既存クレートへの写像はほぼ完全。取り込みクライアントは実装済み。既存
+  `AdapterEvent`互換投影は、Input Adapter v1でBravePI package内のprivateなlegacy wrapperへ隔離する。
 - 概念整合: 2部品式は双方向デバイス(BravePI downlink/DFU)で破綻 → 3部品+南の席予約で解消。
 
 ## 確定した細部
@@ -51,10 +52,23 @@ Status: 確定 (2026-07-02、3レンズレビュー済み: 概念整合/Rust実�
 - SDKは便宜品、**ワイヤ契約が規範**(Azure/EdgeXの言語マトリクス疲弊の教訓)。
   祝福されたRustライブラリ1本+他言語は薄いワイヤ実装で十分。
 - **変換境界は一箇所**(2026-07-02、外部レビュー指摘反映): 移行期間中、旧語彙(AdapterEvent)と
-  新契約(Envelope)の変換は**IoTKit Edge内の明示的ブリッジ1ファイルに限定**する(Wave 0実装計画の
-  暫定ブリッジ。アダプタ内取り込みクライアント化の完了時に削除)。新規コードがAdapterEventへの依存を
+  新契約(Envelope)の変換は**明示的ブリッジ1ファイルに限定**する(Wave 0のEdge内暫定ブリッジは
+  Input Adapter v1でadapter package内のprivate legacy projectionへ置換)。新規コードがAdapterEventへの依存を
   **増やすことを禁止**——旧語彙は論点2確定までfrozen vocabulary(D12決定8で**移行ブリッジ削除まで**に
 延長 2026-07-08)。北向き/南向き/測定語彙の再一体化を防ぐ。
+
+## Input Adapter v1実装追記(2026-07-20、review完了)
+
+公式in-process adapterの**北向きhost追加境界**は
+[`docs/input-adapter-contract.md`](../../input-adapter-contract.md)で確定・実装した。これは完全なD4 adapter
+契約やD12 care-servicer完成を表さない。compile-time catalog、
+安定したtype/instance/sourceの分離、Edge所有principal、supervision非依存host/composition API、
+Edge-private factory wrapperを採用する。ここでいう共有境界はadapter packageのhost/composition APIであり、
+driver/runtime自身は取り込みclientを知らない。factoryはrestart権限やhealth真実を所有せず、静的な対応mappingを
+実デバイスの能力宣言として扱わない。動的pluginと完全なcapability declaration convergenceはv1対象外。
+`iotkit-ingest-client`が最終Ack/放棄を表すreceiptと同一Envelopeのretry ownershipを持ち、
+`iotkit-input-adapter-host-api`がsource-bound送信、activity、bounded diagnostics、completion、shutdownを
+提供する。Edgeは静的catalog、instance設定、principal、inventory、再起動、healthを所有する。
 
 ## 論点2(南向き契約)への引き継ぎ事項
 

@@ -20,6 +20,9 @@ use iotkit_core_types::AdapterId;
 use iotkit_edge::api::{ApiHandle, spawn_api_task};
 use iotkit_edge::{config, epoch_start, health};
 use iotkit_ingest_client::IngestClient;
+use iotkit_input_adapter_host_api::{
+    AdapterCompletion, AdapterStartContext, RunningInputAdapter, SourceBoundIngest,
+};
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -44,6 +47,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Err(error) = iotkit_edge::input_adapters::validate_catalog() {
+        tracing::error!(%error, "invalid built-in input adapter catalog");
+        std::process::exit(1);
+    }
 
     tracing::info!(source = ?config.config_source, "config loaded");
     tracing::info!(
@@ -55,8 +62,7 @@ fn main() {
         api_enabled = config.api.enabled,
         api_bind = %config.api.bind,
         api_edge_name = %config.api.edge_name,
-        bravepi_enabled = config.bravepi.is_some(),
-        rpi_local_enabled = config.rpi_local.is_some(),
+        input_adapter_instances = config.adapter_instances.len(),
         mqtt_exit_enabled = config.mqtt_exit.is_some(),
         "effective config"
     );
@@ -65,6 +71,14 @@ fn main() {
     }
     if let Some(rpi) = &config.rpi_local {
         tracing::info!(bus_path = %rpi.bus_path, poll_interval_ms = rpi.poll_interval_ms, "rpi_local config");
+    }
+    for instance in &config.adapter_instances {
+        tracing::info!(
+            instance = %instance.instance_id(),
+            adapter_type = instance.adapter_type(),
+            source = %instance.source(),
+            "input adapter instance configured"
+        );
     }
     if let Some(mqtt) = &config.mqtt_exit {
         tracing::info!(
@@ -296,93 +310,63 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
     let (ingest_exit_tx, mut ingest_exit_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut ingest_client_task_count = 0usize;
 
-    // rpi_local有効時、位置型デバイスを起動時に登録する(D5経路B: 定義=登録)。
-    // hardcoded_rpi_local_targets()と同じ2アドレス(0x60, 0x44)。冪等: 既にalive登録済みならスキップ。
-    if config.rpi_local.is_some() {
-        db.with_conn(|conn| {
-            for (addr, label) in [
-                (0x60u8, "MCP9600 thermocouple"),
-                (0x44u8, "OPT3001 illuminance"),
-            ] {
-                let hw = format!("rpi-local:default:i2c:0x{addr:02x}");
-                if iotkit_core_ledger::find_alive_by_hardware_id(conn, &hw)
-                    .map_err(ledger_to_storage_err)?
-                    .is_none()
-                {
-                    iotkit_core_ledger::insert_device(
-                        conn,
-                        &iotkit_core_ledger::NewDevice {
-                            hardware_id: hw,
-                            user_label: Some(label.to_string()),
-                            parent: None,
-                            kind: iotkit_core_ledger::DeviceKind::Positional,
-                            initial_state: iotkit_core_ledger::DeviceState::Active,
-                        },
-                    )
-                    .map_err(ledger_to_storage_err)?;
-                }
-            }
-            Ok(())
+    // Validate-all has completed in config::resolve. Reconcile the combined positional
+    // inventory before starting any runtime.
+    let positional_inventory: Vec<_> = config
+        .adapter_instances
+        .iter()
+        .flat_map(|instance| instance.positional_inventory())
+        .collect();
+    if !positional_inventory.is_empty() {
+        db.with_conn(move |conn| {
+            let devices = positional_inventory
+                .iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "hardware_id": item.hardware_id,
+                        "user_label": item.label,
+                    })
+                })
+                .collect::<Vec<_>>();
+            iotkit_core_ops::dispatch(
+                conn,
+                iotkit_core_ops::standard_catalog(),
+                iotkit_core_ops::DispatchRequest {
+                    op: iotkit_core_ops::POSITIONAL_INVENTORY_RECONCILE_OP.into(),
+                    params: serde_json::json!({ "devices": devices }),
+                    dry_run: false,
+                    actor: iotkit_core_ops::Actor {
+                        actor_id: "system:iotkit-edge".into(),
+                        actor_kind: iotkit_core_ops::ActorKind::System,
+                        tier_ceiling: iotkit_core_ops::Tier::Daily,
+                    },
+                    source: Some("input_adapter_inventory".into()),
+                    step_up_verified: false,
+                    clock_trust: None,
+                },
+            )
+            .and_then(iotkit_core_ops::DispatchResult::into_public)
+            .map(|_| ())
+            .map_err(|error| {
+                iotkit_core_storage::StorageError::Sqlite(rusqlite::Error::ToSqlConversionFailure(
+                    Box::new(error),
+                ))
+            })
         })
         .await
         .expect("positional device registration");
     }
 
-    // R20: 再起動可能な公式アダプタ(BravePI/rpi-local)のみを記録する(D4: 再起動権限は形態①のみ)。
-    // 他のAdapterClosedはログのみで再起動しない。
+    // Every built-in instance uses the same generic host lifecycle and restart record.
     let mut restart_specs: HashMap<AdapterId, RestartSpec> = HashMap::new();
-
-    // BravePI mainboard adapter
-    if let Some(bp) = &config.bravepi {
-        let source = format!("bravepi-mainboard:{}", bp.port);
-        let principal = principal_issuer.official_adapter(format!("principal:{source}"), source);
-        let (ingest, ingest_handle) = iotkit_ingest_client::spawn_inproc(
-            collector.clone(),
-            principal,
-            iotkit_ingest_client::DEFAULT_QUEUE_CAP,
-            iotkit_ingest_client::DEFAULT_SPOOL_CAP,
-        );
-        ingest_client_task_count += 1;
-        let exit_tx = ingest_exit_tx.clone();
-        tokio::spawn(async move {
-            let _ = ingest_handle.await;
-            let _ = exit_tx.send(());
-        });
-        match start_bravepi(&mut host, &bp.port, Some(ingest.clone())) {
-            Ok(id) => {
-                restart_specs.insert(
-                    id,
-                    RestartSpec::BravePi {
-                        port: bp.port.clone(),
-                        ingest,
-                    },
-                );
-            }
-            Err(e) => {
-                tracing::error!(error = %e, port = %bp.port, "Failed to start BravePI mainboard adapter");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        tracing::info!("BravePI mainboard adapter disabled");
-    }
-
-    // RPi local I2C adapter
-    if let Some(rpi) = &config.rpi_local {
-        let targets = hardcoded_rpi_local_targets();
-        tracing::info!(
-            bus_path = %rpi.bus_path,
-            poll_interval_ms = rpi.poll_interval_ms,
-            target_count = targets.len(),
-            "rpi-local using hardcoded targets: MCP9600@0x60(K-type), OPT3001@0x44 (until auto-detection #35)"
-        );
-        let adapter_config = rpi_local_adapter::RpiLocalConfig {
-            bus_path: rpi.bus_path.clone(),
-            poll_interval_ms: rpi.poll_interval_ms,
-            targets,
-        };
+    let mut active_generations: HashMap<AdapterId, u64> = HashMap::new();
+    let mut generation_counters: HashMap<AdapterId, u64> = HashMap::new();
+    let (healthy_tx, mut healthy_rx) =
+        tokio::sync::mpsc::channel::<ActivityNotice>((config.adapter_instances.len() * 2).max(1));
+    for instance in &config.adapter_instances {
+        let source = instance.source().as_str().to_owned();
         let principal =
-            principal_issuer.official_adapter("principal:rpi-local:default", "rpi-local:default");
+            principal_issuer.official_adapter(format!("principal:{source}"), source.clone());
         let (ingest, ingest_handle) = iotkit_ingest_client::spawn_inproc(
             collector.clone(),
             principal,
@@ -395,23 +379,39 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
             let _ = ingest_handle.await;
             let _ = exit_tx.send(());
         });
-        match start_rpi_local(&mut host, adapter_config.clone(), Some(ingest.clone())) {
+        match start_input_adapter(
+            &mut host,
+            instance.clone(),
+            ingest.clone(),
+            healthy_tx.clone(),
+            1,
+        ) {
             Ok(id) => {
+                active_generations.insert(id.clone(), 1);
+                generation_counters.insert(id.clone(), 1);
+                health_state
+                    .lock()
+                    .expect("health state mutex poisoned")
+                    .note_adapter_running(&id.to_string());
                 restart_specs.insert(
                     id,
-                    RestartSpec::RpiLocal {
-                        config: adapter_config,
+                    RestartSpec {
+                        instance: instance.clone(),
                         ingest,
                     },
                 );
             }
             Err(e) => {
-                tracing::error!(error = %e, bus_path = %rpi.bus_path, "Failed to start RPi local adapter");
-                std::process::exit(1);
+                tracing::error!(
+                    error = %e,
+                    instance = %instance.instance_id(),
+                    adapter_type = instance.adapter_type(),
+                    "failed to start input adapter"
+                );
+                host.shutdown_all().await;
+                return false;
             }
         }
-    } else {
-        tracing::info!("RPi local adapter disabled");
     }
     drop(ingest_exit_tx);
 
@@ -429,12 +429,14 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
     let service_only_mode = host.is_empty() && (api_task_running || mqtt_task_running);
     let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
     let mut pending_restart_count = 0usize;
+    let mut exhausted_adapter_count = 0usize;
 
     // Unified fan-in loop
     loop {
         if host.is_empty()
             && should_stop_after_all_adapter_streams_closed(
                 pending_restart_count,
+                exhausted_adapter_count,
                 api_task_running || mqtt_task_running,
                 service_only_mode,
             )
@@ -491,6 +493,15 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                     .collector_alive = false;
                 break;
             }
+            Some(notice) = healthy_rx.recv() => {
+                if activity_notice_is_current(&active_generations, &notice) {
+                    tracker.note_healthy(&notice.adapter_id);
+                    health_state
+                        .lock()
+                        .expect("health state mutex poisoned")
+                        .note_adapter_event(&notice.adapter_id.to_string(), health::now_ms());
+                }
+            }
             Some(id) = rx_restart.recv() => {
                 pending_restart_count = pending_restart_count.saturating_sub(1);
                 let Some(spec) = restart_specs.get(&id).cloned() else {
@@ -500,20 +511,24 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                     );
                     continue;
                 };
-                let restart_result = match &spec {
-                    RestartSpec::BravePi { port, ingest } => {
-                        start_bravepi(&mut host, port, Some(ingest.clone()))
-                    }
-                    RestartSpec::RpiLocal { config, ingest } => {
-                        start_rpi_local(
-                            &mut host,
-                            config.clone(),
-                            Some(ingest.clone()),
-                        )
-                    }
-                };
+                let generation = *generation_counters
+                    .entry(id.clone())
+                    .and_modify(|generation| *generation = generation.saturating_add(1))
+                    .or_insert(1);
+                let restart_result = start_input_adapter(
+                    &mut host,
+                    spec.instance.clone(),
+                    spec.ingest.clone(),
+                    healthy_tx.clone(),
+                    generation,
+                );
                 match restart_result {
                     Ok(new_id) => {
+                        active_generations.insert(new_id.clone(), generation);
+                        health_state
+                            .lock()
+                            .expect("health state mutex poisoned")
+                            .note_adapter_running(&new_id.to_string());
                         tracing::info!(adapter = %new_id, "Adapter restarted successfully");
                     }
                     Err(e) => {
@@ -521,6 +536,28 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                             adapter = %id, error = %e,
                             "Adapter restart attempt failed"
                         );
+                        if let Some(delay) = tracker.next_delay(&id) {
+                            health_state
+                                .lock()
+                                .expect("health state mutex poisoned")
+                                .note_adapter_restarting(&id.to_string());
+                            pending_restart_count = pending_restart_count.saturating_add(1);
+                            supervision::schedule_restart_notification(
+                                id,
+                                delay,
+                                tx_restart.clone(),
+                            );
+                        } else {
+                            exhausted_adapter_count = exhausted_adapter_count.saturating_add(1);
+                            health_state
+                                .lock()
+                                .expect("health state mutex poisoned")
+                                .note_adapter_exhausted(&id.to_string());
+                            tracing::error!(
+                                adapter = %id,
+                                "Adapter permanently degraded after restart-start failures"
+                            );
+                        }
                     }
                 }
             }
@@ -552,6 +589,7 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                         }
                     }
                     Some(AdapterHostEvent::AdapterClosed(id)) => {
+                        active_generations.remove(&id);
                         health_state
                             .lock()
                             .expect("health state mutex poisoned")
@@ -575,6 +613,10 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                                         "Adapter channel closed, restarting after backoff"
                                     );
                                     pending_restart_count = pending_restart_count.saturating_add(1);
+                                    health_state
+                                        .lock()
+                                        .expect("health state mutex poisoned")
+                                        .note_adapter_restarting(&id.to_string());
                                     supervision::schedule_restart_notification(
                                         id,
                                         sleep_for,
@@ -582,6 +624,12 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                                     );
                                 }
                                 None => {
+                                    exhausted_adapter_count =
+                                        exhausted_adapter_count.saturating_add(1);
+                                    health_state
+                                        .lock()
+                                        .expect("health state mutex poisoned")
+                                        .note_adapter_exhausted(&id.to_string());
                                     tracing::error!(
                                         adapter = %id,
                                         "Adapter permanently degraded (restart budget exhausted)"
@@ -599,6 +647,7 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                     None => {
                         if should_stop_after_all_adapter_streams_closed(
                             pending_restart_count,
+                            exhausted_adapter_count,
                             api_task_running || mqtt_task_running,
                             service_only_mode,
                         ) {
@@ -668,64 +717,122 @@ async fn wait_for_mqtt_task(
 /// R20: 再起動を許可される公式アダプタ(D4: 再起動権限は形態①のみ)の起動パラメータ。
 /// AdapterClosed時、host.deregister後にこのspecから同じ起動パスを再実行する。
 #[derive(Clone)]
-enum RestartSpec {
-    BravePi {
-        port: String,
-        ingest: IngestClient,
-    },
-    RpiLocal {
-        config: rpi_local_adapter::RpiLocalConfig,
-        ingest: IngestClient,
-    },
+struct RestartSpec {
+    instance: iotkit_edge::input_adapters::PreparedInputAdapter,
+    ingest: IngestClient,
 }
 
-/// BravePI mainboard adapterを起動し、hostへ登録する。
-/// 起動時と再起動時の両方から呼ばれる共用コードパス。
-fn start_bravepi(
+fn start_input_adapter(
     host: &mut AdapterHost,
-    port: &str,
-    ingest: Option<IngestClient>,
+    instance: iotkit_edge::input_adapters::PreparedInputAdapter,
+    ingest: IngestClient,
+    healthy_tx: tokio::sync::mpsc::Sender<ActivityNotice>,
+    generation: u64,
 ) -> Result<AdapterId, String> {
-    let handle = bravepi_mainboard_adapter::task::start(port.to_string(), ingest)
-        .map_err(|e| format!("Failed to start BravePI mainboard adapter on {port}: {e}"))?;
-    tracing::info!(adapter_id = %handle.id, port = %port, "BravePI mainboard adapter started");
-    let parts = handle.into_parts();
-    let id = parts.id.clone();
-    host.register(parts.id, parts.event_rx, {
-        let sh = parts.shutdown;
-        move || Box::pin(async move { sh.shutdown().await })
-    })?;
-    Ok(id)
+    let adapter_id = AdapterId::new(instance.instance_id().as_str());
+    if host.contains(&adapter_id) {
+        return Err(format!(
+            "duplicate adapter instance ID: {}",
+            instance.instance_id()
+        ));
+    }
+    let context = AdapterStartContext::try_new(
+        instance.instance_id().clone(),
+        instance.source().clone(),
+        SourceBoundIngest::new(instance.source().clone(), ingest),
+    )
+    .map_err(|error| format!("invalid adapter source binding: {error}"))?;
+    let running = instance.start(context)?;
+    register_running_adapter(host, running, healthy_tx, generation)
 }
 
-/// RPi local I2C adapterを検証・起動し、hostへ登録する。
-/// 起動時と再起動時の両方から呼ばれる共用コードパス。
-fn start_rpi_local(
+#[derive(Debug, Clone)]
+struct ActivityNotice {
+    adapter_id: AdapterId,
+    generation: u64,
+}
+
+fn activity_notice_is_current(
+    active_generations: &HashMap<AdapterId, u64>,
+    notice: &ActivityNotice,
+) -> bool {
+    active_generations.get(&notice.adapter_id) == Some(&notice.generation)
+}
+
+fn register_running_adapter(
     host: &mut AdapterHost,
-    adapter_config: rpi_local_adapter::RpiLocalConfig,
-    ingest: Option<IngestClient>,
+    running: RunningInputAdapter,
+    healthy_tx: tokio::sync::mpsc::Sender<ActivityNotice>,
+    generation: u64,
 ) -> Result<AdapterId, String> {
-    // Preflight: catch driver-level validation before spawning background tasks
-    rpi_local_adapter::validate(&adapter_config)
-        .map_err(|e| format!("RPi local adapter config validation failed: {e}"))?;
-    let handle = rpi_local_adapter::start(adapter_config, ingest)
-        .map_err(|e| format!("Failed to start RPi local adapter: {e}"))?;
-    tracing::info!(adapter_id = %handle.id, "RPi local adapter started");
-    let parts = handle.into_parts();
-    let id = parts.id.clone();
-    host.register(parts.id, parts.event_rx, {
-        let sh = parts.shutdown;
-        move || Box::pin(async move { sh.shutdown().await })
+    let id = AdapterId::new(running.instance_id.as_str());
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AdapterEvent>(1);
+    let shutdown = running.shutdown.clone();
+    let instance_id = running.instance_id.clone();
+    let activity_adapter_id = id.clone();
+    let activity = running.activity.clone();
+    let completion = running.completion;
+    let mut diagnostics = running.diagnostics;
+    let join = tokio::spawn(async move {
+        let diagnostic_task = tokio::spawn(async move {
+            while let Some(diagnostic) = diagnostics.recv().await {
+                tracing::warn!(
+                    instance = %instance_id,
+                    kind = ?diagnostic.kind,
+                    code = ?diagnostic.code,
+                    message = %diagnostic.message,
+                    "input adapter diagnostic"
+                );
+            }
+        });
+        let activity_task = tokio::spawn(async move {
+            let mut last_seen = None;
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                let snapshot = activity.snapshot();
+                if snapshot.last_physical_decode.is_some()
+                    && snapshot.last_physical_decode != last_seen
+                {
+                    last_seen = snapshot.last_physical_decode;
+                    let _ = healthy_tx.try_send(ActivityNotice {
+                        adapter_id: activity_adapter_id.clone(),
+                        generation,
+                    });
+                }
+            }
+        });
+        let outcome = completion.wait().await;
+        diagnostic_task.abort();
+        activity_task.abort();
+        let _ = diagnostic_task.await;
+        let _ = activity_task.await;
+        drop(event_tx);
+        outcome
+    });
+    host.register(id.clone(), event_rx, move || {
+        Box::pin(async move {
+            shutdown.request();
+            match join.await {
+                Ok(AdapterCompletion::RequestedStop) => Ok(()),
+                Ok(other) => Err(format!("adapter completed unexpectedly: {other:?}")),
+                Err(error) => Err(format!("adapter completion task panicked: {error}")),
+            }
+        })
     })?;
+    tracing::info!(adapter = %id, "input adapter started through generic host");
     Ok(id)
 }
 
 fn should_stop_after_all_adapter_streams_closed(
     pending_restart_count: usize,
+    exhausted_adapter_count: usize,
     background_service_running: bool,
     service_only_mode: bool,
 ) -> bool {
-    pending_restart_count == 0 && (!service_only_mode || !background_service_running)
+    pending_restart_count == 0
+        && exhausted_adapter_count == 0
+        && (!service_only_mode || !background_service_running)
 }
 
 fn should_exit_nonzero(collector_alive: bool, api_failed: bool, mqtt_failed: bool) -> bool {
@@ -745,21 +852,6 @@ fn log_fan_in_stop(service_only_mode: bool, api_failed: bool) {
     }
 }
 
-/// Hardcoded sensor targets for the v1 RPi4B hardware profile.
-///
-/// Deployment inventory -- lives in the Edge composition root, not the
-/// adapter crate. Replaced by #35 auto-detection or #23 device-config-service.
-fn hardcoded_rpi_local_targets() -> Vec<rpi_local_adapter::RpiLocalTarget> {
-    use rpi_local_adapter::ThermocoupleType;
-    vec![
-        rpi_local_adapter::RpiLocalTarget::MCP9600 {
-            address: 0x60,
-            thermocouple_type: ThermocoupleType::K,
-        },
-        rpi_local_adapter::RpiLocalTarget::OPT3001 { address: 0x44 },
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,20 +859,24 @@ mod tests {
     #[test]
     fn fan_in_continues_while_restart_notification_is_pending() {
         assert!(
-            !should_stop_after_all_adapter_streams_closed(1, false, false),
+            !should_stop_after_all_adapter_streams_closed(1, 0, false, false),
             "pending restart timers must keep the fan-in loop alive"
         );
         assert!(
-            should_stop_after_all_adapter_streams_closed(0, true, false),
+            should_stop_after_all_adapter_streams_closed(0, 0, true, false),
             "normal adapter closure should stop even while the API task is running"
         );
         assert!(
-            !should_stop_after_all_adapter_streams_closed(0, true, true),
+            !should_stop_after_all_adapter_streams_closed(0, 0, true, true),
             "service-only mode must keep the fan-in loop alive until its background service exits"
         );
         assert!(
-            should_stop_after_all_adapter_streams_closed(0, false, true),
+            should_stop_after_all_adapter_streams_closed(0, 0, false, true),
             "the fan-in loop may stop only when no restart is pending"
+        );
+        assert!(
+            !should_stop_after_all_adapter_streams_closed(0, 1, false, false),
+            "an exhausted adapter remains process-lifetime degraded"
         );
     }
 
@@ -802,5 +898,54 @@ mod tests {
             should_exit_nonzero(true, false, true),
             "unexpected MQTT publisher exit should be fail-fast"
         );
+    }
+
+    #[tokio::test]
+    async fn generic_running_adapter_drives_health_and_closed_lifecycle() {
+        let instance_id =
+            iotkit_input_adapter_host_api::AdapterInstanceId::new("reference_one").unwrap();
+        let (runtime, running) = iotkit_input_adapter_host_api::runtime_channels(instance_id, 1);
+        let (healthy_tx, mut healthy_rx) = tokio::sync::mpsc::channel(1);
+        let mut host = AdapterHost::new();
+        let adapter_id =
+            register_running_adapter(&mut host, running, healthy_tx, 7).expect("register");
+
+        runtime.activity.physical_decode();
+        let healthy = tokio::time::timeout(Duration::from_secs(2), healthy_rx.recv())
+            .await
+            .expect("activity monitor timeout")
+            .expect("activity monitor closed");
+        assert_eq!(healthy.adapter_id, adapter_id);
+        assert_eq!(healthy.generation, 7);
+
+        runtime
+            .completion
+            .complete(AdapterCompletion::UnexpectedExit(
+                iotkit_input_adapter_host_api::UnexpectedExitReason::WorkerReturned,
+            ));
+        let closed = tokio::time::timeout(Duration::from_secs(2), host.next_event())
+            .await
+            .expect("host close timeout");
+        assert!(matches!(closed, Some(AdapterHostEvent::AdapterClosed(id)) if id == adapter_id));
+    }
+
+    #[test]
+    fn stale_activity_from_a_previous_runtime_generation_is_ignored() {
+        let id = AdapterId::new("line_a");
+        let active = HashMap::from([(id.clone(), 2)]);
+        assert!(!activity_notice_is_current(
+            &active,
+            &ActivityNotice {
+                adapter_id: id.clone(),
+                generation: 1,
+            }
+        ));
+        assert!(activity_notice_is_current(
+            &active,
+            &ActivityNotice {
+                adapter_id: id,
+                generation: 2,
+            }
+        ));
     }
 }

@@ -1,9 +1,12 @@
 //! Bootstrap config: TOML parse → ENV merge → validated EdgeConfig.
 
+use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use crate::input_adapters::PreparedInputAdapter;
 
 // ── Error ───────────────────────────────────────────────
 
@@ -47,6 +50,21 @@ pub struct RawEdgeConfig {
 pub struct RawAdaptersConfig {
     pub bravepi: Option<RawBravepiConfig>,
     pub rpi_local: Option<RawRpiLocalConfig>,
+    #[serde(default)]
+    pub instances: BTreeMap<String, RawInputAdapterInstance>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawInputAdapterInstance {
+    #[serde(rename = "type")]
+    pub adapter_type: String,
+    pub enabled: Option<bool>,
+    pub config_schema_version: u16,
+    pub source: String,
+    pub port: Option<String>,
+    pub bus_path: Option<String>,
+    pub poll_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -102,6 +120,7 @@ pub struct EdgeConfig {
     pub disk_high_watermark_pct: u64,
     pub bravepi: Option<BravepiConfig>,
     pub rpi_local: Option<RpiLocalResolvedConfig>,
+    pub adapter_instances: Vec<PreparedInputAdapter>,
     pub api: ApiConfig,
     pub mqtt_exit: Option<MqttExitConfig>,
 }
@@ -219,14 +238,15 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
         raw.api.bind = Some(val);
     }
 
-    if let Ok(val) = std::env::var("BRAVEPI_ENABLED") {
+    let legacy_adapter_form = raw.adapters.instances.is_empty();
+    if legacy_adapter_form && let Ok(val) = std::env::var("BRAVEPI_ENABLED") {
         let bp = raw.adapters.bravepi.get_or_insert(RawBravepiConfig {
             enabled: None,
             port: None,
         });
         bp.enabled = Some(parse_bool_env("BRAVEPI_ENABLED", &val)?);
     }
-    if let Ok(val) = std::env::var("BRAVEPI_PORT") {
+    if legacy_adapter_form && let Ok(val) = std::env::var("BRAVEPI_PORT") {
         let bp = raw.adapters.bravepi.get_or_insert(RawBravepiConfig {
             enabled: None,
             port: None,
@@ -234,7 +254,7 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
         bp.port = Some(val);
     }
 
-    if let Ok(val) = std::env::var("RPI_LOCAL_ENABLED") {
+    if legacy_adapter_form && let Ok(val) = std::env::var("RPI_LOCAL_ENABLED") {
         let rpi = raw.adapters.rpi_local.get_or_insert(RawRpiLocalConfig {
             enabled: None,
             bus_path: None,
@@ -242,7 +262,7 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
         });
         rpi.enabled = Some(parse_bool_env("RPI_LOCAL_ENABLED", &val)?);
     }
-    if let Ok(val) = std::env::var("RPI_LOCAL_BUS_PATH") {
+    if legacy_adapter_form && let Ok(val) = std::env::var("RPI_LOCAL_BUS_PATH") {
         let rpi = raw.adapters.rpi_local.get_or_insert(RawRpiLocalConfig {
             enabled: None,
             bus_path: None,
@@ -250,7 +270,7 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
         });
         rpi.bus_path = Some(val);
     }
-    if let Ok(val) = std::env::var("RPI_LOCAL_POLL_INTERVAL_MS") {
+    if legacy_adapter_form && let Ok(val) = std::env::var("RPI_LOCAL_POLL_INTERVAL_MS") {
         let rpi = raw.adapters.rpi_local.get_or_insert(RawRpiLocalConfig {
             enabled: None,
             bus_path: None,
@@ -284,8 +304,18 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, Confi
         .map(PathBuf::from)
         .unwrap_or_else(|| default_health_json_path(&db_path));
 
-    // BravePI: enabled by default
-    let bravepi = {
+    let using_instances = !raw.adapters.instances.is_empty();
+    if using_instances && (raw.adapters.bravepi.is_some() || raw.adapters.rpi_local.is_some()) {
+        return Err(ConfigError::Validation(
+            "adapters.instances cannot be combined with adapters.bravepi or adapters.rpi_local"
+                .to_string(),
+        ));
+    }
+
+    // BravePI: enabled by default in the legacy form.
+    let bravepi = if using_instances {
+        None
+    } else {
         let (enabled, port) = match raw.adapters.bravepi {
             Some(bp) => (
                 bp.enabled.unwrap_or(true),
@@ -306,7 +336,9 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, Confi
     };
 
     // RPi local: disabled by default
-    let rpi_local = {
+    let rpi_local = if using_instances {
+        None
+    } else {
         let (enabled, bus_path, poll_interval_ms) = match raw.adapters.rpi_local {
             Some(rpi) => (
                 rpi.enabled.unwrap_or(false),
@@ -335,10 +367,53 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, Confi
         }
     };
 
+    let adapter_instances = if using_instances {
+        resolve_adapter_instances(raw.adapters.instances)?
+    } else {
+        let mut instances = Vec::new();
+        if let Some(bravepi) = &bravepi {
+            instances.push(
+                crate::input_adapters::resolve_instance(
+                    "bravepi_main".into(),
+                    RawInputAdapterInstance {
+                        adapter_type: "bravepi-mainboard".into(),
+                        enabled: Some(true),
+                        config_schema_version: 1,
+                        source: format!("bravepi-mainboard:{}", bravepi.port),
+                        port: Some(bravepi.port.clone()),
+                        bus_path: None,
+                        poll_interval_ms: None,
+                    },
+                )
+                .map_err(ConfigError::Validation)?
+                .expect("enabled legacy BravePI instance"),
+            );
+        }
+        if let Some(rpi) = &rpi_local {
+            instances.push(
+                crate::input_adapters::resolve_instance(
+                    "rpi_local_default".into(),
+                    RawInputAdapterInstance {
+                        adapter_type: "rpi-local".into(),
+                        enabled: Some(true),
+                        config_schema_version: 1,
+                        source: "rpi-local:default".into(),
+                        port: None,
+                        bus_path: Some(rpi.bus_path.clone()),
+                        poll_interval_ms: Some(rpi.poll_interval_ms),
+                    },
+                )
+                .map_err(ConfigError::Validation)?
+                .expect("enabled legacy RPi instance"),
+            );
+        }
+        instances
+    };
+
     let api = resolve_api(raw.api)?;
     let mqtt_exit = resolve_mqtt_exit(raw.exit)?;
 
-    if bravepi.is_none() && rpi_local.is_none() && !api.enabled && mqtt_exit.is_none() {
+    if adapter_instances.is_empty() && !api.enabled && mqtt_exit.is_none() {
         return Err(ConfigError::Validation(
             "at least one adapter, api, or MQTT exit must be enabled".to_string(),
         ));
@@ -353,9 +428,32 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, Confi
         disk_high_watermark_pct,
         bravepi,
         rpi_local,
+        adapter_instances,
         api,
         mqtt_exit,
     })
+}
+
+fn resolve_adapter_instances(
+    raw_instances: BTreeMap<String, RawInputAdapterInstance>,
+) -> Result<Vec<PreparedInputAdapter>, ConfigError> {
+    let mut resolved = Vec::new();
+    let mut sources = std::collections::BTreeSet::new();
+    for (raw_id, raw) in raw_instances {
+        let Some(config) = crate::input_adapters::resolve_instance(raw_id, raw)
+            .map_err(ConfigError::Validation)?
+        else {
+            continue;
+        };
+        if !sources.insert(config.source().as_str().to_owned()) {
+            return Err(ConfigError::Validation(format!(
+                "duplicate input adapter source {:?}",
+                config.source().as_str()
+            )));
+        }
+        resolved.push(config);
+    }
+    Ok(resolved)
 }
 
 fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, ConfigError> {
@@ -1051,6 +1149,106 @@ edge_name = "kitchen-edge"
         let rpi = config.rpi_local.as_ref().unwrap();
         assert_eq!(rpi.bus_path, "/dev/i2c-1");
         assert_eq!(rpi.poll_interval_ms, 1000);
+    }
+
+    #[test]
+    fn explicit_instances_support_multiple_same_type_adapters() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+[adapters.instances.line_a]
+type = "bravepi-mainboard"
+enabled = true
+config_schema_version = 1
+source = "input:bravepi-mainboard:line_a"
+port = "/dev/serial0"
+
+[adapters.instances.line_b]
+type = "bravepi-mainboard"
+enabled = true
+config_schema_version = 1
+source = "input:bravepi-mainboard:line_b"
+port = "/dev/serial1"
+"#,
+        )
+        .unwrap();
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(config.adapter_instances.len(), 2);
+        assert_eq!(config.adapter_instances[0].instance_id().as_str(), "line_a");
+        assert_eq!(
+            config.adapter_instances[1].source().as_str(),
+            "input:bravepi-mainboard:line_b"
+        );
+        assert!(config.bravepi.is_none());
+    }
+
+    #[test]
+    fn explicit_and_legacy_adapter_forms_are_mutually_exclusive() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+[adapters.bravepi]
+enabled = false
+
+[adapters.instances.local]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+"#,
+        )
+        .unwrap();
+        let error = resolve(raw, ConfigSource::DefaultsOnly).unwrap_err();
+        assert!(error.to_string().contains("cannot be combined"));
+    }
+
+    #[test]
+    fn explicit_instances_reject_duplicate_source_and_unknown_fields() {
+        let duplicate: RawConfig = toml::from_str(
+            r#"
+[adapters.instances.one]
+type = "bravepi-mainboard"
+config_schema_version = 1
+source = "input:same"
+port = "/dev/serial0"
+
+[adapters.instances.two]
+type = "bravepi-mainboard"
+config_schema_version = 1
+source = "input:same"
+port = "/dev/serial1"
+"#,
+        )
+        .unwrap();
+        assert!(
+            resolve(duplicate, ConfigSource::DefaultsOnly)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate")
+        );
+
+        assert!(
+            toml::from_str::<RawConfig>(
+                r#"
+[adapters.instances.one]
+type = "bravepi-mainboard"
+config_schema_version = 1
+source = "input:one"
+port = "/dev/serial0"
+secret_magic = "forbidden"
+"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_resolution_pins_existing_identity_values() {
+        let config = resolve(RawConfig::default(), ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(config.adapter_instances.len(), 1);
+        let instance = &config.adapter_instances[0];
+        assert_eq!(instance.adapter_type(), "bravepi-mainboard");
+        assert_eq!(instance.instance_id().as_str(), "bravepi_main");
+        assert_eq!(instance.source().as_str(), "bravepi-mainboard:/dev/ttyAMA0");
     }
 
     #[test]

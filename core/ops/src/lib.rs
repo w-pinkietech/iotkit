@@ -44,6 +44,8 @@ pub use ingress_listener::{
 pub use ops::standard_catalog;
 pub use tier::{Actor, ActorKind, Tier, TokenKind};
 
+pub const POSITIONAL_INVENTORY_RECONCILE_OP: &str = "device.positional_inventory.reconcile";
+
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 12,

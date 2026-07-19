@@ -1,0 +1,14 @@
+[package]
+name = "iotkit-input-adapter-testkit"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iotkit-core-registry = { path = "../core/registry" }
+iotkit-input-adapter-host-api = { path = "../iotkit-input-adapter-host-api" }
+iotkit-ingest-contract = { path = "../iotkit-ingest-contract" }
+
+[dev-dependencies]
+iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"] }
+tokio = { version = "1", features = ["rt", "macros", "sync"] }

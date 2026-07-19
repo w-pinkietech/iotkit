@@ -1,8 +1,7 @@
 use bravepi_codec::{BravePiFrame, ConfigFrame, SensorFrame};
-use iotkit_core_supervision::AdapterEvent;
 use iotkit_core_types::SensorType;
 
-use super::convert::frame_to_event;
+use super::convert::{DecodedEvent, frame_to_event};
 
 // ── ヘルパー ──────────────────────────────────────
 
@@ -25,7 +24,7 @@ fn temperature_frame_produces_sensor_data() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData {
+        DecodedEvent::SensorData {
             device_key,
             reading,
             rssi,
@@ -55,7 +54,7 @@ fn illuminance_frame_produces_sensor_data() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData { reading, .. } => {
+        DecodedEvent::SensorData { reading, .. } => {
             assert_eq!(reading.sensor_type, SensorType::Illuminance);
             assert_eq!(reading.values.len(), 1);
             assert!((reading.values[0] - 500.0).abs() < 0.1);
@@ -79,7 +78,7 @@ fn contact_input_frame_maps_bytes_to_float() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData { reading, .. } => {
+        DecodedEvent::SensorData { reading, .. } => {
             assert_eq!(reading.sensor_type, SensorType::ContactInput);
             assert_eq!(reading.values, vec![1.0, 0.0, 1.0]);
         }
@@ -102,7 +101,7 @@ fn contact_output_frame_produces_sensor_data() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData { reading, .. } => {
+        DecodedEvent::SensorData { reading, .. } => {
             assert_eq!(reading.sensor_type, SensorType::ContactOutput);
             assert_eq!(reading.values, vec![0.0, 1.0]);
         }
@@ -148,7 +147,7 @@ fn decode_error_produces_adapter_error() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::AdapterError { device_key, error } => {
+        DecodedEvent::AdapterError { device_key, error } => {
             assert_eq!(
                 device_key.unwrap().as_str(),
                 "bravepi-mainboard:bad_device:temperature"
@@ -168,7 +167,7 @@ fn ranging_frame_produces_sensor_data() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData { reading, .. } => {
+        DecodedEvent::SensorData { reading, .. } => {
             assert_eq!(reading.sensor_type, SensorType::Ranging);
             assert!(!reading.values.is_empty());
         }
@@ -184,7 +183,7 @@ fn adc_frame_produces_sensor_data() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData { reading, .. } => {
+        DecodedEvent::SensorData { reading, .. } => {
             assert_eq!(reading.sensor_type, SensorType::Adc);
         }
         other => panic!("expected SensorData, got {:?}", other),
@@ -206,7 +205,7 @@ fn rssi_and_battery_are_propagated() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData {
+        DecodedEvent::SensorData {
             rssi, battery_pct, ..
         } => {
             assert_eq!(rssi, Some(-128));
@@ -240,7 +239,7 @@ fn contact_input_data_count_exceeds_data_does_not_panic() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::SensorData { reading, .. } => {
+        DecodedEvent::SensorData { reading, .. } => {
             assert_eq!(reading.values.len(), 2);
         }
         other => panic!("expected SensorData, got {:?}", other),
@@ -334,7 +333,7 @@ fn decode_error_unknown_sensor_type_produces_none_key() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::AdapterError { device_key, error } => {
+        DecodedEvent::AdapterError { device_key, error } => {
             assert!(
                 device_key.is_none(),
                 "unknown sensor type should produce None key"
@@ -357,7 +356,7 @@ fn decode_error_unknown_device_produces_none_key() {
     let (event, _identity) = frame_to_event(frame, "/dev/test").expect("should produce event");
 
     match event {
-        AdapterEvent::AdapterError { device_key, error } => {
+        DecodedEvent::AdapterError { device_key, error } => {
             assert!(
                 device_key.is_none(),
                 "unknown device should produce None key"

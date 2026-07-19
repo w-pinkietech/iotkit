@@ -4,5 +4,6 @@ pub mod descriptor_snapshot;
 pub mod epoch_start;
 pub mod health;
 pub mod ingress;
+pub mod input_adapters;
 pub mod network_authority;
 pub mod record;

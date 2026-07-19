@@ -231,7 +231,9 @@ fn authority_config_descriptor(with_debt: bool) -> OpDescriptor {
 fn human_only(_tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(), OpError> {
     match ctx.actor_kind {
         ActorKind::Human | ActorKind::LocalCli => Ok(()),
-        ActorKind::Ai => Err(OpError::Forbidden("human_authority_required".into())),
+        ActorKind::Ai | ActorKind::System => {
+            Err(OpError::Forbidden("human_authority_required".into()))
+        }
     }
 }
 

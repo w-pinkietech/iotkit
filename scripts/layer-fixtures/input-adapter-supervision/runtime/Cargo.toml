@@ -1,0 +1,8 @@
+[package]
+name = "input-adapter-bad-runtime"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iotkit-core-supervision = { path = "../../../../core/supervision" }

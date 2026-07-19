@@ -276,6 +276,11 @@ pub fn dispatch_with_secret_dir(
     };
 
     let result = (|| -> Result<DispatchResult, OpError> {
+        if req.actor.actor_kind == ActorKind::System
+            && descriptor.name != crate::POSITIONAL_INVENTORY_RECONCILE_OP
+        {
+            return Err(OpError::Forbidden("system_actor_scope".into()));
+        }
         if matches!(req.actor.actor_kind, ActorKind::Human | ActorKind::Ai) {
             let token_expiry = tx
                 .query_row(
@@ -518,5 +523,6 @@ fn actor_kind_str(kind: ActorKind) -> &'static str {
         ActorKind::Human => "human",
         ActorKind::Ai => "ai",
         ActorKind::LocalCli => "local_cli",
+        ActorKind::System => "system",
     }
 }

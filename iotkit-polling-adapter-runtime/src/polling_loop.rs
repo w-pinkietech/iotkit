@@ -2,11 +2,12 @@ use std::panic;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use iotkit_core_supervision::{AdapterCommand, AdapterEvent};
 use iotkit_core_types::{AdapterId, DeviceKey, SensorIdentity, SensorReading};
-use iotkit_ingest_client::IngestClient;
 
-use crate::{PollingAdapterConfig, SensorDriver};
+use crate::{
+    PollingAdapterConfig, PollingCommand as AdapterCommand, PollingEvent as AdapterEvent,
+    SensorDriver,
+};
 
 // ── Internal failure threshold constants ─────────────────
 
@@ -438,8 +439,8 @@ pub(crate) fn poll_cycle(
 // ── polling_loop ─────────────────────────────────────────
 
 pub(crate) async fn polling_loop(
-    adapter_id: AdapterId,
-    ingest: Option<IngestClient>,
+    _adapter_id: AdapterId,
+    _legacy_ingest_removed: Option<()>,
     config: PollingAdapterConfig,
     event_tx: mpsc::Sender<AdapterEvent>,
     mut command_rx: mpsc::Receiver<AdapterCommand>,
@@ -504,7 +505,6 @@ pub(crate) async fn polling_loop(
         let events = apply_outcomes(outcomes, &mut states, &targets);
 
         for event in events {
-            submit_ingest(&adapter_id, &ingest, &event);
             if event_tx.send(event).await.is_err() {
                 tracing::warn!("event channel closed during startup probe");
                 return;
@@ -547,10 +547,11 @@ pub(crate) async fn polling_loop(
             cmd_opt = command_rx.recv() => {
                 match cmd_opt {
                     Some(AdapterCommand::Shutdown) | None => return,
-                    Some(AdapterCommand::DeviceCommand(cmd)) => {
+                    #[cfg(test)]
+                    Some(AdapterCommand::Unsupported { device_key }) => {
                         let event = AdapterEvent::AdapterError {
-                            device_key: Some(cmd.device_key),
-                            error: "unsupported: I2C polling adapter v1 does not handle DeviceCommand".into(),
+                            device_key: Some(device_key),
+                            error: "unsupported: I2C polling adapter v1 does not handle commands".into(),
                         };
                         if event_tx.send(event).await.is_err() {
                             tracing::warn!("event channel closed while sending DeviceCommand rejection");
@@ -591,45 +592,12 @@ pub(crate) async fn polling_loop(
 
                 let events = apply_outcomes(outcomes, &mut states, &targets);
                 for event in events {
-                    submit_ingest(&adapter_id, &ingest, &event);
                     if event_tx.send(event).await.is_err() {
                         tracing::warn!("event channel closed during poll cycle");
                         return;
                     }
                 }
             }
-        }
-    }
-}
-
-fn submit_ingest(adapter_id: &AdapterId, ingest: &Option<IngestClient>, event: &AdapterEvent) {
-    if let (
-        Some(client),
-        AdapterEvent::SensorData {
-            device_key,
-            reading,
-            ..
-        },
-    ) = (ingest, event)
-    {
-        match crate::ingest_map::to_items(adapter_id, device_key, reading) {
-            Some(items) => {
-                let envelope = iotkit_ingest_client::new_envelope(adapter_id.as_str(), items);
-                if let Err(e) = client.try_submit(envelope) {
-                    match e {
-                        iotkit_ingest_client::IngestClientError::Full => {
-                            tracing::warn!("ingest queue full; dropping reading");
-                        }
-                        iotkit_ingest_client::IngestClientError::Closed => {
-                            tracing::warn!("ingest client closed; dropping reading");
-                        }
-                    }
-                }
-            }
-            None => tracing::warn!(
-                device_key = device_key.as_str(),
-                "no measurement mapping; reading not ingested"
-            ),
         }
     }
 }
@@ -809,12 +777,9 @@ mod tests {
 
         // Send a DeviceCommand to trigger a send on the closed event channel.
         let _ = command_tx
-            .send(AdapterCommand::DeviceCommand(
-                iotkit_core_supervision::DeviceCommand {
-                    device_key: DeviceKey::new("test"),
-                    payload: iotkit_core_supervision::DeviceCommandPayload::QueryConfig,
-                },
-            ))
+            .send(AdapterCommand::Unsupported {
+                device_key: DeviceKey::new("test"),
+            })
             .await;
 
         tokio::time::timeout(Duration::from_secs(2), handle)
@@ -860,12 +825,9 @@ mod tests {
         ));
 
         command_tx
-            .send(AdapterCommand::DeviceCommand(
-                iotkit_core_supervision::DeviceCommand {
-                    device_key: DeviceKey::new("i2c:0x40:temperature"),
-                    payload: iotkit_core_supervision::DeviceCommandPayload::QueryConfig,
-                },
-            ))
+            .send(AdapterCommand::Unsupported {
+                device_key: DeviceKey::new("i2c:0x40:temperature"),
+            })
             .await
             .unwrap();
 
@@ -944,7 +906,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sensor_data_is_submitted_to_ingest_client() {
+    async fn sensor_data_is_emitted_without_an_ingest_client() {
         let identity = make_identity();
         let reading = make_reading();
         let target = make_sensor_target(
@@ -958,11 +920,10 @@ mod tests {
 
         let (event_tx, mut event_rx) = mpsc::channel(16);
         let (command_tx, command_rx) = mpsc::channel(16);
-        let (ingest, mut ingest_rx) = iotkit_ingest_client::channel_for_test(4);
 
         let handle = tokio::spawn(super::polling_loop(
             iotkit_core_types::AdapterId::new("rpi-local:default"),
-            Some(ingest),
+            None,
             config,
             event_tx,
             command_rx,
@@ -977,22 +938,17 @@ mod tests {
             .expect("timeout")
             .expect("channel closed");
         assert!(
-            matches!(event, AdapterEvent::SensorData { .. }),
+            matches!(&event, AdapterEvent::SensorData { .. }),
             "expected SensorData, got {event:?}"
         );
 
-        let envelope = tokio::time::timeout(Duration::from_secs(2), ingest_rx.recv())
-            .await
-            .expect("timeout waiting for ingest envelope")
-            .expect("ingest channel closed");
-        assert_eq!(envelope.source, "rpi-local:default");
-        assert_eq!(envelope.items.len(), 1);
-        assert_eq!(
-            envelope.items[0].subject_hint.as_deref(),
-            Some("rpi-local:default:i2c:0x40")
-        );
-        assert_eq!(envelope.items[0].measurement_key, "temperature_c");
-        assert_eq!(envelope.items[0].values, reading.values);
+        let AdapterEvent::SensorData {
+            reading: emitted, ..
+        } = event
+        else {
+            unreachable!()
+        };
+        assert_eq!(emitted.values, reading.values);
 
         command_tx.send(AdapterCommand::Shutdown).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), handle)

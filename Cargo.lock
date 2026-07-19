@@ -241,6 +241,7 @@ dependencies = [
  "iotkit-core-types",
  "iotkit-ingest-client",
  "iotkit-ingest-contract",
+ "iotkit-input-adapter-host-api",
  "iotkit-sensor-drivers",
  "rpi4b-transport",
  "tokio",
@@ -1078,6 +1079,7 @@ dependencies = [
  "iotkit-core-types",
  "iotkit-ingest-client",
  "iotkit-ingest-http",
+ "iotkit-input-adapter-host-api",
  "libc",
  "rcgen",
  "reqwest",
@@ -1181,13 +1183,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-input-adapter-host-api"
+version = "0.1.0"
+dependencies = [
+ "iotkit-ingest-client",
+ "iotkit-ingest-contract",
+ "tokio",
+]
+
+[[package]]
+name = "iotkit-input-adapter-testkit"
+version = "0.1.0"
+dependencies = [
+ "iotkit-core-registry",
+ "iotkit-ingest-client",
+ "iotkit-ingest-contract",
+ "iotkit-input-adapter-host-api",
+ "tokio",
+]
+
+[[package]]
 name = "iotkit-polling-adapter-runtime"
 version = "0.1.0"
 dependencies = [
- "iotkit-core-supervision",
  "iotkit-core-types",
- "iotkit-ingest-client",
- "iotkit-ingest-contract",
  "tokio",
  "tracing",
 ]
@@ -1697,12 +1716,13 @@ dependencies = [
 name = "rpi-local-adapter"
 version = "0.1.0"
 dependencies = [
- "iotkit-core-supervision",
  "iotkit-core-types",
- "iotkit-ingest-client",
+ "iotkit-ingest-contract",
+ "iotkit-input-adapter-host-api",
  "iotkit-polling-adapter-runtime",
  "iotkit-sensor-drivers",
  "rpi4b-transport",
+ "tempfile",
  "tokio",
  "tracing",
 ]

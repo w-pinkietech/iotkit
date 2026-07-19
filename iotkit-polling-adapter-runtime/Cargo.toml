@@ -5,9 +5,6 @@ edition = "2024"
 
 [dependencies]
 iotkit-core-types = { path = "../core/types" }
-iotkit-core-supervision = { path = "../core/supervision" }
-iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"] }
-iotkit-ingest-contract = { path = "../iotkit-ingest-contract" }
 tokio = { version = "1", features = ["rt", "sync", "macros", "fs", "time"] }
 tracing = "0.1"
 

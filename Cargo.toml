@@ -3,6 +3,8 @@ members = [
     "iotkit-ingest-contract",
     "iotkit-ingest-client",
     "iotkit-ingest-http",
+    "iotkit-input-adapter-host-api",
+    "iotkit-input-adapter-testkit",
     "core/types",
     "core/engine",
     "core/supervision",

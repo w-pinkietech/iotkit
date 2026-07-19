@@ -1,0 +1,11 @@
+[package]
+name = "iotkit-input-adapter-negative-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["runtime"]
+
+[dependencies]
+input-adapter-bad-runtime = { path = "runtime" }
