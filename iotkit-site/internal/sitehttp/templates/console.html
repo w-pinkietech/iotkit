@@ -473,7 +473,7 @@
       {{end}}
 
       <section class="content-section equipment-sensors">
-        <div class="section-heading"><div><p class="section-kicker">SENSORS</p><h2>接続されているセンサー</h2><p>届いている値を確認し、現場で分かる名前と単位を設定します。</p></div></div>
+        <div class="section-heading"><div><p class="section-kicker">SENSORS</p><h2>接続されているセンサー</h2><p>届いている値と接続情報を確認し、必要なセンサーの詳細画面を開きます。</p></div></div>
         <div class="equipment-sensor-grid">
           {{range .Signals}}
           <article class="equipment-sensor-card">
@@ -492,49 +492,9 @@
               <div><dt>チャンネル</dt><dd>{{.ChannelLabel}}</dd></div>
             </dl>
             {{if .MissingMessage}}<p class="metadata-warning">{{.MissingMessage}}</p>{{end}}
-            {{if $.IsAdmin}}
-            <details class="equipment-editor" {{if not .ProfileComplete}}open{{end}}>
-              <summary>{{if .ProfileComplete}}センサー設定を変更{{else}}センサーを設定{{end}}</summary>
-              <form method="post" action="/console/signals/{{.Signal.SignalRef}}/profile" class="setup-signal-form" data-signal-profile>
-                <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-                <input type="hidden" name="return_to" value="/equipment/devices/{{$.SelectedDevice.Device.DeviceRef}}">
-                <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
-                <label><span>センサー名</span><input name="display_name" value="{{.FormProfile.DisplayName}}" placeholder="例：乾燥炉入口 温度" required></label>
-                <div class="form-row">
-                  <label><span>センサーの種類</span><select name="display_sensor_type" data-sensor-type required>
-                    <option value="">選択してください</option>
-                    <option value="thermocouple" {{if eq .FormProfile.DisplaySensorType "thermocouple"}}selected{{end}}>熱電対</option>
-                    <option value="contact" {{if eq .FormProfile.DisplaySensorType "contact"}}selected{{end}}>接点入力</option>
-                    <option value="illuminance" {{if eq .FormProfile.DisplaySensorType "illuminance"}}selected{{end}}>照度</option>
-                    <option value="distance" {{if eq .FormProfile.DisplaySensorType "distance"}}selected{{end}}>距離</option>
-                    <option value="voltage" {{if eq .FormProfile.DisplaySensorType "voltage"}}selected{{end}}>電圧</option>
-                    <option value="current" {{if eq .FormProfile.DisplaySensorType "current"}}selected{{end}}>電流</option>
-                    <option value="pressure" {{if eq .FormProfile.DisplaySensorType "pressure"}}selected{{end}}>圧力</option>
-                    <option value="humidity" {{if eq .FormProfile.DisplaySensorType "humidity"}}selected{{end}}>湿度</option>
-                    <option value="acceleration" {{if eq .FormProfile.DisplaySensorType "acceleration"}}selected{{end}}>加速度</option>
-                    <option value="custom" {{if eq .FormProfile.DisplaySensorType "custom"}}selected{{end}}>その他</option>
-                  </select></label>
-                  <label data-custom-sensor-label><span>「その他」の表示名</span><input name="display_sensor_type_label" value="{{.FormProfile.DisplaySensorTypeLabel}}" placeholder="例：流量"></label>
-                </div>
-                <div class="form-row">
-                  <label><span>値の見せ方</span><select name="display_value_kind" data-value-kind required>
-                    <option value="numeric" {{if eq .FormProfile.DisplayValueKind "numeric"}}selected{{end}}>数値</option>
-                    <option value="boolean" {{if eq .FormProfile.DisplayValueKind "boolean"}}selected{{end}}>ON / OFF</option>
-                  </select></label>
-                  <label><span>単位の扱い</span><select name="display_unit_mode" data-unit-mode required>
-                    <option value="">選択してください</option>
-                    <option value="unit" {{if eq .FormProfile.DisplayUnitMode "unit"}}selected{{end}}>単位を表示する</option>
-                    <option value="dimensionless" {{if eq .FormProfile.DisplayUnitMode "dimensionless"}}selected{{end}}>単位なし</option>
-                  </select></label>
-                </div>
-                <div class="form-row">
-                  <label data-display-unit><span>表示単位</span><input name="display_unit" value="{{.FormProfile.DisplayUnit}}" maxlength="32" placeholder="例：°C"></label>
-                  <label data-decimal-places><span>小数点以下の桁数</span><input name="decimal_places" type="number" min="0" max="6" value="{{.FormProfile.DecimalPlaces}}" required></label>
-                </div>
-                <button type="submit">センサー設定を保存</button>
-              </form>
-            </details>
-            {{end}}
+            <footer class="equipment-sensor-actions">
+              <a class="button secondary" href="/sensors/{{.Signal.SignalRef}}">センサー設定を開く</a>
+            </footer>
           </article>
           {{else}}
           {{template "empty-state" "この機器からセンサー情報が届くと表示されます。"}}

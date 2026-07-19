@@ -354,7 +354,7 @@ func TestEquipmentEdgeDetailShowsDeviceSummaryLinks(t *testing.T) {
 	}
 }
 
-func TestEquipmentDeviceDetailContainsDeviceAndSensorSettings(t *testing.T) {
+func TestEquipmentDeviceDetailLinksSensorsToCanonicalSettings(t *testing.T) {
 	server, archive := newTestServerFixture(
 		t, false, siteapp.AccountRoleAdmin,
 	)
@@ -362,6 +362,10 @@ func TestEquipmentDeviceDetailContainsDeviceAndSensorSettings(t *testing.T) {
 	devices, err := archive.ListInventoryDevices(context.Background(), 100, "")
 	if err != nil || len(devices) != 1 {
 		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
 	}
 	cookie, _ := loginTestAccount(t, server)
 	path := "/equipment/devices/" + devices[0].DeviceRef
@@ -375,13 +379,23 @@ func TestEquipmentDeviceDetailContainsDeviceAndSensorSettings(t *testing.T) {
 		`class="equipment-breadcrumb"`,
 		`class="equipment-sensor-grid"`,
 		`action="/console/devices/` + devices[0].DeviceRef + `/profile"`,
-		`action="/console/signals/`,
-		`name="return_to" value="` + path + `"`,
+		`href="/sensors/` + signals[0].SignalRef + `"`,
+		"センサー設定を開く",
 		"24.8",
-		"温度",
+		"temperature_c",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("device detail missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`action="/console/signals/`,
+		`data-signal-profile`,
+		`name="display_sensor_type"`,
+		`name="display_value_kind"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("device detail duplicates sensor setting %q: %s", forbidden, body)
 		}
 	}
 }

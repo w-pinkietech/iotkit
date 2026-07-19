@@ -454,7 +454,7 @@ td strong { color: var(--ink); font-weight: 600; }
 .equipment-editor--device { margin: 0 0 20px; background: var(--surface); }
 .equipment-sensors { margin-top: 0; }
 .equipment-sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 16px; }
-.equipment-sensor-card { overflow: hidden; border: 1px solid var(--line); border-top: 4px solid var(--teal); border-radius: 10px; background: var(--surface); }
+.equipment-sensor-card { display: flex; overflow: hidden; flex-direction: column; border: 1px solid var(--line); border-top: 4px solid var(--teal); border-radius: 10px; background: var(--surface); }
 .equipment-sensor-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px 14px; }
 .equipment-sensor-card > header h3 { margin: 0; font-size: 1rem; }
 .sensor-current-value { display: grid; grid-template-columns: 1fr auto; align-items: end; margin: 0 20px; padding: 18px; border-radius: 8px; background: var(--teal-soft); }
@@ -468,7 +468,7 @@ td strong { color: var(--ink); font-weight: 600; }
 .sensor-source-facts dt { color: var(--muted); font-size: .64rem; }
 .sensor-source-facts dd { margin: 2px 0 0; font-size: .74rem; font-weight: 600; }
 .equipment-sensor-card > .metadata-warning { margin: 14px 20px 0; }
-.equipment-sensor-card > .equipment-editor { margin-top: 16px; }
+.equipment-sensor-actions { display: flex; justify-content: flex-end; margin-top: auto; padding: 16px 20px 18px; }
 
 /* Sensor master-detail */
 .sensor-list-table tr[data-href] { cursor: pointer; }
@@ -943,7 +943,6 @@ td strong { color: var(--ink); font-weight: 600; }
   .equipment-detail-facts { grid-template-columns: 1fr; }
   .equipment-detail-facts > div:nth-child(even) { border-left: 0; }
   .equipment-editor--device { margin-right: 0; margin-left: 0; }
-  .equipment-sensor-card > .equipment-editor { margin-right: 16px; margin-left: 16px; }
   .sensor-current-value { grid-template-columns: 1fr; gap: 3px; }
   .sensor-current-value > strong { grid-row: auto; }
   .sensor-source-facts { grid-template-columns: 1fr; }
