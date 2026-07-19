@@ -44,7 +44,7 @@ func TestV1TwoEdgeSemanticOutputJourneySurvivesRestart(t *testing.T) {
 		}
 		_, err = archive.ApplyYokaKitRoute(
 			ctx, siteapp.LocalCLIActor(), definition.ID,
-			outputadapter.YokaKit{
+			outputadapter.YokaKitConfig{
 				SourceID: "iotkit-01",
 				SignalID: []string{"press-a-running", "press-b-running"}[index],
 				Kind:     outputadapter.YokaKitOnOff,

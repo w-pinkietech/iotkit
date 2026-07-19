@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/outputadapter"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantics"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
@@ -236,6 +237,16 @@ type consoleRuleOutputView struct {
 	KindLabel  string
 	StateLabel string
 	StateClass string
+}
+
+type consoleOutputRouteView struct {
+	siteapp.OutputRoute
+	RuleName     string
+	KindLabel    string
+	AdapterLabel string
+	Destination  string
+	StateLabel   string
+	StateClass   string
 }
 
 func newConsoleSignalView(
@@ -676,6 +687,55 @@ func newConsoleRuleOutputViews(
 			KindLabel:        displayOutputKind(string(route.Kind)),
 			StateLabel:       "停止",
 			StateClass:       "never",
+		}
+		if route.Active {
+			view.StateLabel = "使用中"
+			view.StateClass = "receiving"
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func newConsoleOutputRouteViews(
+	routes []siteapp.OutputRoute,
+	rules []consoleRuleOption,
+) []consoleOutputRouteView {
+	rulesByID := make(map[string]consoleRuleOption, len(rules))
+	for _, rule := range rules {
+		rulesByID[rule.ID] = rule
+	}
+	views := make([]consoleOutputRouteView, 0, len(routes))
+	for _, route := range routes {
+		rule := rulesByID[route.RuleID]
+		view := consoleOutputRouteView{
+			OutputRoute: route,
+			RuleName:    rule.Name,
+			KindLabel:   rule.Kind,
+			StateLabel:  "停止",
+			StateClass:  "never",
+		}
+		if view.RuleName == "" {
+			view.RuleName = "設定済みの値"
+		}
+		switch route.AdapterID {
+		case "iotkit.mqtt-json.v1":
+			view.AdapterLabel = "汎用MQTT JSON"
+			config, err := outputadapter.DecodeGenericMQTTJSONConfig(route.Config)
+			if err == nil {
+				view.Destination = config.Topic
+			}
+		case "yokakit.mqtt.v1":
+			view.AdapterLabel = "YokaKit MQTT"
+			config, err := outputadapter.DecodeYokaKitConfig(route.Config)
+			if err == nil {
+				view.Destination = config.SourceID + " / " + config.SignalID
+			}
+		default:
+			view.AdapterLabel = route.AdapterID
+		}
+		if view.Destination == "" {
+			view.Destination = "設定を確認してください"
 		}
 		if route.Active {
 			view.StateLabel = "使用中"

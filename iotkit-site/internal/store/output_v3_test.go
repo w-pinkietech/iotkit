@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestMultipleRuleOutputRouteSurvivesRuleRevisionAndPublishes(t *testing.T) {
 		ctx,
 		siteapp.LocalCLIActor(),
 		rule.ID,
-		outputadapter.YokaKit{
+		outputadapter.YokaKitConfig{
 			SourceID: "line-a",
 			SignalID: "production",
 			Kind:     outputadapter.YokaKitProduction,
@@ -102,6 +103,91 @@ func TestMultipleRuleOutputRouteSurvivesRuleRevisionAndPublishes(t *testing.T) {
 	}
 }
 
+func TestGenericOutputRouteUsesRegisteredAdapter(t *testing.T) {
+	archive := openTestStore(t)
+	signalRef := semanticV3Signal(t, archive)
+	ctx := context.Background()
+	configuration, err := archive.GetSemanticConfiguration(ctx, signalRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		"生産回数",
+		semantics.RuleSpec{
+			Kind: semantics.KindCumulativeCounter,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+			Trigger: semantics.TriggerTransition,
+		},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := outputadapter.EncodeGenericMQTTJSONConfig(
+		outputadapter.GenericMQTTJSONConfig{
+			Topic: "factory/line-a/production",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := archive.ApplyOutputRoute(
+		ctx,
+		siteapp.LocalCLIActor(),
+		rule.ID,
+		"iotkit.mqtt-json.v1",
+		config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.AdapterID != "iotkit.mqtt-json.v1" ||
+		route.ConfigSchemaVersion != 1 ||
+		string(route.Config) != string(config) {
+		t.Fatalf("route = %#v", route)
+	}
+	routes, err := archive.ListOutputRoutes(ctx)
+	if err != nil || len(routes) != 1 || routes[0].RouteID != route.RouteID {
+		t.Fatalf("routes=%#v err=%v", routes, err)
+	}
+	acceptSemanticBatch(
+		t,
+		archive,
+		"edge-node-01",
+		"epoch-a",
+		2,
+		[]float64{0},
+		[]float64{1},
+	)
+	if _, err := archive.ProjectSemanticRules(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := archive.EnqueueMultipleRuleOutputExports(ctx, 100); err != nil ||
+		count != 1 {
+		t.Fatalf("enqueued=%d err=%v", count, err)
+	}
+	pending, err := archive.ListPendingMQTTExports(ctx, 100)
+	if err != nil || len(pending) != 1 ||
+		pending[0].Topic != "factory/line-a/production" {
+		t.Fatalf("pending=%#v err=%v", pending, err)
+	}
+	var payload struct {
+		Kind  outputadapter.ObservationKind `json:"kind"`
+		Value int64                         `json:"value"`
+	}
+	if err := json.Unmarshal(pending[0].PayloadJSON, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Kind != outputadapter.KindCumulativeValue || payload.Value != 1 {
+		t.Fatalf("payload=%#v raw=%s", payload, pending[0].PayloadJSON)
+	}
+}
+
 func TestMultipleRuleStateAndOutputRemainExactlyOnceAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "site.db")
 	archive, err := Open(path)
@@ -135,7 +221,7 @@ func TestMultipleRuleStateAndOutputRemainExactlyOnceAcrossRestart(t *testing.T) 
 		ctx,
 		siteapp.LocalCLIActor(),
 		rule.ID,
-		outputadapter.YokaKit{
+		outputadapter.YokaKitConfig{
 			SourceID: "line-a",
 			SignalID: "production",
 			Kind:     outputadapter.YokaKitProduction,

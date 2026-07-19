@@ -1,6 +1,7 @@
 package sitehttp
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -423,6 +424,74 @@ func (server *Server) listYokaKitOutputs(response http.ResponseWriter, request *
 	}{routes})
 }
 
+func (server *Server) listOutputAdapters(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireAPIAuth(response, request, false); !ok {
+		return
+	}
+	registry, err := outputadapter.BuiltInRegistry()
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Items []outputadapter.Descriptor `json:"items"`
+	}{registry.Descriptors()})
+}
+
+func (server *Server) listOutputRoutes(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireAPIAuth(response, request, false); !ok {
+		return
+	}
+	routes, err := server.store.ListOutputRoutes(request.Context())
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Items []siteapp.OutputRoute `json:"items"`
+	}{routes})
+}
+
+func (server *Server) createOutputRoute(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		RuleID    string          `json:"rule_id"`
+		AdapterID string          `json:"adapter_id"`
+		Config    json.RawMessage `json:"config"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil ||
+		input.RuleID == "" ||
+		input.AdapterID == "" ||
+		len(input.Config) == 0 {
+		server.badRequest(response)
+		return
+	}
+	route, err := server.ruleOutputs.CreateOutputRoute(
+		request.Context(),
+		server.actor(auth),
+		input.RuleID,
+		input.AdapterID,
+		input.Config,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, route)
+}
+
 func (server *Server) createYokaKitOutput(response http.ResponseWriter, request *http.Request) {
 	auth, ok := server.requireAdminMutation(response, request)
 	if !ok {
@@ -440,7 +509,7 @@ func (server *Server) createYokaKitOutput(response http.ResponseWriter, request 
 		server.badRequest(response)
 		return
 	}
-	adapter := outputadapter.YokaKit{
+	adapter := outputadapter.YokaKitConfig{
 		SourceID: input.SourceID, SignalID: input.SignalID,
 		Kind: input.Kind, Reason: input.Reason,
 	}

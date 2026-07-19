@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -73,8 +74,8 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 14 {
-		t.Fatalf("schema version = %d, want 14", version)
+	if version != 15 {
+		t.Fatalf("schema version = %d, want 15", version)
 	}
 	if got := testTableCount(t, store.db, "site_devices"); got != 1 {
 		t.Fatalf("backfilled devices = %d, want 1", got)
@@ -101,7 +102,7 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	}
 }
 
-func TestMigrationFourteenCreatesMultipleRuleSchemaWithoutDroppingV2(t *testing.T) {
+func TestMigrationFifteenCreatesGenericOutputSchemaWithoutDroppingV2(t *testing.T) {
 	store := openTestStore(t)
 	for _, table := range []string{
 		"signal_calibration_revisions_v3",
@@ -116,7 +117,7 @@ func TestMigrationFourteenCreatesMultipleRuleSchemaWithoutDroppingV2(t *testing.
 		"semantic_projection_failures_v3",
 		"semantic_counter_resets_v3",
 		"semantic_counter_reset_boundaries_v3",
-		"yokakit_routes_v3",
+		"output_routes",
 		"output_outbox_v3",
 		"semantic_definitions_v2",
 	} {
@@ -145,6 +146,147 @@ func TestMigrationFourteenCreatesMultipleRuleSchemaWithoutDroppingV2(t *testing.
 	}
 	if uniqueSignalRuleIndex != 0 {
 		t.Fatal("v3 schema still limits a signal to one active rule")
+	}
+}
+
+func TestMigrationFifteenConvertsYokaKitRoutesToGenericOutputRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 14)
+	if _, err := db.Exec(`
+		INSERT INTO yokakit_routes_v3(
+			route_id, rule_id, source_id, signal_id, kind, reason,
+			start_after_observation_row_id, active, created_at
+		) VALUES(
+			'out_0123456789abcdef0123456789abcdef',
+			'rule_0123456789abcdef0123456789abcdef',
+			'line-a', 'production', 'production', '', 42, 1, 1000
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO output_outbox_v3(
+			export_id, route_id, observation_id, topic, qos,
+			payload_json, attempts, created_at
+		) VALUES(
+			'export-01',
+			'out_0123456789abcdef0123456789abcdef',
+			'observation-01',
+			'yokakit/v1/sources/line-a/signals/production/observations',
+			1, '{"schema_version":1}', 2, 1100
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+
+	var (
+		adapterID    string
+		configSchema int
+		configJSON   string
+		startAfter   int64
+	)
+	if err := archive.db.QueryRow(`
+		SELECT adapter_id, config_schema_version, CAST(config_json AS TEXT),
+			start_after_observation_row_id
+		FROM output_routes
+		WHERE route_id = 'out_0123456789abcdef0123456789abcdef'
+	`).Scan(&adapterID, &configSchema, &configJSON, &startAfter); err != nil {
+		t.Fatal(err)
+	}
+	if adapterID != "yokakit.mqtt.v1" || configSchema != 1 ||
+		startAfter != 42 {
+		t.Fatalf(
+			"adapter=%q schema=%d start=%d config=%s",
+			adapterID,
+			configSchema,
+			startAfter,
+			configJSON,
+		)
+	}
+	var config struct {
+		SchemaVersion int    `json:"schema_version"`
+		SourceID      string `json:"source_id"`
+		SignalID      string `json:"signal_id"`
+		Kind          string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.SchemaVersion != 1 || config.SourceID != "line-a" ||
+		config.SignalID != "production" || config.Kind != "production" {
+		t.Fatalf("config = %#v", config)
+	}
+	var outboxRoute string
+	var outboxAttempts int
+	if err := archive.db.QueryRow(`
+		SELECT route_id, attempts FROM output_outbox_v3
+		WHERE export_id = 'export-01'
+	`).Scan(&outboxRoute, &outboxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if outboxRoute != "out_0123456789abcdef0123456789abcdef" ||
+		outboxAttempts != 2 {
+		t.Fatalf("outbox route=%q attempts=%d", outboxRoute, outboxAttempts)
+	}
+}
+
+func TestMigrationFifteenRollsBackBeforeDroppingYokaKitRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 14)
+	if _, err := db.Exec(`
+		INSERT INTO yokakit_routes_v3(
+			route_id, rule_id, source_id, signal_id, kind, reason,
+			start_after_observation_row_id, active, created_at
+		) VALUES(
+			'out_0123456789abcdef0123456789abcdef',
+			'rule_0123456789abcdef0123456789abcdef',
+			'line-a', 'production', 'production', '', 0, 1, 1000
+		);
+		CREATE TABLE output_routes(conflict TEXT);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if archive, err := Open(path); err == nil {
+		_ = archive.Close()
+		t.Fatal("migration succeeded despite conflicting output_routes table")
+	}
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var version, routeCount int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`
+		SELECT count(*) FROM yokakit_routes_v3
+	`).Scan(&routeCount); err != nil {
+		t.Fatal(err)
+	}
+	if version != 14 || routeCount != 1 {
+		t.Fatalf("version=%d route count=%d", version, routeCount)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/outputadapter"
@@ -12,19 +13,22 @@ import (
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
 
+type OutputRoute = siteapp.OutputRoute
 type YokaKitRuleRoute = siteapp.YokaKitRuleRoute
 
-func (store *Store) ApplyYokaKitRuleRoute(
+func (store *Store) ApplyOutputRoute(
 	ctx context.Context,
 	actor siteapp.Actor,
 	ruleID string,
-	adapter outputadapter.YokaKit,
-) (YokaKitRuleRoute, error) {
-	var noRoute YokaKitRuleRoute
+	adapterID string,
+	config json.RawMessage,
+) (OutputRoute, error) {
+	var noRoute OutputRoute
 	if err := actor.Validate(); err != nil {
 		return noRoute, err
 	}
-	if err := adapter.Validate(); err != nil {
+	adapter, descriptor, err := resolveOutputAdapter(adapterID)
+	if err != nil {
 		return noRoute, err
 	}
 	tx, err := store.db.BeginTx(ctx, nil)
@@ -41,11 +45,11 @@ func (store *Store) ApplyYokaKitRuleRoute(
 	} else if err != nil {
 		return noRoute, err
 	}
-	probe := semantics.Observation{Kind: semanticKind, Value: json.RawMessage(`0`)}
-	if semanticKind == semantics.KindBoolean || semanticKind == semantics.KindAlarm {
-		probe.Value = json.RawMessage(`false`)
+	outputKind, err := outputObservationKind(semanticKind)
+	if err != nil {
+		return noRoute, err
 	}
-	if _, err := adapter.Transform(probe); err != nil {
+	if err := adapter.ValidateConfig(config, outputKind); err != nil {
 		return noRoute, err
 	}
 	var start int64
@@ -58,33 +62,43 @@ func (store *Store) ApplyYokaKitRuleRoute(
 	if err != nil {
 		return noRoute, err
 	}
-	route := YokaKitRuleRoute{
-		RouteID: routeID, RuleID: ruleID,
-		SourceID: adapter.SourceID, SignalID: adapter.SignalID,
-		Kind: adapter.Kind, Reason: adapter.Reason,
-		StartAfterObservationRowID: start, Active: true,
-		CreatedAt: time.Now().UnixMilli(),
+	route := OutputRoute{
+		RouteID:                    routeID,
+		RuleID:                     ruleID,
+		AdapterID:                  descriptor.ID,
+		ConfigSchemaVersion:        descriptor.ConfigSchemaVersion,
+		Config:                     append(json.RawMessage(nil), config...),
+		StartAfterObservationRowID: start,
+		Active:                     true,
+		CreatedAt:                  time.Now().UnixMilli(),
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO yokakit_routes_v3(
-			route_id, rule_id, source_id, signal_id, kind, reason,
-			start_after_observation_row_id, active, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-	`, route.RouteID, route.RuleID, route.SourceID, route.SignalID,
-		route.Kind, route.Reason, route.StartAfterObservationRowID,
-		route.CreatedAt); err != nil {
+		INSERT INTO output_routes(
+			route_id, rule_id, adapter_id, config_schema_version,
+			config_json, start_after_observation_row_id, active, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+	`, route.RouteID, route.RuleID, route.AdapterID,
+		route.ConfigSchemaVersion, []byte(route.Config),
+		route.StartAfterObservationRowID, route.CreatedAt); err != nil {
 		return noRoute, err
 	}
 	summary, _ := json.Marshal(struct {
-		RuleID   string                    `json:"rule_id"`
-		SourceID string                    `json:"source_id"`
-		SignalID string                    `json:"signal_id"`
-		Kind     outputadapter.YokaKitKind `json:"kind"`
-	}{route.RuleID, route.SourceID, route.SignalID, route.Kind})
+		RuleID              string `json:"rule_id"`
+		AdapterID           string `json:"adapter_id"`
+		ConfigSchemaVersion int    `json:"config_schema_version"`
+	}{
+		RuleID:              route.RuleID,
+		AdapterID:           route.AdapterID,
+		ConfigSchemaVersion: route.ConfigSchemaVersion,
+	})
 	if err := insertAuditEventTx(ctx, tx, siteapp.AuditEvent{
-		OccurredAt: route.CreatedAt, ActorClass: actor.Class, ActorRef: actor.Ref,
-		Operation: "yokakit_rule_route.create", ResourceRef: route.RouteID,
-		Outcome: auditOutcomeSuccess, Summary: summary,
+		OccurredAt:  route.CreatedAt,
+		ActorClass:  actor.Class,
+		ActorRef:    actor.Ref,
+		Operation:   "output_route.create",
+		ResourceRef: route.RouteID,
+		Outcome:     auditOutcomeSuccess,
+		Summary:     summary,
 	}); err != nil {
 		return noRoute, err
 	}
@@ -94,18 +108,42 @@ func (store *Store) ApplyYokaKitRuleRoute(
 	return route, nil
 }
 
-func (store *Store) ListYokaKitRuleRoutes(
+func (store *Store) ApplyYokaKitRuleRoute(
 	ctx context.Context,
-) ([]YokaKitRuleRoute, error) {
+	actor siteapp.Actor,
+	ruleID string,
+	config outputadapter.YokaKitConfig,
+) (YokaKitRuleRoute, error) {
+	var noRoute YokaKitRuleRoute
+	encoded, err := outputadapter.EncodeYokaKitConfig(config)
+	if err != nil {
+		return noRoute, err
+	}
+	route, err := store.ApplyOutputRoute(
+		ctx,
+		actor,
+		ruleID,
+		"yokakit.mqtt.v1",
+		encoded,
+	)
+	if err != nil {
+		return noRoute, err
+	}
+	return yokaKitRuleRoute(route)
+}
+
+func (store *Store) ListOutputRoutes(
+	ctx context.Context,
+) ([]OutputRoute, error) {
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT route.route_id, route.rule_id, route.source_id,
-			route.signal_id, route.kind, route.reason,
+		SELECT route.route_id, route.rule_id, route.adapter_id,
+			route.config_schema_version, route.config_json,
 			route.start_after_observation_row_id, route.active, route.created_at,
 			COALESCE(SUM(CASE WHEN outbox.export_id IS NOT NULL
 				AND outbox.published_at IS NULL THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN outbox.published_at IS NOT NULL
 				THEN 1 ELSE 0 END), 0)
-		FROM yokakit_routes_v3 AS route
+		FROM output_routes AS route
 		LEFT JOIN output_outbox_v3 AS outbox ON outbox.route_id = route.route_id
 		GROUP BY route.route_id
 		ORDER BY route.created_at, route.route_id
@@ -114,20 +152,69 @@ func (store *Store) ListYokaKitRuleRoutes(
 		return nil, err
 	}
 	defer rows.Close()
-	var routes []YokaKitRuleRoute
+	var routes []OutputRoute
 	for rows.Next() {
-		var route YokaKitRuleRoute
+		var route OutputRoute
+		var config []byte
 		if err := rows.Scan(
-			&route.RouteID, &route.RuleID, &route.SourceID, &route.SignalID,
-			&route.Kind, &route.Reason, &route.StartAfterObservationRowID,
-			&route.Active, &route.CreatedAt, &route.PendingCount,
+			&route.RouteID,
+			&route.RuleID,
+			&route.AdapterID,
+			&route.ConfigSchemaVersion,
+			&config,
+			&route.StartAfterObservationRowID,
+			&route.Active,
+			&route.CreatedAt,
+			&route.PendingCount,
 			&route.PublishedCount,
 		); err != nil {
 			return nil, err
 		}
+		route.Config = append(json.RawMessage(nil), config...)
 		routes = append(routes, route)
 	}
 	return routes, rows.Err()
+}
+
+func (store *Store) ListYokaKitRuleRoutes(
+	ctx context.Context,
+) ([]YokaKitRuleRoute, error) {
+	routes, err := store.ListOutputRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]YokaKitRuleRoute, 0, len(routes))
+	for _, route := range routes {
+		if route.AdapterID != "yokakit.mqtt.v1" {
+			continue
+		}
+		converted, err := yokaKitRuleRoute(route)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, converted)
+	}
+	return result, nil
+}
+
+func yokaKitRuleRoute(route OutputRoute) (YokaKitRuleRoute, error) {
+	config, err := outputadapter.DecodeYokaKitConfig(route.Config)
+	if err != nil {
+		return YokaKitRuleRoute{}, err
+	}
+	return YokaKitRuleRoute{
+		RouteID:                    route.RouteID,
+		RuleID:                     route.RuleID,
+		SourceID:                   config.SourceID,
+		SignalID:                   config.SignalID,
+		Kind:                       config.Kind,
+		Reason:                     config.Reason,
+		StartAfterObservationRowID: route.StartAfterObservationRowID,
+		Active:                     route.Active,
+		CreatedAt:                  route.CreatedAt,
+		PendingCount:               route.PendingCount,
+		PublishedCount:             route.PublishedCount,
+	}, nil
 }
 
 func (store *Store) EnqueueMultipleRuleOutputExports(
@@ -138,15 +225,15 @@ func (store *Store) EnqueueMultipleRuleOutputExports(
 		return 0, errors.New("output enqueue limit must be between 1 and 10000")
 	}
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT route.route_id, route.source_id, route.signal_id, route.kind,
-			route.reason, observation.observation_row_id,
+		SELECT route.route_id, route.adapter_id, route.config_schema_version,
+			route.config_json, observation.observation_row_id,
 			observation.observation_id, observation.series_id, observation.sequence,
 			observation.rule_id, observation.rule_revision, observation.kind,
 			observation.value_json, observation.signal_ref,
 			observation.edge_node_id, observation.ledger_epoch,
 			observation.source_pub_seq, observation.observed_at,
 			observation.created_at
-		FROM yokakit_routes_v3 AS route
+		FROM output_routes AS route
 		JOIN semantic_observations_v3 AS observation
 			ON observation.rule_id = route.rule_id
 			AND observation.observation_row_id > route.start_after_observation_row_id
@@ -162,24 +249,34 @@ func (store *Store) EnqueueMultipleRuleOutputExports(
 		return 0, err
 	}
 	type candidate struct {
-		routeID, sourceID, signalID, reason string
-		kind                                outputadapter.YokaKitKind
-		observation                         semantics.Observation
+		routeID, adapterID  string
+		configSchemaVersion int
+		config              json.RawMessage
+		observation         semantics.Observation
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var item candidate
 		var rowID int64
-		var value []byte
+		var config, value []byte
 		if err := rows.Scan(
-			&item.routeID, &item.sourceID, &item.signalID, &item.kind,
-			&item.reason, &rowID, &item.observation.ObservationID,
-			&item.observation.SeriesID, &item.observation.Sequence,
+			&item.routeID,
+			&item.adapterID,
+			&item.configSchemaVersion,
+			&config,
+			&rowID,
+			&item.observation.ObservationID,
+			&item.observation.SeriesID,
+			&item.observation.Sequence,
 			&item.observation.DefinitionID,
 			&item.observation.DefinitionRevision,
-			&item.observation.Kind, &value, &item.observation.SignalRef,
-			&item.observation.EdgeNodeID, &item.observation.LedgerEpoch,
-			&item.observation.SourcePubSeq, &item.observation.ObservedAt,
+			&item.observation.Kind,
+			&value,
+			&item.observation.SignalRef,
+			&item.observation.EdgeNodeID,
+			&item.observation.LedgerEpoch,
+			&item.observation.SourcePubSeq,
+			&item.observation.ObservedAt,
 			&item.observation.CreatedAt,
 		); err != nil {
 			_ = rows.Close()
@@ -187,6 +284,7 @@ func (store *Store) EnqueueMultipleRuleOutputExports(
 		}
 		item.observation.RowID = rowID
 		item.observation.Value = value
+		item.config = append(json.RawMessage(nil), config...)
 		candidates = append(candidates, item)
 	}
 	if err := rows.Close(); err != nil {
@@ -199,10 +297,24 @@ func (store *Store) EnqueueMultipleRuleOutputExports(
 	defer func() { _ = tx.Rollback() }()
 	inserted := 0
 	for _, item := range candidates {
-		message, err := (outputadapter.YokaKit{
-			SourceID: item.sourceID, SignalID: item.signalID,
-			Kind: item.kind, Reason: item.reason,
-		}).Transform(item.observation)
+		adapter, descriptor, err := resolveOutputAdapter(item.adapterID)
+		if err != nil {
+			return 0, err
+		}
+		if item.configSchemaVersion != descriptor.ConfigSchemaVersion {
+			return 0, fmt.Errorf(
+				"%w: route %s uses config schema %d, adapter expects %d",
+				outputadapter.ErrInvalidConfiguration,
+				item.routeID,
+				item.configSchemaVersion,
+				descriptor.ConfigSchemaVersion,
+			)
+		}
+		observation, err := outputObservation(item.observation)
+		if err != nil {
+			return 0, err
+		}
+		message, err := adapter.Transform(item.config, observation)
 		if err != nil {
 			return 0, err
 		}
@@ -224,4 +336,22 @@ func (store *Store) EnqueueMultipleRuleOutputExports(
 		return 0, err
 	}
 	return inserted, nil
+}
+
+func resolveOutputAdapter(
+	adapterID string,
+) (outputadapter.Adapter, outputadapter.Descriptor, error) {
+	registry, err := outputadapter.BuiltInRegistry()
+	if err != nil {
+		return nil, outputadapter.Descriptor{}, err
+	}
+	adapter, ok := registry.Resolve(adapterID)
+	if !ok {
+		return nil, outputadapter.Descriptor{}, fmt.Errorf(
+			"%w: unknown output adapter %q",
+			outputadapter.ErrInvalidConfiguration,
+			adapterID,
+		)
+	}
+	return adapter, adapter.Descriptor(), nil
 }

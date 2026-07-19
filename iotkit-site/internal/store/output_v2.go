@@ -30,13 +30,14 @@ func (store *Store) ApplyYokaKitRoute(
 	ctx context.Context,
 	actor siteapp.Actor,
 	definitionID string,
-	adapter outputadapter.YokaKit,
+	config outputadapter.YokaKitConfig,
 ) (YokaKitRoute, error) {
 	var noRoute YokaKitRoute
 	if err := actor.Validate(); err != nil {
 		return noRoute, err
 	}
-	if err := adapter.Validate(); err != nil {
+	encodedConfig, err := outputadapter.EncodeYokaKitConfig(config)
+	if err != nil {
 		return noRoute, err
 	}
 	tx, err := store.db.BeginTx(ctx, nil)
@@ -66,11 +67,14 @@ func (store *Store) ApplyYokaKitRoute(
 	} else if err != nil {
 		return noRoute, err
 	}
-	probe := semantics.Observation{Kind: semanticKind, Value: json.RawMessage(`0`)}
-	if semanticKind == semantics.KindBoolean || semanticKind == semantics.KindAlarm {
-		probe.Value = json.RawMessage(`false`)
+	outputKind, err := outputObservationKind(semanticKind)
+	if err != nil {
+		return noRoute, err
 	}
-	if _, err := adapter.Transform(probe); err != nil {
+	if err := (outputadapter.YokaKitAdapter{}).ValidateConfig(
+		encodedConfig,
+		outputKind,
+	); err != nil {
 		return noRoute, err
 	}
 	var start int64
@@ -85,8 +89,8 @@ func (store *Store) ApplyYokaKitRoute(
 	}
 	route := YokaKitRoute{
 		RouteID: routeID, DefinitionID: definitionID,
-		SourceID: adapter.SourceID, SignalID: adapter.SignalID,
-		Kind: adapter.Kind, Reason: adapter.Reason,
+		SourceID: config.SourceID, SignalID: config.SignalID,
+		Kind: config.Kind, Reason: config.Reason,
 		StartAfterObservationRowID: start, Active: true,
 		CreatedAt: time.Now().UnixMilli(),
 	}
@@ -154,8 +158,14 @@ func (store *Store) ListYokaKitRoutes(ctx context.Context) ([]YokaKitRoute, erro
 
 func (store *Store) ListYokaKitSourceIDs(ctx context.Context) ([]string, error) {
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT DISTINCT source_id FROM yokakit_routes
-		WHERE active = 1 ORDER BY source_id
+		SELECT source_id FROM yokakit_routes
+		WHERE active = 1
+		UNION
+		SELECT CAST(json_extract(config_json, '$.source_id') AS TEXT)
+		FROM output_routes
+		WHERE active = 1
+			AND adapter_id = 'yokakit.mqtt.v1'
+		ORDER BY 1
 	`)
 	if err != nil {
 		return nil, err
@@ -236,10 +246,23 @@ func (store *Store) EnqueueOutputExports(ctx context.Context, limit int) (int, e
 	defer func() { _ = tx.Rollback() }()
 	inserted := 0
 	for _, item := range candidates {
-		message, err := (outputadapter.YokaKit{
-			SourceID: item.sourceID, SignalID: item.signalID,
-			Kind: item.kind, Reason: item.reason,
-		}).Transform(item.observation)
+		config, err := outputadapter.EncodeYokaKitConfig(
+			outputadapter.YokaKitConfig{
+				SourceID: item.sourceID, SignalID: item.signalID,
+				Kind: item.kind, Reason: item.reason,
+			},
+		)
+		if err != nil {
+			return 0, err
+		}
+		observation, err := outputObservation(item.observation)
+		if err != nil {
+			return 0, err
+		}
+		message, err := (outputadapter.YokaKitAdapter{}).Transform(
+			config,
+			observation,
+		)
 		if err != nil {
 			return 0, err
 		}

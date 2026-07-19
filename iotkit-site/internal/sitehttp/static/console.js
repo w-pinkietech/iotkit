@@ -94,6 +94,25 @@
     toggleSignalProfileFields(form);
   }
 
+  for (const form of document.querySelectorAll("[data-output-route-form]")) {
+    const adapter = form.querySelector("[data-output-adapter]");
+    const update = () => {
+      for (const fields of form.querySelectorAll("[data-output-fields]")) {
+        const active = fields.dataset.outputFields === adapter?.value;
+        fields.hidden = !active;
+        for (const input of fields.querySelectorAll("input, select, textarea")) {
+          input.disabled = !active;
+          if (input.name === "topic" || input.name === "source_id" ||
+              input.name === "signal_id") {
+            input.required = active;
+          }
+        }
+      }
+    };
+    adapter?.addEventListener("change", update);
+    update();
+  }
+
   const toggleSemanticFields = (form) => {
     const kind = form.querySelector("[data-semantic-kind]");
     const detectorFields = form.querySelector("[data-semantic-detector]");

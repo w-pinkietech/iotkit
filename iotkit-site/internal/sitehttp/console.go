@@ -2,6 +2,7 @@ package sitehttp
 
 import (
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/http"
@@ -52,6 +53,8 @@ type consoleData struct {
 	OutputRules        []consoleRuleOption
 	RuleOutputs        []store.YokaKitRuleRoute
 	RuleOutputRows     []consoleRuleOutputView
+	OutputRoutes       []siteapp.OutputRoute
+	OutputRouteRows    []consoleOutputRouteView
 	Audit              []siteapp.AuditEvent
 	Accounts           []siteapp.Account
 	Certificate        certificateStatus
@@ -337,8 +340,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			data.LogRows = newConsoleLogViews(records, data.SignalRows)
 		}
 	case "output":
-		data.RuleOutputs, err = server.store.ListYokaKitRuleRoutes(request.Context())
-		data.RuleOutputRows = newConsoleRuleOutputViews(data.RuleOutputs)
+		data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
 		if err == nil {
 			data.Signals, err = server.site.ListSignals(
 				request.Context(), siteapp.PageRequest{Limit: 100},
@@ -366,6 +368,12 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				}
 			}
 		}
+		if err == nil {
+			data.OutputRouteRows = newConsoleOutputRouteViews(
+				data.OutputRoutes,
+				data.OutputRules,
+			)
+		}
 	case "audit":
 		data.Audit, err = server.site.ListAuditEvents(request.Context(), 100)
 		data.AuditRows = newConsoleAuditViews(data.Audit)
@@ -376,7 +384,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			)
 		}
 	case "system":
-		data.RuleOutputs, err = server.store.ListYokaKitRuleRoutes(request.Context())
+		data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
 	}
 	if err == nil && page == "status" {
 		var setupDevices []siteapp.SetupDevice
@@ -884,7 +892,7 @@ func (server *Server) consoleYokaKitOutput(response http.ResponseWriter, request
 	if !ok {
 		return
 	}
-	adapter := outputadapter.YokaKit{
+	adapter := outputadapter.YokaKitConfig{
 		SourceID: request.FormValue("source_id"),
 		SignalID: request.FormValue("signal_id"),
 		Kind:     outputadapter.YokaKitKind(request.FormValue("kind")),
@@ -896,6 +904,50 @@ func (server *Server) consoleYokaKitOutput(response http.ResponseWriter, request
 		request.FormValue("rule_id"),
 		adapter,
 	)
+	server.consoleMutationResult(response, request, "/output", err)
+}
+
+func (server *Server) consoleOutputRoute(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	adapterID := request.FormValue("adapter_id")
+	var config json.RawMessage
+	var err error
+	switch adapterID {
+	case "iotkit.mqtt-json.v1":
+		config, err = outputadapter.EncodeGenericMQTTJSONConfig(
+			outputadapter.GenericMQTTJSONConfig{
+				Topic: request.FormValue("topic"),
+			},
+		)
+	case "yokakit.mqtt.v1":
+		config, err = outputadapter.EncodeYokaKitConfig(
+			outputadapter.YokaKitConfig{
+				SourceID: request.FormValue("source_id"),
+				SignalID: request.FormValue("signal_id"),
+				Kind: outputadapter.YokaKitKind(
+					request.FormValue("kind"),
+				),
+				Reason: request.FormValue("reason"),
+			},
+		)
+	default:
+		err = outputadapter.ErrInvalidConfiguration
+	}
+	if err == nil {
+		_, err = server.ruleOutputs.CreateOutputRoute(
+			request.Context(),
+			server.actor(auth),
+			request.FormValue("rule_id"),
+			adapterID,
+			config,
+		)
+	}
 	server.consoleMutationResult(response, request, "/output", err)
 }
 

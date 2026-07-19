@@ -676,6 +676,47 @@ var schemaMigrations = []migration{
 		JOIN accepted_cursors AS cursor
 			ON cursor.edge_node_id = signal.edge_node_id;
 	`},
+	{version: 15, sql: `
+		CREATE TABLE output_routes (
+			route_id TEXT PRIMARY KEY,
+			rule_id TEXT NOT NULL,
+			adapter_id TEXT NOT NULL,
+			config_schema_version INTEGER NOT NULL CHECK(
+				config_schema_version >= 1
+			),
+			config_json BLOB NOT NULL CHECK(
+				json_valid(config_json) AND json_type(config_json) = 'object'
+			),
+			start_after_observation_row_id INTEGER NOT NULL CHECK(
+				start_after_observation_row_id >= 0
+			),
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			created_at INTEGER NOT NULL
+		);
+		INSERT INTO output_routes(
+			route_id, rule_id, adapter_id, config_schema_version,
+			config_json, start_after_observation_row_id, active, created_at
+		)
+		SELECT route_id, rule_id, 'yokakit.mqtt.v1', 1,
+			json_object(
+				'schema_version', 1,
+				'source_id', source_id,
+				'signal_id', signal_id,
+				'kind', kind,
+				'reason', reason
+			),
+			start_after_observation_row_id, active, created_at
+		FROM yokakit_routes_v3;
+		CREATE INDEX ix_output_routes_rule
+			ON output_routes(rule_id, active);
+		CREATE UNIQUE INDEX ux_output_routes_yokakit_identity
+			ON output_routes(
+				json_extract(config_json, '$.source_id'),
+				json_extract(config_json, '$.signal_id')
+			)
+			WHERE adapter_id = 'yokakit.mqtt.v1';
+		DROP TABLE yokakit_routes_v3;
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

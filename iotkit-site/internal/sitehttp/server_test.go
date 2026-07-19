@@ -1008,6 +1008,170 @@ func TestSemanticConfigurationAPIStoresTwoRulesForOneSignal(t *testing.T) {
 	}
 }
 
+func TestOutputAdapterAndGenericRouteAPI(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		"生産回数",
+		semantics.RuleSpec{
+			Kind: semantics.KindCumulativeCounter,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+			Trigger: semantics.TriggerTransition,
+		},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/output-adapters",
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"id":"iotkit.mqtt-json.v1"`) ||
+		!strings.Contains(response.Body.String(), `"id":"yokakit.mqtt.v1"`) ||
+		!strings.Contains(response.Body.String(), `"cumulative_value"`) {
+		t.Fatalf("adapters status=%d body=%s",
+			response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/output-routes",
+		strings.NewReader(`{
+			"rule_id":"`+rule.ID+`",
+			"adapter_id":"iotkit.mqtt-json.v1",
+			"config":{
+				"schema_version":1,
+				"topic":"factory/line-a/production"
+			}
+		}`),
+	)
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", csrf)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s",
+			response.Code, response.Body.String())
+	}
+	var created siteapp.OutputRoute
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.AdapterID != "iotkit.mqtt-json.v1" ||
+		created.ConfigSchemaVersion != 1 {
+		t.Fatalf("created = %#v", created)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/output-routes",
+		nil,
+	)
+	request.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(
+			response.Body.String(),
+			`"topic":"factory/line-a/production"`,
+		) {
+		t.Fatalf("routes status=%d body=%s",
+			response.Code, response.Body.String())
+	}
+}
+
+func TestConsoleCreatesAndDisplaysGenericMQTTJSONOutput(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		"生産回数",
+		semantics.RuleSpec{
+			Kind: semantics.KindCumulativeCounter,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+			Trigger: semantics.TriggerTransition,
+		},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	form := url.Values{
+		"adapter_id": {"iotkit.mqtt-json.v1"},
+		"rule_id":    {rule.ID},
+		"topic":      {"factory/line-a/production"},
+		"_csrf":      {csrf},
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/console/output-routes",
+		strings.NewReader(form.Encode()),
+	)
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", testOrigin)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther ||
+		response.Header().Get("Location") != "/output?saved=1" {
+		t.Fatalf("save status=%d location=%q body=%s",
+			response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/output", nil)
+	request.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+	if response.Code != http.StatusOK ||
+		!strings.Contains(body, "汎用MQTT JSON") ||
+		!strings.Contains(body, "factory/line-a/production") {
+		t.Fatalf("page status=%d body=%s", response.Code, body)
+	}
+}
+
 func TestSemanticConfigurationMutationRequiresIfMatch(t *testing.T) {
 	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
 	seedSetupDevice(t, archive)
@@ -1480,6 +1644,8 @@ func TestViewerCannotChangeProfilesMeaningsOutputsOrAccounts(t *testing.T) {
 			`{"kind":"numeric","scale":1,"offset":0,"condition":{"mode":"","bool_value":false,"threshold":0,"hysteresis":0},"trigger":""}`},
 		{http.MethodPost, "/api/v1/outputs/yokakit",
 			`{"definition_id":"sem_example","source_id":"iotkit-01","signal_id":"x","kind":"onoff","reason":""}`},
+		{http.MethodPost, "/api/v1/output-routes",
+			`{"rule_id":"rule_00000000000000000000000000000000","adapter_id":"yokakit.mqtt.v1","config":{"schema_version":1}}`},
 		{http.MethodPost, "/api/v1/accounts",
 			`{"login_id":"other","display_name":"別担当","role":"viewer","temporary_password":"十分に長い 仮パスワード です"}`},
 	} {

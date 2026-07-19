@@ -42,6 +42,12 @@ result to an application-facing MQTT contract. Applications such as YokaKit own 
 and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
 complicates this story needs a strong reason.
 
+The exporter boundary is the versioned
+[Output Adapter contract v1](output-adapter-contract.md). An Output Adapter is a deterministic
+in-process transformer from a generic Site observation plus route configuration to one exact MQTT
+publication. It never owns Broker connectivity, credentials, durable outbox state, retries, or
+business masters. `yokakit.mqtt.v1` is the first implementation, not a privileged core path.
+
 The current production-shaped reference installation keeps Edge native on its Raspberry Pi and
 co-locates the standard Broker plus Site in Docker on one Linux host. Co-location is not a product
 requirement: the Broker and Site may run on separate hosts and communicate only through the same

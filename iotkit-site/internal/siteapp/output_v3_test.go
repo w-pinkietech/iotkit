@@ -2,6 +2,7 @@ package siteapp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/outputadapter"
@@ -11,14 +12,15 @@ type ruleOutputRepositoryStub struct {
 	called bool
 }
 
-func (stub *ruleOutputRepositoryStub) ApplyYokaKitRuleRoute(
+func (stub *ruleOutputRepositoryStub) ApplyOutputRoute(
 	context.Context,
 	Actor,
 	string,
-	outputadapter.YokaKit,
-) (YokaKitRuleRoute, error) {
+	string,
+	json.RawMessage,
+) (OutputRoute, error) {
 	stub.called = true
-	return YokaKitRuleRoute{
+	return OutputRoute{
 		RouteID: "out_0123456789abcdef0123456789abcdef",
 		RuleID:  "rule_0123456789abcdef0123456789abcdef",
 	}, nil
@@ -31,7 +33,7 @@ func TestRuleOutputServiceRequiresAdminForMutation(t *testing.T) {
 		"acct_0123456789abcdef0123456789abcdef",
 		AccountRoleViewer,
 	)
-	adapter := outputadapter.YokaKit{
+	adapter := outputadapter.YokaKitConfig{
 		SourceID: "line-a",
 		SignalID: "production",
 		Kind:     outputadapter.YokaKitProduction,

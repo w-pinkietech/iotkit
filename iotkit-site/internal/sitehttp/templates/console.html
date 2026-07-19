@@ -948,26 +948,32 @@
       {{end}}
 
       {{if eq .Page "output"}}
-      <section class="health-banner {{if .RuleOutputs}}healthy{{else}}attention{{end}}">
-        <span class="health-icon" aria-hidden="true">{{if .RuleOutputs}}✓{{else}}!{{end}}</span>
-        <div><strong>{{if .RuleOutputs}}外部出力が設定されています{{else}}外部出力はまだ設定されていません{{end}}</strong><p>ここでは送るデータの対応だけを管理します。MQTTの接続先や証明書は導入設定で管理します。</p></div>
+      <section class="health-banner {{if .OutputRoutes}}healthy{{else}}attention{{end}}">
+        <span class="health-icon" aria-hidden="true">{{if .OutputRoutes}}✓{{else}}!{{end}}</span>
+        <div><strong>{{if .OutputRoutes}}外部出力が設定されています{{else}}外部出力はまだ設定されていません{{end}}</strong><p>ここでは送るデータの対応だけを管理します。MQTTの接続先や証明書は導入設定で管理します。</p></div>
       </section>
       <section class="content-section">
         <div class="section-heading"><div><p class="section-kicker">ROUTES</p><h2>登録済みの出力</h2></div></div>
-        <div class="table-wrap"><table><thead><tr><th>送信元</th><th>送る値</th><th>外部での用途</th><th>配送状況</th><th>状態</th></tr></thead>
-          <tbody>{{range .RuleOutputRows}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.KindLabel}}</td><td><strong>{{.PublishedCount}}</strong>件送信 / {{.PendingCount}}件待ち</td><td><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></td></tr>{{else}}<tr class="empty-row"><td colspan="5">登録済みの出力はありません。</td></tr>{{end}}</tbody>
+        <div class="table-wrap"><table><thead><tr><th>送る値</th><th>出力形式</th><th>送信先での識別</th><th>配送状況</th><th>状態</th></tr></thead>
+          <tbody>{{range .OutputRouteRows}}<tr><td><strong>{{.RuleName}}</strong><small class="table-subtext">{{.KindLabel}}</small></td><td>{{.AdapterLabel}}</td><td class="mono">{{.Destination}}</td><td><strong>{{.PublishedCount}}</strong>件送信 / {{.PendingCount}}件待ち</td><td><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></td></tr>{{else}}<tr class="empty-row"><td colspan="5">登録済みの出力はありません。</td></tr>{{end}}</tbody>
         </table></div>
       </section>
       {{if .IsAdmin}}
       {{if .OutputRules}}
       <section class="form-card narrow">
-        <div class="section-heading"><div><p class="section-kicker">ADD OUTPUT</p><h2>YokaKitへの出力を追加</h2><p>使い方を設定した値を、YokaKitが受け取れる用途へ対応付けます。</p></div></div>
-        <form method="post" action="/console/outputs/yokakit">
+        <div class="section-heading"><div><p class="section-kicker">ADD OUTPUT</p><h2>外部出力を追加</h2><p>送る値と出力形式を選び、送信先で使う識別情報を設定します。</p></div></div>
+        <form method="post" action="/console/output-routes" data-output-route-form>
           <input type="hidden" name="_csrf" value="{{.CSRF}}">
           <label><span>送る値</span><select name="rule_id" required><option value="">選択してください</option>{{range .OutputRules}}<option value="{{.ID}}">{{.Name}} — {{.Kind}}</option>{{end}}</select></label>
-          <div class="form-row"><label><span>送信元ID</span><input name="source_id" pattern="[a-z0-9-]+" placeholder="factory-line-1" required><small>英小文字・数字・ハイフン</small></label><label><span>値のID</span><input name="signal_id" pattern="[a-z0-9-]+" placeholder="completed-count" required><small>外部アプリで識別する名前</small></label></div>
-          <label><span>YokaKitでの用途</span><select name="kind"><option value="production">生産の累積値</option><option value="onoff">ON/OFF状態</option><option value="gantt_chart">稼働状態</option><option value="alarm">アラーム</option></select></label>
-          <label><span>アラーム理由（アラームの場合のみ）</span><input name="reason" placeholder="例：温度上限を超過"></label>
+          <label><span>出力形式</span><select name="adapter_id" data-output-adapter required><option value="iotkit.mqtt-json.v1">汎用MQTT JSON</option><option value="yokakit.mqtt.v1">YokaKit MQTT</option></select><small>接続先がIoTKit共通JSONを受け取れる場合は「汎用MQTT JSON」を選びます。</small></label>
+          <div data-output-fields="iotkit.mqtt-json.v1">
+            <label><span>送信topic</span><input name="topic" placeholder="factory/line-a/production" required><small>送信先システムが購読する完全なMQTT topic</small></label>
+          </div>
+          <div data-output-fields="yokakit.mqtt.v1" hidden>
+            <div class="form-row"><label><span>送信元ID</span><input name="source_id" pattern="[a-z0-9-]+" placeholder="factory-line-1" disabled><small>英小文字・数字・ハイフン</small></label><label><span>値のID</span><input name="signal_id" pattern="[a-z0-9-]+" placeholder="completed-count" disabled><small>YokaKitで識別する名前</small></label></div>
+            <label><span>YokaKitでの用途</span><select name="kind" disabled><option value="production">生産の累積値</option><option value="onoff">ON/OFF状態</option><option value="gantt_chart">稼働状態</option><option value="alarm">アラーム</option></select></label>
+            <label><span>アラーム理由（アラームの場合のみ）</span><input name="reason" placeholder="例：温度上限を超過" disabled></label>
+          </div>
           <button type="submit">出力を追加</button>
         </form>
       </section>
@@ -1033,7 +1039,7 @@
       <section class="system-grid">
         <article class="system-card"><span class="system-icon">●</span><div><h2>IoTKit Site</h2><strong class="ok-text">稼働中</strong><p>Consoleとデータ保存サービスは動作しています。</p></div></article>
         <article class="system-card"><span class="system-icon">⌁</span><div><h2>通信証明書</h2>{{if .Certificate.Available}}<strong class="{{if .Certificate.NeedsAction}}warn-text{{else}}ok-text{{end}}">有効期限まで {{.Certificate.DaysRemaining}}日</strong><p>{{.Certificate.NotAfter}} まで有効です。</p>{{else}}<strong class="warn-text">Consoleでは確認できません</strong><p>導入時の証明書設定と運用コマンドを確認してください。</p>{{end}}</div></article>
-        <article class="system-card"><span class="system-icon">↗</span><div><h2>外部出力</h2><strong>{{len .RuleOutputs}}件</strong><p>MQTTの接続先や認証情報は、この画面から変更できません。</p></div></article>
+        <article class="system-card"><span class="system-icon">↗</span><div><h2>外部出力</h2><strong>{{len .OutputRoutes}}件</strong><p>MQTTの接続先や認証情報は、この画面から変更できません。</p></div></article>
       </section>
       <section class="guidance-card"><h2>問題が起きたとき</h2><ol><li>「センサー」で停止・古い値を確認する</li><li>「受信履歴」で最後に届いた時刻を確認する</li><li>復旧しない場合は導入担当者へ、Edge名と発生時刻を伝える</li></ol></section>
       {{end}}

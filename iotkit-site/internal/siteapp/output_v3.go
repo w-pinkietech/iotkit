@@ -2,10 +2,24 @@ package siteapp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/outputadapter"
 )
+
+type OutputRoute struct {
+	RouteID                    string          `json:"route_id"`
+	RuleID                     string          `json:"rule_id"`
+	AdapterID                  string          `json:"adapter_id"`
+	ConfigSchemaVersion        int             `json:"config_schema_version"`
+	Config                     json.RawMessage `json:"config"`
+	StartAfterObservationRowID int64           `json:"start_after_observation_row_id"`
+	Active                     bool            `json:"active"`
+	CreatedAt                  int64           `json:"created_at"`
+	PendingCount               int64           `json:"pending_count"`
+	PublishedCount             int64           `json:"published_count"`
+}
 
 type YokaKitRuleRoute struct {
 	RouteID                    string                    `json:"route_id"`
@@ -22,12 +36,13 @@ type YokaKitRuleRoute struct {
 }
 
 type RuleOutputRepository interface {
-	ApplyYokaKitRuleRoute(
+	ApplyOutputRoute(
 		context.Context,
 		Actor,
 		string,
-		outputadapter.YokaKit,
-	) (YokaKitRuleRoute, error)
+		string,
+		json.RawMessage,
+	) (OutputRoute, error)
 }
 
 type RuleOutputService struct {
@@ -42,11 +57,48 @@ func (service *RuleOutputService) CreateYokaKitRoute(
 	ctx context.Context,
 	actor Actor,
 	ruleID string,
-	adapter outputadapter.YokaKit,
+	config outputadapter.YokaKitConfig,
 ) (YokaKitRuleRoute, error) {
 	var noRoute YokaKitRuleRoute
+	encoded, err := outputadapter.EncodeYokaKitConfig(config)
+	if err != nil {
+		return noRoute, err
+	}
+	route, err := service.CreateOutputRoute(
+		ctx,
+		actor,
+		ruleID,
+		"yokakit.mqtt.v1",
+		encoded,
+	)
+	if err != nil {
+		return noRoute, err
+	}
+	return YokaKitRuleRoute{
+		RouteID:                    route.RouteID,
+		RuleID:                     route.RuleID,
+		SourceID:                   config.SourceID,
+		SignalID:                   config.SignalID,
+		Kind:                       config.Kind,
+		Reason:                     config.Reason,
+		StartAfterObservationRowID: route.StartAfterObservationRowID,
+		Active:                     route.Active,
+		CreatedAt:                  route.CreatedAt,
+		PendingCount:               route.PendingCount,
+		PublishedCount:             route.PublishedCount,
+	}, nil
+}
+
+func (service *RuleOutputService) CreateOutputRoute(
+	ctx context.Context,
+	actor Actor,
+	ruleID string,
+	adapterID string,
+	config json.RawMessage,
+) (OutputRoute, error) {
+	var noRoute OutputRoute
 	if service == nil || service.repository == nil {
-		return noRoute, errors.New("Site rule output repository is nil")
+		return noRoute, errors.New("Site output route repository is nil")
 	}
 	if err := actor.Validate(); err != nil {
 		return noRoute, err
@@ -60,13 +112,11 @@ func (service *RuleOutputService) CreateYokaKitRoute(
 	if err := validateResourceRef(ruleID, "rule_"); err != nil {
 		return noRoute, err
 	}
-	if err := adapter.Validate(); err != nil {
-		return noRoute, err
-	}
-	return service.repository.ApplyYokaKitRuleRoute(
+	return service.repository.ApplyOutputRoute(
 		ctx,
 		actor,
 		ruleID,
-		adapter,
+		adapterID,
+		config,
 	)
 }

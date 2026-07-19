@@ -337,7 +337,9 @@ credential rotationとin-place upgradeは明示的な別作業のままとする
 当初の「YokaKit再設計を凍結する」という判断は、2026-07-17のYokaKit MQTT Purpose-Bound Signal
 Contract合意により更新した。YokaKitはIoTKitに依存せず、合意済みMQTT契約を満たす任意の送信softwareから
 入力を受ける。IoTKitもYokaKitをcore、Siteの汎用semantic model、adapter境界へ組み込まず、
-YokaKit Output Adapterだけが同契約への変換を担う。
+YokaKit Output Adapterだけが同契約への変換を担う。Output Adapterの実行境界、汎用Observation、
+version付きroute設定、MQTT publication、非責務は
+[`docs/output-adapter-contract.md`](../../output-adapter-contract.md)を正本とする。
 
 ## 決定4: 「第ゼロ波」(レガシー環境でのAI診断実証)は見送り
 
