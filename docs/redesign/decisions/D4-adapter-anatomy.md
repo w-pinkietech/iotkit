@@ -74,6 +74,10 @@ driver/runtime自身は取り込みclientを知らない。factoryはrestart権�
 `iotkit-ingest-client`が最終Ack/放棄を表すreceiptと同一Envelopeのretry ownershipを持ち、
 `iotkit-input-adapter-host-api`がsource-bound送信、activity、bounded diagnostics、completion、shutdownを
 提供する。Edgeは静的catalog、instance設定、principal、inventory、再起動、healthを所有する。
+RPi-localでは、配置設定がadapter packageのcatalogからmodelとmodel固有設定を選び、Edge-private factoryは
+その不透明な設定をpackageへ渡す。host platform世代は設定・source・device identityへ含めない。位置identityを
+維持したまま別modelへ黙って差し替えることは、台帳へ永続化したmodel fenceとの不一致としてruntime開始前に
+原子的に拒否する。
 
 ## 論点2(南向き契約)への引き継ぎ事項
 

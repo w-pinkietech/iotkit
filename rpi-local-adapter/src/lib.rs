@@ -7,6 +7,7 @@ pub mod drivers;
 pub use iotkit_polling_adapter_runtime::{AdapterHandle, PollingEvent};
 pub use iotkit_sensor_drivers::mcp9600::ThermocoupleType;
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -14,9 +15,9 @@ use iotkit_core_types::AdapterId;
 use iotkit_core_types::{DeviceKey, SensorReading};
 use iotkit_ingest_contract::{ReadingItem, TimeSource};
 use iotkit_input_adapter_host_api::{
-    runtime_channels, AdapterCompletion, AdapterDiagnostic, AdapterStartContext,
-    CompletionReporter, DiagnosticKind, InputAdapterTypeDescriptor, PhysicalTransportKind,
-    QueueSubmitError, RunningInputAdapter, UnexpectedExitReason,
+    runtime_channels, AdapterCompletion, AdapterConfigScalar, AdapterDiagnostic,
+    AdapterStartContext, CompletionReporter, DiagnosticKind, InputAdapterTypeDescriptor,
+    PhysicalTransportKind, QueueSubmitError, RunningInputAdapter, UnexpectedExitReason,
 };
 use iotkit_polling_adapter_runtime::{PollingAdapterConfig, SensorTargetConfig};
 
@@ -46,11 +47,20 @@ pub enum RpiLocalTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionalDeviceMetadata {
     pub locator: String,
+    pub model_id: String,
     pub label: String,
 }
 
 pub fn built_in_targets() -> Vec<RpiLocalTarget> {
     devices::built_in_targets()
+}
+
+pub fn configured_target(
+    model: &str,
+    address: u8,
+    settings: &BTreeMap<String, AdapterConfigScalar>,
+) -> Result<RpiLocalTarget, String> {
+    devices::configured_target(model, address, settings)
 }
 
 pub fn positional_inventory(config: &RpiLocalConfig) -> Vec<PositionalDeviceMetadata> {
@@ -59,6 +69,7 @@ pub fn positional_inventory(config: &RpiLocalConfig) -> Vec<PositionalDeviceMeta
         .iter()
         .map(|target| PositionalDeviceMetadata {
             locator: format!("i2c:0x{:02x}", target.address()),
+            model_id: target.device_model_id().to_string(),
             label: target.inventory_label().to_string(),
         })
         .collect()
@@ -257,6 +268,64 @@ fn to_polling_config(config: &RpiLocalConfig) -> PollingAdapterConfig {
 mod tests {
     use super::*;
     use iotkit_core_types::SensorType;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn configured_target_is_resolved_by_the_adapter_owned_model_catalog() {
+        let mcp9600 = configured_target(
+            "mcp9600",
+            0x61,
+            &BTreeMap::from([(
+                "thermocouple_type".into(),
+                AdapterConfigScalar::String("T".into()),
+            )]),
+        )
+        .unwrap();
+        let opt3001 = configured_target("opt3001", 0x45, &BTreeMap::new()).unwrap();
+
+        assert_eq!(mcp9600.device_model_id(), "mcp9600");
+        assert_eq!(mcp9600.address(), 0x61);
+        assert!(matches!(
+            mcp9600,
+            RpiLocalTarget::MCP9600 {
+                thermocouple_type: ThermocoupleType::T,
+                ..
+            }
+        ));
+        assert_eq!(opt3001.device_model_id(), "opt3001");
+        assert_eq!(opt3001.address(), 0x45);
+    }
+
+    #[test]
+    fn configured_target_rejects_unknown_models_and_model_specific_settings() {
+        let unknown = configured_target("unknown", 0x44, &BTreeMap::new()).unwrap_err();
+        assert!(unknown.contains("unsupported device model"));
+
+        let missing_type = configured_target("mcp9600", 0x60, &BTreeMap::new()).unwrap_err();
+        assert!(missing_type.contains("thermocouple_type"));
+
+        let bad_type = configured_target(
+            "mcp9600",
+            0x60,
+            &BTreeMap::from([(
+                "thermocouple_type".into(),
+                AdapterConfigScalar::String("X".into()),
+            )]),
+        )
+        .unwrap_err();
+        assert!(bad_type.contains("thermocouple_type"));
+
+        let opt_setting = configured_target(
+            "opt3001",
+            0x44,
+            &BTreeMap::from([(
+                "thermocouple_type".into(),
+                AdapterConfigScalar::String("K".into()),
+            )]),
+        )
+        .unwrap_err();
+        assert!(opt_setting.contains("unsupported setting"));
+    }
 
     /// Tokio runtime が無い状態で start() を呼ぶと panic せず Err を返す。
     #[test]
@@ -394,10 +463,12 @@ mod tests {
             [
                 PositionalDeviceMetadata {
                     locator: "i2c:0x60".into(),
+                    model_id: "mcp9600".into(),
                     label: "MCP9600 thermocouple".into(),
                 },
                 PositionalDeviceMetadata {
                     locator: "i2c:0x44".into(),
+                    model_id: "opt3001".into(),
                     label: "OPT3001 illuminance".into(),
                 },
             ]

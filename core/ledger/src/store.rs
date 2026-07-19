@@ -389,6 +389,31 @@ pub fn get_device(
     .map_err(LedgerError::from)
 }
 
+pub fn positional_model_id(
+    conn: &Connection,
+    system_id: &SystemId,
+) -> Result<Option<String>, LedgerError> {
+    conn.query_row(
+        "SELECT model_id FROM positional_device_models WHERE system_id = ?1",
+        params![system_id.as_bytes().to_vec()],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(LedgerError::from)
+}
+
+pub fn bind_positional_model(
+    conn: &Connection,
+    system_id: &SystemId,
+    model_id: &str,
+) -> Result<(), LedgerError> {
+    conn.execute(
+        "INSERT INTO positional_device_models(system_id, model_id) VALUES (?1, ?2)",
+        params![system_id.as_bytes().to_vec(), model_id],
+    )?;
+    Ok(())
+}
+
 pub fn ensure_series(
     conn: &Connection,
     system_id: &SystemId,

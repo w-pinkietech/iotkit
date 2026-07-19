@@ -324,6 +324,7 @@ async fn run(config: config::EdgeConfig, db: iotkit_core_storage::DbHandle) -> b
                 .map(|item| {
                     serde_json::json!({
                         "hardware_id": item.hardware_id,
+                        "model_id": item.model_id,
                         "user_label": item.label,
                     })
                 })

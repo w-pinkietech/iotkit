@@ -1,6 +1,6 @@
 use iotkit_core_ledger::{
     DeviceKind, DeviceState, NewDevice, current_generation, find_alive_by_hardware_id,
-    insert_device, list_devices,
+    insert_device, list_devices, positional_model_id,
 };
 use iotkit_core_ops::{
     Actor, ActorKind, DispatchRequest, OpError, POSITIONAL_INVENTORY_RECONCILE_OP, Tier, dispatch,
@@ -37,6 +37,15 @@ fn system_request(devices: Value) -> DispatchRequest {
 fn device(hardware_id: &str, user_label: &str) -> Value {
     json!({
         "hardware_id": hardware_id,
+        "model_id": "test-model",
+        "user_label": user_label,
+    })
+}
+
+fn device_with_model(hardware_id: &str, model_id: &str, user_label: &str) -> Value {
+    json!({
+        "hardware_id": hardware_id,
+        "model_id": model_id,
         "user_label": user_label,
     })
 }
@@ -124,6 +133,153 @@ fn repeated_reconcile_reuses_the_existing_system_id() {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].system_id.to_text(), first_id);
         assert_eq!(rows[0].user_label.as_deref(), Some("original label"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn positional_inventory_rejects_a_model_change_at_the_same_locator_atomically() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    let hardware_id = "input:rpi:one:i2c:0x60";
+    let would_be_new = "input:rpi:one:i2c:0x44";
+
+    db.with_conn_sync(|conn| {
+        dispatch(
+            conn,
+            standard_catalog(),
+            system_request(json!([device_with_model(
+                hardware_id,
+                "mcp9600",
+                "MCP9600 thermocouple",
+            )])),
+        )
+        .unwrap()
+        .into_public()
+        .unwrap();
+
+        let repeated = dispatch(
+            conn,
+            standard_catalog(),
+            system_request(json!([device_with_model(
+                hardware_id,
+                "mcp9600",
+                "MCP9600 thermocouple",
+            )])),
+        )
+        .unwrap()
+        .into_public()
+        .unwrap();
+        assert_eq!(repeated["existing"].as_array().unwrap().len(), 1);
+
+        let error = dispatch(
+            conn,
+            standard_catalog(),
+            system_request(json!([
+                device_with_model(would_be_new, "opt3001", "must not be inserted"),
+                device_with_model(hardware_id, "opt3001", "wrong replacement"),
+            ])),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, OpError::PreconditionFailed(ref code) if code == "positional_inventory_model_conflict")
+        );
+        assert!(
+            find_alive_by_hardware_id(conn, would_be_new)
+                .unwrap()
+                .is_none()
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn first_reconcile_binds_the_model_to_a_preexisting_positional_device() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    let hardware_id = "input:rpi:one:i2c:0x60";
+
+    db.with_conn_sync(|conn| {
+        let system_id = insert_device(
+            conn,
+            &NewDevice {
+                hardware_id: hardware_id.into(),
+                user_label: Some("legacy positional device".into()),
+                parent: None,
+                kind: DeviceKind::Positional,
+                initial_state: DeviceState::Active,
+            },
+        )
+        .unwrap();
+        assert_eq!(positional_model_id(conn, &system_id).unwrap(), None);
+
+        dispatch(
+            conn,
+            standard_catalog(),
+            system_request(json!([device_with_model(
+                hardware_id,
+                "mcp9600",
+                "MCP9600 thermocouple",
+            )])),
+        )
+        .unwrap()
+        .into_public()
+        .unwrap();
+
+        assert_eq!(
+            positional_model_id(conn, &system_id).unwrap().as_deref(),
+            Some("mcp9600")
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn omitted_inventory_entry_is_not_silently_retired_or_reused() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    let retained = "input:rpi:one:i2c:0x60";
+    let omitted = "input:rpi:one:i2c:0x44";
+
+    db.with_conn_sync(|conn| {
+        dispatch(
+            conn,
+            standard_catalog(),
+            system_request(json!([
+                device_with_model(retained, "mcp9600", "MCP9600 thermocouple"),
+                device_with_model(omitted, "opt3001", "OPT3001 illuminance"),
+            ])),
+        )
+        .unwrap()
+        .into_public()
+        .unwrap();
+        let omitted_system_id = find_alive_by_hardware_id(conn, omitted)
+            .unwrap()
+            .unwrap()
+            .system_id;
+
+        dispatch(
+            conn,
+            standard_catalog(),
+            system_request(json!([device_with_model(
+                retained,
+                "mcp9600",
+                "MCP9600 thermocouple",
+            )])),
+        )
+        .unwrap()
+        .into_public()
+        .unwrap();
+
+        let omitted_after = find_alive_by_hardware_id(conn, omitted).unwrap().unwrap();
+        assert_eq!(omitted_after.system_id, omitted_system_id);
+        assert_eq!(omitted_after.state, DeviceState::Active);
+        assert_eq!(
+            positional_model_id(conn, &omitted_system_id)
+                .unwrap()
+                .as_deref(),
+            Some("opt3001")
+        );
         Ok(())
     })
     .unwrap();

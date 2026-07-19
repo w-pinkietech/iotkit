@@ -370,7 +370,7 @@ checked.
 | You are adding… | It goes in… |
 |---|---|
 | Datasheet conversion reusable across acquisition paths | `iotkit-sensor-drivers` |
-| A new IC using the same I2C transport, polling lifecycle, positional identity recipe, and config shape | The typed supported-device catalog in `rpi-local-adapter`; Edge must not learn the IC model. |
+| A new IC using the same I2C transport, polling lifecycle, positional identity recipe, and config shape | The typed supported-device catalog in `rpi-local-adapter`; deployment config selects catalog models and settings, while Edge treats those fields opaquely and must not learn the IC model. |
 | A device family with different discovery, wire protocol, security, lifecycle, identity recipe, or southbound model | A **new top-level `*-adapter` crate**. Never inside `core/*` or IoTKit Edge. |
 | A change to the ingest wire (envelope fields, ack semantics, reason codes) | `iotkit-ingest-contract` **only**, with its conformance tests; consumers adapt. The wire is the contract — the Rust types follow it, not vice versa. |
 | A new Edge operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |

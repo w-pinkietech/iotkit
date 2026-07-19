@@ -49,6 +49,14 @@ string_id!(AdapterTypeId);
 string_id!(AdapterInstanceId);
 string_id!(ConfiguredSource);
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdapterConfigScalar {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+}
+
 impl AdapterTypeId {
     pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();

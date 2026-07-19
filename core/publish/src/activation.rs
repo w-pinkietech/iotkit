@@ -676,7 +676,10 @@ mod tests {
         )
         .unwrap();
 
-        iotkit_core_storage::run_migrations(&conn, &[crate::MIGRATIONS[1]]).unwrap();
+        let mut after_activation = before_activation;
+        after_activation.push(crate::MIGRATIONS[1]);
+        after_activation.sort_by_key(|migration| migration.version);
+        iotkit_core_storage::run_migrations(&conn, &after_activation).unwrap();
 
         assert_eq!(activation_state(&conn).unwrap(), ActivationState::Active);
     }

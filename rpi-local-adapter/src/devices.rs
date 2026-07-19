@@ -1,6 +1,8 @@
 use iotkit_core_types::{SensorReading, SensorType};
+use iotkit_input_adapter_host_api::AdapterConfigScalar;
 use iotkit_polling_adapter_runtime::SensorDriver;
 use rpi4b_transport::i2c::I2cDeviceFactory;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::{RpiLocalTarget, ThermocoupleType};
@@ -97,4 +99,61 @@ pub fn built_in_targets() -> Vec<RpiLocalTarget> {
         },
         RpiLocalTarget::OPT3001 { address: 0x44 },
     ]
+}
+
+pub fn configured_target(
+    model: &str,
+    address: u8,
+    settings: &BTreeMap<String, AdapterConfigScalar>,
+) -> Result<RpiLocalTarget, String> {
+    match model {
+        "mcp9600" => {
+            reject_settings_other_than(settings, &["thermocouple_type"])?;
+            let thermocouple_type = settings
+                .get("thermocouple_type")
+                .ok_or_else(|| "mcp9600 requires thermocouple_type".to_string())
+                .and_then(|value| match value {
+                    AdapterConfigScalar::String(value) => parse_thermocouple_type(value),
+                    _ => Err("thermocouple_type must be a string".into()),
+                })?;
+            Ok(RpiLocalTarget::MCP9600 {
+                address,
+                thermocouple_type,
+            })
+        }
+        "opt3001" => {
+            reject_settings_other_than(settings, &[])?;
+            Ok(RpiLocalTarget::OPT3001 { address })
+        }
+        _ => Err(format!("unsupported device model {model:?}")),
+    }
+}
+
+fn reject_settings_other_than(
+    settings: &BTreeMap<String, AdapterConfigScalar>,
+    supported: &[&str],
+) -> Result<(), String> {
+    if let Some(name) = settings
+        .keys()
+        .find(|name| !supported.contains(&name.as_str()))
+    {
+        return Err(format!("unsupported setting {name:?}"));
+    }
+    Ok(())
+}
+
+fn parse_thermocouple_type(value: &str) -> Result<ThermocoupleType, String> {
+    match value {
+        "K" => Ok(ThermocoupleType::K),
+        "J" => Ok(ThermocoupleType::J),
+        "T" => Ok(ThermocoupleType::T),
+        "N" => Ok(ThermocoupleType::N),
+        "S" => Ok(ThermocoupleType::S),
+        "E" => Ok(ThermocoupleType::E),
+        "B" => Ok(ThermocoupleType::B),
+        "R" => Ok(ThermocoupleType::R),
+        _ => Err(format!(
+            "unsupported thermocouple_type {value:?}; expected K, J, T, N, S, E, B, or R"
+        )),
+    }
 }

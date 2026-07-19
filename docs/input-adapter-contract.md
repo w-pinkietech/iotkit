@@ -218,10 +218,42 @@ config_schema_version = 1
 source = "input:rpi-local:local_i2c"
 bus_path = "/dev/i2c-1"
 poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "mcp9600"
+address = 0x60
+thermocouple_type = "K"
+
+[[adapters.instances.local_i2c.devices]]
+model = "opt3001"
+address = 0x44
 ```
 
 The table key is the stable instance ID. `source` is required and stable;
 principal ID and positional namespace derive from it.
+
+`rpi-local` device selection is deployment configuration, not host-platform
+selection. `model` is resolved by the adapter package's compile-time catalog;
+Edge does not match model IDs. Model-specific scalar settings cross the generic
+host boundary as string, integer, float, or boolean values; the adapter catalog
+owns their names, types, and validation. MCP9600 requires
+`thermocouple_type` with one of
+`K`, `J`, `T`, `N`, `S`, `E`, `B`, or `R`. OPT3001 accepts no model-specific
+setting. An empty list, unsupported model or setting, invalid I2C address,
+duplicate address, or driver-incompatible polling interval fails validation
+before any adapter starts. Omitting `devices` preserves the compatibility
+inventory of MCP9600 at `0x60` with K-type thermocouple and OPT3001 at `0x44`.
+The explicit device list is available on the instance form; the legacy
+`[adapters.rpi_local]` form retains its historical fixed inventory.
+Removing an entry, disabling the instance, or removing the instance stops the
+target from being polled after restart; additive inventory reconciliation does
+not delete or silently retire the existing ledger device or its series, so its
+descriptor state remains active until an explicit operation changes it. An
+operator who is physically removing or replacing an already registered target
+must use the ledger retire/replacement journey so history remains auditable.
+
+Raspberry Pi 4B/5 is never selected in this configuration. The transport
+backend checks the Linux I2C capability it needs.
 
 Legacy and instance forms are mutually exclusive. Legacy input is converted in
 memory before validation without changing behavior:
@@ -279,7 +311,13 @@ measurement projection, and inventory display metadata. Edge owns only the
 adapter type catalog and inventory reconciliation authority; it does not match
 on MCP9600, OPT3001, or later IC models. The adapter still owns the positional
 subject recipe, so model IDs and host platform names never become device
-identity.
+identity. The deployment-selected model is nevertheless persisted beside the
+positional ledger entry as a safety fence. The first reconciliation after this
+metadata was introduced binds the known compatibility model to an existing
+positional entry. Later configuration that assigns a different model to the
+same source and locator fails the whole reconciliation before runtimes start;
+it must use an explicit device replacement/cutover rather than silently
+reusing history.
 
 ## 7. Lifecycle and legacy isolation
 

@@ -1,6 +1,6 @@
 use iotkit_core_ledger::{
-    DeviceKind, DeviceState, NewDevice, SystemId, approve_sighting, find_alive_by_hardware_id,
-    get_device, insert_device, retire_device,
+    DeviceKind, DeviceState, NewDevice, SystemId, approve_sighting, bind_positional_model,
+    find_alive_by_hardware_id, get_device, insert_device, positional_model_id, retire_device,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
@@ -126,6 +126,7 @@ pub fn reconcile_positional_inventory_descriptor() -> OpDescriptor {
 #[derive(Debug)]
 struct PositionalInventoryIntent {
     hardware_id: String,
+    model_id: String,
     user_label: Option<String>,
 }
 
@@ -167,7 +168,7 @@ fn positional_inventory_intents(
                 .ok_or_else(|| OpError::Validation("devices entries must be objects".into()))?;
             if device
                 .keys()
-                .any(|key| !matches!(key.as_str(), "hardware_id" | "user_label"))
+                .any(|key| !matches!(key.as_str(), "hardware_id" | "model_id" | "user_label"))
             {
                 return Err(OpError::Validation(
                     "undeclared positional inventory field".into(),
@@ -186,6 +187,18 @@ fn positional_inventory_intents(
                     "duplicate positional inventory hardware_id".into(),
                 ));
             }
+            let model_id = device
+                .get("model_id")
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    !value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
+                })
+                .ok_or_else(|| {
+                    OpError::Validation(
+                        "devices model_id must be a non-empty string of at most 64 bytes".into(),
+                    )
+                })?
+                .to_owned();
             let user_label = match device.get("user_label") {
                 None | Some(Value::Null) => None,
                 Some(Value::String(value)) => Some(value.clone()),
@@ -197,6 +210,7 @@ fn positional_inventory_intents(
             };
             Ok(PositionalInventoryIntent {
                 hardware_id,
+                model_id,
                 user_label,
             })
         })
@@ -211,12 +225,19 @@ fn positional_inventory_preconditions(
         return Err(OpError::Forbidden("system_actor_required".into()));
     }
     for intent in positional_inventory_intents(ctx)? {
-        if let Some(existing) = find_alive_by_hardware_id(tx, &intent.hardware_id)?
-            && existing.kind != DeviceKind::Positional
-        {
-            return Err(OpError::PreconditionFailed(
-                "positional_inventory_kind_conflict".into(),
-            ));
+        if let Some(existing) = find_alive_by_hardware_id(tx, &intent.hardware_id)? {
+            if existing.kind != DeviceKind::Positional {
+                return Err(OpError::PreconditionFailed(
+                    "positional_inventory_kind_conflict".into(),
+                ));
+            }
+            if positional_model_id(tx, &existing.system_id)?
+                .is_some_and(|model_id| model_id != intent.model_id)
+            {
+                return Err(OpError::PreconditionFailed(
+                    "positional_inventory_model_conflict".into(),
+                ));
+            }
         }
     }
     Ok(())
@@ -252,8 +273,12 @@ fn positional_inventory_execute(
     let mut existing = Vec::new();
     for intent in positional_inventory_intents(ctx)? {
         if let Some(row) = find_alive_by_hardware_id(tx, &intent.hardware_id)? {
+            if positional_model_id(tx, &row.system_id)?.is_none() {
+                bind_positional_model(tx, &row.system_id, &intent.model_id)?;
+            }
             existing.push(json!({
                 "hardware_id": intent.hardware_id,
+                "model_id": intent.model_id,
                 "system_id": row.system_id.to_text(),
             }));
             continue;
@@ -268,8 +293,10 @@ fn positional_inventory_execute(
                 initial_state: DeviceState::Active,
             },
         )?;
+        bind_positional_model(tx, &system_id, &intent.model_id)?;
         created.push(json!({
             "hardware_id": intent.hardware_id,
+            "model_id": intent.model_id,
             "system_id": system_id.to_text(),
         }));
     }

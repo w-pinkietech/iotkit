@@ -45,6 +45,7 @@ fn catalog() -> [&'static InputAdapterFactory; 2] {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionalInventoryItem {
     pub hardware_id: String,
+    pub model_id: String,
     pub label: String,
 }
 
@@ -150,7 +151,7 @@ pub fn validate_catalog() -> Result<(), String> {
 }
 
 fn parse_bravepi(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String> {
-    if raw.bus_path.is_some() || raw.poll_interval_ms.is_some() {
+    if raw.bus_path.is_some() || raw.poll_interval_ms.is_some() || raw.devices.is_some() {
         return Err("has rpi-local-only fields".into());
     }
     let port = raw
@@ -181,10 +182,6 @@ fn no_positional_inventory(
     Vec::new()
 }
 
-fn rpi_local_targets() -> Vec<rpi_local_adapter::RpiLocalTarget> {
-    rpi_local_adapter::built_in_targets()
-}
-
 fn parse_rpi_local(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String> {
     if raw.port.is_some() {
         return Err("has bravepi-mainboard-only fields".into());
@@ -196,10 +193,24 @@ fn parse_rpi_local(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String
     let poll_interval_ms = raw
         .poll_interval_ms
         .ok_or_else(|| "requires poll_interval_ms".to_string())?;
+    let targets = match &raw.devices {
+        None => rpi_local_adapter::built_in_targets(),
+        Some(devices) => devices
+            .iter()
+            .map(|device| {
+                let settings = device
+                    .settings
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.to_host_value()))
+                    .collect();
+                rpi_local_adapter::configured_target(&device.model, device.address, &settings)
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
     let config = rpi_local_adapter::RpiLocalConfig {
         bus_path,
         poll_interval_ms,
-        targets: rpi_local_targets(),
+        targets,
     };
     rpi_local_adapter::validate(&config)
         .map_err(|error| format!("invalid rpi-local config: {error}"))?;
@@ -229,6 +240,7 @@ fn rpi_local_inventory(
         .into_iter()
         .map(|device| PositionalInventoryItem {
             hardware_id: format!("{}:{}", source.as_str(), device.locator),
+            model_id: device.model_id,
             label: device.label,
         })
         .collect()
@@ -247,6 +259,7 @@ mod tests {
             port: None,
             bus_path: None,
             poll_interval_ms: None,
+            devices: None,
         }
     }
 

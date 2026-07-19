@@ -65,6 +65,36 @@ pub struct RawInputAdapterInstance {
     pub port: Option<String>,
     pub bus_path: Option<String>,
     pub poll_interval_ms: Option<u64>,
+    pub devices: Option<Vec<RawInputAdapterDevice>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawInputAdapterDevice {
+    pub model: String,
+    pub address: u8,
+    #[serde(flatten)]
+    pub settings: BTreeMap<String, RawAdapterConfigScalar>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum RawAdapterConfigScalar {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+}
+
+impl RawAdapterConfigScalar {
+    pub fn to_host_value(&self) -> iotkit_input_adapter_host_api::AdapterConfigScalar {
+        use iotkit_input_adapter_host_api::AdapterConfigScalar;
+        match self {
+            Self::String(value) => AdapterConfigScalar::String(value.clone()),
+            Self::Integer(value) => AdapterConfigScalar::Integer(*value),
+            Self::Float(value) => AdapterConfigScalar::Float(*value),
+            Self::Boolean(value) => AdapterConfigScalar::Boolean(*value),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -383,6 +413,7 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, Confi
                         port: Some(bravepi.port.clone()),
                         bus_path: None,
                         poll_interval_ms: None,
+                        devices: None,
                     },
                 )
                 .map_err(ConfigError::Validation)?
@@ -401,6 +432,7 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeConfig, Confi
                         port: None,
                         bus_path: Some(rpi.bus_path.clone()),
                         poll_interval_ms: Some(rpi.poll_interval_ms),
+                        devices: None,
                     },
                 )
                 .map_err(ConfigError::Validation)?
@@ -1179,6 +1211,214 @@ port = "/dev/serial1"
             "input:bravepi-mainboard:line_b"
         );
         assert!(config.bravepi.is_none());
+    }
+
+    #[test]
+    fn explicit_rpi_local_instance_uses_its_configured_device_list() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+enabled = true
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "mcp9600"
+address = 0x61
+thermocouple_type = "T"
+
+[[adapters.instances.local_i2c.devices]]
+model = "opt3001"
+address = 0x45
+"#,
+        )
+        .unwrap();
+
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        let inventory = config.adapter_instances[0].positional_inventory();
+
+        assert_eq!(inventory.len(), 2);
+        assert_eq!(
+            inventory[0].hardware_id,
+            "input:rpi-local:local_i2c:i2c:0x61"
+        );
+        assert_eq!(inventory[0].model_id, "mcp9600");
+        assert_eq!(
+            inventory[1].hardware_id,
+            "input:rpi-local:local_i2c:i2c:0x45"
+        );
+        assert_eq!(inventory[1].model_id, "opt3001");
+    }
+
+    #[test]
+    fn explicit_rpi_local_instance_rejects_invalid_device_configuration() {
+        let unknown_model: RawConfig = toml::from_str(
+            r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "unknown"
+address = 0x44
+"#,
+        )
+        .unwrap();
+        let error = resolve(unknown_model, ConfigSource::DefaultsOnly).unwrap_err();
+        assert!(error.to_string().contains("unsupported device model"));
+
+        let duplicate_address: RawConfig = toml::from_str(
+            r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "mcp9600"
+address = 0x44
+thermocouple_type = "K"
+
+[[adapters.instances.local_i2c.devices]]
+model = "opt3001"
+address = 0x44
+"#,
+        )
+        .unwrap();
+        let error = resolve(duplicate_address, ConfigSource::DefaultsOnly).unwrap_err();
+        assert!(error.to_string().contains("duplicate address"));
+    }
+
+    #[test]
+    fn model_specific_scalar_types_are_validated_by_the_adapter_catalog() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "mcp9600"
+address = 0x60
+thermocouple_type = 7
+"#,
+        )
+        .unwrap();
+
+        let error = resolve(raw, ConfigSource::DefaultsOnly).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("thermocouple_type must be a string")
+        );
+    }
+
+    #[test]
+    fn rpi_local_public_config_rejects_the_documented_invalid_matrix() {
+        let cases = [
+            (
+                "empty device list",
+                r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+devices = []
+"#,
+                "targets must not be empty",
+            ),
+            (
+                "invalid I2C address",
+                r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "opt3001"
+address = 0x07
+"#,
+                "outside valid I2C range",
+            ),
+            (
+                "unsupported setting",
+                r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "opt3001"
+address = 0x44
+gain = true
+"#,
+                "unsupported setting",
+            ),
+            (
+                "invalid thermocouple type",
+                r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+
+[[adapters.instances.local_i2c.devices]]
+model = "mcp9600"
+address = 0x60
+thermocouple_type = "X"
+"#,
+                "unsupported thermocouple_type",
+            ),
+            (
+                "driver polling limit",
+                r#"
+[adapters.instances.local_i2c]
+type = "rpi-local"
+config_schema_version = 1
+source = "input:rpi-local:local_i2c"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 50
+
+[[adapters.instances.local_i2c.devices]]
+model = "opt3001"
+address = 0x44
+"#,
+                "poll_interval_ms",
+            ),
+        ];
+
+        for (name, input, expected) in cases {
+            let raw: RawConfig =
+                toml::from_str(input).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let error = resolve(raw, ConfigSource::DefaultsOnly)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(expected),
+                "{name}: expected {expected:?} in {error:?}"
+            );
+        }
     }
 
     #[test]
