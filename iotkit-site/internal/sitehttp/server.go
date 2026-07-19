@@ -46,6 +46,8 @@ type Server struct {
 	site            *siteapp.Service
 	accounts        *siteapp.AccountService
 	semantics       *siteapp.SemanticService
+	semanticConfig  *siteapp.SemanticConfigurationService
+	ruleOutputs     *siteapp.RuleOutputService
 	sessions        *sitesession.Manager
 	publicOrigin    string
 	secureCookies   bool
@@ -100,6 +102,8 @@ func New(config Config) (*Server, error) {
 		site:            config.Site,
 		accounts:        config.Accounts,
 		semantics:       siteapp.NewSemanticService(config.Store),
+		semanticConfig:  siteapp.NewSemanticConfigurationService(config.Store),
+		ruleOutputs:     siteapp.NewRuleOutputService(config.Store),
 		sessions:        config.Sessions,
 		publicOrigin:    strings.TrimSuffix(config.PublicOrigin, "/"),
 		secureCookies:   !config.DevelopmentHTTP,
@@ -139,8 +143,13 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /console/devices/{device_ref}/profile", server.consoleDeviceProfile)
 	server.mux.HandleFunc("POST /console/edges/{edge_ref}/activation", server.consoleEdgeActivation)
 	server.mux.HandleFunc("POST /console/signals/{signal_ref}/profile", server.consoleSignalProfile)
-	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic", server.consoleSemantic)
-	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic-counter/reset", server.consoleSemanticCounterReset)
+	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic", server.deprecatedConsoleSemanticMutation)
+	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic-counter/reset", server.deprecatedConsoleSemanticMutation)
+	server.mux.HandleFunc("POST /console/signals/{signal_ref}/calibration", server.consoleSignalCalibration)
+	server.mux.HandleFunc("POST /console/signals/{signal_ref}/semantic-rules", server.consoleSemanticRuleCreate)
+	server.mux.HandleFunc("POST /console/semantic-rules/{rule_id}", server.consoleSemanticRuleUpdate)
+	server.mux.HandleFunc("POST /console/semantic-rules/{rule_id}/retire", server.consoleSemanticRuleRetire)
+	server.mux.HandleFunc("POST /console/semantic-rules/{rule_id}/counter-resets", server.consoleSemanticRuleCounterReset)
 	server.mux.HandleFunc("POST /console/outputs/yokakit", server.consoleYokaKitOutput)
 	server.mux.HandleFunc("POST /console/accounts", server.consoleAccount)
 	server.mux.HandleFunc("POST /console/accounts/{account_ref}", server.consoleAccountUpdate)
@@ -160,9 +169,15 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("PUT /api/v1/devices/{device_ref}/profile", server.putDeviceProfile)
 	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/profile", server.putSignalProfile)
 	server.mux.HandleFunc("GET /api/v1/semantic-definitions", server.listSemanticDefinitions)
-	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/semantic-definition", server.putSemanticDefinition)
-	server.mux.HandleFunc("DELETE /api/v1/signals/{signal_ref}/semantic-definition", server.deleteSemanticDefinition)
-	server.mux.HandleFunc("POST /api/v1/signals/{signal_ref}/semantic-counter/reset", server.resetSemanticCounter)
+	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/semantic-definition", server.deprecatedSemanticMutation)
+	server.mux.HandleFunc("DELETE /api/v1/signals/{signal_ref}/semantic-definition", server.deprecatedSemanticMutation)
+	server.mux.HandleFunc("POST /api/v1/signals/{signal_ref}/semantic-counter/reset", server.deprecatedSemanticMutation)
+	server.mux.HandleFunc("GET /api/v1/signals/{signal_ref}/semantic-configuration", server.getSemanticConfiguration)
+	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/calibration", server.putSignalCalibration)
+	server.mux.HandleFunc("POST /api/v1/signals/{signal_ref}/semantic-rules", server.createSemanticRule)
+	server.mux.HandleFunc("PUT /api/v1/semantic-rules/{rule_id}", server.updateSemanticRule)
+	server.mux.HandleFunc("DELETE /api/v1/semantic-rules/{rule_id}", server.retireSemanticRule)
+	server.mux.HandleFunc("POST /api/v1/semantic-rules/{rule_id}/counter-resets", server.requestSemanticCounterReset)
 	server.mux.HandleFunc("GET /api/v1/outputs/yokakit", server.listYokaKitOutputs)
 	server.mux.HandleFunc("POST /api/v1/outputs/yokakit", server.createYokaKitOutput)
 	server.mux.HandleFunc("GET /api/v1/audit-events", server.listAuditEvents)

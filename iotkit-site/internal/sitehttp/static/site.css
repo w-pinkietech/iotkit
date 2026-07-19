@@ -649,6 +649,78 @@ td strong { color: var(--ink); font-weight: 600; }
   border-color: var(--line-strong);
   background: var(--surface);
 }
+.semantic-settings { display: grid; gap: 12px; }
+.semantic-settings > .section-heading { margin-bottom: 0; }
+.semantic-settings > .section-heading p { margin: 3px 0 0; color: var(--muted); font-size: .7rem; }
+.semantic-calibration {
+  display: grid;
+  grid-template-columns: minmax(130px, .65fr) minmax(0, 1.35fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafafa;
+}
+.semantic-calibration > div { display: grid; gap: 2px; }
+.semantic-calibration strong,
+.semantic-rule-group header strong { font-size: .78rem; }
+.semantic-calibration small,
+.semantic-rule-group header small { color: var(--muted); font-size: .66rem; }
+.semantic-calibration form {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  align-items: end;
+  gap: 8px;
+}
+.semantic-calibration label { margin: 0; }
+.semantic-rule-group {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.semantic-rule-group--alarm { border-color: #e9c7c1; }
+.semantic-rule-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--teal-soft);
+}
+.semantic-rule-group--alarm > header { background: #fff4f1; }
+.semantic-rule-group > header > div { display: grid; gap: 2px; }
+.semantic-rule-group > header > span {
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 700;
+}
+.semantic-rule-card { border-top: 1px solid var(--line); }
+.semantic-rule-card > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  list-style: none;
+  cursor: pointer;
+}
+.semantic-rule-card > summary::-webkit-details-marker { display: none; }
+.semantic-rule-card > summary > span { display: flex; align-items: baseline; gap: 9px; }
+.semantic-rule-card > summary strong { font-size: .78rem; }
+.semantic-rule-card > summary small { color: var(--muted); font-size: .66rem; }
+.semantic-rule-card > summary em { color: var(--teal-dark); font-size: .66rem; font-style: normal; font-weight: 700; }
+.semantic-rule-card[open] > summary { border-bottom: 1px solid var(--line); }
+.semantic-rule-card > form { margin: 0; padding: 12px; }
+.semantic-rule-card > form + form { padding-top: 0; }
+.semantic-rule-actions { display: flex; justify-content: flex-end; }
+.semantic-retire-form { display: flex; justify-content: flex-end; }
+.semantic-retire-form .button-danger { color: #a73325; border-color: #e5b9b2; background: #fff; }
+.semantic-rule-empty { margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: .7rem; }
+.semantic-rule-create { border: 1px dashed var(--line-strong); border-radius: 8px; }
+.semantic-rule-create > summary { padding: 10px 12px; color: var(--teal-dark); font-size: .74rem; font-weight: 700; cursor: pointer; }
+.semantic-rule-create > form { padding: 0 12px 12px; }
 .sensor-source-details { margin-top: 12px; border-top: 1px solid var(--line); }
 .sensor-source-details > summary { padding: 12px 2px 0; color: var(--teal-dark); font-size: .74rem; font-weight: 700; cursor: pointer; }
 .sensor-source-details[open] > summary { padding-bottom: 10px; }

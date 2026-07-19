@@ -3,6 +3,7 @@ package sitehttp
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -48,6 +49,9 @@ type consoleData struct {
 	OutputDefinitions  []consoleDefinitionOption
 	Outputs            []store.YokaKitRoute
 	OutputRows         []consoleOutputView
+	OutputRules        []consoleRuleOption
+	RuleOutputs        []store.YokaKitRuleRoute
+	RuleOutputRows     []consoleRuleOutputView
 	Audit              []siteapp.AuditEvent
 	Accounts           []siteapp.Account
 	Certificate        certificateStatus
@@ -237,11 +241,11 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			data.Definitions, err = server.semantics.List(request.Context())
 		}
 		if err == nil && page == "status" {
-			data.ProjectionFailures, err = server.store.SemanticProjectionFailureCount(
+			data.ProjectionFailures, err = server.store.SemanticRuleProjectionFailureCount(
 				request.Context(),
 			)
 			if err == nil {
-				data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
+				data.RuleOutputs, err = server.store.ListYokaKitRuleRoutes(request.Context())
 			}
 			if err == nil {
 				data.Edges, err = server.site.ListEdges(request.Context())
@@ -255,6 +259,23 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			}
 		}
 		data.SignalRows = newConsoleSignalViews(data.Signals, data.Definitions, server.now())
+		if err == nil && (page == "status" || page == "signals" || page == "sensors") {
+			configurations := make(map[string]semantics.Configuration, len(data.SignalRows))
+			for _, signal := range data.SignalRows {
+				configuration, configErr := server.store.GetSemanticConfiguration(
+					request.Context(),
+					signal.SignalRef,
+				)
+				if configErr != nil {
+					err = configErr
+					break
+				}
+				configurations[signal.SignalRef] = configuration
+			}
+			if err == nil {
+				attachConsoleSemanticConfigurations(data.SignalRows, configurations)
+			}
+		}
 		if err == nil && page == "sensors" {
 			var devices []siteapp.DeviceSummary
 			devices, err = server.site.ListDevices(
@@ -316,21 +337,34 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			data.LogRows = newConsoleLogViews(records, data.SignalRows)
 		}
 	case "output":
-		data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
-		data.OutputRows = newConsoleOutputViews(data.Outputs)
-		if err == nil {
-			data.Definitions, err = server.semantics.List(request.Context())
-		}
+		data.RuleOutputs, err = server.store.ListYokaKitRuleRoutes(request.Context())
+		data.RuleOutputRows = newConsoleRuleOutputViews(data.RuleOutputs)
 		if err == nil {
 			data.Signals, err = server.site.ListSignals(
 				request.Context(), siteapp.PageRequest{Limit: 100},
 			)
 		}
 		if err == nil {
-			data.SignalRows = newConsoleSignalViews(data.Signals, data.Definitions, server.now())
-			data.OutputDefinitions = newConsoleDefinitionOptions(
-				data.Definitions, data.SignalRows,
-			)
+			data.SignalRows = newConsoleSignalViews(data.Signals, nil, server.now())
+			signalNames := make(map[string]string, len(data.SignalRows))
+			for _, signal := range data.SignalRows {
+				signalNames[signal.SignalRef] = signal.Name
+				configuration, configErr := server.store.GetSemanticConfiguration(
+					request.Context(),
+					signal.SignalRef,
+				)
+				if configErr != nil {
+					err = configErr
+					break
+				}
+				for _, rule := range configuration.Rules {
+					data.OutputRules = append(data.OutputRules, consoleRuleOption{
+						ID:   rule.ID,
+						Name: signalNames[rule.SignalRef] + " — " + rule.DisplayName,
+						Kind: displaySemanticKind(rule.Kind),
+					})
+				}
+			}
 		}
 	case "audit":
 		data.Audit, err = server.site.ListAuditEvents(request.Context(), 100)
@@ -342,7 +376,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			)
 		}
 	case "system":
-		data.Outputs, err = server.store.ListYokaKitRoutes(request.Context())
+		data.RuleOutputs, err = server.store.ListYokaKitRuleRoutes(request.Context())
 	}
 	if err == nil && page == "status" {
 		var setupDevices []siteapp.SetupDevice
@@ -626,19 +660,241 @@ func (server *Server) consoleSemanticCounterReset(
 	)
 }
 
+func (server *Server) deprecatedConsoleSemanticMutation(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireBrowserMutation(response, request, true); !ok {
+		return
+	}
+	http.Error(
+		response,
+		"画面を再読み込みして、ルールごとの設定を使用してください。",
+		http.StatusGone,
+	)
+}
+
+func (server *Server) consoleSignalCalibration(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	revision, ok := requireConsoleRevision(response, request)
+	if !ok {
+		return
+	}
+	scale, scaleErr := strconv.ParseFloat(request.FormValue("scale"), 64)
+	offset, offsetErr := strconv.ParseFloat(request.FormValue("offset"), 64)
+	var err error
+	if scaleErr != nil || offsetErr != nil {
+		err = semantics.Calibration{}.Validate()
+	} else {
+		_, err = server.semanticConfig.UpdateCalibration(
+			request.Context(),
+			server.actor(auth),
+			request.PathValue("signal_ref"),
+			scale,
+			offset,
+			siteapp.RevisionPrecondition{Expected: revision},
+		)
+	}
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(
+			request,
+			"/sensors/"+request.PathValue("signal_ref"),
+		),
+		err,
+	)
+}
+
+func (server *Server) consoleSemanticRuleCreate(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	revision, ok := requireConsoleRevision(response, request)
+	if !ok {
+		return
+	}
+	spec, err := semanticRuleSpecFromForm(request)
+	if err == nil {
+		_, err = server.semanticConfig.CreateRule(
+			request.Context(),
+			server.actor(auth),
+			request.PathValue("signal_ref"),
+			request.FormValue("display_name"),
+			spec,
+			siteapp.RevisionPrecondition{Expected: revision},
+		)
+	}
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(
+			request,
+			"/sensors/"+request.PathValue("signal_ref"),
+		),
+		err,
+	)
+}
+
+func (server *Server) consoleSemanticRuleUpdate(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	revision, ok := requireConsoleRevision(response, request)
+	if !ok {
+		return
+	}
+	spec, err := semanticRuleSpecFromForm(request)
+	if err == nil {
+		_, err = server.semanticConfig.UpdateRule(
+			request.Context(),
+			server.actor(auth),
+			request.PathValue("rule_id"),
+			request.FormValue("display_name"),
+			spec,
+			siteapp.RevisionPrecondition{Expected: revision},
+		)
+	}
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(request, "/sensors"),
+		err,
+	)
+}
+
+func (server *Server) consoleSemanticRuleRetire(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	revision, ok := requireConsoleRevision(response, request)
+	if !ok {
+		return
+	}
+	_, err := server.semanticConfig.RetireRule(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("rule_id"),
+		siteapp.RevisionPrecondition{Expected: revision},
+	)
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(request, "/sensors"),
+		err,
+	)
+}
+
+func (server *Server) consoleSemanticRuleCounterReset(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	resetID := request.FormValue("reset_id")
+	if resetID == "" {
+		resetID = "console_" + newRequestID()
+	}
+	_, err := server.semanticConfig.RequestCounterReset(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("rule_id"),
+		resetID,
+	)
+	server.consoleMutationResult(
+		response,
+		request,
+		consoleReturnTarget(request, "/sensors"),
+		err,
+	)
+}
+
+func semanticRuleSpecFromForm(request *http.Request) (semantics.RuleSpec, error) {
+	riseThreshold, riseThresholdErr := strconv.ParseFloat(
+		request.FormValue("rise_threshold"),
+		64,
+	)
+	fallThreshold, fallThresholdErr := strconv.ParseFloat(
+		request.FormValue("fall_threshold"),
+		64,
+	)
+	riseDebounceSeconds, riseDebounceErr := strconv.ParseFloat(
+		request.FormValue("rise_debounce_seconds"),
+		64,
+	)
+	fallDebounceSeconds, fallDebounceErr := strconv.ParseFloat(
+		request.FormValue("fall_debounce_seconds"),
+		64,
+	)
+	if request.FormValue("rise_threshold") == "" {
+		riseThreshold, riseThresholdErr = 0, nil
+	}
+	if request.FormValue("fall_threshold") == "" {
+		fallThreshold, fallThresholdErr = 0, nil
+	}
+	if request.FormValue("rise_debounce_seconds") == "" {
+		riseDebounceSeconds, riseDebounceErr = 0, nil
+	}
+	if request.FormValue("fall_debounce_seconds") == "" {
+		fallDebounceSeconds, fallDebounceErr = 0, nil
+	}
+	if riseThresholdErr != nil || fallThresholdErr != nil ||
+		riseDebounceErr != nil || fallDebounceErr != nil {
+		return semantics.RuleSpec{}, errors.New("invalid semantic rule number")
+	}
+	spec := semantics.RuleSpec{
+		Kind: semantics.Kind(request.FormValue("kind")),
+		Detector: semantics.Detector{
+			Mode:           semantics.DetectorMode(request.FormValue("detector_mode")),
+			RiseThreshold:  riseThreshold,
+			FallThreshold:  fallThreshold,
+			RiseDebounceMS: int64(riseDebounceSeconds * 1000),
+			FallDebounceMS: int64(fallDebounceSeconds * 1000),
+		},
+		Trigger: semantics.TriggerMode(request.FormValue("trigger")),
+	}
+	if err := spec.Validate(); err != nil {
+		return semantics.RuleSpec{}, err
+	}
+	return spec, nil
+}
+
 func (server *Server) consoleYokaKitOutput(response http.ResponseWriter, request *http.Request) {
 	auth, ok := server.requireBrowserMutation(response, request, true)
 	if !ok {
 		return
 	}
-	_, err := server.store.ApplyYokaKitRoute(
-		request.Context(), server.actor(auth), request.FormValue("definition_id"),
-		outputadapter.YokaKit{
-			SourceID: request.FormValue("source_id"),
-			SignalID: request.FormValue("signal_id"),
-			Kind:     outputadapter.YokaKitKind(request.FormValue("kind")),
-			Reason:   request.FormValue("reason"),
-		},
+	adapter := outputadapter.YokaKit{
+		SourceID: request.FormValue("source_id"),
+		SignalID: request.FormValue("signal_id"),
+		Kind:     outputadapter.YokaKitKind(request.FormValue("kind")),
+		Reason:   request.FormValue("reason"),
+	}
+	_, err := server.ruleOutputs.CreateYokaKitRoute(
+		request.Context(),
+		server.actor(auth),
+		request.FormValue("rule_id"),
+		adapter,
 	)
 	server.consoleMutationResult(response, request, "/output", err)
 }
@@ -782,6 +1038,22 @@ func formRevision(request *http.Request) *int64 {
 		value = -1
 	}
 	return &value
+}
+
+func requireConsoleRevision(
+	response http.ResponseWriter,
+	request *http.Request,
+) (*int64, bool) {
+	revision := formRevision(request)
+	if revision == nil {
+		http.Error(
+			response,
+			"画面を再読み込みして、もう一度操作してください。",
+			http.StatusPreconditionFailed,
+		)
+		return nil, false
+	}
+	return revision, true
 }
 
 func (server *Server) passwordPage(response http.ResponseWriter, request *http.Request) {

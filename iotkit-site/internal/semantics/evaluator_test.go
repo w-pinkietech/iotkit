@@ -24,6 +24,31 @@ func TestEvaluateNumericAppliesScaleAndOffset(t *testing.T) {
 	}
 }
 
+func TestEvaluateRuleUsesAlreadyCalibratedInput(t *testing.T) {
+	result, state, err := EvaluateRule(
+		RuleSpec{Kind: KindNumeric},
+		State{},
+		21.5,
+		1000,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Emitted || result.Number == nil || *result.Number != 21.5 {
+		t.Fatalf("numeric rule result = %#v", result)
+	}
+	if result.Calibrated != 21.5 || !state.Initialized {
+		t.Fatalf("numeric rule state=%#v result=%#v", state, result)
+	}
+}
+
+func TestCalibrationRejectsNonFiniteOutput(t *testing.T) {
+	calibration := Calibration{Scale: math.MaxFloat64, Offset: 0}
+	if _, err := calibration.Apply(math.MaxFloat64); err == nil {
+		t.Fatal("overflowing calibration was accepted")
+	}
+}
+
 func TestEvaluateBooleanThresholdUsesHysteresisAndEmitsChanges(t *testing.T) {
 	spec := DefinitionSpec{
 		Kind:  KindBoolean,

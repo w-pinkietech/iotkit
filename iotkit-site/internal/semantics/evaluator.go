@@ -106,6 +106,25 @@ func EvaluateAt(
 	return result, state, nil
 }
 
+func EvaluateRule(
+	spec RuleSpec,
+	state State,
+	calibrated float64,
+	receivedAt int64,
+) (Result, State, error) {
+	return EvaluateAt(
+		DefinitionSpec{
+			Kind:     spec.Kind,
+			Scale:    1,
+			Detector: spec.Detector,
+			Trigger:  spec.Trigger,
+		},
+		state,
+		calibrated,
+		receivedAt,
+	)
+}
+
 func emitInitial(spec DefinitionSpec, result Result, state State) (Result, State, error) {
 	switch spec.Kind {
 	case KindBoolean, KindAlarm:

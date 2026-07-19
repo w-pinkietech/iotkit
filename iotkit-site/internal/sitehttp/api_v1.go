@@ -212,11 +212,208 @@ func (server *Server) resetSemanticCounter(response http.ResponseWriter, request
 	writeJSON(response, http.StatusOK, definition)
 }
 
+func (server *Server) getSemanticConfiguration(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAPIAuth(response, request, false)
+	if !ok {
+		return
+	}
+	configuration, err := server.semanticConfig.Get(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("signal_ref"),
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(configuration.Revision))
+	writeJSON(response, http.StatusOK, configuration)
+}
+
+func (server *Server) putSignalCalibration(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	precondition, ok := server.requireRevisionPrecondition(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		Scale  float64 `json:"scale"`
+		Offset float64 `json:"offset"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil {
+		server.badRequest(response)
+		return
+	}
+	configuration, err := server.semanticConfig.UpdateCalibration(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("signal_ref"),
+		input.Scale,
+		input.Offset,
+		precondition,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(configuration.Revision))
+	writeJSON(response, http.StatusOK, configuration)
+}
+
+func (server *Server) createSemanticRule(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	precondition, ok := server.requireRevisionPrecondition(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		DisplayName string             `json:"display_name"`
+		Spec        semantics.RuleSpec `json:"spec"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil {
+		server.badRequest(response)
+		return
+	}
+	rule, err := server.semanticConfig.CreateRule(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("signal_ref"),
+		input.DisplayName,
+		input.Spec,
+		precondition,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	// Creating a rule advances the containing configuration revision. Return
+	// that revision so clients can add another rule without an extra GET.
+	response.Header().Set(
+		"ETag",
+		revisionETag(*precondition.Expected+1),
+	)
+	writeJSON(response, http.StatusCreated, rule)
+}
+
+func (server *Server) updateSemanticRule(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	precondition, ok := server.requireRevisionPrecondition(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		DisplayName string             `json:"display_name"`
+		Spec        semantics.RuleSpec `json:"spec"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil {
+		server.badRequest(response)
+		return
+	}
+	rule, err := server.semanticConfig.UpdateRule(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("rule_id"),
+		input.DisplayName,
+		input.Spec,
+		precondition,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(rule.Revision))
+	writeJSON(response, http.StatusOK, rule)
+}
+
+func (server *Server) retireSemanticRule(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	precondition, ok := server.requireRevisionPrecondition(response, request)
+	if !ok {
+		return
+	}
+	rule, err := server.semanticConfig.RetireRule(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("rule_id"),
+		precondition,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, rule)
+}
+
+func (server *Server) requestSemanticCounterReset(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	resetID := request.Header.Get("Idempotency-Key")
+	reset, err := server.semanticConfig.RequestCounterReset(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("rule_id"),
+		resetID,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusAccepted, reset)
+}
+
+func (server *Server) deprecatedSemanticMutation(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireAdminMutation(response, request); !ok {
+		return
+	}
+	server.writeError(
+		response,
+		http.StatusGone,
+		"semantic_definition_retired",
+		"この操作は複数ルール設定へ移行しました。semantic-configuration APIを使用してください。",
+		nil,
+	)
+}
+
 func (server *Server) listYokaKitOutputs(response http.ResponseWriter, request *http.Request) {
 	if _, ok := server.requireAPIAuth(response, request, false); !ok {
 		return
 	}
-	routes, err := server.store.ListYokaKitRoutes(request.Context())
+	routes, err := server.store.ListYokaKitRuleRoutes(request.Context())
 	if err != nil {
 		server.operationError(response, err)
 		return
@@ -232,22 +429,23 @@ func (server *Server) createYokaKitOutput(response http.ResponseWriter, request 
 		return
 	}
 	var input struct {
-		DefinitionID string                    `json:"definition_id"`
-		SourceID     string                    `json:"source_id"`
-		SignalID     string                    `json:"signal_id"`
-		Kind         outputadapter.YokaKitKind `json:"kind"`
-		Reason       string                    `json:"reason"`
+		RuleID   string                    `json:"rule_id"`
+		SourceID string                    `json:"source_id"`
+		SignalID string                    `json:"signal_id"`
+		Kind     outputadapter.YokaKitKind `json:"kind"`
+		Reason   string                    `json:"reason"`
 	}
-	if err := decodeJSON(response, request, &input); err != nil {
+	if err := decodeJSON(response, request, &input); err != nil ||
+		input.RuleID == "" {
 		server.badRequest(response)
 		return
 	}
-	route, err := server.store.ApplyYokaKitRoute(
-		request.Context(), server.actor(auth), input.DefinitionID,
-		outputadapter.YokaKit{
-			SourceID: input.SourceID, SignalID: input.SignalID,
-			Kind: input.Kind, Reason: input.Reason,
-		},
+	adapter := outputadapter.YokaKit{
+		SourceID: input.SourceID, SignalID: input.SignalID,
+		Kind: input.Kind, Reason: input.Reason,
+	}
+	route, err := server.ruleOutputs.CreateYokaKitRoute(
+		request.Context(), server.actor(auth), input.RuleID, adapter,
 	)
 	if err != nil {
 		server.operationError(response, err)
@@ -388,6 +586,24 @@ func revisionPrecondition(request *http.Request) siteapp.RevisionPrecondition {
 		return siteapp.RevisionPrecondition{Expected: &impossible}
 	}
 	return siteapp.RevisionPrecondition{Expected: &value}
+}
+
+func (server *Server) requireRevisionPrecondition(
+	response http.ResponseWriter,
+	request *http.Request,
+) (siteapp.RevisionPrecondition, bool) {
+	raw := strings.TrimSpace(request.Header.Get("If-Match"))
+	if raw == "" || raw == "*" {
+		server.writeError(
+			response,
+			http.StatusPreconditionRequired,
+			"precondition_required",
+			"最新の設定を読み直してから保存してください。",
+			nil,
+		)
+		return siteapp.RevisionPrecondition{}, false
+	}
+	return revisionPrecondition(request), true
 }
 
 func revisionETag(revision int64) string {

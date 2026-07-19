@@ -145,6 +145,18 @@
   for (const form of document.querySelectorAll("form.semantic-form")) {
     toggleSemanticFields(form);
   }
+  const semanticRuleCards = Array.from(
+    document.querySelectorAll("details.semantic-rule-card"),
+  );
+  if (semanticRuleCards.length) semanticRuleCards[0].open = true;
+  for (const card of semanticRuleCards) {
+    card.addEventListener("toggle", () => {
+      if (!card.open) return;
+      for (const other of semanticRuleCards) {
+        if (other !== card) other.open = false;
+      }
+    });
+  }
 
   const svgNS = "http://www.w3.org/2000/svg";
   const addSVG = (parent, name, attributes = {}) => {
@@ -178,6 +190,17 @@
     },
     trigger: form.elements.trigger?.value || "",
   });
+  const semanticRuleSpec = (form) => ({
+    kind: form.elements.kind.value,
+    detector: {
+      mode: form.elements.detector_mode?.value || "",
+      rise_threshold: number(form, "rise_threshold"),
+      fall_threshold: number(form, "fall_threshold"),
+      rise_debounce_ms: Math.round(number(form, "rise_debounce_seconds") * 1000),
+      fall_debounce_ms: Math.round(number(form, "fall_debounce_seconds") * 1000),
+    },
+    trigger: form.elements.trigger?.value || "",
+  });
 
   const renderPreviewChart = (svg, payload) => {
     svg.replaceChildren();
@@ -197,14 +220,18 @@
         "text-anchor": "middle",
         class: "chart-empty-title",
       });
-      empty.textContent = "まだ受信データがありません";
+      empty.textContent = payload.error
+        ? "このルールでは受信値を判定できません"
+        : "まだ受信データがありません";
       const hint = addSVG(svg, "text", {
         x: width / 2,
         y: height / 2 + 18,
         "text-anchor": "middle",
         class: "chart-empty-hint",
       });
-      hint.textContent = "試す値を入力して、設定結果を確認できます";
+      hint.textContent = payload.error
+        ? "入力値の補正と判定条件を確認してください"
+        : "試す値を入力して、設定結果を確認できます";
       return;
     }
 
@@ -396,7 +423,19 @@
 
   for (const panel of document.querySelectorAll("[data-setting-simulation]")) {
     const signalRef = panel.dataset.signalRef;
-    const form = document.querySelector(`form.semantic-form[data-signal-ref="${signalRef}"]`);
+    const forms = Array.from(
+      document.querySelectorAll(`form.semantic-form[data-signal-ref="${signalRef}"]`),
+    );
+    const form = forms[0];
+    const calibrationForm = document.querySelector(
+      `form[action="/console/signals/${signalRef}/calibration"]`,
+    );
+    const ruleCards = forms
+      .map((candidate) => candidate.closest("details.semantic-rule-card"))
+      .filter(Boolean);
+    const usesMultipleRules =
+      forms.some((candidate) => candidate.dataset.ruleId) ||
+      forms.some((candidate) => candidate.action.endsWith("/semantic-rules"));
     const testInput = panel.querySelector("[name=preview_test_value]");
     const testResult = panel.querySelector("[data-preview-test-result]");
     const range = panel.querySelector("[data-preview-range]");
@@ -419,7 +458,29 @@
         field.removeAttribute("aria-invalid");
       });
       const body = {signal_ref: signalRef};
-      if (form) body.spec = semanticSpec(form);
+      if (usesMultipleRules) {
+        body.calibration = {
+          scale: calibrationForm ? number(calibrationForm, "scale") : 1,
+          offset: number(calibrationForm, "offset"),
+        };
+        body.rules = forms
+          .filter((candidate) =>
+            candidate.dataset.ruleId ||
+            candidate.elements.display_name?.value.trim(),
+          )
+          .map((candidate, index) => ({
+            rule_id: candidate.dataset.ruleId || `draft-${index + 1}`,
+            display_name:
+              candidate.elements.display_name?.value.trim() || `ルール ${index + 1}`,
+            spec: semanticRuleSpec(candidate),
+          }));
+        if (!body.rules.length) {
+          delete body.calibration;
+          delete body.rules;
+        }
+      } else if (form) {
+        body.spec = semanticSpec(form);
+      }
       if (testInput?.value.trim()) body.test_value = Number(testInput.value);
       try {
         const response = await fetch("/api/v1/mapping-previews", {
@@ -451,7 +512,22 @@
           }
           return;
         }
-        const payload = await response.json();
+        const responsePayload = await response.json();
+        const selectedRuleID = ruleCards.find((card) => card.open)?.dataset.ruleId;
+        const firstRule =
+          responsePayload.rules?.find(
+            (rule) => rule.rule_id === selectedRuleID,
+          ) ||
+          responsePayload.rules?.find((rule) => !rule.error) ||
+          responsePayload.rules?.[0];
+        const payload = firstRule
+          ? {
+              ...firstRule,
+              window_start: responsePayload.window_start,
+              window_end: responsePayload.window_end,
+              truncated_by: responsePayload.truncated_by,
+            }
+          : responsePayload;
         renderPreviewChart(chart, payload);
         const latest = payload.points?.at(-1);
         if (latest && currentValue) {
@@ -514,8 +590,17 @@
       window.clearTimeout(debounce);
       debounce = window.setTimeout(refresh, 300);
     };
-    form?.addEventListener("input", schedule);
-    form?.addEventListener("change", schedule);
+    for (const candidate of forms) {
+      candidate.addEventListener("input", schedule);
+      candidate.addEventListener("change", schedule);
+    }
+    calibrationForm?.addEventListener("input", schedule);
+    calibrationForm?.addEventListener("change", schedule);
+    for (const card of ruleCards) {
+      card.addEventListener("toggle", () => {
+        if (card.open) schedule();
+      });
+    }
     testInput?.addEventListener("input", schedule);
     refresh();
     window.setInterval(() => {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -556,20 +557,23 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 		"temperature_c",
 		"24.8",
 		`action="/console/signals/` + signals[0].SignalRef + `/profile"`,
-		`action="/console/signals/` + signals[0].SignalRef + `/semantic"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/calibration"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/semantic-rules"`,
 		`name="display_name"`,
 		`name="kind"`,
 		`value="thermocouple"`,
 		`>熱電対</option>`,
 		`>照度</option>`,
-		`受信した値をどうするか`,
+		`入力値の補正`,
+		`正常値の使い方`,
+		`異常検知`,
 		`data-semantic-detector`,
 		`name="rise_threshold"`,
 		`name="fall_threshold"`,
 		`name="rise_debounce_seconds"`,
 		`name="fall_debounce_seconds"`,
 		`data-semantic-trigger hidden`,
-		`状態がOFFからONに変わったとき`,
+		`OFFからONへ変わったとき`,
 		`name="return_to" value="` + path + `"`,
 		`data-setting-simulation`,
 		`data-preview-chart`,
@@ -588,6 +592,164 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 	}
 	if strings.Contains(body, "累積するタイミング") {
 		t.Fatalf("sensor detail still exposes the internal trigger wording: %s", body)
+	}
+}
+
+func TestSensorDetailSeparatesNormalAndAbnormalSemanticRules(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := configuration.Revision
+	normal, err := archive.CreateSemanticRule(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		"現在温度",
+		semantics.RuleSpec{Kind: semantics.KindNumeric},
+		siteapp.RevisionPrecondition{Expected: &expected},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err = archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected = configuration.Revision
+	alarm, err := archive.CreateSemanticRule(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		"高温アラーム",
+		semantics.RuleSpec{
+			Kind: semantics.KindAlarm,
+			Detector: semantics.Detector{
+				Mode:          semantics.DetectorHighActive,
+				RiseThreshold: 40,
+				FallThreshold: 38,
+			},
+		},
+		siteapp.RevisionPrecondition{Expected: &expected},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/"+signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	for _, want := range []string{
+		"入力値の補正",
+		"正常値の使い方",
+		"異常検知",
+		"現在温度",
+		"高温アラーム",
+		`action="/console/semantic-rules/` + normal.ID + `"`,
+		`action="/console/semantic-rules/` + alarm.ID + `"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/calibration"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/semantic-rules"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("sensor detail missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "受信した値をどうするか") {
+		t.Fatalf("sensor detail still presents a single semantic choice: %s", body)
+	}
+}
+
+func TestConsoleCreatesNormalAndAlarmRulesIndependently(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postRule := func(values url.Values) {
+		t.Helper()
+		values.Set("_csrf", csrf)
+		values.Set("return_to", "/sensors/"+signals[0].SignalRef)
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/console/signals/"+signals[0].SignalRef+"/semantic-rules",
+			strings.NewReader(values.Encode()),
+		)
+		request.AddCookie(cookie)
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", testOrigin)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusSeeOther ||
+			!strings.HasSuffix(response.Header().Get("Location"), "?saved=1") {
+			t.Fatalf("status=%d location=%q", response.Code, response.Header().Get("Location"))
+		}
+	}
+	postRule(url.Values{
+		"revision":     {strconv.FormatInt(configuration.Revision, 10)},
+		"display_name": {"現在温度"},
+		"kind":         {"numeric"},
+	})
+	configuration, err = archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postRule(url.Values{
+		"revision":              {strconv.FormatInt(configuration.Revision, 10)},
+		"display_name":          {"高温アラーム"},
+		"kind":                  {"alarm"},
+		"detector_mode":         {"high_active"},
+		"rise_threshold":        {"40"},
+		"fall_threshold":        {"38"},
+		"rise_debounce_seconds": {"2"},
+		"fall_debounce_seconds": {"5"},
+	})
+	configuration, err = archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configuration.Rules) != 2 ||
+		configuration.Rules[0].Kind != semantics.KindNumeric ||
+		configuration.Rules[1].Kind != semantics.KindAlarm {
+		t.Fatalf("rules=%#v", configuration.Rules)
 	}
 }
 
@@ -712,7 +874,7 @@ func TestMappingPreviewReturnsBoundedHistoryAndTestValueWithoutWriting(t *testin
 	}
 }
 
-func TestConsoleSavesExplicitRisingAndFallingSensorRule(t *testing.T) {
+func TestConsoleRejectsRetiredSingleDefinitionMutation(t *testing.T) {
 	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
 	seedSetupDevice(t, archive)
 	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
@@ -743,20 +905,258 @@ func TestConsoleSavesExplicitRisingAndFallingSensorRule(t *testing.T) {
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
-	if response.Code != http.StatusSeeOther {
+	if response.Code != http.StatusGone {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	definitions, err := archive.ListSemanticDefinitions(context.Background())
-	if err != nil || len(definitions) != 1 {
+	if err != nil || len(definitions) != 0 {
 		t.Fatalf("definitions=%#v err=%v", definitions, err)
 	}
-	detector := definitions[0].Detector
-	if detector.Mode != semantics.DetectorLowActive ||
-		detector.RiseThreshold != 80 ||
-		detector.FallThreshold != 20 ||
-		detector.RiseDebounceMS != 1_500 ||
-		detector.FallDebounceMS != 2_500 {
-		t.Fatalf("detector=%#v", detector)
+}
+
+func TestSemanticConfigurationAPIStoresTwoRulesForOneSignal(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	signalRef := signals[0].SignalRef
+	cookie, csrf := loginTestAccount(t, server)
+
+	getConfiguration := func() (semantics.Configuration, string) {
+		t.Helper()
+		request := httptest.NewRequest(
+			http.MethodGet,
+			"/api/v1/signals/"+signalRef+"/semantic-configuration",
+			nil,
+		)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET status=%d body=%s", response.Code, response.Body.String())
+		}
+		var configuration semantics.Configuration
+		if err := json.Unmarshal(response.Body.Bytes(), &configuration); err != nil {
+			t.Fatal(err)
+		}
+		return configuration, response.Header().Get("ETag")
+	}
+	createRule := func(etag, body string) string {
+		t.Helper()
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/signals/"+signalRef+"/semantic-rules",
+			strings.NewReader(body),
+		)
+		request.AddCookie(cookie)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", testOrigin)
+		request.Header.Set("X-CSRF-Token", csrf)
+		request.Header.Set("If-Match", etag)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("POST status=%d body=%s", response.Code, response.Body.String())
+		}
+		return response.Header().Get("ETag")
+	}
+
+	configuration, etag := getConfiguration()
+	if configuration.Calibration.Scale != 1 || len(configuration.Rules) != 0 ||
+		etag != revisionETag(configuration.Revision) {
+		t.Fatalf("initial configuration=%#v etag=%q", configuration, etag)
+	}
+	etag = createRule(etag, `{
+		"display_name":"生産回数",
+		"spec":{
+			"kind":"cumulative_counter",
+			"detector":{"mode":"boolean_high_active"},
+			"trigger":"on_transition"
+		}
+	}`)
+	if etag != revisionETag(configuration.Revision+1) {
+		t.Fatalf("created configuration etag=%q", etag)
+	}
+	createRule(etag, `{
+		"display_name":"停止アラーム",
+		"spec":{
+			"kind":"alarm",
+			"detector":{"mode":"boolean_low_active"},
+			"trigger":""
+		}
+	}`)
+	configuration, _ = getConfiguration()
+	if len(configuration.Rules) != 2 ||
+		configuration.Rules[0].ID == configuration.Rules[1].ID {
+		t.Fatalf("configuration rules=%#v", configuration.Rules)
+	}
+}
+
+func TestSemanticConfigurationMutationRequiresIfMatch(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	send := func(ifMatch string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/signals/"+signals[0].SignalRef+"/semantic-rules",
+			strings.NewReader(`{
+				"display_name":"測定値",
+				"spec":{"kind":"numeric","detector":{},"trigger":""}
+			}`),
+		)
+		request.AddCookie(cookie)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", testOrigin)
+		request.Header.Set("X-CSRF-Token", csrf)
+		if ifMatch != "" {
+			request.Header.Set("If-Match", ifMatch)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	if response := send(""); response.Code != http.StatusPreconditionRequired {
+		t.Fatalf("missing If-Match status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := send(`"99"`); response.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale If-Match status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestMultiRulePreviewReturnsIndependentCounterAndAlarmResults(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/mapping-previews",
+		strings.NewReader(`{
+			"signal_ref":"`+signals[0].SignalRef+`",
+			"calibration":{"scale":1,"offset":0},
+			"rules":[
+				{
+					"rule_id":"draft-counter",
+					"display_name":"生産回数",
+					"spec":{
+						"kind":"cumulative_counter",
+						"detector":{
+							"mode":"high_active",
+							"rise_threshold":20,
+							"fall_threshold":19
+						},
+						"trigger":"on_transition"
+					}
+				},
+				{
+					"rule_id":"draft-alarm",
+					"display_name":"停止アラーム",
+					"spec":{
+						"kind":"alarm",
+						"detector":{
+							"mode":"low_active",
+							"rise_threshold":30,
+							"fall_threshold":29
+						},
+						"trigger":""
+					}
+				}
+			],
+			"test_value":1
+		}`),
+	)
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", csrf)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var preview struct {
+		Rules []struct {
+			RuleID string         `json:"rule_id"`
+			Kind   semantics.Kind `json:"kind"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Rules) != 2 ||
+		preview.Rules[0].RuleID != "draft-counter" ||
+		preview.Rules[1].RuleID != "draft-alarm" {
+		t.Fatalf("multi-rule preview=%#v", preview)
+	}
+}
+
+func TestMultiRulePreviewFailureDoesNotHideAnotherRule(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	cookie, csrf := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/mapping-previews",
+		strings.NewReader(`{
+			"signal_ref":"`+signals[0].SignalRef+`",
+			"calibration":{"scale":1,"offset":0},
+			"rules":[
+				{
+					"rule_id":"draft-numeric",
+					"display_name":"温度",
+					"spec":{"kind":"numeric","detector":{},"trigger":""}
+				},
+				{
+					"rule_id":"draft-boolean",
+					"display_name":"接点",
+					"spec":{
+						"kind":"boolean",
+						"detector":{"mode":"boolean_high_active"},
+						"trigger":""
+					}
+				}
+			]
+		}`),
+	)
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", testOrigin)
+	request.Header.Set("X-CSRF-Token", csrf)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var preview struct {
+		Rules []struct {
+			RuleID     string `json:"rule_id"`
+			InputCount int    `json:"input_count"`
+			Error      string `json:"error"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Rules) != 2 ||
+		preview.Rules[0].InputCount != 1 ||
+		preview.Rules[0].Error != "" ||
+		preview.Rules[1].Error == "" {
+		t.Fatalf("preview=%#v", preview)
 	}
 }
 

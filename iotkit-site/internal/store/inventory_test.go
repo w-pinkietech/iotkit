@@ -12,6 +12,7 @@ import (
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantic"
+	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/semantics"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/siteapp"
 )
 
@@ -457,6 +458,43 @@ func TestListInventorySignalsReportsActiveSemanticMapping(t *testing.T) {
 	}
 	if len(signals) != 1 || !signals[0].HasSemanticMapping {
 		t.Fatalf("signals = %#v", signals)
+	}
+}
+
+func TestListInventorySignalsReportsActiveMultipleRuleConfiguration(t *testing.T) {
+	archive := openTestStore(t)
+	snapshot := descriptorFixture(t)
+	if _, err := archive.ApplyDescriptorSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := configuration.Revision
+	if _, err := archive.CreateSemanticRule(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		"測定値",
+		semantics.RuleSpec{Kind: semantics.KindNumeric},
+		siteapp.RevisionPrecondition{Expected: &expected},
+	); err != nil {
+		t.Fatal(err)
+	}
+	signals, err = archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(signals) != 1 || !signals[0].HasSemanticMapping {
+		t.Fatalf("signals=%#v", signals)
 	}
 }
 

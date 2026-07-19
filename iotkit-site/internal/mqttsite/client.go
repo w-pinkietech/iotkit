@@ -51,6 +51,14 @@ type genericExportQueue interface {
 	EnqueueOutputExports(context.Context, int) (int, error)
 }
 
+type multipleRuleProjector interface {
+	ProjectSemanticRules(context.Context, int) (int, error)
+}
+
+type multipleRuleOutputQueue interface {
+	EnqueueMultipleRuleOutputExports(context.Context, int) (int, error)
+}
+
 type activationCommandQueue interface {
 	ListPendingActivationCommands(context.Context, int) ([]store.ActivationCommand, error)
 	MarkActivationCommandAttempt(context.Context, string, int64) error
@@ -370,8 +378,14 @@ func convergeSite(ctx context.Context, queue ExportQueue, logger *slog.Logger) {
 	if _, err := queue.ProjectSemanticEvents(ctx, convergenceBatchSize); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("semantic projection failed", "error", err)
 	}
-	if generic, ok := queue.(genericExportQueue); ok {
-		if _, err := generic.ProjectSemanticObservations(ctx, convergenceBatchSize); err != nil &&
+	if multiple, ok := queue.(multipleRuleProjector); ok {
+		if _, err := multiple.ProjectSemanticRules(ctx, convergenceBatchSize); err != nil &&
+			!errors.Is(err, context.Canceled) {
+			logger.Error("multiple-rule semantic projection failed", "error", err)
+		}
+	} else if generic, ok := queue.(genericExportQueue); ok {
+		_, err := generic.ProjectSemanticObservations(ctx, convergenceBatchSize)
+		if err != nil &&
 			!errors.Is(err, context.Canceled) {
 			logger.Error("generic semantic projection failed", "error", err)
 		}
@@ -386,6 +400,14 @@ func convergeSite(ctx context.Context, queue ExportQueue, logger *slog.Logger) {
 		if _, err := generic.EnqueueOutputExports(ctx, convergenceBatchSize); err != nil &&
 			!errors.Is(err, context.Canceled) {
 			logger.Error("generic output enqueue failed", "error", err)
+		}
+	}
+	if multiple, ok := queue.(multipleRuleOutputQueue); ok {
+		if _, err := multiple.EnqueueMultipleRuleOutputExports(
+			ctx,
+			convergenceBatchSize,
+		); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("multiple-rule output enqueue failed", "error", err)
 		}
 	}
 }

@@ -39,6 +39,16 @@ type consoleSignalView struct {
 	InputIsBoolean      bool
 	RiseDebounceSeconds string
 	FallDebounceSeconds string
+	Configuration       *semantics.Configuration
+	NormalRules         []consoleSemanticRuleView
+	AlarmRules          []consoleSemanticRuleView
+}
+
+type consoleSemanticRuleView struct {
+	semantics.Rule
+	KindLabel           string
+	RiseDebounceSeconds string
+	FallDebounceSeconds string
 }
 
 type consoleEdgeView struct {
@@ -210,6 +220,19 @@ type consoleDefinitionOption struct {
 
 type consoleOutputView struct {
 	store.YokaKitRoute
+	KindLabel  string
+	StateLabel string
+	StateClass string
+}
+
+type consoleRuleOption struct {
+	ID   string
+	Name string
+	Kind string
+}
+
+type consoleRuleOutputView struct {
+	store.YokaKitRuleRoute
 	KindLabel  string
 	StateLabel string
 	StateClass string
@@ -456,6 +479,38 @@ func newConsoleSignalViews(
 	return views
 }
 
+func attachConsoleSemanticConfigurations(
+	signals []consoleSignalView,
+	configurations map[string]semantics.Configuration,
+) {
+	for index := range signals {
+		configuration, exists := configurations[signals[index].SignalRef]
+		if !exists {
+			continue
+		}
+		signals[index].Configuration = &configuration
+		signals[index].MeaningLabel = "未設定"
+		signals[index].MeaningClass = "needs-setup"
+		for _, rule := range configuration.Rules {
+			view := consoleSemanticRuleView{
+				Rule:                rule,
+				KindLabel:           displaySemanticKind(rule.Kind),
+				RiseDebounceSeconds: formatMillisecondsAsSeconds(rule.Detector.RiseDebounceMS),
+				FallDebounceSeconds: formatMillisecondsAsSeconds(rule.Detector.FallDebounceMS),
+			}
+			if rule.Kind == semantics.KindAlarm {
+				signals[index].AlarmRules = append(signals[index].AlarmRules, view)
+			} else {
+				signals[index].NormalRules = append(signals[index].NormalRules, view)
+			}
+		}
+		if len(configuration.Rules) > 0 {
+			signals[index].MeaningLabel = strconv.Itoa(len(configuration.Rules)) + "件のルール"
+			signals[index].MeaningClass = "configured"
+		}
+	}
+}
+
 func formatMillisecondsAsSeconds(milliseconds int64) string {
 	return strconv.FormatFloat(float64(milliseconds)/1000, 'f', -1, 64)
 }
@@ -601,6 +656,26 @@ func newConsoleOutputViews(routes []store.YokaKitRoute) []consoleOutputView {
 			KindLabel:    displayOutputKind(string(route.Kind)),
 			StateLabel:   "停止",
 			StateClass:   "never",
+		}
+		if route.Active {
+			view.StateLabel = "使用中"
+			view.StateClass = "receiving"
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func newConsoleRuleOutputViews(
+	routes []store.YokaKitRuleRoute,
+) []consoleRuleOutputView {
+	views := make([]consoleRuleOutputView, 0, len(routes))
+	for _, route := range routes {
+		view := consoleRuleOutputView{
+			YokaKitRuleRoute: route,
+			KindLabel:        displayOutputKind(string(route.Kind)),
+			StateLabel:       "停止",
+			StateClass:       "never",
 		}
 		if route.Active {
 			view.StateLabel = "使用中"

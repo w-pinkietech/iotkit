@@ -499,6 +499,183 @@ var schemaMigrations = []migration{
 			ADD COLUMN pending_since INTEGER NOT NULL DEFAULT 0
 			CHECK(pending_since >= 0);
 	`},
+	{version: 14, sql: `
+		CREATE TABLE semantic_signal_configs_v3 (
+			signal_ref TEXT PRIMARY KEY,
+			revision INTEGER NOT NULL CHECK(revision > 0)
+		);
+		CREATE TABLE signal_calibration_revisions_v3 (
+			signal_ref TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			scale REAL NOT NULL,
+			offset REAL NOT NULL,
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY(signal_ref, revision)
+		);
+		CREATE UNIQUE INDEX ux_signal_calibration_active_v3
+			ON signal_calibration_revisions_v3(signal_ref) WHERE active = 1;
+		CREATE TABLE signal_calibration_starts_v3 (
+			signal_ref TEXT NOT NULL,
+			calibration_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			start_after_pub_seq INTEGER NOT NULL CHECK(start_after_pub_seq >= 0),
+			PRIMARY KEY(signal_ref, calibration_revision, ledger_epoch)
+		);
+		CREATE TABLE semantic_rules_v3 (
+			rule_id TEXT PRIMARY KEY,
+			signal_ref TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN (
+				'numeric', 'boolean', 'cumulative_counter', 'alarm'
+			)),
+			series_id TEXT NOT NULL UNIQUE,
+			display_order INTEGER NOT NULL CHECK(display_order > 0),
+			created_at INTEGER NOT NULL,
+			retired_at INTEGER
+		);
+		CREATE UNIQUE INDEX ux_semantic_rule_name_v3
+			ON semantic_rules_v3(signal_ref, display_name)
+			WHERE retired_at IS NULL;
+		CREATE INDEX ix_semantic_rules_signal_v3
+			ON semantic_rules_v3(signal_ref, rule_id);
+		CREATE UNIQUE INDEX ux_semantic_rule_display_order_v3
+			ON semantic_rules_v3(signal_ref, display_order);
+		CREATE TABLE semantic_rule_revisions_v3 (
+			rule_id TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			spec_json BLOB NOT NULL CHECK(json_valid(spec_json)),
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY(rule_id, revision)
+		);
+		CREATE UNIQUE INDEX ux_semantic_rule_revision_active_v3
+			ON semantic_rule_revisions_v3(rule_id) WHERE active = 1;
+		CREATE TABLE semantic_rule_starts_v3 (
+			rule_id TEXT NOT NULL,
+			rule_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			start_after_pub_seq INTEGER NOT NULL CHECK(start_after_pub_seq >= 0),
+			PRIMARY KEY(rule_id, rule_revision, ledger_epoch)
+		);
+		CREATE TABLE semantic_rule_ends_v3 (
+			rule_id TEXT NOT NULL,
+			rule_revision INTEGER NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			end_at_pub_seq INTEGER NOT NULL CHECK(end_at_pub_seq >= 0),
+			PRIMARY KEY(rule_id, rule_revision, ledger_epoch)
+		);
+		CREATE TABLE semantic_rule_runtime_v3 (
+			rule_id TEXT PRIMARY KEY,
+			initialized INTEGER NOT NULL CHECK(initialized IN (0, 1)),
+			detector_active INTEGER NOT NULL CHECK(detector_active IN (0, 1)),
+			counter INTEGER NOT NULL CHECK(counter >= 0),
+			pending INTEGER NOT NULL CHECK(pending IN (0, 1)),
+			pending_active INTEGER NOT NULL CHECK(pending_active IN (0, 1)),
+			pending_since INTEGER NOT NULL CHECK(pending_since >= 0),
+			applied_rule_revision INTEGER NOT NULL CHECK(applied_rule_revision >= 0),
+			applied_calibration_revision INTEGER NOT NULL CHECK(applied_calibration_revision >= 0),
+			applied_ledger_epoch TEXT NOT NULL,
+			next_sequence INTEGER NOT NULL CHECK(next_sequence > 0)
+		);
+		CREATE TABLE semantic_projection_receipts_v3 (
+			rule_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			pub_seq INTEGER NOT NULL CHECK(pub_seq > 0),
+			rule_revision INTEGER NOT NULL,
+			calibration_revision INTEGER NOT NULL,
+			observation_id TEXT,
+			PRIMARY KEY(rule_id, ledger_epoch, pub_seq)
+		);
+		CREATE TABLE semantic_observations_v3 (
+			observation_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			observation_id TEXT NOT NULL UNIQUE,
+			rule_id TEXT NOT NULL,
+			rule_revision INTEGER NOT NULL,
+			calibration_revision INTEGER NOT NULL,
+			series_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL CHECK(sequence > 0),
+			kind TEXT NOT NULL CHECK(kind IN (
+				'numeric', 'boolean', 'cumulative_counter', 'alarm'
+			)),
+			value_json BLOB NOT NULL CHECK(json_valid(value_json)),
+			signal_ref TEXT NOT NULL,
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			source_pub_seq INTEGER NOT NULL CHECK(source_pub_seq >= 0),
+			observed_at INTEGER NOT NULL CHECK(observed_at >= 0),
+			created_at INTEGER NOT NULL,
+			UNIQUE(rule_id, sequence)
+		);
+		CREATE TABLE semantic_projection_failures_v3 (
+			rule_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			pub_seq INTEGER NOT NULL CHECK(pub_seq > 0),
+			error_text TEXT NOT NULL,
+			attempts INTEGER NOT NULL CHECK(attempts > 0),
+			last_failed_at INTEGER NOT NULL,
+			PRIMARY KEY(rule_id, ledger_epoch, pub_seq)
+		);
+		CREATE TABLE semantic_counter_resets_v3 (
+			reset_id TEXT PRIMARY KEY,
+			rule_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			apply_after_pub_seq INTEGER NOT NULL CHECK(apply_after_pub_seq >= 0),
+			requested_at INTEGER NOT NULL,
+			applied_at INTEGER,
+			actor_ref TEXT NOT NULL,
+			zero_observation_id TEXT
+		);
+		CREATE INDEX ix_semantic_counter_resets_pending_v3
+			ON semantic_counter_resets_v3(rule_id, applied_at, requested_at, reset_id);
+		CREATE TABLE semantic_counter_reset_boundaries_v3 (
+			reset_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			apply_after_pub_seq INTEGER NOT NULL CHECK(apply_after_pub_seq >= 0),
+			PRIMARY KEY(reset_id, ledger_epoch)
+		);
+		CREATE TABLE yokakit_routes_v3 (
+			route_id TEXT PRIMARY KEY,
+			rule_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			signal_id TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN (
+				'production', 'onoff', 'gantt_chart', 'alarm'
+			)),
+			reason TEXT NOT NULL,
+			start_after_observation_row_id INTEGER NOT NULL CHECK(
+				start_after_observation_row_id >= 0
+			),
+			active INTEGER NOT NULL CHECK(active IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			UNIQUE(source_id, signal_id)
+		);
+		CREATE TABLE output_outbox_v3 (
+			export_id TEXT PRIMARY KEY,
+			route_id TEXT NOT NULL,
+			observation_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			qos INTEGER NOT NULL CHECK(qos = 1),
+			payload_json BLOB NOT NULL CHECK(json_valid(payload_json)),
+			attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+			created_at INTEGER NOT NULL,
+			published_at INTEGER,
+			UNIQUE(route_id, observation_id)
+		);
+		INSERT INTO semantic_signal_configs_v3(signal_ref, revision)
+		SELECT signal_ref, 1 FROM site_signals;
+		INSERT INTO signal_calibration_revisions_v3(
+			signal_ref, revision, scale, offset, active, created_at
+		)
+		SELECT signal_ref, 1, 1, 0, 1, created_at FROM site_signals;
+		INSERT INTO signal_calibration_starts_v3(
+			signal_ref, calibration_revision, ledger_epoch, start_after_pub_seq
+		)
+		SELECT signal.signal_ref, 1, cursor.ledger_epoch, 0
+		FROM site_signals AS signal
+		JOIN accepted_cursors AS cursor
+			ON cursor.edge_node_id = signal.edge_node_id;
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

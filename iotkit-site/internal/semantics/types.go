@@ -50,6 +50,81 @@ type DefinitionSpec struct {
 	Trigger  TriggerMode `json:"trigger"`
 }
 
+type Calibration struct {
+	SignalRef string  `json:"signal_ref"`
+	Revision  int64   `json:"revision"`
+	Scale     float64 `json:"scale"`
+	Offset    float64 `json:"offset"`
+	CreatedAt int64   `json:"created_at"`
+}
+
+func (calibration Calibration) Validate() error {
+	if !finite(calibration.Scale) || calibration.Scale == 0 {
+		return errors.New("semantic calibration scale must be a finite non-zero number")
+	}
+	if !finite(calibration.Offset) {
+		return errors.New("semantic calibration offset must be finite")
+	}
+	return nil
+}
+
+func (calibration Calibration) Apply(input float64) (float64, error) {
+	if err := calibration.Validate(); err != nil {
+		return 0, err
+	}
+	if !finite(input) {
+		return 0, errors.New("semantic input must be finite")
+	}
+	calibrated := input*calibration.Scale + calibration.Offset
+	if !finite(calibrated) {
+		return 0, errors.New("calibrated semantic input must be finite")
+	}
+	return calibrated, nil
+}
+
+type RuleSpec struct {
+	Kind     Kind        `json:"kind"`
+	Detector Detector    `json:"detector"`
+	Trigger  TriggerMode `json:"trigger"`
+}
+
+func (spec RuleSpec) Validate() error {
+	return DefinitionSpec{
+		Kind:     spec.Kind,
+		Scale:    1,
+		Detector: spec.Detector,
+		Trigger:  spec.Trigger,
+	}.Validate()
+}
+
+type Rule struct {
+	ID          string `json:"rule_id"`
+	SignalRef   string `json:"signal_ref"`
+	DisplayName string `json:"display_name"`
+	SeriesID    string `json:"series_id"`
+	Revision    int64  `json:"revision"`
+	RuleSpec
+	Active    bool   `json:"active"`
+	CreatedAt int64  `json:"created_at"`
+	RetiredAt *int64 `json:"retired_at,omitempty"`
+}
+
+type Configuration struct {
+	SignalRef   string      `json:"signal_ref"`
+	Revision    int64       `json:"revision"`
+	Calibration Calibration `json:"calibration"`
+	Rules       []Rule      `json:"rules"`
+}
+
+type CounterReset struct {
+	ID               string `json:"reset_id"`
+	RuleID           string `json:"rule_id"`
+	LedgerEpoch      string `json:"ledger_epoch"`
+	ApplyAfterPubSeq int64  `json:"apply_after_pub_seq"`
+	RequestedAt      int64  `json:"requested_at"`
+	AppliedAt        *int64 `json:"applied_at,omitempty"`
+}
+
 // UnmarshalJSON keeps existing Site databases readable while new writes use the
 // explicit rising/falling detector contract.
 func (spec *DefinitionSpec) UnmarshalJSON(data []byte) error {
@@ -209,4 +284,22 @@ type Observation struct {
 	SourcePubSeq       int64           `json:"source_pub_seq"`
 	ObservedAt         int64           `json:"observed_at"`
 	CreatedAt          int64           `json:"created_at"`
+}
+
+type RuleObservation struct {
+	RowID               int64           `json:"row_id"`
+	ObservationID       string          `json:"observation_id"`
+	RuleID              string          `json:"rule_id"`
+	RuleRevision        int64           `json:"rule_revision"`
+	CalibrationRevision int64           `json:"calibration_revision"`
+	SeriesID            string          `json:"series_id"`
+	Sequence            int64           `json:"sequence"`
+	Kind                Kind            `json:"kind"`
+	Value               json.RawMessage `json:"value"`
+	SignalRef           string          `json:"signal_ref"`
+	EdgeNodeID          string          `json:"edge_node_id"`
+	LedgerEpoch         string          `json:"-"`
+	SourcePubSeq        int64           `json:"source_pub_seq"`
+	ObservedAt          int64           `json:"observed_at"`
+	CreatedAt           int64           `json:"created_at"`
 }

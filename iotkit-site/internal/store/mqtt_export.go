@@ -411,6 +411,18 @@ func (store *Store) ListPendingMQTTExports(ctx context.Context, limit int) ([]Pe
 			JOIN semantic_observations_v2 AS observation
 				ON observation.observation_id = outbox.observation_id
 			WHERE outbox.published_at IS NULL
+			UNION ALL
+			SELECT outbox.export_id, outbox.route_id, outbox.observation_id,
+				outbox.topic, outbox.qos, outbox.payload_json, outbox.attempts,
+				outbox.created_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY outbox.route_id
+					ORDER BY observation.observation_row_id, outbox.export_id
+				), observation.observation_row_id
+			FROM output_outbox_v3 AS outbox
+			JOIN semantic_observations_v3 AS observation
+				ON observation.observation_id = outbox.observation_id
+			WHERE outbox.published_at IS NULL
 		)
 		SELECT export_id, route_id, event_id, topic, qos, payload_json, attempts, created_at
 		FROM combined
@@ -468,6 +480,19 @@ func (store *Store) MarkMQTTExportPublished(ctx context.Context, exportID string
 	if rowsAffected == 0 {
 		result, err = store.db.ExecContext(ctx, `
 			UPDATE output_outbox_v2 SET published_at = COALESCE(published_at, ?)
+			WHERE export_id = ?
+		`, now, exportID)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err = result.RowsAffected()
+		if err != nil {
+			return err
+		}
+	}
+	if rowsAffected == 0 {
+		result, err = store.db.ExecContext(ctx, `
+			UPDATE output_outbox_v3 SET published_at = COALESCE(published_at, ?)
 			WHERE export_id = ?
 		`, now, exportID)
 		if err != nil {

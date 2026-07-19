@@ -77,6 +77,37 @@ func ensureSignalSourceTx(
 		ON CONFLICT(edge_node_id, series_key) DO UPDATE SET
 			system_id = COALESCE(excluded.system_id, site_signals.system_id)
 	`, signalRef, edgeNodeID, seriesKey, systemID, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO semantic_signal_configs_v3(signal_ref, revision)
+		SELECT signal_ref, 1 FROM site_signals
+		WHERE edge_node_id = ? AND series_key = ?
+	`, edgeNodeID, seriesKey); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO signal_calibration_revisions_v3(
+			signal_ref, revision, scale, offset, active, created_at
+		)
+		SELECT signal_ref, 1, 1, 0, 1, ?
+		FROM site_signals
+		WHERE edge_node_id = ? AND series_key = ?
+	`, now, edgeNodeID, seriesKey); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO signal_calibration_starts_v3(
+			signal_ref, calibration_revision, ledger_epoch, start_after_pub_seq
+		)
+		SELECT signal.signal_ref, 1, cursor.ledger_epoch, 0
+		FROM site_signals AS signal
+		JOIN accepted_cursors AS cursor
+			ON cursor.edge_node_id = signal.edge_node_id
+		WHERE signal.edge_node_id = ? AND signal.series_key = ?
+	`, edgeNodeID, seriesKey)
 	return err
 }
 
@@ -378,6 +409,10 @@ func (store *Store) ListInventorySignals(
 				SELECT 1 FROM semantic_definitions_v2 AS definition
 				WHERE definition.signal_ref = source.signal_ref
 					AND definition.active = 1
+			) OR EXISTS (
+				SELECT 1 FROM semantic_rules_v3 AS rule
+				WHERE rule.signal_ref = source.signal_ref
+					AND rule.retired_at IS NULL
 			),
 			source.last_received_at,
 			current.values_json,

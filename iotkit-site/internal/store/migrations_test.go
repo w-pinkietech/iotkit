@@ -73,8 +73,8 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 13 {
-		t.Fatalf("schema version = %d, want 13", version)
+	if version != 14 {
+		t.Fatalf("schema version = %d, want 14", version)
 	}
 	if got := testTableCount(t, store.db, "site_devices"); got != 1 {
 		t.Fatalf("backfilled devices = %d, want 1", got)
@@ -98,6 +98,230 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	}
 	if len(signals) != 1 || signals[0].Latest == nil || signals[0].Latest.EventTime != 1500 {
 		t.Fatalf("migrated signals = %#v", signals)
+	}
+}
+
+func TestMigrationFourteenCreatesMultipleRuleSchemaWithoutDroppingV2(t *testing.T) {
+	store := openTestStore(t)
+	for _, table := range []string{
+		"signal_calibration_revisions_v3",
+		"signal_calibration_starts_v3",
+		"semantic_rules_v3",
+		"semantic_rule_revisions_v3",
+		"semantic_rule_starts_v3",
+		"semantic_rule_ends_v3",
+		"semantic_rule_runtime_v3",
+		"semantic_projection_receipts_v3",
+		"semantic_observations_v3",
+		"semantic_projection_failures_v3",
+		"semantic_counter_resets_v3",
+		"semantic_counter_reset_boundaries_v3",
+		"yokakit_routes_v3",
+		"output_outbox_v3",
+		"semantic_definitions_v2",
+	} {
+		var exists int
+		if err := store.db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM sqlite_master
+				WHERE type = 'table' AND name = ?
+			)
+		`, table).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists != 1 {
+			t.Fatalf("table %s was not created", table)
+		}
+	}
+
+	var uniqueSignalRuleIndex int
+	if err := store.db.QueryRow(`
+		SELECT count(*) FROM sqlite_master
+		WHERE type = 'index'
+			AND tbl_name = 'semantic_rules_v3'
+			AND sql LIKE '%ON semantic_rules_v3(signal_ref) WHERE retired_at IS NULL%'
+	`).Scan(&uniqueSignalRuleIndex); err != nil {
+		t.Fatal(err)
+	}
+	if uniqueSignalRuleIndex != 0 {
+		t.Fatal("v3 schema still limits a signal to one active rule")
+	}
+}
+
+func TestMigrationFourteenPreservesV2SemanticAndOutputData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 13)
+	if _, err := db.Exec(`
+		INSERT INTO semantic_definitions_v2(
+			definition_id, revision, signal_ref, edge_node_id, series_key,
+			series_id, spec_json, active, created_at
+		) VALUES(
+			'legacy-definition', 2, 'legacy-signal', 'legacy-edge',
+			'legacy-series', 'legacy-semantic-series',
+			'{"kind":"numeric"}', 1, 1000
+		);
+		INSERT INTO semantic_observations_v2(
+			observation_id, series_id, sequence, definition_id,
+			definition_revision, kind, value_json, signal_ref,
+			edge_node_id, ledger_epoch, source_pub_seq, observed_at, created_at
+		) VALUES(
+			'legacy-observation', 'legacy-semantic-series', 7,
+			'legacy-definition', 2, 'numeric', '12.5', 'legacy-signal',
+			'legacy-edge', 'legacy-epoch', 9, 2000, 2100
+		);
+		INSERT INTO yokakit_routes(
+			route_id, definition_id, source_id, signal_id, kind, reason,
+			start_after_observation_row_id, active, created_at
+		) VALUES(
+			'legacy-route', 'legacy-definition', 'legacy-source',
+			'legacy-channel', 'production', '', 0, 1, 3000
+		);
+		INSERT INTO output_outbox_v2(
+			export_id, route_id, observation_id, topic, qos,
+			payload_json, attempts, created_at
+		) VALUES(
+			'legacy-export', 'legacy-route', 'legacy-observation',
+			'yokakit/v1/sources/legacy-source/channels/legacy-channel',
+			1, '{"value":12.5}', 3, 4000
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+
+	var (
+		definitionRevision int64
+		observationValue   string
+		routeSignalID      string
+		outboxAttempts     int
+	)
+	if err := archive.db.QueryRow(`
+		SELECT revision FROM semantic_definitions_v2
+		WHERE definition_id = 'legacy-definition' AND active = 1
+	`).Scan(&definitionRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.db.QueryRow(`
+		SELECT CAST(value_json AS TEXT) FROM semantic_observations_v2
+		WHERE observation_id = 'legacy-observation'
+	`).Scan(&observationValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.db.QueryRow(`
+		SELECT signal_id FROM yokakit_routes WHERE route_id = 'legacy-route'
+	`).Scan(&routeSignalID); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.db.QueryRow(`
+		SELECT attempts FROM output_outbox_v2 WHERE export_id = 'legacy-export'
+	`).Scan(&outboxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if definitionRevision != 2 || observationValue != "12.5" ||
+		routeSignalID != "legacy-channel" || outboxAttempts != 3 {
+		t.Fatalf(
+			"v2 data changed: revision=%d value=%q signal=%q attempts=%d",
+			definitionRevision,
+			observationValue,
+			routeSignalID,
+			outboxAttempts,
+		)
+	}
+}
+
+func TestMigrationFourteenRollsBackCompletelyOnFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 13)
+	if _, err := db.Exec(`
+		INSERT INTO semantic_definitions_v2(
+			definition_id, revision, signal_ref, edge_node_id, series_key,
+			series_id, spec_json, active, created_at
+		) VALUES(
+			'legacy-definition', 1, 'legacy-signal', 'legacy-edge',
+			'legacy-series', 'legacy-semantic-series',
+			'{"kind":"numeric"}', 1, 1000
+		);
+		CREATE TABLE semantic_rules_v3(conflicting_column TEXT);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if archive, err := Open(path); err == nil {
+		_ = archive.Close()
+		t.Fatal("migration succeeded despite a conflicting v3 table")
+	}
+
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 13 {
+		t.Fatalf("schema version = %d, want 13 after rollback", version)
+	}
+	var preservedV2Definitions int
+	if err := db.QueryRow(
+		"SELECT count(*) FROM semantic_definitions_v2",
+	).Scan(&preservedV2Definitions); err != nil {
+		t.Fatal(err)
+	}
+	if preservedV2Definitions != 1 {
+		t.Fatalf(
+			"preserved v2 definitions = %d, want 1",
+			preservedV2Definitions,
+		)
+	}
+	var partialV3Table int
+	if err := db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM sqlite_master
+			WHERE type = 'table' AND name = 'semantic_signal_configs_v3'
+		)
+	`).Scan(&partialV3Table); err != nil {
+		t.Fatal(err)
+	}
+	if partialV3Table != 0 {
+		t.Fatal("failed migration left an earlier v3 table behind")
+	}
+}
+
+func applyTestMigrationsThrough(t *testing.T, db *sql.DB, version int) {
+	t.Helper()
+	for _, migration := range schemaMigrations {
+		if migration.version > version {
+			break
+		}
+		if _, err := db.Exec(migration.sql); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(
+			fmt.Sprintf("PRAGMA user_version = %d", migration.version),
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

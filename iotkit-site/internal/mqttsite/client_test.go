@@ -42,6 +42,68 @@ type fakeActivationQueue struct {
 	markAttemptErr error
 }
 
+type fakeMultipleRuleQueue struct {
+	fakeExportQueue
+	v2Projected int
+	v3Projected int
+	v2Outputs   int
+	v3Outputs   int
+}
+
+type fakeV3OnlyQueue struct {
+	fakeExportQueue
+	projected int
+	enqueued  int
+}
+
+func (queue *fakeV3OnlyQueue) ProjectSemanticRules(
+	context.Context,
+	int,
+) (int, error) {
+	queue.projected++
+	return 0, nil
+}
+
+func (queue *fakeV3OnlyQueue) EnqueueMultipleRuleOutputExports(
+	context.Context,
+	int,
+) (int, error) {
+	queue.enqueued++
+	return 0, nil
+}
+
+func (queue *fakeMultipleRuleQueue) ProjectSemanticObservations(
+	context.Context,
+	int,
+) (int, error) {
+	queue.v2Projected++
+	return 0, nil
+}
+
+func (queue *fakeMultipleRuleQueue) ProjectSemanticRules(
+	context.Context,
+	int,
+) (int, error) {
+	queue.v3Projected++
+	return 0, nil
+}
+
+func (queue *fakeMultipleRuleQueue) EnqueueOutputExports(
+	context.Context,
+	int,
+) (int, error) {
+	queue.v2Outputs++
+	return 0, nil
+}
+
+func (queue *fakeMultipleRuleQueue) EnqueueMultipleRuleOutputExports(
+	context.Context,
+	int,
+) (int, error) {
+	queue.v3Outputs++
+	return 0, nil
+}
+
 func (queue *fakeActivationQueue) ListPendingActivationCommands(
 	context.Context,
 	int,
@@ -103,6 +165,41 @@ func TestDescriptorTopicFilterUsesEdgeNodes(t *testing.T) {
 func TestActivationResultTopicFilterUsesEdgeNodes(t *testing.T) {
 	if activationResultTopicFilter != "iotkit/v1/edge-nodes/+/activation/result" {
 		t.Fatalf("activation result topic filter = %q", activationResultTopicFilter)
+	}
+}
+
+func TestConvergenceUsesMultipleRuleProjectionWhenAvailable(t *testing.T) {
+	queue := &fakeMultipleRuleQueue{}
+	convergeSite(
+		context.Background(),
+		queue,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if queue.v3Projected != 1 || queue.v2Projected != 0 {
+		t.Fatalf(
+			"v3 projected=%d, v2 projected=%d",
+			queue.v3Projected,
+			queue.v2Projected,
+		)
+	}
+	if queue.v3Outputs != 1 {
+		t.Fatalf("v3 output enqueue=%d", queue.v3Outputs)
+	}
+}
+
+func TestConvergenceDoesNotRequireLegacyGenericInterfaceForV3(t *testing.T) {
+	queue := &fakeV3OnlyQueue{}
+	convergeSite(
+		context.Background(),
+		queue,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if queue.projected != 1 || queue.enqueued != 1 {
+		t.Fatalf(
+			"v3-only projected=%d enqueued=%d",
+			queue.projected,
+			queue.enqueued,
+		)
 	}
 }
 

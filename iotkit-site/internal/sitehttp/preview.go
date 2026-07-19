@@ -22,6 +22,22 @@ type cachedPreviewWindow struct {
 	expiresAt time.Time
 }
 
+type semanticRulePreviewDraft struct {
+	RuleID      string             `json:"rule_id"`
+	DisplayName string             `json:"display_name"`
+	Spec        semantics.RuleSpec `json:"spec"`
+}
+
+type semanticRulePreview struct {
+	RuleID      string         `json:"rule_id"`
+	DisplayName string         `json:"display_name"`
+	Kind        semantics.Kind `json:"kind"`
+	semantics.Preview
+	RiseThreshold *float64 `json:"rise_threshold,omitempty"`
+	FallThreshold *float64 `json:"fall_threshold,omitempty"`
+	Error         string   `json:"error,omitempty"`
+}
+
 func (server *Server) createMappingPreview(
 	response http.ResponseWriter,
 	request *http.Request,
@@ -31,9 +47,11 @@ func (server *Server) createMappingPreview(
 		return
 	}
 	var input struct {
-		SignalRef string                    `json:"signal_ref"`
-		Spec      *semantics.DefinitionSpec `json:"spec"`
-		TestValue *float64                  `json:"test_value"`
+		SignalRef   string                     `json:"signal_ref"`
+		Spec        *semantics.DefinitionSpec  `json:"spec"`
+		TestValue   *float64                   `json:"test_value"`
+		Calibration *semantics.Calibration     `json:"calibration"`
+		Rules       []semanticRulePreviewDraft `json:"rules"`
 	}
 	if err := decodeJSON(response, request, &input); err != nil ||
 		input.SignalRef == "" {
@@ -53,13 +71,90 @@ func (server *Server) createMappingPreview(
 			return
 		}
 	}
+	if input.Calibration != nil || len(input.Rules) > 0 {
+		if auth.account.Role != siteapp.AccountRoleAdmin &&
+			auth.account.Role != siteapp.AccountRoleSystemAdmin {
+			server.operationError(response, siteapp.ErrForbidden)
+			return
+		}
+		if input.Calibration == nil {
+			input.Calibration = &semantics.Calibration{Scale: 1}
+		}
+		if err := input.Calibration.Validate(); err != nil {
+			field := "calibration"
+			server.writeError(response, http.StatusBadRequest, "invalid_request",
+				"入力内容を確認してください。", &field)
+			return
+		}
+		if len(input.Rules) < 1 || len(input.Rules) > 16 {
+			field := "rules"
+			server.writeError(response, http.StatusBadRequest, "invalid_request",
+				"入力内容を確認してください。", &field)
+			return
+		}
+		for _, rule := range input.Rules {
+			if rule.RuleID == "" || rule.DisplayName == "" {
+				field := "rules"
+				server.writeError(response, http.StatusBadRequest, "invalid_request",
+					"入力内容を確認してください。", &field)
+				return
+			}
+			if err := rule.Spec.Validate(); err != nil {
+				field := "rules"
+				server.writeError(response, http.StatusBadRequest, "invalid_request",
+					"入力内容を確認してください。", &field)
+				return
+			}
+		}
+	}
 
-	spec, err := server.previewSpec(request, input.SignalRef, input.Spec)
+	window, err := server.previewWindow(request, input.SignalRef)
 	if err != nil {
 		server.operationError(response, err)
 		return
 	}
-	window, err := server.previewWindow(request, input.SignalRef)
+	if input.Calibration != nil || len(input.Rules) > 0 {
+		server.writeSemanticRulePreview(
+			response,
+			window,
+			*input.Calibration,
+			input.Rules,
+			input.TestValue,
+		)
+		return
+	}
+
+	if input.Spec == nil {
+		configuration, configErr := server.semanticConfig.Get(
+			request.Context(),
+			server.actor(auth),
+			input.SignalRef,
+		)
+		if configErr == nil && len(configuration.Rules) > 0 {
+			rules := make([]semanticRulePreviewDraft, 0, len(configuration.Rules))
+			for _, rule := range configuration.Rules {
+				rules = append(rules, semanticRulePreviewDraft{
+					RuleID:      rule.ID,
+					DisplayName: rule.DisplayName,
+					Spec:        rule.RuleSpec,
+				})
+			}
+			server.writeSemanticRulePreview(
+				response,
+				window,
+				configuration.Calibration,
+				rules,
+				input.TestValue,
+			)
+			return
+		}
+		if configErr != nil && configErr != siteapp.ErrNotFound {
+			server.operationError(response, configErr)
+			return
+		}
+	}
+
+	spec, err := server.previewSpec(request, input.SignalRef, input.Spec)
 	if err != nil {
 		server.operationError(response, err)
 		return
@@ -99,6 +194,70 @@ func (server *Server) createMappingPreview(
 		TruncatedBy:   window.TruncatedBy,
 		RiseThreshold: riseThreshold,
 		FallThreshold: fallThreshold,
+	})
+}
+
+func (server *Server) writeSemanticRulePreview(
+	response http.ResponseWriter,
+	window store.SemanticPreviewWindow,
+	calibration semantics.Calibration,
+	rules []semanticRulePreviewDraft,
+	testValue *float64,
+) {
+	previews := make([]semanticRulePreview, 0, len(rules))
+	for _, rule := range rules {
+		spec := semantics.DefinitionSpec{
+			Kind:     rule.Spec.Kind,
+			Scale:    calibration.Scale,
+			Offset:   calibration.Offset,
+			Detector: rule.Spec.Detector,
+			Trigger:  rule.Spec.Trigger,
+		}
+		preview, err := semantics.BuildPreview(
+			spec,
+			window.Inputs,
+			previewPlotLimit,
+			testValue,
+		)
+		if err != nil {
+			previews = append(previews, semanticRulePreview{
+				RuleID:      rule.RuleID,
+				DisplayName: rule.DisplayName,
+				Kind:        rule.Spec.Kind,
+				Error:       "received_value_incompatible",
+			})
+			continue
+		}
+		var riseThreshold *float64
+		var fallThreshold *float64
+		if spec.Detector.Mode == semantics.DetectorHighActive ||
+			spec.Detector.Mode == semantics.DetectorLowActive {
+			rise := spec.Detector.RiseThreshold
+			fall := spec.Detector.FallThreshold
+			riseThreshold = &rise
+			fallThreshold = &fall
+		}
+		previews = append(previews, semanticRulePreview{
+			RuleID:        rule.RuleID,
+			DisplayName:   rule.DisplayName,
+			Kind:          rule.Spec.Kind,
+			Preview:       preview,
+			RiseThreshold: riseThreshold,
+			FallThreshold: fallThreshold,
+		})
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Calibration semantics.Calibration `json:"calibration"`
+		Rules       []semanticRulePreview `json:"rules"`
+		WindowStart int64                 `json:"window_start,omitempty"`
+		WindowEnd   int64                 `json:"window_end,omitempty"`
+		TruncatedBy string                `json:"truncated_by,omitempty"`
+	}{
+		Calibration: calibration,
+		Rules:       previews,
+		WindowStart: window.WindowStart,
+		WindowEnd:   window.WindowEnd,
+		TruncatedBy: window.TruncatedBy,
 	})
 }
 

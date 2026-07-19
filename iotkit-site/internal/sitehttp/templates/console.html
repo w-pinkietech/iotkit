@@ -220,61 +220,103 @@
             {{end}}
             </section>
 
-            <section class="sensor-detail-setting-card">
-            <div class="section-heading"><div><h3>受信した値の扱い</h3></div><span class="status-pill {{.MeaningClass}}">{{.MeaningLabel}}</span></div>
-            {{if $.IsAdmin}}
-            <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" data-boolean-input="{{.InputIsBoolean}}" method="post" action="/console/signals/{{.SignalRef}}/semantic">
-              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-              <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
-              <input type="hidden" name="revision" value="{{if .Definition}}{{.Definition.Revision}}{{end}}">
-              <label><span>受信した値をどうするか</span><select name="kind" data-semantic-kind>
-                <option value="numeric" {{if and .Definition (eq .Definition.Kind "numeric")}}selected{{end}}>測定値としてそのまま使う</option>
-                <option value="boolean" {{if and .Definition (eq .Definition.Kind "boolean")}}selected{{end}}>ON/OFFを判定する</option>
-                <option value="cumulative_counter" {{if and .Definition (eq .Definition.Kind "cumulative_counter")}}selected{{end}}>回数として数える</option>
-                <option value="alarm" {{if and .Definition (eq .Definition.Kind "alarm")}}selected{{end}}>異常を判定する</option>
-              </select><small>保存後、IoTKitがこの方法で値を扱います。</small></label>
-              <div class="form-row">
-                <label><span>補正倍率</span><input name="scale" type="number" step="any" value="{{if .Definition}}{{.Definition.Scale}}{{else}}1{{end}}"></label>
-                <label><span>補正加算</span><input name="offset" type="number" step="any" value="{{if .Definition}}{{.Definition.Offset}}{{else}}0{{end}}"></label>
+            <section class="sensor-detail-setting-card semantic-settings">
+              <div class="section-heading"><div><h3>値の意味づけ</h3><p>補正は受信値全体に、ルールはそれぞれ独立して適用されます。</p></div><span class="status-pill {{.MeaningClass}}">{{.MeaningLabel}}</span></div>
+              {{with .Configuration}}
+              <div class="semantic-calibration">
+                <div><strong>入力値の補正</strong><small>すべてのルールへ共通で適用</small></div>
+                {{if $.IsAdmin}}
+                <form method="post" action="/console/signals/{{.SignalRef}}/calibration">
+                  <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+                  <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
+                  <input type="hidden" name="revision" value="{{.Revision}}">
+                  <label><span>倍率</span><input name="scale" type="number" step="any" value="{{.Calibration.Scale}}" required></label>
+                  <label><span>加算</span><input name="offset" type="number" step="any" value="{{.Calibration.Offset}}" required></label>
+                  <button class="button-secondary" type="submit">補正を保存</button>
+                </form>
+                {{else}}<span>受信値 × {{.Calibration.Scale}} ＋ {{.Calibration.Offset}}</span>{{end}}
               </div>
-              <div class="conditional-fields detector-fields" data-semantic-detector {{if or (not .Definition) (eq .Definition.Kind "numeric")}}hidden{{end}}>
-                <label><span data-semantic-detector-label>有効とみなす側</span><select name="detector_mode">
-                  <option value="boolean_high_active" data-detector-boolean {{if or (and (not .Definition) .InputIsBoolean) (and .Definition (eq .Definition.Detector.Mode "boolean_high_active"))}}selected{{end}}>High（1）を有効にする</option>
-                  <option value="boolean_low_active" data-detector-boolean {{if and .Definition (eq .Definition.Detector.Mode "boolean_low_active")}}selected{{end}}>Low（0）を有効にする</option>
-                  <option value="high_active" data-detector-analog {{if or (and (not .Definition) (not .InputIsBoolean)) (and .Definition (eq .Definition.Detector.Mode "high_active"))}}selected{{end}}>値が上がった側を有効にする</option>
-                  <option value="low_active" data-detector-analog {{if and .Definition (eq .Definition.Detector.Mode "low_active")}}selected{{end}}>値が下がった側を有効にする</option>
-                </select><small>ON、数える状態、異常のどちら側を判定するかを決めます。</small></label>
-                <div class="form-row" data-semantic-thresholds {{if .InputIsBoolean}}hidden{{end}}>
-                  <label><span>立ち上がりしきい値</span><input name="rise_threshold" type="number" step="any" value="{{if .Definition}}{{.Definition.Detector.RiseThreshold}}{{else}}0{{end}}"></label>
-                  <label><span>立ち下がりしきい値</span><input name="fall_threshold" type="number" step="any" value="{{if .Definition}}{{.Definition.Detector.FallThreshold}}{{else}}0{{end}}"></label>
-                </div>
-                <div class="form-row">
-                  <label><span>立ち上がり確定待ち</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{.RiseDebounceSeconds}}"><small>秒。チャタリングや瞬間的な明るさ変化を除きます。</small></label>
-                  <label><span>立ち下がり確定待ち</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{.FallDebounceSeconds}}"><small>秒。0なら受信時にすぐ確定します。</small></label>
-                </div>
+              {{end}}
+
+              <div class="semantic-rule-group">
+                <header><div><strong>正常値の使い方</strong><small>測定値、ON/OFF、累積値など通常の結果</small></div><span>{{len .NormalRules}}件</span></header>
+                {{range .NormalRules}}
+                <details class="semantic-rule-card" data-rule-id="{{.ID}}">
+                  <summary><span><strong>{{.DisplayName}}</strong><small>{{.KindLabel}}</small></span><em>設定を開く</em></summary>
+                  {{if $.IsAdmin}}
+                  <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" data-rule-id="{{.ID}}" data-boolean-input="{{$.SelectedSignal.InputIsBoolean}}" method="post" action="/console/semantic-rules/{{.ID}}">
+                    <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+                    <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
+                    <input type="hidden" name="revision" value="{{.Revision}}">
+                    <input type="hidden" name="kind" value="{{.Kind}}">
+                    <label><span>ルール名</span><input name="display_name" value="{{.DisplayName}}" maxlength="128" required></label>
+                    {{if ne .Kind "numeric"}}
+                    <div class="conditional-fields detector-fields" data-semantic-detector>
+                      <label><span>有効とみなす側</span><select name="detector_mode">
+                        <option value="boolean_high_active" data-detector-boolean {{if eq .Detector.Mode "boolean_high_active"}}selected{{end}}>High（1）を有効にする</option>
+                        <option value="boolean_low_active" data-detector-boolean {{if eq .Detector.Mode "boolean_low_active"}}selected{{end}}>Low（0）を有効にする</option>
+                        <option value="high_active" data-detector-analog {{if eq .Detector.Mode "high_active"}}selected{{end}}>値が上がった側を有効にする</option>
+                        <option value="low_active" data-detector-analog {{if eq .Detector.Mode "low_active"}}selected{{end}}>値が下がった側を有効にする</option>
+                      </select></label>
+                      <div class="form-row" data-semantic-thresholds {{if or (eq .Detector.Mode "boolean_high_active") (eq .Detector.Mode "boolean_low_active")}}hidden{{end}}>
+                        <label><span>立ち上がりしきい値</span><input name="rise_threshold" type="number" step="any" value="{{.Detector.RiseThreshold}}"></label>
+                        <label><span>立ち下がりしきい値</span><input name="fall_threshold" type="number" step="any" value="{{.Detector.FallThreshold}}"></label>
+                      </div>
+                      <div class="form-row">
+                        <label><span>立ち上がり確定待ち（秒）</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{.RiseDebounceSeconds}}"></label>
+                        <label><span>立ち下がり確定待ち（秒）</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{.FallDebounceSeconds}}"></label>
+                      </div>
+                    </div>
+                    {{end}}
+                    {{if eq .Kind "cumulative_counter"}}<label><span>数え方</span><select name="trigger"><option value="on_transition" {{if eq .Trigger "on_transition"}}selected{{end}}>OFFからONへ変わったとき</option><option value="on_notification" {{if eq .Trigger "on_notification"}}selected{{end}}>条件に合う値を受信するたび</option></select></label>{{end}}
+                    <div class="semantic-rule-actions"><button type="submit">ルールを保存</button></div>
+                  </form>
+                  {{if eq .Kind "cumulative_counter"}}<form class="counter-reset-form" method="post" action="/console/semantic-rules/{{.ID}}/counter-resets"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><button class="button-secondary" type="submit">この累積値を0に戻す</button></form>{{end}}
+                  <form class="semantic-retire-form" method="post" action="/console/semantic-rules/{{.ID}}/retire"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="revision" value="{{.Revision}}"><button class="button-danger" type="submit">このルールを終了</button></form>
+                  {{else}}<dl class="detail-list"><div><dt>種類</dt><dd>{{.KindLabel}}</dd></div></dl>{{end}}
+                </details>
+                {{else}}<p class="semantic-rule-empty">通常の結果を作るルールはまだありません。</p>{{end}}
               </div>
-              <div class="conditional-fields" data-semantic-trigger {{if not (and .Definition (eq .Definition.Kind "cumulative_counter"))}}hidden{{end}}>
-                <label><span>数え方</span><select name="trigger">
-                  <option value="on_transition" {{if and .Definition (eq .Definition.Trigger "on_transition")}}selected{{end}}>状態がOFFからONに変わったとき</option>
-                  <option value="on_notification" {{if and .Definition (eq .Definition.Trigger "on_notification")}}selected{{end}}>条件に合う値を受信するたび</option>
-                </select><small>選んだ条件を、いつ1回として数えるかを決めます。</small></label>
+
+              <div class="semantic-rule-group semantic-rule-group--alarm">
+                <header><div><strong>異常検知</strong><small>正常値とは別に判定するアラーム</small></div><span>{{len .AlarmRules}}件</span></header>
+                {{range .AlarmRules}}
+                <details class="semantic-rule-card" data-rule-id="{{.ID}}">
+                  <summary><span><strong>{{.DisplayName}}</strong><small>{{.KindLabel}}</small></span><em>設定を開く</em></summary>
+                  {{if $.IsAdmin}}
+                  <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" data-rule-id="{{.ID}}" data-boolean-input="{{$.SelectedSignal.InputIsBoolean}}" method="post" action="/console/semantic-rules/{{.ID}}">
+                    <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="revision" value="{{.Revision}}"><input type="hidden" name="kind" value="alarm">
+                    <label><span>ルール名</span><input name="display_name" value="{{.DisplayName}}" maxlength="128" required></label>
+                    <div class="conditional-fields detector-fields" data-semantic-detector>
+                      <label><span>異常とみなす側</span><select name="detector_mode"><option value="boolean_high_active" data-detector-boolean {{if eq .Detector.Mode "boolean_high_active"}}selected{{end}}>High（1）を異常にする</option><option value="boolean_low_active" data-detector-boolean {{if eq .Detector.Mode "boolean_low_active"}}selected{{end}}>Low（0）を異常にする</option><option value="high_active" data-detector-analog {{if eq .Detector.Mode "high_active"}}selected{{end}}>値が上がった側を異常にする</option><option value="low_active" data-detector-analog {{if eq .Detector.Mode "low_active"}}selected{{end}}>値が下がった側を異常にする</option></select></label>
+                      <div class="form-row" data-semantic-thresholds {{if or (eq .Detector.Mode "boolean_high_active") (eq .Detector.Mode "boolean_low_active")}}hidden{{end}}><label><span>異常になるしきい値</span><input name="rise_threshold" type="number" step="any" value="{{.Detector.RiseThreshold}}"></label><label><span>正常に戻るしきい値</span><input name="fall_threshold" type="number" step="any" value="{{.Detector.FallThreshold}}"></label></div>
+                      <div class="form-row"><label><span>異常確定待ち（秒）</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{.RiseDebounceSeconds}}"></label><label><span>復帰確定待ち（秒）</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{.FallDebounceSeconds}}"></label></div>
+                    </div>
+                    <div class="semantic-rule-actions"><button type="submit">アラームを保存</button></div>
+                  </form>
+                  <form class="semantic-retire-form" method="post" action="/console/semantic-rules/{{.ID}}/retire"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="revision" value="{{.Revision}}"><button class="button-danger" type="submit">このルールを終了</button></form>
+                  {{else}}<dl class="detail-list"><div><dt>判定</dt><dd>{{.Detector.Mode}}</dd></div></dl>{{end}}
+                </details>
+                {{else}}<p class="semantic-rule-empty">異常を検知するルールはまだありません。</p>{{end}}
               </div>
-              <button type="submit">値の扱いを保存</button>
-            </form>
-            {{if and .Definition (eq .Definition.Kind "cumulative_counter")}}
-            <form class="counter-reset-form" method="post" action="/console/signals/{{.SignalRef}}/semantic-counter/reset">
-              <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-              <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
-              <input type="hidden" name="revision" value="{{.Definition.Revision}}">
-              <button class="button-secondary" type="submit">累積値を0に戻す</button>
-            </form>
-            {{end}}
-            {{else}}
-            <dl class="detail-list sensor-setting-summary">
-              <div><dt>設定状態</dt><dd>{{.MeaningLabel}}</dd></div>
-              {{if .Definition}}<div><dt>用途</dt><dd>{{.Definition.Kind}}</dd></div><div><dt>補正</dt><dd>× {{.Definition.Scale}} ＋ {{.Definition.Offset}}</dd></div>{{end}}
-            </dl>
-            {{end}}
+
+              {{if $.IsAdmin}}{{with .Configuration}}
+              <details class="semantic-rule-create">
+                <summary>ルールを追加</summary>
+                <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" data-boolean-input="{{$.SelectedSignal.InputIsBoolean}}" method="post" action="/console/signals/{{.SignalRef}}/semantic-rules">
+                  <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="revision" value="{{.Revision}}">
+                  <label><span>ルール名</span><input name="display_name" maxlength="128" placeholder="例：現在温度、高温アラーム" required></label>
+                  <label><span>作る結果</span><select name="kind" data-semantic-kind><option value="numeric">測定値</option><option value="boolean">ON/OFF</option><option value="cumulative_counter">累積値</option><option value="alarm">異常検知</option></select></label>
+                  <div class="conditional-fields detector-fields" data-semantic-detector hidden>
+                    <label><span>有効とみなす側</span><select name="detector_mode"><option value="boolean_high_active" data-detector-boolean>High（1）</option><option value="boolean_low_active" data-detector-boolean>Low（0）</option><option value="high_active" data-detector-analog>値が上がった側</option><option value="low_active" data-detector-analog>値が下がった側</option></select></label>
+                    <div class="form-row" data-semantic-thresholds><label><span>立ち上がりしきい値</span><input name="rise_threshold" type="number" step="any" value="0"></label><label><span>立ち下がりしきい値</span><input name="fall_threshold" type="number" step="any" value="0"></label></div>
+                    <div class="form-row"><label><span>立ち上がり確定待ち（秒）</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="0"></label><label><span>立ち下がり確定待ち（秒）</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="0"></label></div>
+                  </div>
+                  <div class="conditional-fields" data-semantic-trigger hidden><label><span>数え方</span><select name="trigger"><option value="on_transition">OFFからONへ変わったとき</option><option value="on_notification">条件に合う値を受信するたび</option></select></label></div>
+                  <button type="submit">ルールを追加</button>
+                </form>
+              </details>
+              {{end}}{{end}}
             </section>
               </div>
 
@@ -946,23 +988,23 @@
       {{end}}
 
       {{if eq .Page "output"}}
-      <section class="health-banner {{if .Outputs}}healthy{{else}}attention{{end}}">
-        <span class="health-icon" aria-hidden="true">{{if .Outputs}}✓{{else}}!{{end}}</span>
-        <div><strong>{{if .Outputs}}外部出力が設定されています{{else}}外部出力はまだ設定されていません{{end}}</strong><p>ここでは送るデータの対応だけを管理します。MQTTの接続先や証明書は導入設定で管理します。</p></div>
+      <section class="health-banner {{if .RuleOutputs}}healthy{{else}}attention{{end}}">
+        <span class="health-icon" aria-hidden="true">{{if .RuleOutputs}}✓{{else}}!{{end}}</span>
+        <div><strong>{{if .RuleOutputs}}外部出力が設定されています{{else}}外部出力はまだ設定されていません{{end}}</strong><p>ここでは送るデータの対応だけを管理します。MQTTの接続先や証明書は導入設定で管理します。</p></div>
       </section>
       <section class="content-section">
         <div class="section-heading"><div><p class="section-kicker">ROUTES</p><h2>登録済みの出力</h2></div></div>
         <div class="table-wrap"><table><thead><tr><th>送信元</th><th>送る値</th><th>外部での用途</th><th>配送状況</th><th>状態</th></tr></thead>
-          <tbody>{{range .OutputRows}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.KindLabel}}</td><td><strong>{{.PublishedCount}}</strong>件送信 / {{.PendingCount}}件待ち</td><td><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></td></tr>{{else}}<tr class="empty-row"><td colspan="5">登録済みの出力はありません。</td></tr>{{end}}</tbody>
+          <tbody>{{range .RuleOutputRows}}<tr><td>{{.SourceID}}</td><td>{{.SignalID}}</td><td>{{.KindLabel}}</td><td><strong>{{.PublishedCount}}</strong>件送信 / {{.PendingCount}}件待ち</td><td><span class="status-pill {{.StateClass}}">{{.StateLabel}}</span></td></tr>{{else}}<tr class="empty-row"><td colspan="5">登録済みの出力はありません。</td></tr>{{end}}</tbody>
         </table></div>
       </section>
       {{if .IsAdmin}}
-      {{if .OutputDefinitions}}
+      {{if .OutputRules}}
       <section class="form-card narrow">
         <div class="section-heading"><div><p class="section-kicker">ADD OUTPUT</p><h2>YokaKitへの出力を追加</h2><p>使い方を設定した値を、YokaKitが受け取れる用途へ対応付けます。</p></div></div>
         <form method="post" action="/console/outputs/yokakit">
           <input type="hidden" name="_csrf" value="{{.CSRF}}">
-          <label><span>送る値</span><select name="definition_id" required><option value="">選択してください</option>{{range .OutputDefinitions}}<option value="{{.ID}}">{{.Name}} — {{.Kind}}</option>{{end}}</select></label>
+          <label><span>送る値</span><select name="rule_id" required><option value="">選択してください</option>{{range .OutputRules}}<option value="{{.ID}}">{{.Name}} — {{.Kind}}</option>{{end}}</select></label>
           <div class="form-row"><label><span>送信元ID</span><input name="source_id" pattern="[a-z0-9-]+" placeholder="factory-line-1" required><small>英小文字・数字・ハイフン</small></label><label><span>値のID</span><input name="signal_id" pattern="[a-z0-9-]+" placeholder="completed-count" required><small>外部アプリで識別する名前</small></label></div>
           <label><span>YokaKitでの用途</span><select name="kind"><option value="production">生産の累積値</option><option value="onoff">ON/OFF状態</option><option value="gantt_chart">稼働状態</option><option value="alarm">アラーム</option></select></label>
           <label><span>アラーム理由（アラームの場合のみ）</span><input name="reason" placeholder="例：温度上限を超過"></label>
@@ -1031,7 +1073,7 @@
       <section class="system-grid">
         <article class="system-card"><span class="system-icon">●</span><div><h2>IoTKit Site</h2><strong class="ok-text">稼働中</strong><p>Consoleとデータ保存サービスは動作しています。</p></div></article>
         <article class="system-card"><span class="system-icon">⌁</span><div><h2>通信証明書</h2>{{if .Certificate.Available}}<strong class="{{if .Certificate.NeedsAction}}warn-text{{else}}ok-text{{end}}">有効期限まで {{.Certificate.DaysRemaining}}日</strong><p>{{.Certificate.NotAfter}} まで有効です。</p>{{else}}<strong class="warn-text">Consoleでは確認できません</strong><p>導入時の証明書設定と運用コマンドを確認してください。</p>{{end}}</div></article>
-        <article class="system-card"><span class="system-icon">↗</span><div><h2>外部出力</h2><strong>{{len .Outputs}}件</strong><p>MQTTの接続先や認証情報は、この画面から変更できません。</p></div></article>
+        <article class="system-card"><span class="system-icon">↗</span><div><h2>外部出力</h2><strong>{{len .RuleOutputs}}件</strong><p>MQTTの接続先や認証情報は、この画面から変更できません。</p></div></article>
       </section>
       <section class="guidance-card"><h2>問題が起きたとき</h2><ol><li>「センサー」で停止・古い値を確認する</li><li>「受信履歴」で最後に届いた時刻を確認する</li><li>復旧しない場合は導入担当者へ、Edge名と発生時刻を伝える</li></ol></section>
       {{end}}
