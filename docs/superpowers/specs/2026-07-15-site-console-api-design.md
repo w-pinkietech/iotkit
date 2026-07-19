@@ -1,7 +1,7 @@
 # IoTKit Site Console / API設計
 
 Date: 2026-07-15
-Status: Approved baseline; local account authentication revised 2026-07-18
+Status: Approved baseline; multiple semantic rules revised 2026-07-19
 
 ## 目的と正本
 
@@ -15,8 +15,8 @@ Status: Approved baseline; local account authentication revised 2026-07-18
 
 - Edge、デバイス、信号、MQTT出力の状態を日常確認する。
 - デバイスと信号へ人間向けの名前と設置場所を付ける。
-- 接点信号をfuture-onlyで`production_pulse`へ意味付けする。
-- 実信号による保存前previewでカウント条件を確認する。
+- 一つの信号から、補正値、ON/OFF、累積値、alarm等の独立したsemantic observationを作る。
+- 実信号による保存前previewで各ルールの判定条件を確認する。
 - Site単位の汎用MQTT出力について、使用中profile、接続・配送状態、certificate期限を確認する。
 
 旧IoTKitは現場要求に応じて現在値、realtime chart、履歴検索、CSV/Excel、camera、threshold、通知、
@@ -32,8 +32,8 @@ IoTKitはYokaKitを内包しない。YokaKitは汎用MQTT出力を利用し得�
 
 初版では次を作らない。
 
-- 品番、工程、ラインmaster、生産実績、OEE、alarm、業務dashboard
-- 温度のsemantic meaningとapplication export
+- 品番、工程、ラインmaster、生産実績、OEE、業務dashboard
+- 温度を工程良否等の業務固有meaningへ解釈するapplication export
 - 過去raw recordのbackfill、意味付け前データの遡及変換
 - Siteを跨ぐ工場統合、fleet管理、複数Siteの上下関係
 - adapter、BravePI Transmitter、BravePI Mainboardの設定・pairing・downlink UI
@@ -59,14 +59,14 @@ IoTKitはYokaKitを内包しない。YokaKitは汎用MQTT出力を利用し得�
 |---|---|---|---|
 | 登録済みdevice一覧・detail | 形を変えて継承 | adapter/Edge descriptorで発見し、Site profileで名前・locationを付ける。source IDは通常画面へ出さない | 初期 |
 | device追加・access type選択 | 形を変えて継承 | 製品別formで手登録せず、adapter導入とdescriptor収束を正とする。未対応sensor追加はadapter開発体験で扱う | 初期/後続 |
-| device削除 | 形を変えて継承 | hard deleteせずretire/stale化し、raw、profile、mappingを保持する | 初期 |
-| sensor名、unit、表示桁、offset、ADC倍率 | 形を変えて継承 | 名前・表示unit・表示桁はSite profile、校正offsetと倍率はfuture-only semantic definitionで扱う | 初期 |
+| device削除 | 形を変えて継承 | hard deleteせずretire/stale化し、raw、profile、calibration、ruleを保持する | 初期 |
+| sensor名、unit、表示桁、offset、ADC倍率 | 形を変えて継承 | 名前・表示unit・表示桁はSite profile、校正offsetと倍率はfuture-only input calibrationで扱う | 初期 |
 | 熱電対型 | 形を変えて継承 | 対応Adapterが設定を受け付ける場合のEdge Adapter設定。BravePI Mainboardの製品固有設定は既存の管理方法を維持する | Adapter設定時 |
 | 現在値一覧・自動更新 | 継承 | bounded current-value read modelを低頻度pollingし、表示中pageだけ更新する | 初期 |
 | realtime chart・接点変化表示 | 形を変えて継承 | 設置・稼働確認に必要な短いrecent windowだけを表示し、業務dashboardにしない | 初期候補 |
 | 履歴の期間検索・集約chart | 形を変えて継承 | Site raw/queryから有界rangeを返す。全履歴scanや無制限series比較を許さない | 初期候補 |
 | CSV/Excel download・graph画像保存 | 一部継承 | 汎用CSVを正とし、秘密/internal identityを除外する。Excel専用生成と画像保存は追加価値を確認する | CSVは初期候補、他は後続 |
-| 接点count・threshold立上り/立下り | 形を変えて継承 | future-only semantic definitionへ移し、上下しきい値、上下debounce、有効側、累積方法を汎用センサー判定として扱う | 初期 |
+| 接点count・threshold立上り/立下り | 形を変えて継承 | future-only semantic ruleへ移し、上下しきい値、上下debounce、有効側、累積方法を汎用センサー判定として扱う | 初期 |
 | MQTT broker/topic設定・送信 | 形を変えて継承 | Broker connectionはlocal CLIの完全profile、topic意味契約はSite設定、配送はversioned outputとoutboxで扱う | 初期 |
 | email宛先・threshold mail | 要求を保持して分離 | semantic observationを入力にするoptional notifier route / adapterとして扱い、センサー判定DBへ宛先を埋め込まない | 後続 |
 | 接点出力・外部機器駆動 | 要求を保持して分離 | generic typed command/downlinkが必要。adapter固有commandをSite semantic処理へ直結しない | 後続 |
@@ -123,11 +123,11 @@ Site CLI ----------^  (local actor; HTTP必須ではない)
 ```
 
 Site ConsoleはGoのserver-rendered HTMLと限定的なJavaScriptで作る。templateと静的assetは
-Go binaryへ埋め込む。現在値は低頻度polling、mapping previewだけはbounded SSEを使う。
-WebSocketを常時接続の既定にしない。
+Go binaryへ埋め込む。現在値は低頻度pollingし、semantic previewは入力変更ごとのbounded HTTP requestで
+更新する。WebSocketやSSEを常時接続の既定にしない。
 
 HTML handler、HTTP API、CLIはStoreを直接操作しない。共通のtyped application serviceを
-呼び、検証、future-only境界、監査を一箇所に置く。HTML用view modelとJSON/SSE DTOは
+呼び、検証、future-only境界、監査を一箇所に置く。HTML用view modelとJSON DTOは
 分離し、必要になった画面だけを将来SPAへ置換できるようにする。初版から巨大な汎用REST
 surfaceを固定しない。
 
@@ -248,8 +248,8 @@ Siteは`system_id + measurement_key + channel_index + variant`から再構成し
 enrichする。descriptorが先なら「データ未受信」と表示する。
 
 complete snapshotから消えたdevice/signalをhard deleteしない。`stale`またはEdgeの明示的`retired`
-として残し、Site固有profileとsemantic mappingを消さない。新しいsnapshotはSiteの表示名、設置場所、
-mappingを上書きしない。
+として残し、Site固有profile、calibration、semantic ruleを消さない。新しいsnapshotはSiteの表示名、
+設置場所、calibration、ruleを上書きしない。
 
 ## Site-local identityとread model
 
@@ -262,14 +262,15 @@ signal source = (edge_node_id, series_key)
 
 HTTP URLにはこれらを直接出さず、最初に観測したときSiteが128 bit randomの`device_ref`と
 `signal_ref`を発行して永続化する。refは認可tokenではなく、推測困難な安定resource referenceである。
-descriptor、raw、profile、mappingは内部source identityで結び、API adapterがrefを解決する。
+descriptor、raw、profile、calibration、ruleは内部source identityで結び、API adapterがrefを解決する。
 
 Site-local profileはdescriptor複製と別tableに持つ。
 
 - device profile: 必須`display_name`、必須free-text`location`、revision
 - signal profile: 必須`display_name`、revision
 - identifier: descriptor所有、設定sessionだけに表示、編集不可
-- semantic mapping: 既存の`(edge_node_id, series_key)`にfuture-onlyで結ぶ
+- input calibration: 既存の`(edge_node_id, series_key)`にfuture-onlyで結ぶ入力補正
+- semantic rule: stableな`rule_id`を持ち、一つのsignalへ複数をfuture-onlyで結ぶ
 
 工場、工程、ラインの階層masterは作らない。`location`は例えば
 `第2工場・プレスライン出口`という一つの自由記述であり、YokaKit等のbusiness hierarchyと同期しない。
@@ -288,14 +289,16 @@ descriptorやprofileの欠落はraw custody、ack、semantic projectorを停止�
 - `GetSiteStatus`
 - `ListDevices` / `GetDeviceProfile` / `UpdateDeviceProfile`
 - `ListSignals` / `GetSignalProfile` / `UpdateSignalProfile`
-- `GetSemanticMapping` / `PutSemanticMapping` / `DeactivateSemanticMapping`
-- `StartMappingPreview` / `ObserveMappingPreview` / `StopMappingPreview`
+- `GetSemanticConfiguration` / `PutSignalCalibration`
+- `CreateSemanticRule` / `UpdateSemanticRule` / `RetireSemanticRule`
+- `RequestCounterReset`
+- `PreviewSemanticConfiguration`
 - `GetOutputStatus` / `PutOutputCandidate` / `TestOutputCandidate` / `ActivateOutputCandidate`
 - `ListAuditEvents`
 - local-only `ResetSettingsPassphrase` / `AbandonOutputRevision`
 
 Storeはapplication serviceに必要な狭いinterfaceとして注入し、HTTP DTOをdomain/store型として使わない。
-mutationはprofile/mapping/output revision更新と監査を同じSQLite transactionでcommitする。秘密値とraw
+mutationはprofile/calibration/rule/output revision更新と監査を同じSQLite transactionでcommitする。秘密値とraw
 payloadを監査detailへ入れない。
 
 ## HTTP API v1
@@ -338,7 +341,7 @@ POST   /api/v1/password
 `account_ref`、再利用しない`login_id`、変更可能な`display_name`、role、状態を持つ。roleは次の3種類とする。
 
 - `viewer`: 状態、モニター、デバイス、信号、ログを閲覧できる。
-- `admin`: viewer権限に加え、profile、semantic mapping、output割り当てを変更できる。
+- `admin`: viewer権限に加え、profile、input calibration、semantic rule、output割り当てを変更できる。
 - `system_admin`: admin権限に加え、accountの発行、role変更、無効化、password resetを行える。
 
 Broker endpoint、credential、CA/certificate、connection profileのinstall・切替はaccount roleによらず
@@ -377,7 +380,7 @@ owner-only fileから受け取る。
 application serviceへ渡す。将来OIDC/Keycloakを追加する場合も、外部subjectとlocal accountのlink、緊急時の
 local access、provider停止時の方針を別設計し、既存の認可判定を置き換えない。
 
-### Profileとsemantic mapping
+### Profileとsemantic configuration
 
 ```text
 GET /api/v1/devices/{device_ref}/profile
@@ -386,18 +389,31 @@ PUT /api/v1/devices/{device_ref}/profile
 GET /api/v1/signals/{signal_ref}/profile
 PUT /api/v1/signals/{signal_ref}/profile
 
-GET    /api/v1/semantic-definitions
-PUT    /api/v1/signals/{signal_ref}/semantic-definition
-DELETE /api/v1/signals/{signal_ref}/semantic-definition
-POST   /api/v1/signals/{signal_ref}/semantic-counter/reset
+GET  /api/v1/signals/{signal_ref}/semantic-configuration
+PUT  /api/v1/signals/{signal_ref}/calibration
+POST /api/v1/signals/{signal_ref}/semantic-rules
+
+PUT    /api/v1/semantic-rules/{rule_id}
+DELETE /api/v1/semantic-rules/{rule_id}
+POST   /api/v1/semantic-rules/{rule_id}/counter-resets
 ```
 
-個別GETと全mutationはaccount sessionを要求し、mutationは`admin`以上に限定する。GETはresource `ETag`を返し、PUT/DELETEは
-`If-Match`を必須とする。欠落は`428 Precondition Required`、revision不一致は
-`412 Precondition Failed`とし、複数画面からの無音上書きを防ぐ。
+個別GETと全mutationはaccount sessionを要求し、mutationは`admin`以上に限定する。GETはresource `ETag`を返し、
+PUT/DELETEとrule作成POSTは`If-Match`を必須とする。欠落は`428 Precondition Required`、revision不一致は
+`412 Precondition Failed`とし、複数画面からの無音上書きを防ぐ。counter reset POSTは
+`Idempotency-Key`を`reset_id`として必須にし、同じkeyと同じbodyを同じ結果へ収束させる。
 
-semantic definitionは、数値、ON/OFF、累積値、alarmを扱う。状態判定を伴うdefinitionは次を
-必須選択し、暗黙defaultをAPI契約に持たない。
+`semantic-configuration`は、signal profile、active calibration、active rule一覧、runtime summaryを
+一度に返す画面用read modelである。calibrationはsignalへ一つだけactive revisionを持ち、`scale`と
+`offset`を全ruleの入力へ共通適用する。一つのsignalへ最大16個のactive ruleを持てる。
+signal作成時にidentity calibration（revision 1、scale 1、offset 0）を作る。新しいledger epochでは
+現在のcalibrationをpub sequence 0から適用可能にするが、各rule自身のfuture-only開始境界より前を評価しない。
+
+semantic ruleはstableな`rule_id`、表示名、immutableな`kind`を持つ。`kind`は`numeric`、`boolean`、
+`cumulative_counter`、`alarm`のいずれかである。別のkindへ変える場合は既存ruleをretireして新規作成する。
+これにより、output route、observation series、監査対象の意味が途中で変わらない。
+
+状態判定を伴うruleは次を必須選択し、暗黙defaultをAPI契約に持たない。
 
 - `detector.mode`: boolean high/low active、またはanalog high/low active
 - `rise_threshold` / `fall_threshold`: analog入力の上下しきい値
@@ -405,23 +421,79 @@ semantic definitionは、数値、ON/OFF、累積値、alarmを扱う。状態�
 - `on_transition`: 有効状態へ変化した瞬間に1加算
 - `on_notification`: 有効状態の通知を受信するたびに1加算
 
-BravePI専用の反対値補完を共通semantic処理へ入れない。PUTは現在のaccepted cursorを開始境界にした
-新definition revisionを作り、設定前rawを処理しない。
-DELETEも現在cursorを終了境界にしてfuture-onlyでdeactivateし、raw、既存semantic event、既にenqueue済みの
-出力を削除しない。counter resetはdefinition revisionを変更せず、現在の永続counterだけを0にして
-監査記録へ残す。
+BravePI専用の反対値補完を共通semantic処理へ入れない。calibrationとruleのPUTはそれぞれ独立した
+revisionを作り、現在のaccepted cursorをfuture-only開始境界にする。変更後の最初の入力では状態判定を
+re-baselineし、pending debounceを引き継がない。numericは最初の入力から出力し、boolean/alarmは現在状態を
+出力する。cumulative counterは既存counter値を保持するが、最初の入力を増分として数えない。
 
-### Mapping preview
+DELETEは現在cursorを終了境界にしてruleをfuture-onlyでretireし、raw、既存observation、既にenqueue済みの
+出力を削除しない。ruleの表示名は意味を表す必須値で、同じsignal内で重複を許さない。
+
+counter resetはcounterの直接更新ではなく、`reset_id`を持つ順序付きcommandとして受理する。受理時の
+`ledger_epoch`とaccepted cursorを境界として保存し、projectorがその境界までのrawを処理した後にだけ0へ
+変更する。同じ`reset_id`は冪等であり、reset適用時に明示的な値0のobservationを一件発行する。境界より後の
+rawだけを新しいcounterへ加算する。要求・適用時刻、actor、境界を監査し、activeな
+`cumulative_counter`以外は拒否する。
+
+### Semantic data modelとprojection
+
+semantic storageは「一つのsignalに一つのdefinition」を廃止し、次の責任へ分ける。table名は責任を示す
+正本であり、実装時に同じ制約を維持した補助tableへ分割してよい。
+
+```text
+signal_calibration_revisions
+  (signal_ref, revision, scale, offset, created_at)
+
+signal_calibration_starts
+  (signal_ref, calibration_revision, ledger_epoch, start_after_pub_seq)
+
+semantic_rules
+  (rule_id, signal_ref, display_name, kind, series_id, created_at, retired_at)
+
+semantic_rule_revisions
+  (rule_id, revision, detector_json, trigger, created_at)
+
+semantic_rule_starts / semantic_rule_ends
+  (rule_id, rule_revision, ledger_epoch, cursor boundary)
+
+semantic_rule_runtime
+  (rule_id, initialized, active, counter, pending, pending_active,
+   pending_since, applied_rule_revision, applied_calibration_revision, next_sequence)
+
+semantic_projection_receipts
+  (rule_id, ledger_epoch, pub_seq, observation_id, outcome)
+
+semantic_counter_resets
+  (reset_id, rule_id, ledger_epoch, apply_after_pub_seq,
+   requested_at, applied_at, actor_ref)
+```
+
+`rule_id`、`series_id`、observation sequenceはrevisionを跨いで安定させる。observationは少なくとも
+`rule_id`、`rule_revision`、`calibration_revision`、`series_id`、連続sequence、入力の
+`ledger_epoch` / `source_pub_seq`、observed timeを持つ。外部出力routeはsignalやrevisionではなく
+stableな`rule_id`へ結ぶ。
+
+projectorは一つのrawを、そのsignalに属する各active ruleへ独立して評価する。receiptとfailureは
+`rule_id + ledger_epoch + pub_seq`単位に保存し、あるruleの不正状態や永続化失敗が別ruleの進行を
+止めない。失敗ruleはbounded retryし、診断へrule名とcursorを出すが、raw custody、
+`accepted-through`、他ruleのobservationとoutput deliveryを止めない。
+
+同じsignalのcalibrationは各rawにつき一度だけ計算してrule評価へ渡す。rule/calibration revisionの
+切替、receipt、runtime、observationまたはfailureは、ruleごとのSQLite transactionで整合させる。
+処理途中で再起動してもreceiptにより同じrawからobservationを二重生成しない。
+
+### Semantic configuration preview
 
 ```text
 POST /api/v1/mapping-previews
 ```
 
-previewは対象signal、任意の保存前設定案、任意の試験値を受け取るstatelessな試算APIとする。設定案を省略した場合は
-保存済みのactive definitionを使う。Siteが保管している
+previewは対象signal、任意の保存前calibration、0〜16個の保存前rule案、任意の試験値を受け取る
+statelessな試算APIとする。設定案を省略した場合は保存済みのactive calibrationとactive rulesを使う。
+Siteが保管している
 受信開始以降のrawから直近最大1時間、かつ新しい順に最大20,000件を取得し、受信順へ戻してSite semantic evaluatorと
-同じpure functionで評価する。時刻が同じ入力はcustody順で安定に並べる。累積値の先頭入力は保存直後と同じく
-baselineとして扱い、加算しない。
+同じpure functionで全ruleを独立評価する。時刻が同じ入力はcustody順で安定に並べる。各累積値ruleの
+先頭入力は保存直後と同じくbaselineとして扱い、加算しない。
 
 応答は最大300描画点とする。数値は区間の最小・最大値を保ち、boolean・alarm・累積値は全入力を評価してから
 区間の変化回数、active sample数、累積増分を合算する。次の表示情報も返す。
@@ -429,8 +501,9 @@ baselineとして扱い、加算しない。
 - 実際に評価した開始・終了時刻
 - input件数と描画点数
 - 1時間または20,000件のどちらで表示範囲を打ち切ったか
-- rawと変換後の系列、しきい値、表示範囲内の累積結果
-- 試験値を指定した場合の変換値と状態判定
+- rawと共通補正後の系列
+- ruleごとのしきい値、状態区間、変化回数、表示範囲内の累積結果
+- 試験値を指定した場合の共通補正値とruleごとの状態判定
 
 同じsignalのraw取得結果は短時間だけ共有cacheできるが、設定案と試算結果はrequest内に閉じる。request body、
 設定値、応答を有界化し、Consoleは入力停止から約300ms後に再試算する。受信中の自動更新は最大1秒に1回とし、
@@ -438,13 +511,14 @@ baselineとして扱い、加算しない。
 横軸にはSite受信時刻を使い、設備時計のずれや再送で線が逆行しないようにする。
 
 保存済み設定だけを使うpreviewは`viewer`以上、保存前の設定案を指定するpreviewは`admin`以上とする。POSTは
-account session、CSRF、signal存在確認を必須とする。不正な設定はfield errorを返す。previewはsemantic mapping table、
+account session、CSRF、signal存在確認を必須とする。不正な設定はrule IDを含むfield errorを返し、他の
+valid ruleのpreview結果は返してよい。previewはsemantic configuration table、
 event、outbox、MQTT、audit、rawへ一切書かず、失敗してもraw custodyと意味付け処理を止めない。
 
-このpreviewは過去rawを画面内で試算するだけである。mapping保存は現在のaccepted cursorを開始境界にするfuture-only
-操作のままとし、過去のsemantic eventや外部出力を生成しない。「過去分は数えない」「累積結果は表示範囲内の試算」
-「保存後の信号から有効」を画面に明示する。設備を動かせない場合、rawが0件でも試験値を使って確認でき、preview未実施
-でもwarning付きでmappingを保存できる。
+このpreviewは過去rawを画面内で試算するだけである。calibration/rule保存は現在のaccepted cursorを開始境界にするfuture-only
+操作のままとし、過去のsemantic observationや外部出力を生成しない。「過去分は数えない」「累積結果は表示範囲内の試算」
+「保存後の信号から有効」を画面に明示する。設備を動かせない場合、rawが0件でも試験値を使って確認でき、
+preview未実施でもwarning付きでcalibration/ruleを保存できる。
 
 ### Audit
 
@@ -477,8 +551,7 @@ JSON API errorは次の形に統一する。
 
 validationは400、未認証は401、CSRF/権限は403、不在は404、rate limitは429、内部失敗は500/503を使う。
 error、log、request ID相関情報へpassword、password hash、session token、credential、private key、
-payload全文を出さない。body、header、
-SSE、query、同時request、read limitを有界化する。
+payload全文を出さない。body、header、query、同時request、read limitを有界化する。
 
 HTML/API responseにはstrict CSP（`default-src 'self'`を基礎にinline script禁止）、
 `X-Content-Type-Options: nosniff`、frame embedding禁止、適切な`Referrer-Policy`を付ける。未検証の
@@ -515,15 +588,21 @@ Edge media serviceとSite proxyのcontractが成立した時点で`モニター`
 
 ## 汎用MQTT出力
 
-### 一つのSite、一つのactive output
+### 一つのSite、一つのactive Broker output profile
 
-初版はSiteごとにactive outputを一つだけ持ち、次のmodeを選べる。
+初版はSiteごとにactiveなBroker output profileを一つだけ持ち、次のmodeを選べる。
 
 - `embedded_broker`: SiteがIoTKit内蔵Brokerのapplication topicへpublishし、外部applicationが購読
 - `external_broker`: Siteがoperator指定の外部Brokerへpublish
 
-意味付け、application contract、stable `event_id`、QoS 1 outboxはmodeから独立する。外部application名を
-保存しない。初版meaningは`production_pulse`一つなので、output revisionは一つのexact topicを持つ。
+意味付け、application contract、stable `observation_id`、QoS 1 outboxはmodeから独立する。外部application名を
+Broker profileへ保存しない。一つのprofile上に複数のsemantic output routeを持てる。各routeはstableな
+`rule_id`、output adapter、exact topicまたは契約上のtopic template、追加payload設定へ結び、rule revision
+変更では切れない。ruleをretireしても既にenqueue済みのoutboxは配送を継続する。
+
+Broker profileの切替とsemantic output routeの編集を混同しない。profileは導入担当者がlocal CLIで管理し、
+adminはConsoleから登録済みruleを、利用可能なoutput adapter/topic契約へ割り当てる。任意Broker endpoint、
+credential、CA、private keyはConsoleから入力させない。
 
 ### Credential境界
 
@@ -543,9 +622,9 @@ roleを一体としてversion固定する。Site/Edge/Brokerが同一hostにあ�
 必要なprofileをlocal CLIでinstallする。APIとDBはsecret pathそのものではなく固定profile refだけを参照し、
 任意filesystem path、endpoint、CA、credential、client IDをUIから指定・変更させない。
 
-embedded modeのexact topicはdeployment allowlistへ事前登録する。bootstrap/local CLIはSite userのexact
-write ACL、application subscriberのexact read ACL、password DBを同時生成し、必要なBroker reload/restartと
-接続切断をoperator作業として扱う。external modeもlocal CLIでinstall済みの完全なprofileだけを使う。
+embedded modeの許可topic namespaceはdeployment allowlistへ事前登録する。bootstrap/local CLIはSite userの
+namespace write ACL、application subscriberの必要範囲だけのread ACL、password DBを同時生成し、必要なBroker
+reload/restartと接続切断をoperator作業として扱う。external modeもlocal CLIでinstall済みの完全なprofileだけを使う。
 Broker接続profileは初版Consoleで選択・切替せず、topicのsemantic contract設定とBroker plumbingを混同しない。
 
 ### Local CLIによるcandidate、test、activate
@@ -561,37 +640,41 @@ exact publish ACLを無害に確認できる標準手段はないため、通常
 Consoleは`接続確認済み`と、最初のevent delivery/PUBACK後の`配送確認済み`を区別する。candidate内容が
 変わればtest結果を無効化し、activateには直近10分以内の同一candidate test成功を要求する。
 
-output revisionはmode、endpoint、exact topic、`credential_ref`、`tls_profile_ref`をimmutableに束縛する。
+output profile revisionはmode、endpoint、`credential_ref`、`tls_profile_ref`をimmutableに束縛する。
+exact topicとpayload contractはsemantic output route revisionが所有する。
 drainまたは明示abandonが完了する前に、そのrevisionが参照するcredential/CA fileを交換・削除しては
 ならない。初版はdraining revisionを同時に一つまでとし、pendingが残る間の次のactivateを`409`で拒否する。
 次へ切り替える必要がある場合、operatorは旧endpointを復旧してdrainするか、local CLIで明示abandonする。
 
-activateはsemantic eventの現在最大`event_row_id`を一つのtransactionでcutover境界にする。
+activateはsemantic observationの現在最大`observation_row_id`を一つのtransactionでcutover境界にする。
 
 ```text
-old output: end_at_event_row_id = boundary
-new output: start_after_event_row_id = boundary
+old output: end_at_observation_row_id = boundary
+new output: start_after_observation_row_id = boundary
 ```
 
-旧revisionは境界以前の未配送eventを旧endpointへdrainし続け、新revisionは境界より後のeventだけを新endpointへ
-送る。未配送eventを新Brokerへ黙って移動せず、二つの出力へ同じeventを新規enqueueしない。旧endpointが
-復旧しなくても新しいeventの配送を止めず、UIは旧pending件数と`draining`警告を表示する。
+旧revisionは境界以前の未配送observationを旧endpointへdrainし続け、新revisionは境界より後のobservationだけを新endpointへ
+送る。未配送observationを新Brokerへ黙って移動せず、二つの出力へ同じobservationを新規enqueueしない。旧endpointが
+復旧しなくても新しいobservationの配送を止めず、UIは旧pending件数と`draining`警告を表示する。
 
-cutover時点でsemantic event tableには存在するがoutboxへまだenqueueされていない境界以前のeventも、旧revisionが
-その`end_at_event_row_id`までenqueueする。新revisionは`start_after_event_row_id`以前を読まない。
+cutover時点でsemantic observation tableには存在するがoutboxへまだenqueueされていない境界以前のobservationも、
+旧revisionがその`end_at_observation_row_id`までenqueueする。新revisionは
+`start_after_observation_row_id`以前を読まない。
 
 旧pendingを破棄する操作は初版UIへ出さない。local CLIの`output abandon --revision ... --reason ...`だけが、
-明示理由、件数、event境界を監査した上で`abandoned`へできる。abandoned eventを新outputへ再配送しない。
+明示理由、件数、observation境界を監査した上で`abandoned`へできる。abandoned observationを新outputへ再配送しない。
 
 MQTT deliveryはat-least-onceで、PUBACK後だけpublishedにする。timeoutや切断ではpendingのまま再試行し、
-consumerはstable `event_id`でdedupできる。output outageや失敗がraw custody / `accepted-through`を止めない。
+consumerはstable `observation_id`でdedupできる。output outageや失敗がraw custody / `accepted-through`を止めない。
 
 ## Failure behavior
 
 - descriptor不正/oversize: 最後のvalid snapshotを保持し、Site statusを要確認にする。raw custodyは継続する。
-- descriptor巻き戻し/conflict: 適用せず監査し、既存profile/mappingを保持する。
-- profile/mapping validation失敗: transactionをcommitせず、field errorを返す。
-- preview対象signal停止: heartbeatを続け、TTLで終了する。実event/outboxは生まない。
+- descriptor巻き戻し/conflict: 適用せず監査し、既存profile/calibration/ruleを保持する。
+- profile/calibration/rule validation失敗: transactionをcommitせず、rule ID付きfield errorを返す。
+- semantic rule projection失敗: 該当ruleだけをfailure/retry対象にし、同じsignalの他ruleを進める。
+- counter reset待機: 受理境界までのprojectionを優先し、適用前に0を表示または出力しない。
+- preview対象signal停止: 最後のbounded履歴と最終受信時刻を返す。実observation/outboxは生まない。
 - local output candidate test失敗: active outputを変更しない。
 - local output activate transaction失敗: old/new境界を一切変更しない。
 - output publish失敗: pendingを保持し、bounded retry/backoffと状態表示を行う。
@@ -601,18 +684,24 @@ consumerはstable `event_id`でdedupできる。output outageや失敗がraw cus
 ## Migrationと配置
 
 Site SQLiteはschema migrationを導入し、descriptor cache、public refs、profiles、local accounts/sessions、audit、
-output revisions/cutoverを追加する。既存raw、cursor、semantic mapping/event/outboxを破棄しない。新tableは
-Site Storeが所有するが、migration SQLとapplication queryを分離してtest可能にする。
+output revisions/cutoverを追加する。複数rule化ではsemantic schema v3を新設し、既存raw、Edge activation、
+descriptor、device/signal profile、account/session、Broker connection profileを保持する。
+
+本変更時点のsemantic v2設定、runtime、observation、projection failure、そこへ結び付く開発用output routeは
+製品互換対象ではない。migrationはv2 tableを自動削除せずlegacyとして残すが、v3 runtimeから参照・配送しない。
+移行件数をmigration logへ秘密なしで記録し、開発者が明示的に再設定する。fresh databaseと既存development
+databaseの両方をtestし、rawを失わないことを確認する。v2 tableの物理削除はbackup/restore方針が決まるまで行わない。
+新tableはSite Storeが所有するが、migration SQLとapplication queryを分離してtest可能にする。
 
 既存CLIの`query`、`mapping-set/list`、`route-add/list`、`semantic-query`は即座に削除しない。新application
 serviceへ移し、Site Console journeyが成立した後に、重複する低水準route commandをdeprecatedにするかを
 別判断する。
 
-既存のmappingごとのMQTT routeを新しい単一outputへ自動集約しない。旧routeが存在するDBは
-`legacy_output`として従来のendpoint/topic/outboxを継続し、新しいoutput activateを拒否する。operatorが
-旧pendingをdrainし、local CLIの明示migrationでlegacy routeを終了境界へ固定してから、初回output candidateを
-activateする。migrationは件数と境界を表示・監査し、旧eventを新outputへ再配送しない。公開前の使い捨て環境では、
-operatorが明示的にDB再作成を選べるが、製品が自動削除してはならない。
+semantic v2のrouteをv3 ruleへ推測で結び直さない。v2設定またはrouteがあるdevelopment DBでは
+`semantic_reconfiguration_required`を診断へ表示し、v3 ruleとoutput routeを明示的に作り直す。
+legacy tableとoutboxは自動削除・再配送せず、通常runtimeから隔離する。公開前の使い捨て環境ではoperatorが
+明示的にDB再作成を選べるが、製品が自動削除してはならない。v1公開後のsemantic schema変更では、
+このdevelopment-only方針を互換migrationの先例にしない。
 
 production deploymentはCaddy、Site、Brokerの責務を分ける。BrokerとSiteの同居は任意で、別host配置では
 Broker-host artifact、Site client profile、per-Edge client profileを分離する。Caddy data、Site data、
@@ -627,13 +716,17 @@ Consoleは非秘密statusだけをreadする。
 
 初版の必須testは次である。
 
-- application service: profile revision、future-only mapping put/delete、同transaction監査
+- application service: profile revision、future-only calibration/rule revision、retire、同transaction監査
 - descriptor: strict decode、series_key整合、revision rollback/conflict、reconnect同一snapshot、stale化、
   measurement先着/descriptor先着
 - auth: Argon2id、3 role、初回password変更、rate limit、cookie、idle/absolute expiry、CSRF、Origin、
   password変更/reset・無効化・role変更による全session失効、最後のsystem admin保護、CLI復旧
 - API: 全read認証、role認可、秘密field absence、no-store/CORS deny、ETag/If-Match、error contract、bounded pagination
-- preview: POST後だけ、2 mode × 2 target value、pure/no-write、ownership、TTL、limit、restart破棄
+- semantics: 同一signalのnumeric/count/alarm並行評価、revision切替、counter維持、rule failure分離、
+  active rule上限16、stable sequence、receiptによる再起動時dedup
+- counter reset: accepted cursor境界、projection backlog、明示的zero observation、冪等reset ID、
+  reset直前直後のraw順序
+- preview: 複数rule、pure/no-write、権限、1時間/20,000入力/300描画点の上限
 - output: candidate test非破壊、atomic cutover、old drain/new future-only、failure retry、local abandon監査、
   credential非露出
 - HTML:主要journeyのhandler/component test、内部語とsecretの非表示、keyboard操作
@@ -653,14 +746,17 @@ Site Console E2Eを一度まとめて実行する。失敗後は原因箇所のf
 - 工場LANのWindows browserからCaddy HTTPS経由でSite Consoleを使える。
 - 個人accountでlogin後、roleに応じてデバイス/信号の名前、location、現在値、受信状態を確認でき、
   secret/internal identityは露出しない。
-- admin以上が名前、location、接点の2方式/ON-OFFを設定でき、全mutationがrevision保護と個人単位の監査を持つ。
+- admin以上が名前、location、共通入力補正と複数の正常値・異常検知ruleを設定でき、全mutationが
+  revision保護と個人単位の監査を持つ。
 - system adminがaccountを発行、role変更、無効化、password resetでき、初期所有権と緊急復旧はlocal CLIで行える。
-- previewが実信号を表示するが、semantic event、outbox、MQTTへ書かない。
+- previewが実信号を表示するが、semantic observation、outbox、MQTTへ書かない。
 - Edge descriptor snapshotが製品固有schemaなしでidentifierとsignal metadataをSiteへ収束させる。
-- Site固有profile/mappingがdescriptor更新、Edge restart、retireで消えない。
+- Site固有profile/calibration/ruleがdescriptor更新、Edge restart、retireで消えない。
+- 一つのsignalから正常counterとalarm等を独立生成でき、片方の設定・失敗・retireが他方へ影響しない。
+- counter resetが受理境界以前のrawを取りこぼさず、境界後のrawだけを0から加算する。
 - local CLIでembedded/external Broker profileをcandidate testし、atomic future-only cutoverを経て配送できる。
   Consoleは使用中profileと接続・配送状態をreadするだけで切替操作を持たない。
-- 旧output pendingは旧revisionへdrainし、黙った移送、損失、二重enqueueがない。
+- v3 output pendingは作成元ruleとoutput revisionへ固定され、黙った移送、損失、二重enqueueがない。
 - credential、private key、password、password hash、session tokenがUI、API、log、audit、Gitへ出ない。
 - raw custodyと`accepted-through`がdescriptor、UI、semantic、output failureから独立して継続する。
 - focused testと最終一回の全体検証が成功する。

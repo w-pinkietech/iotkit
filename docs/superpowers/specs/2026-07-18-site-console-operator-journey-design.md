@@ -76,39 +76,47 @@ Siteの担当者が管理する。
 これはraw recordやEdgeのcanonical metadataを書き換えず、Siteでの表示・意味付けに使う
 現場設定である。画面は情報の出所を「Adapterから」「現場設定」と表示する。
 
-### 4.3 変換ルール
+### 4.3 入力補正と変換ルール
 
-Site semantic definitionが管理する。
+Siteは同じsignalに対する情報を、共通入力補正と複数の変換ルールへ分けて管理する。
 
-- scale
-- offset
-- 数値、ON/OFF、累積値、alarm
-- 入力上昇時のしきい値と確定待ち時間
-- 入力下降時のしきい値と確定待ち時間
-- High側とLow側のどちらを有効状態とするか
-- 有効状態への変化を数えるか、有効な受信ごとに数えるか
+- 共通入力補正: scale、offset
+- 各変換ルール: 表示名、数値、ON/OFF、累積値、alarm
+- 各変換ルール: 入力上昇時のしきい値と確定待ち時間
+- 各変換ルール: 入力下降時のしきい値と確定待ち時間
+- 各変換ルール: High側とLow側のどちらを有効状態とするか
+- 累積値ルール: 有効状態への変化を数えるか、有効な受信ごとに数えるか
 
-表示用profileへ変換ロジックを埋め込まない。生値とsemantic変換後の値を別に示す。
+表示用profileへ変換ロジックを埋め込まない。生値、共通補正後の値、各ルールの結果を別に示す。
+一つのsignalから、例えば「補正後照度」「稼働回数」「明るすぎalarm」を同時に作れる。正常カウントと
+異常alarmは別ルールなので、しきい値、debounce、現在状態、履歴、外部出力を独立して変更できる。
+
+Consoleではルールを「正常値」と「異常検知」に分けて見せるが、これは作業者が探しやすくする表示分類である。
+DB上のidentity、評価順序、出力優先度を意味せず、どちらもstableなルールIDを持つ同じsemantic ruleである。
+同じsignalへ最大16個のactive ruleを設定できる。
+
 旧IoTKitの`hysteresisHigh`、`hysteresisLow`、`debounceHigh`、`debounceLow`、
-`toggle`はこの判定ルールへ移す。確定待ち時間中の状態はDBへ保存し、Site再起動で失わない。
-設定変更は従来どおりfuture-onlyとし、過去のraw recordやsemantic observationを書き換えない。
+`toggle`は各判定ルールへ移す。確定待ち時間中の状態はルールごとにDBへ保存し、Site再起動で失わない。
+入力補正とルールの設定変更はそれぞれfuture-onlyとし、過去のraw recordやsemantic observationを書き換えない。
 
 旧IoTKitの設定項目を同じ画面・同じDB表へ戻すこと自体は目的にしない。責務は次へ分ける。
 
-- ADC倍率とoffset: semantic definitionの入力補正
-- 立ち上がり、立ち下がり、各debounce、入力反転: semantic definitionの状態判定
+- ADC倍率とoffset: signal共通のinput calibration
+- 立ち上がり、立ち下がり、各debounce、入力反転: 各semantic ruleの状態判定
 - clear count: semantic counterに対する監査付き操作
 - MQTT topicと追加payload: 外部出力route / adapter
 - メール、接点出力の初期値・反転・連動先、撮影: 通知・action route / adapter
 - 熱電対型: 対応Adapterが設定を受け付ける場合だけEdge側のAdapter設定
 
 BravePI Mainboardとtransmitterのペアリングや熱電対型設定をSiteから行わない。既存iOSアプリと
-Mainboardで管理される製品固有操作を、Site semantic definitionへ混ぜない。
+Mainboardで管理される製品固有操作を、Site input calibrationやsemantic ruleへ混ぜない。
 
 ### 4.4 外部出力
 
 semantic observationと外部application contractの対応を管理する。Broker profile、credential、
-CA、private keyは管理しない。
+CA、private keyは管理しない。出力routeはsignal全体ではなくstableなsemantic rule IDへ結び、
+rule revisionを更新しても同じ出力identityを維持する。ruleを終了した後も既に配送待ちの
+observationを黙って削除しない。
 
 ## 5. デバイスと信号
 
@@ -144,7 +152,7 @@ Consoleの用語は次に統一する。
 | signal | センサー |
 | device profile | デバイス名・設置場所 |
 | signal profile | センサー名・種類・単位 |
-| semantic definition | センサーの設定 |
+| input calibration / semantic rule | センサーの設定 |
 | setup device | 登録待ちデバイス |
 
 Consoleはdevice groupingを維持し、配下signalをセンサーとして示す。measurement key、channel、
@@ -240,24 +248,30 @@ event-driven signalを5分無通信だけで故障と断定しない。明示的
 
 Excel専用出力とgraph画像保存は要求として保持するがCSVより後に実装する。
 
-### 6.5 変換ルール
+### 6.5 入力補正と変換ルール
 
-- numeric
-- boolean
-- rising threshold / falling threshold
-- rising debounce / falling debounce
-- high-active / low-active
-- transition/notification trigger
-- cumulative counter
-- counter reset
-- alarm
+- signalで共有するscale / offset
+- 正常値ルール: numeric、boolean、cumulative counter
+- 異常検知ルール: alarm
+- ruleごとのrising threshold / falling threshold
+- ruleごとのrising debounce / falling debounce
+- ruleごとのhigh-active / low-active
+- cumulative counterごとのtransition/notification trigger
+- rule IDを指定するcounter reset
 - 実信号preview
 - future-only開始境界
 
-画面は「用途」だけで抽象化せず、入力、判定、結果を示す。
+画面は曖昧な「用途」一つで抽象化せず、共通入力、選択中ルールの判定、結果を示す。同じsignalへ
+複数ruleを追加できるが、一度に展開する編集フォームは一つだけとし、グラフ上でそのruleを強調する。
+別ruleの保存済み結果も薄く重ね、相互に独立していることが分かるようにする。
+
 debounceは、条件が継続したことを次の受信値で確認して状態を確定する。サンプル間隔より短い
 debounceを指定しても、確認前に推測で状態を変更しない。これはrawの受信順に再現でき、再起動や
 backlog処理でも同じ結果になる。
+
+入力補正またはルール変更後は、変更後の最初の入力で状態を取り直す。累積値は既存値を保持するが
+最初の入力を加算しない。counter resetは受理時点までの未処理rawを数え終えてから0を出力し、それより
+後のrawだけを新しいcounterへ加算する。
 
 ### 6.6 外部出力
 
