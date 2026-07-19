@@ -1182,6 +1182,59 @@ port = "/dev/serial1"
     }
 
     #[test]
+    fn legacy_and_explicit_rpi_local_forms_preserve_the_same_identity_recipe() {
+        let legacy: RawConfig = toml::from_str(
+            r#"
+[adapters.bravepi]
+enabled = false
+
+[adapters.rpi_local]
+enabled = true
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+"#,
+        )
+        .unwrap();
+        let legacy = resolve(legacy, ConfigSource::DefaultsOnly).unwrap();
+        let legacy_adapter = &legacy.adapter_instances[0];
+
+        let explicit: RawConfig = toml::from_str(
+            r#"
+[adapters.instances.rpi_local_default]
+type = "rpi-local"
+enabled = true
+config_schema_version = 1
+source = "rpi-local:default"
+bus_path = "/dev/i2c-1"
+poll_interval_ms = 1000
+"#,
+        )
+        .unwrap();
+        let explicit = resolve(explicit, ConfigSource::DefaultsOnly).unwrap();
+        let explicit_adapter = &explicit.adapter_instances[0];
+
+        assert_eq!(legacy_adapter.adapter_type(), "rpi-local");
+        assert_eq!(explicit_adapter.adapter_type(), "rpi-local");
+        assert_eq!(legacy_adapter.source().as_str(), "rpi-local:default");
+        assert_eq!(
+            legacy_adapter.source().as_str(),
+            explicit_adapter.source().as_str()
+        );
+        assert_eq!(
+            legacy_adapter.positional_inventory(),
+            explicit_adapter.positional_inventory()
+        );
+        assert_eq!(
+            legacy_adapter
+                .positional_inventory()
+                .into_iter()
+                .map(|device| device.hardware_id)
+                .collect::<Vec<_>>(),
+            ["rpi-local:default:i2c:0x60", "rpi-local:default:i2c:0x44",]
+        );
+    }
+
+    #[test]
     fn explicit_and_legacy_adapter_forms_are_mutually_exclusive() {
         let raw: RawConfig = toml::from_str(
             r#"

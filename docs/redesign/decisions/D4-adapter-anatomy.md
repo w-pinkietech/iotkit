@@ -5,13 +5,17 @@ Status: 確定 (2026-07-02、3レンズレビュー済み: 概念整合/Rust実�
 
 ## 決定
 
-**アダプタ = ドライバ + アダプタランタイム + 契約クライアント**(北=取り込みクライアント、南=世話サービサ=D12決定8)
-の3部品合成パッケージであり、供給者としての**説明責任単位**。
+**アダプタ = device integration(transport backend + device driver) +
+adapter runtime/composition + 契約クライアント**(北=取り込みクライアント、南=世話サービサ=D12決定8)
+の3群を合成するパッケージであり、供給者としての**説明責任単位**。transportとdevice driverを
+別境界として実装しても、device integrationという南側の一群であることは変わらない。
 
 | 部品 | 話す相手 | 知らないもの | 実例(iotkit-next) |
 |---|---|---|---|
-| ドライバ | 物理(transport+コーデック+デコード)。南向きencodeも含む | 取り込み契約(ドライバSPIには従う) | rpi4b-transport, bravepi-codec, iotkit-sensor-drivers |
-| アダプタランタイム | 両者の間(スケジューリング、状態機械、panic隔離、measurement写像=measurement_key+channel、南向きディスパッチ)。series解決はコレクタ=D5 | 契約もICも知らない | iotkit-polling-adapter-runtime(ポーリング型)、BravePI event_loop(イベント駆動型) |
+| transport backend | raw I/O(open/read/write/combined write-read)。OS・board差を吸収 | IC register意味、データシート変換、取り込み契約 | rpi4b-transportのI2C/serial等 |
+| デバイスドライバ | transportを介した検出・初期化・読取、コーデック、データシート変換。南向きencodeも含む | measurement key、source、series、取り込み契約(ドライバSPIには従う) | rpi-localのI2C driver、bravepi-codec、iotkit-sensor-driversのIC変換部品 |
+| アダプタランタイム | スケジューリング、状態機械、panic隔離、driver lifecycle、南向きディスパッチ | 契約、IC、measurement写像 | iotkit-polling-adapter-runtime(現行I2Cポーリング型)、BravePI event_loop(イベント駆動型) |
+| package固有composition | 対応device model、measurement写像、runtimeと契約clientの合成。series解決はコレクタ=D5 | ledger mutation、principal発行、再起動policy | rpi-local-adapter、bravepi-mainboard-adapter |
 | 取り込みクライアント | 取り込み契約(エンベロープ/ack/spool)。北向き専用 | ハードウェア | `iotkit-ingest-client`。公式in-process adapterへprincipal-bound clientを注入 |
 
 ## レビューの評決と根拠
@@ -24,8 +28,9 @@ Status: 確定 (2026-07-02、3レンズレビュー済み: 概念整合/Rust実�
 
 ## 確定した細部
 
-1. **正規化の3分掌**: デコード(データシートの数学)=ドライバ / measurement写像(measurement_key+
-   channelへの写像)=ランタイム / 現場較正(オフセット・倍率)=R9。**series解決(台帳→system_id→series)は
+1. **正規化の3分掌**: デコード(データシートの数学)=device driver / measurement写像(measurement_key+
+   channelへの写像)=adapter package固有composition / 現場較正(オフセット・倍率)=R9。共有runtimeは写像を
+   知らない。**series解決(台帳→system_id→series)は
    コレクタ**(D5反映 2026-07-02)。判定基準「データシート由来かデータ現場設定由来か」。
 2. **監督マトリクス**: 再起動権限(R20)は形態①のみ。②③④は死活観測+検疫+エスカレーション。
 3. **区別不能の精密化**: ②③④は北向きについて区別不能。南向き能力は**能力宣言**(R7台帳)で申告、推定しない。

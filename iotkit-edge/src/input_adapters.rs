@@ -182,14 +182,7 @@ fn no_positional_inventory(
 }
 
 fn rpi_local_targets() -> Vec<rpi_local_adapter::RpiLocalTarget> {
-    use rpi_local_adapter::ThermocoupleType;
-    vec![
-        rpi_local_adapter::RpiLocalTarget::MCP9600 {
-            address: 0x60,
-            thermocouple_type: ThermocoupleType::K,
-        },
-        rpi_local_adapter::RpiLocalTarget::OPT3001 { address: 0x44 },
-    ]
+    rpi_local_adapter::built_in_targets()
 }
 
 fn parse_rpi_local(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String> {
@@ -232,18 +225,11 @@ fn rpi_local_inventory(
     let config = config
         .downcast_ref::<rpi_local_adapter::RpiLocalConfig>()
         .expect("RPi local factory owns validated RpiLocalConfig");
-    config
-        .targets
-        .iter()
-        .map(|target| match target {
-            rpi_local_adapter::RpiLocalTarget::MCP9600 { address, .. } => PositionalInventoryItem {
-                hardware_id: format!("{}:i2c:0x{address:02x}", source.as_str()),
-                label: "MCP9600 thermocouple".into(),
-            },
-            rpi_local_adapter::RpiLocalTarget::OPT3001 { address } => PositionalInventoryItem {
-                hardware_id: format!("{}:i2c:0x{address:02x}", source.as_str()),
-                label: "OPT3001 illuminance".into(),
-            },
+    rpi_local_adapter::positional_inventory(config)
+        .into_iter()
+        .map(|device| PositionalInventoryItem {
+            hardware_id: format!("{}:{}", source.as_str(), device.locator),
+            label: device.label,
         })
         .collect()
 }

@@ -65,8 +65,9 @@ The northbound package remains the D4 composition:
 
 ```text
 physical device
-  -> driver / codec
-  -> adapter runtime
+  -> transport backend
+  -> device driver / codec
+  -> shared adapter runtime
   -> adapter-package composition glue
   -> SourceBoundIngest / IngestClient
   -> receiver-owned principal
@@ -243,7 +244,9 @@ an existing-Edge-DB cutover test covering principal scope, hardware identity,
 
 ## 6. Measurements, descriptors, and inventory
 
-Driver/protocol conversion to a canonical measurement is adapter-owned.
+Driver/protocol conversion to a physical value and adapter-package projection
+to a canonical measurement are adapter-owned. Shared runtimes know neither the
+device model catalog nor canonical measurement keys.
 Conformance fixtures, not the production type descriptor, record:
 
 - driver value and unit;
@@ -269,6 +272,14 @@ Positional inventory is an Edge-owned mutation:
 
 The same resolved target list drives reconciliation and runtime start.
 Factories and adapter crates never mutate ledger or registry.
+
+RPi-local's current compile-time supported-device catalog is package-owned. A
+typed device entry binds model-specific validation, driver construction,
+measurement projection, and inventory display metadata. Edge owns only the
+adapter type catalog and inventory reconciliation authority; it does not match
+on MCP9600, OPT3001, or later IC models. The adapter still owns the positional
+subject recipe, so model IDs and host platform names never become device
+identity.
 
 ## 7. Lifecycle and legacy isolation
 

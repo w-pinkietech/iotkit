@@ -279,12 +279,12 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-input-adapter-host-api` | `iotkit-input-adapter-host-api` | Supervision-free official adapter composition API: validated identities, source-bound ingest, delivery receipts/retry, bounded diagnostics/activity, completion, and shutdown. |
 | `iotkit-input-adapter-testkit` | `iotkit-input-adapter-testkit` | Dev-only conformance assertions and a non-catalog two-subject/two-measurement reference adapter. |
 | `iotkit-ingest-http` | `iotkit-ingest-http` | **INGRESS.** Listener parsing, exposure/TLS validation, accepted-peer checks, and transport construction; never control-API routes or measurement domain logic. |
-| `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Supervision- and ingest-free shared polling engine for I2C-bus adapters; emits decoded observations and lifecycle facts. |
-| `rpi4b-transport` | `rpi4b-transport` | Raw bus access (serial/I2C/GPIO/SPI/PWM/USB). Bytes and pin states, zero protocol knowledge. |
-| `iotkit-sensor-drivers` | `iotkit-sensor-drivers` | Vendor-neutral per-sensor-IC conversion drivers, input-source-agnostic (shared by multiple adapters). |
+| `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Supervision-, ingest-, mapping-free I2C polling engine; emits decoded observations and lifecycle facts. The current name is retained for compatibility but its public SPI is I2C-specific. |
+| `rpi4b-transport` | `rpi4b-transport` | Raw host I/O. I2C exposes an injectable device/factory boundary and combined write-read; GPIO/SPI/PWM use Raspberry Pi `rppal`. The historical crate name does not limit support to Pi 4B. |
+| `iotkit-sensor-drivers` | `iotkit-sensor-drivers` | Vendor-neutral per-sensor-IC constants, identity metadata, and datasheet conversion components shared by adapters; not a complete transport-owning driver. |
 | `bravepi-codec` | `bravepi-mainboard-adapter/codec` | BravePI frame encoding/decoding. |
 | `bravepi-mainboard-adapter` | `bravepi-mainboard-adapter` | BravePI-protocol adapter: transport + codec + sensor drivers → Envelopes. |
-| `rpi-local-adapter` | `rpi-local-adapter` | On-Pi I2C sensor adapter; thin wrapper over the polling runtime. |
+| `rpi-local-adapter` | `rpi-local-adapter` | Direct Linux I2C adapter under its accepted `rpi-local` compatibility name; owns the typed supported-device catalog, driver construction, measurement projection, and inventory metadata. |
 | `bravepi-poc` | `bravepi-mainboard-adapter/poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
 | `iotkit-edge` | `iotkit-edge` | **Binary.** IoTKit Edge composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
 | `iotkit-edgectl` | `iotkit-edgectl` | **Binary.** Edge operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
@@ -369,8 +369,9 @@ checked.
 
 | You are adding… | It goes in… |
 |---|---|
-| A new sensor-IC conversion (usable by several adapters) | `iotkit-sensor-drivers` |
-| A new sensor family / device protocol | A **new top-level `*-adapter` crate**; build on `iotkit-polling-adapter-runtime` if it's bus polling. Never inside `core/*` or IoTKit Edge. |
+| Datasheet conversion reusable across acquisition paths | `iotkit-sensor-drivers` |
+| A new IC using the same I2C transport, polling lifecycle, positional identity recipe, and config shape | The typed supported-device catalog in `rpi-local-adapter`; Edge must not learn the IC model. |
+| A device family with different discovery, wire protocol, security, lifecycle, identity recipe, or southbound model | A **new top-level `*-adapter` crate**. Never inside `core/*` or IoTKit Edge. |
 | A change to the ingest wire (envelope fields, ack semantics, reason codes) | `iotkit-ingest-contract` **only**, with its conformance tests; consumers adapt. The wire is the contract — the Rust types follow it, not vice versa. |
 | A new Edge operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |
 | A new Site operator / UI operation that changes state | A typed operation in the Site application-service dispatcher, the Site implementation of R14. HTTP, HTML, and CLI remain thin adapters and never write SQL directly. |

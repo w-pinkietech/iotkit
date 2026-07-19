@@ -1,7 +1,7 @@
 # IoTKit / YokaKit 再設計 用語集
 
 Status: 会話合意済み (living document)
-Updated: 2026-07-18
+Updated: 2026-07-20
 
 この文書は再設計に関わるすべての文書・コード・会話で使う統一語彙を定める。
 ここにない語を新しく使うときは、まずこの文書に追加する。
@@ -51,17 +51,20 @@ Updated: 2026-07-18
 | 用語 | 英語 | 定義 |
 |---|---|---|
 | プロバイダ | provider | センサー/デバイスのベンダー技術体系(BravePI、BraveJIG等)。コアの語彙に漏れてはならない |
-| ドライバ | driver | **物理の世界と話す**コード: transport(シリアル/I2C等の物理I/O)+プロトコルコーデック(南向きencode含む——コーデックは双方向)+センサーデコード(**データシートの数学**: 生値→物理量)。**取り込み契約を知らない**(ドライバSPIへの依存は許容)。「同じICはどこに繋がっていても同じドライバ」原則。iotkit-nextの `rpi4b-transport` / `bravepi-codec` / `iotkit-sensor-drivers` がこの層。※**OSのカーネルドライバとは別概念**。OS側を指すときは必ず「カーネルドライバ」と書く |
+| ホストプラットフォーム | host platform | Edgeを実行するOS・CPU architecture・board能力。Raspberry Pi 4B/5等。起動可否と診断には使うが、adapter/source/device identityには含めない。board世代を手設定で選ばせず、実装が必要な能力を検査する |
+| transport backend | transport backend | Linux I2C、serial、GPIO等のraw I/Oをopen/read/writeする薄い境界。IC register意味、データシート変換、measurement、取り込み契約を知らない。I2Cはraw read/writeに加えてrepeated STARTを保つcombined write-readを提供する |
+| デバイスドライバ | device driver | transport backendを介して特定IC/機器の検出・初期化・読取・protocol/register処理と**データシートの数学**(生値→物理量)を担う。measurement_key、source、series、取り込み契約を知らない。※**OSのカーネルドライバとは別概念**。OS側を指すときは必ず「カーネルドライバ」と書く |
+| 対応デバイスモデル | supported device model | 1つのInput Adapter buildが扱える機器モデル。安定したmodel ID、モデル固有設定、device driver生成、measurement写像、inventory表示情報をadapter package内のcompile-time catalogへ束ねる。catalogは対応可能モデルであり、接続済みinventoryではない |
 | ドライバSPI | driver SPI | ドライバが結果を返す先の型体系(`SensorReading` 等)。ドライバは取り込み契約を知らないが、この**第二の契約**には従う。名前と版管理を持つ(Home Assistantのライブラリ地獄の予防) |
-| アダプタランタイム | adapter runtime | ドライバと契約クライアントを実際に走らせる**胴体**: スケジューリング(ポーリング/イベントループ)、検出・接続の状態機械、ドライバのライフサイクルとpanic隔離、**measurement写像**(measurement_key+channelへの写像=正規化の写像段。series解決はコレクタの仕事=D5)、南向きコマンドのディスパッチと有界ジョブ実行。契約もICも知らない。`iotkit-polling-adapter-runtime` が実例(ポーリング型)。BravePIの event_loop/serial_source はイベント駆動型の胴体 |
+| アダプタランタイム | adapter runtime | ドライバを実際に走らせる**胴体**: スケジューリング(ポーリング/イベントループ)、検出・接続の状態機械、ドライバのライフサイクルとpanic隔離、南向きコマンドのディスパッチと有界ジョブ実行。共有runtimeは契約、IC、measurement写像を知らない。**adapter package固有のruntime/composition層**がmeasurement_key+channelへの写像を所有し、series解決はコレクタが所有する(D5)。`iotkit-polling-adapter-runtime` がI2Cポーリング型の現行実例。BravePIのevent_loop/serial_sourceはイベント駆動型の胴体 |
 | 取り込みクライアント | ingest client | **取り込み契約と話す**コード(**北向き専用**): 正規形のエンベロープ化・envelope_id採番・送信・ack処理・(必要なら)spool。バインディング(プロセス内/UDS/HTTP/MQTT)を選ぶ。全アダプタで共有可能な1ライブラリ。ESP32ファームのHTTPクライアントと同種。南向きは別契約・別チャネル(D12。対名=世話サービサ) |
-| アダプタ | adapter | **ドライバ+アダプタランタイム+契約クライアント(北=取り込みクライアント、南=世話サービサ、D12)の合成パッケージ**であり、供給者としての**説明責任単位**: 認証済み送信者として識別され、死活観測(R7/R12)の対象になり、南向き参加時は契約の宛先になる。形態4種: ①**公式アダプタ**(Edge内プロセス)、②**衛星アダプタ**(同一コード別筐体)、③**外部アダプタ**(第三者製、任意の言語)、④**契約ネイティブデバイス**(ドライバ不要。ランタイム+クライアント=ファームウェアそのもの)。**監督(再起動権限、R20)は形態①のみの性質**——②③④は死活観測+検疫+エスカレーションのみ。②③④は**北向きについて**Edgeから区別不能。南向き能力は能力宣言で申告される(推定しない)。※ネットワーク入口(R2)はアダプタではなくコレクタの玄関。翻訳責任は常に送る側 |
+| アダプタ | adapter | **device integration(transport backend+device driver)+adapter runtime/composition+契約クライアント(北=取り込みクライアント、南=世話サービサ、D12)の合成パッケージ**であり、供給者としての**説明責任単位**: 認証済み送信者として識別され、死活観測(R7/R12)の対象になり、南向き参加時は契約の宛先になる。形態4種: ①**公式アダプタ**(Edge内プロセス)、②**衛星アダプタ**(同一コード別筐体)、③**外部アダプタ**(第三者製、任意の言語)、④**契約ネイティブデバイス**(device driver不要。ランタイム+クライアント=ファームウェアそのもの)。**監督(再起動権限、R20)は形態①のみの性質**——②③④は死活観測+検疫+エスカレーションのみ。②③④は**北向きについて**Edgeから区別不能。南向き能力は能力宣言で申告される(推定しない)。※ネットワーク入口(R2)はアダプタではなくコレクタの玄関。翻訳責任は常に送る側 |
 | 能力宣言 | capability declaration | アダプタ/デバイスが「何を測り(measurement_key×channel構成)、何のコマンドを受けられるか」をデバイス台帳(R7)に宣言する仕組み。南向きの宛先解決と、R9/R14の事前条件検証(南向き非対応デバイス宛のアクション設定を**設定時に拒否**)の基準。再アナウンス要求(redescribe)等の最小応答はack応答へのピギーバックで受動参加可能(ただしackを読まないfire-and-forget送信者=形態③④には届かないため、宣言の世代番号 declaration_version のエンベロープ同梱+コレクタ側版不一致検知で補完する=D5)。詳細はD12(未宣言動詞の拒否時点=D12決定2) |
 | 北向き / 南向き | northbound / southbound | 北向き=デバイス→Edgeのデータ方向(D1で契約確定)。南向き=Edge→デバイスの機器の世話方向(D12で契約確定: 照会・構成・コマンド・有界ジョブ)。公式①・衛星②は双方向市民(②は第一波必須)、外部③は能力宣言による任意参加、契約ネイティブ④の南向き参加は保留(D12決定5) |
 | コレクタ | collector | Edge側の受理の権威。エンベロープの受理・重複排除・確認応答・逆圧を担う(R8) |
 | エンベロープ | envelope | アダプタ/自作デバイス→コレクタ間の配送単位。安定ID(envelope_id)を持ち、再送しても安全 |
 | 取り込み契約 | ingest contract | エンベロープをコレクタに届けるための公開ワイヤ契約。バインディングは複数(プロセス内チャネル / UDS / HTTP / MQTT ingest専用リスナー)だが論理契約は一つ |
-| 正規化 | normalization | プロバイダ固有の生データ→測定レジストリ準拠の正規形への変換。アダプタ(=つなぐ側)の責任。**3段に分掌**: ①デコード(データシートの数学: 生値→物理量)=ドライバ、②measurement写像(measurement_key+channelへの写像)=アダプタランタイム、③現場較正(オフセット/倍率、現場設定の数学)=R9(コレクタ後段)。**series解決**(送信者アイデンティティ+subject_hint→台帳→system_id→series_id)は写像ではなく**コレクタの責務**(D5)。判定基準:「データシート由来の数学はドライバ、現場設定由来の数学はR9」 |
+| 正規化 | normalization | プロバイダ固有の生データ→測定レジストリ準拠の正規形への変換。アダプタ(=つなぐ側)の責任。**3段に分掌**: ①デコード(データシートの数学: 生値→物理量)=device driver、②measurement写像(measurement_key+channelへの写像)=adapter package固有のruntime/composition層、③現場較正(オフセット/倍率、現場設定の数学)=R9(コレクタ後段)。**series解決**(送信者アイデンティティ+subject_hint→台帳→system_id→series_id)は写像ではなく**コレクタの責務**(D5)。判定基準:「データシート由来の数学はドライバ、現場設定由来の数学はR9」 |
 | 派生系列プロセッサ | derived-series processor | R9のうち、受理済み観測から較正・累積count・時間集約等の**新しいseries**を決定的に生成する概念境界。元観測を上書きせず、導出revision/入力series/適用境界を持つ。名前だけを理由にcrate化しない |
 | ローカルルール評価器 | local rule evaluator | R9のうち、受理済み・非検疫の観測/状態へ型付き有界条件を評価し、型付きaction intentだけを生成する概念境界。I/Oや変更を直接行わず、実行はR14 dispatch・権限・監査・TTL/冪等性を通す。自由script/rule engineではない |
 | 測定レジストリ | measurement registry | 測定種別・単位・型の語彙の定義と版管理(R6)。正規化の目標形を定める権威。**二層構造**: 命名の典拠=標準語彙カタログ、受理の正本=現場レジストリ(D6) |
