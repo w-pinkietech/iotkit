@@ -177,9 +177,18 @@ cargo fmt --all --check
 # Docker Mosquittoによる外部Output Adapter/PUBACK/再接続ゲート
 scripts/test-site-output.sh
 
+# OpenAPIから生成したConsole型、TypeScript、埋め込みJavaScriptの同期
+npm ci --prefix iotkit-site/frontend
+scripts/test-site-console-frontend.sh
+
 # 隣接するYokaKit checkoutとのconsumer contractゲート
 scripts/test-yokakit-consumer-contract.sh
 ```
+
+Site ConsoleはGoのserver-side renderingを維持し、ブラウザ動作だけを
+`iotkit-site/frontend/src/`のTypeScriptで実装する。JSON APIの型は
+`iotkit-site/openapi/site-console-v1.yaml`から生成し、配布物にはesbuild済みの
+`static/console.js`を埋め込むため、Siteの実行環境にNode.jsは不要である。
 
 CI additionally checks the crate layer rules (`scripts/check-layers`) and runs
 all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml));
@@ -193,7 +202,7 @@ all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows
 | `iotkit-ingest-contract` / `iotkit-ingest-client` | The ingest wire contract (Envelope/Ack) and the client adapters use |
 | `*-adapter*` / `iotkit-sensor-drivers` / `rpi4b-transport` | Sensor adapters (BravePI mainboard, rpi-local), shared sensor-IC drivers and polling runtime, raw bus transport |
 | `iotkit-edge` / `iotkit-edgectl` | IoTKit Edge daemon and its operator CLI |
-| `iotkit-site` | IoTKit Site MQTT consumer, durable raw/semantic store, cursor manager, application exporter, and query/configuration CLI |
+| `iotkit-site` | IoTKit Site MQTT consumer, durable raw/semantic store, cursor manager, application exporter, authenticated SSR Console, and query/configuration CLI |
 
 The full crate map, layer rules, and "where does new code go" placement table
 live in [docs/architecture.md](docs/architecture.md).

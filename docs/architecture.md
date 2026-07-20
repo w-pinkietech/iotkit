@@ -296,6 +296,8 @@ Approved next-slice non-Rust placement:
 | Component | Path | Responsibility (one line) |
 |---|---|---|
 | IoTKit Site | `iotkit-site/` | MQTT consumer, durable raw acceptance, Edge Node cursor manager, accepted-through publisher, query, future-only semantic projection, and durable MQTT application export. |
+| Site Console browser source | `iotkit-site/frontend/src/` | TypeScript browser behavior for the server-rendered Console; it does not own authorization, persistence, or domain state transitions. |
+| Site Console API schema | `iotkit-site/openapi/site-console-v1.yaml` | Browser-facing JSON contract used to generate TypeScript request and response types. HTML form endpoints are not duplicated here. |
 | Cross-language fixtures | `testdata/egress/v1/`, `testdata/egress/v2/` | Normative JSON examples decoded by both Rust and Go tests. Descriptor uses only `v2`; the other current egress messages remain in `v1`. |
 
 ### Layer rules (machine-checked)

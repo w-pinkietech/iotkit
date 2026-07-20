@@ -1,0 +1,354 @@
+openapi: 3.1.0
+info:
+  title: IoTKit Site Console API
+  version: 1.0.0
+  description: >
+    Browser-facing JSON contracts used by the server-rendered IoTKit Site
+    Console. HTML form endpoints are intentionally outside this schema.
+servers:
+  - url: /
+paths:
+  /api/v1/mapping-previews:
+    post:
+      operationId: createMappingPreview
+      summary: Preview future-only semantic settings without writing them
+      description: >
+        Requires an authenticated Site Console session, a matching
+        X-CSRF-Token header, and a same-origin browser request. The schema
+        documents the supported Console request; the server may continue to
+        read older DefinitionSpec representations for stored-client
+        compatibility.
+      security:
+        - SiteSession: []
+      parameters:
+        - $ref: "#/components/parameters/CSRFToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MappingPreviewRequest"
+      responses:
+        "200":
+          description: Preview built from the bounded recent input window
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MappingPreview"
+                  - $ref: "#/components/schemas/MultipleRuleMappingPreview"
+        "400":
+          $ref: "#/components/responses/RequestError"
+        "401":
+          $ref: "#/components/responses/RequestError"
+        "403":
+          $ref: "#/components/responses/RequestError"
+        "404":
+          $ref: "#/components/responses/RequestError"
+        default:
+          $ref: "#/components/responses/RequestError"
+components:
+  securitySchemes:
+    SiteSession:
+      type: apiKey
+      in: cookie
+      name: iotkit_site_session
+  parameters:
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Value of the same-origin iotkit_site_csrf cookie.
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    RequestError:
+      description: The request could not be completed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    SemanticKind:
+      type: string
+      enum: [numeric, boolean, cumulative_counter, alarm]
+    DetectorMode:
+      type: string
+      enum: ["", boolean_high_active, boolean_low_active, high_active, low_active]
+    TriggerMode:
+      type: string
+      enum: ["", on_transition, on_notification]
+    Detector:
+      type: object
+      additionalProperties: false
+      properties:
+        mode:
+          $ref: "#/components/schemas/DetectorMode"
+        rise_threshold:
+          type: number
+        fall_threshold:
+          type: number
+        rise_debounce_ms:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 300000
+        fall_debounce_ms:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 300000
+    LegacyCondition:
+      type: object
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+        bool_value:
+          type: boolean
+        threshold:
+          type: number
+        hysteresis:
+          type: number
+    DefinitionSpec:
+      type: object
+      additionalProperties: false
+      required: [kind, scale]
+      properties:
+        kind:
+          $ref: "#/components/schemas/SemanticKind"
+        scale:
+          type: number
+        offset:
+          type: number
+        detector:
+          $ref: "#/components/schemas/Detector"
+        condition:
+          $ref: "#/components/schemas/LegacyCondition"
+        trigger:
+          $ref: "#/components/schemas/TriggerMode"
+    RuleSpec:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          $ref: "#/components/schemas/SemanticKind"
+        detector:
+          $ref: "#/components/schemas/Detector"
+        trigger:
+          $ref: "#/components/schemas/TriggerMode"
+    CalibrationDraft:
+      type: object
+      additionalProperties: false
+      required: [scale]
+      properties:
+        signal_ref:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        scale:
+          type: number
+        offset:
+          type: number
+        created_at:
+          type: integer
+          format: int64
+    SemanticRulePreviewDraft:
+      type: object
+      additionalProperties: false
+      required: [rule_id, display_name, spec]
+      properties:
+        rule_id:
+          type: string
+          minLength: 1
+        display_name:
+          type: string
+          minLength: 1
+        spec:
+          $ref: "#/components/schemas/RuleSpec"
+    MappingPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [signal_ref]
+      dependentRequired:
+        calibration: [rules]
+      properties:
+        signal_ref:
+          type: string
+          minLength: 1
+        spec:
+          $ref: "#/components/schemas/DefinitionSpec"
+        test_value:
+          type: number
+        calibration:
+          $ref: "#/components/schemas/CalibrationDraft"
+        rules:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/SemanticRulePreviewDraft"
+    PreviewPoint:
+      type: object
+      additionalProperties: false
+      required:
+        - received_at
+        - input
+        - input_min
+        - input_max
+        - calibrated
+        - calibrated_min
+        - calibrated_max
+        - sample_count
+      properties:
+        received_at:
+          type: integer
+          format: int64
+        input:
+          type: number
+        input_min:
+          type: number
+        input_max:
+          type: number
+        calibrated:
+          type: number
+        calibrated_min:
+          type: number
+        calibrated_max:
+          type: number
+        active:
+          type: boolean
+        counter:
+          type: integer
+          format: int64
+        sample_count:
+          type: integer
+        active_samples:
+          type: integer
+        transitions:
+          type: integer
+        increment:
+          type: integer
+          format: int64
+    PreviewResult:
+      type: object
+      additionalProperties: false
+      required: [emitted, calibrated]
+      properties:
+        emitted:
+          type: boolean
+        number:
+          type: number
+        boolean:
+          type: boolean
+        integer:
+          type: integer
+          format: int64
+        calibrated:
+          type: number
+    PreviewBody:
+      type: object
+      required: [kind, input_count, plot_count, points]
+      properties:
+        kind:
+          $ref: "#/components/schemas/SemanticKind"
+        input_count:
+          type: integer
+        plot_count:
+          type: integer
+        points:
+          oneOf:
+            - type: array
+              items:
+                $ref: "#/components/schemas/PreviewPoint"
+            - type: "null"
+        test_result:
+          $ref: "#/components/schemas/PreviewResult"
+        window_start:
+          type: integer
+          format: int64
+        window_end:
+          type: integer
+          format: int64
+        truncated_by:
+          type: string
+        rise_threshold:
+          type: number
+        fall_threshold:
+          type: number
+        error:
+          type: string
+    MappingPreview:
+      allOf:
+        - $ref: "#/components/schemas/PreviewBody"
+    SemanticRulePreview:
+      allOf:
+        - $ref: "#/components/schemas/PreviewBody"
+        - type: object
+          required: [rule_id, display_name]
+          properties:
+            rule_id:
+              type: string
+            display_name:
+              type: string
+    MultipleRuleMappingPreview:
+      type: object
+      additionalProperties: false
+      required: [calibration, rules]
+      properties:
+        calibration:
+          $ref: "#/components/schemas/Calibration"
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/SemanticRulePreview"
+        window_start:
+          type: integer
+          format: int64
+        window_end:
+          type: integer
+          format: int64
+        truncated_by:
+          type: string
+    Calibration:
+      type: object
+      additionalProperties: false
+      required: [signal_ref, revision, scale, offset, created_at]
+      properties:
+        signal_ref:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        scale:
+          type: number
+        offset:
+          type: number
+        created_at:
+          type: integer
+          format: int64
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [code, message, field, request_id]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        field:
+          oneOf:
+            - type: string
+            - type: "null"
+        request_id:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"

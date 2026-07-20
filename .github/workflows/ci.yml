@@ -54,11 +54,8 @@ jobs:
         run: cargo test --workspace
 
   site:
-    name: site go test
+    name: site go / console test
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: iotkit-site
     steps:
       - uses: actions/checkout@v4
 
@@ -67,5 +64,18 @@ jobs:
           go-version-file: iotkit-site/go.mod
           cache-dependency-path: iotkit-site/go.sum
 
-      - name: Tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: iotkit-site/frontend/package-lock.json
+
+      - name: Install Console tooling
+        run: npm ci --prefix iotkit-site/frontend
+
+      - name: Console schema, types, and generated assets
+        run: scripts/test-site-console-frontend.sh
+
+      - name: Site tests
+        working-directory: iotkit-site
         run: go test ./...

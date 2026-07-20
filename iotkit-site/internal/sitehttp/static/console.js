@@ -1,18 +1,103 @@
+"use strict";
 (() => {
-  const csrf = () =>
-    document.cookie
-      .split("; ")
-      .find((value) => value.startsWith("iotkit_site_csrf="))
-      ?.split("=")[1] || "";
+  // src/api.ts
+  function isRecord(value) {
+    return !!value && typeof value === "object";
+  }
+  function isAPIError(value) {
+    if (!isRecord(value) || !("error" in value)) return false;
+    const error = value.error;
+    return isRecord(error) && "code" in error && typeof error.code === "string" && "message" in error && typeof error.message === "string";
+  }
+  function isPreviewPoint(value) {
+    if (!isRecord(value)) return false;
+    return [
+      "received_at",
+      "input",
+      "input_min",
+      "input_max",
+      "calibrated",
+      "calibrated_min",
+      "calibrated_max",
+      "sample_count"
+    ].every((field) => typeof value[field] === "number");
+  }
+  function isPreviewBody(value) {
+    if (!isRecord(value)) return false;
+    const kinds = /* @__PURE__ */ new Set([
+      "numeric",
+      "boolean",
+      "cumulative_counter",
+      "alarm"
+    ]);
+    return typeof value.kind === "string" && kinds.has(value.kind) && typeof value.input_count === "number" && typeof value.plot_count === "number" && (value.points === null || Array.isArray(value.points) && value.points.every(isPreviewPoint));
+  }
+  function isMappingPreviewResponse(value) {
+    if (isPreviewBody(value)) return true;
+    if (!isRecord(value) || !isRecord(value.calibration)) return false;
+    return typeof value.calibration.scale === "number" && typeof value.calibration.offset === "number" && Array.isArray(value.rules) && value.rules.every(
+      (rule) => isPreviewBody(rule) && isRecord(rule) && typeof rule.rule_id === "string" && typeof rule.display_name === "string"
+    );
+  }
+  async function createMappingPreview(request, csrfToken2, signal) {
+    const response = await fetch("/api/v1/mapping-previews", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken2
+      },
+      body: JSON.stringify(request),
+      signal
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: isAPIError(payload) ? payload : null
+      };
+    }
+    if (!isMappingPreviewResponse(payload)) {
+      return { ok: false, status: response.status, error: null };
+    }
+    return { ok: true, value: payload };
+  }
 
-  const menuButton = document.querySelector(".menu-button");
-  const overlay = document.querySelector(".mobile-overlay");
-  const closeMenu = () => {
-    document.body.classList.remove("menu-open");
-    if (menuButton) menuButton.setAttribute("aria-expanded", "false");
-    if (overlay) overlay.hidden = true;
-  };
-  if (menuButton && overlay) {
+  // src/dom.ts
+  function query(selector, root = document) {
+    return root.querySelector(selector);
+  }
+  function queryAll(selector, root = document) {
+    return Array.from(root.querySelectorAll(selector));
+  }
+  function formField(form, name) {
+    const candidate = form.elements.namedItem(name);
+    return candidate instanceof HTMLInputElement || candidate instanceof HTMLSelectElement || candidate instanceof HTMLTextAreaElement ? candidate : null;
+  }
+  function requiredFormField(form, name) {
+    const candidate = formField(form, name);
+    if (!candidate) throw new Error(`missing form field: ${name}`);
+    return candidate;
+  }
+  function numericFormField(form, name, fallback = 0) {
+    const value = formField(form, name)?.value.trim();
+    return value ? Number(value) : fallback;
+  }
+
+  // src/shell.ts
+  function csrfToken() {
+    const value = document.cookie.split("; ").find((cookie) => cookie.startsWith("iotkit_site_csrf="));
+    return value?.split("=")[1] ?? "";
+  }
+  function initializeMenu() {
+    const menuButton = query(".menu-button");
+    const overlay = query(".mobile-overlay");
+    const closeMenu = () => {
+      document.body.classList.remove("menu-open");
+      menuButton?.setAttribute("aria-expanded", "false");
+      if (overlay) overlay.hidden = true;
+    };
+    if (!menuButton || !overlay) return;
     menuButton.addEventListener("click", () => {
       const open = !document.body.classList.contains("menu-open");
       document.body.classList.toggle("menu-open", open);
@@ -24,20 +109,27 @@
       if (event.key === "Escape") closeMenu();
     });
   }
-
-  const filterTable = (tableID) => {
+  function initializeTableFilter(tableID) {
     const table = document.getElementById(tableID);
-    if (!table) return;
-    const search = document.querySelector(`[data-table-search="${tableID}"]`);
-    const status = document.querySelector(`[data-table-status="${tableID}"]`);
-    const count = document.querySelector(`[data-table-count="${tableID}"]`);
+    if (!(table instanceof HTMLTableElement)) return;
+    const search = query(
+      `[data-table-search="${tableID}"]`
+    );
+    const status = query(
+      `[data-table-status="${tableID}"]`
+    );
+    const count = query(`[data-table-count="${tableID}"]`);
     const apply = () => {
-      const query = search?.value.trim().toLocaleLowerCase("ja") || "";
-      const state = status?.value || "";
+      const searchText = search?.value.trim().toLocaleLowerCase("ja") ?? "";
+      const selectedState = status?.value ?? "";
       let visible = 0;
-      for (const row of table.querySelectorAll("tbody tr:not(.empty-row)")) {
-        const matchesText = !query || row.textContent.toLocaleLowerCase("ja").includes(query);
-        const matchesState = !state || row.dataset.status === state;
+      for (const row of queryAll(
+        "tbody tr:not(.empty-row)",
+        table
+      )) {
+        const rowText = row.textContent?.toLocaleLowerCase("ja") ?? "";
+        const matchesText = !searchText || rowText.includes(searchText);
+        const matchesState = !selectedState || row.dataset.status === selectedState;
         row.hidden = !(matchesText && matchesState);
         if (!row.hidden) visible += 1;
       }
@@ -45,57 +137,119 @@
     };
     search?.addEventListener("input", apply);
     status?.addEventListener("change", apply);
-  };
-  filterTable("signal-table");
-  filterTable("log-table");
-
-  document.addEventListener("click", (event) => {
-    const copyButton = event.target.closest("[data-copy-text]");
-    if (copyButton) {
-      const originalLabel = copyButton.textContent;
-      navigator.clipboard
-        .writeText(copyButton.dataset.copyText || "")
-        .then(() => {
-          copyButton.textContent = "コピーしました";
-        })
-        .catch(() => {
-          copyButton.textContent = "コピーできません";
-        })
-        .finally(() => {
+  }
+  function initializeDocumentActions() {
+    for (const form of queryAll("form[data-confirm-message]")) {
+      form.addEventListener("submit", (event) => {
+        const message = form.dataset.confirmMessage;
+        if (message && !window.confirm(message)) {
+          event.preventDefault();
+        }
+      });
+    }
+    document.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) return;
+      const copyButton = event.target.closest("[data-copy-text]");
+      if (copyButton) {
+        const originalLabel = copyButton.textContent;
+        navigator.clipboard.writeText(copyButton.dataset.copyText ?? "").then(() => {
+          copyButton.textContent = "\u30B3\u30D4\u30FC\u3057\u307E\u3057\u305F";
+        }).catch(() => {
+          copyButton.textContent = "\u30B3\u30D4\u30FC\u3067\u304D\u307E\u305B\u3093";
+        }).finally(() => {
           window.setTimeout(() => {
             copyButton.textContent = originalLabel;
           }, 1600);
         });
+        return;
+      }
+      const row = event.target.closest("tr[data-href]");
+      if (!row || event.target.closest("a, button, input, select, textarea") || !row.dataset.href) {
+        return;
+      }
+      window.location.assign(row.dataset.href);
+    });
+  }
+  function initializeSettingTabs() {
+    for (const root of queryAll("[data-setting-tabs]")) {
+      const tabs = queryAll("[data-setting-tab]", root);
+      const panels = queryAll("[data-setting-panel]", root);
+      if (!tabs.length || !panels.length) continue;
+      const activate = (key, focus = false) => {
+        for (const tab of tabs) {
+          const selected = tab.dataset.settingTab === key;
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+          if (selected && focus) tab.focus();
+        }
+        for (const panel of panels) {
+          panel.hidden = panel.dataset.settingPanel !== key;
+        }
+      };
+      let initial = root.dataset.defaultSettingTab ?? tabs[0].dataset.settingTab;
+      const focusedID = document.body.dataset.focusTarget;
+      const focused = focusedID ? document.getElementById(focusedID) : null;
+      const focusedPanel = focused && root.contains(focused) ? focused.closest("[data-setting-panel]") : null;
+      if (focusedPanel?.dataset.settingPanel) {
+        initial = focusedPanel.dataset.settingPanel;
+      }
+      activate(initial ?? "");
+      root.classList.add("setting-tabs-ready");
+      tabs.forEach((tab, index) => {
+        tab.addEventListener("click", () => {
+          activate(tab.dataset.settingTab ?? "");
+        });
+        tab.addEventListener("keydown", (event) => {
+          let next = index;
+          if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+          else if (event.key === "ArrowLeft") {
+            next = (index - 1 + tabs.length) % tabs.length;
+          } else if (event.key === "Home") next = 0;
+          else if (event.key === "End") next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          activate(tabs[next].dataset.settingTab ?? "", true);
+        });
+      });
+    }
+  }
+  function initializeFocusedSection() {
+    const targetID = document.body.dataset.focusTarget;
+    if (!targetID) return;
+    const target = document.getElementById(targetID);
+    if (!target) return;
+    if (target instanceof HTMLDetailsElement) {
+      target.open = true;
+      target.querySelector("summary")?.focus();
       return;
     }
-    const row = event.target.closest("tr[data-href]");
-    if (!row || event.target.closest("a, button, input, select, textarea")) return;
-    window.location.assign(row.dataset.href);
-  });
-
-  const toggleSignalProfileFields = (form) => {
-    const sensorType = form.querySelector("[data-sensor-type]");
-    const customLabel = form.querySelector("[data-custom-sensor-label]");
-    const valueKind = form.querySelector("[data-value-kind]");
-    const unitMode = form.querySelector("[data-unit-mode]");
-    const unitField = form.querySelector("[data-display-unit]");
-    const decimalField = form.querySelector("[data-decimal-places]");
+    target.setAttribute("tabindex", "-1");
+    target.focus();
+  }
+  function initializeSignalProfile(form) {
+    const sensorType = query("[data-sensor-type]", form);
+    const customLabel = query("[data-custom-sensor-label]", form);
+    const valueKind = query("[data-value-kind]", form);
+    const unitMode = query("[data-unit-mode]", form);
+    const unitField = query("[data-display-unit]", form);
+    const decimalField = query("[data-decimal-places]", form);
     const update = () => {
       if (customLabel) {
-        customLabel.hidden = sensorType?.value !== "custom";
-        const input = customLabel.querySelector("input");
-        if (input) input.required = sensorType?.value === "custom";
+        const usesCustomLabel = sensorType?.value === "custom";
+        customLabel.hidden = !usesCustomLabel;
+        const input = query("input", customLabel);
+        if (input) input.required = usesCustomLabel;
       }
       if (valueKind?.value === "boolean") {
         if (unitMode) unitMode.value = "dimensionless";
-        const unitInput = unitField?.querySelector("input");
-        if (unitInput) unitInput.value = "";
-        const decimalInput = decimalField?.querySelector("input");
+        const unitInput2 = unitField ? query("input", unitField) : null;
+        if (unitInput2) unitInput2.value = "";
+        const decimalInput = decimalField ? query("input", decimalField) : null;
         if (decimalInput) decimalInput.value = "0";
       }
       const hasUnit = unitMode?.value === "unit" && valueKind?.value !== "boolean";
       if (unitField) unitField.hidden = !hasUnit;
-      const unitInput = unitField?.querySelector("input");
+      const unitInput = unitField ? query("input", unitField) : null;
       if (unitInput) {
         unitInput.required = hasUnit;
         unitInput.disabled = !hasUnit;
@@ -107,125 +261,119 @@
     valueKind?.addEventListener("change", update);
     unitMode?.addEventListener("change", update);
     update();
-  };
-  for (const form of document.querySelectorAll("form[data-signal-profile]")) {
-    toggleSignalProfileFields(form);
+  }
+  function initializeShell() {
+    initializeMenu();
+    initializeTableFilter("signal-table");
+    initializeTableFilter("log-table");
+    initializeDocumentActions();
+    initializeSettingTabs();
+    for (const form of queryAll("form[data-signal-profile]")) {
+      initializeSignalProfile(form);
+    }
+    initializeFocusedSection();
   }
 
-  for (const form of document.querySelectorAll("[data-output-route-form]")) {
-    const rule = form.querySelector("[data-output-rule]");
-    const adapter = form.querySelector("[data-output-adapter]");
-    const mode = form.querySelector("[data-output-mode]");
-    const sourceID = form.querySelector('[name="source_id"]');
-    const signalID = form.querySelector('[name="signal_id"]');
-    const yokakitTopicPreview = form.querySelector(
-      "[data-yokakit-topic-preview]",
-    );
-    const payloadPreview = form.querySelector("[data-output-payload-preview]");
-    const yokakitPayloadPreview = form.querySelector(
-      "[data-yokakit-payload-preview]",
-    );
-    const payloadExamples = {
-      numeric: '{"schema_version":1,"kind":"numeric","value":24.8}',
-      boolean: '{"schema_version":1,"kind":"boolean","value":true}',
-      cumulative_value:
-        '{"schema_version":1,"kind":"cumulative_value","value":1524}',
-      alarm: '{"schema_version":1,"kind":"alarm","value":true}',
-    };
-    const yokakitPayloadExamples = {
-      production: '{"schema_version":1,"kind":"production","value":1524}',
-      onoff: '{"schema_version":1,"kind":"onoff","value":true}',
-      gantt_chart: '{"schema_version":1,"kind":"gantt_chart","value":true}',
-      alarm:
-        '{"schema_version":1,"kind":"alarm","value":true,"reason":"温度上限を超過"}',
-    };
-    const supports = (option, kind) => {
-      if (!kind) return true;
-      return (option?.dataset.accepts || "").split(/\s+/).includes(kind);
-    };
-    const update = () => {
-      const kind = rule?.selectedOptions[0]?.dataset.kind || "";
-      if (payloadPreview) {
-        payloadPreview.textContent =
-          payloadExamples[kind] ||
-          "値を選ぶと、ここにpayloadの例を表示します";
-      }
-      if (adapter) {
-        for (const option of adapter.options) {
-          option.disabled = !supports(option, kind);
-        }
-        if (adapter.selectedOptions[0]?.disabled) {
-          const compatible = Array.from(adapter.options).find((option) => !option.disabled);
-          if (compatible) adapter.value = compatible.value;
-        }
-      }
-      for (const fields of form.querySelectorAll("[data-output-fields]")) {
-        const active = fields.dataset.outputFields === adapter?.value;
-        fields.hidden = !active;
-        for (const input of fields.querySelectorAll("input, select, textarea")) {
-          input.disabled = !active;
-          if (input.name === "topic" || input.name === "source_id" ||
-              input.name === "signal_id") {
-            input.required = active;
-          }
-        }
-      }
-      if (mode) {
-        for (const option of mode.options) {
-          option.disabled = !supports(option, kind);
-          option.hidden = option.disabled;
-        }
-        if (mode.selectedOptions[0]?.disabled) {
-          const compatible = Array.from(mode.options).find((option) => !option.disabled);
-          if (compatible) mode.value = compatible.value;
-        }
-      }
-      if (yokakitPayloadPreview) {
-        yokakitPayloadPreview.textContent =
-          yokakitPayloadExamples[mode?.value] ||
-          "用途を選ぶと、ここにpayloadの例を表示します";
-      }
-      if (yokakitTopicPreview) {
-        const source = sourceID?.value || "{source-id}";
-        const signal = signalID?.value || "{signal-id}";
-        yokakitTopicPreview.textContent =
-          `yokakit/v1/sources/${source}/signals/${signal}/observations`;
-      }
-    };
-    rule?.addEventListener("change", update);
-    adapter?.addEventListener("change", update);
-    mode?.addEventListener("change", update);
-    sourceID?.addEventListener("input", update);
-    signalID?.addEventListener("input", update);
-    update();
+  // src/semantic.ts
+  var semanticKinds = /* @__PURE__ */ new Set([
+    "numeric",
+    "boolean",
+    "cumulative_counter",
+    "alarm"
+  ]);
+  var detectorModes = /* @__PURE__ */ new Set([
+    "",
+    "boolean_high_active",
+    "boolean_low_active",
+    "high_active",
+    "low_active"
+  ]);
+  var triggerModes = /* @__PURE__ */ new Set([
+    "",
+    "on_transition",
+    "on_notification"
+  ]);
+  function selectedValue(value, allowed, field) {
+    if (!allowed.has(value)) {
+      throw new Error(`unsupported ${field}: ${value}`);
+    }
+    return value;
   }
-
-  const toggleSemanticFields = (form) => {
-    const kind = form.querySelector("[data-semantic-kind]");
-    const detectorFields = form.querySelector("[data-semantic-detector]");
-    const detector = form.elements.detector_mode;
-    const thresholds = form.querySelector("[data-semantic-thresholds]");
-    const triggerFields = form.querySelector("[data-semantic-trigger]");
-    const trigger = form.elements.trigger;
+  function detectorSpec(form) {
+    return {
+      mode: selectedValue(
+        formField(form, "detector_mode")?.value ?? "",
+        detectorModes,
+        "detector mode"
+      ),
+      rise_threshold: numericFormField(form, "rise_threshold"),
+      fall_threshold: numericFormField(form, "fall_threshold"),
+      rise_debounce_ms: Math.round(
+        numericFormField(form, "rise_debounce_seconds") * 1e3
+      ),
+      fall_debounce_ms: Math.round(
+        numericFormField(form, "fall_debounce_seconds") * 1e3
+      )
+    };
+  }
+  function semanticKind(form) {
+    return selectedValue(
+      requiredFormField(form, "kind").value,
+      semanticKinds,
+      "semantic kind"
+    );
+  }
+  function triggerMode(form) {
+    return selectedValue(
+      formField(form, "trigger")?.value ?? "",
+      triggerModes,
+      "trigger mode"
+    );
+  }
+  function definitionSpec(form) {
+    return {
+      kind: semanticKind(form),
+      scale: numericFormField(form, "scale"),
+      offset: numericFormField(form, "offset"),
+      detector: detectorSpec(form),
+      trigger: triggerMode(form)
+    };
+  }
+  function ruleSpec(form) {
+    return {
+      kind: semanticKind(form),
+      detector: detectorSpec(form),
+      trigger: triggerMode(form)
+    };
+  }
+  function toggleFields(container, visible) {
+    if (!container) return;
+    container.hidden = !visible;
+    for (const field of queryAll(
+      "input, select",
+      container
+    )) {
+      field.disabled = !visible;
+    }
+  }
+  function initializeSemanticFields(form) {
+    const kind = query("[data-semantic-kind]", form);
+    const detectorFields = query("[data-semantic-detector]", form);
+    const detector = formField(form, "detector_mode");
+    const thresholds = query("[data-semantic-thresholds]", form);
+    const triggerFields = query("[data-semantic-trigger]", form);
+    const trigger = formField(form, "trigger");
     const booleanInput = form.dataset.booleanInput === "true";
-    if (!kind || !detectorFields || !detector || !triggerFields || !trigger) return;
-    const toggleFields = (container, visible) => {
-      if (!container) return;
-      container.hidden = !visible;
-      container.querySelectorAll("input, select").forEach((field) => {
-        field.disabled = !visible;
-      });
-    };
+    if (!kind || !detectorFields || !detector || !triggerFields || !trigger) {
+      return;
+    }
     const update = () => {
-      const selectedKind = kind.value;
-      const needsDetector = selectedKind !== "numeric";
-      const countsValues = selectedKind === "cumulative_counter";
+      const needsDetector = kind.value !== "numeric";
+      const countsValues = kind.value === "cumulative_counter";
       toggleFields(detectorFields, needsDetector);
       toggleFields(triggerFields, countsValues);
-      for (const option of detector.options) {
-        const matchesInput = booleanInput
-          ? option.hasAttribute("data-detector-boolean")
-          : option.hasAttribute("data-detector-analog");
+      for (const option of Array.from(detector.options)) {
+        const matchesInput = booleanInput ? option.hasAttribute("data-detector-boolean") : option.hasAttribute("data-detector-analog");
         option.hidden = !matchesInput;
         option.disabled = !matchesInput;
       }
@@ -236,7 +384,6 @@
         detector.value = "";
       }
       toggleFields(thresholds, needsDetector && !booleanInput);
-
       if (countsValues && !["on_transition", "on_notification"].includes(trigger.value)) {
         trigger.value = "on_transition";
       } else if (!countsValues) {
@@ -245,72 +392,131 @@
     };
     kind.addEventListener("change", update);
     update();
-  };
-
-  const number = (form, name) => Number(form.elements[name]?.value || 0);
-  for (const form of document.querySelectorAll("form.semantic-form")) {
-    toggleSemanticFields(form);
   }
-  const semanticRuleCards = Array.from(
-    document.querySelectorAll("details.semantic-rule-card"),
-  );
-  if (semanticRuleCards.length) semanticRuleCards[0].open = true;
-  for (const card of semanticRuleCards) {
-    card.addEventListener("toggle", () => {
-      if (!card.open) return;
-      for (const other of semanticRuleCards) {
-        if (other !== card) other.open = false;
-      }
-    });
+  function initializeSemanticForms() {
+    for (const form of queryAll("form.semantic-form")) {
+      initializeSemanticFields(form);
+    }
+    const cards = queryAll("details.semantic-rule-card");
+    if (cards[0] && !cards.some((card) => card.open)) cards[0].open = true;
+    for (const card of cards) {
+      card.addEventListener("toggle", () => {
+        if (!card.open) return;
+        for (const other of cards) {
+          if (other !== card) other.open = false;
+        }
+      });
+    }
   }
 
-  const svgNS = "http://www.w3.org/2000/svg";
-  const addSVG = (parent, name, attributes = {}) => {
-    const element = document.createElementNS(svgNS, name);
+  // src/preview.ts
+  var svgNamespace = "http://www.w3.org/2000/svg";
+  function addSVG(parent, name, attributes = {}) {
+    const element = document.createElementNS(svgNamespace, name);
     for (const [key, value] of Object.entries(attributes)) {
       element.setAttribute(key, String(value));
     }
     parent.appendChild(element);
     return element;
-  };
-  const finite = (value) => Number.isFinite(Number(value));
-  const formatNumber = (value) =>
-    Number(value).toLocaleString("ja-JP", {maximumFractionDigits: 3});
-  const formatPreviewCurrentValue = (value, valueKind) =>
-    valueKind === "boolean" ? (Number(value) === 0 ? "OFF" : "ON") : formatNumber(value);
-  const formatDuration = (start, end) => {
-    const milliseconds = Math.max(0, Number(end) - Number(start));
-    if (milliseconds < 60_000) return `${Math.max(1, Math.round(milliseconds / 1000))}秒`;
-    return `${Math.max(1, Math.round(milliseconds / 60_000))}分`;
-  };
-  const semanticSpec = (form) => ({
-    kind: form.elements.kind.value,
-    scale: number(form, "scale"),
-    offset: number(form, "offset"),
-    detector: {
-      mode: form.elements.detector_mode?.value || "",
-      rise_threshold: number(form, "rise_threshold"),
-      fall_threshold: number(form, "fall_threshold"),
-      rise_debounce_ms: Math.round(number(form, "rise_debounce_seconds") * 1000),
-      fall_debounce_ms: Math.round(number(form, "fall_debounce_seconds") * 1000),
-    },
-    trigger: form.elements.trigger?.value || "",
-  });
-  const semanticRuleSpec = (form) => ({
-    kind: form.elements.kind.value,
-    detector: {
-      mode: form.elements.detector_mode?.value || "",
-      rise_threshold: number(form, "rise_threshold"),
-      fall_threshold: number(form, "fall_threshold"),
-      rise_debounce_ms: Math.round(number(form, "rise_debounce_seconds") * 1000),
-      fall_debounce_ms: Math.round(number(form, "fall_debounce_seconds") * 1000),
-    },
-    trigger: form.elements.trigger?.value || "",
-  });
-
-  const renderPreviewChart = (svg, payload) => {
+  }
+  function isFiniteNumber(value) {
+    return Number.isFinite(Number(value));
+  }
+  function formatNumber(value) {
+    return Number(value).toLocaleString("ja-JP", {
+      maximumFractionDigits: 3
+    });
+  }
+  function formatCurrentValue(value, valueKind) {
+    return valueKind === "boolean" ? Number(value) === 0 ? "OFF" : "ON" : formatNumber(value);
+  }
+  function formatDuration(start, end) {
+    const milliseconds = Math.max(0, end - start);
+    if (milliseconds < 6e4) {
+      return `${Math.max(1, Math.round(milliseconds / 1e3))}\u79D2`;
+    }
+    return `${Math.max(1, Math.round(milliseconds / 6e4))}\u5206`;
+  }
+  function setText(element, value) {
+    if (element.textContent !== value) element.textContent = value;
+  }
+  function clearFieldErrors(panel) {
+    for (const error of queryAll(".field-error", panel)) {
+      error.remove();
+    }
+    for (const field of queryAll('[aria-invalid="true"]', panel)) {
+      field.removeAttribute("aria-invalid");
+      const describedBy = (field.getAttribute("aria-describedby") ?? "").split(/\s+/).filter((id) => id && !id.startsWith("preview-field-error-"));
+      if (describedBy.length) {
+        field.setAttribute("aria-describedby", describedBy.join(" "));
+      } else {
+        field.removeAttribute("aria-describedby");
+      }
+    }
+  }
+  function showFieldError(field, label) {
+    field.setAttribute("aria-invalid", "true");
+    const wrapper = field.closest("label");
+    if (!wrapper) return;
+    const error = document.createElement("small");
+    error.className = "field-error";
+    error.id = `preview-field-error-${field.getAttribute("name") ?? "field"}`;
+    error.textContent = `${label}\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002`;
+    wrapper.append(error);
+    const describedBy = new Set(
+      (field.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean)
+    );
+    describedBy.add(error.id);
+    field.setAttribute("aria-describedby", Array.from(describedBy).join(" "));
+  }
+  function updateAccessibleSummary(summary, payload) {
+    if (!summary) return;
+    const points = payload.points ?? [];
+    if (!points.length) {
+      setText(summary, "\u30B0\u30E9\u30D5\u306B\u8868\u793A\u3067\u304D\u308B\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002");
+      return;
+    }
+    const inputs = points.flatMap((point) => [
+      Number(point.input_min),
+      Number(point.input_max)
+    ]);
+    const calibrated = points.flatMap((point) => [
+      Number(point.calibrated_min),
+      Number(point.calibrated_max)
+    ]);
+    const latest = points.at(-1);
+    const count = payload.input_count ?? points.length;
+    setText(
+      summary,
+      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3001\u8A2D\u5B9A\u7D50\u679C\u306F${formatNumber(Math.min(...calibrated))}\u304B\u3089${formatNumber(Math.max(...calibrated))}\u3067\u3059\u3002\u6700\u65B0\u306E\u8A2D\u5B9A\u7D50\u679C\u306F${formatNumber(latest?.calibrated)}\u3067\u3059\u3002${count}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+    );
+  }
+  function previewWindow(payload, points) {
+    const now = Date.now();
+    return {
+      start: payload.window_start ?? points[0]?.received_at ?? now,
+      end: payload.window_end ?? points.at(-1)?.received_at ?? now
+    };
+  }
+  function renderEmptyChart(svg, payload) {
+    const title = addSVG(svg, "text", {
+      x: 380,
+      y: 122,
+      "text-anchor": "middle",
+      class: "chart-empty-title"
+    });
+    title.textContent = payload.error ? "\u3053\u306E\u30EB\u30FC\u30EB\u3067\u306F\u53D7\u4FE1\u5024\u3092\u5224\u5B9A\u3067\u304D\u307E\u305B\u3093" : "\u307E\u3060\u53D7\u4FE1\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093";
+    const hint = addSVG(svg, "text", {
+      x: 380,
+      y: 148,
+      "text-anchor": "middle",
+      class: "chart-empty-hint"
+    });
+    hint.textContent = payload.error ? "\u5165\u529B\u5024\u306E\u88DC\u6B63\u3068\u5224\u5B9A\u6761\u4EF6\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044" : "\u8A66\u3059\u5024\u3092\u5165\u529B\u3057\u3066\u3001\u8A2D\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059";
+  }
+  function renderPreviewChart(svg, payload) {
     svg.replaceChildren();
-    const points = payload.points || [];
+    const points = payload.points ?? [];
     const width = 760;
     const height = 260;
     const left = 58;
@@ -320,40 +526,26 @@
     const plotWidth = width - left - right;
     const plotHeight = height - top - bottom;
     if (!points.length) {
-      const empty = addSVG(svg, "text", {
-        x: width / 2,
-        y: height / 2 - 8,
-        "text-anchor": "middle",
-        class: "chart-empty-title",
-      });
-      empty.textContent = payload.error
-        ? "このルールでは受信値を判定できません"
-        : "まだ受信データがありません";
-      const hint = addSVG(svg, "text", {
-        x: width / 2,
-        y: height / 2 + 18,
-        "text-anchor": "middle",
-        class: "chart-empty-hint",
-      });
-      hint.textContent = payload.error
-        ? "入力値の補正と判定条件を確認してください"
-        : "試す値を入力して、設定結果を確認できます";
+      renderEmptyChart(svg, payload);
       return;
     }
-
     const values = [];
     for (const point of points) {
       for (const value of [
         point.input_min,
         point.input_max,
         point.calibrated_min,
-        point.calibrated_max,
+        point.calibrated_max
       ]) {
-        if (finite(value)) values.push(Number(value));
+        if (isFiniteNumber(value)) values.push(Number(value));
       }
     }
-    if (finite(payload.rise_threshold)) values.push(Number(payload.rise_threshold));
-    if (finite(payload.fall_threshold)) values.push(Number(payload.fall_threshold));
+    if (isFiniteNumber(payload.rise_threshold)) {
+      values.push(payload.rise_threshold);
+    }
+    if (isFiniteNumber(payload.fall_threshold)) {
+      values.push(payload.fall_threshold);
+    }
     let minValue = Math.min(...values);
     let maxValue = Math.max(...values);
     if (minValue === maxValue) {
@@ -365,62 +557,56 @@
       minValue -= padding;
       maxValue += padding;
     }
-    const firstReceivedAt = Number(points[0].received_at);
-    const lastReceivedAt = Number(points.at(-1).received_at);
+    const firstReceivedAt = points[0].received_at;
+    const lastReceivedAt = points.at(-1)?.received_at ?? firstReceivedAt;
     const x = (index) => {
       if (points.length === 1) return left + plotWidth / 2;
       const point = points[index];
       if (lastReceivedAt > firstReceivedAt) {
-        return (
-          left +
-          ((Number(point.received_at) - firstReceivedAt) * plotWidth) /
-            (lastReceivedAt - firstReceivedAt)
-        );
+        return left + (point.received_at - firstReceivedAt) * plotWidth / (lastReceivedAt - firstReceivedAt);
       }
-      return left + (index * plotWidth) / (points.length - 1);
+      return left + index * plotWidth / (points.length - 1);
     };
-    const y = (value) =>
-      top + ((maxValue - Number(value)) * plotHeight) / (maxValue - minValue);
-
+    const y = (value) => top + (maxValue - value) * plotHeight / (maxValue - minValue);
     for (let index = 0; index <= 4; index += 1) {
-      const gridY = top + (index * plotHeight) / 4;
+      const gridY = top + index * plotHeight / 4;
       addSVG(svg, "line", {
         x1: left,
         x2: width - right,
         y1: gridY,
         y2: gridY,
-        class: "chart-grid",
+        class: "chart-grid"
       });
       const label = addSVG(svg, "text", {
         x: left - 9,
         y: gridY + 4,
         "text-anchor": "end",
-        class: "chart-axis-label",
+        class: "chart-axis-label"
       });
-      label.textContent = formatNumber(maxValue - (index * (maxValue - minValue)) / 4);
+      label.textContent = formatNumber(
+        maxValue - index * (maxValue - minValue) / 4
+      );
     }
-
     const drawThreshold = (value, labelText) => {
-      if (!finite(value)) return;
+      if (!isFiniteNumber(value)) return;
       const thresholdY = y(value);
       addSVG(svg, "line", {
         x1: left,
         x2: width - right,
         y1: thresholdY,
         y2: thresholdY,
-        class: "chart-threshold",
+        class: "chart-threshold"
       });
       const label = addSVG(svg, "text", {
         x: width - right - 4,
         y: thresholdY - 6,
         "text-anchor": "end",
-        class: "chart-threshold-label",
+        class: "chart-threshold-label"
       });
       label.textContent = `${labelText} ${formatNumber(value)}`;
     };
-    drawThreshold(payload.rise_threshold, "立上り");
-    drawThreshold(payload.fall_threshold, "立下り");
-
+    drawThreshold(payload.rise_threshold, "\u7ACB\u4E0A\u308A");
+    drawThreshold(payload.fall_threshold, "\u7ACB\u4E0B\u308A");
     points.forEach((point, index) => {
       if (point.sample_count > 1) {
         addSVG(svg, "line", {
@@ -428,20 +614,18 @@
           x2: x(index),
           y1: y(point.input_min),
           y2: y(point.input_max),
-          class: "chart-range",
+          class: "chart-range"
         });
         addSVG(svg, "line", {
           x1: x(index) + 2,
           x2: x(index) + 2,
           y1: y(point.calibrated_min),
           y2: y(point.calibrated_max),
-          class: "chart-range-result",
+          class: "chart-range-result"
         });
       }
       if (payload.kind !== "numeric") {
-        const ratio = point.sample_count
-          ? Number(point.active_samples || 0) / Number(point.sample_count)
-          : 0;
+        const ratio = point.sample_count ? Number(point.active_samples ?? 0) / point.sample_count : 0;
         if (ratio > 0) {
           addSVG(svg, "rect", {
             x: x(index) - Math.max(1, plotWidth / Math.max(points.length, 1) / 2),
@@ -449,217 +633,241 @@
             width: Math.max(2, plotWidth / Math.max(points.length, 1)),
             height: plotHeight,
             class: "chart-active-band",
-            opacity: Math.max(0.12, ratio * 0.24),
+            opacity: Math.max(0.12, ratio * 0.24)
           });
         }
       }
     });
-
-    const path = (field) =>
-      points
-        .map((point, index) =>
-          `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${y(point[field]).toFixed(2)}`,
-        )
-        .join(" ");
-    addSVG(svg, "path", {d: path("input"), class: "chart-line chart-line-raw"});
+    const path = (field) => points.map(
+      (point, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${y(point[field]).toFixed(2)}`
+    ).join(" ");
+    addSVG(svg, "path", {
+      d: path("input"),
+      class: "chart-line chart-line-raw"
+    });
     addSVG(svg, "path", {
       d: path("calibrated"),
-      class: "chart-line chart-line-result",
+      class: "chart-line chart-line-result"
     });
-
     if (payload.kind === "cumulative_counter") {
-      const maxIncrement = Math.max(1, ...points.map((point) => Number(point.increment || 0)));
+      const maxIncrement = Math.max(
+        1,
+        ...points.map((point) => Number(point.increment ?? 0))
+      );
       points.forEach((point, index) => {
-        const increment = Number(point.increment || 0);
+        const increment = Number(point.increment ?? 0);
         if (!increment) return;
-        const barHeight = Math.max(3, (increment / maxIncrement) * 34);
+        const barHeight = Math.max(3, increment / maxIncrement * 34);
         addSVG(svg, "rect", {
           x: x(index) - 2,
           y: top + plotHeight - barHeight,
           width: 4,
           height: barHeight,
-          class: "chart-increment",
+          class: "chart-increment"
         });
       });
-      const maxCounter = Math.max(1, ...points.map((point) => Number(point.counter || 0)));
-      const counterY = (value) =>
-        top + ((maxCounter - Number(value || 0)) * plotHeight) / maxCounter;
-      const counterPath = points
-        .map(
-          (point, index) =>
-            `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ` +
-            `${counterY(point.counter).toFixed(2)}`,
-        )
-        .join(" ");
+      const maxCounter = Math.max(
+        1,
+        ...points.map((point) => Number(point.counter ?? 0))
+      );
+      const counterY = (value) => top + (maxCounter - Number(value ?? 0)) * plotHeight / maxCounter;
+      const counterPath = points.map(
+        (point, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${counterY(point.counter).toFixed(2)}`
+      ).join(" ");
       addSVG(svg, "path", {
         d: counterPath,
-        class: "chart-line chart-line-counter",
+        class: "chart-line chart-line-counter"
       });
+      const latestCounter = points.at(-1)?.counter;
       const counterLabel = addSVG(svg, "text", {
         x: width - right - 4,
-        y: counterY(points.at(-1)?.counter) - 7,
+        y: counterY(latestCounter) - 7,
         "text-anchor": "end",
-        class: "chart-counter-label",
+        class: "chart-counter-label"
       });
-      counterLabel.textContent = `累積 ${formatNumber(points.at(-1)?.counter || 0)}`;
+      counterLabel.textContent = `\u7D2F\u7A4D ${formatNumber(latestCounter ?? 0)}`;
     }
-
+    const window2 = previewWindow(payload, points);
     const start = addSVG(svg, "text", {
       x: left,
       y: height - 14,
-      class: "chart-axis-label",
+      class: "chart-axis-label"
     });
-    start.textContent = new Date(payload.window_start).toLocaleTimeString("ja-JP", {
+    start.textContent = new Date(window2.start).toLocaleTimeString("ja-JP", {
       hour: "2-digit",
       minute: "2-digit",
-      second: "2-digit",
+      second: "2-digit"
     });
     const end = addSVG(svg, "text", {
       x: width - right,
       y: height - 14,
       "text-anchor": "end",
-      class: "chart-axis-label",
+      class: "chart-axis-label"
     });
-    end.textContent = new Date(payload.window_end).toLocaleTimeString("ja-JP", {
+    end.textContent = new Date(window2.end).toLocaleTimeString("ja-JP", {
       hour: "2-digit",
       minute: "2-digit",
-      second: "2-digit",
+      second: "2-digit"
     });
-  };
-
-  for (const panel of document.querySelectorAll("[data-setting-simulation]")) {
+  }
+  function isMultipleRulePreview(response) {
+    return "rules" in response;
+  }
+  function selectedPreview(response, selectedRuleID) {
+    if (!isMultipleRulePreview(response)) return response;
+    const selected = response.rules.find((rule) => rule.rule_id === selectedRuleID) ?? response.rules.find((rule) => !rule.error) ?? response.rules[0];
+    if (!selected) return null;
+    return {
+      ...selected,
+      window_start: response.window_start,
+      window_end: response.window_end,
+      truncated_by: response.truncated_by
+    };
+  }
+  function buildRequest(signalRef, forms, calibrationForm, multipleRules, testInput) {
+    const body = { signal_ref: signalRef };
+    const firstForm = forms[0];
+    if (multipleRules) {
+      const rules = forms.filter(
+        (candidate) => !!candidate.dataset.ruleId || !!formField(candidate, "display_name")?.value.trim()
+      ).map((candidate, index) => ({
+        rule_id: candidate.dataset.ruleId || `draft-${index + 1}`,
+        display_name: formField(candidate, "display_name")?.value.trim() || `\u30EB\u30FC\u30EB ${index + 1}`,
+        spec: ruleSpec(candidate)
+      }));
+      if (rules.length) {
+        body.calibration = {
+          scale: calibrationForm ? numericFormField(calibrationForm, "scale") : 1,
+          offset: calibrationForm ? numericFormField(calibrationForm, "offset") : 0
+        };
+        body.rules = rules;
+      }
+    } else if (firstForm) {
+      body.spec = definitionSpec(firstForm);
+    }
+    const testValue = testInput?.value.trim();
+    if (testValue) body.test_value = Number(testValue);
+    return body;
+  }
+  function initializePreview(panel) {
     const signalRef = panel.dataset.signalRef;
-    const forms = Array.from(
-      document.querySelectorAll(`form.semantic-form[data-signal-ref="${signalRef}"]`),
+    if (!signalRef) return;
+    const previewScope = panel.closest(".sensor-setting-workspace") ?? document.body;
+    const forms = queryAll(
+      `form.semantic-form[data-signal-ref="${signalRef}"]`
     );
-    const form = forms[0];
-    const calibrationForm = document.querySelector(
-      `form[action="/console/signals/${signalRef}/calibration"]`,
+    const calibrationForm = query(
+      `form[action="/console/signals/${signalRef}/calibration"]`
     );
-    const ruleCards = forms
-      .map((candidate) => candidate.closest("details.semantic-rule-card"))
-      .filter(Boolean);
-    const usesMultipleRules =
-      forms.some((candidate) => candidate.dataset.ruleId) ||
-      forms.some((candidate) => candidate.action.endsWith("/semantic-rules"));
-    const testInput = panel.querySelector("[name=preview_test_value]");
-    const testResult = panel.querySelector("[data-preview-test-result]");
-    const range = panel.querySelector("[data-preview-range]");
-    const count = panel.querySelector("[data-preview-count]");
-    const message = panel.querySelector("[data-preview-message]");
-    const chart = panel.querySelector("[data-preview-chart]");
-    const currentValue = panel.querySelector("[data-preview-current-value]");
-    const currentReceived = panel.querySelector("[data-preview-current-received]");
-    const sourceFlow = document.querySelector(".sensor-flow-input [data-source-value]");
-    const sourceCurrentValue = sourceFlow?.querySelector("[data-source-current-value]");
-    const sourceCurrentReceived = sourceFlow?.querySelector(
-      "[data-source-current-received]",
+    const ruleCards = forms.map((form) => form.closest("details.semantic-rule-card")).filter(
+      (card) => card instanceof HTMLDetailsElement
     );
-    const valueKind = document.querySelector(
-      'form[data-signal-profile] [name="display_value_kind"]',
+    const multipleRules = forms.some((form) => !!form.dataset.ruleId) || forms.some((form) => form.action.endsWith("/semantic-rules"));
+    const testInput = query(
+      '[name="preview_test_value"]',
+      panel
+    );
+    const testResult = query("[data-preview-test-result]", panel);
+    const range = query("[data-preview-range]", panel);
+    const count = query("[data-preview-count]", panel);
+    const message = query("[data-preview-message]", panel);
+    const accessibleSummary = query(
+      "[data-preview-accessible-summary]",
+      panel
+    );
+    const toggle = query("[data-preview-toggle]", panel);
+    const chart = query("[data-preview-chart]", panel);
+    const currentValue = query(
+      "[data-preview-current-value]",
+      panel
+    );
+    const currentReceived = query(
+      "[data-preview-current-received]",
+      panel
+    );
+    if (!range || !count || !message || !chart) return;
+    const sourceSummary = query(
+      ".sensor-detail-latest[data-source-value]"
+    );
+    const sourceCurrentValue = sourceSummary ? query("[data-source-current-value]", sourceSummary) : null;
+    const sourceCurrentReceived = sourceSummary ? query("[data-source-current-received]", sourceSummary) : null;
+    const valueKind = query(
+      'form[data-signal-profile] [name="display_value_kind"]'
     );
     let controller;
-    let debounce = 0;
+    let debounce;
     let previewUnavailable = false;
-
+    let paused = false;
     const refresh = async () => {
       controller?.abort();
       controller = new AbortController();
-      form?.querySelectorAll('[aria-invalid="true"]').forEach((field) => {
-        field.removeAttribute("aria-invalid");
-      });
-      const body = {signal_ref: signalRef};
-      if (usesMultipleRules) {
-        body.calibration = {
-          scale: calibrationForm ? number(calibrationForm, "scale") : 1,
-          offset: number(calibrationForm, "offset"),
-        };
-        body.rules = forms
-          .filter((candidate) =>
-            candidate.dataset.ruleId ||
-            candidate.elements.display_name?.value.trim(),
-          )
-          .map((candidate, index) => ({
-            rule_id: candidate.dataset.ruleId || `draft-${index + 1}`,
-            display_name:
-              candidate.elements.display_name?.value.trim() || `ルール ${index + 1}`,
-            spec: semanticRuleSpec(candidate),
-          }));
-        if (!body.rules.length) {
-          delete body.calibration;
-          delete body.rules;
-        }
-      } else if (form) {
-        body.spec = semanticSpec(form);
-      }
-      if (testInput?.value.trim()) body.test_value = Number(testInput.value);
+      clearFieldErrors(previewScope);
+      const body = buildRequest(
+        signalRef,
+        forms,
+        calibrationForm,
+        multipleRules,
+        testInput
+      );
       try {
-        const response = await fetch("/api/v1/mapping-previews", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRF-Token": csrf(),
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          const failure = await response.json().catch(() => ({}));
-          const invalidField = failure.error?.field
-            ? form?.elements[failure.error.field]
-            : null;
-          invalidField?.setAttribute("aria-invalid", "true");
-          const fieldLabel = invalidField
-            ?.closest("label")
-            ?.querySelector(":scope > span")
-            ?.textContent?.trim();
-          if (response.status === 404 && !form) {
+        const result = await createMappingPreview(
+          body,
+          csrfToken(),
+          controller.signal
+        );
+        if (!result.ok) {
+          const fieldName = result.error?.error.field;
+          const invalidField = fieldName && forms[0] ? formField(forms[0], fieldName) : null;
+          const fieldLabel = invalidField?.closest("label")?.querySelector(":scope > span")?.textContent?.trim();
+          if (result.status === 404 && !forms[0]) {
             previewUnavailable = true;
-            message.textContent = "値の変換が設定されると、ここに設定結果を表示します。";
-          } else if (fieldLabel) {
-            message.textContent = `${fieldLabel}を確認してください。最後に確認できたグラフを表示しています。`;
+            setText(
+              message,
+              "\u5024\u306E\u5909\u63DB\u304C\u8A2D\u5B9A\u3055\u308C\u308B\u3068\u3001\u3053\u3053\u306B\u8A2D\u5B9A\u7D50\u679C\u3092\u8868\u793A\u3057\u307E\u3059\u3002"
+            );
+          } else if (fieldLabel && invalidField) {
+            showFieldError(invalidField, fieldLabel);
+            setText(
+              message,
+              `${fieldLabel}\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u6700\u5F8C\u306B\u78BA\u8A8D\u3067\u304D\u305F\u30B0\u30E9\u30D5\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+            );
           } else {
-            message.textContent = "設定内容を確認してください。最後に確認できたグラフを表示しています。";
+            setText(
+              message,
+              "\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u6700\u5F8C\u306B\u78BA\u8A8D\u3067\u304D\u305F\u30B0\u30E9\u30D5\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002"
+            );
           }
           return;
         }
-        const responsePayload = await response.json();
         const selectedRuleID = ruleCards.find((card) => card.open)?.dataset.ruleId;
-        const firstRule =
-          responsePayload.rules?.find(
-            (rule) => rule.rule_id === selectedRuleID,
-          ) ||
-          responsePayload.rules?.find((rule) => !rule.error) ||
-          responsePayload.rules?.[0];
-        const payload = firstRule
-          ? {
-              ...firstRule,
-              window_start: responsePayload.window_start,
-              window_end: responsePayload.window_end,
-              truncated_by: responsePayload.truncated_by,
-            }
-          : responsePayload;
-        renderPreviewChart(chart, payload);
-        const latest = payload.points?.at(-1);
-        if (latest && currentValue) {
-          currentValue.textContent = formatPreviewCurrentValue(latest.input, valueKind?.value);
+        const payload = selectedPreview(result.value, selectedRuleID);
+        if (!payload) {
+          setText(message, "\u78BA\u8A8D\u3067\u304D\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002");
+          return;
         }
-        if (latest && sourceCurrentValue) {
+        renderPreviewChart(chart, payload);
+        updateAccessibleSummary(accessibleSummary, payload);
+        const points = payload.points ?? [];
+        const latest = points.at(-1);
+        if (latest && currentValue) {
+          currentValue.textContent = formatCurrentValue(
+            latest.input,
+            valueKind?.value
+          );
+        }
+        if (latest && sourceCurrentValue && sourceSummary) {
           const rawValue = formatNumber(latest.input);
           sourceCurrentValue.textContent = rawValue;
-          sourceFlow.dataset.sourceValue = rawValue;
+          sourceSummary.dataset.sourceValue = rawValue;
         }
         if (latest && (currentReceived || sourceCurrentReceived)) {
-          const elapsed = Math.max(0, Date.now() - Number(latest.received_at));
-          const relative =
-            elapsed < 5_000
-              ? "たった今"
-              : elapsed < 60_000
-                ? `${Math.floor(elapsed / 1_000)}秒前`
-                : `${Math.floor(elapsed / 60_000)}分前`;
-          const receivedTitle = new Date(latest.received_at).toLocaleString("ja-JP");
+          const elapsed = Math.max(0, Date.now() - latest.received_at);
+          const relative = elapsed < 5e3 ? "\u305F\u3063\u305F\u4ECA" : elapsed < 6e4 ? `${Math.floor(elapsed / 1e3)}\u79D2\u524D` : `${Math.floor(elapsed / 6e4)}\u5206\u524D`;
+          const receivedTitle = new Date(latest.received_at).toLocaleString(
+            "ja-JP"
+          );
           if (currentReceived) {
-            currentReceived.textContent = `最終受信 ${relative}`;
+            currentReceived.textContent = `\u6700\u7D42\u53D7\u4FE1 ${relative}`;
             currentReceived.title = receivedTitle;
           }
           if (sourceCurrentReceived) {
@@ -668,54 +876,53 @@
           }
         }
         if (payload.input_count === 0) {
-          range.textContent = "受信データはまだありません";
-          count.textContent = "試す値で設定結果を確認できます。";
-          message.textContent = "履歴は作らず、実際に届いた値だけを表示します。";
+          range.textContent = "\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093";
+          count.textContent = "\u8A66\u3059\u5024\u3067\u8A2D\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002";
+          setText(message, "\u5C65\u6B74\u306F\u4F5C\u3089\u305A\u3001\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3060\u3051\u3092\u8868\u793A\u3057\u307E\u3059\u3002");
         } else {
-          const duration = formatDuration(payload.window_start, payload.window_end);
-          range.textContent = `直近${duration}の受信値`;
-          count.textContent =
-            `${Number(payload.input_count).toLocaleString("ja-JP")}件を` +
-            `${Number(payload.plot_count).toLocaleString("ja-JP")}点で表示`;
-          message.textContent =
-            payload.truncated_by === "input_count"
-              ? "高速な信号のため、最新20,000件を要約しています。"
-              : payload.kind === "cumulative_counter"
-                ? `表示範囲内の累積値は ${
-                    payload.points.at(-1)?.counter ?? 0
-                  } です。先頭の値は数えません。`
-                : "設定を変えると、保存前の結果をこのグラフで確認できます。";
+          const window2 = previewWindow(payload, points);
+          range.textContent = `\u76F4\u8FD1${formatDuration(window2.start, window2.end)}\u306E\u53D7\u4FE1\u5024`;
+          count.textContent = `${payload.input_count.toLocaleString("ja-JP")}\u4EF6\u3092${payload.plot_count.toLocaleString("ja-JP")}\u70B9\u3067\u8868\u793A`;
+          const valuesOverlap = points.every(
+            (point) => Math.abs(point.input - point.calibrated) < 1e-9
+          );
+          setText(
+            message,
+            payload.truncated_by === "input_count" ? "\u9AD8\u901F\u306A\u4FE1\u53F7\u306E\u305F\u3081\u3001\u6700\u65B020,000\u4EF6\u3092\u8981\u7D04\u3057\u3066\u3044\u307E\u3059\u3002" : payload.kind === "cumulative_counter" ? `\u8868\u793A\u7BC4\u56F2\u5185\u306E\u7D2F\u7A4D\u5024\u306F ${points.at(-1)?.counter ?? 0} \u3067\u3059\u3002\u5148\u982D\u306E\u5024\u306F\u6570\u3048\u307E\u305B\u3093\u3002` : valuesOverlap ? "\u5909\u63DB\u524D\u5F8C\u306E\u5024\u306F\u540C\u3058\u3067\u3059\u3002\u88DC\u6B63\u3092\u5909\u66F4\u3059\u308B\u3068\u5DEE\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002" : "\u8A2D\u5B9A\u3092\u5909\u3048\u308B\u3068\u3001\u4FDD\u5B58\u524D\u306E\u7D50\u679C\u3092\u3053\u306E\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+          );
         }
         if (testResult) {
-          const result = payload.test_result;
-          if (!result) {
-            testResult.textContent = "値を入力すると結果を確認できます";
-          } else if (result.number !== undefined) {
-            testResult.textContent = formatNumber(result.number);
-          } else if (result.boolean !== undefined) {
-            testResult.textContent = result.boolean ? "ON" : "OFF";
-          } else if (result.integer !== undefined) {
-            testResult.textContent = `累積 ${formatNumber(result.integer)}`;
+          const previewResult = payload.test_result;
+          if (!previewResult) {
+            testResult.textContent = "\u5024\u3092\u5165\u529B\u3059\u308B\u3068\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059";
+          } else if (previewResult.number !== void 0) {
+            testResult.textContent = formatNumber(previewResult.number);
+          } else if (previewResult.boolean !== void 0) {
+            testResult.textContent = previewResult.boolean ? "ON" : "OFF";
+          } else if (previewResult.integer !== void 0) {
+            testResult.textContent = `\u7D2F\u7A4D ${formatNumber(previewResult.integer)}`;
           } else if (payload.kind === "cumulative_counter") {
-            testResult.textContent = "最初の値として確認（累積には加えません）";
+            testResult.textContent = "\u6700\u521D\u306E\u5024\u3068\u3057\u3066\u78BA\u8A8D\uFF08\u7D2F\u7A4D\u306B\u306F\u52A0\u3048\u307E\u305B\u3093\uFF09";
           } else {
-            testResult.textContent = `補正後 ${formatNumber(result.calibrated)}`;
+            testResult.textContent = `\u88DC\u6B63\u5F8C ${formatNumber(previewResult.calibrated)}`;
           }
         }
       } catch (error) {
-        if (error.name !== "AbortError") {
-          message.textContent = "設定結果を更新できません。データ受信には影響ありません。";
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setText(
+            message,
+            "\u8A2D\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u30C7\u30FC\u30BF\u53D7\u4FE1\u306B\u306F\u5F71\u97FF\u3042\u308A\u307E\u305B\u3093\u3002"
+          );
         }
       }
     };
-
     const schedule = () => {
-      window.clearTimeout(debounce);
+      if (debounce !== void 0) window.clearTimeout(debounce);
       debounce = window.setTimeout(refresh, 300);
     };
-    for (const candidate of forms) {
-      candidate.addEventListener("input", schedule);
-      candidate.addEventListener("change", schedule);
+    for (const form of forms) {
+      form.addEventListener("input", schedule);
+      form.addEventListener("change", schedule);
     }
     calibrationForm?.addEventListener("input", schedule);
     calibrationForm?.addEventListener("change", schedule);
@@ -725,9 +932,29 @@
       });
     }
     testInput?.addEventListener("input", schedule);
-    refresh();
+    toggle?.addEventListener("click", () => {
+      paused = !paused;
+      toggle.setAttribute("aria-checked", String(!paused));
+      const state = query("[data-preview-toggle-state]", toggle);
+      if (state) state.textContent = paused ? "OFF" : "ON";
+      panel.classList.toggle("preview-paused", paused);
+      if (!paused) void refresh();
+    });
+    void refresh();
     window.setInterval(() => {
-      if (document.visibilityState === "visible" && !previewUnavailable) refresh();
-    }, 1000);
+      if (document.visibilityState === "visible" && !previewUnavailable && !paused) {
+        void refresh();
+      }
+    }, 1e3);
   }
+  function initializePreviews() {
+    for (const panel of queryAll("[data-setting-simulation]")) {
+      initializePreview(panel);
+    }
+  }
+
+  // src/console.ts
+  initializeShell();
+  initializeSemanticForms();
+  initializePreviews();
 })();
