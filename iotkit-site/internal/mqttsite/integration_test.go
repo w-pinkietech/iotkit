@@ -24,7 +24,7 @@ func TestMQTTPreActivationFixtureGetsNoApplicationAcknowledgement(t *testing.T) 
 		t.Fatal(err)
 	}
 	descriptorPath := filepath.Join(
-		"..", "..", "..", "testdata", "egress", "v1", "descriptor-snapshot.json",
+		"..", "..", "..", "testdata", "egress", "v2", "descriptor-snapshot.json",
 	)
 	descriptorPayload, err := os.ReadFile(descriptorPath)
 	if err != nil {

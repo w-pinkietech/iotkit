@@ -103,17 +103,32 @@ receives no acknowledgement; normal Edge replay converges after Site becomes act
 
 ## Descriptor snapshot
 
-The descriptor topic carries schema version 1 complete snapshots of Edge-owned device and signal
-metadata. Edge publishes after every MQTT connection and whenever the persisted descriptor revision
-changes. The encoded snapshot is limited to 1 MiB and is rejected rather than truncated.
+The descriptor topic carries schema version 2 complete snapshots of Edge-owned device and signal
+metadata. Other descriptor schema versions are rejected; there is no pre-release schema 1
+compatibility path. Schema version 2 includes the optional device-level `model_id`. Edge publishes
+after every MQTT connection and whenever the persisted descriptor revision changes. The encoded
+snapshot is limited to 1 MiB and is rejected rather than truncated.
 
-It contains stable `system_id`/`series_key`, an optional non-authoritative display identifier,
-device state, measurement key, channel, variant, canonical unit, and value type. It never contains
-hardware/provider identifiers, credentials, or adapter payloads. Site validates the composite
-series identity and durably replicates the snapshot. Lower revisions in one ledger epoch are ignored;
-equal revisions with different content are conflicts. A descriptor may discover an inactive Edge
-but never activates it. A descriptor failure never authorizes purge, changes publication admission,
-or suppresses `accepted-through` for an already active Edge.
+`model_id` is an opaque, stable software catalog identifier for an explicitly persisted device
+model. It is not a display label, device identity component, or semantic classification. It is
+absent for unknown and non-modelled devices. When present it is 1–64 ASCII bytes matching
+`[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*`. Site may display it but MUST NOT branch semantic mapping,
+grouping, or authorization on its value.
+
+The snapshot also contains stable `system_id`/`series_key`, an optional non-authoritative display
+identifier, device state, measurement key, channel, variant, canonical unit, and value type. It
+never contains hardware/provider identifiers, adapter type or instance identifiers, physical
+locators, configured sources, credentials, or adapter payloads. Site validates the composite
+series identity and durably replicates the snapshot. Lower revisions in one ledger epoch are
+ignored; equal revisions with different content are conflicts. Persisted model binding changes
+advance `descriptor_revision`, so different model content is never published under the same
+revision.
+
+A descriptor may discover an inactive Edge but never activates it. A descriptor failure never
+authorizes purge, changes publication admission, or suppresses `accepted-through` for an already
+active Edge. Edge and Site are developed and deployed together against schema version 2; incompatible
+pre-release databases and retained descriptors are recreated instead of carrying compatibility
+code.
 
 ## Record batch
 

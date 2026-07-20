@@ -27,6 +27,7 @@ type DescriptorDevice struct {
 	SystemID   string  `json:"system_id"`
 	Identifier *string `json:"identifier,omitempty"`
 	State      string  `json:"state"`
+	ModelID    *string `json:"model_id,omitempty"`
 }
 
 type DescriptorSignal struct {
@@ -116,8 +117,8 @@ func DecodeDescriptorSnapshot(payload []byte) (DescriptorSnapshot, error) {
 }
 
 func (snapshot DescriptorSnapshot) Validate() error {
-	if snapshot.SchemaVersion != SchemaVersion || !snapshot.Complete {
-		return descriptorInvalid("only complete descriptor schema version 1 is supported")
+	if snapshot.SchemaVersion != 2 || !snapshot.Complete {
+		return descriptorInvalid("only complete descriptor schema version 2 is supported")
 	}
 	if err := validateTopicSegment("edge_node_id", snapshot.EdgeNodeID); err != nil {
 		return err
@@ -146,6 +147,9 @@ func (snapshot DescriptorSnapshot) Validate() error {
 		}
 		if device.Identifier != nil && !validDisplayText(*device.Identifier, 64, false) {
 			return descriptorInvalid("invalid device identifier")
+		}
+		if device.ModelID != nil && !validModelID(*device.ModelID) {
+			return descriptorInvalid("invalid device model_id")
 		}
 	}
 
@@ -176,6 +180,28 @@ func (snapshot DescriptorSnapshot) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validModelID(value string) bool {
+	if len(value) == 0 || len(value) > 64 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	afterSeparator := false
+	for index := 1; index < len(value); index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') {
+			afterSeparator = false
+			continue
+		}
+		if (character == '-' || character == '_' || character == '.') &&
+			!afterSeparator {
+			afterSeparator = true
+			continue
+		}
+		return false
+	}
+	return !afterSeparator
 }
 
 func sameChannelIndex(left, right *int32) bool {
@@ -218,5 +244,5 @@ func validDisplayText(value string, maxBytes int, allowEmpty bool) bool {
 }
 
 func descriptorInvalid(message string) error {
-	return fmt.Errorf("invalid descriptor v1 message: %s", message)
+	return fmt.Errorf("invalid descriptor message: %s", message)
 }

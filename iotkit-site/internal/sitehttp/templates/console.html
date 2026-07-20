@@ -325,6 +325,7 @@
                 <dl class="sensor-detail-facts">
                   <div><dt>Edge</dt><dd>{{.Edge}}</dd></div>
                   <div><dt>デバイス</dt><dd>{{if .DeviceName}}{{if .DeviceRef}}<a href="/equipment/devices/{{.DeviceRef}}">{{.DeviceName}}</a>{{else}}{{.DeviceName}}{{end}}{{else}}確認できません{{end}}</dd></div>
+                  {{if .DeviceModelID}}<div><dt>機器モデル</dt><dd class="mono">{{.DeviceModelID}}</dd></div>{{end}}
                   <div><dt>データ種類</dt><dd class="mono">{{.SourceSensorType}}</dd></div>
                   <div><dt>値の形式</dt><dd>{{.SourceValueType}}</dd></div>
                   <div><dt>通知された単位</dt><dd>{{.SourceUnit}}</dd></div>
@@ -453,6 +454,7 @@
         <div><dt>センサー</dt><dd>{{len .Signals}}件</dd></div>
         <div><dt>最終受信</dt><dd title="{{.LastReceivedTitle}}">{{.LastReceived}}</dd></div>
         <div><dt>接続情報</dt><dd>{{if eq .Device.DescriptorPresence "current"}}受信済み{{else}}確認が必要{{end}}</dd></div>
+        {{with .Device.ModelID}}<div><dt>機器モデル</dt><dd class="mono">{{.}}</dd></div>{{end}}
         {{if and $.IsAdmin .Identifier}}<div><dt>現物との照合番号</dt><dd class="mono">{{.Identifier}}</dd></div>{{end}}
       </dl>
 

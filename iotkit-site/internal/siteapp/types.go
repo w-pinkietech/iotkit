@@ -222,6 +222,7 @@ type DeviceSummary struct {
 	DeviceRef          string  `json:"device_ref"`
 	Edge               string  `json:"edge"`
 	Identifier         *string `json:"-"`
+	ModelID            *string `json:"model_id,omitempty"`
 	DisplayName        string  `json:"display_name"`
 	Location           string  `json:"location"`
 	ProfileRevision    *int64  `json:"profile_revision"`

@@ -1,14 +1,15 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "edge_node_id": "edge-node-01",
   "ledger_epoch": "epoch-01",
-  "descriptor_revision": 4,
+  "descriptor_revision": 5,
   "complete": true,
   "devices": [
     {
       "system_id": "018f0000-0000-7000-8000-000000000001",
       "identifier": "01234567",
-      "state": "active"
+      "state": "active",
+      "model_id": "mcp9600"
     }
   ],
   "signals": [

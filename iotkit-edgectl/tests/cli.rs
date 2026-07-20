@@ -1770,7 +1770,7 @@ fn existing_empty_db_gets_edge_migration_version_set() {
     assert_eq!(
         versions,
         vec![
-            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
         ]
     );
     let edge_node_id: String = conn

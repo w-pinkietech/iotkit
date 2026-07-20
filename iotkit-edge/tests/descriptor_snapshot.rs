@@ -20,13 +20,19 @@ fn builds_adapter_neutral_snapshot_with_resolved_metadata() {
     conn.execute(
         "INSERT INTO devices
             (system_id, hardware_id, presentation_identifier, kind, state, created_at)
-         VALUES (?1, 'ble:secret-provider-id', '01234567', 'individual', 'active', 1)",
+         VALUES (?1, 'input:secret-provider-id:i2c:0x60', '01234567', 'positional', 'active', 1)",
         [
             iotkit_core_ledger::SystemId::from_text("018f0000-0000-7000-8000-000000000001")
                 .unwrap()
                 .as_bytes()
                 .to_vec(),
         ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO positional_device_models(system_id, model_id)
+         SELECT system_id, 'mcp9600' FROM devices",
+        [],
     )
     .unwrap();
     conn.execute(
@@ -49,15 +55,16 @@ fn builds_adapter_neutral_snapshot_with_resolved_metadata() {
         iotkit_edge::descriptor_snapshot::build_descriptor_snapshot(&conn, "edge-node-01").unwrap();
     assert_eq!(snapshot.schema_version, DESCRIPTOR_SCHEMA_VERSION);
     assert!(snapshot.complete);
-    assert_eq!(snapshot.descriptor_revision, 4);
+    assert_eq!(snapshot.descriptor_revision, 5);
     assert_eq!(snapshot.devices[0].identifier.as_deref(), Some("01234567"));
+    assert_eq!(snapshot.devices[0].model_id.as_deref(), Some("mcp9600"));
     assert_eq!(snapshot.signals[0].value_type, "bool");
     assert_eq!(snapshot.signals[0].channel_index, None);
 
     let text = String::from_utf8(snapshot.encode_bounded().unwrap()).unwrap();
     assert!(!text.contains("secret-provider-id"));
     let fixture =
-        std::fs::read_to_string("../testdata/egress/v1/descriptor-snapshot.json").unwrap();
+        std::fs::read_to_string("../testdata/egress/v2/descriptor-snapshot.json").unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&text).unwrap(),
         serde_json::from_str::<serde_json::Value>(&fixture).unwrap()

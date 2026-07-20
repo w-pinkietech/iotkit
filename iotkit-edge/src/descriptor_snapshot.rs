@@ -34,6 +34,8 @@ pub fn build_descriptor_snapshot(
                 DeviceState::Retired => "retired",
             }
             .into(),
+            model_id: ledger::positional_model_id(conn, &device.system_id)
+                .map_err(|error| PublishError::Ledger(error.to_string()))?,
         });
         let series = ledger::list_series_for_device(conn, &device.system_id)
             .map_err(|error| PublishError::Ledger(error.to_string()))?;

@@ -100,7 +100,9 @@ Inside Edge, the adapter and collector normalize and durably enqueue observation
 ```
 
 Edgeは同じBroker上のEdge Node固有`descriptors` topicへ、ledger/registryから組み立てた1 MiB以下の
-complete snapshotをQoS 1 retainedで送る。Siteはrevision/epochを検証して専用tableへ複製する。この経路は
+schema 2 complete snapshotをQoS 1 retainedで送る。機器に明示的に永続化された任意`model_id`だけを
+入力モデル情報として含める。Siteはschema 2とrevision/epochを検証して専用tableへ
+複製する。Adapterインスタンス、物理locator、hardware/provider識別子はこの境界を越えない。この経路は
 publication outbox、raw transaction、accepted-through cursorと結合せず、失敗してもcustody処理を継続する。
 
 Broker enrollment済みでもSite activation前のEdgeは、正規化済み観測をEdgeローカルへ保持するだけで
@@ -294,7 +296,7 @@ Approved next-slice non-Rust placement:
 | Component | Path | Responsibility (one line) |
 |---|---|---|
 | IoTKit Site | `iotkit-site/` | MQTT consumer, durable raw acceptance, Edge Node cursor manager, accepted-through publisher, query, future-only semantic projection, and durable MQTT application export. |
-| Cross-language fixtures | `testdata/egress/v1/` | Normative JSON examples decoded by both Rust and Go tests. |
+| Cross-language fixtures | `testdata/egress/v1/`, `testdata/egress/v2/` | Normative JSON examples decoded by both Rust and Go tests. Descriptor uses only `v2`; the other current egress messages remain in `v1`. |
 
 ### Layer rules (machine-checked)
 

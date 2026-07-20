@@ -12,7 +12,7 @@ import (
 
 func descriptorFixture(t *testing.T) contract.DescriptorSnapshot {
 	t.Helper()
-	payload, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "egress", "v1", "descriptor-snapshot.json"))
+	payload, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "egress", "v2", "descriptor-snapshot.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +45,43 @@ func TestApplyDescriptorSnapshotPersistsCurrentReplica(t *testing.T) {
 	}
 	if len(signals) != 1 || signals[0].Presence != DescriptorCurrent || signals[0].ValueType != "bool" {
 		t.Fatalf("signals = %#v", signals)
+	}
+}
+
+func TestApplyDescriptorSnapshotPersistsAndClearsCurrentDeviceModel(t *testing.T) {
+	store := openTestStore(t)
+	snapshot := descriptorFixture(t)
+	if _, err := store.ApplyDescriptorSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := store.ListDescriptorDevices(context.Background(), "edge-node-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].ModelID == nil || *devices[0].ModelID != "mcp9600" {
+		t.Fatalf("devices = %#v", devices)
+	}
+	inventory, err := store.ListInventoryDevices(context.Background(), 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory) != 1 || inventory[0].ModelID == nil || *inventory[0].ModelID != "mcp9600" {
+		t.Fatalf("inventory = %#v", inventory)
+	}
+
+	next := snapshot
+	next.DescriptorRevision++
+	next.Devices = append([]contract.DescriptorDevice(nil), snapshot.Devices...)
+	next.Devices[0].ModelID = nil
+	if _, err := store.ApplyDescriptorSnapshot(context.Background(), next); err != nil {
+		t.Fatal(err)
+	}
+	devices, err = store.ListDescriptorDevices(context.Background(), "edge-node-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].ModelID != nil {
+		t.Fatalf("model was not cleared: %#v", devices)
 	}
 }
 
@@ -103,7 +140,8 @@ func TestApplyDescriptorSnapshotMarksMissingRowsStaleAndAcceptsNewEpoch(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(devices) != 1 || devices[0].Presence != DescriptorStale {
+	if len(devices) != 1 || devices[0].Presence != DescriptorStale ||
+		devices[0].ModelID == nil || *devices[0].ModelID != "mcp9600" {
 		t.Fatalf("devices = %#v", devices)
 	}
 	signals, err := store.ListDescriptorSignals(context.Background(), "edge-node-01")

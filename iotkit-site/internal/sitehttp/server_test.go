@@ -381,6 +381,8 @@ func TestEquipmentDeviceDetailLinksSensorsToCanonicalSettings(t *testing.T) {
 		`action="/console/devices/` + devices[0].DeviceRef + `/profile"`,
 		`href="/sensors/` + signals[0].SignalRef + `"`,
 		"センサー設定を開く",
+		"機器モデル",
+		"mcp9600",
 		"24.8",
 		"temperature_c",
 	} {
@@ -396,6 +398,33 @@ func TestEquipmentDeviceDetailLinksSensorsToCanonicalSettings(t *testing.T) {
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("device detail duplicates sensor setting %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestSensorDetailShowsDeviceModelInSourceFacts(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/"+signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	for _, want := range []string{"接続元と受信情報を確認する", "機器モデル", "mcp9600"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("sensor detail missing %q: %s", want, body)
 		}
 	}
 }
@@ -2481,7 +2510,7 @@ func newTestServerFixture(
 func seedDiscoveredEdge(t *testing.T, archive *store.Store) siteapp.Edge {
 	t.Helper()
 	snapshot := contract.DescriptorSnapshot{
-		SchemaVersion:      1,
+		SchemaVersion:      2,
 		EdgeNodeID:         "factory-edge-01",
 		LedgerEpoch:        "epoch-01",
 		DescriptorRevision: 1,
@@ -2518,7 +2547,7 @@ func seedAdditionalDiscoveredEdge(t *testing.T, archive *store.Store) siteapp.Ed
 	if _, err := archive.ApplyDescriptorSnapshot(
 		context.Background(),
 		contract.DescriptorSnapshot{
-			SchemaVersion:      1,
+			SchemaVersion:      2,
 			EdgeNodeID:         "assembly-edge-02",
 			LedgerEpoch:        "epoch-02",
 			DescriptorRevision: 1,
@@ -2560,9 +2589,10 @@ func seedSetupDevice(t *testing.T, archive *store.Store) {
 		seriesKey = systemID + ":temperature_c:na:primary"
 	)
 	identifier := "BP-01234567"
+	modelID := "mcp9600"
 	unit := "Cel"
 	snapshot := contract.DescriptorSnapshot{
-		SchemaVersion:      1,
+		SchemaVersion:      2,
 		EdgeNodeID:         "factory-edge-01",
 		LedgerEpoch:        "epoch-01",
 		DescriptorRevision: 1,
@@ -2570,6 +2600,7 @@ func seedSetupDevice(t *testing.T, archive *store.Store) {
 		Devices: []contract.DescriptorDevice{{
 			SystemID:   systemID,
 			Identifier: &identifier,
+			ModelID:    &modelID,
 			State:      "active",
 		}},
 		Signals: []contract.DescriptorSignal{{

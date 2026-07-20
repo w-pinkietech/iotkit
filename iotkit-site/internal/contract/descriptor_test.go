@@ -3,16 +3,18 @@ package contract
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestDecodeDescriptorSnapshotFixture(t *testing.T) {
-	snapshot, err := DecodeDescriptorSnapshot(fixture(t, "descriptor-snapshot.json"))
+	snapshot, err := DecodeDescriptorSnapshot(descriptorFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.EdgeNodeID != "edge-node-01" || snapshot.DescriptorRevision != 4 || !snapshot.Complete {
+	if snapshot.EdgeNodeID != "edge-node-01" || snapshot.DescriptorRevision != 5 || !snapshot.Complete {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 	if len(snapshot.Devices) != 1 || snapshot.Devices[0].Identifier == nil || *snapshot.Devices[0].Identifier != "01234567" {
@@ -23,8 +25,57 @@ func TestDecodeDescriptorSnapshotFixture(t *testing.T) {
 	}
 }
 
+func TestDecodeDescriptorSnapshotSchemaTwoModelID(t *testing.T) {
+	payload := descriptorFixture(t)
+	snapshot, err := DecodeDescriptorSnapshot(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.SchemaVersion != 2 || len(snapshot.Devices) != 1 ||
+		snapshot.Devices[0].ModelID == nil ||
+		*snapshot.Devices[0].ModelID != "mcp9600" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+
+	var unsupportedSchemaOne map[string]any
+	if err := json.Unmarshal(payload, &unsupportedSchemaOne); err != nil {
+		t.Fatal(err)
+	}
+	unsupportedSchemaOne["schema_version"] = float64(1)
+	delete(unsupportedSchemaOne["devices"].([]any)[0].(map[string]any), "model_id")
+	encoded, err := json.Marshal(unsupportedSchemaOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeDescriptorSnapshot(encoded); err == nil {
+		t.Fatal("schema 1 descriptor decoded")
+	}
+}
+
+func TestDecodeDescriptorSnapshotRejectsInvalidModelIDs(t *testing.T) {
+	payload := descriptorFixture(t)
+	for _, invalid := range []string{
+		"", "MCP9600", "-mcp9600", "vendor//model", "model id", "model-",
+	} {
+		t.Run(invalid, func(t *testing.T) {
+			var value map[string]any
+			if err := json.Unmarshal(payload, &value); err != nil {
+				t.Fatal(err)
+			}
+			value["devices"].([]any)[0].(map[string]any)["model_id"] = invalid
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeDescriptorSnapshot(encoded); err == nil {
+				t.Fatalf("invalid model_id %q decoded", invalid)
+			}
+		})
+	}
+}
+
 func TestDecodeDescriptorSnapshotRejectsUnknownAndInconsistentContent(t *testing.T) {
-	payload := fixture(t, "descriptor-snapshot.json")
+	payload := descriptorFixture(t)
 	var value map[string]any
 	if err := json.Unmarshal(payload, &value); err != nil {
 		t.Fatal(err)
@@ -52,6 +103,17 @@ func TestDecodeDescriptorSnapshotRejectsUnknownAndInconsistentContent(t *testing
 	}
 }
 
+func descriptorFixture(t *testing.T) []byte {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(
+		"..", "..", "..", "testdata", "egress", "v2", "descriptor-snapshot.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
 func TestDecodeDescriptorSnapshotRejectsOversizeBeforeJSONDecode(t *testing.T) {
 	payload := bytes.Repeat([]byte{'x'}, MaxDescriptorBytes+1)
 	if _, err := DecodeDescriptorSnapshot(payload); err == nil {
@@ -60,7 +122,7 @@ func TestDecodeDescriptorSnapshotRejectsOversizeBeforeJSONDecode(t *testing.T) {
 }
 
 func TestDecodeDescriptorSnapshotRejectsMalformedIdentityStateAndDuplicates(t *testing.T) {
-	payload := fixture(t, "descriptor-snapshot.json")
+	payload := descriptorFixture(t)
 	mutations := map[string]func(map[string]any){
 		"malformed identity": func(value map[string]any) {
 			value["devices"].([]any)[0].(map[string]any)["system_id"] = "not-a-uuid"

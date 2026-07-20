@@ -321,6 +321,7 @@ func (store *Store) ListInventoryDevices(
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT source.device_ref, source.edge_node_id,
 			descriptor.identifier,
+			descriptor.model_id,
 			COALESCE(profile.display_name, ''),
 			COALESCE(profile.location, ''),
 			profile.revision,
@@ -346,12 +347,14 @@ func (store *Store) ListInventoryDevices(
 	for rows.Next() {
 		var summary siteapp.DeviceSummary
 		var identifier sql.NullString
+		var modelID sql.NullString
 		var revision sql.NullInt64
 		var lastReceivedAt sql.NullInt64
 		if err := rows.Scan(
 			&summary.DeviceRef,
 			&summary.Edge,
 			&identifier,
+			&modelID,
 			&summary.DisplayName,
 			&summary.Location,
 			&revision,
@@ -363,6 +366,9 @@ func (store *Store) ListInventoryDevices(
 		}
 		if identifier.Valid {
 			summary.Identifier = &identifier.String
+		}
+		if modelID.Valid {
+			summary.ModelID = &modelID.String
 		}
 		if revision.Valid {
 			summary.ProfileRevision = &revision.Int64

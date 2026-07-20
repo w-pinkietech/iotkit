@@ -37,6 +37,7 @@ type consoleSignalView struct {
 	ChannelLabel        string
 	DeviceName          string
 	DeviceLocation      string
+	DeviceModelID       string
 	InputIsBoolean      bool
 	RiseDebounceSeconds string
 	FallDebounceSeconds string
@@ -363,6 +364,9 @@ func attachConsoleSignalDevices(
 		signals[index].DeviceLocation = device.Location
 		if signals[index].DeviceLocation == "" {
 			signals[index].DeviceLocation = "設置場所 未設定"
+		}
+		if device.ModelID != nil {
+			signals[index].DeviceModelID = *device.ModelID
 		}
 	}
 }

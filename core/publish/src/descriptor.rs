@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::PublishError;
 
-pub const DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
+pub const DESCRIPTOR_SCHEMA_VERSION: u32 = 2;
 pub const MAX_DESCRIPTOR_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +25,8 @@ pub struct DescriptorDevice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
     pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,7 +70,7 @@ impl DescriptorSnapshot {
 
     fn validate(&self) -> Result<(), PublishError> {
         if self.schema_version != DESCRIPTOR_SCHEMA_VERSION || !self.complete {
-            return invalid("only complete descriptor schema version 1 is supported");
+            return invalid("only complete descriptor schema version 2 is supported");
         }
         crate::wire::validate_topic_segment("edge_node_id", &self.edge_node_id)
             .map_err(|error| PublishError::Invalid(error.to_string()))?;
@@ -94,6 +96,11 @@ impl DescriptorSnapshot {
                     || identifier.chars().any(char::is_control))
             {
                 return invalid("invalid descriptor device identifier");
+            }
+            if let Some(model_id) = &device.model_id
+                && !iotkit_core_ledger::is_valid_model_id(model_id)
+            {
+                return invalid("invalid descriptor device model_id");
             }
         }
 

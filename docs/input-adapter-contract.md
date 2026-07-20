@@ -319,6 +319,12 @@ same source and locator fails the whole reconciliation before runtimes start;
 it must use an explicit device replacement/cutover rather than silently
 reusing history.
 
+The persisted model ID is also the only adapter-origin metadata exported in
+descriptor schema 2. It is optional, opaque, and display-only at Site. Adapter
+type/instance IDs, configured sources, bus paths, addresses, and other physical
+locators remain Edge-local deployment details and are not inferred from
+`hardware_id`.
+
 ## 7. Lifecycle and legacy isolation
 
 Initial start is fail-fast: if one instance fails, Edge stops already-started

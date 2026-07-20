@@ -45,7 +45,7 @@ func (store *fakeStore) ApplyDescriptorSnapshot(_ context.Context, snapshot cont
 
 func descriptorPayload(t *testing.T) []byte {
 	t.Helper()
-	payload, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "egress", "v1", "descriptor-snapshot.json"))
+	payload, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "egress", "v2", "descriptor-snapshot.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestProcessAppliesDescriptorWithoutPublishingAcknowledgement(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(store.descriptors) != 1 || store.descriptors[0].DescriptorRevision != 4 {
+	if len(store.descriptors) != 1 || store.descriptors[0].DescriptorRevision != 5 {
 		t.Fatalf("descriptors = %#v", store.descriptors)
 	}
 	if published {

@@ -717,6 +717,9 @@ var schemaMigrations = []migration{
 			WHERE adapter_id = 'yokakit.mqtt.v1';
 		DROP TABLE yokakit_routes_v3;
 	`},
+	{version: 16, sql: `
+		ALTER TABLE descriptor_devices ADD COLUMN model_id TEXT;
+	`},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

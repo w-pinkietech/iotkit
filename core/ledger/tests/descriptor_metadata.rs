@@ -1,6 +1,6 @@
 use iotkit_core_ledger::{
-    DeviceKind, DeviceState, MIGRATIONS, NewDevice, descriptor_revision, ensure_series,
-    insert_device, set_presentation_identifier,
+    DeviceKind, DeviceState, MIGRATIONS, NewDevice, bind_positional_model, descriptor_revision,
+    ensure_series, insert_device, set_presentation_identifier,
 };
 
 fn migrations_through(version: u32) -> Vec<iotkit_core_storage::Migration> {
@@ -74,4 +74,61 @@ fn presentation_identifier_rejects_control_and_overlong_values() {
 
     assert!(set_presentation_identifier(&conn, &system_id, Some("bad\nvalue")).is_err());
     assert!(set_presentation_identifier(&conn, &system_id, Some(&"x".repeat(65))).is_err());
+}
+
+#[test]
+fn descriptor_model_migration_preserves_revision_and_binding_advances_it() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    iotkit_core_storage::run_migrations(&conn, &migrations_through(21)).unwrap();
+    conn.execute(
+        "INSERT INTO ledger_meta(key, value) VALUES ('edge_node_id', 'edge-node-01')",
+        [],
+    )
+    .unwrap();
+    let before_migration = descriptor_revision(&conn).unwrap();
+
+    iotkit_core_storage::run_migrations(&conn, &migrations_through(22)).unwrap();
+    assert_eq!(descriptor_revision(&conn).unwrap(), before_migration);
+
+    let system_id = insert_device(
+        &conn,
+        &NewDevice {
+            hardware_id: "input:test:line-a:i2c:0x60".into(),
+            user_label: Some("MCP9600 thermocouple".into()),
+            parent: None,
+            kind: DeviceKind::Positional,
+            initial_state: DeviceState::Active,
+        },
+    )
+    .unwrap();
+    let before_binding = descriptor_revision(&conn).unwrap();
+    bind_positional_model(&conn, &system_id, "mcp9600").unwrap();
+    assert_eq!(descriptor_revision(&conn).unwrap(), before_binding + 1);
+}
+
+#[test]
+fn positional_model_binding_rejects_non_canonical_model_id() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    iotkit_core_storage::run_migrations(&conn, &migrations_through(22)).unwrap();
+    let system_id = insert_device(
+        &conn,
+        &NewDevice {
+            hardware_id: "input:test:line-a:i2c:0x60".into(),
+            user_label: None,
+            parent: None,
+            kind: DeviceKind::Positional,
+            initial_state: DeviceState::Active,
+        },
+    )
+    .unwrap();
+
+    let error = bind_positional_model(&conn, &system_id, "Model ID").unwrap_err();
+    assert!(matches!(
+        error,
+        iotkit_core_ledger::LedgerError::InvalidModelId(_)
+    ));
+    assert_eq!(
+        iotkit_core_ledger::positional_model_id(&conn, &system_id).unwrap(),
+        None
+    );
 }

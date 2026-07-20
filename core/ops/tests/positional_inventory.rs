@@ -139,6 +139,33 @@ fn repeated_reconcile_reuses_the_existing_system_id() {
 }
 
 #[test]
+fn positional_inventory_rejects_non_canonical_model_before_writing() {
+    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
+    let hardware_id = "input:rpi:one:i2c:0x60";
+
+    db.with_conn_sync(|conn| {
+        let error = dispatch(
+            conn,
+            standard_catalog(),
+            system_request(json!([device_with_model(
+                hardware_id,
+                "Model ID",
+                "invalid model",
+            )])),
+        )
+        .unwrap_err();
+        assert!(matches!(error, OpError::Validation(_)));
+        assert!(
+            find_alive_by_hardware_id(conn, hardware_id)
+                .unwrap()
+                .is_none()
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn positional_inventory_rejects_a_model_change_at_the_same_locator_atomically() {
     let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
     let hardware_id = "input:rpi:one:i2c:0x60";

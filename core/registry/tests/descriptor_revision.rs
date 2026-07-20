@@ -9,6 +9,7 @@ fn registry_entry_change_bumps_descriptor_revision_in_its_transaction() {
     migrations.sort_by_key(|m| m.version);
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     iotkit_core_storage::run_migrations(&conn, &migrations).unwrap();
+    let before = descriptor_revision(&conn).unwrap();
 
     let tx = conn.unchecked_transaction().unwrap();
     let catalog = standard_catalog();
@@ -19,10 +20,10 @@ fn registry_entry_change_bumps_descriptor_revision_in_its_transaction() {
         "test",
     )
     .unwrap();
-    assert_eq!(descriptor_revision(&tx).unwrap(), 2);
+    assert_eq!(descriptor_revision(&tx).unwrap(), before + 1);
     tx.rollback().unwrap();
 
-    assert_eq!(descriptor_revision(&conn).unwrap(), 1);
+    assert_eq!(descriptor_revision(&conn).unwrap(), before);
 }
 
 #[test]
@@ -33,6 +34,7 @@ fn registry_alias_change_bumps_descriptor_revision_in_its_transaction() {
     migrations.sort_by_key(|m| m.version);
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     iotkit_core_storage::run_migrations(&conn, &migrations).unwrap();
+    let before = descriptor_revision(&conn).unwrap();
 
     let catalog = standard_catalog();
     enable_entry(
@@ -42,7 +44,8 @@ fn registry_alias_change_bumps_descriptor_revision_in_its_transaction() {
         "test",
     )
     .unwrap();
-    assert_eq!(descriptor_revision(&conn).unwrap(), 2);
+    let after_entry = descriptor_revision(&conn).unwrap();
+    assert_eq!(after_entry, before + 1);
 
     let tx = conn.unchecked_transaction().unwrap();
     define_alias(
@@ -52,8 +55,8 @@ fn registry_alias_change_bumps_descriptor_revision_in_its_transaction() {
         AliasKind::Rename,
     )
     .unwrap();
-    assert_eq!(descriptor_revision(&tx).unwrap(), 3);
+    assert_eq!(descriptor_revision(&tx).unwrap(), after_entry + 1);
     tx.rollback().unwrap();
 
-    assert_eq!(descriptor_revision(&conn).unwrap(), 2);
+    assert_eq!(descriptor_revision(&conn).unwrap(), after_entry);
 }

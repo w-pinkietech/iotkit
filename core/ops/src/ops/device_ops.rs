@@ -1,6 +1,7 @@
 use iotkit_core_ledger::{
     DeviceKind, DeviceState, NewDevice, SystemId, approve_sighting, bind_positional_model,
-    find_alive_by_hardware_id, get_device, insert_device, positional_model_id, retire_device,
+    find_alive_by_hardware_id, get_device, insert_device, is_valid_model_id, positional_model_id,
+    retire_device,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
@@ -190,12 +191,10 @@ fn positional_inventory_intents(
             let model_id = device
                 .get("model_id")
                 .and_then(Value::as_str)
-                .filter(|value| {
-                    !value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
-                })
+                .filter(|value| is_valid_model_id(value))
                 .ok_or_else(|| {
                     OpError::Validation(
-                        "devices model_id must be a non-empty string of at most 64 bytes".into(),
+                        "devices model_id must be a canonical model identifier".into(),
                     )
                 })?
                 .to_owned();

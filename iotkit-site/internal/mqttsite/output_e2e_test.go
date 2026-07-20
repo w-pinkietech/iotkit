@@ -112,7 +112,7 @@ func prepareOutputRoutes(t *testing.T, archive *store.Store) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 	descriptorPayload, err := os.ReadFile(filepath.Join(
-		"..", "..", "..", "testdata", "egress", "v1", "descriptor-snapshot.json",
+		"..", "..", "..", "testdata", "egress", "v2", "descriptor-snapshot.json",
 	))
 	if err != nil {
 		t.Fatal(err)

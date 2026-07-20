@@ -7,6 +7,7 @@ pub enum LedgerError {
     HardwareIdInUse(String),
     NotFound(String),
     InvalidId(String),
+    InvalidModelId(String),
     InvalidReplace(String),
     UnsupportedPreReleaseSchema,
     Storage(StorageError),
@@ -20,6 +21,7 @@ impl std::fmt::Display for LedgerError {
             }
             Self::NotFound(w) => write!(f, "not found: {w}"),
             Self::InvalidId(s) => write!(f, "invalid system_id text: {s}"),
+            Self::InvalidModelId(s) => write!(f, "invalid model_id: {s}"),
             Self::InvalidReplace(s) => write!(f, "invalid replace: {s}"),
             Self::UnsupportedPreReleaseSchema => write!(
                 f,
@@ -407,11 +409,32 @@ pub fn bind_positional_model(
     system_id: &SystemId,
     model_id: &str,
 ) -> Result<(), LedgerError> {
+    if !is_valid_model_id(model_id) {
+        return Err(LedgerError::InvalidModelId(model_id.into()));
+    }
     conn.execute(
         "INSERT INTO positional_device_models(system_id, model_id) VALUES (?1, ?2)",
         params![system_id.as_bytes().to_vec(), model_id],
     )?;
     Ok(())
+}
+
+pub fn is_valid_model_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 || !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    let mut after_separator = false;
+    for byte in &bytes[1..] {
+        if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+            after_separator = false;
+        } else if matches!(byte, b'-' | b'_' | b'.') && !after_separator {
+            after_separator = true;
+        } else {
+            return false;
+        }
+    }
+    !after_separator
 }
 
 pub fn ensure_series(

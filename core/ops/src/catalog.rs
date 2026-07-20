@@ -163,7 +163,10 @@ impl From<iotkit_core_ledger::LedgerError> for OpError {
     fn from(value: iotkit_core_ledger::LedgerError) -> Self {
         match value {
             iotkit_core_ledger::LedgerError::NotFound(_) => Self::NotFound,
-            iotkit_core_ledger::LedgerError::InvalidId(_) => Self::Validation(value.to_string()),
+            iotkit_core_ledger::LedgerError::InvalidId(_)
+            | iotkit_core_ledger::LedgerError::InvalidModelId(_) => {
+                Self::Validation(value.to_string())
+            }
             iotkit_core_ledger::LedgerError::HardwareIdInUse(_)
             | iotkit_core_ledger::LedgerError::InvalidReplace(_) => {
                 Self::PreconditionFailed(value.to_string())

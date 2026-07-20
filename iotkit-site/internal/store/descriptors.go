@@ -37,6 +37,7 @@ type DescriptorDeviceRow struct {
 	EdgeNodeID         string
 	SystemID           string
 	Identifier         *string
+	ModelID            *string
 	State              string
 	Presence           DescriptorPresence
 	DescriptorRevision int64
@@ -162,16 +163,17 @@ func (store *Store) ApplyDescriptorSnapshot(
 	for _, device := range snapshot.Devices {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO descriptor_devices (
-				edge_node_id, system_id, identifier, state, presence,
+				edge_node_id, system_id, identifier, model_id, state, presence,
 				descriptor_revision, updated_at
-			) VALUES (?, ?, ?, ?, 'current', ?, ?)
+			) VALUES (?, ?, ?, ?, ?, 'current', ?, ?)
 			ON CONFLICT(edge_node_id, system_id) DO UPDATE SET
 				identifier = excluded.identifier,
+				model_id = excluded.model_id,
 				state = excluded.state,
 				presence = 'current',
 				descriptor_revision = excluded.descriptor_revision,
 				updated_at = excluded.updated_at
-		`, snapshot.EdgeNodeID, device.SystemID, device.Identifier, device.State,
+		`, snapshot.EdgeNodeID, device.SystemID, device.Identifier, device.ModelID, device.State,
 			int64(snapshot.DescriptorRevision), now); err != nil {
 			return DescriptorApplyResult{}, err
 		}
@@ -218,7 +220,7 @@ func (store *Store) ApplyDescriptorSnapshot(
 
 func (store *Store) ListDescriptorDevices(ctx context.Context, edgeNodeID string) ([]DescriptorDeviceRow, error) {
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT edge_node_id, system_id, identifier, state, presence,
+		SELECT edge_node_id, system_id, identifier, model_id, state, presence,
 			descriptor_revision, updated_at
 		FROM descriptor_devices
 		WHERE edge_node_id = ?
@@ -232,12 +234,16 @@ func (store *Store) ListDescriptorDevices(ctx context.Context, edgeNodeID string
 	for rows.Next() {
 		var row DescriptorDeviceRow
 		var identifier sql.NullString
-		if err := rows.Scan(&row.EdgeNodeID, &row.SystemID, &identifier, &row.State,
+		var modelID sql.NullString
+		if err := rows.Scan(&row.EdgeNodeID, &row.SystemID, &identifier, &modelID, &row.State,
 			&row.Presence, &row.DescriptorRevision, &row.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if identifier.Valid {
 			row.Identifier = &identifier.String
+		}
+		if modelID.Valid {
+			row.ModelID = &modelID.String
 		}
 		result = append(result, row)
 	}
