@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,6 +22,57 @@ import (
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/sitesession"
 	"github.com/w-pinkietech/iotkit-next/iotkit-site/internal/store"
 )
+
+func TestConsoleMutationResultReturnsToTheEditedSection(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/console/semantic-rules/rule_01",
+		strings.NewReader(url.Values{
+			"return_anchor": {"rule-rule_01"},
+		}.Encode()),
+	)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	response := httptest.NewRecorder()
+	(&Server{}).consoleMutationResult(
+		response,
+		request,
+		"/sensors/sig_0123456789abcdef0123456789abcdef",
+		nil,
+	)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", response.Code)
+	}
+	if location := response.Header().Get("Location"); location !=
+		"/sensors/sig_0123456789abcdef0123456789abcdef?focus=rule-rule_01&saved=1#rule-rule_01" {
+		t.Fatalf("Location = %q", location)
+	}
+}
+
+func TestConsoleMutationResultExplainsThresholdOrderErrors(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/console/semantic-rules/rule_01",
+		strings.NewReader(url.Values{
+			"return_anchor": {"rule-rule_01"},
+		}.Encode()),
+	)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	response := httptest.NewRecorder()
+	(&Server{}).consoleMutationResult(
+		response,
+		request,
+		"/sensors/sig_0123456789abcdef0123456789abcdef",
+		errors.New("semantic falling threshold cannot exceed rising threshold"),
+	)
+
+	if location := response.Header().Get("Location"); location !=
+		"/sensors/sig_0123456789abcdef0123456789abcdef?error=threshold_order&focus=rule-rule_01#rule-rule_01" {
+		t.Fatalf("Location = %q", location)
+	}
+}
 
 const testOrigin = "https://iotkit.example.test"
 
@@ -590,6 +642,9 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 	body := response.Body.String()
 	for _, want := range []string{
 		`class="sensor-detail"`,
+		`class="sensor-detail-header"`,
+		`class="sensor-detail-identity"`,
+		`class="sensor-detail-latest`,
 		`class="sensor-setting-workspace"`,
 		`class="sensor-detail-settings sensor-setting-controls"`,
 		`class="content-section sensor-settings-panel"`,
@@ -610,7 +665,6 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 		`>熱電対</option>`,
 		`>照度</option>`,
 		`入力値の補正`,
-		`正常値の使い方`,
 		`異常検知`,
 		`data-semantic-detector`,
 		`name="rise_threshold"`,
@@ -622,7 +676,26 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 		`name="return_to" value="` + path + `"`,
 		`data-setting-simulation`,
 		`data-preview-chart`,
+		`data-preview-toggle`,
+		`role="switch" aria-checked="true"`,
+		`data-preview-accessible-summary`,
+		`data-setting-tabs`,
+		`role="tablist" aria-label="設定の種類"`,
+		`data-setting-tab="basic"`,
+		`data-setting-tab="normal"`,
+		`data-setting-tab="alarm"`,
+		`data-setting-panel="basic"`,
+		`data-setting-panel="normal"`,
+		`data-setting-panel="alarm"`,
+		`class="semantic-advanced-settings"`,
+		`判定の安定化`,
 		`name="preview_test_value"`,
+		`id="sensor-profile"`,
+		`name="return_anchor" value="sensor-profile"`,
+		`id="sensor-calibration"`,
+		`name="return_anchor" value="sensor-calibration"`,
+		`id="rule-create"`,
+		`name="return_anchor" value="rule-create"`,
 		"受信値と設定結果",
 	} {
 		if !strings.Contains(body, want) {
@@ -637,6 +710,15 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 	}
 	if strings.Contains(body, "累積するタイミング") {
 		t.Fatalf("sensor detail still exposes the internal trigger wording: %s", body)
+	}
+	for _, forbidden := range []string{
+		`class="sensor-data-flow"`,
+		`class="semantic-rule-output"`,
+		`正常値の使い方`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("sensor detail retains duplicate content %q: %s", forbidden, body)
+		}
 	}
 }
 
@@ -698,7 +780,8 @@ func TestSensorDetailSeparatesNormalAndAbnormalSemanticRules(t *testing.T) {
 	cookie, _ := loginTestAccount(t, server)
 	request := httptest.NewRequest(
 		http.MethodGet,
-		"/sensors/"+signals[0].SignalRef,
+		"/sensors/"+signals[0].SignalRef+
+			"?error=threshold_order&focus=rule-"+alarm.ID,
 		nil,
 	)
 	request.AddCookie(cookie)
@@ -708,7 +791,6 @@ func TestSensorDetailSeparatesNormalAndAbnormalSemanticRules(t *testing.T) {
 
 	for _, want := range []string{
 		"入力値の補正",
-		"正常値の使い方",
 		"異常検知",
 		"現在温度",
 		"高温アラーム",
@@ -716,6 +798,12 @@ func TestSensorDetailSeparatesNormalAndAbnormalSemanticRules(t *testing.T) {
 		`action="/console/semantic-rules/` + alarm.ID + `"`,
 		`action="/console/signals/` + signals[0].SignalRef + `/calibration"`,
 		`action="/console/signals/` + signals[0].SignalRef + `/semantic-rules"`,
+		`data-focus-target="rule-` + alarm.ID + `"`,
+		`id="rule-` + normal.ID + `"`,
+		`name="return_anchor" value="rule-` + normal.ID + `"`,
+		`class="semantic-rule-danger"`,
+		`data-confirm-message="現在温度を終了します。`,
+		"立ち下がりしきい値は、立ち上がりしきい値以下にしてください。",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("sensor detail missing %q: %s", want, body)
@@ -2128,11 +2216,11 @@ func TestConsoleScriptSupportsAutomaticSettingSimulation(t *testing.T) {
 		"chart-range-result",
 		"chart-line-counter",
 		"point.received_at",
-		"formatPreviewCurrentValue",
+		"formatCurrentValue",
 		`[name="display_value_kind"]`,
 		`document.visibilityState === "visible"`,
 		"previewUnavailable",
-		"failure.error.field",
+		"result.error?.error.field",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("console script missing %q", want)
