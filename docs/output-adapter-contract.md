@@ -131,6 +131,8 @@ type Adapter interface {
 
 設定変更は新しいroute revisionとしてfuture-onlyに適用する。過去Observationを暗黙にbackfillしない。
 routeを停止しても、すでにdurable outboxへ入ったpublicationを黙って削除しない。
+routeの停止は新しい変換を止める設定であり、既存outboxのMQTT配送は継続する。Consoleもrouteの
+使用中・停止中とMQTTの配送中・滞留を別々に判定する。
 
 route設定へBroker credential、CA、private key、tokenを保存しない。`config`はviewerにも表示可能な
 非秘密の変換設定だけで構成する。接続profileとsecretはdeployment設定が所有する。
@@ -157,14 +159,30 @@ created_at
 YokaKit専用routeはmigrationで`adapter_id=yokakit.mqtt.v1`とversion付きconfig JSONへ変換する。
 outboxの`route_id`は維持し、配送待ちmessageを失わない。
 
-Console/APIが利用する汎用面は次である。
+`output_routes`は現在、利用者がruleごとに作る設定ではなく、Site全体の`export_profile`から
+`profile_rule_binding`を経て展開される実行単位である。profile expanderがSite ID、
+versioned Adapter ID・semantic rule ID・外部用途で特定される論理signal ID、rule kindから
+exact route configを作る。Adapter自身はSite、rule一覧、将来ruleの自動追加を知らない。
+
+Console/APIが利用するSite全体の操作面は次である。
+
+- `GET /api/v1/export-profiles`: 外部出力先とbinding状態を一覧する
+- `POST /api/v1/export-profiles`: 対応する現在・将来ruleへの継続適用を確認する。汎用出力は即時開始し、
+  YokaKitはtopicとIDだけを準備する
+- `PUT /api/v1/output-bindings/{binding_id}`: YokaKit boolean用途を確定し、topicとIDを準備する
+- `POST /api/v1/output-bindings/{binding_id}/start`: topicを外部へ登録した確認後に、
+  その時点より後のデータだけを送信開始する
+- `POST /api/v1/export-profiles/{profile_id}/stop`: 新規変換を境界で終了し、既存配送をdrainする
+- `GET /api/v1/output-bindings/{binding_id}/publication`: 完全なtopic/payloadを確認する
+
+次のroute APIの読み取りは診断のため残す。
 
 - `GET /api/v1/output-adapters`: 利用可能なdescriptorとmode
 - `GET /api/v1/output-routes`: route、非秘密config、配送件数
-- `POST /api/v1/output-routes`: rule、Adapter ID、version付きconfigからfuture-only routeを作成
 
-既存のYokaKit専用APIは移行用の互換入口であり、内部では同じgeneric route operationを使う。
-API handlerやConsole handlerからSQLへ直接書き込まない。
+個別routeを作るAPIとConsole操作は提供しない。これらから任意topic、source ID、signal IDを
+作ることはできない。旧個別routeがDBに残っている場合はmigrationで停止し、未配送outboxだけを
+既存の配送経路で処理する。API handlerやConsole handlerからSQLへ直接書き込まない。
 
 ## 7. Transformation and errors
 
@@ -182,6 +200,22 @@ API handlerやConsole handlerからSQLへ直接書き込まない。
 純粋変換には一時的network errorという分類は存在しない。変換失敗時はoutboxへ不正なmessageを入れず、
 routeを要対応として可視化する。元のsemantic Observationを削除、配送済み扱い、別modeへ推測変換
 してはならない。
+
+Siteはrouteごとに、自由文ではないclosedな`last_transform_error_code`と発生時刻だけをdurable保存する。
+初版のcodeは`adapter_unavailable`、`config_version_mismatch`、`invalid_observation`、
+`transform_failed`である。config JSON、payload、credential、内部error文字列を診断欄へ複製しない。
+一つのrouteの決定的変換失敗は同じbatchにある別routeの変換・outbox保存を止めない。失敗した
+Observationにはoutbox rowを作らない。候補はrouteごとの古い順を保ち、最後に変換を試みた時刻が古い
+routeから一件ずつinterleaveする。エラー中のrouteは最古の未変換Observationだけを再試行候補にする。
+一つのrouteで最初の変換失敗が起きたら、そのbatch中の同route後続候補を処理しない。これにより壊れた
+routeのbacklogがbatch limitを独占せず、正常routeの連続入力も修復済みrouteの再試行を飢餓させず、
+後続成功が未解決の古い失敗を隠さない。routeの最古の未変換Observationが再び正常に変換できた時点で
+error状態を解消する。
+
+Consoleではこの変換状態をOutput Adapterの列へ表示し、`pending`、`published_at`から導くMQTT配送状態と
+分ける。Output Adapter自身がBroker接続、retry、PUBACKを担当しているように表示してはならない。
+短時間の`pending`は異常ではないため「配送中」として表示する。最古の未配送messageが5分以上残った
+routeだけを「配送停止の可能性」として要確認にし、最終配送時刻と件数を同じ欄へ表示する。
 
 ## 8. MQTT publication
 
@@ -219,18 +253,32 @@ YokaKitの実decoderへ渡し、送信側とconsumer側のcontract driftを検�
 `iotkit.mqtt-json.v1`は、特定applicationに依存しないIoTKit共通JSONをexact MQTT topicへ出力する。
 `numeric`、`boolean`、`cumulative_value`、`alarm`の全汎用kindを、意味を変更せず受け入れる。
 
-route設定は次の閉じたschemaとする。
+Site全体の外部出力先ではtopicを人へ入力させない。`source_id`は`site_meta.site_id`、
+`signal_id`は`(versioned adapter_id, semantic rule_id, mode)`ごとに暗号学的乱数から一度だけ発行し、
+profile expanderが次を生成する。
+
+```text
+iotkit/v1/sources/<site-id>/signals/<signal-id>/observations
+```
+
+出力先を停止して同じAdapter・rule・modeで再追加した場合、新しいbindingとfuture-only開始境界を作るが、
+`signal_id`は再利用する。別modeや別versioned Adapterには別の`signal_id`を発行する。payloadの
+`series_id`が意味づけ系列を、`observation_id`が個々のObservationを識別するため、bindingの
+ライフサイクルをsignal ID変更で表現しない。
+
+Adapterへ渡す内部route設定は次の閉じたschemaを維持する。これはlegacy routeの読取りと、
+Adapterを純粋変換に保つための実行形式であり、通常Consoleの入力schemaではない。
 
 ```json
 {
   "schema_version": 1,
-  "topic": "factory/line-a/production"
+  "topic": "iotkit/v1/sources/site-0123456789abcdef0123456789abcdef/signals/sig-0123456789abcdef0123456789abcdef/observations"
 }
 ```
 
 `topic`は空でない完全なMQTT topic名である。ワイルドカード`+`、`#`、NUL、不正UTF-8、65,535 byte超を
-拒否する。テンプレート、placeholder、暗黙のsensor名展開は行わない。複数routeへ同じtopicを設定でき、
-一つのrouteは一つのexact topicだけを持つ。
+拒否する。Adapter内でテンプレート、placeholder、sensor名展開は行わず、一つのrouteは一つのexact
+topicだけを持つ。
 
 payloadは次の閉じたIoTKit共通contractである。
 
@@ -270,8 +318,19 @@ route設定は`schema_version=1`、`source_id`、`signal_id`、`kind`、任意�
 topicとpayloadはYokaKitの合意済み
 `YokaKit MQTT Purpose-Bound Signal Contract v1`へ変換する。
 
+YokaKitではtopicが入力登録契約でもある。profile追加やboolean用途確定だけではpublishせず、
+Console/APIがexact topicとpayload例を提示する。導入担当者がそのtopicをYokaKitへ登録した後、
+明示的な開始操作でaccepted cursor境界を保存して`prepared -> active`へ遷移する。登録確認より前の
+Observationは後から送らない。
+
 YokaKit source statusはsemantic Observationの変換ではないため、Observation routeとは別の
 source-level publicationとして扱う。
+
+production bootstrapはDB作成前に`site-<32hex>`を発行し、Siteの`--site-id`とBroker ACLへ同じ値を
+渡す。`site-output`は
+`iotkit/v1/sources/<site-id>/signals/+/observations`、
+`yokakit/v1/sources/<site-id>/signals/+/observations`、同sourceのstatusだけを書ける。
+既存DBを別の`--site-id`で起動した場合は起動を拒否する。
 
 ## 11. v1 exclusions
 

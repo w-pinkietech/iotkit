@@ -506,7 +506,7 @@ func (store *Store) MarkMQTTExportPublished(ctx context.Context, exportID string
 	if rowsAffected != 1 {
 		return fmt.Errorf("MQTT export %q does not exist", exportID)
 	}
-	return nil
+	return store.ReconcileExportProfileLifecycle(ctx)
 }
 
 func generateMQTTRouteID() (string, error) {

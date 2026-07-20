@@ -450,12 +450,14 @@ func TestConsoleReturnTargetAllowsOnlyEquipmentDetailPaths(t *testing.T) {
 		"https://example.test/equipment",
 		"//example.test/equipment",
 		"/equipment/edges/",
+		"equipment/edges/edge_0123456789abcdef0123456789abcdef",
 		"/equipment/devices/",
 		"/equipment/edges/edge_",
 		"/equipment/devices/dev_not-a-resource-ref",
 		"/equipment/edges/edge_a/extra",
 		"/equipment/edges/edge_a?changed=1",
 		"/sensors/",
+		"sensors/sig_0123456789abcdef0123456789abcdef",
 		"/sensors/sig_",
 		"/sensors/sig_0123456789abcdef0123456789abcdef/extra",
 		"/sensors/sig_0123456789abcdef0123456789abcdef?changed=1",
@@ -1037,7 +1039,7 @@ func TestSemanticConfigurationAPIStoresTwoRulesForOneSignal(t *testing.T) {
 	}
 }
 
-func TestOutputAdapterAndGenericRouteAPI(t *testing.T) {
+func TestOutputAdapterAPIHasNoIndividualRouteCreation(t *testing.T) {
 	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
 	seedSetupDevice(t, archive)
 	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
@@ -1104,17 +1106,9 @@ func TestOutputAdapterAndGenericRouteAPI(t *testing.T) {
 	request.Header.Set("X-CSRF-Token", csrf)
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
+	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("create status=%d body=%s",
 			response.Code, response.Body.String())
-	}
-	var created siteapp.OutputRoute
-	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	if created.AdapterID != "iotkit.mqtt-json.v1" ||
-		created.ConfigSchemaVersion != 1 {
-		t.Fatalf("created = %#v", created)
 	}
 
 	request = httptest.NewRequest(
@@ -1126,16 +1120,222 @@ func TestOutputAdapterAndGenericRouteAPI(t *testing.T) {
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
-		!strings.Contains(
-			response.Body.String(),
-			`"topic":"factory/line-a/production"`,
-		) {
+		!strings.Contains(response.Body.String(), `"items":[]`) {
 		t.Fatalf("routes status=%d body=%s",
 			response.Code, response.Body.String())
 	}
 }
 
-func TestConsoleCreatesAndDisplaysGenericMQTTJSONOutput(t *testing.T) {
+func TestConsoleDashboardIgnoresIndividualOutputRoutes(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(),
+		signals[0].SignalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		"生産回数",
+		semantics.RuleSpec{
+			Kind: semantics.KindCumulativeCounter,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+			Trigger: semantics.TriggerTransition,
+		},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := outputadapter.EncodeGenericMQTTJSONConfig(
+		outputadapter.GenericMQTTJSONConfig{
+			Topic: "factory/line-a/production",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ApplyOutputRoute(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		rule.ID,
+		"iotkit.mqtt-json.v1",
+		encoded,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/status", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	for _, want := range []string{
+		"受信した値",
+		"Siteで作る値",
+		"外部出力",
+		"出力未設定",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "1件の出力") {
+		t.Fatalf("dashboard exposed an individual output route: %s", body)
+	}
+}
+
+func TestSensorDetailShowsInputSemanticAndOutputFlow(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	if _, err := archive.UpdateSignalProfile(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signals[0].SignalRef,
+		siteapp.SignalProfileInput{
+			DisplayName:       "乾燥炉入口",
+			DisplaySensorType: "thermocouple",
+			DisplayValueKind:  "numeric",
+			DisplayUnitMode:   "unit",
+			DisplayUnit:       "%",
+			DecimalPlaces:     0,
+		},
+		siteapp.RevisionPrecondition{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	seedConsoleNumericRule(t, archive, signals[0].SignalRef, "現在温度")
+	if _, err := archive.ActivateExportProfile(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		"IoTKit MQTT JSON v1",
+		"iotkit.mqtt-json.v1",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/"+signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	for _, want := range []string{
+		"受信した値",
+		"Siteで作る値",
+		"外部へ送る",
+		"現在温度",
+		"IoTKit MQTT JSON v1",
+		"iotkit/v1/sources/site-",
+		`href="/output"`,
+		`data-source-value="24.8"`,
+		`data-source-unit="°C"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("sensor flow missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestSensorDetailShowsMissingOutput(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	seedConsoleNumericRule(t, archive, signals[0].SignalRef, "現在温度")
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/"+signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	if !strings.Contains(body, "外部出力なし") {
+		t.Fatalf("sensor flow hides missing output: %s", body)
+	}
+}
+
+func TestViewerCanFollowExistingOutputFromSensorDetail(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleViewer)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	rule := seedConsoleNumericRule(t, archive, signals[0].SignalRef, "現在温度")
+	encoded, err := outputadapter.EncodeGenericMQTTJSONConfig(
+		outputadapter.GenericMQTTJSONConfig{Topic: "factory/line-a/temperature"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ApplyOutputRoute(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		rule.ID,
+		"iotkit.mqtt-json.v1",
+		encoded,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/"+signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK ||
+		!strings.Contains(body, "Site全体の外部出力先を見る") ||
+		!strings.Contains(body, `href="/output"`) ||
+		strings.Contains(body, "外部出力を追加") {
+		t.Fatalf("viewer output journey status=%d body=%s", response.Code, body)
+	}
+}
+
+func TestConsoleRejectsRetiredIndividualOutputCreation(t *testing.T) {
 	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
 	seedSetupDevice(t, archive)
 	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
@@ -1183,22 +1383,470 @@ func TestConsoleCreatesAndDisplaysGenericMQTTJSONOutput(t *testing.T) {
 	request.Header.Set("Origin", testOrigin)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
-	if response.Code != http.StatusSeeOther ||
-		response.Header().Get("Location") != "/output?saved=1" {
+	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("save status=%d location=%q body=%s",
 			response.Code, response.Header().Get("Location"), response.Body.String())
 	}
+	routes, err := archive.ListOutputRoutes(context.Background())
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("routes=%#v err=%v", routes, err)
+	}
+}
 
-	request = httptest.NewRequest(http.MethodGet, "/output", nil)
+func TestConsoleOutputRouteViewSeparatesTransformAndDeliveryStatus(t *testing.T) {
+	errorAt := int64(1_784_500_000_000)
+	now := time.UnixMilli(errorAt)
+	oldestPendingAt := now.Add(-6 * time.Minute).UnixMilli()
+	recentPendingAt := now.Add(-time.Minute).UnixMilli()
+	routes := []siteapp.OutputRoute{
+		{
+			RouteID:                "out_error",
+			RuleID:                 "rule_error",
+			AdapterID:              "iotkit.mqtt-json.v1",
+			Active:                 true,
+			LastTransformErrorCode: "config_version_mismatch",
+			LastTransformErrorAt:   &errorAt,
+		},
+		{
+			RouteID:      "out_pending",
+			RuleID:       "rule_pending",
+			AdapterID:    "iotkit.mqtt-json.v1",
+			Active:       true,
+			PendingCount: 3,
+		},
+		{
+			RouteID:         "out_stalled",
+			RuleID:          "rule_stalled",
+			AdapterID:       "iotkit.mqtt-json.v1",
+			Active:          true,
+			PendingCount:    4,
+			OldestPendingAt: &oldestPendingAt,
+		},
+		{
+			RouteID:         "out_stopped_pending",
+			RuleID:          "rule_stopped_pending",
+			AdapterID:       "iotkit.mqtt-json.v1",
+			Active:          false,
+			PendingCount:    2,
+			OldestPendingAt: &recentPendingAt,
+		},
+		{
+			RouteID:                "out_stopped_empty",
+			RuleID:                 "rule_stopped_empty",
+			AdapterID:              "iotkit.mqtt-json.v1",
+			Active:                 false,
+			LastTransformErrorCode: "transform_failed",
+		},
+		{
+			RouteID:        "out_stopped_published",
+			RuleID:         "rule_stopped_published",
+			AdapterID:      "iotkit.mqtt-json.v1",
+			Active:         false,
+			PublishedCount: 2,
+		},
+	}
+	rules := []consoleRuleOption{
+		{ID: "rule_error", Name: "異常route"},
+		{ID: "rule_pending", Name: "配送待ちroute"},
+		{ID: "rule_stalled", Name: "配送停止route"},
+		{ID: "rule_stopped_pending", Name: "停止後配送route"},
+		{ID: "rule_stopped_empty", Name: "停止済みroute"},
+		{ID: "rule_stopped_published", Name: "配送済み停止route"},
+	}
+
+	views := newConsoleOutputRouteViews(routes, rules, now)
+
+	if len(views) != 6 {
+		t.Fatalf("views=%#v", views)
+	}
+	if views[0].TransformLabel != "変換エラー" ||
+		views[0].DeliveryLabel != "配送実績なし" ||
+		views[0].StateLabel != "要確認" {
+		t.Fatalf("error view=%#v", views[0])
+	}
+	if views[1].TransformLabel != "設定済み" ||
+		views[1].DeliveryLabel != "配送中" ||
+		views[1].DeliveryClass != "in-progress" ||
+		views[1].StateLabel != "配送中" ||
+		views[1].StateClass != "in-progress" {
+		t.Fatalf("pending view=%#v", views[1])
+	}
+	if views[2].DeliveryLabel != "要確認" ||
+		views[2].DeliveryClass != "stale" ||
+		views[2].StateLabel != "配送停止の可能性" {
+		t.Fatalf("stalled view=%#v", views[2])
+	}
+	if views[3].StateLabel != "停止" ||
+		views[3].TransformLabel != "停止中" ||
+		views[3].DeliveryLabel != "配送中" ||
+		views[3].DeliveryClass != "in-progress" {
+		t.Fatalf("stopped pending view=%#v", views[3])
+	}
+	if views[4].TransformLabel != "停止中" ||
+		views[4].DeliveryLabel != "配送実績なし" ||
+		views[4].DeliveryClass != "never" {
+		t.Fatalf("stopped empty view=%#v", views[4])
+	}
+	if views[5].TransformLabel != "停止中" ||
+		views[5].DeliveryLabel != "待ちなし" ||
+		views[5].DeliveryClass != "configured" {
+		t.Fatalf("stopped published view=%#v", views[5])
+	}
+}
+
+func TestConsoleOutputHealthUsesRouteStateInsteadOfExistence(t *testing.T) {
+	now := time.UnixMilli(1_784_500_000_000)
+	oldestPendingAt := now.Add(-6 * time.Minute).UnixMilli()
+	tests := []struct {
+		name       string
+		routes     []siteapp.OutputRoute
+		wantLabel  string
+		wantClass  string
+		wantActive int
+	}{
+		{
+			name:      "not configured",
+			wantLabel: "外部出力は未設定です",
+			wantClass: "attention",
+		},
+		{
+			name: "transform error wins",
+			routes: []siteapp.OutputRoute{{
+				Active: true, LastTransformErrorCode: "transform_failed",
+			}},
+			wantLabel:  "変換エラーがあります",
+			wantClass:  "attention",
+			wantActive: 1,
+		},
+		{
+			name: "pending wins over configured",
+			routes: []siteapp.OutputRoute{{
+				Active: true, PendingCount: 3,
+			}},
+			wantLabel:  "配送中のデータがあります",
+			wantClass:  "in-progress",
+			wantActive: 1,
+		},
+		{
+			name: "stalled delivery wins over pending",
+			routes: []siteapp.OutputRoute{{
+				Active: true, PendingCount: 3, OldestPendingAt: &oldestPendingAt,
+			}},
+			wantLabel:  "MQTT配送が停止している可能性があります",
+			wantClass:  "attention",
+			wantActive: 1,
+		},
+		{
+			name: "stopped route can still have stalled durable delivery",
+			routes: []siteapp.OutputRoute{{
+				Active: false, PendingCount: 3, OldestPendingAt: &oldestPendingAt,
+			}},
+			wantLabel: "MQTT配送が停止している可能性があります",
+			wantClass: "attention",
+		},
+		{
+			name: "all stopped",
+			routes: []siteapp.OutputRoute{{
+				Active: false,
+			}},
+			wantLabel: "外部出力は停止中です",
+			wantClass: "attention",
+		},
+		{
+			name: "configured",
+			routes: []siteapp.OutputRoute{{
+				Active: true,
+			}},
+			wantLabel:  "外部出力が設定されています",
+			wantClass:  "healthy",
+			wantActive: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := consoleData{OutputRoutes: test.routes}
+			data.summarizeOutputRoutes(now)
+			if data.OutputStatusLabel != test.wantLabel ||
+				data.OutputHealthClass != test.wantClass ||
+				data.OutputActiveCount != test.wantActive {
+				t.Fatalf("output status=%#v", data)
+			}
+		})
+	}
+}
+
+func TestExportProfileSummaryShowsRegistrationWaitBeforeNormalDelivery(t *testing.T) {
+	data := consoleData{
+		OutputPendingCount: 4,
+		ExportProfiles: []consoleExportProfileView{{
+			ExportProfile: siteapp.ExportProfile{
+				State: siteapp.ExportProfilePreparing,
+			},
+			PreparedCount: 1,
+		}},
+	}
+
+	data.summarizeExportProfiles()
+
+	if data.OutputStatusLabel != "外部アプリへの登録待ちがあります" ||
+		data.OutputStatusSummary != "1件の外部登録待ち" {
+		t.Fatalf("output status=%#v", data)
+	}
+}
+
+func TestExportProfileTransformFailureIsCountedAsAttention(t *testing.T) {
+	views := newConsoleExportProfileViews(
+		[]siteapp.ExportProfile{{
+			ProfileID: "exp_0123456789abcdef0123456789abcdef",
+			State:     siteapp.ExportProfileActive,
+			Bindings: []siteapp.OutputProfileRuleBinding{{
+				BindingID: "bind_0123456789abcdef0123456789abcdef",
+				State:     siteapp.OutputBindingActive,
+			}},
+		}},
+		nil,
+		[]consoleOutputRouteView{{
+			OutputRoute: siteapp.OutputRoute{
+				BindingID:              "bind_0123456789abcdef0123456789abcdef",
+				Active:                 true,
+				LastTransformErrorCode: "transform_failed",
+			},
+			TransformClass: "stale",
+			DeliveryClass:  "configured",
+		}},
+	)
+
+	if len(views) != 1 || views[0].AttentionCount != 1 ||
+		views[0].TransformErrorCount != 1 ||
+		!views[0].Bindings[0].NeedsAttention {
+		t.Fatalf("profile views=%#v", views)
+	}
+}
+
+func TestSensorFlowCountsPreparedAndUnconfiguredOutputBindings(t *testing.T) {
+	signals := []consoleSignalView{{
+		NormalRules: []consoleSemanticRuleView{{
+			Rule: semantics.Rule{ID: "rule-prepared"},
+		}},
+		AlarmRules: []consoleSemanticRuleView{{
+			Rule: semantics.Rule{ID: "rule-needs-config"},
+		}},
+	}}
+	profiles := []siteapp.ExportProfile{{
+		Bindings: []siteapp.OutputProfileRuleBinding{
+			{RuleID: "rule-prepared", State: siteapp.OutputBindingPrepared},
+			{
+				RuleID: "rule-needs-config",
+				State:  siteapp.OutputBindingNeedsConfiguration,
+			},
+		},
+	}}
+
+	attachConsoleOutputBindings(signals, profiles)
+
+	if signals[0].FlowPreparedCount != 1 ||
+		signals[0].FlowNeedsConfigCount != 1 ||
+		signals[0].FlowIneligibleCount != 0 {
+		t.Fatalf("sensor flow=%#v", signals[0])
+	}
+}
+
+func TestOutputConsoleDoesNotExposeIndividualOutputRoutes(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	rule := seedConsoleNumericRule(t, archive, signals[0].SignalRef, "現在温度")
+	encoded, err := outputadapter.EncodeGenericMQTTJSONConfig(
+		outputadapter.GenericMQTTJSONConfig{Topic: "factory/line-a/temperature"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.ApplyOutputRoute(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		rule.ID,
+		"iotkit.mqtt-json.v1",
+		encoded,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/output?rule_id="+rule.ID+
+			"&return_to=/sensors/"+signals[0].SignalRef,
+		nil,
+	)
 	request.AddCookie(cookie)
-	response = httptest.NewRecorder()
+	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	body := response.Body.String()
-	if response.Code != http.StatusOK ||
-		!strings.Contains(body, "汎用MQTT JSON") ||
-		!strings.Contains(body, "factory/line-a/production") {
-		t.Fatalf("page status=%d body=%s", response.Code, body)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
 	}
+	for _, want := range []string{
+		"汎用MQTT JSONで送る",
+		"YokaKitへ送る",
+		"現在の対応値と、今後追加する対応値を自動で送信する",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("output console missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		"LEGACY",
+		"旧方式",
+		"factory/line-a/temperature",
+		"/console/output-routes",
+		`name="source_id"`,
+		`name="signal_id"`,
+		`name="rule_id"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("output console retains per-rule input %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestOutputConsoleHidesStoppedProfilesAndOffersReAdd(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	seedConsoleNumericRule(t, archive, signals[0].SignalRef, "現在温度")
+	profile, err := archive.ActivateExportProfile(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		"停止した第一工場向け出力",
+		"iotkit.mqtt-json.v1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.RequestExportProfileStop(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		profile.ProfileID,
+		profile.Revision,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.ReconcileExportProfileLifecycle(
+		context.Background(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/output", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	if strings.Contains(body, profile.DisplayName) {
+		t.Fatalf("stopped profile remains in current destinations: %s", body)
+	}
+	if !strings.Contains(body, "汎用MQTT JSONで送る") {
+		t.Fatalf("stopped adapter is not offered for re-add: %s", body)
+	}
+}
+
+func TestOutputConsoleShowsSiteWideProfileAndCompletePayloadWithoutIdentityInputs(
+	t *testing.T,
+) {
+	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals=%#v err=%v", signals, err)
+	}
+	seedConsoleNumericRule(t, archive, signals[0].SignalRef, "現在温度")
+	if _, err := archive.ActivateExportProfile(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		"汎用MQTT JSON",
+		"iotkit.mqtt-json.v1",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/output", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	for _, want := range []string{
+		"汎用MQTT JSON",
+		"今後追加される対応値も自動追加",
+		"現在温度",
+		"送信内容のサンプル",
+		"iotkit/v1/sources/site-",
+		`&#34;observation_id&#34;`,
+		`&#34;series_id&#34;`,
+		`&#34;sequence&#34;`,
+		`&#34;observed_at&#34;`,
+		`&#34;kind&#34;`,
+		`&#34;value&#34;`,
+		"payload（省略なし）",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("output profile console missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`name="source_id"`,
+		`name="signal_id"`,
+		`name="topic"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("output profile console exposes %q: %s", forbidden, body)
+		}
+	}
+}
+
+func seedConsoleNumericRule(
+	t *testing.T,
+	archive *store.Store,
+	signalRef string,
+	displayName string,
+) semantics.Rule {
+	t.Helper()
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(),
+		signalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		context.Background(),
+		siteapp.LocalCLIActor(),
+		signalRef,
+		displayName,
+		semantics.RuleSpec{Kind: semantics.KindNumeric},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rule
 }
 
 func TestSemanticConfigurationMutationRequiresIfMatch(t *testing.T) {
@@ -1671,10 +2319,6 @@ func TestViewerCannotChangeProfilesMeaningsOutputsOrAccounts(t *testing.T) {
 			`{"display_name":"変更","location":"現場"}`},
 		{http.MethodPut, "/api/v1/signals/sig_00000000000000000000000000000000/semantic-definition",
 			`{"kind":"numeric","scale":1,"offset":0,"condition":{"mode":"","bool_value":false,"threshold":0,"hysteresis":0},"trigger":""}`},
-		{http.MethodPost, "/api/v1/outputs/yokakit",
-			`{"definition_id":"sem_example","source_id":"iotkit-01","signal_id":"x","kind":"onoff","reason":""}`},
-		{http.MethodPost, "/api/v1/output-routes",
-			`{"rule_id":"rule_00000000000000000000000000000000","adapter_id":"yokakit.mqtt.v1","config":{"schema_version":1}}`},
 		{http.MethodPost, "/api/v1/accounts",
 			`{"login_id":"other","display_name":"別担当","role":"viewer","temporary_password":"十分に長い 仮パスワード です"}`},
 	} {
@@ -1967,7 +2611,7 @@ func TestSetupConsoleShowsLiveFactsAndLimitsPhysicalIdentifier(t *testing.T) {
 		"デバイス管理",
 		"24.8",
 		"temperature_c",
-		"Adapterから届いた情報",
+		"Edgeから届いた情報",
 		"閲覧のみ",
 	} {
 		if !strings.Contains(viewerBody, want) {
@@ -2376,43 +3020,6 @@ func TestConsoleLogoutRevokesSession(t *testing.T) {
 		statusResponse.Header().Get("Location") != "/login" {
 		t.Fatalf("revoked session status = %d, location=%q",
 			statusResponse.Code, statusResponse.Header().Get("Location"))
-	}
-}
-
-func TestConsoleOutputOptionsUseOperatorNamesInsteadOfResourceRefs(t *testing.T) {
-	options := newConsoleDefinitionOptions(
-		[]semantics.Definition{{
-			ID:        "sem_example",
-			SignalRef: "sig_00000000000000000000000000000001",
-			DefinitionSpec: semantics.DefinitionSpec{
-				Kind: semantics.KindCumulativeCounter,
-			},
-			Active: true,
-		}},
-		[]consoleSignalView{{
-			SignalSummary: siteapp.SignalSummary{
-				SignalRef: "sig_00000000000000000000000000000001",
-			},
-			Name: "ライン1 完了",
-		}},
-	)
-	if len(options) != 1 || options[0].Name != "ライン1 完了" ||
-		options[0].Kind != "累積値" ||
-		strings.Contains(options[0].Name, "sig_") {
-		t.Fatalf("options = %#v", options)
-	}
-}
-
-func TestConsoleOutputRowsUseOperatorLanguage(t *testing.T) {
-	rows := newConsoleOutputViews([]store.YokaKitRoute{{
-		SourceID: "line-1", SignalID: "completed-count",
-		Kind: outputadapter.YokaKitProduction, Active: true,
-		PendingCount: 2, PublishedCount: 41,
-	}})
-
-	if len(rows) != 1 || rows[0].KindLabel != "生産の累積値" ||
-		rows[0].StateLabel != "使用中" || rows[0].StateClass != "receiving" {
-		t.Fatalf("rows = %#v", rows)
 	}
 }
 

@@ -36,6 +36,8 @@ services:
       - serve
       - --db
       - /data/site.db
+      - --site-id
+      - ${IOTKIT_SITE_ID:?}
       - --broker-url
       - ssl://${IOTKIT_BROKER_HOST:?}:${IOTKIT_BROKER_PORT:?}
       - --client-id

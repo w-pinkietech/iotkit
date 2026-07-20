@@ -47,11 +47,13 @@ IoTKit Site Consoleの中心目的は次である。
 
 ### 4.1 受信情報
 
-AdapterとEdgeが報告した事実であり、Siteは上書きしない。
+EdgeがInput Adapterから受け取り、provider-neutralなdescriptorとrecordとして報告した事実であり、
+Siteは上書きしない。ConsoleはInput Adapterのtype、instance、locatorを受け取ったと誤解させる
+「Adapterから届いた情報」という表記を使わず、「Edgeから届いた情報」と表示する。
 
 - Edge
 - 取得元identity
-- Adapterが報告した識別子
+- Edgeが報告した機器識別子
 - measurement key
 - channel
 - value type
@@ -74,7 +76,7 @@ Siteの担当者が管理する。
 受信情報が完全な場合、センサー表示分類と表示単位は受信情報を初期値にする。担当者が
 確認して保存した時点で設定済みとする。受信情報が不完全な場合は担当者が明示入力できる。
 これはraw recordやEdgeのcanonical metadataを書き換えず、Siteでの表示・意味付けに使う
-現場設定である。画面は情報の出所を「Adapterから」「現場設定」と表示する。
+現場設定である。画面は情報の出所を「Edgeから」「現場設定」と表示する。
 
 ### 4.3 入力補正と変換ルール
 
@@ -156,7 +158,7 @@ Consoleの用語は次に統一する。
 | setup device | 登録待ちデバイス |
 
 Consoleはdevice groupingを維持し、配下signalをセンサーとして示す。measurement key、channel、
-value typeは「Adapterから届いた情報」の詳細にだけ表示する。「センサー」と「値」を別entityとして
+value typeは「Edgeから届いた情報」の詳細にだけ表示する。「センサー」と「値」を別entityとして
 二段表示してはならず、現在値はセンサーの属性として表示する。
 
 主要navigationは次とする。
@@ -258,6 +260,31 @@ Excel専用出力とgraph画像保存は要求として保持するがCSVより�
 - ruleごとのhigh-active / low-active
 - cumulative counterごとのtransition/notification trigger
 - rule IDを指定するcounter reset
+
+### 6.6 入力から外部出力までの導線
+
+センサー詳細のパンくず直下に、常時見えるコンパクトな3段経路を置く。
+
+```text
+受信した値
+Edge > デバイス / 現在値 / 最終受信
+  -> Siteで作る値
+     semantic rule名 / generic kind
+       -> 外部へ送る
+          Output Adapter / 非秘密の送信先識別 / 配送状態
+```
+
+入力欄の現在値と単位はSiteの表示profileではなく、Edgeから届いた生値とcanonical unitを使う。
+同じ情報を入力、semantic、出力の別画面で探し直させない。各semantic ruleには外部出力の件数と状態を
+表示し、既存routeがある場合はviewerを含め対象ruleの外部出力一覧へ1クリックで進める。admin以上だけ
+routeがないruleから外部出力追加へ進める。外部出力一覧からも元センサー詳細へ1クリックで戻れる。
+
+Output Adapterの状態はtopic/payloadへの変換状態、MQTT配送の状態はSite outboxの待機・配送済み状態として
+列と文言を分ける。routeが存在するだけで正常表示にせず、変換エラーと全route停止は要対応として
+正常より優先して集約する。配送待ちは異常ではなく進行中の「配送中」として中立表示する。
+最古の未配送messageが5分以上滞留したrouteは「配送停止の可能性」として警告し、最終配送時刻を
+外部出力一覧に表示する。
+Input AdapterをSiteで選択するUI、Broker接続やsecretを変更するUIは作らない。
 - 実信号preview
 - future-only開始境界
 
@@ -273,7 +300,7 @@ backlog処理でも同じ結果になる。
 最初の入力を加算しない。counter resetは受理時点までの未処理rawを数え終えてから0を出力し、それより
 後のrawだけを新しいcounterへ加算する。
 
-### 6.6 外部出力
+### 6.7 外部出力
 
 - 送信するsemantic observation
 - 外部用source IDとsignal ID
@@ -285,7 +312,7 @@ backlog処理でも同じ結果になる。
 
 Broker接続設定とsecretは導入済みprofileを使い、Consoleは非秘密状態だけを扱う。
 
-### 6.7 通知・action
+### 6.8 通知・action
 
 旧IoTKitの要求として次を保持する。
 
@@ -299,7 +326,7 @@ Broker接続設定とsecretは導入済みprofileを使い、Consoleは非秘密
 
 sensor evaluatorへ送信実装を直結せず、semantic observationを受ける出力として分離する。
 
-### 6.8 Adapter固有機能
+### 6.9 Adapter固有機能
 
 共通Consoleへprovider固有語彙を常設しない。Adapterが能力を提供する場合だけ追加面を表示する。
 
@@ -312,12 +339,12 @@ sensor evaluatorへ送信実装を直結せず、semantic observationを受け�
 - DFU
 - command busy/success/failure/timeout
 
-### 6.9 Camera
+### 6.10 Camera
 
 旧IoTKitの要求として保持する。camera一覧、名前、場所、live view、healthを扱う。初期版で録画、
 画像認識、外部application向けmedia APIを作らない。
 
-### 6.10 System、account、audit
+### 6.11 System、account、audit
 
 - version、license
 - Site、Edge、Adapter health
@@ -449,7 +476,7 @@ descriptorにcanonical unitがある場合は上表の単位よりdescriptorを�
 候補は入力支援であり、保存済みprofileを自動更新しない。
 
 通常画面ではセンサーの物理的な種類と測定対象を混同しない。初版で扱う温度入力は
-「熱電対」と表示し、Adapterから届く`temperature_c`は接続元の測定キーとして別に表示する。
+「熱電対」と表示し、Edgeから届く`temperature_c`は接続元の測定キーとして別に表示する。
 既存DBの`temperature`は互換入力として受理するが、画面では「熱電対」と読み替え、
 次回保存時に`thermocouple`へ正規化する。「光」は測定量として確立した「照度」と表示する。
 
@@ -500,7 +527,7 @@ admin以上に限定する。概要の登録待ち件数、`/setup`、monitor、
 
 ## 9. Error behavior
 
-- descriptor未着: raw値と「Adapterから種類・単位が届いていません」を表示する。
+- descriptor未着: raw値と「Edgeから種類・単位を確認できません」を表示する。
 - identifierなし: 照合情報なしと表示し、内部system IDを代用表示しない。
 - revision競合: 入力を失わず、再読み込みが必要な対象を示す。
 - signal保存失敗: device profileをrollbackしたように見せず、該当signalだけ失敗表示する。

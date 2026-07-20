@@ -46,7 +46,7 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	genericRouteID, yokakitRouteID := prepareOutputRoutes(t, archive)
+	genericRouteID, yokakitRouteID, sourceID := prepareOutputRoutes(t, archive)
 	enqueueOutputTransition(t, archive, 2)
 	pending, err := archive.ListPendingMQTTExports(ctx, 100)
 	if err != nil || len(pending) < 2 {
@@ -74,7 +74,7 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	if initialRoutes[genericRouteID] < 1 || initialRoutes[yokakitRouteID] < 1 {
 		t.Fatalf("initial published counts = %#v", initialRoutes)
 	}
-	assertRetainedYokaKitStatus(t, brokerURL, observerPassword)
+	assertRetainedYokaKitStatus(t, brokerURL, observerPassword, sourceID)
 
 	writeTestMarker(t, controlDir, "ready")
 	waitForTestMarker(t, controlDir, "broker-down", 30*time.Second)
@@ -96,6 +96,12 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 			recoveredRoutes,
 		)
 	}
+	assertWrongSourcePublishDenied(
+		t, brokerURL, outputPassword, observerPassword,
+	)
+	assertOutputCredentialCannotSubscribe(
+		t, brokerURL, outputPassword, sourceID,
+	)
 
 	cancel()
 	select {
@@ -108,7 +114,7 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	}
 }
 
-func prepareOutputRoutes(t *testing.T, archive *store.Store) (string, string) {
+func prepareOutputRoutes(t *testing.T, archive *store.Store) (string, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	descriptorPayload, err := os.ReadFile(filepath.Join(
@@ -207,43 +213,180 @@ func prepareOutputRoutes(t *testing.T, archive *store.Store) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	genericConfig, err := outputadapter.EncodeGenericMQTTJSONConfig(
-		outputadapter.GenericMQTTJSONConfig{
-			Topic: "factory/line-a/production",
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	genericRoute, err := archive.ApplyOutputRoute(
+	genericProfile, err := archive.ActivateExportProfile(
 		ctx,
 		siteapp.LocalCLIActor(),
-		counter.ID,
+		"IoTKit common MQTT",
 		"iotkit.mqtt-json.v1",
-		genericConfig,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	yokakitConfig, err := outputadapter.EncodeYokaKitConfig(outputadapter.YokaKitConfig{
-		SourceID: "iotkit-01",
-		SignalID: "press-running",
-		Kind:     outputadapter.YokaKitOnOff,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	yokakitRoute, err := archive.ApplyOutputRoute(
+	yokakitProfile, err := archive.ActivateExportProfile(
 		ctx,
 		siteapp.LocalCLIActor(),
-		state.ID,
+		"YokaKit",
 		"yokakit.mqtt.v1",
-		yokakitConfig,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return genericRoute.RouteID, yokakitRoute.RouteID
+	for _, binding := range yokakitProfile.Bindings {
+		if binding.RuleID != state.ID {
+			continue
+		}
+		configured, err := archive.ConfigureYokaKitBooleanBinding(
+			ctx,
+			siteapp.LocalCLIActor(),
+			binding.BindingID,
+			"onoff",
+			binding.Revision,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := archive.StartPreparedOutputBinding(
+			ctx,
+			siteapp.LocalCLIActor(),
+			configured.BindingID,
+			configured.Revision,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	routes, err := archive.ListOutputRoutes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var genericRouteID, yokakitRouteID string
+	for _, route := range routes {
+		switch {
+		case route.RuleID == counter.ID &&
+			route.AdapterID == genericProfile.AdapterID:
+			genericRouteID = route.RouteID
+		case route.RuleID == state.ID &&
+			route.AdapterID == yokakitProfile.AdapterID:
+			yokakitRouteID = route.RouteID
+		}
+	}
+	if genericRouteID == "" || yokakitRouteID == "" {
+		t.Fatalf("profile routes not found: %#v", routes)
+	}
+	return genericRouteID, yokakitRouteID, yokakitProfile.Bindings[0].SourceID
+}
+
+func assertWrongSourcePublishDenied(
+	t *testing.T,
+	brokerURL string,
+	outputPassword string,
+	observerPassword string,
+) {
+	t.Helper()
+	const wrongTopic = "iotkit/v1/sources/" +
+		"site-00000000000000000000000000000000/" +
+		"signals/sig-00000000000000000000000000000000/observations"
+	received := make(chan struct{}, 1)
+	observer := connectOutputTestClient(
+		t,
+		brokerURL,
+		"iotkit-output-e2e-wrong-source-observer",
+		"observer",
+		observerPassword,
+	)
+	defer observer.Disconnect(250)
+	if token := observer.Subscribe(
+		wrongTopic,
+		1,
+		func(mqtt.Client, mqtt.Message) { received <- struct{}{} },
+	); !token.WaitTimeout(10 * time.Second) {
+		t.Fatal("wrong-source observer subscribe timeout")
+	} else if err := token.Error(); err != nil {
+		t.Fatal(err)
+	}
+	options := mqtt.NewClientOptions().
+		AddBroker(brokerURL).
+		SetClientID("iotkit-output-e2e-wrong-source").
+		SetUsername("site-output").
+		SetPassword(outputPassword).
+		SetAutoReconnect(false)
+	client := mqtt.NewClient(options)
+	if token := client.Connect(); !token.WaitTimeout(10 * time.Second) {
+		t.Fatal("wrong-source publisher connect timeout")
+	} else if err := token.Error(); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(250)
+	token := client.Publish(
+		wrongTopic,
+		1,
+		false,
+		`{"schema_version":1}`,
+	)
+	if !token.WaitTimeout(10 * time.Second) {
+		t.Fatal("wrong-source publish did not receive an ACL decision")
+	}
+	select {
+	case <-received:
+		t.Fatal("Broker ACL accepted a topic for another Site source")
+	case <-time.After(750 * time.Millisecond):
+	}
+}
+
+func assertOutputCredentialCannotSubscribe(
+	t *testing.T,
+	brokerURL string,
+	outputPassword string,
+	sourceID string,
+) {
+	t.Helper()
+	topic := "iotkit/v1/sources/" + sourceID +
+		"/signals/sig-00000000000000000000000000000000/observations"
+	received := make(chan struct{}, 1)
+	subscriber := connectOutputTestClient(
+		t,
+		brokerURL,
+		"iotkit-output-e2e-no-subscribe",
+		"site-output",
+		outputPassword,
+	)
+	defer subscriber.Disconnect(250)
+	token := subscriber.Subscribe(
+		topic,
+		1,
+		func(mqtt.Client, mqtt.Message) { received <- struct{}{} },
+	)
+	if !token.WaitTimeout(10 * time.Second) {
+		t.Fatal("output credential subscribe did not receive an ACL decision")
+	}
+	if token.Error() != nil {
+		return
+	}
+
+	publisher := connectOutputTestClient(
+		t,
+		brokerURL,
+		"iotkit-output-e2e-no-subscribe-publisher",
+		"site-output",
+		outputPassword,
+	)
+	defer publisher.Disconnect(250)
+	published := publisher.Publish(
+		topic,
+		1,
+		false,
+		`{"schema_version":1}`,
+	)
+	if !published.WaitTimeout(10 * time.Second) {
+		t.Fatal("authorized output publish timeout")
+	}
+	if err := published.Error(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-received:
+		t.Fatal("Broker ACL allowed the output credential to subscribe")
+	case <-time.After(750 * time.Millisecond):
+	}
 }
 
 func acceptOutputBatch(
@@ -342,9 +485,9 @@ func subscribeOutputTestTopics(
 		}
 	}
 	token := client.SubscribeMultiple(map[string]byte{
-		"factory/line-a/production":                                       1,
-		"yokakit/v1/sources/iotkit-01/signals/press-running/observations": 1,
-		"yokakit/v1/sources/iotkit-01/status":                             1,
+		"iotkit/v1/sources/+/signals/+/observations":  1,
+		"yokakit/v1/sources/+/signals/+/observations": 1,
+		"yokakit/v1/sources/+/status":                 1,
 	}, handler)
 	if !token.WaitTimeout(10 * time.Second) {
 		t.Fatal("MQTT observer subscribe timeout")
@@ -372,19 +515,22 @@ func waitForInitialAdapterMessages(
 			if err := json.Unmarshal(message.payload, &payload); err != nil {
 				t.Fatalf("decode %q payload: %v", message.topic, err)
 			}
-			switch message.topic {
-			case "factory/line-a/production":
-				if payload.SchemaVersion != 1 ||
-					payload.Kind != string(outputadapter.KindCumulativeValue) {
+			switch {
+			case strings.HasPrefix(message.topic, "iotkit/v1/sources/"):
+				if payload.SchemaVersion != 1 {
 					t.Fatalf("generic payload = %s", message.payload)
 				}
-				genericSeen = true
-			case "yokakit/v1/sources/iotkit-01/signals/press-running/observations":
-				if payload.SchemaVersion != 1 ||
-					payload.Kind != string(outputadapter.YokaKitOnOff) {
+				if payload.Kind == string(outputadapter.KindCumulativeValue) {
+					genericSeen = true
+				}
+			case strings.HasPrefix(message.topic, "yokakit/v1/sources/") &&
+				strings.Contains(message.topic, "/signals/"):
+				if payload.SchemaVersion != 1 {
 					t.Fatalf("YokaKit payload = %s", message.payload)
 				}
-				yokakitSeen = true
+				if payload.Kind == string(outputadapter.YokaKitOnOff) {
+					yokakitSeen = true
+				}
 			}
 		case <-deadline.C:
 			t.Fatalf(
@@ -400,6 +546,7 @@ func assertRetainedYokaKitStatus(
 	t *testing.T,
 	brokerURL string,
 	observerPassword string,
+	sourceID string,
 ) {
 	t.Helper()
 	client := connectOutputTestClient(
@@ -412,7 +559,7 @@ func assertRetainedYokaKitStatus(
 	defer client.Disconnect(250)
 	statuses := make(chan observedMQTTMessage, 1)
 	token := client.Subscribe(
-		"yokakit/v1/sources/iotkit-01/status",
+		"yokakit/v1/sources/"+sourceID+"/status",
 		1,
 		func(_ mqtt.Client, message mqtt.Message) {
 			statuses <- observedMQTTMessage{

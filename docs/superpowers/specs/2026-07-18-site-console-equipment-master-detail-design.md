@@ -113,7 +113,7 @@ headerに次を表示する。
 - `基本情報を編集`
 
 編集対象のセンサーだけformを展開する。Adapter由来のmeasurement key、値型、canonical unit、
-channelは編集panel内の`Adapterから届いた情報`に置く。値の変換は別画面へのlinkとし、
+channelは編集panel内の`Edgeから届いた情報`に置く。値の変換は別画面へのlinkとし、
 この画面へsemantic formを置かない。
 
 ## 6. Visual hierarchy

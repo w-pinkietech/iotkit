@@ -74,8 +74,8 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 16 {
-		t.Fatalf("schema version = %d, want 16", version)
+	if version != 25 {
+		t.Fatalf("schema version = %d, want 25", version)
 	}
 	if got := testTableCount(t, store.db, "site_devices"); got != 1 {
 		t.Fatalf("backfilled devices = %d, want 1", got)
@@ -99,6 +99,126 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	}
 	if len(signals) != 1 || signals[0].Latest == nil || signals[0].Latest.EventTime != 1500 {
 		t.Fatalf("migrated signals = %#v", signals)
+	}
+}
+
+func TestMigrationSeventeenAddsOutputRouteDiagnostics(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 16)
+	if _, err := db.Exec(`
+		INSERT INTO output_routes(
+			route_id, rule_id, adapter_id, config_schema_version,
+			config_json, start_after_observation_row_id, active, created_at
+		) VALUES(
+			'out_0123456789abcdef0123456789abcdef',
+			'rule_0123456789abcdef0123456789abcdef',
+			'iotkit.mqtt-json.v1', 1,
+			'{"schema_version":1,"topic":"factory/line-a/value"}',
+			0, 1, 1000
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+	var version int
+	if err := archive.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 25 {
+		t.Fatalf("schema version=%d, want 25", version)
+	}
+	var errorCode string
+	var errorAt, successAt sql.NullInt64
+	if err := archive.db.QueryRow(`
+		SELECT COALESCE(last_transform_error_code, ''),
+			last_transform_error_at, last_transform_success_at
+		FROM output_routes
+		WHERE route_id = 'out_0123456789abcdef0123456789abcdef'
+	`).Scan(&errorCode, &errorAt, &successAt); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode != "" || errorAt.Valid || successAt.Valid {
+		t.Fatalf(
+			"diagnostics code=%q error_at=%#v success_at=%#v",
+			errorCode,
+			errorAt,
+			successAt,
+		)
+	}
+}
+
+func TestMigrationStopsPreProfileOutputRoutesAfterAddingSiteWideProfiles(
+	t *testing.T,
+) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 17)
+	if _, err := db.Exec(`
+		INSERT INTO output_routes(
+			route_id, rule_id, adapter_id, config_schema_version,
+			config_json, start_after_observation_row_id, active, created_at
+		) VALUES(
+			'out_0123456789abcdef0123456789abcdef',
+			'rule_0123456789abcdef0123456789abcdef',
+			'iotkit.mqtt-json.v1', 1,
+			'{"schema_version":1,"topic":"legacy/value"}',
+			0, 1, 1000
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+	for _, table := range []string{
+		"export_profiles",
+		"output_profile_rule_bindings",
+		"output_binding_starts",
+		"output_binding_ends",
+	} {
+		var count int
+		if err := archive.db.QueryRow(`
+			SELECT count(*) FROM sqlite_master
+			WHERE type = 'table' AND name = ?
+		`, table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("table %s count=%d, want 1", table, count)
+		}
+	}
+	var bindingID sql.NullString
+	var lifecycle string
+	if err := archive.db.QueryRow(`
+		SELECT binding_id, lifecycle_state
+		FROM output_routes
+		WHERE route_id = 'out_0123456789abcdef0123456789abcdef'
+	`).Scan(&bindingID, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if bindingID.Valid || lifecycle != "stopped" {
+		t.Fatalf("legacy binding=%#v lifecycle=%q", bindingID, lifecycle)
 	}
 }
 
@@ -447,6 +567,444 @@ func TestMigrationFourteenRollsBackCompletelyOnFailure(t *testing.T) {
 	}
 	if partialV3Table != 0 {
 		t.Fatal("failed migration left an earlier v3 table behind")
+	}
+}
+
+func TestMigrationTwentyScopesObservationSequenceToSeriesAndBackfillsRuntime(
+	t *testing.T,
+) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 19)
+	const (
+		ruleID    = "rule_0123456789abcdef0123456789abcdef"
+		signalRef = "sig_0123456789abcdef0123456789abcdef"
+		seriesID  = "11111111-1111-4111-8111-111111111111"
+	)
+	if _, err := db.Exec(`
+		INSERT INTO semantic_rules_v3(
+			rule_id, signal_ref, display_name, kind, series_id,
+			display_order, created_at
+		) VALUES (?, ?, '状態', 'boolean', ?, 1, 1000)
+	`, ruleID, signalRef, seriesID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO semantic_rule_revisions_v3(
+			rule_id, revision, spec_json, active, created_at, series_id
+		) VALUES(
+			?, 1, '{"kind":"boolean","detector":{"mode":"boolean_high_active",
+			"rise_threshold":0,"fall_threshold":0,"rise_debounce_ms":0,
+			"fall_debounce_ms":0},"trigger":""}', 1, 1000, ?
+		)
+	`, ruleID, seriesID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO semantic_rule_runtime_v3(
+			rule_id, initialized, detector_active, counter,
+			pending, pending_active, pending_since,
+			applied_rule_revision, applied_calibration_revision,
+			applied_ledger_epoch, next_sequence, applied_series_id
+		) VALUES (?, 1, 1, 0, 0, 0, 0, 1, 1, 'epoch-a', 2, '')
+	`, ruleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO semantic_observations_v3(
+			observation_id, rule_id, rule_revision, calibration_revision,
+			series_id, sequence, kind, value_json, signal_ref, edge_node_id,
+			ledger_epoch, source_pub_seq, observed_at, created_at
+		) VALUES(
+			'obs-old', ?, 1, 1, ?, 1, 'boolean', 'true', ?,
+			'edge-node-01', 'epoch-a', 1, 1000, 1000
+		)
+	`, ruleID, seriesID, signalRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	var appliedSeries string
+	if err := archive.db.QueryRow(`
+		SELECT applied_series_id FROM semantic_rule_runtime_v3
+		WHERE rule_id = ?
+	`, ruleID).Scan(&appliedSeries); err != nil {
+		t.Fatal(err)
+	}
+	if appliedSeries != seriesID {
+		t.Fatalf("applied series=%q, want %q", appliedSeries, seriesID)
+	}
+	if _, err := archive.db.Exec(`
+		INSERT INTO semantic_observations_v3(
+			observation_id, rule_id, rule_revision, calibration_revision,
+			series_id, sequence, kind, value_json, signal_ref, edge_node_id,
+			ledger_epoch, source_pub_seq, observed_at, created_at
+		) VALUES(
+			'obs-new', ?, 2, 1,
+			'22222222-2222-4222-8222-222222222222', 1,
+			'boolean', 'false', ?, 'edge-node-01', 'epoch-a', 2, 2000, 2000
+		)
+	`, ruleID, signalRef); err != nil {
+		t.Fatalf("new series sequence 1 was rejected: %v", err)
+	}
+}
+
+func TestMigrationTwentyKeepsRuleObservationIndexes(t *testing.T) {
+	archive := openTestStore(t)
+	for _, indexName := range []string{
+		"ix_semantic_observations_rule_row",
+		"ix_semantic_observations_rule_source_cursor",
+	} {
+		var count int
+		if err := archive.db.QueryRow(`
+			SELECT count(*) FROM sqlite_master
+			WHERE type = 'index' AND name = ?
+		`, indexName).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("missing observation index %q", indexName)
+		}
+	}
+}
+
+func TestMigrationUpgradesPrePreparedOutputBindingConstraint(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "site.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE export_profiles (
+			profile_id TEXT PRIMARY KEY,
+			display_name TEXT NOT NULL,
+			adapter_id TEXT NOT NULL,
+			adapter_schema_version INTEGER NOT NULL,
+			profile_config_json BLOB NOT NULL,
+			state TEXT NOT NULL CHECK(state IN (
+				'preparing', 'active', 'draining', 'stopped'
+			)),
+			auto_bind_future_rules INTEGER NOT NULL,
+			revision INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			drain_requested_at INTEGER,
+			stopped_at INTEGER
+		);
+		CREATE TABLE output_profile_rule_bindings (
+			binding_id TEXT PRIMARY KEY,
+			profile_id TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			signal_id TEXT,
+			mode TEXT,
+			reason TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL CHECK(state IN (
+				'needs_configuration', 'active', 'ineligible',
+				'draining', 'stopped'
+			)),
+			ineligible_reason TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			activated_at INTEGER CHECK(
+				activated_at IS NULL OR activated_at >= 0
+			),
+			stopped_at INTEGER CHECK(
+				stopped_at IS NULL OR stopped_at >= 0
+			),
+			UNIQUE(profile_id, rule_id, mode)
+		);
+		CREATE TABLE output_routes (
+			binding_id TEXT,
+			active INTEGER NOT NULL,
+			lifecycle_state TEXT NOT NULL
+		);
+		PRAGMA user_version = 21;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyMigrations(context.Background(), db, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO output_signal_identities(
+			output_identity_id, adapter_id, rule_id, mode,
+			source_id, signal_id, created_at
+		) VALUES(
+			'osi_0123456789abcdef0123456789abcdef',
+			'yokakit.mqtt.v1', 'rule_counter', 'production',
+			'site-0123456789abcdef0123456789abcdef',
+			'sig-0123456789abcdef0123456789abcdef', 1000
+		);
+		INSERT INTO output_profile_rule_bindings(
+			binding_id, profile_id, rule_id, output_identity_id,
+			state, revision, created_at
+		) VALUES(
+			'bind_prepared', 'exp_yokakit', 'rule_counter',
+			'osi_0123456789abcdef0123456789abcdef',
+			'prepared', 1, 1000
+		)
+	`); err != nil {
+		t.Fatalf("prepared binding rejected after migration: %v", err)
+	}
+}
+
+func TestMigrationUpgradesPrePreparingExportProfileConstraint(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "site.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE export_profiles (
+			profile_id TEXT PRIMARY KEY,
+			display_name TEXT NOT NULL,
+			adapter_id TEXT NOT NULL,
+			adapter_schema_version INTEGER NOT NULL CHECK(
+				adapter_schema_version > 0
+			),
+			profile_config_json BLOB NOT NULL CHECK(
+				json_valid(profile_config_json) AND
+				json_type(profile_config_json) = 'object'
+			),
+			state TEXT NOT NULL CHECK(state IN (
+				'active', 'draining', 'stopped'
+			)),
+			auto_bind_future_rules INTEGER NOT NULL CHECK(
+				auto_bind_future_rules IN (0, 1)
+			),
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			drain_requested_at INTEGER CHECK(
+				drain_requested_at IS NULL OR drain_requested_at >= 0
+			),
+			stopped_at INTEGER CHECK(
+				stopped_at IS NULL OR stopped_at >= 0
+			)
+		);
+		CREATE TABLE output_profile_rule_bindings (
+			binding_id TEXT PRIMARY KEY,
+			profile_id TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			signal_id TEXT,
+			mode TEXT,
+			reason TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			ineligible_reason TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			activated_at INTEGER,
+			stopped_at INTEGER
+		);
+		CREATE TABLE output_routes (
+			binding_id TEXT,
+			active INTEGER NOT NULL,
+			lifecycle_state TEXT NOT NULL
+		);
+		PRAGMA user_version = 22;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyMigrations(context.Background(), db, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO export_profiles(
+			profile_id, display_name, adapter_id,
+			adapter_schema_version, profile_config_json, state,
+			auto_bind_future_rules, revision, created_at
+		) VALUES(
+			'exp_yokakit', 'YokaKit', 'yokakit.mqtt.v1',
+			1, '{"schema_version":1}', 'preparing', 1, 1, 1000
+		)
+	`); err != nil {
+		t.Fatalf("preparing profile rejected after migration: %v", err)
+	}
+}
+
+func TestMigrationStopsIndividualOutputRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 23)
+	if _, err := db.Exec(`
+		INSERT INTO output_routes(
+			route_id, rule_id, adapter_id, config_schema_version,
+			config_json, start_after_observation_row_id,
+			active, created_at, lifecycle_state
+		) VALUES(
+			'out_individual', 'rule_individual', 'iotkit.mqtt-json.v1', 1,
+			'{"schema_version":1,"topic":"factory/legacy"}',
+			0, 1, 1000, 'active'
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	var active bool
+	var lifecycle string
+	if err := archive.db.QueryRow(`
+		SELECT active, lifecycle_state FROM output_routes
+		WHERE route_id = 'out_individual'
+	`).Scan(&active, &lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if active || lifecycle != "stopped" {
+		t.Fatalf("individual route active=%v lifecycle=%q", active, lifecycle)
+	}
+}
+
+func TestMigrationTwentyFiveNormalizesOutputSignalIdentities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 24)
+	const (
+		ruleID          = "rule_0123456789abcdef0123456789abcdef"
+		stoppedSignalID = "sig-11111111111111111111111111111111"
+		activeSignalID  = "sig-22222222222222222222222222222222"
+		routeConfig     = `{"schema_version":1,"topic":"iotkit/v1/sources/site-0123456789abcdef0123456789abcdef/signals/sig-22222222222222222222222222222222/observations"}`
+		outboxPayload   = `{"schema_version":1,"value":42}`
+	)
+	if _, err := db.Exec(`
+		INSERT INTO export_profiles(
+			profile_id, display_name, adapter_id, adapter_schema_version,
+			profile_config_json, state, auto_bind_future_rules,
+			revision, created_at, stopped_at
+		) VALUES
+			('exp_stopped', '停止済み', 'iotkit.mqtt-json.v1', 1,
+				'{"schema_version":1}', 'stopped', 1, 2, 1000, 1500),
+			('exp_active', '使用中', 'iotkit.mqtt-json.v1', 1,
+				'{"schema_version":1}', 'active', 1, 1, 2000, NULL);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO output_profile_rule_bindings(
+			binding_id, profile_id, rule_id, source_id, signal_id,
+			mode, state, revision, created_at, activated_at, stopped_at
+		) VALUES
+			('bind_stopped', 'exp_stopped', ?, 'site-0123456789abcdef0123456789abcdef',
+				?, 'observation', 'stopped', 2, 1000, 1000, 1500),
+			('bind_active', 'exp_active', ?, 'site-0123456789abcdef0123456789abcdef',
+				?, 'observation', 'active', 1, 2000, 2000, NULL);
+	`, ruleID, stoppedSignalID, ruleID, activeSignalID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO output_routes(
+			route_id, rule_id, adapter_id, config_schema_version,
+			config_json, start_after_observation_row_id, active, created_at,
+			binding_id, lifecycle_state
+		) VALUES(
+			'out_active', ?, 'iotkit.mqtt-json.v1', 1, ?, 0, 1, 2000,
+			'bind_active', 'active'
+		);
+	`, ruleID, routeConfig); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO output_outbox_v3(
+			export_id, route_id, observation_id, topic, qos,
+			payload_json, created_at
+		) VALUES(
+			'export_active', 'out_active', 'observation-active',
+			'iotkit/v1/test', 1, ?, 2100
+		);
+		PRAGMA user_version = 24;
+	`, outboxPayload); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	var version int
+	if err := archive.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 25 {
+		t.Fatalf("schema version=%d, want 25", version)
+	}
+	var identityCount int
+	if err := archive.db.QueryRow(`
+		SELECT count(*) FROM output_signal_identities
+		WHERE adapter_id = 'iotkit.mqtt-json.v1'
+			AND rule_id = ? AND mode = 'observation'
+	`, ruleID).Scan(&identityCount); err != nil {
+		t.Fatal(err)
+	}
+	if identityCount != 1 {
+		t.Fatalf("identity count=%d, want 1", identityCount)
+	}
+	var canonicalSignalID string
+	if err := archive.db.QueryRow(`
+		SELECT signal_id FROM output_signal_identities
+		WHERE adapter_id = 'iotkit.mqtt-json.v1'
+			AND rule_id = ? AND mode = 'observation'
+	`, ruleID).Scan(&canonicalSignalID); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalSignalID != activeSignalID {
+		t.Fatalf("signal_id=%q, want active %q",
+			canonicalSignalID, activeSignalID)
+	}
+	var bindingIdentityCount int
+	if err := archive.db.QueryRow(`
+		SELECT count(DISTINCT output_identity_id)
+		FROM output_profile_rule_bindings
+		WHERE binding_id IN ('bind_stopped', 'bind_active')
+			AND output_identity_id IS NOT NULL
+	`).Scan(&bindingIdentityCount); err != nil {
+		t.Fatal(err)
+	}
+	if bindingIdentityCount != 1 {
+		t.Fatalf("binding identity count=%d, want 1", bindingIdentityCount)
+	}
+	var migratedConfig, migratedPayload string
+	if err := archive.db.QueryRow(`
+		SELECT CAST(config_json AS TEXT) FROM output_routes
+		WHERE route_id = 'out_active'
+	`).Scan(&migratedConfig); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.db.QueryRow(`
+		SELECT CAST(payload_json AS TEXT) FROM output_outbox_v3
+		WHERE export_id = 'export_active'
+	`).Scan(&migratedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if migratedConfig != routeConfig || migratedPayload != outboxPayload {
+		t.Fatalf("publication data changed config=%s payload=%s",
+			migratedConfig, migratedPayload)
 	}
 }
 

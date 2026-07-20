@@ -720,9 +720,345 @@ var schemaMigrations = []migration{
 	{version: 16, sql: `
 		ALTER TABLE descriptor_devices ADD COLUMN model_id TEXT;
 	`},
+	{version: 17, sql: `
+		ALTER TABLE output_routes ADD COLUMN last_transform_error_code TEXT
+			CHECK(last_transform_error_code IS NULL OR last_transform_error_code IN (
+				'adapter_unavailable',
+				'config_version_mismatch',
+				'invalid_observation',
+				'transform_failed'
+			));
+		ALTER TABLE output_routes ADD COLUMN last_transform_error_at INTEGER
+			CHECK(last_transform_error_at IS NULL OR last_transform_error_at >= 0);
+		ALTER TABLE output_routes ADD COLUMN last_transform_success_at INTEGER
+			CHECK(last_transform_success_at IS NULL OR last_transform_success_at >= 0);
+	`},
+	{version: 18, sql: `
+		CREATE TABLE export_profiles (
+			profile_id TEXT PRIMARY KEY,
+			display_name TEXT NOT NULL,
+			adapter_id TEXT NOT NULL,
+			adapter_schema_version INTEGER NOT NULL CHECK(adapter_schema_version > 0),
+			profile_config_json BLOB NOT NULL CHECK(
+				json_valid(profile_config_json) AND
+				json_type(profile_config_json) = 'object'
+			),
+			state TEXT NOT NULL CHECK(state IN (
+				'preparing', 'active', 'draining', 'stopped'
+			)),
+			auto_bind_future_rules INTEGER NOT NULL CHECK(
+				auto_bind_future_rules IN (0, 1)
+			),
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			drain_requested_at INTEGER CHECK(
+				drain_requested_at IS NULL OR drain_requested_at >= 0
+			),
+			stopped_at INTEGER CHECK(stopped_at IS NULL OR stopped_at >= 0)
+		);
+		CREATE UNIQUE INDEX ux_export_profiles_active_adapter
+			ON export_profiles(adapter_id)
+			WHERE state IN ('preparing', 'active', 'draining');
+
+		CREATE TABLE output_profile_rule_bindings (
+			binding_id TEXT PRIMARY KEY,
+			profile_id TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			signal_id TEXT,
+			mode TEXT,
+			reason TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL CHECK(state IN (
+				'needs_configuration', 'prepared', 'active', 'ineligible',
+				'draining', 'stopped'
+			)),
+			ineligible_reason TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			activated_at INTEGER CHECK(
+				activated_at IS NULL OR activated_at >= 0
+			),
+			stopped_at INTEGER CHECK(stopped_at IS NULL OR stopped_at >= 0),
+			UNIQUE(profile_id, rule_id, mode)
+		);
+		CREATE UNIQUE INDEX ux_output_binding_identity
+			ON output_profile_rule_bindings(source_id, signal_id)
+			WHERE signal_id IS NOT NULL;
+		CREATE INDEX ix_output_bindings_profile_state
+			ON output_profile_rule_bindings(profile_id, state, rule_id);
+
+		CREATE TABLE output_binding_starts (
+			binding_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			start_after_pub_seq INTEGER NOT NULL CHECK(start_after_pub_seq >= 0),
+			PRIMARY KEY(binding_id, ledger_epoch)
+		);
+		CREATE TABLE output_binding_ends (
+			binding_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			end_at_pub_seq INTEGER NOT NULL CHECK(end_at_pub_seq >= 0),
+			PRIMARY KEY(binding_id, ledger_epoch)
+		);
+
+		ALTER TABLE output_routes ADD COLUMN binding_id TEXT;
+		ALTER TABLE output_routes ADD COLUMN lifecycle_state TEXT NOT NULL
+			DEFAULT 'active' CHECK(lifecycle_state IN (
+				'active', 'draining', 'stopped'
+			));
+		CREATE UNIQUE INDEX ux_output_routes_binding
+			ON output_routes(binding_id) WHERE binding_id IS NOT NULL;
+	`},
+	{version: 19, sql: `
+		ALTER TABLE semantic_rule_revisions_v3
+			ADD COLUMN series_id TEXT NOT NULL DEFAULT '';
+		UPDATE semantic_rule_revisions_v3
+		SET series_id = (
+			SELECT rule.series_id FROM semantic_rules_v3 AS rule
+			WHERE rule.rule_id = semantic_rule_revisions_v3.rule_id
+		);
+		ALTER TABLE semantic_rule_runtime_v3
+			ADD COLUMN applied_series_id TEXT NOT NULL DEFAULT '';
+	`},
+	{version: 20, sql: `
+		ALTER TABLE semantic_observations_v3
+			RENAME TO semantic_observations_v3_rule_sequence;
+		CREATE TABLE semantic_observations_v3 (
+			observation_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			observation_id TEXT NOT NULL UNIQUE,
+			rule_id TEXT NOT NULL,
+			rule_revision INTEGER NOT NULL,
+			calibration_revision INTEGER NOT NULL,
+			series_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL CHECK(sequence > 0),
+			kind TEXT NOT NULL CHECK(kind IN (
+				'numeric', 'boolean', 'cumulative_counter', 'alarm'
+			)),
+			value_json BLOB NOT NULL CHECK(json_valid(value_json)),
+			signal_ref TEXT NOT NULL,
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			source_pub_seq INTEGER NOT NULL CHECK(source_pub_seq >= 0),
+			observed_at INTEGER NOT NULL CHECK(observed_at >= 0),
+			created_at INTEGER NOT NULL,
+			UNIQUE(series_id, sequence)
+		);
+		INSERT INTO semantic_observations_v3(
+			observation_row_id, observation_id, rule_id, rule_revision,
+			calibration_revision, series_id, sequence, kind, value_json,
+			signal_ref, edge_node_id, ledger_epoch, source_pub_seq,
+			observed_at, created_at
+		)
+		SELECT observation_row_id, observation_id, rule_id, rule_revision,
+			calibration_revision, series_id, sequence, kind, value_json,
+			signal_ref, edge_node_id, ledger_epoch, source_pub_seq,
+			observed_at, created_at
+		FROM semantic_observations_v3_rule_sequence;
+		DROP TABLE semantic_observations_v3_rule_sequence;
+		UPDATE semantic_rule_runtime_v3 AS runtime
+		SET applied_series_id = COALESCE((
+			SELECT revision.series_id
+			FROM semantic_rule_revisions_v3 AS revision
+			WHERE revision.rule_id = runtime.rule_id
+				AND revision.revision = runtime.applied_rule_revision
+		), (
+			SELECT revision.series_id
+			FROM semantic_rule_revisions_v3 AS revision
+			WHERE revision.rule_id = runtime.rule_id
+				AND revision.active = 1
+		), '');
+	`},
+	{version: 21, sql: `
+		CREATE INDEX IF NOT EXISTS ix_semantic_observations_rule_row
+			ON semantic_observations_v3(rule_id, observation_row_id);
+		CREATE INDEX IF NOT EXISTS ix_semantic_observations_rule_source_cursor
+			ON semantic_observations_v3(
+				rule_id, ledger_epoch, source_pub_seq
+			);
+	`},
+	{version: 22, sql: `
+		ALTER TABLE output_profile_rule_bindings
+			RENAME TO output_profile_rule_bindings_without_prepared;
+		CREATE TABLE output_profile_rule_bindings (
+			binding_id TEXT PRIMARY KEY,
+			profile_id TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			signal_id TEXT,
+			mode TEXT,
+			reason TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL CHECK(state IN (
+				'needs_configuration', 'prepared', 'active', 'ineligible',
+				'draining', 'stopped'
+			)),
+			ineligible_reason TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			activated_at INTEGER CHECK(
+				activated_at IS NULL OR activated_at >= 0
+			),
+			stopped_at INTEGER CHECK(
+				stopped_at IS NULL OR stopped_at >= 0
+			),
+			UNIQUE(profile_id, rule_id, mode)
+		);
+		INSERT INTO output_profile_rule_bindings(
+			binding_id, profile_id, rule_id, source_id, signal_id,
+			mode, reason, state, ineligible_reason, revision,
+			created_at, activated_at, stopped_at
+		)
+		SELECT binding_id, profile_id, rule_id, source_id, signal_id,
+			mode, reason, state, ineligible_reason, revision,
+			created_at, activated_at, stopped_at
+		FROM output_profile_rule_bindings_without_prepared;
+		DROP TABLE output_profile_rule_bindings_without_prepared;
+		CREATE UNIQUE INDEX ux_output_binding_identity
+			ON output_profile_rule_bindings(source_id, signal_id)
+			WHERE signal_id IS NOT NULL;
+		CREATE INDEX ix_output_bindings_profile_state
+			ON output_profile_rule_bindings(profile_id, state, rule_id);
+	`},
+	{version: 23, sql: `
+		ALTER TABLE export_profiles
+			RENAME TO export_profiles_without_preparing;
+		CREATE TABLE export_profiles (
+			profile_id TEXT PRIMARY KEY,
+			display_name TEXT NOT NULL,
+			adapter_id TEXT NOT NULL,
+			adapter_schema_version INTEGER NOT NULL CHECK(
+				adapter_schema_version > 0
+			),
+			profile_config_json BLOB NOT NULL CHECK(
+				json_valid(profile_config_json) AND
+				json_type(profile_config_json) = 'object'
+			),
+			state TEXT NOT NULL CHECK(state IN (
+				'preparing', 'active', 'draining', 'stopped'
+			)),
+			auto_bind_future_rules INTEGER NOT NULL CHECK(
+				auto_bind_future_rules IN (0, 1)
+			),
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			drain_requested_at INTEGER CHECK(
+				drain_requested_at IS NULL OR drain_requested_at >= 0
+			),
+			stopped_at INTEGER CHECK(
+				stopped_at IS NULL OR stopped_at >= 0
+			)
+		);
+		INSERT INTO export_profiles(
+			profile_id, display_name, adapter_id,
+			adapter_schema_version, profile_config_json, state,
+			auto_bind_future_rules, revision, created_at,
+			drain_requested_at, stopped_at
+		)
+		SELECT profile_id, display_name, adapter_id,
+			adapter_schema_version, profile_config_json, state,
+			auto_bind_future_rules, revision, created_at,
+			drain_requested_at, stopped_at
+		FROM export_profiles_without_preparing;
+		DROP TABLE export_profiles_without_preparing;
+		CREATE UNIQUE INDEX ux_export_profiles_active_adapter
+			ON export_profiles(adapter_id)
+			WHERE state IN ('preparing', 'active', 'draining');
+	`},
+	{version: 24, sql: `
+		UPDATE output_routes
+		SET active = 0, lifecycle_state = 'stopped'
+		WHERE binding_id IS NULL;
+	`},
+	{version: 25, sql: `
+		CREATE TABLE output_signal_identities (
+			output_identity_id TEXT PRIMARY KEY,
+			adapter_id TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			mode TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			signal_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			UNIQUE(adapter_id, rule_id, mode),
+			UNIQUE(source_id, signal_id)
+		);
+		WITH ranked_identity AS (
+			SELECT profile.adapter_id, binding.rule_id, binding.mode,
+				binding.source_id, binding.signal_id, binding.created_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY profile.adapter_id, binding.rule_id, binding.mode
+					ORDER BY
+						CASE WHEN profile.state IN (
+							'preparing', 'active', 'draining'
+						) AND binding.state IN (
+							'prepared', 'active', 'draining'
+						) THEN 0 ELSE 1 END,
+						binding.created_at DESC,
+						binding.binding_id DESC
+				) AS identity_rank
+			FROM output_profile_rule_bindings AS binding
+			JOIN export_profiles AS profile
+				ON profile.profile_id = binding.profile_id
+			WHERE binding.signal_id IS NOT NULL
+				AND binding.mode IS NOT NULL
+		)
+		INSERT INTO output_signal_identities(
+			output_identity_id, adapter_id, rule_id, mode,
+			source_id, signal_id, created_at
+		)
+		SELECT 'osi_' || lower(hex(randomblob(16))),
+			adapter_id, rule_id, mode, source_id, signal_id, created_at
+		FROM ranked_identity
+		WHERE identity_rank = 1;
+
+		ALTER TABLE output_profile_rule_bindings
+			RENAME TO output_profile_rule_bindings_with_embedded_identity;
+		CREATE TABLE output_profile_rule_bindings (
+			binding_id TEXT PRIMARY KEY,
+			profile_id TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			output_identity_id TEXT,
+			reason TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL CHECK(state IN (
+				'needs_configuration', 'prepared', 'active', 'ineligible',
+				'draining', 'stopped'
+			)),
+			ineligible_reason TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL CHECK(revision > 0),
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			activated_at INTEGER CHECK(
+				activated_at IS NULL OR activated_at >= 0
+			),
+			stopped_at INTEGER CHECK(
+				stopped_at IS NULL OR stopped_at >= 0
+			),
+			UNIQUE(profile_id, rule_id)
+		);
+		INSERT INTO output_profile_rule_bindings(
+			binding_id, profile_id, rule_id, output_identity_id,
+			reason, state, ineligible_reason, revision,
+			created_at, activated_at, stopped_at
+		)
+		SELECT binding.binding_id, binding.profile_id, binding.rule_id,
+			identity.output_identity_id, binding.reason, binding.state,
+			binding.ineligible_reason, binding.revision,
+			binding.created_at, binding.activated_at, binding.stopped_at
+		FROM output_profile_rule_bindings_with_embedded_identity AS binding
+		JOIN export_profiles AS profile
+			ON profile.profile_id = binding.profile_id
+		LEFT JOIN output_signal_identities AS identity
+			ON identity.adapter_id = profile.adapter_id
+			AND identity.rule_id = binding.rule_id
+			AND identity.mode = binding.mode;
+		DROP TABLE output_profile_rule_bindings_with_embedded_identity;
+		CREATE INDEX ix_output_bindings_profile_state
+			ON output_profile_rule_bindings(profile_id, state, rule_id);
+		DROP INDEX IF EXISTS ux_output_routes_yokakit_identity;
+	`},
 }
 
-func applyMigrations(ctx context.Context, db *sql.DB) error {
+func applyMigrations(
+	ctx context.Context,
+	db *sql.DB,
+	configuredSiteID string,
+) error {
 	var current int
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
 		return fmt.Errorf("read Site schema version: %w", err)
@@ -743,6 +1079,19 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply Site schema migration %d: %w", migration.version, err)
+		}
+		if migration.version == 11 && configuredSiteID != "" {
+			if _, err := tx.ExecContext(
+				ctx,
+				"UPDATE site_meta SET site_id = ? WHERE singleton = 1",
+				configuredSiteID,
+			); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf(
+					"assign configured Site identity in migration 11: %w",
+					err,
+				)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", migration.version)); err != nil {
 			_ = tx.Rollback()

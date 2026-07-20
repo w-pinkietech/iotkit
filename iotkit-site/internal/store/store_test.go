@@ -186,6 +186,74 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
+func TestOpenWithSiteIDPersistsDeploymentIdentityAndRejectsMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	const siteID = "site-0123456789abcdef0123456789abcdef"
+	archive, err := OpenWithSiteID(path, siteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := archive.db.QueryRow(
+		"SELECT site_id FROM site_meta WHERE singleton = 1",
+	).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != siteID {
+		t.Fatalf("stored Site ID=%q", stored)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenWithSiteID(
+		path,
+		"site-ffffffffffffffffffffffffffffffff",
+	); err == nil {
+		t.Fatal("existing database accepted a different deployment Site ID")
+	}
+}
+
+func TestOpenWithSiteIDPersistsIdentityInTheSiteMetaMigrationTransaction(
+	t *testing.T,
+) {
+	path := filepath.Join(t.TempDir(), "site.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 10)
+	if _, err := db.Exec(`
+		CREATE INDEX idx_raw_records_signal_preview
+		ON raw_records(edge_node_id)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	const siteID = "site-0123456789abcdef0123456789abcdef"
+	if archive, err := OpenWithSiteID(path, siteID); err == nil {
+		_ = archive.Close()
+		t.Fatal("migration unexpectedly passed the intentional version 12 conflict")
+	}
+
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var storedSiteID string
+	if err := db.QueryRow(`
+		SELECT site_id FROM site_meta WHERE singleton = 1
+	`).Scan(&storedSiteID); err != nil {
+		t.Fatal(err)
+	}
+	if storedSiteID != siteID {
+		t.Fatalf("Site ID after interrupted migration=%q, want %q", storedSiteID, siteID)
+	}
+}
+
 func acceptBatchForTest(
 	t *testing.T,
 	store *Store,

@@ -47,7 +47,6 @@ type Server struct {
 	accounts        *siteapp.AccountService
 	semantics       *siteapp.SemanticService
 	semanticConfig  *siteapp.SemanticConfigurationService
-	ruleOutputs     *siteapp.RuleOutputService
 	sessions        *sitesession.Manager
 	publicOrigin    string
 	secureCookies   bool
@@ -103,7 +102,6 @@ func New(config Config) (*Server, error) {
 		accounts:        config.Accounts,
 		semantics:       siteapp.NewSemanticService(config.Store),
 		semanticConfig:  siteapp.NewSemanticConfigurationService(config.Store),
-		ruleOutputs:     siteapp.NewRuleOutputService(config.Store),
 		sessions:        config.Sessions,
 		publicOrigin:    strings.TrimSuffix(config.PublicOrigin, "/"),
 		secureCookies:   !config.DevelopmentHTTP,
@@ -150,8 +148,19 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /console/semantic-rules/{rule_id}", server.consoleSemanticRuleUpdate)
 	server.mux.HandleFunc("POST /console/semantic-rules/{rule_id}/retire", server.consoleSemanticRuleRetire)
 	server.mux.HandleFunc("POST /console/semantic-rules/{rule_id}/counter-resets", server.consoleSemanticRuleCounterReset)
-	server.mux.HandleFunc("POST /console/outputs/yokakit", server.consoleYokaKitOutput)
-	server.mux.HandleFunc("POST /console/output-routes", server.consoleOutputRoute)
+	server.mux.HandleFunc("POST /console/export-profiles", server.consoleActivateExportProfile)
+	server.mux.HandleFunc(
+		"POST /console/export-profiles/{profile_id}/stop",
+		server.consoleStopExportProfile,
+	)
+	server.mux.HandleFunc(
+		"POST /console/output-bindings/{binding_id}",
+		server.consoleConfigureOutputBinding,
+	)
+	server.mux.HandleFunc(
+		"POST /console/output-bindings/{binding_id}/start",
+		server.consoleStartOutputBinding,
+	)
 	server.mux.HandleFunc("POST /console/accounts", server.consoleAccount)
 	server.mux.HandleFunc("POST /console/accounts/{account_ref}", server.consoleAccountUpdate)
 	server.mux.HandleFunc("POST /console/accounts/{account_ref}/disable", server.consoleAccountDisable)
@@ -180,10 +189,29 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("DELETE /api/v1/semantic-rules/{rule_id}", server.retireSemanticRule)
 	server.mux.HandleFunc("POST /api/v1/semantic-rules/{rule_id}/counter-resets", server.requestSemanticCounterReset)
 	server.mux.HandleFunc("GET /api/v1/output-adapters", server.listOutputAdapters)
+	server.mux.HandleFunc("GET /api/v1/export-profiles", server.listExportProfiles)
+	server.mux.HandleFunc(
+		"POST /api/v1/export-profiles/preview",
+		server.previewExportProfile,
+	)
+	server.mux.HandleFunc("POST /api/v1/export-profiles", server.activateExportProfile)
+	server.mux.HandleFunc(
+		"PUT /api/v1/output-bindings/{binding_id}",
+		server.configureExportBinding,
+	)
+	server.mux.HandleFunc(
+		"POST /api/v1/export-profiles/{profile_id}/stop",
+		server.stopExportProfile,
+	)
+	server.mux.HandleFunc(
+		"GET /api/v1/output-bindings/{binding_id}/publication",
+		server.getOutputBindingPublication,
+	)
+	server.mux.HandleFunc(
+		"POST /api/v1/output-bindings/{binding_id}/start",
+		server.startOutputBinding,
+	)
 	server.mux.HandleFunc("GET /api/v1/output-routes", server.listOutputRoutes)
-	server.mux.HandleFunc("POST /api/v1/output-routes", server.createOutputRoute)
-	server.mux.HandleFunc("GET /api/v1/outputs/yokakit", server.listYokaKitOutputs)
-	server.mux.HandleFunc("POST /api/v1/outputs/yokakit", server.createYokaKitOutput)
 	server.mux.HandleFunc("GET /api/v1/audit-events", server.listAuditEvents)
 	server.mux.HandleFunc("GET /api/v1/accounts", server.listAccounts)
 	server.mux.HandleFunc("POST /api/v1/accounts", server.createAccount)

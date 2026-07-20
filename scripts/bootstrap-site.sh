@@ -151,6 +151,7 @@ jq -e '
 edge_node_id=$(jq -er '.edge_node_id' "$binding")
 [[ "$edge_node_id" =~ ^[A-Za-z0-9._-]{1,128}$ ]] \
   || fail "edge_node_id is not safe for generated ACL/config files"
+site_id="site-$(openssl rand -hex 16)"
 
 for topic in "${site_publish_topics[@]}"; do
   [[ -n "$topic" && "$topic" != /* && "$topic" != */ && "$topic" != *['+#']* \
@@ -239,6 +240,9 @@ topic write iotkit/v1/edge-nodes/+/accepted-through
 topic write iotkit/v1/edge-nodes/+/activation/request
 
 user site-output
+topic write iotkit/v1/sources/$site_id/signals/+/observations
+topic write yokakit/v1/sources/$site_id/signals/+/observations
+topic write yokakit/v1/sources/$site_id/status
 EOF
 for topic in "${site_publish_topics[@]}"; do
   printf 'topic write %s\n' "$topic" >>"$stage/mosquitto/acl"
@@ -272,6 +276,7 @@ cat >"$stage/site.env" <<EOF
 COMPOSE_PROJECT_NAME=$compose_project
 IOTKIT_RUNTIME_UID=$(id -u)
 IOTKIT_RUNTIME_GID=$(id -g)
+IOTKIT_SITE_ID=$site_id
 IOTKIT_MOSQUITTO_IMAGE=$IOTKIT_MOSQUITTO_IMAGE
 IOTKIT_BROKER_HOST=$broker_host
 IOTKIT_SITE_HOST=$broker_host

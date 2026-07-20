@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,33 +18,47 @@ import (
 
 type consoleSignalView struct {
 	siteapp.SignalSummary
-	Name                string
-	Value               string
-	Unit                string
-	SensorType          string
-	LastReceived        string
-	LastReceivedTitle   string
-	StatusLabel         string
-	StatusClass         string
-	SettingLabel        string
-	SettingClass        string
-	MeaningLabel        string
-	MeaningClass        string
-	FormProfile         siteapp.SignalProfileInput
-	Definition          *semantics.Definition
-	SourceSensorType    string
-	SourceValueType     string
-	SourceUnit          string
-	ChannelLabel        string
-	DeviceName          string
-	DeviceLocation      string
-	DeviceModelID       string
-	InputIsBoolean      bool
-	RiseDebounceSeconds string
-	FallDebounceSeconds string
-	Configuration       *semantics.Configuration
-	NormalRules         []consoleSemanticRuleView
-	AlarmRules          []consoleSemanticRuleView
+	Name                 string
+	Value                string
+	Unit                 string
+	SensorType           string
+	LastReceived         string
+	LastReceivedTitle    string
+	StatusLabel          string
+	StatusClass          string
+	SettingLabel         string
+	SettingClass         string
+	MeaningLabel         string
+	MeaningClass         string
+	FormProfile          siteapp.SignalProfileInput
+	Definition           *semantics.Definition
+	SourceSensorType     string
+	SourceValue          string
+	SourceValueType      string
+	SourceUnit           string
+	ChannelLabel         string
+	DeviceName           string
+	DeviceLocation       string
+	DeviceModelID        string
+	InputIsBoolean       bool
+	RiseDebounceSeconds  string
+	FallDebounceSeconds  string
+	Configuration        *semantics.Configuration
+	NormalRules          []consoleSemanticRuleView
+	AlarmRules           []consoleSemanticRuleView
+	FlowRules            []consoleSemanticRuleView
+	FlowRuleRemaining    int
+	FlowRoutes           []consoleOutputRouteView
+	FlowRouteRemaining   int
+	FlowRouteCount       int
+	FlowActiveCount      int
+	FlowStoppedCount     int
+	FlowTransformErrors  int
+	FlowDeliveryErrors   int
+	FlowPendingCount     int64
+	FlowPreparedCount    int
+	FlowNeedsConfigCount int
+	FlowIneligibleCount  int
 }
 
 type consoleSemanticRuleView struct {
@@ -51,6 +66,8 @@ type consoleSemanticRuleView struct {
 	KindLabel           string
 	RiseDebounceSeconds string
 	FallDebounceSeconds string
+	OutputRoutes        []consoleOutputRouteView
+	OutputBindings      []consoleOutputBindingView
 }
 
 type consoleEdgeView struct {
@@ -214,40 +231,285 @@ type consoleAuditView struct {
 	OutcomeClass string
 }
 
-type consoleDefinitionOption struct {
-	ID   string
-	Name string
-	Kind string
-}
-
-type consoleOutputView struct {
-	store.YokaKitRoute
-	KindLabel  string
-	StateLabel string
-	StateClass string
-}
-
 type consoleRuleOption struct {
-	ID   string
-	Name string
-	Kind string
+	ID              string
+	Name            string
+	DisplayName     string
+	Kind            string
+	ObservationKind outputadapter.ObservationKind
+	SignalRef       string
+	SensorName      string
 }
 
-type consoleRuleOutputView struct {
-	store.YokaKitRuleRoute
-	KindLabel  string
-	StateLabel string
-	StateClass string
+type consoleExportProfileView struct {
+	siteapp.ExportProfile
+	AdapterLabel           string
+	StateLabel             string
+	StateClass             string
+	ActiveCount            int
+	NeedsConfigCount       int
+	PreparedCount          int
+	IneligibleCount        int
+	DrainingCount          int
+	StoppedCount           int
+	AttentionCount         int
+	TransformErrorCount    int
+	DeliveryAttentionCount int
+	Bindings               []consoleOutputBindingView
+}
+
+type consoleOutputBindingView struct {
+	siteapp.OutputProfileRuleBinding
+	AdapterLabel      string
+	StateLabel        string
+	StateClass        string
+	KindLabel         string
+	ModeLabel         string
+	Preview           *siteapp.OutputPublicationPreview
+	PreviewLabel      string
+	PrettyPayload     string
+	HasDiagnostics    bool
+	TransformLabel    string
+	TransformClass    string
+	DeliveryLabel     string
+	DeliveryClass     string
+	PendingCount      int64
+	NeedsAttention    bool
+	TransformError    bool
+	DeliveryAttention bool
+}
+
+func newConsoleExportProfileViews(
+	profiles []siteapp.ExportProfile,
+	previews map[string]siteapp.OutputPublicationPreview,
+	routes []consoleOutputRouteView,
+) []consoleExportProfileView {
+	routesByBinding := make(map[string]consoleOutputRouteView, len(routes))
+	for _, route := range routes {
+		if route.BindingID != "" {
+			routesByBinding[route.BindingID] = route
+		}
+	}
+	views := make([]consoleExportProfileView, 0, len(profiles))
+	for _, profile := range profiles {
+		view := consoleExportProfileView{
+			ExportProfile: profile,
+			AdapterLabel:  profile.AdapterID,
+			StateLabel:    "停止中",
+			StateClass:    "never",
+		}
+		switch profile.AdapterID {
+		case "iotkit.mqtt-json.v1":
+			view.AdapterLabel = "汎用MQTT JSON"
+		case "yokakit.mqtt.v1":
+			view.AdapterLabel = "YokaKit"
+		}
+		switch profile.State {
+		case siteapp.ExportProfilePreparing:
+			view.StateLabel, view.StateClass = "送信前の準備中", "needs-setup"
+		case siteapp.ExportProfileActive:
+			view.StateLabel, view.StateClass = "使用中", "configured"
+		case siteapp.ExportProfileDraining:
+			view.StateLabel, view.StateClass = "配送終了処理中", "in-progress"
+		}
+		for _, binding := range profile.Bindings {
+			bindingView := consoleOutputBindingView{
+				OutputProfileRuleBinding: binding,
+				AdapterLabel:             view.AdapterLabel,
+				KindLabel:                displaySemanticKind(semantics.Kind(binding.RuleKind)),
+				ModeLabel:                displayOutputKind(binding.Mode),
+			}
+			switch binding.State {
+			case siteapp.OutputBindingPrepared:
+				bindingView.StateLabel, bindingView.StateClass = "外部登録待ち", "needs-setup"
+				view.PreparedCount++
+			case siteapp.OutputBindingActive:
+				bindingView.StateLabel, bindingView.StateClass = "送信対象", "configured"
+				view.ActiveCount++
+			case siteapp.OutputBindingNeedsConfiguration:
+				bindingView.StateLabel, bindingView.StateClass = "用途を選んでください", "needs-setup"
+				view.NeedsConfigCount++
+			case siteapp.OutputBindingIneligible:
+				bindingView.StateLabel, bindingView.StateClass = "対象外", "never"
+				view.IneligibleCount++
+			case siteapp.OutputBindingDraining:
+				bindingView.StateLabel, bindingView.StateClass = "配送終了処理中", "in-progress"
+				view.DrainingCount++
+			default:
+				bindingView.StateLabel, bindingView.StateClass = "停止", "never"
+				view.StoppedCount++
+			}
+			if preview, exists := previews[binding.BindingID]; exists {
+				copied := preview
+				bindingView.Preview = &copied
+				switch preview.Provenance {
+				case "actual":
+					bindingView.PreviewLabel = "実際の送信内容"
+				case "latest_observation":
+					bindingView.PreviewLabel = "最新値を使った変換結果"
+				default:
+					bindingView.PreviewLabel = "送信内容のサンプル"
+				}
+				var pretty bytes.Buffer
+				if json.Indent(&pretty, preview.Payload, "", "  ") == nil {
+					bindingView.PrettyPayload = pretty.String()
+				} else {
+					bindingView.PrettyPayload = string(preview.Payload)
+				}
+			}
+			if route, exists := routesByBinding[binding.BindingID]; exists &&
+				(binding.State == siteapp.OutputBindingActive ||
+					binding.State == siteapp.OutputBindingDraining) {
+				bindingView.HasDiagnostics = true
+				bindingView.TransformLabel = route.TransformLabel
+				bindingView.TransformClass = route.TransformClass
+				bindingView.DeliveryLabel = route.DeliveryLabel
+				bindingView.DeliveryClass = route.DeliveryClass
+				bindingView.PendingCount = route.PendingCount
+				bindingView.TransformError =
+					route.LastTransformErrorCode != ""
+				bindingView.DeliveryAttention =
+					route.DeliveryClass == "stale"
+				bindingView.NeedsAttention =
+					bindingView.TransformError ||
+						bindingView.DeliveryAttention
+				if bindingView.TransformError {
+					view.TransformErrorCount++
+				}
+				if bindingView.DeliveryAttention {
+					view.DeliveryAttentionCount++
+				}
+				if bindingView.NeedsAttention {
+					view.AttentionCount++
+				}
+			}
+			view.Bindings = append(view.Bindings, bindingView)
+		}
+		sort.SliceStable(view.Bindings, func(left, right int) bool {
+			if view.Bindings[left].NeedsAttention !=
+				view.Bindings[right].NeedsAttention {
+				return view.Bindings[left].NeedsAttention
+			}
+			priority := func(state siteapp.OutputBindingState) int {
+				switch state {
+				case siteapp.OutputBindingNeedsConfiguration:
+					return 0
+				case siteapp.OutputBindingPrepared:
+					return 1
+				case siteapp.OutputBindingDraining:
+					return 2
+				case siteapp.OutputBindingActive:
+					return 3
+				case siteapp.OutputBindingIneligible:
+					return 4
+				default:
+					return 5
+				}
+			}
+			return priority(view.Bindings[left].State) <
+				priority(view.Bindings[right].State)
+		})
+		views = append(views, view)
+	}
+	return views
+}
+
+func currentExportProfiles(
+	profiles []siteapp.ExportProfile,
+) []siteapp.ExportProfile {
+	current := make([]siteapp.ExportProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile.State != siteapp.ExportProfileStopped {
+			current = append(current, profile)
+		}
+	}
+	return current
+}
+
+func attachConsoleOutputBindings(
+	signals []consoleSignalView,
+	profiles []siteapp.ExportProfile,
+) {
+	bindingsByRule := make(map[string][]consoleOutputBindingView)
+	for _, profileView := range newConsoleExportProfileViews(profiles, nil, nil) {
+		for _, binding := range profileView.Bindings {
+			switch binding.State {
+			case siteapp.OutputBindingNeedsConfiguration,
+				siteapp.OutputBindingPrepared,
+				siteapp.OutputBindingIneligible:
+				bindingsByRule[binding.RuleID] = append(
+					bindingsByRule[binding.RuleID],
+					binding,
+				)
+			}
+		}
+	}
+	for signalIndex := range signals {
+		signals[signalIndex].FlowPreparedCount = 0
+		signals[signalIndex].FlowNeedsConfigCount = 0
+		signals[signalIndex].FlowIneligibleCount = 0
+		for ruleIndex := range signals[signalIndex].NormalRules {
+			rule := &signals[signalIndex].NormalRules[ruleIndex]
+			rule.OutputBindings = bindingsByRule[rule.ID]
+			addConsoleOutputBindingFlowCounts(
+				&signals[signalIndex],
+				rule.OutputBindings,
+			)
+		}
+		for ruleIndex := range signals[signalIndex].AlarmRules {
+			rule := &signals[signalIndex].AlarmRules[ruleIndex]
+			rule.OutputBindings = bindingsByRule[rule.ID]
+			addConsoleOutputBindingFlowCounts(
+				&signals[signalIndex],
+				rule.OutputBindings,
+			)
+		}
+	}
+}
+
+func addConsoleOutputBindingFlowCounts(
+	signal *consoleSignalView,
+	bindings []consoleOutputBindingView,
+) {
+	for _, binding := range bindings {
+		switch binding.State {
+		case siteapp.OutputBindingPrepared:
+			signal.FlowPreparedCount++
+		case siteapp.OutputBindingNeedsConfiguration:
+			signal.FlowNeedsConfigCount++
+		case siteapp.OutputBindingIneligible:
+			signal.FlowIneligibleCount++
+		}
+	}
 }
 
 type consoleOutputRouteView struct {
 	siteapp.OutputRoute
-	RuleName     string
-	KindLabel    string
-	AdapterLabel string
-	Destination  string
-	StateLabel   string
-	StateClass   string
+	RuleName       string
+	KindLabel      string
+	AdapterLabel   string
+	Destination    string
+	StateLabel     string
+	StateClass     string
+	TransformLabel string
+	TransformClass string
+	DeliveryLabel  string
+	DeliveryClass  string
+	DeliveryDetail string
+	SignalRef      string
+	SensorName     string
+}
+
+func profileOutputRoutes(
+	routes []siteapp.OutputRoute,
+) []siteapp.OutputRoute {
+	profileRoutes := make([]siteapp.OutputRoute, 0, len(routes))
+	for _, route := range routes {
+		if route.BindingID != "" {
+			profileRoutes = append(profileRoutes, route)
+		}
+	}
+	return profileRoutes
 }
 
 func newConsoleSignalView(
@@ -268,6 +530,7 @@ func newConsoleSignalView(
 			summary.SensorType,
 			"未通知",
 		),
+		SourceValue:     "—",
 		SourceValueType: displayValueType(summary.ValueType),
 		SourceUnit:      displayUnit(summary.Unit),
 		ChannelLabel:    "なし",
@@ -277,6 +540,9 @@ func newConsoleSignalView(
 	}
 	if summary.ChannelIndex != nil {
 		view.ChannelLabel = strconv.FormatInt(int64(*summary.ChannelIndex), 10)
+	}
+	if summary.Latest != nil {
+		view.SourceValue = displayValues(summary.Latest.Values, summary.ValueType)
 	}
 	view.FormProfile, _ = siteapp.SignalProfileCandidate(summary)
 	if summary.Profile != nil {
@@ -456,7 +722,7 @@ func newConsoleSetupSignalView(
 		}
 	}
 	if len(signal.CandidateMissing) > 0 {
-		view.MissingMessage = "Adapterから種類・単位が届いていません。現場で確認して入力してください。"
+		view.MissingMessage = "Edgeから種類・単位を確認できません。現場で確認して入力してください。"
 	}
 	return view
 }
@@ -522,6 +788,79 @@ func attachConsoleSemanticConfigurations(
 		if len(configuration.Rules) > 0 {
 			signals[index].MeaningLabel = strconv.Itoa(len(configuration.Rules)) + "件のルール"
 			signals[index].MeaningClass = "configured"
+		}
+	}
+}
+
+func attachConsoleOutputRoutes(
+	signals []consoleSignalView,
+	routes []consoleOutputRouteView,
+) {
+	routesByRule := make(map[string][]consoleOutputRouteView)
+	for _, route := range routes {
+		if route.BindingID != "" && !route.Active {
+			continue
+		}
+		routesByRule[route.RuleID] = append(routesByRule[route.RuleID], route)
+	}
+	for signalIndex := range signals {
+		signal := &signals[signalIndex]
+		for ruleIndex := range signal.NormalRules {
+			rule := &signal.NormalRules[ruleIndex]
+			rule.OutputRoutes = routesByRule[rule.ID]
+		}
+		for ruleIndex := range signal.AlarmRules {
+			rule := &signal.AlarmRules[ruleIndex]
+			rule.OutputRoutes = routesByRule[rule.ID]
+		}
+		allRules := append(
+			append([]consoleSemanticRuleView(nil), signal.NormalRules...),
+			signal.AlarmRules...,
+		)
+		signal.FlowRules = allRules
+		if len(signal.FlowRules) > 2 {
+			signal.FlowRuleRemaining = len(signal.FlowRules) - 2
+			signal.FlowRules = signal.FlowRules[:2]
+		}
+		for _, rule := range allRules {
+			signal.FlowRoutes = append(signal.FlowRoutes, rule.OutputRoutes...)
+		}
+		signal.FlowRouteCount = len(signal.FlowRoutes)
+		for _, route := range signal.FlowRoutes {
+			if route.Active {
+				signal.FlowActiveCount++
+			} else {
+				signal.FlowStoppedCount++
+			}
+			if route.Active && route.LastTransformErrorCode != "" {
+				signal.FlowTransformErrors++
+			}
+			if route.DeliveryClass == "stale" {
+				signal.FlowDeliveryErrors++
+			}
+			signal.FlowPendingCount += route.PendingCount
+		}
+		if len(signal.FlowRoutes) > 2 {
+			signal.FlowRouteRemaining = len(signal.FlowRoutes) - 2
+			signal.FlowRoutes = signal.FlowRoutes[:2]
+		}
+	}
+}
+
+func attachConsoleOutputSensorNames(
+	routes []consoleOutputRouteView,
+	signals []consoleSignalView,
+) {
+	names := make(map[string]string, len(signals))
+	for _, signal := range signals {
+		names[signal.SignalRef] = signal.Name
+	}
+	for index := range routes {
+		if routes[index].SensorName == "" {
+			routes[index].SensorName = names[routes[index].SignalRef]
+		}
+		if routes[index].SensorName == "" {
+			routes[index].SensorName = "名前未設定のセンサー"
 		}
 	}
 }
@@ -639,71 +978,10 @@ func newConsoleAuditViews(events []siteapp.AuditEvent) []consoleAuditView {
 	return views
 }
 
-func newConsoleDefinitionOptions(
-	definitions []semantics.Definition,
-	signals []consoleSignalView,
-) []consoleDefinitionOption {
-	nameBySignal := make(map[string]string, len(signals))
-	for _, signal := range signals {
-		nameBySignal[signal.SignalRef] = signal.Name
-	}
-	options := make([]consoleDefinitionOption, 0, len(definitions))
-	for _, definition := range definitions {
-		if !definition.Active {
-			continue
-		}
-		name := nameBySignal[definition.SignalRef]
-		if name == "" {
-			name = "名前未設定のセンサー"
-		}
-		options = append(options, consoleDefinitionOption{
-			ID: definition.ID, Name: name, Kind: displaySemanticKind(definition.Kind),
-		})
-	}
-	return options
-}
-
-func newConsoleOutputViews(routes []store.YokaKitRoute) []consoleOutputView {
-	views := make([]consoleOutputView, 0, len(routes))
-	for _, route := range routes {
-		view := consoleOutputView{
-			YokaKitRoute: route,
-			KindLabel:    displayOutputKind(string(route.Kind)),
-			StateLabel:   "停止",
-			StateClass:   "never",
-		}
-		if route.Active {
-			view.StateLabel = "使用中"
-			view.StateClass = "receiving"
-		}
-		views = append(views, view)
-	}
-	return views
-}
-
-func newConsoleRuleOutputViews(
-	routes []store.YokaKitRuleRoute,
-) []consoleRuleOutputView {
-	views := make([]consoleRuleOutputView, 0, len(routes))
-	for _, route := range routes {
-		view := consoleRuleOutputView{
-			YokaKitRuleRoute: route,
-			KindLabel:        displayOutputKind(string(route.Kind)),
-			StateLabel:       "停止",
-			StateClass:       "never",
-		}
-		if route.Active {
-			view.StateLabel = "使用中"
-			view.StateClass = "receiving"
-		}
-		views = append(views, view)
-	}
-	return views
-}
-
 func newConsoleOutputRouteViews(
 	routes []siteapp.OutputRoute,
 	rules []consoleRuleOption,
+	now time.Time,
 ) []consoleOutputRouteView {
 	rulesByID := make(map[string]consoleRuleOption, len(rules))
 	for _, rule := range rules {
@@ -713,24 +991,39 @@ func newConsoleOutputRouteViews(
 	for _, route := range routes {
 		rule := rulesByID[route.RuleID]
 		view := consoleOutputRouteView{
-			OutputRoute: route,
-			RuleName:    rule.Name,
-			KindLabel:   rule.Kind,
-			StateLabel:  "停止",
-			StateClass:  "never",
+			OutputRoute:    route,
+			RuleName:       rule.DisplayName,
+			KindLabel:      rule.Kind,
+			StateLabel:     "停止",
+			StateClass:     "never",
+			TransformLabel: "設定済み",
+			TransformClass: "configured",
+			DeliveryLabel:  "配送実績なし",
+			DeliveryClass:  "never",
+			SignalRef:      rule.SignalRef,
+			SensorName:     rule.SensorName,
+		}
+		if view.RuleName == "" {
+			view.RuleName = route.RuleDisplayName
 		}
 		if view.RuleName == "" {
 			view.RuleName = "設定済みの値"
 		}
+		if view.KindLabel == "" && route.RuleKind != "" {
+			view.KindLabel = displaySemanticKind(semantics.Kind(route.RuleKind))
+		}
+		if view.SignalRef == "" {
+			view.SignalRef = route.SignalRef
+		}
 		switch route.AdapterID {
 		case "iotkit.mqtt-json.v1":
-			view.AdapterLabel = "汎用MQTT JSON"
+			view.AdapterLabel = "IoTKit MQTT JSON v1"
 			config, err := outputadapter.DecodeGenericMQTTJSONConfig(route.Config)
 			if err == nil {
 				view.Destination = config.Topic
 			}
 		case "yokakit.mqtt.v1":
-			view.AdapterLabel = "YokaKit MQTT"
+			view.AdapterLabel = "YokaKit MQTT v1"
 			config, err := outputadapter.DecodeYokaKitConfig(route.Config)
 			if err == nil {
 				view.Destination = config.SourceID + " / " + config.SignalID
@@ -741,13 +1034,80 @@ func newConsoleOutputRouteViews(
 		if view.Destination == "" {
 			view.Destination = "設定を確認してください"
 		}
+		if route.LastTransformSuccessAt != nil {
+			view.TransformLabel = "変換確認済み"
+		}
 		if route.Active {
-			view.StateLabel = "使用中"
+			view.StateLabel = "データ待ち"
 			view.StateClass = "receiving"
+		} else {
+			view.TransformLabel = "停止中"
+			view.TransformClass = "never"
+		}
+		switch {
+		case outputRouteDeliveryStalled(route, now):
+			view.DeliveryLabel = "要確認"
+			view.DeliveryClass = "stale"
+			if route.Active {
+				view.StateLabel = "配送停止の可能性"
+				view.StateClass = "stale"
+			}
+		case route.PendingCount > 0:
+			view.DeliveryLabel = "配送中"
+			view.DeliveryClass = "in-progress"
+			if route.Active {
+				view.StateLabel = "配送中"
+				view.StateClass = "in-progress"
+			}
+		case route.PublishedCount > 0:
+			view.DeliveryLabel = "待ちなし"
+			view.DeliveryClass = "configured"
+			if route.Active {
+				view.StateLabel = "待ちなし"
+				view.StateClass = "configured"
+			}
+		}
+		switch {
+		case route.LastPublishedAt != nil:
+			age, _ := displayAge(route.LastPublishedAt, now)
+			view.DeliveryDetail = fmt.Sprintf(
+				"%d件送信 / %d件待ち · 最終配送 %s",
+				route.PublishedCount,
+				route.PendingCount,
+				age,
+			)
+		case route.PendingCount > 0:
+			view.DeliveryDetail = fmt.Sprintf(
+				"%d件送信 / %d件待ち · まだ配送できていません",
+				route.PublishedCount,
+				route.PendingCount,
+			)
+		default:
+			view.DeliveryDetail = fmt.Sprintf(
+				"%d件送信 / %d件待ち",
+				route.PublishedCount,
+				route.PendingCount,
+			)
+		}
+		if route.Active && route.LastTransformErrorCode != "" {
+			view.TransformLabel = "変換エラー"
+			view.TransformClass = "stale"
+			view.StateLabel = "要確認"
+			view.StateClass = "stale"
 		}
 		views = append(views, view)
 	}
 	return views
+}
+
+const outputDeliveryStallThreshold = 5 * time.Minute
+
+func outputRouteDeliveryStalled(route siteapp.OutputRoute, now time.Time) bool {
+	if route.PendingCount == 0 || route.OldestPendingAt == nil {
+		return false
+	}
+	return now.Sub(time.UnixMilli(*route.OldestPendingAt)) >=
+		outputDeliveryStallThreshold
 }
 
 func displayOutputKind(kind string) string {
@@ -966,7 +1326,10 @@ func displayOperation(operation string) string {
 		"semantic_definition.put":        "センサー設定を保存",
 		"semantic_definition.deactivate": "センサー設定を停止",
 		"semantic_counter.reset":         "累積値を0に戻す",
-		"yokakit_route.create":           "外部出力を追加",
+		"export_profile.activate":        "外部出力先を追加",
+		"export_profile.stop_requested":  "外部出力先の終了を開始",
+		"output_binding.configure":       "外部出力の用途を設定",
+		"output_binding.start":           "外部出力の送信を開始",
 		"account.create":                 "アカウントを発行",
 		"account.update":                 "アカウント情報を変更",
 		"account.disable":                "アカウントを無効化",

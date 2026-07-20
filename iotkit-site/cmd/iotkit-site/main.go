@@ -167,6 +167,7 @@ func readOwnerOnlySecret(path string) (string, error) {
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dbPath := flags.String("db", "site.db", "Site SQLite path")
+	siteID := flags.String("site-id", "", "deployment-assigned Site source identity")
 	brokerURL := flags.String("broker-url", "", "MQTT broker URL")
 	clientID := flags.String("client-id", "iotkit-site", "MQTT client ID")
 	username := flags.String("username", "", "MQTT username")
@@ -250,7 +251,12 @@ func runServe(args []string) error {
 		return err
 	}
 
-	archive, err := store.Open(*dbPath)
+	var archive *store.Store
+	if *siteID == "" {
+		archive, err = store.Open(*dbPath)
+	} else {
+		archive, err = store.OpenWithSiteID(*dbPath, *siteID)
+	}
 	if err != nil {
 		return fmt.Errorf("open Site store: %w", err)
 	}

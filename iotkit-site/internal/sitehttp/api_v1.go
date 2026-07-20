@@ -1,7 +1,6 @@
 package sitehttp
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -410,20 +409,6 @@ func (server *Server) deprecatedSemanticMutation(
 	)
 }
 
-func (server *Server) listYokaKitOutputs(response http.ResponseWriter, request *http.Request) {
-	if _, ok := server.requireAPIAuth(response, request, false); !ok {
-		return
-	}
-	routes, err := server.store.ListYokaKitRuleRoutes(request.Context())
-	if err != nil {
-		server.operationError(response, err)
-		return
-	}
-	writeJSON(response, http.StatusOK, struct {
-		Items any `json:"items"`
-	}{routes})
-}
-
 func (server *Server) listOutputAdapters(
 	response http.ResponseWriter,
 	request *http.Request,
@@ -441,6 +426,195 @@ func (server *Server) listOutputAdapters(
 	}{registry.Descriptors()})
 }
 
+func (server *Server) listExportProfiles(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireAPIAuth(response, request, false); !ok {
+		return
+	}
+	profiles, err := server.store.ListExportProfiles(request.Context())
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Items []siteapp.ExportProfile `json:"items"`
+	}{profiles})
+}
+
+func (server *Server) activateExportProfile(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		DisplayName         string `json:"display_name"`
+		AdapterID           string `json:"adapter_id"`
+		AutoBindFutureRules bool   `json:"auto_bind_future_rules"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil ||
+		input.DisplayName == "" ||
+		input.AdapterID == "" ||
+		!input.AutoBindFutureRules {
+		server.badRequest(response)
+		return
+	}
+	profile, err := server.store.ActivateExportProfile(
+		request.Context(),
+		server.actor(auth),
+		input.DisplayName,
+		input.AdapterID,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(profile.Revision))
+	writeJSON(response, http.StatusCreated, profile)
+}
+
+func (server *Server) previewExportProfile(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireAPIAuth(response, request, false); !ok {
+		return
+	}
+	var input struct {
+		AdapterID string `json:"adapter_id"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil ||
+		input.AdapterID == "" {
+		server.badRequest(response)
+		return
+	}
+	preview, err := server.store.PreviewExportProfileActivation(
+		request.Context(), input.AdapterID,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, preview)
+}
+
+func (server *Server) configureExportBinding(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		Mode             string `json:"mode"`
+		ExpectedRevision int64  `json:"expected_revision"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil ||
+		input.Mode == "" ||
+		input.ExpectedRevision < 1 {
+		server.badRequest(response)
+		return
+	}
+	binding, err := server.store.ConfigureYokaKitBooleanBinding(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("binding_id"),
+		input.Mode,
+		input.ExpectedRevision,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(binding.Revision))
+	writeJSON(response, http.StatusOK, binding)
+}
+
+func (server *Server) stopExportProfile(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		ExpectedRevision int64 `json:"expected_revision"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil ||
+		input.ExpectedRevision < 1 {
+		server.badRequest(response)
+		return
+	}
+	profile, err := server.store.RequestExportProfileStop(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("profile_id"),
+		input.ExpectedRevision,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(profile.Revision))
+	writeJSON(response, http.StatusAccepted, profile)
+}
+
+func (server *Server) getOutputBindingPublication(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if _, ok := server.requireAPIAuth(response, request, false); !ok {
+		return
+	}
+	preview, err := server.store.GetOutputBindingPublication(
+		request.Context(),
+		request.PathValue("binding_id"),
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, preview)
+}
+
+func (server *Server) startOutputBinding(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireAdminMutation(response, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		ExpectedRevision             int64 `json:"expected_revision"`
+		ExternalRegistrationComplete bool  `json:"external_registration_complete"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil ||
+		input.ExpectedRevision < 1 ||
+		!input.ExternalRegistrationComplete {
+		server.badRequest(response)
+		return
+	}
+	binding, err := server.store.StartPreparedOutputBinding(
+		request.Context(),
+		server.actor(auth),
+		request.PathValue("binding_id"),
+		input.ExpectedRevision,
+	)
+	if err != nil {
+		server.operationError(response, err)
+		return
+	}
+	response.Header().Set("ETag", revisionETag(binding.Revision))
+	writeJSON(response, http.StatusOK, binding)
+}
+
 func (server *Server) listOutputRoutes(
 	response http.ResponseWriter,
 	request *http.Request,
@@ -453,74 +627,10 @@ func (server *Server) listOutputRoutes(
 		server.operationError(response, err)
 		return
 	}
+	routes = profileOutputRoutes(routes)
 	writeJSON(response, http.StatusOK, struct {
 		Items []siteapp.OutputRoute `json:"items"`
 	}{routes})
-}
-
-func (server *Server) createOutputRoute(
-	response http.ResponseWriter,
-	request *http.Request,
-) {
-	auth, ok := server.requireAdminMutation(response, request)
-	if !ok {
-		return
-	}
-	var input struct {
-		RuleID    string          `json:"rule_id"`
-		AdapterID string          `json:"adapter_id"`
-		Config    json.RawMessage `json:"config"`
-	}
-	if err := decodeJSON(response, request, &input); err != nil ||
-		input.RuleID == "" ||
-		input.AdapterID == "" ||
-		len(input.Config) == 0 {
-		server.badRequest(response)
-		return
-	}
-	route, err := server.ruleOutputs.CreateOutputRoute(
-		request.Context(),
-		server.actor(auth),
-		input.RuleID,
-		input.AdapterID,
-		input.Config,
-	)
-	if err != nil {
-		server.operationError(response, err)
-		return
-	}
-	writeJSON(response, http.StatusCreated, route)
-}
-
-func (server *Server) createYokaKitOutput(response http.ResponseWriter, request *http.Request) {
-	auth, ok := server.requireAdminMutation(response, request)
-	if !ok {
-		return
-	}
-	var input struct {
-		RuleID   string                    `json:"rule_id"`
-		SourceID string                    `json:"source_id"`
-		SignalID string                    `json:"signal_id"`
-		Kind     outputadapter.YokaKitKind `json:"kind"`
-		Reason   string                    `json:"reason"`
-	}
-	if err := decodeJSON(response, request, &input); err != nil ||
-		input.RuleID == "" {
-		server.badRequest(response)
-		return
-	}
-	adapter := outputadapter.YokaKitConfig{
-		SourceID: input.SourceID, SignalID: input.SignalID,
-		Kind: input.Kind, Reason: input.Reason,
-	}
-	route, err := server.ruleOutputs.CreateYokaKitRoute(
-		request.Context(), server.actor(auth), input.RuleID, adapter,
-	)
-	if err != nil {
-		server.operationError(response, err)
-		return
-	}
-	writeJSON(response, http.StatusCreated, route)
 }
 
 func (server *Server) listAuditEvents(response http.ResponseWriter, request *http.Request) {

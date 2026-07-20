@@ -216,6 +216,17 @@ grep -Fq 'allow_anonymous false' "$output/mosquitto/mosquitto.conf"
 grep -Fq 'listener 8883 0.0.0.0' "$output/mosquitto/mosquitto.conf"
 grep -Fq "IOTKIT_BROKER_BIND=127.0.0.1" "$output/site.env"
 grep -Fq "IOTKIT_BROKER_PORT=$port" "$output/site.env"
+site_id=$(sed -n 's/^IOTKIT_SITE_ID=//p' "$output/site.env")
+[[ "$site_id" =~ ^site-[0-9a-f]{32}$ ]] || {
+  echo "bootstrap did not assign a valid Site ID: $site_id" >&2
+  exit 1
+}
+grep -Fxq "topic write iotkit/v1/sources/$site_id/signals/+/observations" \
+  "$output/mosquitto/acl"
+grep -Fxq "topic write yokakit/v1/sources/$site_id/signals/+/observations" \
+  "$output/mosquitto/acl"
+grep -Fxq "topic write yokakit/v1/sources/$site_id/status" \
+  "$output/mosquitto/acl"
 grep -Fxq 'IOTKIT_MOSQUITTO_IMAGE=eclipse-mosquitto:2.0.22' "$output/site.env"
 for setting in \
   'message_size_limit 1048576' \
@@ -271,6 +282,16 @@ fi
 docker compose --env-file "$output/site.env" -p "$project" \
   -f "$repo_root/deploy/compose.site.yaml" up --build --detach
 compose_started=true
+for _ in $(seq 1 60); do
+  stored_site_id=$(sqlite3 "$output/data/site/site.db" \
+    "SELECT site_id FROM site_meta WHERE singleton=1" 2>/dev/null || true)
+  [[ -n "$stored_site_id" ]] && break
+  sleep 1
+done
+[[ "${stored_site_id:-}" == "$site_id" ]] || {
+  echo "Site database identity does not match bootstrap ACL identity" >&2
+  exit 1
+}
 
 openssl rand -base64 24 >"$scratch/admin-password"
 chmod 600 "$scratch/admin-password"

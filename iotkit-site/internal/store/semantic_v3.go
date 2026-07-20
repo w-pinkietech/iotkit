@@ -94,7 +94,7 @@ func (store *Store) listActiveSemanticRulesV3(
 ) ([]semantics.Rule, error) {
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT rule.rule_id, rule.signal_ref, rule.display_name, rule.kind,
-			rule.series_id, revision.revision, revision.spec_json,
+			revision.series_id, revision.revision, revision.spec_json,
 			rule.created_at, rule.retired_at
 		FROM semantic_rules_v3 AS rule
 		JOIN semantic_rule_revisions_v3 AS revision
@@ -225,6 +225,9 @@ func (store *Store) CreateSemanticRule(
 	`, rule.ID); err != nil {
 		return noRule, err
 	}
+	if err := autoBindSemanticRuleTx(ctx, tx, rule, edgeNodeID); err != nil {
+		return noRule, err
+	}
 	if err := bumpSemanticConfigV3(ctx, tx, signalRef, configRevision); err != nil {
 		return noRule, err
 	}
@@ -280,10 +283,13 @@ func (store *Store) UpdateSemanticRule(
 	updated.DisplayName = displayName
 	updated.Revision++
 	updated.RuleSpec = spec
+	if spec != current.RuleSpec {
+		updated.SeriesID = uuid.NewString()
+	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE semantic_rules_v3 SET display_name = ?
+		UPDATE semantic_rules_v3 SET display_name = ?, series_id = ?
 		WHERE rule_id = ? AND retired_at IS NULL
-	`, displayName, ruleID); err != nil {
+	`, displayName, updated.SeriesID, ruleID); err != nil {
 		return noRule, err
 	}
 	if err := insertSemanticRuleRevisionV3(
@@ -375,6 +381,11 @@ func (store *Store) UpdateSignalCalibration(
 	`, signalRef, calibration.Revision, edgeNodeID); err != nil {
 		return noConfiguration, err
 	}
+	if err := rotateSemanticSeriesForCalibrationTx(
+		ctx, tx, signalRef, edgeNodeID,
+	); err != nil {
+		return noConfiguration, err
+	}
 	if err := bumpSemanticConfigV3(
 		ctx, tx, signalRef, configRevision,
 	); err != nil {
@@ -400,6 +411,70 @@ func (store *Store) UpdateSignalCalibration(
 		return noConfiguration, err
 	}
 	return store.GetSemanticConfiguration(ctx, signalRef)
+}
+
+func rotateSemanticSeriesForCalibrationTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	signalRef string,
+	edgeNodeID string,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT rule.rule_id, rule.signal_ref, rule.display_name, rule.kind,
+			revision.series_id, revision.revision, revision.spec_json,
+			rule.created_at
+		FROM semantic_rules_v3 AS rule
+		JOIN semantic_rule_revisions_v3 AS revision
+			ON revision.rule_id = rule.rule_id AND revision.active = 1
+		WHERE rule.signal_ref = ? AND rule.retired_at IS NULL
+		ORDER BY rule.display_order
+	`, signalRef)
+	if err != nil {
+		return err
+	}
+	rules := make([]semantics.Rule, 0)
+	for rows.Next() {
+		var rule semantics.Rule
+		var specJSON []byte
+		if err := rows.Scan(
+			&rule.ID, &rule.SignalRef, &rule.DisplayName, &rule.Kind,
+			&rule.SeriesID, &rule.Revision, &specJSON, &rule.CreatedAt,
+		); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := json.Unmarshal(specJSON, &rule.RuleSpec); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		rule.Active = true
+		rules = append(rules, rule)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, current := range rules {
+		if err := endSemanticRuleRevisionV3(
+			ctx, tx, current, edgeNodeID,
+		); err != nil {
+			return err
+		}
+		updated := current
+		updated.Revision++
+		updated.SeriesID = uuid.NewString()
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE semantic_rules_v3 SET series_id = ?
+			WHERE rule_id = ? AND retired_at IS NULL
+		`, updated.SeriesID, updated.ID); err != nil {
+			return err
+		}
+		if err := insertSemanticRuleRevisionV3(
+			ctx, tx, updated, edgeNodeID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (store *Store) RetireSemanticRule(
@@ -430,6 +505,11 @@ func (store *Store) RetireSemanticRule(
 	}
 	if err := endSemanticRuleRevisionV3(
 		ctx, tx, current, edgeNodeID,
+	); err != nil {
+		return noRule, err
+	}
+	if err := drainOutputBindingsForRuleTx(
+		ctx, tx, current.ID, edgeNodeID,
 	); err != nil {
 		return noRule, err
 	}
@@ -494,7 +574,7 @@ func activeSemanticRuleForUpdateV3(
 	var configRevision int64
 	err := tx.QueryRowContext(ctx, `
 		SELECT rule.rule_id, rule.signal_ref, rule.display_name, rule.kind,
-			rule.series_id, revision.revision, revision.spec_json,
+			revision.series_id, revision.revision, revision.spec_json,
 			rule.created_at, rule.retired_at,
 			signal.edge_node_id, config.revision
 		FROM semantic_rules_v3 AS rule
@@ -534,9 +614,10 @@ func insertSemanticRuleRevisionV3(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO semantic_rule_revisions_v3(
-			rule_id, revision, spec_json, active, created_at
-		) VALUES (?, ?, ?, 1, ?)
-	`, rule.ID, rule.Revision, specJSON, time.Now().UnixMilli()); err != nil {
+			rule_id, revision, spec_json, active, created_at, series_id
+		) VALUES (?, ?, ?, 1, ?, ?)
+	`, rule.ID, rule.Revision, specJSON, time.Now().UnixMilli(),
+		rule.SeriesID); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -719,6 +800,20 @@ func (store *Store) ensureSemanticEpochStartsV3(ctx context.Context) error {
 	`); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO output_binding_starts(
+			binding_id, ledger_epoch, start_after_pub_seq
+		)
+		SELECT binding.binding_id, cursor.ledger_epoch, 0
+		FROM output_profile_rule_bindings AS binding
+		JOIN semantic_rules_v3 AS rule ON rule.rule_id = binding.rule_id
+		JOIN site_signals AS signal ON signal.signal_ref = rule.signal_ref
+		JOIN accepted_cursors AS cursor
+			ON cursor.edge_node_id = signal.edge_node_id
+		WHERE binding.state = 'active'
+	`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -729,7 +824,7 @@ func (store *Store) listSemanticV3Candidates(
 	rows, err := store.db.QueryContext(ctx, `
 		WITH candidates AS (
 			SELECT rule.rule_id, revision.revision, rule.signal_ref,
-				signal.edge_node_id, signal.series_key, rule.series_id,
+				signal.edge_node_id, signal.series_key, revision.series_id,
 				rule.kind, revision.spec_json,
 				calibration.revision AS calibration_revision,
 				calibration.scale, calibration.offset,
@@ -895,31 +990,38 @@ func (store *Store) projectSemanticV3Candidate(
 	var appliedRuleRevision int64
 	var appliedCalibrationRevision int64
 	var appliedLedgerEpoch string
+	var appliedSeriesID string
 	nextSequence := int64(1)
 	if err := tx.QueryRowContext(ctx, `
 		SELECT initialized, detector_active, counter,
 			pending, pending_active, pending_since,
 			applied_rule_revision, applied_calibration_revision,
-			applied_ledger_epoch, next_sequence
+			applied_ledger_epoch, next_sequence, applied_series_id
 		FROM semantic_rule_runtime_v3 WHERE rule_id = ?
 	`, candidate.RuleID).Scan(
 		&initialized, &detectorActive, &state.Counter,
 		&state.Pending, &state.PendingActive, &state.PendingSince,
 		&appliedRuleRevision, &appliedCalibrationRevision,
-		&appliedLedgerEpoch, &nextSequence,
+		&appliedLedgerEpoch, &nextSequence, &appliedSeriesID,
 	); err != nil {
 		return err
 	}
-	if appliedRuleRevision == candidate.RuleRevision &&
+	if appliedSeriesID == candidate.SeriesID &&
+		appliedRuleRevision == candidate.RuleRevision &&
 		appliedCalibrationRevision == candidate.CalibrationRevision &&
 		appliedLedgerEpoch == candidate.LedgerEpoch {
 		state.Initialized = initialized
 		state.Active = detectorActive
 	} else {
 		state.Initialized = false
+		state.Active = false
 		state.Pending = false
 		state.PendingActive = false
 		state.PendingSince = 0
+		if appliedSeriesID != candidate.SeriesID {
+			state.Counter = 0
+			nextSequence = 1
+		}
 	}
 	result, nextState, err := semantics.EvaluateRule(
 		spec, state, calibrated, candidate.ReceivedAt,
@@ -971,12 +1073,12 @@ func (store *Store) projectSemanticV3Candidate(
 		SET initialized = ?, detector_active = ?, counter = ?,
 			pending = ?, pending_active = ?, pending_since = ?,
 			applied_rule_revision = ?, applied_calibration_revision = ?,
-			applied_ledger_epoch = ?, next_sequence = ?
+			applied_ledger_epoch = ?, next_sequence = ?, applied_series_id = ?
 		WHERE rule_id = ?
 	`, nextState.Initialized, nextState.Active, nextState.Counter,
 		nextState.Pending, nextState.PendingActive, nextState.PendingSince,
 		candidate.RuleRevision, candidate.CalibrationRevision,
-		candidate.LedgerEpoch, nextSequence,
+		candidate.LedgerEpoch, nextSequence, candidate.SeriesID,
 		candidate.RuleID); err != nil {
 		return err
 	}
@@ -1295,30 +1397,30 @@ func (store *Store) applySemanticCounterResetV3(
 		ruleRevision        int64
 		calibrationRevision int64
 		nextSequence        int64
+		appliedSeriesID     string
 	)
 	if err := tx.QueryRowContext(ctx, `
-		SELECT rule.series_id, rule.signal_ref, signal.edge_node_id,
-			CASE WHEN runtime.applied_rule_revision > 0
-				THEN runtime.applied_rule_revision
-				ELSE (SELECT MAX(revision) FROM semantic_rule_revisions_v3
-					WHERE rule_id = rule.rule_id)
-			END,
-			CASE WHEN runtime.applied_calibration_revision > 0
-				THEN runtime.applied_calibration_revision
-				ELSE (SELECT revision FROM signal_calibration_revisions_v3
-					WHERE signal_ref = rule.signal_ref AND active = 1)
-			END,
-			runtime.next_sequence
+		SELECT revision.series_id, rule.signal_ref, signal.edge_node_id,
+			revision.revision, calibration.revision,
+			runtime.next_sequence, runtime.applied_series_id
 		FROM semantic_rules_v3 AS rule
+		JOIN semantic_rule_revisions_v3 AS revision
+			ON revision.rule_id = rule.rule_id AND revision.active = 1
+		JOIN signal_calibration_revisions_v3 AS calibration
+			ON calibration.signal_ref = rule.signal_ref
+			AND calibration.active = 1
 		JOIN site_signals AS signal ON signal.signal_ref = rule.signal_ref
 		JOIN semantic_rule_runtime_v3 AS runtime
 			ON runtime.rule_id = rule.rule_id
 		WHERE rule.rule_id = ?
 	`, reset.RuleID).Scan(
 		&seriesID, &signalRef, &edgeNodeID, &ruleRevision,
-		&calibrationRevision, &nextSequence,
+		&calibrationRevision, &nextSequence, &appliedSeriesID,
 	); err != nil {
 		return err
+	}
+	if appliedSeriesID != seriesID {
+		nextSequence = 1
 	}
 	observationID := uuid.NewSHA1(
 		uuid.NameSpaceOID,
@@ -1338,9 +1440,16 @@ func (store *Store) applySemanticCounterResetV3(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE semantic_rule_runtime_v3
-		SET counter = 0, next_sequence = next_sequence + 1
+		SET initialized = 0, detector_active = 0, counter = 0,
+			pending = 0, pending_active = 0, pending_since = 0,
+			applied_rule_revision = ?,
+			applied_calibration_revision = ?,
+			applied_ledger_epoch = ?,
+			next_sequence = ?,
+			applied_series_id = ?
 		WHERE rule_id = ?
-	`, reset.RuleID); err != nil {
+	`, ruleRevision, calibrationRevision, reset.LedgerEpoch,
+		nextSequence+1, seriesID, reset.RuleID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `

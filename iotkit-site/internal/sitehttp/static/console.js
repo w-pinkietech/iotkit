@@ -50,6 +50,24 @@
   filterTable("log-table");
 
   document.addEventListener("click", (event) => {
+    const copyButton = event.target.closest("[data-copy-text]");
+    if (copyButton) {
+      const originalLabel = copyButton.textContent;
+      navigator.clipboard
+        .writeText(copyButton.dataset.copyText || "")
+        .then(() => {
+          copyButton.textContent = "コピーしました";
+        })
+        .catch(() => {
+          copyButton.textContent = "コピーできません";
+        })
+        .finally(() => {
+          window.setTimeout(() => {
+            copyButton.textContent = originalLabel;
+          }, 1600);
+        });
+      return;
+    }
     const row = event.target.closest("tr[data-href]");
     if (!row || event.target.closest("a, button, input, select, textarea")) return;
     window.location.assign(row.dataset.href);
@@ -95,8 +113,52 @@
   }
 
   for (const form of document.querySelectorAll("[data-output-route-form]")) {
+    const rule = form.querySelector("[data-output-rule]");
     const adapter = form.querySelector("[data-output-adapter]");
+    const mode = form.querySelector("[data-output-mode]");
+    const sourceID = form.querySelector('[name="source_id"]');
+    const signalID = form.querySelector('[name="signal_id"]');
+    const yokakitTopicPreview = form.querySelector(
+      "[data-yokakit-topic-preview]",
+    );
+    const payloadPreview = form.querySelector("[data-output-payload-preview]");
+    const yokakitPayloadPreview = form.querySelector(
+      "[data-yokakit-payload-preview]",
+    );
+    const payloadExamples = {
+      numeric: '{"schema_version":1,"kind":"numeric","value":24.8}',
+      boolean: '{"schema_version":1,"kind":"boolean","value":true}',
+      cumulative_value:
+        '{"schema_version":1,"kind":"cumulative_value","value":1524}',
+      alarm: '{"schema_version":1,"kind":"alarm","value":true}',
+    };
+    const yokakitPayloadExamples = {
+      production: '{"schema_version":1,"kind":"production","value":1524}',
+      onoff: '{"schema_version":1,"kind":"onoff","value":true}',
+      gantt_chart: '{"schema_version":1,"kind":"gantt_chart","value":true}',
+      alarm:
+        '{"schema_version":1,"kind":"alarm","value":true,"reason":"温度上限を超過"}',
+    };
+    const supports = (option, kind) => {
+      if (!kind) return true;
+      return (option?.dataset.accepts || "").split(/\s+/).includes(kind);
+    };
     const update = () => {
+      const kind = rule?.selectedOptions[0]?.dataset.kind || "";
+      if (payloadPreview) {
+        payloadPreview.textContent =
+          payloadExamples[kind] ||
+          "値を選ぶと、ここにpayloadの例を表示します";
+      }
+      if (adapter) {
+        for (const option of adapter.options) {
+          option.disabled = !supports(option, kind);
+        }
+        if (adapter.selectedOptions[0]?.disabled) {
+          const compatible = Array.from(adapter.options).find((option) => !option.disabled);
+          if (compatible) adapter.value = compatible.value;
+        }
+      }
       for (const fields of form.querySelectorAll("[data-output-fields]")) {
         const active = fields.dataset.outputFields === adapter?.value;
         fields.hidden = !active;
@@ -108,8 +170,33 @@
           }
         }
       }
+      if (mode) {
+        for (const option of mode.options) {
+          option.disabled = !supports(option, kind);
+          option.hidden = option.disabled;
+        }
+        if (mode.selectedOptions[0]?.disabled) {
+          const compatible = Array.from(mode.options).find((option) => !option.disabled);
+          if (compatible) mode.value = compatible.value;
+        }
+      }
+      if (yokakitPayloadPreview) {
+        yokakitPayloadPreview.textContent =
+          yokakitPayloadExamples[mode?.value] ||
+          "用途を選ぶと、ここにpayloadの例を表示します";
+      }
+      if (yokakitTopicPreview) {
+        const source = sourceID?.value || "{source-id}";
+        const signal = signalID?.value || "{signal-id}";
+        yokakitTopicPreview.textContent =
+          `yokakit/v1/sources/${source}/signals/${signal}/observations`;
+      }
     };
+    rule?.addEventListener("change", update);
     adapter?.addEventListener("change", update);
+    mode?.addEventListener("change", update);
+    sourceID?.addEventListener("input", update);
+    signalID?.addEventListener("input", update);
     update();
   }
 
@@ -463,6 +550,11 @@
     const chart = panel.querySelector("[data-preview-chart]");
     const currentValue = panel.querySelector("[data-preview-current-value]");
     const currentReceived = panel.querySelector("[data-preview-current-received]");
+    const sourceFlow = document.querySelector(".sensor-flow-input [data-source-value]");
+    const sourceCurrentValue = sourceFlow?.querySelector("[data-source-current-value]");
+    const sourceCurrentReceived = sourceFlow?.querySelector(
+      "[data-source-current-received]",
+    );
     const valueKind = document.querySelector(
       'form[data-signal-profile] [name="display_value_kind"]',
     );
@@ -552,7 +644,12 @@
         if (latest && currentValue) {
           currentValue.textContent = formatPreviewCurrentValue(latest.input, valueKind?.value);
         }
-        if (latest && currentReceived) {
+        if (latest && sourceCurrentValue) {
+          const rawValue = formatNumber(latest.input);
+          sourceCurrentValue.textContent = rawValue;
+          sourceFlow.dataset.sourceValue = rawValue;
+        }
+        if (latest && (currentReceived || sourceCurrentReceived)) {
           const elapsed = Math.max(0, Date.now() - Number(latest.received_at));
           const relative =
             elapsed < 5_000
@@ -560,8 +657,15 @@
               : elapsed < 60_000
                 ? `${Math.floor(elapsed / 1_000)}秒前`
                 : `${Math.floor(elapsed / 60_000)}分前`;
-          currentReceived.textContent = `最終受信 ${relative}`;
-          currentReceived.title = new Date(latest.received_at).toLocaleString("ja-JP");
+          const receivedTitle = new Date(latest.received_at).toLocaleString("ja-JP");
+          if (currentReceived) {
+            currentReceived.textContent = `最終受信 ${relative}`;
+            currentReceived.title = receivedTitle;
+          }
+          if (sourceCurrentReceived) {
+            sourceCurrentReceived.textContent = relative;
+            sourceCurrentReceived.title = receivedTitle;
+          }
         }
         if (payload.input_count === 0) {
           range.textContent = "受信データはまだありません";

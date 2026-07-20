@@ -35,7 +35,7 @@ func TestSemanticV3SignalStartsWithIdentityCalibration(t *testing.T) {
 	}
 }
 
-func TestSemanticV3CreatesTwoIndependentRulesAndKeepsIdentityAcrossRevision(t *testing.T) {
+func TestSemanticV3CreatesTwoIndependentRulesAndStartsNewSeriesWhenMeaningChanges(t *testing.T) {
 	archive := openTestStore(t)
 	signalRef := semanticV3Signal(t, archive)
 	ctx := context.Background()
@@ -103,10 +103,10 @@ func TestSemanticV3CreatesTwoIndependentRulesAndKeepsIdentityAcrossRevision(t *t
 		t.Fatal(err)
 	}
 	if updated.ID != counter.ID ||
-		updated.SeriesID != counter.SeriesID ||
+		updated.SeriesID == counter.SeriesID ||
 		updated.Revision != 2 ||
 		updated.Kind != counter.Kind {
-		t.Fatalf("updated rule changed identity: before=%#v after=%#v", counter, updated)
+		t.Fatalf("updated rule series generation is wrong: before=%#v after=%#v", counter, updated)
 	}
 
 	configuration, err = archive.GetSemanticConfiguration(ctx, signalRef)
@@ -115,6 +115,125 @@ func TestSemanticV3CreatesTwoIndependentRulesAndKeepsIdentityAcrossRevision(t *t
 	}
 	if len(configuration.Rules) != 2 {
 		t.Fatalf("active rules = %#v", configuration.Rules)
+	}
+}
+
+func TestSemanticV3DisplayNameOnlyUpdateKeepsSeries(t *testing.T) {
+	archive := openTestStore(t)
+	signalRef := semanticV3Signal(t, archive)
+	ctx := context.Background()
+	configuration, err := archive.GetSemanticConfiguration(ctx, signalRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		"室温",
+		semantics.RuleSpec{Kind: semantics.KindNumeric},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := archive.UpdateSemanticRule(
+		ctx,
+		siteapp.LocalCLIActor(),
+		rule.ID,
+		"炉内温度",
+		rule.RuleSpec,
+		siteapp.RevisionPrecondition{Expected: &rule.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.SeriesID != rule.SeriesID {
+		t.Fatalf("display name update changed series: before=%#v after=%#v", rule, updated)
+	}
+}
+
+func TestSemanticV3MeaningChangeRestartsSequenceInNewSeries(t *testing.T) {
+	archive := openTestStore(t)
+	signalRef := semanticV3Signal(t, archive)
+	ctx := context.Background()
+	configuration, err := archive.GetSemanticConfiguration(ctx, signalRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		"運転状態",
+		semantics.RuleSpec{
+			Kind: semantics.KindBoolean,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+		},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptSemanticBatch(
+		t, archive, "edge-node-01", "epoch-a", 2, []float64{1},
+	)
+	if _, err := archive.ProjectSemanticRules(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := archive.UpdateSemanticRule(
+		ctx,
+		siteapp.LocalCLIActor(),
+		rule.ID,
+		rule.DisplayName,
+		semantics.RuleSpec{
+			Kind: semantics.KindBoolean,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanLowActive,
+			},
+		},
+		siteapp.RevisionPrecondition{Expected: &rule.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptSemanticBatch(
+		t, archive, "edge-node-01", "epoch-a", 3, []float64{0},
+	)
+	if _, err := archive.ProjectSemanticRules(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := archive.db.Query(`
+		SELECT series_id, sequence
+		FROM semantic_observations_v3
+		WHERE rule_id = ? ORDER BY observation_row_id
+	`, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var generations []struct {
+		seriesID string
+		sequence int64
+	}
+	for rows.Next() {
+		var generation struct {
+			seriesID string
+			sequence int64
+		}
+		if err := rows.Scan(&generation.seriesID, &generation.sequence); err != nil {
+			t.Fatal(err)
+		}
+		generations = append(generations, generation)
+	}
+	if len(generations) != 2 ||
+		generations[0].seriesID == generations[1].seriesID ||
+		generations[0].sequence != 1 ||
+		generations[1].sequence != 1 ||
+		updated.SeriesID != generations[1].seriesID {
+		t.Fatalf("generations=%#v updated=%#v", generations, updated)
 	}
 }
 
@@ -157,6 +276,11 @@ func TestSemanticV3CalibrationAndRetirementAreFutureOnly(t *testing.T) {
 		updated.Calibration.Offset != 1 {
 		t.Fatalf("updated calibration = %#v", updated.Calibration)
 	}
+	if len(updated.Rules) != 1 ||
+		updated.Rules[0].SeriesID == rule.SeriesID ||
+		updated.Rules[0].Revision != rule.Revision+1 {
+		t.Fatalf("calibration did not start a new rule series: %#v", updated.Rules)
+	}
 	var calibrationBoundary int64
 	if err := archive.db.QueryRow(`
 		SELECT start_after_pub_seq
@@ -174,7 +298,7 @@ func TestSemanticV3CalibrationAndRetirementAreFutureOnly(t *testing.T) {
 		ctx,
 		siteapp.LocalCLIActor(),
 		rule.ID,
-		siteapp.RevisionPrecondition{Expected: &rule.Revision},
+		siteapp.RevisionPrecondition{Expected: &updated.Rules[0].Revision},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -430,6 +554,87 @@ func TestSemanticV3CounterResetWaitsForAcceptedBoundaryAndIsIdempotent(t *testin
 	}
 	if len(values) != 3 || values[0] != 1 || values[1] != 0 || values[2] != 1 {
 		t.Fatalf("counter reset observations = %#v", values)
+	}
+}
+
+func TestSemanticV3CounterResetAfterSeriesRotationUsesNewGeneration(t *testing.T) {
+	archive := openTestStore(t)
+	signalRef := semanticV3Signal(t, archive)
+	ctx := context.Background()
+	configuration, err := archive.GetSemanticConfiguration(ctx, signalRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := archive.CreateSemanticRule(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		"累積値",
+		semantics.RuleSpec{
+			Kind: semantics.KindCumulativeCounter,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+			Trigger: semantics.TriggerTransition,
+		},
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptSemanticBatch(
+		t, archive, "edge-node-01", "epoch-a", 2,
+		[]float64{0}, []float64{1},
+	)
+	if _, err := archive.ProjectSemanticRules(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err = archive.GetSemanticConfiguration(ctx, signalRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := archive.UpdateSignalCalibration(
+		ctx,
+		siteapp.LocalCLIActor(),
+		signalRef,
+		-1,
+		1,
+		siteapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.RequestSemanticCounterReset(
+		ctx, siteapp.LocalCLIActor(), rule.ID, "reset-after-rotation",
+	); err != nil {
+		t.Fatal(err)
+	}
+	acceptSemanticBatch(
+		t, archive, "edge-node-01", "epoch-a", 4,
+		[]float64{1}, []float64{0},
+	)
+	if _, err := archive.ProjectSemanticRules(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	var sequences []int64
+	rows, err := archive.db.Query(`
+		SELECT sequence FROM semantic_observations_v3
+		WHERE rule_id = ? AND series_id = ?
+		ORDER BY sequence
+	`, rule.ID, rotated.Rules[0].SeriesID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sequence int64
+		if err := rows.Scan(&sequence); err != nil {
+			t.Fatal(err)
+		}
+		sequences = append(sequences, sequence)
+	}
+	if len(sequences) != 2 || sequences[0] != 1 || sequences[1] != 2 {
+		t.Fatalf("new generation sequences=%#v", sequences)
 	}
 }
 

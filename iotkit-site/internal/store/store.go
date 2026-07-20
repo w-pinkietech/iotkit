@@ -51,13 +51,24 @@ type SemanticEvent struct {
 }
 
 func Open(path string) (*Store, error) {
+	return open(path, "")
+}
+
+func OpenWithSiteID(path string, siteID string) (*Store, error) {
+	if !siteIDPattern.MatchString(siteID) {
+		return nil, errors.New("configured Site ID is invalid")
+	}
+	return open(path, siteID)
+}
+
+func open(path string, configuredSiteID string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	store := &Store{db: db}
-	if err := store.initialize(); err != nil {
+	if err := store.initialize(configuredSiteID); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -68,7 +79,7 @@ func (store *Store) Close() error {
 	return store.db.Close()
 }
 
-func (store *Store) initialize() error {
+func (store *Store) initialize(configuredSiteID string) error {
 	if err := store.rejectLegacyGatewaySchema(); err != nil {
 		return err
 	}
@@ -79,7 +90,25 @@ func (store *Store) initialize() error {
 	`); err != nil {
 		return err
 	}
-	return applyMigrations(context.Background(), store.db)
+	if err := applyMigrations(
+		context.Background(),
+		store.db,
+		configuredSiteID,
+	); err != nil {
+		return err
+	}
+	if configuredSiteID != "" {
+		var storedSiteID string
+		if err := store.db.QueryRow(
+			"SELECT site_id FROM site_meta WHERE singleton = 1",
+		).Scan(&storedSiteID); err != nil {
+			return err
+		}
+		if storedSiteID != configuredSiteID {
+			return errors.New("configured Site ID does not match the existing database")
+		}
+	}
+	return store.validateSiteIdentity(context.Background())
 }
 
 func (store *Store) rejectLegacyGatewaySchema() error {

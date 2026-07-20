@@ -32,6 +32,25 @@ activationは既存Site application serviceのtyped operationを使い、Edge表
 操作状態、最終結果、登録前ローカル値が正式履歴へ入らないことを表示する。credential、ACL、endpoint、
 certificateは表示用statusを除き操作しない。
 
+## Adapter境界の表示
+
+Input AdapterとOutput Adapterは左右対称の管理対象ではない。Input AdapterはEdge内部で物理機器固有の
+通信をprovider-neutralなdevice、signal、measurementへ変換する実装境界であり、Site Consoleは
+adapter type、instance、configured source、locator、bus addressを受け取らず、選択・設定もしない。
+Consoleの入力側は「Edgeから受信した値」と表記し、Edge、デバイス、任意の表示用model ID、channel、
+値形式、単位、生値、最終受信だけを表示する。model IDからAdapterやsemantic meaningを推測しない。
+
+Output AdapterはSiteで確定したgeneric semantic observationを外部application向けtopic/payloadへ変換する
+Site内部の純粋変換境界である。Consoleではruleごとにregistryが宣言する互換な変換形式を選べる。
+Consoleの設定候補はregistry descriptorから作るが、同じbuildにversioned config presenterとPOST encoderが
+あるAdapterだけを表示する。registryへAdapterを登録しただけで未実装の設定formを選択可能にしない。
+Output Adapterの変換状態と、Site delivery layerが所有するMQTT接続、outbox、retry、PUBACK状態を別に
+表示する。Broker endpoint、certificate、credential、ACLはどちらのAdapter設定にも混ぜない。
+
+概要とセンサー詳細の共通導線は「受信した値 → Siteで作る値 → 外部へ送る」とする。センサー詳細を
+一つのセンサーの入力、semantic rule、Output Routeを追える正本とし、各ruleから対象選択済みの外部出力
+画面へ進める。専用のデータ経路画面や初回限定wizardを追加しない。
+
 ## Application boundary
 
 YokaKit UIはYokaKitの責務であり、IoTKit管理UIではない。品番、工程、生産、OEE、業務alarm、業務dashboardを

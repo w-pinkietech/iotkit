@@ -2,10 +2,10 @@ package sitehttp
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,53 +18,60 @@ import (
 )
 
 type consoleData struct {
-	Page               string
-	Title              string
-	Description        string
-	Notice             string
-	PageError          string
-	DisplayName        string
-	Role               siteapp.AccountRole
-	RoleLabel          string
-	IsAdmin            bool
-	IsOwner            bool
-	CSRF               string
-	Devices            []siteapp.DeviceSummary
-	Edges              []siteapp.Edge
-	EdgeRows           []consoleEdgeView
-	EquipmentRows      []consoleEquipmentEdgeView
-	OrphanDevices      []consoleSetupDeviceView
-	EquipmentView      string
-	SelectedEdge       *consoleEquipmentEdgeView
-	SelectedDevice     *consoleSetupDeviceView
-	SelectedDeviceEdge *consoleEquipmentEdgeView
-	Signals            []siteapp.SignalSummary
-	DeviceRows         []consoleDeviceView
-	SignalRows         []consoleSignalView
-	SensorView         string
-	SelectedSignal     *consoleSignalView
-	SetupRows          []consoleSetupDeviceView
-	LogRows            []consoleLogView
-	AuditRows          []consoleAuditView
-	Definitions        []semantics.Definition
-	OutputDefinitions  []consoleDefinitionOption
-	Outputs            []store.YokaKitRoute
-	OutputRows         []consoleOutputView
-	OutputRules        []consoleRuleOption
-	RuleOutputs        []store.YokaKitRuleRoute
-	RuleOutputRows     []consoleRuleOutputView
-	OutputRoutes       []siteapp.OutputRoute
-	OutputRouteRows    []consoleOutputRouteView
-	Audit              []siteapp.AuditEvent
-	Accounts           []siteapp.Account
-	Certificate        certificateStatus
-	ProjectionFailures int64
-	ReceivingCount     int
-	AttentionCount     int
-	UnconfiguredCount  int
-	SetupPendingCount  int
-	EdgeCount          int
-	EdgePendingCount   int
+	Page                string
+	Title               string
+	Description         string
+	Notice              string
+	PageError           string
+	DisplayName         string
+	Role                siteapp.AccountRole
+	RoleLabel           string
+	IsAdmin             bool
+	IsOwner             bool
+	CSRF                string
+	Devices             []siteapp.DeviceSummary
+	Edges               []siteapp.Edge
+	EdgeRows            []consoleEdgeView
+	EquipmentRows       []consoleEquipmentEdgeView
+	OrphanDevices       []consoleSetupDeviceView
+	EquipmentView       string
+	SelectedEdge        *consoleEquipmentEdgeView
+	SelectedDevice      *consoleSetupDeviceView
+	SelectedDeviceEdge  *consoleEquipmentEdgeView
+	Signals             []siteapp.SignalSummary
+	DeviceRows          []consoleDeviceView
+	SignalRows          []consoleSignalView
+	SensorView          string
+	SelectedSignal      *consoleSignalView
+	SetupRows           []consoleSetupDeviceView
+	LogRows             []consoleLogView
+	AuditRows           []consoleAuditView
+	Definitions         []semantics.Definition
+	OutputRules         []consoleRuleOption
+	OutputRoutes        []siteapp.OutputRoute
+	OutputRouteRows     []consoleOutputRouteView
+	ExportProfiles      []consoleExportProfileView
+	AvailableOutputs    []consoleAvailableOutput
+	Audit               []siteapp.AuditEvent
+	Accounts            []siteapp.Account
+	Certificate         certificateStatus
+	ProjectionFailures  int64
+	ReceivingCount      int
+	AttentionCount      int
+	UnconfiguredCount   int
+	SetupPendingCount   int
+	EdgeCount           int
+	EdgePendingCount    int
+	SemanticRuleCount   int
+	OutputPendingCount  int64
+	OutputActiveCount   int
+	OutputErrorCount    int
+	OutputStalledCount  int
+	OutputHealthClass   string
+	OutputFlowClass     string
+	OutputStatusLabel   string
+	OutputStatusDetail  string
+	OutputStatusSummary string
 }
 
 type certificateStatus struct {
@@ -72,6 +79,16 @@ type certificateStatus struct {
 	DaysRemaining int
 	NotAfter      string
 	NeedsAction   bool
+}
+
+type consoleAvailableOutput struct {
+	AdapterID               string
+	DisplayName             string
+	Description             string
+	AutomaticCount          int
+	NeedsConfigurationCount int
+	IneligibleCount         int
+	Rules                   []siteapp.OutputActivationRulePreview
 }
 
 func (server *Server) consoleSensorsRedirect(
@@ -248,7 +265,24 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				request.Context(),
 			)
 			if err == nil {
-				data.RuleOutputs, err = server.store.ListYokaKitRuleRoutes(request.Context())
+				data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
+				data.OutputRoutes = profileOutputRoutes(data.OutputRoutes)
+				data.summarizeOutputRoutes(server.now())
+			}
+			if err == nil {
+				profiles, profileErr := server.store.ListExportProfiles(
+					request.Context(),
+				)
+				if profileErr != nil {
+					err = profileErr
+				} else {
+					data.ExportProfiles = newConsoleExportProfileViews(
+						currentExportProfiles(profiles),
+						nil,
+						nil,
+					)
+					data.summarizeExportProfiles()
+				}
 			}
 			if err == nil {
 				data.Edges, err = server.site.ListEdges(request.Context())
@@ -279,7 +313,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				attachConsoleSemanticConfigurations(data.SignalRows, configurations)
 			}
 		}
-		if err == nil && page == "sensors" {
+		if err == nil && (page == "status" || page == "sensors") {
 			var devices []siteapp.DeviceSummary
 			devices, err = server.site.ListDevices(
 				request.Context(),
@@ -287,6 +321,54 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			)
 			if err == nil {
 				attachConsoleSignalDevices(data.SignalRows, devices)
+			}
+		}
+		if err == nil && page == "status" {
+			for _, signal := range data.SignalRows {
+				data.SemanticRuleCount += len(signal.NormalRules) + len(signal.AlarmRules)
+			}
+		}
+		if err == nil && page == "sensors" {
+			data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
+			data.OutputRoutes = profileOutputRoutes(data.OutputRoutes)
+			for _, signal := range data.SignalRows {
+				for _, rule := range append(
+					append([]consoleSemanticRuleView(nil), signal.NormalRules...),
+					signal.AlarmRules...,
+				) {
+					data.OutputRules = append(data.OutputRules, consoleRuleOption{
+						ID:              rule.ID,
+						Name:            signal.Name + " — " + rule.DisplayName,
+						DisplayName:     rule.DisplayName,
+						Kind:            displaySemanticKind(rule.Kind),
+						ObservationKind: consoleObservationKind(rule.Kind),
+						SignalRef:       signal.SignalRef,
+						SensorName:      signal.Name,
+					})
+				}
+			}
+			if err == nil {
+				data.OutputRouteRows = newConsoleOutputRouteViews(
+					data.OutputRoutes,
+					data.OutputRules,
+					server.now(),
+				)
+				attachConsoleOutputSensorNames(
+					data.OutputRouteRows,
+					data.SignalRows,
+				)
+				attachConsoleOutputRoutes(data.SignalRows, data.OutputRouteRows)
+				profiles, profileErr := server.store.ListExportProfiles(
+					request.Context(),
+				)
+				if profileErr != nil {
+					err = profileErr
+				} else {
+					attachConsoleOutputBindings(
+						data.SignalRows,
+						currentExportProfiles(profiles),
+					)
+				}
 			}
 		}
 		if signalRef := request.PathValue("signal_ref"); signalRef != "" {
@@ -341,38 +423,86 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		}
 	case "output":
 		data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
+		data.OutputRoutes = profileOutputRoutes(data.OutputRoutes)
+		data.summarizeOutputRoutes(server.now())
 		if err == nil {
-			data.Signals, err = server.site.ListSignals(
-				request.Context(), siteapp.PageRequest{Limit: 100},
-			)
-		}
-		if err == nil {
-			data.SignalRows = newConsoleSignalViews(data.Signals, nil, server.now())
-			signalNames := make(map[string]string, len(data.SignalRows))
-			for _, signal := range data.SignalRows {
-				signalNames[signal.SignalRef] = signal.Name
-				configuration, configErr := server.store.GetSemanticConfiguration(
-					request.Context(),
-					signal.SignalRef,
-				)
-				if configErr != nil {
-					err = configErr
-					break
+			var profiles []siteapp.ExportProfile
+			profiles, err = server.store.ListExportProfiles(request.Context())
+			if err == nil {
+				currentProfiles := currentExportProfiles(profiles)
+				previews := make(map[string]siteapp.OutputPublicationPreview)
+				for _, profile := range currentProfiles {
+					for _, binding := range profile.Bindings {
+						if binding.State != siteapp.OutputBindingActive &&
+							binding.State != siteapp.OutputBindingPrepared &&
+							binding.State != siteapp.OutputBindingDraining {
+							continue
+						}
+						preview, previewErr := server.store.GetOutputBindingPublication(
+							request.Context(), binding.BindingID,
+						)
+						if previewErr == nil {
+							previews[binding.BindingID] = preview
+						}
+					}
 				}
-				for _, rule := range configuration.Rules {
-					data.OutputRules = append(data.OutputRules, consoleRuleOption{
-						ID:   rule.ID,
-						Name: signalNames[rule.SignalRef] + " — " + rule.DisplayName,
-						Kind: displaySemanticKind(rule.Kind),
-					})
+				data.ExportProfiles = newConsoleExportProfileViews(
+					currentProfiles,
+					previews,
+					newConsoleOutputRouteViews(
+						data.OutputRoutes,
+						nil,
+						server.now(),
+					),
+				)
+				data.summarizeExportProfiles()
+				busyAdapters := make(map[string]bool)
+				for _, profile := range profiles {
+					if profile.State != siteapp.ExportProfileStopped {
+						busyAdapters[profile.AdapterID] = true
+					}
+				}
+				if !busyAdapters["yokakit.mqtt.v1"] {
+					preview, previewErr := server.store.PreviewExportProfileActivation(
+						request.Context(), "yokakit.mqtt.v1",
+					)
+					if previewErr != nil {
+						err = previewErr
+						break
+					}
+					data.AvailableOutputs = append(
+						data.AvailableOutputs,
+						consoleAvailableOutput{
+							AdapterID:               "yokakit.mqtt.v1",
+							DisplayName:             "YokaKitへ送る",
+							Description:             "累積値・状態・アラームをYokaKit契約へ変換します。",
+							AutomaticCount:          preview.AutomaticCount,
+							NeedsConfigurationCount: preview.NeedsConfigurationCount,
+							IneligibleCount:         preview.IneligibleCount,
+							Rules:                   preview.Rules,
+						},
+					)
+				}
+				if !busyAdapters["iotkit.mqtt-json.v1"] {
+					preview, previewErr := server.store.PreviewExportProfileActivation(
+						request.Context(), "iotkit.mqtt-json.v1",
+					)
+					if previewErr != nil {
+						err = previewErr
+						break
+					}
+					data.AvailableOutputs = append(
+						data.AvailableOutputs,
+						consoleAvailableOutput{
+							AdapterID:      "iotkit.mqtt-json.v1",
+							DisplayName:    "汎用MQTT JSONで送る",
+							Description:    "すべての意味づけ済みの値をIoTKit共通形式で送ります。",
+							AutomaticCount: preview.AutomaticCount,
+							Rules:          preview.Rules,
+						},
+					)
 				}
 			}
-		}
-		if err == nil {
-			data.OutputRouteRows = newConsoleOutputRouteViews(
-				data.OutputRoutes,
-				data.OutputRules,
-			)
 		}
 	case "audit":
 		data.Audit, err = server.site.ListAuditEvents(request.Context(), 100)
@@ -385,6 +515,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		}
 	case "system":
 		data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
+		data.OutputRoutes = profileOutputRoutes(data.OutputRoutes)
 	}
 	if err == nil && page == "status" {
 		var setupDevices []siteapp.SetupDevice
@@ -426,6 +557,133 @@ func (data *consoleData) summarizeSignals() {
 		}
 	}
 	data.AttentionCount += int(data.ProjectionFailures)
+}
+
+func (data *consoleData) summarizeOutputRoutes(now time.Time) {
+	data.OutputPendingCount = 0
+	data.OutputActiveCount = 0
+	data.OutputErrorCount = 0
+	data.OutputStalledCount = 0
+	for _, route := range data.OutputRoutes {
+		data.OutputPendingCount += route.PendingCount
+		if route.Active {
+			data.OutputActiveCount++
+		}
+		if route.Active && route.LastTransformErrorCode != "" {
+			data.OutputErrorCount++
+		}
+		if outputRouteDeliveryStalled(route, now) {
+			data.OutputStalledCount++
+		}
+	}
+	data.OutputHealthClass = "attention"
+	data.OutputFlowClass = "pending"
+	switch {
+	case len(data.OutputRoutes) == 0:
+		data.OutputStatusLabel = "外部出力は未設定です"
+		data.OutputStatusDetail = "Siteで作った値を外部へ送る設定はまだありません。"
+		data.OutputStatusSummary = "出力未設定"
+	case data.OutputErrorCount > 0:
+		data.OutputStatusLabel = "変換エラーがあります"
+		data.OutputStatusDetail = strconv.Itoa(data.OutputErrorCount) +
+			"件の外部向け変換を確認してください。"
+		data.OutputStatusSummary = strconv.Itoa(data.OutputErrorCount) + "件の変換エラー"
+	case data.OutputStalledCount > 0:
+		data.OutputStatusLabel = "MQTT配送が停止している可能性があります"
+		data.OutputStatusDetail = strconv.Itoa(data.OutputStalledCount) +
+			"件の外部出力で、5分以上データを配送できていません。"
+		data.OutputStatusSummary = strconv.Itoa(data.OutputStalledCount) +
+			"件の配送を確認"
+	case data.OutputPendingCount > 0:
+		data.OutputHealthClass = "in-progress"
+		data.OutputFlowClass = "complete"
+		data.OutputStatusLabel = "配送中のデータがあります"
+		data.OutputStatusDetail = strconv.FormatInt(data.OutputPendingCount, 10) +
+			"件のデータをMQTTで配送しています。"
+		data.OutputStatusSummary = strconv.FormatInt(data.OutputPendingCount, 10) +
+			"件配送中"
+	case data.OutputActiveCount == 0:
+		data.OutputStatusLabel = "外部出力は停止中です"
+		data.OutputStatusDetail = "登録済みの外部出力はすべて停止しています。"
+		data.OutputStatusSummary = "すべて停止中"
+	default:
+		data.OutputHealthClass = "healthy"
+		data.OutputFlowClass = "complete"
+		data.OutputStatusLabel = "外部出力が設定されています"
+		data.OutputStatusDetail = strconv.Itoa(data.OutputActiveCount) +
+			"件の外部出力を使用中です。変換エラーと配送待ちはありません。"
+		data.OutputStatusSummary = strconv.Itoa(data.OutputActiveCount) +
+			"件の出力を使用中"
+	}
+}
+
+func (data *consoleData) summarizeExportProfiles() {
+	if len(data.ExportProfiles) == 0 ||
+		data.OutputErrorCount > 0 ||
+		data.OutputStalledCount > 0 {
+		return
+	}
+	var activeDestinations, preparingDestinations, sendingValues int
+	var needsConfiguration, preparedValues int
+	for _, profile := range data.ExportProfiles {
+		if profile.State == siteapp.ExportProfileActive {
+			activeDestinations++
+		}
+		if profile.State == siteapp.ExportProfilePreparing {
+			preparingDestinations++
+		}
+		sendingValues += profile.ActiveCount
+		needsConfiguration += profile.NeedsConfigCount
+		preparedValues += profile.PreparedCount
+	}
+	switch {
+	case preparedValues > 0:
+		data.OutputHealthClass = "in-progress"
+		data.OutputStatusLabel = "外部アプリへの登録待ちがあります"
+		data.OutputStatusDetail = strconv.Itoa(preparedValues) +
+			"個の値はtopicを外部アプリへ登録してから送信を開始します。" +
+			strconv.Itoa(needsConfiguration) + "個は用途の選択待ちです。"
+		data.OutputStatusSummary = strconv.Itoa(preparedValues) + "件の外部登録待ち"
+	case needsConfiguration > 0:
+		data.OutputHealthClass = "in-progress"
+		data.OutputStatusLabel = "用途の選択が必要な値があります"
+		data.OutputStatusDetail = strconv.Itoa(activeDestinations) +
+			"件の外部出力先で" + strconv.Itoa(sendingValues) +
+			"個の値を送信中、" + strconv.Itoa(needsConfiguration) +
+			"個は用途の選択待ちです。"
+		data.OutputStatusSummary = strconv.Itoa(needsConfiguration) + "件の設定待ち"
+	case data.OutputPendingCount > 0:
+		data.OutputHealthClass = "in-progress"
+		data.OutputFlowClass = "complete"
+		data.OutputStatusLabel = "配送中のデータがあります"
+		data.OutputStatusDetail = strconv.Itoa(activeDestinations) +
+			"件の外部出力先で" + strconv.Itoa(sendingValues) +
+			"個の値を送信中、" +
+			strconv.FormatInt(data.OutputPendingCount, 10) +
+			"件をMQTTで配送しています。"
+		data.OutputStatusSummary = strconv.FormatInt(
+			data.OutputPendingCount,
+			10,
+		) + "件配送中"
+	case activeDestinations > 0:
+		data.OutputHealthClass = "healthy"
+		data.OutputFlowClass = "complete"
+		data.OutputStatusLabel = "外部出力先が設定されています"
+		data.OutputStatusDetail = strconv.Itoa(activeDestinations) +
+			"件の外部出力先で" + strconv.Itoa(sendingValues) +
+			"個の値を送信しています。"
+		data.OutputStatusSummary = strconv.Itoa(activeDestinations) +
+			"件の出力先を使用中"
+	case preparingDestinations > 0:
+		data.OutputHealthClass = "in-progress"
+		data.OutputStatusLabel = "外部出力先を準備しています"
+		data.OutputStatusDetail = "対応する値が追加されるとtopicを準備します。"
+		data.OutputStatusSummary = "出力先を準備中"
+	default:
+		data.OutputStatusLabel = "外部出力先は停止中です"
+		data.OutputStatusDetail = "登録済みの外部出力先はすべて停止しています。"
+		data.OutputStatusSummary = "すべて停止中"
+	}
 }
 
 func roleLabel(role siteapp.AccountRole) string {
@@ -555,7 +813,9 @@ func consoleReturnTarget(request *http.Request, fallback string) string {
 }
 
 func safeSensorReturnTarget(target string) bool {
-	if strings.ContainsAny(target, "?#\\") || strings.HasPrefix(target, "//") {
+	if !strings.HasPrefix(target, "/") ||
+		strings.ContainsAny(target, "?#\\") ||
+		strings.HasPrefix(target, "//") {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
@@ -568,7 +828,9 @@ func safeEquipmentReturnTarget(target string) bool {
 	if target == "/equipment" {
 		return true
 	}
-	if strings.ContainsAny(target, "?#\\") || strings.HasPrefix(target, "//") {
+	if !strings.HasPrefix(target, "/") ||
+		strings.ContainsAny(target, "?#\\") ||
+		strings.HasPrefix(target, "//") {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
@@ -887,27 +1149,22 @@ func semanticRuleSpecFromForm(request *http.Request) (semantics.RuleSpec, error)
 	return spec, nil
 }
 
-func (server *Server) consoleYokaKitOutput(response http.ResponseWriter, request *http.Request) {
-	auth, ok := server.requireBrowserMutation(response, request, true)
-	if !ok {
-		return
+func consoleObservationKind(kind semantics.Kind) outputadapter.ObservationKind {
+	switch kind {
+	case semantics.KindNumeric:
+		return outputadapter.KindNumeric
+	case semantics.KindBoolean:
+		return outputadapter.KindBoolean
+	case semantics.KindCumulativeCounter:
+		return outputadapter.KindCumulativeValue
+	case semantics.KindAlarm:
+		return outputadapter.KindAlarm
+	default:
+		return ""
 	}
-	adapter := outputadapter.YokaKitConfig{
-		SourceID: request.FormValue("source_id"),
-		SignalID: request.FormValue("signal_id"),
-		Kind:     outputadapter.YokaKitKind(request.FormValue("kind")),
-		Reason:   request.FormValue("reason"),
-	}
-	_, err := server.ruleOutputs.CreateYokaKitRoute(
-		request.Context(),
-		server.actor(auth),
-		request.FormValue("rule_id"),
-		adapter,
-	)
-	server.consoleMutationResult(response, request, "/output", err)
 }
 
-func (server *Server) consoleOutputRoute(
+func (server *Server) consoleActivateExportProfile(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
@@ -915,38 +1172,86 @@ func (server *Server) consoleOutputRoute(
 	if !ok {
 		return
 	}
-	adapterID := request.FormValue("adapter_id")
-	var config json.RawMessage
 	var err error
-	switch adapterID {
-	case "iotkit.mqtt-json.v1":
-		config, err = outputadapter.EncodeGenericMQTTJSONConfig(
-			outputadapter.GenericMQTTJSONConfig{
-				Topic: request.FormValue("topic"),
-			},
-		)
-	case "yokakit.mqtt.v1":
-		config, err = outputadapter.EncodeYokaKitConfig(
-			outputadapter.YokaKitConfig{
-				SourceID: request.FormValue("source_id"),
-				SignalID: request.FormValue("signal_id"),
-				Kind: outputadapter.YokaKitKind(
-					request.FormValue("kind"),
-				),
-				Reason: request.FormValue("reason"),
-			},
-		)
-	default:
-		err = outputadapter.ErrInvalidConfiguration
-	}
-	if err == nil {
-		_, err = server.ruleOutputs.CreateOutputRoute(
+	if request.FormValue("auto_bind_future_rules") != "true" {
+		err = errors.New("future rule authorization is required")
+	} else {
+		_, err = server.store.ActivateExportProfile(
 			request.Context(),
 			server.actor(auth),
-			request.FormValue("rule_id"),
-			adapterID,
-			config,
+			request.FormValue("display_name"),
+			request.FormValue("adapter_id"),
 		)
+	}
+	server.consoleMutationResult(response, request, "/output", err)
+}
+
+func (server *Server) consoleConfigureOutputBinding(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	revision, err := strconv.ParseInt(request.FormValue("revision"), 10, 64)
+	if err == nil {
+		_, err = server.store.ConfigureYokaKitBooleanBinding(
+			request.Context(),
+			server.actor(auth),
+			request.PathValue("binding_id"),
+			request.FormValue("mode"),
+			revision,
+		)
+	}
+	server.consoleMutationResult(response, request, "/output", err)
+}
+
+func (server *Server) consoleStopExportProfile(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	revision, err := strconv.ParseInt(request.FormValue("revision"), 10, 64)
+	if err == nil {
+		_, err = server.store.RequestExportProfileStop(
+			request.Context(),
+			server.actor(auth),
+			request.PathValue("profile_id"),
+			revision,
+		)
+	}
+	server.consoleMutationResult(response, request, "/output", err)
+}
+
+func (server *Server) consoleStartOutputBinding(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	auth, ok := server.requireBrowserMutation(response, request, true)
+	if !ok {
+		return
+	}
+	var err error
+	if request.FormValue("external_registration_complete") != "true" {
+		err = errors.New("external topic registration confirmation is required")
+	} else {
+		revision, parseErr := strconv.ParseInt(
+			request.FormValue("revision"), 10, 64,
+		)
+		if parseErr != nil {
+			err = parseErr
+		} else {
+			_, err = server.store.StartPreparedOutputBinding(
+				request.Context(),
+				server.actor(auth),
+				request.PathValue("binding_id"),
+				revision,
+			)
+		}
 	}
 	server.consoleMutationResult(response, request, "/output", err)
 }
@@ -1073,11 +1378,20 @@ func (server *Server) consoleMutationResult(
 	target string,
 	err error,
 ) {
+	parsed, parseErr := url.Parse(target)
+	if parseErr != nil {
+		parsed = &url.URL{Path: "/status"}
+	}
+	query := parsed.Query()
 	if err != nil {
-		http.Redirect(response, request, target+"?error=save", http.StatusSeeOther)
+		query.Set("error", "save")
+		parsed.RawQuery = query.Encode()
+		http.Redirect(response, request, parsed.String(), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(response, request, target+"?saved=1", http.StatusSeeOther)
+	query.Set("saved", "1")
+	parsed.RawQuery = query.Encode()
+	http.Redirect(response, request, parsed.String(), http.StatusSeeOther)
 }
 
 func formRevision(request *http.Request) *int64 {

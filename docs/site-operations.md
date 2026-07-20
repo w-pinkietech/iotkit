@@ -8,8 +8,10 @@ factory router, DNS, IP address allocation, firewall, or VPN.
 1. Give every Edge a different `edge_node_id` and export its `mqtt-binding`.
 2. Prepare a DNS name, a full-chain server certificate, its private key, and a
    root trust bundle that covers the Site host. The key file must be owner-only.
-3. Run `scripts/bootstrap-site.sh` for the first Edge. Add exact YokaKit
-   observation and status topics with repeated `--site-publish-topic`.
+3. Run `scripts/bootstrap-site.sh` for the first Edge. Bootstrap assigns the
+   Site source ID before startup and gives `site-output` write access only to
+   that Site's IoTKit/YokaKit observation and status namespace. Use repeated
+   `--site-publish-topic` only for additional exact legacy application topics.
 4. Start `deploy/compose.site.yaml`.
 5. Create the first `system_admin` with `iotkit-site account bootstrap` and an
    owner-only password file. Delete that file afterwards.

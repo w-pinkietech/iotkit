@@ -49,14 +49,14 @@ chmod 600 "$scratch/config/passwords"
 
 cat >"$scratch/config/acl" <<'EOF'
 user site-output
-topic write factory/line-a/production
-topic write yokakit/v1/sources/iotkit-01/signals/press-running/observations
-topic write yokakit/v1/sources/iotkit-01/status
+topic write iotkit/v1/sources/+/signals/+/observations
+topic write yokakit/v1/sources/+/signals/+/observations
+topic write yokakit/v1/sources/+/status
 
 user observer
-topic read factory/line-a/production
-topic read yokakit/v1/sources/iotkit-01/signals/press-running/observations
-topic read yokakit/v1/sources/iotkit-01/status
+topic read iotkit/v1/sources/+/signals/+/observations
+topic read yokakit/v1/sources/+/signals/+/observations
+topic read yokakit/v1/sources/+/status
 EOF
 chmod 600 "$scratch/config/acl"
 
@@ -126,6 +126,25 @@ mapfile -t pending_ids < <(
   echo "Broker outage did not leave adapter exports pending" >&2
   exit 1
 }
+
+site_id=$(sqlite3 "$scratch/control/site.db" \
+  "SELECT site_id FROM site_meta WHERE singleton=1")
+[[ "$site_id" =~ ^site-[0-9a-f]{32}$ ]] || {
+  cat "$scratch/test.log" >&2
+  echo "Site did not persist a valid source identity: $site_id" >&2
+  exit 1
+}
+{
+  printf 'user site-output\n'
+  printf 'topic write iotkit/v1/sources/%s/signals/+/observations\n' "$site_id"
+  printf 'topic write yokakit/v1/sources/%s/signals/+/observations\n' "$site_id"
+  printf 'topic write yokakit/v1/sources/%s/status\n\n' "$site_id"
+  printf 'user observer\n'
+  printf 'topic read iotkit/v1/sources/+/signals/+/observations\n'
+  printf 'topic read yokakit/v1/sources/+/signals/+/observations\n'
+  printf 'topic read yokakit/v1/sources/+/status\n'
+} >"$scratch/config/acl"
+chmod 600 "$scratch/config/acl"
 
 docker start "$container" >/dev/null
 if ! wait "$test_pid"; then
