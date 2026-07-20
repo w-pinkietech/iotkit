@@ -27,6 +27,7 @@ IoTKit Siteの外部出力をsemantic ruleごとの手動route設定ではなく
 ```text
 export_profile
   └─ profile_rule_binding
+       ├─ references output_signal_identity
        └─ output_route
             └─ output_outbox
 ```
@@ -107,8 +108,9 @@ DB open時に`site_meta`がexact singletonであり、`site_id`が`^site-[0-9a-f
 
 ### 5.2 Signal identity
 
-`signal-id`はprofile-rule purpose bindingごとに一度だけ、Goの`crypto/rand`による128bit乱数から
-次の形式で発行する。
+`signal-id`はMQTT topic上で論理出力信号を識別する安定した住所であり、bindingのライフサイクルIDでは
+ない。Adapter契約、semantic rule、Adapter内用途の組ごとに一度だけ、Goの`crypto/rand`による
+128bit乱数から次の形式で発行する。
 
 ```text
 sig-<128-bit lowercase hex>
@@ -117,8 +119,17 @@ sig-<128-bit lowercase hex>
 表示名、sensor type、Edge ID、IP、MAC、pin、Broker設定から生成しない。entropy取得に失敗した場合は
 時刻、counter、MAC等へfallbackせずtransactionを失敗させる。
 
-`UNIQUE(source_id, signal_id)`を永続制約とし、停止済みIDも再利用しない。profile停止、表示名変更、
-credential更新では維持する。新profile、別YokaKit purpose、別bindingには新しいsignal IDを発行する。
+`output_signal_identities`をbinding履歴から独立したidentity台帳とする。identity keyは
+`(adapter_id, rule_id, mode)`である。`adapter_id`にはversionを含み、`mode`は汎用MQTTの
+`observation`、またはYokaKitの`production`、`onoff`、`gantt_chart`、`alarm`とする。
+
+同じAdapter契約、rule、modeでprofileを停止・再追加した場合は、binding IDとfuture-only開始境界だけを
+新しくし、signal IDは台帳から再利用する。別rule、別versioned Adapter、別modeには新しいsignal IDを
+発行する。semantic ruleの設定変更ではsignal IDを維持し、payloadの新しい`series_id`で系列変更を表す。
+`observation_id`は個々のObservationを一意に識別する。
+
+`UNIQUE(adapter_id, rule_id, mode)`と`UNIQUE(source_id, signal_id)`を永続制約とする。identityは
+profileやbindingの停止時に削除しない。表示名、sensor type、credential更新でも維持する。
 
 ### 5.3 Identity is not authentication
 
@@ -158,15 +169,28 @@ credential、certificate、Broker URLを保存しない。active profileはAdapt
 
 ### 6.2 Profile-rule binding
 
+`output_signal_identities`は少なくとも次を持つ。
+
+```text
+output_identity_id
+adapter_id
+rule_id
+mode
+source_id
+signal_id
+created_at
+```
+
+`UNIQUE(adapter_id, rule_id, mode)`と`UNIQUE(source_id, signal_id)`を持つ。identity作成または再利用は
+binding作成transaction内で行い、競合時に別IDを発行して同じ論理信号を分裂させない。
+
 `output_profile_rule_bindings`は少なくとも次を持つ。
 
 ```text
 binding_id
 profile_id
 rule_id
-source_id
-signal_id
-mode
+output_identity_id
 reason
 state                 needs_configuration | active | ineligible | draining | stopped
 ineligible_reason
@@ -183,9 +207,10 @@ stopped_at
 recordがactivationまたはstop transactionの後にsemantic Observationへなる場合も、観測時点が境界の
 内側か外側かを判定できなければならない。
 
-`UNIQUE(profile_id, rule_id, mode)`と`UNIQUE(source_id, signal_id)`を持つ。YokaKit booleanの
-needs-configuration bindingはmodeとsignal IDを持たず、用途確定transactionでsignal ID、mode、
+`UNIQUE(profile_id, rule_id)`を持つ。YokaKit booleanのneeds-configuration bindingは
+`output_identity_id`を持たず、用途確定transactionで選択したmodeに対応するidentityを作成または再利用し、
 その時点の上流開始境界を保存してactiveにする。設定待ち期間のObservationを後からbackfillしない。
+APIとConsoleのread modelではidentityをjoinし、従来どおり`source_id`、`signal_id`、`mode`を返す。
 
 ### 6.3 Output route
 
@@ -204,7 +229,7 @@ descriptor、binding identityからexact route configまたはclosedなineligibl
 
 1. export profileを作成する
 2. その時点の全active semantic ruleを分類する
-3. auto-active bindingへsignal IDと、ruleのsourceに対するfuture-only上流開始境界を保存する
+3. auto-active bindingへ論理出力identityを作成または再利用し、ruleのsourceに対するfuture-only上流開始境界を保存する
 4. needs-configuration、ineligible bindingも永続化する
 5. active bindingのconcrete output routeを作る
 6. 継続的なfuture-rule自動送信許可を監査する
@@ -215,11 +240,12 @@ descriptor、binding identityからexact route configまたはclosedなineligibl
 
 semantic rule作成transactionはactive export profileを同じtransaction内で評価する。
 
-- 自動対応可能: binding、signal ID、開始境界、routeを同時作成
+- 自動対応可能: binding、論理出力identity、開始境界、routeを同時作成
 - YokaKit boolean: needs-configuration bindingを作る
 - 非対応: ineligible bindingを作る
 
-reconcilerはmaterializeの再試行に使えるが、保存済み開始境界とidentityを作り直さない。
+reconcilerはmaterializeの再試行に使えるが、保存済み開始境界を作り直さず、同じidentity keyへ
+別signal IDを発行しない。
 
 ### 7.3 Rule retirement
 
@@ -238,10 +264,10 @@ active -> draining -> stopped
 停止transactionは各active child binding/routeへ、そのruleのsourceに対する終了境界を保存する。
 開始境界より後かつ終了境界以下のraw recordから作られるObservationを、stop要求後にprojectionされた
 ものも含めてoutbox化する。対象projectionが境界へ到達し、既存outboxをPUBACKまで配送してから
-stoppedにする。履歴、identity、診断、監査を削除しない。
+stoppedにする。profile、binding、route、identity、診断、監査をDBから削除しない。
 
-停止済みprofileはresumeしない。「もう一度追加」は新profile、新binding、新signal IDとしてfuture-onlyで
-開始する。停止期間のObservationを送信しない。
+停止済みprofileはresumeしない。「もう一度追加」は新profile、新bindingとしてfuture-onlyで開始するが、
+同じAdapter契約、rule、modeのsignal IDは再利用する。停止期間のObservationを送信しない。
 
 ## 8. Console
 
@@ -254,9 +280,11 @@ stoppedにする。履歴、identity、診断、監査を削除しない。
 - 使用中、設定が必要、対象外、停止、変換エラーの件数
 - MQTT配送中、5分以上滞留、最終配送時刻
 - 「今後追加される対応値も自動追加」
-- 使用中、配送終了処理中、停止中
+- 使用中、配送終了処理中
 
 通常画面ではprofile/route、config schema等の内部語を使わない。
+停止済みprofileは現行の外部出力先カードとして表示しない。DBと変更履歴には残し、同じAdapterを
+新しいprofileとして追加できる状態へ戻す。通常画面へ停止履歴一覧を新設しない。
 
 ### 8.2 Add destination
 
@@ -334,7 +362,7 @@ boolean用途、alarm reasonを変更できる。Broker connection設定はConso
 
 ## 11. Backup, restore, and clone safety
 
-正式backupはsite ID、profile、binding、signal ID、semantic state、outboxを一緒に保持する。
+正式backupはsite ID、profile、binding、output signal identity、semantic state、outboxを一緒に保持する。
 Broker credentialとprivate keyをDB backupへ含めない。
 
 cold restoreは次の順序を要求する。
@@ -357,17 +385,18 @@ DB cloneを新Siteとして利用しない。新Siteは新規DBから初期化�
 
 - fresh DBとmigration後DBのprofile/binding schema
 - site ID singleton、syntax、破損fail-closed
-- signal IDのsyntax、uniqueness、entropy failure rollback、再利用禁止
+- signal IDのsyntax、identity key単位のuniqueness、entropy failure rollback
+- 同じAdapter・rule・modeのprofile再追加ではsignal IDを再利用し、別modeでは再利用しないこと
 - profile activationと既存rule bindingのatomic future-only境界
 - future rule作成とbinding/route作成のatomicity
 - YokaKit cumulative/alarm自動対応、boolean pending、numeric ineligible
 - generic adapterの全kind自動topic生成
 - profile stop、rule retire、projection、outboxのdrain
-- profile再追加が新identity・future-onlyとなりbackfillしないこと
+- profile再追加が新binding、同じ論理出力identity、future-only境界となりbackfillしないこと
 - 一bindingの変換失敗が他bindingを止めないこと
 - 別source prefixへのpublishと不要subscribeをACLが拒否すること
 - complete dry-run previewとdurable actual publicationがAdapter出力とbyte単位で一致すること
-- Consoleの権限、確認、部分稼働、対象外、停止、配送滞留表示
+- Consoleの権限、確認、部分稼働、対象外、配送滞留表示と、停止済みprofileの通常画面からの除外
 - DB cloneではcredentialが存在せずpublishできない導入境界
 - restore後にsemantic series generationが更新されること
 
