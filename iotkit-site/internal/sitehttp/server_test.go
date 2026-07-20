@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -720,6 +721,20 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 			t.Fatalf("sensor detail retains duplicate content %q: %s", forbidden, body)
 		}
 	}
+	cssBytes, err := os.ReadFile("static/site.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	for _, forbidden := range []string{
+		".sensor-data-flow {",
+		".semantic-rule-output {",
+		".semantic-rule-group > header {",
+	} {
+		if strings.Contains(css, forbidden) {
+			t.Fatalf("sensor editor stylesheet retains obsolete layer %q", forbidden)
+		}
+	}
 }
 
 func TestSensorDetailSeparatesNormalAndAbnormalSemanticRules(t *testing.T) {
@@ -1288,7 +1303,7 @@ func TestConsoleDashboardIgnoresIndividualOutputRoutes(t *testing.T) {
 	}
 }
 
-func TestSensorDetailShowsInputSemanticAndOutputFlow(t *testing.T) {
+func TestSensorDetailShowsCompactIdentityAndOutputLink(t *testing.T) {
 	server, archive := newTestServerFixture(t, false, siteapp.AccountRoleAdmin)
 	seedSetupDevice(t, archive)
 	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
@@ -1336,18 +1351,28 @@ func TestSensorDetailShowsInputSemanticAndOutputFlow(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, body)
 	}
 	for _, want := range []string{
-		"受信した値",
-		"Siteで作る値",
-		"外部へ送る",
+		`class="sensor-detail-identity"`,
+		`class="sensor-detail-latest`,
 		"現在温度",
-		"IoTKit MQTT JSON v1",
-		"iotkit/v1/sources/site-",
+		"外部出力あり",
+		"Site全体の外部出力先を見る",
 		`href="/output"`,
 		`data-source-value="24.8"`,
 		`data-source-unit="°C"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("sensor flow missing %q: %s", want, body)
+			t.Fatalf("compact sensor detail missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		"受信した値",
+		"Siteで作る値",
+		"外部へ送る",
+		"IoTKit MQTT JSON v1",
+		"iotkit/v1/sources/site-",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("compact sensor detail exposes duplicate flow %q: %s", forbidden, body)
 		}
 	}
 }

@@ -49,14 +49,16 @@
     </header>
 
     <main id="main-content" tabindex="-1">
+      {{if not (and (eq .Page "sensors") (eq .SensorView "detail"))}}
       <header class="page-header">
         <div>
           <p class="eyebrow">IOTKIT SITE</p>
-          <h1>{{if and (eq .Page "sensors") (eq .SensorView "detail")}}センサー設定{{else}}{{.Title}}{{end}}</h1>
-          <p class="page-description">{{if and (eq .Page "sensors") (eq .SensorView "detail")}}{{.Title}}の表示と値の扱いを設定します。{{else}}{{.Description}}{{end}}</p>
+          <h1>{{.Title}}</h1>
+          <p class="page-description">{{.Description}}</p>
         </div>
         {{if and (eq .Page "sensors") (eq .SensorView "list")}}<a class="button secondary" href="/sensors">最新の状態に更新</a>{{end}}
       </header>
+      {{end}}
       {{if .Notice}}<div class="feedback success-feedback{{if .FeedbackTarget}} feedback-toast{{end}}" role="status"><span aria-hidden="true">✓</span>{{.Notice}}</div>{{end}}
       {{if .PageError}}<div class="feedback error-feedback{{if .FeedbackTarget}} feedback-toast{{end}}" role="alert"><span aria-hidden="true">!</span>{{.PageError}}</div>{{end}}
 
@@ -116,7 +118,7 @@
         <header class="sensor-detail-header">
           <div class="sensor-detail-identity">
             <span>{{.SensorType}}</span>
-            <h2>{{.Name}}</h2>
+            <h1>{{.Name}}</h1>
             <small>{{.Edge}}{{if .DeviceName}} · {{.DeviceName}}{{end}}</small>
           </div>
           <div class="sensor-detail-latest sensor-detail-latest--{{.StatusClass}}"
@@ -138,7 +140,6 @@
               <div class="section-heading">
                 <div>
                   <h2>実信号プレビュー</h2>
-                  <p>保存前に、実際の受信値で結果を確認できます。</p>
                 </div>
                 <button class="simulation-live" type="button" role="switch" aria-checked="true" data-preview-toggle><i aria-hidden="true"></i><span>自動更新</span><b data-preview-toggle-state>ON</b></button>
               </div>
@@ -165,10 +166,13 @@
               </div>
               <p class="simulation-message" data-preview-message role="status">読み込み中です。</p>
               {{if $.IsAdmin}}
-              <div class="simulation-test">
-                <label><span>試す値</span><input name="preview_test_value" type="number" step="any" inputmode="decimal" placeholder="例：28.5"></label>
-                <div><span>この値なら</span><strong data-preview-test-result>値を入力すると結果を確認できます</strong></div>
-              </div>
+              <details class="simulation-test">
+                <summary>値を指定して結果を確認</summary>
+                <div class="simulation-test-fields">
+                  <label><span>試す値</span><input name="preview_test_value" type="number" step="any" inputmode="decimal" placeholder="例：28.5"></label>
+                  <div><span>この値なら</span><strong data-preview-test-result>値を入力すると結果を確認できます</strong></div>
+                </div>
+              </details>
               {{end}}
             </section>
           </aside>
@@ -367,6 +371,10 @@
                   <div><dt>通知された単位</dt><dd>{{.SourceUnit}}</dd></div>
                   <div><dt>チャンネル</dt><dd>{{.ChannelLabel}}</dd></div>
                 </dl>
+                <div class="sensor-source-actions">
+                  <span>{{if gt .FlowRouteCount 0}}外部出力あり{{else}}外部出力なし{{end}}</span>
+                  <a href="/output">Site全体の外部出力先を見る</a>
+                </div>
               </details>
             </section>
           </div>
