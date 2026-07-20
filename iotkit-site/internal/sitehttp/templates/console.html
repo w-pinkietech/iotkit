@@ -1138,8 +1138,8 @@
     <thead><tr><th>センサー</th><th>種類</th><th>取得元</th><th>現在値</th><th>受信状態</th><th>最終受信</th></tr></thead>
     <tbody>
     {{range .SignalRows}}
-    <tr data-status="{{.StatusClass}}" data-href="/sensors/{{.SignalRef}}">
-      <td data-label="センサー"><a href="/sensors/{{.SignalRef}}"><strong>{{.Name}}</strong><small class="table-subtext">{{.SettingLabel}}</small></a></td>
+    <tr data-status="{{.StatusClass}}" data-href="{{if and $.SignalSettingsLinks .DeviceRef}}/equipment/devices/{{.DeviceRef}}/sensors/{{.SignalRef}}{{else}}/sensors/{{.SignalRef}}{{end}}">
+      <td data-label="センサー"><a href="{{if and $.SignalSettingsLinks .DeviceRef}}/equipment/devices/{{.DeviceRef}}/sensors/{{.SignalRef}}{{else}}/sensors/{{.SignalRef}}{{end}}"><strong>{{.Name}}</strong><small class="table-subtext">{{.SettingLabel}}</small></a></td>
       <td data-label="種類"><span class="sensor-type">{{.SensorType}}</span></td>
       <td data-label="取得元"><strong>{{.Edge}}</strong>{{if .DeviceName}}<small class="table-subtext">{{.DeviceName}}</small>{{end}}</td>
       <td data-label="現在値"><span class="measurement">{{.Value}}</span>{{if .Unit}} <span class="measurement-unit">{{.Unit}}</span>{{end}}</td>

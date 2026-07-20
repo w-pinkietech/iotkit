@@ -44,6 +44,7 @@ type consoleData struct {
 	DeviceRows          []consoleDeviceView
 	SignalRows          []consoleSignalView
 	SensorView          string
+	SignalSettingsLinks bool
 	SensorSettingsPath  string
 	SelectedSignal      *consoleSignalView
 	SetupRows           []consoleSetupDeviceView
@@ -178,6 +179,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			auth.account.Role == siteapp.AccountRoleSystemAdmin,
 		IsOwner: auth.account.Role == siteapp.AccountRoleSystemAdmin,
 	}
+	data.SignalSettingsLinks = page == "sensors" && data.IsAdmin
 	if request.PathValue("device_ref") != "" &&
 		request.PathValue("signal_ref") != "" {
 		data.NavigationPage = "equipment"

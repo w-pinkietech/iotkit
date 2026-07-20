@@ -697,7 +697,7 @@ func TestSensorRoutesReturnNotFoundForUnknownDetail(t *testing.T) {
 	}
 }
 
-func TestSensorListShowsCurrentValuesAndLinksWithoutSettings(t *testing.T) {
+func TestSensorListShowsCurrentValuesAndLinksToEquipmentSettingsForAdmin(t *testing.T) {
 	server, archive := newTestServerFixture(
 		t, false, siteapp.AccountRoleAdmin,
 	)
@@ -706,6 +706,9 @@ func TestSensorListShowsCurrentValuesAndLinksWithoutSettings(t *testing.T) {
 	if err != nil || len(signals) != 1 {
 		t.Fatalf("signals = %#v, err = %v", signals, err)
 	}
+	if signals[0].DeviceRef == nil {
+		t.Fatalf("signal has no device reference: %#v", signals[0])
+	}
 	cookie, _ := loginTestAccount(t, server)
 	request := httptest.NewRequest(http.MethodGet, "/sensors", nil)
 	request.AddCookie(cookie)
@@ -713,11 +716,14 @@ func TestSensorListShowsCurrentValuesAndLinksWithoutSettings(t *testing.T) {
 	server.ServeHTTP(response, request)
 
 	body := response.Body.String()
+	settingsPath := "/equipment/devices/" + *signals[0].DeviceRef +
+		"/sensors/" + signals[0].SignalRef
 	for _, want := range []string{
 		"センサー一覧",
 		"24.8",
 		"factory-edge-01",
-		`href="/sensors/` + signals[0].SignalRef + `"`,
+		`href="` + settingsPath + `"`,
+		`data-href="` + settingsPath + `"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("sensor list missing %q: %s", want, body)
@@ -731,6 +737,32 @@ func TestSensorListShowsCurrentValuesAndLinksWithoutSettings(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("sensor list exposes setting %q: %s", forbidden, body)
 		}
+	}
+}
+
+func TestSensorListLinksToMonitoringDetailForViewer(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleViewer,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/sensors", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	monitoringPath := "/sensors/" + signals[0].SignalRef
+	if !strings.Contains(body, `href="`+monitoringPath+`"`) {
+		t.Fatalf("viewer sensor list missing monitoring link %q: %s",
+			monitoringPath, body)
+	}
+	if strings.Contains(body, "/equipment/devices/") {
+		t.Fatalf("viewer sensor list exposes equipment settings link: %s", body)
 	}
 }
 
