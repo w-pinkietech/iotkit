@@ -8,7 +8,7 @@
   <title>{{.Title}} | IoTKit</title>
   <link rel="stylesheet" href="/static/site.css">
 </head>
-<body class="console-shell" data-console-page="{{.Page}}" data-sensor-view="{{.SensorView}}"{{if .FeedbackTarget}} data-focus-target="{{.FeedbackTarget}}"{{end}}>
+<body class="console-shell" data-console-page="{{.NavigationPage}}" data-sensor-view="{{.SensorView}}"{{if .FeedbackTarget}} data-focus-target="{{.FeedbackTarget}}"{{end}}>
   <a class="skip-link" href="#main-content">本文へ移動</a>
   <aside class="sidebar" id="sidebar">
     <a class="product-mark" href="/status" aria-label="IoTKit 現場の概要">
@@ -18,18 +18,18 @@
 
     <nav class="side-nav" aria-label="メインメニュー">
       <p class="nav-heading">現場を見る</p>
-      <a href="/status" {{if eq .Page "status"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10.5V20h11v-9.5"/><path d="M10 20v-5h4v5"/></svg></span>概要</a>
-      <a href="/sensors" {{if eq .Page "sensors"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M6.7 6.7a7.5 7.5 0 0 0 0 10.6M17.3 6.7a7.5 7.5 0 0 1 0 10.6"/><path d="M3.9 3.9a11.5 11.5 0 0 0 0 16.2M20.1 3.9a11.5 11.5 0 0 1 0 16.2"/></svg></span>センサー一覧</a>
-      <a href="/logs" {{if eq .Page "logs"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/><circle cx="3" cy="7" r=".8"/><circle cx="3" cy="12" r=".8"/><circle cx="3" cy="17" r=".8"/></svg></span>受信履歴</a>
+      <a href="/status" {{if eq .NavigationPage "status"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10.5V20h11v-9.5"/><path d="M10 20v-5h4v5"/></svg></span>概要</a>
+      <a href="/sensors" {{if eq .NavigationPage "sensors"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M6.7 6.7a7.5 7.5 0 0 0 0 10.6M17.3 6.7a7.5 7.5 0 0 1 0 10.6"/><path d="M3.9 3.9a11.5 11.5 0 0 0 0 16.2M20.1 3.9a11.5 11.5 0 0 1 0 16.2"/></svg></span>センサー一覧</a>
+      <a href="/logs" {{if eq .NavigationPage "logs"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/><circle cx="3" cy="7" r=".8"/><circle cx="3" cy="12" r=".8"/><circle cx="3" cy="17" r=".8"/></svg></span>受信履歴</a>
 
       <p class="nav-heading">設定</p>
-      <a href="/equipment" {{if eq .Page "equipment"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h3M15.5 15.5v.01"/></svg></span>機器管理</a>
-      <a href="/output" {{if eq .Page "output"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M14 8l4 4-4 4"/><path d="M5 7v10"/></svg></span>外部出力</a>
+      <a href="/equipment" {{if eq .NavigationPage "equipment"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h3M15.5 15.5v.01"/></svg></span>機器管理</a>
+      <a href="/output" {{if eq .NavigationPage "output"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M14 8l4 4-4 4"/><path d="M5 7v10"/></svg></span>外部出力</a>
 
       <p class="nav-heading">管理</p>
-      <a href="/audit" {{if eq .Page "audit"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v16H7z"/><path d="M9.5 9h5M9.5 13h5M9.5 17h3"/><path d="m4 8 1.5 1.5L8 7"/></svg></span>変更履歴</a>
-      {{if .IsOwner}}<a href="/accounts" {{if eq .Page "accounts"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5.5 20c.5-4 2.8-6 6.5-6s6 2 6.5 6"/></svg></span>アカウント</a>{{end}}
-      <a href="/system" {{if eq .Page "system"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/></svg></span>システム</a>
+      <a href="/audit" {{if eq .NavigationPage "audit"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v16H7z"/><path d="M9.5 9h5M9.5 13h5M9.5 17h3"/><path d="m4 8 1.5 1.5L8 7"/></svg></span>変更履歴</a>
+      {{if .IsOwner}}<a href="/accounts" {{if eq .NavigationPage "accounts"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5.5 20c.5-4 2.8-6 6.5-6s6 2 6.5 6"/></svg></span>アカウント</a>{{end}}
+      <a href="/system" {{if eq .NavigationPage "system"}}class="active" aria-current="page"{{end}}><span class="nav-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/></svg></span>システム</a>
     </nav>
 
     <div class="sidebar-user">
@@ -49,7 +49,7 @@
     </header>
 
     <main id="main-content" tabindex="-1">
-      {{if not (and (eq .Page "sensors") (eq .SensorView "detail"))}}
+      {{if not (and (eq .Page "sensors") (ne .SensorView "list"))}}
       <header class="page-header">
         <div>
           <p class="eyebrow">IOTKIT SITE</p>
@@ -109,11 +109,20 @@
       </section>
       {{end}}
 
-      {{if and (eq .Page "sensors") (eq .SensorView "detail")}}
-      {{if not .IsAdmin}}<div class="permission-note"><strong>閲覧のみ</strong><span>現在値と設定内容を確認できます。変更には設定管理者の権限が必要です。</span></div>{{end}}
+      {{if and (eq .Page "sensors") (ne .SensorView "list")}}
+      {{if and (eq .SensorView "settings") (not .IsAdmin)}}<div class="permission-note"><strong>閲覧のみ</strong><span>設定内容を確認できます。変更には設定管理者の権限が必要です。</span></div>{{end}}
       {{with .SelectedSignal}}
       <div class="sensor-detail">
+        {{if eq $.SensorView "settings"}}
+        <nav class="equipment-breadcrumb" aria-label="現在位置">
+          <a href="/equipment">機器管理</a><span aria-hidden="true">/</span>
+          {{with $.SelectedDeviceEdge}}<a href="/equipment/edges/{{.EdgeRef}}">{{.Name}}</a><span aria-hidden="true">/</span>{{end}}
+          {{with $.SelectedDevice}}<a href="/equipment/devices/{{.Device.DeviceRef}}">{{.Name}}</a><span aria-hidden="true">/</span>{{end}}
+          <strong>{{.Name}}</strong>
+        </nav>
+        {{else}}
         <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/sensors">センサー一覧</a><span aria-hidden="true">/</span><strong>{{.Name}}</strong></nav>
+        {{end}}
 
         <header class="sensor-detail-header">
           <div class="sensor-detail-identity">
@@ -121,25 +130,28 @@
             <h1>{{.Name}}</h1>
             <small>{{.Edge}}{{if .DeviceName}} · {{.DeviceName}}{{end}}</small>
           </div>
-          <div class="sensor-detail-latest sensor-detail-latest--{{.StatusClass}}"
-            data-source-value="{{.SourceValue}}"
-            data-source-unit="{{.SourceUnit}}">
-            <span class="status-pill {{.StatusClass}}">{{.StatusLabel}}</span>
-            <strong><span data-source-current-value>{{.SourceValue}}</span>{{if .SourceUnit}} <small>{{.SourceUnit}}</small>{{end}}</strong>
-            <small data-source-current-received>最終受信 {{.LastReceived}}</small>
+          <div class="sensor-detail-header-side">
+            <div class="sensor-detail-latest sensor-detail-latest--{{.StatusClass}}"
+              data-source-value="{{.SourceValue}}"
+              data-source-unit="{{.SourceUnit}}">
+              <span class="status-pill {{.StatusClass}}">{{.StatusLabel}}</span>
+              <strong><span data-source-current-value>{{.SourceValue}}</span>{{if .SourceUnit}} <small>{{.SourceUnit}}</small>{{end}}</strong>
+              <small data-source-current-received>最終受信 {{.LastReceived}}</small>
+            </div>
+            {{if and (eq $.SensorView "detail") $.IsAdmin $.SensorSettingsPath}}<a class="button secondary sensor-settings-link" href="{{$.SensorSettingsPath}}">設定を変更</a>{{end}}
           </div>
         </header>
 
-        <div class="sensor-setting-workspace">
+        <div class="sensor-setting-workspace sensor-setting-workspace--{{$.SensorView}}">
           <aside class="sensor-setting-preview">
             <section class="content-section sensor-setting-simulation"
               data-setting-simulation
               data-signal-ref="{{.SignalRef}}"
               data-unit="{{.Unit}}"
-              data-can-edit="{{if $.IsAdmin}}true{{else}}false{{end}}">
+              data-can-edit="{{if and $.IsAdmin (eq $.SensorView "settings")}}true{{else}}false{{end}}">
               <div class="section-heading">
                 <div>
-                  <h2>実信号プレビュー</h2>
+                  <h2>{{if eq $.SensorView "settings"}}実信号プレビュー{{else}}受信値の推移{{end}}</h2>
                 </div>
                 <button class="simulation-live" type="button" role="switch" aria-checked="true" data-preview-toggle><i aria-hidden="true"></i><span>自動更新</span><b data-preview-toggle-state>ON</b></button>
               </div>
@@ -151,7 +163,7 @@
               </div>
               <div class="simulation-summary">
                 <strong data-preview-range>受信データを読み込んでいます</strong>
-                <span data-preview-count>設定を変更すると自動で再計算します。</span>
+                <span data-preview-count>{{if eq $.SensorView "settings"}}設定を変更すると自動で再計算します。{{else}}直近の受信データを表示します。{{end}}</span>
               </div>
               <div class="simulation-chart-wrap">
                 <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値と設定結果のグラフ" aria-describedby="sensor-preview-chart-summary">
@@ -165,7 +177,7 @@
                 <span><i class="legend-threshold"></i>立上り・立下り</span>
               </div>
               <p class="simulation-message" data-preview-message role="status">読み込み中です。</p>
-              {{if $.IsAdmin}}
+              {{if and $.IsAdmin (eq $.SensorView "settings")}}
               <details class="simulation-test">
                 <summary>値を指定して結果を確認</summary>
                 <div class="simulation-test-fields">
@@ -177,6 +189,7 @@
             </section>
           </aside>
 
+          {{if eq $.SensorView "settings"}}
           <div class="sensor-detail-settings sensor-setting-controls">
             <section class="content-section sensor-settings-panel"
               data-setting-tabs
@@ -201,7 +214,7 @@
               </summary>
             <form method="post" action="/console/signals/{{.SignalRef}}/profile" class="setup-signal-form" data-signal-profile>
               <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-              <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
+              <input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}">
               <input type="hidden" name="return_anchor" value="sensor-profile">
               <input type="hidden" name="revision" value="{{if .ProfileRevision}}{{.ProfileRevision}}{{end}}">
               <label><span>センサー名</span><input name="display_name" value="{{.FormProfile.DisplayName}}" placeholder="例：乾燥炉入口 温度" required></label>
@@ -254,7 +267,7 @@
                 {{if $.IsAdmin}}
                 <form method="post" action="/console/signals/{{.SignalRef}}/calibration">
                   <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-                  <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
+                  <input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}">
                   <input type="hidden" name="return_anchor" value="sensor-calibration">
                   <input type="hidden" name="revision" value="{{.Revision}}">
                   <label><span>倍率</span><input name="scale" type="number" step="any" value="{{.Calibration.Scale}}" required></label>
@@ -275,7 +288,7 @@
                   {{if $.IsAdmin}}
                   <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" data-rule-id="{{.ID}}" data-boolean-input="{{$.SelectedSignal.InputIsBoolean}}" method="post" action="/console/semantic-rules/{{.ID}}">
                     <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-                    <input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}">
+                    <input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}">
                     <input type="hidden" name="return_anchor" value="rule-{{.ID}}">
                     <input type="hidden" name="revision" value="{{.Revision}}">
                     <input type="hidden" name="kind" value="{{.Kind}}">
@@ -305,8 +318,8 @@
                     <div class="semantic-rule-actions"><button type="submit">ルールを保存</button></div>
                   </form>
                   <details class="semantic-rule-danger"><summary>その他の操作</summary>
-                    {{if eq .Kind "cumulative_counter"}}<form class="counter-reset-form" data-confirm-message="{{.DisplayName}}を0に戻します。元の累積値には戻せません。よろしいですか？" method="post" action="/console/semantic-rules/{{.ID}}/counter-resets"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><button class="button-secondary" type="submit">この累積値を0に戻す</button></form>{{end}}
-                    <form class="semantic-retire-form" data-confirm-message="{{.DisplayName}}を終了します。このルールから新しい値は作られなくなります。よろしいですか？" method="post" action="/console/semantic-rules/{{.ID}}/retire"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><input type="hidden" name="revision" value="{{.Revision}}"><button class="button-danger" type="submit">このルールを終了</button></form>
+                    {{if eq .Kind "cumulative_counter"}}<form class="counter-reset-form" data-confirm-message="{{.DisplayName}}を0に戻します。元の累積値には戻せません。よろしいですか？" method="post" action="/console/semantic-rules/{{.ID}}/counter-resets"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><button class="button-secondary" type="submit">この累積値を0に戻す</button></form>{{end}}
+                    <form class="semantic-retire-form" data-confirm-message="{{.DisplayName}}を終了します。このルールから新しい値は作られなくなります。よろしいですか？" method="post" action="/console/semantic-rules/{{.ID}}/retire"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><input type="hidden" name="revision" value="{{.Revision}}"><button class="button-danger" type="submit">このルールを終了</button></form>
                   </details>
                   {{else}}<dl class="detail-list"><div><dt>種類</dt><dd>{{.KindLabel}}</dd></div></dl>{{end}}
                 </details>
@@ -322,7 +335,7 @@
                   <summary><span><strong>{{.DisplayName}}</strong><small>{{.KindLabel}}</small></span><em>設定を開く</em></summary>
                   {{if $.IsAdmin}}
                   <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" data-rule-id="{{.ID}}" data-boolean-input="{{$.SelectedSignal.InputIsBoolean}}" method="post" action="/console/semantic-rules/{{.ID}}">
-                    <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><input type="hidden" name="revision" value="{{.Revision}}"><input type="hidden" name="kind" value="alarm">
+                    <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><input type="hidden" name="revision" value="{{.Revision}}"><input type="hidden" name="kind" value="alarm">
                     <label><span>ルール名</span><input name="display_name" value="{{.DisplayName}}" maxlength="128" required></label>
                     <div class="conditional-fields detector-fields" data-semantic-detector>
                       <label><span>異常とみなす側</span><select name="detector_mode"><option value="boolean_high_active" data-detector-boolean {{if eq .Detector.Mode "boolean_high_active"}}selected{{end}}>High（1）を異常にする</option><option value="boolean_low_active" data-detector-boolean {{if eq .Detector.Mode "boolean_low_active"}}selected{{end}}>Low（0）を異常にする</option><option value="high_active" data-detector-analog {{if eq .Detector.Mode "high_active"}}selected{{end}}>値が上がった側を異常にする</option><option value="low_active" data-detector-analog {{if eq .Detector.Mode "low_active"}}selected{{end}}>値が下がった側を異常にする</option></select></label>
@@ -332,7 +345,7 @@
                     <div class="semantic-rule-actions"><button type="submit">アラームを保存</button></div>
                   </form>
                   <details class="semantic-rule-danger"><summary>その他の操作</summary>
-                    <form class="semantic-retire-form" data-confirm-message="{{.DisplayName}}を終了します。このアラームは新しい異常を検知しなくなります。よろしいですか？" method="post" action="/console/semantic-rules/{{.ID}}/retire"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><input type="hidden" name="revision" value="{{.Revision}}"><button class="button-danger" type="submit">このルールを終了</button></form>
+                    <form class="semantic-retire-form" data-confirm-message="{{.DisplayName}}を終了します。このアラームは新しい異常を検知しなくなります。よろしいですか？" method="post" action="/console/semantic-rules/{{.ID}}/retire"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}"><input type="hidden" name="return_anchor" value="rule-{{.ID}}"><input type="hidden" name="revision" value="{{.Revision}}"><button class="button-danger" type="submit">このルールを終了</button></form>
                   </details>
                   {{else}}<dl class="detail-list"><div><dt>判定</dt><dd>{{.Detector.Mode}}</dd></div></dl>{{end}}
                 </details>
@@ -344,7 +357,7 @@
               <details class="semantic-rule-create" id="rule-create">
                 <summary>ルールを追加</summary>
                 <form class="semantic-form compact-form" data-signal-ref="{{.SignalRef}}" data-boolean-input="{{$.SelectedSignal.InputIsBoolean}}" method="post" action="/console/signals/{{.SignalRef}}/semantic-rules">
-                  <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="/sensors/{{.SignalRef}}"><input type="hidden" name="return_anchor" value="rule-create"><input type="hidden" name="revision" value="{{.Revision}}">
+                  <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="return_to" value="{{$.SensorSettingsPath}}"><input type="hidden" name="return_anchor" value="rule-create"><input type="hidden" name="revision" value="{{.Revision}}">
                   <label><span>ルール名</span><input name="display_name" maxlength="128" placeholder="例：現在温度、高温アラーム" required></label>
                   <label><span>作る結果</span><select name="kind" data-semantic-kind><option value="numeric">測定値</option><option value="boolean">ON/OFF</option><option value="cumulative_counter">累積値</option><option value="alarm">異常検知</option></select></label>
                   <div class="conditional-fields detector-fields" data-semantic-detector hidden>
@@ -360,24 +373,35 @@
             </section>
               </div>
 
-              <details class="sensor-source-details">
-                <summary>接続元と受信情報を確認する</summary>
-                <dl class="sensor-detail-facts">
-                  <div><dt>Edge</dt><dd>{{.Edge}}</dd></div>
-                  <div><dt>デバイス</dt><dd>{{if .DeviceName}}{{if .DeviceRef}}<a href="/equipment/devices/{{.DeviceRef}}">{{.DeviceName}}</a>{{else}}{{.DeviceName}}{{end}}{{else}}確認できません{{end}}</dd></div>
-                  {{if .DeviceModelID}}<div><dt>機器モデル</dt><dd class="mono">{{.DeviceModelID}}</dd></div>{{end}}
-                  <div><dt>データ種類</dt><dd class="mono">{{.SourceSensorType}}</dd></div>
-                  <div><dt>値の形式</dt><dd>{{.SourceValueType}}</dd></div>
-                  <div><dt>通知された単位</dt><dd>{{.SourceUnit}}</dd></div>
-                  <div><dt>チャンネル</dt><dd>{{.ChannelLabel}}</dd></div>
-                </dl>
-                <div class="sensor-source-actions">
-                  <span>{{if gt .FlowRouteCount 0}}外部出力あり{{else}}外部出力なし{{end}}</span>
-                  <a href="/output">Site全体の外部出力先を見る</a>
-                </div>
-              </details>
+              {{template "sensor-source-details" .}}
             </section>
           </div>
+          {{else}}
+          <div class="sensor-observation-summary sensor-setting-controls">
+            <section class="content-section sensor-configuration-summary">
+              <div class="section-heading">
+                <div><h2>設定内容</h2><p>このセンサーに現在適用されている表示と判定です。</p></div>
+              </div>
+              <dl class="sensor-summary-facts">
+                <div><dt>表示名</dt><dd>{{.Name}}</dd></div>
+                <div><dt>種類</dt><dd>{{.SensorType}}</dd></div>
+                <div><dt>表示単位</dt><dd>{{if .Unit}}{{.Unit}}{{else}}なし{{end}}</dd></div>
+                {{with .Configuration}}<div><dt>入力値の補正</dt><dd>× {{.Calibration.Scale}} ＋ {{.Calibration.Offset}}</dd></div>{{end}}
+              </dl>
+              <div class="sensor-summary-rules">
+                <section>
+                  <h3>通常の値 <span>{{len .NormalRules}}件</span></h3>
+                  {{if .NormalRules}}<ul>{{range .NormalRules}}<li><strong>{{.DisplayName}}</strong><small>{{.KindLabel}}</small></li>{{end}}</ul>{{else}}<p>ルールはまだありません。</p>{{end}}
+                </section>
+                <section>
+                  <h3>異常検知 <span>{{len .AlarmRules}}件</span></h3>
+                  {{if .AlarmRules}}<ul>{{range .AlarmRules}}<li><strong>{{.DisplayName}}</strong><small>{{.KindLabel}}</small></li>{{end}}</ul>{{else}}<p>アラームはまだありません。</p>{{end}}
+                </section>
+              </div>
+            </section>
+            {{template "sensor-source-details" .}}
+          </div>
+          {{end}}
         </div>
       </div>
       {{end}}
@@ -539,7 +563,7 @@
             </dl>
             {{if .MissingMessage}}<p class="metadata-warning">{{.MissingMessage}}</p>{{end}}
             <footer class="equipment-sensor-actions">
-              <a class="button secondary" href="/sensors/{{.Signal.SignalRef}}">センサー設定を開く</a>
+              <a class="button secondary" href="/equipment/devices/{{$.SelectedDevice.Device.DeviceRef}}/sensors/{{.Signal.SignalRef}}">センサー設定を開く</a>
             </footer>
           </article>
           {{else}}
@@ -1126,6 +1150,25 @@
     </tbody>
   </table>
 </div>
+{{end}}
+
+{{define "sensor-source-details"}}
+<details class="sensor-source-details">
+  <summary>接続元と受信情報を確認する</summary>
+  <dl class="sensor-detail-facts">
+    <div><dt>Edge</dt><dd>{{.Edge}}</dd></div>
+    <div><dt>デバイス</dt><dd>{{if .DeviceName}}{{if .DeviceRef}}<a href="/equipment/devices/{{.DeviceRef}}">{{.DeviceName}}</a>{{else}}{{.DeviceName}}{{end}}{{else}}確認できません{{end}}</dd></div>
+    {{if .DeviceModelID}}<div><dt>機器モデル</dt><dd class="mono">{{.DeviceModelID}}</dd></div>{{end}}
+    <div><dt>データ種類</dt><dd class="mono">{{.SourceSensorType}}</dd></div>
+    <div><dt>値の形式</dt><dd>{{.SourceValueType}}</dd></div>
+    <div><dt>通知された単位</dt><dd>{{.SourceUnit}}</dd></div>
+    <div><dt>チャンネル</dt><dd>{{.ChannelLabel}}</dd></div>
+  </dl>
+  <div class="sensor-source-actions">
+    <span>{{if gt .FlowRouteCount 0}}外部出力あり{{else}}外部出力なし{{end}}</span>
+    <a href="/output">Site全体の外部出力先を見る</a>
+  </div>
+</details>
 {{end}}
 
 {{define "empty-state"}}<div class="empty-state"><span aria-hidden="true">○</span><strong>{{.}}</strong></div>{{end}}

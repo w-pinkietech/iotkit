@@ -432,7 +432,8 @@ func TestEquipmentDeviceDetailLinksSensorsToCanonicalSettings(t *testing.T) {
 		`class="equipment-breadcrumb"`,
 		`class="equipment-sensor-grid"`,
 		`action="/console/devices/` + devices[0].DeviceRef + `/profile"`,
-		`href="/sensors/` + signals[0].SignalRef + `"`,
+		`href="/equipment/devices/` + devices[0].DeviceRef +
+			`/sensors/` + signals[0].SignalRef + `"`,
 		"センサー設定を開く",
 		"機器モデル",
 		"mcp9600",
@@ -488,6 +489,8 @@ func TestConsoleReturnTargetAllowsOnlyEquipmentDetailPaths(t *testing.T) {
 		"/equipment/edges/edge_0123456789abcdef0123456789abcdef",
 		"/equipment/devices/dev_0123456789abcdef0123456789abcdef",
 		"/sensors/sig_0123456789abcdef0123456789abcdef",
+		"/equipment/devices/dev_0123456789abcdef0123456789abcdef/" +
+			"sensors/sig_0123456789abcdef0123456789abcdef",
 	}
 	for _, target := range valid {
 		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
@@ -514,6 +517,15 @@ func TestConsoleReturnTargetAllowsOnlyEquipmentDetailPaths(t *testing.T) {
 		"/sensors/sig_",
 		"/sensors/sig_0123456789abcdef0123456789abcdef/extra",
 		"/sensors/sig_0123456789abcdef0123456789abcdef?changed=1",
+		"/equipment/devices/dev_0123456789abcdef0123456789abcdef/sensors/",
+		"/equipment/devices/dev_0123456789abcdef0123456789abcdef/" +
+			"sensors/sig_",
+		"/equipment/devices/dev_0123456789abcdef0123456789abcdef/" +
+			"sensors/sig_0123456789abcdef0123456789abcdef/extra",
+		"/equipment/devices/dev_0123456789abcdef0123456789abcdef/" +
+			"sensors/sig_0123456789abcdef0123456789abcdef?changed=1",
+		"/equipment/devices/dev_not-a-resource-ref/" +
+			"sensors/sig_0123456789abcdef0123456789abcdef",
 	}
 	for _, target := range invalid {
 		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
@@ -547,6 +559,122 @@ func TestSensorRoutesResolveListAndKnownDetail(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s status = %d, body=%s", path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestSensorMonitoringDetailKeepsMonitoringNavigationAndHasNoSettingsForms(
+	t *testing.T,
+) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/sensors/"+signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`data-console-page="sensors"`,
+		`href="/sensors" class="active" aria-current="page"`,
+		`<a href="/sensors">センサー一覧</a>`,
+		"設定内容",
+		">設定を変更</a>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("monitoring detail missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`action="/console/signals/`,
+		`action="/console/semantic-rules/`,
+		`data-setting-tabs`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("monitoring detail exposes settings %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestSensorSettingsDetailUsesEquipmentNavigationAndCanonicalHierarchy(
+	t *testing.T,
+) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	devices, err := archive.ListInventoryDevices(context.Background(), 100, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	path := "/equipment/devices/" + devices[0].DeviceRef +
+		"/sensors/" + signals[0].SignalRef
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`data-console-page="equipment"`,
+		`href="/equipment" class="active" aria-current="page"`,
+		`<a href="/equipment">機器管理</a>`,
+		`href="/equipment/edges/`,
+		`href="/equipment/devices/` + devices[0].DeviceRef + `"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/profile"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/calibration"`,
+		`action="/console/signals/` + signals[0].SignalRef + `/semantic-rules"`,
+		`name="return_to" value="` + path + `"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("settings detail missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestSensorSettingsRouteRejectsADeviceThatDoesNotOwnTheSignal(t *testing.T) {
+	server, archive := newTestServerFixture(
+		t, false, siteapp.AccountRoleAdmin,
+	)
+	seedSetupDevice(t, archive)
+	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
+	if err != nil || len(signals) != 1 {
+		t.Fatalf("signals = %#v, err = %v", signals, err)
+	}
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/equipment/devices/dev_00000000000000000000000000000000/sensors/"+
+			signals[0].SignalRef,
+		nil,
+	)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -624,17 +752,22 @@ func TestLegacySensorConsoleRoutesRedirectToSensorList(t *testing.T) {
 	}
 }
 
-func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
+func TestSensorSettingsDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 	server, archive := newTestServerFixture(
 		t, false, siteapp.AccountRoleAdmin,
 	)
 	seedSetupDevice(t, archive)
+	devices, err := archive.ListInventoryDevices(context.Background(), 100, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
 	signals, err := archive.ListInventorySignals(context.Background(), 100, "")
 	if err != nil || len(signals) != 1 {
 		t.Fatalf("signals = %#v, err = %v", signals, err)
 	}
 	cookie, _ := loginTestAccount(t, server)
-	path := "/sensors/" + signals[0].SignalRef
+	path := "/equipment/devices/" + devices[0].DeviceRef +
+		"/sensors/" + signals[0].SignalRef
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
@@ -646,7 +779,7 @@ func TestSensorDetailShowsCurrentValueSourceAndSettingsForAdmin(t *testing.T) {
 		`class="sensor-detail-header"`,
 		`class="sensor-detail-identity"`,
 		`class="sensor-detail-latest`,
-		`class="sensor-setting-workspace"`,
+		`class="sensor-setting-workspace sensor-setting-workspace--settings"`,
 		`class="sensor-detail-settings sensor-setting-controls"`,
 		`class="content-section sensor-settings-panel"`,
 		`class="sensor-setting-preview"`,
@@ -742,6 +875,10 @@ func TestSensorDetailSeparatesNormalAndAbnormalSemanticRules(t *testing.T) {
 		t, false, siteapp.AccountRoleAdmin,
 	)
 	seedSetupDevice(t, archive)
+	devices, err := archive.ListInventoryDevices(context.Background(), 10, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices=%#v err=%v", devices, err)
+	}
 	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
 	if err != nil || len(signals) != 1 {
 		t.Fatalf("signals=%#v err=%v", signals, err)
@@ -795,7 +932,8 @@ func TestSensorDetailSeparatesNormalAndAbnormalSemanticRules(t *testing.T) {
 	cookie, _ := loginTestAccount(t, server)
 	request := httptest.NewRequest(
 		http.MethodGet,
-		"/sensors/"+signals[0].SignalRef+
+		"/equipment/devices/"+devices[0].DeviceRef+
+			"/sensors/"+signals[0].SignalRef+
 			"?error=threshold_order&focus=rule-"+alarm.ID,
 		nil,
 	)
@@ -834,11 +972,17 @@ func TestConsoleCreatesNormalAndAlarmRulesIndependently(t *testing.T) {
 		t, false, siteapp.AccountRoleAdmin,
 	)
 	seedSetupDevice(t, archive)
+	devices, err := archive.ListInventoryDevices(context.Background(), 10, "")
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices=%#v err=%v", devices, err)
+	}
 	signals, err := archive.ListInventorySignals(context.Background(), 10, "")
 	if err != nil || len(signals) != 1 {
 		t.Fatalf("signals=%#v err=%v", signals, err)
 	}
 	cookie, csrf := loginTestAccount(t, server)
+	settingsPath := "/equipment/devices/" + devices[0].DeviceRef +
+		"/sensors/" + signals[0].SignalRef
 	configuration, err := archive.GetSemanticConfiguration(
 		context.Background(),
 		signals[0].SignalRef,
@@ -849,7 +993,7 @@ func TestConsoleCreatesNormalAndAlarmRulesIndependently(t *testing.T) {
 	postRule := func(values url.Values) {
 		t.Helper()
 		values.Set("_csrf", csrf)
-		values.Set("return_to", "/sensors/"+signals[0].SignalRef)
+		values.Set("return_to", settingsPath)
 		request := httptest.NewRequest(
 			http.MethodPost,
 			"/console/signals/"+signals[0].SignalRef+"/semantic-rules",
@@ -861,7 +1005,7 @@ func TestConsoleCreatesNormalAndAlarmRulesIndependently(t *testing.T) {
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
 		if response.Code != http.StatusSeeOther ||
-			!strings.HasSuffix(response.Header().Get("Location"), "?saved=1") {
+			response.Header().Get("Location") != settingsPath+"?saved=1" {
 			t.Fatalf("status=%d location=%q", response.Code, response.Header().Get("Location"))
 		}
 	}
@@ -922,7 +1066,6 @@ func TestSensorDetailViewerSeesFactsWithoutMutationControls(t *testing.T) {
 
 	body := response.Body.String()
 	for _, want := range []string{
-		"閲覧のみ",
 		"factory-edge-01",
 		"temperature_c",
 		"24.8",
@@ -938,6 +1081,7 @@ func TestSensorDetailViewerSeesFactsWithoutMutationControls(t *testing.T) {
 		`name="display_name"`,
 		`name="kind"`,
 		`name="preview_test_value"`,
+		">設定を変更</a>",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("viewer sensor detail exposes %q: %s", forbidden, body)

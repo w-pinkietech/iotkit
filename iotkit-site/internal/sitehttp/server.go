@@ -129,6 +129,10 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /equipment", server.consolePage)
 	server.mux.HandleFunc("GET /equipment/edges/{edge_ref}", server.consolePage)
 	server.mux.HandleFunc("GET /equipment/devices/{device_ref}", server.consolePage)
+	server.mux.HandleFunc(
+		"GET /equipment/devices/{device_ref}/sensors/{signal_ref}",
+		server.consolePage,
+	)
 	server.mux.HandleFunc("GET /setup", server.consolePage)
 	server.mux.HandleFunc("GET /edges", server.consolePage)
 	server.mux.HandleFunc("GET /devices", server.consolePage)

@@ -19,6 +19,7 @@ import (
 
 type consoleData struct {
 	Page                string
+	NavigationPage      string
 	Title               string
 	Description         string
 	Notice              string
@@ -43,6 +44,7 @@ type consoleData struct {
 	DeviceRows          []consoleDeviceView
 	SignalRows          []consoleSignalView
 	SensorView          string
+	SensorSettingsPath  string
 	SelectedSignal      *consoleSignalView
 	SetupRows           []consoleSetupDeviceView
 	LogRows             []consoleLogView
@@ -90,6 +92,27 @@ type consoleAvailableOutput struct {
 	NeedsConfigurationCount int
 	IneligibleCount         int
 	Rules                   []siteapp.OutputActivationRulePreview
+}
+
+func findConsoleEquipmentDevice(
+	rows []consoleEquipmentEdgeView,
+	orphans []consoleSetupDeviceView,
+	deviceRef string,
+) (*consoleSetupDeviceView, *consoleEquipmentEdgeView) {
+	for edgeIndex := range rows {
+		for deviceIndex := range rows[edgeIndex].Devices {
+			device := &rows[edgeIndex].Devices[deviceIndex]
+			if device.Device.DeviceRef == deviceRef {
+				return device, &rows[edgeIndex]
+			}
+		}
+	}
+	for index := range orphans {
+		if orphans[index].Device.DeviceRef == deviceRef {
+			return &orphans[index], nil
+		}
+	}
+	return nil, nil
 }
 
 func (server *Server) consoleSensorsRedirect(
@@ -147,13 +170,17 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		return
 	}
 	data := consoleData{
-		Page: page, Title: title, Description: descriptions[page],
+		Page: page, NavigationPage: page, Title: title, Description: descriptions[page],
 		DisplayName: auth.account.DisplayName,
 		Role:        auth.account.Role,
 		RoleLabel:   roleLabel(auth.account.Role),
 		IsAdmin: auth.account.Role == siteapp.AccountRoleAdmin ||
 			auth.account.Role == siteapp.AccountRoleSystemAdmin,
 		IsOwner: auth.account.Role == siteapp.AccountRoleSystemAdmin,
+	}
+	if request.PathValue("device_ref") != "" &&
+		request.PathValue("signal_ref") != "" {
+		data.NavigationPage = "equipment"
 	}
 	feedbackTarget := request.URL.Query().Get("focus")
 	if safeConsoleAnchor(feedbackTarget) {
@@ -208,27 +235,11 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			}
 			if deviceRef := request.PathValue("device_ref"); deviceRef != "" {
 				data.EquipmentView = "device"
-				for edgeIndex := range data.EquipmentRows {
-					for deviceIndex := range data.EquipmentRows[edgeIndex].Devices {
-						device := &data.EquipmentRows[edgeIndex].Devices[deviceIndex]
-						if device.Device.DeviceRef == deviceRef {
-							data.SelectedDevice = device
-							data.SelectedDeviceEdge = &data.EquipmentRows[edgeIndex]
-							break
-						}
-					}
-					if data.SelectedDevice != nil {
-						break
-					}
-				}
-				if data.SelectedDevice == nil {
-					for index := range data.OrphanDevices {
-						if data.OrphanDevices[index].Device.DeviceRef == deviceRef {
-							data.SelectedDevice = &data.OrphanDevices[index]
-							break
-						}
-					}
-				}
+				data.SelectedDevice, data.SelectedDeviceEdge = findConsoleEquipmentDevice(
+					data.EquipmentRows,
+					data.OrphanDevices,
+					deviceRef,
+				)
 				if data.SelectedDevice == nil {
 					http.NotFound(response, request)
 					return
@@ -388,8 +399,55 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				http.NotFound(response, request)
 				return
 			}
+			if data.SelectedSignal.DeviceRef != nil {
+				data.SensorSettingsPath = "/equipment/devices/" +
+					*data.SelectedSignal.DeviceRef + "/sensors/" + signalRef
+			}
 			data.Title = data.SelectedSignal.Name
-			data.Description = "現在値と受信元を確認し、このセンサーの設定を管理します。"
+			data.Description = "現在値、受信状態、設定されている内容を確認します。"
+			if deviceRef := request.PathValue("device_ref"); deviceRef != "" {
+				if data.SelectedSignal.DeviceRef == nil ||
+					*data.SelectedSignal.DeviceRef != deviceRef {
+					http.NotFound(response, request)
+					return
+				}
+				data.SensorView = "settings"
+				data.SensorSettingsPath = "/equipment/devices/" + deviceRef +
+					"/sensors/" + signalRef
+				data.Title = data.SelectedSignal.Name + "の設定"
+				data.Description = "表示、値の変換、異常検知を設定します。"
+				var setupDevices []siteapp.SetupDevice
+				data.Edges, err = server.site.ListEdges(request.Context())
+				if err == nil {
+					setupDevices, err = server.site.ListSetupDevices(
+						request.Context(),
+						server.actor(auth),
+						100,
+					)
+				}
+				if err == nil {
+					data.EquipmentRows = newConsoleEquipmentViews(
+						data.Edges,
+						setupDevices,
+						server.now(),
+					)
+					data.OrphanDevices = newConsoleOrphanDeviceViews(
+						data.Edges,
+						setupDevices,
+						server.now(),
+					)
+					data.SelectedDevice, data.SelectedDeviceEdge =
+						findConsoleEquipmentDevice(
+							data.EquipmentRows,
+							data.OrphanDevices,
+							deviceRef,
+						)
+					if data.SelectedDevice == nil {
+						http.NotFound(response, request)
+						return
+					}
+				}
+			}
 		}
 		data.summarizeSignals()
 	case "devices":
@@ -797,6 +855,9 @@ func (server *Server) consoleSignalProfile(response http.ResponseWriter, request
 
 func consoleReturnTarget(request *http.Request, fallback string) string {
 	target := request.FormValue("return_to")
+	if safeSensorSettingsReturnTarget(target) {
+		return target
+	}
 	if safeEquipmentReturnTarget(target) {
 		return target
 	}
@@ -815,6 +876,21 @@ func consoleReturnTarget(request *http.Request, fallback string) string {
 	default:
 		return fallback
 	}
+}
+
+func safeSensorSettingsReturnTarget(target string) bool {
+	if !strings.HasPrefix(target, "/") ||
+		strings.ContainsAny(target, "?#\\") ||
+		strings.HasPrefix(target, "//") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
+	return len(parts) == 5 &&
+		parts[0] == "equipment" &&
+		parts[1] == "devices" &&
+		validConsoleResourceRef(parts[2], "dev_") &&
+		parts[3] == "sensors" &&
+		validConsoleResourceRef(parts[4], "sig_")
 }
 
 func safeSensorReturnTarget(target string) bool {
