@@ -189,7 +189,9 @@ func TestSemanticHistoryCSVExportsPersistedProcessedObservations(t *testing.T) {
 	record := json.RawMessage(
 		`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":2,` +
 			`"series_key":"018f0000-0000-7000-8000-000000000001:temperature_c:na:primary",` +
-			`"values":[25.5],"event_time":2000}`,
+			`"values":[25.5],"event_time":2000,"event_time_source":"received_at",` +
+			`"time_source":"edge_node","time_quality":"unsynced","received_at":2000,` +
+			`"device_time":null}`,
 	)
 	batch := contract.RecordBatch{
 		SchemaVersion: 1, EdgeNodeID: "factory-edge-01", LedgerEpoch: "epoch-01",
@@ -3816,7 +3818,9 @@ func seedSetupDevice(t *testing.T, archive *store.Store) {
 	}
 	record := json.RawMessage(
 		`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,` +
-			`"series_key":"` + seriesKey + `","values":[24.8],"event_time":1000}`,
+			`"series_key":"` + seriesKey + `","values":[24.8],"event_time":1000,` +
+			`"event_time_source":"received_at","time_source":"edge_node",` +
+			`"time_quality":"unsynced","received_at":1000,"device_time":null}`,
 	)
 	batch := contract.RecordBatch{
 		SchemaVersion: 1,
