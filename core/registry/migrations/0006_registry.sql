@@ -12,8 +12,8 @@ CREATE TABLE registry_entries (
     channel_roles_json TEXT,            -- fixedのみ(JSON配列)
     physical_min      REAL,             -- カタログ物理限界(外殻=決定7)
     physical_max      REAL,
-    site_min          REAL,             -- 現場既定(外殻内)。Wave 0では設定APIなし(R14=Wave 1)
-    site_max          REAL,
+    local_min          REAL,             -- 現場既定(外殻内)。Wave 0では設定APIなし(R14=Wave 1)
+    local_max          REAL,
     enabled_at        INTEGER NOT NULL
 );
 
@@ -22,7 +22,7 @@ CREATE TABLE registry_entries (
 CREATE TABLE registry_aliases (
     alias            TEXT PRIMARY KEY,
     measurement_key  TEXT NOT NULL REFERENCES registry_entries(measurement_key),
-    alias_kind       TEXT NOT NULL CHECK (alias_kind IN ('rename','site_mapping')),
+    alias_kind       TEXT NOT NULL CHECK (alias_kind IN ('rename','location_mapping')),
     created_at       INTEGER NOT NULL
 );
 

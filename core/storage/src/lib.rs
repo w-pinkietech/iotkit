@@ -1,4 +1,4 @@
-//! iotkit-core-storage: SQLite persistence infrastructure for IoTKit Edge.
+//! iotkit-core-storage: SQLite persistence infrastructure for IoTKit Edge Node.
 
 mod error;
 mod handle;
@@ -12,13 +12,13 @@ pub use error::StorageError;
 pub use handle::DbHandle;
 pub use migrate::{MIGRATIONS, Migration, run_migrations};
 
-/// Read-only cutover guard for an on-disk IoTKit Edge database.
+/// Read-only cutover guard for an on-disk IoTKit Edge Node database.
 ///
 /// Missing and zero-length paths are fresh creation targets. A non-empty database is current
 /// only when it already has an `edge_node_id`, or when migration v1 from the post-cutover code
 /// created the private format marker before identity initialization completed. Everything else
 /// is an unsupported pre-release database and is never migrated in place.
-pub fn preflight_edge_database(db_path: &Path) -> Result<(), StorageError> {
+pub fn preflight_edge_node_database(db_path: &Path) -> Result<(), StorageError> {
     let metadata = match std::fs::metadata(db_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -160,10 +160,10 @@ mod tests {
 
     fn assert_preflight_rejects_without_mutation(db_path: &Path) {
         let bytes_before = std::fs::read(db_path).unwrap();
-        let error = preflight_edge_database(db_path).unwrap_err();
+        let error = preflight_edge_node_database(db_path).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "unsupported pre-release Edge database; recreate the Edge database"
+            "unsupported pre-release Edge Node database; recreate the Edge Node database"
         );
         assert_eq!(std::fs::read(db_path).unwrap(), bytes_before);
 
@@ -209,7 +209,7 @@ mod tests {
         let db_path = dir.path().join("current.db");
         create_identity_database(&db_path, Some("edge_node_id"));
 
-        preflight_edge_database(&db_path).unwrap();
+        preflight_edge_node_database(&db_path).unwrap();
     }
 
     #[test]
@@ -223,11 +223,11 @@ mod tests {
         drop(conn);
         let bytes_before = std::fs::read(&db_path).unwrap();
 
-        let error = preflight_edge_database(&db_path).unwrap_err();
+        let error = preflight_edge_node_database(&db_path).unwrap_err();
 
         assert_eq!(
             error.to_string(),
-            "unsupported pre-release Edge database; recreate the Edge database"
+            "unsupported pre-release Edge Node database; recreate the Edge Node database"
         );
         assert_eq!(std::fs::read(db_path).unwrap(), bytes_before);
     }
@@ -236,11 +236,11 @@ mod tests {
     fn cutover_preflight_accepts_absent_and_zero_length_fresh_targets() {
         let dir = tempfile::tempdir().unwrap();
         let absent = dir.path().join("absent.db");
-        preflight_edge_database(&absent).unwrap();
+        preflight_edge_node_database(&absent).unwrap();
 
         let empty = dir.path().join("empty.db");
         std::fs::File::create(&empty).unwrap();
-        preflight_edge_database(&empty).unwrap();
+        preflight_edge_node_database(&empty).unwrap();
         assert_eq!(std::fs::metadata(empty).unwrap().len(), 0);
     }
 
@@ -250,7 +250,7 @@ mod tests {
         let db_path = dir.path().join("fresh.db");
         drop(init_db(&db_path, MIGRATIONS).unwrap());
 
-        preflight_edge_database(&db_path).unwrap();
+        preflight_edge_node_database(&db_path).unwrap();
         let conn =
             Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .unwrap();

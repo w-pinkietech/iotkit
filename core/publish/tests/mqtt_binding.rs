@@ -2,11 +2,11 @@ use iotkit_core_publish::mqtt::MqttBinding;
 
 #[test]
 fn mqtt_binding_derives_the_d9_identity_and_topics() {
-    let binding = MqttBinding::for_edge("edge-node-01").unwrap();
+    let binding = MqttBinding::for_edge_node("edge-node-01").unwrap();
 
     assert_eq!(binding.edge_node_id, "edge-node-01");
     assert_eq!(binding.username, "edge-node-01");
-    assert_eq!(binding.client_id, "iotkit-edge-edge-node-01");
+    assert_eq!(binding.client_id, "iotkit-edge-node-edge-node-01");
     assert_eq!(
         binding.records_topic,
         "iotkit/v1/edge-nodes/edge-node-01/records"
@@ -36,7 +36,7 @@ fn mqtt_binding_derives_the_d9_identity_and_topics() {
 fn mqtt_binding_rejects_an_unsafe_edge_node_id() {
     for edge_node_id in ["", "edge/node", "edge+node", "edge#node", "edge:node"] {
         assert!(
-            MqttBinding::for_edge(edge_node_id).is_err(),
+            MqttBinding::for_edge_node(edge_node_id).is_err(),
             "{edge_node_id:?}"
         );
     }

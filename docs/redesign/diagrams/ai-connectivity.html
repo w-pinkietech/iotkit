@@ -17,15 +17,15 @@
 </style>
 </head>
 <body>
-<h2>AIオペレーターはどうやってIoTKit Edgeに触るのか</h2>
-<p class="subtitle">3つの接続パターン。共通原則は「IoTKit Edgeはインターネットからの着信(inbound)を一切受けない」こと。</p>
+<h2>AIオペレーターはどうやってIoTKit Edge Nodeに触るのか</h2>
+<p class="subtitle">3つの接続パターン。共通原則は「IoTKit Edge Nodeはインターネットからの着信(inbound)を一切受けない」こと。</p>
 
 <div style="border:1px solid rgba(128,128,128,.4);border-radius:8px;padding:10px 14px;margin:12px 0;font-size:13px">
   <b>まず前提: 「AIオペレーター」は2つの部品でできている</b><br>
   <span style="display:inline-block;margin-top:6px">
-  ① <b>ハーネス</b> = エージェントの実行環境(runbook、Edge APIを叩くツール群、認証情報、エージェントループ)。<b>キットの一部として提供する</b>。<br>
+  ① <b>ハーネス</b> = エージェントの実行環境(runbook、Edge Node APIを叩くツール群、認証情報、エージェントループ)。<b>キットの一部として提供する</b>。<br>
   ② <b>LLM</b> = ハーネスの後ろにいる頭脳。<b>差し替え可能</b>(ローカルモデルでもクラウドAPIでも)。<br>
-  IoTKit Edgeから見えるのは常に「①ハーネスからの認証済みHTTP呼び出し」だけ。LLMがどこにいるかをEdgeは知らないし、知る必要がない。
+  IoTKit Edge Nodeから見えるのは常に「①ハーネスからの認証済みHTTP呼び出し」だけ。LLMがどこにいるかをEdge Nodeは知らないし、知る必要がない。
   </span>
 </div>
 
@@ -36,14 +36,14 @@
     <div class="label" style="color:#16a34a">パターンA: 完全オフライン工場 — Wave 1(AIハーネス開発時に実証)</div>
     <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
 ┌─ 工場の中 ────────────────┐
-│ [3] IoTKit Site            │
+│ [3] IoTKit Edge            │
 │  ┌─────────┐ ┌─────────┐ │
 │  │ ハーネス │→│ローカルLLM││
 │  └────┬────┘ └─────────┘ │
 │       │ LAN内HTTPS         │
 │       │ (自己署名+ピン留め)│
 │       ▼ +operatorトークン  │
-│ [2] IoTKit Edge            │
+│ [2] IoTKit Edge Node            │
 │  制御プレーン(LAN待受)     │
 └───────── 外に出る線なし ──┘</pre>
     <p style="font-size:12.5px;margin:6px 0 0">インターネット接続ゼロで成立。データも診断内容も工場から出ない。LLMの品質は積むモデル次第。</p>
@@ -54,7 +54,7 @@
     <div class="label" style="color:#2563eb">パターンB1: ハーネスは工場、頭脳はクラウド — Wave 1(AIハーネス開発時に実証)・推奨構成</div>
     <pre style="font-size:12px;line-height:1.5;background:none;border:none;padding:8px 0;margin:0">
 ┌─ 工場の中 ────────────────┐
-│ [3] IoTKit Site            │
+│ [3] IoTKit Edge            │
 │  ┌─────────┐              │
 │  │ ハーネス │──────────────┼──→ [4] LLM API
 │  └────┬────┘  APIキーで   │    (Claude等)
@@ -62,10 +62,10 @@
 │       │ LAN内HTTPS         │
 │       │ (自己署名+ピン留め)│
 │       ▼ +operatorトークン  │
-│ [2] IoTKit Edge            │
+│ [2] IoTKit Edge Node            │
 │  制御プレーン(LAN待受)     │
 └─── inboundは開けない ─────┘</pre>
-    <p style="font-size:12.5px;margin:6px 0 0">外に出る線は「ハーネス→LLM API」の一本だけ(発信のみ)。IoTKit Edgeの姿はパターンAと完全に同一。LLMに送る情報(インシデントバンドル等)はハーネスが統制=データガバナンスの制御点が工場側にある。</p>
+    <p style="font-size:12.5px;margin:6px 0 0">外に出る線は「ハーネス→LLM API」の一本だけ(発信のみ)。IoTKit Edge Nodeの姿はパターンAと完全に同一。LLMに送る情報(インシデントバンドル等)はハーネスが統制=データガバナンスの制御点が工場側にある。</p>
   </div>
 
   <!-- パターンB2 -->
@@ -78,19 +78,19 @@
  └────▲────┘ └─────┘
       │ 中継サーバー(relay)
       ▲
-      │ IoTKit Edgeが自分から
+      │ IoTKit Edge Nodeが自分から
       │ outboundで張る常時接続
 ┌─────┴─ 工場の中 ──────────┐
-│ [2] IoTKit Edge            │
+│ [2] IoTKit Edge Node            │
 └───────────────────────────┘</pre>
-    <p style="font-size:12.5px;margin:6px 0 0">支援機関やSIerが30現場を一元運用する形。この場合も<b>工場側にポートは開けない</b>——IoTKit Edgeが自分から外の中継点に発信して接続を維持し、その中を制御が通る(AWS IoTのsecure tunnelingと同じ発想)。IoTKit Site[3]すら不要になるが、中継インフラが要るのでWave 2。なお全パターン共通で、<b>AIのoperatorトークンは物理アクション権限に昇格不可</b>(プロンプトインジェクション対策)。</p>
+    <p style="font-size:12.5px;margin:6px 0 0">支援機関やSIerが30現場を一元運用する形。この場合も<b>工場側にポートは開けない</b>——IoTKit Edge Nodeが自分から外の中継点に発信して接続を維持し、その中を制御が通る(AWS IoTのsecure tunnelingと同じ発想)。IoTKit Edge[3]すら不要になるが、中継インフラが要るのでWave 2。なお全パターン共通で、<b>AIのoperatorトークンは物理アクション権限に昇格不可</b>(プロンプトインジェクション対策)。</p>
   </div>
 </div>
 
-<p style="font-size:12px;opacity:.8;margin:8px 0 0">※Wave表記はD3のWave 0/1/2体系に従う。Wave 0にAIハーネスは含まれない——柱3の価値検証は、Wave 1でAIハーネスを開発する際にWave 0稼働中の自社IoTKit Edgeに対して行う(D3決定4)。</p>
+<p style="font-size:12px;opacity:.8;margin:8px 0 0">※Wave表記はD3のWave 0/1/2体系に従う。Wave 0にAIハーネスは含まれない——柱3の価値検証は、Wave 1でAIハーネスを開発する際にWave 0稼働中の自社IoTKit Edge Nodeに対して行う(D3決定4)。</p>
 
 <div class="section" style="margin-top:18px">
-  <h3>全パターン共通の安全装置(IoTKit Edge側 R14/R19)</h3>
+  <h3>全パターン共通の安全装置(IoTKit Edge Node側 R14/R19)</h3>
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;font-size:13px">
     <div style="flex:1;min-width:230px;border-left:4px solid #2563eb;padding:8px 12px;background:rgba(37,99,235,.06);border-radius:6px">
       <b>操作主体の識別</b><br>ハーネスは「ai-operator@現場名」という運用者アイデンティティを持つ。全操作が監査ログに残る(操作者がLLMだからこそ、人間運用より厳格に)
@@ -108,7 +108,7 @@
 </div>
 
 <div class="section" style="margin-top:14px;font-size:13px;opacity:.9">
-  <b>「SSHなしで直せる」の正確な意味:</b> これは<b>直し方の話(型付きAPI vs 生シェル)</b>であって、<b>届くかどうかの話ではありません</b>。AIが直せるのは制御プレーンに到達できる障害まで。到達できない障害(ネットワーク全断、電源、物理)は、①IoTKit Edge自身の決定的自己修復、②現場の人への平易な指示(「白い箱のコンセントを抜き挿ししてください」)、の2層が受け持ちます。この3層(AI遠隔修復/自己修復/現場の人)の役割分担こそが運用設計の本体です。
+  <b>「SSHなしで直せる」の正確な意味:</b> これは<b>直し方の話(型付きAPI vs 生シェル)</b>であって、<b>届くかどうかの話ではありません</b>。AIが直せるのは制御プレーンに到達できる障害まで。到達できない障害(ネットワーク全断、電源、物理)は、①IoTKit Edge Node自身の決定的自己修復、②現場の人への平易な指示(「白い箱のコンセントを抜き挿ししてください」)、の2層が受け持ちます。この3層(AI遠隔修復/自己修復/現場の人)の役割分担こそが運用設計の本体です。
 </div>
 </body>
 </html>

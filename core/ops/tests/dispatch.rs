@@ -139,7 +139,7 @@ fn insert_registry_marker(conn: &Connection, id: &str) -> Result<(), OpError> {
             measurement_key, origin, catalog_version, entry_revision,
             unit_ucum, unit_display, value_type, semantic_class,
             channel_mode, channel_roles_json, physical_min, physical_max,
-            site_min, site_max, enabled_at
+            local_min, local_max, enabled_at
          ) VALUES (?1, 'custom', NULL, 'fake-revision', NULL, NULL, 'float', 'test',
             'single', NULL, NULL, NULL, NULL, NULL, 1)",
         params![format!("fake.{id}")],

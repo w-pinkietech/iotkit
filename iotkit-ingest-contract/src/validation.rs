@@ -5,7 +5,7 @@ use crate::ReasonCode;
 /// Side-effect-free validation output.
 ///
 /// This type is deliberately separate from [`crate::EnvelopeAck`]. Receiving it
-/// never means that the Edge accepted custody and never authorizes a sender to
+/// never means that the Edge Node accepted custody and never authorizes a sender to
 /// delete a spooled envelope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidationReport {

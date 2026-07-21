@@ -113,7 +113,7 @@ pub fn validate_commissioning_smoke_test_id(test_id: &str) -> Result<(), Publish
 fn require_publication_admitted(conn: &Connection) -> Result<(), PublishError> {
     if !crate::activation::publication_admitted(conn)? {
         return Err(PublishError::Invalid(
-            "Site activation has not admitted publication".into(),
+            "Edge Node activation has not admitted publication".into(),
         ));
     }
     Ok(())
@@ -455,10 +455,10 @@ mod tests {
     #[test]
     fn discovery_only_rejects_every_direct_publication_enqueue() {
         let conn = crate::tests_support::open();
-        crate::activation::install_site_target(
+        crate::activation::install_edge_target(
             &conn,
             &TargetRow {
-                target_id: "site".into(),
+                target_id: "edge".into(),
                 endpoint_url: "mqtts://broker.example.test:8883".into(),
                 credential_token: String::new(),
                 archive_responsible: true,
@@ -534,7 +534,7 @@ mod tests {
                 series_id: 10,
                 received_at_ms: 1_200,
                 device_time_ms: None,
-                time_source: "edge".into(),
+                time_source: "edge_node".into(),
                 values: vec![1.0],
                 rssi: None,
                 battery_pct: None,
@@ -548,7 +548,7 @@ mod tests {
                 series_id: 10,
                 received_at_ms: 2_200,
                 device_time_ms: None,
-                time_source: "edge".into(),
+                time_source: "edge_node".into(),
                 values: vec![2.0],
                 rssi: None,
                 battery_pct: None,
@@ -562,7 +562,7 @@ mod tests {
                 series_id: 20,
                 received_at_ms: 1_300,
                 device_time_ms: None,
-                time_source: "edge".into(),
+                time_source: "edge_node".into(),
                 values: vec![3.0],
                 rssi: None,
                 battery_pct: None,

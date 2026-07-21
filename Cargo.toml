@@ -21,8 +21,8 @@ members = [
     "iotkit-sensor-drivers",
     "bravepi-mainboard-adapter/poc",
     "rpi-local-adapter",
-    "iotkit-edge",
-    "iotkit-edgectl",
+    "iotkit-edge-node",
+    "iotkit-edge-nodectl",
     "iotkit-polling-adapter-runtime",
 ]
 resolver = "3"

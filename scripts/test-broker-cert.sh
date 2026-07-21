@@ -16,16 +16,16 @@ openssl x509 -req -days 60 -in "$scratch/server.csr" \
   -extfile "$scratch/server.ext" -out "$scratch/server.pem" >/dev/null 2>&1
 chmod 600 "$scratch/server.key"
 
-touch "$scratch/site.env" "$scratch/compose.yaml" "$scratch/password"
+touch "$scratch/edge.env" "$scratch/compose.yaml" "$scratch/password"
 cat >"$scratch/cert.env" <<EOF
 IOTKIT_CERT_DOMAIN=localhost
 IOTKIT_CERT_FILE=$scratch/server.pem
 IOTKIT_CERT_KEY_FILE=$scratch/server.key
 IOTKIT_CERT_CA_FILE=$scratch/ca.pem
-IOTKIT_CERT_SITE_ENV=$scratch/site.env
+IOTKIT_CERT_EDGE_ENV=$scratch/edge.env
 IOTKIT_CERT_COMPOSE_FILE=$scratch/compose.yaml
 IOTKIT_CERT_BROKER_PORT=18883
-IOTKIT_CERT_SITE_PASSWORD_FILE=$scratch/password
+IOTKIT_CERT_EDGE_ARCHIVE_PASSWORD_FILE=$scratch/password
 EOF
 chmod 600 "$scratch/cert.env"
 

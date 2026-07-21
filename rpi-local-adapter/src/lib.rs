@@ -228,7 +228,7 @@ pub fn to_items(
         series_variant: None,
         values: projection.values,
         device_time_ms: None,
-        time_source: TimeSource::Edge,
+        time_source: TimeSource::EdgeNode,
         age_ms: None,
         rssi: None,
         battery_pct: None,
@@ -239,7 +239,7 @@ pub fn to_items(
 ///
 /// Converts to `PollingAdapterConfig` internally and delegates to
 /// `iotkit_polling_adapter_runtime::validate_config()`. Used for
-/// preflight validation in the Edge before `start()`.
+/// preflight validation in the Edge Node before `start()`.
 pub fn validate(config: &RpiLocalConfig) -> Result<(), String> {
     let polling_config = to_polling_config(config);
     iotkit_polling_adapter_runtime::validate_config(&polling_config)

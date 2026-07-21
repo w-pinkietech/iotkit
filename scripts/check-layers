@@ -43,7 +43,7 @@ INPUT_ADAPTERS = {
     "bravepi-mainboard-adapter", "rpi-local-adapter",
     "iotkit-polling-adapter-runtime",
 }
-BINARIES = {"iotkit-edge", "iotkit-edgectl"}
+BINARIES = {"iotkit-edge-node", "iotkit-edge-nodectl"}
 INGRESS = {"iotkit-ingest-http"}
 CONTRACT = "iotkit-ingest-contract"
 CLIENT = "iotkit-ingest-client"
@@ -59,7 +59,7 @@ CLASSIFIED = DATA_PLANE | ADAPTERS | BINARIES | INGRESS | {
 }
 SUPERVISION_DEPENDENTS = {
     "iotkit-core-engine",
-    "iotkit-edge",
+    "iotkit-edge-node",
     "bravepi-mainboard-adapter",
     "bravepi-poc",
 }
@@ -94,7 +94,7 @@ def main() -> int:
             d["name"] for d in fixture_pkg["dependencies"] if d.get("kind") != "dev"
         }
         fixture_errors = ingress_edge_errors(fixture_pkg["name"], fixture_internal)
-        intended = "iotkit-edge"
+        intended = "iotkit-edge-node"
         if len(fixture_errors) != 1 or intended not in fixture_errors[0]:
             errors.append(
                 "rule-8 negative fixture did not fail for its intended ingress -> "

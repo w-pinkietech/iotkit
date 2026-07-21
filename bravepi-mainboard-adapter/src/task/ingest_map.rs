@@ -60,7 +60,7 @@ fn make_item(
         series_variant: None,
         values,
         device_time_ms: None,
-        time_source: TimeSource::Edge,
+        time_source: TimeSource::EdgeNode,
         age_ms: None,
         rssi,
         battery_pct,

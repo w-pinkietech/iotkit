@@ -1,0 +1,228 @@
+import { query, queryAll } from "./dom";
+
+export function csrfToken(): string {
+  const value = document.cookie
+    .split("; ")
+    .find((cookie) => cookie.startsWith("iotkit_edge_csrf="));
+  return value?.split("=")[1] ?? "";
+}
+
+function initializeMenu(): void {
+  const menuButton = query<HTMLButtonElement>(".menu-button");
+  const overlay = query<HTMLElement>(".mobile-overlay");
+  const closeMenu = (): void => {
+    document.body.classList.remove("menu-open");
+    menuButton?.setAttribute("aria-expanded", "false");
+    if (overlay) overlay.hidden = true;
+  };
+  if (!menuButton || !overlay) return;
+
+  menuButton.addEventListener("click", () => {
+    const open = !document.body.classList.contains("menu-open");
+    document.body.classList.toggle("menu-open", open);
+    menuButton.setAttribute("aria-expanded", String(open));
+    overlay.hidden = !open;
+  });
+  overlay.addEventListener("click", closeMenu);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMenu();
+  });
+}
+
+function initializeTableFilter(tableID: string): void {
+  const table = document.getElementById(tableID);
+  if (!(table instanceof HTMLTableElement)) return;
+
+  const search = query<HTMLInputElement>(
+    `[data-table-search="${tableID}"]`,
+  );
+  const status = query<HTMLSelectElement>(
+    `[data-table-status="${tableID}"]`,
+  );
+  const count = query<HTMLElement>(`[data-table-count="${tableID}"]`);
+  const apply = (): void => {
+    const searchText = search?.value.trim().toLocaleLowerCase("ja") ?? "";
+    const selectedState = status?.value ?? "";
+    let visible = 0;
+    for (const row of queryAll<HTMLTableRowElement>(
+      "tbody tr:not(.empty-row)",
+      table,
+    )) {
+      const rowText = row.textContent?.toLocaleLowerCase("ja") ?? "";
+      const matchesText = !searchText || rowText.includes(searchText);
+      const matchesState =
+        !selectedState || row.dataset.status === selectedState;
+      row.hidden = !(matchesText && matchesState);
+      if (!row.hidden) visible += 1;
+    }
+    if (count) count.textContent = String(visible);
+  };
+  search?.addEventListener("input", apply);
+  status?.addEventListener("change", apply);
+}
+
+function initializeDocumentActions(): void {
+  for (const form of queryAll<HTMLFormElement>("form[data-confirm-message]")) {
+    form.addEventListener("submit", (event) => {
+      const message = form.dataset.confirmMessage;
+      if (message && !window.confirm(message)) {
+        event.preventDefault();
+      }
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+
+    const copyButton = event.target.closest<HTMLElement>("[data-copy-text]");
+    if (copyButton) {
+      const originalLabel = copyButton.textContent;
+      navigator.clipboard
+        .writeText(copyButton.dataset.copyText ?? "")
+        .then(() => {
+          copyButton.textContent = "コピーしました";
+        })
+        .catch(() => {
+          copyButton.textContent = "コピーできません";
+        })
+        .finally(() => {
+          window.setTimeout(() => {
+            copyButton.textContent = originalLabel;
+          }, 1600);
+        });
+      return;
+    }
+
+    const row = event.target.closest<HTMLTableRowElement>("tr[data-href]");
+    if (
+      !row ||
+      event.target.closest("a, button, input, select, textarea") ||
+      !row.dataset.href
+    ) {
+      return;
+    }
+    window.location.assign(row.dataset.href);
+  });
+}
+
+function initializeSettingTabs(): void {
+  for (const root of queryAll<HTMLElement>("[data-setting-tabs]")) {
+    const tabs = queryAll<HTMLButtonElement>("[data-setting-tab]", root);
+    const panels = queryAll<HTMLElement>("[data-setting-panel]", root);
+    if (!tabs.length || !panels.length) continue;
+
+    const activate = (key: string, focus = false): void => {
+      for (const tab of tabs) {
+        const selected = tab.dataset.settingTab === key;
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected && focus) tab.focus();
+      }
+      for (const panel of panels) {
+        panel.hidden = panel.dataset.settingPanel !== key;
+      }
+    };
+
+    let initial = root.dataset.defaultSettingTab ?? tabs[0].dataset.settingTab;
+    const focusedID = document.body.dataset.focusTarget;
+    const focused = focusedID ? document.getElementById(focusedID) : null;
+    const focusedPanel =
+      focused && root.contains(focused)
+        ? focused.closest<HTMLElement>("[data-setting-panel]")
+        : null;
+    if (focusedPanel?.dataset.settingPanel) {
+      initial = focusedPanel.dataset.settingPanel;
+    }
+    activate(initial ?? "");
+    root.classList.add("setting-tabs-ready");
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => {
+        activate(tab.dataset.settingTab ?? "");
+      });
+      tab.addEventListener("keydown", (event) => {
+        let next = index;
+        if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+        else if (event.key === "ArrowLeft") {
+          next = (index - 1 + tabs.length) % tabs.length;
+        } else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        activate(tabs[next].dataset.settingTab ?? "", true);
+      });
+    });
+  }
+}
+
+function initializeFocusedSection(): void {
+  const targetID = document.body.dataset.focusTarget;
+  if (!targetID) return;
+  const target = document.getElementById(targetID);
+  if (!target) return;
+  if (target instanceof HTMLDetailsElement) {
+    target.open = true;
+    target.querySelector<HTMLElement>("summary")?.focus();
+    return;
+  }
+  target.setAttribute("tabindex", "-1");
+  target.focus();
+}
+
+function initializeSignalProfile(form: HTMLFormElement): void {
+  const sensorType = query<HTMLSelectElement>("[data-sensor-type]", form);
+  const customLabel = query<HTMLElement>("[data-custom-sensor-label]", form);
+  const valueKind = query<HTMLSelectElement>("[data-value-kind]", form);
+  const unitMode = query<HTMLSelectElement>("[data-unit-mode]", form);
+  const unitField = query<HTMLElement>("[data-display-unit]", form);
+  const decimalField = query<HTMLElement>("[data-decimal-places]", form);
+
+  const update = (): void => {
+    if (customLabel) {
+      const usesCustomLabel = sensorType?.value === "custom";
+      customLabel.hidden = !usesCustomLabel;
+      const input = query<HTMLInputElement>("input", customLabel);
+      if (input) input.required = usesCustomLabel;
+    }
+    if (valueKind?.value === "boolean") {
+      if (unitMode) unitMode.value = "dimensionless";
+      const unitInput = unitField
+        ? query<HTMLInputElement>("input", unitField)
+        : null;
+      if (unitInput) unitInput.value = "";
+      const decimalInput = decimalField
+        ? query<HTMLInputElement>("input", decimalField)
+        : null;
+      if (decimalInput) decimalInput.value = "0";
+    }
+    const hasUnit =
+      unitMode?.value === "unit" && valueKind?.value !== "boolean";
+    if (unitField) unitField.hidden = !hasUnit;
+    const unitInput = unitField
+      ? query<HTMLInputElement>("input", unitField)
+      : null;
+    if (unitInput) {
+      unitInput.required = hasUnit;
+      unitInput.disabled = !hasUnit;
+      if (!hasUnit) unitInput.value = "";
+    }
+    if (decimalField) decimalField.hidden = valueKind?.value === "boolean";
+  };
+
+  sensorType?.addEventListener("change", update);
+  valueKind?.addEventListener("change", update);
+  unitMode?.addEventListener("change", update);
+  update();
+}
+
+export function initializeShell(): void {
+  initializeMenu();
+  initializeTableFilter("signal-table");
+  initializeTableFilter("log-table");
+  initializeDocumentActions();
+  initializeSettingTabs();
+  for (const form of queryAll<HTMLFormElement>("form[data-signal-profile]")) {
+    initializeSignalProfile(form);
+  }
+  initializeFocusedSection();
+}

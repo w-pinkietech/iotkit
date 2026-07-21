@@ -126,7 +126,7 @@ pub use routes::{
     HttpIngestConfig, HttpIngestService, InvalidHttpIngestConfig, ServeConnectionError,
 };
 
-pub type SiteCidr = IpNet;
+pub type LocalIngressCidr = IpNet;
 
 #[derive(Clone)]
 pub enum ListenerMode {
@@ -213,7 +213,7 @@ impl TlsMaterial {
 pub struct ListenerConfig {
     pub bind: SocketAddr,
     pub interface: String,
-    pub site_local_cidrs: Vec<SiteCidr>,
+    pub local_ingress_cidrs: Vec<LocalIngressCidr>,
     pub mode: ListenerMode,
 }
 
@@ -275,11 +275,11 @@ impl ExposureSnapshot {
 
     /// Constructs a snapshot from an already-authoritative interface inventory.
     ///
-    /// The default Edge composition uses [`Self::from_os`]. This boundary is for a trusted
+    /// The default Edge Node composition uses [`Self::from_os`]. This boundary is for a trusted
     /// composition root that already owns the inventory source (for example, a supervisor that
     /// receives interface state from a platform service). It does not classify or authorize a
     /// bind by itself: [`ValidatedListenerConfig::new`] still requires a private address, a
-    /// matching interface, and a site-local CIDR.
+    /// matching interface, and a local-ingress CIDR.
     pub fn from_inventory(
         interface: impl Into<String>,
         addresses: impl IntoIterator<Item = IpAddr>,
@@ -339,7 +339,7 @@ impl ValidatedListenerConfig {
     }
 
     /// Loopback is deliberately available only to crate/integration tests. Product configuration
-    /// must name a real private site interface and CIDR.
+    /// must name a real private-network interface and CIDR.
     #[cfg(test)]
     pub(crate) fn new_for_test(
         config: ListenerConfig,
@@ -366,18 +366,18 @@ impl ValidatedListenerConfig {
         if !exposure.addresses.contains(&config.bind.ip()) {
             return Err(ListenerError::BindNotOnInterface);
         }
-        if config.site_local_cidrs.is_empty() || config.site_local_cidrs.len() > 8 {
-            return Err(ListenerError::MissingSiteCidr);
+        if config.local_ingress_cidrs.is_empty() || config.local_ingress_cidrs.len() > 8 {
+            return Err(ListenerError::MissingLocalIngressCidr);
         }
-        for cidr in &config.site_local_cidrs {
+        for cidr in &config.local_ingress_cidrs {
             validate_cidr(cidr, allow_loopback)?;
         }
         if !config
-            .site_local_cidrs
+            .local_ingress_cidrs
             .iter()
             .any(|cidr| cidr_contains(cidr, config.bind.ip()))
         {
-            return Err(ListenerError::BindOutsideSiteCidr);
+            return Err(ListenerError::BindOutsideLocalIngressCidr);
         }
         validate_private_ip(config.bind.ip(), allow_loopback)?;
         let degraded = matches!(config.mode, ListenerMode::PrivatePlaintext);
@@ -400,8 +400,8 @@ impl ValidatedListenerConfig {
         &self.config.mode
     }
 
-    pub fn site_local_cidrs(&self) -> &[SiteCidr] {
-        &self.config.site_local_cidrs
+    pub fn local_ingress_cidrs(&self) -> &[LocalIngressCidr] {
+        &self.config.local_ingress_cidrs
     }
 }
 
@@ -411,11 +411,11 @@ pub struct Listener {
     configured_addr: SocketAddr,
 }
 
-/// Runtime transport policy staged independently from a bound socket. The Edge uses this
+/// Runtime transport policy staged independently from a bound socket. The Edge Node uses this
 /// boundary to validate TLS/configuration changes before pausing and swapping a live listener.
 #[derive(Clone)]
 pub struct ListenerPolicy {
-    site_local_cidrs: Vec<SiteCidr>,
+    local_ingress_cidrs: Vec<LocalIngressCidr>,
     tls: Option<TlsAcceptor>,
 }
 
@@ -514,14 +514,14 @@ impl Drop for ServingListener {
 
 impl Listener {
     pub fn stage_policy(config: &ValidatedListenerConfig) -> Result<ListenerPolicy, ListenerError> {
-        Self::stage_policy_with_cidrs(config, config.site_local_cidrs().to_vec())
+        Self::stage_policy_with_cidrs(config, config.local_ingress_cidrs().to_vec())
     }
 
     /// Stages policy for a socket supplied by the composition root.
     ///
     /// A loopback socket is explicitly treated as local-only and therefore accepts only
     /// loopback peers. This keeps the socket-injection boundary useful for deterministic
-    /// supervisor composition without turning loopback into an accepted site-LAN exposure.
+    /// supervisor composition without turning loopback into an accepted LAN exposure.
     pub fn stage_policy_for_local_addr(
         config: &ValidatedListenerConfig,
         local_addr: SocketAddr,
@@ -531,7 +531,7 @@ impl Listener {
         let peer_cidrs = if local_ip.is_loopback() {
             vec![loopback_cidr(local_ip)]
         } else if local_ip == configured_ip {
-            config.site_local_cidrs().to_vec()
+            config.local_ingress_cidrs().to_vec()
         } else {
             return Err(ListenerError::BindNotOnInterface);
         };
@@ -540,14 +540,14 @@ impl Listener {
 
     fn stage_policy_with_cidrs(
         config: &ValidatedListenerConfig,
-        site_local_cidrs: Vec<SiteCidr>,
+        local_ingress_cidrs: Vec<LocalIngressCidr>,
     ) -> Result<ListenerPolicy, ListenerError> {
         let tls = match config.mode() {
             ListenerMode::Tls(material) => Some(TlsAcceptor::from(material.server_config()?)),
             ListenerMode::PrivatePlaintext => None,
         };
         Ok(ListenerPolicy {
-            site_local_cidrs,
+            local_ingress_cidrs,
             tls,
         })
     }
@@ -572,7 +572,7 @@ impl Listener {
 
     /// Adopts a socket owned by the composition root after the configuration has been strictly
     /// validated. This supports socket activation and deterministic supervisor probes without
-    /// changing the production [`Self::bind`] path or its private-site checks.
+    /// changing the production [`Self::bind`] path or its private-network checks.
     pub fn from_prebound_socket(
         config: ValidatedListenerConfig,
         inner: tokio::net::TcpListener,
@@ -600,7 +600,7 @@ impl Listener {
         peer: SocketAddr,
         policy: &ListenerPolicy,
     ) -> Result<(AcceptedStream, SocketAddr), ListenerError> {
-        validate_peer(peer, &policy.site_local_cidrs)?;
+        validate_peer(peer, &policy.local_ingress_cidrs)?;
         match &policy.tls {
             Some(acceptor) => Ok((
                 AcceptedStream::Tls(Box::new(acceptor.accept(stream).await?)),
@@ -820,13 +820,13 @@ fn interface_has_default_route(interface: &str) -> Result<bool, ListenerError> {
     }))
 }
 
-pub fn validate_peer(peer: SocketAddr, cidrs: &[SiteCidr]) -> Result<(), ListenerError> {
+pub fn validate_peer(peer: SocketAddr, cidrs: &[LocalIngressCidr]) -> Result<(), ListenerError> {
     let peer = normalize_ip(peer.ip());
     validate_private_ip(peer, true)?;
     if cidrs.iter().any(|cidr| cidr_contains(cidr, peer)) {
         Ok(())
     } else {
-        Err(ListenerError::PeerOutsideSiteCidr)
+        Err(ListenerError::PeerOutsideLocalIngressCidr)
     }
 }
 
@@ -840,14 +840,14 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
-fn loopback_cidr(ip: IpAddr) -> SiteCidr {
+fn loopback_cidr(ip: IpAddr) -> LocalIngressCidr {
     match normalize_ip(ip) {
         IpAddr::V4(_) => "127.0.0.0/8".parse().expect("loopback CIDR literal"),
         IpAddr::V6(_) => "::1/128".parse().expect("loopback CIDR literal"),
     }
 }
 
-fn cidr_contains(cidr: &SiteCidr, ip: IpAddr) -> bool {
+fn cidr_contains(cidr: &LocalIngressCidr, ip: IpAddr) -> bool {
     match (cidr, normalize_ip(ip)) {
         (IpNet::V4(cidr), IpAddr::V4(ip)) => cidr.contains(&ip),
         (IpNet::V6(cidr), IpAddr::V6(ip)) => cidr.contains(&ip),
@@ -855,7 +855,7 @@ fn cidr_contains(cidr: &SiteCidr, ip: IpAddr) -> bool {
     }
 }
 
-fn validate_cidr(cidr: &SiteCidr, allow_loopback: bool) -> Result<(), ListenerError> {
+fn validate_cidr(cidr: &LocalIngressCidr, allow_loopback: bool) -> Result<(), ListenerError> {
     let contained = match cidr {
         IpNet::V4(net) => {
             let blocks = [
@@ -915,12 +915,12 @@ pub enum ListenerError {
     UnapprovedInterface,
     #[error("bind address is not assigned to the approved interface")]
     BindNotOnInterface,
-    #[error("site-local CIDR is required")]
-    MissingSiteCidr,
-    #[error("bind address is outside the site-local CIDR")]
-    BindOutsideSiteCidr,
-    #[error("accepted peer is outside the site-local CIDR")]
-    PeerOutsideSiteCidr,
+    #[error("local-ingress CIDR is required")]
+    MissingLocalIngressCidr,
+    #[error("bind address is outside the local-ingress CIDR")]
+    BindOutsideLocalIngressCidr,
+    #[error("accepted peer is outside the local-ingress CIDR")]
+    PeerOutsideLocalIngressCidr,
     #[error("certificate and private key must both be present")]
     IncompleteTls,
     #[error("TLS generation must be positive")]

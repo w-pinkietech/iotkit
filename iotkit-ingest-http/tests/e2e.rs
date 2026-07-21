@@ -22,7 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::routes::HttpIngestHooks;
 use super::{
     ExposureSnapshot, HttpIngestConfig, HttpIngestService, Listener, ListenerConfig, ListenerMode,
-    ServingListener, SiteCidr, SystemMonotonicClock, TlsMaterial, ValidatedListenerConfig,
+    LocalIngressCidr, ServingListener, SystemMonotonicClock, TlsMaterial, ValidatedListenerConfig,
 };
 
 #[test]
@@ -128,8 +128,8 @@ fn normative_contract_matches_shipped_wire_schema_and_finite_defaults() {
         "internal",
         "device_ntp",
         "device_rtc",
-        "edge",
-        "edge_adjusted",
+        "edge_node",
+        "edge_node_adjusted",
     ] {
         assert!(
             contract.contains(&format!("`{value}`")),
@@ -242,13 +242,13 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
             {
                 "measurement_key": "temperature_c",
                 "values": [22.0],
-                "time_source": "edge"
+                "time_source": "edge_node"
             },
             {
                 "subject_hint": "not-registered",
                 "measurement_key": "temperature_c",
                 "values": [23.0],
-                "time_source": "edge"
+                "time_source": "edge_node"
             }
         ]),
     );
@@ -282,7 +282,7 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
         json!([{
             "measurement_key": "temperature_c",
             "values": [24.0],
-            "time_source": "edge"
+            "time_source": "edge_node"
         }]),
     );
     let rejected = run_pinned_body(&running, &ca_path, &rejected_path, "rejected-response").await;
@@ -300,7 +300,7 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
         json!([{
             "measurement_key": "temperature_c",
             "values": [25.0],
-            "time_source": "edge"
+            "time_source": "edge_node"
         }]),
     );
     let validation = run_pinned_validation(&running, &ca_path, &validation_path).await;
@@ -392,7 +392,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
         &payload_429,
         &principal_429,
         "retry-after-429-0001",
-        json!([{"measurement_key":"temperature_c","values":[27.0],"time_source":"edge"}]),
+        json!([{"measurement_key":"temperature_c","values":[27.0],"time_source":"edge_node"}]),
     );
     let first_429 = tokio::spawn(run_pinned_body_owned(
         running_429.url(),
@@ -450,7 +450,7 @@ async fn real_tls_retry_probes_keep_429_and_503_without_ack() {
         &payload_503,
         &principal_503,
         "retry-after-503-0001",
-        json!([{"measurement_key":"temperature_c","values":[28.0],"time_source":"edge"}]),
+        json!([{"measurement_key":"temperature_c","values":[28.0],"time_source":"edge_node"}]),
     );
     let first_503 = tokio::spawn(run_pinned_body_owned(
         running_503.url(),
@@ -1144,7 +1144,7 @@ async fn start_edge_with_cidr(
     let config = ListenerConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         interface: "lo".into(),
-        site_local_cidrs: vec![site_cidr.parse::<SiteCidr>().unwrap()],
+        local_ingress_cidrs: vec![site_cidr.parse::<LocalIngressCidr>().unwrap()],
         mode: ListenerMode::Tls(material),
     };
     let listener =

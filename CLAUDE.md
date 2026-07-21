@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-オンプレミス優先のIoTデータ収集基盤。現場側のRust + tokio製`IoTKit Edge`
-（Raspberry Pi向け）と、拠点側のGo製`IoTKit Site`からなる。
+オンプレミス優先のIoTデータ収集基盤。収集側のRust + tokio製`IoTKit Edge Node`
+（Raspberry Pi向け）と、集約側のGo製`IoTKit Edge`からなる。
 
 ```text
-{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-edge
+{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-edge-node
 ```
 
 adapters は `core/engine` に依存せず、取り込みは `iotkit-ingest-client` 経由 (D4)。
@@ -22,7 +22,7 @@ adapters は `core/engine` に依存せず、取り込みは `iotkit-ingest-clie
 
 - 秘密情報を Debug 出力、ログ、エラー、監査記録へ載せない。
 - データを黙って失わない。ストレージ失敗は custody ack を生まない。
-- 変更系操作は所有componentの R14 typed dispatch 経由。Edgeは`core/ops`、SiteはSite
+- 変更系操作は所有componentの R14 typed dispatch 経由。Edge Nodeは`core/ops`、IoTKit EdgeはGo
   application service内のtyped operation dispatcherを使い、新しいdirect-SQL mutation pathを作らない。
 
 ## Workflow

@@ -25,7 +25,7 @@ pub struct EnvelopeAck {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum AckStatus {
-    /// Processing was committed at the Edge acknowledgement durability point.
+    /// Processing was committed at the Edge Node acknowledgement durability point.
     ///
     /// The sender treats the envelope as complete; individual entries describe
     /// stored and terminally rejected items.
@@ -118,7 +118,7 @@ pub enum ItemStatus {
 /// The reason a stored item is quarantined.
 ///
 /// The receiver exposes this value so operators can resolve data that is visible
-/// at IoTKit Edge but withheld from downstream delivery.
+/// at IoTKit Edge Node but withheld from downstream delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuarantineReason {
@@ -137,7 +137,7 @@ pub enum QuarantineReason {
     /// The receiver stores it in quarantine until the declaration or mapping is
     /// corrected.
     UndeclaredChannel,
-    /// The subject itself is currently in the Edge's quarantined state.
+    /// The subject itself is currently in the Edge Node's quarantined state.
     ///
     /// The receiver stores the observation visibly but prevents downstream
     /// delivery until the subject is approved.
@@ -166,7 +166,7 @@ impl QuarantineReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Disposition {
-    /// IoTKit Edge now owns the retained data at the acknowledgement durability point.
+    /// IoTKit Edge Node now owns the retained data at the acknowledgement durability point.
     ///
     /// The item is eligible for normal downstream delivery and the sender may
     /// discard its spooled copy.
@@ -176,9 +176,9 @@ pub enum Disposition {
     /// Custody is provisional: the observation may be evicted if the subject is
     /// not approved, while its deduplication entry can remain until its own TTL.
     Staged,
-    /// The observation is stored and visible at IoTKit Edge but isolated from delivery.
+    /// The observation is stored and visible at IoTKit Edge Node but isolated from delivery.
     ///
-    /// IoTKit Edge retains it for operator resolution and withholds it from
+    /// IoTKit Edge Node retains it for operator resolution and withholds it from
     /// downstream consumers.
     Quarantined,
 }
@@ -203,7 +203,7 @@ pub enum ReasonCode {
     ValueTypeMismatch,
     /// The receiver cannot resolve a required subject identity from the item.
     ///
-    /// IoTKit Edge produces this TERMINAL item rejection for multi-subject
+    /// IoTKit Edge Node produces this TERMINAL item rejection for multi-subject
     /// omission and for unknown subjects from externally authenticated device
     /// principals. One-subject omission resolves from receiver-owned principal
     /// scope; only trusted official adapters can stage unknown sightings.

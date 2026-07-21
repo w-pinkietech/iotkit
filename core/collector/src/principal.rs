@@ -5,7 +5,7 @@ use iotkit_core_ledger::SystemId;
 /// The receiver-authenticated actor class for an ingest request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngestActorKind {
-    /// A trusted official adapter running in the Edge process.
+    /// A trusted official adapter running in the Edge Node process.
     OfficialAdapter,
     /// An externally authenticated device credential.
     DeviceToken,
@@ -199,7 +199,7 @@ impl IngestPrincipal {
 /// Receiver-composition capability for creating trusted local principals.
 ///
 /// The capability has no public constructor and is not cloneable. Collector
-/// composition returns it to the Edge, which binds each local principal into
+/// composition returns it to the Edge Node, which binds each local principal into
 /// one sender handle. Sender crates receive neither this capability nor principal
 /// constructors. Task 5 must introduce a separate, authenticator-only
 /// device-principal boundary; HTTP request code must receive only the resulting

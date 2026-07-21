@@ -80,7 +80,7 @@ pub enum SubmitError {
 }
 
 /// タスク所有キャッシュ(D5: 起動時全ロードはWave 0では行数が小さいため遅延ロードで開始し、
-/// ミス時にDBを引く。iotkit-edgectl(別プロセス)変異はgeneration counterで無効化する(T4、D5決定3))
+/// ミス時にDBを引く。iotkit-edge-nodectl(別プロセス)変異はgeneration counterで無効化する(T4、D5決定3))
 #[derive(Default)]
 struct ResolutionCache {
     generation: i64,
@@ -89,7 +89,7 @@ struct ResolutionCache {
 }
 
 impl Collector {
-    /// Edge composition receives both non-cloneable issuer capabilities exactly once.
+    /// Edge Node composition receives both non-cloneable issuer capabilities exactly once.
     pub fn spawn_fully_composed(
         db: DbHandle,
         policy: Arc<dyn RegistryPolicy>,
@@ -726,7 +726,7 @@ fn requires_absolute_time(item: &ReadingItem) -> bool {
     item.device_time_ms.is_some()
         && matches!(
             item.time_source,
-            TimeSource::DeviceNtp | TimeSource::DeviceRtc | TimeSource::EdgeAdjusted
+            TimeSource::DeviceNtp | TimeSource::DeviceRtc | TimeSource::EdgeNodeAdjusted
         )
 }
 
@@ -742,7 +742,7 @@ fn restore_device_time(
             .ok()
             .and_then(|a| received_at.checked_sub(a))
         {
-            Some(dt) => (Some(dt), TimeSource::EdgeAdjusted),
+            Some(dt) => (Some(dt), TimeSource::EdgeNodeAdjusted),
             None => (None, declared),
         },
         (None, None) => (None, declared),
@@ -949,7 +949,7 @@ fn process_item(
     let row_quarantined = registry_quarantine.is_some() || device_quarantined;
     let wire_reason = registry_quarantine
         .or_else(|| device_quarantined.then_some(QuarantineReason::DeviceQuarantined));
-    // D1: RTCなしデバイスのage_ms → received_at - age_ms で復元(time_source=edge_adjusted)。
+    // D1: RTCなしデバイスのage_ms → received_at - age_ms で復元(time_source=edge_node_adjusted)。
     // item.device_time_msが既にあればそれが優先(申告時刻>復元時刻)。
     let (device_time_ms, time_source) = restore_device_time(
         context.received_at,
@@ -960,8 +960,8 @@ fn process_item(
     let time_source = match time_source {
         TimeSource::DeviceNtp => "device_ntp",
         TimeSource::DeviceRtc => "device_rtc",
-        TimeSource::Edge => "edge",
-        TimeSource::EdgeAdjusted => "edge_adjusted",
+        TimeSource::EdgeNode => "edge_node",
+        TimeSource::EdgeNodeAdjusted => "edge_node_adjusted",
     };
     let new = ts::NewReading {
         series_id,
@@ -1084,7 +1084,7 @@ mod tests {
                 series_variant: None,
                 values: vec![1.0],
                 device_time_ms: None,
-                time_source: TimeSource::Edge,
+                time_source: TimeSource::EdgeNode,
                 age_ms: None,
                 rssi: None,
                 battery_pct: None,
@@ -1463,10 +1463,10 @@ mod tests {
         let db = test_db();
         register_active(&db, "ble:activation-preview");
         db.with_conn_sync(|conn| {
-            iotkit_core_publish::activation::install_site_target(
+            iotkit_core_publish::activation::install_edge_target(
                 conn,
                 &iotkit_core_publish::store::TargetRow {
-                    target_id: "site".into(),
+                    target_id: "edge".into(),
                     endpoint_url: "mqtts://broker.example.test:8883".into(),
                     credential_token: String::new(),
                     archive_responsible: true,
@@ -1523,7 +1523,7 @@ mod tests {
             series_variant: None,
             values: vec![55.0],
             device_time_ms: None,
-            time_source: TimeSource::Edge,
+            time_source: TimeSource::EdgeNode,
             age_ms: None,
             rssi: None,
             battery_pct: None,
@@ -1693,13 +1693,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn age_ms_restores_edge_adjusted_device_time() {
+    async fn age_ms_restores_edge_node_adjusted_device_time() {
         let db = test_db();
         register_active(&db, "ble:aa");
         let (collector, _h) = Collector::spawn(db.clone(), Arc::new(PermissiveRegistry), 16);
         let mut e = env("e-age", "ble:aa", "temperature_c");
         e.envelope.items[0].age_ms = Some(5000);
-        e.envelope.items[0].time_source = TimeSource::Edge;
+        e.envelope.items[0].time_source = TimeSource::EdgeNode;
         e.envelope.items[0].device_time_ms = None;
         collector.submit(e).await.unwrap();
 
@@ -1712,9 +1712,9 @@ mod tests {
             ).unwrap())
         }).unwrap();
         assert_eq!(device_time, received_at - 5000);
-        assert_eq!(time_source, "edge_adjusted");
+        assert_eq!(time_source, "edge_node_adjusted");
         assert_eq!(event_time, received_at - 5000);
-        assert_eq!(event_time_source, "edge_adjusted");
+        assert_eq!(event_time_source, "edge_node_adjusted");
     }
 
     #[tokio::test]
@@ -1736,24 +1736,30 @@ mod tests {
 
     #[test]
     fn restore_device_time_ignores_unrepresentable_age_ms() {
-        let (device_time, source) =
-            restore_device_time(10_000, None, Some(i64::MAX as u64 + 1), TimeSource::Edge);
+        let (device_time, source) = restore_device_time(
+            10_000,
+            None,
+            Some(i64::MAX as u64 + 1),
+            TimeSource::EdgeNode,
+        );
         assert_eq!(device_time, None);
-        assert_eq!(source, TimeSource::Edge);
+        assert_eq!(source, TimeSource::EdgeNode);
     }
 
     #[test]
     fn restore_device_time_ignores_age_ms_that_would_underflow() {
-        let (device_time, source) = restore_device_time(i64::MIN, None, Some(1), TimeSource::Edge);
+        let (device_time, source) =
+            restore_device_time(i64::MIN, None, Some(1), TimeSource::EdgeNode);
         assert_eq!(device_time, None);
-        assert_eq!(source, TimeSource::Edge);
+        assert_eq!(source, TimeSource::EdgeNode);
     }
 
     #[test]
     fn restore_device_time_age_zero_returns_received_at() {
-        let (device_time, source) = restore_device_time(10_000, None, Some(0), TimeSource::Edge);
+        let (device_time, source) =
+            restore_device_time(10_000, None, Some(0), TimeSource::EdgeNode);
         assert_eq!(device_time, Some(10_000));
-        assert_eq!(source, TimeSource::EdgeAdjusted);
+        assert_eq!(source, TimeSource::EdgeNodeAdjusted);
     }
 
     #[test]
@@ -2240,8 +2246,8 @@ mod tests {
             iotkit_core_publish::store::target_insert(
                 conn,
                 &iotkit_core_publish::store::TargetRow {
-                    target_id: "site".into(),
-                    endpoint_url: "mqtt://site".into(),
+                    target_id: "edge".into(),
+                    endpoint_url: "mqtt://edge".into(),
                     credential_token: String::new(),
                     archive_responsible: true,
                     schema_version: 1,
@@ -2758,7 +2764,7 @@ mod tests {
             series_variant: None,
             values: vec![value],
             device_time_ms: None,
-            time_source: TimeSource::Edge,
+            time_source: TimeSource::EdgeNode,
             age_ms: None,
             rssi: None,
             battery_pct: None,

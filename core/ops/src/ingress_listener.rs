@@ -164,7 +164,7 @@ pub struct IngressListenerState {
     pub generation: u64,
     pub bind_addr: String,
     pub interface: String,
-    pub site_local_cidrs: Vec<String>,
+    pub local_ingress_cidrs: Vec<String>,
     pub mode: IngressListenerMode,
     pub tls_generation: Option<u64>,
     pub tls_fingerprint: Option<String>,
@@ -182,8 +182,8 @@ pub struct IngressListenerConfig {
 pub fn load_ingress_listener_config(conn: &Connection) -> Result<IngressListenerConfig, OpsError> {
     conn.query_row(
         "SELECT desired_generation, applied_generation, enabled, bind_addr, interface,
-                site_local_cidrs, mode, desired_tls_generation, desired_tls_fingerprint,
-                applied_bind_addr, applied_interface, applied_site_local_cidrs, applied_mode,
+                local_ingress_cidrs, mode, desired_tls_generation, desired_tls_fingerprint,
+                applied_bind_addr, applied_interface, applied_local_ingress_cidrs, applied_mode,
                 applied_tls_generation, applied_tls_fingerprint, last_error, last_action
          FROM ingress_listener_config WHERE id=1",
         [],
@@ -219,7 +219,7 @@ pub fn load_ingress_listener_config(conn: &Connection) -> Result<IngressListener
             generation: checked_generation(row.0)?,
             bind_addr: row.3,
             interface: row.4,
-            site_local_cidrs: parse_cidrs_json(&row.5)?,
+            local_ingress_cidrs: parse_cidrs_json(&row.5)?,
             mode: IngressListenerMode::parse(&row.6)?,
             tls_generation: row.7.map(checked_generation).transpose()?,
             tls_fingerprint: row.8,
@@ -235,7 +235,7 @@ pub fn load_ingress_listener_config(conn: &Connection) -> Result<IngressListener
                 interface: row
                     .10
                     .ok_or_else(|| OpsError::Validation("partial_applied_ingress_state".into()))?,
-                site_local_cidrs: parse_cidrs_json(&row.11.ok_or_else(|| {
+                local_ingress_cidrs: parse_cidrs_json(&row.11.ok_or_else(|| {
                     OpsError::Validation("partial_applied_ingress_state".into())
                 })?)?,
                 mode: IngressListenerMode::parse(&row.12.ok_or_else(|| {
@@ -312,7 +312,7 @@ pub fn mark_ingress_applied_in_transaction(
     let changed = tx.execute(
         "UPDATE ingress_listener_config SET applied_generation=desired_generation,
           applied_bind_addr=bind_addr, applied_interface=interface,
-          applied_site_local_cidrs=site_local_cidrs, applied_mode=mode,
+          applied_local_ingress_cidrs=local_ingress_cidrs, applied_mode=mode,
           applied_tls_generation=CASE WHEN ?2 IS NULL THEN NULL ELSE desired_tls_generation END,
           applied_tls_fingerprint=CASE WHEN ?2 IS NULL THEN NULL ELSE desired_tls_fingerprint END,
           last_error=NULL, last_action=CASE WHEN enabled THEN 'listening' ELSE 'disabled' END
@@ -332,7 +332,7 @@ pub fn mark_ingress_runtime_unbound(conn: &Connection, action: &str) -> Result<(
     }
     conn.execute(
         "UPDATE ingress_listener_config SET applied_generation=0,
-         applied_bind_addr=NULL,applied_interface=NULL,applied_site_local_cidrs=NULL,
+         applied_bind_addr=NULL,applied_interface=NULL,applied_local_ingress_cidrs=NULL,
          applied_mode=NULL,applied_tls_generation=NULL,applied_tls_fingerprint=NULL,
          last_action=?1 WHERE id=1",
         [action],
@@ -367,7 +367,7 @@ pub fn mark_ingress_apply_error(
     Ok(())
 }
 
-pub(crate) fn validate_site_config(
+pub(crate) fn validate_local_ingress_config(
     bind_addr: &str,
     interface: &str,
     cidrs: &[String],
@@ -400,7 +400,7 @@ pub(crate) fn validate_site_config(
         .map(|value| {
             value
                 .parse::<IpNet>()
-                .map_err(|_| crate::OpError::Validation("invalid_site_local_cidr".into()))
+                .map_err(|_| crate::OpError::Validation("invalid_local_ingress_cidr".into()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     if parsed.iter().any(|cidr| !private_network(cidr))

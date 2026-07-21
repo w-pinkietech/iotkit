@@ -1,8 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::{
-    ExposureSnapshot, ListenerConfig, ListenerMode, SiteCidr, TlsMaterial, ValidatedListenerConfig,
-    validate_peer,
+    ExposureSnapshot, ListenerConfig, ListenerMode, LocalIngressCidr, TlsMaterial,
+    ValidatedListenerConfig, validate_peer,
 };
 use rcgen::{CertificateParams, KeyPair};
 use rustls::pki_types::pem::PemObject;
@@ -13,7 +13,7 @@ fn private_config(bind: SocketAddr, cidr: &str, mode: ListenerMode) -> ListenerC
     ListenerConfig {
         bind,
         interface: "eth0".into(),
-        site_local_cidrs: vec![cidr.parse::<SiteCidr>().unwrap()],
+        local_ingress_cidrs: vec![cidr.parse::<LocalIngressCidr>().unwrap()],
         mode,
     }
 }
@@ -70,7 +70,7 @@ fn exposure_validation_rejects_public_wildcard_route_interface_and_cidr() {
             &default_route,
         )
         .is_ok(),
-        "a specific approved private bind remains site-confined when its interface owns the host default route"
+        "a specific approved private bind remains locally confined when its interface owns the host default route"
     );
 }
 

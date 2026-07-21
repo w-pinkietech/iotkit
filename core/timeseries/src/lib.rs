@@ -377,8 +377,8 @@ pub fn insert_reading_v3(
 }
 
 /// D7決定3: event_time導出。device_time採用はtime_sourceがデバイス由来
-/// (device_ntp/device_rtc)またはedge_adjusted(age_ms復元)のときのみ。
-/// time_source=edge(デバイス時刻なしの申告)はdevice_time_msがあっても信頼しない(矛盾入力)。
+/// (device_ntp/device_rtc)またはedge_node_adjusted(age_ms復元)のときのみ。
+/// time_source=edge_node(デバイス時刻なしの申告)はdevice_time_msがあっても信頼しない(矛盾入力)。
 fn derive_event_time(
     received_at_ms: i64,
     device_time_ms: Option<i64>,
@@ -386,7 +386,7 @@ fn derive_event_time(
 ) -> (i64, &'static str) {
     let label = match time_source {
         "device_ntp" | "device_rtc" => "device",
-        "edge_adjusted" => "edge_adjusted",
+        "edge_node_adjusted" => "edge_node_adjusted",
         _ => return (received_at_ms, "received_at"),
     };
     match device_time_ms {
@@ -843,7 +843,7 @@ mod v3_tests {
                 series_id,
                 received_at_ms: 1000,
                 device_time_ms: None,
-                time_source: "edge".into(),
+                time_source: "edge_node".into(),
                 values: vec![21.5],
                 rssi: None,
                 battery_pct: None,
@@ -902,7 +902,7 @@ mod v3_tests {
     }
 
     #[test]
-    fn event_time_edge_adjusted_source() {
+    fn event_time_edge_node_adjusted_source() {
         let db = v3_db();
         db.with_conn_sync(|conn| {
             let received_at = 10_000_000;
@@ -910,10 +910,10 @@ mod v3_tests {
                 conn,
                 received_at,
                 Some(received_at - 5000),
-                "edge_adjusted",
+                "edge_node_adjusted",
             );
             assert_eq!(event_time, received_at - 5000);
-            assert_eq!(source, "edge_adjusted");
+            assert_eq!(source, "edge_node_adjusted");
             Ok(())
         })
         .unwrap();
@@ -924,8 +924,12 @@ mod v3_tests {
         let db = v3_db();
         db.with_conn_sync(|conn| {
             let received_at = 10_000_000;
-            let (event_time, source) =
-                insert_and_read_event_time(conn, received_at, Some(received_at - 5000), "edge");
+            let (event_time, source) = insert_and_read_event_time(
+                conn,
+                received_at,
+                Some(received_at - 5000),
+                "edge_node",
+            );
             assert_eq!(event_time, received_at);
             assert_eq!(source, "received_at");
             Ok(())
@@ -974,7 +978,8 @@ mod v3_tests {
         let db = v3_db();
         db.with_conn_sync(|conn| {
             let received_at = 10_000_000;
-            let (event_time, source) = insert_and_read_event_time(conn, received_at, None, "edge");
+            let (event_time, source) =
+                insert_and_read_event_time(conn, received_at, None, "edge_node");
             assert_eq!(event_time, received_at);
             assert_eq!(source, "received_at");
             Ok(())
@@ -1372,10 +1377,10 @@ mod v3_tests {
             // introduced by later migrations and must not be used to seed old schemas.
             let series_id = seed_series_before_v8(conn);
             let rows = [
-                (1, 10_000_000, None, "edge"),
+                (1, 10_000_000, None, "edge_node"),
                 (2, 10_000_000, Some(9_990_000), "device_ntp"),
                 (3, 10_000_000, Some(10_300_001), "device_ntp"),
-                (4, 10_000_000, Some(9_995_000), "edge"),
+                (4, 10_000_000, Some(9_995_000), "edge_node"),
             ];
             for (seq, received_at, device_time, time_source) in rows {
                 conn.execute(

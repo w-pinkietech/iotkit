@@ -55,8 +55,8 @@ pub struct EntryRow {
     pub channel_roles: Vec<String>,
     pub physical_min: Option<f64>,
     pub physical_max: Option<f64>,
-    pub site_min: Option<f64>,
-    pub site_max: Option<f64>,
+    pub local_min: Option<f64>,
+    pub local_max: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,13 +91,13 @@ pub enum Resolution {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AliasKind {
     Rename,
-    SiteMapping,
+    LocationMapping,
 }
 impl AliasKind {
     fn as_db(&self) -> &'static str {
         match self {
             Self::Rename => "rename",
-            Self::SiteMapping => "site_mapping",
+            Self::LocationMapping => "location_mapping",
         }
     }
 }
@@ -220,14 +220,14 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> Result<EntryRow, rusqlite::Error> {
         channel_roles,
         physical_min: row.get(10)?,
         physical_max: row.get(11)?,
-        site_min: row.get(12)?,
-        site_max: row.get(13)?,
+        local_min: row.get(12)?,
+        local_max: row.get(13)?,
     })
 }
 
 const ENTRY_COLS: &str = "measurement_key, origin, catalog_version, entry_revision, unit_ucum, \
      unit_display, value_type, semantic_class, channel_mode, channel_roles_json, \
-     physical_min, physical_max, site_min, site_max";
+     physical_min, physical_max, local_min, local_max";
 
 pub fn get_entry(conn: &Connection, key: &str) -> Result<Option<EntryRow>, RegistryError> {
     conn.query_row(
@@ -285,7 +285,7 @@ pub fn enable_entry(
     conn.execute(
         "INSERT INTO registry_entries (measurement_key, origin, catalog_version, entry_revision,
             unit_ucum, unit_display, value_type, semantic_class, channel_mode, channel_roles_json,
-            physical_min, physical_max, site_min, site_max, enabled_at)
+            physical_min, physical_max, local_min, local_max, enabled_at)
          VALUES (?1, 'catalog', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, ?12)",
         params![
             entry.key,
@@ -348,7 +348,7 @@ pub fn define_custom_entry(
     conn.execute(
         "INSERT INTO registry_entries (measurement_key, origin, catalog_version, entry_revision,
             unit_ucum, unit_display, value_type, semantic_class, channel_mode, channel_roles_json,
-            physical_min, physical_max, site_min, site_max, enabled_at)
+            physical_min, physical_max, local_min, local_max, enabled_at)
          VALUES (?1, 'custom', NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11)",
         params![
             entry.key,
@@ -494,7 +494,7 @@ mod tests {
             assert_eq!(row.entry_revision, t.revision());
             assert_eq!(row.physical_min, Some(-200.0));
             assert_eq!(row.physical_max, Some(1372.0));
-            assert_eq!(row.site_min, None, "現場既定はWave 0では未設定");
+            assert_eq!(row.local_min, None, "現場既定はWave 0では未設定");
             // 監査イベント必須(D6決定4)
             let detail: String = conn
                 .query_row(
@@ -589,7 +589,7 @@ mod tests {
                 conn,
                 "custom.alias_temp",
                 "temperature_c",
-                AliasKind::SiteMapping,
+                AliasKind::LocationMapping,
             )
             .unwrap();
             assert!(matches!(
@@ -679,14 +679,20 @@ mod tests {
                 "auto",
             )
             .unwrap();
-            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+            define_alias(
+                conn,
+                "temp_old",
+                "temperature_c",
+                AliasKind::LocationMapping,
+            )
+            .unwrap();
             match find_resolution(conn, "temp_old").unwrap().unwrap() {
                 Resolution::Alias {
                     canonical,
                     alias_kind,
                 } => {
                     assert_eq!(canonical.measurement_key, "temperature_c");
-                    assert_eq!(alias_kind, "site_mapping");
+                    assert_eq!(alias_kind, "location_mapping");
                 }
                 other => panic!("expected Alias resolution, got {other:?}"),
             }
@@ -718,12 +724,18 @@ mod tests {
                     conn,
                     "temperature_c",
                     "temperature_c",
-                    AliasKind::SiteMapping
+                    AliasKind::LocationMapping
                 ),
                 Err(RegistryError::NamespaceCollision(_))
             ));
             // 逆方向: 既存aliasと同名のエントリ有効化 → 拒否(D6決定3の衝突検査)
-            define_alias(conn, "voltage_mv", "temperature_c", AliasKind::SiteMapping).unwrap();
+            define_alias(
+                conn,
+                "voltage_mv",
+                "temperature_c",
+                AliasKind::LocationMapping,
+            )
+            .unwrap();
             assert!(matches!(
                 enable_entry(
                     conn,
@@ -773,7 +785,13 @@ mod tests {
                 Some("unknown_key"),
             )
             .unwrap();
-            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+            define_alias(
+                conn,
+                "temp_old",
+                "temperature_c",
+                AliasKind::LocationMapping,
+            )
+            .unwrap();
             let meta = iotkit_core_ledger::find_series_meta(
                 conn,
                 &sid,
@@ -843,7 +861,13 @@ mod tests {
             )
             .unwrap();
 
-            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+            define_alias(
+                conn,
+                "temp_old",
+                "temperature_c",
+                AliasKind::LocationMapping,
+            )
+            .unwrap();
 
             let released = iotkit_core_ledger::find_series_meta(
                 conn,
@@ -934,7 +958,13 @@ mod tests {
             )
             .unwrap();
 
-            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+            define_alias(
+                conn,
+                "temp_old",
+                "temperature_c",
+                AliasKind::LocationMapping,
+            )
+            .unwrap();
 
             let released = iotkit_core_ledger::find_series_meta(
                 conn,

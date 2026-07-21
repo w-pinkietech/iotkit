@@ -1,8 +1,8 @@
 # Exit contract (R10)
 
 Status: Approved MQTT v1 target contract. The records/descriptors/accepted-through custody path is
-implemented. The Site activation extension is approved but not yet implemented. The older HTTPS
-publisher is retained only as transitional code and is not started by the Edge composition root.
+implemented. The Edge Node activation extension is approved but not yet implemented. The older HTTPS
+publisher is retained only as transitional code and is not started by the Edge Node composition root.
 
 This contract defines how canonical records leave one Edge Node and when that Edge Node may transfer
 custody. Application meaning such as production, OEE, process, alarm text, or YokaKit state is not
@@ -10,15 +10,15 @@ part of this contract.
 
 ## Roles
 
-- **Edge publisher** reads the durable outbox, publishes bounded batches, retries, and owns the
+- **Edge Node publisher** reads the durable outbox, publishes bounded batches, retries, and owns the
   local delivery cursor.
 - **MQTT Broker** transports QoS 1 messages. Its PUBACK confirms Broker receipt only.
-- **IoTKit Site** durably accepts canonical records, advances the contiguous accepted-through
+- **IoTKit Edge** durably accepts canonical records, advances the contiguous accepted-through
   cursor, then publishes the application custody acknowledgement. It also provides direct raw query
-  today and is the future site-local semantic and application export boundary. Semantic projection
+  today and is the Edge-scoped semantic and application export boundary. Semantic projection
   and exporter failure never weaken or roll back raw custody acceptance.
 - **Application consumer** such as YokaKit reads canonical records and maps them into its own domain.
-  Its business result does not authorize Edge purge.
+  Its business result does not authorize Edge Node purge.
 
 ## Topics
 
@@ -32,35 +32,35 @@ iotkit/v1/edge-nodes/{edge_node_id}/activation/result
 
 `records` and `accepted-through` use QoS 1 and MUST NOT be retained. `descriptors` uses QoS 1 and
 MUST be retained; it is a complete current-state replica, not a custody stream. `activation/request`
-and `activation/result` use QoS 1 and MUST NOT be retained. Site durably retries an activation
+and `activation/result` use QoS 1 and MUST NOT be retained. IoTKit Edge durably retries an activation
 request until the correlated application result is committed; MQTT PUBACK is never activation
 completion. ACLs restrict each Edge Node to publishing its own records/descriptors/activation result
 and subscribing to its own acknowledgement/activation request. Application-specific topics are
 outside R10.
 
-## Site activation and publication admission
+## Edge Node activation and publication admission
 
-Broker enrollment and Site activation are separate.
+Broker enrollment and Edge Node activation are separate.
 
 - **Broker enrollment** gives an Edge Node its connection profile, static credential, and exact
-  topic ACL. It is an installation operation on the Broker and Edge hosts.
-- **Site activation** is an authenticated Site Console operation that authorizes one exact
-  `(edge_node_id, ledger_epoch)` incarnation to begin a new Site custody stream.
+  topic ACL. It is an installation operation on the Broker and Edge Node hosts.
+- **Edge Node activation** is an authenticated IoTKit Console operation that authorizes one exact
+  `(edge_node_id, ledger_epoch)` incarnation to begin a new IoTKit Edge custody stream.
 
-A Broker-enrolled but inactive Edge publishes its descriptor and receives activation requests. It
+A Broker-enrolled but inactive Edge Node publishes its descriptor and receives activation requests. It
 MUST NOT publish records. It may durably keep normalized pre-activation readings for local
 commissioning preview, but MUST NOT assign them a `pub_seq` or insert any record family into the
 publication outbox. Those readings are not R10 canonical publication records and are never eligible
-for later replay to Site.
+for later replay to IoTKit Edge.
 
-An administrator activation transaction durably records `site_id`, a unique `activation_id`, the
+An administrator activation transaction durably records `edge_id`, a unique `activation_id`, the
 exact Edge Node and ledger epoch, actor audit, and a retryable command outbox before publishing:
 
 ```json
 {
   "schema_version": 1,
   "activation_id": "act-0123456789abcdef0123456789abcdef",
-  "site_id": "site-0123456789abcdef0123456789abcdef",
+  "edge_id": "edge-0123456789abcdef0123456789abcdef",
   "edge_node_id": "edge-node-01",
   "expected_ledger_epoch": "01J...",
   "grant_revision": 1,
@@ -68,19 +68,19 @@ exact Edge Node and ledger epoch, actor audit, and a retryable command outbox be
 }
 ```
 
-The Edge applies a request in the same SQLite write serialization used by collection. It validates
+The Edge Node applies a request in the same SQLite write serialization used by collection. It validates
 the exact identity and epoch, verifies that the publication log and its allocation sequence have
 never been used, freezes the pre-activation `readings.seq` boundary once, persists the activation
 receipt, and opens publication admission for future transactions. Every publication enqueue path,
 including measurement, annotation, epoch start, commissioning smoke, and later quarantine release,
 MUST use this durable admission gate. Replaying the same activation ID returns the same result and
-never recomputes the boundary. A different activation ID for an active Edge is rejected.
+never recomputes the boundary. A different activation ID for an active Edge Node is rejected.
 
 ```json
 {
   "schema_version": 1,
   "activation_id": "act-0123456789abcdef0123456789abcdef",
-  "site_id": "site-0123456789abcdef0123456789abcdef",
+  "edge_id": "edge-0123456789abcdef0123456789abcdef",
   "edge_node_id": "edge-node-01",
   "ledger_epoch": "01J...",
   "status": "applied",
@@ -91,42 +91,42 @@ never recomputes the boundary. A different activation ID for an active Edge is r
 ```
 
 The frozen prefix becomes immediately ineligible for normal query and publication. Physical row
-deletion is restartable, bounded Edge-local cleanup and is not an activation completion condition.
+deletion is restartable, bounded Edge Node-local cleanup and is not an activation completion condition.
 It never changes the boundary. `accepted-through` remains the only authority to advance or purge
 the post-activation official publication outbox.
 
-Site states are `discovered`, `activating`, `active`, and `recovery_hold`. It accepts records only
+IoTKit Edge states are `discovered`, `activating`, `active`, and `recovery_hold`. It accepts records only
 after committing the matching activation result and entering `active`. Activation state validation,
 exact epoch validation, raw insertion, fingerprint verification, and cursor advance belong to the
 same custody transaction. A record received before activation completion is stored nowhere and
-receives no acknowledgement; normal Edge replay converges after Site becomes active.
+receives no acknowledgement; normal Edge Node replay converges after IoTKit Edge becomes active.
 
 ## Descriptor snapshot
 
-The descriptor topic carries schema version 2 complete snapshots of Edge-owned device and signal
+The descriptor topic carries schema version 2 complete snapshots of Edge Node-owned device and signal
 metadata. Other descriptor schema versions are rejected; there is no pre-release schema 1
-compatibility path. Schema version 2 includes the optional device-level `model_id`. Edge publishes
+compatibility path. Schema version 2 includes the optional device-level `model_id`. Edge Node publishes
 after every MQTT connection and whenever the persisted descriptor revision changes. The encoded
 snapshot is limited to 1 MiB and is rejected rather than truncated.
 
 `model_id` is an opaque, stable software catalog identifier for an explicitly persisted device
 model. It is not a display label, device identity component, or semantic classification. It is
 absent for unknown and non-modelled devices. When present it is 1–64 ASCII bytes matching
-`[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*`. Site may display it but MUST NOT branch semantic mapping,
+`[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*`. IoTKit Edge may display it but MUST NOT branch semantic mapping,
 grouping, or authorization on its value.
 
 The snapshot also contains stable `system_id`/`series_key`, an optional non-authoritative display
 identifier, device state, measurement key, channel, variant, canonical unit, and value type. It
 never contains hardware/provider identifiers, adapter type or instance identifiers, physical
-locators, configured sources, credentials, or adapter payloads. Site validates the composite
+locators, configured sources, credentials, or adapter payloads. IoTKit Edge validates the composite
 series identity and durably replicates the snapshot. Lower revisions in one ledger epoch are
 ignored; equal revisions with different content are conflicts. Persisted model binding changes
 advance `descriptor_revision`, so different model content is never published under the same
 revision.
 
-A descriptor may discover an inactive Edge but never activates it. A descriptor failure never
+A descriptor may discover an inactive Edge Node but never activates it. A descriptor failure never
 authorizes purge, changes publication admission, or suppresses `accepted-through` for an already
-active Edge. Edge and Site are developed and deployed together against schema version 2; incompatible
+active Edge Node. Edge Node and IoTKit Edge are developed and deployed together against schema version 2; incompatible
 pre-release databases and retained descriptors are recreated instead of carrying compatibility
 code.
 
@@ -155,7 +155,7 @@ Requirements:
 - The initial publisher permits one application-unacknowledged batch at a time.
 - A newly activated stream starts at `pub_seq=1`; there is no implicit or fabricated prefix.
 
-`publication_id` is a deterministic correlation and replay identity. Site stores a fingerprint of
+`publication_id` is a deterministic correlation and replay identity. IoTKit Edge stores a fingerprint of
 the received record content. Receiving different content for an existing global record identity is
 a custody conflict; it is never last-write-wins.
 
@@ -203,7 +203,7 @@ an application table or MQTT topic.
 }
 ```
 
-This optional family proves the normal Edge outbox, MQTT, Site durable raw storage, and
+This optional family proves the normal Edge Node outbox, MQTT, IoTKit Edge durable raw storage, and
 `accepted-through` path without claiming that a physical sensor produced a measurement.
 `test_id` is a freshly generated 128-bit lowercase hexadecimal identifier prefixed with `smoke-`.
 The record bypasses device registration, measurement-registry, quarantine, and semantic projection;
@@ -213,7 +213,7 @@ every other raw record and has no special topic or acknowledgement.
 
 ## Application custody acknowledgement
 
-After storing a batch, Site publishes:
+After storing a batch, IoTKit Edge publishes:
 
 ```json
 {
@@ -225,9 +225,9 @@ After storing a batch, Site publishes:
 }
 ```
 
-For a valid batch, Site performs one custody transaction:
+For a valid batch, IoTKit Edge performs one custody transaction:
 
-1. Authenticate the Edge Node topic and validate active Site admission, version, identity, exact
+1. Authenticate the Edge Node topic and validate active IoTKit Edge admission, version, identity, exact
    activated epoch, bounds, and contiguous range.
 2. Insert or idempotently verify every raw canonical record.
 3. Advance that Edge Node and epoch's contiguous accepted-through cursor.
@@ -237,47 +237,47 @@ For a valid batch, Site performs one custody transaction:
 SQL failure, ENOSPC, corruption, cancellation before commit, a gap, or a content conflict MUST NOT
 produce an accepted-through acknowledgement. A lost acknowledgement causes a harmless exact replay.
 
-Edge validates schema version, topic/body Edge Node identity, epoch, publication ID, monotonicity,
+Edge Node validates schema version, topic/body Edge Node identity, epoch, publication ID, monotonicity,
 and that `accepted_through` does not exceed the published batch. Only then may it advance its target
 cursor. MQTT PUBACK never advances this cursor and never authorizes retention purge.
 
 ## Retry and outage behavior
 
-- Edge outbox is the retry authority and remains durable until application acknowledgement.
-- Site activation-command outbox and Edge activation receipt are the retry authorities for
+- Edge Node outbox is the retry authority and remains durable until application acknowledgement.
+- Edge Node activation-command outbox and Edge Node activation receipt are the retry authorities for
   activation. Broker session state is not.
 - Broker receipt may release MQTT protocol inflight state but not the application sending window.
-- While inactive, Edge continues bounded local commissioning collection without creating an R10
+- While inactive, Edge Node continues bounded local commissioning collection without creating an R10
   publication backlog.
-- If Site or the network is down, Edge continues local collection and retains unacknowledged rows.
-- On reconnect, Edge republishes the same batch until Site confirms the contiguous cursor.
-- Site exact replay verifies existing rows and republishes the already committed watermark.
+- If IoTKit Edge or the network is down, Edge Node continues local collection and retains unacknowledged rows.
+- On reconnect, Edge Node republishes the same batch until IoTKit Edge confirms the contiguous cursor.
+- IoTKit Edge exact replay verifies existing rows and republishes the already committed watermark.
 
 ## Authentication
 
 The first implementation uses MQTT over TLS on an operator-provided IP path, anonymous access
-disabled, and one static credential plus topic ACL per Edge Node. The path may be a site LAN, VPN,
+disabled, and one static credential plus topic ACL per Edge Node. The path may be a local network, VPN,
 private routed network, or another deployment-specific route; IoTKit requires no VPN product.
 Secrets are stored outside Git and never appear in argv, logs, Debug output, audit detail, or query
 output. D10 owns later authentication hardening.
 
-Edge configuration names the Broker and a credential file; the MQTT username is always the
+Edge Node configuration names the Broker and a credential file; the MQTT username is always the
 Edge Node's generated `edge_node_id`:
 
 ```toml
 [exit.mqtt]
 enabled = true
-host = "mqtt.site.example"
+host = "mqtt.edge.example"
 port = 8883
 password_file = "/run/secrets/iotkit-mqtt-password"
-# ca_file = "/etc/iotkit/site-ca.pem" # optional custom CA; otherwise system roots
+# ca_file = "/etc/iotkit/broker-ca.pem" # optional custom CA; otherwise system roots
 ```
 
 Plain MQTT requires `allow_insecure = true` and is only for local Docker testing.
 
 ## YokaKit boundary
 
-IoTKit publishes canonical observations. IoTKit Site is the future site-local boundary that maps
+IoTKit publishes canonical observations. IoTKit Edge is the Edge-scoped boundary that maps
 stored series to configured sensor meanings and outputs such as `production`. That mapping does not
 enter R10, and downstream business success is not a custody ack. YokaKit consumes the mapped signal
 and owns business masters and logic such as products, processes, production records, OEE, alarms,
@@ -285,8 +285,8 @@ UI, and notifications.
 
 ## Deferred
 
-The following are deferred: deactivation/reactivation, Site transfer, Edge Node ID reuse, clone
+The following are deferred: deactivation/reactivation, IoTKit Edge transfer, Edge Node ID reuse, clone
 detection, automatic adoption of an existing standalone outbox, same-epoch `stream_start_after`,
-terminal/gap repair protocol, multi-Edge fleet operations, generic Broker fan-out, legacy HTTPS
+terminal/gap repair protocol, multi-Edge Node fleet operations, generic Broker fan-out, legacy HTTPS
 migration, and alternative egress bindings. Ambiguous legacy or restored state enters
 `recovery_hold`; it is never auto-activated or remotely cleaned.
