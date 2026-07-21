@@ -197,7 +197,34 @@ deviceの正本台帳はEdge Nodeにあり、IoTKit Consoleの表示行を編集
 `system_id`を維持してhardwareだけを交換する。強制指定と確認なし実行を通常手順にしない。
 Edge Node descriptorがIoTKit Edgeへ届くと、retired状態と交換後の継続seriesがConsoleへ反映される。
 
-## 10. Manual IoTKit Edge update and rollback
+## 10. SQLiteからPostgreSQLへの停止移行
+
+移行中はIoTKit Edgeを停止し、Edge Nodeからの未ackデータはBroker/Edge Node側へ保持させる。
+SQLiteとPostgreSQLへの二重書込みや、失敗時の自動fallbackは行わない。移行先はIoTKitのtableを
+まだ持たない空databaseにする。
+
+PostgreSQL接続情報はmode `0600`のJSON fileへ保存し、command lineへDSNやpasswordを渡さない。
+
+```json
+{"dsn":"postgres://iotkit:REDACTED@postgres:5432/iotkit?sslmode=require"}
+```
+
+```bash
+install -m 600 /dev/null /run/iotkit/postgres.json
+# 対話可能なeditor等で上記JSONを書き、shell履歴へsecretを載せない。
+iotkit-edge storage migrate \
+  --from-sqlite /data/edge.db \
+  --to-postgres-config /run/iotkit/postgres.json \
+  --report /data/sqlite-to-postgres-report.json
+```
+
+成功したreportにはprofile、IoTKit Edge ID、schema version、全table件数、cursor vector、
+全rowの内容digest、`completed: true`が含まれる。reportはmode `0600`で新規作成される。
+完了後も元SQLite DBを削除せず、PostgreSQL profileで起動してConsole履歴、未配送outbox、
+Edge Node cursorの再収束を確認する。不一致または途中失敗時はPostgreSQL側を利用せず、
+空databaseを作り直してから再実行する。
+
+## 11. Manual IoTKit Edge update and rollback
 
 1. 上記の暗号化backupを作り、Consoleの最終backup表示を確認する。
 2. 現在のGit commit、Compose設定、IoTKit Edge image IDを記録する。credentialや秘密鍵はGitへ
