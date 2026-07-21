@@ -194,6 +194,7 @@ cargo fmt --all --check
 
 # Docker Mosquittoによる外部Output Adapter/PUBACK/再接続ゲート
 scripts/test-edge-output.sh
+IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
 
 # SQLite/PostgreSQL共通契約と短時間capacity回帰smoke
 scripts/test-edge-postgres.sh
@@ -205,9 +206,13 @@ scripts/test-edge-console-frontend.sh
 
 # Chromiumによるlogin、Edge Node登録、センサー設定、意味付け、外部出力、権限導線
 scripts/test-edge-console-e2e.sh
+IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-console-e2e.sh
 
 # 隣接するYokaKit checkoutとのconsumer contractゲート
 scripts/test-yokakit-consumer-contract.sh
+
+# v1のhost統合ゲート（新しいreport directoryを指定する）
+scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 ```
 
 IoTKit ConsoleはGoのserver-side renderingを維持し、ブラウザ動作だけを
@@ -215,8 +220,9 @@ IoTKit ConsoleはGoのserver-side renderingを維持し、ブラウザ動作だ�
 `iotkit-edge/openapi/edge-console-v1.yaml`から生成し、配布物にはesbuild済みの
 `static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要である。
 
-CI additionally checks the crate layer rules (`scripts/check-layers`) and runs
-all of the above on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml));
+CI checks the crate layer rules, Rust/Go unit tests, generated Console assets, and the embedded
+browser journey on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Docker、
+PostgreSQL、Broker障害を含む統合検証は`test-edge-host-release-gate.sh`でrelease前に一度実行する。
 `scripts/verify.sh` runs the fmt / layer-rule / test / clippy checks locally.
 
 ## Repository layout

@@ -1,8 +1,10 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+
+import { removeChromiumProfile } from "./profile-cleanup.mjs";
 
 const edgeNodeURL = process.env.IOTKIT_EDGE_E2E_URL;
 const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
@@ -449,10 +451,21 @@ try {
     `processed and raw history CSV boundary failed: ${JSON.stringify(csvResult)}`,
   );
   await devtools.navigate(`${edgeNodeURL}/system`, "/system");
+  const storageState = await devtools.evaluate(`(() => ({
+    body: document.body.textContent,
+    meter: Boolean(document.querySelector(".storage-meter progress")),
+  }))()`);
+  const postgresStorage = process.env.IOTKIT_TEST_STORAGE_PROFILE === "postgres";
   assert(
-    await devtools.evaluate(
-      `document.body.textContent.includes("保存データの状態") && document.body.textContent.includes("raw受信データ") && document.body.textContent.includes("確認が必要なこと") && document.body.textContent.includes("rawの自動削除は無効") && Boolean(document.querySelector(".storage-meter progress"))`,
-    ),
+    storageState.body.includes("保存データの状態") &&
+      storageState.body.includes("raw受信データ") &&
+      storageState.body.includes("確認が必要なこと") &&
+      storageState.body.includes("rawの自動削除は無効") &&
+      (postgresStorage
+        ? storageState.body.includes("PostgreSQL") &&
+          storageState.body.includes("hostの空き容量は取得できません") &&
+          !storageState.meter
+        : storageState.meter),
     "Edge storage facts are not visible in the Console",
   );
   await devtools.navigate(`${edgeNodeURL}/output`, "/output");
@@ -496,5 +509,5 @@ try {
     browser.once("exit", resolve);
     setTimeout(resolve, 2_000);
   });
-  await rm(profile, { recursive: true, force: true });
+  await removeChromiumProfile(profile);
 }

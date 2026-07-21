@@ -3,6 +3,15 @@
 This is the operator entry point for one IoTKit Edge deployment. IoTKit does not
 configure routers, DNS, IP address allocation, firewalls, or VPNs.
 
+Release候補を現場へ持ち込む前に、既存DBやcredentialを使わないhost統合ゲートを新しいreport
+directoryへ実行する。これはPostgreSQL構成のクリーン導入、Console操作、疑似Edge Node 2台、
+意味付け、外部MQTT、再起動・通信断、暗号化backup/restore、証明書rollback、両storage profileの
+capacity回帰smokeを通す。実BravePI、対象hardwareでのcapacity測定、Windows+Caddy操作確認の代替ではない。
+
+```bash
+scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
+```
+
 ## 1. Install
 
 1. Give every Edge Node a different `edge_node_id` and export its `mqtt-binding`.

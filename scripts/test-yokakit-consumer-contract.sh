@@ -2,7 +2,13 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-yokakit_root=${YOKAKIT_REPO:-"$repo_root/../yokakit-redesign"}
+if [[ -n "${YOKAKIT_REPO:-}" ]]; then
+  yokakit_root=$YOKAKIT_REPO
+else
+  git_common_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
+  main_checkout=$(dirname "$git_common_dir")
+  yokakit_root="$(dirname "$main_checkout")/yokakit-redesign"
+fi
 iotkit_fixture="$repo_root/testdata/output/v1/yokakit-production.json"
 yokakit_fixture="$yokakit_root/testdata/mqtt/iotkit-yokakit-production.json"
 

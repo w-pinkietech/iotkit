@@ -452,6 +452,13 @@ func TestOpenConfiguredStoreUsesEmbeddedProfileWithoutPostgresConfiguration(t *t
 	defer archive.Close()
 }
 
+func TestQueryAcceptsPostgresStorageProfile(t *testing.T) {
+	err := run([]string{"query", "--storage-profile", "postgres"})
+	if err == nil || !strings.Contains(err.Error(), "--postgres-config is required") {
+		t.Fatalf("query postgres configuration error = %v", err)
+	}
+}
+
 func TestExpectedStorageProfileFailsClosedOnDeploymentMismatch(t *testing.T) {
 	t.Setenv("IOTKIT_EXPECTED_STORAGE_PROFILE", "postgres")
 	if err := validateExpectedStorageProfile(store.ProfileEmbedded); err == nil ||

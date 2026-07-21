@@ -23,7 +23,7 @@ func TestConsoleOperatorJourneyInBrowser(t *testing.T) {
 		t.Skip("set IOTKIT_RUN_BROWSER_E2E=1 to run the Chromium journey")
 	}
 
-	archive, err := store.Open(filepath.Join(t.TempDir(), "edge.db"))
+	archive, err := openBrowserE2EStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +68,17 @@ func TestConsoleOperatorJourneyInBrowser(t *testing.T) {
 		t.Fatalf("browser journey failed: %v\n%s", err, strings.TrimSpace(string(output)))
 	}
 	t.Log(strings.TrimSpace(string(output)))
+}
+
+func openBrowserE2EStore(t *testing.T) (*store.Store, error) {
+	t.Helper()
+	if postgresDSN := os.Getenv("IOTKIT_TEST_CONSOLE_POSTGRES_DSN"); postgresDSN != "" {
+		return store.OpenWithOptions(store.OpenOptions{
+			Profile:     store.ProfilePostgres,
+			PostgresDSN: postgresDSN,
+		})
+	}
+	return store.Open(filepath.Join(t.TempDir(), "edge.db"))
 }
 
 func seedBrowserAccount(

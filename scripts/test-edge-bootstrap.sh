@@ -12,9 +12,16 @@ output="$scratch/edge-install"
 project="iotkit-edge-bootstrap-test-$$"
 port=$((20000 + $$ % 20000))
 edge_port=$((port + 1))
+postgres_port=$((port + 2))
+storage_profile=${IOTKIT_TEST_STORAGE_PROFILE:-embedded}
+[[ "$storage_profile" == "embedded" || "$storage_profile" == "postgres" ]] || {
+  echo "IOTKIT_TEST_STORAGE_PROFILE must be embedded or postgres" >&2
+  exit 1
+}
 edge_pid=""
 edge2_pid=""
 compose_started=false
+compose=()
 repo_test_parent=$(mktemp -d "$repo_root/.bootstrap-repo-test.XXXXXX")
 repo_symlink_output="$repo_test_parent/symlink-output"
 
@@ -28,8 +35,7 @@ cleanup() {
     wait "$edge2_pid" 2>/dev/null || true
   fi
   if [[ "$compose_started" == true ]]; then
-    docker compose --env-file "$output/edge.env" -p "$project" \
-      -f "$repo_root/deploy/compose.edge.yaml" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
   rm -rf "$repo_test_parent"
   rm -rf "$scratch"
@@ -177,12 +183,19 @@ fi
   --broker-bind 127.0.0.1 \
   --broker-port "$port" \
   --edge-https-port "$edge_port" \
+  --storage-profile "$storage_profile" \
+  --postgres-port "$postgres_port" \
   --tls-cert "$scratch/server.pem" \
   --tls-key "$scratch/server.key" \
   --tls-ca "$scratch/ca.pem" \
   --edge-publish-topic iotkit/v1/application/production-pulses >/dev/null
 project=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$output/edge.env")
 [[ -n "$project" ]] || { echo "bootstrap did not assign a Compose project" >&2; exit 1; }
+compose=(docker compose --env-file "$output/edge.env" -p "$project"
+  -f "$repo_root/deploy/compose.edge.yaml")
+if [[ "$storage_profile" == "postgres" ]]; then
+  compose+=(-f "$repo_root/deploy/compose.edge-postgres.yaml")
+fi
 
 edge_env_before=$(sha256sum "$output/edge.env")
 if "$repo_root/scripts/bootstrap-edge.sh" \
@@ -251,8 +264,9 @@ grep -Fq 'allow_anonymous false' "$output/mosquitto/mosquitto.conf"
 grep -Fq 'listener 8883 0.0.0.0' "$output/mosquitto/mosquitto.conf"
 grep -Fq "IOTKIT_BROKER_BIND=127.0.0.1" "$output/edge.env"
 grep -Fq "IOTKIT_BROKER_PORT=$port" "$output/edge.env"
-grep -Fxq 'IOTKIT_STORAGE_PROFILE=embedded' "$output/edge.env"
-jq -e '.profile == "embedded"' "$output/storage-profile.json" >/dev/null
+grep -Fxq "IOTKIT_STORAGE_PROFILE=$storage_profile" "$output/edge.env"
+jq -e --arg profile "$storage_profile" '.profile == $profile' \
+  "$output/storage-profile.json" >/dev/null
 edge_id=$(sed -n 's/^IOTKIT_EDGE_ID=//p' "$output/edge.env")
 [[ "$edge_id" =~ ^edge-[0-9a-f]{32}$ ]] || {
   echo "bootstrap did not assign a valid Edge ID: $edge_id" >&2
@@ -283,46 +297,51 @@ grep -Fq 'allow_insecure' "$output/edge-handoff/edge-mqtt.toml" && {
 }
 grep -Fxq 'trust_mode = "bundle_only"' "$output/edge-handoff/edge-mqtt.toml"
 
-edge_password=$(<"$output/secrets/edge-archive-mqtt-password")
+archive_password=$(<"$output/secrets/edge-archive-mqtt-password")
 output_password=$(<"$output/secrets/output-mqtt-password")
-edge_password=$(<"$output/edge-handoff/mqtt-password")
+node_password=$(<"$output/edge-handoff/mqtt-password")
 for public_file in \
   "$output/edge.env" "$output/mosquitto/mosquitto.conf" "$output/mosquitto/acl" \
   "$output/edge-handoff/edge-mqtt.toml"; do
-  if grep -Fq "$edge_password" "$public_file" || grep -Fq "$output_password" "$public_file" \
-    || grep -Fq "$edge_password" "$public_file"; then
+  if grep -Fq "$archive_password" "$public_file" \
+    || grep -Fq "$output_password" "$public_file" \
+    || grep -Fq "$node_password" "$public_file"; then
     echo "plaintext credential leaked into generated config: $public_file" >&2
     exit 1
   fi
 done
-if grep -Fq "$edge_password" "$output/mosquitto/passwords" \
+if grep -Fq "$archive_password" "$output/mosquitto/passwords" \
   || grep -Fq "$output_password" "$output/mosquitto/passwords" \
-  || grep -Fq "$edge_password" "$output/mosquitto/passwords"; then
+  || grep -Fq "$node_password" "$output/mosquitto/passwords"; then
   echo "Mosquitto password database was not hashed" >&2
   exit 1
 fi
 
-docker compose --env-file "$output/edge.env" -p "$project" \
-  -f "$repo_root/deploy/compose.edge.yaml" config >"$scratch/compose.rendered"
+"${compose[@]}" config >"$scratch/compose.rendered"
 grep -Fq 'image: eclipse-mosquitto:2.0.22' "$scratch/compose.rendered"
 grep -Fq 'no-new-privileges:true' "$scratch/compose.rendered"
 grep -Fq '/run/iotkit-tmp:mode=0700' "$scratch/compose.rendered"
 grep -Fq 'pids_limit: 128' "$scratch/compose.rendered"
 grep -Eq 'mem_limit: ("?268435456"?|256m)' "$scratch/compose.rendered"
 grep -A2 -F 'cap_drop:' "$scratch/compose.rendered" | grep -Fq 'ALL'
-if grep -Fq "$edge_password" "$scratch/compose.rendered" \
+if grep -Fq "$archive_password" "$scratch/compose.rendered" \
   || grep -Fq "$output_password" "$scratch/compose.rendered" \
-  || grep -Fq "$edge_password" "$scratch/compose.rendered"; then
+  || grep -Fq "$node_password" "$scratch/compose.rendered"; then
   echo "plaintext credential leaked into rendered Compose config" >&2
   exit 1
 fi
 
-docker compose --env-file "$output/edge.env" -p "$project" \
-  -f "$repo_root/deploy/compose.edge.yaml" up --build --detach
+"${compose[@]}" up --build --detach
 compose_started=true
 for _ in $(seq 1 60); do
-  stored_edge_id=$(sqlite3 "$output/data/edge/edge.db" \
-    "SELECT edge_id FROM edge_meta WHERE singleton=1" 2>/dev/null || true)
+  if [[ "$storage_profile" == "postgres" ]]; then
+    stored_edge_id=$("${compose[@]}" exec -T postgres \
+      psql --username iotkit --dbname iotkit --tuples-only --no-align \
+      --command 'SELECT edge_id FROM edge_meta WHERE singleton=1' 2>/dev/null || true)
+  else
+    stored_edge_id=$(sqlite3 "$output/data/edge/edge.db" \
+      "SELECT edge_id FROM edge_meta WHERE singleton=1" 2>/dev/null || true)
+  fi
   [[ -n "$stored_edge_id" ]] && break
   sleep 1
 done
@@ -333,10 +352,16 @@ done
 
 openssl rand -base64 24 >"$scratch/admin-password"
 chmod 600 "$scratch/admin-password"
-if ! docker compose --env-file "$output/edge.env" -p "$project" \
-  -f "$repo_root/deploy/compose.edge.yaml" run --rm \
+storage_args=(--storage-profile "$storage_profile"
+  --storage-metadata /run/iotkit/storage-profile.json)
+if [[ "$storage_profile" == "postgres" ]]; then
+  storage_args+=(--postgres-config /run/iotkit/postgres.json)
+else
+  storage_args+=(--db /data/edge.db)
+fi
+if ! "${compose[@]}" run --rm \
   -v "$scratch/admin-password:/run/iotkit/admin-password:ro" \
-  edge account bootstrap --db /data/edge.db --login-id admin \
+  edge account bootstrap "${storage_args[@]}" --login-id admin \
   --display-name '試験管理者' --password-file /run/iotkit/admin-password \
   >"$scratch/account-bootstrap.stdout" 2>"$scratch/account-bootstrap.stderr"; then
   sed -n '1,120p' "$scratch/account-bootstrap.stderr" >&2
@@ -356,10 +381,8 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ "${login_code:-}" == 201 ]] || {
-  docker compose --env-file "$output/edge.env" -p "$project" \
-    -f "$repo_root/deploy/compose.edge.yaml" ps --all || true
-  docker compose --env-file "$output/edge.env" -p "$project" \
-    -f "$repo_root/deploy/compose.edge.yaml" logs caddy edge broker || true
+  "${compose[@]}" ps --all || true
+  "${compose[@]}" logs caddy edge broker postgres || true
   echo "Caddy HTTPS Edge login failed: ${login_code:-no response}" >&2
   exit 1
 }
@@ -474,8 +497,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ "$edges_discovered" == true ]] || {
-  docker compose --env-file "$output/edge.env" -p "$project" \
-    -f "$repo_root/deploy/compose.edge.yaml" logs broker edge
+  "${compose[@]}" logs broker edge
   echo "fresh Edges were not discovered as unregistered" >&2
   exit 1
 }
@@ -513,8 +535,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ "$edges_active" == true ]] || {
-  docker compose --env-file "$output/edge.env" -p "$project" \
-    -f "$repo_root/deploy/compose.edge.yaml" logs broker edge
+  "${compose[@]}" logs broker edge
   sed -n '1,200p' "$scratch/edge.log"
   sed -n '1,200p' "$scratch/edge2.log"
   echo "Edge Node activation did not converge" >&2
@@ -530,8 +551,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -n "$smoke_output" ]] || {
-  docker compose --env-file "$output/edge.env" -p "$project" \
-    -f "$repo_root/deploy/compose.edge.yaml" logs broker edge
+  "${compose[@]}" logs broker edge
   sed -n '1,200p' "$scratch/edge.log"
   echo "TLS commissioning smoke could not be enqueued" >&2
   exit 1
@@ -562,9 +582,8 @@ for _ in $(seq 1 60); do
     --ledger-epoch "$smoke_epoch" --pub-seq "$smoke_pub_seq" 2>/dev/null || true)
   status_output2=$("$cargo_target_dir/debug/iotkit-edge-nodectl" --db "$scratch/edge2.db" smoke status \
     --ledger-epoch "$smoke_epoch2" --pub-seq "$smoke_pub_seq2" 2>/dev/null || true)
-  query_output=$(docker compose --env-file "$output/edge.env" -p "$project" \
-    -f "$repo_root/deploy/compose.edge.yaml" exec -T edge \
-    iotkit-edge query --db /data/edge.db --limit 10 2>/dev/null || true)
+  query_output=$("${compose[@]}" exec -T edge \
+    iotkit-edge query "${storage_args[@]}" --limit 10 2>/dev/null || true)
   if jq -e '.status == "delivered"' <<<"$status_output" >/dev/null 2>&1 \
     && jq -e '.status == "delivered"' <<<"$status_output2" >/dev/null 2>&1 \
     && grep -Fq "$smoke_test_id" <<<"$query_output" \
@@ -575,8 +594,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ "$delivered" == true ]] || {
-  docker compose --env-file "$output/edge.env" -p "$project" \
-    -f "$repo_root/deploy/compose.edge.yaml" logs broker edge
+  "${compose[@]}" logs broker edge
   sed -n '1,200p' "$scratch/edge.log"
   echo "TLS commissioning smoke did not reach Edge custody" >&2
   exit 1
@@ -588,4 +606,4 @@ edge_pid=""
 kill -INT "$edge2_pid"
 wait "$edge2_pid"
 edge2_pid=""
-echo "Production Edge bootstrap TLS slice: OK"
+echo "Production Edge bootstrap TLS slice ($storage_profile): OK"
