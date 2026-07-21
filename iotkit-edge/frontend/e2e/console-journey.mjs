@@ -1,8 +1,10 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+
+import { removeChromiumProfile } from "./profile-cleanup.mjs";
 
 const edgeNodeURL = process.env.IOTKIT_EDGE_E2E_URL;
 const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
@@ -507,5 +509,5 @@ try {
     browser.once("exit", resolve);
     setTimeout(resolve, 2_000);
   });
-  await rm(profile, { recursive: true, force: true });
+  await removeChromiumProfile(profile);
 }
