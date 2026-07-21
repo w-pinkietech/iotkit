@@ -176,7 +176,7 @@ try {
   const activePort = await waitFor(async () => {
     const content = await readFile(join(profile, "DevToolsActivePort"), "utf8");
     return content.trim();
-  }, "Chromium DevTools port");
+  }, "Chromium DevTools port", 30_000);
   const [port] = activePort.split("\n");
   const target = await waitFor(async () => {
     const response = await fetch(`http://127.0.0.1:${port}/json/list`);

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 )
 
@@ -34,9 +35,42 @@ type AcceptedThrough struct {
 }
 
 type recordHeader struct {
+	Family        string `json:"family"`
 	SchemaVersion uint32 `json:"schema_version"`
 	Epoch         string `json:"epoch"`
 	PubSeq        int64  `json:"pub_seq"`
+}
+
+type measurementRecord struct {
+	Family          string          `json:"family"`
+	SchemaVersion   uint32          `json:"schema_version"`
+	Epoch           string          `json:"epoch"`
+	PubSeq          int64           `json:"pub_seq"`
+	SeriesKey       string          `json:"series_key"`
+	Values          []float64       `json:"values"`
+	EventTime       *int64          `json:"event_time"`
+	EventTimeSource string          `json:"event_time_source"`
+	TimeSource      string          `json:"time_source"`
+	TimeQuality     string          `json:"time_quality"`
+	ReceivedAt      *int64          `json:"received_at"`
+	DeviceTime      json.RawMessage `json:"device_time"`
+}
+
+type annotationRecord struct {
+	Family        string `json:"family"`
+	SchemaVersion uint32 `json:"schema_version"`
+	Epoch         string `json:"epoch"`
+	PubSeq        int64  `json:"pub_seq"`
+	Subtype       string `json:"subtype"`
+	PriorEpoch    string `json:"prior_epoch"`
+}
+
+type commissioningSmokeRecord struct {
+	Family        string `json:"family"`
+	SchemaVersion uint32 `json:"schema_version"`
+	Epoch         string `json:"epoch"`
+	PubSeq        int64  `json:"pub_seq"`
+	TestID        string `json:"test_id"`
 }
 
 func DecodeBatch(payload []byte) (RecordBatch, error) {
@@ -107,6 +141,14 @@ func (batch RecordBatch) Validate() error {
 		if header.PubSeq != batch.CursorStart+int64(index) {
 			return invalid("record pub_seq is not contiguous")
 		}
+		switch header.Family {
+		case "measurement", "annotation", "commissioning_smoke":
+		default:
+			return invalid("record family is unsupported")
+		}
+		if err := validateRecordFamily(raw, header.Family); err != nil {
+			return invalid(fmt.Sprintf("record %d: %v", index, err))
+		}
 	}
 	encoded, err := json.Marshal(batch)
 	if err != nil {
@@ -116,6 +158,105 @@ func (batch RecordBatch) Validate() error {
 		return invalid("batch exceeds encoded byte limit")
 	}
 	return nil
+}
+
+func validateRecordFamily(raw json.RawMessage, family string) error {
+	switch family {
+	case "measurement":
+		var record measurementRecord
+		if err := decodeOneStrict(raw, &record); err != nil {
+			return fmt.Errorf("measurement: %w", err)
+		}
+		if record.SeriesKey == "" || len(record.Values) == 0 || len(record.DeviceTime) == 0 ||
+			record.EventTime == nil || record.ReceivedAt == nil {
+			return errors.New("measurement fields are missing")
+		}
+		for _, value := range record.Values {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return errors.New("measurement values must be finite")
+			}
+		}
+		deviceTime, err := decodeNullableInt64(record.DeviceTime)
+		if err != nil {
+			return errors.New("measurement device_time must be an integer or null")
+		}
+		if !oneOf(record.TimeSource, "device_ntp", "device_rtc", "edge_node", "edge_node_adjusted") {
+			return errors.New("measurement time_source is invalid")
+		}
+		if !oneOf(record.TimeQuality, "synced", "holdover", "unsynced") {
+			return errors.New("measurement time_quality is invalid")
+		}
+		switch record.EventTimeSource {
+		case "received_at":
+			if *record.EventTime != *record.ReceivedAt {
+				return errors.New("measurement received_at event_time is inconsistent")
+			}
+		case "device":
+			if !oneOf(record.TimeSource, "device_ntp", "device_rtc") ||
+				deviceTime == nil || *record.EventTime != *deviceTime {
+				return errors.New("measurement device event_time is inconsistent")
+			}
+		case "edge_node_adjusted":
+			if record.TimeSource != "edge_node_adjusted" ||
+				deviceTime == nil || *record.EventTime != *deviceTime {
+				return errors.New("measurement adjusted event_time is inconsistent")
+			}
+		default:
+			return errors.New("measurement event_time_source is invalid")
+		}
+	case "annotation":
+		var record annotationRecord
+		if err := decodeOneStrict(raw, &record); err != nil {
+			return fmt.Errorf("annotation: %w", err)
+		}
+		if record.Subtype != "epoch_start" || record.PriorEpoch == "" {
+			return errors.New("annotation must be epoch_start with prior_epoch")
+		}
+	case "commissioning_smoke":
+		var record commissioningSmokeRecord
+		if err := decodeOneStrict(raw, &record); err != nil {
+			return fmt.Errorf("commissioning_smoke: %w", err)
+		}
+		if !validCommissioningSmokeTestID(record.TestID) {
+			return errors.New("commissioning_smoke test_id is invalid")
+		}
+	default:
+		return errors.New("record family is unsupported")
+	}
+	return nil
+}
+
+func decodeNullableInt64(raw json.RawMessage) (*int64, error) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+	var value int64
+	if err := decodeOne(raw, &value); err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
+func oneOf(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func validCommissioningSmokeTestID(testID string) bool {
+	const prefix = "smoke-"
+	if !strings.HasPrefix(testID, prefix) || len(testID) != len(prefix)+32 {
+		return false
+	}
+	for _, character := range testID[len(prefix):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (ack AcceptedThrough) Validate() error {

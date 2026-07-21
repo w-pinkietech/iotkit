@@ -172,14 +172,21 @@ func TestDescriptorFailureDoesNotPreventLaterRecordCustody(t *testing.T) {
 	}
 }
 
-func payloadWithMarker(t *testing.T, marker string) []byte {
+func payloadWithValue(t *testing.T, value float64) []byte {
 	t.Helper()
 	record, err := json.Marshal(map[string]any{
-		"family":         "measurement",
-		"schema_version": 1,
-		"epoch":          "epoch-01",
-		"pub_seq":        1,
-		"marker":         marker,
+		"family":            "measurement",
+		"schema_version":    1,
+		"epoch":             "epoch-01",
+		"pub_seq":           1,
+		"series_key":        "series-temperature-01",
+		"values":            []float64{value},
+		"event_time":        1_000,
+		"event_time_source": "received_at",
+		"time_source":       "edge_node",
+		"time_quality":      "unsynced",
+		"received_at":       1_000,
+		"device_time":       nil,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +208,7 @@ func payloadWithMarker(t *testing.T, marker string) []byte {
 
 func validPayload(t *testing.T) []byte {
 	t.Helper()
-	return payloadWithMarker(t, "original")
+	return payloadWithValue(t, 1)
 }
 
 func activateRealStore(t *testing.T, archive *edgestore.Store) {
@@ -317,7 +324,7 @@ func TestProcessDoesNotPublishForRealStoreConflict(t *testing.T) {
 	if err := processor.Process(
 		context.Background(),
 		topic,
-		payloadWithMarker(t, "original"),
+		payloadWithValue(t, 1),
 		publish,
 	); err != nil {
 		t.Fatal(err)
@@ -325,7 +332,7 @@ func TestProcessDoesNotPublishForRealStoreConflict(t *testing.T) {
 	if err := processor.Process(
 		context.Background(),
 		topic,
-		payloadWithMarker(t, "changed"),
+		payloadWithValue(t, 2),
 		publish,
 	); !errors.Is(err, edgestore.ErrConflict) {
 		t.Fatalf("conflicting Process error = %v, want ErrConflict", err)
@@ -337,8 +344,37 @@ func TestProcessDoesNotPublishForRealStoreConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || !bytes.Contains(records[0].Record, []byte(`"marker":"original"`)) {
+	if len(records) != 1 || !bytes.Contains(records[0].Record, []byte(`"values":[1]`)) {
 		t.Fatalf("stored record changed after conflict: %+v", records)
+	}
+}
+
+func TestProcessRejectsInvalidRecordFamilyWithoutStoreOrAck(t *testing.T) {
+	store := &fakeStore{}
+	payload := bytes.Replace(
+		validPayload(t),
+		[]byte(`"family":"measurement"`),
+		[]byte(`"family":"future_family"`),
+		1,
+	)
+	published := false
+	err := (Processor{Store: store}).Process(
+		context.Background(),
+		"iotkit/v1/edge-nodes/edge-node-01/records",
+		payload,
+		func(string, []byte) error {
+			published = true
+			return nil
+		},
+	)
+	if err == nil {
+		t.Fatal("invalid record family was accepted")
+	}
+	if len(store.batches) != 0 {
+		t.Fatalf("store called for invalid record family: %+v", store.batches)
+	}
+	if published {
+		t.Fatal("ack published for invalid record family")
 	}
 }
 

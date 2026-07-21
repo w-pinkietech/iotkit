@@ -1,0 +1,109 @@
+{
+  "cases": [
+    {
+      "name": "measurement received at",
+      "valid": true,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[21.5],"event_time":1000,"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement device time",
+      "valid": true,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[21.5],"event_time":900,"event_time_source":"device","time_source":"device_ntp","time_quality":"synced","received_at":1000,"device_time":900}
+    },
+    {
+      "name": "measurement adjusted device time",
+      "valid": true,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[21.5],"event_time":950,"event_time_source":"edge_node_adjusted","time_source":"edge_node_adjusted","time_quality":"holdover","received_at":1000,"device_time":950}
+    },
+    {
+      "name": "epoch start annotation",
+      "valid": true,
+      "record": {"family":"annotation","schema_version":1,"epoch":"epoch-01","pub_seq":1,"subtype":"epoch_start","prior_epoch":"epoch-00"}
+    },
+    {
+      "name": "commissioning smoke",
+      "valid": true,
+      "record": {"family":"commissioning_smoke","schema_version":1,"epoch":"epoch-01","pub_seq":1,"test_id":"smoke-0123456789abcdef0123456789abcdef"}
+    },
+    {
+      "name": "unknown family",
+      "valid": false,
+      "record": {"family":"future_family","schema_version":1,"epoch":"epoch-01","pub_seq":1}
+    },
+    {
+      "name": "measurement missing series key",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"values":[1],"event_time":1000,"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement empty values",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[],"event_time":1000,"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement missing device time field",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":1000,"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","received_at":1000}
+    },
+    {
+      "name": "measurement invalid device time type",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":1000,"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","received_at":1000,"device_time":"900"}
+    },
+    {
+      "name": "measurement missing event and received times",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","device_time":null}
+    },
+    {
+      "name": "measurement device event missing received time",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":900,"event_time_source":"device","time_source":"device_ntp","time_quality":"synced","device_time":900}
+    },
+    {
+      "name": "measurement unknown event time source",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":1000,"event_time_source":"device_clock","time_source":"edge_node","time_quality":"unsynced","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement legacy time source",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":1000,"event_time_source":"received_at","time_source":"gateway","time_quality":"unsynced","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement unknown time quality",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":1000,"event_time_source":"received_at","time_source":"edge_node","time_quality":"excellent","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement device event without device time",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":900,"event_time_source":"device","time_source":"device_ntp","time_quality":"synced","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement received event mismatch",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":900,"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","received_at":1000,"device_time":null}
+    },
+    {
+      "name": "measurement unknown field",
+      "valid": false,
+      "record": {"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-01","values":[1],"event_time":1000,"event_time_source":"received_at","time_source":"edge_node","time_quality":"unsynced","received_at":1000,"device_time":null,"unexpected":true}
+    },
+    {
+      "name": "annotation unknown subtype",
+      "valid": false,
+      "record": {"family":"annotation","schema_version":1,"epoch":"epoch-01","pub_seq":1,"subtype":"future_annotation","prior_epoch":"epoch-00"}
+    },
+    {
+      "name": "annotation missing prior epoch",
+      "valid": false,
+      "record": {"family":"annotation","schema_version":1,"epoch":"epoch-01","pub_seq":1,"subtype":"epoch_start"}
+    },
+    {
+      "name": "commissioning smoke malformed id",
+      "valid": false,
+      "record": {"family":"commissioning_smoke","schema_version":1,"epoch":"epoch-01","pub_seq":1,"test_id":"smoke-ABCDEF0123456789ABCDEF0123456789"}
+    }
+  ]
+}

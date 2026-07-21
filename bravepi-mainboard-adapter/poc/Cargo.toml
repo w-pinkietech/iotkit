@@ -2,6 +2,8 @@
 name = "bravepi-poc"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 iotkit-core-supervision = { path = "../../core/supervision" }

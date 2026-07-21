@@ -20,6 +20,47 @@ import (
 
 const contactSeries = "subject:contact_state:na:primary"
 
+func testMeasurementRecord(
+	ledgerEpoch string,
+	pubSeq int64,
+	seriesKey string,
+	values any,
+	eventTime int64,
+) map[string]any {
+	return map[string]any{
+		"family":            "measurement",
+		"schema_version":    1,
+		"epoch":             ledgerEpoch,
+		"pub_seq":           pubSeq,
+		"series_key":        seriesKey,
+		"values":            values,
+		"event_time":        eventTime,
+		"event_time_source": "received_at",
+		"time_source":       "edge_node",
+		"time_quality":      "unsynced",
+		"received_at":       eventTime,
+		"device_time":       nil,
+	}
+}
+
+func encodedTestMeasurement(
+	t *testing.T,
+	ledgerEpoch string,
+	pubSeq int64,
+	seriesKey string,
+	values any,
+	eventTime int64,
+) json.RawMessage {
+	t.Helper()
+	record, err := json.Marshal(testMeasurementRecord(
+		ledgerEpoch, pubSeq, seriesKey, values, eventTime,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
 func putSemanticMappingForTest(
 	store *Store,
 	ctx context.Context,
@@ -46,17 +87,9 @@ func putMQTTRouteForTest(store *Store, ctx context.Context, mappingID, topic str
 
 func testBatch(t *testing.T) contract.RecordBatch {
 	t.Helper()
-	record, err := json.Marshal(map[string]any{
-		"family":         "measurement",
-		"schema_version": 1,
-		"epoch":          "epoch-01",
-		"pub_seq":        1,
-		"series_key":     "series-temperature-01",
-		"values":         []float64{21.5},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := encodedTestMeasurement(
+		t, "epoch-01", 1, "series-temperature-01", []float64{21.5}, 1_000,
+	)
 	return contract.RecordBatch{
 		SchemaVersion: 1,
 		EdgeNodeID:    "edge-node-01",
@@ -327,7 +360,9 @@ func TestConflictingReplayDoesNotAdvanceCursor(t *testing.T) {
 	if len(before) != 1 {
 		t.Fatalf("records before conflict = %d, want 1", len(before))
 	}
-	batch.Records[0] = json.RawMessage(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-temperature-01","values":[99]}`)
+	batch.Records[0] = encodedTestMeasurement(
+		t, "epoch-01", 1, "series-temperature-01", []float64{99}, 1_000,
+	)
 	if _, err := acceptBatchForTest(t, store, batch); !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
 	}
@@ -676,13 +711,10 @@ func TestProjectSemanticEventsRejectsInvalidInputWithoutAdvancingIt(t *testing.T
 	}{
 		{name: "non binary", mutate: func(record map[string]any) { record["values"] = []any{2} }},
 		{name: "non scalar", mutate: func(record map[string]any) { record["values"] = []any{0, 1} }},
-		{name: "null value", mutate: func(record map[string]any) { record["values"] = []any{nil} }},
-		{name: "wrong family", mutate: func(record map[string]any) { record["family"] = "annotation" }},
-		{name: "missing family", mutate: func(record map[string]any) { delete(record, "family") }},
-		{name: "missing event time", mutate: func(record map[string]any) { delete(record, "event_time") }},
-		{name: "null event time", mutate: func(record map[string]any) { record["event_time"] = nil }},
-		{name: "fractional event time", mutate: func(record map[string]any) { record["event_time"] = 1.5 }},
-		{name: "negative event time", mutate: func(record map[string]any) { record["event_time"] = -1 }},
+		{name: "negative event time", mutate: func(record map[string]any) {
+			record["event_time"] = -1
+			record["received_at"] = -1
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := openTestStore(t)
@@ -771,15 +803,7 @@ func TestProjectSemanticEventsIsolatesPoisonMappingAndFairlyProcessesIndependent
 }
 
 func contactRecord(ledgerEpoch string, pubSeq int64, values []any) map[string]any {
-	return map[string]any{
-		"family":         "measurement",
-		"schema_version": 1,
-		"epoch":          ledgerEpoch,
-		"pub_seq":        pubSeq,
-		"series_key":     contactSeries,
-		"values":         values,
-		"event_time":     pubSeq * 1_000,
-	}
+	return testMeasurementRecord(ledgerEpoch, pubSeq, contactSeries, values, pubSeq*1_000)
 }
 
 func acceptContactRecords(t *testing.T, store *Store, edgeNodeID, ledgerEpoch string, records ...map[string]any) {
@@ -828,15 +852,9 @@ func acceptContactBatch(t *testing.T, store *Store, edgeNodeID, ledgerEpoch stri
 	records := make([]json.RawMessage, 0, len(samples))
 	for index, values := range samples {
 		pubSeq := start + int64(index)
-		record, err := json.Marshal(map[string]any{
-			"family":         "measurement",
-			"schema_version": 1,
-			"epoch":          ledgerEpoch,
-			"pub_seq":        pubSeq,
-			"series_key":     contactSeries,
-			"values":         values,
-			"event_time":     pubSeq * 1_000,
-		})
+		record, err := json.Marshal(testMeasurementRecord(
+			ledgerEpoch, pubSeq, contactSeries, values, pubSeq*1_000,
+		))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -867,14 +885,9 @@ func listSemanticEvents(t *testing.T, store *Store) []SemanticEvent {
 
 func acceptEpoch(t *testing.T, store *Store, edgeNodeID, ledgerEpoch string, pubSeq, value int64) {
 	t.Helper()
-	record, err := json.Marshal(map[string]any{
-		"family":         "measurement",
-		"schema_version": 1,
-		"epoch":          ledgerEpoch,
-		"pub_seq":        pubSeq,
-		"series_key":     contactSeries,
-		"values":         []int64{value},
-	})
+	record, err := json.Marshal(testMeasurementRecord(
+		ledgerEpoch, pubSeq, contactSeries, []int64{value}, pubSeq*1_000,
+	))
 	if err != nil {
 		t.Fatal(err)
 	}

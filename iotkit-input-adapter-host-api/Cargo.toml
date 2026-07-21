@@ -2,6 +2,8 @@
 name = "iotkit-input-adapter-host-api"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"] }

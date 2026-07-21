@@ -264,6 +264,4 @@ it's the "why", for deep dives.
 
 ## License
 
-Not yet licensed for public use — a license will be added before the public
-(Wave 2) release. Until then this is source-available for review, not for
-redistribution.
+Licensed under the [Apache License, Version 2.0](LICENSE).
