@@ -48,6 +48,7 @@ such as YokaKit own products, processes, OEE, alarms, business UI, and notificat
 - **Exit contract (R10):** MQTT delivery through a standard Broker to IoTKit Site, at-least-once, with a per-target cursor; Site's durable `accepted-through` is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
 - **Authenticated HTTP ingest (Plan 6):** a separate, default-off site-LAN TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See [docs/ingest-contract.md](docs/ingest-contract.md).
 - **Operator CLI** (`iotkit-edgectl`) for the device ledger, measurement registry, snapshots/restore, and the Site target.
+- **Site operations** for bounded history/CSV, storage diagnostics, and encrypted backup/new-path restore.
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
 - The control-plane API is intended for private LAN reachability only. Use SSH port forwarding when the deployment's private routed path does not provide direct client reachability.
 

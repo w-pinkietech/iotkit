@@ -18,64 +18,74 @@ import (
 )
 
 type consoleData struct {
-	Page                string
-	NavigationPage      string
-	Title               string
-	Description         string
-	Notice              string
-	PageError           string
-	FeedbackTarget      string
-	DisplayName         string
-	Role                siteapp.AccountRole
-	RoleLabel           string
-	IsAdmin             bool
-	IsOwner             bool
-	CSRF                string
-	Devices             []siteapp.DeviceSummary
-	Edges               []siteapp.Edge
-	EdgeRows            []consoleEdgeView
-	EquipmentRows       []consoleEquipmentEdgeView
-	OrphanDevices       []consoleSetupDeviceView
-	EquipmentView       string
-	SelectedEdge        *consoleEquipmentEdgeView
-	SelectedDevice      *consoleSetupDeviceView
-	SelectedDeviceEdge  *consoleEquipmentEdgeView
-	Signals             []siteapp.SignalSummary
-	DeviceRows          []consoleDeviceView
-	SignalRows          []consoleSignalView
-	SensorView          string
-	SignalSettingsLinks bool
-	SensorSettingsPath  string
-	SelectedSignal      *consoleSignalView
-	SetupRows           []consoleSetupDeviceView
-	LogRows             []consoleLogView
-	AuditRows           []consoleAuditView
-	Definitions         []semantics.Definition
-	OutputRules         []consoleRuleOption
-	OutputRoutes        []siteapp.OutputRoute
-	OutputRouteRows     []consoleOutputRouteView
-	ExportProfiles      []consoleExportProfileView
-	AvailableOutputs    []consoleAvailableOutput
-	Audit               []siteapp.AuditEvent
-	Accounts            []siteapp.Account
-	Certificate         certificateStatus
-	ProjectionFailures  int64
-	ReceivingCount      int
-	AttentionCount      int
-	UnconfiguredCount   int
-	SetupPendingCount   int
-	EdgeCount           int
-	EdgePendingCount    int
-	SemanticRuleCount   int
-	OutputPendingCount  int64
-	OutputActiveCount   int
-	OutputErrorCount    int
-	OutputStalledCount  int
-	OutputHealthClass   string
-	OutputFlowClass     string
-	OutputStatusLabel   string
-	OutputStatusDetail  string
-	OutputStatusSummary string
+	Page                  string
+	NavigationPage        string
+	Title                 string
+	Description           string
+	Notice                string
+	PageError             string
+	FeedbackTarget        string
+	DisplayName           string
+	Role                  siteapp.AccountRole
+	RoleLabel             string
+	IsAdmin               bool
+	IsOwner               bool
+	CSRF                  string
+	Devices               []siteapp.DeviceSummary
+	Edges                 []siteapp.Edge
+	EdgeRows              []consoleEdgeView
+	EquipmentRows         []consoleEquipmentEdgeView
+	OrphanDevices         []consoleSetupDeviceView
+	EquipmentView         string
+	SelectedEdge          *consoleEquipmentEdgeView
+	SelectedDevice        *consoleSetupDeviceView
+	SelectedDeviceEdge    *consoleEquipmentEdgeView
+	Signals               []siteapp.SignalSummary
+	DeviceRows            []consoleDeviceView
+	SignalRows            []consoleSignalView
+	SensorView            string
+	SignalSettingsLinks   bool
+	SensorSettingsPath    string
+	SelectedSignal        *consoleSignalView
+	SetupRows             []consoleSetupDeviceView
+	LogRows               []consoleLogView
+	HistoryRange          string
+	HistoryRangeLabel     string
+	HistorySelectedSignal string
+	HistorySelectedEdge   string
+	HistoryRawExportURL   string
+	HistoryExportURL      string
+	HistoryHasMore        bool
+	HistoryChart          *consoleHistoryChart
+	Storage               consoleStorageView
+	Diagnostics           store.DiagnosticReport
+	AuditRows             []consoleAuditView
+	Definitions           []semantics.Definition
+	OutputRules           []consoleRuleOption
+	OutputRoutes          []siteapp.OutputRoute
+	OutputRouteRows       []consoleOutputRouteView
+	ExportProfiles        []consoleExportProfileView
+	AvailableOutputs      []consoleAvailableOutput
+	Audit                 []siteapp.AuditEvent
+	Accounts              []siteapp.Account
+	Certificate           certificateStatus
+	ProjectionFailures    int64
+	ReceivingCount        int
+	AttentionCount        int
+	UnconfiguredCount     int
+	SetupPendingCount     int
+	EdgeCount             int
+	EdgePendingCount      int
+	SemanticRuleCount     int
+	OutputPendingCount    int64
+	OutputActiveCount     int
+	OutputErrorCount      int
+	OutputStalledCount    int
+	OutputHealthClass     string
+	OutputFlowClass       string
+	OutputStatusLabel     string
+	OutputStatusDetail    string
+	OutputStatusSummary   string
 }
 
 type certificateStatus struct {
@@ -93,6 +103,103 @@ type consoleAvailableOutput struct {
 	NeedsConfigurationCount int
 	IneligibleCount         int
 	Rules                   []siteapp.OutputActivationRulePreview
+}
+
+func selectConsoleHistoryScope(
+	request *http.Request,
+	signals []consoleSignalView,
+) (rangeValue, rangeLabel, edgeNodeID, signalRef string) {
+	rangeValue = request.URL.Query().Get("range")
+	switch rangeValue {
+	case "1h":
+		rangeLabel = "直近1時間"
+	case "24h":
+		rangeLabel = "直近24時間"
+	case "7d":
+		rangeLabel = "直近7日"
+	case "30d":
+		rangeLabel = "直近30日"
+	default:
+		rangeValue, rangeLabel = "1h", "直近1時間"
+	}
+	edgeNodeID = request.URL.Query().Get("edge_node_id")
+	requestedSignal := request.URL.Query().Get("signal_ref")
+	for _, signal := range signals {
+		if signal.SignalRef == requestedSignal &&
+			(edgeNodeID == "" || signal.Edge == edgeNodeID) {
+			return rangeValue, rangeLabel, edgeNodeID, signal.SignalRef
+		}
+	}
+	for _, signal := range signals {
+		if signal.Latest != nil && (edgeNodeID == "" || signal.Edge == edgeNodeID) {
+			return rangeValue, rangeLabel, edgeNodeID, signal.SignalRef
+		}
+	}
+	for _, signal := range signals {
+		if edgeNodeID == "" || signal.Edge == edgeNodeID {
+			return rangeValue, rangeLabel, edgeNodeID, signal.SignalRef
+		}
+	}
+	return rangeValue, rangeLabel, edgeNodeID, ""
+}
+
+func consoleHistoryWindow(now time.Time, rangeValue string) (int64, int64) {
+	duration := time.Hour
+	switch rangeValue {
+	case "24h":
+		duration = 24 * time.Hour
+	case "7d":
+		duration = 7 * 24 * time.Hour
+	case "30d":
+		duration = 30 * 24 * time.Hour
+	}
+	return now.Add(-duration).UnixMilli(), now.Add(time.Millisecond).UnixMilli()
+}
+
+func consoleHistoryExportURL(
+	from, until int64,
+	signalRef, edgeNodeID string,
+) string {
+	values := url.Values{
+		"from": {strconv.FormatInt(from, 10)},
+		"to":   {strconv.FormatInt(until, 10)},
+	}
+	if signalRef != "" {
+		values.Set("signal_ref", signalRef)
+	}
+	if edgeNodeID != "" {
+		values.Set("edge_node_id", edgeNodeID)
+	}
+	return "/api/v1/history.csv?" + values.Encode()
+}
+
+func consoleSemanticHistoryExportURL(
+	from, until int64,
+	signalRef, edgeNodeID string,
+) string {
+	values := url.Values{
+		"from": {strconv.FormatInt(from, 10)},
+		"to":   {strconv.FormatInt(until, 10)},
+	}
+	if signalRef != "" {
+		values.Set("signal_ref", signalRef)
+	}
+	if edgeNodeID != "" {
+		values.Set("edge_node_id", edgeNodeID)
+	}
+	return "/api/v1/semantic-history.csv?" + values.Encode()
+}
+
+func selectedConsoleSignal(
+	signals []consoleSignalView,
+	signalRef string,
+) *consoleSignalView {
+	for index := range signals {
+		if signals[index].SignalRef == signalRef {
+			return &signals[index]
+		}
+	}
+	return nil
 }
 
 func findConsoleEquipmentDevice(
@@ -159,7 +266,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		"edges":    "Siteへデータを送るEdgeの登録状態と最終通信を確認します。",
 		"devices":  "現場に設置したデバイスの名前と場所を管理します。",
 		"signals":  "センサーから届く値の補正・判定・累積方法を設定します。",
-		"logs":     "Siteが受け取った直近のデータを時系列で確認します。",
+		"logs":     "センサーと期間を選び、値の推移・受信履歴・CSVを一画面で確認します。",
 		"output":   "使い方を設定した値が外部アプリへ渡っているか確認します。",
 		"audit":    "誰が、いつ、どの設定を変更したか確認します。",
 		"accounts": "Consoleへログインできる担当者と権限を管理します。",
@@ -475,16 +582,56 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 			}
 		}
 	case "logs":
-		var records []store.RawRecord
-		records, err = server.store.ListRawRecords(request.Context(), 100)
+		data.Signals, err = server.site.ListSignals(
+			request.Context(), siteapp.PageRequest{Limit: 100},
+		)
 		if err == nil {
-			data.Signals, err = server.site.ListSignals(
-				request.Context(), siteapp.PageRequest{Limit: 100},
-			)
+			data.Edges, err = server.site.ListEdges(request.Context())
 		}
 		if err == nil {
-			data.SignalRows = newConsoleSignalViews(data.Signals, nil, server.now())
-			data.LogRows = newConsoleLogViews(records, data.SignalRows)
+			now := server.now()
+			data.SignalRows = newConsoleSignalViews(data.Signals, nil, now)
+			data.EdgeRows = newConsoleEdgeViews(data.Edges, now)
+			data.HistoryRange, data.HistoryRangeLabel, data.HistorySelectedEdge,
+				data.HistorySelectedSignal = selectConsoleHistoryScope(
+				request, data.SignalRows,
+			)
+			from, until := consoleHistoryWindow(now, data.HistoryRange)
+			var page store.HistoryPage
+			page, err = server.store.QueryHistory(request.Context(), store.HistoryQuery{
+				SignalRef:  data.HistorySelectedSignal,
+				EdgeNodeID: data.HistorySelectedEdge,
+				From:       from, Until: until, Limit: 200,
+			})
+			if err == nil {
+				data.LogRows = newConsoleHistoryLogViews(page.Records)
+				data.HistoryHasMore = page.HasMore
+				data.HistoryRawExportURL = consoleHistoryExportURL(
+					from, until, data.HistorySelectedSignal, data.HistorySelectedEdge,
+				)
+				data.HistoryExportURL = consoleSemanticHistoryExportURL(
+					from, until, data.HistorySelectedSignal, data.HistorySelectedEdge,
+				)
+			}
+			if err == nil && data.HistorySelectedSignal != "" {
+				bucketMilliseconds := (until - from + 179) / 180
+				if bucketMilliseconds < 1_000 {
+					bucketMilliseconds = 1_000
+				}
+				var series store.HistorySeries
+				series, err = server.store.QueryHistorySeries(
+					request.Context(), store.HistorySeriesQuery{
+						SignalRef: data.HistorySelectedSignal,
+						From:      from, Until: until,
+						BucketMilliseconds: bucketMilliseconds,
+					},
+				)
+				if err == nil {
+					data.HistoryChart = newConsoleHistoryChart(
+						series, selectedConsoleSignal(data.SignalRows, data.HistorySelectedSignal),
+					)
+				}
+			}
 		}
 	case "output":
 		data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
@@ -581,6 +728,20 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 	case "system":
 		data.OutputRoutes, err = server.store.ListOutputRoutes(request.Context())
 		data.OutputRoutes = profileOutputRoutes(data.OutputRoutes)
+		if err == nil {
+			var storageStatus store.StorageStatus
+			storageStatus, err = server.store.GetStorageStatus(
+				request.Context(), server.storageWarningPercent,
+			)
+			if err == nil {
+				data.Storage = newConsoleStorageView(storageStatus)
+			}
+		}
+		if err == nil {
+			data.Diagnostics, err = server.store.GetDiagnostics(
+				request.Context(), server.storageWarningPercent, server.now(),
+			)
+		}
 	}
 	if err == nil && page == "status" {
 		var setupDevices []siteapp.SetupDevice

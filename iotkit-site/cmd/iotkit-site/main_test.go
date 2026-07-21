@@ -367,6 +367,59 @@ func TestAccountCommandRejectsPasswordInArgvAndUnsafePasswordFile(t *testing.T) 
 	assertPathDoesNotExist(t, dbPath)
 }
 
+func TestBackupCreateAndRestoreUseOwnerOnlyPassphraseFile(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "site.db")
+	archive, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	passphraseFile := filepath.Join(dir, "backup-passphrase")
+	if err := os.WriteFile(passphraseFile, []byte("工場バックアップを守る十分に長い合言葉\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(dir, "site.iotkit-backup")
+	if err := run([]string{
+		"backup", "create", "--db", dbPath,
+		"--output", backupPath, "--passphrase-file", passphraseFile,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restoredPath := filepath.Join(dir, "restored.db")
+	if err := run([]string{
+		"backup", "restore", "--input", backupPath,
+		"--db", restoredPath, "--passphrase-file", passphraseFile,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := store.Open(restoredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+}
+
+func TestBackupCreateDoesNotCreateMissingSourceDatabase(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "missing.db")
+	passphraseFile := filepath.Join(dir, "backup-passphrase")
+	if err := os.WriteFile(passphraseFile, []byte("工場バックアップを守る十分に長い合言葉\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := run([]string{
+		"backup", "create", "--db", dbPath,
+		"--output", filepath.Join(dir, "backup"),
+		"--passphrase-file", passphraseFile,
+	})
+	if err == nil || !strings.Contains(err.Error(), "existing Site database") {
+		t.Fatalf("backup missing database error = %v", err)
+	}
+	assertPathDoesNotExist(t, dbPath)
+}
+
 func assertPathDoesNotExist(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err == nil {

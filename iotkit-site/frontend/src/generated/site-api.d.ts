@@ -1,5 +1,110 @@
 // Generated from iotkit-site/openapi/site-console-v1.yaml. Do not edit.
 export interface paths {
+    "/api/v1/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Query a bounded page of durably stored sensor history */
+        get: operations["listHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/history/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Aggregate one sensor history into bounded time buckets */
+        get: operations["getHistorySeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/history.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export the same bounded history filter as UTF-8 CSV */
+        get: operations["exportHistoryCSV"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/semantic-history.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export persisted processed semantic observations as UTF-8 CSV
+         * @description Exports the results stored when Site applied calibration and semantic rules. Historical observations are not recomputed with current rules.
+         */
+        get: operations["exportSemanticHistoryCSV"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Site database, filesystem, and pending-work storage facts */
+        get: operations["getStorageStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read factual Site, Edge, sensor, output, and restore diagnostics */
+        get: operations["getDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mapping-previews": {
         parameters: {
             query?: never;
@@ -24,6 +129,100 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        HistoryRecord: {
+            signal_ref: string;
+            series_key: string;
+            edge_node_id: string;
+            ledger_epoch: string;
+            /** Format: int64 */
+            pub_seq: number;
+            /** Format: int64 */
+            received_at: number;
+            /** Format: int64 */
+            observed_at: number;
+            values: number[];
+            value_type: string;
+            unit: string;
+            display_name: string;
+            decimal_places: number;
+            display_value_kind: string;
+        };
+        HistoryPage: {
+            records: components["schemas"]["HistoryRecord"][];
+            has_more: boolean;
+            next_cursor?: string;
+        };
+        HistorySeriesPoint: {
+            /** Format: int64 */
+            bucket_start: number;
+            minimum: number;
+            average: number;
+            maximum: number;
+            /** Format: int64 */
+            sample_count: number;
+        };
+        HistorySeries: {
+            signal_ref: string;
+            display_name: string;
+            unit: string;
+            value_type: string;
+            /** Format: int64 */
+            sample_count: number;
+            points: components["schemas"]["HistorySeriesPoint"][];
+        };
+        StorageStatus: {
+            /** @enum {string} */
+            state: "healthy" | "warning" | "critical" | "unavailable";
+            filesystem_available: boolean;
+            /** Format: int64 */
+            database_bytes: number;
+            /** Format: int64 */
+            reclaimable_bytes: number;
+            /** Format: int64 */
+            disk_total_bytes: number;
+            /** Format: int64 */
+            disk_available_bytes: number;
+            disk_used_percent: number;
+            warning_percent: number;
+            /** Format: int64 */
+            raw_record_count: number;
+            /** Format: int64 */
+            semantic_observation_count: number;
+            /** Format: int64 */
+            pending_output_count: number;
+            /** Format: int64 */
+            projection_failure_count: number;
+            last_backup_id?: string;
+            /** Format: int64 */
+            last_backup_at?: number;
+            /** Format: int64 */
+            last_backup_raw_record_count?: number;
+            /** Format: int64 */
+            backup_protected_raw_count: number;
+            /** Format: int64 */
+            unprotected_raw_count: number;
+            automatic_raw_purge_enabled: boolean;
+        };
+        DiagnosticIssue: {
+            code: string;
+            /** @enum {string} */
+            severity: "info" | "warning" | "critical";
+            component: string;
+            resource_ref?: string;
+            summary: string;
+            detail: string;
+            /** Format: int64 */
+            observed_at?: number;
+        };
+        DiagnosticReport: {
+            /** Format: int64 */
+            generated_at: number;
+            /** @enum {string} */
+            state: "healthy" | "attention" | "critical";
+            issues: components["schemas"]["DiagnosticIssue"][];
+            truncated: boolean;
+            limitations: string[];
+        };
         /** @enum {string} */
         SemanticKind: "numeric" | "boolean" | "cumulative_counter" | "alarm";
         /** @enum {string} */
@@ -165,6 +364,13 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Inclusive Site receipt time in Unix milliseconds. */
+        HistoryFrom: number;
+        /** @description Exclusive Site receipt time in Unix milliseconds; ranges are limited to 31 days. */
+        HistoryTo: number;
+        HistorySignalRef: string;
+        HistorySignalRefRequired: string;
+        HistoryEdgeNodeID: string;
         /** @description Value of the same-origin iotkit_site_csrf cookie. */
         CSRFToken: string;
     };
@@ -174,6 +380,180 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listHistory: {
+        parameters: {
+            query: {
+                /** @description Inclusive Site receipt time in Unix milliseconds. */
+                from: components["parameters"]["HistoryFrom"];
+                /** @description Exclusive Site receipt time in Unix milliseconds; ranges are limited to 31 days. */
+                to: components["parameters"]["HistoryTo"];
+                signal_ref?: components["parameters"]["HistorySignalRef"];
+                edge_node_id?: components["parameters"]["HistoryEdgeNodeID"];
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A stable newest-first history page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryPage"];
+                };
+            };
+            default: components["responses"]["RequestError"];
+        };
+    };
+    getHistorySeries: {
+        parameters: {
+            query: {
+                /** @description Inclusive Site receipt time in Unix milliseconds. */
+                from: components["parameters"]["HistoryFrom"];
+                /** @description Exclusive Site receipt time in Unix milliseconds; ranges are limited to 31 days. */
+                to: components["parameters"]["HistoryTo"];
+                signal_ref: components["parameters"]["HistorySignalRefRequired"];
+                bucket_ms: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description At most 1000 chronological aggregate points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistorySeries"];
+                };
+            };
+            default: components["responses"]["RequestError"];
+        };
+    };
+    exportHistoryCSV: {
+        parameters: {
+            query: {
+                /** @description Inclusive Site receipt time in Unix milliseconds. */
+                from: components["parameters"]["HistoryFrom"];
+                /** @description Exclusive Site receipt time in Unix milliseconds; ranges are limited to 31 days. */
+                to: components["parameters"]["HistoryTo"];
+                signal_ref?: components["parameters"]["HistorySignalRef"];
+                edge_node_id?: components["parameters"]["HistoryEdgeNodeID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV with a UTF-8 BOM for spreadsheet interoperability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description More than 100000 rows matched; narrow the filter */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            default: components["responses"]["RequestError"];
+        };
+    };
+    exportSemanticHistoryCSV: {
+        parameters: {
+            query: {
+                /** @description Inclusive Site receipt time in Unix milliseconds. */
+                from: components["parameters"]["HistoryFrom"];
+                /** @description Exclusive Site receipt time in Unix milliseconds; ranges are limited to 31 days. */
+                to: components["parameters"]["HistoryTo"];
+                signal_ref?: components["parameters"]["HistorySignalRef"];
+                edge_node_id?: components["parameters"]["HistoryEdgeNodeID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Processed observation CSV with a UTF-8 BOM */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description More than 100000 observations matched; narrow the filter */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            default: components["responses"]["RequestError"];
+        };
+    };
+    getStorageStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current storage facts observed by Site */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageStatus"];
+                };
+            };
+            default: components["responses"]["RequestError"];
+        };
+    };
+    getDiagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded diagnostic issues and explicit observability limitations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticReport"];
+                };
+            };
+            default: components["responses"]["RequestError"];
+        };
+    };
     createMappingPreview: {
         parameters: {
             query?: never;

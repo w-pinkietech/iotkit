@@ -294,6 +294,7 @@ IOTKIT_BROKER_TLS_DIR=$output_dir/tls
 IOTKIT_BROKER_DATA_DIR=$output_dir/data/mosquitto
 IOTKIT_SITE_PASSWORD_FILE=$output_dir/secrets/site-mqtt-password
 IOTKIT_SITE_DATA_DIR=$output_dir/data/site
+IOTKIT_SITE_STORAGE_WARNING_PERCENT=90
 IOTKIT_OUTPUT_BROKER_URL=ssl://$broker_host:$broker_port
 IOTKIT_OUTPUT_CLIENT_ID=iotkit-site-output
 IOTKIT_OUTPUT_USERNAME=site-output

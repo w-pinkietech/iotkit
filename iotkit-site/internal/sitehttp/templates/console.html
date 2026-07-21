@@ -1005,14 +1005,56 @@
       {{end}}
 
       {{if eq .Page "logs"}}
-      <section class="toolbar" aria-label="受信履歴の絞り込み">
-        <label class="search-field"><span>履歴を探す</span><input type="search" data-table-search="log-table" placeholder="センサー名、Edge"></label>
-        <div class="toolbar-summary"><strong data-table-count="log-table">{{len .LogRows}}</strong><span>件を表示</span></div>
+      <section class="history-workspace">
+        <form id="history-filter" class="history-filter" method="get" action="/logs">
+          <label><span>センサー</span><select name="signal_ref">
+            {{range .SignalRows}}<option value="{{.SignalRef}}" {{if eq .SignalRef $.HistorySelectedSignal}}selected{{end}}>{{.Name}}（{{.Edge}}）</option>{{end}}
+          </select></label>
+          <label><span>Edge</span><select name="edge_node_id">
+            <option value="">すべてのEdge</option>
+            {{range .EdgeRows}}<option value="{{.EdgeNodeID}}" {{if eq .EdgeNodeID $.HistorySelectedEdge}}selected{{end}}>{{.Name}}</option>{{end}}
+          </select></label>
+          <label><span>期間</span><select name="range">
+            <option value="1h" {{if eq .HistoryRange "1h"}}selected{{end}}>直近1時間</option>
+            <option value="24h" {{if eq .HistoryRange "24h"}}selected{{end}}>直近24時間</option>
+            <option value="7d" {{if eq .HistoryRange "7d"}}selected{{end}}>直近7日</option>
+            <option value="30d" {{if eq .HistoryRange "30d"}}selected{{end}}>直近30日</option>
+          </select></label>
+          <button type="submit">表示を更新</button>
+          {{if .HistoryExportURL}}<div class="history-export-actions">
+            <a class="button" href="{{.HistoryExportURL}}">加工後CSV</a>
+            <a class="button secondary" href="{{.HistoryRawExportURL}}">受信した生データCSV</a>
+          </div>
+          <p class="history-export-note"><strong>通常はこちら：</strong>加工後CSVは、センサー設定の補正・判定・累積ルールを適用した結果です。生データCSVは通信や設定の調査に使用します。</p>{{end}}
+        </form>
+
+        {{with .HistoryChart}}
+        <article class="history-chart-card">
+          <header><div><p class="section-kicker">{{$.HistoryRangeLabel}}</p><h2>{{.DisplayName}}</h2></div><span><strong>{{.SampleCount}}</strong>件を集約</span></header>
+          <dl class="history-stats">
+            <div><dt>最新</dt><dd>{{.Latest}}{{if .Unit}} <small>{{.Unit}}</small>{{end}}</dd></div>
+            <div><dt>最小</dt><dd>{{.Minimum}}{{if .Unit}} <small>{{.Unit}}</small>{{end}}</dd></div>
+            <div><dt>最大</dt><dd>{{.Maximum}}{{if .Unit}} <small>{{.Unit}}</small>{{end}}</dd></div>
+          </dl>
+          <svg class="history-chart" viewBox="0 0 920 220" role="img" aria-label="{{.AccessibleLabel}}" preserveAspectRatio="none">
+            <line x1="24" y1="18" x2="24" y2="196"></line>
+            <line x1="24" y1="196" x2="908" y2="196"></line>
+            <line class="history-chart-grid" x1="24" y1="107" x2="908" y2="107"></line>
+            <path d="{{.Path}}"></path>
+          </svg>
+          <div class="history-chart-axis"><span>{{.StartLabel}}</span><span>{{.EndLabel}}</span></div>
+          <p class="form-hint">高頻度の値は時間ごとにまとめて表示します。正確な受信値は下の表または「受信した生データCSV」で確認できます。</p>
+        </article>
+        {{else}}
+        <div class="empty-state"><span aria-hidden="true">⌁</span><p>選択した期間には数値データがありません。</p></div>
+        {{end}}
       </section>
       <section class="content-section flush">
+        <div class="section-heading history-table-heading"><div><p class="section-kicker">RAW HISTORY</p><h2>受信した値</h2><p>新しい順に最大200件を表示します。</p></div><div class="toolbar-summary"><strong>{{len .LogRows}}</strong><span>件を表示</span></div></div>
+        {{if .HistoryHasMore}}<div class="permission-note"><strong>表示は200件まで</strong><span>期間またはセンサーを絞るか、CSVで確認してください。</span></div>{{end}}
         <div class="table-wrap">
-          <table id="log-table"><thead><tr><th>受信日時</th><th>センサー</th><th>Edge</th><th>受信値</th></tr></thead>
-          <tbody>{{range .LogRows}}<tr><td class="mono">{{.ReceivedAt}}</td><td><strong>{{.Sensor}}</strong></td><td>{{.Edge}}</td><td class="measurement compact">{{.Value}} {{.Unit}}</td></tr>{{else}}<tr class="empty-row"><td colspan="4">受信履歴はまだありません。</td></tr>{{end}}</tbody></table>
+          <table id="log-table"><thead><tr><th>計測日時</th><th>Site受信日時</th><th>センサー</th><th>Edge</th><th>受信値</th></tr></thead>
+          <tbody>{{range .LogRows}}<tr><td class="mono">{{.ObservedAt}}</td><td class="mono">{{.ReceivedAt}}</td><td><a href="/sensors/{{.SignalRef}}"><strong>{{.Sensor}}</strong></a></td><td>{{.Edge}}</td><td class="measurement compact">{{.Value}}{{if .Unit}} {{.Unit}}{{end}}</td></tr>{{else}}<tr class="empty-row"><td colspan="5">選択した期間の受信履歴はありません。</td></tr>{{end}}</tbody></table>
         </div>
       </section>
       {{end}}
@@ -1118,9 +1160,33 @@
 
       {{if eq .Page "system"}}
       <section class="system-grid">
-        <article class="system-card"><span class="system-icon">●</span><div><h2>IoTKit Site</h2><strong class="ok-text">稼働中</strong><p>Consoleとデータ保存サービスは動作しています。</p></div></article>
+        <article class="system-card"><span class="system-icon">●</span><div><h2>IoTKit Site</h2><strong class="ok-text">Console応答中</strong><p>この画面を表示するWebサービスは応答しています。</p></div></article>
+        <article class="system-card"><span class="system-icon">▤</span><div><h2>保存容量</h2><strong class="{{if eq .Storage.StateClass "healthy"}}ok-text{{else}}warn-text{{end}}">{{.Storage.StateLabel}}</strong>{{if .Storage.Available}}<p>ディスク使用率 {{.Storage.DiskUsedPercent}}%・空き {{.Storage.DiskAvailable}}</p>{{else}}<p>DBは確認できましたが、hostの空き容量は取得できません。</p>{{end}}</div></article>
+        <article class="system-card"><span class="system-icon">⤓</span><div><h2>バックアップ</h2>{{if .Storage.LastBackupAvailable}}<strong class="ok-text">{{.Storage.LastBackupAt}}</strong><p>raw受信データ {{.Storage.LastBackupRecords}}件を含む検証済みバックアップです。</p>{{else}}<strong class="warn-text">まだ確認できません</strong><p>導入担当者がSite hostのバックアップ操作を実行します。</p>{{end}}</div></article>
         <article class="system-card"><span class="system-icon">⌁</span><div><h2>通信証明書</h2>{{if .Certificate.Available}}<strong class="{{if .Certificate.NeedsAction}}warn-text{{else}}ok-text{{end}}">有効期限まで {{.Certificate.DaysRemaining}}日</strong><p>{{.Certificate.NotAfter}} まで有効です。</p>{{else}}<strong class="warn-text">Consoleでは確認できません</strong><p>導入時の証明書設定と運用コマンドを確認してください。</p>{{end}}</div></article>
         <article class="system-card"><span class="system-icon">↗</span><div><h2>外部出力</h2><strong>{{len .OutputRoutes}}件</strong><p>MQTTの接続先や認証情報は、この画面から変更できません。</p></div></article>
+      </section>
+      <section class="content-section storage-detail">
+        <div class="section-heading"><div><p class="section-kicker">SITE STORAGE</p><h2>保存データの状態</h2><p>容量不足になる前に、導入担当者へ空き容量と件数を伝えられます。</p></div></div>
+        {{if .Storage.Available}}<label class="storage-meter"><span>ディスク使用率 {{.Storage.DiskUsedPercent}}%（警告 {{.Storage.WarningPercent}}%）</span><progress value="{{.Storage.DiskUsedPercent}}" max="100">{{.Storage.DiskUsedPercent}}%</progress></label>{{end}}
+        <dl class="storage-facts">
+          <div><dt>Site DB</dt><dd>{{.Storage.DatabaseSize}}</dd></div>
+          <div><dt>再利用可能なDB領域</dt><dd>{{.Storage.ReclaimableSize}}</dd></div>
+          <div><dt>raw受信データ</dt><dd>{{.Storage.RawRecordCount}}件</dd></div>
+          <div><dt>意味付け済みデータ</dt><dd>{{.Storage.ObservationCount}}件</dd></div>
+          <div><dt>未配送の外部出力</dt><dd>{{.Storage.PendingOutputCount}}件</dd></div>
+          <div><dt>変換失敗</dt><dd>{{.Storage.ProjectionFailures}}件</dd></div>
+          <div><dt>最終バックアップ</dt><dd>{{if .Storage.LastBackupAvailable}}{{.Storage.LastBackupAt}}{{else}}未実施{{end}}</dd></div>
+          <div><dt>backupで保護済みのraw</dt><dd>{{.Storage.BackupProtectedRaw}}件</dd></div>
+          <div><dt>最終backup後のraw</dt><dd>{{.Storage.UnprotectedRaw}}件</dd></div>
+        </dl>
+        <p class="form-hint">v1ではrawの自動削除は無効です。容量対策として未配送データを自動削除しません。警告が出た場合は、先にバックアップと保存方針を確認します。</p>
+      </section>
+      <section class="content-section">
+        <div class="section-heading"><div><p class="section-kicker">DIAGNOSTICS</p><h2>確認が必要なこと</h2><p>確認できた事実を原因別に表示します。推測だけで「正常」とは表示しません。</p></div></div>
+        {{if .Diagnostics.Issues}}<div class="diagnostic-list">{{range .Diagnostics.Issues}}<article class="diagnostic-item {{.Severity}}"><div><strong>{{.Summary}}</strong><p>{{.Detail}}</p></div>{{if .ResourceRef}}<code>{{.ResourceRef}}</code>{{end}}</article>{{end}}</div>{{else}}<div class="empty-state"><strong>現在、確認が必要な事実はありません</strong><p>受信・外部配送の状態は継続して監視してください。</p></div>{{end}}
+        {{if .Diagnostics.Truncated}}<p class="form-hint">表示上限を超えました。診断APIまたはlocal CLIで対象を絞って確認してください。</p>{{end}}
+        <details class="equipment-diagnostics"><summary>この画面だけでは判別できないこと</summary><ul>{{range .Diagnostics.Limitations}}<li>{{.}}</li>{{end}}</ul></details>
       </section>
       <section class="guidance-card"><h2>問題が起きたとき</h2><ol><li>「センサー」で停止・古い値を確認する</li><li>「受信履歴」で最後に届いた時刻を確認する</li><li>復旧しない場合は導入担当者へ、Edge名と発生時刻を伝える</li></ol></section>
       {{end}}

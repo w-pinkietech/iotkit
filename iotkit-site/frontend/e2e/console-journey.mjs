@@ -415,6 +415,46 @@ try {
     )),
     "viewer can see sensor mutation forms",
   );
+  await devtools.navigate(`${siteURL}/logs`, "/logs");
+  assert((await devtools.evaluate(activeNavigation)) === "受信履歴", "history navigation is not active");
+  const historyState = await devtools.evaluate(`(() => ({
+    filter: Boolean(document.querySelector("#history-filter")),
+    chart: document.querySelector("svg.history-chart path")?.getAttribute("d") ?? "",
+    rows: document.querySelectorAll("#log-table tbody tr:not(.empty-row)").length,
+    body: document.body.textContent.replace(/\\s+/g, " ").trim().slice(0, 1400),
+  }))()`);
+  assert(
+    historyState.filter && historyState.chart && historyState.rows > 0,
+    `history filter, chart, and raw table are not available together: ${JSON.stringify(historyState)}`,
+  );
+  const csvResult = await devtools.evaluate(`(async () => {
+    const links = [...document.querySelectorAll("a")];
+    const processed = links.find((candidate) => candidate.textContent.includes("加工後CSV"));
+    const raw = links.find((candidate) => candidate.textContent.includes("受信した生データCSV"));
+    if (!processed || !raw) return { status: 0, type: "", body: "", processed: "", raw: "" };
+    const response = await fetch(processed.href);
+    return {
+      status: response.status,
+      type: response.headers.get("content-type") ?? "",
+      body: await response.text(),
+      processed: new URL(processed.href).pathname,
+      raw: new URL(raw.href).pathname,
+    };
+  })()`);
+  assert(
+    csvResult.status === 200 && csvResult.type.includes("text/csv") &&
+      csvResult.processed === "/api/v1/semantic-history.csv" &&
+      csvResult.raw === "/api/v1/history.csv" &&
+      csvResult.body.includes("rule_name"),
+    `processed and raw history CSV boundary failed: ${JSON.stringify(csvResult)}`,
+  );
+  await devtools.navigate(`${siteURL}/system`, "/system");
+  assert(
+    await devtools.evaluate(
+      `document.body.textContent.includes("保存データの状態") && document.body.textContent.includes("raw受信データ") && document.body.textContent.includes("確認が必要なこと") && document.body.textContent.includes("rawの自動削除は無効") && Boolean(document.querySelector(".storage-meter progress"))`,
+    ),
+    "Site storage facts are not visible in the Console",
+  );
   await devtools.navigate(`${siteURL}/output`, "/output");
   assert(
     await devtools.evaluate(

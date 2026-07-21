@@ -41,8 +41,12 @@ fallback.
   state; it does not mean the Edge is currently online.
 - **モニター**: current value and last receipt. A stopped or old signal must be
   investigated at the sensor, adapter, Edge, broker, then Site—in that order.
+- **受信履歴**: sensor、Edge、期間を同じ画面で絞り込み、集約graphと直近rawを
+  確認する。同じ条件のCSVは汎用観測の持ち出しであり、業務帳票ではない。
 - **出力**: active purpose-bound routes. Pending output is not deleted until
   broker PUBACK.
+- **システム**: filesystem使用率、DB size、raw/意味付け/outbox件数、最終backup、
+  原因別の診断を確認する。「Console応答中」はEdgeやBrokerの正常を意味しない。
 - **監査**: who changed a display name, meaning, output, or account.
 - `iotkit-edgectl smoke status`: durable Site acceptance, not merely MQTT PUBACK.
 - `scripts/iotkit-broker-cert status --config SITE/broker-cert.env`: exact
@@ -119,3 +123,93 @@ Git.
   bounded background work. This makes the rows unavailable to normal IoTKit
   processing, but it is not a promise of forensic physical erasure from SQLite
   pages, backups, or storage media.
+
+## 7. Site encrypted backup
+
+Site DBにはsensor履歴だけでなく、account/session hash、設定、監査、未配送outboxも
+含まれる。通常の運用backupとしてDB fileを平文コピーしない。backupの合言葉は
+12文字以上とし、所有者だけが読めるfileから渡す。
+
+稼働中のSiteから整合snapshotを作成できる。次はCompose導入時の例である。
+
+```bash
+install_root="$HOME/.local/share/iotkit/site-01"
+backup_root="$HOME/.local/share/iotkit/backups/site-01"
+mkdir -p "$backup_root"
+install -m 600 /dev/null "$install_root/secrets/backup-passphrase"
+# 対話可能なeditor等で合言葉を書き、shell履歴へ載せない。
+docker compose --env-file "$install_root/site.env" -f deploy/compose.site.yaml \
+  run --rm \
+  -v "$backup_root:/backup" \
+  -v "$install_root/secrets/backup-passphrase:/run/iotkit/backup-passphrase:ro" \
+  site backup create --db /data/site.db \
+  --output "/backup/site-$(date +%Y%m%d-%H%M%S).iotkit-backup" \
+  --passphrase-file /run/iotkit/backup-passphrase
+```
+
+成功時はformat、Site ID、schema、raw件数、DB hashを含むmanifestをJSONで返す。
+containerはArgon2idとXChaCha20-Poly1305で暗号化・改ざん検知され、mode `0600`で
+新規作成される。同名fileは上書きしない。Consoleの最終backup時刻が更新されたこと、
+別mediaにも暗号化containerを複製できたことを確認する。MQTT credential、certificate、
+private keyはbackupに含まれないため、導入設定側で別に復旧する。
+
+## 8. Site restore
+
+復元先は必ず新しいDB pathにする。稼働DBへ直接上書きしない。
+
+```bash
+docker compose --env-file "$install_root/site.env" -f deploy/compose.site.yaml stop site
+docker compose --env-file "$install_root/site.env" -f deploy/compose.site.yaml \
+  run --rm \
+  -v "$backup_root:/backup:ro" \
+  -v "$install_root/secrets/backup-passphrase:/run/iotkit/backup-passphrase:ro" \
+  site backup restore --input /backup/SELECTED.iotkit-backup \
+  --db /data/site.restore-candidate.db \
+  --passphrase-file /run/iotkit/backup-passphrase
+docker compose --env-file "$install_root/site.env" -f deploy/compose.site.yaml \
+  run --rm site diagnose --db /data/site.restore-candidate.db
+```
+
+restoreは暗号・manifest・DB hash・`quick_check`・Site ID・cursorを照合し、全browser
+sessionを失効して復元履歴をtransactionで記録する。検証後、host上で元の`site.db`と
+その`-wal`/`-shm`を一つの退避directoryへ移し、candidateを`site.db`へrenameしてから
+Siteを起動する。元DBは収束確認まで削除しない。
+
+古いbackupのcursorより先からEdgeが再開した場合、SiteはackせずEdgeを
+`recovery_hold`にする。`iotkit-site diagnose`とConsoleは失われる可能性のあるcursor
+範囲を表示する。別backupや元DBから回収できないと判断した場合に限り、Site IDと理由を
+明示して次を実行する。
+
+```bash
+iotkit-site backup accept-archive-loss --db /path/site.db \
+  --edge-node-id EDGE --ledger-epoch EPOCH \
+  --confirm-site-id SITE_ID --reason '元DB故障、他の検証済みbackupなし'
+```
+
+これは欠損を修復する操作ではない。`archive_lost`を監査し、永久retryを止めるための
+最終判断である。SQLでcursorやEdge stateを直接変更してはならない。
+
+## 9. Device retirement and hardware replacement
+
+deviceの正本台帳はEdgeにあり、Site Consoleの表示行を編集して交換扱いにはしない。
+使用終了は`iotkit-edgectl device retire`、個体識別型deviceの交換は
+`iotkit-edgectl device replace`を使う。replaceは候補の観測profileと既存seriesを照合し、
+`system_id`を維持してhardwareだけを交換する。強制指定と確認なし実行を通常手順にしない。
+Edge descriptorがSiteへ届くと、retired状態と交換後の継続seriesがConsoleへ反映される。
+
+## 10. Manual Site update and rollback
+
+1. 上記の暗号化backupを作り、Consoleの最終backup表示を確認する。
+2. 現在のGit commit、Compose設定、Site image IDを記録する。credentialや秘密鍵はGitへ
+   入れない。
+3. 新versionを取得してSite imageをbuildする。Brokerは動かしたままSiteだけを停止する。
+   停止中もEdgeは未ack recordを保持する。
+4. 新Siteを起動する。schema migrationは起動時にtransactionで実行される。
+5. HTTPS login、`/api/v1/system/diagnostics`、Edge cursorの再収束、未配送outbox、履歴graph、
+   CSVを確認する。問題がなければ旧imageと更新前DBの退避を保持期間後に片付ける。
+6. 起動・migration・health確認に失敗した場合はSiteを停止する。旧binaryでmigration済みDBを
+   開こうとせず、旧commit/imageへ戻し、更新前backupを**新しいcandidate DB**へ復元して
+   §8と同じswapを行う。Broker/Edge identityやcredentialを作り直さない。
+
+この手順はmanual updateであり、自動更新ではない。DB migration後にimageだけを戻す操作は
+rollbackではない。更新前backupからDBも対で戻す。

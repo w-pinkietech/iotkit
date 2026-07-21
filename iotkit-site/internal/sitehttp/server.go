@@ -23,39 +23,42 @@ import (
 )
 
 const (
-	sessionCookieName = "iotkit_site_session"
-	csrfCookieName    = "iotkit_site_csrf"
-	maxJSONBodyBytes  = 64 * 1024
+	sessionCookieName                = "iotkit_site_session"
+	csrfCookieName                   = "iotkit_site_csrf"
+	maxJSONBodyBytes                 = 64 * 1024
+	defaultSiteStorageWarningPercent = 90
 )
 
 //go:embed templates/*.html static/*
 var assets embed.FS
 
 type Config struct {
-	Store           *store.Store
-	Site            *siteapp.Service
-	Accounts        *siteapp.AccountService
-	Sessions        *sitesession.Manager
-	PublicOrigin    string
-	DevelopmentHTTP bool
-	CertificateFile string
+	Store                 *store.Store
+	Site                  *siteapp.Service
+	Accounts              *siteapp.AccountService
+	Sessions              *sitesession.Manager
+	PublicOrigin          string
+	DevelopmentHTTP       bool
+	CertificateFile       string
+	StorageWarningPercent int
 }
 
 type Server struct {
-	store           *store.Store
-	site            *siteapp.Service
-	accounts        *siteapp.AccountService
-	semantics       *siteapp.SemanticService
-	semanticConfig  *siteapp.SemanticConfigurationService
-	sessions        *sitesession.Manager
-	publicOrigin    string
-	secureCookies   bool
-	templates       *template.Template
-	mux             *http.ServeMux
-	previewMu       sync.Mutex
-	previewCache    map[string]cachedPreviewWindow
-	now             func() time.Time
-	certificateFile string
+	store                 *store.Store
+	site                  *siteapp.Service
+	accounts              *siteapp.AccountService
+	semantics             *siteapp.SemanticService
+	semanticConfig        *siteapp.SemanticConfigurationService
+	sessions              *sitesession.Manager
+	publicOrigin          string
+	secureCookies         bool
+	templates             *template.Template
+	mux                   *http.ServeMux
+	previewMu             sync.Mutex
+	previewCache          map[string]cachedPreviewWindow
+	now                   func() time.Time
+	certificateFile       string
+	storageWarningPercent int
 }
 
 type requestAuth struct {
@@ -96,20 +99,28 @@ func New(config Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse Site templates: %w", err)
 	}
+	storageWarningPercent := config.StorageWarningPercent
+	if storageWarningPercent == 0 {
+		storageWarningPercent = defaultSiteStorageWarningPercent
+	}
+	if storageWarningPercent < 50 || storageWarningPercent > 99 {
+		return nil, errors.New("Site storage warning percent must be between 50 and 99")
+	}
 	server := &Server{
-		store:           config.Store,
-		site:            config.Site,
-		accounts:        config.Accounts,
-		semantics:       siteapp.NewSemanticService(config.Store),
-		semanticConfig:  siteapp.NewSemanticConfigurationService(config.Store),
-		sessions:        config.Sessions,
-		publicOrigin:    strings.TrimSuffix(config.PublicOrigin, "/"),
-		secureCookies:   !config.DevelopmentHTTP,
-		templates:       templates,
-		mux:             http.NewServeMux(),
-		previewCache:    make(map[string]cachedPreviewWindow),
-		now:             time.Now,
-		certificateFile: config.CertificateFile,
+		store:                 config.Store,
+		site:                  config.Site,
+		accounts:              config.Accounts,
+		semantics:             siteapp.NewSemanticService(config.Store),
+		semanticConfig:        siteapp.NewSemanticConfigurationService(config.Store),
+		sessions:              config.Sessions,
+		publicOrigin:          strings.TrimSuffix(config.PublicOrigin, "/"),
+		secureCookies:         !config.DevelopmentHTTP,
+		templates:             templates,
+		mux:                   http.NewServeMux(),
+		previewCache:          make(map[string]cachedPreviewWindow),
+		now:                   time.Now,
+		certificateFile:       config.CertificateFile,
+		storageWarningPercent: storageWarningPercent,
 	}
 	server.routes()
 	return server, nil
@@ -179,6 +190,12 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /api/v1/edges", server.listEdges)
 	server.mux.HandleFunc("POST /api/v1/edges/{edge_ref}/activation", server.activateEdge)
 	server.mux.HandleFunc("GET /api/v1/signals", server.listSignals)
+	server.mux.HandleFunc("GET /api/v1/history", server.listHistory)
+	server.mux.HandleFunc("GET /api/v1/history/series", server.getHistorySeries)
+	server.mux.HandleFunc("GET /api/v1/history.csv", server.exportHistoryCSV)
+	server.mux.HandleFunc("GET /api/v1/semantic-history.csv", server.exportSemanticHistoryCSV)
+	server.mux.HandleFunc("GET /api/v1/system/storage", server.getStorageStatus)
+	server.mux.HandleFunc("GET /api/v1/system/diagnostics", server.getDiagnostics)
 	server.mux.HandleFunc("GET /api/v1/setup/devices", server.listSetupDevices)
 	server.mux.HandleFunc("PUT /api/v1/devices/{device_ref}/profile", server.putDeviceProfile)
 	server.mux.HandleFunc("PUT /api/v1/signals/{signal_ref}/profile", server.putSignalProfile)

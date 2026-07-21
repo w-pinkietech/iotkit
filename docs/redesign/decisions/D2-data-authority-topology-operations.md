@@ -81,6 +81,33 @@ R17劣化契約のパージ順序は
 デバイス/現場設定の手作業再入力は復旧経路に含めない。ただし権限の安全な再確立は例外とし、
 2026-07-12 Plan 6裁定によりlocal admin recoveryとoperator token再発行を必須とする。
 
+### IoTKit Site backup・復元境界 (2026-07-21追記)
+
+SiteはEdgeから`accepted-through`を返した時点以降のraw archive正本を持つ。したがって、古いSite backupを
+復元すると、backup後にSiteが受理してEdge側で既にpurge可能になった区間は自動再送できない場合がある。
+DB fileだけを戻して通常起動し、欠番を無視したりcursorだけを現在値へ進めたりしてはならない。
+
+v1は次を採用する。
+
+1. Site backupはSQLiteの整合snapshot、format version、Site ID、schema version、作成時刻、DB hash、
+   Edge別accepted cursorを一つの暗号化containerへ入れる。Site account password hash、session hash、監査、
+   device情報を含むため、平文backup成功経路を持たない。復旧passphraseは所有者限定fileからだけ読む。
+2. backup作成後にsnapshotの`quick_check`とmanifest/hashを検証し、同一filesystem上の一時fileから原子的に
+   完成名へ切り替える。既存backupを黙って上書きしない。
+3. 復元は既存DBを上書きせず、新しいDB pathへ展開・検証する。全Site sessionを失効し、復元metadataを
+   DB transactionへ記録してから完成扱いにする。Broker credential、certificate、private keyはcontainerへ
+   入れず、deployment設定から再接続する。
+4. 復元DBのcursorより先から同じEdge/epochのbatchが届いた場合、通常のgapとは分けて
+   `archive_recovery_required`を耐久記録し、ackを返さず当該Edgeを`recovery_hold`にする。Consoleは失われる
+   可能性のある`backup cursor + 1 .. incoming cursor start - 1`を表示する。
+5. v1はEdgeのaccepted済み行を巻き戻して再送するprotocolを持たない。Site hostのlocal CLIで範囲を確認し、
+   人間が明示承認した場合だけ`archive_lost`監査を同じtransactionで記録してSite cursorをgap直前まで進め、
+   Edgeを再開する。これにより損失は起こり得るが、無音の損失と永久retryを防ぐ。将来のretained replayは
+   terminal/gap repair protocolとして別versionで追加する。
+6. raw retentionは、対象rawを含む検証済みbackupが存在し、意味付けprojectionが完了し、未配送outboxを
+   削除しない場合だけ実行できる。容量watermarkを理由にこの順序を飛ばさない。初版は自動purgeを既定offとし、
+   保存状況と削除可能範囲を先に可視化する。
+
 ## 3.5 監査追記: スナップショットの機密性とエポックフェンス(2026-07-02)
 
 「予備RPi+スナップショット復元→デバイス自動再認識」を成立させるには、スナップショットに

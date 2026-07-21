@@ -1052,6 +1052,61 @@ var schemaMigrations = []migration{
 			ON output_profile_rule_bindings(profile_id, state, rule_id);
 		DROP INDEX IF EXISTS ux_output_routes_yokakit_identity;
 	`},
+	{version: 26, sql: `
+		CREATE INDEX idx_raw_records_history_received
+		ON raw_records(
+			received_at DESC,
+			edge_node_id DESC,
+			ledger_epoch DESC,
+			pub_seq DESC
+		);
+	`},
+	{version: 27, sql: `
+		CREATE TABLE site_backup_events (
+			backup_id TEXT PRIMARY KEY,
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			destination_name TEXT NOT NULL,
+			database_sha256 TEXT NOT NULL CHECK(length(database_sha256) = 64),
+			raw_record_count INTEGER NOT NULL CHECK(raw_record_count >= 0)
+		);
+		CREATE TABLE site_backup_cursors (
+			backup_id TEXT NOT NULL REFERENCES site_backup_events(backup_id),
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			accepted_through INTEGER NOT NULL CHECK(accepted_through >= 0),
+			PRIMARY KEY(backup_id, edge_node_id, ledger_epoch)
+		);
+		CREATE TABLE site_restore_events (
+			restore_id TEXT PRIMARY KEY,
+			backup_id TEXT,
+			restored_at INTEGER NOT NULL CHECK(restored_at >= 0),
+			backup_created_at INTEGER NOT NULL CHECK(backup_created_at >= 0),
+			backup_site_id TEXT NOT NULL,
+			backup_schema_version INTEGER NOT NULL CHECK(backup_schema_version > 0),
+			backup_sha256 TEXT NOT NULL CHECK(length(backup_sha256) = 64)
+		);
+		CREATE TABLE site_restore_cursor_checks (
+			restore_id TEXT NOT NULL REFERENCES site_restore_events(restore_id),
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			backup_accepted_through INTEGER NOT NULL CHECK(backup_accepted_through >= 0),
+			state TEXT NOT NULL CHECK(state IN (
+				'pending', 'verified', 'recovery_required', 'archive_lost'
+			)),
+			observed_cursor_start INTEGER CHECK(observed_cursor_start > 0),
+			updated_at INTEGER NOT NULL CHECK(updated_at >= 0),
+			PRIMARY KEY (restore_id, edge_node_id, ledger_epoch)
+		);
+		CREATE INDEX ix_site_restore_cursor_checks_pending
+			ON site_restore_cursor_checks(edge_node_id, ledger_epoch, state);
+	`},
+	{version: 28, sql: `
+		CREATE INDEX idx_semantic_observations_history
+		ON semantic_observations_v3(
+			observed_at DESC,
+			observation_row_id DESC
+		);
+	`},
 }
 
 func applyMigrations(

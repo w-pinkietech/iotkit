@@ -33,13 +33,17 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: iotkit-site <serve|account|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]")
+		return errors.New("usage: iotkit-site <serve|account|backup|diagnose|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]")
 	}
 	switch args[0] {
 	case "serve":
 		return runServe(args[1:])
 	case "account":
 		return runAccount(args[1:])
+	case "backup":
+		return runBackup(args[1:])
+	case "diagnose":
+		return runDiagnose(args[1:])
 	case "query":
 		return runQuery(args[1:])
 	case "mapping-set":
@@ -57,6 +61,144 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runDiagnose(args []string) error {
+	flags := flag.NewFlagSet("diagnose", flag.ContinueOnError)
+	dbPath := flags.String("db", "site.db", "Site SQLite path")
+	storageWarningPercent := flags.Int("storage-warning-percent", 90, "Site filesystem usage warning percent")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if err := requireExistingRegularFile(*dbPath, "--db must name an existing Site database"); err != nil {
+		return err
+	}
+	archive, err := store.Open(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	report, err := archive.GetDiagnostics(
+		context.Background(), *storageWarningPercent, time.Now(),
+	)
+	if err != nil {
+		return err
+	}
+	return writeJSON(report)
+}
+
+func runBackup(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: iotkit-site backup <create|restore|accept-archive-loss> [options]")
+	}
+	switch args[0] {
+	case "create":
+		return runBackupCreate(args[1:])
+	case "restore":
+		return runBackupRestore(args[1:])
+	case "accept-archive-loss":
+		return runBackupAcceptArchiveLoss(args[1:])
+	default:
+		return fmt.Errorf("unknown backup command %q", args[0])
+	}
+}
+
+func runBackupCreate(args []string) error {
+	flags := flag.NewFlagSet("backup create", flag.ContinueOnError)
+	dbPath := flags.String("db", "site.db", "existing Site SQLite path")
+	output := flags.String("output", "", "new encrypted backup path")
+	passphraseFile := flags.String("passphrase-file", "", "owner-only file containing the backup passphrase")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *output == "" || *passphraseFile == "" {
+		return errors.New("--output and --passphrase-file are required")
+	}
+	if err := requireExistingRegularFile(*dbPath, "--db must name an existing Site database"); err != nil {
+		return err
+	}
+	passphrase, err := readOwnerOnlySecret(*passphraseFile)
+	if err != nil {
+		return err
+	}
+	archive, err := store.Open(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	result, err := siteapp.NewService(archive).Dispatch(
+		context.Background(), siteapp.LocalCLIActor(), siteapp.CreateSiteBackup{
+			Destination: *output,
+			Passphrase:  passphrase,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	return writeJSON(result.Backup)
+}
+
+func runBackupRestore(args []string) error {
+	flags := flag.NewFlagSet("backup restore", flag.ContinueOnError)
+	input := flags.String("input", "", "encrypted backup path")
+	dbPath := flags.String("db", "site.db", "new restored Site SQLite path")
+	passphraseFile := flags.String("passphrase-file", "", "owner-only file containing the backup passphrase")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *input == "" || *passphraseFile == "" {
+		return errors.New("--input and --passphrase-file are required")
+	}
+	passphrase, err := readOwnerOnlySecret(*passphraseFile)
+	if err != nil {
+		return err
+	}
+	manifest, err := store.RestoreEncryptedBackup(
+		context.Background(), *input, *dbPath, passphrase,
+	)
+	if err != nil {
+		return err
+	}
+	return writeJSON(manifest)
+}
+
+func runBackupAcceptArchiveLoss(args []string) error {
+	flags := flag.NewFlagSet("backup accept-archive-loss", flag.ContinueOnError)
+	dbPath := flags.String("db", "site.db", "Site SQLite path")
+	edgeNodeID := flags.String("edge-node-id", "", "Edge node identity in recovery hold")
+	ledgerEpoch := flags.String("ledger-epoch", "", "Edge ledger epoch")
+	confirmSiteID := flags.String("confirm-site-id", "", "Site ID typed to confirm the destructive decision")
+	reason := flags.String("reason", "", "operator reason recorded in the audit log")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *edgeNodeID == "" || *ledgerEpoch == "" || *confirmSiteID == "" || *reason == "" {
+		return errors.New("--edge-node-id, --ledger-epoch, --confirm-site-id, and --reason are required")
+	}
+	if err := requireExistingRegularFile(*dbPath, "--db must name an existing Site database"); err != nil {
+		return err
+	}
+	archive, err := store.Open(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	result, err := siteapp.NewService(archive).Dispatch(
+		context.Background(), siteapp.LocalCLIActor(), siteapp.AcceptRestoredArchiveLoss{
+			EdgeNodeID: *edgeNodeID, LedgerEpoch: *ledgerEpoch,
+			ConfirmedSiteID: *confirmSiteID, Reason: *reason,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if !result.ArchiveLossAccepted {
+		return errors.New("archive-loss decision was not applied")
+	}
+	return writeJSON(map[string]any{
+		"status": "archive_lost", "edge_node_id": *edgeNodeID,
+		"ledger_epoch": *ledgerEpoch,
+	})
 }
 
 func runAccount(args []string) error {
@@ -141,27 +283,35 @@ func runAccountRecover(args []string) error {
 }
 
 func readOwnerOnlySecret(path string) (string, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
-		return "", fmt.Errorf("stat password file: %w", err)
+		return "", fmt.Errorf("stat secret file: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", errors.New("password file must be a regular file")
+		return "", errors.New("secret file must be a regular file")
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return "", errors.New("password file must be owner-only")
+		return "", errors.New("secret file must be owner-only")
 	}
 	value, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read password file: %w", err)
+		return "", fmt.Errorf("read secret file: %w", err)
 	}
 	password := string(value)
 	password = strings.TrimSuffix(password, "\n")
 	password = strings.TrimSuffix(password, "\r")
 	if password == "" {
-		return "", errors.New("password file is empty")
+		return "", errors.New("secret file is empty")
 	}
 	return password, nil
+}
+
+func requireExistingRegularFile(path string, message string) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New(message)
+	}
+	return nil
 }
 
 func runServe(args []string) error {
@@ -179,6 +329,7 @@ func runServe(args []string) error {
 	publicOrigin := flags.String("public-origin", "", "public Caddy HTTPS origin")
 	developmentHTTP := flags.Bool("development-http", false, "allow loopback HTTP origin for development")
 	certificateFile := flags.String("broker-certificate-file", "", "broker certificate shown in Console status")
+	storageWarningPercent := flags.Int("storage-warning-percent", 90, "Site filesystem usage warning percent")
 	outputBrokerURL := flags.String("output-broker-url", "", "external application MQTT broker URL")
 	outputClientID := flags.String("output-client-id", "iotkit-site-output", "external MQTT client ID")
 	outputUsername := flags.String("output-username", "", "external MQTT username")
@@ -266,13 +417,14 @@ func runServe(args []string) error {
 		return fmt.Errorf("initialize Site sessions: %w", err)
 	}
 	httpHandler, err := sitehttp.New(sitehttp.Config{
-		Store:           archive,
-		Site:            siteapp.NewService(archive),
-		Accounts:        siteapp.NewAccountService(archive),
-		Sessions:        sessions,
-		PublicOrigin:    *publicOrigin,
-		DevelopmentHTTP: *developmentHTTP,
-		CertificateFile: *certificateFile,
+		Store:                 archive,
+		Site:                  siteapp.NewService(archive),
+		Accounts:              siteapp.NewAccountService(archive),
+		Sessions:              sessions,
+		PublicOrigin:          *publicOrigin,
+		DevelopmentHTTP:       *developmentHTTP,
+		CertificateFile:       *certificateFile,
+		StorageWarningPercent: *storageWarningPercent,
 	})
 	if err != nil {
 		return fmt.Errorf("initialize Site HTTP: %w", err)

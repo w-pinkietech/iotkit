@@ -39,11 +39,15 @@ Wave 1/2は将来の責務地図であり、現在すべてを実装するバッ
 | 実センサーとadapter境界 | BravePI MainboardのUARTから温度と接点入力を取得し、Edgeで耐久保存してSiteへ渡せる。BravePI固有処理はadapter内へ閉じ、疑似adapterまたは別adapterが同じingest契約を使える | Raspberry PiとBravePIによる温度・接点の実信号証拠、host上のadapter境界test |
 | 複数Edge | 1つのSiteへ複数Edgeを同時接続でき、identity、credential、topic、raw record、cursor、表示が混ざらない | BravePI実機Edge 1台の試験に加え、host上で疑似Edge 2台を同時接続する統合test |
 | Site Console | 工場LANのWindows browserからCaddy HTTPS経由で利用できる。全画面でloginを要求し、個人accountと`viewer`、`admin`、`system_admin`を分離する。Edge、device、signalを別階層で表示し、descriptorで発見したEdgeの初回Site activation、sensor type、現在値、最終受信時刻、停止・古い・未設定状態を日本語で確認できる。表示名と設置場所を設定でき、変更者と変更内容を監査できる | browser E2E、activation権限・再送・未登録recordsのnegative test、監査と秘密非表示test、現場担当者役による操作確認 |
+| 履歴と汎用export | sensor、Edge、期間を指定してSiteに保存された履歴を検索できる。大量データは有界queryと時間集約でgraph表示する。標準CSVは保存済みの補正・判定・累積結果を出し、受信した生データCSVは調査用として分離する。画面内の最新数件だけを履歴機能とは扱わない | query境界・pagination・集約test、加工後/生データCSV escaping test、Console browser E2E、長期間・高頻度データの負荷test |
 | Siteでの意味付け | IoTKitの汎用語彙として、数値の現在値、booleanの現在状態、接点・光等から作る累積値、補正、しきい値による状態・alarmを扱える。設定はfuture-onlyで、過去値を暗黙に再計算しない。保存前に実信号previewで挙動を確認できる | evaluatorの境界test、Console/API E2E、mapping revisionとfuture-only test |
 | 外部application出力 | Siteの意味付けと、出力先固有のpayload変換を分離し、Output Adapterを追加できる。YokaKit Adapterは合意済みの`source-id`、`signal-id`、observation contractを使い、IoTKitの累積値を`kind=production`へ、boolean状態を`onoff`または`gantt_chart`へ、alarm判定を`alarm`へ変換し、source statusも送れる。barcodeはIoTKit v1で直接取り込まない | YokaKit契約fixture、YokaKitとのconsumer contract test、YokaKit非依存のOutput Adapter境界test |
 | 配送と保管責任 | Site activation後にpublication admissionされたrecordはSiteの`accepted-through`までEdgeが保持する。登録前ローカル値はpublication identityを持たずSiteへ送らない。Siteが受理したraw recordは再起動後も残る。外部出力eventはMQTT PUBACKまでSite outboxへ残り、at-least-once再送時に同じeventを識別できる | Edge/Site/Broker再起動、activation境界、未登録records拒否、経路断、重複、DB書込失敗、outbox再送・収束test |
 | MQTTと証明書 | MQTTはTLS、匿名禁止、主体ごとのcredential、exact topic ACLを使う。Mosquitto server certificate lifecycleはIoTKitの意味付けやYokaKitに依存しないBroker-host運用componentが担う。完成済みbundleのinstall経路と`lego` ACME経路を持ち、検証、原子的切替、reload、新規TLS/MQTT probe、失敗時rollback、期限statusまで自動化する | 実Brokerの認証・ACL・TLS negative matrix、Pebbleを使う自動更新test、更新失敗とrollback test、期限status |
 | Siteの認証と復旧 | password、credential、秘密鍵をlog、監査、画面、Gitへ出さない。初期所有権と緊急password復旧はSite hostのlocal CLIだけで行い、sessionを失効できる。Site ConsoleはHTTPS失敗時にHTTPへfallbackしない | account/session統合test、secret scan、local CLI復旧test、Caddy障害test |
+| Siteの保存運用 | Site DB使用量、hostの利用可能容量、raw・意味付け・outboxの件数と滞留を確認できる。rawの保持期間と削除権威を明示し、未配送outboxや復旧に必要な状態を容量対策として黙って削除しない | 容量watermark test、retention境界test、Console/API E2E、容量不足negative test |
+| backup・復元・更新 | Siteの整合したbackupを秘密情報を漏らさず作成し、新規環境へ検証付きで復元できる。復元中の書込みを防ぎ、失敗時は元DBを保持する。手動version更新は事前backup、migration、health確認、既知良好versionへのrollback手順を持つ | backup/restore往復test、破損・異version・容量不足negative test、更新/rollback rehearsalと手順書 |
+| 障害診断 | Consoleとlocal診断から、sensor停止、Input Adapter停止、Edge停止、Edge-Broker通信断、Site受信停止、外部Broker配送停止、outbox滞留、容量警告を区別できる。推測で「稼働中」と表示しない | 状態組合せtest、stale境界test、障害注入E2E、診断手順 |
 
 「データを黙って失わない」の検証境界は次とする。
 
@@ -67,6 +71,7 @@ BravePI温度・接点
   -> Site ConsoleでEdgeを発見・activation
   -> IoTKit Site raw保存
   -> Site Consoleで現在値と状態を確認
+  -> 期間を指定して履歴graphを確認し、同じ条件をCSV出力
   -> 累積値・boolean状態・alarmを設定
   -> YokaKit Adapterから合意済みMQTT契約で出力
   -> Edge/Site/Broker再起動と通信断
@@ -75,6 +80,7 @@ BravePI温度・接点
 
 この実機Edge 1台のシナリオに、host上の疑似Edge 2台同時接続、Site DB書込失敗、MQTT認証失敗、
 誤CA・誤hostname・期限切れcertificate、sensor信号停止、password紛失時のlocal CLI復旧を加える。
+さらにSite容量watermark、整合backupからの復元、手動更新の失敗とrollbackをhost上で確認する。
 現場担当者役がWindows browserからloginし、現在値確認、意味付け、出力確認、障害状態の把握を
 手順書どおり完了できた時点でv1完成とする。
 

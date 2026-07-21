@@ -248,16 +248,19 @@ side-effect-free `/api/v1/ingest/validate` endpoint. Its principal, staging,
 deduplication, health, and episode-audit boundaries are distinct from the
 control API.
 
-The current slice is deliberately narrow: one paired BravePI temperature sensor through
-the existing Long Range BLE/BravePI Mainboard/UART path, one IoTKit Edge, one standard MQTT Broker,
-one IoTKit Site, raw SQLite storage, application-level accepted-through, future-only semantic
-projection, a durable application MQTT outbox, and direct CLI queries. BravePI owns
+The current v1 candidate supports BravePI temperature/contact input through the existing Long
+Range BLE/BravePI Mainboard/UART path and generic Input Adapter/driver boundaries, multiple
+IoTKit Edges, one standard MQTT Broker, one IoTKit Site, raw SQLite storage,
+application-level accepted-through, future-only semantic projection, durable Output Adapter MQTT
+outboxes, an authenticated Site Console, bounded history graphs, and generic CSV export. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
-BravePI Mainboard UART stream. A production-shaped one-Edge bootstrap exists for the Broker/Site
-TLS boundary. Automatic Broker certificate issuance/renewal is now designed as a Broker-host
-operations component but is not implemented in this slice. Enrollment, credential rotation,
-Site backup/restore, legacy HTTPS migration, multi-Edge-Node hardware, YokaKit integration, and UI
-remain later implementation work.
+BravePI Mainboard UART stream. A production-shaped multi-Edge bootstrap exists for the Broker/Site
+TLS boundary. The Broker-host certificate component validates and atomically installs bundles,
+supports `lego` ACME renewal, probes MQTT/HTTPS, and rolls back a failed install. Site has local
+accounts, factual storage/diagnostic views, and encrypted backup/new-path restore with explicit
+archive-gap recovery. YokaKit remains outside IoTKit and is reached through its versioned Output
+Adapter contract. Short-lived credential enrollment/rotation and retained replay for a restored
+archive gap remain post-v1 hardening work.
 
 ## Crate map
 

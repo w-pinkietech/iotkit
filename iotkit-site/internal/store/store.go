@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	ErrConflict = errors.New("raw record content conflict")
-	ErrGap      = errors.New("batch starts after the contiguous cursor")
+	ErrConflict                = errors.New("raw record content conflict")
+	ErrGap                     = errors.New("batch starts after the contiguous cursor")
+	ErrArchiveRecoveryRequired = errors.New("restored Site is missing Edge records and requires an explicit recovery decision")
 )
 
 type Store struct {
@@ -639,7 +640,35 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 	if err != nil {
 		return noAck, err
 	}
+	restoreID, restoreCheckPending, err := pendingRestoredCursorCheckTx(
+		ctx, tx, batch.EdgeNodeID, batch.LedgerEpoch,
+	)
+	if err != nil {
+		return noAck, err
+	}
 	if batch.CursorStart > currentCursor+1 {
+		if restoreCheckPending {
+			now := time.Now().UnixMilli()
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE site_restore_cursor_checks
+				SET state = 'recovery_required', observed_cursor_start = ?, updated_at = ?
+				WHERE restore_id = ? AND edge_node_id = ? AND ledger_epoch = ?
+					AND state = 'pending'
+			`, batch.CursorStart, now, restoreID, batch.EdgeNodeID, batch.LedgerEpoch); err != nil {
+				return noAck, err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE edge_activations
+				SET state = 'recovery_hold', revision = revision + 1, updated_at = ?
+				WHERE edge_node_id = ? AND ledger_epoch = ? AND state = 'active'
+			`, now, batch.EdgeNodeID, batch.LedgerEpoch); err != nil {
+				return noAck, err
+			}
+			if err := tx.Commit(); err != nil {
+				return noAck, err
+			}
+			return noAck, ErrArchiveRecoveryRequired
+		}
 		return noAck, ErrGap
 	}
 
@@ -682,6 +711,16 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 				accepted_through = excluded.accepted_through,
 				updated_at = excluded.updated_at
 		`, batch.EdgeNodeID, batch.LedgerEpoch, acceptedThrough, now); err != nil {
+			return noAck, err
+		}
+	}
+	if restoreCheckPending {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE site_restore_cursor_checks
+			SET state = 'verified', observed_cursor_start = ?, updated_at = ?
+			WHERE restore_id = ? AND edge_node_id = ? AND ledger_epoch = ?
+				AND state = 'pending'
+		`, batch.CursorStart, time.Now().UnixMilli(), restoreID, batch.EdgeNodeID, batch.LedgerEpoch); err != nil {
 			return noAck, err
 		}
 	}

@@ -8,6 +8,148 @@ info:
 servers:
   - url: /
 paths:
+  /api/v1/history:
+    get:
+      operationId: listHistory
+      summary: Query a bounded page of durably stored sensor history
+      security:
+        - SiteSession: []
+      parameters:
+        - $ref: "#/components/parameters/HistoryFrom"
+        - $ref: "#/components/parameters/HistoryTo"
+        - $ref: "#/components/parameters/HistorySignalRef"
+        - $ref: "#/components/parameters/HistoryEdgeNodeID"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A stable newest-first history page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoryPage"
+        default:
+          $ref: "#/components/responses/RequestError"
+  /api/v1/history/series:
+    get:
+      operationId: getHistorySeries
+      summary: Aggregate one sensor history into bounded time buckets
+      security:
+        - SiteSession: []
+      parameters:
+        - $ref: "#/components/parameters/HistoryFrom"
+        - $ref: "#/components/parameters/HistoryTo"
+        - $ref: "#/components/parameters/HistorySignalRefRequired"
+        - name: bucket_ms
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: At most 1000 chronological aggregate points
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistorySeries"
+        default:
+          $ref: "#/components/responses/RequestError"
+  /api/v1/history.csv:
+    get:
+      operationId: exportHistoryCSV
+      summary: Export the same bounded history filter as UTF-8 CSV
+      security:
+        - SiteSession: []
+      parameters:
+        - $ref: "#/components/parameters/HistoryFrom"
+        - $ref: "#/components/parameters/HistoryTo"
+        - $ref: "#/components/parameters/HistorySignalRef"
+        - $ref: "#/components/parameters/HistoryEdgeNodeID"
+      responses:
+        "200":
+          description: CSV with a UTF-8 BOM for spreadsheet interoperability
+          content:
+            text/csv:
+              schema:
+                type: string
+        "422":
+          description: More than 100000 rows matched; narrow the filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        default:
+          $ref: "#/components/responses/RequestError"
+  /api/v1/semantic-history.csv:
+    get:
+      operationId: exportSemanticHistoryCSV
+      summary: Export persisted processed semantic observations as UTF-8 CSV
+      description: >
+        Exports the results stored when Site applied calibration and semantic
+        rules. Historical observations are not recomputed with current rules.
+      security:
+        - SiteSession: []
+      parameters:
+        - $ref: "#/components/parameters/HistoryFrom"
+        - $ref: "#/components/parameters/HistoryTo"
+        - $ref: "#/components/parameters/HistorySignalRef"
+        - $ref: "#/components/parameters/HistoryEdgeNodeID"
+      responses:
+        "200":
+          description: Processed observation CSV with a UTF-8 BOM
+          content:
+            text/csv:
+              schema:
+                type: string
+        "422":
+          description: More than 100000 observations matched; narrow the filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        default:
+          $ref: "#/components/responses/RequestError"
+  /api/v1/system/storage:
+    get:
+      operationId: getStorageStatus
+      summary: Read Site database, filesystem, and pending-work storage facts
+      security:
+        - SiteSession: []
+      responses:
+        "200":
+          description: Current storage facts observed by Site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageStatus"
+        default:
+          $ref: "#/components/responses/RequestError"
+  /api/v1/system/diagnostics:
+    get:
+      operationId: getDiagnostics
+      summary: Read factual Site, Edge, sensor, output, and restore diagnostics
+      security:
+        - SiteSession: []
+      responses:
+        "200":
+          description: Bounded diagnostic issues and explicit observability limitations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiagnosticReport"
+        default:
+          $ref: "#/components/responses/RequestError"
   /api/v1/mapping-previews:
     post:
       operationId: createMappingPreview
@@ -54,6 +196,41 @@ components:
       in: cookie
       name: iotkit_site_session
   parameters:
+    HistoryFrom:
+      name: from
+      in: query
+      required: true
+      description: Inclusive Site receipt time in Unix milliseconds.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    HistoryTo:
+      name: to
+      in: query
+      required: true
+      description: Exclusive Site receipt time in Unix milliseconds; ranges are limited to 31 days.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    HistorySignalRef:
+      name: signal_ref
+      in: query
+      schema:
+        type: string
+    HistorySignalRefRequired:
+      name: signal_ref
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    HistoryEdgeNodeID:
+      name: edge_node_id
+      in: query
+      schema:
+        type: string
     CSRFToken:
       name: X-CSRF-Token
       in: header
@@ -70,6 +247,145 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
   schemas:
+    HistoryRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - signal_ref
+        - series_key
+        - edge_node_id
+        - ledger_epoch
+        - pub_seq
+        - received_at
+        - observed_at
+        - values
+        - value_type
+        - unit
+        - display_name
+        - decimal_places
+        - display_value_kind
+      properties:
+        signal_ref: { type: string }
+        series_key: { type: string }
+        edge_node_id: { type: string }
+        ledger_epoch: { type: string }
+        pub_seq: { type: integer, format: int64 }
+        received_at: { type: integer, format: int64 }
+        observed_at: { type: integer, format: int64 }
+        values:
+          type: array
+          items: { type: number }
+        value_type: { type: string }
+        unit: { type: string }
+        display_name: { type: string }
+        decimal_places: { type: integer }
+        display_value_kind: { type: string }
+    HistoryPage:
+      type: object
+      additionalProperties: false
+      required: [records, has_more]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistoryRecord"
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+    HistorySeriesPoint:
+      type: object
+      additionalProperties: false
+      required: [bucket_start, minimum, average, maximum, sample_count]
+      properties:
+        bucket_start: { type: integer, format: int64 }
+        minimum: { type: number }
+        average: { type: number }
+        maximum: { type: number }
+        sample_count: { type: integer, format: int64 }
+    HistorySeries:
+      type: object
+      additionalProperties: false
+      required: [signal_ref, display_name, unit, value_type, sample_count, points]
+      properties:
+        signal_ref: { type: string }
+        display_name: { type: string }
+        unit: { type: string }
+        value_type: { type: string }
+        sample_count: { type: integer, format: int64 }
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistorySeriesPoint"
+    StorageStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - state
+        - filesystem_available
+        - database_bytes
+        - reclaimable_bytes
+        - disk_total_bytes
+        - disk_available_bytes
+        - disk_used_percent
+        - warning_percent
+        - raw_record_count
+        - semantic_observation_count
+        - pending_output_count
+        - projection_failure_count
+        - backup_protected_raw_count
+        - unprotected_raw_count
+        - automatic_raw_purge_enabled
+      properties:
+        state:
+          type: string
+          enum: [healthy, warning, critical, unavailable]
+        filesystem_available: { type: boolean }
+        database_bytes: { type: integer, format: int64 }
+        reclaimable_bytes: { type: integer, format: int64 }
+        disk_total_bytes: { type: integer, format: int64, minimum: 0 }
+        disk_available_bytes: { type: integer, format: int64, minimum: 0 }
+        disk_used_percent: { type: integer, minimum: 0, maximum: 100 }
+        warning_percent: { type: integer, minimum: 50, maximum: 99 }
+        raw_record_count: { type: integer, format: int64, minimum: 0 }
+        semantic_observation_count: { type: integer, format: int64, minimum: 0 }
+        pending_output_count: { type: integer, format: int64, minimum: 0 }
+        projection_failure_count: { type: integer, format: int64, minimum: 0 }
+        last_backup_id: { type: string }
+        last_backup_at: { type: integer, format: int64, minimum: 0 }
+        last_backup_raw_record_count: { type: integer, format: int64, minimum: 0 }
+        backup_protected_raw_count: { type: integer, format: int64, minimum: 0 }
+        unprotected_raw_count: { type: integer, format: int64, minimum: 0 }
+        automatic_raw_purge_enabled: { type: boolean }
+    DiagnosticIssue:
+      type: object
+      additionalProperties: false
+      required: [code, severity, component, summary, detail]
+      properties:
+        code: { type: string }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        component: { type: string }
+        resource_ref: { type: string }
+        summary: { type: string }
+        detail: { type: string }
+        observed_at: { type: integer, format: int64, minimum: 0 }
+    DiagnosticReport:
+      type: object
+      additionalProperties: false
+      required: [generated_at, state, issues, truncated, limitations]
+      properties:
+        generated_at: { type: integer, format: int64, minimum: 0 }
+        state:
+          type: string
+          enum: [healthy, attention, critical]
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiagnosticIssue"
+        truncated: { type: boolean }
+        limitations:
+          type: array
+          items: { type: string }
     SemanticKind:
       type: string
       enum: [numeric, boolean, cumulative_counter, alarm]

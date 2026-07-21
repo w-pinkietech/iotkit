@@ -56,6 +56,8 @@ services:
       - ${IOTKIT_SITE_ORIGIN:?}
       - --broker-certificate-file
       - /run/iotkit/broker-tls/server.pem
+      - --storage-warning-percent
+      - ${IOTKIT_SITE_STORAGE_WARNING_PERCENT:-90}
       - --output-broker-url
       - ${IOTKIT_OUTPUT_BROKER_URL:?}
       - --output-client-id

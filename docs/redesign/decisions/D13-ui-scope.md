@@ -63,6 +63,18 @@ routing・projection設定を扱う。
 センサー設置・収集確認・障害調査のためのIoTKit管理面として扱える。Site Consoleへ含める具体的な範囲は
 Site Console/API設計で決め、取得・保存・queryを有界化する。
 
+v1のSite Consoleは、履歴検索、汎用CSV export、Site storage状態を必須とする。履歴はsensor、Edge、期間で
+絞り込み、graphとtableを同じ検索条件から作る。高頻度・長期間のgraphは生record全件をbrowserへ送らず、
+上限付きの時間bucket集約を使う。標準CSVは補正・判定・累積ruleを適用して永続化した
+`semantic_observations_v3`を正本とし、時刻、Edge、sensor identity、rule名・kind、値、単位、series identityと
+適用revisionを含める。export時に現在のruleで過去を再計算しない。`raw_records`のCSVは通信・設定調査用の
+副導線として明示する。どちらも業務帳票やOutput Adapter固有payloadではない。検索やCSV取得は`viewer`も
+利用できるが、保持期間変更、backup、復元、削除は管理権限とlocal host authorityを分離する。
+
+storage画面はDB使用量、filesystem利用可能容量、保存件数、未配送outbox、最終検証済みbackupを事実として表示する。
+単にHTTP応答中であることから「保存サービスは正常」と推測しない。sensor停止、Edge停止、Broker断、Site受信停止、
+外部配送停止、容量警告を同じ「データが古い」表示へ潰さず、観測できない原因は「確認できません」と表示する。
+
 camera映像はmeasurement/MQTT payloadへ載せず、Edge側のoptional media serviceからSiteのHTTPS originを
 経由して表示する。MQTTはcameraの存在、能力、health等のversion付きmetadataにだけ利用する方向とし、
 exact wire contractは別のFull lane設計まで固定しない。camera不在やmedia service停止はraw custodyを止めない。

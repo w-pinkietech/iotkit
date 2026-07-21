@@ -74,8 +74,8 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 25 {
-		t.Fatalf("schema version = %d, want 25", version)
+	if version != 28 {
+		t.Fatalf("schema version = %d, want 28", version)
 	}
 	if got := testTableCount(t, store.db, "site_devices"); got != 1 {
 		t.Fatalf("backfilled devices = %d, want 1", got)
@@ -136,8 +136,8 @@ func TestMigrationSeventeenAddsOutputRouteDiagnostics(t *testing.T) {
 	if err := archive.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 25 {
-		t.Fatalf("schema version=%d, want 25", version)
+	if version != 28 {
+		t.Fatalf("schema version=%d, want 28", version)
 	}
 	var errorCode string
 	var errorAt, successAt sql.NullInt64
@@ -727,6 +727,16 @@ func TestMigrationUpgradesPrePreparedOutputBindingConstraint(t *testing.T) {
 			active INTEGER NOT NULL,
 			lifecycle_state TEXT NOT NULL
 		);
+		CREATE TABLE raw_records (
+			received_at INTEGER NOT NULL,
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			pub_seq INTEGER NOT NULL
+		);
+		CREATE TABLE semantic_observations_v3 (
+			observation_row_id INTEGER PRIMARY KEY,
+			observed_at INTEGER NOT NULL
+		);
 		PRAGMA user_version = 21;
 	`); err != nil {
 		t.Fatal(err)
@@ -810,6 +820,16 @@ func TestMigrationUpgradesPrePreparingExportProfileConstraint(t *testing.T) {
 			binding_id TEXT,
 			active INTEGER NOT NULL,
 			lifecycle_state TEXT NOT NULL
+		);
+		CREATE TABLE raw_records (
+			received_at INTEGER NOT NULL,
+			edge_node_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			pub_seq INTEGER NOT NULL
+		);
+		CREATE TABLE semantic_observations_v3 (
+			observation_row_id INTEGER PRIMARY KEY,
+			observed_at INTEGER NOT NULL
 		);
 		PRAGMA user_version = 22;
 	`); err != nil {
@@ -951,8 +971,8 @@ func TestMigrationTwentyFiveNormalizesOutputSignalIdentities(t *testing.T) {
 	if err := archive.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 25 {
-		t.Fatalf("schema version=%d, want 25", version)
+	if version != 28 {
+		t.Fatalf("schema version=%d, want 28", version)
 	}
 	var identityCount int
 	if err := archive.db.QueryRow(`

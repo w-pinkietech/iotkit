@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -59,6 +60,39 @@ type ActivateEdge struct {
 
 func (ActivateEdge) isSiteOperation() {}
 
+type CreateSiteBackup struct {
+	Destination string
+	Passphrase  string
+}
+
+func (CreateSiteBackup) isSiteOperation() {}
+
+type AcceptRestoredArchiveLoss struct {
+	EdgeNodeID      string
+	LedgerEpoch     string
+	ConfirmedSiteID string
+	Reason          string
+}
+
+func (AcceptRestoredArchiveLoss) isSiteOperation() {}
+
+type BackupCursor struct {
+	EdgeNodeID      string `json:"edge_node_id"`
+	LedgerEpoch     string `json:"ledger_epoch"`
+	AcceptedThrough int64  `json:"accepted_through"`
+}
+
+type BackupManifest struct {
+	FormatVersion  int            `json:"format_version"`
+	BackupID       string         `json:"backup_id"`
+	CreatedAt      int64          `json:"created_at"`
+	SiteID         string         `json:"site_id"`
+	SchemaVersion  int            `json:"schema_version"`
+	RawRecordCount int64          `json:"raw_record_count"`
+	Cursors        []BackupCursor `json:"cursors"`
+	DatabaseSHA256 string         `json:"database_sha256"`
+}
+
 func (operation PutLegacyMQTTRoute) Validate() error {
 	return validateLegacyMQTTRoute(operation.MappingID, operation.Topic)
 }
@@ -74,11 +108,13 @@ type LegacyMQTTRoute struct {
 }
 
 type Result struct {
-	SemanticMapping *semantic.Mapping
-	LegacyMQTTRoute *LegacyMQTTRoute
-	DeviceProfile   *DeviceProfile
-	SignalProfile   *SignalProfile
-	Edge            *Edge
+	SemanticMapping     *semantic.Mapping
+	LegacyMQTTRoute     *LegacyMQTTRoute
+	DeviceProfile       *DeviceProfile
+	SignalProfile       *SignalProfile
+	Edge                *Edge
+	Backup              *BackupManifest
+	ArchiveLossAccepted bool
 }
 
 type Repository interface {
@@ -94,6 +130,8 @@ type Repository interface {
 	ListSetupDevices(context.Context, int) ([]SetupDeviceSource, error)
 	ListEdges(context.Context) ([]Edge, error)
 	RequestEdgeActivation(context.Context, Actor, string, RevisionPrecondition) (Edge, error)
+	ApplyEncryptedBackup(context.Context, Actor, string, string) (BackupManifest, error)
+	ApplyRestoredArchiveLoss(context.Context, Actor, string, string, string, string) error
 }
 
 type Service struct {
@@ -209,6 +247,44 @@ func (service *Service) Dispatch(ctx context.Context, actor Actor, operation Ope
 			return noResult, err
 		}
 		return Result{Edge: &edge}, nil
+	case CreateSiteBackup:
+		if actor.Class != ActorLocalCLI {
+			return noResult, ErrForbidden
+		}
+		if strings.TrimSpace(operation.Destination) == "" ||
+			len(operation.Destination) > 4096 ||
+			strings.IndexFunc(operation.Destination, unicode.IsControl) >= 0 {
+			return noResult, errors.New("backup destination is invalid")
+		}
+		backup, err := service.repository.ApplyEncryptedBackup(
+			ctx, actor, operation.Destination, operation.Passphrase,
+		)
+		if err != nil {
+			return noResult, err
+		}
+		return Result{Backup: &backup}, nil
+	case AcceptRestoredArchiveLoss:
+		if actor.Class != ActorLocalCLI {
+			return noResult, ErrForbidden
+		}
+		for name, value := range map[string]string{
+			"edge node ID":      operation.EdgeNodeID,
+			"ledger epoch":      operation.LedgerEpoch,
+			"confirmed Site ID": operation.ConfirmedSiteID,
+			"reason":            operation.Reason,
+		} {
+			if strings.TrimSpace(value) == "" || len(value) > 512 ||
+				strings.IndexFunc(value, unicode.IsControl) >= 0 {
+				return noResult, fmt.Errorf("invalid %s", name)
+			}
+		}
+		if err := service.repository.ApplyRestoredArchiveLoss(
+			ctx, actor, operation.EdgeNodeID, operation.LedgerEpoch,
+			operation.ConfirmedSiteID, operation.Reason,
+		); err != nil {
+			return noResult, err
+		}
+		return Result{ArchiveLossAccepted: true}, nil
 	default:
 		return noResult, errors.New("unsupported Site operation")
 	}

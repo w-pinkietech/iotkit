@@ -216,10 +216,96 @@ type consoleDeviceView struct {
 
 type consoleLogView struct {
 	ReceivedAt string
+	ObservedAt string
 	Edge       string
 	Sensor     string
+	SignalRef  string
 	Value      string
 	Unit       string
+}
+
+type consoleHistoryChart struct {
+	Path            string
+	DisplayName     string
+	Unit            string
+	Minimum         string
+	Maximum         string
+	Latest          string
+	SampleCount     int64
+	StartLabel      string
+	EndLabel        string
+	AccessibleLabel string
+}
+
+type consoleStorageView struct {
+	Available           bool
+	StateClass          string
+	StateLabel          string
+	DatabaseSize        string
+	ReclaimableSize     string
+	DiskAvailable       string
+	DiskUsedPercent     int
+	WarningPercent      int
+	RawRecordCount      int64
+	ObservationCount    int64
+	PendingOutputCount  int64
+	ProjectionFailures  int64
+	LastBackupAvailable bool
+	LastBackupAt        string
+	LastBackupRecords   int64
+	BackupProtectedRaw  int64
+	UnprotectedRaw      int64
+}
+
+func newConsoleStorageView(status store.StorageStatus) consoleStorageView {
+	view := consoleStorageView{
+		Available:  status.FilesystemAvailable,
+		StateClass: "stale", StateLabel: "容量を確認できません",
+		DatabaseSize:       formatByteCount(uint64(max(status.DatabaseBytes, 0))),
+		ReclaimableSize:    formatByteCount(uint64(max(status.ReclaimableBytes, 0))),
+		DiskUsedPercent:    status.DiskUsedPercent,
+		WarningPercent:     status.WarningPercent,
+		RawRecordCount:     status.RawRecordCount,
+		ObservationCount:   status.SemanticObservationCount,
+		PendingOutputCount: status.PendingOutputCount,
+		ProjectionFailures: status.ProjectionFailureCount,
+		BackupProtectedRaw: status.BackupProtectedRawCount,
+		UnprotectedRaw:     status.UnprotectedRawCount,
+	}
+	if status.FilesystemAvailable {
+		view.DiskAvailable = formatByteCount(status.DiskAvailableBytes)
+	}
+	if status.LastBackupAt != nil {
+		view.LastBackupAvailable = true
+		view.LastBackupAt = time.UnixMilli(*status.LastBackupAt).In(time.Local).Format("2006年1月2日 15:04")
+		view.LastBackupRecords = status.LastBackupRawRecordCount
+	}
+	switch status.State {
+	case store.StorageHealthy:
+		view.StateClass, view.StateLabel = "healthy", "保存容量は正常です"
+	case store.StorageWarning:
+		view.StateClass, view.StateLabel = "in-progress", "保存容量が少なくなっています"
+	case store.StorageCritical:
+		view.StateClass, view.StateLabel = "stale", "保存容量が残りわずかです"
+	}
+	return view
+}
+
+func formatByteCount(bytes uint64) string {
+	const unit = uint64(1024)
+	if bytes < unit {
+		return strconv.FormatUint(bytes, 10) + " B"
+	}
+	value, suffix := float64(bytes), "KiB"
+	for _, candidate := range []string{"KiB", "MiB", "GiB", "TiB"} {
+		suffix = candidate
+		value = float64(bytes) / float64(unit)
+		if value < 1024 || candidate == "TiB" {
+			break
+		}
+		bytes /= unit
+	}
+	return strconv.FormatFloat(value, 'f', 1, 64) + " " + suffix
 }
 
 type consoleAuditView struct {
@@ -950,6 +1036,97 @@ func newConsoleLogViews(
 		})
 	}
 	return views
+}
+
+func newConsoleHistoryLogViews(records []store.HistoryRecord) []consoleLogView {
+	views := make([]consoleLogView, 0, len(records))
+	for _, record := range records {
+		valueType := record.ValueType
+		if record.DisplayValueKind == "boolean" {
+			valueType = "bool"
+		}
+		views = append(views, consoleLogView{
+			ReceivedAt: displayDateTime(record.ReceivedAt),
+			ObservedAt: displayDateTime(record.ObservedAt),
+			Edge:       record.EdgeNodeID,
+			Sensor:     record.DisplayName,
+			SignalRef:  record.SignalRef,
+			Value: displayValuesWithPrecision(
+				record.Values, &valueType, record.DecimalPlaces,
+			),
+			Unit: record.Unit,
+		})
+	}
+	return views
+}
+
+func newConsoleHistoryChart(
+	series store.HistorySeries,
+	signal *consoleSignalView,
+) *consoleHistoryChart {
+	if len(series.Points) == 0 {
+		return nil
+	}
+	displayName := series.DisplayName
+	unit := series.Unit
+	decimalPlaces := 2
+	if signal != nil {
+		displayName = signal.Name
+		unit = signal.Unit
+		if signal.Profile != nil && signal.Profile.Complete() {
+			decimalPlaces = signal.Profile.DecimalPlaces
+		}
+	}
+	minimum, maximum := series.Points[0].Minimum, series.Points[0].Maximum
+	for _, point := range series.Points[1:] {
+		minimum = math.Min(minimum, point.Minimum)
+		maximum = math.Max(maximum, point.Maximum)
+	}
+	dataMinimum, dataMaximum := minimum, maximum
+	rangeValue := maximum - minimum
+	if rangeValue == 0 {
+		rangeValue = math.Max(math.Abs(maximum)*0.1, 1)
+		minimum -= rangeValue / 2
+		maximum += rangeValue / 2
+	}
+	const width, height, left, top, bottom = 920.0, 220.0, 24.0, 18.0, 24.0
+	plotWidth, plotHeight := width-left-12, height-top-bottom
+	firstTime := series.Points[0].BucketStart
+	lastTime := series.Points[len(series.Points)-1].BucketStart
+	timeRange := float64(lastTime - firstTime)
+	if timeRange == 0 {
+		timeRange = 1
+	}
+	var path strings.Builder
+	for index, point := range series.Points {
+		x := left + float64(point.BucketStart-firstTime)/timeRange*plotWidth
+		if len(series.Points) == 1 {
+			x = left + plotWidth/2
+		}
+		y := top + (maximum-point.Average)/(maximum-minimum)*plotHeight
+		command := "L"
+		if index == 0 {
+			command = "M"
+		}
+		_, _ = fmt.Fprintf(&path, "%s %.2f %.2f ", command, x, y)
+	}
+	latest := series.Points[len(series.Points)-1].Average
+	format := func(value float64) string {
+		return strconv.FormatFloat(value, 'f', decimalPlaces, 64)
+	}
+	start := time.UnixMilli(firstTime).In(time.Local)
+	end := time.UnixMilli(lastTime).In(time.Local)
+	return &consoleHistoryChart{
+		Path: path.String(), DisplayName: displayName, Unit: unit,
+		Minimum: format(dataMinimum), Maximum: format(dataMaximum), Latest: format(latest),
+		SampleCount: series.SampleCount,
+		StartLabel:  start.Format("1/2 15:04"), EndLabel: end.Format("1/2 15:04"),
+		AccessibleLabel: fmt.Sprintf(
+			"受信値の推移。%s、%d件、最小%s%s、最大%s%s、最新%s%s",
+			displayName, series.SampleCount, format(dataMinimum), unit,
+			format(dataMaximum), unit, format(latest), unit,
+		),
+	}
 }
 
 func newConsoleAuditViews(events []siteapp.AuditEvent) []consoleAuditView {

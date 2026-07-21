@@ -85,6 +85,37 @@ func TestAdministratorCanActivateAndListEdges(t *testing.T) {
 	}
 }
 
+func TestMaintenanceOperationsRequireLocalCLIAndUseTypedRepositoryMethods(t *testing.T) {
+	repository := &fakeRepository{backup: BackupManifest{BackupID: "backup_test"}}
+	service := NewService(repository)
+	viewer := AccountActor(
+		"acct_00000000000000000000000000000001",
+		AccountRoleSystemAdmin,
+	)
+	if _, err := service.Dispatch(context.Background(), viewer, CreateSiteBackup{
+		Destination: "/backup/site", Passphrase: "secret",
+	}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("network backup error=%v, want ErrForbidden", err)
+	}
+	result, err := service.Dispatch(
+		context.Background(), LocalCLIActor(),
+		CreateSiteBackup{Destination: "/backup/site", Passphrase: "secret"},
+	)
+	if err != nil || result.Backup == nil || result.Backup.BackupID != "backup_test" {
+		t.Fatalf("backup result=%#v err=%v", result, err)
+	}
+	accepted, err := service.Dispatch(
+		context.Background(), LocalCLIActor(),
+		AcceptRestoredArchiveLoss{
+			EdgeNodeID: "edge-node-01", LedgerEpoch: "epoch-01",
+			ConfirmedSiteID: "site-01", Reason: "verified unavailable archive",
+		},
+	)
+	if err != nil || !accepted.ArchiveLossAccepted || repository.archiveLossCalls != 1 {
+		t.Fatalf("archive-loss result=%#v calls=%d err=%v", accepted, repository.archiveLossCalls, err)
+	}
+}
+
 func TestSignalProfileV2Validation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -385,6 +416,31 @@ type fakeRepository struct {
 	edges              []Edge
 	edge               Edge
 	activateEdgeCalls  int
+	backup             BackupManifest
+	backupCalls        int
+	archiveLossCalls   int
+}
+
+func (repository *fakeRepository) ApplyEncryptedBackup(
+	context.Context,
+	Actor,
+	string,
+	string,
+) (BackupManifest, error) {
+	repository.backupCalls++
+	return repository.backup, nil
+}
+
+func (repository *fakeRepository) ApplyRestoredArchiveLoss(
+	context.Context,
+	Actor,
+	string,
+	string,
+	string,
+	string,
+) error {
+	repository.archiveLossCalls++
+	return nil
 }
 
 func (repository *fakeRepository) ListEdges(context.Context) ([]Edge, error) {
