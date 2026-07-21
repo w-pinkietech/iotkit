@@ -27,6 +27,49 @@ pub struct AcceptedThrough {
     pub accepted_through: i64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "family", rename_all = "snake_case")]
+enum EgressRecord {
+    Measurement(MeasurementRecord),
+    Annotation(AnnotationRecord),
+    CommissioningSmoke(CommissioningSmokeRecord),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeasurementRecord {
+    schema_version: u32,
+    epoch: String,
+    pub_seq: i64,
+    series_key: String,
+    values: Vec<f64>,
+    event_time: i64,
+    event_time_source: String,
+    time_source: String,
+    time_quality: String,
+    received_at: i64,
+    device_time: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnnotationRecord {
+    schema_version: u32,
+    epoch: String,
+    pub_seq: i64,
+    subtype: String,
+    prior_epoch: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommissioningSmokeRecord {
+    schema_version: u32,
+    epoch: String,
+    pub_seq: i64,
+    test_id: String,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("invalid egress v1 message: {0}")]
 pub struct WireError(String);
@@ -64,21 +107,10 @@ impl RecordBatch {
         }
 
         for (offset, record) in self.records.iter().enumerate() {
-            let object = record
-                .as_object()
-                .ok_or_else(|| WireError("record must be an object".into()))?;
             let expected_seq = self.cursor_start + offset as i64;
-            if object.get("schema_version").and_then(Value::as_u64)
-                != Some(EGRESS_SCHEMA_VERSION as u64)
-            {
-                return invalid("record schema_version mismatch");
-            }
-            if object.get("epoch").and_then(Value::as_str) != Some(self.ledger_epoch.as_str()) {
-                return invalid("record epoch mismatch");
-            }
-            if object.get("pub_seq").and_then(Value::as_i64) != Some(expected_seq) {
-                return invalid("record pub_seq is not contiguous");
-            }
+            let record: EgressRecord = serde_json::from_value(record.clone())
+                .map_err(|error| WireError(format!("record schema is invalid: {error}")))?;
+            record.validate(&self.ledger_epoch, expected_seq)?;
         }
 
         let encoded = serde_json::to_vec(self)
@@ -88,6 +120,80 @@ impl RecordBatch {
         }
         Ok(())
     }
+}
+
+impl EgressRecord {
+    fn validate(&self, ledger_epoch: &str, expected_seq: i64) -> Result<(), WireError> {
+        let (schema_version, epoch, pub_seq) = match self {
+            Self::Measurement(record) => {
+                let device_time =
+                    if record.device_time.is_null() {
+                        None
+                    } else {
+                        Some(record.device_time.as_i64().ok_or_else(|| {
+                            WireError("measurement device_time is invalid".into())
+                        })?)
+                    };
+                if record.series_key.is_empty()
+                    || record.values.is_empty()
+                    || record.values.iter().any(|value| !value.is_finite())
+                    || !matches!(
+                        record.time_source.as_str(),
+                        "device_ntp" | "device_rtc" | "edge_node" | "edge_node_adjusted"
+                    )
+                    || !matches!(
+                        record.time_quality.as_str(),
+                        "synced" | "holdover" | "unsynced"
+                    )
+                {
+                    return invalid("measurement fields are invalid");
+                }
+                match record.event_time_source.as_str() {
+                    "received_at" if record.event_time == record.received_at => {}
+                    "device"
+                        if matches!(record.time_source.as_str(), "device_ntp" | "device_rtc")
+                            && device_time == Some(record.event_time) => {}
+                    "edge_node_adjusted"
+                        if record.time_source == "edge_node_adjusted"
+                            && device_time == Some(record.event_time) => {}
+                    _ => return invalid("measurement event_time is inconsistent"),
+                }
+                (record.schema_version, &record.epoch, record.pub_seq)
+            }
+            Self::Annotation(record) => {
+                if record.subtype != "epoch_start" || record.prior_epoch.is_empty() {
+                    return invalid("annotation must be epoch_start with prior_epoch");
+                }
+                (record.schema_version, &record.epoch, record.pub_seq)
+            }
+            Self::CommissioningSmoke(record) => {
+                if !valid_commissioning_smoke_test_id(&record.test_id) {
+                    return invalid("commissioning_smoke test_id is invalid");
+                }
+                (record.schema_version, &record.epoch, record.pub_seq)
+            }
+        };
+        if schema_version != EGRESS_SCHEMA_VERSION {
+            return invalid("record schema_version mismatch");
+        }
+        if epoch != ledger_epoch {
+            return invalid("record epoch mismatch");
+        }
+        if pub_seq != expected_seq {
+            return invalid("record pub_seq is not contiguous");
+        }
+        Ok(())
+    }
+}
+
+fn valid_commissioning_smoke_test_id(test_id: &str) -> bool {
+    let Some(random) = test_id.strip_prefix("smoke-") else {
+        return false;
+    };
+    random.len() == 32
+        && random
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 impl AcceptedThrough {

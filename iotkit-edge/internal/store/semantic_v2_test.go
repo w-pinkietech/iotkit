@@ -437,15 +437,9 @@ func acceptSemanticBatch(
 	records := make([]json.RawMessage, 0, len(samples))
 	for index, values := range samples {
 		pubSeq := start + int64(index)
-		record, err := json.Marshal(map[string]any{
-			"family":         "measurement",
-			"schema_version": 1,
-			"epoch":          ledgerEpoch,
-			"pub_seq":        pubSeq,
-			"series_key":     inventorySeriesKey,
-			"values":         values,
-			"event_time":     pubSeq * 1_000,
-		})
+		record, err := json.Marshal(testMeasurementRecord(
+			ledgerEpoch, pubSeq, inventorySeriesKey, values, pubSeq*1_000,
+		))
 		if err != nil {
 			t.Fatal(err)
 		}

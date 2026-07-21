@@ -31,31 +31,26 @@ Status: 確定 (2026-07-03。2026-07-13 MQTT binding簡素化をD9へ反映)
 
 **検疫データの配送規則**(用語集・D5との接続): 検疫中の行は配送しない(検疫は保存・可視化=R11のみ。
 用語集どおり)。**検疫解除時、解除された行はpublication log(決定4)に新規採番されて通常のmeasurement
-レコードとして流れる**(=D5「解除は新規配送イベント」の実体)。あわせて検疫遷移annotation(決定2)で
-「どのseriesのどの範囲が有効化されたか」を通知する。遡及検疫(既配送データの事後隔離)は
-annotationのみ(データは既に配送済みのため回収はしない——消費者側の扱いはannotationを見て判断)。
+レコードとして流れる**(=D5「解除は新規配送イベント」の実体)。v1は検疫遷移annotationを
+定義しない。遡及検疫を含む追加annotationは、具体的なschemaと受理側の挙動を決めた将来の
+version付き契約として追加する。
 
-## 決定2: record family枠組み(前方互換の骨格)
+## 決定2: record family枠組み(version付きstrict契約)
 
 ストリームの全レコードに **family識別子+スキーマ版** を付ける。
 
-- **読み飛ばし規則(限定付き)**: 未知familyの読み飛ばしが許されるのは**追加的(optional)な
-  familyに限る**。消費者が必ず見るべき情報を後から足す場合は契約major版上げ+購読再交渉が必須。
-  「静かな読み飛ばし」と「必須情報」は両立しない——これを契約規則として明文化する。
-- **版交渉は購読(target登録)時に確定する**。Edge Nodeは合意したmajor版のレコードのみ配送する
-  (「未知majorで停止」の検知点はレコード受信時ではなく登録時の交渉)。minorの未知フィールドは
-  optionalフィールドの読み飛ばしのみ許容。
+- **v1はstrict**: 未知family、未知field、必須field欠落、未知enumを含むbatchはraw保存前に
+  全体を拒否し、`accepted-through`を返さない。fieldまたはfamily追加はversion付き契約変更とする。
+- **版交渉は将来要件**。現行v1はtarget登録時のminor版交渉やoptional field読み飛ばしを実装せず、
+  Rust/Go共通conformance fixtureで同じ受理文法を固定する。
 - **version 1で確定する3族**:
   - **measurement族**: series識別(D5のseries_key)+event_time(決定3)+値。**一時点=1レコード**。
     values配列は**単一seriesの1観測の値**(値型が `array<scalar,N>` の場合の固定長ベクトル。
     bool/intはf64正規化=D6決定10)であり、**多チャネル束ねでも時間方向ブロックでもない**
     (多軸はチャネル=別series。D5/D6・取り込み契約の忠実な反映)。
-  - **annotation族(ストリームannotation)**: データについての構造化通知で、**共有seqを持ち
-    全targetに配送される**(購読フィルタ不可)。最低限: D2が配送必須と確定済みの
-    **custody_lost欠落annotation**、**検疫遷移annotation**(決定1)、**epoch開始annotation**(決定8)。
-    予約(D12波及 2026-07-08): **device_maintenance**(親再起動等の保守イベント)/**counter_discontinuity**
-    (カウンタ非連続)——スキーマ詳細はWave 1出口spec。
-    購読外シリーズを参照するannotationは情報として無視してよい(消費者に契約上の義務を生まない)。
+  - **annotation族(ストリームannotation)**: v1は`epoch_start`だけを定義し、`prior_epoch`を必須とする。
+    measurementと同じ共有seqを持つ。`custody_lost`、検疫遷移、`device_maintenance`、
+    `counter_discontinuity`は予約名ではなく未定義の将来候補であり、v1へ送信してはならない。
 - **commissioning_smoke族(optional、2026-07-15追加)**: 物理センサー由来を偽らず、通常outbox、MQTT、
   IoTKit Edge raw耐久保存、`accepted-through`を導入時に検査する合成レコード。`test_id`は`smoke-`接頭辞付き
   128bit小文字hex。device登録、測定レジストリ、検疫、semantic projectionを通らず、特別なtopicやackも

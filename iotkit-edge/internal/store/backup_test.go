@@ -267,7 +267,9 @@ func TestRestoredCursorGapFailsClosedUntilArchiveLossIsExplicitlyAccepted(t *tes
 	gap.CursorStart = 5
 	gap.CursorEnd = 5
 	gap.PublicationID = contract.PublicationID(gap.EdgeNodeID, gap.LedgerEpoch, 5, 5)
-	gap.Records[0] = []byte(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":5,"series_key":"series-temperature-01","values":[22.5]}`)
+	gap.Records[0] = encodedTestMeasurement(
+		t, "epoch-01", 5, "series-temperature-01", []float64{22.5}, 5_000,
+	)
 	if _, err := archive.AcceptBatch(ctx, gap); !errors.Is(err, ErrArchiveRecoveryRequired) {
 		t.Fatalf("gap error = %v, want ErrArchiveRecoveryRequired", err)
 	}
@@ -343,7 +345,9 @@ func TestContiguousBatchAfterRestoreVerifiesCursorWithoutRecoveryHold(t *testing
 	second.CursorStart = 2
 	second.CursorEnd = 2
 	second.PublicationID = contract.PublicationID(second.EdgeNodeID, second.LedgerEpoch, 2, 2)
-	second.Records[0] = []byte(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":2,"series_key":"series-temperature-01","values":[22]}`)
+	second.Records[0] = encodedTestMeasurement(
+		t, "epoch-01", 2, "series-temperature-01", []float64{22}, 2_000,
+	)
 	if _, err := archive.AcceptBatch(ctx, second); err != nil {
 		t.Fatal(err)
 	}

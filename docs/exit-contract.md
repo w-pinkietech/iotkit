@@ -1,7 +1,7 @@
 # Exit contract (R10)
 
 Status: Approved MQTT v1 target contract. The records/descriptors/accepted-through custody path is
-implemented. The Edge Node activation extension is approved but not yet implemented. The older HTTPS
+implemented, including Edge Node activation and publication admission. The older HTTPS
 publisher is retained only as transitional code and is not started by the Edge Node composition root.
 
 This contract defines how canonical records leave one Edge Node and when that Edge Node may transfer
@@ -17,8 +17,8 @@ part of this contract.
   cursor, then publishes the application custody acknowledgement. It also provides direct raw query
   today and is the Edge-scoped semantic and application export boundary. Semantic projection
   and exporter failure never weaken or roll back raw custody acceptance.
-- **Application consumer** such as YokaKit reads canonical records and maps them into its own domain.
-  Its business result does not authorize Edge Node purge.
+- **Application consumer** such as YokaKit receives a separately mapped Output Adapter contract.
+  It does not consume this raw custody stream, and its business result does not authorize Edge Node purge.
 
 ## Topics
 
@@ -161,6 +161,11 @@ a custody conflict; it is never last-write-wins.
 
 ## Record families
 
+Version 1 accepts exactly `measurement`, `annotation`, and `commissioning_smoke`. Each family is
+strict: missing required fields, unknown fields, unknown enum values, or an unknown family reject the
+complete batch before raw storage or cursor advance. Adding a field or family requires a versioned
+contract change.
+
 ### Measurement
 
 ```json
@@ -174,19 +179,43 @@ a custody conflict; it is never last-write-wins.
   "event_time": 1720000000000,
   "event_time_source": "device",
   "time_source": "device_ntp",
-  "time_quality": "synchronized",
+  "time_quality": "synced",
   "received_at": 1720000000123,
   "device_time": 1720000000000
 }
 ```
 
-`device_time` may be null. All numeric values must be finite. `series_key` is opaque to consumers;
-YokaKit or another application maps it to equipment and business meaning outside IoTKit.
+`device_time` is required but may be null. `values` is non-empty and all numeric values are finite.
+`time_source` is one of `device_ntp`, `device_rtc`, `edge_node`, or `edge_node_adjusted`.
+`time_quality` is one of `synced`, `holdover`, or `unsynced`. `event_time_source` is one of
+`device`, `edge_node_adjusted`, or `received_at` and must agree with the selected timestamp:
+
+- `device`: `time_source` is `device_ntp` or `device_rtc`, `device_time` is present, and
+  `event_time == device_time`.
+- `edge_node_adjusted`: `time_source` is `edge_node_adjusted`, `device_time` is present, and
+  `event_time == device_time`.
+- `received_at`: `event_time == received_at`.
+
+`series_key` is non-empty and opaque to consumers. YokaKit or another application receives a
+separate mapped Output Adapter contract rather than assigning business meaning to this raw record.
 
 ### Annotation
 
-Version 1 retains the existing `epoch_start` annotation. Annotation records share the same
-publication sequence as measurements and therefore participate in the same contiguous cursor.
+Version 1 retains exactly the existing `epoch_start` annotation:
+
+```json
+{
+  "family": "annotation",
+  "schema_version": 1,
+  "epoch": "01J...",
+  "pub_seq": 130,
+  "subtype": "epoch_start",
+  "prior_epoch": "01H..."
+}
+```
+
+`prior_epoch` is required and non-empty. Annotation records share the same publication sequence as
+measurements and therefore participate in the same contiguous cursor.
 
 Additional record families require a versioned contract change. They are not added merely to mirror
 an application table or MQTT topic.
@@ -231,15 +260,20 @@ For a valid batch, IoTKit Edge performs one custody transaction:
    activated epoch, bounds, and contiguous range.
 2. Insert or idempotently verify every raw canonical record.
 3. Advance that Edge Node and epoch's contiguous accepted-through cursor.
-4. Commit the raw records and cursor atomically with durable SQLite settings.
+4. Commit the raw records, fingerprints, and cursor atomically in the selected authoritative store
+   (`embedded` SQLite or `postgres`).
 5. Only after commit, publish the correlated accepted-through message.
 
-SQL failure, ENOSPC, corruption, cancellation before commit, a gap, or a content conflict MUST NOT
+Storage failure, ENOSPC, corruption, cancellation before commit, a gap, or a content conflict MUST NOT
 produce an accepted-through acknowledgement. A lost acknowledgement causes a harmless exact replay.
 
 Edge Node validates schema version, topic/body Edge Node identity, epoch, publication ID, monotonicity,
 and that `accepted_through` does not exceed the published batch. Only then may it advance its target
 cursor. MQTT PUBACK never advances this cursor and never authorizes retention purge.
+
+The shared machine conformance cases in
+[`testdata/egress/v1/record-family-cases.json`](../testdata/egress/v1/record-family-cases.json)
+must produce the same accept/reject result in the Rust publisher contract and Go IoTKit Edge decoder.
 
 ## Retry and outage behavior
 

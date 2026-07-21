@@ -192,7 +192,9 @@ func TestActiveEdgeRejectsUnexpectedEpochWithoutStoringOrAcknowledging(t *testin
 	batch := testBatch(t)
 	batch.LedgerEpoch = "epoch-other"
 	batch.PublicationID = contract.PublicationID(batch.EdgeNodeID, batch.LedgerEpoch, 1, 1)
-	batch.Records[0] = json.RawMessage(`{"family":"measurement","schema_version":1,"epoch":"epoch-other","pub_seq":1,"series_key":"series-temperature-01","values":[21.5]}`)
+	batch.Records[0] = encodedTestMeasurement(
+		t, "epoch-other", 1, "series-temperature-01", []float64{21.5}, 1_000,
+	)
 
 	if _, err := store.AcceptBatch(context.Background(), batch); !errors.Is(err, ErrEdgeNodeNotActive) {
 		t.Fatalf("error = %v, want ErrEdgeNodeNotActive", err)

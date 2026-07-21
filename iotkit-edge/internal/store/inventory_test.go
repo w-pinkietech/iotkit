@@ -54,15 +54,9 @@ func TestDescriptorInventoryRefsAreStableAcrossReplayAndReopen(t *testing.T) {
 func TestReconcileInventorySourcesCreatesMeasurementFirstPlaceholder(t *testing.T) {
 	store := openTestStore(t)
 	batch := testBatch(t)
-	record := map[string]any{
-		"family":         "measurement",
-		"schema_version": 1,
-		"epoch":          batch.LedgerEpoch,
-		"pub_seq":        1,
-		"series_key":     inventorySeriesKey,
-		"values":         []float64{21.5},
-		"event_time":     1000,
-	}
+	record := testMeasurementRecord(
+		batch.LedgerEpoch, 1, inventorySeriesKey, []float64{21.5}, 1_000,
+	)
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -337,18 +331,33 @@ func TestListInventorySignalsUsesLatestValidMeasurement(t *testing.T) {
 	records := []json.RawMessage{
 		inventoryMeasurementRecord(t, 1, seriesKey, []any{20.0}, 1000),
 		inventoryMeasurementRecord(t, 2, seriesKey, []any{21.5}, 2000),
-		inventoryMeasurementRecord(t, 3, seriesKey, []any{"invalid"}, 3000),
 	}
 	batch := contract.RecordBatch{
 		SchemaVersion: 1,
 		EdgeNodeID:    snapshot.EdgeNodeID,
 		LedgerEpoch:   snapshot.LedgerEpoch,
-		PublicationID: contract.PublicationID(snapshot.EdgeNodeID, snapshot.LedgerEpoch, 1, 3),
+		PublicationID: contract.PublicationID(snapshot.EdgeNodeID, snapshot.LedgerEpoch, 1, 2),
 		CursorStart:   1,
-		CursorEnd:     3,
+		CursorEnd:     2,
 		Records:       records,
 	}
 	if _, err := acceptBatchForTest(t, store, batch); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a corrupt/legacy raw row that could not pass the current custody contract.
+	invalid := inventoryMeasurementRecord(t, 3, seriesKey, []any{"invalid"}, 3000)
+	if _, err := store.db.Exec(`
+		INSERT INTO raw_records(
+			edge_node_id, ledger_epoch, pub_seq, publication_id,
+			record_json, record_sha256, received_at
+		) VALUES (?, ?, 3, 'corrupt-fixture', ?, ?, 3000)
+	`, snapshot.EdgeNodeID, snapshot.LedgerEpoch, invalid, make([]byte, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`
+		UPDATE accepted_cursors SET accepted_through = 3
+		WHERE edge_node_id = ? AND ledger_epoch = ?
+	`, snapshot.EdgeNodeID, snapshot.LedgerEpoch); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(`
@@ -508,15 +517,9 @@ func inventoryMeasurementRecord(
 	eventTime int64,
 ) json.RawMessage {
 	t.Helper()
-	encoded, err := json.Marshal(map[string]any{
-		"family":         "measurement",
-		"schema_version": 1,
-		"epoch":          "epoch-01",
-		"pub_seq":        pubSeq,
-		"series_key":     seriesKey,
-		"values":         values,
-		"event_time":     eventTime,
-	})
+	encoded, err := json.Marshal(testMeasurementRecord(
+		"epoch-01", pubSeq, seriesKey, values, eventTime,
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
