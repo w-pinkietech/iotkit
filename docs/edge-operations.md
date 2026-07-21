@@ -12,7 +12,9 @@ configure routers, DNS, IP address allocation, firewalls, or VPNs.
    IoTKit Edge source ID before startup and gives `iotkit-edge-output-<edge-id>` write access only to
    that IoTKit Edge's IoTKit/YokaKit observation and status namespace. Use repeated
    `--edge-publish-topic` only for additional exact legacy application topics.
-4. Start `deploy/compose.edge.yaml`.
+4. `embedded`は`deploy/compose.edge.yaml`、`postgres`はそれに
+   `deploy/compose.edge-postgres.yaml`を重ねて起動する。profile metadataと起動profileが
+   一致しなければIoTKit Edgeは停止する。
 5. Create the first `system_admin` with `iotkit-edge account bootstrap` and an
    owner-only password file. Delete that file afterwards.
 6. Transfer each generated Edge Node handoff through a protected channel. This
@@ -47,6 +49,9 @@ fallback.
   broker PUBACK.
 - **システム**: filesystem使用率、DB size、raw/意味付け/outbox件数、最終backup、
   原因別の診断を確認する。「Console応答中」はEdge NodeやBrokerの正常を意味しない。
+- `postgres` profileではSQLからnamed volumeの空き容量を取得できないため、Consoleは容量を正常扱いしない。
+  `docker compose ... exec postgres df -Pk /var/lib/postgresql/data`をhost監視へ登録し、使用率90%、
+  空き2 GiBでwarning、空き512 MiBでcriticalとする。ConsoleのDB増加量と合わせて確認する。
 - **監査**: who changed a display name, meaning, output, or account.
 - `iotkit-edge-nodectl smoke status`: durable IoTKit Edge acceptance, not merely MQTT PUBACK.
 - `scripts/iotkit-broker-cert status --config DEPLOYMENT/broker-cert.env`: exact
@@ -79,11 +84,26 @@ certificates.
 
 ## 4. Account recovery
 
-Only the IoTKit Edge host can recover a system administrator:
+Only the IoTKit Edge host can recover a system administrator. Compose導入の`embedded`例:
 
 ```bash
-iotkit-edge account recover --db /path/edge.db --login-id admin \
-  --password-file /owner-only/new-password
+docker compose --env-file "$install_root/edge.env" -f deploy/compose.edge.yaml \
+  run --rm -v /owner-only/new-password:/run/iotkit/new-password:ro \
+  edge account recover --storage-profile embedded --db /data/edge.db \
+  --storage-metadata /run/iotkit/storage-profile.json --login-id admin \
+  --password-file /run/iotkit/new-password
+```
+
+`postgres`はoverlayとPostgreSQL接続fileを明示する。
+
+```bash
+docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml \
+  run --rm -v /owner-only/new-password:/run/iotkit/new-password:ro \
+  edge account recover --storage-profile postgres \
+  --postgres-config /run/iotkit/postgres.json \
+  --storage-metadata /run/iotkit/storage-profile.json --login-id admin \
+  --password-file /run/iotkit/new-password
 ```
 
 Recovery revokes existing sessions. Passwords, MQTT credentials, private keys,
@@ -130,7 +150,7 @@ IoTKit Edge DBにはsensor履歴だけでなく、account/session hash、設定�
 含まれる。通常の運用backupとしてDB fileを平文コピーしない。backupの合言葉は
 12文字以上とし、所有者だけが読めるfileから渡す。
 
-稼働中のIoTKit Edgeから整合snapshotを作成できる。次はCompose導入時の例である。
+稼働中のIoTKit Edgeから整合snapshotを作成できる。次は`embedded`のCompose導入例である。
 
 ```bash
 install_root="$HOME/.local/share/iotkit/edge-01"
@@ -147,11 +167,31 @@ docker compose --env-file "$install_root/edge.env" -f deploy/compose.edge.yaml \
   --passphrase-file /run/iotkit/backup-passphrase
 ```
 
+`postgres`ではPostgreSQL toolを含むoverlayを必ず指定し、profileとowner-only接続fileを渡す。
+
+```bash
+docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml \
+  run --rm \
+  -v "$backup_root:/backup" \
+  -v "$install_root/secrets/backup-passphrase:/run/iotkit/backup-passphrase:ro" \
+  edge backup create --storage-profile postgres \
+  --postgres-config /run/iotkit/postgres.json \
+  --storage-metadata /run/iotkit/storage-profile.json \
+  --output "/backup/edge-$(date +%Y%m%d-%H%M%S).iotkit-backup" \
+  --passphrase-file /run/iotkit/backup-passphrase
+```
+
 成功時はformat、IoTKit Edge ID、schema、raw件数、DB hashを含むmanifestをJSONで返す。
 containerはArgon2idとXChaCha20-Poly1305で暗号化・改ざん検知され、mode `0600`で
 新規作成される。同名fileは上書きしない。Consoleの最終backup時刻が更新されたこと、
 別mediaにも暗号化containerを複製できたことを確認する。MQTT credential、certificate、
 private keyはbackupに含まれないため、導入設定側で別に復旧する。
+Composeは暗号化前の一時snapshotをbackup directoryではなく専用tmpfsへ置く。host CLIで実行する場合も、
+所有者だけがアクセスでき、backup対象外で、再起動時に消去される領域を`TMPDIR`へ指定する。
+backup CLIは自動スケジュールを提供しない。導入担当者はOSまたは既存運用基盤から定期実行し、暗号化済み
+containerを別host/mediaへ複製し、失敗通知と定期restore drillを用意する。これがない場合、最後の
+off-host backup以後に受理したrecordのhost障害時RPOは保証されない。
 
 ## 8. IoTKit Edge restore
 
@@ -175,16 +215,74 @@ sessionを失効して復元履歴をtransactionで記録する。検証後、ho
 その`-wal`/`-shm`を一つの退避directoryへ移し、candidateを`edge.db`へrenameしてから
 IoTKit Edgeを起動する。元DBは収束確認まで削除しない。
 
+`postgres` backupは、既存tableを持たない新しいdatabaseへだけ復元できる。IoTKit Edgeを停止した上で、
+管理対象PostgreSQLに一時database（例: `iotkit_restore`）を作り、そのdatabaseを指すowner-onlyの一時
+`postgres.json`を用意して復元する。接続先database名だけを`iotkit_restore`へ変え、通常設定と同じ
+credential・host・portを使い、mode `0600`にする。
+
+```bash
+docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml stop edge
+docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml \
+  exec postgres createdb --username iotkit iotkit_restore
+docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml \
+  run --rm -v "$backup_root:/backup:ro" \
+  -v "$install_root/secrets/postgres-restore.json:/run/iotkit/postgres-restore.json:ro" \
+  -v "$install_root/secrets/backup-passphrase:/run/iotkit/backup-passphrase:ro" \
+  edge backup restore --storage-profile postgres \
+  --postgres-config /run/iotkit/postgres-restore.json \
+  --storage-metadata /run/iotkit/storage-profile.json \
+  --input /backup/SELECTED.iotkit-backup \
+  --passphrase-file /run/iotkit/backup-passphrase
+docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml \
+  run --rm \
+  -v "$install_root/secrets/postgres-restore.json:/run/iotkit/postgres-restore.json:ro" \
+  edge diagnose --storage-profile postgres \
+  --postgres-config /run/iotkit/postgres-restore.json \
+  --storage-metadata /run/iotkit/storage-profile.json
+```
+
+manifest、IoTKit Edge ID、schema、cursor、未配送outboxを確認したら、対象名と暗号化backupを二人確認し、
+次のように現DBを退避して復元DBを通常名へ切り替える。IoTKit Edgeは停止したままにする。
+
+```bash
+old_database="iotkit_before_restore_$(date +%Y%m%d%H%M%S)"
+compose=(docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml)
+"${compose[@]}" exec postgres psql --username iotkit --dbname postgres \
+  --set ON_ERROR_STOP=1 --command \
+  "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('iotkit','iotkit_restore') AND pid <> pg_backend_pid();"
+"${compose[@]}" exec postgres psql --username iotkit --dbname postgres \
+  --set ON_ERROR_STOP=1 --command "ALTER DATABASE iotkit RENAME TO \"$old_database\";"
+"${compose[@]}" exec postgres psql --username iotkit --dbname postgres \
+  --set ON_ERROR_STOP=1 --command 'ALTER DATABASE iotkit_restore RENAME TO iotkit;'
+"${compose[@]}" up --detach edge
+"${compose[@]}" run --rm edge diagnose --storage-profile postgres \
+  --postgres-config /run/iotkit/postgres.json \
+  --storage-metadata /run/iotkit/storage-profile.json
+```
+
+起動、cursor再収束、未配送outboxを確認できるまで退避DBを残す。切替後に失敗した場合はEdgeを停止し、
+新しい`iotkit`を別の失敗名へrenameしてから、`$old_database`を`iotkit`へ戻して再起動する。
+管理対象DBの本体はCompose named volume `postgres-data`にあり、導入directoryの退避だけでは保全されない。
+通常停止で`docker compose down --volumes`を使ってはならない。
+
 古いbackupのcursorより先からEdge Nodeが再開した場合、IoTKit EdgeはackせずEdge Nodeを
 `recovery_hold`にする。`iotkit-edge diagnose`とConsoleは失われる可能性のあるcursor
 範囲を表示する。別backupや元DBから回収できないと判断した場合に限り、IoTKit Edge IDと理由を
 明示して次を実行する。
 
 ```bash
-iotkit-edge backup accept-archive-loss --db /path/edge.db \
+iotkit-edge backup accept-archive-loss --storage-profile embedded --db /path/edge.db \
   --edge-node-id EDGE --ledger-epoch EPOCH \
-  --confirm-edge-id SITE_ID --reason '元DB故障、他の検証済みbackupなし'
+  --confirm-edge-id EDGE_ID --reason '元DB故障、他の検証済みbackupなし'
 ```
+
+PostgreSQLでは`--storage-profile postgres --postgres-config FILE --storage-metadata FILE`を
+同じcommandへ渡す。
 
 これは欠損を修復する操作ではない。`archive_lost`を監査し、永久retryを止めるための
 最終判断である。SQLでcursorやEdge Node stateを直接変更してはならない。
@@ -201,7 +299,8 @@ Edge Node descriptorがIoTKit Edgeへ届くと、retired状態と交換後の継
 
 移行中はIoTKit Edgeを停止し、Edge Nodeからの未ackデータはBroker/Edge Node側へ保持させる。
 SQLiteとPostgreSQLへの二重書込みや、失敗時の自動fallbackは行わない。移行先はIoTKitのtableを
-まだ持たない空databaseにする。
+まだ持たない空databaseにする。IoTKit Edge起動中は同じSQLite deployment lockを保持するため、停止を
+忘れた移行は開始されない。移行処理は保護された一貫snapshotを作ってから全tableをcopyする。
 
 PostgreSQL接続情報はmode `0600`のJSON fileへ保存し、command lineへDSNやpasswordを渡さない。
 

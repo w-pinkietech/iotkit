@@ -17,8 +17,8 @@ func TestOpenCreatesLocalAccountSchema(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 28 {
-		t.Fatalf("schema version = %d, want 28", version)
+	if want := schemaMigrations[len(schemaMigrations)-1].version; version != want {
+		t.Fatalf("schema version = %d, want %d", version, want)
 	}
 	for _, table := range []string{"edge_accounts", "edge_sessions"} {
 		var got int

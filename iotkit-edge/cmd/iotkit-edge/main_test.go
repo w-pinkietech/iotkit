@@ -452,6 +452,26 @@ func TestOpenConfiguredStoreUsesEmbeddedProfileWithoutPostgresConfiguration(t *t
 	defer archive.Close()
 }
 
+func TestExpectedStorageProfileFailsClosedOnDeploymentMismatch(t *testing.T) {
+	t.Setenv("IOTKIT_EXPECTED_STORAGE_PROFILE", "postgres")
+	if err := validateExpectedStorageProfile(store.ProfileEmbedded); err == nil ||
+		!strings.Contains(err.Error(), "does not match deployment") {
+		t.Fatalf("profile mismatch error = %v", err)
+	}
+	if err := validateExpectedStorageProfile(store.ProfilePostgres); err != nil {
+		t.Fatalf("matching profile was rejected: %v", err)
+	}
+	databasePath := filepath.Join(t.TempDir(), "edge.db")
+	archive, err := openConfiguredStore(store.ProfileEmbedded, databasePath, "", "", "")
+	if archive != nil {
+		_ = archive.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "does not match deployment") {
+		t.Fatalf("maintenance store profile mismatch error = %v", err)
+	}
+	assertPathDoesNotExist(t, databasePath)
+}
+
 func assertPathDoesNotExist(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err == nil {

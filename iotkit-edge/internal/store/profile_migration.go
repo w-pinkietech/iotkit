@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -41,9 +44,32 @@ func MigrateSQLiteToPostgres(
 		TargetProfile: ProfilePostgres,
 		TableCounts:   make(map[string]int64),
 	}
-	source, err := sql.Open("sqlite", "file:"+sqlitePath+"?mode=ro")
+	deploymentLock, err := AcquireSQLiteDeploymentLock(sqlitePath)
+	if err != nil {
+		return report, err
+	}
+	defer deploymentLock.Close()
+
+	stagingDirectory, err := os.MkdirTemp(filepath.Dir(sqlitePath), ".iotkit-migration-*")
+	if err != nil {
+		return report, errors.New("create protected SQLite migration staging directory")
+	}
+	defer os.RemoveAll(stagingDirectory)
+	snapshotPath := filepath.Join(stagingDirectory, "source.db")
+	liveSource, err := sql.Open("sqlite", "file:"+sqlitePath+"?mode=ro")
 	if err != nil {
 		return report, errors.New("open SQLite migration source")
+	}
+	if _, err := liveSource.ExecContext(ctx, "VACUUM INTO ?", snapshotPath); err != nil {
+		_ = liveSource.Close()
+		return report, errors.New("create consistent SQLite migration snapshot")
+	}
+	if err := liveSource.Close(); err != nil {
+		return report, errors.New("close SQLite migration source")
+	}
+	source, err := sql.Open("sqlite", "file:"+snapshotPath+"?mode=ro")
+	if err != nil {
+		return report, errors.New("open SQLite migration snapshot")
 	}
 	defer source.Close()
 	if err := source.QueryRowContext(ctx, "PRAGMA user_version").Scan(&report.SchemaVersion); err != nil {
@@ -62,14 +88,11 @@ func MigrateSQLiteToPostgres(
 	if err != nil {
 		return report, err
 	}
-	target, err := OpenWithOptions(OpenOptions{
-		Profile: ProfilePostgres, PostgresDSN: postgresDSN,
-		EdgeID: report.EdgeID,
-	})
+	target, err := openPostgresForProfileMigration(postgresDSN, report.EdgeID)
 	if err != nil {
 		// A fresh PostgreSQL schema has a generated Edge ID. Open without the
 		// configured identity, then replace that seed inside the import.
-		target, err = OpenWithOptions(OpenOptions{Profile: ProfilePostgres, PostgresDSN: postgresDSN})
+		target, err = openPostgresForProfileMigration(postgresDSN, "")
 	}
 	if err != nil {
 		return report, err
@@ -309,7 +332,7 @@ func writeMigrationDigest(digest hash.Hash, table string, values []any) {
 		case int64:
 			_, _ = fmt.Fprintf(digest, "I%d;", typed)
 		case float64:
-			_, _ = fmt.Fprintf(digest, "F%016x;", typed)
+			_, _ = fmt.Fprintf(digest, "F%016x;", math.Float64bits(typed))
 		case bool:
 			if typed {
 				_, _ = digest.Write([]byte("I1;"))

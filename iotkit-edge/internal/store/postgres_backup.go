@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -11,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -40,25 +40,37 @@ func (store *Store) createPostgresSnapshot(
 	if err != nil {
 		return empty, err
 	}
+	dump, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return empty, errors.New("create protected PostgreSQL snapshot")
+	}
 	command := exec.CommandContext(ctx, "pg_dump",
 		"--dbname="+connection,
 		"--format=custom",
-		"--file="+destination,
 		"--no-owner",
 		"--no-privileges",
 		"--snapshot="+snapshotID,
 	)
 	command.Env = append(os.Environ(), "PGPASSWORD="+password)
-	if output, err := command.CombinedOutput(); err != nil {
+	command.Stdout = dump
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		_ = dump.Close()
 		_ = os.Remove(destination)
-		if len(output) > 0 {
-			return empty, fmt.Errorf("create PostgreSQL snapshot: %s", output)
+		if stderr.Len() > 0 {
+			return empty, fmt.Errorf("create PostgreSQL snapshot: %s", stderr.Bytes())
 		}
 		return empty, errors.New("create PostgreSQL snapshot")
 	}
-	if err := os.Chmod(destination, 0o600); err != nil {
+	if err := dump.Sync(); err != nil {
+		_ = dump.Close()
 		_ = os.Remove(destination)
-		return empty, fmt.Errorf("protect PostgreSQL snapshot: %w", err)
+		return empty, errors.New("sync PostgreSQL snapshot")
+	}
+	if err := dump.Close(); err != nil {
+		_ = os.Remove(destination)
+		return empty, errors.New("close PostgreSQL snapshot")
 	}
 	return info, nil
 }
@@ -112,13 +124,31 @@ func inspectPostgresSnapshot(ctx context.Context, tx *sql.Tx) (BackupSnapshotInf
 
 func postgresDumpConnection(dsn string) (string, string, error) {
 	parsed, err := url.Parse(dsn)
-	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
+	if err != nil || parsed.Opaque != "" || parsed.Fragment != "" ||
+		(parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
 		return "", "", errors.New("PostgreSQL backup requires a URL connection configuration")
 	}
-	password, _ := parsed.User.Password()
+	password := ""
 	if parsed.User != nil {
+		password, _ = parsed.User.Password()
 		parsed.User = url.User(parsed.User.Username())
 	}
+	allowed := map[string]bool{
+		"application_name": true, "connect_timeout": true,
+		"sslcert": true, "sslkey": true, "sslmode": true, "sslrootcert": true,
+		"target_session_attrs": true,
+	}
+	safeQuery := make(url.Values)
+	for key, values := range parsed.Query() {
+		normalized := strings.ToLower(key)
+		if !allowed[normalized] {
+			return "", "", fmt.Errorf("PostgreSQL backup connection parameter %q is not allowed", key)
+		}
+		for _, value := range values {
+			safeQuery.Add(normalized, value)
+		}
+	}
+	parsed.RawQuery = safeQuery.Encode()
 	return parsed.String(), password, nil
 }
 
@@ -132,10 +162,35 @@ func RestoreEncryptedBackupToPostgres(
 	if err := validateBackupPassphrase(passphrase); err != nil {
 		return empty, err
 	}
+	connection, password, err := postgresDumpConnection(targetDSN)
+	if err != nil {
+		return empty, err
+	}
+	guardDB, err := sql.Open("pgx", targetDSN)
+	if err != nil {
+		return empty, errors.New("open PostgreSQL restore operation guard")
+	}
+	guard, err := acquirePostgresStorageGuard(ctx, guardDB, false)
+	if err != nil {
+		_ = guardDB.Close()
+		return empty, err
+	}
+	defer func() {
+		closePostgresGuard(guard)
+		_ = guardDB.Close()
+	}()
 	if err := ensurePostgresRestoreTargetEmpty(ctx, targetDSN); err != nil {
 		return empty, err
 	}
-	payload, err := os.CreateTemp(filepath.Dir(source), ".iotkit-edge-postgres-restore-*")
+	if err := setPostgresRestoreState(ctx, targetDSN, "incomplete"); err != nil {
+		return empty, err
+	}
+	stagingDirectory, err := os.MkdirTemp("", ".iotkit-edge-postgres-restore-*")
+	if err != nil {
+		return empty, err
+	}
+	defer os.RemoveAll(stagingDirectory)
+	payload, err := os.CreateTemp(stagingDirectory, "payload-*")
 	if err != nil {
 		return empty, err
 	}
@@ -162,7 +217,12 @@ func RestoreEncryptedBackupToPostgres(
 		_ = payload.Close()
 		return empty, errors.New("backup storage profile does not match PostgreSQL restore destination")
 	}
-	dump, err := os.CreateTemp(filepath.Dir(source), ".iotkit-edge-postgres-dump-*")
+	latestSchema := schemaMigrations[len(schemaMigrations)-1].version
+	if !canUpgradePostgresSchema(manifest.SchemaVersion, latestSchema) {
+		_ = payload.Close()
+		return empty, errors.New("PostgreSQL backup schema is not supported by this version")
+	}
+	dump, err := os.CreateTemp(stagingDirectory, "dump-*")
 	if err != nil {
 		_ = payload.Close()
 		return empty, err
@@ -191,10 +251,6 @@ func RestoreEncryptedBackupToPostgres(
 	if got := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(got, manifest.DatabaseSHA256) {
 		return empty, errors.New("Edge backup database checksum does not match its manifest")
 	}
-	connection, password, err := postgresDumpConnection(targetDSN)
-	if err != nil {
-		return empty, err
-	}
 	command := exec.CommandContext(ctx, "pg_restore",
 		"--dbname="+connection,
 		"--no-owner",
@@ -207,31 +263,60 @@ func RestoreEncryptedBackupToPostgres(
 	if err := command.Run(); err != nil {
 		return empty, errors.New("restore PostgreSQL snapshot")
 	}
-	restored, err := OpenWithOptions(OpenOptions{
-		Profile: ProfilePostgres, PostgresDSN: targetDSN,
-	})
+	inspectionDB, err := sql.Open("pgx", targetDSN)
 	if err != nil {
-		return empty, err
+		return empty, errors.New("open restored PostgreSQL database for validation")
 	}
-	defer restored.Close()
-	tx, err := restored.db.raw.BeginTx(ctx, &sql.TxOptions{
+	inspectionTx, err := inspectionDB.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead, ReadOnly: true,
 	})
 	if err != nil {
+		_ = inspectionDB.Close()
 		return empty, err
 	}
-	info, err := inspectPostgresSnapshot(ctx, tx)
-	_ = tx.Rollback()
+	info, err := inspectPostgresSnapshot(ctx, inspectionTx)
+	_ = inspectionTx.Rollback()
+	_ = inspectionDB.Close()
 	if err != nil {
 		return empty, err
 	}
 	if err := validateSnapshotInfo(info, manifest); err != nil {
 		return empty, err
 	}
+	restored, err := openPostgresInternal(targetDSN, "", true, false)
+	if err != nil {
+		return empty, err
+	}
+	defer restored.Close()
 	if err := prepareRestoredStore(ctx, restored, manifest); err != nil {
 		return empty, err
 	}
+	if err := setPostgresRestoreState(ctx, targetDSN, "ready"); err != nil {
+		return empty, err
+	}
 	return manifest, nil
+}
+
+func setPostgresRestoreState(ctx context.Context, dsn string, state string) error {
+	if state != "incomplete" && state != "ready" {
+		return errors.New("invalid PostgreSQL restore state")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return errors.New("open PostgreSQL restore state connection")
+	}
+	defer db.Close()
+	var databaseName string
+	if err := db.QueryRowContext(ctx, "SELECT current_database()").Scan(&databaseName); err != nil {
+		return errors.New("read PostgreSQL restore database name")
+	}
+	quotedDatabase := `"` + strings.ReplaceAll(databaseName, `"`, `""`) + `"`
+	if _, err := db.ExecContext(ctx,
+		"ALTER DATABASE "+quotedDatabase+" SET iotkit.restore_state = '"+state+"'",
+	); err != nil {
+		return errors.New("record PostgreSQL restore state")
+	}
+	return nil
 }
 
 func ensurePostgresRestoreTargetEmpty(ctx context.Context, dsn string) error {

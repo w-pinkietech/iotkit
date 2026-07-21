@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/edgeapp"
 )
@@ -44,6 +45,9 @@ func TestPostgresStorageStatusReportsProfileAndDatabaseSize(t *testing.T) {
 	if status.FilesystemAvailable {
 		t.Fatalf("PostgreSQL status guessed server filesystem capacity: %#v", status)
 	}
+	if status.State != StorageUnavailable || status.AbsoluteReserveState != "unknown" {
+		t.Fatalf("PostgreSQL capacity state was presented as known: %#v", status)
+	}
 }
 
 func TestStorageStatusSeparatesBackupProtectedAndNewRawRecords(t *testing.T) {
@@ -80,5 +84,27 @@ func TestStorageStatusValidatesWarningThreshold(t *testing.T) {
 		if _, err := archive.GetStorageStatus(context.Background(), invalid); err == nil {
 			t.Fatalf("warning threshold %d was accepted", invalid)
 		}
+	}
+}
+
+func TestStorageStatusEstimatesGrowthAndDaysRemaining(t *testing.T) {
+	archive := openTestStore(t)
+	fixed := time.Unix(2_000_000_000, 0)
+	previousNow := storageStatusNow
+	storageStatusNow = func() time.Time { return fixed }
+	t.Cleanup(func() { storageStatusNow = previousNow })
+	if _, err := archive.db.Exec(`
+		INSERT INTO edge_storage_samples(sampled_at, database_bytes, raw_record_count)
+		VALUES(?, 1, 0)
+	`, fixed.Add(-24*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	status, err := archive.GetStorageStatus(context.Background(), 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.GrowthBytesPerDay <= 0 || status.EstimatedDaysRemaining == nil ||
+		status.AbsoluteReserveState == "" {
+		t.Fatalf("storage growth status = %#v", status)
 	}
 }

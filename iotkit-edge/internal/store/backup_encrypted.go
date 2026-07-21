@@ -67,20 +67,12 @@ func (store *Store) ApplyEncryptedBackup(
 	if err := requireAbsentPath(destination, "backup destination"); err != nil {
 		return empty, err
 	}
-	directory := filepath.Dir(destination)
-	snapshotFile, err := os.CreateTemp(directory, ".iotkit-edge-snapshot-*")
+	stagingDirectory, err := os.MkdirTemp("", ".iotkit-edge-backup-staging-*")
 	if err != nil {
-		return empty, fmt.Errorf("create Edge snapshot staging file: %w", err)
+		return empty, fmt.Errorf("create protected Edge backup staging directory: %w", err)
 	}
-	snapshotPath := snapshotFile.Name()
-	if err := snapshotFile.Close(); err != nil {
-		_ = os.Remove(snapshotPath)
-		return empty, err
-	}
-	if err := os.Remove(snapshotPath); err != nil {
-		return empty, err
-	}
-	defer os.Remove(snapshotPath)
+	defer os.RemoveAll(stagingDirectory)
+	snapshotPath := filepath.Join(stagingDirectory, "snapshot")
 
 	snapshot, err := store.CreateConsistentSnapshot(ctx, snapshotPath)
 	if err != nil {

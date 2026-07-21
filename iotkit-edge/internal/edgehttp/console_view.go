@@ -256,6 +256,10 @@ type consoleStorageView struct {
 	LastBackupRecords   int64
 	BackupProtectedRaw  int64
 	UnprotectedRaw      int64
+	GrowthPerDay        string
+	DaysRemainingKnown  bool
+	DaysRemaining       int64
+	ReserveLabel        string
 }
 
 func newConsoleStorageView(status store.StorageStatus) consoleStorageView {
@@ -276,7 +280,15 @@ func newConsoleStorageView(status store.StorageStatus) consoleStorageView {
 		ProjectionFailures: status.ProjectionFailureCount,
 		BackupProtectedRaw: status.BackupProtectedRawCount,
 		UnprotectedRaw:     status.UnprotectedRawCount,
+		GrowthPerDay:       formatByteCount(uint64(max(status.GrowthBytesPerDay, 0))),
 	}
+	if status.EstimatedDaysRemaining != nil {
+		view.DaysRemainingKnown = true
+		view.DaysRemaining = *status.EstimatedDaysRemaining
+	}
+	view.ReserveLabel = map[string]string{
+		"adequate": "十分", "warning": "注意", "critical": "危険", "unknown": "host監視で確認",
+	}[status.AbsoluteReserveState]
 	if view.ProfileLabel == "" {
 		view.ProfileLabel = "不明"
 	}

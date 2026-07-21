@@ -5,13 +5,17 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/edgeapp"
 )
 
@@ -89,6 +93,46 @@ func TestPostgresOpenCreatesCurrentSchema(t *testing.T) {
 	}
 }
 
+func TestPostgresUpgradeFromSchema28IsExplicitAndPreservesPrecisionContract(t *testing.T) {
+	dsn := newPostgresTestDatabase(t)
+	archive, err := OpenWithOptions(OpenOptions{Profile: ProfilePostgres, PostgresDSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		DROP TABLE edge_storage_samples;
+		ALTER TABLE signal_calibration_revisions_v3
+			ALTER COLUMN scale TYPE REAL USING scale::REAL,
+			ALTER COLUMN "offset" TYPE REAL USING "offset"::REAL;
+		UPDATE edge_schema_meta SET version = 28 WHERE singleton = 1;
+	`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := OpenWithOptions(OpenOptions{Profile: ProfilePostgres, PostgresDSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var version int
+	if err := upgraded.db.QueryRow("SELECT version FROM edge_schema_meta WHERE singleton = 1").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 29 {
+		t.Fatalf("schema version = %d, want 29", version)
+	}
+}
+
 func TestPostgresCustodyAcceptsReplayAndRejectsConflictAndGap(t *testing.T) {
 	store := openPostgresTestStore(t)
 	edgeNode := discoverTestEdge(t, store)
@@ -121,6 +165,63 @@ func TestPostgresCustodyAcceptsReplayAndRejectsConflictAndGap(t *testing.T) {
 	}
 }
 
+func TestPostgresConcurrentOverlappingBatchesNeverRegressCursor(t *testing.T) {
+	archive := openPostgresTestStore(t)
+	if _, err := acceptBatchForTest(t, archive, testBatch(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	const largestCursor = 40
+	start := make(chan struct{})
+	errorsCh := make(chan error, largestCursor-1)
+	var wait sync.WaitGroup
+	for cursorEnd := int64(2); cursorEnd <= largestCursor; cursorEnd++ {
+		cursorEnd := cursorEnd
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			records := make([]json.RawMessage, 0, cursorEnd)
+			for sequence := int64(1); sequence <= cursorEnd; sequence++ {
+				value := 20.0
+				if sequence == 1 {
+					value = 21.5
+				}
+				record, err := json.Marshal(map[string]any{
+					"family": "measurement", "schema_version": 1,
+					"epoch": "epoch-01", "pub_seq": sequence,
+					"series_key": "series-temperature-01", "values": []float64{value},
+				})
+				if err != nil {
+					errorsCh <- err
+					return
+				}
+				records = append(records, record)
+			}
+			batch := contract.RecordBatch{
+				SchemaVersion: 1, EdgeNodeID: "edge-node-01", LedgerEpoch: "epoch-01",
+				CursorStart: 1, CursorEnd: cursorEnd, Records: records,
+			}
+			batch.PublicationID = contract.PublicationID(
+				batch.EdgeNodeID, batch.LedgerEpoch, batch.CursorStart, batch.CursorEnd,
+			)
+			_, err := archive.AcceptBatch(context.Background(), batch)
+			errorsCh <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errorsCh)
+	for err := range errorsCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if cursor := archive.testCursor(t); cursor != largestCursor {
+		t.Fatalf("accepted cursor = %d, want %d", cursor, largestCursor)
+	}
+}
+
 func TestPostgresCreatesConsistentCustomSnapshot(t *testing.T) {
 	store := openPostgresTestStore(t)
 	if _, err := acceptBatchForTest(t, store, testBatch(t)); err != nil {
@@ -139,6 +240,9 @@ func TestPostgresCreatesConsistentCustomSnapshot(t *testing.T) {
 		info.PayloadFormat != "postgres-custom" ||
 		info.RawRecordCount != 1 || file.Size() == 0 {
 		t.Fatalf("PostgreSQL snapshot = %#v size=%d", info, file.Size())
+	}
+	if file.Mode().Perm() != 0o600 {
+		t.Fatalf("PostgreSQL snapshot mode = %v", file.Mode().Perm())
 	}
 }
 
@@ -193,5 +297,82 @@ func TestPostgresEncryptedBackupRestoresOnlyIntoEmptyDatabase(t *testing.T) {
 		context.Background(), backupPath, targetDSN, testBackupPassphrase,
 	); err == nil {
 		t.Fatal("non-empty PostgreSQL restore destination was accepted")
+	}
+}
+
+func TestPostgresSchema28BackupRestoresAndUpgradesInsideCandidate(t *testing.T) {
+	source := openPostgresTestStore(t)
+	if _, err := source.db.Exec(`
+		DROP TABLE edge_storage_samples;
+		ALTER TABLE signal_calibration_revisions_v3
+			ALTER COLUMN scale TYPE REAL USING scale::REAL,
+			ALTER COLUMN "offset" TYPE REAL USING "offset"::REAL;
+		UPDATE edge_schema_meta SET version = 28 WHERE singleton = 1;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(t.TempDir(), "edge-v28.iotkit-backup")
+	manifest, err := source.ApplyEncryptedBackup(
+		context.Background(), edgeapp.LocalCLIActor(), backupPath, testBackupPassphrase,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SchemaVersion != 28 {
+		t.Fatalf("backup schema = %d, want 28", manifest.SchemaVersion)
+	}
+	targetDSN := newPostgresTestDatabase(t)
+	if _, err := RestoreEncryptedBackupToPostgres(
+		context.Background(), backupPath, targetDSN, testBackupPassphrase,
+	); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := OpenWithOptions(OpenOptions{Profile: ProfilePostgres, PostgresDSN: targetDSN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	var version int
+	if err := restored.db.QueryRow("SELECT version FROM edge_schema_meta WHERE singleton = 1").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 29 {
+		t.Fatalf("restored schema = %d, want 29", version)
+	}
+}
+
+func TestPostgresOpenRejectsIncompleteRestore(t *testing.T) {
+	dsn := newPostgresTestDatabase(t)
+	if err := setPostgresRestoreState(context.Background(), dsn, "incomplete"); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := OpenWithOptions(OpenOptions{Profile: ProfilePostgres, PostgresDSN: dsn})
+	if archive != nil {
+		_ = archive.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "restore state is not ready") {
+		t.Fatalf("incomplete restore open error = %v", err)
+	}
+	overriddenDSN := dsn + "&options=-c%20iotkit.restore_state=ready"
+	archive, err = OpenWithOptions(OpenOptions{Profile: ProfilePostgres, PostgresDSN: overriddenDSN})
+	if archive != nil {
+		_ = archive.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "restore state is not ready") {
+		t.Fatalf("session override bypass error = %v", err)
+	}
+}
+
+func TestPostgresDumpConnectionRejectsSecretAndOverrideParameters(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://iotkit@127.0.0.1/iotkit?sslmode=require&password=visible-secret",
+		"postgres://iotkit@127.0.0.1/iotkit?sslpassword=visible-secret",
+		"postgres://iotkit@127.0.0.1/iotkit?options=-c%20iotkit.restore_state=ready",
+		"postgres://iotkit@127.0.0.1/iotkit#unexpected",
+	} {
+		connection, password, err := postgresDumpConnection(dsn)
+		if err == nil || connection != "" || password != "" {
+			t.Fatalf("unsafe DSN result for %q = %q, %q, %v", dsn, connection, password, err)
+		}
 	}
 }

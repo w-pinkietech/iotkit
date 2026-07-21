@@ -358,9 +358,9 @@ func (store *Store) QueryHistorySeries(
 
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT CAST((raw.received_at - ?) / ? AS INTEGER) AS bucket_index,
-			MIN(CAST(json_extract(raw.record_json, '$.values[0]') AS REAL)),
-			AVG(CAST(json_extract(raw.record_json, '$.values[0]') AS REAL)),
-			MAX(CAST(json_extract(raw.record_json, '$.values[0]') AS REAL)),
+			MIN(CAST(json_extract(raw.record_json, '$.values[0]') AS DOUBLE PRECISION)),
+			AVG(CAST(json_extract(raw.record_json, '$.values[0]') AS DOUBLE PRECISION)),
+			MAX(CAST(json_extract(raw.record_json, '$.values[0]') AS DOUBLE PRECISION)),
 			COUNT(*)
 		FROM raw_records AS raw
 		WHERE raw.edge_node_id = ?

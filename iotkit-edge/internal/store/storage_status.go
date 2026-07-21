@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 type StorageState string
@@ -38,7 +39,12 @@ type StorageStatus struct {
 	BackupProtectedRawCount  int64        `json:"backup_protected_raw_count"`
 	UnprotectedRawCount      int64        `json:"unprotected_raw_count"`
 	AutomaticRawPurgeEnabled bool         `json:"automatic_raw_purge_enabled"`
+	GrowthBytesPerDay        int64        `json:"growth_bytes_per_day"`
+	EstimatedDaysRemaining   *int64       `json:"estimated_days_remaining,omitempty"`
+	AbsoluteReserveState     string       `json:"absolute_reserve_state"`
 }
+
+var storageStatusNow = time.Now
 
 func (store *Store) GetStorageStatus(
 	ctx context.Context,
@@ -122,6 +128,14 @@ func (store *Store) getEmbeddedStorageStatus(
 	if status.DiskUsedPercent >= 97 {
 		status.State = StorageCritical
 	}
+	status.AbsoluteReserveState = "adequate"
+	if status.DiskAvailableBytes < 2*1024*1024*1024 {
+		status.AbsoluteReserveState = "warning"
+	}
+	if status.DiskAvailableBytes < 512*1024*1024 {
+		status.AbsoluteReserveState = "critical"
+	}
+	store.recordStorageGrowth(ctx, &status)
 	return status, nil
 }
 
@@ -183,6 +197,44 @@ func (store *Store) getPostgresStorageStatus(
 	if err := store.populateStorageCounts(ctx, &status); err != nil {
 		return StorageStatus{}, err
 	}
-	status.State = StorageHealthy
+	// PostgreSQL cannot report filesystem free space through the SQL contract.
+	// Keep capacity state unknown instead of presenting a false healthy signal.
+	status.State = StorageUnavailable
+	status.AbsoluteReserveState = "unknown"
+	store.recordStorageGrowth(ctx, &status)
 	return status, nil
+}
+
+func (store *Store) recordStorageGrowth(ctx context.Context, status *StorageStatus) {
+	now := storageStatusNow().Truncate(time.Hour).UnixMilli()
+	var sampledAt, databaseBytes int64
+	err := store.db.QueryRowContext(ctx, `
+		SELECT sampled_at, database_bytes FROM edge_storage_samples
+		WHERE sampled_at <= ? AND sampled_at >= ?
+		ORDER BY sampled_at ASC LIMIT 1
+	`, now-6*time.Hour.Milliseconds(), now-7*24*time.Hour.Milliseconds()).Scan(&sampledAt, &databaseBytes)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+	if err == nil && now > sampledAt && status.DatabaseBytes > databaseBytes {
+		status.GrowthBytesPerDay = (status.DatabaseBytes - databaseBytes) *
+			(24 * time.Hour.Milliseconds()) / (now - sampledAt)
+		if status.FilesystemAvailable && status.GrowthBytesPerDay > 0 {
+			days := int64(status.DiskAvailableBytes) / status.GrowthBytesPerDay
+			status.EstimatedDaysRemaining = &days
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO edge_storage_samples(sampled_at, database_bytes, raw_record_count)
+		VALUES(?, ?, ?)
+		ON CONFLICT(sampled_at) DO UPDATE SET
+			database_bytes = excluded.database_bytes,
+			raw_record_count = excluded.raw_record_count
+	`, now, status.DatabaseBytes, status.RawRecordCount); err != nil {
+		return
+	}
+	_, _ = store.db.ExecContext(ctx,
+		"DELETE FROM edge_storage_samples WHERE sampled_at < ?",
+		now-30*24*time.Hour.Milliseconds(),
+	)
 }

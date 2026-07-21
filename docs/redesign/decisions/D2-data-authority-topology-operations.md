@@ -136,9 +136,9 @@ IoTKit Edgeは導入規模に応じて次の2つのstorage profileを持てる�
 6. profile選択はsensor台数だけで決めない。Edge Node数、合計records/秒、burst、payload size、rule/output fan-out、
    保持期間、同時Console/CSV利用、backup時間、RPO/RTOを含む実測capacity envelopeで決める。
 
-初期実装順は`embedded`を基準実装として契約とcapacityを確立し、同じ適合testを満たす`postgres`を追加する。
-現在のv1 release candidateは`embedded`だけを実装している。`postgres`未実装を理由に検証済み範囲内の小規模運用を
-禁止しない一方、大規模運用を無根拠に保証しない。
+初期実装は`embedded`を基準実装として共通契約を確立し、同じ適合testを満たす`postgres`を追加した。
+両profileとも短時間のcapacity回帰smokeは通すが、これは実導入の対応上限を証明しない。導入規模ごとの
+production-shaped capacity reportがない構成を「検証済み規模」として案内しない。
 
 ## 3.5 監査追記: スナップショットの機密性とエポックフェンス(2026-07-02)
 

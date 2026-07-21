@@ -204,8 +204,7 @@ trap cleanup EXIT
 mkdir -m 700 "$stage"
 mkdir -m 700 "$stage/mosquitto" "$stage/mosquitto/tls" "$stage/caddy" \
   "$stage/systemd" "$stage/secrets" "$stage/tls" \
-  "$stage/edge-handoff" "$stage/data" "$stage/data/edge" "$stage/data/mosquitto" \
-  "$stage/data/postgres"
+  "$stage/edge-handoff" "$stage/data" "$stage/data/edge" "$stage/data/mosquitto"
 mkdir -m 700 "$stage/data/caddy"
 mkdir -m 755 "$stage/data/acme-webroot"
 cp "$binding" "$stage/edge-node-binding.json"
@@ -307,7 +306,6 @@ IOTKIT_STORAGE_METADATA_FILE=$output_dir/storage-profile.json
 IOTKIT_POSTGRES_CONFIG=$postgres_config
 IOTKIT_POSTGRES_CONFIG_FILE=$output_dir/secrets/postgres.json
 IOTKIT_POSTGRES_PASSWORD_FILE=$output_dir/secrets/postgres-password
-IOTKIT_POSTGRES_DATA_DIR=$output_dir/data/postgres
 IOTKIT_POSTGRES_PORT=$postgres_port
 IOTKIT_MOSQUITTO_IMAGE=$IOTKIT_MOSQUITTO_IMAGE
 IOTKIT_BROKER_HOST=$broker_host

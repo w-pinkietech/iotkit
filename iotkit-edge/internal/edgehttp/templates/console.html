@@ -1172,6 +1172,8 @@
         <dl class="storage-facts">
           <div><dt>IoTKit Edge DB</dt><dd>{{.Storage.DatabaseSize}}</dd></div>
           <div><dt>再利用可能なDB領域</dt><dd>{{.Storage.ReclaimableSize}}</dd></div>
+          <div><dt>直近の増加量</dt><dd>{{.Storage.GrowthPerDay}}/日</dd></div>
+          <div><dt>空き容量の目安</dt><dd>{{if .Storage.DaysRemainingKnown}}約{{.Storage.DaysRemaining}}日{{else}}{{.Storage.ReserveLabel}}{{end}}</dd></div>
           <div><dt>raw受信データ</dt><dd>{{.Storage.RawRecordCount}}件</dd></div>
           <div><dt>意味付け済みデータ</dt><dd>{{.Storage.ObservationCount}}件</dd></div>
           <div><dt>未配送の外部出力</dt><dd>{{.Storage.PendingOutputCount}}件</dd></div>

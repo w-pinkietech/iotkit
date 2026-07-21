@@ -703,7 +703,7 @@ func (store *Store) ListSemanticPreviewWindow(
 
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT raw.received_at,
-			CAST(json_extract(raw.record_json, '$.event_time') AS INTEGER),
+			CAST(json_extract(raw.record_json, '$.event_time') AS BIGINT),
 			json_extract(raw.record_json, '$.values[0]')
 		FROM edge_signals AS signal
 		JOIN raw_records AS raw

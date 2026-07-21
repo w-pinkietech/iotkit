@@ -31,12 +31,17 @@ services:
     restart: unless-stopped
     user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"
     network_mode: host
+    environment:
+      IOTKIT_EXPECTED_STORAGE_PROFILE: ${IOTKIT_STORAGE_PROFILE:?}
+      TMPDIR: /run/iotkit-tmp
+    tmpfs:
+      - /run/iotkit-tmp:mode=0700,uid=${IOTKIT_RUNTIME_UID:?},gid=${IOTKIT_RUNTIME_GID:?},noexec,nosuid,nodev
     depends_on:
       - broker
     command:
       - serve
       - --storage-profile
-      - ${IOTKIT_STORAGE_PROFILE:-embedded}
+      - ${IOTKIT_STORAGE_PROFILE:?}
       - --db
       - /data/edge.db
       - --postgres-config

@@ -236,6 +236,9 @@ func runBackupRestore(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := validateExpectedStorageProfile(store.Profile(*storageFlags.profile)); err != nil {
+		return err
+	}
 	if err := validateStorageProfileMetadata(
 		store.Profile(*storageFlags.profile), *storageFlags.metadata,
 	); err != nil {
@@ -263,7 +266,7 @@ func runBackupRestore(args []string) error {
 
 func runBackupAcceptArchiveLoss(args []string) error {
 	flags := flag.NewFlagSet("backup accept-archive-loss", flag.ContinueOnError)
-	dbPath := flags.String("db", "edge.db", "Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	edgeNodeID := flags.String("edge-node-id", "", "Edge Node identity in recovery hold")
 	ledgerEpoch := flags.String("ledger-epoch", "", "Edge Node ledger epoch")
 	confirmEdgeID := flags.String("confirm-edge-id", "", "IoTKit Edge ID typed to confirm the destructive decision")
@@ -274,10 +277,12 @@ func runBackupAcceptArchiveLoss(args []string) error {
 	if *edgeNodeID == "" || *ledgerEpoch == "" || *confirmEdgeID == "" || *reason == "" {
 		return errors.New("--edge-node-id, --ledger-epoch, --confirm-edge-id, and --reason are required")
 	}
-	if err := requireExistingRegularFile(*dbPath, "--db must name an existing Edge database"); err != nil {
-		return err
+	if store.Profile(*storageFlags.profile) == store.ProfileEmbedded {
+		if err := requireExistingRegularFile(*storageFlags.dbPath, "--db must name an existing Edge database"); err != nil {
+			return err
+		}
 	}
-	archive, err := store.Open(*dbPath)
+	archive, err := storageFlags.open("")
 	if err != nil {
 		return err
 	}
@@ -505,7 +510,6 @@ func runServe(args []string) error {
 	if err := validatePrivateHTTPListen(*httpListen); err != nil {
 		return err
 	}
-
 	archive, err := openConfiguredStore(
 		store.Profile(*storageProfile), *dbPath, *postgresConfig,
 		*storageMetadata, *edgeID,
@@ -603,6 +607,9 @@ func openConfiguredStore(
 	if profile != store.ProfileEmbedded && profile != store.ProfilePostgres {
 		return nil, errors.New("unsupported storage profile")
 	}
+	if err := validateExpectedStorageProfile(profile); err != nil {
+		return nil, err
+	}
 	if err := validateStorageProfileMetadata(profile, metadataPath); err != nil {
 		return nil, err
 	}
@@ -640,6 +647,17 @@ func validateStorageProfileMetadata(profile store.Profile, metadataPath string) 
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&metadata); err != nil || metadata.Profile != profile {
 		return errors.New("configured storage profile does not match deployment metadata")
+	}
+	return nil
+}
+
+func validateExpectedStorageProfile(profile store.Profile) error {
+	expected := os.Getenv("IOTKIT_EXPECTED_STORAGE_PROFILE")
+	if expected == "" {
+		return nil
+	}
+	if store.Profile(expected) != profile {
+		return errors.New("configured storage profile does not match deployment")
 	}
 	return nil
 }

@@ -195,6 +195,10 @@ cargo fmt --all --check
 # Docker Mosquittoによる外部Output Adapter/PUBACK/再接続ゲート
 scripts/test-edge-output.sh
 
+# SQLite/PostgreSQL共通契約と短時間capacity回帰smoke
+scripts/test-edge-postgres.sh
+scripts/test-edge-capacity.sh
+
 # OpenAPIから生成したConsole型、TypeScript、埋め込みJavaScriptの同期
 npm ci --prefix iotkit-edge/frontend
 scripts/test-edge-console-frontend.sh

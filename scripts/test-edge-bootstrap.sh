@@ -4,6 +4,8 @@ set -euo pipefail
 trap 'echo "Edge bootstrap test failed at line $LINENO" >&2' ERR
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+export TMPDIR="${TMPDIR:-$repo_root/../.tmp/runtime}"
+mkdir -p "$TMPDIR"
 cargo_target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
 scratch=$(mktemp -d)
 output="$scratch/edge-install"
@@ -123,6 +125,28 @@ expect_bootstrap_failure invalid-storage-profile "$scratch/invalid-storage-outpu
   --broker-host localhost --broker-bind 127.0.0.1 --broker-port "$port" \
   --storage-profile timeseries \
   --tls-cert "$scratch/server.pem" --tls-key "$scratch/server.key" --tls-ca "$scratch/ca.pem"
+
+postgres_output="$scratch/postgres-edge-install"
+"$repo_root/scripts/bootstrap-edge.sh" \
+  --binding "$scratch/binding.json" --output-dir "$postgres_output" \
+  --broker-host localhost --broker-bind 127.0.0.1 --broker-port "$port" \
+  --edge-https-port "$edge_port" --storage-profile postgres --postgres-port 55432 \
+  --tls-cert "$scratch/server.pem" --tls-key "$scratch/server.key" --tls-ca "$scratch/ca.pem" \
+  >/dev/null
+grep -Fxq 'IOTKIT_STORAGE_PROFILE=postgres' "$postgres_output/edge.env"
+grep -Fxq 'IOTKIT_POSTGRES_PORT=55432' "$postgres_output/edge.env"
+jq -e '.profile == "postgres"' "$postgres_output/storage-profile.json" >/dev/null
+jq -e '.dsn | contains("@127.0.0.1:55432/iotkit?sslmode=disable")' \
+  "$postgres_output/secrets/postgres.json" >/dev/null
+[[ -s "$postgres_output/secrets/postgres-password" ]]
+[[ "$(stat -c %a "$postgres_output/secrets/postgres-password")" == "600" ]]
+[[ ! -e "$postgres_output/data/postgres" ]]
+docker compose --env-file "$postgres_output/edge.env" \
+  -f "$repo_root/deploy/compose.edge.yaml" \
+  -f "$repo_root/deploy/compose.edge-postgres.yaml" \
+  config >"$scratch/postgres-compose.rendered"
+grep -Fq 'IOTKIT_EXPECTED_STORAGE_PROFILE: postgres' "$scratch/postgres-compose.rendered"
+grep -Fq 'shm_size:' "$scratch/postgres-compose.rendered"
 
 repo_output="$repo_test_parent/direct-output"
 [[ ! -e "$repo_output" ]] || { echo "reserved test output already exists" >&2; exit 1; }
@@ -282,6 +306,7 @@ docker compose --env-file "$output/edge.env" -p "$project" \
   -f "$repo_root/deploy/compose.edge.yaml" config >"$scratch/compose.rendered"
 grep -Fq 'image: eclipse-mosquitto:2.0.22' "$scratch/compose.rendered"
 grep -Fq 'no-new-privileges:true' "$scratch/compose.rendered"
+grep -Fq '/run/iotkit-tmp:mode=0700' "$scratch/compose.rendered"
 grep -Fq 'pids_limit: 128' "$scratch/compose.rendered"
 grep -Eq 'mem_limit: ("?268435456"?|256m)' "$scratch/compose.rendered"
 grep -A2 -F 'cap_drop:' "$scratch/compose.rendered" | grep -Fq 'ALL'

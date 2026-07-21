@@ -2,9 +2,70 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestSQLiteDeploymentLockRejectsConcurrentOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "edge.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := AcquireSQLiteDeploymentLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := AcquireSQLiteDeploymentLock(path)
+	if second != nil {
+		_ = second.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("second deployment lock error = %v", err)
+	}
+}
+
+func TestSQLiteDeploymentLockCannotBeBypassedWithSymlinkAlias(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "edge.db")
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	alias := filepath.Join(t.TempDir(), "edge-alias.db")
+	if err := os.Symlink(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := AcquireSQLiteDeploymentLock(alias)
+	if lock != nil {
+		_ = lock.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("symlink migration lock error = %v", err)
+	}
+}
+
+func TestSQLiteMigrationRejectsDatabaseHeldByRunningEdge(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "edge.db")
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deploymentLock, err := AcquireSQLiteDeploymentLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deploymentLock.Close()
+	_, err = MigrateSQLiteToPostgres(context.Background(), path, "unused")
+	if err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("live SQLite migration error = %v", err)
+	}
+}
 
 func TestMigrateSQLiteToPostgresCopiesAndVerifiesCustody(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "edge.db")
@@ -65,5 +126,23 @@ func TestMigrateSQLiteToPostgresRejectsNonEmptyTarget(t *testing.T) {
 		context.Background(), sourcePath, target.postgresDSN,
 	); err == nil {
 		t.Fatal("non-empty PostgreSQL migration target was accepted")
+	}
+}
+
+func TestMigrateSQLiteToPostgresRejectsTargetHeldByRunningEdge(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "edge.db")
+	source, err := Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	target := openPostgresTestStore(t)
+	defer target.Close()
+	_, err = MigrateSQLiteToPostgres(context.Background(), sourcePath, target.postgresDSN)
+	if err == nil || !strings.Contains(err.Error(), "in use by another IoTKit process") {
+		t.Fatalf("live PostgreSQL migration target error = %v", err)
 	}
 }

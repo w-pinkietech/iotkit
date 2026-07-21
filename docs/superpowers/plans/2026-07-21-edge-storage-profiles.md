@@ -33,13 +33,13 @@
 - Produces: `type Profile string`、`ProfileEmbedded`、`ProfilePostgres`、`OpenOptions{Profile, SQLitePath, PostgresDSN, EdgeID}`、`OpenWithOptions(OpenOptions)`。
 - Produces: dialect-aware `sqlDatabase` / `sqlTx` whose `ExecContext`、`QueryContext`、`QueryRowContext` rebind `?` to `$n` only for PostgreSQL.
 
-- [ ] profile validation testを追加し、空profileは`embedded`へ正規化、PostgreSQLでSQLite pathを同時指定、未知profile、secretを含むerrorを拒否する。
-- [ ] placeholder rebind testを追加し、文字列literalとquoted identifier内の`?`は変更せず、bind markerだけを連番化する。
-- [ ] testを実行し、型と関数未実装で失敗することを確認する。
-- [ ] `Profile`、`OpenOptions`、dialect-aware DB/Tx wrapperを最小実装する。
-- [ ] SQLiteの既存`Open`/`OpenWithEdgeID`を`OpenWithOptions`の互換wrapperとして維持し、既存testを通す。
-- [ ] focused testと`go test ./internal/store`を実行する。
-- [ ] `feat(edge): add storage profile boundary`としてcommitする。
+- [x] profile validation testを追加し、空profileは`embedded`へ正規化、PostgreSQLでSQLite pathを同時指定、未知profile、secretを含むerrorを拒否する。
+- [x] placeholder rebind testを追加し、文字列literalとquoted identifier内の`?`は変更せず、bind markerだけを連番化する。
+- [x] testを実行し、型と関数未実装で失敗することを確認する。
+- [x] `Profile`、`OpenOptions`、dialect-aware DB/Tx wrapperを最小実装する。
+- [x] SQLiteの既存`Open`/`OpenWithEdgeID`を`OpenWithOptions`の互換wrapperとして維持し、既存testを通す。
+- [x] focused testと`go test ./internal/store`を実行する。
+- [x] `feat(edge): add storage profile boundary`としてcommitする。
 
 ### Task 2: PostgreSQL schemaとcustody適合
 
@@ -56,15 +56,15 @@
 - Consumes: `OpenWithOptions` and dialect-aware SQL wrapper.
 - Produces: PostgreSQL schema version equal to current SQLite schema version and `OpenWithOptions(ProfilePostgres)`.
 
-- [ ] Docker PostgreSQLを使うtest harnessを作り、一時databaseをtestごとに作成・破棄する。
-- [ ] PostgreSQL open/schema identity testを追加し、未実装で失敗することを確認する。
-- [ ] 現行SQLite migrationの最終schemaをPostgreSQL型へ写し、schema version tableとtransactional migrationを実装する。
-- [ ] JSON抽出queryをDB非依存にし、hot queryがopaque JSONを同じ意味で読めるようにする。
-- [ ] `INSERT OR IGNORE`を両DBで使える明示的`ON CONFLICT ... DO NOTHING`へ置換する。
-- [ ] 共通custody testとして、activation済みbatch受理、exact replay、異内容conflict、gap、commit failureでackなし、cursor単調性を両profileへ実行する。
-- [ ] account、semantic rule、projection、history、output outboxの代表journeyを両profileへ実行する。
-- [ ] `scripts/test-edge-postgres.sh`とSQLite store suiteを通す。
-- [ ] `feat(edge): add PostgreSQL storage profile`としてcommitする。
+- [x] Docker PostgreSQLを使うtest harnessを作り、一時databaseをtestごとに作成・破棄する。
+- [x] PostgreSQL open/schema identity testを追加し、未実装で失敗することを確認する。
+- [x] 現行SQLite migrationの最終schemaをPostgreSQL型へ写し、schema version tableとtransactional migrationを実装する。
+- [x] JSON抽出queryをDB非依存にし、hot queryがopaque JSONを同じ意味で読めるようにする。
+- [x] `INSERT OR IGNORE`を両DBで使える明示的`ON CONFLICT ... DO NOTHING`へ置換する。
+- [x] 共通custody testとして、activation済みbatch受理、exact replay、異内容conflict、gap、commit failureでackなし、cursor単調性を両profileへ実行する。
+- [x] account、semantic rule、projection、history、output outboxの代表journeyを両profileへ実行する。
+- [x] `scripts/test-edge-postgres.sh`とSQLite store suiteを通す。
+- [x] `feat(edge): add PostgreSQL storage profile`としてcommitする。
 
 ### Task 3: Profile別storage statusと安全なbackup/restore
 
@@ -82,13 +82,13 @@
 - Produces: profile-aware encrypted backup manifest with `storage_profile` and payload format.
 - Produces: same logical storage status fields for both profiles, plus profile、growth rate、estimated days remaining、absolute reserve state.
 
-- [ ] backup manifestがprofileを固定し、異なるprofileへの直接restoreを拒否するtestを追加する。
-- [ ] PostgreSQLの一貫snapshotをcredential非露出で作成し、hash/cursor/schema/Edge IDを検証するtestを追加する。
-- [ ] restoreを新しい空databaseへだけ許可し、session失効、recovery fence、cursor gap holdをSQLiteと同じ意味で実装する。
-- [ ] PostgreSQL容量取得とSQLite DB/WAL合計取得のtestを追加する。
-- [ ] 絶対空き容量、増加速度、推定残日数をstatusへ追加し、未配送outboxや未保護rawを削除しない。
-- [ ] backup/restore focused suiteを両profileで通す。
-- [ ] `feat(edge): support profile-aware backup and capacity status`としてcommitする。
+- [x] backup manifestがprofileを固定し、異なるprofileへの直接restoreを拒否するtestを追加する。
+- [x] PostgreSQLの一貫snapshotをcredential非露出で作成し、hash/cursor/schema/Edge IDを検証するtestを追加する。
+- [x] restoreを新しい空databaseへだけ許可し、session失効、recovery fence、cursor gap holdをSQLiteと同じ意味で実装する。
+- [x] PostgreSQL容量取得とSQLite DB/WAL合計取得のtestを追加する。
+- [x] 絶対空き容量、増加速度、推定残日数をstatusへ追加し、未配送outboxや未保護rawを削除しない。
+- [x] backup/restore focused suiteを両profileで通す。
+- [x] `feat(edge): support profile-aware backup and capacity status`としてcommitする。
 
 ### Task 4: Offline SQLite to PostgreSQL migration
 
@@ -102,12 +102,12 @@
 - Produces CLI: `iotkit-edge storage migrate --from-sqlite PATH --to-postgres-config FILE --report FILE`。
 - Produces a non-secret JSON verification report containing source/target profile、Edge ID、schema、table counts、cursor vector、pending outbox counts、content digest、completion state.
 
-- [ ] 稼働中source、非empty target、Edge ID不一致、schema不一致、件数/hash/cursor不一致を拒否するtestを追加する。
-- [ ] 全tableをforeign-key-safe orderでcopyし、sequenceを最大IDの次へ合わせるtransactional importerを実装する。
-- [ ] import後にraw identity/hash、cursor、semantic observation、account/audit、pending outboxを比較し、不一致ならtargetを未完成のまま残して切替を禁止する。
-- [ ] CLIがsecretをargv/report/logへ出さず、owner-only reportを原子的に作るtestを追加する。
-- [ ] SQLite fixtureからPostgreSQLへ移行し、同じhistory/Console read modelとpending outputを読める統合testを通す。
-- [ ] `feat(edge): add verified SQLite to PostgreSQL migration`としてcommitする。
+- [x] 稼働中source、非empty target、Edge ID不一致、schema不一致、件数/hash/cursor不一致を拒否するtestを追加する。
+- [x] 全tableをforeign-key-safe orderでcopyし、sequenceを最大IDの次へ合わせるtransactional importerを実装する。
+- [x] import後にraw identity/hash、cursor、semantic observation、account/audit、pending outboxを比較し、不一致ならtargetを未完成のまま残して切替を禁止する。
+- [x] CLIがsecretをargv/report/logへ出さず、owner-only reportを原子的に作るtestを追加する。
+- [x] SQLite fixtureからPostgreSQLへ移行し、同じhistory/Console read modelとpending outputを読める統合testを通す。
+- [x] `feat(edge): add verified SQLite to PostgreSQL migration`としてcommitする。
 
 ### Task 5: 導入profileとfail-closed起動
 
@@ -124,14 +124,14 @@
 - Produces CLI flags: `--storage-profile embedded|postgres`、`--postgres-config FILE`; DSN/passwordはowner-only fileから読む。
 - Produces generated deployment metadata recording the immutable selected profile.
 
-- [ ] bootstrap profile選択、owner-only PostgreSQL config、未知profile、既存profile不一致のtestを追加する。
-- [ ] embedded Composeを現在互換のまま維持し、PostgreSQL Composeはdigest-pinned image、healthcheck、resource limits、local-only DB exposure、persistent volumeを持たせる。
-- [ ] Edge起動時にprofile metadataとflagを照合し、不一致・DB接続失敗・durability設定不足でfail closedする。
-- [ ] Consoleのシステム画面へprofileと検証済みcapacity envelopeを表示する。
-- [ ] clean bootstrap testを両profileで通す。
-- [ ] `feat(edge): add embedded and PostgreSQL deployment profiles`としてcommitする。
+- [x] bootstrap profile選択、owner-only PostgreSQL config、未知profile、既存profile不一致のtestを追加する。
+- [x] embedded Composeを現在互換のまま維持し、PostgreSQL Composeはdigest-pinned image、healthcheck、resource limits、local-only DB exposure、persistent volumeを持たせる。
+- [x] Edge起動時にprofile metadataとflagを照合し、不一致・DB接続失敗・durability設定不足でfail closedする。
+- [x] Consoleのシステム画面へprofileと取得可能な容量事実を表示し、未計測の対応上限を正常扱いしない。
+- [x] clean bootstrap testを両profileで通す。
+- [x] `feat(edge): add embedded and PostgreSQL deployment profiles`としてcommitする。
 
-### Task 6: Capacity gateと最終検証
+### Task 6: Capacity回帰smokeと最終検証
 
 **Files:**
 - Create: `scripts/test-edge-capacity.sh`
@@ -141,13 +141,13 @@
 - Modify: `docs/redesign/decisions/D3-process-and-wave-decisions.md`
 
 **Interfaces:**
-- Produces reproducible load report for profile、hardware、Edge Nodes、sensors、records/s、payload bytes、rules、retention、query/backup workload.
+- Produces a reproducible short regression report for profile、Edge Nodes、sensors、records/s、payload bytes、query/backup workload.
+- Production sizing remains a deployment-specific rehearsal; the short smoke must not be presented as a supported capacity envelope.
 
-- [ ] 疑似Edge Node複数台のbatch generatorを作り、通常受信とburstを再現する。
-- [ ] 受信中に31日graph相当query、100k CSV、semantic catch-up、output outage、backup、restartを重ねる。
-- [ ] accepted-through p99、backlog、projection/outbox lag、DB/WAL bytes、CPU/RAM、query/backup時間をJSONへ出す。
-- [ ] 数値未計測のprofileを「対応済み」と表示しないfail-closed capacity metadataを実装する。
-- [ ] SQLite、PostgreSQLのfocused tests、Console browser journey、Broker/output、backup/migration gateを実行する。
-- [ ] Rust製品動作は変更しないためRust全体testは省略し、`go test ./...`、frontend、Docker integration、`git diff --check`を実行する。
-- [ ] `test(edge): add storage profile capacity gate`としてcommitする。
-
+- [x] 疑似Edge Node複数台のbatch generatorで両profileへ同じ8,000 recordを投入する。
+- [x] 履歴readと暗号化backupを含む短時間回帰smokeを実行する。
+- [x] accepted-through p99、DB bytes、query/backup時間、pending output、projection failureをJSONへ出す。
+- [x] 未計測の規模を対応済みと表現しない運用文書とConsole表示にする。
+- [x] SQLite、PostgreSQLのfocused tests、Console frontend、bootstrap、backup/migration gateを実行する。
+- [x] Rust製品動作は変更しないためRust全体testは省略し、`go test ./...`、frontend、Docker integration、`git diff --check`を実行する。
+- [x] `test(edge): add storage profile capacity regression smoke`としてcommitする。
