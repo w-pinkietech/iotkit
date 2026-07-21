@@ -181,6 +181,9 @@ scripts/test-site-output.sh
 npm ci --prefix iotkit-site/frontend
 scripts/test-site-console-frontend.sh
 
+# Chromiumによるlogin、Edge登録、センサー設定、意味付け、外部出力、権限導線
+scripts/test-site-console-e2e.sh
+
 # 隣接するYokaKit checkoutとのconsumer contractゲート
 scripts/test-yokakit-consumer-contract.sh
 ```

@@ -76,6 +76,9 @@ jobs:
       - name: Console schema, types, and generated assets
         run: scripts/test-site-console-frontend.sh
 
+      - name: Site Console browser journey
+        run: scripts/test-site-console-e2e.sh
+
       - name: Site tests
         working-directory: iotkit-site
         run: go test ./...
