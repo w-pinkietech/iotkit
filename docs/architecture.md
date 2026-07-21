@@ -63,9 +63,9 @@ produce separate Broker-host, IoTKit Edge-client, and per-Edge Node-client artif
 principal and credential even when it is co-located with the Broker.
 
 IoTKit Edgeのtarget storage architectureは、同じ製品契約を満たす`embedded` (SQLite)と
-`postgres` (PostgreSQL)の2 profileである。現在実装済みなのは`embedded`だけであり、SQLite fileは
-IoTKit Edge processと同じhostのlocal storageへ置く。一つのEdgeが両DBへdual writeしたり、障害時に空の
-別backendへfallbackしたりしない。profileは導入時に固定し、将来のSQLiteからPostgreSQLへの移行は停止、
+`postgres` (PostgreSQL)の2 profileであり、どちらも実装済みである。SQLite fileはIoTKit Edge processと
+同じhostのlocal storageへ置く。一つのEdgeが両DBへdual writeしたり、障害時に空の別backendへfallback
+したりしない。profileは導入時に固定し、SQLiteからPostgreSQLへの移行は停止、
 整合backup、全identity/cursor/outbox検証を伴うoffline operationとする。Storage実装の共通契約と配置先は
 [D2](redesign/decisions/D2-data-authority-topology-operations.md)を正本とする。TimescaleDB等は第3の正本ではなく、
 実測で必要性が確認された場合だけ`postgres` profile内部で検討する。

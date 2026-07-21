@@ -14,7 +14,9 @@ for command in docker openssl grep timeout; do
   }
 done
 
-scratch=$(mktemp -d /tmp/iotkit-mqtt-security.XXXXXX)
+test_tmpdir=${TMPDIR:-/tmp}
+mkdir -p "$test_tmpdir"
+scratch=$(mktemp -d "$test_tmpdir/iotkit-mqtt-security.XXXXXX")
 broker="iotkit-mqtt-security-$$"
 expired_broker="iotkit-mqtt-security-expired-$$"
 started_containers=()

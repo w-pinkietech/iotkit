@@ -38,7 +38,7 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	outputPassword := readTestPassword(t, "IOTKIT_TEST_OUTPUT_PASSWORD_FILE")
 	observerPassword := readTestPassword(t, "IOTKIT_TEST_OUTPUT_OBSERVER_PASSWORD_FILE")
 
-	archive, err := store.Open(filepath.Join(controlDir, "edge.db"))
+	archive, err := openOutputTestStore(controlDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +112,16 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("MQTT output runner did not stop")
 	}
+}
+
+func openOutputTestStore(controlDir string) (*store.Store, error) {
+	if postgresDSN := os.Getenv("IOTKIT_TEST_OUTPUT_POSTGRES_DSN"); postgresDSN != "" {
+		return store.OpenWithOptions(store.OpenOptions{
+			Profile:     store.ProfilePostgres,
+			PostgresDSN: postgresDSN,
+		})
+	}
+	return store.Open(filepath.Join(controlDir, "edge.db"))
 }
 
 func prepareOutputRoutes(t *testing.T, archive *store.Store) (string, string, string) {

@@ -718,12 +718,12 @@ func validatePrivateHTTPListen(address string) error {
 
 func runQuery(args []string) error {
 	flags := flag.NewFlagSet("query", flag.ContinueOnError)
-	dbPath := flags.String("db", "edge.db", "Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	limit := flags.Int("limit", 100, "maximum raw records")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	archive, err := store.Open(*dbPath)
+	archive, err := storageFlags.open("")
 	if err != nil {
 		return err
 	}
