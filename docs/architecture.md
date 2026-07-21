@@ -2,12 +2,14 @@
 
 IoTKit currently ships the Rust IoTKit Edge Node binary (`iotkit-edge-node`) plus an operator CLI
 (`iotkit-edge-nodectl`), backed by a single SQLite database, and the independently deployable Go
-IoTKit Edge (`iotkit-edge`), backed by its own SQLite database and a standard MQTT broker.
+IoTKit Edge (`iotkit-edge`), backed by one selected `embedded` (SQLite) or `postgres`
+(PostgreSQL) storage profile and a standard MQTT broker.
 IoTKit Edge is not part of the Edge Node process. Edge Node runs unattended on a
 Raspberry Pi under systemd. This document is the "get oriented in 10 minutes"
-map **and the canon for code placement**; the authoritative *why* is the
-Japanese design corpus under `docs/redesign/` (decision records D1–D13,
-responsibility ledger R1–R23).
+map **and the canon for code placement**. The product boundary is defined in
+[product-model.md](product-model.md), and [docs/README.md](README.md) defines the
+source-of-truth order. `docs/redesign/` preserves historical rationale and does
+not override current executable contracts or this architecture.
 
 ## Who this serves
 
@@ -20,17 +22,18 @@ makes life worse for one of them, that is a review finding, not a taste issue.
 | **Self-made-device builders** (ESP32 hobbyists, plant engineers — often not Rust readers) | The ingest **wire contract only** | Onboarding stays a curl-3-lines experience. Contract docs never require reading Rust. Rejections come back with a reason code they can act on. |
 | **Adapter developers** (Rust) | `core/types`, `iotkit-input-adapter-host-api`, `iotkit-input-adapter-testkit`, `iotkit-polling-adapter-runtime`, an existing adapter as template | The adapter boundary is obvious; a new sensor family means a new adapter crate, not core surgery. No knowledge of storage/ledger internals needed. |
 | **Core contributors** (Rust) | `core/*`, IoTKit Edge Node, tests | The crate map fits in one screen. Layer rules are machine-checked, not tribal. Each crate has one responsibility; tests read as the executable spec. |
-| **Data consumers** (dashboards, Node-RED, analytics) | The **exit contract** | The record schema, ack rules, and cursor semantics are documented and versioned; no schema surprises. |
+| **Raw custody implementers** | The **Edge Node custody contract** | Record families, ack rules, and cursor semantics are documented and versioned; no schema surprises. |
+| **Application integrators** (YokaKit, dashboards, analytics) | The **Output Adapter contract** | They receive application-facing topics and payloads without depending on the raw custody stream. |
 
 ## IoTKit Edge anatomy — what runs where
 
-The design corpus describes four tiers of a deployment (terminology.md):
+The [product model](product-model.md) describes four tiers of a deployment:
 **[1] devices** (sensors/actuators in the field, incl. third-party self-made
 hardware) → **[2] IoTKit Edge Node** (Raspberry Pi, this repo) → **[3] IoTKit Edge**
 (per-deployment aggregation; may be hosted remotely) → **[4] Fleet layer**.
 
-**The current Cargo workspace ships tier [2].** Tier [3] is a separate Go program in this repository
-that consumes only the public MQTT exit contract; it does not import Edge Node Rust packages or read
+**This repository ships tiers [2] and [3].** Tier [3] is a separate Go program
+that consumes only the public Edge Node custody contract; it does not import Edge Node Rust packages or read
 the Edge Node database. Tier [1] is hardware plus the ingest wire contract. Tier [4] remains external
 and spans multiple `edge_id` values regardless of whether it runs in cloud or on premises.
 So a minimal Edge Node install is: flash a Pi, run the `iotkit-edge-node` daemon
@@ -38,7 +41,7 @@ under systemd, keep `iotkit-edge-nodectl` on the same Pi as a hand-run CLI, and 
 adapters to sensors. A standalone deployment can stop there (D8: an upstream is
 optional). IoTKit Edge adds durable aggregation, Edge Node cursors, direct raw
 query, Edge Node descriptor replica, configurable Edge-scoped sensor meaning, and the application-export boundary. IoTKit Edge maps one
-stored series to one typed meaning such as `production_pulse`; a separate exporter converts the
+stored series to one generic typed meaning such as a cumulative value; a separate exporter converts the
 result to an application-facing MQTT contract. Applications such as YokaKit own business masters
 and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
 complicates this story needs a strong reason.
@@ -55,7 +58,7 @@ requirement: the Broker and IoTKit Edge may run on separate hosts and communicat
 authenticated MQTT/TLS contract, without a shared filesystem or Compose project. The current
 `scripts/bootstrap-edge.sh` consumes the
 non-secret `iotkit-edge-nodectl mqtt-binding` document and operator-provided TLS material, then creates
-an anonymous-disabled Broker, exact per-Edge Node-Node ACLs, owner-only credential files, and a small
+an anonymous-disabled Broker, exact per-Edge-Node ACLs, owner-only credential files, and a small
 Edge Node handoff. It does not issue certificates, configure DNS/firewalls/VPNs, or modify the Edge Node.
 `deploy/compose.edge.yaml` consumes only generated file paths and non-secret network settings; it
 does not place MQTT credentials in Compose environment values or argv. A split deployment must
@@ -67,7 +70,8 @@ IoTKit Edgeのtarget storage architectureは、同じ製品契約を満たす`em
 同じhostのlocal storageへ置く。一つのEdgeが両DBへdual writeしたり、障害時に空の別backendへfallback
 したりしない。profileは導入時に固定し、SQLiteからPostgreSQLへの移行は停止、
 整合backup、全identity/cursor/outbox検証を伴うoffline operationとする。Storage実装の共通契約と配置先は
-[D2](redesign/decisions/D2-data-authority-topology-operations.md)を正本とする。TimescaleDB等は第3の正本ではなく、
+[IoTKit Edge operations](edge-operations.md)と[capacity runbook](edge-capacity.md)に従う。
+TimescaleDB等は第3の正本ではなく、
 実測で必要性が確認された場合だけ`postgres` profile内部で検討する。
 
 `deploy/mosquitto-image.env` is the repository's single source for the verified Mosquitto patch
@@ -97,7 +101,7 @@ Inside Edge Node, the adapter and collector normalize and durably enqueue observ
                     ▼                    ▼                    ▼
              ┌────────────┐      ┌──────────────┐     ┌──────────────┐
              │ push task  │      │  retention   │     │ health writer│
-             │ R10 exit   │      │ R17 custody- │     │ R12 status   │
+             │ R10 custody│      │ R17 custody- │     │ R12 status   │
              │ contract   │      │ aware purge  │     │ JSON         │
              └─────┬──────┘      └──────────────┘     └──────────────┘
                    │ MQTT QoS 1 (transport PUBACK only)
@@ -141,7 +145,8 @@ Edge Node cursor, and MQTT routes are future-only from the current semantic-even
 
 Operators use JSON-producing CLI commands backed by the typed IoTKit Edge application-service dispatcher
 (the raw `query` command remains available). Semantic mapping changes and the legacy MQTT route
-command commit their success audit in the same SQLite transaction as the setting change:
+command commit their success audit in the same authoritative-store transaction as the setting change.
+The following commands show the legacy embedded-profile interface:
 
 ```bash
 iotkit-edge mapping-set --db edge.db --edge-node-id edge-node-01 \
@@ -196,14 +201,20 @@ configuration authority, restart policy, and health aggregation.
 
 IoTKit Edge Node is a **buffer, not a warehouse**. A measurement's lifecycle:
 
-1. **Ingest** — the collector writes a `readings` row and, in the *same* SQLite
-   transaction, enqueues an outbox row in `publication_log` (only for
-   non-quarantined measurements). Crash-consistent: you never get a reading
-   without its outbox row, or vice versa.
+1. **Ingest** — the collector always decides local reading acceptance first. For
+   an active Edge Node incarnation, a non-quarantined measurement that passes
+   publication admission is written with its `publication_log` outbox row in the
+   *same* SQLite transaction. Pre-activation readings remain local without a
+   publication row and are never backfilled into the custody stream. Quarantined
+   readings have no publication row while quarantined; a later release must pass
+   the durable activation and publication-admission gate before enqueue. For
+   publishable readings, crash consistency guarantees that the reading and its
+   outbox row appear together or not at all.
 2. **Publish** — the publisher batches undelivered outbox rows and sends them through a standard
-MQTT broker with a per-Edge Node-Node credential. The DB lock is **not** held across the network
+MQTT broker with a per-Edge-Node credential. The DB lock is **not** held across the network
    round-trip. Broker PUBACK does not release application custody.
-3. **Ack → cursor** — after its SQLite commit, IoTKit Edge publishes a valid `accepted-through` ack
+3. **Ack → cursor** — after committing records and cursor atomically in its selected authoritative
+   store, IoTKit Edge publishes a valid `accepted-through` ack
    (matching Edge Node, epoch, publication id, and batch bound), which
    advances the per-target cursor. The cursor is the consumer's durable
    watermark: "I have taken custody up to here."
@@ -259,7 +270,8 @@ control API.
 
 The current v1 candidate supports BravePI temperature/contact input through the existing Long
 Range BLE/BravePI Mainboard/UART path and generic Input Adapter/driver boundaries, multiple
-IoTKit Edge Nodes, one standard MQTT Broker, one IoTKit Edge, raw SQLite storage,
+IoTKit Edge Nodes, one standard MQTT Broker, one IoTKit Edge, one selected
+embedded SQLite or PostgreSQL raw store,
 application-level accepted-through, future-only semantic projection, durable Output Adapter MQTT
 outboxes, an authenticated IoTKit Console, bounded history graphs, and generic CSV export. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
@@ -393,7 +405,7 @@ checked.
 | A new IoTKit Edge operator / UI operation that changes state | A typed operation in the IoTKit Edge application-service dispatcher, the IoTKit Edge implementation of R14. HTTP, HTML, and CLI remain thin adapters and never write SQL directly. |
 | A new table / column | A migration in the **owning** `core/*` crate's version slice (the binaries concatenate the slices; the `core/storage` harness applies them by set difference). |
 | A new control-plane HTTP API route | `iotkit-edge-node/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
-| An authenticated measurement-ingress HTTP binding | Shipped Plan 6 binding: `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
+| An authenticated measurement-ingress HTTP binding | `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
 | A new CLI command | `iotkit-edge-nodectl`, calling `core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
 | IoTKit Edge acceptance, query, sensor semantic mapping, or application-export behavior | `iotkit-edge/`; communicate through versioned MQTT contracts and shared fixtures, never Edge Node internals. Business masters, production records, OEE, and alarms stay in applications. |
 | Raw bus/pin access | `rpi4b-transport`. |
@@ -420,7 +432,7 @@ Getting these right is most of the design (see D5, D7).
 - **`(epoch, pub_seq)` record identity** — `epoch` is a restore-generation fence.
   A snapshot restore (box swap) mints a *new* epoch, so a stale consumer cursor
   from before the restore is detected (epoch mismatch → treat everything as
-  unacked, re-baseline) rather than silently trusted. The exit contract never
+  unacked, re-baseline) rather than silently trusted. The custody contract never
   promises anything it can't keep across a box swap.
 
 ## Concurrency model
@@ -453,6 +465,7 @@ downgrade" discipline.
 
 ## Where to go next
 
-- The exit-contract wire details: [exit-contract.md](exit-contract.md).
-- The authoritative rationale: `docs/redesign/` (D1–D13, R-ledger) — Japanese,
-  for deep dives only.
+- The complete reading path and authority order: [docs/README.md](README.md).
+- The Edge Node -> IoTKit Edge custody details: [exit-contract.md](exit-contract.md).
+- The IoTKit Edge -> application boundary: [output-adapter-contract.md](output-adapter-contract.md).
+- Historical rationale: [redesign/README.md](redesign/README.md), for deep dives only.

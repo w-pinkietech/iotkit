@@ -1,6 +1,6 @@
 # IoTKit authenticated ingest contract v1
 
-Status: **normative for the Plan 6 HTTP device-ingest binding**.
+Status: **normative for the authenticated HTTP device-ingest binding**.
 
 This document describes the wire contract implemented by `iotkit-ingest-http`.
 The JSON types in `iotkit-ingest-contract` are the shipped reference
@@ -369,15 +369,15 @@ audit stream.
 
 ## Current implementation and deferred work
 
-Current Plan 6 code provides the authenticated HTTP binding, bearer credential
+The current implementation provides the authenticated HTTP binding, bearer credential
 authority, bounded admission, TLS/private-LAN listener construction, freshness
 handling, side-effect-free validation, bounded staging/dedup state, health and
 episode audit hooks, and local recovery authority closure. It is intentionally a
 device-builder HTTP path, not a remotely claimable Edge Node setup path.
 
-Plan 6.5 is still required before distribution for encrypted replacement backup
-containers and the cross-filesystem restore staging/fence mechanics. Until that
-work lands, legacy plaintext replacement snapshot export is unavailable once a
+Encrypted Edge Node replacement-backup containers and cross-filesystem restore
+staging/fence mechanics remain deferred distribution work. Until that work lands,
+legacy plaintext replacement snapshot export is unavailable once a
 device-token secret exists; the Edge Node must say so without emitting the token or
 its hash. State-only inspection is not a complete replacement backup.
 

@@ -11,12 +11,15 @@ adapters は `core/engine` に依存せず、取り込みは `iotkit-ingest-clie
 
 ## Authorities
 
-- 製品の設計正本: `docs/redesign/`（用語集、責務台帳 R1〜R23、決定文書 D1〜D13）
+- 文書の入口と正本順序: `docs/README.md`
+- versioned contract: machine-readable schemaまたはexported wire types、共有fixture、
+  conformance test、現行`docs/*-contract.md`を一組として扱う
 - コード配置、crate 地図、層規則: `docs/architecture.md`
 - エージェントのプロジェクト規則と不変条件: `AGENTS.md`
-- 開発プロセス: 作業に該当する標準 Superpowers スキル
 
-旧実装は正しさの基準ではない。設計正本と依頼が矛盾して見える場合は作業を止めて確認する。
+`docs/redesign/`の用語集・責務台帳・決定文書は理由と不変条件、inputs/reviews/移行記録と
+`docs/superpowers/`は履歴資料であり、現行実装状態や作業指示を上書きしない。
+旧実装も正しさの基準ではない。現行正本と依頼が矛盾して見える場合は作業を止めて確認する。
 
 ## Product Invariants
 

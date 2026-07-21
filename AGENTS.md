@@ -16,13 +16,16 @@
 adapters は `core/engine` に依存しない。`AdapterEvent` は engine/監督専用の frozen
 vocabulary であり、新規コードは依存を増やさない。
 
-コードの置き場、crate 地図、層規則の正本は `docs/architecture.md`。依存方向は
-`scripts/check-layers` が検査する。新しい crate を作る場合は、同スクリプトの分類と
-`docs/architecture.md` を同時に更新する。
+文書の入口と正本の構成は `docs/README.md`。機械表現・共有fixture/conformance test・
+現行契約文書を一つの契約成果物として扱い、不一致時は一方へ自動追従させない。
+コードの置き場、crate 地図、層規則の
+正本は `docs/architecture.md` であり、依存方向は `scripts/check-layers` が検査する。
+新しい crate を作る場合は、同スクリプトの分類と `docs/architecture.md` を同時に更新する。
 
-正しさの基準は旧実装ではなく `docs/redesign/` の設計正本
-(用語集、責務台帳 R1〜R23、決定文書 D1〜D13)。タスク指示と設計正本が矛盾して
-見える場合は、勝手に解釈せず作業を止めて報告する。
+`docs/redesign/`の用語集・責務台帳・決定文書は、現行文書から参照される理由と不変条件を保持する。
+同directoryのinputs/reviews/移行記録と`docs/superpowers/`は履歴であり、現行実装状態や
+作業指示を上書きしない。タスク指示と現行契約成果物が矛盾して見える場合は、
+勝手に解釈せず作業を止めて報告する。旧実装も正しさの基準にはしない。
 
 ## Invariants（絶対に破らない）
 

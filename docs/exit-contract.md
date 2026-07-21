@@ -1,4 +1,4 @@
-# Exit contract (R10)
+# Edge Node custody contract v1 (R10 exit)
 
 Status: Approved MQTT v1 target contract. The records/descriptors/accepted-through custody path is
 implemented, including Edge Node activation and publication admission. The older HTTPS

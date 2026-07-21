@@ -102,7 +102,7 @@ SourceBoundIngest::try_submit(items)
 
 SourceBoundIngest::try_retry(RetryHandle)
   -> EnqueuedEnvelope
-  | RetryQueueError::{Full(RetryHandle), Closed(RetryHandle)}
+  | RetryQueueError::{Full(RetryHandle), Closed(RetryHandle), SourceMismatch(RetryHandle)}
 
 DeliveryOutcome {
   Final(EnvelopeAck),

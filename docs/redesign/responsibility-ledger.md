@@ -102,7 +102,7 @@ Scope: **すべて配置[2]IoTKit Edge Node(RPi)の責務**。「他の箱が全
 ## D8波及(複数Edge Node 2026-07-07)
 
 - **R10/R19の優先順位**: Edge-connected構成ではR10出口認証とtopic ACLを先に成立させる
-  ([D8](decisions/D8-edge-topology-multi-edge.md)、[D10](decisions/D10-exit-authentication.md))。
+  ([D8](decisions/D8-edge-topology-multi-node.md)、[D10](decisions/D10-exit-authentication.md))。
 - Broker enrollmentはMQTT通信許可、Edge Node activationはexact ledger incarnationの将来publication受理許可であり、
   同一操作にしない。activation前のローカル確認値はoutboxへ採番せず、IoTKit Edge custodyへ移さない。
 - **R22の edge_node_id 発行**: 各Edge Nodeは初回自己構成で `edge_node_id` を1回だけ生成し、

@@ -34,19 +34,24 @@ such as YokaKit own products, processes, OEE, alarms, business UI, and notificat
 ## What it does today
 
 ```
- BravePI Mainboard ──UART──▶ IoTKit Edge Node ──MQTT──▶ MQTT Broker ──▶ IoTKit Edge
-                              │                                      │
-                              └─ SQLite readings + outbox             ├─ durable raw records
-                                                                     ├─ Edge Node cursors
-                                                                     ├─ direct raw/semantic query
-                                                                     └─ semantic MQTT outbox
+ vendor/protocol device ──▶ Input Adapter ──┐
+ contract-native device ──▶ HTTPS ingest ───┴─▶ IoTKit Edge Node
+                                                   │ SQLite readings + outbox
+                                                   ▼
+                                            internal MQTT Broker
+                                                   │
+                                                   ▼
+                                              IoTKit Edge
+                                                   ├─ durable raw records and Edge Node cursors
+                                                   ├─ generic semantics
+                                                   └─ Output Adapter ──▶ external Broker ──▶ application
 ```
 
 - **Durable ingest** with crash consistency (power loss is a normal event, not an error).
 - **Series identity** that survives device rename and hardware swap (history isn't cut).
 - **Measurement registry** (standard vocabulary + deployment overrides) and row/series quarantine for unknown or out-of-range data.
-- **Exit contract (R10):** MQTT delivery through a standard Broker to IoTKit Edge, at-least-once, with a per-target cursor; IoTKit Edge's durable `accepted-through` is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
-- **Authenticated HTTP ingest (Plan 6):** a separate, default-off local-network TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See [docs/ingest-contract.md](docs/ingest-contract.md).
+- **Edge Node custody contract:** MQTT delivery through a standard Broker to IoTKit Edge, at-least-once, with a per-target cursor; IoTKit Edge's durable `accepted-through` is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
+- **Authenticated HTTP ingest:** a separate, default-off local-network TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See [docs/ingest-contract.md](docs/ingest-contract.md).
 - **Operator CLI** (`iotkit-edge-nodectl`) for the device ledger, measurement registry, snapshots/restore, and the IoTKit Edge target.
 - **IoTKit Edge operations** for bounded history/CSV, storage diagnostics, and encrypted backup/new-path restore.
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
@@ -244,15 +249,14 @@ context-authority rules.
 
 ## Architecture & contracts
 
-- [docs/architecture.md](docs/architecture.md) — who this serves, crate map & placement rules, data flow, the custody loop, concurrency model.
-- [docs/ingest-contract.md](docs/ingest-contract.md) — normative device-builder HTTP envelope, authentication, acknowledgement, retry, validation, limits, and pinned-TLS journey.
-- [docs/exit-contract.md](docs/exit-contract.md) — what IoTKit Edge receives and must do (record schema, ack, cursor, epochs).
+- [Documentation index](docs/README.md) — the reading path and source-of-truth order.
+- [Product model](docs/product-model.md) — what IoTKit owns, its component boundaries, and what stays in external applications.
+- [Architecture](docs/architecture.md) — crate map, placement rules, data flow, custody, and concurrency.
+- [Contracts](docs/README.md#where-to-start) — device ingest, Input Adapter, Edge transfer, and Output Adapter boundaries.
 
-The authoritative design corpus (decision records **D1–D13**, the **R1–R23**
-responsibility ledger) lives in [docs/redesign/](docs/redesign/) and is currently
-Japanese-only. It travels with every clone so local and Codex Cloud work use the
-same design context. You do **not** need it to build, run, or make a routine change —
-it's the "why", for deep dives.
+Historical redesign decisions and completed implementation plans remain in the
+repository for rationale and traceability, but they do not override current
+executable contracts or the documentation index.
 
 ## Roadmap
 

@@ -9,11 +9,12 @@ Codex Cloud は候補実装や調査を別環境で行うための任意ツー�
 ## Start or resume
 
 1. `AGENTS.md` でプロジェクト規則、不変条件、権限境界を読む。
-2. 対象コード、公開契約、必要な `docs/redesign/` の決定文書を読む。
+2. `docs/README.md`から対象コード、現行契約、architectureを辿る。必要な場合だけ
+   `docs/redesign/`の履歴から設計理由を確認する。
 3. `git status`, `git log -1`, 対象ファイルで作業状態を実物確認する。
 
-チャット、モデルの記憶、過去の handoff は補助情報であり、Git、現在の設計正本、コード、
-実行可能テストより優先しない。
+チャット、モデルの記憶、過去の handoff、履歴spec/planは補助情報であり、Git、現在の契約文書、
+コード、実行可能テストより優先しない。
 
 ## Configure the Cloud environment
 
