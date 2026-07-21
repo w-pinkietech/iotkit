@@ -639,7 +639,7 @@ func prepareRestoredDatabase(ctx context.Context, path string, manifest BackupMa
 
 func pendingRestoredCursorCheckTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	edgeNodeID string,
 	ledgerEpoch string,
 ) (string, bool, error) {

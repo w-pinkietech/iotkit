@@ -53,7 +53,7 @@ func (store *Store) GetSemanticConfiguration(
 	configuration.SignalRef = signalRef
 	if err := store.db.QueryRowContext(ctx, `
 		SELECT config.revision, calibration.revision,
-			calibration.scale, calibration.offset, calibration.created_at
+			calibration.scale, calibration."offset", calibration.created_at
 		FROM semantic_signal_configs_v3 AS config
 		JOIN signal_calibration_revisions_v3 AS calibration
 			ON calibration.signal_ref = config.signal_ref
@@ -66,13 +66,13 @@ func (store *Store) GetSemanticConfiguration(
 		&configuration.Calibration.Offset,
 		&configuration.Calibration.CreatedAt,
 	); errors.Is(err, sql.ErrNoRows) {
-		var exists int
+		var exists bool
 		if lookupErr := store.db.QueryRowContext(ctx, `
 			SELECT EXISTS(SELECT 1 FROM edge_signals WHERE signal_ref = ?)
 		`, signalRef).Scan(&exists); lookupErr != nil {
 			return semantics.Configuration{}, lookupErr
 		}
-		if exists == 0 {
+		if !exists {
 			return semantics.Configuration{}, edgeapp.ErrNotFound
 		}
 		return semantics.Configuration{}, errors.New("semantic signal configuration is not initialized")
@@ -366,7 +366,7 @@ func (store *Store) UpdateSignalCalibration(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO signal_calibration_revisions_v3(
-			signal_ref, revision, scale, offset, active, created_at
+			signal_ref, revision, scale, "offset", active, created_at
 		) VALUES (?, ?, ?, ?, 1, ?)
 	`, signalRef, calibration.Revision, calibration.Scale,
 		calibration.Offset, calibration.CreatedAt); err != nil {
@@ -415,7 +415,7 @@ func (store *Store) UpdateSignalCalibration(
 
 func rotateSemanticSeriesForCalibrationTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	signalRef string,
 	edgeNodeID string,
 ) error {
@@ -540,7 +540,7 @@ func (store *Store) RetireSemanticRule(
 
 func semanticSignalForUpdateV3(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	signalRef string,
 	precondition edgeapp.RevisionPrecondition,
 ) (string, int64, error) {
@@ -565,7 +565,7 @@ func semanticSignalForUpdateV3(
 
 func activeSemanticRuleForUpdateV3(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	ruleID string,
 ) (semantics.Rule, string, int64, error) {
 	var rule semantics.Rule
@@ -604,7 +604,7 @@ func activeSemanticRuleForUpdateV3(
 
 func insertSemanticRuleRevisionV3(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	rule semantics.Rule,
 	edgeNodeID string,
 ) error {
@@ -632,7 +632,7 @@ func insertSemanticRuleRevisionV3(
 
 func endSemanticRuleRevisionV3(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	rule semantics.Rule,
 	edgeNodeID string,
 ) error {
@@ -663,7 +663,7 @@ func endSemanticRuleRevisionV3(
 
 func bumpSemanticConfigV3(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	signalRef string,
 	currentRevision int64,
 ) error {
@@ -686,7 +686,7 @@ func bumpSemanticConfigV3(
 
 func auditSemanticRuleV3(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	actor edgeapp.Actor,
 	operation string,
 	rule semantics.Rule,
@@ -827,7 +827,7 @@ func (store *Store) listSemanticV3Candidates(
 				signal.edge_node_id, signal.series_key, revision.series_id,
 				rule.kind, revision.spec_json,
 				calibration.revision AS calibration_revision,
-				calibration.scale, calibration.offset,
+				calibration.scale, calibration."offset",
 				raw.ledger_epoch, raw.pub_seq, raw.record_json, raw.received_at,
 				ROW_NUMBER() OVER (
 					PARTITION BY rule.rule_id
@@ -906,7 +906,7 @@ func (store *Store) listSemanticV3Candidates(
 				)
 		)
 		SELECT rule_id, revision, signal_ref, edge_node_id, series_key,
-			series_id, kind, spec_json, calibration_revision, scale, offset,
+			series_id, kind, spec_json, calibration_revision, scale, "offset",
 			ledger_epoch, pub_seq, record_json, received_at
 		FROM candidates
 		ORDER BY rule_rank, received_at, ledger_epoch, pub_seq, rule_id, revision
@@ -970,7 +970,7 @@ func (store *Store) projectSemanticV3Candidate(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var receiptExists int
+	var receiptExists bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM semantic_projection_receipts_v3
@@ -980,7 +980,7 @@ func (store *Store) projectSemanticV3Candidate(
 		Scan(&receiptExists); err != nil {
 		return err
 	}
-	if receiptExists == 1 {
+	if receiptExists {
 		return tx.Commit()
 	}
 
@@ -1331,7 +1331,7 @@ func (store *Store) semanticCounterResetReadyV3(
 	ctx context.Context,
 	reset semantics.CounterReset,
 ) (bool, error) {
-	var missing int
+	var missing bool
 	err := store.db.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1
@@ -1365,7 +1365,7 @@ func (store *Store) semanticCounterResetReadyV3(
 				)
 		)
 	`, reset.RuleID, reset.ID).Scan(&missing)
-	return missing == 0, err
+	return !missing, err
 }
 
 func (store *Store) applySemanticCounterResetV3(
@@ -1378,7 +1378,7 @@ func (store *Store) applySemanticCounterResetV3(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var alreadyApplied int
+	var alreadyApplied bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM semantic_counter_resets_v3
@@ -1387,7 +1387,7 @@ func (store *Store) applySemanticCounterResetV3(
 	`, reset.ID).Scan(&alreadyApplied); err != nil {
 		return err
 	}
-	if alreadyApplied == 1 {
+	if alreadyApplied {
 		return tx.Commit()
 	}
 	var (

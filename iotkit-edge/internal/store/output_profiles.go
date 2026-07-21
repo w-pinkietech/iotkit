@@ -924,7 +924,7 @@ func sampleOutputObservation(
 
 func autoBindSemanticRuleTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	rule semantics.Rule,
 	edgeNodeID string,
 ) error {
@@ -977,7 +977,7 @@ func autoBindSemanticRuleTx(
 
 func drainOutputBindingsForRuleTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	ruleID string,
 	edgeNodeID string,
 ) error {
@@ -1033,7 +1033,7 @@ func drainOutputBindingsForRuleTx(
 
 func createProfileBindingTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	profile edgeapp.ExportProfile,
 	sourceID string,
 	ruleID string,
@@ -1158,7 +1158,7 @@ func createProfileBindingTx(
 
 func findOrCreateOutputSignalIdentityTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	adapterID string,
 	ruleID string,
 	mode string,
@@ -1249,7 +1249,7 @@ func consoleOutputKind(kind semantics.Kind) outputadapter.ObservationKind {
 	}
 }
 
-func validatedEdgeIDTx(ctx context.Context, tx *sql.Tx) (string, error) {
+func validatedEdgeIDTx(ctx context.Context, tx *sqlTx) (string, error) {
 	var count int
 	var edgeID string
 	if err := tx.QueryRowContext(ctx, `

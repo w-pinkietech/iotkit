@@ -45,7 +45,7 @@ func newResourceRef(prefix string) (string, error) {
 	return prefix + hex.EncodeToString(bytes), nil
 }
 
-func ensureDeviceSourceTx(ctx context.Context, tx *sql.Tx, edgeNodeID, systemID string) error {
+func ensureDeviceSourceTx(ctx context.Context, tx *sqlTx, edgeNodeID, systemID string) error {
 	deviceRef, err := newResourceRef("dev_")
 	if err != nil {
 		return err
@@ -61,7 +61,7 @@ func ensureDeviceSourceTx(ctx context.Context, tx *sql.Tx, edgeNodeID, systemID 
 
 func ensureSignalSourceTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	edgeNodeID string,
 	seriesKey string,
 	systemID *string,
@@ -90,7 +90,7 @@ func ensureSignalSourceTx(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO signal_calibration_revisions_v3(
-			signal_ref, revision, scale, offset, active, created_at
+			signal_ref, revision, scale, "offset", active, created_at
 		)
 		SELECT signal_ref, 1, 1, 0, 1, ?
 		FROM edge_signals

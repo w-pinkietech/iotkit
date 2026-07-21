@@ -58,7 +58,7 @@ type PendingMQTTExport struct {
 	CreatedAt   int64           `json:"created_at"`
 }
 
-func putMQTTRouteTx(ctx context.Context, tx *sql.Tx, mappingID, topic string) (MQTTRoute, bool, error) {
+func putMQTTRouteTx(ctx context.Context, tx *sqlTx, mappingID, topic string) (MQTTRoute, bool, error) {
 	var noRoute MQTTRoute
 	existing, err := readMQTTRoute(ctx, tx, mappingID, topic)
 	if err == nil {
@@ -68,13 +68,13 @@ func putMQTTRouteTx(ctx context.Context, tx *sql.Tx, mappingID, topic string) (M
 		return noRoute, false, err
 	}
 
-	var mappingExists int
+	var mappingExists bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM semantic_mappings WHERE mapping_id = ?)
 	`, mappingID).Scan(&mappingExists); err != nil {
 		return noRoute, false, err
 	}
-	if mappingExists != 1 {
+	if !mappingExists {
 		return noRoute, false, fmt.Errorf("semantic mapping %q does not exist", mappingID)
 	}
 
@@ -171,7 +171,7 @@ func (store *Store) ApplyLegacyMQTTRoute(
 	}, nil
 }
 
-func readMQTTRoute(ctx context.Context, tx *sql.Tx, mappingID, topic string) (MQTTRoute, error) {
+func readMQTTRoute(ctx context.Context, tx *sqlTx, mappingID, topic string) (MQTTRoute, error) {
 	var route MQTTRoute
 	var qos int
 	err := tx.QueryRowContext(ctx, `

@@ -168,7 +168,7 @@ func (store *Store) DeactivateSemanticMapping(
 	return mapping, nil
 }
 
-func insertAuditEventTx(ctx context.Context, tx *sql.Tx, event edgeapp.AuditEvent) error {
+func insertAuditEventTx(ctx context.Context, tx *sqlTx, event edgeapp.AuditEvent) error {
 	var actorLoginID any
 	var actorDisplayName any
 	if event.ActorClass == edgeapp.ActorAccount {

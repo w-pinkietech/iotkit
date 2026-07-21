@@ -97,7 +97,7 @@ func (store *Store) UpdateDeviceProfile(
 
 func currentDeviceProfileRevision(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	edgeNodeID string,
 	systemID string,
 ) (int64, bool, error) {
@@ -233,7 +233,7 @@ func (store *Store) UpdateSignalProfile(
 
 func currentSignalProfileRevision(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	edgeNodeID string,
 	seriesKey string,
 ) (int64, bool, error) {

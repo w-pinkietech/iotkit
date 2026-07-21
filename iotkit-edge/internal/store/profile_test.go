@@ -44,3 +44,11 @@ func TestRebindPostgresPlaceholdersSkipsQuotedQuestionMarks(t *testing.T) {
 		t.Fatalf("rebound query:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestNormalizePortableSQLRewritesInsertOrIgnore(t *testing.T) {
+	query := "INSERT OR IGNORE INTO readings(id) VALUES (?)"
+	want := "INSERT INTO readings(id) VALUES (?) ON CONFLICT DO NOTHING"
+	if got := normalizePortableSQL(query); got != want {
+		t.Fatalf("normalized query = %q, want %q", got, want)
+	}
+}

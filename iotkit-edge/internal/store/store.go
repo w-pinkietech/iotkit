@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/edgeapp"
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/semantic"
@@ -25,7 +26,8 @@ var (
 )
 
 type Store struct {
-	db *sql.DB
+	db      *sqlDatabase
+	profile Profile
 }
 
 type RawRecord struct {
@@ -64,8 +66,11 @@ func OpenWithOptions(options OpenOptions) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if options.Profile != ProfileEmbedded {
-		return nil, errors.New("postgres storage is not initialized")
+	if options.EdgeID != "" && !edgeIDPattern.MatchString(options.EdgeID) {
+		return nil, errors.New("configured IoTKit Edge ID is invalid")
+	}
+	if options.Profile == ProfilePostgres {
+		return openPostgres(options.PostgresDSN, options.EdgeID)
 	}
 	return open(options.SQLitePath, options.EdgeID)
 }
@@ -83,7 +88,10 @@ func openSQLite(path string, configuredEdgeID string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{
+		db:      &sqlDatabase{raw: db, dialect: dialectSQLite},
+		profile: ProfileEmbedded,
+	}
 	if err := store.initialize(configuredEdgeID); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -108,7 +116,7 @@ func (store *Store) initialize(configuredEdgeID string) error {
 	}
 	if err := applyMigrations(
 		context.Background(),
-		store.db,
+		store.db.raw,
 		configuredEdgeID,
 	); err != nil {
 		return err
@@ -145,7 +153,7 @@ func (store *Store) rejectLegacyGatewaySchema() error {
 
 func putSemanticMappingTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	spec semantic.MappingSpec,
 	precondition edgeapp.RevisionPrecondition,
 ) (semantic.Mapping, error) {
@@ -496,8 +504,8 @@ func (store *Store) projectSemanticCandidate(ctx context.Context, candidate sema
 	return true, nil
 }
 
-func semanticCandidateEligible(ctx context.Context, tx *sql.Tx, candidate semanticCandidate) (bool, error) {
-	var eligible int
+func semanticCandidateEligible(ctx context.Context, tx *sqlTx, candidate semanticCandidate) (bool, error) {
+	var eligible bool
 	err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1
@@ -528,7 +536,7 @@ func semanticCandidateEligible(ctx context.Context, tx *sql.Tx, candidate semant
 	`, candidate.LedgerEpoch, candidate.LedgerEpoch, candidate.MappingID,
 		candidate.MappingRevision, candidate.PubSeq, candidate.PubSeq,
 		candidate.LedgerEpoch, candidate.PubSeq).Scan(&eligible)
-	return eligible == 1, err
+	return eligible, err
 }
 
 func decodeSemanticContact(record []byte) (int, int64, error) {
@@ -638,7 +646,7 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var active int
+	var active bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM edge_node_activations
@@ -647,7 +655,7 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 	`, batch.EdgeNodeID, batch.LedgerEpoch).Scan(&active); err != nil {
 		return noAck, err
 	}
-	if active != 1 {
+	if !active {
 		return noAck, ErrEdgeNodeNotActive
 	}
 
@@ -787,7 +795,7 @@ func (store *Store) ListRawRecords(ctx context.Context, limit int) ([]RawRecord,
 	return records, rows.Err()
 }
 
-func readCursor(ctx context.Context, tx *sql.Tx, edgeNodeID, ledgerEpoch string) (int64, error) {
+func readCursor(ctx context.Context, tx *sqlTx, edgeNodeID, ledgerEpoch string) (int64, error) {
 	var cursor int64
 	err := tx.QueryRowContext(ctx, `
 		SELECT accepted_through FROM accepted_cursors

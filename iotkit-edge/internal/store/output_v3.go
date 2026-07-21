@@ -264,11 +264,17 @@ func (store *Store) EnqueueMultipleRuleOutputExports(
 				observation.created_at,
 				CASE WHEN route.last_transform_error_code IS NULL
 					THEN 0 ELSE 1 END AS route_error_rank,
-				MAX(
-					COALESCE(route.last_transform_error_at, 0),
-					COALESCE(route.last_transform_success_at, 0),
-					route.created_at
-				) AS route_attempt_at,
+				CASE
+					WHEN COALESCE(route.last_transform_error_at, 0) >=
+						COALESCE(route.last_transform_success_at, 0)
+						AND COALESCE(route.last_transform_error_at, 0) >=
+							route.created_at
+					THEN COALESCE(route.last_transform_error_at, 0)
+					WHEN COALESCE(route.last_transform_success_at, 0) >=
+						route.created_at
+					THEN COALESCE(route.last_transform_success_at, 0)
+					ELSE route.created_at
+				END AS route_attempt_at,
 				ROW_NUMBER() OVER (
 					PARTITION BY route.route_id
 					ORDER BY observation.observation_row_id
