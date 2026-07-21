@@ -52,17 +52,32 @@ type SemanticEvent struct {
 }
 
 func Open(path string) (*Store, error) {
-	return open(path, "")
+	return OpenWithOptions(OpenOptions{SQLitePath: path})
 }
 
 func OpenWithEdgeID(path string, edgeID string) (*Store, error) {
-	if !edgeIDPattern.MatchString(edgeID) {
-		return nil, errors.New("configured IoTKit Edge ID is invalid")
+	return OpenWithOptions(OpenOptions{SQLitePath: path, EdgeID: edgeID})
+}
+
+func OpenWithOptions(options OpenOptions) (*Store, error) {
+	options, err := options.normalized()
+	if err != nil {
+		return nil, err
 	}
-	return open(path, edgeID)
+	if options.Profile != ProfileEmbedded {
+		return nil, errors.New("postgres storage is not initialized")
+	}
+	return open(options.SQLitePath, options.EdgeID)
 }
 
 func open(path string, configuredEdgeID string) (*Store, error) {
+	if configuredEdgeID != "" && !edgeIDPattern.MatchString(configuredEdgeID) {
+		return nil, errors.New("configured IoTKit Edge ID is invalid")
+	}
+	return openSQLite(path, configuredEdgeID)
+}
+
+func openSQLite(path string, configuredEdgeID string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
