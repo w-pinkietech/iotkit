@@ -26,3 +26,7 @@ members = [
     "iotkit-polling-adapter-runtime",
 ]
 resolver = "3"
+
+[workspace.package]
+license = "Apache-2.0"
+repository = "https://github.com/w-pinkietech/iotkit-next"

@@ -1,6 +1,7 @@
 {
   "name": "iotkit-edge-console",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check-generated.mjs && tsc --noEmit && vitest run --environment happy-dom",

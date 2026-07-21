@@ -2,6 +2,8 @@
 name = "iotkit-input-adapter-testkit"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [dependencies]
