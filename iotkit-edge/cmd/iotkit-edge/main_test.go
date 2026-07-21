@@ -420,6 +420,38 @@ func TestBackupCreateDoesNotCreateMissingSourceDatabase(t *testing.T) {
 	assertPathDoesNotExist(t, dbPath)
 }
 
+func TestOpenConfiguredStoreRejectsProfileDifferentFromDeploymentMetadata(t *testing.T) {
+	dir := t.TempDir()
+	metadata := filepath.Join(dir, "storage-profile.json")
+	if err := os.WriteFile(metadata, []byte(`{"profile":"postgres"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := openConfiguredStore(
+		store.ProfileEmbedded, filepath.Join(dir, "edge.db"), "", metadata, "",
+	)
+	if archive != nil {
+		_ = archive.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("profile mismatch error = %v", err)
+	}
+}
+
+func TestOpenConfiguredStoreUsesEmbeddedProfileWithoutPostgresConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	metadata := filepath.Join(dir, "storage-profile.json")
+	if err := os.WriteFile(metadata, []byte(`{"profile":"embedded"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := openConfiguredStore(
+		store.ProfileEmbedded, filepath.Join(dir, "edge.db"), "", metadata, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+}
+
 func assertPathDoesNotExist(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err == nil {

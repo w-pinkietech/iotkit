@@ -27,6 +27,7 @@ services:
   edge:
     build:
       context: ../iotkit-edge
+      target: runtime
     restart: unless-stopped
     user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"
     network_mode: host
@@ -34,8 +35,14 @@ services:
       - broker
     command:
       - serve
+      - --storage-profile
+      - ${IOTKIT_STORAGE_PROFILE:-embedded}
       - --db
       - /data/edge.db
+      - --postgres-config
+      - ${IOTKIT_POSTGRES_CONFIG:-}
+      - --storage-metadata
+      - /run/iotkit/storage-profile.json
       - --edge-id
       - ${IOTKIT_EDGE_ID:?}
       - --broker-url
@@ -74,6 +81,14 @@ services:
       - type: bind
         source: ${IOTKIT_EDGE_DATA_DIR:?}
         target: /data
+      - type: bind
+        source: ${IOTKIT_STORAGE_METADATA_FILE:?}
+        target: /run/iotkit/storage-profile.json
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_POSTGRES_CONFIG_FILE:?}
+        target: /run/iotkit/postgres.json
+        read_only: true
       - type: bind
         source: ${IOTKIT_EDGE_ARCHIVE_PASSWORD_FILE:?}
         target: /run/iotkit/edge-archive-mqtt-password

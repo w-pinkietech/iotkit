@@ -118,6 +118,12 @@ expect_bootstrap_failure wrong-certificate-host "$scratch/wrong-certificate-host
   --tls-cert "$scratch/wrong-host.pem" --tls-key "$scratch/wrong-host.key" \
   --tls-ca "$scratch/ca.pem"
 
+expect_bootstrap_failure invalid-storage-profile "$scratch/invalid-storage-output" \
+  --binding "$scratch/binding.json" --output-dir "$scratch/invalid-storage-output" \
+  --broker-host localhost --broker-bind 127.0.0.1 --broker-port "$port" \
+  --storage-profile timeseries \
+  --tls-cert "$scratch/server.pem" --tls-key "$scratch/server.key" --tls-ca "$scratch/ca.pem"
+
 repo_output="$repo_test_parent/direct-output"
 [[ ! -e "$repo_output" ]] || { echo "reserved test output already exists" >&2; exit 1; }
 expect_bootstrap_failure repository-output "$repo_output" \
@@ -181,6 +187,9 @@ for path in \
   "$output/mosquitto/passwords" \
   "$output/secrets/edge-archive-mqtt-password" \
   "$output/secrets/output-mqtt-password" \
+	"$output/secrets/postgres-password" \
+	"$output/secrets/postgres.json" \
+	"$output/storage-profile.json" \
   "$output/tls/server.pem" \
   "$output/tls/server.key" \
   "$output/tls/ca.pem" \
@@ -218,6 +227,8 @@ grep -Fq 'allow_anonymous false' "$output/mosquitto/mosquitto.conf"
 grep -Fq 'listener 8883 0.0.0.0' "$output/mosquitto/mosquitto.conf"
 grep -Fq "IOTKIT_BROKER_BIND=127.0.0.1" "$output/edge.env"
 grep -Fq "IOTKIT_BROKER_PORT=$port" "$output/edge.env"
+grep -Fxq 'IOTKIT_STORAGE_PROFILE=embedded' "$output/edge.env"
+jq -e '.profile == "embedded"' "$output/storage-profile.json" >/dev/null
 edge_id=$(sed -n 's/^IOTKIT_EDGE_ID=//p' "$output/edge.env")
 [[ "$edge_id" =~ ^edge-[0-9a-f]{32}$ ]] || {
   echo "bootstrap did not assign a valid Edge ID: $edge_id" >&2

@@ -116,6 +116,20 @@ docker compose --env-file "$install_root/edge.env" \
   -f deploy/compose.edge.yaml up --build --detach
 ```
 
+上記は小規模・standalone向けの`embedded` profile（SQLite）である。同じConsoleとMQTT契約を
+維持したまま、常設運用向けの管理対象PostgreSQL profileを選ぶ場合はbootstrapへ
+`--storage-profile postgres`を追加し、起動時にもoverlayを追加する。
+
+```bash
+docker compose --env-file "$install_root/edge.env" \
+  -f deploy/compose.edge.yaml -f deploy/compose.edge-postgres.yaml \
+  up --build --detach
+```
+
+profileは導入directoryの`storage-profile.json`へ固定され、起動flagと異なる場合は停止する。
+接続失敗時にSQLiteへfallbackせず、両DBへの二重書込みもしない。SQLiteからの切替手順は
+[IoTKit Edge installation and recovery](docs/edge-operations.md)を参照する。
+
 The generator creates an anonymous-disabled Broker configuration, an Edge Node-specific ACL and hashed
 password database, the IoTKit Edge secret, and `edge-handoff/`. Securely transfer the three handoff files
 to the Edge Node. Install `mqtt-password` and `broker-ca.pem` at the paths named by
@@ -130,7 +144,10 @@ install -m 600 /dev/null "$install_root/secrets/initial-admin-password"
 # Write the initial password without putting it in shell history.
 docker compose --env-file "$install_root/edge.env" -f deploy/compose.edge.yaml run --rm \
   -v "$install_root/secrets/initial-admin-password:/run/iotkit/admin-password:ro" \
-  edge account bootstrap --db /data/edge.db --login-id admin \
+  edge account bootstrap --storage-profile "$(sed -n 's/^IOTKIT_STORAGE_PROFILE=//p' "$install_root/edge.env")" \
+  --db /data/edge.db \
+  --postgres-config "$(sed -n 's/^IOTKIT_POSTGRES_CONFIG=//p' "$install_root/edge.env")" \
+  --storage-metadata /run/iotkit/storage-profile.json --login-id admin \
   --display-name 'システム管理者' --password-file /run/iotkit/admin-password
 rm "$install_root/secrets/initial-admin-password"
 ```

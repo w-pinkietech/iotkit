@@ -13,6 +13,8 @@ broker_host=""
 broker_bind=""
 broker_port="8883"
 edge_https_port="443"
+storage_profile="embedded"
+postgres_port="5432"
 tls_cert=""
 tls_key=""
 tls_ca=""
@@ -27,6 +29,8 @@ usage: bootstrap-edge.sh \
   --broker-bind 192.0.2.10 \
   [--broker-port 8883] \
   [--edge-https-port 443] \
+	[--storage-profile embedded|postgres] \
+	[--postgres-port 5432] \
   --tls-cert server-fullchain.pem \
   --tls-key server.key \
   --tls-ca client-trust-ca.pem \
@@ -41,7 +45,7 @@ fail() {
 
 while (($#)); do
   case "$1" in
-    --binding|--output-dir|--broker-host|--broker-bind|--broker-port|--edge-https-port|--tls-cert|--tls-key|--tls-ca|--edge-publish-topic)
+    --binding|--output-dir|--broker-host|--broker-bind|--broker-port|--edge-https-port|--storage-profile|--postgres-port|--tls-cert|--tls-key|--tls-ca|--edge-publish-topic)
       (($# >= 2)) || { usage; exit 2; }
       case "$1" in
         --binding) binding=$2 ;;
@@ -50,6 +54,8 @@ while (($#)); do
         --broker-bind) broker_bind=$2 ;;
         --broker-port) broker_port=$2 ;;
         --edge-https-port) edge_https_port=$2 ;;
+		--storage-profile) storage_profile=$2 ;;
+		--postgres-port) postgres_port=$2 ;;
         --tls-cert) tls_cert=$2 ;;
         --tls-key) tls_key=$2 ;;
         --tls-ca) tls_ca=$2 ;;
@@ -127,6 +133,10 @@ validate_ipv4 "$broker_bind" || fail "broker bind must be an explicit IPv4 addre
   || fail "broker port must be between 1 and 65535"
 [[ "$edge_https_port" =~ ^[0-9]+$ ]] && ((edge_https_port >= 1 && edge_https_port <= 65535)) \
   || fail "Edge HTTPS port must be between 1 and 65535"
+[[ "$storage_profile" == "embedded" || "$storage_profile" == "postgres" ]] \
+  || fail "storage profile must be embedded or postgres"
+[[ "$postgres_port" =~ ^[0-9]+$ ]] && ((postgres_port >= 1 && postgres_port <= 65535)) \
+  || fail "PostgreSQL port must be between 1 and 65535"
 getent ahostsv4 "$broker_host" | awk '{print $1}' | grep -Fxq "$broker_bind" \
   || fail "broker host must resolve to the configured bind address on the Edge host"
 
@@ -194,7 +204,8 @@ trap cleanup EXIT
 mkdir -m 700 "$stage"
 mkdir -m 700 "$stage/mosquitto" "$stage/mosquitto/tls" "$stage/caddy" \
   "$stage/systemd" "$stage/secrets" "$stage/tls" \
-  "$stage/edge-handoff" "$stage/data" "$stage/data/edge" "$stage/data/mosquitto"
+  "$stage/edge-handoff" "$stage/data" "$stage/data/edge" "$stage/data/mosquitto" \
+  "$stage/data/postgres"
 mkdir -m 700 "$stage/data/caddy"
 mkdir -m 755 "$stage/data/acme-webroot"
 cp "$binding" "$stage/edge-node-binding.json"
@@ -204,6 +215,18 @@ cp "$tls_ca" "$stage/tls/ca.pem"
 cp "$tls_ca" "$stage/edge-handoff/broker-ca.pem"
 openssl rand -hex 24 >"$stage/secrets/edge-archive-mqtt-password"
 openssl rand -hex 24 >"$stage/edge-handoff/mqtt-password"
+printf '{"profile":"%s"}\n' "$storage_profile" >"$stage/storage-profile.json"
+if [[ "$storage_profile" == "postgres" ]]; then
+  openssl rand -hex 24 >"$stage/secrets/postgres-password"
+  postgres_password=$(<"$stage/secrets/postgres-password")
+  printf '{"dsn":"postgres://iotkit:%s@127.0.0.1:%s/iotkit?sslmode=disable"}\n' \
+    "$postgres_password" "$postgres_port" >"$stage/secrets/postgres.json"
+  postgres_config=/run/iotkit/postgres.json
+else
+  : >"$stage/secrets/postgres-password"
+  printf '{"dsn":""}\n' >"$stage/secrets/postgres.json"
+  postgres_config=
+fi
 
 cat >"$stage/mosquitto/mosquitto.conf" <<'EOF'
 listener 8883 0.0.0.0
@@ -279,6 +302,13 @@ COMPOSE_PROJECT_NAME=$compose_project
 IOTKIT_RUNTIME_UID=$(id -u)
 IOTKIT_RUNTIME_GID=$(id -g)
 IOTKIT_EDGE_ID=$edge_id
+IOTKIT_STORAGE_PROFILE=$storage_profile
+IOTKIT_STORAGE_METADATA_FILE=$output_dir/storage-profile.json
+IOTKIT_POSTGRES_CONFIG=$postgres_config
+IOTKIT_POSTGRES_CONFIG_FILE=$output_dir/secrets/postgres.json
+IOTKIT_POSTGRES_PASSWORD_FILE=$output_dir/secrets/postgres-password
+IOTKIT_POSTGRES_DATA_DIR=$output_dir/data/postgres
+IOTKIT_POSTGRES_PORT=$postgres_port
 IOTKIT_MOSQUITTO_IMAGE=$IOTKIT_MOSQUITTO_IMAGE
 IOTKIT_BROKER_HOST=$broker_host
 IOTKIT_EDGE_HOST=$broker_host
@@ -371,6 +401,10 @@ committed=true
 trap - EXIT
 
 echo "IoTKit Edge bootstrap created: $output_dir"
-echo "Start Edge: docker compose --env-file $output_dir/edge.env -f $repo_root/deploy/compose.edge.yaml up --build --detach"
+if [[ "$storage_profile" == "postgres" ]]; then
+  echo "Start Edge: docker compose --env-file $output_dir/edge.env -f $repo_root/deploy/compose.edge.yaml -f $repo_root/deploy/compose.edge-postgres.yaml up --build --detach"
+else
+  echo "Start Edge: docker compose --env-file $output_dir/edge.env -f $repo_root/deploy/compose.edge.yaml up --build --detach"
+fi
 echo "Edge handoff directory (contains a plaintext credential): $output_dir/edge-handoff"
 echo "Certificate timer templates: $output_dir/systemd (enable after ACME settings are added to broker-cert.env)"
