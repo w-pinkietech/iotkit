@@ -33,12 +33,12 @@ config=$(realpath "$config")
 source "$config"
 
 for variable in IOTKIT_CERT_DOMAIN IOTKIT_CERT_FILE IOTKIT_CERT_KEY_FILE \
-  IOTKIT_CERT_CA_FILE IOTKIT_CERT_SITE_ENV IOTKIT_CERT_COMPOSE_FILE \
-  IOTKIT_CERT_BROKER_PORT IOTKIT_CERT_SITE_PASSWORD_FILE; do
+  IOTKIT_CERT_CA_FILE IOTKIT_CERT_EDGE_ENV IOTKIT_CERT_COMPOSE_FILE \
+  IOTKIT_CERT_BROKER_PORT IOTKIT_CERT_EDGE_ARCHIVE_PASSWORD_FILE; do
   [[ -n "${!variable:-}" ]] || fail "missing $variable in certificate config"
 done
 
-compose_args=(--env-file "$IOTKIT_CERT_SITE_ENV" -f "$IOTKIT_CERT_COMPOSE_FILE")
+compose_args=(--env-file "$IOTKIT_CERT_EDGE_ENV" -f "$IOTKIT_CERT_COMPOSE_FILE")
 if [[ -n "${IOTKIT_CERT_COMPOSE_PROJECT:-}" ]]; then
   compose_args+=(-p "$IOTKIT_CERT_COMPOSE_PROJECT")
 fi
@@ -75,16 +75,16 @@ status() {
 
 reload_and_probe() {
   docker compose "${compose_args[@]}" kill -s HUP broker >/dev/null || return 1
-  docker compose "${compose_args[@]}" restart site >/dev/null || return 1
+  docker compose "${compose_args[@]}" restart edge >/dev/null || return 1
   docker compose "${compose_args[@]}" exec -T caddy \
     caddy reload --config /etc/caddy/Caddyfile >/dev/null || return 1
-  docker compose "${compose_args[@]}" exec -T site \
+  docker compose "${compose_args[@]}" exec -T edge \
     sh -c 'test -r /run/iotkit/broker-tls/ca.pem' >/dev/null || return 1
   timeout 15 openssl s_client -connect "$IOTKIT_CERT_DOMAIN:$IOTKIT_CERT_BROKER_PORT" \
     -servername "$IOTKIT_CERT_DOMAIN" -CAfile "$IOTKIT_CERT_CA_FILE" \
     -verify_return_error </dev/null 2>/dev/null |
     grep -Fq 'Verify return code: 0 (ok)' || return 1
-  timeout 15 openssl s_client -connect "$IOTKIT_CERT_DOMAIN:${IOTKIT_CERT_SITE_HTTPS_PORT:-443}" \
+  timeout 15 openssl s_client -connect "$IOTKIT_CERT_DOMAIN:${IOTKIT_CERT_EDGE_HTTPS_PORT:-443}" \
     -servername "$IOTKIT_CERT_DOMAIN" -CAfile "$IOTKIT_CERT_CA_FILE" \
     -verify_return_error </dev/null 2>/dev/null |
     grep -Fq 'Verify return code: 0 (ok)' || return 1
@@ -115,7 +115,7 @@ install_bundle() {
     mv "$backup/ca.pem" "$IOTKIT_CERT_CA_FILE"
     rmdir "$backup"
     docker compose "${compose_args[@]}" kill -s HUP broker >/dev/null || true
-    docker compose "${compose_args[@]}" restart site >/dev/null || true
+    docker compose "${compose_args[@]}" restart edge >/dev/null || true
     docker compose "${compose_args[@]}" exec -T caddy \
       caddy reload --config /etc/caddy/Caddyfile >/dev/null || true
     fail "new certificate probe failed; previous bundle restored"

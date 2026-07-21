@@ -203,7 +203,7 @@ assert_cross_namespace_subscription_isolated() {
     exit 1
   fi
 
-  expect_success site-publishes-edge-b-ack mqtt_client site mosquitto_pub \
+  expect_success edge-publishes-edge-b-ack mqtt_client edge mosquitto_pub \
     -h localhost -p "$tls_port" -q 1 \
     -t iotkit/v1/edge-nodes/edge-b/accepted-through -m "$marker"
 
@@ -259,7 +259,7 @@ assert_activation_subscription_isolated() {
     exit 1
   }
 
-  expect_success site-publishes-edge-b-activation mqtt_client site mosquitto_pub \
+  expect_success edge-publishes-edge-b-activation mqtt_client edge mosquitto_pub \
     -h localhost -p "$tls_port" -q 1 \
     -t iotkit/v1/edge-nodes/edge-b/activation/request -m "$marker"
 
@@ -284,7 +284,7 @@ assert_activation_subscription_isolated() {
 
 assert_activation_request_is_nonretained() {
   local marker="nonretained-activation-probe-$$" status
-  expect_success site-publishes-nonretained-activation mqtt_client site mosquitto_pub \
+  expect_success edge-publishes-nonretained-activation mqtt_client edge mosquitto_pub \
     -h localhost -p "$tls_port" -q 1 \
     -t iotkit/v1/edge-nodes/edge-a/activation/request -m "$marker"
   set +e
@@ -362,19 +362,19 @@ cp "$scratch/server.key" "$scratch/expired-server.key"
 mkdir -p "$scratch/passwords"
 openssl rand -hex 24 >"$scratch/passwords/edge-a.txt"
 openssl rand -hex 24 >"$scratch/passwords/edge-b.txt"
-openssl rand -hex 24 >"$scratch/passwords/site.txt"
+openssl rand -hex 24 >"$scratch/passwords/edge.txt"
 openssl rand -hex 24 >"$scratch/passwords/wrong.txt"
 chmod 600 "$scratch/passwords"/*.txt "$scratch"/*.key
 
 edge_a_password=$(<"$scratch/passwords/edge-a.txt")
 edge_b_password=$(<"$scratch/passwords/edge-b.txt")
-site_password=$(<"$scratch/passwords/site.txt")
+edge_password=$(<"$scratch/passwords/edge.txt")
 wrong_password=$(<"$scratch/passwords/wrong.txt")
 
 cat >"$scratch/passwords.db" <<EOF
 edge-a:$edge_a_password
 edge-b:$edge_b_password
-site:$site_password
+edge:$edge_password
 EOF
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$scratch:/work" "$IOTKIT_MOSQUITTO_IMAGE" \
@@ -395,7 +395,7 @@ topic write iotkit/v1/edge-nodes/edge-b/activation/result
 topic read iotkit/v1/edge-nodes/edge-b/accepted-through
 topic read iotkit/v1/edge-nodes/edge-b/activation/request
 
-user site
+user edge
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic read iotkit/v1/edge-nodes/+/activation/result
@@ -427,7 +427,7 @@ EOF
 write_client_config edge-a edge-a "$edge_a_password" ca.pem
 write_client_config edge-b edge-b "$edge_b_password" ca.pem
 write_client_config edge-a-wrong edge-a "$wrong_password" ca.pem
-write_client_config site site "$site_password" ca.pem
+write_client_config edge edge "$edge_password" ca.pem
 write_anonymous_tls_config anonymous
 write_plain_config plaintext
 
@@ -453,13 +453,13 @@ fi
 expect_success edge-a-own-records mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
-expect_success site-own-ack mqtt_client site mosquitto_pub \
+expect_success edge-own-ack mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/accepted-through -m '{}'
 expect_success edge-a-own-activation-result mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/activation/result -m '{}'
-expect_success site-own-activation-request mqtt_client site mosquitto_pub \
+expect_success edge-own-activation-request mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/activation/request -m '{}'
 expect_status_and_error anonymous 135 'Connection error: Not authorized' \
@@ -476,8 +476,8 @@ expect_publish_denied edge-a-writes-edge-b \
 assert_cross_namespace_subscription_isolated
 assert_activation_subscription_isolated
 assert_activation_request_is_nonretained
-expect_publish_denied site-writes-edge-records \
-  iotkit/v1/edge-nodes/edge-a/records mqtt_client site mosquitto_pub \
+expect_publish_denied edge-writes-edge-records \
+  iotkit/v1/edge-nodes/edge-a/records mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
 expect_publish_denied edge-a-writes-edge-b-activation-result \
@@ -488,8 +488,8 @@ expect_publish_denied edge-a-writes-activation-request \
   iotkit/v1/edge-nodes/edge-a/activation/request mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/activation/request -m '{}'
-expect_publish_denied site-writes-activation-result \
-  iotkit/v1/edge-nodes/edge-a/activation/result mqtt_client site mosquitto_pub \
+expect_publish_denied edge-writes-activation-result \
+  iotkit/v1/edge-nodes/edge-a/activation/result mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/activation/result -m '{}'
 expect_tls_rejected wrong-ca 'unable to get local issuer certificate|self-signed certificate' \

@@ -15,7 +15,7 @@
       "values": [21.5],
       "event_time": 1720000000000,
       "event_time_source": "received",
-      "time_source": "edge",
+      "time_source": "edge_node",
       "time_quality": "unsynced",
       "received_at": 1720000000123,
       "device_time": null

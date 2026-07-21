@@ -599,7 +599,7 @@ mod tests {
             series_variant: None,
             values: vec![21.5],
             device_time_ms: None,
-            time_source: TimeSource::Edge,
+            time_source: TimeSource::EdgeNode,
             age_ms: None,
             rssi: None,
             battery_pct: None,

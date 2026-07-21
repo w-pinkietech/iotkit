@@ -40,7 +40,7 @@ fn evaluate_item(
                     // 明示解決(R14)が要る状態——Wave 0はwarnログで可視化する。
                     tracing::warn!(
                         key = declared,
-                        "catalog key shadowed by site alias; explicit resolution required (D6)"
+                        "catalog key shadowed by location alias; explicit resolution required (D6)"
                     );
                 }
                 let materialized = ledger::series_exists_for_key(conn, system_id, declared)
@@ -190,8 +190,8 @@ fn evaluate_item(
         .map_err(|e| e.to_string())?;
     let series_min = series_meta.as_ref().and_then(|m| m.range_min);
     let series_max = series_meta.as_ref().and_then(|m| m.range_max);
-    let min = series_min.or(entry.site_min).or(entry.physical_min);
-    let max = series_max.or(entry.site_max).or(entry.physical_max);
+    let min = series_min.or(entry.local_min).or(entry.physical_min);
+    let max = series_max.or(entry.local_max).or(entry.physical_max);
     let out_of_range = min.is_some_and(|lo| value < lo) || max.is_some_and(|hi| value > hi);
     if out_of_range {
         return Ok(RegistryVerdict::Accept {
@@ -248,7 +248,7 @@ mod tests {
             series_variant: None,
             values,
             device_time_ms: None,
-            time_source: TimeSource::Edge,
+            time_source: TimeSource::EdgeNode,
             age_ms: None,
             rssi: None,
             battery_pct: None,
@@ -358,13 +358,13 @@ mod tests {
     }
 
     #[test]
-    fn site_default_range_applies_when_no_series_override() {
+    fn local_default_range_applies_when_no_series_override() {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let sid = device(conn);
             eval(conn, &sid, &item("temperature_c", None, vec![21.5])); // auto-enable
             conn.execute(
-                "UPDATE registry_entries SET site_min = 0.0, site_max = 100.0
+                "UPDATE registry_entries SET local_min = 0.0, local_max = 100.0
                  WHERE measurement_key='temperature_c'",
                 [],
             )
@@ -564,7 +564,13 @@ mod tests {
                 "test",
             )
             .unwrap();
-            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+            define_alias(
+                conn,
+                "temp_old",
+                "temperature_c",
+                AliasKind::LocationMapping,
+            )
+            .unwrap();
             let v = eval(conn, &sid, &item("temp_old", None, vec![21.5]));
             assert!(
                 matches!(v,
@@ -602,7 +608,13 @@ mod tests {
             )
             .unwrap();
             // エイリアス確立=canonical定義バインドで検疫解除される(Task 3)
-            define_alias(conn, "temp_old", "temperature_c", AliasKind::SiteMapping).unwrap();
+            define_alias(
+                conn,
+                "temp_old",
+                "temperature_c",
+                AliasKind::LocationMapping,
+            )
+            .unwrap();
             let meta = iotkit_core_ledger::find_series_meta(
                 conn,
                 &sid,

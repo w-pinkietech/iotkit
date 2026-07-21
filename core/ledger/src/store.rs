@@ -25,7 +25,7 @@ impl std::fmt::Display for LedgerError {
             Self::InvalidReplace(s) => write!(f, "invalid replace: {s}"),
             Self::UnsupportedPreReleaseSchema => write!(
                 f,
-                "unsupported pre-release Edge database; recreate the Edge database"
+                "unsupported pre-release Edge Node database; recreate the Edge Node database"
             ),
             Self::Storage(e) => write!(f, "storage error: {e}"),
             Self::Sqlite(e) => write!(f, "sqlite error: {e}"),
@@ -135,7 +135,7 @@ pub struct SeriesListRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EdgeIdentity {
+pub struct EdgeNodeIdentity {
     pub edge_node_id: String,
     pub ledger_epoch: String,
 }
@@ -965,8 +965,8 @@ pub fn edge_node_id(conn: &Connection) -> Result<String, LedgerError> {
     .map_err(LedgerError::from)
 }
 
-/// Return an initialized Edge identity without generating or changing either value.
-pub fn load_edge_identity(conn: &Connection) -> Result<EdgeIdentity, LedgerError> {
+/// Return an initialized Edge Node identity without generating or changing either value.
+pub fn load_edge_node_identity(conn: &Connection) -> Result<EdgeNodeIdentity, LedgerError> {
     if conn
         .query_row(
             "SELECT value FROM ledger_meta WHERE key = 'gateway_identity'",
@@ -994,7 +994,7 @@ pub fn load_edge_identity(conn: &Connection) -> Result<EdgeIdentity, LedgerError
         )
         .optional()?
         .ok_or_else(|| LedgerError::NotFound("ledger_epoch".into()))?;
-    Ok(EdgeIdentity {
+    Ok(EdgeNodeIdentity {
         edge_node_id,
         ledger_epoch,
     })
@@ -2060,14 +2060,14 @@ mod tests {
     }
 
     #[test]
-    fn load_edge_identity_returns_existing_values_without_writing() {
+    fn load_edge_node_identity_returns_existing_values_without_writing() {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let edge_node_id = edge_node_id(conn).unwrap();
             let ledger_epoch = ledger_epoch(conn).unwrap();
             let changes_before = conn.total_changes();
 
-            let identity = load_edge_identity(conn).unwrap();
+            let identity = load_edge_node_identity(conn).unwrap();
 
             assert_eq!(identity.edge_node_id, edge_node_id);
             assert_eq!(identity.ledger_epoch, ledger_epoch);
@@ -2078,12 +2078,12 @@ mod tests {
     }
 
     #[test]
-    fn load_edge_identity_does_not_generate_missing_values() {
+    fn load_edge_node_identity_does_not_generate_missing_values() {
         let db = test_db();
         db.with_conn_sync(|conn| {
             let changes_before = conn.total_changes();
 
-            let error = load_edge_identity(conn).unwrap_err();
+            let error = load_edge_node_identity(conn).unwrap_err();
 
             assert!(matches!(error, LedgerError::NotFound(_)));
             assert_eq!(conn.total_changes(), changes_before);
@@ -2115,7 +2115,7 @@ mod tests {
             assert!(matches!(error, LedgerError::UnsupportedPreReleaseSchema));
             assert_eq!(
                 error.to_string(),
-                "unsupported pre-release Edge database; recreate the Edge database"
+                "unsupported pre-release Edge Node database; recreate the Edge Node database"
             );
             assert_eq!(
                 conn.query_row(

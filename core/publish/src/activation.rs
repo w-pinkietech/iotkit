@@ -19,7 +19,7 @@ impl ActivationState {
             "discovery_only" => Ok(Self::DiscoveryOnly),
             "active" => Ok(Self::Active),
             other => Err(PublishError::Invalid(format!(
-                "unknown Site activation state {other:?}"
+                "unknown Edge Node activation state {other:?}"
             ))),
         }
     }
@@ -30,7 +30,7 @@ impl ActivationState {
 pub struct ActivationRequest {
     pub schema_version: u32,
     pub activation_id: String,
-    pub site_id: String,
+    pub edge_id: String,
     pub edge_node_id: String,
     pub expected_ledger_epoch: String,
     pub grant_revision: u64,
@@ -42,7 +42,7 @@ pub struct ActivationRequest {
 pub struct ActivationResult {
     pub schema_version: u32,
     pub activation_id: String,
-    pub site_id: String,
+    pub edge_id: String,
     pub edge_node_id: String,
     pub ledger_epoch: String,
     pub status: String,
@@ -64,7 +64,7 @@ impl ActivationRequest {
             return invalid("activation request schema_version must be 1");
         }
         validate_prefixed_hex("activation_id", &self.activation_id, "act-")?;
-        validate_prefixed_hex("site_id", &self.site_id, "site-")?;
+        validate_prefixed_hex("edge_id", &self.edge_id, "edge-")?;
         validate_topic_segment("edge_node_id", &self.edge_node_id)?;
         validate_identity("expected_ledger_epoch", &self.expected_ledger_epoch)?;
         if self.grant_revision != 1 {
@@ -90,7 +90,7 @@ impl ActivationResult {
             return invalid("activation result schema_version must be 1");
         }
         validate_prefixed_hex("activation_id", &self.activation_id, "act-")?;
-        validate_prefixed_hex("site_id", &self.site_id, "site-")?;
+        validate_prefixed_hex("edge_id", &self.edge_id, "edge-")?;
         validate_topic_segment("edge_node_id", &self.edge_node_id)?;
         validate_identity("ledger_epoch", &self.ledger_epoch)?;
         if self.status != "applied" {
@@ -117,7 +117,7 @@ impl ActivationResult {
 
 pub fn activation_state(conn: &Connection) -> Result<ActivationState, PublishError> {
     let value: String = conn.query_row(
-        "SELECT state FROM site_activation WHERE singleton = 1",
+        "SELECT state FROM edge_node_activation WHERE singleton = 1",
         [],
         |row| row.get(0),
     )?;
@@ -128,17 +128,17 @@ pub fn publication_admitted(conn: &Connection) -> Result<bool, PublishError> {
     Ok(activation_state(conn)? != ActivationState::DiscoveryOnly)
 }
 
-pub fn install_site_target(
+pub fn install_edge_target(
     conn: &Connection,
     target: &TargetRow,
     now_ms: i64,
 ) -> Result<(), PublishError> {
     if target.cursor_pub_seq != 0 || target.cursor_epoch.is_some() {
-        return invalid("new Site target cursor must be unused");
+        return invalid("new IoTKit Edge target cursor must be unused");
     }
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     if activation_state(&tx)? != ActivationState::Standalone {
-        return invalid("Site target may only be installed on a standalone Edge");
+        return invalid("IoTKit Edge target may only be installed on a standalone Edge Node");
     }
     let existing_targets: i64 =
         tx.query_row("SELECT count(*) FROM target_registry", [], |row| row.get(0))?;
@@ -147,7 +147,7 @@ pub fn install_site_target(
     let allocation_sequence = publication_allocation_sequence(&tx)?;
     if existing_targets != 0 || publication_rows != 0 || allocation_sequence != 0 {
         return invalid(
-            "standalone outbox adoption is unsupported; Site activation requires an unused publication stream",
+            "standalone outbox adoption is unsupported; Edge Node activation requires an unused publication stream",
         );
     }
     tx.execute(
@@ -165,7 +165,7 @@ pub fn install_site_target(
         ],
     )?;
     tx.execute(
-        "UPDATE site_activation
+        "UPDATE edge_node_activation
          SET state = 'discovery_only'
          WHERE singleton = 1 AND state = 'standalone'",
         [],
@@ -186,32 +186,34 @@ pub fn apply_activation(
     let request_json = serde_json::to_string(request)
         .map_err(|error| PublishError::Invalid(format!("activation request JSON: {error}")))?;
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let identity = iotkit_core_ledger::load_edge_identity(&tx)
+    let identity = iotkit_core_ledger::load_edge_node_identity(&tx)
         .map_err(|error| PublishError::Ledger(error.to_string()))?;
     if request.edge_node_id != identity.edge_node_id {
-        return invalid("activation request edge_node_id does not match this Edge");
+        return invalid("activation request edge_node_id does not match this Edge Node");
     }
     if request.expected_ledger_epoch != identity.ledger_epoch {
-        return invalid("activation request ledger epoch does not match this Edge");
+        return invalid("activation request ledger epoch does not match this Edge Node");
     }
 
     let (state, stored_request, stored_result): (String, Option<String>, Option<String>) = tx
         .query_row(
             "SELECT state, request_json, result_json
-             FROM site_activation WHERE singleton = 1",
+             FROM edge_node_activation WHERE singleton = 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
     match ActivationState::from_db(&state)? {
         ActivationState::Active => {
             if stored_request.as_deref() != Some(request_json.as_str()) {
-                return invalid("Edge is already active under a conflicting activation");
+                return invalid("Edge Node is already active under a conflicting activation");
             }
             let result = ActivationResult::decode(
                 stored_result
                     .as_deref()
                     .ok_or_else(|| {
-                        PublishError::Invalid("active Edge has no stored activation result".into())
+                        PublishError::Invalid(
+                            "active Edge Node has no stored activation result".into(),
+                        )
                     })?
                     .as_bytes(),
             )?;
@@ -219,7 +221,7 @@ pub fn apply_activation(
             return Ok(result);
         }
         ActivationState::Standalone => {
-            return invalid("Edge has no Site target and cannot be activated");
+            return invalid("Edge Node has no IoTKit Edge target and cannot be activated");
         }
         ActivationState::DiscoveryOnly => {}
     }
@@ -246,7 +248,7 @@ pub fn apply_activation(
     let result = ActivationResult {
         schema_version: ACTIVATION_SCHEMA_VERSION,
         activation_id: request.activation_id.clone(),
-        site_id: request.site_id.clone(),
+        edge_id: request.edge_id.clone(),
         edge_node_id: identity.edge_node_id,
         ledger_epoch: identity.ledger_epoch,
         status: "applied".into(),
@@ -257,9 +259,9 @@ pub fn apply_activation(
     let result_json = serde_json::to_string(&result)
         .map_err(|error| PublishError::Invalid(format!("activation result JSON: {error}")))?;
     tx.execute(
-        "UPDATE site_activation
+        "UPDATE edge_node_activation
          SET state = 'active',
-             site_id = ?1,
+             edge_id = ?1,
              activation_id = ?2,
              ledger_epoch = ?3,
              discard_through_reading_seq = ?4,
@@ -269,7 +271,7 @@ pub fn apply_activation(
              activated_at = ?7
          WHERE singleton = 1 AND state = 'discovery_only'",
         params![
-            result.site_id,
+            result.edge_id,
             result.activation_id,
             result.ledger_epoch,
             result.discard_through_reading_seq,
@@ -290,7 +292,7 @@ pub fn cleanup_pre_activation_batch(conn: &Connection, limit: u32) -> Result<u64
     let row: Option<(i64, i64)> = tx
         .query_row(
             "SELECT discard_through_reading_seq, cleanup_through_reading_seq
-             FROM site_activation
+             FROM edge_node_activation
              WHERE singleton = 1 AND state = 'active'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -313,7 +315,7 @@ pub fn cleanup_pre_activation_batch(conn: &Connection, limit: u32) -> Result<u64
     let Some(batch_end) = batch_end else {
         if progress < boundary {
             tx.execute(
-                "UPDATE site_activation
+                "UPDATE edge_node_activation
                  SET cleanup_through_reading_seq = ?1
                  WHERE singleton = 1",
                 [boundary],
@@ -327,7 +329,7 @@ pub fn cleanup_pre_activation_batch(conn: &Connection, limit: u32) -> Result<u64
         params![progress, batch_end],
     )?;
     tx.execute(
-        "UPDATE site_activation
+        "UPDATE edge_node_activation
          SET cleanup_through_reading_seq = ?1
          WHERE singleton = 1",
         [batch_end],
@@ -390,7 +392,7 @@ fn invalid<T>(message: &str) -> Result<T, PublishError> {
 mod tests {
     use super::{
         ActivationRequest, ActivationResult, ActivationState, activation_state, apply_activation,
-        cleanup_pre_activation_batch, install_site_target,
+        cleanup_pre_activation_batch, install_edge_target,
     };
     use crate::store::TargetRow;
     use rusqlite::{Connection, params};
@@ -413,7 +415,7 @@ mod tests {
 
     fn target() -> TargetRow {
         TargetRow {
-            target_id: "site".into(),
+            target_id: "edge".into(),
             endpoint_url: "mqtts://broker.example.test:8883".into(),
             credential_token: "secret".into(),
             archive_responsible: true,
@@ -427,7 +429,7 @@ mod tests {
         ActivationRequest {
             schema_version: 1,
             activation_id: activation_id.into(),
-            site_id: "site-0123456789abcdef0123456789abcdef".into(),
+            edge_id: "edge-0123456789abcdef0123456789abcdef".into(),
             edge_node_id: EDGE_ID.into(),
             expected_ledger_epoch: EPOCH.into(),
             grant_revision: 1,
@@ -466,7 +468,7 @@ mod tests {
             activation_state(&conn).unwrap(),
             ActivationState::Standalone
         );
-        install_site_target(&conn, &target(), 1).unwrap();
+        install_edge_target(&conn, &target(), 1).unwrap();
         assert_eq!(
             activation_state(&conn).unwrap(),
             ActivationState::DiscoveryOnly
@@ -597,9 +599,9 @@ mod tests {
         );
 
         for invalid in [
-            br#"{"schema_version":2,"activation_id":"act-0123456789abcdef0123456789abcdef","site_id":"site-0123456789abcdef0123456789abcdef","edge_node_id":"edge-node-01","expected_ledger_epoch":"01JTESTEPOCH","grant_revision":1,"issued_at":1}"#.as_slice(),
-            br#"{"schema_version":1,"activation_id":"act-0123456789ABCDEF0123456789ABCDEF","site_id":"site-0123456789abcdef0123456789abcdef","edge_node_id":"edge-node-01","expected_ledger_epoch":"01JTESTEPOCH","grant_revision":1,"issued_at":1}"#.as_slice(),
-            br#"{"schema_version":1,"activation_id":"act-0123456789abcdef0123456789abcdef","site_id":"site-0123456789abcdef0123456789abcdef","edge_node_id":"edge-node-01","expected_ledger_epoch":"01JTESTEPOCH","grant_revision":1,"issued_at":1,"unknown":true}"#.as_slice(),
+            br#"{"schema_version":2,"activation_id":"act-0123456789abcdef0123456789abcdef","edge_id":"edge-0123456789abcdef0123456789abcdef","edge_node_id":"edge-node-01","expected_ledger_epoch":"01JTESTEPOCH","grant_revision":1,"issued_at":1}"#.as_slice(),
+            br#"{"schema_version":1,"activation_id":"act-0123456789ABCDEF0123456789ABCDEF","edge_id":"edge-0123456789abcdef0123456789abcdef","edge_node_id":"edge-node-01","expected_ledger_epoch":"01JTESTEPOCH","grant_revision":1,"issued_at":1}"#.as_slice(),
+            br#"{"schema_version":1,"activation_id":"act-0123456789abcdef0123456789abcdef","edge_id":"edge-0123456789abcdef0123456789abcdef","edge_node_id":"edge-node-01","expected_ledger_epoch":"01JTESTEPOCH","grant_revision":1,"issued_at":1,"unknown":true}"#.as_slice(),
         ] {
             assert!(ActivationRequest::decode(invalid).is_err());
         }
@@ -637,7 +639,7 @@ mod tests {
 
         let conn = discovery_only();
         for contextual_mismatch in [
-            include_bytes!("../../../testdata/egress/v1/activation-request-wrong-edge.json")
+            include_bytes!("../../../testdata/egress/v1/activation-request-wrong-edge-node.json")
                 .as_slice(),
             include_bytes!("../../../testdata/egress/v1/activation-request-wrong-epoch.json")
                 .as_slice(),
@@ -671,7 +673,7 @@ mod tests {
             "INSERT INTO target_registry(
                  target_id, endpoint_url, credential_token, archive_responsible,
                  schema_version, cursor_pub_seq, created_at
-             ) VALUES('site', 'mqtts://broker', 'secret', 1, 1, 0, 1)",
+             ) VALUES('edge', 'mqtts://broker', 'secret', 1, 1, 0, 1)",
             [],
         )
         .unwrap();
@@ -695,7 +697,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = install_site_target(&conn, &target(), 2).unwrap_err();
+        let error = install_edge_target(&conn, &target(), 2).unwrap_err();
 
         assert!(error.to_string().contains("standalone outbox adoption"));
         assert_eq!(crate::store::target_count(&conn).unwrap(), 0);

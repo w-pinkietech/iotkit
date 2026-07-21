@@ -86,7 +86,7 @@ fn execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> 
     let key = required_str(ctx.params, "key")?;
     match resolution(ctx.params)? {
         ResolutionSpec::Alias { target } => {
-            define_alias(tx, key, &target, AliasKind::SiteMapping)?;
+            define_alias(tx, key, &target, AliasKind::LocationMapping)?;
             Ok(json!({
                 "alias": key,
                 "target": target,
@@ -94,7 +94,7 @@ fn execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> 
         }
         ResolutionSpec::Custom { spec } => {
             let entry = define_custom_entry(tx, &spec)?;
-            define_alias(tx, key, &entry.measurement_key, AliasKind::SiteMapping)?;
+            define_alias(tx, key, &entry.measurement_key, AliasKind::LocationMapping)?;
             Ok(json!({
                 "alias": key,
                 "target": entry.measurement_key,

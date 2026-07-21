@@ -5,7 +5,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_json::{Value, json};
 
 use crate::ingress_listener::{
-    INGRESS_READY, IngressListenerMode, stage_ingress_tls_generation, validate_site_config,
+    INGRESS_READY, IngressListenerMode, stage_ingress_tls_generation, validate_local_ingress_config,
 };
 use crate::{OpContext, OpDescriptor, OpError, Tier, fingerprint_of_pem};
 
@@ -17,7 +17,7 @@ pub fn configure_descriptor() -> OpDescriptor {
         tier: Tier::Construction,
         bulk_escalates: false,
         changes_state: true,
-        params_schema: || json!({"required":["enabled","bind_addr","interface","site_local_cidrs","mode"]}),
+        params_schema: || json!({"required":["enabled","bind_addr","interface","local_ingress_cidrs","mode"]}),
         targets: |_| vec!["ingress_listener".into()],
         preconditions: configure_preconditions,
         dry_run: configure_result,
@@ -70,9 +70,9 @@ fn configure_preconditions(
     }
     let bind = required_str(ctx.params, "bind_addr")?;
     let interface = required_str(ctx.params, "interface")?;
-    let cidrs = required_string_array(ctx.params, "site_local_cidrs")?;
+    let cidrs = required_string_array(ctx.params, "local_ingress_cidrs")?;
     let mode = IngressListenerMode::parse(required_str(ctx.params, "mode")?)?;
-    validate_site_config(bind, interface, &cidrs, mode)?;
+    validate_local_ingress_config(bind, interface, &cidrs, mode)?;
     if mode == IngressListenerMode::Tls {
         let exists = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM ingress_tls_material WHERE id=1)",
@@ -102,7 +102,7 @@ fn configure_execute(
         .expect("precondition validated");
     let bind = required_str(ctx.params, "bind_addr")?;
     let interface = required_str(ctx.params, "interface")?;
-    let cidrs = serde_json::to_string(&required_string_array(ctx.params, "site_local_cidrs")?)
+    let cidrs = serde_json::to_string(&required_string_array(ctx.params, "local_ingress_cidrs")?)
         .map_err(|error| OpError::Internal(error.to_string()))?;
     let mode = IngressListenerMode::parse(required_str(ctx.params, "mode")?)?;
     let tls: Option<(i64, String)> = if mode == IngressListenerMode::Tls {
@@ -117,7 +117,7 @@ fn configure_execute(
     };
     tx.execute(
         "UPDATE ingress_listener_config SET desired_generation=desired_generation+1,
-          enabled=?1, bind_addr=?2, interface=?3, site_local_cidrs=?4, mode=?5,
+          enabled=?1, bind_addr=?2, interface=?3, local_ingress_cidrs=?4, mode=?5,
           desired_tls_generation=?6, desired_tls_fingerprint=?7, last_error=NULL,
           last_action='configured' WHERE id=1",
         params![

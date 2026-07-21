@@ -18,12 +18,12 @@ pub struct MqttBinding {
 }
 
 impl MqttBinding {
-    pub fn for_edge(edge_node_id: &str) -> Result<Self, WireError> {
+    pub fn for_edge_node(edge_node_id: &str) -> Result<Self, WireError> {
         crate::wire::validate_topic_segment("edge_node_id", edge_node_id)?;
         Ok(Self {
             edge_node_id: edge_node_id.to_string(),
             username: edge_node_id.to_string(),
-            client_id: format!("iotkit-edge-{edge_node_id}"),
+            client_id: format!("iotkit-edge-node-{edge_node_id}"),
             records_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/records"),
             accepted_through_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/accepted-through"),
             descriptor_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/descriptors"),

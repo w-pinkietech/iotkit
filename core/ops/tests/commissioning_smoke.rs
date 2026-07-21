@@ -32,7 +32,7 @@ fn request(dry_run: bool) -> DispatchRequest {
 }
 
 #[test]
-fn commissioning_smoke_requires_initialized_mqtt_site_target() {
+fn commissioning_smoke_requires_initialized_mqtt_edge_target() {
     let db = iotkit_core_storage::init_db_memory(&migrations()).unwrap();
     db.with_conn_sync(|conn| {
         iotkit_core_ledger::ledger_epoch(conn).unwrap();
@@ -61,7 +61,7 @@ fn commissioning_smoke_dispatch_enqueues_audited_test_record() {
         target_insert(
             conn,
             &TargetRow {
-                target_id: "site".into(),
+                target_id: "edge".into(),
                 endpoint_url: "mqtt://broker:1883".into(),
                 credential_token: String::new(),
                 archive_responsible: true,
@@ -80,7 +80,7 @@ fn commissioning_smoke_dispatch_enqueues_audited_test_record() {
         let result = dispatch(conn, standard_catalog(), request(false)).unwrap();
         let test_id = result["test_id"].as_str().unwrap();
         assert!(test_id.starts_with("smoke-"));
-        assert_eq!(result["target_id"], "site");
+        assert_eq!(result["target_id"], "edge");
         assert_eq!(result["ledger_epoch"], epoch);
         assert!(result["pub_seq"].as_i64().unwrap() > 0);
 
@@ -106,10 +106,10 @@ fn commissioning_smoke_rejects_a_discovery_only_edge() {
     let db = iotkit_core_storage::init_db_memory(&migrations()).unwrap();
     db.with_conn_sync(|conn| {
         let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
-        iotkit_core_publish::activation::install_site_target(
+        iotkit_core_publish::activation::install_edge_target(
             conn,
             &TargetRow {
-                target_id: "site".into(),
+                target_id: "edge".into(),
                 endpoint_url: "mqtts://broker.example.test:8883".into(),
                 credential_token: String::new(),
                 archive_responsible: true,

@@ -398,7 +398,7 @@ async fn prove_listener_invalidation_closes_established_keep_alive(reason: &str,
     let config = crate::ListenerConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         interface: "lo".into(),
-        site_local_cidrs: vec!["127.0.0.0/8".parse().unwrap()],
+        local_ingress_cidrs: vec!["127.0.0.0/8".parse().unwrap()],
         mode,
     };
     let listener = crate::Listener::bind(
@@ -676,7 +676,7 @@ fn envelope_for(source: &str, id: &str) -> String {
         "items": [{
             "measurement_key": "temperature_c",
             "values": [21.5],
-            "time_source": "edge"
+            "time_source": "edge_node"
         }]
     })
     .to_string()
@@ -1791,7 +1791,7 @@ async fn source_mismatch_is_terminal_ack_but_untrusted_absolute_time_is_503_with
     let forged = serde_json::json!({
         "envelope_id": "forged-source",
         "source": "somebody-else",
-        "items": [{"measurement_key":"temperature_c","values":[1.0],"time_source":"edge"}]
+        "items": [{"measurement_key":"temperature_c","values":[1.0],"time_source":"edge_node"}]
     })
     .to_string();
     let result = service
@@ -1852,7 +1852,7 @@ async fn malformed_oversize_and_encoding_fail_without_an_ingest_ack() {
         "envelope_id":"too-many-items",
         "source":"http-device",
         "items": (0..257).map(|_| serde_json::json!({
-            "measurement_key":"temperature_c", "values":[1.0], "time_source":"edge"
+            "measurement_key":"temperature_c", "values":[1.0], "time_source":"edge_node"
         })).collect::<Vec<_>>()
     })
     .to_string();

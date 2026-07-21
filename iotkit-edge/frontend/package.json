@@ -1,0 +1,16 @@
+{
+  "name": "iotkit-edge-console",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check-generated.mjs && tsc --noEmit && vitest run --environment happy-dom",
+    "generate:api": "node scripts/generate-api.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "happy-dom": "^20.11.0",
+    "openapi-typescript": "^7.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}

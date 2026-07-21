@@ -48,7 +48,7 @@ fn item(hw: &str, key: &str, value: f64) -> ReadingItem {
         series_variant: None,
         values: vec![value],
         device_time_ms: None,
-        time_source: TimeSource::Edge,
+        time_source: TimeSource::EdgeNode,
         age_ms: None,
         rssi: None,
         battery_pct: None,
@@ -351,7 +351,7 @@ async fn collector_death_exits_client_task() {
         "test-adapter",
         vec![item("ble:aa", "temperature_c", 21.5)],
     ));
-    // クライアントタスクはClosed検知で終了する(IoTKit Edgeのfail-fast検知点)
+    // クライアントタスクはClosed検知で終了する(IoTKit Edge Nodeのfail-fast検知点)
     tokio::time::timeout(std::time::Duration::from_secs(5), client_handle)
         .await
         .expect("client task must exit after collector death")

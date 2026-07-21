@@ -53,7 +53,7 @@ fn env_with(
             series_variant: None,
             values,
             device_time_ms: None,
-            time_source: TimeSource::Edge,
+            time_source: TimeSource::EdgeNode,
             age_ms: None,
             rssi: None,
             battery_pct: None,
@@ -212,7 +212,7 @@ async fn value_type_mismatch_rejects_item_but_stores_valid_sibling() {
         series_variant: None,
         values: vec![3.0], // boolに3.0 → 構造的に解釈不能
         device_time_ms: None,
-        time_source: TimeSource::Edge,
+        time_source: TimeSource::EdgeNode,
         age_ms: None,
         rssi: None,
         battery_pct: None,
@@ -341,7 +341,7 @@ async fn alias_routes_new_series_to_canonical_key() {
             conn,
             "temp_old",
             "temperature_c",
-            iotkit_core_registry::AliasKind::SiteMapping,
+            iotkit_core_registry::AliasKind::LocationMapping,
         )
         .unwrap();
         Ok(())

@@ -4,7 +4,7 @@ Status: Implemented 2026-07-19
 
 ## 1. Purpose
 
-Output Adapterは、IoTKit Siteで確定した汎用的な意味データを、外部application固有のMQTT契約へ
+Output Adapterは、IoTKit Edgeで確定した汎用的な意味データを、外部application固有のMQTT契約へ
 変換する境界である。YokaKitは最初の実装だが、汎用契約はYokaKitのtopic、用途名、payload fieldを
 知らない。
 
@@ -14,7 +14,7 @@ raw record
   -> generic Output Observation
   -> Output Adapter + versioned route config
   -> exact MQTT publication
-  -> durable Site outbox
+  -> durable IoTKit Edge outbox
   -> external Broker
 ```
 
@@ -37,10 +37,10 @@ Output Adapterが所有しないもの:
 - Broker endpoint、TLS、certificate、credential、client ID
 - MQTT接続、publish、PUBACK、retry、backoff
 - SQLite、outbox、配送済み状態、監査
-- Siteのaccount、role、Console
+- IoTKit Edgeのaccount、role、Console
 - 外部applicationのbusiness master、工程、生産実績、OEE
 
-AdapterはSite process内で動く純粋変換である。storage、clock、network、environment、secretへ
+AdapterはIoTKit Edge process内で動く純粋変換である。storage、clock、network、environment、secretへ
 アクセスしてはならない。同じroute設定とObservationからは、byte単位で同じpublicationを返す。
 
 ## 3. Adapter identity and capabilities
@@ -105,7 +105,7 @@ IoTKit内部の実装名が`cumulative_counter`でも、Output Adapter境界で�
 `observed_at`はUnix epoch millisecondsである。Adapterはidentity、時刻、値を作り直さない。
 `reading`はalarm判断時の任意の有限数値であり、存在しない場合に推測しない。
 
-Edgeの`ledger_epoch`、`pub_seq`、Siteのraw row ID、custody cursorは外部applicationの入力ではないため
+Edge Nodeの`ledger_epoch`、`pub_seq`、IoTKit Edgeのraw row ID、custody cursorは外部applicationの入力ではないため
 この境界へ渡さない。
 
 ## 5. Versioned route configuration
@@ -139,7 +139,7 @@ route設定へBroker credential、CA、private key、tokenを保存しない。`
 
 ## 6. Registry and route persistence
 
-Siteは組み込みAdapterをregistryへ登録する。v1のregistryはcompile-timeであり、runtime plugin discoveryを
+IoTKit Edgeは組み込みAdapterをregistryへ登録する。v1のregistryはcompile-timeであり、runtime plugin discoveryを
 行わない。重複Adapter ID、invalid descriptor、未知Adapter IDはroute作成時に拒否する。
 
 generic routeは論理的に次を保存する。
@@ -159,12 +159,12 @@ created_at
 YokaKit専用routeはmigrationで`adapter_id=yokakit.mqtt.v1`とversion付きconfig JSONへ変換する。
 outboxの`route_id`は維持し、配送待ちmessageを失わない。
 
-`output_routes`は現在、利用者がruleごとに作る設定ではなく、Site全体の`export_profile`から
-`profile_rule_binding`を経て展開される実行単位である。profile expanderがSite ID、
+`output_routes`は現在、利用者がruleごとに作る設定ではなく、IoTKit Edge全体の`export_profile`から
+`profile_rule_binding`を経て展開される実行単位である。profile expanderがIoTKit Edge ID、
 versioned Adapter ID・semantic rule ID・外部用途で特定される論理signal ID、rule kindから
-exact route configを作る。Adapter自身はSite、rule一覧、将来ruleの自動追加を知らない。
+exact route configを作る。Adapter自身はIoTKit Edge、rule一覧、将来ruleの自動追加を知らない。
 
-Console/APIが利用するSite全体の操作面は次である。
+Console/APIが利用するIoTKit Edge全体の操作面は次である。
 
 - `GET /api/v1/export-profiles`: 外部出力先とbinding状態を一覧する
 - `POST /api/v1/export-profiles`: 対応する現在・将来ruleへの継続適用を確認する。汎用出力は即時開始し、
@@ -201,7 +201,7 @@ Console/APIが利用するSite全体の操作面は次である。
 routeを要対応として可視化する。元のsemantic Observationを削除、配送済み扱い、別modeへ推測変換
 してはならない。
 
-Siteはrouteごとに、自由文ではないclosedな`last_transform_error_code`と発生時刻だけをdurable保存する。
+IoTKit Edgeはrouteごとに、自由文ではないclosedな`last_transform_error_code`と発生時刻だけをdurable保存する。
 初版のcodeは`adapter_unavailable`、`config_version_mismatch`、`invalid_observation`、
 `transform_failed`である。config JSON、payload、credential、内部error文字列を診断欄へ複製しない。
 一つのrouteの決定的変換失敗は同じbatchにある別routeの変換・outbox保存を止めない。失敗した
@@ -243,7 +243,7 @@ v1では次を必須とする。
 
 組み込みAdapterの共有fixtureは`testdata/output/v1/`に置く。fixtureはAdapter ID、version付き設定、
 汎用Observation、期待するtopic、QoS、retain、payloadを一組で固定する。
-`scripts/test-site-output.sh`は実Mosquittoに対して汎用JSONとYokaKitの両routeを配送し、Broker停止中は
+`scripts/test-edge-output.sh`は実Mosquittoに対して汎用JSONとYokaKitの両routeを配送し、Broker停止中は
 outboxへ残ること、再起動後に同じexport identityがPUBACK済みへ収束することを検証する。
 YokaKit repositoryを隣接checkoutした環境では、`scripts/test-yokakit-consumer-contract.sh`が同じfixtureを
 YokaKitの実decoderへ渡し、送信側とconsumer側のcontract driftを検出する。
@@ -253,12 +253,12 @@ YokaKitの実decoderへ渡し、送信側とconsumer側のcontract driftを検�
 `iotkit.mqtt-json.v1`は、特定applicationに依存しないIoTKit共通JSONをexact MQTT topicへ出力する。
 `numeric`、`boolean`、`cumulative_value`、`alarm`の全汎用kindを、意味を変更せず受け入れる。
 
-Site全体の外部出力先ではtopicを人へ入力させない。`source_id`は`site_meta.site_id`、
+IoTKit Edge全体の外部出力先ではtopicを人へ入力させない。`source_id`は`edge_meta.edge_id`、
 `signal_id`は`(versioned adapter_id, semantic rule_id, mode)`ごとに暗号学的乱数から一度だけ発行し、
 profile expanderが次を生成する。
 
 ```text
-iotkit/v1/sources/<site-id>/signals/<signal-id>/observations
+iotkit/v1/sources/<edge-id>/signals/<signal-id>/observations
 ```
 
 出力先を停止して同じAdapter・rule・modeで再追加した場合、新しいbindingとfuture-only開始境界を作るが、
@@ -272,7 +272,7 @@ Adapterを純粋変換に保つための実行形式であり、通常Consoleの
 ```json
 {
   "schema_version": 1,
-  "topic": "iotkit/v1/sources/site-0123456789abcdef0123456789abcdef/signals/sig-0123456789abcdef0123456789abcdef/observations"
+  "topic": "iotkit/v1/sources/edge-0123456789abcdef0123456789abcdef/signals/sig-0123456789abcdef0123456789abcdef/observations"
 }
 ```
 
@@ -326,11 +326,11 @@ Observationは後から送らない。
 YokaKit source statusはsemantic Observationの変換ではないため、Observation routeとは別の
 source-level publicationとして扱う。
 
-production bootstrapはDB作成前に`site-<32hex>`を発行し、Siteの`--site-id`とBroker ACLへ同じ値を
-渡す。`site-output`は
-`iotkit/v1/sources/<site-id>/signals/+/observations`、
-`yokakit/v1/sources/<site-id>/signals/+/observations`、同sourceのstatusだけを書ける。
-既存DBを別の`--site-id`で起動した場合は起動を拒否する。
+production bootstrapはDB作成前に`edge-<32hex>`を発行し、IoTKit Edgeの`--edge-id`とBroker ACLへ同じ値を
+渡す。`iotkit-edge-output-<edge-id>`は
+`iotkit/v1/sources/<edge-id>/signals/+/observations`、
+`yokakit/v1/sources/<edge-id>/signals/+/observations`、同sourceのstatusだけを書ける。
+既存DBを別の`--edge-id`で起動した場合は起動を拒否する。
 
 ## 11. v1 exclusions
 

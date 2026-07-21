@@ -5,8 +5,8 @@ Status: Accepted and implemented (2026-07-20).
 ## 1. Scope
 
 This contract defines the northbound extension boundary for official
-in-process sensor adapters compiled into IoTKit Edge. It keeps the generic host
-and core independent of BravePI while allowing the Edge composition root to
+in-process sensor adapters compiled into IoTKit Edge Node. It keeps the generic host
+and core independent of BravePI while allowing the Edge Node composition root to
 link selected vendor adapter crates.
 
 The only measurement contract is the existing
@@ -19,7 +19,7 @@ capability-declaration convergence, care-servicer completion, or D12 form-①
 completion.
 
 V1 uses a compile-time catalog. Adding an installed adapter type requires
-rebuilding Edge. Dynamic libraries, runtime plugin discovery, and Console-based
+rebuilding Edge Node. Dynamic libraries, runtime plugin discovery, and Console-based
 adapter installation are excluded.
 
 ## 2. Identity and authority
@@ -27,11 +27,11 @@ adapter installation are excluded.
 | Identity | Owner | Meaning |
 |---|---|---|
 | `adapter_type_id` | adapter package/build | Software type, e.g. `bravepi-mainboard` |
-| `adapter_instance_id` | deployment config | Stable configured instance on one Edge |
-| `configured_source` | Edge composition | Diagnostic envelope source |
-| `principal_id` | Edge collector boundary | Receiver-owned admission/dedup authority |
+| `adapter_instance_id` | deployment config | Stable configured instance on one Edge Node |
+| `configured_source` | Edge Node composition | Diagnostic envelope source |
+| `principal_id` | Edge Node collector boundary | Receiver-owned admission/dedup authority |
 | `subject_hint` | observation | Hardware/protocol identity of the observed device |
-| `system_id` | Edge ledger | IoTKit-owned stable device identity |
+| `system_id` | Edge Node ledger | IoTKit-owned stable device identity |
 
 These values MUST remain distinct. A transport path is configuration, not
 instance identity. Type and instance IDs remain stable across restart and
@@ -49,9 +49,9 @@ Validation is closed:
 No trimming, case folding, Unicode normalization, or automatic suffixing is
 performed. A collision is a startup error.
 
-For v1 official adapters, Edge preserves the current `OfficialDiscovery`
+For v1 official adapters, Edge Node preserves the current `OfficialDiscovery`
 subject scope and creates `principal:{configured_source}`. Source grants no
-authority. Edge injects a source-bound submission facade, so adapter code
+authority. Edge Node injects a source-bound submission facade, so adapter code
 cannot choose `Envelope.source` or principal scope.
 
 For positional device identities, `subject_namespace` is exactly
@@ -71,15 +71,15 @@ physical device
   -> adapter-package composition glue
   -> SourceBoundIngest / IngestClient
   -> receiver-owned principal
-  -> Edge collector / ledger / timeseries
+  -> Edge Node collector / ledger / timeseries
 ```
 
 Driver and runtime modules know neither the ingest contract nor the client.
-Package composition glue owns the host API. Adapter crates do not access Edge
+Package composition glue owns the host API. Adapter crates do not access Edge Node
 SQLite or depend directly on collector, ledger, registry, timeseries, publish,
-ops, engine, or Site.
+ops, engine, or IoTKit Edge.
 
-Edge owns principal creation, configuration authorization, inventory mutation,
+Edge Node owns principal creation, configuration authorization, inventory mutation,
 start/stop/restart policy, backoff, exhaustion, health aggregation, and the
 static type catalog. The same principal-bound client survives adapter restarts.
 
@@ -166,7 +166,7 @@ UnexpectedExit { TransportClosed | WorkerReturned | ClientClosed | InternalInvar
 Panic
 ```
 
-Shutdown only requests idempotent graceful stop; Edge owns the completion
+Shutdown only requests idempotent graceful stop; Edge Node owns the completion
 future and bounded timeout. A start error MUST leave no live task, thread, or
 open transport.
 
@@ -188,7 +188,7 @@ Each built-in supplies a non-secret `InputAdapterTypeDescriptor`:
 Ingest-contract version, adapter API version, config version, implementation
 version, and device `declaration_version` are separate domains.
 
-Factories are private to `iotkit-edge` and expose only:
+Factories are private to `iotkit-edge-node` and expose only:
 
 ```text
 descriptor()
@@ -197,7 +197,7 @@ start(edge_context, validated_config) -> RunningInputAdapter
 ```
 
 Adapter parsers strictly reject unknown fields and unsupported config versions.
-Edge validates every enabled instance, identity collision, source binding, and
+Edge Node validates every enabled instance, identity collision, source binding, and
 inventory intent before starting any instance. Factories do not own
 `restart()` or `health()`.
 
@@ -234,7 +234,7 @@ principal ID and positional namespace derive from it.
 
 `rpi-local` device selection is deployment configuration, not host-platform
 selection. `model` is resolved by the adapter package's compile-time catalog;
-Edge does not match model IDs. Model-specific scalar settings cross the generic
+Edge Node does not match model IDs. Model-specific scalar settings cross the generic
 host boundary as string, integer, float, or boolean values; the adapter catalog
 owns their names, types, and validation. MCP9600 requires
 `thermocouple_type` with one of
@@ -271,7 +271,7 @@ and subject identity. No config rewriter or DB migration is added.
 The current slice pins the legacy source/subject recipes in config and mapping
 tests, and the R14 inventory test proves repeated reconciliation reuses the
 existing `system_id`. Any future change to a source or subject recipe requires
-an existing-Edge-DB cutover test covering principal scope, hardware identity,
+an existing-Edge Node-DB cutover test covering principal scope, hardware identity,
 `system_id`, series, and in-window dedup before that change can be accepted.
 
 ## 6. Measurements, descriptors, and inventory
@@ -289,13 +289,13 @@ Conformance fixtures, not the production type descriptor, record:
 Fixtures are checked against the measurement registry and exact emitted items.
 Vendor codes remain in the adapter crate.
 
-Supported mappings are not connected-device capabilities. The retained Edge
+Supported mappings are not connected-device capabilities. The retained Edge Node
 descriptor remains derived from actual ledger devices, materialized
 non-quarantined series, and provider-neutral registry entries. Full per-device
 capability declarations, care verbs, `declaration_version` mismatch, and
 redescribe remain a separate D5/D12 state machine.
 
-Positional inventory is an Edge-owned mutation:
+Positional inventory is an Edge Node-owned mutation:
 
 1. purely validate all instances and combine inventory intents;
 2. reconcile idempotently through an audited R14 system-actor operation;
@@ -307,7 +307,7 @@ Factories and adapter crates never mutate ledger or registry.
 
 RPi-local's current compile-time supported-device catalog is package-owned. A
 typed device entry binds model-specific validation, driver construction,
-measurement projection, and inventory display metadata. Edge owns only the
+measurement projection, and inventory display metadata. Edge Node owns only the
 adapter type catalog and inventory reconciliation authority; it does not match
 on MCP9600, OPT3001, or later IC models. The adapter still owns the positional
 subject recipe, so model IDs and host platform names never become device
@@ -320,16 +320,16 @@ it must use an explicit device replacement/cutover rather than silently
 reusing history.
 
 The persisted model ID is also the only adapter-origin metadata exported in
-descriptor schema 2. It is optional, opaque, and display-only at Site. Adapter
+descriptor schema 2. It is optional, opaque, and display-only at IoTKit Edge. Adapter
 type/instance IDs, configured sources, bus paths, addresses, and other physical
-locators remain Edge-local deployment details and are not inferred from
+locators remain Edge Node-local deployment details and are not inferred from
 `hardware_id`.
 
 ## 7. Lifecycle and legacy isolation
 
-Initial start is fail-fast: if one instance fails, Edge stops already-started
+Initial start is fail-fast: if one instance fails, Edge Node stops already-started
 instances in reverse order and exits non-zero. After successful initial start,
-unexpected exit or restart-start failure enters the same bounded Edge-owned
+unexpected exit or restart-start failure enters the same bounded Edge Node-owned
 backoff and restart budget. Exhaustion is process-lifetime degraded state in
 health JSON; systemd process restart resets it.
 
@@ -365,7 +365,7 @@ client/collector close. Host API tests own source mismatch and secret-free,
 bounded diagnostic surfaces. Adapter packages own mapping fixtures and
 leak-free transport cleanup.
 
-Edge tests cover factory validation during pure config resolution, multiple
+Edge Node tests cover factory validation during pure config resolution, multiple
 same-type instances, pinned legacy identity, inventory/runtime target parity,
 reverse bounded shutdown, process-lifetime exhaustion behavior, generation
 fencing, and activity health independent of legacy sensor events. Package
@@ -373,9 +373,9 @@ tests cover panic/stop cleanup ordering. Layer tests include a transitive
 negative fixture and reject supervision dependencies for every newly
 classified adapter.
 
-Adding a third adapter changes only its focused crate, one Edge-private factory
+Adding a third adapter changes only its focused crate, one Edge Node-private factory
 catalog entry, Cargo/layer classification, architecture map, and conformance
-fixtures. It does not change collector, storage, MQTT custody, Site, semantic,
+fixtures. It does not change collector, storage, MQTT custody, IoTKit Edge, semantic,
 or output-adapter code.
 
 A test-only non-catalog reference adapter emits two subjects and two

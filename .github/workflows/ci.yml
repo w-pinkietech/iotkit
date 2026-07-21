@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # serialport (via rpi4b-transport → adapters → iotkit-edge) pulls
+      # serialport (via rpi4b-transport → adapters → iotkit-edge-node) pulls
       # libudev-sys, whose build script needs libudev's pkg-config file. It's
       # present on dev machines but not on a clean runner.
       - name: Install system dependencies
@@ -53,32 +53,32 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-  site:
-    name: site go / console test
+  edge:
+    name: edge go / console test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: iotkit-site/go.mod
-          cache-dependency-path: iotkit-site/go.sum
+          go-version-file: iotkit-edge/go.mod
+          cache-dependency-path: iotkit-edge/go.sum
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: iotkit-site/frontend/package-lock.json
+          cache-dependency-path: iotkit-edge/frontend/package-lock.json
 
       - name: Install Console tooling
-        run: npm ci --prefix iotkit-site/frontend
+        run: npm ci --prefix iotkit-edge/frontend
 
       - name: Console schema, types, and generated assets
-        run: scripts/test-site-console-frontend.sh
+        run: scripts/test-edge-console-frontend.sh
 
-      - name: Site Console browser journey
-        run: scripts/test-site-console-e2e.sh
+      - name: IoTKit Console browser journey
+        run: scripts/test-edge-console-e2e.sh
 
-      - name: Site tests
-        working-directory: iotkit-site
+      - name: Edge tests
+        working-directory: iotkit-edge
         run: go test ./...

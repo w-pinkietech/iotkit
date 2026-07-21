@@ -57,7 +57,7 @@ adapter runtime/composition + 契約クライアント**(北=取り込みクラ�
 - SDKは便宜品、**ワイヤ契約が規範**(Azure/EdgeXの言語マトリクス疲弊の教訓)。
   祝福されたRustライブラリ1本+他言語は薄いワイヤ実装で十分。
 - **変換境界は一箇所**(2026-07-02、外部レビュー指摘反映): 移行期間中、旧語彙(AdapterEvent)と
-  新契約(Envelope)の変換は**明示的ブリッジ1ファイルに限定**する(Wave 0のEdge内暫定ブリッジは
+  新契約(Envelope)の変換は**明示的ブリッジ1ファイルに限定**する(Wave 0のEdge Node内暫定ブリッジは
   Input Adapter v1でadapter package内のprivate legacy projectionへ置換)。新規コードがAdapterEventへの依存を
   **増やすことを禁止**——旧語彙は論点2確定までfrozen vocabulary(D12決定8で**移行ブリッジ削除まで**に
 延長 2026-07-08)。北向き/南向き/測定語彙の再一体化を防ぐ。
@@ -67,14 +67,14 @@ adapter runtime/composition + 契約クライアント**(北=取り込みクラ�
 公式in-process adapterの**北向きhost追加境界**は
 [`docs/input-adapter-contract.md`](../../input-adapter-contract.md)で確定・実装した。これは完全なD4 adapter
 契約やD12 care-servicer完成を表さない。compile-time catalog、
-安定したtype/instance/sourceの分離、Edge所有principal、supervision非依存host/composition API、
-Edge-private factory wrapperを採用する。ここでいう共有境界はadapter packageのhost/composition APIであり、
+安定したtype/instance/sourceの分離、Edge Node所有principal、supervision非依存host/composition API、
+Edge Node-private factory wrapperを採用する。ここでいう共有境界はadapter packageのhost/composition APIであり、
 driver/runtime自身は取り込みclientを知らない。factoryはrestart権限やhealth真実を所有せず、静的な対応mappingを
 実デバイスの能力宣言として扱わない。動的pluginと完全なcapability declaration convergenceはv1対象外。
 `iotkit-ingest-client`が最終Ack/放棄を表すreceiptと同一Envelopeのretry ownershipを持ち、
 `iotkit-input-adapter-host-api`がsource-bound送信、activity、bounded diagnostics、completion、shutdownを
-提供する。Edgeは静的catalog、instance設定、principal、inventory、再起動、healthを所有する。
-RPi-localでは、配置設定がadapter packageのcatalogからmodelとmodel固有設定を選び、Edge-private factoryは
+提供する。Edge Nodeは静的catalog、instance設定、principal、inventory、再起動、healthを所有する。
+RPi-localでは、配置設定がadapter packageのcatalogからmodelとmodel固有設定を選び、Edge Node-private factoryは
 その不透明な設定をpackageへ渡す。host platform世代は設定・source・device identityへ含めない。位置identityを
 維持したまま別modelへ黙って差し替えることは、台帳へ永続化したmodel fenceとの不一致としてruntime開始前に
 原子的に拒否する。
@@ -86,7 +86,7 @@ RPi-localでは、配置設定がadapter packageのcatalogからmodelとmodel固
   (Azure twin / AWS shadow パターン。R15のdesired/reportedと接続)。
 - コマンド受領・TTL/冪等/タイムアウト管理(R4)・有界ジョブのライフサイクル報告はランタイムの南向きディスパッチ。
   DFU中のポーリング停止など北南の調停もランタイム。
-- MQTTの「ingest専用リスナー」は「デバイス間pub/subはしない(Edge⇔デバイスの契約トピックのみ)」に
+- MQTTの「ingest専用リスナー」は「デバイス間pub/subはしない(Edge Node⇔デバイスの契約トピックのみ)」に
   精密化(南向きコマンドトピックの追加余地)。HTTP-onlyデバイスにはlong-poll等の受領経路。
 - **redescribeの形態別分解**(D5波及 2026-07-02): 形態①②は南向きチャネルで強制。形態③④は
   能力宣言の世代番号(`declaration_version`)をエンベロープ同梱必須とし、コレクタが版不一致検知で

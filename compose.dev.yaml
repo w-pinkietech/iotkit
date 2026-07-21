@@ -2,15 +2,15 @@ services:
   broker:
     image: "${IOTKIT_MOSQUITTO_IMAGE:?}"
     ports:
-      - "127.0.0.1:18883:1883"
+      - "127.0.0.1:${IOTKIT_DEV_BROKER_PORT:-18883}:1883"
     volumes:
       - ./deploy/mosquitto/dev.conf:/mosquitto/config/mosquitto.conf:ro
       - ${IOTKIT_MOSQUITTO_ACL_FILE:-./deploy/mosquitto/dev.acl}:/mosquitto/config/acl:ro
       - ${IOTKIT_MOSQUITTO_PASSWORD_FILE:?set IOTKIT_MOSQUITTO_PASSWORD_FILE}:/mosquitto/config/passwords:ro
 
-  site:
+  edge:
     build:
-      context: ./iotkit-site
+      context: ./iotkit-edge
     restart: on-failure
     user: ${IOTKIT_DEV_UID:-1000}:${IOTKIT_DEV_GID:-1000}
     depends_on:
@@ -18,19 +18,19 @@ services:
     command:
       - serve
       - --db
-      - /data/site.db
+      - /data/edge.db
       - --broker-url
       - tcp://broker:1883
       - --client-id
-      - iotkit-site-dev
+      - iotkit-edge-dev
       - --username
-      - site
+      - edge
       - --password-file
-      - /run/secrets/site-mqtt-password
+      - /run/secrets/edge-archive-mqtt-password
       - --allow-insecure
       - --public-origin
       - http://127.0.0.1:8080
       - --development-http
     volumes:
-      - ${IOTKIT_SITE_DATA_DIR:?set IOTKIT_SITE_DATA_DIR}:/data
-      - ${IOTKIT_SITE_PASSWORD_FILE:?set IOTKIT_SITE_PASSWORD_FILE}:/run/secrets/site-mqtt-password:ro
+      - ${IOTKIT_EDGE_DATA_DIR:?set IOTKIT_EDGE_DATA_DIR}:/data
+      - ${IOTKIT_EDGE_ARCHIVE_PASSWORD_FILE:?set IOTKIT_EDGE_ARCHIVE_PASSWORD_FILE}:/run/secrets/edge-archive-mqtt-password:ro

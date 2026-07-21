@@ -108,7 +108,7 @@ fn enable_succeeds_only_after_bounded_ingest_schema_is_present() {
                 "ingress.listener.configure",
                 json!({
                     "enabled":true,"bind_addr":"192.168.4.2:8444","interface":"eth0",
-                    "site_local_cidrs":["192.168.4.0/24"],"mode":"tls"
+                    "local_ingress_cidrs":["192.168.4.0/24"],"mode":"tls"
                 }),
                 true,
             );
@@ -148,14 +148,14 @@ fn construction_step_up_and_exposure_validation_are_enforced() {
             None,
         )
         .unwrap();
-        let params = json!({"enabled":false,"bind_addr":"192.168.4.2:8444","interface":"eth0","site_local_cidrs":["192.168.4.0/24"],"mode":"private_plaintext"});
+        let params = json!({"enabled":false,"bind_addr":"192.168.4.2:8444","interface":"eth0","local_ingress_cidrs":["192.168.4.0/24"],"mode":"private_plaintext"});
         assert_eq!(dispatch(conn, standard_catalog(), human_request(human.token_id.clone(), "ingress.listener.configure", params.clone(), false)), Err(OpError::StepUpRequired));
         dispatch(conn, standard_catalog(), human_request(human.token_id, "ingress.listener.configure", params, true)).unwrap();
         for bind in ["0.0.0.0:8444", "8.8.8.8:8444", "[::]:8444", "[::ffff:8.8.8.8]:8444"] {
-            let err = dispatch(conn, standard_catalog(), request("ingress.listener.configure", json!({"enabled":false,"bind_addr":bind,"interface":"eth0","site_local_cidrs":["0.0.0.0/0"],"mode":"private_plaintext"}), true)).unwrap_err();
+            let err = dispatch(conn, standard_catalog(), request("ingress.listener.configure", json!({"enabled":false,"bind_addr":bind,"interface":"eth0","local_ingress_cidrs":["0.0.0.0/0"],"mode":"private_plaintext"}), true)).unwrap_err();
             assert!(matches!(err, OpError::Validation(_)));
         }
-        let spanning = dispatch(conn, standard_catalog(), request("ingress.listener.configure", json!({"enabled":false,"bind_addr":"192.168.4.2:8444","interface":"eth0","site_local_cidrs":["192.168.0.0/15"],"mode":"private_plaintext"}), true)).unwrap_err();
+        let spanning = dispatch(conn, standard_catalog(), request("ingress.listener.configure", json!({"enabled":false,"bind_addr":"192.168.4.2:8444","interface":"eth0","local_ingress_cidrs":["192.168.0.0/15"],"mode":"private_plaintext"}), true)).unwrap_err();
         assert!(matches!(spanning, OpError::Validation(_)));
         Ok(())
     }).unwrap();
@@ -322,7 +322,7 @@ fn startup_reconciliation_promotes_only_settled_and_retains_referenced_last_safe
         conn.execute(
             "UPDATE ingress_listener_config SET applied_generation=1,
              applied_bind_addr='192.168.1.2:8444',applied_interface='eth0',
-             applied_site_local_cidrs='[\"192.168.1.0/24\"]',applied_mode='tls',
+             applied_local_ingress_cidrs='[\"192.168.1.0/24\"]',applied_mode='tls',
              applied_tls_generation=1,
              applied_tls_fingerprint=(SELECT fingerprint FROM ingress_tls_material WHERE id=1)
              WHERE id=1",
@@ -532,10 +532,10 @@ fn r14_rejects_undeclared_secret_aliases_and_redacts_nested_pem_values() {
 fn apply_failure_retains_last_safe_generation_and_later_exact_apply_converges() {
     let db = iotkit_core_storage::init_db_memory(&migrations()).unwrap();
     db.with_conn_sync(|conn| {
-        let first = json!({"enabled":false,"bind_addr":"192.168.4.2:8444","interface":"eth0","site_local_cidrs":["192.168.4.0/24"],"mode":"private_plaintext"});
+        let first = json!({"enabled":false,"bind_addr":"192.168.4.2:8444","interface":"eth0","local_ingress_cidrs":["192.168.4.0/24"],"mode":"private_plaintext"});
         dispatch(conn, standard_catalog(), request("ingress.listener.configure", first, true)).unwrap();
         iotkit_core_ops::mark_ingress_applied(conn, 1, None).unwrap();
-        let second = json!({"enabled":false,"bind_addr":"10.2.3.4:8444","interface":"eth1","site_local_cidrs":["10.0.0.0/8"],"mode":"private_plaintext"});
+        let second = json!({"enabled":false,"bind_addr":"10.2.3.4:8444","interface":"eth1","local_ingress_cidrs":["10.0.0.0/8"],"mode":"private_plaintext"});
         dispatch(conn, standard_catalog(), request("ingress.listener.configure", second, true)).unwrap();
         iotkit_core_ops::mark_ingress_apply_error(conn, 2, "bind_failed").unwrap();
         let failed = load_ingress_listener_config(conn).unwrap();

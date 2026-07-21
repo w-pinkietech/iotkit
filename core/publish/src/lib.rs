@@ -24,8 +24,8 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 20,
-        label: "site_activation",
-        sql: include_str!("../migrations/0020_site_activation.sql"),
+        label: "edge_node_activation",
+        sql: include_str!("../migrations/0020_edge_node_activation.sql"),
     },
 ];
 

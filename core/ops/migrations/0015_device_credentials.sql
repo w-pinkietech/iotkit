@@ -5,7 +5,7 @@ ALTER TABLE auth_state
 CREATE UNIQUE INDEX idx_auth_state_epoch ON auth_state(auth_epoch);
 
 -- These bootstrap values are deliberately minimal positive fail-closed values. They are not
--- measured product defaults: construction-tier configuration must install site measurements.
+-- measured product defaults: construction-tier configuration must install local network measurements.
 CREATE TABLE device_flow_classes (
   flow_class TEXT PRIMARY KEY CHECK (flow_class IN ('low', 'default', 'high')),
   steady_units INTEGER NOT NULL CHECK (steady_units > 0),

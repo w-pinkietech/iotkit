@@ -1,0 +1,24 @@
+{{define "login.html"}}
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IoTKitへログイン</title>
+  <link rel="stylesheet" href="/static/edge.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <div class="login-product"><img src="/static/pinkietech-mark.svg" alt=""><span><strong>IoTKit</strong><small>IoTKit Console</small></span></div>
+    <h1>IoTKitへログイン</h1>
+    <p>センサーの状態と現在値を確認します。</p>
+    {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="/login">
+      <label>ログインID<input name="login_id" autocomplete="username" required></label>
+      <label>パスワード<input type="password" name="password" autocomplete="current-password" required></label>
+      <button type="submit">ログイン</button>
+    </form>
+  </main>
+</body>
+</html>
+{{end}}

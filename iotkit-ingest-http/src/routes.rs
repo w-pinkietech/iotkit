@@ -346,7 +346,7 @@ impl<C: MonotonicClock> HttpIngestService<C> {
         }
     }
 
-    /// Serve a previously site-CIDR-validated stream with hard header limits.
+    /// Serve a previously local-ingress-CIDR-validated stream with hard header limits.
     ///
     /// Direct callers acquire the connection permit at this boundary. The listener
     /// uses [`Self::try_acquire_connection`] before TLS and transfers that same permit

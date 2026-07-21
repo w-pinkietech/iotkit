@@ -253,7 +253,7 @@ impl RuntimeShutdown {
 /// Start the official northbound host integration.
 ///
 /// The existing `start` path remains for the separate frozen care projection;
-/// this wrapper is the only path used by the generic Edge input host.
+/// this wrapper is the only path used by the generic Edge Node input host.
 pub fn start_host(
     context: AdapterStartContext,
     port_path: String,

@@ -11,17 +11,17 @@ Status: 会話合意 (2026-07-02)
 
 | データ | 正本 | 備考 |
 |---|---|---|
-| 測定データ(時系列) | 移転する: ackの瞬間Edge → アーカイブ責任消費者のackで上流へ移転、Edge側はパージ可 | 「バッファであって倉庫ではない」の帰結 |
-| デバイス台帳・desired設定・測定レジストリ・較正値 | 常にEdge | 上流スナップショットは複製。オフラインで閉じるため(柱1)。※「測定レジストリ」の正本は**現場レジストリ**。標準語彙カタログ(リポジトリ資産)との二層関係は [D6](D6-measurement-registry.md) で確定(copy-on-enable) |
-| デバイス実状態(reported) | 現実はデバイス、記録はEdge | R15 |
-| 監査ログ・診断証拠 | 生成はEdge、早期に上流へ送出(append-only) | 箱ごと盗難・破損でも証跡が残る |
-| センサー意味付け | Site | 保存済みseriesを`production_pulse`等の設定可能な意味へ対応付ける。品番・工程・実績は持たない |
-| 業務データ(品番・工程・実績) | YokaKit | Siteの意味付け結果を消費し、業務masterとロジックを所有する(柱2) |
-| フリート情報 | [3]/[4]のフリート管理 | Edge責務外 |
+| 測定データ(時系列) | 移転する: ackの瞬間Edge Node → アーカイブ責任消費者のackで上流へ移転、Edge Node側はパージ可 | 「バッファであって倉庫ではない」の帰結 |
+| デバイス台帳・desired設定・測定レジストリ・較正値 | 常にEdge Node | 上流スナップショットは複製。オフラインで閉じるため(柱1)。※「測定レジストリ」の正本は**現場レジストリ**。標準語彙カタログ(リポジトリ資産)との二層関係は [D6](D6-measurement-registry.md) で確定(copy-on-enable) |
+| デバイス実状態(reported) | 現実はデバイス、記録はEdge Node | R15 |
+| 監査ログ・診断証拠 | 生成はEdge Node、早期に上流へ送出(append-only) | 箱ごと盗難・破損でも証跡が残る |
+| センサー意味付け | IoTKit Edge | 保存済みseriesを`production_pulse`等の設定可能な意味へ対応付ける。品番・工程・実績は持たない |
+| 業務データ(品番・工程・実績) | YokaKit | IoTKit Edgeの意味付け結果を消費し、業務masterとロジックを所有する(柱2) |
+| フリート情報 | [3]/[4]のフリート管理 | Edge Node責務外 |
 
 **アーカイブ責任消費者(archival consumer)**: 出口契約の消費者のうち1つを台帳で指定。
 その消費者のackのみが正本移転=パージ許可を意味する。他の消費者のackはパージ判断に関与しない。
-上流ゼロの最小構成では正本はEdgeに留まり、retention期限が正本の寿命(明文で受け入れる)。
+上流ゼロの最小構成では正本はEdge Nodeに留まり、retention期限が正本の寿命(明文で受け入れる)。
 
 **劣化契約との優先順位(2026-07-03確定、外部レビュー第2回反映。同日D7決定7により4クラスへ改訂)**:
 R17劣化契約のパージ順序は
@@ -34,7 +34,7 @@ R17劣化契約のパージ順序は
 
 ## 2. 初期化・運用開始(コミッショニング)
 
-以下は単一Edge Node(D8のStandalone)を前提とした標準手順である。**複数Edge Nodeの現場(D8のSite-managed)では
+以下は単一Edge Node(D8のStandalone)を前提とした標準手順である。**IoTKit Edgeへ接続する構成(D8のEdge-connected)では
 コミッショニングがトポロジで分岐する(D8)。** また共有OSイメージには `edge_node_id`・TLS秘密鍵・トークンを
 焼き込まず、台ごとに固有な値はPhase 2の初回自己構成で生成する(D8。大量複製イメージからの同一identity量産を防ぐ)。
 
@@ -42,7 +42,7 @@ R17劣化契約のパージ順序は
 - Phase 1 物理設置: RPi+HAT+電源+センサー配置
 - Phase 2 初回自己構成(**全自動**, R22): 機体ID生成・自己署名証明書生成・DB初期化。管理者所有権が
   未確立の間はネットワーク制御API/UIをbindせず、mDNSにも管理面を公開しない(2026-07-12 Plan 6裁定)。
-- Phase 3 初期設定: 箱上の `iotkit-edgectl`(物理/SSH root)で管理者パスフレーズを非echo入力して所有権を
+- Phase 3 初期設定: 箱上の `iotkit-edge-nodectl`(物理/SSH root)で管理者パスフレーズを非echo入力して所有権を
   1回確立する。その後にスマホ/PCのUIを開き、時刻確認・ネットワーク設定以降を行う。ネットワーク越しに
   初期所有権をclaimする経路は設けない。
 - Phase 3.5 レガシー移行(該当現場のみ、**Phase 4より前**に実施。D5波及 2026-07-02): 移行エントリの播種(D5経路D)。
@@ -54,7 +54,7 @@ R17劣化契約のパージ順序は
     儀式の精密化=D11決定6: 登録コードは単回使用・短TTL、窓は自動クローズ、流量クラスは既定値可)
 - Phase 5 上流接続(任意): YokaKit/アーカイバ設定→疎通スモークテスト
   (**検疫の影響を受けない合成テストパブリケーション**で行う)。AIハーネスへのoperatorトークン発行
-- Phase 6 開始チェック: Edge自身が自動検査し「導入完了レポート」生成。追加項目(レビュー反映 2026-07-02):
+- Phase 6 開始チェック: Edge Node自身が自動検査し「導入完了レポート」生成。追加項目(レビュー反映 2026-07-02):
   - **流量クラス申告合計の検算**(D11決定4 2026-07-08): 全デバイスの申告流量の合計がこの箱の実測体力に
     収まるかを検算。超過は人間の明示承認(`capacity_debt` 記録)がない限り不合格。検算はPhase 6限りでなく
     `device add`・クラス変更のたびにも実行される
@@ -72,37 +72,37 @@ R17劣化契約のパージ順序は
 |---|---|---|---|
 | センサー[1] | 死活(R7)→通知 | 電池交換/交換機→台帳でhardware_id差し替え、**seriesは継続** | 欠測マーキング+当該series較正の**要再確認**(D5ガードレール) |
 | 親デバイス(BravePI Mainboard等)[1] | 配下子デバイスの一斉死活 | 一括replace+メンテナンスウィンドウ(D5ガードレール5) | 配下全子の区間欠測 |
-| IoTKit Edge[2]全損 | 上流/AI無応答+LED | 予備RPi+最新スナップショット復元(R22)→デバイス自動再認識 | 未配送outbox分+最終スナップショット以降の台帳変異を損失(明文で受け入れ) |
-| IoTKit Edge[2]部分故障 | 監督(R20) | 自動再起動→degraded+AI診断→操作カタログ | 当該アダプタの区間欠測 |
-| IoTKit Site[3] | Edge無影響 | Site再構築+接続再設定 | 未ack範囲はEdgeから再送。Siteが既にcustodyを取った範囲の損失はSite側`archive_lost`(D8) |
+| IoTKit Edge Node[2]全損 | 上流/AI無応答+LED | 予備RPi+最新スナップショット復元(R22)→デバイス自動再認識 | 未配送outbox分+最終スナップショット以降の台帳変異を損失(明文で受け入れ) |
+| IoTKit Edge Node[2]部分故障 | 監督(R20) | 自動再起動→degraded+AI診断→操作カタログ | 当該アダプタの区間欠測 |
+| IoTKit Edge[3] | Edge Node無影響 | IoTKit Edge再構築+接続再設定 | 未ack範囲はEdge Nodeから再送。IoTKit Edgeが既にcustodyを取った範囲の損失はIoTKit Edge側`archive_lost`(D8) |
 | 上流断・NW断 | 接続状態機械 | 何もしない→復旧後カーソルから自動再送 | ゼロ(長期断のみ劣化契約) |
 
 設計思想: **どの箱が死んでも復旧は「交換して、スナップショットか自動再認識で戻す」に統一**。
 デバイス/現場設定の手作業再入力は復旧経路に含めない。ただし権限の安全な再確立は例外とし、
 2026-07-12 Plan 6裁定によりlocal admin recoveryとoperator token再発行を必須とする。
 
-### IoTKit Site backup・復元境界 (2026-07-21追記)
+### IoTKit Edge backup・復元境界 (2026-07-21追記)
 
-SiteはEdgeから`accepted-through`を返した時点以降のraw archive正本を持つ。したがって、古いSite backupを
-復元すると、backup後にSiteが受理してEdge側で既にpurge可能になった区間は自動再送できない場合がある。
+IoTKit EdgeはEdge Nodeから`accepted-through`を返した時点以降のraw archive正本を持つ。したがって、古いIoTKit Edge backupを
+復元すると、backup後にIoTKit Edgeが受理してEdge Node側で既にpurge可能になった区間は自動再送できない場合がある。
 DB fileだけを戻して通常起動し、欠番を無視したりcursorだけを現在値へ進めたりしてはならない。
 
 v1は次を採用する。
 
-1. Site backupはSQLiteの整合snapshot、format version、Site ID、schema version、作成時刻、DB hash、
-   Edge別accepted cursorを一つの暗号化containerへ入れる。Site account password hash、session hash、監査、
+1. IoTKit Edge backupはSQLiteの整合snapshot、format version、IoTKit Edge ID、schema version、作成時刻、DB hash、
+   Edge Node別accepted cursorを一つの暗号化containerへ入れる。IoTKit Edge account password hash、session hash、監査、
    device情報を含むため、平文backup成功経路を持たない。復旧passphraseは所有者限定fileからだけ読む。
 2. backup作成後にsnapshotの`quick_check`とmanifest/hashを検証し、同一filesystem上の一時fileから原子的に
    完成名へ切り替える。既存backupを黙って上書きしない。
-3. 復元は既存DBを上書きせず、新しいDB pathへ展開・検証する。全Site sessionを失効し、復元metadataを
+3. 復元は既存DBを上書きせず、新しいDB pathへ展開・検証する。全IoTKit Edge sessionを失効し、復元metadataを
    DB transactionへ記録してから完成扱いにする。Broker credential、certificate、private keyはcontainerへ
    入れず、deployment設定から再接続する。
-4. 復元DBのcursorより先から同じEdge/epochのbatchが届いた場合、通常のgapとは分けて
-   `archive_recovery_required`を耐久記録し、ackを返さず当該Edgeを`recovery_hold`にする。Consoleは失われる
+4. 復元DBのcursorより先から同じEdge Node/epochのbatchが届いた場合、通常のgapとは分けて
+   `archive_recovery_required`を耐久記録し、ackを返さず当該Edge Nodeを`recovery_hold`にする。Consoleは失われる
    可能性のある`backup cursor + 1 .. incoming cursor start - 1`を表示する。
-5. v1はEdgeのaccepted済み行を巻き戻して再送するprotocolを持たない。Site hostのlocal CLIで範囲を確認し、
-   人間が明示承認した場合だけ`archive_lost`監査を同じtransactionで記録してSite cursorをgap直前まで進め、
-   Edgeを再開する。これにより損失は起こり得るが、無音の損失と永久retryを防ぐ。将来のretained replayは
+5. v1はEdge Nodeのaccepted済み行を巻き戻して再送するprotocolを持たない。IoTKit Edge hostのlocal CLIで範囲を確認し、
+   人間が明示承認した場合だけ`archive_lost`監査を同じtransactionで記録してIoTKit Edge cursorをgap直前まで進め、
+   Edge Nodeを再開する。これにより損失は起こり得るが、無音の損失と永久retryを防ぐ。将来のretained replayは
    terminal/gap repair protocolとして別versionで追加する。
 6. raw retentionは、対象rawを含む検証済みbackupが存在し、意味付けprojectionが完了し、未配送outboxを
    削除しない場合だけ実行できる。容量watermarkを理由にこの順序を飛ばさない。初版は自動purgeを既定offとし、
@@ -116,7 +116,7 @@ v1は次を採用する。
 
 - スナップショットは**高機密資産**として扱う。暗号化必須(リカバリパスフレーズ方式)、退避先のアクセス制御。
 - 退避経路は出口契約(R10)とは別の専用チャネル(R22の一部として設計スペックで確定)。
-- 復旧表の[3]故障「データ影響ゼロ」は、通知がEdge配置であるという確定判断
+- 復旧表の[3]故障「データ影響ゼロ」は、通知がEdge Node配置であるという確定判断
   (台帳プロダクト判断)に依存している。
 - **エポックフェンス(D5波及 2026-07-02)**: 全損復旧の前提条件として**エポックフェンス(台帳世代番号)**を
   定義する(下記最小契約で確定)。復旧runbookには**旧機の物理回収/無効化ステップを必須**で含め、
@@ -135,7 +135,7 @@ Wave 0のR22(手動エクスポート)が曖昧なまま実装されると復旧
    (TLS秘密鍵・per-deviceトークンハッシュ・operatorトークンの**失効済み監査metadata**・
    **`self_managed_static` のトンネル秘密鍵**。**Wave 1+**)。`managed_overlay` providerのnode秘密/stateと
    MQTT broker credentialはsnapshotへ含めず、
-   復元後にSite operatorが再設定する(D10)。
+   復元後にIoTKit Edge operatorが再設定する(D10)。
    readings本体は対象外(custody transfer/outboxの領分)。
    **2026-07-12 Plan 6改訂:** per-deviceトークンは可用性優先で有効なまま引き継ぐ。これはStandaloneで
    snapshot取得後の失効が巻き戻り得ることを明示受容し、復元時に騒がしく報告する契約である。一方、
@@ -157,16 +157,16 @@ Wave 0のR22(手動エクスポート)が曖昧なまま実装されると復旧
 
 ## 4. アダプタ・コレクタの配置
 
-- **コレクタ: 常にEdgeと不可分**。ackの瞬間にデータの正本が誕生する場所であり、切り離すと正本の定義が壊れる。
+- **コレクタ: 常にEdge Nodeと不可分**。ackの瞬間にデータの正本が誕生する場所であり、切り離すと正本の定義が壊れる。
 - **アダプタ: デフォルト同梱、ただしアーキテクチャ要件ではない**。
-  - 物理ポートに縛られるアダプタ(UART HAT/I2C)は通常Edge同梱(運用する箱は少ないほど良い)
+  - 物理ポートに縛られるアダプタ(UART HAT/I2C)は通常Edge Node同梱(運用する箱は少ないほど良い)
   - センサーが遠い場合は**衛星アダプタ構成**: RPi Zero等でアダプタランタイムのみ動かし、
     HTTPバインディングでコレクタへ送る。自作デバイスと完全に同じ経路・同じ契約(D1のバインディング複数の帰結)。
-    **経路はサイトLAN内のみ**(D11決定7 2026-07-08: 入口リスナーはインターネット非公開のため、
-    インターネット越えの衛星アダプタは構成として認めない。遠隔地は別のIoTKit Edge+出口契約で運ぶ)
+    **経路はローカルLAN内のみ**(D11決定7 2026-07-08: 入口リスナーはインターネット非公開のため、
+    インターネット越えの衛星アダプタは構成として認めない。遠隔地は別のIoTKit Edge Node+出口契約で運ぶ)
   - ソフトウェアは同一、デプロイ配置だけの違い
   - **注(D8 2026-07-07)**: この衛星アダプタ(コレクタを持たない薄いランタイム)は、D8のトポロジ2分
-    (Standalone/Site-managed)とは**直交する概念**である。D8が却下したのは「rpi4b級の完全なEdge Nodeを
+    (Standalone/Edge-connected)とは**直交する概念**である。D8が却下したのは「rpi4b級の完全なEdge Nodeを
     中央1台の衛星にする Model A」であって、RPi Zero級の非コレクタ衛星アダプタではない。複数Piが
-    それぞれ完全なEdge Nodeになる現場(=Site-managed)の各Piが、さらにその配下にこの衛星アダプタを
+    それぞれ完全なEdge Nodeになる構成(=Edge-connected)の各Piが、さらにその配下にこの衛星アダプタを
     持つことはあり得る。

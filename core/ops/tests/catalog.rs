@@ -102,7 +102,7 @@ fn matrix_params(conn: &Connection, op: &str, bulk: bool) -> Value {
             iotkit_core_publish::store::target_insert(
                 conn,
                 &iotkit_core_publish::store::TargetRow {
-                    target_id: "site".into(),
+                    target_id: "edge".into(),
                     endpoint_url: "mqtt://broker:1883".into(),
                     credential_token: String::new(),
                     archive_responsible: true,
@@ -227,7 +227,7 @@ fn standard_catalog_enforces_tier_matrix_for_single_and_bulk_shapes() {
 }
 
 #[test]
-fn resolve_unknown_key_alias_branch_defines_site_mapping_alias() {
+fn resolve_unknown_key_alias_branch_defines_location_mapping_alias() {
     let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
     db.with_conn_sync(|conn| {
         enable_temperature(conn);

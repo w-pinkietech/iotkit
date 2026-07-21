@@ -3,13 +3,13 @@
 ## Project Context
 
 `iotkit-next` は旧 `iotkit` をゼロから作り直すオンプレミス優先のIoTデータ収集基盤。
-現場側のRust + tokio製`IoTKit Edge`（Raspberry Pi向け）と、拠点側のGo製
-`IoTKit Site`からなる。
+収集側のRust + tokio製`IoTKit Edge Node`（Raspberry Pi向け）と、集約側のGo製
+`IoTKit Edge`からなる。
 
 レイヤ:
 
 ```text
-{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-edge
+{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-edge-node
 ```
 
 取り込み経路はアダプタ内クライアント (`iotkit-ingest-client`) が正 (D4)。
@@ -29,7 +29,7 @@ vocabulary であり、新規コードは依存を増やさない。
 - 秘密情報（トークン、credential、鍵）を Debug 出力、ログ、エラー、監査記録に載せない。
 - データを黙って失わない。ack の意味は D1 に従う。`rejected` は決定的違反専用で、
   ストレージ失敗には `rejected` を返さない（ack なし）。
-- 変更系操作は所有componentの R14 typed dispatch 経由。Edgeは`core/ops`、SiteはSite
+- 変更系操作は所有componentの R14 typed dispatch 経由。Edge Nodeは`core/ops`、IoTKit EdgeはGo
   application service内のtyped operation dispatcherを使う。API/UI/CLIからSQLへ直書きする
   変更経路を新設しない。
 

@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::{OpContext, OpDescriptor, OpError, Tier};
 
-const SITE_TARGET_ID: &str = "site";
+const EDGE_TARGET_ID: &str = "edge";
 
 pub fn enqueue_smoke_descriptor() -> OpDescriptor {
     OpDescriptor {
@@ -15,7 +15,7 @@ pub fn enqueue_smoke_descriptor() -> OpDescriptor {
         bulk_escalates: false,
         changes_state: true,
         params_schema: || json!({"required": []}),
-        targets: |_| vec![SITE_TARGET_ID.into()],
+        targets: |_| vec![EDGE_TARGET_ID.into()],
         preconditions,
         dry_run,
         execute,
@@ -26,23 +26,23 @@ pub fn enqueue_smoke_descriptor() -> OpDescriptor {
 fn preconditions(tx: &Transaction<'_>, _ctx: &OpContext<'_>) -> Result<(), OpError> {
     if !iotkit_core_publish::activation::publication_admitted(tx).map_err(publish_error)? {
         return Err(OpError::PreconditionFailed(
-            "Site activation is required before commissioning smoke".into(),
+            "Edge Node activation is required before commissioning smoke".into(),
         ));
     }
     let target = target_get(tx).map_err(publish_error)?;
     match target {
         Some(target)
-            if target.target_id == SITE_TARGET_ID
+            if target.target_id == EDGE_TARGET_ID
                 && target.archive_responsible
                 && target.credential_token.is_empty() =>
         {
             Ok(())
         }
         Some(_) => Err(OpError::PreconditionFailed(
-            "configured exit target is not the MQTT Site target".into(),
+            "configured exit target is not the MQTT IoTKit Edge target".into(),
         )),
         None => Err(OpError::PreconditionFailed(
-            "MQTT Site target is not initialized; start Edge with MQTT exit enabled first".into(),
+            "MQTT IoTKit Edge target is not initialized; start Edge Node with MQTT exit enabled first".into(),
         )),
     }
 }
@@ -50,7 +50,7 @@ fn preconditions(tx: &Transaction<'_>, _ctx: &OpContext<'_>) -> Result<(), OpErr
 fn dry_run(tx: &Transaction<'_>, _ctx: &OpContext<'_>) -> Result<Value, OpError> {
     Ok(json!({
         "would": "enqueue_commissioning_smoke",
-        "target_id": SITE_TARGET_ID,
+        "target_id": EDGE_TARGET_ID,
         "ledger_epoch": iotkit_core_ledger::ledger_epoch(tx)?,
     }))
 }
@@ -62,7 +62,7 @@ fn execute(tx: &Transaction<'_>, _ctx: &OpContext<'_>) -> Result<Value, OpError>
         .map_err(publish_error)?;
     Ok(json!({
         "test_id": test_id,
-        "target_id": SITE_TARGET_ID,
+        "target_id": EDGE_TARGET_ID,
         "ledger_epoch": ledger_epoch,
         "pub_seq": pub_seq,
     }))

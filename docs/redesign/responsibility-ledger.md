@@ -1,7 +1,7 @@
-# IoTKit Edge責務台帳 (R1〜R23)
+# IoTKit Edge Node責務台帳 (R1〜R23)
 
 Status: 会話合意済み (2026-07-02)
-Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部死んでいても、この一台が果たすべき仕事」の台帳。
+Scope: **すべて配置[2]IoTKit Edge Node(RPi)の責務**。「他の箱が全部死んでいても、この一台が果たすべき仕事」の台帳。
 
 用語は [terminology.md](terminology.md) に従う。
 
@@ -50,27 +50,27 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 | R22 | 機体アイデンティティと交換可能性 | Edge Node自身のID、初回自己構成、箱の差し替え(バックアップ/リストア) | 新規 |
 | R23 | 現場ローカル表示 | LED/ローカルステータス画面。全通信が死んだときの最後の観測手段(現場の人が写真を撮れば伝わる) | 新規 |
 
-## Edgeの責務でないもの(住所付き)
+## Edge Nodeの責務でないもの(住所付き)
 
 | 項目 | 住む場所 |
 |---|---|
-| AIオペレーター(LLM+runbook実行+診断ループ) | [3]IoTKit Site or [4]クラウド |
+| AIオペレーター(LLM+runbook実行+診断ループ) | [3]IoTKit Edge or [4]クラウド |
 | YokaKit(生産管理アプリ) | [3] or [4] |
 | フリート管理・更新ロールアウト編成 | [3] or [4] |
 | 通知のリッチなエスカレーション(チャット・電話等) | [3] or [4] |
 | 契約仕様書・SDK・適合試験ハーネス | リポジトリ資産(どの箱でもない) |
-| 出口credential発行権威 | MQTT endpointを運営する[3]のSite operator。MVPはEdge Nodeごとのstatic credentialとtopic ACL(D10) |
-| 複数Edge Nodeの集約・raw保存・cursor・site-level query | [3]IoTKit Site |
-| application接続・export境界 | [3]IoTKit Site。保存済みseriesを`production_pulse`等の設定可能な意味へfuture-onlyで対応付け、routing・projectionする。YokaKit等はbusiness master、実績、OEE、alarm、UIを所有する |
+| 出口credential発行権威 | MQTT endpointを運営する[3]のIoTKit Edge operator。MVPはEdge Nodeごとのstatic credentialとtopic ACL(D10) |
+| 複数Edge Nodeの集約・raw保存・cursor・Edge Node-scoped query | [3]IoTKit Edge |
+| application接続・export境界 | [3]IoTKit Edge。保存済みseriesを`production_pulse`等の設定可能な意味へfuture-onlyで対応付け、routing・projectionする。YokaKit等はbusiness master、実績、OEE、alarm、UIを所有する |
 | 長期アーカイブ | [3] or [4] |
-| UI本体(静的ビルドの配布物。フレームワークは予算内で自由=D13決定1) | 配布物(Edgeが配信はする) |
+| UI本体(静的ビルドの配布物。フレームワークは予算内で自由=D13決定1) | 配布物(Edge Nodeが配信はする) |
 | OSレイヤ(A/Bパーティション機構・NTPデーモン・カーネルドライバ) | [2]内だがIoTKitアプリの外(OSイメージ/インストーラ) |
 | インストーラ・OSイメージ作成 | リポジトリ資産 |
 
 ## 意図的却下(設計判断として維持)
 
 - コンテナオーケストレーション(単一Rustバイナリ+systemdで足りる)
-- Edge上のML推論
+- Edge Node上のML推論
 - フルCEP/ストリーム処理エンジン
 - クラウドとの双方向エンティティ同期
 - 中央デコードレジストリ(Lua transform等)— 正規化の責任は常に「つなぐ側」
@@ -101,25 +101,25 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 
 ## D8波及(複数Edge Node 2026-07-07)
 
-- **R10/R19の優先順位**: 複数Pi現場(Site-managed)ではR10出口認証とtopic ACLを先に成立させる
-  ([D8](decisions/D8-site-topology-multi-edge.md)、[D10](decisions/D10-exit-authentication.md))。
-- Broker enrollmentはMQTT通信許可、Site activationはexact ledger incarnationの将来publication受理許可であり、
-  同一操作にしない。activation前のローカル確認値はoutboxへ採番せず、Site custodyへ移さない。
+- **R10/R19の優先順位**: Edge-connected構成ではR10出口認証とtopic ACLを先に成立させる
+  ([D8](decisions/D8-edge-topology-multi-edge.md)、[D10](decisions/D10-exit-authentication.md))。
+- Broker enrollmentはMQTT通信許可、Edge Node activationはexact ledger incarnationの将来publication受理許可であり、
+  同一操作にしない。activation前のローカル確認値はoutboxへ採番せず、IoTKit Edge custodyへ移さない。
 - **R22の edge_node_id 発行**: 各Edge Nodeは初回自己構成で `edge_node_id` を1回だけ生成し、
   共有OSイメージには焼き込まない(D8)。
-- **archive_lost 監査イベント**: Site-managedで、Pi purge済みかつsite archive損失かつbackupなしの範囲は、
-  Edge側の `custody_lost` ではなくSite側の `archive_lost` として記録する(custody境界の明確化。D8)。
+- **archive_lost 監査イベント**: Edge-connectedで、Edge Node purge済みかつIoTKit Edge archive損失かつbackupなしの範囲は、
+  Edge Node側の `custody_lost` ではなくIoTKit Edge側の `archive_lost` として記録する(custody境界の明確化。D8)。
 
-## D10波及(出口認証 2026-07-18 Site activation ACL追記)
+## D10波及(出口認証 2026-07-18 Edge Node activation ACL追記)
 
 - **R19出口認証の設計本体**は [decisions/D10-exit-authentication.md](decisions/D10-exit-authentication.md)。
   MVPはoperatorが用意するIP経路上のMQTT TLS、匿名禁止、Edge Nodeごとのstatic Broker credential、
-  Site固有credential、topic ACLとする。VPNと特定network製品は必須にしない。Broker/Site同居はreference
+  IoTKit Edge固有credential、topic ACLとする。VPNと特定network製品は必須にしない。Broker/IoTKit Edge同居はreference
   deploymentであり要件ではなく、別host配置でも同じ認証契約を使う。
 - endpoint、TLS server name、trust、主体固有credential、client ID、principal roleは一つのconnection profileに
-  束縛する。profileは対象hostのlocal CLIと所有者限定fileでinstallし、Site Consoleから変更・切替しない。
-- Edge ACLはown records/descriptors/activation result publishとown accepted-through/activation request
-  subscribeに限定し、Siteは逆方向を持つ。activation request/resultはQoS 1 non-retainedで、DB状態から再送する。
+  束縛する。profileは対象hostのlocal CLIと所有者限定fileでinstallし、IoTKit Consoleから変更・切替しない。
+- Edge Node ACLはown records/descriptors/activation result publishとown accepted-through/activation request
+  subscribeに限定し、IoTKit Edgeは逆方向を持つ。activation request/resultはQoS 1 non-retainedで、DB状態から再送する。
 - Broker server certificate lifecycleはBroker host上のdomain非依存運用componentが担う。通常のleaf更新と
   trust anchor/CA移行を分離し、Consoleは非秘密statusだけを表示する。
 - mTLSなしのMVPは、明示trust mode、credential失効journey、negative auth/TLS test、Broker resource limit、
@@ -144,9 +144,9 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 - **デバイストークンは長命が既定**。漏洩は寿命でなくsubjectスコープ・ワンタップ
   失効・流量クラス・LAN限定露出の4枚で受ける(D11決定3)。
 - **入口リスナー既定オフ+インターネット公開禁止**(D11決定7)。R2の「公開受信面」とは
-  サイトLAN内の面を指す。
+  ローカルLAN内の面を指す。
 - **Plan 6初期所有権・復旧裁定(2026-07-12):** network box claimを廃止し、初期admin所有権は箱上の
-  local `iotkit-edgectl`(物理/SSH root、非echo入力)だけで確立する。未所有中はnetwork API/UIをbindしない。
+  local `iotkit-edge-nodectl`(物理/SSH root、非echo入力)だけで確立する。未所有中はnetwork API/UIをbindしない。
   admin recoveryは全operator/sessionを失効する非破壊操作。factory resetはSSH/local rootだけの全消去で、
   API/AI/R14には載せない。R22 replacementはEdge Node identity/TLS/device-token continuityを維持する一方、
   admin/operator/sessionを新auth epochで無効化する。device-tokenはsnapshot後の失効rollbackを明示受容し、
@@ -169,22 +169,22 @@ Scope: **すべて配置[2]IoTKit Edge(RPi)の責務**。「他の箱が全部�
 
 | 判断 | 決定 |
 |---|---|
-| 通知(メール/外部MQTT publish) | Edgeに最小限残す(R9のローカルアクションの一種、型付き)。上流やAIが死んでいても現場に届く。※メールは外部SMTP依存のため「上流死亡でも届く」が厳密に真なのは接点出力・LED。この限界は明記する。※接点出力の**駆動**はD12決定1(2026-07-08、ユーザー裁定)で今回の設計対象外へ繰り延べ——Wave 1の「上流死亡でも届く」はR23(Edge自身のLED/ローカル画面)が受け持つ。将来の有効化条件はD12決定1 |
+| 通知(メール/外部MQTT publish) | Edge Nodeに最小限残す(R9のローカルアクションの一種、型付き)。上流やAIが死んでいても現場に届く。※メールは外部SMTP依存のため「上流死亡でも届く」が厳密に真なのは接点出力・LED。この限界は明記する。※接点出力の**駆動**はD12決定1(2026-07-08、ユーザー裁定)で今回の設計対象外へ繰り延べ——Wave 1の「上流死亡でも届く」はR23(Edge Node自身のLED/ローカル画面)が受け持つ。将来の有効化条件はD12決定1 |
 | 振動解析(FFT/スペクトログラム) | 測定レジストリに契約だけ予約、実装は第二波 |
 | カメラライブ映像(MJPEG) | オプションsidecarとして存続。コア責務外を明記、第一波は設計のみ |
-| 履歴集計/帳票 | Edgeではクエリ+範囲集計+CSVエクスポートまで(R11)。Siteはsite-level queryとapplication export境界を持つ。Excel帳票・グラフ画像は上流アプリ |
+| 履歴集計/帳票 | Edge Nodeではクエリ+範囲集計+CSVエクスポートまで(R11)。IoTKit EdgeはEdge Node-scoped queryとapplication export境界を持つ。Excel帳票・グラフ画像は上流アプリ |
 
 ## 追加の設計原則(会話で確定 2026-07-02)
 
-### Edgeはバッファであって、倉庫ではない
+### Edge Nodeはバッファであって、倉庫ではない
 
-Edge(RPi)は環境的・負荷的に死にやすい箱である前提に立ち、抱えるデータ量を常に最小化する。
+Edge Node(RPi)は環境的・負荷的に死にやすい箱である前提に立ち、抱えるデータ量を常に最小化する。
 
-- **測定データ**: **アーカイブ責任消費者**がackした分はパージ可能(他の消費者のackはパージ判断に関与しない=D2)。ただしack後も**最低保持フロア**(目安72h、設定可)を置く——上流の箱がEdgeより堅牢という保証はない。正常時のデータ残高≒フロア分のみ、断線時のみダムとして水位が上がる。残高上限はR17の劣化契約でキャップ。
+- **測定データ**: **アーカイブ責任消費者**がackした分はパージ可能(他の消費者のackはパージ判断に関与しない=D2)。ただしack後も**最低保持フロア**(目安72h、設定可)を置く——上流の箱がEdge Nodeより堅牢という保証はない。正常時のデータ残高≒フロア分のみ、断線時のみダムとして水位が上がる。残高上限はR17の劣化契約でキャップ。
 - **小さいが致命的な状態**(デバイス台帳・desired設定・測定レジストリ・較正値): 上流がいれば状態スナップショットとして定期退避(R22の強化)。故障時は「新しいRPi+スナップショット流し込み」で交換完了。オフライン構成ではUSBエクスポートが代替。
-- **禁止事項**: 上流退避を正しさの条件にしない。上流ゼロでも生きられる(柱1)。位置づけは「上流がいるほどEdgeは軽く・死んでも痛くない。いなくても生きられる」。
+- **禁止事項**: 上流退避を正しさの条件にしない。上流ゼロでも生きられる(柱1)。位置づけは「上流がいるほどEdge Nodeは軽く・死んでも痛くない。いなくても生きられる」。
 - **パージ順序とcustody_lost**: 劣化契約のパージ順序(ack済み→保管対象外→検疫滞留→未ack正本の4クラス。D7決定7で改訂)と、未ack正本パージ時のcustody_lost監査+出口annotation必須の規律はD2 §1「劣化契約との優先順位」に従う(2026-07-03)。
-- 長期アーカイブ・全量保存はEdgeの責務ではない([3]/[4]の消費者の仕事。出口契約は全量購読するアーカイバ消費者も特別扱いなしで受け入れられる)。
+- 長期アーカイブ・全量保存はEdge Nodeの責務ではない([3]/[4]の消費者の仕事。出口契約は全量購読するアーカイバ消費者も特別扱いなしで受け入れられる)。
 
 ## 設計論点の状態
 
