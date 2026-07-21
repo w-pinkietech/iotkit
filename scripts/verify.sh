@@ -38,6 +38,10 @@ if [[ "$full" == true ]]; then
   scripts/test-edge-resilience.sh
   echo "== scripts/test-edge-bootstrap.sh =="
   scripts/test-edge-bootstrap.sh
+  echo "== scripts/test-edge-postgres.sh =="
+  scripts/test-edge-postgres.sh
+  echo "== scripts/test-edge-capacity.sh =="
+  scripts/test-edge-capacity.sh
 fi
 
 echo "✔ verify.sh PASS"

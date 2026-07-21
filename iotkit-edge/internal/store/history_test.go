@@ -63,8 +63,8 @@ func seedHistoryRecord(
 		INSERT INTO raw_records(
 			edge_node_id, ledger_epoch, pub_seq, publication_id,
 			record_json, record_sha256, received_at
-		) VALUES (?, ?, ?, ?, ?, zeroblob(32), ?)
-	`, edgeNode, epoch, seq, edgeNode+":"+epoch, payload, receivedAt); err != nil {
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, edgeNode, epoch, seq, edgeNode+":"+epoch, payload, make([]byte, 32), receivedAt); err != nil {
 		t.Fatal(err)
 	}
 }

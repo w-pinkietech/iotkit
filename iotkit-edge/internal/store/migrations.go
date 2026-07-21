@@ -1107,6 +1107,13 @@ var schemaMigrations = []migration{
 			observation_row_id DESC
 		);
 	`},
+	{version: 29, sql: `
+		CREATE TABLE edge_storage_samples (
+			sampled_at INTEGER PRIMARY KEY,
+			database_bytes INTEGER NOT NULL CHECK(database_bytes >= 0),
+			raw_record_count INTEGER NOT NULL CHECK(raw_record_count >= 0)
+		);
+	`},
 }
 
 func applyMigrations(

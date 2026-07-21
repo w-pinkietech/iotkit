@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/edgeapp"
 )
@@ -13,6 +14,8 @@ import (
 type BackupCursor = edgeapp.BackupCursor
 
 type BackupSnapshotInfo struct {
+	StorageProfile Profile        `json:"storage_profile"`
+	PayloadFormat  string         `json:"payload_format"`
 	EdgeID         string         `json:"edge_id"`
 	SchemaVersion  int            `json:"schema_version"`
 	RawRecordCount int64          `json:"raw_record_count"`
@@ -31,18 +34,34 @@ func (store *Store) CreateConsistentSnapshot(
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return BackupSnapshotInfo{}, fmt.Errorf("inspect snapshot destination: %w", err)
 	}
-	if _, err := store.db.ExecContext(ctx, "VACUUM INTO ?", destination); err != nil {
+	if store.profile == ProfilePostgres {
+		return store.createPostgresSnapshot(ctx, destination)
+	}
+	stagingDirectory, err := os.MkdirTemp(filepath.Dir(destination), ".iotkit-edge-snapshot-*")
+	if err != nil {
+		return BackupSnapshotInfo{}, fmt.Errorf("create protected Edge snapshot staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingDirectory)
+	stagingPath := filepath.Join(stagingDirectory, "snapshot.db")
+	if _, err := store.db.ExecContext(ctx, "VACUUM INTO ?", stagingPath); err != nil {
 		return BackupSnapshotInfo{}, fmt.Errorf("create consistent Edge snapshot: %w", err)
 	}
-	if err := os.Chmod(destination, 0o600); err != nil {
-		_ = os.Remove(destination)
+	if err := os.Chmod(stagingPath, 0o600); err != nil {
 		return BackupSnapshotInfo{}, fmt.Errorf("protect Edge snapshot: %w", err)
 	}
-	info, err := inspectSnapshot(ctx, destination)
+	info, err := inspectSnapshot(ctx, stagingPath)
 	if err != nil {
-		_ = os.Remove(destination)
 		return BackupSnapshotInfo{}, err
 	}
+	if err := os.Link(stagingPath, destination); err != nil {
+		return BackupSnapshotInfo{}, fmt.Errorf("publish Edge snapshot: %w", err)
+	}
+	if err := os.Remove(stagingPath); err != nil {
+		_ = os.Remove(destination)
+		return BackupSnapshotInfo{}, fmt.Errorf("finish Edge snapshot publication: %w", err)
+	}
+	info.StorageProfile = ProfileEmbedded
+	info.PayloadFormat = "sqlite-database"
 	return info, nil
 }
 

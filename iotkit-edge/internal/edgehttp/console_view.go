@@ -238,6 +238,7 @@ type consoleHistoryChart struct {
 }
 
 type consoleStorageView struct {
+	ProfileLabel        string
 	Available           bool
 	StateClass          string
 	StateLabel          string
@@ -255,10 +256,18 @@ type consoleStorageView struct {
 	LastBackupRecords   int64
 	BackupProtectedRaw  int64
 	UnprotectedRaw      int64
+	GrowthPerDay        string
+	DaysRemainingKnown  bool
+	DaysRemaining       int64
+	ReserveLabel        string
 }
 
 func newConsoleStorageView(status store.StorageStatus) consoleStorageView {
 	view := consoleStorageView{
+		ProfileLabel: map[store.Profile]string{
+			store.ProfileEmbedded: "内蔵データベース",
+			store.ProfilePostgres: "PostgreSQL",
+		}[status.Profile],
 		Available:  status.FilesystemAvailable,
 		StateClass: "stale", StateLabel: "容量を確認できません",
 		DatabaseSize:       formatByteCount(uint64(max(status.DatabaseBytes, 0))),
@@ -271,6 +280,17 @@ func newConsoleStorageView(status store.StorageStatus) consoleStorageView {
 		ProjectionFailures: status.ProjectionFailureCount,
 		BackupProtectedRaw: status.BackupProtectedRawCount,
 		UnprotectedRaw:     status.UnprotectedRawCount,
+		GrowthPerDay:       formatByteCount(uint64(max(status.GrowthBytesPerDay, 0))),
+	}
+	if status.EstimatedDaysRemaining != nil {
+		view.DaysRemainingKnown = true
+		view.DaysRemaining = *status.EstimatedDaysRemaining
+	}
+	view.ReserveLabel = map[string]string{
+		"adequate": "十分", "warning": "注意", "critical": "危険", "unknown": "host監視で確認",
+	}[status.AbsoluteReserveState]
+	if view.ProfileLabel == "" {
+		view.ProfileLabel = "不明"
 	}
 	if status.FilesystemAvailable {
 		view.DiskAvailable = formatByteCount(status.DiskAvailableBytes)

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -178,6 +179,9 @@ func TestOpenRejectsLegacyGatewayIdentitySchemaBeforeCreatingTables(t *testing.T
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
+	if os.Getenv("IOTKIT_TEST_POSTGRES_DSN") != "" {
+		return openPostgresTestStore(t)
+	}
 	store, err := Open(filepath.Join(t.TempDir(), "edge.db"))
 	if err != nil {
 		t.Fatal(err)

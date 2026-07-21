@@ -1,6 +1,6 @@
 # D2: データ正本・配置・運用開始/復旧イメージ
 
-Status: 会話合意 (2026-07-02)
+Status: 会話合意 (2026-07-02、IoTKit Edge storage profileは2026-07-21確定)
 用語は [../terminology.md](../terminology.md)、責務は [../responsibility-ledger.md](../responsibility-ledger.md) に従う。
 
 ## 1. データの正本(source of truth)
@@ -107,6 +107,38 @@ v1は次を採用する。
 6. raw retentionは、対象rawを含む検証済みbackupが存在し、意味付けprojectionが完了し、未配送outboxを
    削除しない場合だけ実行できる。容量watermarkを理由にこの順序を飛ばさない。初版は自動purgeを既定offとし、
    保存状況と削除可能範囲を先に可視化する。
+
+### IoTKit Edge storage profile (2026-07-21確定)
+
+IoTKit Edgeは導入規模に応じて次の2つのstorage profileを持てる設計とする。profileは信頼性や機能の等級ではなく、
+配置、運用可能な容量、backup方式の違いである。どちらも同じMQTT契約、Edge Node activation、raw/cursor custody、
+意味付け、account、監査、Output Adapterの動作を提供し、検証済みcapacity envelope内では正式運用に使える。
+
+| profile | 単一の正本DB | 主な配置 | 運用上の性質 |
+|---|---|---|---|
+| `embedded` | SQLite | Raspberry Piへの全部入り、小型PC、低〜中流量のLinux Edge host | DB daemonとDB credentialを増やさず導入できる。local SSD等、SQLite WALに適したhost-local storageを必須とする |
+| `postgres` | PostgreSQL | 高流量、長期保持、複数利用者、または別DB hostを必要とするLinux Edge host | server DBの監視、credential、backup、version更新を伴う代わりに、read/write concurrency、partitioning、PITR/replicationへの発展余地を持つ |
+
+次を不変条件とする。
+
+1. 一つのIoTKit Edgeは一時点で一つのprofileと一つの正本DBだけを使う。SQLiteとPostgreSQLへのdual write、
+   自動fallback、外部時系列DBを含む複数正本を作らない。
+2. profileは導入時に選択してdurable metadataへ固定する。Consoleから稼働中に切り替えない。接続不能時に別profileを
+   空DBとして起動せず、fail closedする。
+3. storage実装は共通の適合testを通す。最低でもrawとaccepted cursorの同一transaction、exact replay、content conflict、
+   commit失敗時ack禁止、activation、revision precondition、監査、outbox、backup/restore fenceを同じ観測可能な契約にする。
+4. `embedded`から`postgres`への移行はoffline operationだけとする。新規入力を止め、整合backupを作り、全table、hash、
+   Edge Node別cursor、pending outbox、account/auditをimportし、件数とidentityを検証してから切り替える。元DBは検証済みの
+   rollback資産として保持し、移行先と同時稼働させない。
+5. TimescaleDB等のPostgreSQL拡張は第3のprofileや別正本にしない。plain PostgreSQLの実測上限不足、または圧縮、
+   time partition、continuous aggregate等の具体的要件が確認された場合だけ、`postgres` profile内部のschema選択として
+   別途決定する。IoTKitの時刻非依存record identityを弱めてhypertableへ合わせてはならない。
+6. profile選択はsensor台数だけで決めない。Edge Node数、合計records/秒、burst、payload size、rule/output fan-out、
+   保持期間、同時Console/CSV利用、backup時間、RPO/RTOを含む実測capacity envelopeで決める。
+
+初期実装は`embedded`を基準実装として共通契約を確立し、同じ適合testを満たす`postgres`を追加した。
+両profileとも短時間のcapacity回帰smokeは通すが、これは実導入の対応上限を証明しない。導入規模ごとの
+production-shaped capacity reportがない構成を「検証済み規模」として案内しない。
 
 ## 3.5 監査追記: スナップショットの機密性とエポックフェンス(2026-07-02)
 

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/contract"
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/edgeapp"
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/semantic"
@@ -25,7 +26,11 @@ var (
 )
 
 type Store struct {
-	db *sql.DB
+	db            *sqlDatabase
+	profile       Profile
+	postgresDSN   string
+	sqliteLock    *SQLiteDeploymentLock
+	postgresGuard *sql.Conn
 }
 
 type RawRecord struct {
@@ -52,32 +57,71 @@ type SemanticEvent struct {
 }
 
 func Open(path string) (*Store, error) {
-	return open(path, "")
+	return OpenWithOptions(OpenOptions{SQLitePath: path})
 }
 
 func OpenWithEdgeID(path string, edgeID string) (*Store, error) {
-	if !edgeIDPattern.MatchString(edgeID) {
-		return nil, errors.New("configured IoTKit Edge ID is invalid")
-	}
-	return open(path, edgeID)
+	return OpenWithOptions(OpenOptions{SQLitePath: path, EdgeID: edgeID})
 }
 
-func open(path string, configuredEdgeID string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+func OpenWithOptions(options OpenOptions) (*Store, error) {
+	options, err := options.normalized()
 	if err != nil {
 		return nil, err
 	}
+	if options.EdgeID != "" && !edgeIDPattern.MatchString(options.EdgeID) {
+		return nil, errors.New("configured IoTKit Edge ID is invalid")
+	}
+	if options.Profile == ProfilePostgres {
+		return openPostgres(options.PostgresDSN, options.EdgeID)
+	}
+	return open(options.SQLitePath, options.EdgeID)
+}
+
+func open(path string, configuredEdgeID string) (*Store, error) {
+	if configuredEdgeID != "" && !edgeIDPattern.MatchString(configuredEdgeID) {
+		return nil, errors.New("configured IoTKit Edge ID is invalid")
+	}
+	return openSQLite(path, configuredEdgeID)
+}
+
+func openSQLite(path string, configuredEdgeID string) (*Store, error) {
+	var deploymentLock *SQLiteDeploymentLock
+	if path != ":memory:" {
+		var err error
+		deploymentLock, err = acquireSQLiteSharedDeploymentLock(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		_ = deploymentLock.Close()
+		return nil, err
+	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{
+		db:         &sqlDatabase{raw: db, dialect: dialectSQLite},
+		profile:    ProfileEmbedded,
+		sqliteLock: deploymentLock,
+	}
 	if err := store.initialize(configuredEdgeID); err != nil {
 		_ = db.Close()
+		_ = deploymentLock.Close()
 		return nil, err
 	}
 	return store, nil
 }
 
 func (store *Store) Close() error {
-	return store.db.Close()
+	if store.postgresGuard != nil {
+		_ = store.postgresGuard.Close()
+		store.postgresGuard = nil
+	}
+	databaseErr := store.db.Close()
+	lockErr := store.sqliteLock.Close()
+	store.sqliteLock = nil
+	return errors.Join(databaseErr, lockErr)
 }
 
 func (store *Store) initialize(configuredEdgeID string) error {
@@ -91,9 +135,20 @@ func (store *Store) initialize(configuredEdgeID string) error {
 	`); err != nil {
 		return err
 	}
+	var journalMode string
+	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil || journalMode != "wal" {
+		return errors.New("SQLite WAL durability mode is not active")
+	}
+	var synchronous, foreignKeys int
+	if err := store.db.QueryRow("PRAGMA synchronous").Scan(&synchronous); err != nil || synchronous != 2 {
+		return errors.New("SQLite FULL synchronous durability mode is not active")
+	}
+	if err := store.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil || foreignKeys != 1 {
+		return errors.New("SQLite foreign key enforcement is not active")
+	}
 	if err := applyMigrations(
 		context.Background(),
-		store.db,
+		store.db.raw,
 		configuredEdgeID,
 	); err != nil {
 		return err
@@ -130,7 +185,7 @@ func (store *Store) rejectLegacyGatewaySchema() error {
 
 func putSemanticMappingTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	spec semantic.MappingSpec,
 	precondition edgeapp.RevisionPrecondition,
 ) (semantic.Mapping, error) {
@@ -337,7 +392,7 @@ func (store *Store) listSemanticCandidates(ctx context.Context, limit int) ([]se
 				ON ends.mapping_id = m.mapping_id
 				AND ends.mapping_revision = m.revision
 				AND ends.ledger_epoch = r.ledger_epoch
-			WHERE json_extract(CAST(r.record_json AS TEXT), '$.series_key') = m.series_key
+			WHERE json_extract(r.record_json, '$.series_key') = m.series_key
 				AND r.pub_seq > COALESCE(starts.start_after_pub_seq, 0)
 				AND (
 					m.active = 1
@@ -481,8 +536,8 @@ func (store *Store) projectSemanticCandidate(ctx context.Context, candidate sema
 	return true, nil
 }
 
-func semanticCandidateEligible(ctx context.Context, tx *sql.Tx, candidate semanticCandidate) (bool, error) {
-	var eligible int
+func semanticCandidateEligible(ctx context.Context, tx *sqlTx, candidate semanticCandidate) (bool, error) {
+	var eligible bool
 	err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1
@@ -513,7 +568,7 @@ func semanticCandidateEligible(ctx context.Context, tx *sql.Tx, candidate semant
 	`, candidate.LedgerEpoch, candidate.LedgerEpoch, candidate.MappingID,
 		candidate.MappingRevision, candidate.PubSeq, candidate.PubSeq,
 		candidate.LedgerEpoch, candidate.PubSeq).Scan(&eligible)
-	return eligible == 1, err
+	return eligible, err
 }
 
 func decodeSemanticContact(record []byte) (int, int64, error) {
@@ -623,16 +678,26 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var active int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM edge_node_activations
-			WHERE edge_node_id = ? AND ledger_epoch = ? AND state = 'active'
-		)
-	`, batch.EdgeNodeID, batch.LedgerEpoch).Scan(&active); err != nil {
+	activationQuery := `
+		SELECT state FROM edge_node_activations
+		WHERE edge_node_id = ? AND ledger_epoch = ?
+	`
+	if tx.dialect == dialectPostgres {
+		// MQTT deliveries can run concurrently. Lock the stream authority row
+		// before reading its cursor and restore fence so a replay cannot move
+		// accepted-through backwards.
+		activationQuery += " FOR UPDATE"
+	}
+	var activationState string
+	if err := tx.QueryRowContext(
+		ctx, activationQuery, batch.EdgeNodeID, batch.LedgerEpoch,
+	).Scan(&activationState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return noAck, ErrEdgeNodeNotActive
+		}
 		return noAck, err
 	}
-	if active != 1 {
+	if activationState != "active" {
 		return noAck, ErrEdgeNodeNotActive
 	}
 
@@ -708,7 +773,11 @@ func (store *Store) AcceptBatch(ctx context.Context, batch contract.RecordBatch)
 				edge_node_id, ledger_epoch, accepted_through, updated_at
 			) VALUES (?, ?, ?, ?)
 			ON CONFLICT(edge_node_id, ledger_epoch) DO UPDATE SET
-				accepted_through = excluded.accepted_through,
+				accepted_through = CASE
+					WHEN accepted_cursors.accepted_through > excluded.accepted_through
+					THEN accepted_cursors.accepted_through
+					ELSE excluded.accepted_through
+				END,
 				updated_at = excluded.updated_at
 		`, batch.EdgeNodeID, batch.LedgerEpoch, acceptedThrough, now); err != nil {
 			return noAck, err
@@ -772,7 +841,7 @@ func (store *Store) ListRawRecords(ctx context.Context, limit int) ([]RawRecord,
 	return records, rows.Err()
 }
 
-func readCursor(ctx context.Context, tx *sql.Tx, edgeNodeID, ledgerEpoch string) (int64, error) {
+func readCursor(ctx context.Context, tx *sqlTx, edgeNodeID, ledgerEpoch string) (int64, error) {
 	var cursor int64
 	err := tx.QueryRowContext(ctx, `
 		SELECT accepted_through FROM accepted_cursors

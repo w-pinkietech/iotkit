@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -33,7 +34,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: iotkit-edge <serve|account|backup|diagnose|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]")
+		return errors.New("usage: iotkit-edge <serve|account|backup|storage|diagnose|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]")
 	}
 	switch args[0] {
 	case "serve":
@@ -42,6 +43,8 @@ func run(args []string) error {
 		return runAccount(args[1:])
 	case "backup":
 		return runBackup(args[1:])
+	case "storage":
+		return runStorage(args[1:])
 	case "diagnose":
 		return runDiagnose(args[1:])
 	case "query":
@@ -63,17 +66,95 @@ func run(args []string) error {
 	}
 }
 
+func runStorage(args []string) error {
+	if len(args) == 0 || args[0] != "migrate" {
+		return errors.New("usage: iotkit-edge storage migrate --from-sqlite PATH --to-postgres-config FILE --report FILE")
+	}
+	flags := flag.NewFlagSet("storage migrate", flag.ContinueOnError)
+	source := flags.String("from-sqlite", "", "offline SQLite source database")
+	configPath := flags.String("to-postgres-config", "", "owner-only PostgreSQL configuration file")
+	reportPath := flags.String("report", "", "new owner-only migration verification report")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *source == "" || *configPath == "" || *reportPath == "" {
+		return errors.New("--from-sqlite, --to-postgres-config, and --report are required")
+	}
+	if err := requireExistingRegularFile(*source, "--from-sqlite must name an existing Edge database"); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(*reportPath); err == nil {
+		return errors.New("migration report already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("inspect migration report destination")
+	}
+	encodedConfig, err := readOwnerOnlySecret(*configPath)
+	if err != nil {
+		return err
+	}
+	var config struct {
+		DSN string `json:"dsn"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(encodedConfig))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil || config.DSN == "" {
+		return errors.New("invalid PostgreSQL configuration file")
+	}
+	report, err := store.MigrateSQLiteToPostgres(
+		context.Background(), *source, config.DSN,
+	)
+	if err != nil {
+		return err
+	}
+	return writeOwnerOnlyJSONAtomic(*reportPath, report)
+}
+
+func writeOwnerOnlyJSONAtomic(path string, value any) error {
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".iotkit-edge-report-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(encoded); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(temporaryPath, path); err != nil {
+		return err
+	}
+	return nil
+}
+
 func runDiagnose(args []string) error {
 	flags := flag.NewFlagSet("diagnose", flag.ContinueOnError)
-	dbPath := flags.String("db", "edge.db", "Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	storageWarningPercent := flags.Int("storage-warning-percent", 90, "Edge filesystem usage warning percent")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if err := requireExistingRegularFile(*dbPath, "--db must name an existing Edge database"); err != nil {
-		return err
+	if store.Profile(*storageFlags.profile) == store.ProfileEmbedded {
+		if err := requireExistingRegularFile(*storageFlags.dbPath, "--db must name an existing Edge database"); err != nil {
+			return err
+		}
 	}
-	archive, err := store.Open(*dbPath)
+	archive, err := storageFlags.open("")
 	if err != nil {
 		return err
 	}
@@ -105,7 +186,7 @@ func runBackup(args []string) error {
 
 func runBackupCreate(args []string) error {
 	flags := flag.NewFlagSet("backup create", flag.ContinueOnError)
-	dbPath := flags.String("db", "edge.db", "existing Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	output := flags.String("output", "", "new encrypted backup path")
 	passphraseFile := flags.String("passphrase-file", "", "owner-only file containing the backup passphrase")
 	if err := flags.Parse(args); err != nil {
@@ -114,14 +195,16 @@ func runBackupCreate(args []string) error {
 	if *output == "" || *passphraseFile == "" {
 		return errors.New("--output and --passphrase-file are required")
 	}
-	if err := requireExistingRegularFile(*dbPath, "--db must name an existing Edge database"); err != nil {
-		return err
+	if store.Profile(*storageFlags.profile) == store.ProfileEmbedded {
+		if err := requireExistingRegularFile(*storageFlags.dbPath, "--db must name an existing Edge database"); err != nil {
+			return err
+		}
 	}
 	passphrase, err := readOwnerOnlySecret(*passphraseFile)
 	if err != nil {
 		return err
 	}
-	archive, err := store.Open(*dbPath)
+	archive, err := storageFlags.open("")
 	if err != nil {
 		return err
 	}
@@ -141,7 +224,7 @@ func runBackupCreate(args []string) error {
 func runBackupRestore(args []string) error {
 	flags := flag.NewFlagSet("backup restore", flag.ContinueOnError)
 	input := flags.String("input", "", "encrypted backup path")
-	dbPath := flags.String("db", "edge.db", "new restored Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	passphraseFile := flags.String("passphrase-file", "", "owner-only file containing the backup passphrase")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -153,9 +236,28 @@ func runBackupRestore(args []string) error {
 	if err != nil {
 		return err
 	}
-	manifest, err := store.RestoreEncryptedBackup(
-		context.Background(), *input, *dbPath, passphrase,
-	)
+	if err := validateExpectedStorageProfile(store.Profile(*storageFlags.profile)); err != nil {
+		return err
+	}
+	if err := validateStorageProfileMetadata(
+		store.Profile(*storageFlags.profile), *storageFlags.metadata,
+	); err != nil {
+		return err
+	}
+	var manifest store.BackupManifest
+	if store.Profile(*storageFlags.profile) == store.ProfilePostgres {
+		dsn, err := postgresDSNFromConfig(*storageFlags.postgresConfig)
+		if err != nil {
+			return err
+		}
+		manifest, err = store.RestoreEncryptedBackupToPostgres(
+			context.Background(), *input, dsn, passphrase,
+		)
+	} else {
+		manifest, err = store.RestoreEncryptedBackup(
+			context.Background(), *input, *storageFlags.dbPath, passphrase,
+		)
+	}
 	if err != nil {
 		return err
 	}
@@ -164,7 +266,7 @@ func runBackupRestore(args []string) error {
 
 func runBackupAcceptArchiveLoss(args []string) error {
 	flags := flag.NewFlagSet("backup accept-archive-loss", flag.ContinueOnError)
-	dbPath := flags.String("db", "edge.db", "Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	edgeNodeID := flags.String("edge-node-id", "", "Edge Node identity in recovery hold")
 	ledgerEpoch := flags.String("ledger-epoch", "", "Edge Node ledger epoch")
 	confirmEdgeID := flags.String("confirm-edge-id", "", "IoTKit Edge ID typed to confirm the destructive decision")
@@ -175,10 +277,12 @@ func runBackupAcceptArchiveLoss(args []string) error {
 	if *edgeNodeID == "" || *ledgerEpoch == "" || *confirmEdgeID == "" || *reason == "" {
 		return errors.New("--edge-node-id, --ledger-epoch, --confirm-edge-id, and --reason are required")
 	}
-	if err := requireExistingRegularFile(*dbPath, "--db must name an existing Edge database"); err != nil {
-		return err
+	if store.Profile(*storageFlags.profile) == store.ProfileEmbedded {
+		if err := requireExistingRegularFile(*storageFlags.dbPath, "--db must name an existing Edge database"); err != nil {
+			return err
+		}
 	}
-	archive, err := store.Open(*dbPath)
+	archive, err := storageFlags.open("")
 	if err != nil {
 		return err
 	}
@@ -217,7 +321,7 @@ func runAccount(args []string) error {
 
 func runAccountBootstrap(args []string) error {
 	flags := flag.NewFlagSet("account bootstrap", flag.ContinueOnError)
-	dbPath := flags.String("db", "edge.db", "Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	loginID := flags.String("login-id", "", "initial system administrator login ID")
 	displayName := flags.String("display-name", "", "initial system administrator display name")
 	passwordFile := flags.String("password-file", "", "owner-only file containing the password")
@@ -231,11 +335,12 @@ func runAccountBootstrap(args []string) error {
 	if err != nil {
 		return err
 	}
-	service, archive, err := openAccountService(*dbPath)
+	archive, err := storageFlags.open("")
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
+	service := edgeapp.NewAccountService(archive)
 	result, err := service.DispatchAccount(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
@@ -253,7 +358,7 @@ func runAccountBootstrap(args []string) error {
 
 func runAccountRecover(args []string) error {
 	flags := flag.NewFlagSet("account recover", flag.ContinueOnError)
-	dbPath := flags.String("db", "edge.db", "Edge SQLite path")
+	storageFlags := bindStorageFlags(flags)
 	loginID := flags.String("login-id", "", "system administrator login ID")
 	passwordFile := flags.String("password-file", "", "owner-only file containing the new password")
 	if err := flags.Parse(args); err != nil {
@@ -266,11 +371,12 @@ func runAccountRecover(args []string) error {
 	if err != nil {
 		return err
 	}
-	service, archive, err := openAccountService(*dbPath)
+	archive, err := storageFlags.open("")
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
+	service := edgeapp.NewAccountService(archive)
 	result, err := service.DispatchAccount(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
@@ -317,6 +423,9 @@ func requireExistingRegularFile(path string, message string) error {
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dbPath := flags.String("db", "edge.db", "Edge SQLite path")
+	storageProfile := flags.String("storage-profile", string(store.ProfileEmbedded), "Edge storage profile: embedded or postgres")
+	postgresConfig := flags.String("postgres-config", "", "owner-only PostgreSQL configuration file")
+	storageMetadata := flags.String("storage-metadata", "", "immutable deployment storage profile metadata")
 	edgeID := flags.String("edge-id", "", "deployment-assigned Edge source identity")
 	brokerURL := flags.String("broker-url", "", "MQTT broker URL")
 	clientID := flags.String("client-id", "iotkit-edge", "MQTT client ID")
@@ -401,13 +510,10 @@ func runServe(args []string) error {
 	if err := validatePrivateHTTPListen(*httpListen); err != nil {
 		return err
 	}
-
-	var archive *store.Store
-	if *edgeID == "" {
-		archive, err = store.Open(*dbPath)
-	} else {
-		archive, err = store.OpenWithEdgeID(*dbPath, *edgeID)
-	}
+	archive, err := openConfiguredStore(
+		store.Profile(*storageProfile), *dbPath, *postgresConfig,
+		*storageMetadata, *edgeID,
+	)
 	if err != nil {
 		return fmt.Errorf("open Edge store: %w", err)
 	}
@@ -489,6 +595,113 @@ func runServe(args []string) error {
 		return runErr
 	}
 	return shutdownErr
+}
+
+func openConfiguredStore(
+	profile store.Profile,
+	sqlitePath string,
+	postgresConfigPath string,
+	metadataPath string,
+	edgeID string,
+) (*store.Store, error) {
+	if profile != store.ProfileEmbedded && profile != store.ProfilePostgres {
+		return nil, errors.New("unsupported storage profile")
+	}
+	if err := validateExpectedStorageProfile(profile); err != nil {
+		return nil, err
+	}
+	if err := validateStorageProfileMetadata(profile, metadataPath); err != nil {
+		return nil, err
+	}
+	options := store.OpenOptions{Profile: profile, EdgeID: edgeID}
+	if profile == store.ProfileEmbedded {
+		if postgresConfigPath != "" {
+			return nil, errors.New("PostgreSQL configuration is not allowed for embedded storage")
+		}
+		options.SQLitePath = sqlitePath
+	} else {
+		if postgresConfigPath == "" {
+			return nil, errors.New("--postgres-config is required for postgres storage")
+		}
+		dsn, err := postgresDSNFromConfig(postgresConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		options.PostgresDSN = dsn
+	}
+	return store.OpenWithOptions(options)
+}
+
+func validateStorageProfileMetadata(profile store.Profile, metadataPath string) error {
+	if metadataPath == "" {
+		return nil
+	}
+	encoded, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return errors.New("read storage profile metadata")
+	}
+	var metadata struct {
+		Profile store.Profile `json:"profile"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&metadata); err != nil || metadata.Profile != profile {
+		return errors.New("configured storage profile does not match deployment metadata")
+	}
+	return nil
+}
+
+func validateExpectedStorageProfile(profile store.Profile) error {
+	expected := os.Getenv("IOTKIT_EXPECTED_STORAGE_PROFILE")
+	if expected == "" {
+		return nil
+	}
+	if store.Profile(expected) != profile {
+		return errors.New("configured storage profile does not match deployment")
+	}
+	return nil
+}
+
+func postgresDSNFromConfig(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("--postgres-config is required for postgres storage")
+	}
+	encoded, err := readOwnerOnlySecret(path)
+	if err != nil {
+		return "", err
+	}
+	var config struct {
+		DSN string `json:"dsn"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil || config.DSN == "" {
+		return "", errors.New("invalid PostgreSQL configuration file")
+	}
+	return config.DSN, nil
+}
+
+type storageCLIFlags struct {
+	profile        *string
+	dbPath         *string
+	postgresConfig *string
+	metadata       *string
+}
+
+func bindStorageFlags(flags *flag.FlagSet) storageCLIFlags {
+	return storageCLIFlags{
+		profile:        flags.String("storage-profile", string(store.ProfileEmbedded), "Edge storage profile: embedded or postgres"),
+		dbPath:         flags.String("db", "edge.db", "Edge SQLite path"),
+		postgresConfig: flags.String("postgres-config", "", "owner-only PostgreSQL configuration file"),
+		metadata:       flags.String("storage-metadata", "", "immutable deployment storage profile metadata"),
+	}
+}
+
+func (flags storageCLIFlags) open(edgeID string) (*store.Store, error) {
+	return openConfiguredStore(
+		store.Profile(*flags.profile), *flags.dbPath, *flags.postgresConfig,
+		*flags.metadata, edgeID,
+	)
 }
 
 func validatePrivateHTTPListen(address string) error {

@@ -84,6 +84,8 @@ type BackupCursor struct {
 
 type BackupManifest struct {
 	FormatVersion  int            `json:"format_version"`
+	StorageProfile string         `json:"storage_profile,omitempty"`
+	PayloadFormat  string         `json:"payload_format,omitempty"`
 	BackupID       string         `json:"backup_id"`
 	CreatedAt      int64          `json:"created_at"`
 	EdgeID         string         `json:"edge_id"`

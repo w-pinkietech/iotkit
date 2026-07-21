@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: "postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193"
+    restart: unless-stopped
+    mem_limit: 1073741824
+    shm_size: 268435456
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_DB: iotkit
+      POSTGRES_USER: iotkit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+    ports:
+      - "127.0.0.1:${IOTKIT_POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=\"$$(cat /run/secrets/postgres-password)\" psql --host 127.0.0.1 --username iotkit --dbname iotkit --no-password --tuples-only --command 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    volumes:
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: ${IOTKIT_POSTGRES_PASSWORD_FILE:?}
+        target: /run/secrets/postgres-password
+        read_only: true
+
+  edge:
+    build:
+      target: runtime-postgres
+    environment:
+      IOTKIT_EXPECTED_STORAGE_PROFILE: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+      broker:
+        condition: service_started
+
+volumes:
+  postgres-data:

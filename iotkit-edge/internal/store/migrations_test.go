@@ -74,8 +74,8 @@ func TestOpenMigratesRealVersionThreeDatabaseWithoutDroppingData(t *testing.T) {
 	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 28 {
-		t.Fatalf("schema version = %d, want 28", version)
+	if want := schemaMigrations[len(schemaMigrations)-1].version; version != want {
+		t.Fatalf("schema version = %d, want %d", version, want)
 	}
 	if got := testTableCount(t, store.db, "edge_devices"); got != 1 {
 		t.Fatalf("backfilled devices = %d, want 1", got)
@@ -136,8 +136,8 @@ func TestMigrationSeventeenAddsOutputRouteDiagnostics(t *testing.T) {
 	if err := archive.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 28 {
-		t.Fatalf("schema version=%d, want 28", version)
+	if want := schemaMigrations[len(schemaMigrations)-1].version; version != want {
+		t.Fatalf("schema version=%d, want %d", version, want)
 	}
 	var errorCode string
 	var errorAt, successAt sql.NullInt64
@@ -971,8 +971,8 @@ func TestMigrationTwentyFiveNormalizesOutputSignalIdentities(t *testing.T) {
 	if err := archive.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 28 {
-		t.Fatalf("schema version=%d, want 28", version)
+	if want := schemaMigrations[len(schemaMigrations)-1].version; version != want {
+		t.Fatalf("schema version=%d, want %d", version, want)
 	}
 	var identityCount int
 	if err := archive.db.QueryRow(`

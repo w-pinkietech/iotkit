@@ -156,7 +156,7 @@ func (store *Store) ListOutputRoutes(
 		FROM output_routes AS route
 		LEFT JOIN semantic_rules_v3 AS rule ON rule.rule_id = route.rule_id
 		LEFT JOIN output_outbox_v3 AS outbox ON outbox.route_id = route.route_id
-		GROUP BY route.route_id
+		GROUP BY route.route_id, rule.signal_ref, rule.display_name, rule.kind
 		ORDER BY route.created_at, route.route_id
 	`)
 	if err != nil {
@@ -264,11 +264,17 @@ func (store *Store) EnqueueMultipleRuleOutputExports(
 				observation.created_at,
 				CASE WHEN route.last_transform_error_code IS NULL
 					THEN 0 ELSE 1 END AS route_error_rank,
-				MAX(
-					COALESCE(route.last_transform_error_at, 0),
-					COALESCE(route.last_transform_success_at, 0),
-					route.created_at
-				) AS route_attempt_at,
+				CASE
+					WHEN COALESCE(route.last_transform_error_at, 0) >=
+						COALESCE(route.last_transform_success_at, 0)
+						AND COALESCE(route.last_transform_error_at, 0) >=
+							route.created_at
+					THEN COALESCE(route.last_transform_error_at, 0)
+					WHEN COALESCE(route.last_transform_success_at, 0) >=
+						route.created_at
+					THEN COALESCE(route.last_transform_success_at, 0)
+					ELSE route.created_at
+				END AS route_attempt_at,
 				ROW_NUMBER() OVER (
 					PARTITION BY route.route_id
 					ORDER BY observation.observation_row_id

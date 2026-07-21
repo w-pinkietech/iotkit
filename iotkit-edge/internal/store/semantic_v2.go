@@ -689,7 +689,7 @@ func (store *Store) ListSemanticPreviewWindow(
 		return SemanticPreviewWindow{},
 			errors.New("semantic preview limit must be between 1 and 20000")
 	}
-	var exists int
+	var exists bool
 	if err := store.db.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM edge_signals WHERE signal_ref = ?
@@ -697,13 +697,13 @@ func (store *Store) ListSemanticPreviewWindow(
 	`, signalRef).Scan(&exists); err != nil {
 		return SemanticPreviewWindow{}, err
 	}
-	if exists != 1 {
+	if !exists {
 		return SemanticPreviewWindow{}, edgeapp.ErrNotFound
 	}
 
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT raw.received_at,
-			CAST(json_extract(raw.record_json, '$.event_time') AS INTEGER),
+			CAST(json_extract(raw.record_json, '$.event_time') AS BIGINT),
 			json_extract(raw.record_json, '$.values[0]')
 		FROM edge_signals AS signal
 		JOIN raw_records AS raw
@@ -737,7 +737,7 @@ func (store *Store) ListSemanticPreviewWindow(
 		window.TruncatedBy = PreviewTruncatedByInputCount
 		descending = descending[:limit]
 	} else {
-		var hasOlder int
+		var hasOlder bool
 		if err := store.db.QueryRowContext(ctx, `
 			SELECT EXISTS(
 				SELECT 1
@@ -750,7 +750,7 @@ func (store *Store) ListSemanticPreviewWindow(
 		`, signalRef, sinceReceivedAt).Scan(&hasOlder); err != nil {
 			return SemanticPreviewWindow{}, err
 		}
-		if hasOlder == 1 {
+		if hasOlder {
 			window.TruncatedBy = PreviewTruncatedByTime
 		}
 	}

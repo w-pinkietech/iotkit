@@ -333,7 +333,7 @@ func (store *Store) MarkActivationCommandAttempt(
 
 func discoverEdgeNodeTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	edgeNodeID string,
 	ledgerEpoch string,
 	now int64,
@@ -378,7 +378,7 @@ func discoverEdgeNodeTx(
 
 func loadEdgeNodeByRefTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *sqlTx,
 	edgeNodeRef string,
 ) (EdgeNodeActivation, error) {
 	row := tx.QueryRowContext(ctx, `

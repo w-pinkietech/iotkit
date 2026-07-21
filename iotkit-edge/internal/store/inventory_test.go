@@ -523,7 +523,11 @@ func inventoryMeasurementRecord(
 	return encoded
 }
 
-func testTableCount(t *testing.T, db *sql.DB, table string) int {
+type testQueryRower interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func testTableCount(t *testing.T, db testQueryRower, table string) int {
 	t.Helper()
 	switch table {
 	case "edge_devices", "edge_signals", "descriptor_signals", "signal_profiles":
@@ -537,7 +541,7 @@ func testTableCount(t *testing.T, db *sql.DB, table string) int {
 	return count
 }
 
-func testSourceRef(t *testing.T, db *sql.DB, table, column string) string {
+func testSourceRef(t *testing.T, db testQueryRower, table, column string) string {
 	t.Helper()
 	if table != "edge_devices" && table != "edge_signals" {
 		t.Fatalf("unsupported source table %q", table)
