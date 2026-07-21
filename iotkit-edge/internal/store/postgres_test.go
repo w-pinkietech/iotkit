@@ -93,6 +93,17 @@ func TestPostgresOpenCreatesCurrentSchema(t *testing.T) {
 	}
 }
 
+func TestPostgresListOutputRoutesUsesPortableGrouping(t *testing.T) {
+	store := openPostgresTestStore(t)
+	routes, err := store.ListOutputRoutes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("routes = %#v, want none", routes)
+	}
+}
+
 func TestPostgresUpgradeFromSchema28IsExplicitAndPreservesPrecisionContract(t *testing.T) {
 	dsn := newPostgresTestDatabase(t)
 	archive, err := OpenWithOptions(OpenOptions{Profile: ProfilePostgres, PostgresDSN: dsn})

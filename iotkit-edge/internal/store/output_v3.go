@@ -156,7 +156,7 @@ func (store *Store) ListOutputRoutes(
 		FROM output_routes AS route
 		LEFT JOIN semantic_rules_v3 AS rule ON rule.rule_id = route.rule_id
 		LEFT JOIN output_outbox_v3 AS outbox ON outbox.route_id = route.route_id
-		GROUP BY route.route_id
+		GROUP BY route.route_id, rule.signal_ref, rule.display_name, rule.kind
 		ORDER BY route.created_at, route.route_id
 	`)
 	if err != nil {
