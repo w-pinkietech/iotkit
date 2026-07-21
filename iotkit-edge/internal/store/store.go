@@ -26,8 +26,9 @@ var (
 )
 
 type Store struct {
-	db      *sqlDatabase
-	profile Profile
+	db          *sqlDatabase
+	profile     Profile
+	postgresDSN string
 }
 
 type RawRecord struct {

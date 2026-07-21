@@ -24,8 +24,9 @@ func openPostgres(dsn string, configuredEdgeID string) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{
-		db:      &sqlDatabase{raw: db, dialect: dialectPostgres},
-		profile: ProfilePostgres,
+		db:          &sqlDatabase{raw: db, dialect: dialectPostgres},
+		profile:     ProfilePostgres,
+		postgresDSN: dsn,
 	}
 	if err := store.validateConfiguredEdgeIdentity(ctx, configuredEdgeID); err != nil {
 		_ = db.Close()

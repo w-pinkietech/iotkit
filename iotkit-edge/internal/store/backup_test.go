@@ -122,6 +122,9 @@ func TestEncryptedBackupRoundTripRestoresNewDatabaseAndRevokesSessions(t *testin
 	if manifest.EdgeID == "" || manifest.RawRecordCount != 1 || manifest.DatabaseSHA256 == "" {
 		t.Fatalf("backup manifest = %#v", manifest)
 	}
+	if manifest.StorageProfile != string(ProfileEmbedded) || manifest.PayloadFormat != "sqlite-database" {
+		t.Fatalf("backup manifest storage identity = %#v", manifest)
+	}
 	container, err := os.ReadFile(backupPath)
 	if err != nil {
 		t.Fatal(err)

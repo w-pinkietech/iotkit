@@ -96,6 +96,8 @@ func (store *Store) ApplyEncryptedBackup(
 	}
 	manifest := BackupManifest{
 		FormatVersion:  backupFormatVersion,
+		StorageProfile: string(snapshot.StorageProfile),
+		PayloadFormat:  snapshot.PayloadFormat,
 		BackupID:       backupID,
 		CreatedAt:      time.Now().UnixMilli(),
 		EdgeID:         snapshot.EdgeID,
@@ -199,6 +201,10 @@ func RestoreEncryptedBackup(
 	if err != nil {
 		_ = payload.Close()
 		return empty, err
+	}
+	if manifest.StorageProfile != "" && manifest.StorageProfile != string(ProfileEmbedded) {
+		_ = payload.Close()
+		return empty, errors.New("backup storage profile does not match embedded restore destination")
 	}
 	database, err := os.CreateTemp(directory, ".iotkit-edge-restored-db-*")
 	if err != nil {
@@ -511,6 +517,14 @@ func readBackupManifest(payload io.Reader) (BackupManifest, error) {
 	if manifest.FormatVersion != backupFormatVersion || manifest.BackupID == "" || manifest.CreatedAt < 0 || manifest.EdgeID == "" || manifest.SchemaVersion < 1 || manifest.RawRecordCount < 0 {
 		return BackupManifest{}, errors.New("invalid Edge backup manifest values")
 	}
+	if manifest.StorageProfile == "" {
+		manifest.StorageProfile = string(ProfileEmbedded)
+		manifest.PayloadFormat = "sqlite-database"
+	}
+	if manifest.StorageProfile != string(ProfileEmbedded) &&
+		manifest.StorageProfile != string(ProfilePostgres) {
+		return BackupManifest{}, errors.New("invalid Edge backup storage profile")
+	}
 	decodedHash, err := hex.DecodeString(manifest.DatabaseSHA256)
 	if err != nil || len(decodedHash) != sha256.Size {
 		return BackupManifest{}, errors.New("invalid Edge backup database checksum")
@@ -523,18 +537,7 @@ func validateRestoredSnapshot(ctx context.Context, path string, manifest BackupM
 	if err != nil {
 		return err
 	}
-	if info.EdgeID != manifest.EdgeID || info.SchemaVersion != manifest.SchemaVersion || info.RawRecordCount != manifest.RawRecordCount {
-		return errors.New("Edge backup manifest does not match the restored database")
-	}
-	if len(info.Cursors) != len(manifest.Cursors) {
-		return errors.New("Edge backup cursor manifest does not match the restored database")
-	}
-	for index := range info.Cursors {
-		if info.Cursors[index] != manifest.Cursors[index] {
-			return errors.New("Edge backup cursor manifest does not match the restored database")
-		}
-	}
-	return nil
+	return validateSnapshotInfo(info, manifest)
 }
 
 func prepareRestoredDatabase(ctx context.Context, path string, manifest BackupManifest) error {
@@ -548,6 +551,28 @@ func prepareRestoredDatabase(ctx context.Context, path string, manifest BackupMa
 			_ = restored.Close()
 		}
 	}()
+	if err := prepareRestoredStore(ctx, restored, manifest); err != nil {
+		return err
+	}
+	if _, err := restored.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return err
+	}
+	if err := restored.Close(); err != nil {
+		return err
+	}
+	closed = true
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func prepareRestoredStore(ctx context.Context, restored *Store, manifest BackupManifest) error {
 	restoreID, err := randomOperationID("restore_")
 	if err != nil {
 		return err
@@ -619,22 +644,7 @@ func prepareRestoredDatabase(ctx context.Context, path string, manifest BackupMa
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if _, err := restored.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		return err
-	}
-	if err := restored.Close(); err != nil {
-		return err
-	}
-	closed = true
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return err
-	}
-	return file.Close()
+	return nil
 }
 
 func pendingRestoredCursorCheckTx(

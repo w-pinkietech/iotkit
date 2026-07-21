@@ -24,8 +24,25 @@ func TestStorageStatusReportsDatabaseFilesystemAndQueues(t *testing.T) {
 	if status.RawRecordCount != 1 || status.WarningPercent != 90 {
 		t.Fatalf("storage counts = %#v", status)
 	}
+	if status.Profile != ProfileEmbedded {
+		t.Fatalf("storage profile = %q, want %q", status.Profile, ProfileEmbedded)
+	}
 	if status.State != StorageHealthy && status.State != StorageWarning {
 		t.Fatalf("storage state = %q", status.State)
+	}
+}
+
+func TestPostgresStorageStatusReportsProfileAndDatabaseSize(t *testing.T) {
+	archive := openPostgresTestStore(t)
+	status, err := archive.GetStorageStatus(context.Background(), 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Profile != ProfilePostgres || status.DatabaseBytes <= 0 {
+		t.Fatalf("PostgreSQL storage status = %#v", status)
+	}
+	if status.FilesystemAvailable {
+		t.Fatalf("PostgreSQL status guessed server filesystem capacity: %#v", status)
 	}
 }
 

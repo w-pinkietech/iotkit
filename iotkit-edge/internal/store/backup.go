@@ -13,6 +13,8 @@ import (
 type BackupCursor = edgeapp.BackupCursor
 
 type BackupSnapshotInfo struct {
+	StorageProfile Profile        `json:"storage_profile"`
+	PayloadFormat  string         `json:"payload_format"`
 	EdgeID         string         `json:"edge_id"`
 	SchemaVersion  int            `json:"schema_version"`
 	RawRecordCount int64          `json:"raw_record_count"`
@@ -31,6 +33,9 @@ func (store *Store) CreateConsistentSnapshot(
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return BackupSnapshotInfo{}, fmt.Errorf("inspect snapshot destination: %w", err)
 	}
+	if store.profile == ProfilePostgres {
+		return store.createPostgresSnapshot(ctx, destination)
+	}
 	if _, err := store.db.ExecContext(ctx, "VACUUM INTO ?", destination); err != nil {
 		return BackupSnapshotInfo{}, fmt.Errorf("create consistent Edge snapshot: %w", err)
 	}
@@ -43,6 +48,8 @@ func (store *Store) CreateConsistentSnapshot(
 		_ = os.Remove(destination)
 		return BackupSnapshotInfo{}, err
 	}
+	info.StorageProfile = ProfileEmbedded
+	info.PayloadFormat = "sqlite-database"
 	return info, nil
 }
 
