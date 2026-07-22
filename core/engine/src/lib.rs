@@ -4,6 +4,7 @@
 mod state;
 
 #[cfg(test)]
+#[path = "../tests/unit/state_tests.rs"]
 mod state_test;
 
 use std::fmt;

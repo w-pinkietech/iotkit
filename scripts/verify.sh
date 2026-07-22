@@ -16,6 +16,9 @@ cargo fmt --all --check
 echo "== scripts/check-layers (crate layer rules) =="
 scripts/check-layers
 
+echo "== scripts/check-source-layout (source/test boundary) =="
+scripts/check-source-layout
+
 echo "== cargo test --workspace =="
 cargo test --workspace
 

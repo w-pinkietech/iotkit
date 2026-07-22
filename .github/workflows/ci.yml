@@ -55,6 +55,9 @@ jobs:
       - name: Layer rules (scripts/check-layers)
         run: scripts/check-layers
 
+      - name: Source/test layout (scripts/check-source-layout)
+        run: scripts/check-source-layout
+
       - name: Lints (cargo clippy -D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 

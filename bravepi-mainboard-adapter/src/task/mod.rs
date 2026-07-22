@@ -13,6 +13,8 @@ mod serial_source;
 pub use handle::{AdapterHandle, AdapterParts, ShutdownHandle, descriptor, start, start_host};
 
 #[cfg(test)]
+#[path = "../../tests/unit/task/convert_tests.rs"]
 mod convert_test;
 #[cfg(test)]
+#[path = "../../tests/unit/task/event_loop_tests.rs"]
 mod event_loop_test;

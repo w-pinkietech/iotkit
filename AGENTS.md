@@ -62,6 +62,18 @@ vocabulary であり、新規コードは依存を増やさない。
 
 ## Development Workflow
 
+### Source and test layout
+
+- Rustの製品コードを置く`src/`には、`#[cfg(test)] mod tests { ... }`の本体や
+  `*_test.rs` / `*_tests.rs`を置かない。
+- private APIを検証するunit testは`<crate>/tests/unit/**/*_tests.rs`へ置き、製品moduleから
+  `#[cfg(test)] #[path = "..."] mod tests;`で参照する。公開APIのintegration testは通常どおり
+  `<crate>/tests/*.rs`へ置く。
+- test fixtureと共通helperは`tests/support/`または専用testkitへ置き、製品ファイルをtest都合で
+  肥大化させない。この境界は`scripts/check-source-layout`が検査する。
+- Goは言語標準の`*_test.go`を製品ファイルと分離して保ち、巨大になったfileは機能責務ごとに
+  同一package内の複数fileへ分割する。
+
 Superpowers skills は任意の作業支援ツールであり、全変更に一律適用する必須パイプラインではない。
 ユーザーの直接指示と本ファイルのプロジェクト規則は、plugin skill の一般的な trigger や成果物要件に
 優先する。着手前に現実的なリスクへ応じて次の lane を選び、必要な場合だけ skill を使う。
