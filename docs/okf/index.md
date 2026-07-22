@@ -14,8 +14,9 @@ Japanese and English documents at the same relative path, with the same
 `translation_key`, `type`, `status`, and positive `revision`. A content change must
 update both translations and increment their shared revision.
 
-Contract and runbook documents in this bundle are orientation guides. Their links
-identify the detailed contract artifact or operator runbook in the source
-repository; the shortened OKF text does not replace those authorities. Historical
-plans, review transcripts, local machine details, and customer configuration do not
-belong in this bundle. `scripts/check-okf-docs.mjs` enforces this repository profile.
+The documents in this bundle are the complete human-readable current product corpus.
+Versioned machine schemas, exported wire types, shared fixtures, and conformance tests
+remain co-authorities for their contracts; a disagreement is a contract defect rather
+than permission to follow one artifact silently. Historical plans, review transcripts,
+local machine details, and customer configuration do not belong in this bundle.
+`scripts/check-okf-docs.mjs` enforces this repository profile.

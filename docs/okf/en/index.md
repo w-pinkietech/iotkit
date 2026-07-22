@@ -11,11 +11,12 @@
 
 ## Public contracts
 
-* [Ingest contract v1 overview](contracts/ingest-v1.md) - Entry point for delivering observations from a device to an Edge Node.
-* [Edge Node custody contract v1 overview](contracts/edge-node-custody-v1.md) - Entry point for durable delivery from an Edge Node to IoTKit Edge.
-* [Input Adapter contract v1 overview](contracts/input-adapter-v1.md) - Entry point for the boundary that separates sensor integration from the core.
-* [Output Adapter contract v1 overview](contracts/output-adapter-v1.md) - Entry point for transforming generic observations for external applications.
+* [Ingest contract v1](contracts/ingest-v1.md) - Complete contract for delivering observations from a device to an Edge Node.
+* [Edge Node custody contract v1](contracts/edge-node-custody-v1.md) - Complete durable-delivery contract from an Edge Node to IoTKit Edge.
+* [Input Adapter contract v1](contracts/input-adapter-v1.md) - Complete boundary that separates sensor integration from the core.
+* [Output Adapter contract v1](contracts/output-adapter-v1.md) - Complete transformation contract for external applications.
 
 ## Operations
 
-* [Installation and recovery overview](operations/installation-and-recovery.md) - Entry point for installation, checks, certificates, backup, and recovery.
+* [Installation and recovery](operations/installation-and-recovery.md) - Installation, checks, certificates, backup, and recovery.
+* [Storage capacity](operations/storage-capacity.md) - Repeatable SQLite and PostgreSQL capacity regression smoke.

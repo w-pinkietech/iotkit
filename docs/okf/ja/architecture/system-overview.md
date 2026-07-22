@@ -1,34 +1,183 @@
 ---
 type: Architecture
-title: "IoTKitシステム全体像"
-description: "IoTKitの配置、入力経路、保管責任、意味付け、外部出力の流れを説明します。"
+title: "IoTKitシステムArchitecture"
+description: "実行構成、dataとcustodyの流れ、code配置、concurrency、互換性ruleを定義します。"
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 1
+revision: 2
 ---
 
-# IoTKitシステム全体像
+# Architecture
+
+IoTKitは、Rust製`iotkit-edge-node`とoperator CLIの`iotkit-edge-nodectl`、別processのGo製`iotkit-edge`、標準MQTT Brokerで構成します。Edge Nodeは単一SQLite DBを使い、Raspberry Pi上でsystemdにより無人運転します。IoTKit Edgeは導入時に`embedded`（SQLite）または`postgres`（PostgreSQL）の正本profileを一つ選びます。
+
+この文書は、初見の開発者が10分で配置を理解するための地図であり、code配置の正本です。製品境界は[製品モデル](../concepts/product-model.md)、読む順序は[日本語ドキュメント](../index.md)に従います。
+
+## 対象読者
+
+| 読者 | 主に触る場所 | 良い状態 |
+|---|---|---|
+| 導入・運用担当者 | 導入手順、CLI、API、Console、error | 何をどこへ入れ、障害時に次に何を確認するかが分かる |
+| 自作device開発者 | Ingest wire contract | Rustを読まず、少数commandと安定reason codeで接続できる |
+| Adapter開発者 | host API、testkit、driver、既存Adapter | Storageやledgerを知らず、新しいsensor familyを追加できる |
+| Core contributor | `core/*`、binary、test | Crate責務と依存方向が機械検査される |
+| Custody実装者 | Edge Node custody contract | Record family、ack、cursorがversion管理される |
+| Application integrator | Output Adapter contract | Raw custodyへ依存せず、application向けtopic/payloadを受け取れる |
+
+## 実行配置
 
 ```text
-ベンダー固有デバイス -> Input Adapter --+
-契約ネイティブデバイス -> HTTPS ingest -+-> IoTKit Edge Node
-  -> internal MQTT Broker
-  -> IoTKit Edge
-  -> 汎用的な意味を持つObservation
+[1] Device
+  -> [2] IoTKit Edge Node
+  -> standard MQTT Broker
+  -> [3] IoTKit Edge
   -> Output Adapter
-  -> external MQTT Broker
-  -> 外部アプリケーション
+  -> external Broker / application
+
+[4] Fleet layer: 複数edge_idをまたぐ任意の上位層
 ```
 
-Input Adapterはデバイス通信とベンダー固有形式の翻訳を担当します。契約を直接実装できるデバイスは、認証付きHTTPS ingestを使えます。どちらの経路もEdge Nodeの同じcollectorへ入り、receiverが認証済み送信者を決定します。
+このrepositoryは[2]と[3]を提供します。[1]はhardwareと公開ingest contract、[4]は外部systemです。IoTKit EdgeはEdge NodeのRust packageやDBを読みません。共有するのはversioned wire contract、fixture、schema semanticsだけです。
 
-Edge NodeはSQLiteへ観測と配送待ち状態を同一transactionで保存します。activation前の観測はローカルに留まり、後から保管責任ストリームへ再送されません。quarantine中の観測には配送状態を作らず、解除時もactivationとpublication admissionを通ったものだけを配送できます。
+基準deploymentは、Edge NodeをRaspberry Piでnative実行し、BrokerとIoTKit EdgeをLinux host上のDockerで動かします。ただしco-locationは要件ではなく、認証付きMQTT/TLS contractを守れば別hostに分離できます。`scripts/bootstrap-edge.sh`は非secret bindingとoperator提供のTLS materialから、anonymous無効Broker、Edge Node別ACL、owner-only credential、handoffを生成します。Certificate発行、DNS、firewall、VPN、Edge Node変更は行いません。
 
-MQTTのPUBACKはBrokerへのtransport到達だけを示します。IoTKit Edgeがraw recordと連続cursorを選択中の正本DBへcommitし、対応する`accepted-through`を返した時点で保管責任が移り、Edge Nodeは対象データを削除可能にできます。
+IoTKit Edgeの`embedded`と`postgres`は同じ製品契約を満たします。SQLite fileはIoTKit Edge processと同じhostのlocal storageへ置きます。一つのEdgeが両DBへdual-writeしたり、障害時に空の別backendへfallbackしたりしません。Profileは導入時に固定し、SQLiteからPostgreSQLへの変更は停止、整合backup、全identity・cursor・outbox検証を伴うoffline operationです。[導入と復旧](../operations/installation-and-recovery.md)と[容量runbook](../operations/storage-capacity.md)に従います。
 
-IoTKit Edgeは保存済みraw dataを変更せず、別の段階で現場設定に基づく汎用意味へ写像します。Output AdapterはそのObservationから外部アプリケーション固有のtopicとpayloadを作ります。外部出力の障害はraw custodyを止めません。
+## Data flow
 
-IoTKit Edgeの正本DBは、一つの導入につき`embedded`（SQLite）または`postgres`（PostgreSQL）のどちらか一つです。両者は同じ製品契約を実装し、実測した容量範囲内で利用します。二重書込みや障害時の無断fallbackは行いません。
+```text
+Adapter / HTTPS device
+  -> collector
+  -> SQLite readings + publication_log（同一transaction）
+  -> MQTT publisher
+  -> Broker（PUBACKはtransport確認だけ）
+  -> IoTKit Edge raw store + cursor（同一transaction）
+  -> accepted-through
+  -> Edge Node purge eligibility
+```
 
-関連契約: [取り込み](../contracts/ingest-v1.md)、[保管責任](../contracts/edge-node-custody-v1.md)、[Input Adapter](../contracts/input-adapter-v1.md)、[Output Adapter](../contracts/output-adapter-v1.md)。
+Input Adapterは`Envelope`を共有ingest clientへ渡します。認証付きHTTP bindingも同じcollectorへ入ります。送信者が指定する`Envelope.source`ではなく、受信側が作るprincipalが権限を決めます。`AdapterEvent`と`AdapterCommand`はsupervisionとlegacy southbound用の凍結語彙であり、新しいingest pathではありません。
+
+Edge Nodeはledgerとregistryから1 MiB以下のschema-2 complete descriptor snapshotを作り、Edge Node固有`descriptors` topicへQoS 1 retainedで送ります。明示的に永続化した任意`model_id`だけを含め、Adapter instance、物理locator、hardware/provider identifierは越境させません。Descriptor失敗はcustody processingを止めません。
+
+Broker enrollmentはtransport接続許可だけで、activationではありません。Activation前のObservationはlocalに保存し、publication sequenceを与えず送信しません。IoTKit EdgeがdescriptorからEdge Nodeを発見し、admin typed operationでexact ledger epochのrequestを耐久enqueueします。Edge Nodeが検証・耐久適用して境界を固定し、その後のingestだけをoutboxへ入れます。IoTKit Edgeはmatching resultをcommitしてactiveにした後だけ、activation検査、raw保存、cursor更新を同一transactionで行います。
+
+`mqtt_publish_task`が現行production exit bindingです。Broker PUBACKはtransport receiptであり、custody移転ではありません。IoTKit Edgeがraw recordとcursorをcommitし、対応する`accepted-through`をpublishするまでEdge Node outboxを保持します。
+
+### Semanticとapplication export
+
+IoTKit Edgeはcommit済みraw dataから汎用semantic Observationをprojectし、versioned application eventを耐久outboxへenqueueします。MQTT QoS 1 publishがPUBACKを受けた時だけpublishedにします。Projection、enqueue、publish errorはpayloadやcredentialをlogへ出さず、loopを停止しません。
+
+Raw batch transactionと`accepted-through`はsemantic projectionやapplication outputを待ちません。Application停止がEdge Node custodyを拘束しないためです。Semantic mappingとMQTT routeはfuture-onlyで、過去dataを暗黙にbackfillしません。
+
+Output Adapterは汎用Observationとroute設定からexact MQTT publicationを作る決定的in-process transformerです。Broker接続、credential、retry、durable outbox、business masterは所有しません。`yokakit.mqtt.v1`は最初の実装ですが、特権core pathではありません。
+
+## Custody loop
+
+1. **Ingest:** active incarnationでquarantineされておらずpublication admissionを通るObservationは、readingとoutbox rowを同じSQLite transactionで保存する。Activation前はlocalだけ、quarantine中はoutboxなし。
+2. **Publish:** publisherはDB lock内でbatchを作り、lockを外してMQTT送信する。Network round-trip中にDB lockを保持しない。
+3. **Ackとcursor:** IoTKit Edgeがrecordとcursorを正本storeへcommitしてから、exact epoch・publication・batch boundの`accepted-through`を返す。
+4. **Purgeと劣化:** ack済み、custody policy対象外、未解決quarantine、未ack originalの順で扱う。未ack original削除は最後の明示data-loss classであり、`custody_lost` auditとgap annotationが必須。
+
+上流停止時はcursorが止まりbacklogが増えます。Capacityを超えると新規writeは明示失敗し、保存済みdataを黙って捨てません。現行契約は持続的圧力に対して「安全だが滑らかではない」です。`commissioning_smoke`は物理sensorを装わず通常custody pathを検証します。
+
+## Control plane
+
+Edge Nodeはprivate address client向けHTTPS APIを持ちます。State変更は`core/ops`のtyped operation catalogを通し、permission tier、dry-run、無条件auditを持ちます。新しいmutation surfaceは必ずR14 descriptorとし、API/UI/AI/CLIから新しいSQL mutation pathを作りません。
+
+初期ownershipとadmin recoveryはlocal-root maintenanceです。Unownedまたはrecovery中のboxはcontrol API/UIをbindしません。Passphrase resetはcredentialを置換し、operator tokenとsessionをすべて失効します。未認証network setup routeはありません。
+
+IoTKit Edge側の変更もGo application serviceのtyped dispatcherを通します。HTTP、HTML、CLIはthin adapterであり、SQLへ直接writeしません。
+
+## 現行実装
+
+V1候補は、BravePI温度・接点入力、汎用Input Adapter/driver、複数Edge Node、標準Broker、一つのIoTKit Edge、SQLite/PostgreSQL raw store、application-level `accepted-through`、future-only semantic projection、durable Output Adapter outbox、認証付きConsole、範囲付きhistory graph、汎用CSVを提供します。
+
+BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所有し、IoTKitはBravePI Mainboard UART streamから始まります。Broker host certificate componentはbundle検証・atomic install、`lego` ACME更新、MQTT/HTTPS probe、失敗時rollbackを提供します。短命credential enrollment/rotationとarchive gap復元後のretained replayはv1後のhardeningです。
+
+## Crate map
+
+| Crate / path | 責務 |
+|---|---|
+| `core/types` | Protocol非依存domain type。leaf |
+| `iotkit-ingest-contract` | `Envelope`、`Ack`、reason codeのwire contract。Runtime依存はserdeだけ |
+| `core/storage` | SQLite handleとcross-crate migration harness |
+| `core/supervision` | 凍結済み`AdapterEvent` / `AdapterCommand`語彙 |
+| `core/engine` | `AdapterEvent`からdevice stateをprojectするin-memory engine |
+| `core/ledger` | Device ledger、`system_id`、series identity、sighting、epoch、audit |
+| `core/timeseries` | Reading、staging、event time、query |
+| `core/publish` | Activation admission、publication outbox、target、cursor |
+| `core/collector` | Dedup、series解決、quarantine、activation admission、same-transaction enqueue |
+| `core/registry` | Standard catalogとdeployment overrideのmeasurement registry |
+| `core/ops` | Typed operation、permission、auth、dispatch、audit |
+| `iotkit-ingest-client` | Adapterが使うingest contract client |
+| `iotkit-input-adapter-host-api` | Supervision非依存の公式Adapter composition API |
+| `iotkit-input-adapter-testkit` | Conformance assertionとreference Adapter |
+| `iotkit-ingest-http` | Ingest listener、TLS、上限制御。Control APIではない |
+| `iotkit-polling-adapter-runtime` | I2C polling engine。Ingest・mapping・supervision非依存 |
+| `rpi4b-transport` | Raw I2C/GPIO/SPI/PWM I/O。歴史的名前はPi 4B限定を意味しない |
+| `iotkit-sensor-drivers` | Sensor IC定数、identity metadata、datasheet変換 |
+| `bravepi-codec` | BravePI frame codec |
+| `bravepi-mainboard-adapter` | BravePI transport + codec + driverからEnvelopeへの変換 |
+| `rpi-local-adapter` | Direct Linux I2C Adapter、対応model catalog、measurement projection |
+| `bravepi-poc` | BravePI実機PoC用tool。非配布 |
+| `iotkit-edge-node` | Edge Node composition root binary |
+| `iotkit-edge-nodectl` | Edge Node operator CLI |
+| `iotkit-edge/` | Go製IoTKit Edge、raw acceptance、cursor、query、semantic、application export |
+| `iotkit-edge/frontend/src/` | SSR ConsoleのTypeScript browser behavior |
+| `iotkit-edge/openapi/edge-console-v1.yaml` | TypeScript生成元のbrowser JSON contract |
+| `testdata/egress/v1/`, `v2/` | Rust/Go両方がdecodeするcross-language fixture |
+
+## 機械検査するlayer rule
+
+1. Adapterは`core/engine`へ依存しない。
+2. Adapterは`iotkit-ingest-client`以外からdata planeへ到達しない。
+3. `iotkit-ingest-contract`のruntime依存はserdeだけ。
+4. `core/types`と`core/storage`はleaf。`core/*`からAdapter・binaryへ上向き依存しない。
+5. 新workspace crateは`scripts/check-layers`とこのmapへ分類する。
+6. `iotkit-ingest-client`のworkspace依存はcollectorとcontractだけ。
+7. `core/supervision`のnon-dev dependent setを固定する。
+8. Ingest HTTPとcontrol APIを分離する。
+9. IoTKit Edgeはwire contractを使い、Edge Node内部packageやDBを読まない。
+10. Input Adapterからsupervisionへのtransitive到達も検査する。
+
+意図的な例外として、collector所有portをregistryが実装する`core/registry -> core/collector`、in-process bindingのためのingest clientからcollectorへの依存、BravePI subcrateのco-location、cross-crate joinを持つretention/record materializationのbinary配置、identity transactionを共有する単一ledger aggregateがあります。理由を理解せず「修正」しません。
+
+## Code配置rule
+
+| 追加するもの | 配置先 |
+|---|---|
+| Acquisition間で再利用するdatasheet変換 | `iotkit-sensor-drivers` |
+| 同じI2C transport・polling・identity・config形状の新IC | `rpi-local-adapter`のtyped model catalog |
+| Discovery、wire、security、lifecycle、identityが異なるdevice family | 新しいtop-level `*-adapter` crate |
+| Ingest wire変更 | `iotkit-ingest-contract`とconformance test |
+| Edge Node state変更operation | `core/ops` catalogとdispatch |
+| IoTKit Edge state変更operation | Go application-service typed dispatcher |
+| Table / column | 所有crateのmigration slice |
+| Control-plane route | `iotkit-edge-node/src/api/`のthin layer、logicは所有`core/*` |
+| Measurement HTTP binding | `iotkit-ingest-http` |
+| CLI command | `iotkit-edge-nodectl`から`core/*`を呼ぶ |
+| IoTKit Edge acceptance/query/semantic/export | `iotkit-edge/` |
+| Raw bus/pin access | `rpi4b-transport` |
+| Tableを持つ、両binaryで必要、複数責務を持つNode module | `core/<name>`へ昇格 |
+
+## 主要data structure
+
+- Seriesは`UNIQUE(system_id, measurement_key, channel_index, variant)`。`system_id`はledgerだけが発行する不変UUIDv7、`hardware_id`は交換可能な物理address、`user_label`は表示だけです。Hardware交換後も同じ`system_id`で履歴を継続します。
+- `readings.seq`はbox内部の挿入順、`publication_log.pub_seq`は外部配送順です。Quarantine readingは`seq`を持ちますが、解除まで`pub_seq`を持ちません。
+- 外部record identityは`(epoch, pub_seq)`です。Snapshot restoreは新epochを発行し、古いconsumer cursorを黙って信用しません。
+
+## Concurrency
+
+Edge Node process全体で`Arc<Mutex<Connection>>`を一つ使い、全subsystemが`spawn_blocking`経由で直列化します。SQLiteはWAL + `synchronous=FULL`です。Publisherはnetwork round-trip中にDB lockを保持しません。Custody-critical retention purgeは一つのImmediate transactionで、失敗してもpurge済みdataをrollbackさせてはいけないhousekeepingはcommit後の別best-effort transactionで行います。
+
+## Migrationと互換性
+
+`core/storage/migrate.rs`はcrateごとに分割されたversion空間を扱うため、最大versionではなく適用済みsetとの差分でmigrationを実行します。新しいon-disk schemaを古いbinaryで開く場合は`SchemaVersionAhead`で拒否し、downgradeで利用者dataを壊しません。
+
+## 次に読む文書
+
+- [日本語ドキュメント](../index.md)
+- [Edge Node保管責任契約](../contracts/edge-node-custody-v1.md)
+- [Output Adapter契約](../contracts/output-adapter-v1.md)

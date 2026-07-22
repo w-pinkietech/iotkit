@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""check-layers — mechanically enforce the crate layer rules of docs/architecture.md.
+"""check-layers — mechanically enforce the crate layer rules of the OKF architecture document.
 
 Cargo prevents dependency *cycles*, not dependency *direction*: nothing else stops
 an adapter from quietly gaining `iotkit-core-engine` or a direct data-plane
 dependency. This script is the hard gate; the review guides only reference it.
 
-Rules (see docs/architecture.md "Layer rules"):
+Rules (see docs/okf/en/architecture/system-overview.md "Layer rules"):
   1. adapters never depend on core/engine
   2. adapters reach the data plane only through iotkit-ingest-client
   3. iotkit-ingest-contract's runtime deps are serde and nothing else
@@ -133,7 +133,7 @@ def main() -> int:
 
     for name in sorted(workspace - CLASSIFIED):
         errors.append(f"{name}: new crate is not classified in scripts/check-layers — "
-                      f"place it in a layer deliberately, and on the docs/architecture.md "
+                      f"place it in a layer deliberately, and in the OKF architecture "
                       f"map (rule 5)")
 
     for name, pkg in sorted(packages.items()):

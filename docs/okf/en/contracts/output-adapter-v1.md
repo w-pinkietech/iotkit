@@ -1,30 +1,237 @@
 ---
-type: Contract Overview
-title: "IoTKit Output Adapter contract v1 overview"
-description: "Entry point for the contract that transforms a generic Observation into an application-specific MQTT publication."
+type: Contract
+title: "IoTKit Output Adapter contract v1"
+description: "Defines generic observations, route configuration, transformation, MQTT publications, and application bindings."
 language: en
 translation_key: contracts.output-adapter-v1
 status: stable
-revision: 1
+revision: 2
 ---
 
-# IoTKit Output Adapter contract v1 overview
+# IoTKit Output Adapter contract v1
 
-This document is an orientation guide to the boundary. In the same Git revision, `docs/output-adapter-contract.md`, exported Go types, and shared fixtures form the detailed contract artifact set for types, configuration schemas, errors, and bindings.
+Status: Implemented 2026-07-19.
 
-An Output Adapter is an in-process transformer. It takes a generic IoTKit Edge Observation plus versioned route configuration and deterministically returns one MQTT publication for one external application.
+## 1. Purpose
 
-Generic Observation kinds are:
+An Output Adapter is the boundary that converts generic semantic data established by IoTKit Edge into an external-application-specific MQTT contract. YokaKit is the first implementation, but the generic contract knows none of its topics, purpose names, or payload fields.
 
-| kind | value | meaning |
+```text
+stored raw observation
+  -> IoTKit generic semantic rule
+  -> Generic Output Observation
+  -> versioned Output Adapter + route configuration
+  -> exact MQTT publication
+  -> IoTKit Edge durable outbox / delivery layer
+```
+
+A Sensor/Input Adapter brings values from physical equipment into IoTKit. An Output Adapter sends semantic data from IoTKit to an external application. They do not share one adapter lifecycle or configuration shape.
+
+## 2. Contract boundary
+
+An Output Adapter owns:
+
+- a stable Adapter ID and configuration schema version;
+- supported combinations of generic Observation kind and external mode;
+- syntax, value, and compatibility validation for route configuration;
+- deterministic conversion from a Generic Output Observation to MQTT topic and payload;
+- one MQTT publication including QoS and retain.
+
+It does not own:
+
+- semantic-rule evaluation, thresholds, debounce, or accumulation;
+- Broker endpoint, TLS, certificates, credentials, or client ID;
+- MQTT connection, publish, PUBACK, retry, or backoff;
+- SQLite, outbox state, delivery state, or audit;
+- IoTKit Edge accounts, roles, or Console;
+- business masters, processes, production results, or OEE.
+
+The Adapter is a pure in-process transformation. It must not access storage, clock, network, environment, or secrets. The same route configuration and Observation return the same publication byte for byte.
+
+## 3. Adapter identity and capabilities
+
+Every Adapter returns a `Descriptor`:
+
+```go
+type Descriptor struct {
+    ID                  string
+    ConfigSchemaVersion int
+    Modes               []ModeDescriptor
+}
+
+type ModeDescriptor struct {
+    Key     string
+    Accepts []ObservationKind
+}
+```
+
+- `ID` is a stable lowercase ASCII ID identifying the external application, transport, and major contract. Initial IDs are `iotkit.mqtt-json.v1` and `yokakit.mqtt.v1`.
+- `ConfigSchemaVersion` is the exact route configuration JSON version.
+- `Mode.Key` is an external-application purpose, not a generic kind.
+- `Accepts` is the closed set of generic kinds transformable to that mode.
+- Mode keys do not repeat inside one Adapter.
+
+The descriptor may populate Console choices, but `ValidateConfig` remains the final authority for persistence.
+
+## 4. Generic Output Observation
+
+```go
+type Observation struct {
+    ObservationID string
+    SeriesID      string
+    Sequence      uint64
+    Kind          ObservationKind
+    Value         any
+    ObservedAt    int64
+    Reading       *float64
+}
+```
+
+| Kind | Value | Meaning |
 |---|---|---|
-| `numeric` | finite JSON number | calibrated or transformed numeric value |
+| `numeric` | finite JSON number | calibrated or transformed number |
 | `boolean` | JSON boolean | generic on/off state |
 | `cumulative_value` | non-negative JSON integer | accumulated value since an origin |
-| `alarm` | JSON boolean | alarm raised or cleared |
+| `alarm` | JSON boolean | `true` raised, `false` cleared |
 
-`production` and `gantt_chart` are application purposes, not IoTKit core kinds. An adapter does not recreate the input `observation_id`, `series_id`, sequence, timestamp, or value.
+`production`, `onoff`, and `gantt_chart` are application purposes and never become generic kinds. Even if an internal implementation is named `cumulative_counter`, this boundary uses the agreed `cumulative_value`.
 
-The adapter validates configuration schema version and capabilities, then returns exactly one topic, payload, QoS, and retain setting, or a typed error. The same input and configuration produce the same result. IoTKit Edge owns credentials, Broker connectivity, retry, the durable outbox, and semantic evaluation.
+`observation_id` and `series_id` are lowercase canonical UUIDs, `sequence` is monotonic and at least 1, and `observed_at` is Unix epoch milliseconds. The Adapter never recreates identity, time, or value. `reading` is an optional finite number captured during alarm evaluation and is never guessed. Edge Node ledger epoch, publication sequence, IoTKit Edge raw-row ID, and custody cursor do not cross this application boundary.
 
-`iotkit.mqtt-json.v1` emits every generic kind without changing its meaning. `yokakit.mqtt.v1` transforms supported kinds into the YokaKit purpose-bound contract and does not guess an application purpose for unsupported `numeric` observations. Another external service is added as another adapter behind the same boundary.
+## 5. Versioned route configuration
+
+Configuration is one UTF-8 JSON object with required `schema_version`. An Adapter rejects unknown fields, unknown versions, multiple JSON values, and trailing garbage. It never interprets an old configuration through implicit defaults or field guessing.
+
+```go
+type RouteConfig struct {
+    AdapterID          string
+    ConfigSchemaVersion int
+    ConfigJSON         []byte
+}
+```
+
+`ValidateConfig` checks together:
+
+- JSON conforms to the selected Adapter schema;
+- the requested mode exists;
+- source kind and mode are compatible;
+- external identities used in topics have a safe closed syntax;
+- values satisfy the external contract.
+
+Configuration changes create a future-only route revision and never implicitly backfill old Observations. Stopping a route stops new transformation but does not silently delete already durable outbox publications; existing delivery drains normally. The Console treats route active/stopped separately from MQTT pending/stalled.
+
+Route configuration contains only non-secret transformation settings visible to viewers. Broker credentials, CA, private key, and token belong to deployment connection profiles.
+
+## 6. Registry and route persistence
+
+IoTKit Edge registers built-in Adapters in a compile-time registry. V1 has no runtime plugin discovery. Duplicate or invalid descriptors and unknown Adapter IDs are rejected when a route is created.
+
+```text
+route_id
+adapter_id
+config_schema_version
+config_json
+route_revision
+active_from_observation
+stopped_at_observation
+```
+
+The configuration version must match the selected descriptor. Migration converts the old YokaKit-specific route into `adapter_id=yokakit.mqtt.v1` plus versioned JSON while preserving `route_id` and pending outbox rows.
+
+`output_routes` are execution units expanded from the IoTKit-Edge-wide `export_profile` through `profile_rule_binding`, not settings users create per rule. The profile expander derives exact route configuration from IoTKit Edge ID, versioned Adapter ID, semantic rule ID, external purpose, stable logical signal ID, and rule kind. The Adapter does not know the Edge, rule inventory, or future automatic rule additions.
+
+Console/API operations are:
+
+- `GET /api/v1/export-profiles`: list destinations and binding states;
+- `POST /api/v1/export-profiles`: confirm continuous application to current and future rules; generic output begins immediately, while YokaKit prepares topics and IDs;
+- `PUT /api/v1/output-bindings/{binding_id}`: decide a YokaKit boolean purpose and prepare topic/ID;
+- `POST /api/v1/output-bindings/{binding_id}/start`: after external topic registration, start only beyond the saved boundary;
+- `POST /api/v1/export-profiles/{profile_id}/stop`: stop new transformation at a boundary and drain existing delivery;
+- `GET /api/v1/output-bindings/{binding_id}/publication`: inspect the exact topic and payload.
+
+Diagnostic reads remain at `GET /api/v1/output-adapters` and `GET /api/v1/output-routes`. There is no API or Console operation for arbitrary individual routes, topics, source IDs, or signal IDs. Migration stops legacy individual routes and drains only their existing outbox. Handlers never write SQL directly.
+
+## 7. Transformation and errors
+
+`Transform` revalidates Observation and configuration, then returns exactly one `MQTTPublication`. Multiple destinations require multiple routes; v1 has no Adapter-internal fan-out.
+
+Error classes are `ErrInvalidDescriptor`, `ErrInvalidConfiguration`, `ErrInvalidObservation`, `ErrUnsupportedObservation`, and `ErrInvalidPublication`. A pure transform has no temporary network-error class.
+
+On transform failure, IoTKit Edge does not enqueue an invalid message, delete the source Observation, mark it delivered, or guess another mode. It exposes the route as requiring action. It durably stores only a closed `last_transform_error_code` and timestamp: `adapter_unavailable`, `config_version_mismatch`, `invalid_observation`, or `transform_failed`. It does not copy configuration JSON, payload, credentials, or internal error strings into diagnostics.
+
+Failure on one route does not stop another route in the same batch. The failed Observation gets no outbox row. Candidates stay oldest-first per route and interleave one at a time from the route least recently attempted. An errored route retries only its oldest untransformed Observation and stops later candidates in that batch, preventing starvation and ensuring later success cannot hide an older failure. The error clears when that oldest Observation transforms successfully.
+
+The Console shows transformation state separately from MQTT state derived from `pending` and `published_at`. A short pending period is “delivering”; only a route whose oldest publication remains pending for five minutes becomes “possible delivery stall,” with last delivery time and count.
+
+## 8. MQTT publication
+
+```go
+type MQTTPublication struct {
+    Topic   string
+    Payload []byte
+    QoS     byte
+    Retain  bool
+}
+```
+
+V1 requires a non-empty exact UTF-8 topic without NUL, `+`, or `#`; exact QoS 1; and valid JSON payload. The Adapter never publishes. The delivery layer durably stores the publication in SQLite before sending it and retries the same topic/payload until PUBACK. The external contract selects retain; ordinary Observations are normally false, while a separate source-status contract may be true.
+
+Shared fixtures live in `testdata/output/v1/` and fix Adapter ID, versioned configuration, generic Observation, expected topic, QoS, retain, and payload together. `scripts/test-edge-output.sh` verifies generic and YokaKit routes through real Mosquitto, persistence while the Broker is down, and convergence after restart. `scripts/test-yokakit-consumer-contract.sh` feeds the same fixture to the adjacent YokaKit decoder to detect drift.
+
+## 9. IoTKit MQTT JSON v1 binding
+
+`iotkit.mqtt-json.v1` accepts all four kinds without changing their meaning. Users do not enter a topic. `source_id` is `edge_meta.edge_id`; a cryptographically random `signal_id` is issued once for `(versioned adapter_id, semantic rule_id, mode)`. The profile expander generates:
+
+```text
+iotkit/v1/sources/{source_id}/signals/{signal_id}/observations
+```
+
+Stopping and re-adding the same Adapter/rule/mode creates a new future-only binding but reuses `signal_id`. Different modes or Adapter versions receive different IDs. `series_id` identifies the semantic series and `observation_id` identifies each Observation, so binding lifecycle is not encoded by changing the signal ID.
+
+The closed internal execution configuration is:
+
+```json
+{"schema_version":1,"topic":"iotkit/v1/sources/.../signals/.../observations"}
+```
+
+The topic is complete and at most 65,535 bytes. Templates, placeholders, and sensor-name expansion are not supported. Payload is:
+
+```json
+{
+  "schema_version": 1,
+  "observation_id": "00000000-0000-0000-0000-000000000000",
+  "series_id": "00000000-0000-0000-0000-000000000000",
+  "sequence": 1,
+  "observed_at": 1720000000000,
+  "kind": "numeric",
+  "value": 21.5
+}
+```
+
+A finite `reading` is added only when present on an alarm Observation. The Adapter does not reinterpret kind, value, identity, or time. QoS is 1 and retain is false. A company-specific system unable to consume this common contract uses a Connector outside IoTKit; v1 ships no Connector runtime, implementation, or SDK.
+
+## 10. YokaKit MQTT v1 binding
+
+| Generic kind | YokaKit mode |
+|---|---|
+| `cumulative_value` | `production` |
+| `boolean` | `onoff` |
+| `boolean` | `gantt_chart` |
+| `alarm` | `alarm` |
+
+It never guesses a YokaKit purpose for `numeric`, and v1 has no string Observation, so it exposes no `barcode` mode. Configuration has `schema_version=1`, `source_id`, `signal_id`, `kind`, and optional `reason`, and converts to the agreed YokaKit MQTT Purpose-Bound Signal Contract v1.
+
+In YokaKit, the topic is also an input-registration contract. Adding a profile or selecting a boolean purpose prepares but does not publish. The Console/API shows the exact topic and example payload. After an installer registers it in YokaKit, an explicit start operation saves the accepted cursor boundary and moves `prepared -> active`. Earlier Observations are never sent later.
+
+YokaKit source status is a separate source-level publication, not a semantic Observation route. Production bootstrap issues `edge-<32hex>` before DB creation and gives the same ID to IoTKit Edge and Broker ACL. `iotkit-edge-output-<edge-id>` may write only that source's IoTKit/YokaKit observation and status namespaces. Starting an existing DB with a different `--edge-id` is rejected.
+
+## 11. V1 exclusions
+
+- Runtime shared-library plugin ABI or Console-installed binary;
+- external-process, WASM, or gRPC Adapter;
+- Connector implementation, SDK, or runtime;
+- HTTP/Webhook output or per-Adapter Broker credentials;
+- camera streams or numeric disguise for barcodes;
+- calling delivery a durable application receipt when the external contract has no application acknowledgement.
+
+A new external service first implements this in-process contract and adds contract tests. If third-party distribution or another transport becomes necessary, it is designed as a separate major contract covering security, resource limits, upgrade, and isolation.

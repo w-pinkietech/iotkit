@@ -12,9 +12,9 @@ adapters は `core/engine` に依存せず、取り込みは `iotkit-ingest-clie
 ## Authorities
 
 - 文書の入口と正本順序: `docs/README.md`
-- versioned contract: machine-readable schemaまたはexported wire types、共有fixture、
-  conformance test、現行`docs/*-contract.md`を一組として扱う
-- コード配置、crate 地図、層規則: `docs/architecture.md`
+- versioned contract: `docs/okf/{en,ja}/contracts/`の対訳文書、machine-readable schemaまたは
+  exported wire types、共有fixture、conformance testを一組として扱う
+- コード配置、crate 地図、層規則: `docs/okf/ja/architecture/system-overview.md`
 - エージェントのプロジェクト規則と不変条件: `AGENTS.md`
 
 `docs/redesign/`の用語集・責務台帳・決定文書は理由と不変条件、inputs/reviews/移行記録と

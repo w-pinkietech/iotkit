@@ -11,11 +11,12 @@
 
 ## 公開契約
 
-* [取り込み契約 v1の概要](contracts/ingest-v1.md) - デバイスからEdge Nodeへ観測を渡す契約の入口です。
-* [Edge Node保管責任契約 v1の概要](contracts/edge-node-custody-v1.md) - Edge NodeからIoTKit Edgeへの耐久配送契約の入口です。
-* [Input Adapter契約 v1の概要](contracts/input-adapter-v1.md) - センサー統合をコアから分離する境界の入口です。
-* [Output Adapter契約 v1の概要](contracts/output-adapter-v1.md) - 汎用観測を外部アプリ向けに変換する境界の入口です。
+* [取り込み契約 v1](contracts/ingest-v1.md) - デバイスからEdge Nodeへ観測を渡す完全な契約です。
+* [Edge Node保管責任契約 v1](contracts/edge-node-custody-v1.md) - Edge NodeからIoTKit Edgeへの完全な耐久配送契約です。
+* [Input Adapter契約 v1](contracts/input-adapter-v1.md) - センサー統合をコアから分離する完全な境界です。
+* [Output Adapter契約 v1](contracts/output-adapter-v1.md) - 外部application向けの完全な変換契約です。
 
 ## 運用
 
-* [導入と復旧の概要](operations/installation-and-recovery.md) - 導入、日常確認、証明書、バックアップ、復旧の入口です。
+* [導入と復旧](operations/installation-and-recovery.md) - 導入、日常確認、証明書、バックアップ、復旧の手順です。
+* [Storage容量](operations/storage-capacity.md) - SQLiteとPostgreSQLの再現可能な容量回帰smokeです。

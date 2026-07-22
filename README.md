@@ -55,8 +55,8 @@ such as YokaKit own products, processes, OEE, alarms, business UI, and notificat
 - **Durable ingest** with crash consistency (power loss is a normal event, not an error).
 - **Series identity** that survives device rename and hardware swap (history isn't cut).
 - **Measurement registry** (standard vocabulary + deployment overrides) and row/series quarantine for unknown or out-of-range data.
-- **Edge Node custody contract:** MQTT delivery through a standard Broker to IoTKit Edge, at-least-once, with a per-target cursor; IoTKit Edge's durable `accepted-through` is what authorizes retention to purge. Unacknowledged originals are protected even when old. See [docs/exit-contract.md](docs/exit-contract.md).
-- **Authenticated HTTP ingest:** a separate, default-off local-network TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See [docs/ingest-contract.md](docs/ingest-contract.md).
+- **Edge Node custody contract:** MQTT delivery through a standard Broker to IoTKit Edge, at-least-once, with a per-target cursor; IoTKit Edge's durable `accepted-through` is what authorizes retention to purge. Unacknowledged originals are protected even when old. See the [Edge Node custody contract](docs/okf/en/contracts/edge-node-custody-v1.md).
+- **Authenticated HTTP ingest:** a separate, default-off local-network TLS listener accepts JSON envelopes with per-device bearer credentials, bounded admission, positional item results, duplicate retry, and side-effect-free validation. See the [authenticated ingest contract](docs/okf/en/contracts/ingest-v1.md).
 - **Operator CLI** (`iotkit-edge-nodectl`) for the device ledger, measurement registry, snapshots/restore, and the IoTKit Edge target.
 - **IoTKit Edge operations** for bounded history/CSV, storage diagnostics, and encrypted backup/new-path restore.
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
@@ -140,7 +140,7 @@ docker compose --env-file "$install_root/edge.env" \
 The profile is pinned in the installation directory's `storage-profile.json`.
 IoTKit Edge stops if startup flags disagree with it. It neither falls back to
 SQLite on connection failure nor dual-writes both databases. See
-[IoTKit Edge installation and recovery](docs/edge-operations.md) for the offline
+[IoTKit Edge installation and recovery](docs/okf/en/operations/installation-and-recovery.md) for the offline
 SQLite-to-PostgreSQL migration procedure.
 
 The generator creates an anonymous-disabled Broker configuration, an Edge Node-specific ACL and hashed
@@ -172,7 +172,7 @@ and `system_admin` can additionally issue accounts.
 
 Run the commissioning smoke commands above after startup. A later bootstrap
 invocation refuses to replace its output directory. See
-[IoTKit Edge installation and recovery](docs/edge-operations.md) for diagnosis,
+[IoTKit Edge installation and recovery](docs/okf/en/operations/installation-and-recovery.md) for diagnosis,
 password recovery, certificate renewal, and rollback behavior.
 
 ### IoTKit Edge semantics and application output
@@ -251,7 +251,7 @@ PostgreSQL, and Broker failures.
 | `iotkit-edge` | IoTKit Edge MQTT consumer, durable raw/semantic store, cursor manager, application exporter, authenticated SSR Console, and query/configuration CLI |
 
 The full crate map, layer rules, and "where does new code go" placement table
-live in [docs/architecture.md](docs/architecture.md).
+live in the [architecture documentation](docs/okf/en/architecture/system-overview.md).
 
 Development can be resumed from a single clone, including in Codex Cloud. See
 [docs/cloud-development.md](docs/cloud-development.md) for the restart order and
@@ -260,9 +260,9 @@ context-authority rules.
 ## Architecture & contracts
 
 - [Documentation index](docs/README.md) — the reading path and source-of-truth order.
-- [Product model](docs/product-model.md) — what IoTKit owns, its component boundaries, and what stays in external applications.
-- [Architecture](docs/architecture.md) — crate map, placement rules, data flow, custody, and concurrency.
-- [Contracts](docs/README.md#where-to-start) — device ingest, Input Adapter, Edge transfer, and Output Adapter boundaries.
+- [Product model](docs/okf/en/concepts/product-model.md) — what IoTKit owns, its component boundaries, and what stays in external applications.
+- [Architecture](docs/okf/en/architecture/system-overview.md) — crate map, placement rules, data flow, custody, and concurrency.
+- [Contracts](docs/okf/en/index.md#contracts) — device ingest, Input Adapter, Edge transfer, and Output Adapter boundaries.
 
 Historical redesign decisions and completed implementation plans remain in the
 repository for rationale and traceability, but they do not override current
