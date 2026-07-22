@@ -9,8 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 IGNORED_PARTS = {".git", ".worktrees", "target"}
 INLINE_TEST_MODULE = re.compile(
-    r"#\[cfg\(test\)\]\s*(?:#\[[^\]]+\]\s*)*mod\s+[A-Za-z0-9_]+\s*\{",
-    re.MULTILINE,
+    r"#\[cfg\(test\)\](?:(?:\s|//[^\n]*\n|/\*.*?\*/)*#\[[^\]]+\])*"
+    r"(?:\s|//[^\n]*\n|/\*.*?\*/)*mod\s+[A-Za-z0-9_]+\s*\{",
+    re.MULTILINE | re.DOTALL,
 )
 
 
