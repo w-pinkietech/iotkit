@@ -1,5 +1,7 @@
 # IoTKit
 
+English | [Japanese](README.ja.md)
+
 An on-premises-first, data-integrity-focused IoT collection platform. Add a focused
 sensor adapter to IoTKit Edge Node and IoTKit supplies durable collection, retry, and an
 explicit transfer of storage responsibility to IoTKit Edge: data is not purge-eligible
@@ -13,7 +15,7 @@ until IoTKit Edge has durably stored it.
 > [Roadmap](#roadmap).
 
 Current product knowledge is also available as an OKF v0.1 bundle in
-[日本語](docs/okf/ja/index.md) and [English](docs/okf/en/index.md).
+[Japanese](docs/okf/ja/index.md) and [English](docs/okf/en/index.md).
 
 ## Why
 
@@ -124,9 +126,10 @@ docker compose --env-file "$install_root/edge.env" \
   -f deploy/compose.edge.yaml up --build --detach
 ```
 
-上記は小規模・standalone向けの`embedded` profile（SQLite）である。同じConsoleとMQTT契約を
-維持したまま、常設運用向けの管理対象PostgreSQL profileを選ぶ場合はbootstrapへ
-`--storage-profile postgres`を追加し、起動時にもoverlayを追加する。
+The example above uses the `embedded` profile (SQLite) for smaller, standalone
+deployments. To select the managed PostgreSQL profile for a larger permanent
+deployment while keeping the same Console and MQTT contracts, add
+`--storage-profile postgres` during bootstrap and include the overlay at startup.
 
 ```bash
 docker compose --env-file "$install_root/edge.env" \
@@ -134,9 +137,11 @@ docker compose --env-file "$install_root/edge.env" \
   up --build --detach
 ```
 
-profileは導入directoryの`storage-profile.json`へ固定され、起動flagと異なる場合は停止する。
-接続失敗時にSQLiteへfallbackせず、両DBへの二重書込みもしない。SQLiteからの切替手順は
-[IoTKit Edge installation and recovery](docs/edge-operations.md)を参照する。
+The profile is pinned in the installation directory's `storage-profile.json`.
+IoTKit Edge stops if startup flags disagree with it. It neither falls back to
+SQLite on connection failure nor dual-writes both databases. See
+[IoTKit Edge installation and recovery](docs/edge-operations.md) for the offline
+SQLite-to-PostgreSQL migration procedure.
 
 The generator creates an anonymous-disabled Broker configuration, an Edge Node-specific ACL and hashed
 password database, the IoTKit Edge secret, and `edge-handoff/`. Securely transfer the three handoff files
@@ -156,7 +161,7 @@ docker compose --env-file "$install_root/edge.env" -f deploy/compose.edge.yaml r
   --db /data/edge.db \
   --postgres-config "$(sed -n 's/^IOTKIT_POSTGRES_CONFIG=//p' "$install_root/edge.env")" \
   --storage-metadata /run/iotkit/storage-profile.json --login-id admin \
-  --display-name 'システム管理者' --password-file /run/iotkit/admin-password
+  --display-name 'System Administrator' --password-file /run/iotkit/admin-password
 rm "$install_root/secrets/initial-admin-password"
 ```
 
@@ -172,13 +177,13 @@ password recovery, certificate renewal, and rollback behavior.
 
 ### IoTKit Edge semantics and application output
 
-Use the Console's **信号** screen to set correction, threshold/hysteresis, boolean
+Use the Console's **Signals** screen to set correction, threshold/hysteresis, boolean
 state, cumulative-value counting, or alarm behavior. A five-minute live preview
 uses only observations received after preview start and never writes a mapping or
 output event. Saving starts a new future-only revision; old raw records are not
 silently recalculated.
 
-Use **出力** to bind a generic semantic definition to a YokaKit `source-id`,
+Use **Output** to bind a generic semantic definition to a YokaKit `source-id`,
 `signal-id`, and purpose (`production`, `onoff`, `gantt_chart`, or `alarm`).
 IoTKit's cumulative value becomes YokaKit `kind=production` only inside this
 adapter. Output is QoS 1 and remains in the IoTKit Edge outbox until broker PUBACK.
@@ -200,37 +205,39 @@ cargo test  --workspace      # ~530 tests; 2 hardware-only tests are #[ignore]d
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 
-# Docker Mosquittoによる外部Output Adapter/PUBACK/再接続ゲート
+# External Output Adapter, PUBACK, and reconnect gate with Docker Mosquitto
 scripts/test-edge-output.sh
 IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
 
-# SQLite/PostgreSQL共通契約と短時間capacity回帰smoke
+# Shared SQLite/PostgreSQL contract and short capacity regression smoke
 scripts/test-edge-postgres.sh
 scripts/test-edge-capacity.sh
 
-# OpenAPIから生成したConsole型、TypeScript、埋め込みJavaScriptの同期
+# Generated Console types, TypeScript, and embedded JavaScript synchronization
 npm ci --prefix iotkit-edge/frontend
 scripts/test-edge-console-frontend.sh
 
-# Chromiumによるlogin、Edge Node登録、センサー設定、意味付け、外部出力、権限導線
+# Chromium journey: login, Edge Node registration, sensors, semantics, output, and roles
 scripts/test-edge-console-e2e.sh
 IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-console-e2e.sh
 
-# 隣接するYokaKit checkoutとのconsumer contractゲート
+# Consumer contract gate against an adjacent YokaKit checkout
 scripts/test-yokakit-consumer-contract.sh
 
-# v1のhost統合ゲート（新しいreport directoryを指定する）
+# v1 host integration gate (provide a new report directory)
 scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 ```
 
-IoTKit ConsoleはGoのserver-side renderingを維持し、ブラウザ動作だけを
-`iotkit-edge/frontend/src/`のTypeScriptで実装する。JSON APIの型は
-`iotkit-edge/openapi/edge-console-v1.yaml`から生成し、配布物にはesbuild済みの
-`static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要である。
+The IoTKit Console keeps server-side rendering in Go and implements only browser
+behavior in TypeScript under `iotkit-edge/frontend/src/`. JSON API types are
+generated from `iotkit-edge/openapi/edge-console-v1.yaml`. The distribution embeds
+the esbuild output as `static/console.js`, so the IoTKit Edge runtime does not
+require Node.js.
 
 CI checks the crate layer rules, Rust/Go unit tests, generated Console assets, and the embedded
-browser journey on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Docker、
-PostgreSQL、Broker障害を含む統合検証は`test-edge-host-release-gate.sh`でrelease前に一度実行する。
+browser journey on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Run
+`test-edge-host-release-gate.sh` once before release for integration coverage including Docker,
+PostgreSQL, and Broker failures.
 `scripts/verify.sh` runs the fmt / layer-rule / test / clippy checks locally.
 
 ## Repository layout
