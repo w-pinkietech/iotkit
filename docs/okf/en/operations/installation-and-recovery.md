@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit Edge installation and recovery
@@ -38,6 +38,12 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
    the startup profile disagree.
 5. Create the first `system_admin` with `iotkit-edge account bootstrap` and an
    owner-only password file. Delete that file afterwards.
+   After the first login, the status page shows **Setup for first use** to settings
+   administrators and system administrators. It derives progress from existing durable state and
+   points to only the first incomplete action: register a collection node, name and locate the
+   device, confirm sensor type and unit, then define how to use the value. Viewers receive no
+   mutation guidance, and the panel disappears when all four items are complete. External output
+   is an optional next step because not every deployment needs it.
 6. Transfer each generated Edge Node handoff through a protected channel. This
    Broker enrollment only gives the Edge Node its MQTT connection and exact-topic
    permissions; it does not authorize IoTKit Edge raw-data custody.

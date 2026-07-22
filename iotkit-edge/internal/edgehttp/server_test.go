@@ -3230,6 +3230,61 @@ func TestStatusHighlightsNewDeviceWithoutCallingItBroken(t *testing.T) {
 	}
 }
 
+func TestStatusShowsAdministratorsOneOnboardingActionAtATime(t *testing.T) {
+	server, archive := newTestServerFixture(t, false, edgeapp.AccountRoleAdmin)
+	seedSetupDevice(t, archive)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/status", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	for _, want := range []string{
+		"利用開始までの設定",
+		"1 / 4",
+		"次に行うこと",
+		"デバイス名と設置場所を設定",
+		"外部アプリへ送る場合は、利用開始後に",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("status missing %q: %s", want, body)
+		}
+	}
+	if strings.Count(body, `class="onboarding-step current"`) != 1 {
+		t.Fatalf("status must emphasize exactly one next step: %s", body)
+	}
+}
+
+func TestFreshStatusDoesNotClaimSensorDataIsBeingReceived(t *testing.T) {
+	server, _ := newTestServerFixture(t, false, edgeapp.AccountRoleAdmin)
+	cookie, _ := loginTestAccount(t, server)
+	request := httptest.NewRequest(http.MethodGet, "/status", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	body := response.Body.String()
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, body)
+	}
+	for _, want := range []string{
+		"収集ノードがまだ登録されていません",
+		"収集ノードを登録",
+		"0 / 4",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("fresh status missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "センサーデータを受信しています") {
+		t.Fatalf("fresh status claims data is being received: %s", body)
+	}
+}
+
 func TestDeviceStopsBeingRegistrationPendingAfterDeviceProfileSave(t *testing.T) {
 	server, archive := newTestServerFixture(t, false, edgeapp.AccountRoleAdmin)
 	seedSetupDevice(t, archive)

@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -25,6 +25,10 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 3. 最初のEdge Nodeについて`scripts/bootstrap-edge.sh`を実行する。Bootstrapは起動前にIoTKit Edge source IDを割り当て、`iotkit-edge-output-<edge-id>`のwrite ACLをそのEdgeのIoTKit/YokaKit Observation/status namespaceだけに限定する。追加legacy topicだけ`--edge-publish-topic`を繰り返す。
 4. `embedded`は`deploy/compose.edge.yaml`、`postgres`はさらに`deploy/compose.edge-postgres.yaml`を重ねて起動する。Profile metadataと起動profileが違えば停止する。
 5. Owner-only password fileから`iotkit-edge account bootstrap`を実行し、最初の`system_admin`を作る。使用後fileを削除する。
+   初回ログイン後、設定管理者とsystem adminの概要画面には**利用開始までの設定**が表示される。これは
+   収集ノード登録、デバイス名・設置場所、センサー種類・単位、値の使い方の順に、既存の耐久状態から
+   未完了の最初の1操作だけを案内する。閲覧担当者には変更導線を表示せず、4項目が完了すると案内は消える。
+   外部出力はdeploymentによって不要なため完了条件に含めず、必要な場合の次工程として案内する。
 6. 生成したEdge Node handoffを保護channelで転送する。Broker enrollmentはMQTT接続とexact topic権限だけで、raw custodyを許可しない。
 7. Edge Nodeを起動し、Consoleの**機器管理 / 収集ノード**へ**未登録**として現れるまで待つ。期待する名称・診断identity・data generationを確認して**収集ノードを登録**する。Settings adminまたはsystem adminだけが実行可能。
 8. **登録済み**を待ちcommissioning smokeを実行する。Durable acceptance後にsensor表示と意味を設定する。

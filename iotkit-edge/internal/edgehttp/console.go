@@ -74,6 +74,7 @@ type consoleData struct {
 	AttentionCount          int
 	UnconfiguredCount       int
 	SetupPendingCount       int
+	SetupDeviceCount        int
 	EdgeNodeCount           int
 	EdgeNodePendingCount    int
 	SemanticRuleCount       int
@@ -86,6 +87,7 @@ type consoleData struct {
 	OutputStatusLabel       string
 	OutputStatusDetail      string
 	OutputStatusSummary     string
+	Onboarding              consoleOnboardingView
 }
 
 type certificateStatus struct {
@@ -752,6 +754,7 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 		)
 		if err == nil {
 			for _, device := range setupDevices {
+				data.SetupDeviceCount++
 				if device.State == edgeapp.SetupWaitingForDevice {
 					data.SetupPendingCount++
 				}
@@ -762,6 +765,16 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 				}
 			}
 		}
+	}
+	if err == nil && page == "status" && data.IsAdmin {
+		data.Onboarding = newConsoleOnboardingView(consoleOnboardingFacts{
+			ActiveEdgeNodes:     data.EdgeNodeCount,
+			DeviceCount:         data.SetupDeviceCount,
+			PendingDevices:      data.SetupPendingCount,
+			SignalCount:         len(data.SignalRows),
+			UnconfiguredSignals: data.UnconfiguredCount,
+			SemanticRules:       data.SemanticRuleCount,
+		})
 	}
 	if err != nil {
 		http.Error(response, "画面の情報を取得できません", http.StatusInternalServerError)

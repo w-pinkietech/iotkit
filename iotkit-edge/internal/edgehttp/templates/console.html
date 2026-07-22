@@ -63,13 +63,40 @@
       {{if .PageError}}<div class="feedback error-feedback{{if .FeedbackTarget}} feedback-toast{{end}}" role="alert"><span aria-hidden="true">!</span>{{.PageError}}</div>{{end}}
 
       {{if eq .Page "status"}}
-      <section class="health-banner {{if or (gt .AttentionCount 0) (gt .SetupPendingCount 0) (gt .EdgeNodePendingCount 0)}}attention{{else}}healthy{{end}}" aria-label="システムの状態">
-        <span class="health-icon" aria-hidden="true">{{if or (gt .AttentionCount 0) (gt .SetupPendingCount 0) (gt .EdgeNodePendingCount 0)}}!{{else}}✓{{end}}</span>
+      <section class="health-banner {{if or (eq .EdgeNodeCount 0) (gt .AttentionCount 0) (gt .SetupPendingCount 0) (gt .EdgeNodePendingCount 0)}}attention{{else}}healthy{{end}}" aria-label="システムの状態">
+        <span class="health-icon" aria-hidden="true">{{if or (eq .EdgeNodeCount 0) (gt .AttentionCount 0) (gt .SetupPendingCount 0) (gt .EdgeNodePendingCount 0)}}!{{else}}✓{{end}}</span>
         <div>
-          <strong>{{if gt .EdgeNodePendingCount 0}}登録が必要な収集ノードがあります{{else if gt .SetupPendingCount 0}}新しいデバイスが見つかりました{{else if gt .UnconfiguredCount 0}}設定が必要なセンサーがあります{{else if gt .AttentionCount 0}}確認が必要な項目があります{{else}}センサーデータを受信しています{{end}}</strong>
-          <p>{{if gt .EdgeNodePendingCount 0}}<a href="/equipment">機器管理</a>で収集ノードを確認し、登録を完了してください。{{else if gt .SetupPendingCount 0}}値は受信できています。<a href="/equipment">機器管理</a>で画面に表示する名前と設置場所を設定してください。{{else if gt .UnconfiguredCount 0}}<a href="/equipment">機器管理</a>でセンサーの種類・単位を確認してください。{{else if gt .AttentionCount 0}}停止または未受信のセンサーを下の一覧で確認してください。{{else}}IoTKit Edgeとセンサーの間で大きな問題は見つかっていません。{{end}}</p>
+          <strong>{{if gt .EdgeNodePendingCount 0}}登録が必要な収集ノードがあります{{else if eq .EdgeNodeCount 0}}収集ノードがまだ登録されていません{{else if gt .SetupPendingCount 0}}新しいデバイスが見つかりました{{else if gt .UnconfiguredCount 0}}設定が必要なセンサーがあります{{else if gt .AttentionCount 0}}確認が必要な項目があります{{else}}センサーデータを受信しています{{end}}</strong>
+          <p>{{if gt .EdgeNodePendingCount 0}}<a href="/equipment">機器管理</a>で収集ノードを確認し、登録を完了してください。{{else if eq .EdgeNodeCount 0}}{{if .IsAdmin}}収集ノードを起動し、<a href="/equipment">機器管理</a>で接続元を確認して登録してください。{{else}}設定管理者へ収集ノードの登録を依頼してください。{{end}}{{else if gt .SetupPendingCount 0}}値は受信できています。<a href="/equipment">機器管理</a>で画面に表示する名前と設置場所を設定してください。{{else if gt .UnconfiguredCount 0}}<a href="/equipment">機器管理</a>でセンサーの種類・単位を確認してください。{{else if gt .AttentionCount 0}}停止または未受信のセンサーを下の一覧で確認してください。{{else}}IoTKit Edgeとセンサーの間で大きな問題は見つかっていません。{{end}}</p>
         </div>
       </section>
+
+      {{if .Onboarding.Show}}
+      <section class="content-section onboarding" aria-labelledby="onboarding-title">
+        <div class="onboarding-heading">
+          <div>
+            <p class="section-kicker">GETTING STARTED</p>
+            <h2 id="onboarding-title">利用開始までの設定</h2>
+            <p>上から順に進めれば、受信した値を現場で使える状態にできます。</p>
+          </div>
+          <strong><span>{{.Onboarding.CompleteCount}} / {{.Onboarding.TotalCount}}</span> 完了</strong>
+        </div>
+        <ol class="onboarding-steps">
+          {{range .Onboarding.Steps}}
+          <li class="onboarding-step{{if .Complete}} complete{{else if .Current}} current{{end}}">
+            <span class="onboarding-number" aria-hidden="true">{{if .Complete}}✓{{else}}{{.Number}}{{end}}</span>
+            <div><strong>{{.Title}}</strong><small>{{.Description}}</small></div>
+            {{if .Current}}<span class="onboarding-state">次</span>{{else if .Complete}}<span class="onboarding-state">完了</span>{{end}}
+          </li>
+          {{end}}
+        </ol>
+        <footer class="onboarding-next">
+          <div><span>次に行うこと</span><strong>{{.Onboarding.NextTitle}}</strong></div>
+          <a class="button" href="{{.Onboarding.NextHref}}">この設定へ進む</a>
+        </footer>
+        <p class="onboarding-optional">外部アプリへ送る場合は、利用開始後に<a href="/output">外部出力</a>を追加できます。</p>
+      </section>
+      {{end}}
 
       <section class="metric-grid" aria-label="集計">
         <article class="metric-card"><span class="metric-label">受信中</span><strong>{{.ReceivingCount}}</strong><small>件のセンサー</small></article>

@@ -61,6 +61,76 @@ type consoleSignalView struct {
 	FlowIneligibleCount  int
 }
 
+type consoleOnboardingFacts struct {
+	ActiveEdgeNodes     int
+	DeviceCount         int
+	PendingDevices      int
+	SignalCount         int
+	UnconfiguredSignals int
+	SemanticRules       int
+}
+
+type consoleOnboardingStep struct {
+	Number      int
+	Title       string
+	Description string
+	Href        string
+	Complete    bool
+	Current     bool
+}
+
+type consoleOnboardingView struct {
+	Show          bool
+	CompleteCount int
+	TotalCount    int
+	NextTitle     string
+	NextHref      string
+	Steps         []consoleOnboardingStep
+}
+
+func newConsoleOnboardingView(facts consoleOnboardingFacts) consoleOnboardingView {
+	steps := []consoleOnboardingStep{
+		{
+			Number: 1, Title: "収集ノードを登録",
+			Description: "接続元を確認し、IoTKit Edgeへのデータ送信を許可します。",
+			Href:        "/equipment",
+			Complete:    facts.ActiveEdgeNodes > 0,
+		},
+		{
+			Number: 2, Title: "デバイス名と設置場所を設定",
+			Description: "現場で見分けられる名前と、設置されている場所を登録します。",
+			Href:        "/equipment",
+			Complete:    facts.DeviceCount > 0 && facts.PendingDevices == 0,
+		},
+		{
+			Number: 3, Title: "センサーの種類と単位を確認",
+			Description: "受信値を、温度・接点入力など人が分かる表示にします。",
+			Href:        "/equipment",
+			Complete:    facts.SignalCount > 0 && facts.UnconfiguredSignals == 0,
+		},
+		{
+			Number: 4, Title: "センサーの値の使い方を設定",
+			Description: "通常値、累積値、状態、アラームから必要な使い方を作ります。",
+			Href:        "/sensors",
+			Complete:    facts.SemanticRules > 0,
+		},
+	}
+	view := consoleOnboardingView{Show: true, TotalCount: len(steps), Steps: steps}
+	for index := range view.Steps {
+		if view.Steps[index].Complete {
+			view.CompleteCount++
+			continue
+		}
+		if view.NextTitle == "" {
+			view.Steps[index].Current = true
+			view.NextTitle = view.Steps[index].Title
+			view.NextHref = view.Steps[index].Href
+		}
+	}
+	view.Show = view.CompleteCount < view.TotalCount
+	return view
+}
+
 type consoleSemanticRuleView struct {
 	semantics.Rule
 	KindLabel           string
