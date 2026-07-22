@@ -12,6 +12,9 @@ until IoTKit Edge has durably stored it.
 > still change. See
 > [Roadmap](#roadmap).
 
+Current product knowledge is also available as an OKF v0.1 bundle in
+[日本語](docs/okf/ja/index.md) and [English](docs/okf/en/index.md).
+
 ## Why
 
 Industrial sites need to connect varied sensors without rebuilding reliability for

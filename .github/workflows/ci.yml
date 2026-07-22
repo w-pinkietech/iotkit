@@ -19,6 +19,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: IoTKit OKF documentation profile
+        env:
+          OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-okf-docs.mjs
 
       # serialport (via rpi4b-transport → adapters → iotkit-edge-node) pulls
       # libudev-sys, whose build script needs libudev's pkg-config file. It's

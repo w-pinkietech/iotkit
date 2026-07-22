@@ -3,6 +3,10 @@
 This is the entry point for current IoTKit product documentation. Start with the
 [product model](product-model.md), then follow the document for your role.
 
+The curated public knowledge bundle is available in
+[日本語](okf/ja/index.md) and [English](okf/en/index.md). It follows Open Knowledge Format v0.1
+and intentionally excludes historical design and process records.
+
 ## Product path
 
 ```text
@@ -84,7 +88,8 @@ all HTTP routes until that coverage is completed.
 - [`cloud-development.md`](cloud-development.md) is an optional internal automation
   guide, not a product contract or an installation requirement.
 
-The current repository is not an OKF bundle: historical material intentionally
-remains under `docs/`. The clean public snapshot will expose only a small mirrored
-Japanese/English current corpus as OKF instead of classifying or translating this
-entire archive.
+The whole `docs/` tree is not an OKF bundle: historical material intentionally
+remains here. The isolated [`docs/okf/`](okf/index.md) bundle contains only a small,
+mirrored Japanese/English current corpus. A clean public snapshot can publish it
+alongside the detailed contract artifacts without classifying or translating this
+archive.
