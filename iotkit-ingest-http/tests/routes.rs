@@ -4,7 +4,7 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::ManualMonotonicClock;
+use crate::admission::test_support::ManualMonotonicClock;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;

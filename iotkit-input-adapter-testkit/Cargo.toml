@@ -12,5 +12,5 @@ iotkit-input-adapter-host-api = { path = "../iotkit-input-adapter-host-api" }
 iotkit-ingest-contract = { path = "../iotkit-ingest-contract" }
 
 [dev-dependencies]
-iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["inproc"] }
+iotkit-ingest-client = { path = "../iotkit-ingest-client", features = ["test-util"] }
 tokio = { version = "1", features = ["rt", "macros", "sync"] }

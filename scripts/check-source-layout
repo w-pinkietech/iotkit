@@ -10,9 +10,34 @@ ROOT = Path(__file__).resolve().parent.parent
 IGNORED_PARTS = {".git", ".worktrees", "target"}
 INLINE_TEST_MODULE = re.compile(
     r"#\[cfg\(test\)\](?:(?:\s|//[^\n]*\n|/\*.*?\*/)*#\[[^\]]+\])*"
-    r"(?:\s|//[^\n]*\n|/\*.*?\*/)*mod\s+[A-Za-z0-9_]+\s*\{",
+    r"(?:\s|//[^\n]*\n|/\*.*?\*/)*(?:pub(?:\([^)]*\))?\s+)?"
+    r"mod\s+[A-Za-z0-9_]+\s*\{",
     re.MULTILINE | re.DOTALL,
 )
+EXTERNAL_TEST_MODULE = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z0-9_]+\s*;\s*$"
+)
+TEST_MODULE_IMPORT = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?use\s+[A-Za-z0-9_:]+(?:::\{[^}]+\})?\s*;\s*$"
+)
+
+
+def test_only_items(source: str) -> list[tuple[int, str]]:
+    """Return cfg(test) targets other than attributes/comments that decorate them."""
+    lines = source.splitlines()
+    items: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        if "#[cfg(" not in line or not re.search(r"\btest\b", line) or "not(test)" in line:
+            continue
+        target = index + 1
+        while target < len(lines):
+            stripped = lines[target].strip()
+            if not stripped or stripped.startswith("//") or stripped.startswith("#["):
+                target += 1
+                continue
+            items.append((index + 1, stripped))
+            break
+    return items
 
 
 def main() -> int:
@@ -31,19 +56,39 @@ def main() -> int:
         source = path.read_text(encoding="utf-8")
         if INLINE_TEST_MODULE.search(source):
             errors.append(f"{relative}: inline #[cfg(test)] module body is not allowed")
+        for line, item in test_only_items(source):
+            if EXTERNAL_TEST_MODULE.fullmatch(item) or TEST_MODULE_IMPORT.fullmatch(item):
+                continue
+            errors.append(
+                f"{relative}:{line}: test-only implementation is inside product source"
+            )
+
+    frontend_roots = [ROOT / "frontend" / "src"]
+    frontend_roots.extend(
+        component / "frontend" / "src"
+        for component in ROOT.iterdir()
+        if component.is_dir() and component.name not in IGNORED_PARTS
+    )
+    for frontend_root in frontend_roots:
+        if not frontend_root.is_dir():
+            continue
+        for path in frontend_root.rglob("*"):
+            if path.is_file() and re.search(r"\.(?:test|spec)\.[^.]+$", path.name):
+                relative = path.relative_to(ROOT)
+                errors.append(f"{relative}: frontend test file is inside product src directory")
 
     if errors:
         print("check-source-layout: FAIL", file=sys.stderr)
         for error in errors:
             print(f"  - {error}", file=sys.stderr)
         print(
-            "Move private unit tests to <crate>/tests/unit/**/*_tests.rs and link "
+            "Move private unit tests and support implementations outside src, then link "
             "them with #[cfg(test)] #[path = \"...\"] mod tests;.",
             file=sys.stderr,
         )
         return 1
 
-    print("check-source-layout: OK (Rust test bodies are outside product src directories)")
+    print("check-source-layout: OK (test implementations are outside product src directories)")
     return 0
 
 

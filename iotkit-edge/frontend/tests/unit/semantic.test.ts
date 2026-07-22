@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { initializeSemanticForms } from "./semantic";
+import { initializeSemanticForms } from "../../src/semantic";
 
 afterEach(() => {
   document.body.replaceChildren();

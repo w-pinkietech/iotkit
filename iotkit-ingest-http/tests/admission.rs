@@ -1,6 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::{AdmissionConfig, AdmissionController, ManualMonotonicClock};
+use crate::admission::test_support::ManualMonotonicClock;
+use crate::{AdmissionConfig, AdmissionController};
 
 #[test]
 fn pre_auth_source_state_is_bounded_and_restart_is_conservative() {

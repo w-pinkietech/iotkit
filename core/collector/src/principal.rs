@@ -2,6 +2,10 @@ use std::collections::HashSet;
 
 use iotkit_core_ledger::SystemId;
 
+#[cfg(test)]
+#[path = "../tests/support/principal_support.rs"]
+mod test_support;
+
 /// The receiver-authenticated actor class for an ingest request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngestActorKind {
@@ -110,28 +114,6 @@ impl IngestPrincipal {
             auth_epoch: Some(proof.auth_epoch),
             auth_generation: Some(proof.auth_generation),
             principal_material_generation: Some(proof.principal_material_generation),
-            actor_kind: IngestActorKind::DeviceToken,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn test_authenticated_device(
-        principal_id: impl Into<String>,
-        credential_id: impl Into<String>,
-        configured_source: impl Into<String>,
-        allowed_subjects: impl IntoIterator<Item = SystemId>,
-        flow_profile: impl Into<String>,
-        auth_epoch: impl Into<String>,
-    ) -> Self {
-        Self {
-            principal_id: principal_id.into(),
-            credential_id: Some(credential_id.into()),
-            configured_source: configured_source.into(),
-            scope: SubjectScope::Restricted(allowed_subjects.into_iter().collect()),
-            flow_profile: flow_profile.into(),
-            auth_epoch: Some(auth_epoch.into()),
-            auth_generation: None,
-            principal_material_generation: None,
             actor_kind: IngestActorKind::DeviceToken,
         }
     }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMappingPreview } from "./api";
+import { createMappingPreview } from "../../src/api";
 
 afterEach(() => {
   vi.unstubAllGlobals();

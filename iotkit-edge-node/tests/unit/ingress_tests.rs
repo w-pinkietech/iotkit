@@ -1,5 +1,23 @@
 use super::*;
 
+async fn publish_applied_if_authorized(
+    db: &DbHandle,
+    data_dir: &Path,
+    expected: &IngressListenerConfig,
+    generation: u64,
+    tls_generation: Option<u64>,
+) -> Result<(), &'static str> {
+    publish_applied_if_authorized_with_composition(
+        db,
+        data_dir,
+        expected,
+        generation,
+        tls_generation,
+        os_ingress_composition(),
+    )
+    .await
+}
+
 fn migrations() -> Vec<iotkit_core_storage::Migration> {
     let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
     all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);

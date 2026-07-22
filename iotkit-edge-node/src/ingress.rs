@@ -494,25 +494,6 @@ async fn recheck_authority(
     .map_err(|_| "database_query_failed")?
 }
 
-#[cfg(test)]
-async fn publish_applied_if_authorized(
-    db: &DbHandle,
-    data_dir: &Path,
-    expected: &IngressListenerConfig,
-    generation: u64,
-    tls_generation: Option<u64>,
-) -> Result<(), &'static str> {
-    publish_applied_if_authorized_with_composition(
-        db,
-        data_dir,
-        expected,
-        generation,
-        tls_generation,
-        os_ingress_composition(),
-    )
-    .await
-}
-
 async fn publish_applied_if_authorized_with_composition(
     db: &DbHandle,
     data_dir: &Path,

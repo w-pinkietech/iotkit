@@ -8,6 +8,7 @@ repository.workspace = true
 [features]
 default = ["inproc"]
 inproc = ["dep:iotkit-core-collector", "dep:tokio"]
+test-util = ["inproc"]
 
 [dependencies]
 iotkit-ingest-contract = { path = "../iotkit-ingest-contract" }

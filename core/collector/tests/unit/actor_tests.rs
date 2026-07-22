@@ -3,6 +3,10 @@ use crate::registry_policy::PermissiveRegistry;
 use iotkit_core_ledger as ledger;
 use std::sync::Arc;
 
+pub(super) fn allow_missing_authentication_proof() -> bool {
+    true
+}
+
 fn test_db() -> iotkit_core_storage::DbHandle {
     let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
     all.extend_from_slice(ledger::MIGRATIONS);
@@ -54,7 +58,7 @@ fn process_test(
     policy: &dyn RegistryPolicy,
     request: &IngestRequest,
 ) -> Result<EnvelopeAck, ProcessError> {
-    process_envelope(
+    process_envelope_mode(
         conn,
         cache,
         policy,
@@ -62,6 +66,7 @@ fn process_test(
         FreshnessLimits::default(),
         None,
         request,
+        true,
     )
 }
 

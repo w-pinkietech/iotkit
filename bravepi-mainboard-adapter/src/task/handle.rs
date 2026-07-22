@@ -205,21 +205,6 @@ impl RuntimeWorker {
             },
         )
     }
-
-    #[cfg(test)]
-    fn from_test_parts(
-        event_rx: mpsc::Receiver<RuntimeEvent>,
-        command_tx: mpsc::Sender<RuntimeCommand>,
-        runtime_handle: tokio::task::JoinHandle<()>,
-        reader_handle: std::thread::JoinHandle<()>,
-    ) -> Self {
-        Self {
-            event_rx,
-            command_tx,
-            source_handle: Some(SerialSourceHandle::from_thread(reader_handle)),
-            runtime_handle: Some(runtime_handle),
-        }
-    }
 }
 
 struct RuntimeShutdown {

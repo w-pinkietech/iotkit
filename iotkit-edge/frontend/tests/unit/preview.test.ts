@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initializePreviews } from "./preview";
+import { initializePreviews } from "../../src/preview";
 
 function installPreviewDOM(): void {
   document.body.innerHTML = `

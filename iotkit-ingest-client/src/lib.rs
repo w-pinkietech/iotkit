@@ -29,8 +29,11 @@ pub fn new_envelope(source: &str, items: Vec<ReadingItem>) -> Envelope {
 pub use inproc::{
     AbandonReason, DeliveryOutcome, DeliveryReceipt, EnqueuedEnvelope, IngestClient,
     IngestClientError, IngestClientEvent, IngestClientFull, QueueSubmitError, RetryHandle,
-    TestEnvelopeReceiver, channel_for_test, spawn_inproc, spawn_inproc_observed,
+    spawn_inproc, spawn_inproc_observed,
 };
+
+#[cfg(all(feature = "inproc", any(test, feature = "test-util")))]
+pub use inproc::{TestEnvelopeReceiver, channel_for_test};
 
 #[cfg(feature = "inproc")]
 mod inproc;

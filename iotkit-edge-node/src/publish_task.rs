@@ -1,3 +1,4 @@
+#[cfg(not(test))]
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,6 +11,9 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use iotkit_edge_node::health::{HealthState, TargetDeliveryHealth, now_ms};
+
+#[cfg(test)]
+use tests::delivery_endpoint_url;
 
 const BATCH_LIMIT: u32 = 256;
 const BYTE_CAP: usize = 1024 * 1024;
@@ -93,13 +97,8 @@ pub(crate) async fn run_publish_cycle(db: &DbHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(test))]
 fn delivery_endpoint_url(endpoint_url: &str) -> Cow<'_, str> {
-    #[cfg(test)]
-    if let Some(rest) = endpoint_url.strip_prefix("https://127.0.0.1:") {
-        // Unit tests use a plain loopback server; production still requires https:// targets.
-        return Cow::Owned(format!("http://127.0.0.1:{rest}"));
-    }
-
     Cow::Borrowed(endpoint_url)
 }
 

@@ -36,10 +36,6 @@ pub enum PollingEvent {
 #[derive(Debug)]
 enum PollingCommand {
     Shutdown,
-    #[cfg(test)]
-    Unsupported {
-        device_key: iotkit_core_types::DeviceKey,
-    },
 }
 
 use PollingCommand as AdapterCommand;

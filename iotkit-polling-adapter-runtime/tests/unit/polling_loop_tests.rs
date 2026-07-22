@@ -152,35 +152,6 @@ async fn command_channel_drop_stops_loop() {
 }
 
 #[tokio::test]
-async fn event_channel_close_detected_with_events() {
-    let config = make_config(vec![]);
-    let (event_tx, event_rx) = mpsc::channel(16);
-    let (command_tx, command_rx) = mpsc::channel(16);
-
-    let handle = tokio::spawn(super::polling_loop(
-        AdapterId::new("test"),
-        None,
-        config,
-        event_tx,
-        command_rx,
-    ));
-
-    drop(event_rx);
-
-    // Send a DeviceCommand to trigger a send on the closed event channel.
-    let _ = command_tx
-        .send(AdapterCommand::Unsupported {
-            device_key: DeviceKey::new("test"),
-        })
-        .await;
-
-    tokio::time::timeout(Duration::from_secs(2), handle)
-        .await
-        .expect("timeout")
-        .expect("task panicked");
-}
-
-#[tokio::test]
 async fn event_channel_close_detected_without_events() {
     let config = make_config(vec![]);
     let (event_tx, event_rx) = mpsc::channel(16);
@@ -196,50 +167,6 @@ async fn event_channel_close_detected_without_events() {
 
     drop(event_rx);
 
-    tokio::time::timeout(Duration::from_secs(2), handle)
-        .await
-        .expect("timeout")
-        .expect("task panicked");
-}
-
-#[tokio::test]
-async fn device_command_rejection_preserves_device_key() {
-    let config = make_config(vec![]);
-    let (event_tx, mut event_rx) = mpsc::channel(16);
-    let (command_tx, command_rx) = mpsc::channel(16);
-
-    let handle = tokio::spawn(super::polling_loop(
-        AdapterId::new("test"),
-        None,
-        config,
-        event_tx,
-        command_rx,
-    ));
-
-    command_tx
-        .send(AdapterCommand::Unsupported {
-            device_key: DeviceKey::new("i2c:0x40:temperature"),
-        })
-        .await
-        .unwrap();
-
-    let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
-        .await
-        .expect("timeout")
-        .expect("channel closed");
-
-    match event {
-        AdapterEvent::AdapterError { device_key, error } => {
-            assert_eq!(
-                device_key.as_ref().unwrap().as_str(),
-                "i2c:0x40:temperature"
-            );
-            assert!(error.contains("unsupported"));
-        }
-        other => panic!("expected AdapterError, got {other:?}"),
-    }
-
-    command_tx.send(AdapterCommand::Shutdown).await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), handle)
         .await
         .expect("timeout")

@@ -69,10 +69,15 @@ vocabulary であり、新規コードは依存を増やさない。
 - private APIを検証するunit testは`<crate>/tests/unit/**/*_tests.rs`へ置き、製品moduleから
   `#[cfg(test)] #[path = "..."] mod tests;`で参照する。公開APIのintegration testは通常どおり
   `<crate>/tests/*.rs`へ置く。
+- test専用constructor、mock clock、fixture、状態観測helperなどの実装本体も`src/`へ置かず、
+  `tests/support/`から外部moduleとして参照する。製品moduleに残せる`cfg(test)`は、その外部moduleの
+  宣言と、外部test moduleから実装を選ぶ最小限のimportだけとする。
 - test fixtureと共通helperは`tests/support/`または専用testkitへ置き、製品ファイルをtest都合で
   肥大化させない。この境界は`scripts/check-source-layout`が検査する。
 - Goは言語標準の`*_test.go`を製品ファイルと分離して保ち、巨大になったfileは機能責務ごとに
   同一package内の複数fileへ分割する。
+- Frontendのunit testは`frontend/tests/unit/`へ置き、`frontend/src/`へ`*.test.ts`や`*.spec.ts`を
+  置かない。
 
 Superpowers skills は任意の作業支援ツールであり、全変更に一律適用する必須パイプラインではない。
 ユーザーの直接指示と本ファイルのプロジェクト規則は、plugin skill の一般的な trigger や成果物要件に

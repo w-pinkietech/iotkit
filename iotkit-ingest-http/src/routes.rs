@@ -23,6 +23,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{AdmissionConfig, AdmissionController, AdmissionDenied, MonotonicClock};
 
+#[cfg(test)]
+#[path = "../tests/support/routes_support.rs"]
+mod test_support;
+
 const ITEM_WORK_UNITS: u64 = 256;
 
 #[derive(Debug, Clone)]
@@ -44,14 +48,6 @@ pub struct HttpIngestConfig {
 }
 
 impl HttpIngestConfig {
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
-        Self {
-            admission: AdmissionConfig::for_test(),
-            ..Self::default()
-        }
-    }
-
     fn validate(&self) -> Result<(), InvalidHttpIngestConfig> {
         if self.max_header_count == 0
             || self.max_header_bytes == 0
@@ -140,57 +136,6 @@ pub(crate) struct HttpIngestHooks {
     after_response_serialization: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
-#[cfg(test)]
-impl HttpIngestHooks {
-    pub(crate) fn with_before_cached_reserved_admission(
-        mut self,
-        hook: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
-        self.before_cached_reserved_admission = Some(Arc::new(hook));
-        self
-    }
-
-    pub(crate) fn with_after_cached_reserved_admission(
-        mut self,
-        hook: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
-        self.after_cached_reserved_admission = Some(Arc::new(hook));
-        self
-    }
-
-    pub(crate) fn with_before_collector_handoff(
-        mut self,
-        hook: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
-        self.before_collector_handoff = Some(Arc::new(hook));
-        self
-    }
-
-    pub(crate) fn with_after_queue_acquired(
-        mut self,
-        hook: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
-        self.after_queue_acquired = Some(Arc::new(hook));
-        self
-    }
-
-    pub(crate) fn with_after_collector_result(
-        mut self,
-        hook: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
-        self.after_collector_result = Some(Arc::new(hook));
-        self
-    }
-
-    pub(crate) fn with_after_response_serialization(
-        mut self,
-        hook: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
-        self.after_response_serialization = Some(Arc::new(hook));
-        self
-    }
-}
-
 pub struct HttpIngestService<C: MonotonicClock> {
     shared: Arc<Shared<C>>,
 }
@@ -226,18 +171,6 @@ impl<C: MonotonicClock> HttpIngestService<C> {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_with_hooks(
-        db: DbHandle,
-        collector: Collector,
-        issuer: DevicePrincipalIssuer,
-        config: HttpIngestConfig,
-        clock: C,
-        hooks: HttpIngestHooks,
-    ) -> Result<Self, InvalidHttpIngestConfig> {
-        Self::new_inner(db, collector, issuer, config, clock, hooks)
-    }
-
     fn new_inner(
         db: DbHandle,
         collector: Collector,
@@ -267,11 +200,6 @@ impl<C: MonotonicClock> HttpIngestService<C> {
                 hooks,
             }),
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn admission_snapshot(&self) -> crate::admission::AdmissionSnapshot {
-        self.shared.admission.snapshot()
     }
 
     pub fn admission_health(&self) -> crate::AdmissionHealthSnapshot {
@@ -304,17 +232,6 @@ impl<C: MonotonicClock> HttpIngestService<C> {
         events: &[crate::ThrottleEpisodeEvent],
     ) -> bool {
         self.shared.admission.acknowledge_episode_events(events)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn auth_cache_contains(&self, bearer: &str) -> bool {
-        let key: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
-        self.shared
-            .cache
-            .lock()
-            .expect("auth cache mutex poisoned")
-            .entries
-            .contains_key(&key)
     }
 
     pub async fn handle(&self, observed_peer: IpAddr, request: Request<Body>) -> Response<Body> {

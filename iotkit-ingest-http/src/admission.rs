@@ -2,10 +2,11 @@ use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+#[cfg(test)]
+#[path = "../tests/support/admission_support.rs"]
+pub(crate) mod test_support;
 
 mod sealed {
     pub trait Sealed {}
@@ -36,31 +37,6 @@ impl MonotonicClock for SystemMonotonicClock {
     }
 }
 
-#[cfg(test)]
-#[derive(Clone, Default)]
-pub(crate) struct ManualMonotonicClock(Arc<AtomicU64>);
-
-#[cfg(test)]
-impl ManualMonotonicClock {
-    pub(crate) fn new(now_ms: u64) -> Self {
-        Self(Arc::new(AtomicU64::new(now_ms)))
-    }
-
-    pub(crate) fn advance_ms(&self, elapsed_ms: u64) {
-        self.0.fetch_add(elapsed_ms, Ordering::SeqCst);
-    }
-}
-
-#[cfg(test)]
-impl sealed::Sealed for ManualMonotonicClock {}
-
-#[cfg(test)]
-impl MonotonicClock for ManualMonotonicClock {
-    fn now_ms(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct AdmissionConfig {
     auth_workers: usize,
@@ -84,30 +60,6 @@ pub struct AdmissionConfig {
 }
 
 impl AdmissionConfig {
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
-        Self {
-            auth_workers: 2,
-            reserved_auth_workers: 1,
-            auth_rate_per_second: 100,
-            auth_burst: 100,
-            initial_auth_tokens: 100,
-            reserved_auth_rate_per_second: 8,
-            reserved_auth_burst: 8,
-            initial_reserved_auth_tokens: 8,
-            pre_auth_source_capacity: 64,
-            pre_auth_source_ttl_ms: 60_000,
-            pre_auth_failures_per_window: 8,
-            principal_state_capacity: 64,
-            low_flow: FlowClassLimit::new(1_000_000, 1_000_000),
-            default_flow: FlowClassLimit::new(1_000_000, 1_000_000),
-            high_flow: FlowClassLimit::new(1_000_000, 1_000_000),
-            global_rate_per_second: 4_000_000,
-            global_burst: 4_000_000,
-            throttle_cooldown_ms: 1_000,
-        }
-    }
-
     pub fn with_auth_workers(mut self, value: usize) -> Self {
         self.auth_workers = value;
         self
@@ -313,13 +265,6 @@ pub struct AdmissionController<C: MonotonicClock = SystemMonotonicClock> {
     reserved_workers: Arc<Semaphore>,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AdmissionSnapshot {
-    pub reserved_auth_tokens_milli: u128,
-    pub reserved_auth_workers_available: usize,
-}
-
 impl<C: MonotonicClock> AdmissionController<C> {
     pub fn new(config: AdmissionConfig, clock: C) -> Result<Self, InvalidAdmissionConfig> {
         config.validate()?;
@@ -369,28 +314,6 @@ impl<C: MonotonicClock> AdmissionController<C> {
             config,
             clock,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pre_auth_source_count(&self) -> usize {
-        self.state
-            .lock()
-            .expect("admission mutex poisoned")
-            .sources
-            .len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot(&self) -> AdmissionSnapshot {
-        AdmissionSnapshot {
-            reserved_auth_tokens_milli: self
-                .state
-                .lock()
-                .expect("admission mutex poisoned")
-                .reserved_auth
-                .tokens_milli,
-            reserved_auth_workers_available: self.reserved_workers.available_permits(),
-        }
     }
 
     pub fn health_snapshot(&self) -> AdmissionHealthSnapshot {
@@ -490,19 +413,6 @@ impl<C: MonotonicClock> AdmissionController<C> {
     }
 
     pub fn record_throttled_drop(&self) {
-        self.record_drop(self.clock.now_ms());
-    }
-
-    #[cfg(test)]
-    pub(crate) fn seed_drop_count_for_test(&self, value: u64) {
-        self.state
-            .lock()
-            .expect("admission mutex poisoned")
-            .throttled_drop_count = value;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn record_throttled_drop_for_test(&self) {
         self.record_drop(self.clock.now_ms());
     }
 

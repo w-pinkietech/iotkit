@@ -37,7 +37,6 @@ impl MigrationEntry for Migration {
 }
 
 /// Full migration runner: bootstrap table, schema-ahead check, apply pending.
-/// Used by both run_migrations() (production) and run_migrations_with() (test).
 fn run_migrations_inner<M: MigrationEntry>(
     conn: &Connection,
     migrations: &[M],
@@ -124,35 +123,6 @@ pub fn run_migrations(conn: &Connection, migrations: &[Migration]) -> Result<(),
         }
     }
     run_migrations_inner(conn, migrations)
-}
-
-/// Test helper: runs a custom migration list through the same inner runner.
-#[cfg(test)]
-pub(crate) fn run_migrations_with(
-    conn: &Connection,
-    migrations: &[TestMigration],
-) -> Result<(), StorageError> {
-    run_migrations_inner(conn, migrations)
-}
-
-#[cfg(test)]
-pub(crate) struct TestMigration {
-    pub version: u32,
-    pub label: &'static str,
-    pub sql: &'static str,
-}
-
-#[cfg(test)]
-impl MigrationEntry for TestMigration {
-    fn version(&self) -> u32 {
-        self.version
-    }
-    fn label(&self) -> &str {
-        self.label
-    }
-    fn sql(&self) -> &str {
-        self.sql
-    }
 }
 
 #[cfg(test)]

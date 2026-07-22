@@ -115,15 +115,12 @@ pub fn init_db(db_path: &Path, migrations: &[Migration]) -> Result<DbHandle, Sto
     Ok(DbHandle::new(conn))
 }
 
-/// Open an in-memory database with all migrations applied.
-/// For tests only.
 #[cfg(any(test, feature = "test-util"))]
-pub fn init_db_memory(migrations: &[Migration]) -> Result<DbHandle, StorageError> {
-    let conn = Connection::open_in_memory()?;
-    configure_pragmas(&conn)?;
-    run_migrations(&conn, migrations)?;
-    Ok(DbHandle::new(conn))
-}
+#[path = "../tests/support/lib_support.rs"]
+mod test_support;
+
+#[cfg(any(test, feature = "test-util"))]
+pub use test_support::init_db_memory;
 
 #[cfg(test)]
 #[path = "../tests/unit/lib_tests.rs"]

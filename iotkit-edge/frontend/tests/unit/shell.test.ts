@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initializeShell } from "./shell";
+import { initializeShell } from "../../src/shell";
 
 afterEach(() => {
   document.body.replaceChildren();

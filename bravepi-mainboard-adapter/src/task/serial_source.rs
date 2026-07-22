@@ -16,15 +16,10 @@ pub(crate) struct SerialSource {
 }
 
 pub(crate) struct SerialSourceHandle {
-    thread_handle: std::thread::JoinHandle<()>,
+    pub(super) thread_handle: std::thread::JoinHandle<()>,
 }
 
 impl SerialSourceHandle {
-    #[cfg(test)]
-    pub(crate) fn from_thread(thread_handle: std::thread::JoinHandle<()>) -> Self {
-        Self { thread_handle }
-    }
-
     pub async fn join(self) -> Result<(), String> {
         tokio::task::spawn_blocking(|| self.thread_handle.join())
             .await

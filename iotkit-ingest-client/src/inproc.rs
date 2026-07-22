@@ -4,6 +4,13 @@ use iotkit_ingest_contract::{AckStatus, EnvelopeAck, ItemStatus};
 use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(any(test, feature = "test-util"))]
+#[path = "../tests/support/inproc_test_support.rs"]
+mod test_support;
+
+#[cfg(any(test, feature = "test-util"))]
+pub use test_support::{TestEnvelopeReceiver, channel_for_test};
+
 /// 非ブロッキング投入の失敗理由。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngestClientError {
@@ -110,26 +117,6 @@ pub struct IngestClient {
     tx: mpsc::Sender<Submission>,
 }
 
-pub struct TestEnvelopeReceiver {
-    rx: mpsc::Receiver<Submission>,
-}
-
-impl TestEnvelopeReceiver {
-    pub async fn recv(&mut self) -> Option<Envelope> {
-        self.rx.recv().await.map(|submission| submission.envelope)
-    }
-
-    pub fn try_recv(&mut self) -> Result<Envelope, mpsc::error::TryRecvError> {
-        self.rx.try_recv().map(|submission| submission.envelope)
-    }
-}
-
-impl Drop for TestEnvelopeReceiver {
-    fn drop(&mut self) {
-        self.rx.close();
-    }
-}
-
 impl IngestClient {
     /// Submit sender-owned wire data. The receiver-bound principal is added
     /// behind this handle and cannot be selected by the adapter.
@@ -181,12 +168,6 @@ impl IngestClient {
     ) -> Result<EnqueuedEnvelope, QueueSubmitError> {
         self.try_submit_with_receipt(retry.envelope)
     }
-}
-
-/// テスト用: 実タスクなしでEnvelopeを捕捉する受け口を返す。
-pub fn channel_for_test(cap: usize) -> (IngestClient, TestEnvelopeReceiver) {
-    let (tx, rx) = mpsc::channel::<Submission>(cap);
-    (IngestClient { tx }, TestEnvelopeReceiver { rx })
 }
 
 /// inprocクライアントタスクを起動する。タスクはコレクタ死亡(Closed)で退出し、

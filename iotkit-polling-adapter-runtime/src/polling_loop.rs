@@ -547,17 +547,6 @@ pub(crate) async fn polling_loop(
             cmd_opt = command_rx.recv() => {
                 match cmd_opt {
                     Some(AdapterCommand::Shutdown) | None => return,
-                    #[cfg(test)]
-                    Some(AdapterCommand::Unsupported { device_key }) => {
-                        let event = AdapterEvent::AdapterError {
-                            device_key: Some(device_key),
-                            error: "unsupported: I2C polling adapter v1 does not handle commands".into(),
-                        };
-                        if event_tx.send(event).await.is_err() {
-                            tracing::warn!("event channel closed while sending DeviceCommand rejection");
-                            return;
-                        }
-                    }
                 }
             }
             _ = ticker.tick() => {

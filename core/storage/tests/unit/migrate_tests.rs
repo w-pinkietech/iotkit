@@ -1,5 +1,32 @@
 use super::*;
 
+struct TestMigration {
+    version: u32,
+    label: &'static str,
+    sql: &'static str,
+}
+
+impl MigrationEntry for TestMigration {
+    fn version(&self) -> u32 {
+        self.version
+    }
+
+    fn label(&self) -> &str {
+        self.label
+    }
+
+    fn sql(&self) -> &str {
+        self.sql
+    }
+}
+
+fn run_migrations_with(
+    conn: &Connection,
+    migrations: &[TestMigration],
+) -> Result<(), StorageError> {
+    run_migrations_inner(conn, migrations)
+}
+
 #[test]
 fn test_migrations_array_invariants() {
     assert!(!MIGRATIONS.is_empty(), "MIGRATIONS must not be empty");

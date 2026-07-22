@@ -11,6 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(test)]
+use tests::allow_missing_authentication_proof;
+
 pub const MAX_ITEMS_PER_ENVELOPE: usize = 256;
 
 /// `ingest_dedup` の保持TTL(D1: sender_id+envelope_idキーはTTL+サイズ上限で有界)。
@@ -460,28 +463,6 @@ async fn record_dedup_maintenance_transition(db: &DbHandle, now: i64, failed: bo
 /// 未耐久データにRejectedを返すと無音損失になる(D1)。呼び出し元はErrに対してack_txを
 /// ドロップし、送信側の再送に委ねる。トランザクションはコミットせずに終わるため自動ロールバック
 /// される(部分コミットしない)。
-#[cfg(test)]
-fn process_envelope(
-    conn: &rusqlite::Connection,
-    cache: &mut ResolutionCache,
-    policy: &dyn RegistryPolicy,
-    freshness_clock: &dyn FreshnessClock,
-    freshness_limits: FreshnessLimits,
-    intrusion_tx: Option<&mpsc::Sender<IntrusionSignal>>,
-    request: &IngestRequest,
-) -> Result<EnvelopeAck, ProcessError> {
-    process_envelope_mode(
-        conn,
-        cache,
-        policy,
-        freshness_clock,
-        freshness_limits,
-        intrusion_tx,
-        request,
-        true,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn process_envelope_mode(
     conn: &rusqlite::Connection,
@@ -639,10 +620,7 @@ fn authentication_is_current_at_serialization(
         principal.auth_generation(),
         principal.principal_material_generation(),
     ) else {
-        #[cfg(test)]
-        return Ok(true);
-        #[cfg(not(test))]
-        return Ok(false);
+        return Ok(allow_missing_authentication_proof());
     };
     conn.query_row(
         "SELECT EXISTS(
@@ -664,6 +642,11 @@ fn authentication_is_current_at_serialization(
         |row| row.get(0),
     )
     .map_err(|error| ProcessError::Storage(error.to_string()))
+}
+
+#[cfg(not(test))]
+fn allow_missing_authentication_proof() -> bool {
+    false
 }
 
 fn validation_report_from_ack(ack: EnvelopeAck) -> ValidationReport {

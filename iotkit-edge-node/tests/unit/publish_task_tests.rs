@@ -10,6 +10,14 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+pub(super) fn delivery_endpoint_url(endpoint_url: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(rest) = endpoint_url.strip_prefix("https://127.0.0.1:") {
+        // Unit tests use a plain loopback server; production still requires HTTPS targets.
+        return std::borrow::Cow::Owned(format!("http://127.0.0.1:{rest}"));
+    }
+    std::borrow::Cow::Borrowed(endpoint_url)
+}
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(1);
 
 struct TestConsumer {

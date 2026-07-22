@@ -106,15 +106,10 @@ use tokio_rustls::TlsAcceptor;
 
 const TLS_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-#[cfg(test)]
-extern crate self as iotkit_ingest_http;
-
 mod transition;
 pub use transition::{ApplyError, ListenerTransition, TransitionError};
 
 mod admission;
-#[cfg(test)]
-pub(crate) use admission::ManualMonotonicClock;
 pub use admission::{
     AdmissionConfig, AdmissionController, AdmissionDenied, AdmissionHealthSnapshot, AuthPermit,
     FlowClassLimit, InvalidAdmissionConfig, MonotonicClock, PrincipalReservation,
@@ -125,6 +120,10 @@ mod routes;
 pub use routes::{
     HttpIngestConfig, HttpIngestService, InvalidHttpIngestConfig, ServeConnectionError,
 };
+
+#[cfg(test)]
+#[path = "../tests/support/lib_support.rs"]
+mod test_support;
 
 pub type LocalIngressCidr = IpNet;
 
@@ -302,29 +301,6 @@ impl ExposureSnapshot {
             _internet_default_route: internet_default_route,
         })
     }
-
-    #[cfg(test)]
-    pub(crate) fn new(
-        interface: impl Into<String>,
-        addresses: impl IntoIterator<Item = IpAddr>,
-        internet_default_route: bool,
-    ) -> Self {
-        Self {
-            interface: interface.into(),
-            addresses: addresses.into_iter().map(normalize_ip).collect(),
-            _internet_default_route: internet_default_route,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn interface(&self) -> &str {
-        &self.interface
-    }
-
-    #[cfg(test)]
-    pub(crate) fn addresses(&self) -> &BTreeSet<IpAddr> {
-        &self.addresses
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -336,16 +312,6 @@ pub struct ValidatedListenerConfig {
 impl ValidatedListenerConfig {
     pub fn new(config: ListenerConfig, exposure: &ExposureSnapshot) -> Result<Self, ListenerError> {
         Self::validate(config, exposure, false)
-    }
-
-    /// Loopback is deliberately available only to crate/integration tests. Product configuration
-    /// must name a real private-network interface and CIDR.
-    #[cfg(test)]
-    pub(crate) fn new_for_test(
-        config: ListenerConfig,
-        exposure: &ExposureSnapshot,
-    ) -> Result<Self, ListenerError> {
-        Self::validate(config, exposure, true)
     }
 
     fn validate(
