@@ -76,6 +76,7 @@ Merge済みbranchをGitHub側で自動削除してよい。Local worktreeとbran
 
 ### Battle-tested review
 
+PR reviewと現場報告triageではproject Skill `$iotkit-battle-tested-review`を使用できる。
 PRの最終review前に`node scripts/battle-tested-review.mjs select --base <base-ref>`を実行し、
 出力された`BT-NNN`だけを確認する。Path選択は下限であるため、公開契約、認証、custody、data loss、
 migration、restore、外部作用の意味を変える場合は該当する`--concern`を明示的に追加する。
