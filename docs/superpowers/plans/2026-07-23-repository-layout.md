@@ -44,9 +44,9 @@ iotkit-edge/                                -> edge/
 rewrite-prep.md                             -> docs/redesign/rewrite-prep.md
 ```
 
-- [ ] Move paths with Git-aware mechanical operations.
-- [ ] Confirm no old tracked source directory remains.
-- [ ] Confirm package names in every moved `Cargo.toml` are unchanged.
+- [x] Move paths with Git-aware mechanical operations.
+- [x] Confirm no old tracked source directory remains.
+- [x] Confirm package names in every moved `Cargo.toml` are unchanged.
 
 ### Task 2: Repair build and executable path references
 
@@ -58,12 +58,12 @@ rewrite-prep.md                             -> docs/redesign/rewrite-prep.md
 - Modify: `edge/frontend/scripts/*.mjs`
 - Modify: `deploy/*.yaml`, `compose.dev.yaml`, `scripts/*.sh`
 
-- [ ] Update workspace members to the target tree.
-- [ ] Update every Cargo path dependency relative to its new manifest.
-- [ ] Update docs/testdata discovery that previously assumed a crate parent was the repository root.
-- [ ] Update Go/Console/Docker working paths from `iotkit-edge/` to `edge/`.
-- [ ] Run `cargo metadata --no-deps` and fix only path-resolution errors.
-- [ ] Run `(cd edge && go list ./...)` and frontend generated-file checks.
+- [x] Update workspace members to the target tree.
+- [x] Update every Cargo path dependency relative to its new manifest.
+- [x] Update docs/testdata discovery that previously assumed a crate parent was the repository root.
+- [x] Update Go/Console/Docker working paths from `iotkit-edge/` to `edge/`.
+- [x] Run `cargo metadata --no-deps` and fix only path-resolution errors.
+- [x] Run `(cd edge && go list ./...)` and frontend generated-file checks.
 
 ### Task 3: Repair repository policy and review routing
 
@@ -74,11 +74,11 @@ rewrite-prep.md                             -> docs/redesign/rewrite-prep.md
 - Modify: `review/battle-tested/catalog.json`
 - Modify: `scripts/tests/battle-tested-review.test.mjs`
 
-- [ ] Update layer classifications to the new Rust paths.
-- [ ] Update selective CI to classify `edge-node/` as Rust and `edge/` as Go/Console.
-- [ ] Update routing tests before changing their implementation expectations.
-- [ ] Update battle-tested path prefixes and provenance links.
-- [ ] Run layer, source-layout, CI selector, and battle-tested tests.
+- [x] Update layer classifications to the new Rust paths.
+- [x] Update selective CI to classify `edge-node/` as Rust and `edge/` as Go/Console.
+- [x] Update routing tests before changing their implementation expectations.
+- [x] Update battle-tested path prefixes and provenance links.
+- [x] Run layer, source-layout, CI selector, and battle-tested tests.
 
 ### Task 4: Make the new structure discoverable
 
@@ -93,22 +93,24 @@ rewrite-prep.md                             -> docs/redesign/rewrite-prep.md
 - Create: `edge-node/adapters/README.md`
 - Create: `edge/README.md`
 
-- [ ] Update every current path reference.
-- [ ] Add the three-way integration decision: authenticated HTTP device, existing direct-I2C model, or new Adapter family.
-- [ ] Explain Transport → Driver → Input Adapter → ingest without duplicating contract semantics.
-- [ ] Keep local READMEs thin: purpose, non-purpose, first code entry, focused test, canonical links.
-- [ ] Run the bilingual OKF checker and search current docs for stale old paths.
+- [x] Update every current path reference.
+- [x] Add the three-way integration decision: authenticated HTTP device, existing direct-I2C model, or new Adapter family.
+- [x] Explain Transport → Driver → Input Adapter → ingest without duplicating contract semantics.
+- [x] Keep local READMEs thin: purpose, non-purpose, first code entry, focused test, canonical links.
+- [x] Run the bilingual OKF checker and search current docs for stale old paths.
 
 ### Task 5: Verify and review
 
 **Files:**
 - Review all issue #81 changes.
 
-- [ ] Run `cargo metadata --no-deps`.
-- [ ] Run `scripts/check-layers` and `scripts/check-source-layout`.
-- [ ] Run selective CI and battle-tested tests.
-- [ ] Run Console frontend and E2E checks.
-- [ ] Run `TMPDIR="$PWD/target/tmp" scripts/verify.sh`.
-- [ ] Review `git diff --summary` to confirm moves dominate and package/binary/protocol names did not change.
-- [ ] Run an independent fresh review and correct all Critical/Important findings.
+- [x] Run `cargo metadata --no-deps`.
+- [x] Run `scripts/check-layers` and `scripts/check-source-layout`.
+- [x] Run selective CI and battle-tested tests.
+- [x] Run Console frontend checks. E2E was attempted but the host Chromium and
+  Chrome binaries both terminate with SIGTRAP before creating a DevTools port;
+  CI remains the independent browser environment.
+- [x] Run `TMPDIR="$PWD/target/tmp" scripts/verify.sh`.
+- [x] Review `git diff --summary` to confirm moves dominate and package/binary/protocol names did not change.
+- [x] Run an independent fresh review and correct all Critical/Important findings.
 - [ ] Push the branch and open a draft PR closing issue #81.

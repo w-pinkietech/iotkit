@@ -14,12 +14,12 @@ const cases = [
   },
   {
     name: "Rust workspace changes select only Rust",
-    paths: ["core/ledger/src/lib.rs", "Cargo.lock"],
+    paths: ["edge-node/core/ledger/src/lib.rs", "Cargo.lock"],
     expected: { rust: true, edge: false },
   },
   {
     name: "IoTKit Edge changes select only Edge",
-    paths: ["iotkit-edge/internal/store/store.go"],
+    paths: ["edge/internal/store/store.go"],
     expected: { rust: false, edge: true },
   },
   {

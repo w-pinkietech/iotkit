@@ -1,0 +1,42 @@
+[package]
+name = "iotkit-ingest-http"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+autotests = false
+
+[dependencies]
+iotkit-core-collector = { path = "../../core/collector" }
+iotkit-core-ops = { path = "../../core/ops" }
+iotkit-core-storage = { path = "../../core/storage" }
+iotkit-ingest-contract = { path = "../contract" }
+axum = "0.8"
+http-body-util = "0.1"
+http-body = "1"
+bytes = "1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+ipnet = "2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+thiserror = "2"
+tracing = "0.1"
+tokio = { version = "1", features = ["io-util", "net", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+libc = "0.2"
+serde_json = "1"
+serde = "1"
+sha2 = "0.10"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+iotkit-core-ledger = { path = "../../core/ledger" }
+iotkit-core-registry = { path = "../../core/registry" }
+iotkit-core-storage = { path = "../../core/storage", features = ["test-util"] }
+iotkit-core-timeseries = { path = "../../core/timeseries" }
+iotkit-core-publish = { path = "../../core/publish" }
+rcgen = "0.13"
+tempfile = "3"
+time = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "test-util"] }
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

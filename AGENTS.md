@@ -22,7 +22,7 @@ sensor -> Input Adapter -> IoTKit Edge Node -> MQTT Broker
 contract-native device -> authenticated HTTP ingest -> IoTKit Edge Node
 ```
 
-Input Adapters use `iotkit-ingest-client`; they do not depend on `core/engine`.
+Input Adapters use `iotkit-ingest-client`; they do not depend on `edge-node/core/engine`.
 `AdapterEvent` is a frozen engine/supervision vocabulary, not a new adapter API.
 The HTTP ingest listener is a separate, default-off path for contract-native
 devices. Both paths converge at the Edge Node collector. The complete and
@@ -49,21 +49,21 @@ historical plan.
 | Change area | Read before editing | Start in | Focused verification |
 |---|---|---|---|
 | Product boundary or component ownership | `docs/okf/<lang>/concepts/product-model.md`, `docs/okf/<lang>/architecture/system-overview.md` | owning component from the architecture map | affected contract and package tests |
-| Crate, package, dependency, or source placement | `docs/okf/<lang>/architecture/system-overview.md` | `Cargo.toml`, `iotkit-edge/go.mod`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
-| Sensor, driver, polling, UART, or Input Adapter host | `docs/okf/<lang>/contracts/input-adapter-v1.md` | `bravepi-mainboard-adapter/src/`, `rpi-local-adapter/src/`, `iotkit-sensor-drivers/src/`, `iotkit-polling-adapter-runtime/src/` | `cargo test -p <owning-crate>` plus adapter conformance tests when the contract changes |
-| Envelope/Ack, authenticated device ingest, admission, or principal mapping | `docs/okf/<lang>/contracts/ingest-v1.md` and product model | `iotkit-ingest-contract/`, `iotkit-ingest-client/`, `iotkit-ingest-http/`, `core/collector/`; BravePI envelope mapping starts at `bravepi-mainboard-adapter/src/task/ingest_map.rs` | owning crate tests; use ingest conformance fixtures when wire behavior changes |
-| Edge Node activation, MQTT delivery, ack, retention, or data loss | `docs/okf/<lang>/contracts/edge-node-custody-v1.md`, `docs/okf/<lang>/contracts/ingest-v1.md` | `core/ledger/`, `core/publish/`, `core/storage/`, `core/timeseries/`, `iotkit-edge-node/` | owning crate tests, then `scripts/verify.sh` |
-| IoTKit Edge raw storage, meanings, history, or CSV | product model and architecture; for browser JSON also `iotkit-edge/openapi/edge-console-v1.yaml` | `iotkit-edge/internal/store/`, `iotkit-edge/internal/semantic/`, `iotkit-edge/internal/semantics/` | `(cd iotkit-edge && go test ./internal/<owning-package>)` |
-| Output Adapter or external application contract | `docs/okf/<lang>/contracts/output-adapter-v1.md` | `iotkit-edge/internal/outputadapter/`, `iotkit-edge/internal/applicationcontract/` | `(cd iotkit-edge && go test ./internal/outputadapter ./internal/applicationcontract)` |
-| Console HTML, navigation, or browser behavior | architecture; OpenAPI only for endpoints and schemas represented there | `iotkit-edge/internal/edgehttp/`, `iotkit-edge/frontend/` | `scripts/test-edge-console-frontend.sh`, then `scripts/test-edge-console-e2e.sh` for journeys |
-| Account bootstrap or recovery | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `iotkit-edge/cmd/iotkit-edge/main.go`, `iotkit-edge/internal/store/accounts.go`; Console account management starts at `iotkit-edge/internal/edgehttp/console_accounts.go` | `(cd iotkit-edge && go test ./cmd/iotkit-edge ./internal/edgehttp ./internal/store)` |
-| Login, password, session, cookie, CSRF, or authorization | relevant current contract plus `iotkit-edge/internal/edgehttp/server.go` route registration; session endpoints are not currently represented in the Console OpenAPI | `iotkit-edge/internal/edgehttp/server_console_auth_test.go`, `iotkit-edge/internal/edgesession/`, `iotkit-edge/internal/edgeauth/` | `(cd iotkit-edge && go test ./internal/edgehttp ./internal/edgesession ./internal/edgeauth)` |
+| Crate, package, dependency, or source placement | `docs/okf/<lang>/architecture/system-overview.md` | `Cargo.toml`, `edge/go.mod`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
+| Sensor, driver, polling, UART, or Input Adapter host | `docs/okf/<lang>/contracts/input-adapter-v1.md` | `edge-node/adapters/bravepi-mainboard/src/`, `edge-node/adapters/rpi-local/src/`, `edge-node/input/hardware/sensor-drivers/src/`, `edge-node/input/runtimes/polling/src/` | `cargo test -p <owning-crate>` plus adapter conformance tests when the contract changes |
+| Envelope/Ack, authenticated device ingest, admission, or principal mapping | `docs/okf/<lang>/contracts/ingest-v1.md` and product model | `edge-node/ingest/contract/`, `edge-node/ingest/client/`, `edge-node/ingest/http/`, `edge-node/core/collector/`; BravePI envelope mapping starts at `edge-node/adapters/bravepi-mainboard/src/task/ingest_map.rs` | owning crate tests; use ingest conformance fixtures when wire behavior changes |
+| Edge Node activation, MQTT delivery, ack, retention, or data loss | `docs/okf/<lang>/contracts/edge-node-custody-v1.md`, `docs/okf/<lang>/contracts/ingest-v1.md` | `edge-node/core/ledger/`, `edge-node/core/publish/`, `edge-node/core/storage/`, `edge-node/core/timeseries/`, `edge-node/apps/node/` | owning crate tests, then `scripts/verify.sh` |
+| IoTKit Edge raw storage, meanings, history, or CSV | product model and architecture; for browser JSON also `edge/openapi/edge-console-v1.yaml` | `edge/internal/store/`, `edge/internal/semantic/`, `edge/internal/semantics/` | `(cd edge && go test ./internal/<owning-package>)` |
+| Output Adapter or external application contract | `docs/okf/<lang>/contracts/output-adapter-v1.md` | `edge/internal/outputadapter/`, `edge/internal/applicationcontract/` | `(cd edge && go test ./internal/outputadapter ./internal/applicationcontract)` |
+| Console HTML, navigation, or browser behavior | architecture; OpenAPI only for endpoints and schemas represented there | `edge/internal/edgehttp/`, `edge/frontend/` | `scripts/test-edge-console-frontend.sh`, then `scripts/test-edge-console-e2e.sh` for journeys |
+| Account bootstrap or recovery | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `edge/cmd/iotkit-edge/main.go`, `edge/internal/store/accounts.go`; Console account management starts at `edge/internal/edgehttp/console_accounts.go` | `(cd edge && go test ./cmd/iotkit-edge ./internal/edgehttp ./internal/store)` |
+| Login, password, session, cookie, CSRF, or authorization | relevant current contract plus `edge/internal/edgehttp/server.go` route registration; session endpoints are not currently represented in the Console OpenAPI | `edge/internal/edgehttp/server_console_auth_test.go`, `edge/internal/edgesession/`, `edge/internal/edgeauth/` | `(cd edge && go test ./internal/edgehttp ./internal/edgesession ./internal/edgeauth)` |
 | TLS, certificate, or deployment credentials | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 3 | owning service and `deploy/` | focused security or deployment script for the changed path |
-| Encrypted backup or restore | `docs/okf/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `iotkit-edge/cmd/iotkit-edge/main.go`, `iotkit-edge/internal/store/backup_encrypted.go`, `iotkit-edge/internal/store/postgres_backup.go` | `(cd iotkit-edge && go test ./cmd/iotkit-edge ./internal/store)`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
+| Encrypted backup or restore | `docs/okf/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `edge/cmd/iotkit-edge/main.go`, `edge/internal/store/backup_encrypted.go`, `edge/internal/store/postgres_backup.go` | `(cd edge && go test ./cmd/iotkit-edge ./internal/store)`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
 | Device retirement or hardware replacement | `docs/okf/<lang>/operations/installation-and-recovery.md` section 9 and Edge Node custody contract | owning Edge Node identity/custody path | focused replacement and custody tests |
-| SQLite-to-PostgreSQL migration | `docs/okf/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `iotkit-edge/cmd/iotkit-edge/main.go`, `iotkit-edge/internal/store/postgres_migrations.go` | `scripts/test-edge-postgres.sh` plus affected command tests |
+| SQLite-to-PostgreSQL migration | `docs/okf/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `edge/cmd/iotkit-edge/main.go`, `edge/internal/store/postgres_migrations.go` | `scripts/test-edge-postgres.sh` plus affected command tests |
 | Manual update or rollback | `docs/okf/<lang>/operations/installation-and-recovery.md` section 11 | `deploy/`, affected startup and migration code | changed update/rollback journey |
-| Capacity, retention, or storage profile selection | `docs/okf/<lang>/operations/storage-capacity.md` | `iotkit-edge/internal/store/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
+| Capacity, retention, or storage profile selection | `docs/okf/<lang>/operations/storage-capacity.md` | `edge/internal/store/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
 | Vulnerability report or accidental secret exposure | `SECURITY.md` | reporting and containment path; do not copy secrets into repository artifacts | follow reporting policy; do not create a public reproducer with secrets |
 | Contract or documentation change | `docs/README.md`, both language files, schemas/types, fixtures, conformance tests | current authority; never a historical plan | `node scripts/check-okf-docs.mjs` plus affected conformance tests |
 | PR review or field report triage | `.agents/skills/iotkit-battle-tested-review/SKILL.md`, `review/battle-tested/README.md` | selector output and linked evidence | `node scripts/battle-tested-review.mjs check` |
@@ -86,8 +86,8 @@ cargo test -p <crate-name>
 scripts/verify.sh
 
 # IoTKit Edge focused / full
-(cd iotkit-edge && go test ./internal/<package>)
-(cd iotkit-edge && go test ./...)
+(cd edge && go test ./internal/<package>)
+(cd edge && go test ./...)
 
 # Console schema, generated assets, and browser journey
 scripts/test-edge-console-frontend.sh
@@ -110,7 +110,7 @@ requires hardware evidence.
 - Never silently lose data. Follow the current ingest and custody contracts.
   `rejected` is only for deterministic terminal violations. A storage failure
   does not produce `rejected` or a durable success acknowledgement.
-- Mutations go through the owning typed operation dispatcher: `core/ops` on Edge
+- Mutations go through the owning typed operation dispatcher: `edge-node/core/ops` on Edge
   Node and the Go application service on IoTKit Edge. Do not add API/UI/CLI paths
   that write SQL directly.
 - Do not treat MQTT PUBACK as IoTKit Edge durable raw acceptance, or downstream
@@ -168,7 +168,7 @@ model or service only when the user explicitly requests it.
   `tests/support/` or a dedicated testkit.
 - Go tests remain in separate `*_test.go` files. Split large product files by
   responsibility within the same package.
-- Frontend unit tests live under `iotkit-edge/frontend/tests/unit/`, not `src/`.
+- Frontend unit tests live under `edge/frontend/tests/unit/`, not `src/`.
 - `scripts/check-source-layout` enforces these boundaries.
 
 ## Review and verification

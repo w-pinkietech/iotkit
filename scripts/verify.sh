@@ -26,7 +26,7 @@ echo "== cargo clippy --workspace --all-targets -- -D warnings =="
 cargo clippy --workspace --all-targets -- -D warnings
 
 echo "== go test ./... =="
-(cd iotkit-edge && go test ./...)
+(cd edge && go test ./...)
 
 if [[ "$full" == true ]]; then
   echo "== scripts/test-mqtt-security.sh =="

@@ -41,7 +41,7 @@ if [[ "$storage_profile" == "postgres" ]]; then
   postgres_dsn="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres_port/iotkit?sslmode=disable"
 fi
 
-cd "$repo_root/iotkit-edge"
+cd "$repo_root/edge"
 IOTKIT_RUN_BROWSER_E2E=1 \
   IOTKIT_TEST_CONSOLE_POSTGRES_DSN="$postgres_dsn" \
   go test ./internal/edgehttp \

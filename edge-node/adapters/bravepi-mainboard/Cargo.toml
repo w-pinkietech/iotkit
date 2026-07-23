@@ -1,0 +1,21 @@
+[package]
+name = "bravepi-mainboard-adapter"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iotkit-core-types = { path = "../../core/types" }
+iotkit-core-supervision = { path = "../../core/supervision" }
+rpi4b-transport = { path = "../../input/hardware/transports/rpi" }
+bravepi-codec = { path = "codec" }
+iotkit-sensor-drivers = { path = "../../input/hardware/sensor-drivers" }
+iotkit-ingest-client = { path = "../../ingest/client", features = ["inproc"] }
+iotkit-ingest-contract = { path = "../../ingest/contract" }
+iotkit-input-adapter-host-api = { path = "../../input/host-api" }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+iotkit-ingest-client = { path = "../../ingest/client", features = ["test-util"] }

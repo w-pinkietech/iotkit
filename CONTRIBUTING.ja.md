@@ -29,7 +29,7 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 対応する開発環境はLinuxです。現在のCIは次を使います。
 
 - `rust-toolchain.toml`が自動選択するRust 1.95.0
-- `iotkit-edge/go.mod`が指定するGo 1.25
+- `edge/go.mod`が指定するGo 1.25
 - Console assetとtest用のNode.js 22、npm
 - Raspberry Pi transport依存の`pkg-config`、`libudev-dev`
 
@@ -79,11 +79,11 @@ sensor / device
 cargo test -p bravepi-mainboard-adapter
 
 # Go製IoTKit Edge側
-(cd iotkit-edge && go test ./internal/outputadapter)
+(cd edge && go test ./internal/outputadapter)
 
 # Browser動作と生成済みConsole型
-npm ci --prefix iotkit-edge/frontend
-npm run check --prefix iotkit-edge/frontend
+npm ci --prefix edge/frontend
+npm run check --prefix edge/frontend
 ```
 
 ### 30〜45分: 実機なしで製品経路を動かす
@@ -113,6 +113,17 @@ directoryを流用してはいけません。
 ingest、Console認証、運用、契約に関するrepository共通の地図とします。完全なcrate
 mapと配置ruleはArchitectureにあります。新しいcrateは、同文書と
 `scripts/check-layers`へ分類するまで追加しません。
+
+短いcomponent別の入口も用意しています。
+
+- 収集とcustody: [`edge-node/README.ja.md`](edge-node/README.ja.md)
+- Transport、Driver、Input Adapter:
+  [`edge-node/adapters/README.ja.md`](edge-node/adapters/README.ja.md)
+- Raw受理、semantic、出力、Console: [`edge/README.ja.md`](edge/README.ja.md)
+
+新しいsensorでは、認証付きHTTP ingestを使えるか、既存direct-I2C Adapterへ
+追加できるか、本当に新しいAdapter familyが必要かを先に判断します。
+対応ICを一つ増やすだけのために新しいfamilyを作りません。
 
 ## 1 issue、1 worktree、1 pull request
 
@@ -187,10 +198,10 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
 
 ## 生成fileとcontract変更
 
-- `iotkit-edge/openapi/edge-console-v1.yaml`を編集し、
-  `npm run generate:api --prefix iotkit-edge/frontend`を実行する。
+- `edge/openapi/edge-console-v1.yaml`を編集し、
+  `npm run generate:api --prefix edge/frontend`を実行する。
 - 埋め込みConsole JavaScriptは
-  `npm run build --prefix iotkit-edge/frontend`で生成する。
+  `npm run build --prefix edge/frontend`で生成する。
 - `Cargo.lock`、`go.sum`、`package-lock.json`は各package managerからだけ更新する。
 - `docs/okf/`の日英fileは同時に変更する。
 - `testdata/`の共有JSONは正規contract dataとして扱う。一実装を通すためだけに
@@ -203,7 +214,7 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
 - 状態変更は所有componentのtyped operation dispatcherを通す。HTTP、UI、CLI、
   AdapterからSQLへ直接writeする経路を追加しない。
 - Rust製品test本体は製品`src/`外、Go testは`*_test.go`、frontend unit testは
-  `iotkit-edge/frontend/tests/unit/`へ置く。
+  `edge/frontend/tests/unit/`へ置く。
 - Legacy planや旧codeを新しい動作の正本にしない。
 
 ## Pull request checklist

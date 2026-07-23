@@ -101,7 +101,7 @@ Activityはsuccessful physical decode、queue admissionのprocess-monotonic time
 
 Completionは全async taskとblocking reader thread停止後にlossless resolveし、`RequestedStop`、reason付き`UnexpectedExit`、`Panic`を表します。Shutdownはidempotent graceful stop requestだけで、timeoutはEdge Nodeが所有します。Start error後にtask/thread/open transportを残しません。
 
-Host APIは`core/supervision`へ依存せず、`AdapterEvent`/`AdapterCommand`、principal作成、storage、設定認可、restart policy、health assertionを公開しません。
+Host APIは`edge-node/core/supervision`へ依存せず、`AdapterEvent`/`AdapterCommand`、principal作成、storage、設定認可、restart policy、health assertionを公開しません。
 
 ## 5. Type catalogと設定
 
@@ -162,7 +162,7 @@ Persisted model IDはdescriptor schema 2へ出す唯一のAdapter-origin metadat
 
 Initial startはfail-fastです。一つが失敗するとstarted instanceを逆順停止してnon-zero exitします。成功後のunexpected exit/restart failureはEdge Node所有のbounded backoff/budgetを使い、exhaustionはprocess-lifetime degraded healthです。Systemd restartでresetします。
 
-Layer checkは全Input Adapterのtransitive Cargo reachabilityを検査し、legacy care pathの`bravepi-mainboard-adapter`だけが`core/supervision`へ到達できます。Polling runtimeはsupervision-freeで、decoded Observation/lifecycle factだけを出します。BravePIもnorthbound seamでdecodeとmapping/submissionを分離し、legacy southbound語彙はpackage-private wrapperへ閉じ込めます。
+Layer checkは全Input Adapterのtransitive Cargo reachabilityを検査し、legacy care pathの`bravepi-mainboard-adapter`だけが`edge-node/core/supervision`へ到達できます。Polling runtimeはsupervision-freeで、decoded Observation/lifecycle factだけを出します。BravePIもnorthbound seamでdecodeとmapping/submissionを分離し、legacy southbound語彙はpackage-private wrapperへ閉じ込めます。
 
 ## 8. Conformance
 

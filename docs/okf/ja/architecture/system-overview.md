@@ -21,7 +21,7 @@ IoTKitは、Rust製`iotkit-edge-node`とoperator CLIの`iotkit-edge-nodectl`、�
 | 導入・運用担当者 | 導入手順、CLI、API、Console、error | 何をどこへ入れ、障害時に次に何を確認するかが分かる |
 | 自作device開発者 | Ingest wire contract | Rustを読まず、少数commandと安定reason codeで接続できる |
 | Adapter開発者 | host API、testkit、driver、既存Adapter | Storageやledgerを知らず、新しいsensor familyを追加できる |
-| Core contributor | `core/*`、binary、test | Crate責務と依存方向が機械検査される |
+| Core contributor | `edge-node/core/*`、binary、test | Crate責務と依存方向が機械検査される |
 | Custody実装者 | Edge Node custody contract | Record family、ack、cursorがversion管理される |
 | Application integrator | Output Adapter contract | Raw custodyへ依存せず、application向けtopic/payloadを受け取れる |
 
@@ -84,7 +84,7 @@ Output Adapterは汎用Observationとroute設定からexact MQTT publicationを�
 
 ## Control plane
 
-Edge Nodeはprivate address client向けHTTPS APIを持ちます。State変更は`core/ops`のtyped operation catalogを通し、permission tier、dry-run、無条件auditを持ちます。新しいmutation surfaceは必ずR14 descriptorとし、API/UI/AI/CLIから新しいSQL mutation pathを作りません。
+Edge Nodeはprivate address client向けHTTPS APIを持ちます。State変更は`edge-node/core/ops`のtyped operation catalogを通し、permission tier、dry-run、無条件auditを持ちます。新しいmutation surfaceは必ずR14 descriptorとし、API/UI/AI/CLIから新しいSQL mutation pathを作りません。
 
 初期ownershipとadmin recoveryはlocal-root maintenanceです。Unownedまたはrecovery中のboxはcontrol API/UIをbindしません。Passphrase resetはcredentialを置換し、operator tokenとsessionをすべて失効します。未認証network setup routeはありません。
 
@@ -100,67 +100,76 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 
 | Crate / path | 責務 |
 |---|---|
-| `core/types` | Protocol非依存domain type。leaf |
-| `iotkit-ingest-contract` | `Envelope`、`Ack`、reason codeのwire contract。Runtime依存はserdeだけ |
-| `core/storage` | SQLite handleとcross-crate migration harness |
-| `core/supervision` | 凍結済み`AdapterEvent` / `AdapterCommand`語彙 |
-| `core/engine` | `AdapterEvent`からdevice stateをprojectするin-memory engine |
-| `core/ledger` | Device ledger、`system_id`、series identity、sighting、epoch、audit |
-| `core/timeseries` | Reading、staging、event time、query |
-| `core/publish` | Activation admission、publication outbox、target、cursor |
-| `core/collector` | Dedup、series解決、quarantine、activation admission、same-transaction enqueue |
-| `core/registry` | Standard catalogとdeployment overrideのmeasurement registry |
-| `core/ops` | Typed operation、permission、auth、dispatch、audit |
-| `iotkit-ingest-client` | Adapterが使うingest contract client |
-| `iotkit-input-adapter-host-api` | Supervision非依存の公式Adapter composition API |
-| `iotkit-input-adapter-testkit` | Conformance assertionとreference Adapter |
-| `iotkit-ingest-http` | Ingest listener、TLS、上限制御。Control APIではない |
-| `iotkit-polling-adapter-runtime` | I2C polling engine。Ingest・mapping・supervision非依存 |
-| `rpi4b-transport` | Raw I2C/GPIO/SPI/PWM I/O。歴史的名前はPi 4B限定を意味しない |
-| `iotkit-sensor-drivers` | Sensor IC定数、identity metadata、datasheet変換 |
-| `bravepi-codec` | BravePI frame codec |
-| `bravepi-mainboard-adapter` | BravePI transport + codec + driverからEnvelopeへの変換 |
-| `rpi-local-adapter` | Direct Linux I2C Adapter、対応model catalog、measurement projection |
-| `bravepi-poc` | BravePI実機PoC用tool。非配布 |
-| `iotkit-edge-node` | Edge Node composition root binary |
-| `iotkit-edge-nodectl` | Edge Node operator CLI |
-| `iotkit-edge/` | Go製IoTKit Edge、raw acceptance、cursor、query、semantic、application export |
-| `iotkit-edge/frontend/src/` | SSR ConsoleのTypeScript browser behavior |
-| `iotkit-edge/openapi/edge-console-v1.yaml` | TypeScript生成元のbrowser JSON contract |
+| `edge-node/core/types` | Protocol非依存domain type。leaf |
+| `edge-node/ingest/contract` (`iotkit-ingest-contract`) | `Envelope`、`Ack`、reason codeのwire contract。Runtime依存はserdeだけ |
+| `edge-node/core/storage` | SQLite handleとcross-crate migration harness |
+| `edge-node/core/supervision` | 凍結済み`AdapterEvent` / `AdapterCommand`語彙 |
+| `edge-node/core/engine` | `AdapterEvent`からdevice stateをprojectするin-memory engine |
+| `edge-node/core/ledger` | Device ledger、`system_id`、series identity、sighting、epoch、audit |
+| `edge-node/core/timeseries` | Reading、staging、event time、query |
+| `edge-node/core/publish` | Activation admission、publication outbox、target、cursor |
+| `edge-node/core/collector` | Dedup、series解決、quarantine、activation admission、same-transaction enqueue |
+| `edge-node/core/registry` | Standard catalogとdeployment overrideのmeasurement registry |
+| `edge-node/core/ops` | Typed operation、permission、auth、dispatch、audit |
+| `edge-node/ingest/client` (`iotkit-ingest-client`) | Adapterが使うingest contract client |
+| `edge-node/input/host-api` (`iotkit-input-adapter-host-api`) | Supervision非依存の公式Adapter composition API |
+| `edge-node/input/testkit` (`iotkit-input-adapter-testkit`) | Conformance assertionとreference Adapter |
+| `edge-node/ingest/http` (`iotkit-ingest-http`) | Ingest listener、TLS、上限制御。Control APIではない |
+| `edge-node/input/runtimes/polling` (`iotkit-polling-adapter-runtime`) | I2C polling engine。Ingest・mapping・supervision非依存 |
+| `edge-node/input/hardware/transports/rpi` (`rpi4b-transport`) | Raw I2C/GPIO/SPI/PWM I/O。歴史的名前はPi 4B限定を意味しない |
+| `edge-node/input/hardware/sensor-drivers` (`iotkit-sensor-drivers`) | Sensor IC定数、identity metadata、datasheet変換 |
+| `edge-node/adapters/bravepi-mainboard/codec` (`bravepi-codec`) | BravePI frame codec |
+| `edge-node/adapters/bravepi-mainboard` (`bravepi-mainboard-adapter`) | BravePI transport + codec + driverからEnvelopeへの変換 |
+| `edge-node/adapters/rpi-local` (`rpi-local-adapter`) | Direct Linux I2C Adapter、対応model catalog、measurement projection |
+| `edge-node/tools/bravepi-poc` (`bravepi-poc`) | BravePI実機PoC用tool。非配布 |
+| `edge-node/apps/node` (`iotkit-edge-node`) | Edge Node composition root binary |
+| `edge-node/apps/nodectl` (`iotkit-edge-nodectl`) | Edge Node operator CLI |
+| `edge/` | Go製IoTKit Edge、raw acceptance、cursor、query、semantic、application export |
+| `edge/frontend/src/` | SSR ConsoleのTypeScript browser behavior |
+| `edge/openapi/edge-console-v1.yaml` | TypeScript生成元のbrowser JSON contract |
 | `testdata/egress/v1/`, `v2/` | Rust/Go両方がdecodeするcross-language fixture |
 
 ## 機械検査するlayer rule
 
-1. Adapterは`core/engine`へ依存しない。
+1. Adapterは`edge-node/core/engine`へ依存しない。
 2. Adapterは`iotkit-ingest-client`以外からdata planeへ到達しない。
 3. `iotkit-ingest-contract`のruntime依存はserdeだけ。
-4. `core/types`と`core/storage`はleaf。`core/*`からAdapter・binaryへ上向き依存しない。
+4. `edge-node/core/types`と`edge-node/core/storage`はleaf。`edge-node/core/*`からAdapter・binaryへ上向き依存しない。
 5. 新workspace crateは`scripts/check-layers`とこのmapへ分類する。
 6. `iotkit-ingest-client`のworkspace依存はcollectorとcontractだけ。
-7. `core/supervision`のnon-dev dependent setを固定する。
+7. `edge-node/core/supervision`のnon-dev dependent setを固定する。
 8. Ingest HTTPとcontrol APIを分離する。
 9. IoTKit Edgeはwire contractを使い、Edge Node内部packageやDBを読まない。
 10. Input Adapterからsupervisionへのtransitive到達も検査する。
 
-意図的な例外として、collector所有portをregistryが実装する`core/registry -> core/collector`、in-process bindingのためのingest clientからcollectorへの依存、BravePI subcrateのco-location、cross-crate joinを持つretention/record materializationのbinary配置、identity transactionを共有する単一ledger aggregateがあります。理由を理解せず「修正」しません。
+意図的な例外として、collector所有portをregistryが実装する`edge-node/core/registry -> edge-node/core/collector`、in-process bindingのためのingest clientからcollectorへの依存、BravePI subcrateのco-location、cross-crate joinを持つretention/record materializationのbinary配置、identity transactionを共有する単一ledger aggregateがあります。理由を理解せず「修正」しません。
 
 ## Code配置rule
 
+先に接続境界を選び、その後でcrateを選びます。
+
+1. Deviceがversioned Envelope/Ack contractを直接送れる場合は
+   `edge-node/ingest/http`へ接続し、Rust Input Adapterは作りません。
+2. 既存のdirect-I2C transport、polling lifecycle、identity、config形状に
+   合う新しいsensor ICは`edge-node/adapters/rpi-local`へ追加します。
+3. Discovery、wire protocol、security、lifecycle、identityが異なる場合は
+   `edge-node/adapters/`配下に新しいfamilyを作り、host contractを実装します。
+
 | 追加するもの | 配置先 |
 |---|---|
-| Acquisition間で再利用するdatasheet変換 | `iotkit-sensor-drivers` |
-| 同じI2C transport・polling・identity・config形状の新IC | `rpi-local-adapter`のtyped model catalog |
-| Discovery、wire、security、lifecycle、identityが異なるdevice family | 新しいtop-level `*-adapter` crate |
-| Ingest wire変更 | `iotkit-ingest-contract`とconformance test |
-| Edge Node state変更operation | `core/ops` catalogとdispatch |
+| Acquisition間で再利用するdatasheet変換 | `edge-node/input/hardware/sensor-drivers` (`iotkit-sensor-drivers`) |
+| 同じI2C transport・polling・identity・config形状の新IC | `edge-node/adapters/rpi-local`のtyped model catalog |
+| Discovery、wire、security、lifecycle、identityが異なるdevice family | `edge-node/adapters/`配下の新しいsibling crate |
+| Ingest wire変更 | `edge-node/ingest/contract`とconformance test |
+| Edge Node state変更operation | `edge-node/core/ops` catalogとdispatch |
 | IoTKit Edge state変更operation | Go application-service typed dispatcher |
 | Table / column | 所有crateのmigration slice |
-| Control-plane route | `iotkit-edge-node/src/api/`のthin layer、logicは所有`core/*` |
-| Measurement HTTP binding | `iotkit-ingest-http` |
-| CLI command | `iotkit-edge-nodectl`から`core/*`を呼ぶ |
-| IoTKit Edge acceptance/query/semantic/export | `iotkit-edge/` |
-| Raw bus/pin access | `rpi4b-transport` |
-| Tableを持つ、両binaryで必要、複数責務を持つNode module | `core/<name>`へ昇格 |
+| Control-plane route | `edge-node/apps/node/src/api/`のthin layer、logicは所有`edge-node/core/*` |
+| Measurement HTTP binding | `edge-node/ingest/http` (`iotkit-ingest-http`) |
+| CLI command | `iotkit-edge-nodectl`から`edge-node/core/*`を呼ぶ |
+| IoTKit Edge acceptance/query/semantic/export | `edge/` |
+| Raw bus/pin access | `edge-node/input/hardware/transports/rpi` (`rpi4b-transport`) |
+| Tableを持つ、両binaryで必要、複数責務を持つNode module | `edge-node/core/<name>`へ昇格 |
 
 ## 主要data structure
 
@@ -174,7 +183,7 @@ Edge Node process全体で`Arc<Mutex<Connection>>`を一つ使い、全subsystem
 
 ## Migrationと互換性
 
-`core/storage/migrate.rs`はcrateごとに分割されたversion空間を扱うため、最大versionではなく適用済みsetとの差分でmigrationを実行します。新しいon-disk schemaを古いbinaryで開く場合は`SchemaVersionAhead`で拒否し、downgradeで利用者dataを壊しません。
+`edge-node/core/storage/migrate.rs`はcrateごとに分割されたversion空間を扱うため、最大versionではなく適用済みsetとの差分でmigrationを実行します。新しいon-disk schemaを古いbinaryで開く場合は`SchemaVersionAhead`で拒否し、downgradeで利用者dataを壊しません。
 
 ## 次に読む文書
 

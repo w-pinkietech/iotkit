@@ -109,7 +109,7 @@ if ! docker run --rm --user "$(id -u):$(id -g)" \
   -v "$go_build_cache:/tmp/gocache" \
   -v "$repo_root:/src" \
   -v "$scratch:/run/iotkit-test:ro" \
-  -w /src/iotkit-edge \
+  -w /src/edge \
   golang:1.25-bookworm \
   go test -tags=integration ./internal/mqttedge \
     -run TestMQTTPreActivationFixtureGetsNoApplicationAcknowledgement -count=1; then
@@ -165,7 +165,7 @@ if ! docker run --rm --user "$(id -u):$(id -g)" \
   -v "$go_build_cache:/tmp/gocache" \
   -v "$repo_root:/src" \
   -v "$scratch:/run/iotkit-test:ro" \
-  -w /src/iotkit-edge \
+  -w /src/edge \
   golang:1.25-bookworm \
   go test -tags=integration ./internal/mqttedge \
     -run TestMQTTRetainedDescriptorIsAvailableToLateSubscriber -count=1; then
@@ -226,7 +226,7 @@ if ! docker run --rm --user "$(id -u):$(id -g)" \
   -v "$go_build_cache:/tmp/gocache" \
   -v "$repo_root:/src" \
   -v "$scratch:/run/iotkit-test:rw" \
-  -w /src/iotkit-edge \
+  -w /src/edge \
   golang:1.25-bookworm \
   go test -tags=integration ./internal/mqttedge \
     -run TestEdgeNodeActivationCommandConvergesWithEdge -count=1; then

@@ -126,17 +126,17 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: iotkit-edge/go.mod
-          cache-dependency-path: iotkit-edge/go.sum
+          go-version-file: edge/go.mod
+          cache-dependency-path: edge/go.sum
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: iotkit-edge/frontend/package-lock.json
+          cache-dependency-path: edge/frontend/package-lock.json
 
       - name: Install Console tooling
-        run: npm ci --prefix iotkit-edge/frontend
+        run: npm ci --prefix edge/frontend
 
       - name: Console schema, types, and generated assets
         run: scripts/test-edge-console-frontend.sh
@@ -145,5 +145,5 @@ jobs:
         run: scripts/test-edge-console-e2e.sh
 
       - name: Edge tests
-        working-directory: iotkit-edge
+        working-directory: edge
         run: go test ./...

@@ -11,7 +11,7 @@ export GOCACHE="${GOCACHE:-$repo_root/../.cache/iotkit-edge-go-cache}"
 export TMPDIR="${TMPDIR:-$repo_root/../.tmp/runtime}"
 mkdir -p "$GOTMPDIR" "$GOCACHE" "$TMPDIR"
 
-cd "$repo_root/iotkit-edge"
+cd "$repo_root/edge"
 IOTKIT_CAPACITY_REPORT="$report_dir/embedded.json" \
   go test ./internal/store -run '^TestStorageCapacityRegressionSmoke$' -count=1
 

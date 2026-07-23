@@ -2,21 +2,7 @@
 
 import { pathToFileURL } from "node:url";
 
-const rustRoots = [
-  "bravepi-mainboard-adapter/",
-  "core/",
-  "iotkit-edge-node/",
-  "iotkit-edge-nodectl/",
-  "iotkit-ingest-client/",
-  "iotkit-ingest-contract/",
-  "iotkit-ingest-http/",
-  "iotkit-input-adapter-host-api/",
-  "iotkit-input-adapter-testkit/",
-  "iotkit-polling-adapter-runtime/",
-  "iotkit-sensor-drivers/",
-  "rpi-local-adapter/",
-  "rpi4b-transport/",
-];
+const rustRoots = ["edge-node/"];
 
 const rustFiles = new Set([
   "Cargo.lock",
@@ -69,7 +55,7 @@ function classify(path) {
   if (rustFiles.has(path) || rustRoots.some((prefix) => path.startsWith(prefix))) {
     return { rust: true, edge: false };
   }
-  if (edgeFiles.has(path) || path.startsWith("iotkit-edge/")) {
+  if (edgeFiles.has(path) || path.startsWith("edge/")) {
     return { rust: false, edge: true };
   }
   if (path.startsWith("testdata/") ||

@@ -15,7 +15,7 @@ test("the repository catalog is structurally valid", () => {
 });
 
 test("storage changes select power-loss, pressure, and replacement questions", () => {
-  const result = selectEntries(catalog, ["core/storage/src/lib.rs"]);
+  const result = selectEntries(catalog, ["edge-node/core/storage/src/lib.rs"]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
     ["BT-002", "BT-003", "BT-004"],
@@ -25,7 +25,7 @@ test("storage changes select power-loss, pressure, and replacement questions", (
 
 test("MQTT output changes select the reproduced convergence question", () => {
   const result = selectEntries(catalog, [
-    "iotkit-edge/internal/outputadapter/worker.go",
+    "edge/internal/outputadapter/worker.go",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
@@ -35,7 +35,7 @@ test("MQTT output changes select the reproduced convergence question", () => {
 
 test("durable output changes select convergence and storage failure questions", () => {
   const result = selectEntries(catalog, [
-    "iotkit-edge/internal/store/output_v3.go",
+    "edge/internal/store/output_v3.go",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
@@ -45,7 +45,7 @@ test("durable output changes select convergence and storage failure questions", 
 
 test("HTTP admission changes select storage pressure acknowledgement review", () => {
   const result = selectEntries(catalog, [
-    "iotkit-ingest-http/src/admission.rs",
+    "edge-node/ingest/http/src/admission.rs",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
@@ -55,7 +55,7 @@ test("HTTP admission changes select storage pressure acknowledgement review", ()
 
 test("Console changes select only the operator diagnosis question", () => {
   const result = selectEntries(catalog, [
-    "iotkit-edge/frontend/src/navigation.ts",
+    "edge/frontend/src/navigation.ts",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
@@ -92,12 +92,12 @@ test("recognized concerns without an entry remain visible without becoming unkno
 test("deleted and both sides of renamed paths are retained from git name status", () => {
   assert.deepEqual(
     parseNameStatus(
-      "D\tcore/publish/src/wire.rs\nR100\told/path.rs\tiotkit-edge/internal/store/output_v3.go\n",
+      "D\tedge-node/core/publish/src/wire.rs\nR100\told/path.rs\tedge/internal/store/output_v3.go\n",
     ),
     [
-      "core/publish/src/wire.rs",
+      "edge-node/core/publish/src/wire.rs",
       "old/path.rs",
-      "iotkit-edge/internal/store/output_v3.go",
+      "edge/internal/store/output_v3.go",
     ],
   );
 });

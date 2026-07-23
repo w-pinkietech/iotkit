@@ -218,7 +218,7 @@ scripts/test-edge-postgres.sh
 scripts/test-edge-capacity.sh
 
 # Generated Console types, TypeScript, and embedded JavaScript synchronization
-npm ci --prefix iotkit-edge/frontend
+npm ci --prefix edge/frontend
 scripts/test-edge-console-frontend.sh
 
 # Chromium journey: login, Edge Node registration, sensors, semantics, output, and roles
@@ -230,8 +230,8 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 ```
 
 The IoTKit Console keeps server-side rendering in Go and implements only browser
-behavior in TypeScript under `iotkit-edge/frontend/src/`. JSON API types are
-generated from `iotkit-edge/openapi/edge-console-v1.yaml`. The distribution embeds
+behavior in TypeScript under `edge/frontend/src/`. JSON API types are
+generated from `edge/openapi/edge-console-v1.yaml`. The distribution embeds
 the esbuild output as `static/console.js`, so the IoTKit Edge runtime does not
 require Node.js.
 
@@ -245,14 +245,19 @@ PostgreSQL, and Broker failures.
 
 | Path | What |
 |------|------|
-| `core/*` | The domain, one responsibility per crate: storage, ledger (device identity), timeseries, registry, collector (ingest), publish (outbox), ops (R14 typed operations & auth), types, engine (supervision) |
-| `iotkit-ingest-contract` / `iotkit-ingest-client` | The ingest wire contract (Envelope/Ack) and the client adapters use |
-| `*-adapter*` / `iotkit-sensor-drivers` / `rpi4b-transport` | Sensor adapters (BravePI mainboard, rpi-local), shared sensor-IC drivers and polling runtime, raw bus transport |
-| `iotkit-edge-node` / `iotkit-edge-nodectl` | IoTKit Edge Node daemon and its operator CLI |
-| `iotkit-edge` | IoTKit Edge MQTT consumer, durable raw/semantic store, cursor manager, application exporter, authenticated SSR Console, and query/configuration CLI |
+| `edge-node/apps/` | Rust Edge Node daemon and operator CLI composition roots |
+| `edge-node/core/` | Durable collection domain, one responsibility per crate |
+| `edge-node/ingest/` | Envelope/Ack contract plus in-process and authenticated HTTP bindings |
+| `edge-node/input/` | Adapter host API, conformance testkit, polling runtime, transports, and reusable sensor drivers |
+| `edge-node/adapters/` | Concrete sensor-family integrations such as BravePI Mainboard and direct Raspberry Pi I2C |
+| `edge/` | Go IoTKit Edge service, Console, raw/semantic storage, cursor management, and application output |
+| `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | Shared contracts, deployment, automation, cross-component fixtures, and review policy |
 
 The full crate map, layer rules, and "where does new code go" placement table
 live in the [architecture documentation](docs/okf/en/architecture/system-overview.md).
+Start collection-side work at [`edge-node/README.md`](edge-node/README.md), concrete
+adapter work at [`edge-node/adapters/README.md`](edge-node/adapters/README.md), and
+Edge/Console work at [`edge/README.md`](edge/README.md).
 
 Development can be resumed from a single clone, including in Codex Cloud. See
 [docs/cloud-development.md](docs/cloud-development.md) for the restart order and
