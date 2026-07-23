@@ -28,6 +28,7 @@ pub struct PreviewPoint {
 
 pub struct Preview {
     pub input_count: usize,
+    pub plot_count: usize,
     pub points: Vec<PreviewPoint>,
     pub test_result: Option<Evaluation>,
 }
@@ -51,7 +52,10 @@ pub fn build_preview(
             spec,
             state,
             input.value,
-            input.observed_at.unwrap_or(input.received_at),
+            input
+                .observed_at
+                .filter(|value| *value != 0)
+                .unwrap_or(input.received_at),
         )?;
         state = next;
         let active = (spec.kind != SemanticKind::Numeric).then_some(state.active);
@@ -80,6 +84,7 @@ pub fn build_preview(
         .map(|pair| pair.0);
     Ok(Preview {
         input_count: inputs.len(),
+        plot_count: points.len(),
         points,
         test_result,
     })

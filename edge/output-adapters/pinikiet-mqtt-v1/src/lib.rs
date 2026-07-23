@@ -180,6 +180,15 @@ impl ProfilePolicy for PinikietProfilePolicy {
             .get("reason")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
+        let compatible = matches!(
+            (request.observation_kind, request.mode),
+            (ObservationKind::CumulativeValue, "production")
+                | (ObservationKind::Boolean, "onoff" | "gantt_chart")
+                | (ObservationKind::Alarm, "alarm")
+        );
+        if !compatible || reason.len() > 512 || (request.mode != "alarm" && !reason.is_empty()) {
+            return Err(AdapterError::InvalidConfiguration);
+        }
         let config = serde_json::value::to_raw_value(&serde_json::json!({
             "schema_version": 1,
             "source_id": request.edge_id,

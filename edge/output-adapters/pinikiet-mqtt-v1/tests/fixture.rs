@@ -67,3 +67,21 @@ fn profile_policy_uses_edge_owned_source_and_signal_scoped_sensor_identity() {
     assert_eq!(config["source_id"], "edge-0123456789abcdef0123456789abcdef");
     assert_eq!(config["sensor_id"], "sen-0123456789abcdef0123456789abcdef");
 }
+
+#[test]
+fn profile_policy_rejects_incompatible_kind_and_mode() {
+    let values = serde_json::Map::new();
+    assert!(
+        PinikietProfilePolicy
+            .propose(&ProfileRequest {
+                edge_id: "edge-0123456789abcdef0123456789abcdef",
+                rule_id: "rule-01",
+                signal_ref: "edge-node-01:series-01",
+                external_id: "sen-0123456789abcdef0123456789abcdef",
+                observation_kind: ObservationKind::Numeric,
+                mode: "production",
+                values: &values,
+            })
+            .is_err()
+    );
+}

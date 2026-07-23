@@ -17,6 +17,8 @@ pub enum SemanticKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DetectorMode {
+    #[serde(rename = "")]
+    None,
     BooleanHighActive,
     BooleanLowActive,
     HighActive,
@@ -26,12 +28,14 @@ pub enum DetectorMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerMode {
+    #[serde(rename = "")]
+    None,
     OnTransition,
     OnNotification,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Detector {
     pub mode: DetectorMode,
     pub rise_threshold: f64,
@@ -40,14 +44,43 @@ pub struct Detector {
     pub fall_debounce_ms: i64,
 }
 
+impl Default for Detector {
+    fn default() -> Self {
+        Self {
+            mode: DetectorMode::None,
+            rise_threshold: 0.0,
+            fall_threshold: 0.0,
+            rise_debounce_ms: 0,
+            fall_debounce_ms: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DefinitionSpec {
     pub kind: SemanticKind,
     pub scale: f64,
+    #[serde(default)]
     pub offset: f64,
-    pub detector: Option<Detector>,
-    pub trigger: Option<TriggerMode>,
+    #[serde(default)]
+    pub detector: Detector,
+    #[serde(default = "no_trigger")]
+    pub trigger: TriggerMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuleSpec {
+    pub kind: SemanticKind,
+    #[serde(default)]
+    pub detector: Detector,
+    #[serde(default = "no_trigger")]
+    pub trigger: TriggerMode,
+}
+
+const fn no_trigger() -> TriggerMode {
+    TriggerMode::None
 }
 
 impl DefinitionSpec {
@@ -58,16 +91,26 @@ impl DefinitionSpec {
         }
         .validate()?;
         match self.kind {
-            SemanticKind::Numeric if self.detector.is_none() && self.trigger.is_none() => Ok(()),
-            SemanticKind::Boolean | SemanticKind::Alarm
-                if self.detector.is_some() && self.trigger.is_none() =>
+            SemanticKind::Numeric
+                if self.detector.mode == DetectorMode::None
+                    && self.trigger == TriggerMode::None =>
             {
-                self.detector.expect("checked").validate()
+                Ok(())
+            }
+            SemanticKind::Boolean | SemanticKind::Alarm
+                if self.detector.mode != DetectorMode::None
+                    && self.trigger == TriggerMode::None =>
+            {
+                self.detector.validate()
             }
             SemanticKind::CumulativeCounter
-                if self.detector.is_some() && self.trigger.is_some() =>
+                if self.detector.mode != DetectorMode::None
+                    && matches!(
+                        self.trigger,
+                        TriggerMode::OnTransition | TriggerMode::OnNotification
+                    ) =>
             {
-                self.detector.expect("checked").validate()
+                self.detector.validate()
             }
             _ => Err(SemanticError::Invalid(
                 "semantic kind, detector, and trigger are inconsistent".into(),
@@ -156,7 +199,7 @@ pub fn evaluate_at(
         return Ok((result, state));
     }
 
-    let detector = spec.detector.expect("validated detector");
+    let detector = spec.detector;
     let candidate = detector_active(detector, state, calibrated)?;
     if !state.initialized {
         state.initialized = true;
@@ -197,9 +240,10 @@ pub fn evaluate_at(
             result.boolean = Some(state.active);
         }
         SemanticKind::CumulativeCounter => {
-            let increments = match spec.trigger.expect("validated trigger") {
+            let increments = match spec.trigger {
                 TriggerMode::OnNotification => state.active,
                 TriggerMode::OnTransition => !previous && state.active,
+                TriggerMode::None => unreachable!("validated trigger"),
             };
             if increments {
                 if state.counter >= MAX_SAFE_INTEGER {
@@ -217,12 +261,33 @@ pub fn evaluate_at(
     Ok((result, state))
 }
 
+pub fn evaluate_rule(
+    spec: RuleSpec,
+    state: EvaluationState,
+    calibrated: f64,
+    received_at: i64,
+) -> Result<(Evaluation, EvaluationState), SemanticError> {
+    evaluate_at(
+        DefinitionSpec {
+            kind: spec.kind,
+            scale: 1.0,
+            offset: 0.0,
+            detector: spec.detector,
+            trigger: spec.trigger,
+        },
+        state,
+        calibrated,
+        received_at,
+    )
+}
+
 fn detector_active(
     detector: Detector,
     state: EvaluationState,
     value: f64,
 ) -> Result<bool, SemanticError> {
     match detector.mode {
+        DetectorMode::None => Err(SemanticError::Invalid("detector mode is required".into())),
         DetectorMode::BooleanHighActive | DetectorMode::BooleanLowActive => {
             if value != 0.0 && value != 1.0 {
                 return Err(SemanticError::Invalid(

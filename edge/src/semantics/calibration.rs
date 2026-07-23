@@ -26,7 +26,7 @@ impl Calibration {
         if !input.is_finite() {
             return Err(SemanticError::Invalid("input must be finite".into()));
         }
-        let value = input.mul_add(self.scale, self.offset);
+        let value = input * self.scale + self.offset;
         if !value.is_finite() {
             return Err(SemanticError::Invalid(
                 "calibrated input must be finite".into(),
