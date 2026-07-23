@@ -136,6 +136,17 @@ directoryを流用してはいけません。
 7. そこで停止して人間へreviewを依頼する。自分でmergeしない。
 8. Review指摘は同じbranchとpull requestで修正する。
 
+最終reviewでは、差分に関係する現場の失敗観点だけを選びます。
+
+```bash
+node scripts/battle-tested-review.mjs select --base origin/master
+```
+
+選択方法、現場報告の秘匿化、review項目をtestまたはrunbookへ昇格させる規則は
+[Battle-testedレビュースイート](review/battle-tested/README.ja.md)にあります。実環境で
+問題を見つけた場合は、GitHubの`Field report / 現場報告` Issue formを使い、生ログ、設定、
+DB、credential、顧客・工場・network・deviceの識別情報を添付しないでください。
+
 例:
 
 ```bash
@@ -210,5 +221,6 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
 - 公開動作に実行可能testまたはfixtureがある。
 - Contract変更では全表現を一緒に更新する。
 - Operator・contributor workflow変更では文書を更新する。
+- Battle-tested selectorの関連ID、または該当なしの理由を書く。
 - 無関係なrefactor、secret、local DB、生成証明書、deployment artifactを含めない。
 - Branchは人間がreviewできる状態だが、mergeされていない。

@@ -142,6 +142,19 @@ Every development task uses the following loop:
 7. Stop and request human review. Do not merge the pull request yourself.
 8. Apply review feedback on the same branch and pull request.
 
+For the final review, select only the field failure questions related to the
+change:
+
+```bash
+node scripts/battle-tested-review.mjs select --base origin/master
+```
+
+See the [battle-tested review suite](review/battle-tested/README.md) for selection,
+redaction, triage, and promotion rules. Use the GitHub
+`Field report / 現場報告` issue form for problems found in a real installation.
+Do not attach raw logs, configuration, databases, credentials, or customer,
+factory, network, or device identifiers.
+
 Example:
 
 ```bash
@@ -224,6 +237,7 @@ every pull request.
 - Public behavior has an executable test or fixture.
 - Contract changes update all representations together.
 - Documentation is updated when an operator or contributor workflow changes.
+- Related battle-tested IDs are recorded, or the PR explains why none apply.
 - No unrelated refactor, secret, local database, generated certificate, or
   deployment artifact is included.
 - The branch is ready for human review but remains unmerged.

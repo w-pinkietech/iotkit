@@ -1,0 +1,119 @@
+name: Field report / 現場報告
+description: Report an operational problem without customer data or secrets / 顧客情報や秘密を含めず運用上の問題を報告します
+title: "[field] "
+labels:
+  - field-report
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping make IoTKit work in real installations.
+
+        IoTKitを実際の現場で使えるものにするための報告に感謝します。
+
+        Do not attach raw logs, configuration, databases, credentials, keys, tokens, customer or factory names, IP addresses, hostnames, SSIDs, MAC addresses, serial numbers, MQTT topics or payloads, or screenshots containing them. Replace identifiers with stable placeholders such as `EDGE_A`.
+
+        生ログ、設定、DB、credential、鍵、token、顧客名、工場名、IP address、hostname、SSID、MAC address、serial番号、MQTT topic/payload、それらを含むscreenshotを添付しないでください。識別子は`EDGE_A`のような一貫した仮名へ置き換えてください。
+
+        For a suspected vulnerability or any report that cannot be safely redacted, stop and follow the [security policy](https://github.com/w-pinkietech/iotkit-next/security/policy). Do not submit it here.
+
+        脆弱性の疑い、または安全に秘匿化できない報告は入力を止め、[Security policy](https://github.com/w-pinkietech/iotkit-next/security/policy)に従ってください。このformでは送信しないでください。
+  - type: input
+    id: version
+    attributes:
+      label: IoTKit version or commit / Versionまたはcommit
+      placeholder: v1.0.0 or 0123abcd
+    validations:
+      required: true
+  - type: dropdown
+    id: storage
+    attributes:
+      label: IoTKit Edge storage / 保存profile
+      options:
+        - embedded (SQLite)
+        - PostgreSQL
+        - Unknown / 不明
+    validations:
+      required: true
+  - type: dropdown
+    id: scale
+    attributes:
+      label: Approximate scale / おおよその規模
+      options:
+        - 1 Edge Node, 1-10 sensors
+        - 1 Edge Node, 11-100 sensors
+        - 2-10 Edge Nodes
+        - More than 10 Edge Nodes
+        - Unknown / 不明
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / 対象領域
+      options:
+        - Edge Node input or Input Adapter / 入力
+        - Edge Node custody or Broker path / 保管責任・Broker経路
+        - IoTKit Edge storage or semantics / 保存・意味付け
+        - Console or diagnostics / 画面・診断
+        - External output / 外部出力
+        - Installation, update, backup, or restore / 導入・更新・復旧
+        - Unknown / 不明
+    validations:
+      required: true
+  - type: textarea
+    id: action
+    attributes:
+      label: What was happening? / 何をしていましたか
+      description: Describe the operator action and system state using redacted placeholders.
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: What happened? / 何が起きましたか
+      description: State what you observed, not the assumed root cause.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Primary impact / 主な影響
+      options:
+        - Possible data loss / 欠測の可能性
+        - Collection or output stopped or delayed / 収集・出力の停止または遅延
+        - Duplicate or out-of-order data / 重複または順序逆転
+        - Misleading Console or diagnostics / 画面または診断が分かりにくい
+        - Operator recovery work / 復旧作業が必要
+        - No lasting impact observed / 継続的な影響は未確認
+        - Unknown / 不明
+    validations:
+      required: true
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Reproducibility / 再現性
+      options:
+        - Every time / 毎回
+        - Intermittent / 時々
+        - Happened once / 1回だけ
+        - Not attempted / 未確認
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Recovery attempted / 実施した復旧
+      description: Summarize only the type of action and its result, such as restart, reconnect, or restore. Do not paste exact commands or output. Write "none" if no recovery was attempted. / 再起動、再接続、復元など操作の種類と結果だけを要約し、正確なcommandや出力は貼らないでください。未実施ならnoneと書きます。
+    validations:
+      required: true
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Safe report confirmation / 秘匿化の確認
+      options:
+        - label: I removed all secrets, customer/factory identifiers, network identifiers, device identifiers, raw MQTT data, databases, configuration files, and sensitive screenshots. / 秘密、顧客・工場・network・deviceの識別情報、生MQTT data、DB、設定file、機密を含むscreenshotを除きました。
+          required: true
+        - label: I understand that this report is unconfirmed until maintainers reproduce or otherwise verify it. / Maintainerが再現または確認するまで未確認の報告として扱われることを理解しました。
+          required: true
