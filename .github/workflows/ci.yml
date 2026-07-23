@@ -14,8 +14,41 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: fmt / clippy / test
+  changes:
+    name: select CI jobs
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.select.outputs.rust }}
+      edge: ${{ steps.select.outputs.edge }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Classify changed paths
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ -n "$BASE_SHA" &&
+                ! "$BASE_SHA" =~ ^0+$ &&
+                -n "$HEAD_SHA" ]] &&
+             git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null &&
+             git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+            git diff --name-only "$BASE_SHA" "$HEAD_SHA" |
+              node scripts/select-ci-jobs.mjs >> "$GITHUB_OUTPUT"
+          else
+            node scripts/select-ci-jobs.mjs </dev/null >> "$GITHUB_OUTPUT"
+          fi
+
+  lightweight:
+    name: lightweight repository checks
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,10 +64,27 @@ jobs:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-okf-docs.mjs
 
+      - name: Layer rules
+        run: scripts/check-layers
+
+      - name: Source/test layout
+        run: scripts/check-source-layout
+
       - name: Battle-tested review catalog and routing
         run: |
           node scripts/battle-tested-review.mjs check
           node --test scripts/tests/battle-tested-review.test.mjs
+
+      - name: Selective CI routing
+        run: node --test scripts/tests/select-ci-jobs.test.mjs
+
+  check:
+    name: fmt / clippy / test
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       # serialport (via rpi4b-transport → adapters → iotkit-edge-node) pulls
       # libudev-sys, whose build script needs libudev's pkg-config file. It's
@@ -57,12 +107,6 @@ jobs:
       - name: Formatting (cargo fmt --check)
         run: cargo fmt --all --check
 
-      - name: Layer rules (scripts/check-layers)
-        run: scripts/check-layers
-
-      - name: Source/test layout (scripts/check-source-layout)
-        run: scripts/check-source-layout
-
       - name: Lints (cargo clippy -D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -74,6 +118,8 @@ jobs:
 
   edge:
     name: edge go / console test
+    needs: changes
+    if: needs.changes.outputs.edge == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
