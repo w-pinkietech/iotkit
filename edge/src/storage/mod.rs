@@ -22,7 +22,9 @@ use tokio::sync::Mutex;
 
 mod activation;
 mod auth;
+mod cli_compat;
 mod history;
+mod migrate;
 mod profiles;
 mod recovery;
 mod semantic_output;
@@ -35,6 +37,7 @@ pub use auth::{
 pub use history::{
     HistoryBucket, RawHistoryPage, RawHistoryQuery, StoredRawHistoryRow, StoredSemanticHistoryRow,
 };
+pub use migrate::{MigrationCursor, StorageMigrationReport, migrate_sqlite_to_postgres};
 pub use semantic_output::{ClaimedOutput, OutputMark};
 
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
@@ -109,6 +112,62 @@ pub struct StoredPreviewInput {
     pub record_json: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliRawRecordRow {
+    pub edge_node_id: String,
+    pub ledger_epoch: String,
+    pub pub_seq: i64,
+    pub publication_id: String,
+    pub record_json: Vec<u8>,
+    pub received_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CliSemanticRevisionRow {
+    pub rule_id: String,
+    pub revision: i64,
+    pub edge_node_id: String,
+    pub series_key: String,
+    pub spec: crate::semantics::RuleSpec,
+    pub active: bool,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CliSemanticEventRow {
+    pub event_id: String,
+    pub rule_id: String,
+    pub mapping_revision: i64,
+    pub event_sequence: i64,
+    pub edge_node_id: String,
+    pub ledger_epoch: String,
+    pub source_pub_seq: i64,
+    pub source_series_key: String,
+    pub occurred_at: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CliRouteDraft {
+    pub rule_id: String,
+    pub adapter_id: String,
+    pub config_schema_version: i64,
+    pub config: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct CliRouteStatusRow {
+    pub route_id: String,
+    pub rule_id: String,
+    pub config: serde_json::Value,
+    pub start_after_observation_row_id: i64,
+    pub active: bool,
+    pub created_at: i64,
+    pub pending_count: i64,
+    pub published_count: i64,
+    pub oldest_pending_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AcceptedCursor {
     pub accepted_through: i64,
@@ -180,6 +239,8 @@ pub enum StorageError {
     ProfileNotFound,
     #[error("semantic or output resource was not found")]
     SemanticNotFound,
+    #[error("storage profile migration rejected: {0}")]
+    ProfileMigration(String),
 }
 
 #[derive(Clone)]

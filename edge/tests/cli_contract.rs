@@ -54,6 +54,14 @@ fn serve_preserves_storage_and_console_binding_flags() {
         "embedded",
         "--db",
         "/data/edge.db",
+        "--edge-id",
+        "edge-01",
+        "--broker-url",
+        "mqtts://broker.example:8883",
+        "--username",
+        "edge-01",
+        "--password-file",
+        "/run/secrets/broker-password",
         "--http-listen",
         "127.0.0.1:8080",
         "--public-origin",
@@ -97,6 +105,73 @@ fn secrets_are_file_inputs_and_cannot_be_supplied_as_cli_values() {
         ])
         .is_err()
     );
+}
+
+#[test]
+fn clap_accepts_all_legacy_operator_commands_and_exact_migration_flags() {
+    for arguments in [
+        vec!["iotkit-edge", "query", "--db", "edge.db", "--limit", "10"],
+        vec!["iotkit-edge", "mapping-list", "--db", "edge.db"],
+        vec![
+            "iotkit-edge",
+            "mapping-deactivate",
+            "--db",
+            "edge.db",
+            "--edge-node-id",
+            "node",
+            "--series-key",
+            "contact",
+        ],
+        vec![
+            "iotkit-edge",
+            "route-add",
+            "--db",
+            "edge.db",
+            "--mapping-id",
+            "sm-550e8400e29b41d4a716446655440000",
+            "--topic",
+            "factory/pulse",
+        ],
+        vec!["iotkit-edge", "route-list", "--db", "edge.db"],
+        vec![
+            "iotkit-edge",
+            "semantic-query",
+            "--db",
+            "edge.db",
+            "--limit",
+            "10",
+        ],
+        vec![
+            "iotkit-edge",
+            "storage",
+            "migrate",
+            "--from-sqlite",
+            "edge.db",
+            "--to-postgres-config",
+            "postgres.json",
+            "--report",
+            "migration.json",
+        ],
+    ] {
+        Cli::try_parse_from(arguments).unwrap();
+    }
+    Cli::try_parse_from([
+        "iotkit-edge",
+        "mapping-set",
+        "--db",
+        "edge.db",
+        "--edge-node-id",
+        "node",
+        "--series-key",
+        "contact",
+        "--meaning",
+        "production_pulse",
+        "--trigger-mode",
+        "active_edge",
+        "--active-value",
+        "1",
+    ])
+    .unwrap();
 }
 
 #[test]

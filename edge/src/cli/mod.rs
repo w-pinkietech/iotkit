@@ -3,7 +3,7 @@
 pub mod commands;
 
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     io::Write,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -15,18 +15,25 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    application::accounts::AccountService,
+    application::{
+        accounts::AccountService,
+        cli_compat::{
+            CliCompatibilityError, CliQueries, LegacyMappingSpec, LegacyMappings, LegacyRoutes,
+            LegacyTriggerMode,
+        },
+    },
     auth::{password::Password, principal::AccountRole},
     backup::{
         create_encrypted_backup, restore_encrypted_backup_postgres, restore_encrypted_backup_sqlite,
     },
     composition::{
+        generic_output_adapter,
         runtime::{ProductionRuntimeFactory, run_runtime, shutdown_signal},
         runtime_config::RuntimeConfig,
     },
     diagnostics::{diagnostics_with_certificate, storage_status},
     lifecycle::ExitReason,
-    storage::{Storage, StorageProfile},
+    storage::{Storage, StorageProfile, migrate_sqlite_to_postgres},
 };
 
 #[derive(Debug, Parser)]
@@ -54,6 +61,84 @@ pub enum Command {
         #[command(subcommand)]
         command: AccountCommand,
     },
+    /// Offline storage profile operations.
+    Storage {
+        #[command(subcommand)]
+        command: StorageCommand,
+    },
+    /// List accepted raw measurement records.
+    Query(QueryArgs),
+    /// Create or revise the legacy production-pulse mapping view.
+    MappingSet(MappingSetArgs),
+    /// Retire a legacy production-pulse mapping.
+    MappingDeactivate(MappingDeactivateArgs),
+    /// List legacy production-pulse mapping revisions.
+    MappingList(StorageArgs),
+    /// Add an exact QoS 1 MQTT route for a legacy mapping.
+    RouteAdd(RouteAddArgs),
+    /// List legacy MQTT route delivery status.
+    RouteList(StorageArgs),
+    /// List projected legacy semantic events.
+    SemanticQuery(QueryArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StorageCommand {
+    Migrate(StorageMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct StorageMigrateArgs {
+    #[arg(long)]
+    pub from_sqlite: PathBuf,
+    #[arg(long)]
+    pub to_postgres_config: PathBuf,
+    #[arg(long)]
+    pub report: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct QueryArgs {
+    #[command(flatten)]
+    pub storage: StorageArgs,
+    #[arg(long, default_value_t = 100)]
+    pub limit: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct MappingSetArgs {
+    #[command(flatten)]
+    pub storage: StorageArgs,
+    #[arg(long)]
+    pub edge_node_id: String,
+    #[arg(long)]
+    pub series_key: String,
+    #[arg(long)]
+    pub meaning: String,
+    #[arg(long)]
+    pub trigger_mode: String,
+    #[arg(long)]
+    pub active_value: i32,
+}
+
+#[derive(Debug, Args)]
+pub struct MappingDeactivateArgs {
+    #[command(flatten)]
+    pub storage: StorageArgs,
+    #[arg(long)]
+    pub edge_node_id: String,
+    #[arg(long)]
+    pub series_key: String,
+}
+
+#[derive(Debug, Args)]
+pub struct RouteAddArgs {
+    #[command(flatten)]
+    pub storage: StorageArgs,
+    #[arg(long)]
+    pub mapping_id: String,
+    #[arg(long)]
+    pub topic: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -215,7 +300,13 @@ pub enum CliError {
     UnexpectedPostgresConfiguration,
     #[error("--postgres-config is required for postgres storage")]
     MissingPostgresConfiguration,
-    #[error("usage: iotkit-edge <serve|account|backup|diagnose|capacity> [options]")]
+    #[error("migration report already exists")]
+    MigrationReportExists,
+    #[error("--from-sqlite must name an existing Edge database")]
+    MigrationSource,
+    #[error(
+        "usage: iotkit-edge <serve|account|backup|storage|diagnose|capacity|query|mapping-set|mapping-deactivate|mapping-list|route-add|route-list|semantic-query> [options]"
+    )]
     Usage,
     #[error("serve configuration is invalid: {0}")]
     ServeConfiguration(String),
@@ -237,6 +328,8 @@ pub enum CliError {
     RuntimeConfig(#[from] crate::composition::runtime_config::RuntimeConfigError),
     #[error(transparent)]
     Runtime(#[from] crate::composition::runtime::RuntimeError),
+    #[error(transparent)]
+    CliCompatibility(#[from] CliCompatibilityError),
 }
 
 pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
@@ -343,6 +436,91 @@ pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
                     write_account(&account)?;
                 }
             }
+            Ok(ExitReason::Requested)
+        }
+        Command::Storage { command } => {
+            match command {
+                StorageCommand::Migrate(args) => {
+                    let metadata = fs::symlink_metadata(&args.from_sqlite)
+                        .map_err(|_| CliError::MigrationSource)?;
+                    if !metadata.file_type().is_file() {
+                        return Err(CliError::MigrationSource);
+                    }
+                    if fs::symlink_metadata(&args.report).is_ok() {
+                        return Err(CliError::MigrationReportExists);
+                    }
+                    let dsn = read_postgres_dsn(&args.to_postgres_config)?;
+                    let report = migrate_sqlite_to_postgres(&args.from_sqlite, &dsn).await?;
+                    write_owner_only_json_atomic(&args.report, &report)?;
+                }
+            }
+            Ok(ExitReason::Requested)
+        }
+        Command::Query(args) => {
+            let storage = args.storage.connect().await?;
+            write_json(&CliQueries::new(storage).raw_records(args.limit).await?)?;
+            Ok(ExitReason::Requested)
+        }
+        Command::MappingSet(args) => {
+            let trigger_mode = match args.trigger_mode.as_str() {
+                "active_sample" => LegacyTriggerMode::ActiveSample,
+                "active_edge" => LegacyTriggerMode::ActiveEdge,
+                _ => {
+                    return Err(CliCompatibilityError::InvalidMapping(
+                        "trigger mode must be active_sample or active_edge".into(),
+                    )
+                    .into());
+                }
+            };
+            let storage = args.storage.connect().await?;
+            let mapping = LegacyMappings::new(storage)
+                .put(
+                    LegacyMappingSpec {
+                        edge_node_id: args.edge_node_id,
+                        series_key: args.series_key,
+                        meaning: args.meaning,
+                        trigger_mode,
+                        active_value: args.active_value,
+                    },
+                    unix_milliseconds()?,
+                )
+                .await?;
+            write_json(&mapping)?;
+            Ok(ExitReason::Requested)
+        }
+        Command::MappingDeactivate(args) => {
+            let storage = args.storage.connect().await?;
+            let mapping = LegacyMappings::new(storage)
+                .deactivate(&args.edge_node_id, &args.series_key, unix_milliseconds()?)
+                .await?;
+            write_json(&mapping)?;
+            Ok(ExitReason::Requested)
+        }
+        Command::MappingList(args) => {
+            let storage = args.connect().await?;
+            write_json(&LegacyMappings::new(storage).list().await?)?;
+            Ok(ExitReason::Requested)
+        }
+        Command::RouteAdd(args) => {
+            let storage = args.storage.connect().await?;
+            let route = LegacyRoutes::new(storage, generic_output_adapter())
+                .add(&args.mapping_id, &args.topic, unix_milliseconds()?)
+                .await?;
+            write_json(&route)?;
+            Ok(ExitReason::Requested)
+        }
+        Command::RouteList(args) => {
+            let storage = args.connect().await?;
+            write_json(
+                &LegacyRoutes::new(storage, generic_output_adapter())
+                    .list()
+                    .await?,
+            )?;
+            Ok(ExitReason::Requested)
+        }
+        Command::SemanticQuery(args) => {
+            let storage = args.storage.connect().await?;
+            write_json(&CliQueries::new(storage).semantic_events(args.limit).await?)?;
             Ok(ExitReason::Requested)
         }
     }
@@ -456,6 +634,58 @@ fn write_json(value: &impl serde::Serialize) -> Result<(), CliError> {
     serde_json::to_writer(&mut output, value)?;
     output.write_all(b"\n")?;
     Ok(())
+}
+
+fn read_postgres_dsn(path: &Path) -> Result<String, CliError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Configuration {
+        dsn: String,
+    }
+    let encoded = read_owner_only_secret(path)?;
+    let configuration: Configuration =
+        serde_json::from_str(&encoded).map_err(|_| CliError::PostgresConfiguration)?;
+    if configuration.dsn.is_empty() {
+        return Err(CliError::PostgresConfiguration);
+    }
+    Ok(configuration.dsn)
+}
+
+fn write_owner_only_json_atomic(
+    path: &Path,
+    value: &impl serde::Serialize,
+) -> Result<(), CliError> {
+    if fs::symlink_metadata(path).is_ok() {
+        return Err(CliError::MigrationReportExists);
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let temporary = parent.join(format!(
+        ".iotkit-edge-report-{}-{}",
+        std::process::id(),
+        unix_milliseconds()?
+    ));
+    let result = (|| -> Result<(), CliError> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        serde_json::to_writer_pretty(&mut file, value)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        drop(file);
+        fs::hard_link(&temporary, path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                CliError::MigrationReportExists
+            } else {
+                CliError::Io(error)
+            }
+        })?;
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(temporary);
+    result
 }
 
 fn write_account(account: &crate::storage::Account) -> Result<(), CliError> {

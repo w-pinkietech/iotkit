@@ -1116,6 +1116,7 @@ async fn retry_route_sqlite(
          ON observation.rule_id=route.rule_id LEFT JOIN output_outbox AS outbox \
          ON outbox.route_id=route.route_id AND outbox.observation_id=observation.observation_id \
          WHERE outbox.export_id IS NULL AND route.active=1 \
+         AND observation.observation_row_id>route.start_after_observation_row_id \
          AND route.lifecycle_state IN ('active','draining') \
          AND binding.state IN ('active','draining') \
          AND (NOT EXISTS(SELECT 1 FROM output_binding_starts start \
@@ -1189,6 +1190,8 @@ async fn enqueue_routes_sqlite(
          FROM output_routes AS route JOIN output_bindings AS binding \
          ON binding.binding_id=route.binding_id \
          WHERE route.rule_id=? AND route.active=1 \
+         AND (SELECT observation_row_id FROM semantic_observations \
+           WHERE observation_id=?)>route.start_after_observation_row_id \
          AND route.lifecycle_state IN ('active','draining') \
          AND binding.state IN ('active','draining') \
          AND NOT EXISTS(SELECT 1 FROM output_route_attempts attempt \
@@ -1205,6 +1208,7 @@ async fn enqueue_routes_sqlite(
              AND ?<=finish.end_at_pub_seq)) ORDER BY route.created_at,route.route_id",
     )
     .bind(&observation.rule_id)
+    .bind(&observation.observation_id)
     .bind(&observation.observation_id)
     .bind(&observation.ledger_epoch)
     .bind(&observation.ledger_epoch)

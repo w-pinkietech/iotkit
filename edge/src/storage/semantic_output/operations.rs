@@ -21,6 +21,42 @@ use super::{
     auth::{insert_audit_postgres, insert_audit_sqlite},
 };
 
+async fn insert_semantic_cli_audit_sqlite(
+    tx: &mut Transaction<'_, Sqlite>,
+    now: i64,
+    operation: &str,
+    resource: &str,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "INSERT INTO audit_events(occurred_at,actor_class,actor_ref,operation,resource_ref,\
+         outcome,summary_json) VALUES(?,'local_cli','local-cli',?,?,'success','{}')",
+    )
+    .bind(now)
+    .bind(operation)
+    .bind(resource)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn insert_semantic_cli_audit_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    now: i64,
+    operation: &str,
+    resource: &str,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "INSERT INTO audit_events(occurred_at,actor_class,actor_ref,operation,resource_ref,\
+         outcome,summary_json) VALUES($1,'local_cli','local-cli',$2,$3,'success','{}'::jsonb)",
+    )
+    .bind(now)
+    .bind(operation)
+    .bind(resource)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimedOutput {
     pub export_id: String,
@@ -241,6 +277,42 @@ impl Storage {
         }
     }
 
+    pub async fn create_cli_compat_semantic_rule(
+        &self,
+        draft: SemanticRuleDraft,
+        now: i64,
+    ) -> Result<SemanticRule, StorageError> {
+        validate_rule_draft(&draft, now)?;
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                let rule = create_rule_sqlite(&mut tx, draft, now).await?;
+                insert_semantic_cli_audit_sqlite(
+                    &mut tx,
+                    now,
+                    "mapping_set",
+                    &rule.rule_id,
+                )
+                .await?;
+                tx.commit().await?;
+                Ok(rule)
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                let rule = create_rule_postgres(&mut tx, draft, now).await?;
+                insert_semantic_cli_audit_postgres(
+                    &mut tx,
+                    now,
+                    "mapping_set",
+                    &rule.rule_id,
+                )
+                .await?;
+                tx.commit().await?;
+                Ok(rule)
+            }
+        }
+    }
+
     pub async fn revise_semantic_rule(
         &self,
         rule_id: &str,
@@ -300,6 +372,37 @@ impl Storage {
                     json!({"revision":rule.revision}),
                 )
                 .await?;
+                tx.commit().await?;
+                Ok(rule)
+            }
+        }
+    }
+
+    pub async fn revise_cli_compat_semantic_rule(
+        &self,
+        rule_id: &str,
+        spec: RuleSpec,
+        now: i64,
+    ) -> Result<SemanticRule, StorageError> {
+        if rule_id.is_empty() || now < 0 {
+            return Err(StorageError::InvalidSemantic(
+                "rule and timestamp are required".into(),
+            ));
+        }
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                let rule =
+                    revise_rule_sqlite(&mut tx, rule_id, "production_pulse", spec, now).await?;
+                insert_semantic_cli_audit_sqlite(&mut tx, now, "mapping_set", rule_id).await?;
+                tx.commit().await?;
+                Ok(rule)
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                let rule =
+                    revise_rule_postgres(&mut tx, rule_id, "production_pulse", spec, now).await?;
+                insert_semantic_cli_audit_postgres(&mut tx, now, "mapping_set", rule_id).await?;
                 tx.commit().await?;
                 Ok(rule)
             }
@@ -568,6 +671,130 @@ impl Storage {
                         "semantic_rule.retire",
                         rule_id,
                         json!({}),
+                    )
+                    .await?;
+                }
+                tx.commit().await?;
+                result.rows_affected()
+            }
+        };
+        if affected == 1 {
+            Ok(())
+        } else {
+            Err(StorageError::SemanticNotFound)
+        }
+    }
+
+    pub async fn retire_cli_compat_semantic_rule(
+        &self,
+        rule_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        if rule_id.is_empty() || now < 0 {
+            return Err(StorageError::InvalidSemantic(
+                "rule and timestamp are required".into(),
+            ));
+        }
+        let affected = match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                sqlx::query(
+                    "INSERT OR IGNORE INTO semantic_rule_ends(rule_id,ledger_epoch,end_at_pub_seq) \
+                     SELECT ?,cursor.ledger_epoch,cursor.accepted_through \
+                     FROM semantic_rules AS rule JOIN semantic_signals AS signal \
+                     ON signal.signal_ref=rule.signal_ref JOIN accepted_cursors AS cursor \
+                     ON cursor.edge_node_id=signal.edge_node_id WHERE rule.rule_id=?",
+                )
+                .bind(rule_id)
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                let result = sqlx::query(
+                    "UPDATE semantic_rules SET active=0,retired_at=? \
+                     WHERE rule_id=? AND active=1",
+                )
+                .bind(now)
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "UPDATE output_bindings SET state='draining',revision=revision+1 \
+                     WHERE rule_id=? AND state='active'",
+                )
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "UPDATE output_routes SET lifecycle_state='draining' \
+                     WHERE rule_id=? AND active=1",
+                )
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                if result.rows_affected() == 1 {
+                    insert_semantic_cli_audit_sqlite(
+                        &mut tx,
+                        now,
+                        "mapping_deactivate",
+                        rule_id,
+                    )
+                    .await?;
+                }
+                tx.commit().await?;
+                result.rows_affected()
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                let edge_node_id: Option<String> = sqlx::query_scalar(
+                    "SELECT signal.edge_node_id FROM semantic_rules AS rule \
+                     JOIN semantic_signals AS signal ON signal.signal_ref=rule.signal_ref \
+                     WHERE rule.rule_id=$1 AND rule.active=TRUE",
+                )
+                .bind(rule_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let edge_node_id = edge_node_id.ok_or(StorageError::SemanticNotFound)?;
+                lock_edge_cursors_postgres(&mut tx, &edge_node_id).await?;
+                lock_rule_runtime_postgres(&mut tx, rule_id).await?;
+                sqlx::query(
+                    "INSERT INTO semantic_rule_ends(rule_id,ledger_epoch,end_at_pub_seq) \
+                     SELECT $1,cursor.ledger_epoch,cursor.accepted_through \
+                     FROM semantic_rules AS rule JOIN semantic_signals AS signal \
+                     ON signal.signal_ref=rule.signal_ref JOIN accepted_cursors AS cursor \
+                     ON cursor.edge_node_id=signal.edge_node_id WHERE rule.rule_id=$1 \
+                     ON CONFLICT(rule_id,ledger_epoch) DO NOTHING",
+                )
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                let result = sqlx::query(
+                    "UPDATE semantic_rules SET active=FALSE,retired_at=$1 \
+                     WHERE rule_id=$2 AND active=TRUE",
+                )
+                .bind(now)
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "UPDATE output_bindings SET state='draining',revision=revision+1 \
+                     WHERE rule_id=$1 AND state='active'",
+                )
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "UPDATE output_routes SET lifecycle_state='draining' \
+                     WHERE rule_id=$1 AND active=TRUE",
+                )
+                .bind(rule_id)
+                .execute(&mut *tx)
+                .await?;
+                if result.rows_affected() == 1 {
+                    insert_semantic_cli_audit_postgres(
+                        &mut tx,
+                        now,
+                        "mapping_deactivate",
+                        rule_id,
                     )
                     .await?;
                 }

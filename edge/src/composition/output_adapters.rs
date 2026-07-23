@@ -27,3 +27,8 @@ static REGISTRY: &[OutputAdapterRegistration] = &[
 pub fn registered_output_adapters() -> &'static [OutputAdapterRegistration] {
     REGISTRY
 }
+
+#[must_use]
+pub fn generic_output_adapter() -> &'static OutputAdapterRegistration {
+    &REGISTRY[0]
+}
