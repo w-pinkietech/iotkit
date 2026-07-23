@@ -1077,6 +1077,9 @@ name = "iotkit-edge"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "iotkit-output-adapter-api",
+ "iotkit-output-adapter-generic-mqtt-json-v1",
+ "iotkit-output-adapter-pinikiet-mqtt-v1",
  "serde",
  "serde_json",
  "thiserror",
@@ -1226,6 +1229,53 @@ dependencies = [
  "iotkit-ingest-contract",
  "iotkit-input-adapter-host-api",
  "tokio",
+]
+
+[[package]]
+name = "iotkit-output-adapter-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "iotkit-output-adapter-example"
+version = "0.1.0"
+dependencies = [
+ "iotkit-output-adapter-api",
+ "iotkit-output-adapter-testkit",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "iotkit-output-adapter-generic-mqtt-json-v1"
+version = "0.1.0"
+dependencies = [
+ "iotkit-output-adapter-api",
+ "iotkit-output-adapter-testkit",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "iotkit-output-adapter-pinikiet-mqtt-v1"
+version = "0.1.0"
+dependencies = [
+ "iotkit-output-adapter-api",
+ "iotkit-output-adapter-testkit",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "iotkit-output-adapter-testkit"
+version = "0.1.0"
+dependencies = [
+ "iotkit-output-adapter-api",
+ "serde_json",
 ]
 
 [[package]]

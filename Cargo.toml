@@ -1,6 +1,11 @@
 [workspace]
 members = [
     "edge",
+    "edge/output-adapters/api",
+    "edge/output-adapters/testkit",
+    "edge/output-adapters/example",
+    "edge/output-adapters/generic-mqtt-json-v1",
+    "edge/output-adapters/pinikiet-mqtt-v1",
     "edge-node/ingest/contract",
     "edge-node/ingest/client",
     "edge-node/ingest/http",

@@ -302,7 +302,7 @@ archive gap remain post-v1 hardening work.
 
 ## Crate map
 
-Twenty-five crates, five layers. `scripts/check-layers` enforces the layer rules
+Thirty crates, five layers. `scripts/check-layers` enforces the layer rules
 below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
@@ -332,6 +332,11 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-edge-node` | `edge-node/apps/node` | **Binary.** IoTKit Edge Node composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
 | `iotkit-edge-nodectl` | `edge-node/apps/nodectl` | **Binary.** Edge Node operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `edge-node/core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
 | `iotkit-edge` | `edge/` | **Binary and library replacement candidate.** Rust composition, lifecycle, and parity slices are built beside the Go production oracle until issue #83 completes its release gate. The two implementations never share a production database or dual-write. |
+| `iotkit-output-adapter-api` | `edge/output-adapters/api` | Leaf Rust API for deterministic Observation-to-MQTT transformation and provider-neutral profile setup policy. |
+| `iotkit-output-adapter-testkit` | `edge/output-adapters/testkit` | Dev-only shared descriptor, configuration, publication, and determinism conformance assertions. |
+| `iotkit-output-adapter-example` | `edge/output-adapters/example` | Compile-tested vendor-neutral author example; deliberately absent from the production registry. |
+| `iotkit-output-adapter-generic-mqtt-json-v1` | `edge/output-adapters/generic-mqtt-json-v1` | Built-in generic IoTKit Observation JSON transformer. |
+| `iotkit-output-adapter-pinikiet-mqtt-v1` | `edge/output-adapters/pinikiet-mqtt-v1` | Built-in Pinikiet MQTT contract transformer and profile policy. |
 
 Approved next-slice non-Rust placement:
 
