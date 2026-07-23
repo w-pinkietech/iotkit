@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 
 mod activation;
 mod auth;
+mod profiles;
 mod recovery;
 mod semantic_output;
 pub use activation::{
@@ -161,6 +162,10 @@ pub enum StorageError {
     InvalidSemantic(String),
     #[error("output operation is invalid: {0}")]
     InvalidOutput(String),
+    #[error("presentation profile operation is invalid: {0}")]
+    InvalidProfile(String),
+    #[error("inventory or presentation profile was not found")]
+    ProfileNotFound,
     #[error("semantic or output resource was not found")]
     SemanticNotFound,
 }

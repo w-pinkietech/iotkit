@@ -1190,7 +1190,7 @@ async fn actor_snapshot_postgres(
     }
 }
 
-async fn insert_audit_sqlite(
+pub(super) async fn insert_audit_sqlite(
     tx: &mut Transaction<'_, Sqlite>,
     actor: &AuditActor,
     now: i64,
@@ -1217,7 +1217,7 @@ async fn insert_audit_sqlite(
     Ok(())
 }
 
-async fn insert_audit_postgres(
+pub(super) async fn insert_audit_postgres(
     tx: &mut Transaction<'_, Postgres>,
     actor: &AuditActor,
     now: i64,

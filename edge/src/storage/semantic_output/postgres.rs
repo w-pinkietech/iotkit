@@ -85,7 +85,14 @@ async fn ensure_signal_postgres(
     {
         return Ok(value);
     }
-    let signal_ref = Uuid::new_v4().to_string();
+    let signal_ref: String = sqlx::query_scalar(
+        "SELECT signal_ref FROM inventory_signals WHERE edge_node_id=$1 AND series_key=$2",
+    )
+    .bind(edge_node_id)
+    .bind(series_key)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(StorageError::SemanticNotFound)?;
     sqlx::query(
         "INSERT INTO semantic_signals(signal_ref,edge_node_id,series_key,created_at) \
          VALUES($1,$2,$3,$4)",

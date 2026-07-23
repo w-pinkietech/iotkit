@@ -279,6 +279,31 @@ impl Storage {
                     .execute(&mut *tx)
                     .await?;
                 }
+                for device in &descriptor.devices {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO inventory_devices(device_ref,edge_node_id,\
+                         system_id,created_at) VALUES(?,?,?,?)",
+                    )
+                    .bind(prefixed_id("dev_"))
+                    .bind(&descriptor.edge_node_id)
+                    .bind(&device.system_id)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                for signal in &descriptor.signals {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO inventory_signals(signal_ref,edge_node_id,\
+                         series_key,system_id,created_at) VALUES(?,?,?,?,?)",
+                    )
+                    .bind(prefixed_id("sig_"))
+                    .bind(&descriptor.edge_node_id)
+                    .bind(&signal.series_key)
+                    .bind(&signal.system_id)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await?;
+                }
                 sqlx::query(
                     "INSERT INTO edge_descriptor_state(edge_node_id, ledger_epoch, \
                      descriptor_revision, content_sha256, updated_at) VALUES(?, ?, ?, ?, ?) \
@@ -415,6 +440,32 @@ impl Storage {
             .bind(&signal.unit)
             .bind(&signal.value_type)
             .bind(descriptor.descriptor_revision as i64)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for device in &descriptor.devices {
+            sqlx::query(
+                "INSERT INTO inventory_devices(device_ref,edge_node_id,system_id,created_at) \
+                 VALUES($1,$2,$3,$4) ON CONFLICT(edge_node_id,system_id) DO NOTHING",
+            )
+            .bind(prefixed_id("dev_"))
+            .bind(&descriptor.edge_node_id)
+            .bind(&device.system_id)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for signal in &descriptor.signals {
+            sqlx::query(
+                "INSERT INTO inventory_signals(signal_ref,edge_node_id,series_key,system_id,\
+                 created_at) VALUES($1,$2,$3,$4,$5) \
+                 ON CONFLICT(edge_node_id,series_key) DO NOTHING",
+            )
+            .bind(prefixed_id("sig_"))
+            .bind(&descriptor.edge_node_id)
+            .bind(&signal.series_key)
+            .bind(&signal.system_id)
             .bind(now)
             .execute(&mut *tx)
             .await?;
