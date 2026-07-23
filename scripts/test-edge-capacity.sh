@@ -16,6 +16,9 @@ IOTKIT_CAPACITY_REPORT="$report_dir/embedded.json" \
   go test ./internal/store -run '^TestStorageCapacityRegressionSmoke$' -count=1
 
 cd "$repo_root"
+cargo test -p iotkit-edge --test diagnostics_contract
+
+cd "$repo_root"
 IOTKIT_CAPACITY_REPORT="$report_dir/postgres.json" \
   "$repo_root/scripts/test-edge-postgres.sh" '^TestStorageCapacityRegressionSmoke$'
 

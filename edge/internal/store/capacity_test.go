@@ -53,7 +53,10 @@ func TestStorageCapacityRegressionSmoke(t *testing.T) {
 					"family": "measurement", "schema_version": 1,
 					"epoch": epoch, "pub_seq": sequence,
 					"series_key": "00000000-0000-0000-0000-00000000000" + intToDecimal((offset%sensorsPerEdge)+1) + ":temperature_c:na:primary",
-					"event_time": sequence * 1000, "values": []float64{20 + float64(offset%10)},
+					"event_time": sequence * 1000, "event_time_source": "received_at",
+					"time_source": "edge_node", "time_quality": "unsynced",
+					"received_at": sequence * 1000, "device_time": nil,
+					"values": []float64{20 + float64(offset%10)},
 				})
 				if err != nil {
 					t.Fatal(err)

@@ -154,11 +154,24 @@ pub struct Storage {
 enum StorageInner {
     Sqlite {
         pool: SqlitePool,
+        path: PathBuf,
         _guard: File,
     },
     Postgres {
         pool: PgPool,
+        dsn: String,
         _guard: Mutex<PoolConnection<Postgres>>,
+    },
+}
+
+pub(crate) enum OperationBackend<'a> {
+    Sqlite {
+        pool: &'a SqlitePool,
+        path: &'a Path,
+    },
+    Postgres {
+        pool: &'a PgPool,
+        dsn: &'a str,
     },
 }
 
@@ -168,7 +181,7 @@ impl Storage {
             StorageProfile::Sqlite { path } => {
                 let guard = acquire_sqlite_guard(&path)?;
                 let options = SqliteConnectOptions::new()
-                    .filename(path)
+                    .filename(&path)
                     .create_if_missing(true)
                     .foreign_keys(true)
                     .journal_mode(SqliteJournalMode::Wal)
@@ -183,6 +196,7 @@ impl Storage {
                 Ok(Self {
                     inner: Arc::new(StorageInner::Sqlite {
                         pool,
+                        path,
                         _guard: guard,
                     }),
                 })
@@ -199,10 +213,36 @@ impl Storage {
                 Ok(Self {
                     inner: Arc::new(StorageInner::Postgres {
                         pool,
+                        dsn,
                         _guard: Mutex::new(guard),
                     }),
                 })
             }
+        }
+    }
+
+    pub(crate) fn operation_backend(&self) -> OperationBackend<'_> {
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, path, .. } => OperationBackend::Sqlite {
+                pool,
+                path: path.as_path(),
+            },
+            StorageInner::Postgres { pool, dsn, .. } => OperationBackend::Postgres { pool, dsn },
+        }
+    }
+
+    pub async fn active_session_count(&self) -> Result<i64, StorageError> {
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => Ok(sqlx::query_scalar(
+                "SELECT count(*) FROM edge_sessions WHERE revoked_at IS NULL",
+            )
+            .fetch_one(pool)
+            .await?),
+            StorageInner::Postgres { pool, .. } => Ok(sqlx::query_scalar(
+                "SELECT count(*) FROM edge_sessions WHERE revoked_at IS NULL",
+            )
+            .fetch_one(pool)
+            .await?),
         }
     }
 

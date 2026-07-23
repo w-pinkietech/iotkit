@@ -39,3 +39,13 @@ mkdir -p "$GOTMPDIR" "$GOCACHE" "$TMPDIR"
 
 cd "$repo_root/edge"
 go test ./internal/store -run "$test_pattern" -count=1
+
+docker exec "$container" dropdb --if-exists --username iotkit iotkit >/dev/null
+docker exec "$container" createdb --username iotkit iotkit
+docker exec "$container" createdb --username iotkit iotkit_restore
+export IOTKIT_TEST_POSTGRES_RESTORE_DSN="postgres://iotkit:iotkit-test-only@127.0.0.1:${port}/iotkit_restore?sslmode=disable"
+export IOTKIT_REQUIRE_POSTGRES=1
+
+cd "$repo_root"
+cargo test -p iotkit-edge --test backup_contract \
+  postgres_custom_snapshot_round_trips_through_real_tools_when_required -- --exact

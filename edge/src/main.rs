@@ -1,18 +1,5 @@
-use clap::{Parser, Subcommand};
-use iotkit_edge::{Application, lifecycle::ExitReason};
-
-#[derive(Debug, Parser)]
-#[command(name = "iotkit-edge", version)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Run the IoTKit Edge server.
-    Serve,
-}
+use clap::Parser;
+use iotkit_edge::{cli::Cli, lifecycle::ExitReason};
 
 #[tokio::main]
 async fn main() {
@@ -21,8 +8,12 @@ async fn main() {
         .init();
 
     let cli = Cli::parse();
-    let exit = match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => Application::new().run().await,
+    let exit = match iotkit_edge::cli::run(cli).await {
+        Ok(exit) => exit,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
     };
 
     if !matches!(exit, ExitReason::Requested) {
