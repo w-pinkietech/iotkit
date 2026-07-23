@@ -129,6 +129,9 @@ if [[ "$storage_profile" == "postgres" ]]; then
 fi
 
 mkdir -p "$repo_root/target/tmp"
+go_cache=${GOCACHE:-"$repo_root/target/tmp/go-build"}
+go_tmp=${GOTMPDIR:-"$repo_root/target/tmp/go-tmp"}
+mkdir -p "$go_cache" "$go_tmp"
 rust_gate_env=(
   IOTKIT_REQUIRE_RUST_OUTPUT_GATE=1
   IOTKIT_TEST_OUTPUT_BROKER_HOST=127.0.0.1
@@ -172,7 +175,8 @@ db_query() {
 (
   cd "$repo_root/edge"
   env \
-    GOCACHE="${GOCACHE:-/tmp/iotkit-go-build}" \
+    GOCACHE="$go_cache" \
+    GOTMPDIR="$go_tmp" \
     IOTKIT_TEST_OUTPUT_BROKER_URL="$broker_url" \
     IOTKIT_TEST_OUTPUT_CONTROL_DIR="$scratch/control" \
     IOTKIT_TEST_OUTPUT_POSTGRES_DSN="$postgres_dsn" \
