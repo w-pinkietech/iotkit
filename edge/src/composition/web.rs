@@ -14,6 +14,7 @@ use std::{
 
 use async_trait::async_trait;
 use axum::http::StatusCode;
+use iotkit_output_adapter_api::ObservationValue;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
@@ -210,6 +211,17 @@ impl StorageWebApplication {
     async fn console_signals(&self) -> Result<Vec<ConsoleSignal>, WebError> {
         let inventory = self.storage.inventory_signals().await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        let mut latest = HashMap::new();
+        for rule in rules.iter().filter(|rule| rule.active) {
+            if let Some(observation) = self
+                .storage
+                .latest_semantic_observation(&rule.rule_id)
+                .await
+                .map_err(internal)?
+            {
+                latest.insert(rule.signal_ref.clone(), observation_value(&observation.value));
+            }
+        }
         Ok(inventory
             .into_iter()
             .map(|signal| {
@@ -227,7 +239,7 @@ impl StorageWebApplication {
                     })
                     .collect();
                 ConsoleSignal {
-                    signal_ref: signal.signal_ref,
+                    signal_ref: signal.signal_ref.clone(),
                     device_ref: signal.device_ref,
                     edge_node_id: signal.edge_node_id,
                     name: if signal.display_name.is_empty() {
@@ -240,7 +252,10 @@ impl StorageWebApplication {
                     } else {
                         signal.display_sensor_type
                     },
-                    value: "—".into(),
+                    value: latest
+                        .get(&signal.signal_ref)
+                        .cloned()
+                        .unwrap_or_else(|| "—".into()),
                     unit: if signal.display_unit.is_empty() {
                         signal.unit
                     } else {
@@ -1596,6 +1611,16 @@ fn history_query(params: &HashMap<String, String>, signals: &[ConsoleSignal]) ->
 
 fn not_found_error() -> WebError {
     WebError::new(StatusCode::NOT_FOUND, "not_found", "resource was not found")
+}
+
+fn observation_value(value: &ObservationValue) -> String {
+    match value {
+        ObservationValue::Numeric(value) => value.to_string(),
+        ObservationValue::Boolean(value) => value.to_string(),
+        ObservationValue::CumulativeValue(value) => value.to_string(),
+        ObservationValue::Alarm { active, reading } => reading
+            .map_or_else(|| active.to_string(), |reading| format!("{active} ({reading})")),
+    }
 }
 
 fn now() -> i64 {

@@ -680,6 +680,35 @@ impl Storage {
         }
     }
 
+    pub async fn latest_semantic_observation(
+        &self,
+        rule_id: &str,
+    ) -> Result<Option<SemanticObservation>, StorageError> {
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => sqlx::query(
+                "SELECT observation_id,rule_id,series_id,sequence,kind,value_json,reading,\
+                 observed_at FROM semantic_observations WHERE rule_id=? \
+                 ORDER BY observation_row_id DESC LIMIT 1",
+            )
+            .bind(rule_id)
+            .fetch_optional(pool)
+            .await?
+            .map(sqlite_row_to_observation)
+            .transpose(),
+            StorageInner::Postgres { pool, .. } => sqlx::query(
+                "SELECT observation_id,rule_id,series_id,sequence,kind,\
+                 value_json::text AS value_json,reading,observed_at \
+                 FROM semantic_observations WHERE rule_id=$1 \
+                 ORDER BY observation_row_id DESC LIMIT 1",
+            )
+            .bind(rule_id)
+            .fetch_optional(pool)
+            .await?
+            .map(postgres_row_to_observation)
+            .transpose(),
+        }
+    }
+
     pub(crate) async fn output_publication_snapshot(
         &self,
         binding_id: &str,

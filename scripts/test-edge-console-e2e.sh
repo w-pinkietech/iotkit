@@ -19,6 +19,7 @@ storage_profile=${IOTKIT_TEST_STORAGE_PROFILE:-embedded}
   exit 1
 }
 postgres_container="iotkit-console-postgres-test-$$"
+broker_container="iotkit-console-broker-test-$$"
 postgres_dsn=""
 
 cleanup() {
@@ -27,6 +28,7 @@ cleanup() {
     wait "$edge_pid" >/dev/null 2>&1 || true
   fi
   docker rm --force "$postgres_container" >/dev/null 2>&1 || true
+  docker rm --force "$broker_container" >/dev/null 2>&1 || true
   rm -rf "${e2e_dir:-}"
 }
 trap cleanup EXIT
@@ -83,8 +85,38 @@ if [[ "$storage_profile" == "postgres" ]]; then
 else
   fixture_location="$e2e_dir/edge.db"
 fi
-TMPDIR="$test_tmp_root" cargo run -p iotkit-edge --example console_fixture -- \
-  "$storage_profile" "$fixture_location"
+fixture_edge_id=$(TMPDIR="$test_tmp_root" cargo run --quiet -p iotkit-edge \
+  --example console_fixture -- "$storage_profile" "$fixture_location")
+
+broker_port=$(node -e '
+  const { createServer } = require("node:net");
+  const server = createServer();
+  server.listen(0, "127.0.0.1", () => {
+    console.log(server.address().port);
+    server.close();
+  });
+')
+broker_dir="$e2e_dir/mosquitto"
+mkdir -p "$broker_dir"
+broker_username="iotkit-edge"
+broker_password="e2e-broker-password"
+printf '%s\n' \
+  'listener 1883 0.0.0.0' \
+  'allow_anonymous false' \
+  'password_file /mosquitto/config/passwords' \
+  'persistence false' >"$broker_dir/mosquitto.conf"
+docker run --rm --user "$(id -u):$(id -g)" \
+  --volume "$broker_dir:/mosquitto/config" \
+  eclipse-mosquitto:2.0.22 \
+  mosquitto_passwd -b -c /mosquitto/config/passwords \
+  "$broker_username" "$broker_password"
+docker run --detach --name "$broker_container" \
+  --publish "127.0.0.1:$broker_port:1883" \
+  --volume "$broker_dir:/mosquitto/config:ro" \
+  eclipse-mosquitto:2.0.22 >/dev/null
+broker_password_file="$e2e_dir/broker-password"
+printf '%s' "$broker_password" >"$broker_password_file"
+chmod 600 "$broker_password_file"
 
 port=$(node -e '
   const { createServer } = require("node:net");
@@ -97,8 +129,14 @@ port=$(node -e '
 origin="http://127.0.0.1:$port"
 "$edge_binary" serve \
   "${storage_args[@]}" \
+  --edge-id "$fixture_edge_id" \
+  --broker-url "tcp://127.0.0.1:$broker_port" \
+  --username "$broker_username" \
+  --password-file "$broker_password_file" \
+  --allow-insecure \
   --http-listen "127.0.0.1:$port" \
   --public-origin "$origin" \
+  --development-http \
   >"$e2e_dir/edge.log" 2>&1 &
 edge_pid=$!
 

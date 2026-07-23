@@ -234,6 +234,29 @@ try {
     "stored semantic rule was not rendered",
   );
   await devtools.evaluate(`(() => {
+    const form = document.querySelector("[data-signal-profile]");
+    form.elements.namedItem("display_name").value = "第一ボイラー温度";
+    form.elements.namedItem("display_sensor_type").value = "temperature";
+    form.elements.namedItem("display_value_kind").value = "numeric";
+    form.elements.namedItem("display_unit").value = "°C";
+    form.elements.namedItem("decimal_places").value = "1";
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && document.body.textContent.includes('第一ボイラー温度')",
+      ),
+    "signal presentation profile save",
+  );
+  await devtools.navigate(signalHref);
+  assert(
+    await devtools.evaluate(
+      "document.body.textContent.includes('第一ボイラー温度') && document.querySelector(\"[data-signal-profile] [name='display_unit']\").value === '°C'",
+    ),
+    "signal presentation profile did not survive reload",
+  );
+  await devtools.evaluate(`(() => {
     const form = document.querySelector(".semantic-form");
     form.elements.namedItem("display_name").value = "稼働状態（補正済み）";
     form.requestSubmit();

@@ -70,6 +70,7 @@ async fn main() {
         .project_pending(10, registered_output_adapters())
         .await
         .expect("project semantic fixture");
+    println!("{}", storage.edge_id().await.expect("read Edge identity"));
 }
 
 async fn accept(storage: &Storage, sequence: i64, value: f64) {
