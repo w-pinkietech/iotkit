@@ -5,7 +5,7 @@ description: "Defines the complete Input Adapter identity, authority, host API, 
 language: en
 translation_key: contracts.input-adapter-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit northbound Input Adapter host contract v1

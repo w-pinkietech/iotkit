@@ -5,7 +5,7 @@ description: "Input Adapterのidentity、権限、host API、設定、lifecycle�
 language: ja
 translation_key: contracts.input-adapter-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit northbound Input Adapter host契約 v1
