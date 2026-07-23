@@ -219,7 +219,10 @@ impl StorageWebApplication {
                 .await
                 .map_err(internal)?
             {
-                latest.insert(rule.signal_ref.clone(), observation_value(&observation.value));
+                latest.insert(
+                    rule.signal_ref.clone(),
+                    observation_value(&observation.value),
+                );
             }
         }
         Ok(inventory
@@ -1618,8 +1621,10 @@ fn observation_value(value: &ObservationValue) -> String {
         ObservationValue::Numeric(value) => value.to_string(),
         ObservationValue::Boolean(value) => value.to_string(),
         ObservationValue::CumulativeValue(value) => value.to_string(),
-        ObservationValue::Alarm { active, reading } => reading
-            .map_or_else(|| active.to_string(), |reading| format!("{active} ({reading})")),
+        ObservationValue::Alarm { active, reading } => reading.map_or_else(
+            || active.to_string(),
+            |reading| format!("{active} ({reading})"),
+        ),
     }
 }
 
