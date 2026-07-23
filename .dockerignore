@@ -1,0 +1,9 @@
+.git
+.github
+.worktrees
+target
+**/target
+**/.DS_Store
+**/*.db
+**/*.sqlite
+**/node_modules

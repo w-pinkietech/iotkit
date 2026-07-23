@@ -12,7 +12,7 @@ the former IoTKit. It consists of:
   computers. Sensor-specific behavior stays in Input Adapters.
 - **MQTT Broker:** standard infrastructure between Edge Nodes, IoTKit Edge, and
   external applications. IoTKit does not implement its own Broker.
-- **IoTKit Edge:** Go service that accepts durable raw records, applies generic
+- **IoTKit Edge:** Rust service that accepts durable raw records, applies generic
   meanings, serves the Console, and invokes Output Adapters.
 
 ```text
@@ -49,21 +49,21 @@ historical plan.
 | Change area | Read before editing | Start in | Focused verification |
 |---|---|---|---|
 | Product boundary or component ownership | `docs/okf/<lang>/concepts/product-model.md`, `docs/okf/<lang>/architecture/system-overview.md` | owning component from the architecture map | affected contract and package tests |
-| Crate, package, dependency, or source placement | `docs/okf/<lang>/architecture/system-overview.md` | `Cargo.toml`, `edge/go.mod`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
+| Crate, package, dependency, or source placement | `docs/okf/<lang>/architecture/system-overview.md` | `Cargo.toml`, component `Cargo.toml`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
 | Sensor, driver, polling, UART, or Input Adapter host | `docs/okf/<lang>/contracts/input-adapter-v1.md` | `edge-node/adapters/bravepi-mainboard/src/`, `edge-node/adapters/rpi-local/src/`, `edge-node/input/hardware/sensor-drivers/src/`, `edge-node/input/runtimes/polling/src/` | `cargo test -p <owning-crate>` plus adapter conformance tests when the contract changes |
 | Envelope/Ack, authenticated device ingest, admission, or principal mapping | `docs/okf/<lang>/contracts/ingest-v1.md` and product model | `edge-node/ingest/contract/`, `edge-node/ingest/client/`, `edge-node/ingest/http/`, `edge-node/core/collector/`; BravePI envelope mapping starts at `edge-node/adapters/bravepi-mainboard/src/task/ingest_map.rs` | owning crate tests; use ingest conformance fixtures when wire behavior changes |
 | Edge Node activation, MQTT delivery, ack, retention, or data loss | `docs/okf/<lang>/contracts/edge-node-custody-v1.md`, `docs/okf/<lang>/contracts/ingest-v1.md` | `edge-node/core/ledger/`, `edge-node/core/publish/`, `edge-node/core/storage/`, `edge-node/core/timeseries/`, `edge-node/apps/node/` | owning crate tests, then `scripts/verify.sh` |
-| IoTKit Edge raw storage, meanings, history, or CSV | product model and architecture; for browser JSON also `edge/openapi/edge-console-v1.yaml` | `edge/internal/store/`, `edge/internal/semantic/`, `edge/internal/semantics/` | `(cd edge && go test ./internal/<owning-package>)` |
-| Output Adapter or external application contract | `docs/okf/<lang>/contracts/output-adapter-v1.md` | `edge/internal/outputadapter/`, `edge/internal/applicationcontract/` | `(cd edge && go test ./internal/outputadapter ./internal/applicationcontract)` |
-| Console HTML, navigation, or browser behavior | architecture; OpenAPI only for endpoints and schemas represented there | `edge/internal/edgehttp/`, `edge/frontend/` | `scripts/test-edge-console-frontend.sh`, then `scripts/test-edge-console-e2e.sh` for journeys |
-| Account bootstrap or recovery | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `edge/cmd/iotkit-edge/main.go`, `edge/internal/store/accounts.go`; Console account management starts at `edge/internal/edgehttp/console_accounts.go` | `(cd edge && go test ./cmd/iotkit-edge ./internal/edgehttp ./internal/store)` |
-| Login, password, session, cookie, CSRF, or authorization | relevant current contract plus `edge/internal/edgehttp/server.go` route registration; session endpoints are not currently represented in the Console OpenAPI | `edge/internal/edgehttp/server_console_auth_test.go`, `edge/internal/edgesession/`, `edge/internal/edgeauth/` | `(cd edge && go test ./internal/edgehttp ./internal/edgesession ./internal/edgeauth)` |
+| IoTKit Edge raw storage, meanings, history, or CSV | product model and architecture; for browser JSON also `edge/openapi/edge-console-v1.yaml` | `edge/src/storage/`, `edge/src/semantics/`, `edge/src/application/` | `cargo test -p iotkit-edge --test storage_contract --test semantic_contract` |
+| Output Adapter or external application contract | `docs/okf/<lang>/contracts/output-adapter-v1.md` | `edge/output-adapters/`, `edge/src/application/output_profiles.rs`, `edge/src/mqtt/output/` | owning Adapter tests, `cargo test -p iotkit-edge --test output_contract --test output_puback` |
+| Console HTML, navigation, or browser behavior | architecture; OpenAPI only for endpoints and schemas represented there | `edge/src/web/`, `edge/frontend/` | `scripts/test-edge-console-frontend.sh`, then `scripts/test-edge-console-e2e.sh` for journeys |
+| Account bootstrap or recovery | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `edge/src/application/accounts.rs`, `edge/src/storage/auth.rs`, `edge/src/cli/`; Console account management starts in `edge/src/web/` | `cargo test -p iotkit-edge --test auth_storage_contract --test cli_contract` |
+| Login, password, session, cookie, CSRF, or authorization | relevant current contract plus `edge/src/web/router.rs`; session endpoints are not currently represented in the Console OpenAPI | `edge/src/auth/`, `edge/src/application/authorization.rs`, `edge/src/web/` | `cargo test -p iotkit-edge --test auth_contract --test session_contract --test http_contract` |
 | TLS, certificate, or deployment credentials | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 3 | owning service and `deploy/` | focused security or deployment script for the changed path |
-| Encrypted backup or restore | `docs/okf/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `edge/cmd/iotkit-edge/main.go`, `edge/internal/store/backup_encrypted.go`, `edge/internal/store/postgres_backup.go` | `(cd edge && go test ./cmd/iotkit-edge ./internal/store)`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
+| Encrypted backup or restore | `docs/okf/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `edge/src/backup/`, `edge/src/cli/`, backend-specific storage operations | `cargo test -p iotkit-edge --test backup_contract --test cli_contract`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
 | Device retirement or hardware replacement | `docs/okf/<lang>/operations/installation-and-recovery.md` section 9 and Edge Node custody contract | owning Edge Node identity/custody path | focused replacement and custody tests |
-| SQLite-to-PostgreSQL migration | `docs/okf/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `edge/cmd/iotkit-edge/main.go`, `edge/internal/store/postgres_migrations.go` | `scripts/test-edge-postgres.sh` plus affected command tests |
+| SQLite-to-PostgreSQL migration | `docs/okf/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `edge/src/backup/`, `edge/src/storage/`, `edge/src/cli/` | `scripts/test-edge-postgres.sh` plus affected command tests |
 | Manual update or rollback | `docs/okf/<lang>/operations/installation-and-recovery.md` section 11 | `deploy/`, affected startup and migration code | changed update/rollback journey |
-| Capacity, retention, or storage profile selection | `docs/okf/<lang>/operations/storage-capacity.md` | `edge/internal/store/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
+| Capacity, retention, or storage profile selection | `docs/okf/<lang>/operations/storage-capacity.md` | `edge/src/storage/`, `edge/src/diagnostics/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
 | Vulnerability report or accidental secret exposure | `SECURITY.md` | reporting and containment path; do not copy secrets into repository artifacts | follow reporting policy; do not create a public reproducer with secrets |
 | Contract or documentation change | `docs/README.md`, both language files, schemas/types, fixtures, conformance tests | current authority; never a historical plan | `node scripts/check-okf-docs.mjs` plus affected conformance tests |
 | PR review or field report triage | `.agents/skills/iotkit-battle-tested-review/SKILL.md`, `review/battle-tested/README.md` | selector output and linked evidence | `node scripts/battle-tested-review.mjs check` |
@@ -86,8 +86,8 @@ cargo test -p <crate-name>
 scripts/verify.sh
 
 # IoTKit Edge focused / full
-(cd edge && go test ./internal/<package>)
-(cd edge && go test ./...)
+cargo test -p iotkit-edge --test <contract-test>
+cargo test -p iotkit-edge
 
 # Console schema, generated assets, and browser journey
 scripts/test-edge-console-frontend.sh
@@ -97,8 +97,8 @@ scripts/test-edge-console-e2e.sh
 scripts/test-edge-host-release-gate.sh NEW_REPORT_DIRECTORY
 ```
 
-`scripts/verify.sh` runs Rust formatting, layer rules, workspace tests, Clippy
-with `-D warnings`, and Go tests. The host release gate is not a per-PR default.
+`scripts/verify.sh` runs Rust formatting, layer rules, workspace tests, and
+Clippy with `-D warnings`. The host release gate is not a per-PR default.
 Raspberry Pi and physical sensors are required only when the task explicitly
 requires hardware evidence.
 
@@ -111,7 +111,7 @@ requires hardware evidence.
   `rejected` is only for deterministic terminal violations. A storage failure
   does not produce `rejected` or a durable success acknowledgement.
 - Mutations go through the owning typed operation dispatcher: `edge-node/core/ops` on Edge
-  Node and the Go application service on IoTKit Edge. Do not add API/UI/CLI paths
+  Node and `edge/src/application/` on IoTKit Edge. Do not add API/UI/CLI paths
   that write SQL directly.
 - Do not treat MQTT PUBACK as IoTKit Edge durable raw acceptance, or downstream
   business success as IoTKit output custody.
@@ -166,8 +166,6 @@ model or service only when the user explicitly requests it.
   tests live under `<crate>/tests/*.rs`.
 - Test constructors, clocks, fixtures, mocks, and observation helpers live in
   `tests/support/` or a dedicated testkit.
-- Go tests remain in separate `*_test.go` files. Split large product files by
-  responsibility within the same package.
 - Frontend unit tests live under `edge/frontend/tests/unit/`, not `src/`.
 - `scripts/check-source-layout` enforces these boundaries.
 

@@ -31,7 +31,6 @@ For each later task, use the **Before changing code** table in
 The supported contributor environment is Linux. CI currently uses:
 
 - Rust 1.95.0, selected automatically by `rust-toolchain.toml`;
-- Go 1.25, as declared by `edge/go.mod`;
 - Node.js 22 and npm for Console assets and tests;
 - `pkg-config` and `libudev-dev` for Raspberry Pi transport dependencies.
 
@@ -47,10 +46,9 @@ sudo apt-get install --yes pkg-config libudev-dev docker.io docker-compose-v2 \
   openssl jq curl
 ```
 
-Install Rust through [rustup](https://rustup.rs/), Go 1.25 through the official
-Go distribution or a version manager, and Node.js 22 through your normal package
-manager. Do not commit credentials, generated certificates, local databases, or
-deployment output directories.
+Install Rust through [rustup](https://rustup.rs/) and Node.js 22 through your
+normal package manager. Do not commit credentials, generated certificates,
+local databases, or deployment output directories.
 
 ## First hour
 
@@ -71,7 +69,7 @@ short version of the runtime path is:
 sensor / device
   -> Rust IoTKit Edge Node
   -> MQTT Broker
-  -> Go IoTKit Edge
+  -> Rust IoTKit Edge
   -> Output Adapter
   -> external application
 ```
@@ -79,11 +77,12 @@ sensor / device
 ### 10–30 minutes: run one focused test in each area
 
 ```bash
-# Rust Edge Node and Adapter side
+# Edge Node and Input Adapter
 cargo test -p bravepi-mainboard-adapter
 
-# Go IoTKit Edge side
-(cd edge && go test ./internal/outputadapter)
+# IoTKit Edge and Output Adapters
+cargo test -p iotkit-edge
+cargo test -p iotkit-output-adapter-testkit
 
 # Browser behavior and generated Console types
 npm ci --prefix edge/frontend
@@ -188,8 +187,7 @@ as the risk grows.
 # Documentation structure
 node scripts/check-okf-docs.mjs
 
-# Rust formatting, dependency rules, source/test placement, tests, Clippy,
-# and all Go tests
+# Rust formatting, dependency rules, source/test placement, tests, and Clippy
 scripts/verify.sh
 
 # Console schema, generated types/assets, and unit tests
@@ -216,8 +214,8 @@ every pull request.
   `npm run generate:api --prefix edge/frontend`.
 - Build embedded Console JavaScript with
   `npm run build --prefix edge/frontend`.
-- Update `Cargo.lock`, `go.sum`, and `package-lock.json` only through their
-  package managers.
+- Update `Cargo.lock` and `package-lock.json` only through their package
+  managers.
 - Change Japanese and English files under `docs/okf/` together.
 - Treat shared JSON under `testdata/` as normative contract data. Do not update
   a fixture merely to make one implementation pass.
@@ -230,9 +228,8 @@ every pull request.
   delete an unacknowledged original.
 - Route state changes through the owning typed operation dispatcher. Do not add
   direct SQL writes from HTTP, UI, CLI, or adapters.
-- Keep Rust product test implementations outside product `src/` directories,
-  Go tests in `*_test.go`, and frontend unit tests under
-  `edge/frontend/tests/unit/`.
+- Keep Rust product test implementations outside product `src/` directories
+  and frontend unit tests under `edge/frontend/tests/unit/`.
 - Do not make legacy plans or extracted old code the authority for new behavior.
 
 ## Pull request checklist

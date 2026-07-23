@@ -5,13 +5,18 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit Edge installation and recovery
 
 This is the operator entry point for one IoTKit Edge deployment. IoTKit does not
 configure routers, DNS, IP address allocation, firewalls, or VPNs.
+
+The Rust IoTKit Edge starts from its own fresh schema. Databases and encrypted
+backup artifacts created by the former Go implementation are not accepted,
+converted, or restored. Export any required business data before cutover and
+perform a clean installation.
 
 Before taking a release candidate to a site, run the host integration gate into a new
 report directory without reusing any database or credential. It covers a clean PostgreSQL

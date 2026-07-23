@@ -165,9 +165,9 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-console-e2e.sh
 scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 ```
 
-IoTKit ConsoleはGoのserver-side renderingを維持し、browser動作だけを`edge/frontend/src/`のTypeScriptで実装します。JSON API型は`edge/openapi/edge-console-v1.yaml`から生成します。配布物にはesbuild済みの`static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要です。
+IoTKit ConsoleはRustの型付きserver-side renderingを使い、browser動作を`edge/frontend/src/`のTypeScriptで実装します。JSON API型は`edge/openapi/edge-console-v1.yaml`から生成します。配布物にはesbuild済みの`static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要です。
 
-CIは各PRでcrate layer rule、Rust/Go unit test、生成済みConsole asset、埋め込みbrowser journeyを検査します（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。Docker、PostgreSQL、Broker障害を含む統合検証は、release前に`test-edge-host-release-gate.sh`を一度実行します。`scripts/verify.sh`はfmt、layer rule、test、clippyをlocalで実行します。
+CIは各PRでcrate layer rule、Rust unit test、生成済みConsole asset、埋め込みbrowser journeyを検査します（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。Docker、PostgreSQL、Broker障害を含む統合検証は、release前に`test-edge-host-release-gate.sh`を一度実行します。`scripts/verify.sh`はfmt、layer rule、test、clippyをlocalで実行します。
 
 ## Repository構成
 
@@ -178,7 +178,7 @@ CIは各PRでcrate layer rule、Rust/Go unit test、生成済みConsole asset、
 | `edge-node/ingest/` | Envelope/Ack contract、in-process binding、認証付きHTTP binding |
 | `edge-node/input/` | Adapter host API、conformance testkit、polling runtime、transport、共有sensor driver |
 | `edge-node/adapters/` | BravePI MainboardやRaspberry Pi直結I2Cなどの具体的sensor family統合 |
-| `edge/` | Go製IoTKit Edge、Console、raw/semantic store、cursor管理、application出力 |
+| `edge/` | Rust製IoTKit Edge、Console、raw/semantic store、cursor管理、application出力 |
 | `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | 共有contract、導入、automation、component横断fixture、review policy |
 
 crate全体図、layer rule、新しいcodeの配置表は[Architecture](docs/okf/ja/architecture/system-overview.md)にあります。

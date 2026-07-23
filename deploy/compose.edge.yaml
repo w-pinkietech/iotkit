@@ -26,7 +26,8 @@ services:
 
   edge:
     build:
-      context: ../edge
+      context: ..
+      dockerfile: edge/Dockerfile
       target: runtime
     restart: unless-stopped
     user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"

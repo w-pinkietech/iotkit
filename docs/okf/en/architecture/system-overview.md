@@ -5,13 +5,13 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 5
+revision: 6
 ---
 
 # Architecture
 
 IoTKit currently ships the Rust IoTKit Edge Node binary (`iotkit-edge-node`) plus an operator CLI
-(`iotkit-edge-nodectl`), backed by a single SQLite database, and the independently deployable Go
+(`iotkit-edge-nodectl`), backed by a single SQLite database, and the independently deployable Rust
 IoTKit Edge (`iotkit-edge`), backed by one selected `embedded` (SQLite) or `postgres`
 (PostgreSQL) storage profile and a standard MQTT broker.
 IoTKit Edge is not part of the Edge Node process. Edge Node runs unattended on a
@@ -42,7 +42,7 @@ The [product model](../concepts/product-model.md) describes four tiers of a depl
 hardware) → **[2] IoTKit Edge Node** (Raspberry Pi, this repo) → **[3] IoTKit Edge**
 (per-deployment aggregation; may be hosted remotely) → **[4] Fleet layer**.
 
-**This repository ships tiers [2] and [3].** Tier [3] is a separate Go program
+**This repository ships tiers [2] and [3].** Tier [3] is a separate Rust program
 that consumes only the public Edge Node custody contract; it does not import Edge Node Rust packages or read
 the Edge Node database. Tier [1] is hardware plus the ingest wire contract. Tier [4] remains external
 and spans multiple `edge_id` values regardless of whether it runs in cloud or on premises.
@@ -331,7 +331,7 @@ below mechanically (in `verify.sh` and CI).
 | `bravepi-poc` | `edge-node/tools/bravepi-poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
 | `iotkit-edge-node` | `edge-node/apps/node` | **Binary.** IoTKit Edge Node composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
 | `iotkit-edge-nodectl` | `edge-node/apps/nodectl` | **Binary.** Edge Node operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `edge-node/core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
-| `iotkit-edge` | `edge/` | **Binary and library replacement candidate.** Rust composition, lifecycle, and parity slices are built beside the Go production oracle until issue #83 completes its release gate. The two implementations never share a production database or dual-write. |
+| `iotkit-edge` | `edge/` | **Binary and library.** Rust composition root for MQTT custody, storage, semantics, Output Adapters, authenticated Console, backup, diagnostics, and operator CLI. |
 | `iotkit-edge-custody-contract` | `edge/custody-contract` | Leaf Rust representation and strict validation of the versioned Edge Node MQTT descriptor, activation, record-batch, and custody acknowledgement wire messages. |
 | `iotkit-output-adapter-api` | `edge/output-adapters/api` | Leaf Rust API for deterministic Observation-to-MQTT transformation and provider-neutral profile setup policy. |
 | `iotkit-output-adapter-testkit` | `edge/output-adapters/testkit` | Dev-only shared descriptor, configuration, publication, and determinism conformance assertions. |
@@ -339,14 +339,13 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-output-adapter-generic-mqtt-json-v1` | `edge/output-adapters/generic-mqtt-json-v1` | Built-in generic IoTKit Observation JSON transformer. |
 | `iotkit-output-adapter-pinikiet-mqtt-v1` | `edge/output-adapters/pinikiet-mqtt-v1` | Built-in Pinikiet MQTT contract transformer and profile policy. |
 
-Approved next-slice non-Rust placement:
+Approved non-crate placement:
 
 | Component | Path | Responsibility (one line) |
 |---|---|---|
-| IoTKit Edge Go oracle | `edge/cmd/`, `edge/internal/` | Existing MQTT consumer, durable raw acceptance, cursor, query, semantic, Console, and export behavior used only as the black-box oracle while issue #83 replaces it. |
 | IoTKit Console browser source | `edge/frontend/src/` | TypeScript browser behavior for the server-rendered Console; it does not own authorization, persistence, or domain state transitions. |
 | IoTKit Console API schema | `edge/openapi/edge-console-v1.yaml` | Browser-facing JSON contract used to generate TypeScript request and response types. HTML form endpoints are not duplicated here. |
-| Cross-language fixtures | `testdata/egress/v1/`, `testdata/egress/v2/` | Normative JSON examples decoded by both Rust and Go tests. Descriptor uses only `v2`; the other current egress messages remain in `v1`. |
+| Wire fixtures | `testdata/egress/v1/`, `testdata/egress/v2/` | Normative JSON examples decoded by Rust conformance tests. Descriptor uses only `v2`; the other current egress messages remain in `v1`. |
 
 ### Layer rules (machine-checked)
 

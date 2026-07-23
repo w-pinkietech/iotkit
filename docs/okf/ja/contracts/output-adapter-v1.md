@@ -5,7 +5,7 @@ description: "汎用Observation、route設定、変換、MQTT publication、appl
 language: ja
 translation_key: contracts.output-adapter-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit Output Adapter contract v1
@@ -152,6 +152,11 @@ route設定へBroker credential、CA、private key、tokenを保存しない。`
 IoTKit Edgeは組み込みAdapterをregistryへ登録する。v1のregistryはcompile-timeであり、runtime plugin discoveryを
 行わない。重複Adapter ID、invalid descriptor、未知Adapter IDはroute作成時に拒否する。
 
+Adapterは`OutputAdapter`と`ProfilePolicy`を実装する信頼済みRust crateである。作者は
+`iotkit-output-adapter-api`へ依存し、`iotkit-output-adapter-testkit`で挙動を証明してから、
+workspaceと一つのstatic production registryへcrateを追加する。Provider固有変換の追加で
+core storage、MQTT、HTTP、Console codeは変更しない。
+
 generic routeは論理的に次を保存する。
 
 ```text
@@ -165,9 +170,8 @@ active
 created_at
 ```
 
-`config_schema_version`は選択されたAdapter descriptorと一致しなければならない。既存の
-旧YokaKit専用routeはmigrationで`adapter_id=pinikiet.mqtt.v1`とversion付きconfig JSONへ変換する。
-outboxの`route_id`は維持し、配送待ちmessageを失わない。
+`config_schema_version`は選択されたAdapter descriptorと一致しなければならない。Rust schemaは
+fresh baselineであり、以前の実装のrouteとoutbox rowをimportしない。
 
 `output_routes`は現在、利用者がruleごとに作る設定ではなく、IoTKit Edge全体の`export_profile`から
 `profile_rule_binding`を経て展開される実行単位である。profile expanderがIoTKit Edge ID、
@@ -191,8 +195,7 @@ Console/APIが利用するIoTKit Edge全体の操作面は次である。
 - `GET /api/v1/output-routes`: route、非秘密config、配送件数
 
 個別routeを作るAPIとConsole操作は提供しない。これらから任意topic、source ID、signal IDを
-作ることはできない。旧個別routeがDBに残っている場合はmigrationで停止し、未配送outboxだけを
-既存の配送経路で処理する。API handlerやConsole handlerからSQLへ直接書き込まない。
+作ることはできない。API handlerやConsole handlerからSQLへ直接書き込まない。
 
 ## 7. Transformation and errors
 
@@ -343,11 +346,6 @@ Console/APIがセンサーごとのexact topicとpayload例を提示する。導
 明示的な開始操作で同じセンサーのpreparedな全kindについてaccepted cursor境界を保存して
 `prepared -> active`へ遷移する。登録済みセンサーへ後から追加した対応ruleは同じtopicで自動開始する。
 各ruleの開始境界より前のObservationは後から送らない。
-
-schema 30への移行では、旧YokaKit `/signals/` topicの登録を新Pinikiet `/sensors/` topicの
-登録済み証拠として扱わない。
-稼働中だったprofileは、新topicを登録するまで`preparing`へ戻す。ただし、既に送信待ちになっているmessageは
-登録済みの旧topicを維持して配送し、破棄しない。
 
 Pinikiet source statusはsemantic Observationの変換ではないため、Observation routeとは別の
 source-level publicationとして扱う。

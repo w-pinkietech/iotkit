@@ -29,7 +29,6 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 対応する開発環境はLinuxです。現在のCIは次を使います。
 
 - `rust-toolchain.toml`が自動選択するRust 1.95.0
-- `edge/go.mod`が指定するGo 1.25
 - Console assetとtest用のNode.js 22、npm
 - Raspberry Pi transport依存の`pkg-config`、`libudev-dev`
 
@@ -44,9 +43,9 @@ sudo apt-get install --yes pkg-config libudev-dev docker.io docker-compose-v2 \
   openssl jq curl
 ```
 
-Rustは[rustup](https://rustup.rs/)、Go 1.25は公式配布またはversion manager、
-Node.js 22は通常使うpackage managerで導入してください。credential、生成した証明書、
-local DB、deployment出力directoryをcommitしてはいけません。
+Rustは[rustup](https://rustup.rs/)、Node.js 22は通常使うpackage managerで
+導入してください。credential、生成した証明書、local DB、deployment出力directoryを
+commitしてはいけません。
 
 ## 最初の60分
 
@@ -67,7 +66,7 @@ scripts/check-source-layout
 sensor / device
   -> Rust製IoTKit Edge Node
   -> MQTT Broker
-  -> Go製IoTKit Edge
+  -> Rust製IoTKit Edge
   -> Output Adapter
   -> 外部application
 ```
@@ -75,11 +74,12 @@ sensor / device
 ### 10〜30分: 各領域でfocused testを一つ動かす
 
 ```bash
-# Rust製Edge Node・Adapter側
+# Edge Node・Input Adapter
 cargo test -p bravepi-mainboard-adapter
 
-# Go製IoTKit Edge側
-(cd edge && go test ./internal/outputadapter)
+# IoTKit Edge・Output Adapter
+cargo test -p iotkit-edge
+cargo test -p iotkit-output-adapter-testkit
 
 # Browser動作と生成済みConsole型
 npm ci --prefix edge/frontend
@@ -202,7 +202,7 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
   `npm run generate:api --prefix edge/frontend`を実行する。
 - 埋め込みConsole JavaScriptは
   `npm run build --prefix edge/frontend`で生成する。
-- `Cargo.lock`、`go.sum`、`package-lock.json`は各package managerからだけ更新する。
+- `Cargo.lock`、`package-lock.json`は各package managerからだけ更新する。
 - `docs/okf/`の日英fileは同時に変更する。
 - `testdata/`の共有JSONは正規contract dataとして扱う。一実装を通すためだけに
   fixtureを変更しない。
@@ -213,7 +213,7 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
 - 文書上のdurability pointより前にackせず、未ack originalを黙って削除しない。
 - 状態変更は所有componentのtyped operation dispatcherを通す。HTTP、UI、CLI、
   AdapterからSQLへ直接writeする経路を追加しない。
-- Rust製品test本体は製品`src/`外、Go testは`*_test.go`、frontend unit testは
+- Rust製品test本体は製品`src/`外、frontend unit testは
   `edge/frontend/tests/unit/`へ置く。
 - Legacy planや旧codeを新しい動作の正本にしない。
 
