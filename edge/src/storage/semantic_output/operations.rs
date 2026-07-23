@@ -29,6 +29,107 @@ pub struct ClaimedOutput {
     pub attempts: i64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct StoredPublication {
+    pub topic: String,
+    pub qos: u8,
+    pub retain: bool,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StoredOutputObservation {
+    pub observation_id: String,
+    pub series_id: String,
+    pub sequence: u64,
+    pub observed_at: i64,
+    pub value: ObservationValue,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OutputPublicationSnapshot {
+    pub adapter_id: String,
+    pub config: Vec<u8>,
+    pub kind: SemanticKind,
+    pub observation: Option<StoredOutputObservation>,
+    pub actual: Option<StoredPublication>,
+    pub pending_count: i64,
+    pub published_count: i64,
+    pub oldest_pending_at: Option<i64>,
+    pub last_published_at: Option<i64>,
+}
+
+async fn latest_output_observation_sqlite(
+    pool: &sqlx::SqlitePool,
+    binding_id: &str,
+) -> Result<Option<StoredOutputObservation>, StorageError> {
+    let row = sqlx::query(
+        "SELECT observation_id,series_id,sequence,kind,value_json,reading,observed_at \
+         FROM semantic_observations WHERE rule_id=(\
+           SELECT rule_id FROM output_bindings WHERE binding_id=?) \
+         ORDER BY observation_row_id DESC LIMIT 1",
+    )
+    .bind(binding_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| {
+        let decoded = decode_stored_observation(
+            row.try_get("observation_id")?,
+            String::new(),
+            row.try_get("series_id")?,
+            row.try_get("sequence")?,
+            parse_semantic_kind(&row.try_get::<String, _>("kind")?)?,
+            &row.try_get::<Vec<u8>, _>("value_json")?,
+            row.try_get("reading")?,
+            row.try_get("observed_at")?,
+        )?;
+        Ok(StoredOutputObservation {
+            observation_id: decoded.observation_id,
+            series_id: decoded.series_id,
+            sequence: decoded.sequence,
+            observed_at: decoded.observed_at,
+            value: decoded.value,
+        })
+    })
+    .transpose()
+}
+
+async fn latest_output_observation_postgres(
+    pool: &sqlx::PgPool,
+    binding_id: &str,
+) -> Result<Option<StoredOutputObservation>, StorageError> {
+    let row = sqlx::query(
+        "SELECT observation_id,series_id,sequence,kind,value_json::text value_json,reading,observed_at \
+         FROM semantic_observations WHERE rule_id=(\
+           SELECT rule_id FROM output_bindings WHERE binding_id=$1) \
+         ORDER BY observation_row_id DESC LIMIT 1",
+    )
+    .bind(binding_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| {
+        let value: String = row.try_get("value_json")?;
+        let decoded = decode_stored_observation(
+            row.try_get("observation_id")?,
+            String::new(),
+            row.try_get("series_id")?,
+            row.try_get("sequence")?,
+            parse_semantic_kind(&row.try_get::<String, _>("kind")?)?,
+            value.as_bytes(),
+            row.try_get("reading")?,
+            row.try_get("observed_at")?,
+        )?;
+        Ok(StoredOutputObservation {
+            observation_id: decoded.observation_id,
+            series_id: decoded.series_id,
+            sequence: decoded.sequence,
+            observed_at: decoded.observed_at,
+            value: decoded.value,
+        })
+    })
+    .transpose()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMark {
     Published,
@@ -412,6 +513,117 @@ impl Storage {
                 .fetch_all(pool)
                 .await?;
                 rows.into_iter().map(postgres_row_to_observation).collect()
+            }
+        }
+    }
+
+    pub(crate) async fn output_publication_snapshot(
+        &self,
+        binding_id: &str,
+    ) -> Result<OutputPublicationSnapshot, StorageError> {
+        if binding_id.is_empty() {
+            return Err(StorageError::InvalidOutput("binding is required".into()));
+        }
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let route = sqlx::query(
+                    "SELECT route.route_id,route.adapter_id,route.config_json,rule.kind \
+                     FROM output_routes route JOIN semantic_rules rule ON rule.rule_id=route.rule_id \
+                     WHERE route.binding_id=?",
+                )
+                .bind(binding_id)
+                .fetch_optional(pool)
+                .await?
+                .ok_or(StorageError::SemanticNotFound)?;
+                let route_id: String = route.try_get("route_id")?;
+                let actual = sqlx::query(
+                    "SELECT topic,qos,retain,payload_json FROM output_outbox WHERE route_id=? \
+                     ORDER BY created_at DESC,export_id DESC LIMIT 1",
+                )
+                .bind(&route_id)
+                .fetch_optional(pool)
+                .await?
+                .map(|row| {
+                    Ok::<_, StorageError>(StoredPublication {
+                        topic: row.try_get("topic")?,
+                        qos: u8::try_from(row.try_get::<i64, _>("qos")?)
+                            .map_err(|_| StorageError::InvalidOutput("invalid qos".into()))?,
+                        retain: row.try_get("retain")?,
+                        payload: row.try_get("payload_json")?,
+                    })
+                })
+                .transpose()?;
+                let observation = latest_output_observation_sqlite(pool, binding_id).await?;
+                let delivery = sqlx::query(
+                    "SELECT COALESCE(SUM(CASE WHEN published_at IS NULL THEN 1 ELSE 0 END),0) pending_count,\
+                     COALESCE(SUM(CASE WHEN published_at IS NOT NULL THEN 1 ELSE 0 END),0) published_count,\
+                     MIN(CASE WHEN published_at IS NULL THEN created_at END) oldest_pending_at,\
+                     MAX(published_at) last_published_at FROM output_outbox WHERE route_id=?",
+                )
+                .bind(&route_id)
+                .fetch_one(pool)
+                .await?;
+                Ok(OutputPublicationSnapshot {
+                    adapter_id: route.try_get("adapter_id")?,
+                    config: route.try_get("config_json")?,
+                    kind: parse_semantic_kind(&route.try_get::<String, _>("kind")?)?,
+                    observation,
+                    actual,
+                    pending_count: delivery.try_get("pending_count")?,
+                    published_count: delivery.try_get("published_count")?,
+                    oldest_pending_at: delivery.try_get("oldest_pending_at")?,
+                    last_published_at: delivery.try_get("last_published_at")?,
+                })
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let route = sqlx::query(
+                    "SELECT route.route_id,route.adapter_id,route.config_json::text config_json,rule.kind \
+                     FROM output_routes route JOIN semantic_rules rule ON rule.rule_id=route.rule_id \
+                     WHERE route.binding_id=$1",
+                )
+                .bind(binding_id)
+                .fetch_optional(pool)
+                .await?
+                .ok_or(StorageError::SemanticNotFound)?;
+                let route_id: String = route.try_get("route_id")?;
+                let actual = sqlx::query(
+                    "SELECT topic,qos,retain,payload_json::text payload_json FROM output_outbox \
+                     WHERE route_id=$1 ORDER BY created_at DESC,export_id DESC LIMIT 1",
+                )
+                .bind(&route_id)
+                .fetch_optional(pool)
+                .await?
+                .map(|row| {
+                    Ok::<_, StorageError>(StoredPublication {
+                        topic: row.try_get("topic")?,
+                        qos: u8::try_from(row.try_get::<i16, _>("qos")?)
+                            .map_err(|_| StorageError::InvalidOutput("invalid qos".into()))?,
+                        retain: row.try_get("retain")?,
+                        payload: row.try_get::<String, _>("payload_json")?.into_bytes(),
+                    })
+                })
+                .transpose()?;
+                let observation = latest_output_observation_postgres(pool, binding_id).await?;
+                let delivery = sqlx::query(
+                    "SELECT COUNT(*) FILTER (WHERE published_at IS NULL)::bigint pending_count,\
+                     COUNT(*) FILTER (WHERE published_at IS NOT NULL)::bigint published_count,\
+                     MIN(created_at) FILTER (WHERE published_at IS NULL) oldest_pending_at,\
+                     MAX(published_at) last_published_at FROM output_outbox WHERE route_id=$1",
+                )
+                .bind(&route_id)
+                .fetch_one(pool)
+                .await?;
+                Ok(OutputPublicationSnapshot {
+                    adapter_id: route.try_get("adapter_id")?,
+                    config: route.try_get::<String, _>("config_json")?.into_bytes(),
+                    kind: parse_semantic_kind(&route.try_get::<String, _>("kind")?)?,
+                    observation,
+                    actual,
+                    pending_count: delivery.try_get("pending_count")?,
+                    published_count: delivery.try_get("published_count")?,
+                    oldest_pending_at: delivery.try_get("oldest_pending_at")?,
+                    last_published_at: delivery.try_get("last_published_at")?,
+                })
             }
         }
     }

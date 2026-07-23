@@ -99,6 +99,12 @@ pub struct StoredRawRecord {
     pub received_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredPreviewInput {
+    pub received_at: i64,
+    pub record_json: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AcceptedCursor {
     pub accepted_through: i64,

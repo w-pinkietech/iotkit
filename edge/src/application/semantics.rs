@@ -2,9 +2,13 @@ use iotkit_output_adapter_api::ObservationValue;
 
 use crate::{
     composition::OutputAdapterRegistration,
-    semantics::{RuleSpec, SemanticKind},
+    semantics::{
+        Calibration, DefinitionSpec, Evaluation, PreviewInput, RuleSpec, SemanticKind,
+        build_preview,
+    },
     storage::{Storage, StorageError},
 };
+use serde::Deserialize;
 
 #[derive(Debug, Clone)]
 pub struct SemanticRuleDraft {
@@ -44,6 +48,43 @@ pub struct ProjectionProgress {
     pub publications: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MappingPreviewRequest {
+    pub signal_ref: String,
+    pub calibration: Calibration,
+    pub rules: Vec<SemanticPreviewRule>,
+    pub test_value: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticPreviewRule {
+    pub rule_id: String,
+    pub display_name: String,
+    pub spec: RuleSpec,
+}
+
+#[derive(Debug, Clone)]
+pub struct MappingPreviewResponse {
+    pub calibration: Calibration,
+    pub rules: Vec<SemanticRulePreview>,
+    pub window_start: Option<i64>,
+    pub window_end: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticRulePreview {
+    pub rule_id: String,
+    pub display_name: String,
+    pub kind: SemanticKind,
+    pub input_count: usize,
+    pub plot_count: usize,
+    pub points: Vec<crate::semantics::PreviewPoint>,
+    pub test_result: Option<Evaluation>,
+    pub error: String,
+}
+
 #[derive(Clone)]
 pub struct Semantics {
     storage: Storage,
@@ -65,6 +106,85 @@ impl Semantics {
             .validate()
             .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
         self.storage.create_semantic_rule(draft, now).await
+    }
+
+    pub async fn preview(
+        &self,
+        request: MappingPreviewRequest,
+    ) -> Result<MappingPreviewResponse, StorageError> {
+        request
+            .calibration
+            .validate()
+            .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
+        if request.signal_ref.is_empty() || request.rules.is_empty() || request.rules.len() > 16 {
+            return Err(StorageError::InvalidSemantic(
+                "signal and between 1 and 16 preview rules are required".into(),
+            ));
+        }
+        let stored = self
+            .storage
+            .recent_signal_inputs(&request.signal_ref, 2_000)
+            .await?;
+        let mut inputs = Vec::with_capacity(stored.len());
+        for item in stored {
+            let value: serde_json::Value = serde_json::from_slice(&item.record_json)
+                .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
+            let Some(number) = value
+                .get("values")
+                .and_then(serde_json::Value::as_array)
+                .filter(|values| values.len() == 1)
+                .and_then(|values| values[0].as_f64())
+                .filter(|value| value.is_finite())
+            else {
+                continue;
+            };
+            inputs.push(PreviewInput {
+                received_at: item.received_at,
+                observed_at: value.get("event_time").and_then(serde_json::Value::as_i64),
+                value: number,
+            });
+        }
+        let window_start = inputs.first().map(|input| input.received_at);
+        let window_end = inputs.last().map(|input| input.received_at);
+        let mut rules = Vec::with_capacity(request.rules.len());
+        for draft in request.rules {
+            let definition = DefinitionSpec {
+                kind: draft.spec.kind,
+                scale: request.calibration.scale,
+                offset: request.calibration.offset,
+                detector: draft.spec.detector,
+                trigger: draft.spec.trigger,
+            };
+            let result = build_preview(definition, &inputs, 200, request.test_value);
+            rules.push(match result {
+                Ok(preview) => SemanticRulePreview {
+                    rule_id: draft.rule_id,
+                    display_name: draft.display_name,
+                    kind: draft.spec.kind,
+                    input_count: preview.input_count,
+                    plot_count: preview.plot_count,
+                    points: preview.points,
+                    test_result: preview.test_result,
+                    error: String::new(),
+                },
+                Err(error) => SemanticRulePreview {
+                    rule_id: draft.rule_id,
+                    display_name: draft.display_name,
+                    kind: draft.spec.kind,
+                    input_count: inputs.len(),
+                    plot_count: 0,
+                    points: Vec::new(),
+                    test_result: None,
+                    error: error.to_string(),
+                },
+            });
+        }
+        Ok(MappingPreviewResponse {
+            calibration: request.calibration,
+            rules,
+            window_start,
+            window_end,
+        })
     }
 
     pub async fn revise_rule(

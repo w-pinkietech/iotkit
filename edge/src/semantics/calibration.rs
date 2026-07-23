@@ -1,6 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use super::SemanticError;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Calibration {
     pub scale: f64,
     pub offset: f64,

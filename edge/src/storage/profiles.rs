@@ -7,11 +7,65 @@ use crate::application::profiles::{
 };
 
 use super::{
-    AuditActor, Storage, StorageError, StorageInner,
+    AuditActor, Storage, StorageError, StorageInner, StoredPreviewInput,
     auth::{insert_audit_postgres, insert_audit_sqlite},
 };
 
 impl Storage {
+    pub async fn recent_signal_inputs(
+        &self,
+        signal_ref: &str,
+        limit: i64,
+    ) -> Result<Vec<StoredPreviewInput>, StorageError> {
+        if !(1..=2_000).contains(&limit) {
+            return Err(StorageError::InvalidProfile(
+                "preview limit must be between 1 and 2000".into(),
+            ));
+        }
+        let mut values = match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => sqlx::query(
+                "SELECT raw.received_at,raw.record_json FROM raw_records AS raw \
+                 JOIN inventory_signals AS signal ON signal.edge_node_id=raw.edge_node_id \
+                 WHERE signal.signal_ref=? \
+                 AND json_extract(raw.record_json,'$.series_key')=signal.series_key \
+                 ORDER BY raw.received_at DESC,raw.ledger_epoch DESC,raw.pub_seq DESC LIMIT ?",
+            )
+            .bind(signal_ref)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(StoredPreviewInput {
+                    received_at: row.try_get("received_at")?,
+                    record_json: row.try_get("record_json")?,
+                })
+            })
+            .collect::<Result<Vec<_>, StorageError>>()?,
+            StorageInner::Postgres { pool, .. } => sqlx::query(
+                "SELECT raw.received_at,raw.record_json FROM raw_records AS raw \
+                 JOIN inventory_signals AS signal ON signal.edge_node_id=raw.edge_node_id \
+                 WHERE signal.signal_ref=$1 \
+                 AND convert_from(raw.record_json,'UTF8')::jsonb->>'series_key'=signal.series_key \
+                 ORDER BY raw.received_at DESC,raw.ledger_epoch DESC,raw.pub_seq DESC LIMIT $2",
+            )
+            .bind(signal_ref)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(StoredPreviewInput {
+                    received_at: row.try_get("received_at")?,
+                    record_json: row.try_get("record_json")?,
+                })
+            })
+            .collect::<Result<Vec<_>, StorageError>>()?,
+        };
+        values.reverse();
+        Ok(values)
+    }
+
     pub async fn inventory_devices(&self) -> Result<Vec<InventoryDevice>, StorageError> {
         let sql = "SELECT inventory.device_ref,inventory.edge_node_id,inventory.system_id,\
             COALESCE(descriptor.identifier,'' ) AS identifier,descriptor.state,\
