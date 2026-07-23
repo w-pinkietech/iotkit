@@ -108,8 +108,10 @@ if [[ "$storage_profile" == "postgres" ]]; then
     postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193 \
     >/dev/null
   postgres_ready=false
-  for _ in $(seq 1 60); do
-    if docker exec "$postgres_container" \
+  for _ in $(seq 1 120); do
+    if docker logs "$postgres_container" 2>&1 |
+        grep -Fq 'PostgreSQL init process complete; ready for start up.' &&
+      docker exec "$postgres_container" \
       pg_isready --username iotkit --dbname iotkit >/dev/null 2>&1; then
       postgres_ready=true
       break
