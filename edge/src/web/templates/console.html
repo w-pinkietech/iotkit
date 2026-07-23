@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ title }} | IoTKit</title>
+  <link rel="stylesheet" href="/static/edge.css">
+</head>
+<body class="console-shell" data-console-page="{{ page }}" data-sensor-view="{{ sensor_view }}">
+  <a class="skip-link" href="#main-content">本文へ移動</a>
+  <aside class="sidebar" id="sidebar">
+    <a class="product-mark" href="/status" aria-label="IoTKit システム概要">
+      <img src="/static/pinkietech-mark.svg" alt=""><span><strong>IoTKit</strong><small>IoTKit Console</small></span>
+    </a>
+    <nav class="side-nav" aria-label="メインメニュー">
+      <p class="nav-heading">状態を見る</p>
+      <a href="/status"{% if page == "status" %} class="active" aria-current="page"{% endif %}>概要</a>
+      <a href="/sensors"{% if page == "sensors" %} class="active" aria-current="page"{% endif %}>センサー一覧</a>
+      <a href="/logs"{% if page == "logs" %} class="active" aria-current="page"{% endif %}>受信履歴</a>
+      <p class="nav-heading">設定</p>
+      <a href="/equipment"{% if page == "equipment" %} class="active" aria-current="page"{% endif %}>機器管理</a>
+      <a href="/output"{% if page == "output" %} class="active" aria-current="page"{% endif %}>外部出力</a>
+      <p class="nav-heading">管理</p>
+      <a href="/audit"{% if page == "audit" %} class="active" aria-current="page"{% endif %}>変更履歴</a>
+      {% if is_owner %}<a href="/accounts"{% if page == "accounts" %} class="active" aria-current="page"{% endif %}>アカウント</a>{% endif %}
+      <a href="/system"{% if page == "system" %} class="active" aria-current="page"{% endif %}>システム</a>
+    </nav>
+    <div class="sidebar-user">
+      <span class="avatar" aria-hidden="true">人</span>
+      <span class="user-copy"><strong>{{ display_name }}</strong><small>{{ role }}</small></span>
+      <form method="post" action="/logout" class="logout-form">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button type="submit" title="ログアウト"><span aria-hidden="true">↪</span><span class="sr-only">ログアウト</span></button>
+      </form>
+    </div>
+  </aside>
+  <div class="console-area">
+    <header class="mobile-header"><button class="menu-button" type="button" aria-controls="sidebar" aria-expanded="false">☰</button><span>IoTKit Console</span></header>
+    <main id="main-content" tabindex="-1">
+      <header class="page-header"><div><p class="eyebrow">IOTKIT EDGE</p><h1>{{ title }}</h1></div></header>
+      <div id="console-page-data" data-page="{{ page }}"></div>
+    </main>
+  </div>
+  <script src="/static/console.js" defer></script>
+</body>
+</html>

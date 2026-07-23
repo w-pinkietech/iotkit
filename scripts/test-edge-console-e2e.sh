@@ -2,6 +2,13 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+cd "$repo_root"
+cargo test -p iotkit-edge \
+  --test http_contract \
+  --test console_contract \
+  --test history_contract
+
 storage_profile=${IOTKIT_TEST_STORAGE_PROFILE:-embedded}
 [[ "$storage_profile" == "embedded" || "$storage_profile" == "postgres" ]] || {
   echo "IOTKIT_TEST_STORAGE_PROFILE must be embedded or postgres" >&2

@@ -6,6 +6,7 @@ pub mod lifecycle;
 pub mod mqtt;
 pub mod semantics;
 pub mod storage;
+pub mod web;
 
 use lifecycle::{ExitReason, Supervisor};
 
