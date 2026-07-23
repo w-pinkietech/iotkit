@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 
 mod activation;
 mod auth;
+mod history;
 mod profiles;
 mod recovery;
 mod semantic_output;
@@ -30,6 +31,9 @@ pub use activation::{
 };
 pub use auth::{
     Account, AccountCredential, AccountProvision, AuditActor, AuditEvent, StoredSession,
+};
+pub use history::{
+    HistoryBucket, RawHistoryPage, RawHistoryQuery, StoredRawHistoryRow, StoredSemanticHistoryRow,
 };
 pub use semantic_output::{ClaimedOutput, OutputMark};
 
@@ -170,6 +174,8 @@ pub enum StorageError {
     InvalidOutput(String),
     #[error("presentation profile operation is invalid: {0}")]
     InvalidProfile(String),
+    #[error("history query is invalid: {0}")]
+    InvalidHistory(String),
     #[error("inventory or presentation profile was not found")]
     ProfileNotFound,
     #[error("semantic or output resource was not found")]
