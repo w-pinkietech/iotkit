@@ -1,11 +1,14 @@
 use iotkit_edge_custody_contract::{
     ActivationRequest, ActivationResult, DescriptorSnapshot, SCHEMA_VERSION,
 };
-use serde_json::to_vec;
+use serde_json::{json, to_vec};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{Storage, StorageError, StorageInner};
+use super::{
+    AuditActor, Storage, StorageError, StorageInner,
+    auth::{insert_audit_postgres, insert_audit_sqlite},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeNodeState {
@@ -611,6 +614,16 @@ impl Storage {
         edge_node_id: &str,
         now: i64,
     ) -> Result<ActivationCommand, StorageError> {
+        self.request_activation_as(AuditActor::local_cli(), edge_node_id, now)
+            .await
+    }
+
+    pub async fn request_activation_as(
+        &self,
+        actor: AuditActor,
+        edge_node_id: &str,
+        now: i64,
+    ) -> Result<ActivationCommand, StorageError> {
         let edge_id = self.initialize_edge_identity(now).await?;
         let activation_id = prefixed_id("act-");
         match self.inner.as_ref() {
@@ -651,6 +664,15 @@ impl Storage {
                 .bind(now)
                 .execute(&mut *tx)
                 .await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "edge_node.activation.request",
+                    edge_node_id,
+                    json!({"activation_id":command.activation_id}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(command)
             }
@@ -690,6 +712,15 @@ impl Storage {
                 .bind(&command.payload_json)
                 .bind(now)
                 .execute(&mut *tx)
+                .await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "edge_node.activation.request",
+                    edge_node_id,
+                    json!({"activation_id":command.activation_id}),
+                )
                 .await?;
                 tx.commit().await?;
                 Ok(command)

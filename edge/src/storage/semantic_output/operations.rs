@@ -2,7 +2,7 @@ use iotkit_output_adapter_api::{
     AdapterError, IdentityScope, Observation, ObservationKind, ObservationValue, ProfileRequest,
 };
 use serde::Deserialize;
-use serde_json::{Map, Value, value::RawValue};
+use serde_json::{Map, Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Row, Sqlite, Transaction};
 use uuid::Uuid;
@@ -16,7 +16,10 @@ use crate::{
     semantics::{EvaluationState, RuleSpec, SemanticKind, evaluate_rule},
 };
 
-use super::{Storage, StorageError, StorageInner};
+use super::{
+    AuditActor, Storage, StorageError, StorageInner,
+    auth::{insert_audit_postgres, insert_audit_sqlite},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimedOutput {
@@ -193,17 +196,45 @@ impl Storage {
         draft: SemanticRuleDraft,
         now: i64,
     ) -> Result<SemanticRule, StorageError> {
+        self.create_semantic_rule_as(AuditActor::local_cli(), draft, now)
+            .await
+    }
+
+    pub async fn create_semantic_rule_as(
+        &self,
+        actor: AuditActor,
+        draft: SemanticRuleDraft,
+        now: i64,
+    ) -> Result<SemanticRule, StorageError> {
         validate_rule_draft(&draft, now)?;
         match self.inner.as_ref() {
             StorageInner::Sqlite { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 let rule = create_rule_sqlite(&mut tx, draft, now).await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_rule.create",
+                    &rule.rule_id,
+                    json!({"revision":rule.revision,"signal_ref":rule.signal_ref}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(rule)
             }
             StorageInner::Postgres { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 let rule = create_rule_postgres(&mut tx, draft, now).await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_rule.create",
+                    &rule.rule_id,
+                    json!({"revision":rule.revision,"signal_ref":rule.signal_ref}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(rule)
             }
@@ -212,6 +243,24 @@ impl Storage {
 
     pub async fn revise_semantic_rule(
         &self,
+        rule_id: &str,
+        display_name: &str,
+        spec: RuleSpec,
+        now: i64,
+    ) -> Result<SemanticRule, StorageError> {
+        self.revise_semantic_rule_as(
+            AuditActor::local_cli(),
+            rule_id,
+            display_name,
+            spec,
+            now,
+        )
+        .await
+    }
+
+    pub async fn revise_semantic_rule_as(
+        &self,
+        actor: AuditActor,
         rule_id: &str,
         display_name: &str,
         spec: RuleSpec,
@@ -226,6 +275,15 @@ impl Storage {
             StorageInner::Sqlite { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 let rule = revise_rule_sqlite(&mut tx, rule_id, display_name, spec, now).await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_rule.revise",
+                    rule_id,
+                    json!({"revision":rule.revision}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(rule)
             }
@@ -233,6 +291,15 @@ impl Storage {
                 let mut tx = pool.begin().await?;
                 let rule =
                     revise_rule_postgres(&mut tx, rule_id, display_name, spec, now).await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_rule.revise",
+                    rule_id,
+                    json!({"revision":rule.revision}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(rule)
             }
@@ -241,6 +308,24 @@ impl Storage {
 
     pub async fn update_semantic_calibration(
         &self,
+        signal_ref: &str,
+        scale: f64,
+        offset: f64,
+        now: i64,
+    ) -> Result<i64, StorageError> {
+        self.update_semantic_calibration_as(
+            AuditActor::local_cli(),
+            signal_ref,
+            scale,
+            offset,
+            now,
+        )
+        .await
+    }
+
+    pub async fn update_semantic_calibration_as(
+        &self,
+        actor: AuditActor,
         signal_ref: &str,
         scale: f64,
         offset: f64,
@@ -286,6 +371,15 @@ impl Storage {
                 .bind(revision)
                 .bind(signal_ref)
                 .execute(&mut *tx)
+                .await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_calibration.update",
+                    signal_ref,
+                    json!({"revision":revision,"scale":scale,"offset":offset}),
+                )
                 .await?;
                 tx.commit().await?;
                 Some(revision)
@@ -334,6 +428,15 @@ impl Storage {
                 .bind(signal_ref)
                 .execute(&mut *tx)
                 .await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_calibration.update",
+                    signal_ref,
+                    json!({"revision":revision,"scale":scale,"offset":offset}),
+                )
+                .await?;
                 tx.commit().await?;
                 Some(revision)
             }
@@ -343,6 +446,16 @@ impl Storage {
 
     pub async fn retire_semantic_rule(
         &self,
+        rule_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        self.retire_semantic_rule_as(AuditActor::local_cli(), rule_id, now)
+            .await
+    }
+
+    pub async fn retire_semantic_rule_as(
+        &self,
+        actor: AuditActor,
         rule_id: &str,
         now: i64,
     ) -> Result<(), StorageError> {
@@ -387,6 +500,17 @@ impl Storage {
                 .bind(rule_id)
                 .execute(&mut *tx)
                 .await?;
+                if result.rows_affected() == 1 {
+                    insert_audit_sqlite(
+                        &mut tx,
+                        &actor,
+                        now,
+                        "semantic_rule.retire",
+                        rule_id,
+                        json!({}),
+                    )
+                    .await?;
+                }
                 tx.commit().await?;
                 result.rows_affected()
             }
@@ -436,6 +560,17 @@ impl Storage {
                 .bind(rule_id)
                 .execute(&mut *tx)
                 .await?;
+                if result.rows_affected() == 1 {
+                    insert_audit_postgres(
+                        &mut tx,
+                        &actor,
+                        now,
+                        "semantic_rule.retire",
+                        rule_id,
+                        json!({}),
+                    )
+                    .await?;
+                }
                 tx.commit().await?;
                 result.rows_affected()
             }
@@ -449,6 +584,16 @@ impl Storage {
 
     pub async fn reset_semantic_counter(
         &self,
+        rule_id: &str,
+        now: i64,
+    ) -> Result<String, StorageError> {
+        self.reset_semantic_counter_as(AuditActor::local_cli(), rule_id, now)
+            .await
+    }
+
+    pub async fn reset_semantic_counter_as(
+        &self,
+        actor: AuditActor,
         rule_id: &str,
         now: i64,
     ) -> Result<String, StorageError> {
@@ -469,6 +614,15 @@ impl Storage {
                     now,
                 )
                 .await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_counter.reset",
+                    rule_id,
+                    json!({"reset_id":reset_id}),
+                )
+                .await?;
                 tx.commit().await?;
             }
             StorageInner::Postgres { pool, .. } => {
@@ -479,6 +633,15 @@ impl Storage {
                     &reset_id,
                     &observation_id,
                     now,
+                )
+                .await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "semantic_counter.reset",
+                    rule_id,
+                    json!({"reset_id":reset_id}),
                 )
                 .await?;
                 tx.commit().await?;
@@ -635,6 +798,24 @@ impl Storage {
         values: Map<String, Value>,
         now: i64,
     ) -> Result<ExportProfile, StorageError> {
+        self.activate_output_profile_as(
+            AuditActor::local_cli(),
+            display_name,
+            registration,
+            values,
+            now,
+        )
+        .await
+    }
+
+    pub async fn activate_output_profile_as(
+        &self,
+        actor: AuditActor,
+        display_name: &str,
+        registration: &'static OutputAdapterRegistration,
+        values: Map<String, Value>,
+        now: i64,
+    ) -> Result<ExportProfile, StorageError> {
         if now < 0 {
             return Err(StorageError::InvalidOutput(
                 "profile timestamp must be non-negative".into(),
@@ -651,6 +832,15 @@ impl Storage {
                     now,
                 )
                 .await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "export_profile.activate",
+                    &result.profile_id,
+                    json!({"adapter_id":result.adapter_id,"revision":result.revision}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(result)
             }
@@ -662,6 +852,15 @@ impl Storage {
                     registration,
                     values,
                     now,
+                )
+                .await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "export_profile.activate",
+                    &result.profile_id,
+                    json!({"adapter_id":result.adapter_id,"revision":result.revision}),
                 )
                 .await?;
                 tx.commit().await?;
@@ -678,12 +877,41 @@ impl Storage {
         adapters: &'static [OutputAdapterRegistration],
         now: i64,
     ) -> Result<OutputBinding, StorageError> {
+        self.configure_output_binding_as(
+            AuditActor::local_cli(),
+            binding_id,
+            mode,
+            values,
+            adapters,
+            now,
+        )
+        .await
+    }
+
+    pub async fn configure_output_binding_as(
+        &self,
+        actor: AuditActor,
+        binding_id: &str,
+        mode: &str,
+        values: Map<String, Value>,
+        adapters: &'static [OutputAdapterRegistration],
+        now: i64,
+    ) -> Result<OutputBinding, StorageError> {
         match self.inner.as_ref() {
             StorageInner::Sqlite { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 let result =
                     configure_binding_sqlite(&mut tx, binding_id, mode, values, adapters, now)
                         .await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "output_binding.configure",
+                    binding_id,
+                    json!({"mode":mode}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(result)
             }
@@ -692,6 +920,15 @@ impl Storage {
                 let result =
                     configure_binding_postgres(&mut tx, binding_id, mode, values, adapters, now)
                         .await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "output_binding.configure",
+                    binding_id,
+                    json!({"mode":mode}),
+                )
+                .await?;
                 tx.commit().await?;
                 Ok(result)
             }
@@ -703,15 +940,43 @@ impl Storage {
         binding_id: &str,
         now: i64,
     ) -> Result<(), StorageError> {
+        self.confirm_output_binding_as(AuditActor::local_cli(), binding_id, now)
+            .await
+    }
+
+    pub async fn confirm_output_binding_as(
+        &self,
+        actor: AuditActor,
+        binding_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
         match self.inner.as_ref() {
             StorageInner::Sqlite { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 confirm_binding_sqlite(&mut tx, binding_id, now).await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "output_binding.confirm",
+                    binding_id,
+                    json!({}),
+                )
+                .await?;
                 tx.commit().await?;
             }
             StorageInner::Postgres { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 confirm_binding_postgres(&mut tx, binding_id, now).await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "output_binding.confirm",
+                    binding_id,
+                    json!({}),
+                )
+                .await?;
                 tx.commit().await?;
             }
         }
@@ -723,15 +988,43 @@ impl Storage {
         profile_id: &str,
         now: i64,
     ) -> Result<(), StorageError> {
+        self.stop_output_profile_as(AuditActor::local_cli(), profile_id, now)
+            .await
+    }
+
+    pub async fn stop_output_profile_as(
+        &self,
+        actor: AuditActor,
+        profile_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
         match self.inner.as_ref() {
             StorageInner::Sqlite { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 stop_profile_sqlite(&mut tx, profile_id, now).await?;
+                insert_audit_sqlite(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "export_profile.stop",
+                    profile_id,
+                    json!({}),
+                )
+                .await?;
                 tx.commit().await?;
             }
             StorageInner::Postgres { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 stop_profile_postgres(&mut tx, profile_id, now).await?;
+                insert_audit_postgres(
+                    &mut tx,
+                    &actor,
+                    now,
+                    "export_profile.stop",
+                    profile_id,
+                    json!({}),
+                )
+                .await?;
                 tx.commit().await?;
             }
         }

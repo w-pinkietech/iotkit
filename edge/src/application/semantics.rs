@@ -6,7 +6,7 @@ use crate::{
         Calibration, DefinitionSpec, Evaluation, PreviewInput, RuleSpec, SemanticKind,
         build_preview,
     },
-    storage::{Storage, StorageError},
+    storage::{AuditActor, Storage, StorageError},
 };
 use serde::Deserialize;
 
@@ -101,11 +101,23 @@ impl Semantics {
         draft: SemanticRuleDraft,
         now: i64,
     ) -> Result<SemanticRule, StorageError> {
+        self.create_rule_as(AuditActor::local_cli(), draft, now)
+            .await
+    }
+
+    pub async fn create_rule_as(
+        &self,
+        actor: AuditActor,
+        draft: SemanticRuleDraft,
+        now: i64,
+    ) -> Result<SemanticRule, StorageError> {
         draft
             .spec
             .validate()
             .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
-        self.storage.create_semantic_rule(draft, now).await
+        self.storage
+            .create_semantic_rule_as(actor, draft, now)
+            .await
     }
 
     pub async fn preview(
@@ -194,10 +206,22 @@ impl Semantics {
         spec: RuleSpec,
         now: i64,
     ) -> Result<SemanticRule, StorageError> {
+        self.revise_rule_as(AuditActor::local_cli(), rule_id, display_name, spec, now)
+            .await
+    }
+
+    pub async fn revise_rule_as(
+        &self,
+        actor: AuditActor,
+        rule_id: &str,
+        display_name: &str,
+        spec: RuleSpec,
+        now: i64,
+    ) -> Result<SemanticRule, StorageError> {
         spec.validate()
             .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
         self.storage
-            .revise_semantic_rule(rule_id, display_name, spec, now)
+            .revise_semantic_rule_as(actor, rule_id, display_name, spec, now)
             .await
     }
 
@@ -208,20 +232,56 @@ impl Semantics {
         offset: f64,
         now: i64,
     ) -> Result<i64, StorageError> {
+        self.update_calibration_as(AuditActor::local_cli(), signal_ref, scale, offset, now)
+            .await
+    }
+
+    pub async fn update_calibration_as(
+        &self,
+        actor: AuditActor,
+        signal_ref: &str,
+        scale: f64,
+        offset: f64,
+        now: i64,
+    ) -> Result<i64, StorageError> {
         crate::semantics::Calibration { scale, offset }
             .validate()
             .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
         self.storage
-            .update_semantic_calibration(signal_ref, scale, offset, now)
+            .update_semantic_calibration_as(actor, signal_ref, scale, offset, now)
             .await
     }
 
     pub async fn retire_rule(&self, rule_id: &str, now: i64) -> Result<(), StorageError> {
-        self.storage.retire_semantic_rule(rule_id, now).await
+        self.retire_rule_as(AuditActor::local_cli(), rule_id, now)
+            .await
+    }
+
+    pub async fn retire_rule_as(
+        &self,
+        actor: AuditActor,
+        rule_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .retire_semantic_rule_as(actor, rule_id, now)
+            .await
     }
 
     pub async fn reset_counter(&self, rule_id: &str, now: i64) -> Result<String, StorageError> {
-        self.storage.reset_semantic_counter(rule_id, now).await
+        self.reset_counter_as(AuditActor::local_cli(), rule_id, now)
+            .await
+    }
+
+    pub async fn reset_counter_as(
+        &self,
+        actor: AuditActor,
+        rule_id: &str,
+        now: i64,
+    ) -> Result<String, StorageError> {
+        self.storage
+            .reset_semantic_counter_as(actor, rule_id, now)
+            .await
     }
 
     pub async fn project_pending(

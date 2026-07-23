@@ -762,7 +762,11 @@ impl WebApplication for StorageWebApplication {
                 })?;
             let command = self
                 .storage
-                .request_activation(&node.edge_node_id, now())
+                .request_activation_as(
+                    AuditActor::account(&principal.account_ref),
+                    &node.edge_node_id,
+                    now(),
+                )
                 .await
                 .map_err(internal)?;
             return Ok(MutationOutput::accepted(json!({
@@ -795,7 +799,8 @@ impl WebApplication for StorageWebApplication {
             }
             if route.ends_with("/calibration") {
                 let revision = semantics
-                    .update_calibration(
+                    .update_calibration_as(
+                        AuditActor::account(&principal.account_ref),
                         signal_ref,
                         required_f64(&body, "scale")?,
                         required_f64(&body, "offset")?,
@@ -812,7 +817,11 @@ impl WebApplication for StorageWebApplication {
                     .find(|rule| rule.signal_ref == *signal_ref && rule.active)
                     .ok_or_else(not_found_error)?;
                 let reset_id = semantics
-                    .reset_counter(&rule.rule_id, now())
+                    .reset_counter_as(
+                        AuditActor::account(&principal.account_ref),
+                        &rule.rule_id,
+                        now(),
+                    )
                     .await
                     .map_err(operation_error)?;
                 return Ok(MutationOutput::accepted(json!({"reset_id": reset_id})));
@@ -823,7 +832,8 @@ impl WebApplication for StorageWebApplication {
             {
                 let signal = resolve_signal(&self.storage, signal_ref).await?;
                 let rule = semantics
-                    .create_rule(
+                    .create_rule_as(
+                        AuditActor::account(&principal.account_ref),
                         SemanticRuleDraft {
                             edge_node_id: signal.edge_node_id,
                             series_key: signal.series_key,
@@ -885,7 +895,7 @@ impl WebApplication for StorageWebApplication {
         if let Some(rule_id) = params.get("rule_id") {
             if route.ends_with("/retire") || method == axum::http::Method::DELETE {
                 semantics
-                    .retire_rule(rule_id, now())
+                    .retire_rule_as(AuditActor::account(&principal.account_ref), rule_id, now())
                     .await
                     .map_err(operation_error)?;
                 return Ok(MutationOutput::ok(
@@ -894,13 +904,14 @@ impl WebApplication for StorageWebApplication {
             }
             if route.ends_with("/counter-resets") {
                 let reset_id = semantics
-                    .reset_counter(rule_id, now())
+                    .reset_counter_as(AuditActor::account(&principal.account_ref), rule_id, now())
                     .await
                     .map_err(operation_error)?;
                 return Ok(MutationOutput::accepted(json!({"reset_id": reset_id})));
             }
             let rule = semantics
-                .revise_rule(
+                .revise_rule_as(
+                    AuditActor::account(&principal.account_ref),
                     rule_id,
                     required_text(&body, "display_name")?,
                     rule_spec(&body)?,
@@ -921,7 +932,8 @@ impl WebApplication for StorageWebApplication {
                         .unwrap_or("Output")
                 });
             let profile = profiles
-                .activate(
+                .activate_as(
+                    AuditActor::account(&principal.account_ref),
                     display_name,
                     required_text(&body, "adapter_id")?,
                     serde_json::Map::new(),
@@ -935,7 +947,11 @@ impl WebApplication for StorageWebApplication {
             && route.ends_with("/stop")
         {
             profiles
-                .stop(profile_id, now())
+                .stop_as(
+                    AuditActor::account(&principal.account_ref),
+                    profile_id,
+                    now(),
+                )
                 .await
                 .map_err(operation_error)?;
             return Ok(MutationOutput::accepted(
@@ -945,7 +961,11 @@ impl WebApplication for StorageWebApplication {
         if let Some(binding_id) = params.get("binding_id") {
             if route.ends_with("/start") {
                 profiles
-                    .confirm(binding_id, now())
+                    .confirm_as(
+                        AuditActor::account(&principal.account_ref),
+                        binding_id,
+                        now(),
+                    )
                     .await
                     .map_err(operation_error)?;
                 return Ok(MutationOutput::accepted(
@@ -953,7 +973,8 @@ impl WebApplication for StorageWebApplication {
                 ));
             }
             let binding = profiles
-                .configure(
+                .configure_as(
+                    AuditActor::account(&principal.account_ref),
                     binding_id,
                     body.get("mode")
                         .and_then(Value::as_str)

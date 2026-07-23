@@ -6,9 +6,13 @@ use iotkit_edge::{
         profiles::InventoryProfiles,
         semantics::{MappingPreviewRequest, SemanticPreviewRule, SemanticRuleDraft, Semantics},
     },
+    auth::{
+        password::{Password, hash_password},
+        principal::AccountRole,
+    },
     composition::registered_output_adapters,
     semantics::{Calibration, Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
-    storage::{AcceptBatch, RawRecord, Storage, StorageProfile},
+    storage::{AcceptBatch, AccountProvision, AuditActor, RawRecord, Storage, StorageProfile},
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
 use serde_json::Map;
@@ -134,4 +138,58 @@ async fn output_preview_uses_policy_transform_and_durable_puback_state() {
     assert!(publication.topic.starts_with("iotkit/v1/sources/edge-"));
     assert_eq!(publication.delivery.pending_count, 0);
     assert_eq!(publication.delivery.state, "waiting_for_observation");
+}
+
+#[tokio::test]
+async fn semantic_and_output_mutations_attribute_the_authenticated_actor() {
+    let (_directory, storage, _signal_ref) = fixture().await;
+    let account = storage
+        .create_account(
+            AccountProvision {
+                login_id: "console".into(),
+                display_name: "Console operator".into(),
+                role: AccountRole::SystemAdmin,
+                password_hash: hash_password(
+                    &Password::new("correct horse battery staple").unwrap(),
+                )
+                .unwrap(),
+                must_change_password: false,
+                require_unowned: true,
+            },
+            AuditActor::local_cli(),
+            1_999,
+        )
+        .await
+        .unwrap();
+    let actor = AuditActor::account(&account.account_ref);
+    let rule = Semantics::new(storage.clone())
+        .create_rule_as(
+            actor.clone(),
+            SemanticRuleDraft {
+                edge_node_id: "edge-node-01".into(),
+                series_key: "018f0000-0000-7000-8000-000000000001:contact_state:na:primary".into(),
+                display_name: "Temperature".into(),
+                spec: RuleSpec {
+                    kind: SemanticKind::Numeric,
+                    detector: Detector::default(),
+                    trigger: TriggerMode::None,
+                },
+            },
+            2_000,
+        )
+        .await
+        .unwrap();
+    let profile = OutputProfiles::new(storage.clone(), registered_output_adapters())
+        .activate_as(actor, "Generic", "iotkit.mqtt-json.v1", Map::new(), 2_001)
+        .await
+        .unwrap();
+    assert_eq!(profile.bindings[0].rule_id, rule.rule_id);
+    let audit = storage.list_audit_events(100).await.unwrap();
+    for operation in ["semantic_rule.create", "export_profile.activate"] {
+        let event = audit
+            .iter()
+            .find(|event| event.operation == operation)
+            .unwrap();
+        assert_eq!(event.actor_ref, account.account_ref);
+    }
 }

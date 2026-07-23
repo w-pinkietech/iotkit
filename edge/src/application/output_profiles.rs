@@ -5,7 +5,7 @@ use serde_json::{Map, Value, value::RawValue};
 
 use crate::{
     composition::OutputAdapterRegistration,
-    storage::{Storage, StorageError},
+    storage::{AuditActor, Storage, StorageError},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +113,24 @@ impl OutputProfiles {
         values: Map<String, Value>,
         now: i64,
     ) -> Result<ExportProfile, StorageError> {
+        self.activate_as(
+            AuditActor::local_cli(),
+            display_name,
+            adapter_id,
+            values,
+            now,
+        )
+        .await
+    }
+
+    pub async fn activate_as(
+        &self,
+        actor: AuditActor,
+        display_name: &str,
+        adapter_id: &str,
+        values: Map<String, Value>,
+        now: i64,
+    ) -> Result<ExportProfile, StorageError> {
         if display_name.is_empty() || display_name.len() > 128 {
             return Err(StorageError::InvalidOutput(
                 "profile display name is required".into(),
@@ -125,7 +143,7 @@ impl OutputProfiles {
             .ok_or_else(|| StorageError::InvalidOutput("unknown output adapter".into()))?;
         validate_setup(registration, &values)?;
         self.storage
-            .activate_output_profile(display_name, registration, values, now)
+            .activate_output_profile_as(actor, display_name, registration, values, now)
             .await
     }
 
@@ -262,17 +280,52 @@ impl OutputProfiles {
         values: Map<String, Value>,
         now: i64,
     ) -> Result<OutputBinding, StorageError> {
+        self.configure_as(AuditActor::local_cli(), binding_id, mode, values, now)
+            .await
+    }
+
+    pub async fn configure_as(
+        &self,
+        actor: AuditActor,
+        binding_id: &str,
+        mode: &str,
+        values: Map<String, Value>,
+        now: i64,
+    ) -> Result<OutputBinding, StorageError> {
         self.storage
-            .configure_output_binding(binding_id, mode, values, self.adapters, now)
+            .configure_output_binding_as(actor, binding_id, mode, values, self.adapters, now)
             .await
     }
 
     pub async fn confirm(&self, binding_id: &str, now: i64) -> Result<(), StorageError> {
-        self.storage.confirm_output_binding(binding_id, now).await
+        self.confirm_as(AuditActor::local_cli(), binding_id, now)
+            .await
+    }
+
+    pub async fn confirm_as(
+        &self,
+        actor: AuditActor,
+        binding_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .confirm_output_binding_as(actor, binding_id, now)
+            .await
     }
 
     pub async fn stop(&self, profile_id: &str, now: i64) -> Result<(), StorageError> {
-        self.storage.stop_output_profile(profile_id, now).await
+        self.stop_as(AuditActor::local_cli(), profile_id, now).await
+    }
+
+    pub async fn stop_as(
+        &self,
+        actor: AuditActor,
+        profile_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .stop_output_profile_as(actor, profile_id, now)
+            .await
     }
 
     pub async fn list(&self) -> Result<Vec<ExportProfile>, StorageError> {
