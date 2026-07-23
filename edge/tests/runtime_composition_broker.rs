@@ -50,7 +50,12 @@ struct CaptureFactory {
 }
 
 impl RuntimeFactory for CaptureFactory {
-    fn web_application(&self, storage: Storage) -> Result<Arc<dyn WebApplication>, RuntimeError> {
+    fn web_application(
+        &self,
+        storage: Storage,
+        _storage_warning_percent: i32,
+        _broker_certificate_file: Option<&Path>,
+    ) -> Result<Arc<dyn WebApplication>, RuntimeError> {
         assert!(
             self.storage
                 .lock()

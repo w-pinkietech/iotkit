@@ -274,8 +274,10 @@ pub enum ApiQuery {
 #[derive(Clone, Debug)]
 pub enum ApiMutation {
     Named {
+        method: Method,
         route: String,
         params: HashMap<String, String>,
+        expected_revision: Option<i64>,
     },
 }
 
@@ -547,8 +549,10 @@ async fn password_form(State(state): State<AppState>, request: Request) -> Respo
             .mutate(
                 &principal,
                 ApiMutation::Named {
+                    method: Method::POST,
                     route: "/password".into(),
                     params: HashMap::new(),
+                    expected_revision: None,
                 },
                 serde_json::to_value(form).unwrap_or_else(|_| json!({})),
             )
@@ -622,6 +626,13 @@ async fn login_form(State(state): State<AppState>, request: Request) -> Response
         .await
     {
         Ok(session) => session,
+        Err(error) if error.status == StatusCode::TOO_MANY_REQUESTS => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "ログインを続けて試行できません。しばらく待ってください。",
+            )
+                .into_response();
+        }
         Err(_) => {
             let html = LoginTemplate {
                 error: "ログインIDまたはパスワードが正しくありません。",
@@ -713,18 +724,24 @@ async fn api_query(
     Path(path): Path<String>,
     Query(mut params): Query<HashMap<String, String>>,
     headers: HeaderMap,
-) -> Result<Json<Value>, WebError> {
+) -> Result<Response, WebError> {
     let principal = api_auth(&state, &headers).await?;
     let route = format!("/api/v1/{path}");
     let path_params = match_known_route(&route, router::API_GET_ROUTES).ok_or_else(not_found)?;
     params.extend(path_params);
     authorize_query(&principal, &route)?;
-    Ok(Json(
-        state
-            .application
-            .query(ApiQuery::Named { route, params })
-            .await?,
-    ))
+    let body = state
+        .application
+        .query(ApiQuery::Named { route, params })
+        .await?;
+    let mut response = Json(body.clone()).into_response();
+    if let Some(revision) = body.get("revision").and_then(Value::as_i64) {
+        response.headers_mut().insert(
+            header::ETAG,
+            HeaderValue::from_str(&format!("\"{revision}\"")).map_err(internal)?,
+        );
+    }
+    Ok(response)
 }
 
 async fn api_mutation(
@@ -732,6 +749,7 @@ async fn api_mutation(
     request: Request,
 ) -> Result<Response, WebError> {
     let principal = require_mutation(&state, request.headers()).await?;
+    let method = request.method().clone();
     let route = request.uri().path().to_owned();
     let clears_session = route == "/api/v1/session/password";
     let known = match *request.method() {
@@ -742,6 +760,11 @@ async fn api_mutation(
     };
     let params = match_known_route(&route, known).ok_or_else(not_found)?;
     authorize_mutation(&principal, &route)?;
+    let expected_revision = if requires_revision_precondition(&method, &route) {
+        Some(parse_if_match(request.headers())?)
+    } else {
+        None
+    };
     let body = axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES)
         .await
         .map_err(|_| {
@@ -764,9 +787,25 @@ async fn api_mutation(
     };
     let output = state
         .application
-        .mutate(&principal, ApiMutation::Named { route, params }, value)
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method,
+                route,
+                params,
+                expected_revision,
+            },
+            value,
+        )
         .await?;
+    let output_revision = output.body.get("revision").and_then(Value::as_i64);
     let mut response = (output.status, Json(output.body)).into_response();
+    if let Some(revision) = output_revision {
+        response.headers_mut().insert(
+            header::ETAG,
+            HeaderValue::from_str(&format!("\"{revision}\"")).map_err(internal)?,
+        );
+    }
     if clears_session {
         clear_session_cookies(response.headers_mut(), &state.config)?;
     }
@@ -798,7 +837,12 @@ async fn console_mutation(
         .application
         .mutate(
             &principal,
-            ApiMutation::Named { route, params },
+            ApiMutation::Named {
+                method: Method::POST,
+                route,
+                params,
+                expected_revision: None,
+            },
             serde_json::to_value(form).map_err(internal)?,
         )
         .await;
@@ -1219,6 +1263,45 @@ fn match_known_route(actual: &str, patterns: &[&str]) -> Option<HashMap<String, 
         .find_map(|pattern| match_route(actual, pattern))
 }
 
+fn requires_revision_precondition(method: &Method, route: &str) -> bool {
+    if !route.starts_with("/api/") {
+        return false;
+    }
+    matches!(*method, Method::PUT | Method::DELETE)
+        || (method == Method::POST
+            && (route.ends_with("/semantic-rules")
+                || route.ends_with("/counter-resets")
+                || route.ends_with("/stop")
+                || route.ends_with("/start")))
+}
+
+fn parse_if_match(headers: &HeaderMap) -> Result<i64, WebError> {
+    let Some(raw) = headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+    else {
+        return Err(WebError::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "precondition_required",
+            "If-Match is required",
+        ));
+    };
+    let revision = raw
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            WebError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "revision_mismatch",
+                "resource revision does not match",
+            )
+        })?;
+    Ok(revision)
+}
+
 fn match_route(actual: &str, pattern: &str) -> Option<HashMap<String, String>> {
     let actual: Vec<_> = actual.trim_matches('/').split('/').collect();
     let pattern: Vec<_> = pattern.trim_matches('/').split('/').collect();
@@ -1321,12 +1404,14 @@ pub mod test_support {
     pub struct StubApplication {
         authenticated: bool,
         role: &'static str,
+        rate_limited: bool,
     }
     impl Default for StubApplication {
         fn default() -> Self {
             Self {
                 authenticated: false,
                 role: "admin",
+                rate_limited: false,
             }
         }
     }
@@ -1335,12 +1420,21 @@ pub mod test_support {
             Self {
                 authenticated: true,
                 role: "admin",
+                rate_limited: false,
             }
         }
         pub fn system_admin() -> Self {
             Self {
                 authenticated: true,
                 role: "system_admin",
+                rate_limited: false,
+            }
+        }
+        pub fn rate_limited() -> Self {
+            Self {
+                authenticated: false,
+                role: "admin",
+                rate_limited: true,
             }
         }
     }
@@ -1348,6 +1442,13 @@ pub mod test_support {
     #[async_trait]
     impl WebApplication for StubApplication {
         async fn login(&self, username: &str, password: &str) -> Result<LoginSession, WebError> {
+            if self.rate_limited {
+                return Err(WebError::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "login_rate_limited",
+                    "login cannot be attempted again yet",
+                ));
+            }
             if username != "admin" || password != "correct" {
                 return Err(WebError::new(
                     StatusCode::UNAUTHORIZED,
@@ -1517,7 +1618,7 @@ pub mod test_support {
             })
         }
         async fn query(&self, operation: ApiQuery) -> Result<Value, WebError> {
-            Ok(json!({"operation":format!("{operation:?}")}))
+            Ok(json!({"operation":format!("{operation:?}"), "revision": 1}))
         }
         async fn mutate(
             &self,
@@ -1525,6 +1626,18 @@ pub mod test_support {
             operation: ApiMutation,
             _body: Value,
         ) -> Result<MutationOutput, WebError> {
+            if let ApiMutation::Named {
+                expected_revision: Some(expected),
+                ..
+            } = &operation
+                && *expected != 1
+            {
+                return Err(WebError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "revision_mismatch",
+                    "resource revision does not match",
+                ));
+            }
             let status = match &operation {
                 ApiMutation::Named { route, .. }
                     if route.ends_with("/activation")
@@ -1544,7 +1657,7 @@ pub mod test_support {
             };
             Ok(MutationOutput {
                 status,
-                body: json!({"operation":format!("{operation:?}")}),
+                body: json!({"operation":format!("{operation:?}"), "revision": 2}),
             })
         }
         async fn raw_history(

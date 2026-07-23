@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    path::Path,
     pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -26,14 +27,28 @@ use super::{
 };
 
 pub trait RuntimeFactory: Send + Sync {
-    fn web_application(&self, storage: Storage) -> Result<Arc<dyn WebApplication>, RuntimeError>;
+    fn web_application(
+        &self,
+        storage: Storage,
+        storage_warning_percent: i32,
+        broker_certificate_file: Option<&Path>,
+    ) -> Result<Arc<dyn WebApplication>, RuntimeError>;
 }
 
 pub struct ProductionRuntimeFactory;
 
 impl RuntimeFactory for ProductionRuntimeFactory {
-    fn web_application(&self, storage: Storage) -> Result<Arc<dyn WebApplication>, RuntimeError> {
-        Ok(Arc::new(StorageWebApplication::new(storage)))
+    fn web_application(
+        &self,
+        storage: Storage,
+        storage_warning_percent: i32,
+        broker_certificate_file: Option<&Path>,
+    ) -> Result<Arc<dyn WebApplication>, RuntimeError> {
+        Ok(Arc::new(StorageWebApplication::with_runtime_settings(
+            storage,
+            storage_warning_percent,
+            broker_certificate_file.map(Path::to_path_buf),
+        )))
     }
 }
 
@@ -49,7 +64,11 @@ where
     storage
         .ensure_edge_identity(&config.edge_id, unix_millis()?)
         .await?;
-    let web_application = factory.web_application(storage.clone())?;
+    let web_application = factory.web_application(
+        storage.clone(),
+        config.storage_warning_percent,
+        config.broker_certificate_file.as_deref(),
+    )?;
     let listener = TcpListener::bind(config.http_listen)
         .await
         .map_err(RuntimeError::HttpBind)?;

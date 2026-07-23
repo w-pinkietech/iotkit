@@ -61,9 +61,19 @@ fn serve_args(directory: &TempDir) -> ServeArgs {
 #[test]
 fn typed_runtime_config_parses_tls_and_redacts_file_contents() {
     let directory = TempDir::new().unwrap();
-    let config = RuntimeConfig::from_serve_args(&serve_args(&directory)).expect("typed config");
+    let mut args = serve_args(&directory);
+    let certificate = directory.path().join("broker-certificate.pem");
+    fs::write(&certificate, "certificate").unwrap();
+    args.broker_certificate_file = Some(certificate.clone());
+    args.storage_warning_percent = 73;
+    let config = RuntimeConfig::from_serve_args(&args).expect("typed config");
     assert_eq!(config.ingest.host, "broker.example");
     assert_eq!(config.ingest.port, 8883);
+    assert_eq!(config.storage_warning_percent, 73);
+    assert_eq!(
+        config.broker_certificate_file.as_deref(),
+        Some(certificate.as_path())
+    );
     assert!(matches!(
         config.ingest.transport,
         MqttTransportConfig::TlsBundle { .. }
@@ -95,6 +105,32 @@ fn typed_runtime_config_rejects_scheme_trust_and_partial_output_conflicts() {
     assert!(RuntimeConfig::from_serve_args(&args).is_err());
 }
 
+#[test]
+fn typed_runtime_config_rejects_every_non_loopback_http_listener() {
+    let directory = TempDir::new().unwrap();
+    for listener in [
+        "0.0.0.0:8080",
+        "192.168.1.20:8080",
+        "[::]:8080",
+        "[2001:db8::1]:8080",
+    ] {
+        let mut args = serve_args(&directory);
+        args.http_listen = listener.into();
+        assert!(
+            RuntimeConfig::from_serve_args(&args).is_err(),
+            "accepted non-loopback listener {listener}"
+        );
+    }
+    for listener in ["127.0.0.1:8080", "[::1]:8080"] {
+        let mut args = serve_args(&directory);
+        args.http_listen = listener.into();
+        assert!(
+            RuntimeConfig::from_serve_args(&args).is_ok(),
+            "rejected loopback listener {listener}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn production_runtime_composes_the_storage_backed_web_adapter() {
     let directory = TempDir::new().unwrap();
@@ -104,7 +140,11 @@ async fn production_runtime_composes_the_storage_backed_web_adapter() {
     .await
     .unwrap();
 
-    assert!(ProductionRuntimeFactory.web_application(storage).is_ok());
+    assert!(
+        ProductionRuntimeFactory
+            .web_application(storage, 90, None)
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -143,7 +183,12 @@ async fn runtime_identity_is_stable_across_restart_and_rejects_reconfiguration()
 struct StubRuntimeFactory;
 
 impl RuntimeFactory for StubRuntimeFactory {
-    fn web_application(&self, _storage: Storage) -> Result<Arc<dyn WebApplication>, RuntimeError> {
+    fn web_application(
+        &self,
+        _storage: Storage,
+        _storage_warning_percent: i32,
+        _broker_certificate_file: Option<&Path>,
+    ) -> Result<Arc<dyn WebApplication>, RuntimeError> {
         Ok(Arc::new(StubApplication::default()))
     }
 }

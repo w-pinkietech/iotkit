@@ -1,4 +1,4 @@
-use std::{fmt, fs, net::SocketAddr};
+use std::{fmt, fs, net::SocketAddr, path::PathBuf};
 
 use url::Url;
 
@@ -56,6 +56,8 @@ pub struct RuntimeConfig {
     pub http_listen: SocketAddr,
     pub public_origin: String,
     pub secure_cookies: bool,
+    pub broker_certificate_file: Option<PathBuf>,
+    pub storage_warning_percent: i32,
 }
 
 impl fmt::Debug for RuntimeConfig {
@@ -69,6 +71,8 @@ impl fmt::Debug for RuntimeConfig {
             .field("http_listen", &self.http_listen)
             .field("public_origin", &self.public_origin)
             .field("secure_cookies", &self.secure_cookies)
+            .field("broker_certificate_file", &self.broker_certificate_file)
+            .field("storage_warning_percent", &self.storage_warning_percent)
             .finish()
     }
 }
@@ -128,10 +132,15 @@ impl RuntimeConfig {
                 )
             })
             .transpose()?;
-        let http_listen = args
+        let http_listen: SocketAddr = args
             .http_listen
             .parse()
             .map_err(|_| RuntimeConfigError::Invalid("invalid HTTP listen address"))?;
+        if !http_listen.ip().is_loopback() {
+            return Err(RuntimeConfigError::Invalid(
+                "HTTP listen address must be loopback",
+            ));
+        }
         let origin = Url::parse(&args.public_origin)
             .map_err(|_| RuntimeConfigError::Invalid("invalid public origin"))?;
         if origin.origin().ascii_serialization() != args.public_origin
@@ -148,6 +157,8 @@ impl RuntimeConfig {
             http_listen,
             public_origin: args.public_origin.clone(),
             secure_cookies: !args.development_http,
+            broker_certificate_file: args.broker_certificate_file.clone(),
+            storage_warning_percent: args.storage_warning_percent,
         })
     }
 }

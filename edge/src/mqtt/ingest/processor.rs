@@ -105,6 +105,13 @@ pub enum IngestError {
     Encode(#[from] serde_json::Error),
 }
 
+impl IngestError {
+    #[must_use]
+    pub fn is_fatal_runtime(&self) -> bool {
+        matches!(self, Self::Storage(_))
+    }
+}
+
 enum TopicKind {
     Descriptor,
     ActivationResult,

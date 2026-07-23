@@ -7,7 +7,9 @@
 
 use std::{
     collections::HashMap,
-    time::{SystemTime, UNIX_EPOCH},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -15,6 +17,7 @@ use axum::http::StatusCode;
 use iotkit_output_adapter_api::ObservationValue;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
+use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::{
     application::{
@@ -39,15 +42,125 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone)]
+pub struct LoginPolicy {
+    pub max_failures: u32,
+    pub failure_window: Duration,
+    pub max_concurrent: usize,
+    pub max_tracked_accounts: usize,
+}
+
+impl Default for LoginPolicy {
+    fn default() -> Self {
+        Self {
+            max_failures: 5,
+            failure_window: Duration::from_secs(60),
+            max_concurrent: 4,
+            max_tracked_accounts: 1_024,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LoginFailures {
+    count: u32,
+    started_at: Instant,
+}
+
+#[derive(Clone)]
+struct LoginAdmission {
+    policy: LoginPolicy,
+    concurrent: Arc<Semaphore>,
+    failures: Arc<Mutex<HashMap<String, LoginFailures>>>,
+}
+
+impl LoginAdmission {
+    fn new(policy: LoginPolicy) -> Self {
+        Self {
+            concurrent: Arc::new(Semaphore::new(policy.max_concurrent.max(1))),
+            failures: Arc::new(Mutex::new(HashMap::new())),
+            policy,
+        }
+    }
+
+    fn begin(&self, login_id: &str) -> Result<OwnedSemaphorePermit, WebError> {
+        let now = Instant::now();
+        let mut failures = self.failures.lock().map_err(internal)?;
+        failures.retain(|_, failure| {
+            now.duration_since(failure.started_at) < self.policy.failure_window
+        });
+        if failures
+            .get(login_id)
+            .is_some_and(|failure| failure.count >= self.policy.max_failures.max(1))
+            || (!failures.contains_key(login_id)
+                && failures.len() >= self.policy.max_tracked_accounts.max(1))
+        {
+            return Err(login_rate_limited());
+        }
+        drop(failures);
+        self.concurrent
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| login_rate_limited())
+    }
+
+    fn failed(&self, login_id: &str) {
+        let Ok(mut failures) = self.failures.lock() else {
+            return;
+        };
+        let failure = failures.entry(login_id.into()).or_insert(LoginFailures {
+            count: 0,
+            started_at: Instant::now(),
+        });
+        failure.count = failure.count.saturating_add(1);
+    }
+
+    fn succeeded(&self, login_id: &str) {
+        if let Ok(mut failures) = self.failures.lock() {
+            failures.remove(login_id);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct StorageWebApplication {
     storage: Storage,
+    login_admission: LoginAdmission,
+    mutation_lock: Arc<AsyncMutex<()>>,
+    storage_warning_percent: i32,
+    broker_certificate_file: Option<PathBuf>,
 }
 
 impl StorageWebApplication {
     #[must_use]
     pub fn new(storage: Storage) -> Self {
-        Self { storage }
+        Self::with_login_policy(storage, LoginPolicy::default())
+    }
+
+    #[must_use]
+    pub fn with_login_policy(storage: Storage, policy: LoginPolicy) -> Self {
+        Self {
+            storage,
+            login_admission: LoginAdmission::new(policy),
+            mutation_lock: Arc::new(AsyncMutex::new(())),
+            storage_warning_percent: 85,
+            broker_certificate_file: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_runtime_settings(
+        storage: Storage,
+        storage_warning_percent: i32,
+        broker_certificate_file: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            storage,
+            login_admission: LoginAdmission::new(LoginPolicy::default()),
+            mutation_lock: Arc::new(AsyncMutex::new(())),
+            storage_warning_percent,
+            broker_certificate_file,
+        }
     }
 
     async fn session(&self, token: &str) -> Result<crate::storage::StoredSession, WebError> {
@@ -58,12 +171,17 @@ impl StorageWebApplication {
     }
 
     async fn storage_view(&self) -> Result<ConsoleStorage, WebError> {
-        let status = diagnostics::storage_status(&self.storage, 85)
+        let status = diagnostics::storage_status(&self.storage, self.storage_warning_percent)
             .await
             .map_err(internal)?;
-        let report = diagnostics::diagnostics(&self.storage, 85, now())
-            .await
-            .map_err(internal)?;
+        let report = diagnostics::diagnostics_with_certificate(
+            &self.storage,
+            self.storage_warning_percent,
+            now(),
+            self.broker_certificate_file.as_deref(),
+        )
+        .await
+        .map_err(internal)?;
         let mut messages: Vec<String> = report
             .issues
             .into_iter()
@@ -243,17 +361,23 @@ impl StorageWebApplication {
 #[async_trait]
 impl WebApplication for StorageWebApplication {
     async fn login(&self, username: &str, password: &str) -> Result<LoginSession, WebError> {
-        let credential = self
-            .storage
-            .get_account_credential_by_login(username)
-            .await
-            .map_err(authentication_error)?;
+        let admission_key = username.trim().to_ascii_lowercase();
+        let _admission = self.login_admission.begin(&admission_key)?;
+        let credential = match self.storage.get_account_credential_by_login(username).await {
+            Ok(credential) => credential,
+            Err(error) => {
+                self.login_admission.failed(&admission_key);
+                return Err(authentication_error(error));
+            }
+        };
         let verification =
             verify_password(&credential.password_hash, &PasswordCandidate::new(password))
                 .map_err(authentication_error)?;
         if !verification.matches || credential.account.state != AccountState::Active {
+            self.login_admission.failed(&admission_key);
             return Err(invalid_credentials());
         }
+        self.login_admission.succeeded(&admission_key);
         let secrets = SessionSecrets::generate().map_err(internal)?;
         let issued_at = now();
         self.storage
@@ -409,15 +533,20 @@ impl WebApplication for StorageWebApplication {
         };
         match route.as_str() {
             "/api/v1/system/storage" => serde_json::to_value(
-                diagnostics::storage_status(&self.storage, 85)
+                diagnostics::storage_status(&self.storage, self.storage_warning_percent)
                     .await
                     .map_err(internal)?,
             )
             .map_err(internal),
             "/api/v1/system/diagnostics" => serde_json::to_value(
-                diagnostics::diagnostics(&self.storage, 85, now())
-                    .await
-                    .map_err(internal)?,
+                diagnostics::diagnostics_with_certificate(
+                    &self.storage,
+                    self.storage_warning_percent,
+                    now(),
+                    self.broker_certificate_file.as_deref(),
+                )
+                .await
+                .map_err(internal)?,
             )
             .map_err(internal),
             "/api/v1/edge-nodes" => Ok(json!({
@@ -495,11 +624,19 @@ impl WebApplication for StorageWebApplication {
             }
             route if route.ends_with("/semantic-configuration") => {
                 let reference = params.get("signal_ref").cloned().unwrap_or_default();
-                Ok(
-                    json!({"items": self.storage.list_semantic_rules().await.map_err(internal)?
-                    .into_iter().filter(|rule| rule.signal_ref == reference)
-                    .map(rule_json).collect::<Vec<_>>() }),
-                )
+                let rules: Vec<_> = self
+                    .storage
+                    .list_semantic_rules()
+                    .await
+                    .map_err(internal)?
+                    .into_iter()
+                    .filter(|rule| rule.signal_ref == reference)
+                    .collect();
+                let revision = rules.iter().map(|rule| rule.revision).max().unwrap_or(1);
+                Ok(json!({
+                    "revision": revision,
+                    "items": rules.into_iter().map(rule_json).collect::<Vec<_>>()
+                }))
             }
             route if route.ends_with("/publication") => Ok(json!({
                 "binding_id": params.get("binding_id"), "pending": self.storage.pending_output_count()
@@ -519,7 +656,19 @@ impl WebApplication for StorageWebApplication {
         operation: ApiMutation,
         body: Value,
     ) -> Result<MutationOutput, WebError> {
-        let ApiMutation::Named { route, params } = operation;
+        let ApiMutation::Named {
+            method,
+            route,
+            params,
+            expected_revision,
+        } = operation;
+        let _mutation = self.mutation_lock.lock().await;
+        if let Some(expected_revision) = expected_revision {
+            let current_revision = self.resource_revision(&params).await?;
+            if current_revision != expected_revision {
+                return Err(revision_mismatch());
+            }
+        }
         let application_principal = application_principal(principal)?;
         let accounts = AccountService::new(self.storage.clone());
         if route == "/password" || route == "/api/v1/session/password" {
@@ -622,6 +771,26 @@ impl WebApplication for StorageWebApplication {
         }
         let semantics = Semantics::new(self.storage.clone());
         if let Some(signal_ref) = params.get("signal_ref") {
+            if method == axum::http::Method::DELETE && route.ends_with("/semantic-definition") {
+                let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+                let mut retired = 0;
+                for rule in rules
+                    .into_iter()
+                    .filter(|rule| rule.signal_ref == *signal_ref && rule.active)
+                {
+                    semantics
+                        .retire_rule(&rule.rule_id, now())
+                        .await
+                        .map_err(operation_error)?;
+                    retired += 1;
+                }
+                if retired == 0 {
+                    return Err(not_found_error());
+                }
+                return Ok(MutationOutput::ok(
+                    json!({"signal_ref": signal_ref, "active": false}),
+                ));
+            }
             if route.ends_with("/calibration") {
                 let revision = semantics
                     .update_calibration(
@@ -672,10 +841,7 @@ impl WebApplication for StorageWebApplication {
             }
         }
         if let Some(rule_id) = params.get("rule_id") {
-            if route.ends_with("/retire")
-                || (route.starts_with("/api/")
-                    && body.as_object().is_some_and(serde_json::Map::is_empty))
-            {
+            if route.ends_with("/retire") || method == axum::http::Method::DELETE {
                 semantics
                     .retire_rule(rule_id, now())
                     .await
@@ -928,6 +1094,60 @@ impl WebApplication for StorageWebApplication {
         let has_more = rows.len() > limit;
         rows.truncate(limit);
         Ok(SemanticHistoryPage { rows, has_more })
+    }
+}
+
+impl StorageWebApplication {
+    async fn resource_revision(&self, params: &HashMap<String, String>) -> Result<i64, WebError> {
+        if let Some(rule_id) = params.get("rule_id") {
+            return self
+                .storage
+                .list_semantic_rules()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .find(|rule| rule.rule_id == *rule_id)
+                .map(|rule| rule.revision)
+                .ok_or_else(not_found_error);
+        }
+        if let Some(signal_ref) = params.get("signal_ref") {
+            return Ok(self
+                .storage
+                .list_semantic_rules()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .filter(|rule| rule.signal_ref == *signal_ref)
+                .map(|rule| rule.revision)
+                .max()
+                .unwrap_or(1));
+        }
+        if let Some(profile_id) = params.get("profile_id") {
+            return OutputProfiles::new(self.storage.clone(), registered_output_adapters())
+                .list()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .find(|profile| profile.profile_id == *profile_id)
+                .map(|profile| profile.revision)
+                .ok_or_else(not_found_error);
+        }
+        if let Some(binding_id) = params.get("binding_id") {
+            return OutputProfiles::new(self.storage.clone(), registered_output_adapters())
+                .list()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .find(|profile| {
+                    profile
+                        .bindings
+                        .iter()
+                        .any(|binding| binding.binding_id == *binding_id)
+                })
+                .map(|profile| profile.revision)
+                .ok_or_else(not_found_error);
+        }
+        Ok(1)
     }
 }
 
@@ -1262,6 +1482,22 @@ fn invalid_credentials() -> WebError {
         StatusCode::UNAUTHORIZED,
         "invalid_credentials",
         "login ID or password is invalid",
+    )
+}
+
+fn login_rate_limited() -> WebError {
+    WebError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "login_rate_limited",
+        "login cannot be attempted again yet",
+    )
+}
+
+fn revision_mismatch() -> WebError {
+    WebError::new(
+        StatusCode::PRECONDITION_FAILED,
+        "revision_mismatch",
+        "resource revision does not match",
     )
 }
 

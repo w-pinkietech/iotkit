@@ -186,6 +186,42 @@ async fn login_rejects_unknown_fields_and_oversized_bodies_with_json_errors() {
 }
 
 #[tokio::test]
+async fn api_and_form_login_preserve_non_enumerating_rate_limit_status() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::rate_limited()));
+    let api = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/session")
+                .header(header::ORIGIN, "http://127.0.0.1:8080")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"login_id":"anything","password":"anything"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(api.status(), StatusCode::TOO_MANY_REQUESTS);
+    let api_body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(api.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    assert_eq!(api_body["error"]["code"], "login_rate_limited");
+
+    let form = app
+        .oneshot(
+            Request::post("/login")
+                .header(header::ORIGIN, "http://127.0.0.1:8080")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("login_id=anything&password=anything"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(form.status(), StatusCode::TOO_MANY_REQUESTS);
+    let form_body = to_bytes(form.into_body(), 64 * 1024).await.unwrap();
+    assert!(!String::from_utf8_lossy(&form_body).contains("anything"));
+}
+
+#[tokio::test]
 async fn existing_put_routes_are_registered_and_dispatchable() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
     for path in [
@@ -205,6 +241,7 @@ async fn existing_put_routes_are_registered_and_dispatchable() {
                         "iotkit_edge_session=valid; iotkit_edge_csrf=csrf",
                     )
                     .header("x-csrf-token", "csrf")
+                    .header(header::IF_MATCH, "\"1\"")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from("{}"))
                     .unwrap(),
@@ -241,6 +278,7 @@ async fn mutation_status_codes_match_the_existing_api() {
                         "iotkit_edge_session=valid; iotkit_edge_csrf=csrf",
                     )
                     .header("x-csrf-token", "csrf")
+                    .header(header::IF_MATCH, "\"1\"")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from("{}"))
                     .unwrap(),
@@ -249,4 +287,68 @@ async fn mutation_status_codes_match_the_existing_api() {
             .unwrap();
         assert_eq!(response.status(), expected, "{path}");
     }
+}
+
+#[tokio::test]
+async fn revisioned_resources_require_if_match_and_advance_etag() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::system_admin()));
+    let get = app
+        .clone()
+        .oneshot(authenticated(
+            Request::get("/api/v1/signals/signal-1/semantic-configuration")
+                .body(Body::empty())
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(get.headers()[header::ETAG], "\"1\"");
+
+    for (if_match, expected) in [
+        (None, StatusCode::PRECONDITION_REQUIRED),
+        (Some("\"malformed\""), StatusCode::PRECONDITION_FAILED),
+        (Some("\"0\""), StatusCode::PRECONDITION_FAILED),
+        (Some("\"99\""), StatusCode::PRECONDITION_FAILED),
+    ] {
+        let mut request = authenticated(
+            Request::put("/api/v1/semantic-rules/rule-1")
+                .header(header::ORIGIN, "http://127.0.0.1:8080")
+                .header("x-csrf-token", "csrf")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"display_name":"Rule","kind":"numeric"}"#))
+                .unwrap(),
+        );
+        if let Some(if_match) = if_match {
+            request
+                .headers_mut()
+                .insert(header::IF_MATCH, if_match.parse().unwrap());
+        }
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected);
+    }
+
+    let success = app
+        .oneshot(authenticated(
+            Request::put("/api/v1/semantic-rules/rule-1")
+                .header(header::ORIGIN, "http://127.0.0.1:8080")
+                .header("x-csrf-token", "csrf")
+                .header(header::IF_MATCH, "\"1\"")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"display_name":"Rule","kind":"numeric"}"#))
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(success.status(), StatusCode::OK);
+    assert_eq!(success.headers()[header::ETAG], "\"2\"");
+}
+
+fn authenticated(mut request: Request<Body>) -> Request<Body> {
+    request.headers_mut().insert(
+        header::COOKIE,
+        "iotkit_edge_session=valid; iotkit_edge_csrf=csrf"
+            .parse()
+            .unwrap(),
+    );
+    request
 }

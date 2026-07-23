@@ -1,8 +1,9 @@
 use iotkit_edge::{
     mqtt::ingest::{
-        IngestProcessor, IngestRuntime, IngestRuntimeConfig, IngestTransport, RuntimeError,
+        IngestError, IngestProcessor, IngestRuntime, IngestRuntimeConfig, IngestTransport,
+        RuntimeError,
     },
-    storage::{Storage, StorageProfile},
+    storage::{Storage, StorageError, StorageProfile},
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
 use std::path::PathBuf;
@@ -25,6 +26,17 @@ async fn runtime(config: IngestRuntimeConfig) -> (TempDir, IngestRuntime) {
         directory,
         IngestRuntime::new(config, IngestProcessor::new(storage)),
     )
+}
+
+#[test]
+fn only_durable_storage_ingest_errors_are_fatal_to_the_runtime() {
+    assert!(
+        IngestError::Storage(StorageError::InvalidRecord(
+            "injected durable failure".into()
+        ))
+        .is_fatal_runtime()
+    );
+    assert!(!IngestError::Topic("malformed input".into()).is_fatal_runtime());
 }
 
 #[tokio::test]

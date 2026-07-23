@@ -128,6 +128,9 @@ impl IngestRuntime {
                                     }
                                 }
                                 Ok(None) => {}
+                                Err(error) if error.is_fatal_runtime() => {
+                                    return Err(RuntimeError::Ingest(error));
+                                }
                                 Err(error) => {
                                     tracing::warn!(
                                         topic = %publication.topic,
