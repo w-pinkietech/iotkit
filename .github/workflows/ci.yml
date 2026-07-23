@@ -31,6 +31,11 @@ jobs:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-okf-docs.mjs
 
+      - name: Battle-tested review catalog and routing
+        run: |
+          node scripts/battle-tested-review.mjs check
+          node --test scripts/tests/battle-tested-review.test.mjs
+
       # serialport (via rpi4b-transport → adapters → iotkit-edge-node) pulls
       # libudev-sys, whose build script needs libudev's pkg-config file. It's
       # present on dev machines but not on a clean runner.

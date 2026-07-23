@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "concern_vocabulary": [
+    "authentication",
+    "custody",
+    "data-loss",
+    "diagnostics",
+    "edge-node-replacement",
+    "external-action",
+    "external-output",
+    "migration",
+    "network-recovery",
+    "operability",
+    "power-loss",
+    "public-contract",
+    "restore",
+    "storage",
+    "storage-pressure"
+  ],
+  "entries": [
+    {
+      "id": "BT-001",
+      "title": "Custody converges after Broker or network interruption",
+      "evidence_level": "reproduced",
+      "concerns": ["custody", "network-recovery", "external-output"],
+      "path_prefixes": [
+        "core/publish/",
+        "iotkit-edge-node/src/mqtt_publish_task.rs",
+        "iotkit-edge-node/src/publish_task.rs",
+        "iotkit-edge-node/src/retention.rs",
+        "iotkit-edge/internal/mqttedge/",
+        "iotkit-edge/internal/outputadapter/",
+        "iotkit-edge/internal/store/mqtt_export.go",
+        "iotkit-edge/internal/store/output_adapter.go",
+        "iotkit-edge/internal/store/output_profiles.go",
+        "iotkit-edge/internal/store/output_v2.go",
+        "iotkit-edge/internal/store/output_v3.go",
+        "scripts/test-edge-output.sh",
+        "scripts/test-edge-resilience.sh"
+      ],
+      "review_question": "After disconnect, restart, duplicate delivery, or delayed acknowledgement, do the Edge Node raw cursor and IoTKit Edge output outbox converge without silent loss or identity changes?",
+      "provenance": [
+        "docs/redesign/decisions/D3-process-and-wave-decisions.md"
+      ],
+      "guards": [
+        "scripts/test-edge-output.sh",
+        "scripts/test-edge-resilience.sh"
+      ],
+      "coverage_gap": "The existing gates exercise process and Broker outages, not every factory router, Wi-Fi, DNS, or long-partition behavior."
+    },
+    {
+      "id": "BT-002",
+      "title": "Abrupt host power loss preserves committed state",
+      "evidence_level": "hypothesis",
+      "concerns": ["custody", "power-loss", "storage"],
+      "path_prefixes": [
+        "core/storage/",
+        "core/ledger/",
+        "core/publish/",
+        "iotkit-edge/internal/store/",
+        "deploy/"
+      ],
+      "review_question": "Does an abrupt Edge Node or IoTKit Edge host power loss preserve the last committed custody boundary and restart without acknowledging uncommitted data?",
+      "provenance": [
+        "docs/okf/ja/operations/installation-and-recovery.md",
+        "docs/okf/en/operations/installation-and-recovery.md"
+      ],
+      "guards": [
+        "scripts/test-edge-resilience.sh"
+      ],
+      "coverage_gap": "Process restart coverage is not evidence of physical power-cut, filesystem, SD-card, or storage-controller durability."
+    },
+    {
+      "id": "BT-003",
+      "title": "Storage pressure never becomes a successful acknowledgement",
+      "evidence_level": "reproduced",
+      "concerns": ["custody", "storage-pressure", "storage"],
+      "path_prefixes": [
+        "core/storage/",
+        "core/timeseries/",
+        "core/publish/",
+        "iotkit-ingest-http/src/admission.rs",
+        "iotkit-ingest-http/src/routes.rs",
+        "iotkit-ingest-http/src/transition.rs",
+        "iotkit-edge/internal/store/",
+        "scripts/test-edge-capacity.sh"
+      ],
+      "review_question": "When a write, commit, or allocation fails because storage is full or unavailable, does the system retain retry authority, avoid a terminal success, and show an actionable capacity state?",
+      "provenance": [
+        "docs/okf/ja/operations/storage-capacity.md",
+        "docs/okf/en/operations/storage-capacity.md"
+      ],
+      "guards": [
+        "scripts/test-edge-capacity.sh"
+      ],
+      "coverage_gap": "Capacity smoke measurements do not by themselves prove disk-full behavior at every transaction boundary."
+    },
+    {
+      "id": "BT-004",
+      "title": "Edge Node computer replacement has an explicit loss boundary",
+      "evidence_level": "hypothesis",
+      "concerns": ["custody", "edge-node-replacement", "restore"],
+      "path_prefixes": [
+        "core/ledger/",
+        "core/storage/",
+        "iotkit-edge-node/src/epoch_start.rs",
+        "iotkit-edge-node/src/network_authority.rs",
+        "iotkit-edge-node/src/record.rs",
+        "iotkit-edge-nodectl/",
+        "iotkit-edge/internal/store/activations.go",
+        "iotkit-edge/internal/store/backup.go",
+        "iotkit-edge/internal/store/backup_encrypted.go",
+        "iotkit-edge/internal/store/postgres_backup.go"
+      ],
+      "review_question": "If the Raspberry Pi or other Edge Node computer is lost or replaced, is every unrecoverable local record and identity transition explicit rather than silently treated as a sensor-device replacement?",
+      "provenance": [
+        "docs/okf/ja/contracts/edge-node-custody-v1.md",
+        "docs/okf/en/contracts/edge-node-custody-v1.md"
+      ],
+      "guards": [],
+      "coverage_gap": "Encrypted replacement backup and restore for an Edge Node computer are deferred; sensor device replace commands do not cover this failure."
+    },
+    {
+      "id": "BT-005",
+      "title": "A non-IT operator can identify the stopped layer",
+      "evidence_level": "hypothesis",
+      "concerns": ["diagnostics", "operability"],
+      "path_prefixes": [
+        "iotkit-edge/internal/edgehttp/console_output_view.go",
+        "iotkit-edge/internal/edgehttp/console_signal_view.go",
+        "iotkit-edge/internal/edgehttp/console_view.go",
+        "iotkit-edge/internal/edgehttp/system.go",
+        "iotkit-edge/frontend/",
+        "iotkit-edge/internal/store/descriptors.go",
+        "iotkit-edge/internal/store/diagnostics.go",
+        "iotkit-edge/internal/store/storage_status.go",
+        "iotkit-edge-node/src/health.rs",
+        "iotkit-edge-node/src/supervision.rs",
+        "scripts/test-edge-console-e2e.sh"
+      ],
+      "review_question": "Can the Console and local diagnostics distinguish a stale sensor, stopped Input Adapter, stopped Edge Node, Broker path failure, IoTKit Edge ingestion failure, and blocked external output without guessing that the system is healthy?",
+      "provenance": [
+        "docs/okf/ja/operations/installation-and-recovery.md",
+        "docs/okf/en/operations/installation-and-recovery.md"
+      ],
+      "guards": [
+        "scripts/test-edge-console-e2e.sh"
+      ],
+      "coverage_gap": "Automated browser assertions do not replace an operator journey performed by someone unfamiliar with the implementation."
+    }
+  ]
+}

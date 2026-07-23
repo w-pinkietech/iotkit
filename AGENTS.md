@@ -74,6 +74,19 @@ vocabulary であり、新規コードは依存を増やさない。
 PRのmerge、release、課金を伴う実行、破壊的操作は引き続き個別の明示承認を必要とする。
 Merge済みbranchをGitHub側で自動削除してよい。Local worktreeとbranchはmerge確認後に削除する。
 
+### Battle-tested review
+
+PR reviewと現場報告triageではproject Skill `$iotkit-battle-tested-review`を使用できる。
+PRの最終review前に`node scripts/battle-tested-review.mjs select --base <base-ref>`を実行し、
+出力された`BT-NNN`だけを確認する。Path選択は下限であるため、公開契約、認証、custody、data loss、
+migration、restore、外部作用の意味を変える場合は該当する`--concern`を明示的に追加する。
+利用可能なconcernは`node scripts/battle-tested-review.mjs concerns`で確認する。
+選択0件や未対応pathを安全の証明にせず、PRへ選択IDまたは該当なしの理由を書く。
+
+現場報告は秘密・顧客情報を除いてtriageし、報告された事実とmaintainerが確認した事実を区別する。
+再発可能な問題だけを`review/battle-tested/catalog.json`へ追加し、再現可能な製品動作はfocused test、
+運用対処はrunbookへ昇格させる。Catalog項目を仮説だけで製品機能へ変えず、全PRで全項目を読まない。
+
 ### Source and test layout
 
 - Rustの製品コードを置く`src/`には、`#[cfg(test)] mod tests { ... }`の本体や

@@ -1,0 +1,4 @@
+interface:
+  display_name: "IoTKit Battle-tested Review"
+  short_description: "Review IoTKit changes against field failure evidence"
+  default_prompt: "Use $iotkit-battle-tested-review to review this IoTKit change against relevant field failure evidence."
