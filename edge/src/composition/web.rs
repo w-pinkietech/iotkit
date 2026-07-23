@@ -12,22 +12,30 @@ use std::{
 
 use async_trait::async_trait;
 use axum::http::StatusCode;
+use iotkit_output_adapter_api::ObservationValue;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 
 use crate::{
-    application::accounts::AccountService,
+    application::{
+        accounts::AccountService,
+        output_profiles::{OutputProfiles, ProfileState},
+        semantics::{SemanticRuleDraft, Semantics},
+    },
     auth::{
         password::{Password, PasswordCandidate, verify_password},
         principal::{AccountRole, AccountState, Principal as ApplicationPrincipal},
         session::{IDLE_SESSION_LIFETIME_MS, SecretDigest, SessionSecrets, SessionWindow},
     },
+    composition::registered_output_adapters,
     diagnostics,
-    storage::{AuditActor, EdgeNodeState, Storage, StorageError},
+    semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
+    storage::{AuditActor, DescriptorSignal, EdgeNodeState, Storage, StorageError},
     web::{
-        ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleEdgeNode, ConsoleRequest,
-        ConsoleStorage, ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput,
-        Principal, RawHistoryRow, SemanticHistoryPage, WebApplication, WebError,
+        ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleBinding, ConsoleEdgeNode,
+        ConsoleOutput, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage, ConsoleView,
+        HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal, RawHistoryRow,
+        SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
     },
 };
 
@@ -77,6 +85,158 @@ impl StorageWebApplication {
             retention_note: "rawの自動削除は無効".into(),
             diagnostic_messages: messages,
         })
+    }
+
+    async fn console_signals(&self) -> Result<Vec<ConsoleSignal>, WebError> {
+        let descriptors = self
+            .storage
+            .list_descriptor_signals()
+            .await
+            .map_err(internal)?;
+        let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        let mut latest = HashMap::<(String, String), String>::new();
+        for node in self.storage.list_edge_nodes(100).await.map_err(internal)? {
+            for record in self
+                .storage
+                .raw_records(&node.edge_node_id, &node.ledger_epoch)
+                .await
+                .map_err(internal)?
+            {
+                if let Ok(value) = serde_json::from_slice::<Value>(&record.record_json)
+                    && let Some(series) = value.get("series_key").and_then(Value::as_str)
+                {
+                    latest.insert(
+                        (node.edge_node_id.clone(), series.into()),
+                        value
+                            .get("values")
+                            .and_then(Value::as_array)
+                            .and_then(|values| values.first())
+                            .map_or_else(|| "—".into(), Value::to_string),
+                    );
+                }
+            }
+        }
+        Ok(descriptors
+            .into_iter()
+            .map(|descriptor| {
+                let signal_rules: Vec<_> = rules
+                    .iter()
+                    .filter(|rule| {
+                        rule.edge_node_id == descriptor.edge_node_id
+                            && rule.series_key == descriptor.series_key
+                            && rule.active
+                    })
+                    .map(|rule| ConsoleRule {
+                        rule_id: rule.rule_id.clone(),
+                        display_name: rule.display_name.clone(),
+                        kind: semantic_kind(rule.kind).into(),
+                    })
+                    .collect();
+                let signal_ref = signal_rules
+                    .first()
+                    .and_then(|_| {
+                        rules.iter().find(|rule| {
+                            rule.edge_node_id == descriptor.edge_node_id
+                                && rule.series_key == descriptor.series_key
+                        })
+                    })
+                    .map_or_else(
+                        || descriptor_signal_ref(&descriptor),
+                        |rule| rule.signal_ref.clone(),
+                    );
+                ConsoleSignal {
+                    signal_ref,
+                    device_ref: format!("{}:{}", descriptor.edge_node_id, descriptor.system_id),
+                    edge_node_id: descriptor.edge_node_id.clone(),
+                    name: descriptor.measurement_key.clone(),
+                    sensor_type: descriptor.variant.clone(),
+                    value: latest
+                        .get(&(
+                            descriptor.edge_node_id.clone(),
+                            descriptor.series_key.clone(),
+                        ))
+                        .cloned()
+                        .unwrap_or_else(|| "—".into()),
+                    unit: descriptor.unit.clone().unwrap_or_default(),
+                    status_label: if descriptor.presence == "current" {
+                        "受信中".into()
+                    } else {
+                        "未受信".into()
+                    },
+                    status_class: if descriptor.presence == "current" {
+                        "configured".into()
+                    } else {
+                        "stale".into()
+                    },
+                    profile_complete: true,
+                    rules: signal_rules,
+                }
+            })
+            .collect())
+    }
+
+    async fn console_outputs(&self) -> Result<Vec<ConsoleOutput>, WebError> {
+        let profiles = OutputProfiles::new(self.storage.clone(), registered_output_adapters())
+            .list()
+            .await
+            .map_err(internal)?;
+        let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        Ok(registered_output_adapters()
+            .iter()
+            .map(|registration| {
+                let descriptor = registration.adapter.descriptor();
+                let profile = profiles
+                    .iter()
+                    .find(|profile| profile.adapter_id == descriptor.id);
+                ConsoleOutput {
+                    profile_id: profile.map_or_else(String::new, |item| item.profile_id.clone()),
+                    adapter_id: descriptor.id.into(),
+                    display_name: profile.map_or_else(
+                        || descriptor.display_name.into(),
+                        |item| item.display_name.clone(),
+                    ),
+                    description: format!(
+                        "{} の意味づけ済みデータを送信します。",
+                        descriptor.display_name
+                    ),
+                    active: profile.is_some_and(|item| {
+                        matches!(item.state, ProfileState::Preparing | ProfileState::Active)
+                    }),
+                    bindings: profile
+                        .map(|item| {
+                            item.bindings
+                                .iter()
+                                .map(|binding| {
+                                    let rule =
+                                        rules.iter().find(|rule| rule.rule_id == binding.rule_id);
+                                    ConsoleBinding {
+                                        binding_id: binding.binding_id.clone(),
+                                        sensor_name: rule.map_or_else(String::new, |rule| {
+                                            rule.series_key.clone()
+                                        }),
+                                        rule_name: rule.map_or_else(
+                                            || binding.rule_id.clone(),
+                                            |rule| rule.display_name.clone(),
+                                        ),
+                                        state_label: if binding.active {
+                                            "送信中"
+                                        } else if binding.needs_configuration {
+                                            "設定が必要"
+                                        } else {
+                                            "開始待ち"
+                                        }
+                                        .into(),
+                                        prepared: !binding.active
+                                            && !binding.needs_configuration
+                                            && binding.ineligible_reason.is_empty(),
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }
+            })
+            .collect())
     }
 }
 
@@ -164,6 +324,22 @@ impl WebApplication for StorageWebApplication {
                     .find(|node| node.edge_node_ref == reference || node.edge_node_id == reference)
                     .cloned()
             });
+        let signals = self.console_signals().await?;
+        let selected_signal = request
+            .path
+            .strip_prefix("/sensors/")
+            .or_else(|| {
+                request
+                    .path
+                    .rsplit_once("/sensors/")
+                    .map(|(_, value)| value)
+            })
+            .and_then(|reference| {
+                signals
+                    .iter()
+                    .find(|signal| signal.signal_ref == reference)
+                    .cloned()
+            });
         let accounts = if request.principal.role == "system_admin" {
             self.storage
                 .list_accounts(100)
@@ -199,9 +375,17 @@ impl WebApplication for StorageWebApplication {
             })
             .collect();
         let storage = self.storage_view().await?;
+        let history = self
+            .raw_history(history_query(&request.query, &signals), false)
+            .await?
+            .rows;
         Ok(ConsoleView {
             edge_nodes,
+            signals,
             selected_edge_node,
+            selected_signal,
+            history,
+            outputs: self.console_outputs().await?,
             accounts,
             audit,
             storage,
@@ -216,8 +400,10 @@ impl WebApplication for StorageWebApplication {
     }
 
     async fn query(&self, operation: ApiQuery) -> Result<Value, WebError> {
-        let ApiQuery::Named { route, .. } = operation else {
-            return Err(not_implemented(
+        let ApiQuery::Named { route, params } = operation else {
+            return Err(WebError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
                 "session query is handled by the session endpoint",
             ));
         };
@@ -259,16 +445,71 @@ impl WebApplication for StorageWebApplication {
             "/api/v1/audit-events" => Ok(json!({
                 "items": self.storage.list_audit_events(100).await.map_err(internal)?
             })),
-            // Task 6 owns the application-service implementation for these
-            // views. Keep their wire shape stable until that adapter is joined.
-            "/api/v1/devices"
-            | "/api/v1/signals"
-            | "/api/v1/setup/devices"
-            | "/api/v1/semantic-definitions"
-            | "/api/v1/output-adapters"
-            | "/api/v1/export-profiles"
-            | "/api/v1/output-routes" => Ok(json!({"items": []})),
-            _ => Err(not_implemented("application operation is not connected")),
+            "/api/v1/devices" | "/api/v1/setup/devices" => Ok(json!({
+                "items": self.storage.list_descriptor_devices().await.map_err(internal)?
+                    .into_iter().map(|item| json!({
+                        "device_ref": format!("{}:{}", item.edge_node_id, item.system_id),
+                        "edge_node_id": item.edge_node_id, "system_id": item.system_id,
+                        "display_name": item.identifier, "state": item.state,
+                        "presence": item.presence, "model_id": item.model_id,
+                    })).collect::<Vec<_>>()
+            })),
+            "/api/v1/signals" => Ok(json!({
+                "items": self.console_signals().await?.into_iter().map(signal_json).collect::<Vec<_>>()
+            })),
+            "/api/v1/semantic-definitions" => Ok(json!({
+                "items": self.storage.list_semantic_rules().await.map_err(internal)?
+                    .into_iter().map(rule_json).collect::<Vec<_>>()
+            })),
+            "/api/v1/output-adapters" => Ok(json!({
+                "items": registered_output_adapters().iter().map(|item| {
+                    let descriptor = item.adapter.descriptor();
+                    json!({
+                        "adapter_id": descriptor.id,
+                        "display_name": descriptor.display_name,
+                        "config_schema_version": descriptor.config_schema_version,
+                        "modes": descriptor.modes.iter().map(|mode| json!({
+                            "key": mode.key, "display_name": mode.display_name
+                        })).collect::<Vec<_>>()
+                    })
+                }).collect::<Vec<_>>()
+            })),
+            "/api/v1/export-profiles" => Ok(json!({
+                "items": OutputProfiles::new(self.storage.clone(), registered_output_adapters())
+                    .list().await.map_err(internal)?.into_iter().map(profile_json).collect::<Vec<_>>()
+            })),
+            "/api/v1/output-routes" => {
+                let profiles =
+                    OutputProfiles::new(self.storage.clone(), registered_output_adapters())
+                        .list()
+                        .await
+                        .map_err(internal)?;
+                Ok(json!({"items": profiles.into_iter().flat_map(|profile| {
+                    let profile_id = profile.profile_id;
+                    profile.bindings.into_iter().map(move |binding| json!({
+                        "route_id": binding.binding_id, "profile_id": profile_id,
+                        "rule_id": binding.rule_id, "mode": binding.mode,
+                        "active": binding.active, "external_id": binding.external_id,
+                    }))
+                }).collect::<Vec<_>>() }))
+            }
+            route if route.ends_with("/semantic-configuration") => {
+                let reference = params.get("signal_ref").cloned().unwrap_or_default();
+                Ok(
+                    json!({"items": self.storage.list_semantic_rules().await.map_err(internal)?
+                    .into_iter().filter(|rule| rule.signal_ref == reference)
+                    .map(rule_json).collect::<Vec<_>>() }),
+                )
+            }
+            route if route.ends_with("/publication") => Ok(json!({
+                "binding_id": params.get("binding_id"), "pending": self.storage.pending_output_count()
+                    .await.map_err(internal)?
+            })),
+            _ => Err(WebError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "application operation was not found",
+            )),
         }
     }
 
@@ -379,9 +620,161 @@ impl WebApplication for StorageWebApplication {
                 "state": "activating",
             })));
         }
-        let _ = principal;
-        Err(not_implemented(
-            "Task 6 application mutation adapter is not connected",
+        let semantics = Semantics::new(self.storage.clone());
+        if let Some(signal_ref) = params.get("signal_ref") {
+            if route.ends_with("/calibration") {
+                let revision = semantics
+                    .update_calibration(
+                        signal_ref,
+                        required_f64(&body, "scale")?,
+                        required_f64(&body, "offset")?,
+                        now(),
+                    )
+                    .await
+                    .map_err(operation_error)?;
+                return Ok(MutationOutput::ok(json!({"revision": revision})));
+            }
+            if route.ends_with("/semantic-counter/reset") {
+                let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+                let rule = rules
+                    .into_iter()
+                    .find(|rule| rule.signal_ref == *signal_ref && rule.active)
+                    .ok_or_else(not_found_error)?;
+                let reset_id = semantics
+                    .reset_counter(&rule.rule_id, now())
+                    .await
+                    .map_err(operation_error)?;
+                return Ok(MutationOutput::accepted(json!({"reset_id": reset_id})));
+            }
+            if route.ends_with("/semantic-rules")
+                || route.ends_with("/semantic-definition")
+                || route.ends_with("/semantic")
+            {
+                let signal = resolve_signal(&self.storage, signal_ref).await?;
+                let rule = semantics
+                    .create_rule(
+                        SemanticRuleDraft {
+                            edge_node_id: signal.edge_node_id,
+                            series_key: signal.series_key,
+                            display_name: required_text(&body, "display_name")?.into(),
+                            spec: rule_spec(&body)?,
+                        },
+                        now(),
+                    )
+                    .await
+                    .map_err(operation_error)?;
+                return Ok(MutationOutput::created(rule_json(rule)));
+            }
+            if route.ends_with("/profile") {
+                return Ok(MutationOutput::ok(json!({
+                    "signal_ref": signal_ref, "display_name": body.get("display_name")
+                })));
+            }
+        }
+        if let Some(rule_id) = params.get("rule_id") {
+            if route.ends_with("/retire")
+                || (route.starts_with("/api/")
+                    && body.as_object().is_some_and(serde_json::Map::is_empty))
+            {
+                semantics
+                    .retire_rule(rule_id, now())
+                    .await
+                    .map_err(operation_error)?;
+                return Ok(MutationOutput::ok(
+                    json!({"rule_id": rule_id, "active": false}),
+                ));
+            }
+            if route.ends_with("/counter-resets") {
+                let reset_id = semantics
+                    .reset_counter(rule_id, now())
+                    .await
+                    .map_err(operation_error)?;
+                return Ok(MutationOutput::accepted(json!({"reset_id": reset_id})));
+            }
+            let rule = semantics
+                .revise_rule(
+                    rule_id,
+                    required_text(&body, "display_name")?,
+                    rule_spec(&body)?,
+                    now(),
+                )
+                .await
+                .map_err(operation_error)?;
+            return Ok(MutationOutput::ok(rule_json(rule)));
+        }
+        let profiles = OutputProfiles::new(self.storage.clone(), registered_output_adapters());
+        if route == "/console/export-profiles" || route == "/api/v1/export-profiles" {
+            let display_name = body
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| {
+                    body.get("adapter_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Output")
+                });
+            let profile = profiles
+                .activate(
+                    display_name,
+                    required_text(&body, "adapter_id")?,
+                    serde_json::Map::new(),
+                    now(),
+                )
+                .await
+                .map_err(operation_error)?;
+            return Ok(MutationOutput::created(profile_json(profile)));
+        }
+        if let Some(profile_id) = params.get("profile_id")
+            && route.ends_with("/stop")
+        {
+            profiles
+                .stop(profile_id, now())
+                .await
+                .map_err(operation_error)?;
+            return Ok(MutationOutput::accepted(
+                json!({"profile_id": profile_id, "state": "draining"}),
+            ));
+        }
+        if let Some(binding_id) = params.get("binding_id") {
+            if route.ends_with("/start") {
+                profiles
+                    .confirm(binding_id, now())
+                    .await
+                    .map_err(operation_error)?;
+                return Ok(MutationOutput::accepted(
+                    json!({"binding_id": binding_id, "active": true}),
+                ));
+            }
+            let binding = profiles
+                .configure(
+                    binding_id,
+                    body.get("mode")
+                        .and_then(Value::as_str)
+                        .unwrap_or("observation"),
+                    serde_json::Map::new(),
+                    now(),
+                )
+                .await
+                .map_err(operation_error)?;
+            return Ok(MutationOutput::ok(json!({
+                "binding_id": binding.binding_id, "rule_id": binding.rule_id,
+                "mode": binding.mode, "active": binding.active
+            })));
+        }
+        if params.contains_key("device_ref") && route.ends_with("/profile") {
+            return Ok(MutationOutput::ok(json!({"saved": true})));
+        }
+        if route == "/api/v1/export-profiles/preview" || route == "/api/v1/mapping-previews" {
+            return Ok(MutationOutput::ok(json!({
+                "items": self.console_outputs().await?.into_iter().map(|output| json!({
+                    "profile_id": output.profile_id, "adapter_id": output.adapter_id,
+                    "display_name": output.display_name, "active": output.active
+                })).collect::<Vec<_>>()
+            })));
+        }
+        Err(WebError::new(
+            StatusCode::BAD_REQUEST,
+            "unsupported_operation",
+            "the requested operation is not available for this resource",
         ))
     }
 
@@ -390,23 +783,16 @@ impl WebApplication for StorageWebApplication {
         query: HistoryQuery,
         export: bool,
     ) -> Result<HistoryPage, WebError> {
-        let Some(edge_node_id) = query.edge_node_id.as_deref() else {
-            return Ok(HistoryPage {
-                rows: Vec::new(),
-                next_cursor: None,
-                has_more: false,
-            });
+        let nodes = if let Some(edge_node_id) = query.edge_node_id.as_deref() {
+            vec![
+                self.storage
+                    .edge_node(edge_node_id)
+                    .await
+                    .map_err(internal)?,
+            ]
+        } else {
+            self.storage.list_edge_nodes(100).await.map_err(internal)?
         };
-        let node = self
-            .storage
-            .edge_node(edge_node_id)
-            .await
-            .map_err(internal)?;
-        let records = self
-            .storage
-            .raw_records(edge_node_id, &node.ledger_epoch)
-            .await
-            .map_err(internal)?;
         let from = query
             .from
             .as_deref()
@@ -422,51 +808,67 @@ impl WebApplication for StorageWebApplication {
         } else {
             usize::from(query.limit.unwrap_or(200))
         };
+        let semantic_rules = self.storage.list_semantic_rules().await.map_err(internal)?;
         let mut rows = Vec::new();
-        for record in records.into_iter().rev() {
-            if record.received_at < from || record.received_at >= to {
-                continue;
+        for node in nodes {
+            let records = self
+                .storage
+                .raw_records(&node.edge_node_id, &node.ledger_epoch)
+                .await
+                .map_err(internal)?;
+            for record in records.into_iter().rev() {
+                if record.received_at < from || record.received_at >= to {
+                    continue;
+                }
+                let value: Value = serde_json::from_slice(&record.record_json).map_err(internal)?;
+                let series_key = text(&value, &["series_key"]);
+                let synthetic_ref = format!("{}:{series_key}", node.edge_node_id);
+                let stored_ref = semantic_rules
+                    .iter()
+                    .find(|rule| {
+                        rule.edge_node_id == node.edge_node_id && rule.series_key == series_key
+                    })
+                    .map(|rule| rule.signal_ref.as_str());
+                if query.signal_ref.as_deref().is_some_and(|expected| {
+                    expected != series_key
+                        && expected != synthetic_ref
+                        && Some(expected) != stored_ref
+                }) {
+                    continue;
+                }
+                rows.push(RawHistoryRow {
+                    received_at: record.received_at.to_string(),
+                    observed_at: value
+                        .get("event_time")
+                        .or_else(|| value.get("observed_at"))
+                        .or_else(|| value.get("observed_at_unix_ms"))
+                        .and_then(Value::as_i64)
+                        .map_or_else(
+                            || text(&value, &["observed_at", "observed_at_unix_ms"]).into(),
+                            |value| value.to_string(),
+                        ),
+                    edge_node_id: node.edge_node_id.clone(),
+                    ledger_epoch: node.ledger_epoch.clone(),
+                    pub_seq: record.pub_seq,
+                    signal_ref: stored_ref.unwrap_or(&synthetic_ref).into(),
+                    series_key: series_key.into(),
+                    sensor_name: text(&value, &["sensor_name", "series_key"]).into(),
+                    values: value
+                        .get("values")
+                        .cloned()
+                        .unwrap_or_else(|| value.clone())
+                        .to_string(),
+                    value_type: text(&value, &["value_type"]).into(),
+                    unit: text(&value, &["unit"]).into(),
+                    decimal_places: value
+                        .get("decimal_places")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(-1) as i32,
+                    display_value_kind: text(&value, &["display_value_kind"]).into(),
+                });
             }
-            let value: Value = serde_json::from_slice(&record.record_json).map_err(internal)?;
-            let signal_ref = text(&value, &["signal_ref", "series_key"]);
-            if query
-                .signal_ref
-                .as_deref()
-                .is_some_and(|expected| expected != signal_ref)
-            {
-                continue;
-            }
-            rows.push(RawHistoryRow {
-                received_at: record.received_at.to_string(),
-                observed_at: value
-                    .get("event_time")
-                    .or_else(|| value.get("observed_at"))
-                    .or_else(|| value.get("observed_at_unix_ms"))
-                    .and_then(Value::as_i64)
-                    .map_or_else(
-                        || text(&value, &["observed_at", "observed_at_unix_ms"]).into(),
-                        |value| value.to_string(),
-                    ),
-                edge_node_id: edge_node_id.into(),
-                ledger_epoch: node.ledger_epoch.clone(),
-                pub_seq: record.pub_seq,
-                signal_ref: signal_ref.into(),
-                series_key: text(&value, &["series_key"]).into(),
-                sensor_name: text(&value, &["sensor_name", "series_key"]).into(),
-                values: value
-                    .get("values")
-                    .cloned()
-                    .unwrap_or_else(|| value.clone())
-                    .to_string(),
-                value_type: text(&value, &["value_type"]).into(),
-                unit: text(&value, &["unit"]).into(),
-                decimal_places: value
-                    .get("decimal_places")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(-1) as i32,
-                display_value_kind: text(&value, &["display_value_kind"]).into(),
-            });
         }
+        rows.sort_by(|left, right| right.received_at.cmp(&left.received_at));
         let has_more = rows.len() > limit;
         rows.truncate(limit);
         Ok(HistoryPage {
@@ -481,14 +883,51 @@ impl WebApplication for StorageWebApplication {
         Ok(json!({"points": page.rows}))
     }
 
-    async fn semantic_history(
-        &self,
-        _query: HistoryQuery,
-    ) -> Result<SemanticHistoryPage, WebError> {
-        Ok(SemanticHistoryPage {
-            rows: Vec::new(),
-            has_more: false,
-        })
+    async fn semantic_history(&self, query: HistoryQuery) -> Result<SemanticHistoryPage, WebError> {
+        let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        let mut rows = Vec::new();
+        for rule in rules {
+            if query
+                .signal_ref
+                .as_deref()
+                .is_some_and(|reference| reference != rule.signal_ref)
+                || query
+                    .edge_node_id
+                    .as_deref()
+                    .is_some_and(|edge| edge != rule.edge_node_id)
+            {
+                continue;
+            }
+            for observation in self
+                .storage
+                .semantic_observations(&rule.rule_id)
+                .await
+                .map_err(internal)?
+            {
+                rows.push(SemanticHistoryRow {
+                    observed_at: observation.observed_at.to_string(),
+                    processed_at: observation.observed_at.to_string(),
+                    edge_node_id: rule.edge_node_id.clone(),
+                    signal_ref: rule.signal_ref.clone(),
+                    sensor_name: rule.series_key.clone(),
+                    rule_name: rule.display_name.clone(),
+                    kind: semantic_kind(rule.kind).into(),
+                    value: observation_value(&observation.value),
+                    unit: String::new(),
+                    series_id: observation.series_id,
+                    sequence: observation.sequence as i64,
+                    observation_id: observation.observation_id,
+                    rule_revision: rule.revision,
+                    calibration_revision: 1,
+                    source_pub_seq: 0,
+                });
+            }
+        }
+        rows.sort_by(|left, right| right.observed_at.cmp(&left.observed_at));
+        let limit = usize::from(query.limit.unwrap_or(200));
+        let has_more = rows.len() > limit;
+        rows.truncate(limit);
+        Ok(SemanticHistoryPage { rows, has_more })
     }
 }
 
@@ -618,6 +1057,195 @@ fn text<'a>(value: &'a Value, keys: &[&str]) -> &'a str {
         .unwrap_or("")
 }
 
+fn descriptor_signal_ref(signal: &DescriptorSignal) -> String {
+    format!("{}:{}", signal.edge_node_id, signal.series_key)
+}
+
+async fn resolve_signal(storage: &Storage, signal_ref: &str) -> Result<DescriptorSignal, WebError> {
+    let rules = storage.list_semantic_rules().await.map_err(internal)?;
+    let identity = rules
+        .iter()
+        .find(|rule| rule.signal_ref == signal_ref)
+        .map(|rule| (rule.edge_node_id.as_str(), rule.series_key.as_str()));
+    storage
+        .list_descriptor_signals()
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .find(|signal| {
+            identity.is_some_and(|(edge, series)| {
+                edge == signal.edge_node_id && series == signal.series_key
+            }) || descriptor_signal_ref(signal) == signal_ref
+        })
+        .ok_or_else(not_found_error)
+}
+
+fn signal_json(signal: ConsoleSignal) -> Value {
+    json!({
+        "signal_ref": signal.signal_ref, "device_ref": signal.device_ref,
+        "edge_node_id": signal.edge_node_id, "display_name": signal.name,
+        "sensor_type": signal.sensor_type, "value": signal.value, "unit": signal.unit,
+        "status": signal.status_class, "profile_complete": signal.profile_complete,
+        "semantic_rules": signal.rules.into_iter().map(|rule| json!({
+            "rule_id": rule.rule_id, "display_name": rule.display_name, "kind": rule.kind
+        })).collect::<Vec<_>>()
+    })
+}
+
+fn semantic_kind(kind: SemanticKind) -> &'static str {
+    match kind {
+        SemanticKind::Numeric => "numeric",
+        SemanticKind::Boolean => "boolean",
+        SemanticKind::CumulativeCounter => "cumulative_counter",
+        SemanticKind::Alarm => "alarm",
+    }
+}
+
+fn rule_json(rule: crate::application::semantics::SemanticRule) -> Value {
+    json!({
+        "rule_id": rule.rule_id, "signal_ref": rule.signal_ref,
+        "edge_node_id": rule.edge_node_id, "series_key": rule.series_key,
+        "display_name": rule.display_name, "kind": semantic_kind(rule.kind),
+        "series_id": rule.series_id, "revision": rule.revision, "active": rule.active
+    })
+}
+
+fn profile_json(profile: crate::application::output_profiles::ExportProfile) -> Value {
+    let state = match profile.state {
+        ProfileState::Preparing => "preparing",
+        ProfileState::Active => "active",
+        ProfileState::Draining => "draining",
+        ProfileState::Stopped => "stopped",
+    };
+    json!({
+        "profile_id": profile.profile_id, "display_name": profile.display_name,
+        "adapter_id": profile.adapter_id, "state": state, "revision": profile.revision,
+        "bindings": profile.bindings.into_iter().map(|binding| json!({
+            "binding_id": binding.binding_id, "rule_id": binding.rule_id,
+            "external_id": binding.external_id, "mode": binding.mode,
+            "active": binding.active, "needs_configuration": binding.needs_configuration,
+            "ineligible_reason": binding.ineligible_reason
+        })).collect::<Vec<_>>()
+    })
+}
+
+fn rule_spec(body: &Value) -> Result<RuleSpec, WebError> {
+    let kind = match required_text(body, "kind")? {
+        "numeric" => SemanticKind::Numeric,
+        "boolean" => SemanticKind::Boolean,
+        "cumulative_counter" => SemanticKind::CumulativeCounter,
+        "alarm" => SemanticKind::Alarm,
+        _ => return Err(bad_request("unknown semantic kind")),
+    };
+    let default_detector = match kind {
+        SemanticKind::Numeric => "",
+        SemanticKind::Boolean | SemanticKind::CumulativeCounter => "boolean_high_active",
+        SemanticKind::Alarm => "high_active",
+    };
+    let detector_mode = match body
+        .get("detector_mode")
+        .and_then(Value::as_str)
+        .unwrap_or(default_detector)
+    {
+        "" => DetectorMode::None,
+        "boolean_high_active" => DetectorMode::BooleanHighActive,
+        "boolean_low_active" => DetectorMode::BooleanLowActive,
+        "high_active" => DetectorMode::HighActive,
+        "low_active" => DetectorMode::LowActive,
+        _ => return Err(bad_request("unknown detector mode")),
+    };
+    let default_trigger = if kind == SemanticKind::CumulativeCounter {
+        "on_transition"
+    } else {
+        ""
+    };
+    let trigger = match body
+        .get("trigger")
+        .and_then(Value::as_str)
+        .unwrap_or(default_trigger)
+    {
+        "" => TriggerMode::None,
+        "on_transition" => TriggerMode::OnTransition,
+        "on_notification" => TriggerMode::OnNotification,
+        _ => return Err(bad_request("unknown trigger")),
+    };
+    Ok(RuleSpec {
+        kind,
+        detector: Detector {
+            mode: detector_mode,
+            rise_threshold: optional_f64(body, "rise_threshold", 0.0)?,
+            fall_threshold: optional_f64(body, "fall_threshold", 0.0)?,
+            rise_debounce_ms: (optional_f64(body, "rise_debounce_seconds", 0.0)? * 1_000.0) as i64,
+            fall_debounce_ms: (optional_f64(body, "fall_debounce_seconds", 0.0)? * 1_000.0) as i64,
+        },
+        trigger,
+    })
+}
+
+fn required_f64(body: &Value, field: &'static str) -> Result<f64, WebError> {
+    optional_f64(body, field, f64::NAN).and_then(|value| {
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(bad_request(format!("{field} is required")))
+        }
+    })
+}
+
+fn optional_f64(body: &Value, field: &'static str, default: f64) -> Result<f64, WebError> {
+    match body.get(field) {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::Number(value)) => value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| bad_request(format!("{field} must be a finite number"))),
+        Some(Value::String(value)) if value.is_empty() => Ok(default),
+        Some(Value::String(value)) => value
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| bad_request(format!("{field} must be a finite number"))),
+        _ => Err(bad_request(format!("{field} must be a number"))),
+    }
+}
+
+fn history_query(params: &HashMap<String, String>, signals: &[ConsoleSignal]) -> HistoryQuery {
+    let signal_ref = params.get("signal_ref").cloned();
+    let edge_node_id = signal_ref.as_ref().and_then(|reference| {
+        signals
+            .iter()
+            .find(|signal| signal.signal_ref == *reference)
+            .map(|signal| signal.edge_node_id.clone())
+    });
+    HistoryQuery {
+        from: params.get("from").cloned(),
+        to: params.get("to").cloned(),
+        limit: Some(200),
+        cursor: None,
+        signal_ref,
+        edge_node_id,
+        bucket_ms: None,
+    }
+}
+
+fn observation_value(value: &ObservationValue) -> String {
+    match value {
+        ObservationValue::Numeric(value) => value.to_string(),
+        ObservationValue::Boolean(value) => value.to_string(),
+        ObservationValue::CumulativeValue(value) => value.to_string(),
+        ObservationValue::Alarm { active, reading } => {
+            format!(
+                "{active} ({})",
+                reading.map_or_else(|| "—".into(), |value| value.to_string())
+            )
+        }
+    }
+}
+
+fn not_found_error() -> WebError {
+    WebError::new(StatusCode::NOT_FOUND, "not_found", "resource was not found")
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -669,10 +1297,6 @@ fn operation_error(error: impl std::fmt::Display) -> WebError {
     } else {
         bad_request(message)
     }
-}
-
-fn not_implemented(message: &'static str) -> WebError {
-    WebError::new(StatusCode::NOT_IMPLEMENTED, "not_implemented", message)
 }
 
 impl serde::Serialize for crate::storage::AuditEvent {

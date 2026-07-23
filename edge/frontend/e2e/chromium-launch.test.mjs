@@ -35,4 +35,22 @@ describe("Chromium launch support", () => {
       }),
     ).toContain("disk quota exceeded");
   });
+
+  it("prefers real Chrome over distro Chromium shims and keeps fallbacks", () => {
+    expect(launch.chromiumCandidatePaths({})).toEqual([
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ]);
+    expect(
+      launch.chromiumCandidatePaths({ IOTKIT_CHROMIUM: "/opt/chrome" }),
+    ).toEqual([
+      "/opt/chrome",
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ]);
+  });
 });

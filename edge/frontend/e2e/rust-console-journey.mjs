@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
 import {
+  chromiumCandidatePaths,
   chromiumDiagnostics,
   chromiumProfilePrefix,
   removeChromiumProfile,
@@ -19,23 +20,21 @@ if (!origin || !password) {
 const sleep = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-async function chromiumExecutable() {
-  const candidates = [
-    process.env.IOTKIT_CHROMIUM,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-  ].filter(Boolean);
+async function chromiumExecutables() {
+  const candidates = chromiumCandidatePaths(process.env);
+  const available = [];
   for (const candidate of candidates) {
     try {
       await access(candidate, constants.X_OK);
-      return candidate;
+      if (!available.includes(candidate)) available.push(candidate);
     } catch {
       // Try the next well-known executable.
     }
   }
-  throw new Error("Chromium was not found; set IOTKIT_CHROMIUM");
+  if (available.length === 0) {
+    throw new Error("Chromium was not found; set IOTKIT_CHROMIUM");
+  }
+  return available;
 }
 
 async function availablePort() {
@@ -127,38 +126,68 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-const profile = await mkdtemp(chromiumProfilePrefix(process.env, homedir()));
-const executable = await chromiumExecutable();
-const debuggingPort = await availablePort();
-let stderr = "";
-const browser = spawn(
-  executable,
-  [
-    "--headless=new",
-    "--disable-gpu",
-    "--disable-dev-shm-usage",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--no-sandbox",
-    "--remote-debugging-address=127.0.0.1",
-    `--remote-debugging-port=${debuggingPort}`,
-    `--user-data-dir=${profile}`,
-    "about:blank",
-  ],
-  { stdio: ["ignore", "ignore", "pipe"] },
-);
-browser.stderr.on("data", (chunk) => {
-  if (stderr.length < 16_384) stderr += chunk.toString();
-});
+async function launchBrowser() {
+  const failures = [];
+  for (const executable of await chromiumExecutables()) {
+    const profile = await mkdtemp(chromiumProfilePrefix(process.env, homedir()));
+    const debuggingPort = await availablePort();
+    let stderr = "";
+    const browser = spawn(
+      executable,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--no-sandbox",
+        "--remote-debugging-address=127.0.0.1",
+        `--remote-debugging-port=${debuggingPort}`,
+        `--user-data-dir=${profile}`,
+        "about:blank",
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    browser.stderr.on("data", (chunk) => {
+      if (stderr.length < 16_384) stderr += chunk.toString();
+    });
+    try {
+      const target = await waitFor(async () => {
+        const response = await fetch(
+          `http://127.0.0.1:${debuggingPort}/json/list`,
+        );
+        const targets = await response.json();
+        return targets.find((candidate) => candidate.type === "page");
+      }, `${executable} DevTools page target`, 5_000);
+      return { browser, debuggingPort, executable, profile, stderr: () => stderr, target };
+    } catch (error) {
+      if (browser.exitCode === null && browser.signalCode === null) {
+        browser.kill("SIGTERM");
+        await new Promise((resolve) => {
+          browser.once("close", resolve);
+          setTimeout(resolve, 2_000);
+        });
+      }
+      failures.push(
+        `${error}\n${chromiumDiagnostics({
+          executable,
+          exitCode: browser.exitCode,
+          signalCode: browser.signalCode,
+          stderr,
+        })}`,
+      );
+      await removeChromiumProfile(profile);
+    }
+  }
+  throw new Error(`No browser exposed DevTools:\n${failures.join("\n\n")}`);
+}
 
 let socket;
 let failure;
+let launched;
 try {
-  const target = await waitFor(async () => {
-    const response = await fetch(`http://127.0.0.1:${debuggingPort}/json/list`);
-    const targets = await response.json();
-    return targets.find((candidate) => candidate.type === "page");
-  }, "Chromium page target");
+  launched = await launchBrowser();
+  const { target } = launched;
   socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     socket.addEventListener("open", resolve, { once: true });
@@ -188,9 +217,69 @@ try {
   );
   assert(
     await devtools.evaluate(
-      "Boolean(document.querySelector('.health-banner') && document.querySelector('#signal-table'))",
+      "Boolean(document.querySelector('.health-banner') && document.querySelector('#signal-table')) && document.body.textContent.includes('contact_state') && document.body.textContent.includes('21.5')",
     ),
-    "overview content was not server-rendered",
+    "real stored sensor data was not server-rendered",
+  );
+
+  const signalHref = await devtools.evaluate(
+    "document.querySelector('#signal-table tbody a')?.getAttribute('href')",
+  );
+  assert(signalHref, "stored signal had no equipment link");
+  await devtools.navigate(signalHref);
+  assert(
+    await devtools.evaluate(
+      "document.body.textContent.includes('稼働状態') && Boolean(document.querySelector('.semantic-form'))",
+    ),
+    "stored semantic rule was not rendered",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector(".semantic-form");
+    form.elements.namedItem("display_name").value = "稼働状態（補正済み）";
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && document.body.textContent.includes('稼働状態（補正済み）')",
+      ),
+    "semantic rule mutation",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector(".calibration-form");
+    form.elements.namedItem("scale").value = "2";
+    form.elements.namedItem("offset").value = "1";
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () => devtools.evaluate("location.search.includes('saved=1')"),
+    "calibration mutation",
+  );
+
+  await devtools.navigate("/output");
+  assert(
+    await devtools.evaluate(
+      "document.body.textContent.includes('IoTKit MQTT 出力') && document.body.textContent.includes('稼働状態（補正済み）') && Boolean(document.querySelector('.output-stop-form'))",
+    ),
+    "stored output profile and route were not rendered",
+  );
+  const connectedInventory = await devtools.evaluate(`(async () => {
+    const [signals, semantics, profiles, routes] = await Promise.all(
+      ["/api/v1/signals", "/api/v1/semantic-definitions", "/api/v1/export-profiles", "/api/v1/output-routes"]
+        .map(async (path) => (await fetch(path)).json()),
+    );
+    return [signals.items.length, semantics.items.length, profiles.items.length, routes.items.length];
+  })()`);
+  assert(
+    connectedInventory.every((count) => count > 0),
+    `production inventories were empty: ${connectedInventory}`,
+  );
+  await devtools.evaluate(
+    "document.querySelector('.output-stop-form').requestSubmit()",
+  );
+  await waitFor(
+    () => devtools.evaluate("location.search.includes('saved=1')"),
+    "output stop mutation",
   );
 
   for (const [path, expression, description] of [
@@ -279,21 +368,25 @@ try {
   failure = error instanceof Error ? error : new Error(String(error));
 } finally {
   if (socket?.readyState === WebSocket.OPEN) socket.close();
-  if (browser.exitCode === null && browser.signalCode === null) {
-    browser.kill("SIGTERM");
+  if (
+    launched &&
+    launched.browser.exitCode === null &&
+    launched.browser.signalCode === null
+  ) {
+    launched.browser.kill("SIGTERM");
     await new Promise((resolve) => {
-      browser.once("close", resolve);
+      launched.browser.once("close", resolve);
       setTimeout(resolve, 2_000);
     });
   }
-  if (failure) {
+  if (failure && launched) {
     failure.message += `\n${chromiumDiagnostics({
-      executable,
-      exitCode: browser.exitCode,
-      signalCode: browser.signalCode,
-      stderr,
+      executable: launched.executable,
+      exitCode: launched.browser.exitCode,
+      signalCode: launched.browser.signalCode,
+      stderr: launched.stderr(),
     })}`;
   }
-  await removeChromiumProfile(profile);
+  if (launched) await removeChromiumProfile(launched.profile);
 }
 if (failure) throw failure;

@@ -60,6 +60,33 @@ struct MeasurementRecord {
 }
 
 impl Storage {
+    pub async fn list_semantic_rules(&self) -> Result<Vec<SemanticRule>, StorageError> {
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let rows = sqlx::query(
+                    "SELECT rule.rule_id,rule.signal_ref,signal.edge_node_id,signal.series_key,\
+                     rule.display_name,rule.kind,rule.series_id,rule.revision,rule.active \
+                     FROM semantic_rules AS rule JOIN semantic_signals AS signal \
+                     ON signal.signal_ref=rule.signal_ref ORDER BY rule.created_at,rule.rule_id",
+                )
+                .fetch_all(pool)
+                .await?;
+                rows.into_iter().map(row_to_semantic_rule).collect()
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let rows = sqlx::query(
+                    "SELECT rule.rule_id,rule.signal_ref,signal.edge_node_id,signal.series_key,\
+                     rule.display_name,rule.kind,rule.series_id,rule.revision,rule.active \
+                     FROM semantic_rules AS rule JOIN semantic_signals AS signal \
+                     ON signal.signal_ref=rule.signal_ref ORDER BY rule.created_at,rule.rule_id",
+                )
+                .fetch_all(pool)
+                .await?;
+                rows.into_iter().map(row_to_semantic_rule).collect()
+            }
+        }
+    }
+
     pub async fn create_semantic_rule(
         &self,
         draft: SemanticRuleDraft,

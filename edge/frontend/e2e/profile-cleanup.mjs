@@ -17,6 +17,16 @@ export function chromiumProfilePrefix(environment, home) {
     : join(home, ".iotkit-console-e2e-");
 }
 
+export function chromiumCandidatePaths(environment) {
+  return [
+    environment.IOTKIT_CHROMIUM,
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ].filter((candidate, index, values) => candidate && values.indexOf(candidate) === index);
+}
+
 export function chromiumDiagnostics({
   executable,
   exitCode,

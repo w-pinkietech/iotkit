@@ -78,6 +78,13 @@ edge_binary="$repo_root/target/debug/iotkit-edge"
   --login-id owner \
   --display-name "第一工場 システム管理者" \
   --password-file "$password_file" >/dev/null
+if [[ "$storage_profile" == "postgres" ]]; then
+  fixture_location="$postgres_dsn"
+else
+  fixture_location="$e2e_dir/edge.db"
+fi
+TMPDIR="$test_tmp_root" cargo run -p iotkit-edge --example console_fixture -- \
+  "$storage_profile" "$fixture_location"
 
 port=$(node -e '
   const { createServer } = require("node:net");

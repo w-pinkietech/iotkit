@@ -54,6 +54,28 @@ pub struct ActivationCommand {
     pub last_attempt_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescriptorDevice {
+    pub edge_node_id: String,
+    pub system_id: String,
+    pub identifier: Option<String>,
+    pub state: String,
+    pub presence: String,
+    pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescriptorSignal {
+    pub edge_node_id: String,
+    pub series_key: String,
+    pub system_id: String,
+    pub measurement_key: String,
+    pub variant: String,
+    pub unit: Option<String>,
+    pub value_type: String,
+    pub presence: String,
+}
+
 impl Storage {
     pub async fn edge_id(&self) -> Result<String, StorageError> {
         match self.inner.as_ref() {
@@ -494,6 +516,45 @@ impl Storage {
         }
     }
 
+    pub async fn list_descriptor_devices(&self) -> Result<Vec<DescriptorDevice>, StorageError> {
+        let sql = "SELECT edge_node_id,system_id,identifier,state,presence,model_id \
+                   FROM descriptor_devices ORDER BY edge_node_id,system_id";
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => sqlx::query(sql)
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(row_to_descriptor_device)
+                .collect(),
+            StorageInner::Postgres { pool, .. } => sqlx::query(sql)
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(row_to_descriptor_device)
+                .collect(),
+        }
+    }
+
+    pub async fn list_descriptor_signals(&self) -> Result<Vec<DescriptorSignal>, StorageError> {
+        let sql = "SELECT edge_node_id,series_key,system_id,measurement_key,variant,unit,\
+                   value_type,presence FROM descriptor_signals \
+                   ORDER BY edge_node_id,series_key";
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => sqlx::query(sql)
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(row_to_descriptor_signal)
+                .collect(),
+            StorageInner::Postgres { pool, .. } => sqlx::query(sql)
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(row_to_descriptor_signal)
+                .collect(),
+        }
+    }
+
     pub async fn request_activation(
         &self,
         edge_node_id: &str,
@@ -778,6 +839,40 @@ impl Storage {
         }
         Ok(())
     }
+}
+
+fn row_to_descriptor_device<R: sqlx::Row>(row: R) -> Result<DescriptorDevice, StorageError>
+where
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+    String: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    Option<String>: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+{
+    Ok(DescriptorDevice {
+        edge_node_id: row.try_get("edge_node_id")?,
+        system_id: row.try_get("system_id")?,
+        identifier: row.try_get("identifier")?,
+        state: row.try_get("state")?,
+        presence: row.try_get("presence")?,
+        model_id: row.try_get("model_id")?,
+    })
+}
+
+fn row_to_descriptor_signal<R: sqlx::Row>(row: R) -> Result<DescriptorSignal, StorageError>
+where
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+    String: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    Option<String>: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+{
+    Ok(DescriptorSignal {
+        edge_node_id: row.try_get("edge_node_id")?,
+        series_key: row.try_get("series_key")?,
+        system_id: row.try_get("system_id")?,
+        measurement_key: row.try_get("measurement_key")?,
+        variant: row.try_get("variant")?,
+        unit: row.try_get("unit")?,
+        value_type: row.try_get("value_type")?,
+        presence: row.try_get("presence")?,
+    })
 }
 
 fn activation_command(

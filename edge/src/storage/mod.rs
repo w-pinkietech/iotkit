@@ -24,7 +24,9 @@ mod activation;
 mod auth;
 mod recovery;
 mod semantic_output;
-pub use activation::{ActivationCommand, DescriptorApply, EdgeNode, EdgeNodeState};
+pub use activation::{
+    ActivationCommand, DescriptorApply, DescriptorDevice, DescriptorSignal, EdgeNode, EdgeNodeState,
+};
 pub use auth::{
     Account, AccountCredential, AccountProvision, AuditActor, AuditEvent, StoredSession,
 };

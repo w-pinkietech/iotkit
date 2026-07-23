@@ -121,6 +121,26 @@ where
     })
 }
 
+fn row_to_semantic_rule<R: Row>(row: R) -> Result<SemanticRule, StorageError>
+where
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+    String: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    i64: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    bool: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+{
+    Ok(SemanticRule {
+        rule_id: row.try_get("rule_id")?,
+        signal_ref: row.try_get("signal_ref")?,
+        edge_node_id: row.try_get("edge_node_id")?,
+        series_key: row.try_get("series_key")?,
+        display_name: row.try_get("display_name")?,
+        kind: parse_semantic_kind(&row.try_get::<String, _>("kind")?)?,
+        series_id: row.try_get("series_id")?,
+        revision: row.try_get("revision")?,
+        active: row.try_get("active")?,
+    })
+}
+
 struct ProjectionCandidate {
     rule_id: String,
     signal_ref: String,
