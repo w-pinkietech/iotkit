@@ -9,6 +9,7 @@ use iotkit_edge::{
     storage::{Storage, StorageProfile},
     web::{ApiMutation, ApiQuery, ConsoleRequest, WebApplication},
 };
+use iotkit_edge_custody_contract::DescriptorSnapshot;
 
 #[tokio::test]
 async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
@@ -186,11 +187,16 @@ async fn mutation_dispatch_preserves_put_and_delete_semantics() {
         )
         .await
         .unwrap();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
     let rule = Semantics::new(storage.clone())
         .create_rule(
             SemanticRuleDraft {
-                edge_node_id: "edge-node-01".into(),
-                series_key: "temperature".into(),
+                edge_node_id: descriptor.edge_node_id,
+                series_key: descriptor.signals[0].series_key.clone(),
                 display_name: "Temperature".into(),
                 spec: RuleSpec {
                     kind: SemanticKind::Numeric,
