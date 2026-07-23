@@ -193,7 +193,7 @@ append-onlyイベント行。確認UI・ワンタップ差し戻し・R14カタ�
   (series_id FK、時刻を一意性に使わない——現行の同一ms暗黙dedupはD1と矛盾するため廃止)
   +コレクタ内台帳解決(タスク所有HashMapキャッシュ、起動時全ロード)。
 - engine(EngineDeviceKey)はWave 0無改修(in-memory projectionのため)。
-- 新クレートは `core/ledger`。uuid crate(v7 feature)をworkspaceに追加。
+- 新クレートは `edge-node/core/ledger`。uuid crate(v7 feature)をworkspaceに追加。
 - **Wave 0の登録経路**(レビュー反映 2026-07-02): 経路B(位置定義)+経路A(目撃ステージング→
   CLI承認 `iotkit-edge-nodectl device approve`)。検疫遷移は**時限自動失効+CLI解除のみ**(承認UIはWave 1)。
   replace-hardwareは上記CLI版ガードレールで実装する。

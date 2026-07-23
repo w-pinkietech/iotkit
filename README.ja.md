@@ -154,7 +154,7 @@ scripts/test-edge-postgres.sh
 scripts/test-edge-capacity.sh
 
 # OpenAPI生成Console型、TypeScript、埋め込みJavaScriptの同期
-npm ci --prefix iotkit-edge/frontend
+npm ci --prefix edge/frontend
 scripts/test-edge-console-frontend.sh
 
 # Chromiumによるlogin、Edge Node登録、センサー設定、意味付け、外部出力、権限導線
@@ -165,7 +165,7 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-console-e2e.sh
 scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 ```
 
-IoTKit ConsoleはGoのserver-side renderingを維持し、browser動作だけを`iotkit-edge/frontend/src/`のTypeScriptで実装します。JSON API型は`iotkit-edge/openapi/edge-console-v1.yaml`から生成します。配布物にはesbuild済みの`static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要です。
+IoTKit ConsoleはGoのserver-side renderingを維持し、browser動作だけを`edge/frontend/src/`のTypeScriptで実装します。JSON API型は`edge/openapi/edge-console-v1.yaml`から生成します。配布物にはesbuild済みの`static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要です。
 
 CIは各PRでcrate layer rule、Rust/Go unit test、生成済みConsole asset、埋め込みbrowser journeyを検査します（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。Docker、PostgreSQL、Broker障害を含む統合検証は、release前に`test-edge-host-release-gate.sh`を一度実行します。`scripts/verify.sh`はfmt、layer rule、test、clippyをlocalで実行します。
 
@@ -173,13 +173,18 @@ CIは各PRでcrate layer rule、Rust/Go unit test、生成済みConsole asset、
 
 | Path | 役割 |
 |------|------|
-| `core/*` | domain。storage、ledger（device identity）、timeseries、registry、collector（ingest）、publish（outbox）、ops（R14 typed operationとauth）、types、engine（supervision）を1 crate 1責務で分離 |
-| `iotkit-ingest-contract` / `iotkit-ingest-client` | Envelope/Ackの取り込みwire contractとAdapterが使うclient |
-| `*-adapter*` / `iotkit-sensor-drivers` / `rpi4b-transport` | BravePI Mainboardとrpi-localのsensor Adapter、共有sensor IC driverとpolling runtime、raw bus transport |
-| `iotkit-edge-node` / `iotkit-edge-nodectl` | IoTKit Edge Node daemonとoperator CLI |
-| `iotkit-edge` | IoTKit Edge MQTT consumer、耐久raw/semantic store、cursor manager、application exporter、認証付きSSR Console、query/configuration CLI |
+| `edge-node/apps/` | Rust製Edge Node daemonとoperator CLIのcomposition root |
+| `edge-node/core/` | 耐久収集domain。1 crate 1責務 |
+| `edge-node/ingest/` | Envelope/Ack contract、in-process binding、認証付きHTTP binding |
+| `edge-node/input/` | Adapter host API、conformance testkit、polling runtime、transport、共有sensor driver |
+| `edge-node/adapters/` | BravePI MainboardやRaspberry Pi直結I2Cなどの具体的sensor family統合 |
+| `edge/` | Go製IoTKit Edge、Console、raw/semantic store、cursor管理、application出力 |
+| `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | 共有contract、導入、automation、component横断fixture、review policy |
 
 crate全体図、layer rule、新しいcodeの配置表は[Architecture](docs/okf/ja/architecture/system-overview.md)にあります。
+収集側は[`edge-node/README.ja.md`](edge-node/README.ja.md)、具体的Adapterは
+[`edge-node/adapters/README.ja.md`](edge-node/adapters/README.ja.md)、Edge/Consoleは
+[`edge/README.ja.md`](edge/README.ja.md)から読み始めてください。
 
 Codex Cloudを含め、単一cloneから開発を再開できます。再開順序とcontext authorityは[docs/cloud-development.md](docs/cloud-development.md)を参照してください。
 

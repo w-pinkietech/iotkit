@@ -31,7 +31,7 @@ For each later task, use the **Before changing code** table in
 The supported contributor environment is Linux. CI currently uses:
 
 - Rust 1.95.0, selected automatically by `rust-toolchain.toml`;
-- Go 1.25, as declared by `iotkit-edge/go.mod`;
+- Go 1.25, as declared by `edge/go.mod`;
 - Node.js 22 and npm for Console assets and tests;
 - `pkg-config` and `libudev-dev` for Raspberry Pi transport dependencies.
 
@@ -83,11 +83,11 @@ sensor / device
 cargo test -p bravepi-mainboard-adapter
 
 # Go IoTKit Edge side
-(cd iotkit-edge && go test ./internal/outputadapter)
+(cd edge && go test ./internal/outputadapter)
 
 # Browser behavior and generated Console types
-npm ci --prefix iotkit-edge/frontend
-npm run check --prefix iotkit-edge/frontend
+npm ci --prefix edge/frontend
+npm run check --prefix edge/frontend
 ```
 
 ### 30–45 minutes: exercise the product without hardware
@@ -119,6 +119,18 @@ required reading, code entry points, authenticated HTTP ingest, Console
 authentication, operations, and contracts. The complete crate map and placement
 rules live in the architecture document. Do not create a new crate until it is
 classified there and in `scripts/check-layers`.
+
+Use the component entry points for a shorter local tour:
+
+- [`edge-node/README.md`](edge-node/README.md) for collection and custody;
+- [`edge-node/adapters/README.md`](edge-node/adapters/README.md) for Transport,
+  Driver, and Input Adapter work;
+- [`edge/README.md`](edge/README.md) for raw acceptance, semantics, output, and
+  Console work.
+
+For a new sensor, first decide whether it can use authenticated HTTP ingest,
+fits the existing direct-I2C adapter, or needs a genuinely new adapter family.
+Do not create a new family merely to add another supported IC.
 
 ## One issue, one worktree, one pull request
 
@@ -200,10 +212,10 @@ every pull request.
 
 ## Generated files and contract changes
 
-- Edit `iotkit-edge/openapi/edge-console-v1.yaml`, then run
-  `npm run generate:api --prefix iotkit-edge/frontend`.
+- Edit `edge/openapi/edge-console-v1.yaml`, then run
+  `npm run generate:api --prefix edge/frontend`.
 - Build embedded Console JavaScript with
-  `npm run build --prefix iotkit-edge/frontend`.
+  `npm run build --prefix edge/frontend`.
 - Update `Cargo.lock`, `go.sum`, and `package-lock.json` only through their
   package managers.
 - Change Japanese and English files under `docs/okf/` together.
@@ -220,7 +232,7 @@ every pull request.
   direct SQL writes from HTTP, UI, CLI, or adapters.
 - Keep Rust product test implementations outside product `src/` directories,
   Go tests in `*_test.go`, and frontend unit tests under
-  `iotkit-edge/frontend/tests/unit/`.
+  `edge/frontend/tests/unit/`.
 - Do not make legacy plans or extracted old code the authority for new behavior.
 
 ## Pull request checklist

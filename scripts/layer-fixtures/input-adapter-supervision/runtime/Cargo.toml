@@ -5,4 +5,4 @@ edition = "2024"
 publish = false
 
 [dependencies]
-iotkit-core-supervision = { path = "../../../../core/supervision" }
+iotkit-core-supervision = { path = "../../../../edge-node/core/supervision" }

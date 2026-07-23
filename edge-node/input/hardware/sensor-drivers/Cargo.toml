@@ -1,0 +1,9 @@
+[package]
+name = "iotkit-sensor-drivers"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iotkit-core-types = { path = "../../../core/types" }

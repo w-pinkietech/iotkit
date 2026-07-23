@@ -6,18 +6,18 @@ an adapter from quietly gaining `iotkit-core-engine` or a direct data-plane
 dependency. This script is the hard gate; the review guides only reference it.
 
 Rules (see docs/okf/en/architecture/system-overview.md "Layer rules"):
-  1. adapters never depend on core/engine
+  1. adapters never depend on edge-node/core/engine
   2. adapters reach the data plane only through iotkit-ingest-client
   3. iotkit-ingest-contract's runtime deps are serde and nothing else
-  4. core/types and core/storage are leaves; core/supervision depends only on
-     core/types; core/engine depends only on core/types + core/supervision; no
-     core/* crate depends on adapters or binaries
+  4. edge-node/core/types and edge-node/core/storage are leaves; edge-node/core/supervision depends only on
+     edge-node/core/types; edge-node/core/engine depends only on edge-node/core/types + edge-node/core/supervision; no
+     edge-node/core/* crate depends on adapters or binaries
   5. a NEW workspace crate must be classified here deliberately (unclassified = error)
-  6. iotkit-ingest-client's workspace deps are exactly core/collector + the contract
-  7. the frozen core/supervision vocabulary's non-dev dependent set is pinned
+  6. iotkit-ingest-client's workspace deps are exactly edge-node/core/collector + the contract
+  7. the frozen edge-node/core/supervision vocabulary's non-dev dependent set is pinned
   8. ingress cannot depend on the Edge/control-plane binary crate
 
-Deliberate exception (do not "fix"): core/registry -> core/collector is dependency
+Deliberate exception (do not "fix"): edge-node/core/registry -> edge-node/core/collector is dependency
 inversion — the collector owns the RegistryPolicy trait, the registry implements it.
 
 Normal AND build dependencies are checked (a build.rs can use the target crate at

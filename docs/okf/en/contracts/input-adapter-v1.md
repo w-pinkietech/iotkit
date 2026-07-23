@@ -5,7 +5,7 @@ description: "Defines the complete Input Adapter identity, authority, host API, 
 language: en
 translation_key: contracts.input-adapter-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit northbound Input Adapter host contract v1
@@ -180,7 +180,7 @@ Shutdown only requests idempotent graceful stop; Edge Node owns the completion
 future and bounded timeout. A start error MUST leave no live task, thread, or
 open transport.
 
-The host API MUST NOT depend on `core/supervision`, expose
+The host API MUST NOT depend on `edge-node/core/supervision`, expose
 `AdapterEvent`/`AdapterCommand`, create principals, access storage, authorize
 configuration, define restart policy, or assert health.
 
@@ -345,7 +345,7 @@ health JSON; systemd process restart resets it.
 
 `scripts/check-layers` checks transitive Cargo reachability for every input
 adapter. After this slice only `bravepi-mainboard-adapter`, for its separate
-legacy care path, may reach `core/supervision`. New adapters may not reach it
+legacy care path, may reach `edge-node/core/supervision`. New adapters may not reach it
 directly or through a runtime crate.
 
 `iotkit-polling-adapter-runtime` is migrated to a supervision-free polling

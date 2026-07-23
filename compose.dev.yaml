@@ -10,7 +10,7 @@ services:
 
   edge:
     build:
-      context: ./iotkit-edge
+      context: ./edge
     restart: on-failure
     user: ${IOTKIT_DEV_UID:-1000}:${IOTKIT_DEV_GID:-1000}
     depends_on:

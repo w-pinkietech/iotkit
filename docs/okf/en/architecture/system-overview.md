@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 2
+revision: 3
 ---
 
 # Architecture
@@ -30,8 +30,8 @@ makes life worse for one of them, that is a review finding, not a taste issue.
 |---|---|---|
 | **IoTKit Edge installers & operators** | The install story, `iotkit-edge-nodectl`, the API/UI, error messages | They can tell *what to install on which device and how to assemble a deployment* from one page. Errors name the thing to check next. Defaults are safe; nothing silently loses data; a Pi is fast enough. |
 | **Self-made-device builders** (ESP32 hobbyists, plant engineers — often not Rust readers) | The ingest **wire contract only** | Onboarding stays a curl-3-lines experience. Contract docs never require reading Rust. Rejections come back with a reason code they can act on. |
-| **Adapter developers** (Rust) | `core/types`, `iotkit-input-adapter-host-api`, `iotkit-input-adapter-testkit`, `iotkit-polling-adapter-runtime`, an existing adapter as template | The adapter boundary is obvious; a new sensor family means a new adapter crate, not core surgery. No knowledge of storage/ledger internals needed. |
-| **Core contributors** (Rust) | `core/*`, IoTKit Edge Node, tests | The crate map fits in one screen. Layer rules are machine-checked, not tribal. Each crate has one responsibility; tests read as the executable spec. |
+| **Adapter developers** (Rust) | `edge-node/core/types`, `iotkit-input-adapter-host-api`, `iotkit-input-adapter-testkit`, `iotkit-polling-adapter-runtime`, an existing adapter as template | The adapter boundary is obvious; a new sensor family means a new adapter crate, not core surgery. No knowledge of storage/ledger internals needed. |
+| **Core contributors** (Rust) | `edge-node/core/*`, IoTKit Edge Node, tests | The crate map fits in one screen. Layer rules are machine-checked, not tribal. Each crate has one responsibility; tests read as the executable spec. |
 | **Raw custody implementers** | The **Edge Node custody contract** | Record families, ack rules, and cursor semantics are documented and versioned; no schema surprises. |
 | **Application integrators** (Pinikiet, dashboards, analytics) | The **Output Adapter contract** | They receive application-facing topics and payloads without depending on the raw custody stream. |
 
@@ -199,9 +199,9 @@ In-process adapters and the HTTP binding both hand the collector a
 receiver-created principal; sender-controlled `Envelope.source` never grants
 authority. MQTT and pairing-window bindings remain future work. `AdapterEvent`/`AdapterCommand` are a
 *frozen* legacy vocabulary, **not** the ingest path: `AdapterEvent` carries
-adapter-lifecycle supervision into `core/engine`'s device-state projection,
+adapter-lifecycle supervision into `edge-node/core/engine`'s device-state projection,
 and `AdapterCommand` carries shutdown plus legacy southbound commands into
-the adapter runtimes. Both are defined in `core/supervision`. The freeze is
+the adapter runtimes. Both are defined in `edge-node/core/supervision`. The freeze is
 machine-enforced for **new crate dependents**: `scripts/check-layers` rule 7
 pins the complete dependent set. Reviews still police usage growth inside the
 existing dependent crates (D4/D12 decision 8).
@@ -256,10 +256,10 @@ direct SQLite access or pretending that a physical sensor produced a measurement
 Since plan 5 IoTKit Edge Node also runs an **HTTPS API server** (axum + rustls,
 self-signed certificate whose SHA-256 fingerprint is surfaced for pinning;
 private-address clients only). State changes ride the **R14 typed operation
-catalog** (`core/ops`): each operation is a descriptor with a permission tier
+catalog** (`edge-node/core/ops`): each operation is a descriptor with a permission tier
 (`Routine` / `Daily` / `Construction`), dry-run support, and unconditional
 audit into `ledger_events`. Today the API's mutation routes go through catalog
-dispatch. The plan-5 CLI commands reuse the same `core/ops` functions —
+dispatch. The plan-5 CLI commands reuse the same `edge-node/core/ops` functions —
 `token issue|revoke` call exactly what the catalog descriptors call, and
 `passphrase reset` is a deliberate out-of-band recovery path — each audited
 as `local_cli`. Migrating the older CLI mutation paths (targets, snapshots,
@@ -307,126 +307,137 @@ below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
 |---|---|---|
-| `iotkit-core-types` | `core/types` | Domain entity types (no protocol specifics). Leaf. |
-| `iotkit-ingest-contract` | `iotkit-ingest-contract` | Ingest wire contract v1: `Envelope`/`Ack`/reason codes. The wire is normative; runtime deps = serde only (serde_json appears only in dev-dependencies). Leaf. |
-| `iotkit-core-storage` | `core/storage` | SQLite handle (`DbHandle`) + cross-crate migration harness. Leaf. |
-| `iotkit-core-supervision` | `core/supervision` | Frozen supervision / legacy-southbound `AdapterEvent`/`AdapterCommand` vocabulary (D4/D12). Depends only on `types`; its dependent set is pinned by rule 7. |
-| `iotkit-core-engine` | `core/engine` | In-memory device-state projection consuming the frozen `AdapterEvent` vocabulary from `core/supervision`. Depends only on `types` and `supervision`; adapters must never depend on it. |
-| `iotkit-core-ledger` | `core/ledger` | Device ledger: `system_id` issuance, series identity, sightings, epochs, audit events. |
-| `iotkit-core-timeseries` | `core/timeseries` | `readings` + staged readings persistence, event-time derivation, queries. |
-| `iotkit-core-publish` | `core/publish` | Exit-contract data layer: Edge Node activation admission, `publication_log` (outbox), `target_registry`, cursors. |
-| `iotkit-core-collector` | `core/collector` | Ingest actor: dedup, series resolution, quarantine and activation admission, active-record same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
-| `iotkit-core-registry` | `core/registry` | D6 measurement registry (standard catalog + deployment overrides); implements `RegistryPolicy`. |
-| `iotkit-core-ops` | `core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
-| `iotkit-ingest-client` | `iotkit-ingest-client` | The ingest-contract client adapters use (D4). In-process binding for official adapters; network device builders use the separate HTTP binding. MQTT remains future. |
-| `iotkit-input-adapter-host-api` | `iotkit-input-adapter-host-api` | Supervision-free official adapter composition API: validated identities, source-bound ingest, delivery receipts/retry, bounded diagnostics/activity, completion, and shutdown. |
-| `iotkit-input-adapter-testkit` | `iotkit-input-adapter-testkit` | Dev-only conformance assertions and a non-catalog two-subject/two-measurement reference adapter. |
-| `iotkit-ingest-http` | `iotkit-ingest-http` | **INGRESS.** Listener parsing, exposure/TLS validation, accepted-peer checks, and transport construction; never control-API routes or measurement domain logic. |
-| `iotkit-polling-adapter-runtime` | `iotkit-polling-adapter-runtime` | Supervision-, ingest-, mapping-free I2C polling engine; emits decoded observations and lifecycle facts. The current name is retained for compatibility but its public SPI is I2C-specific. |
-| `rpi4b-transport` | `rpi4b-transport` | Raw host I/O. I2C exposes an injectable device/factory boundary and combined write-read; GPIO/SPI/PWM use Raspberry Pi `rppal`. The historical crate name does not limit support to Pi 4B. |
-| `iotkit-sensor-drivers` | `iotkit-sensor-drivers` | Vendor-neutral per-sensor-IC constants, identity metadata, and datasheet conversion components shared by adapters; not a complete transport-owning driver. |
-| `bravepi-codec` | `bravepi-mainboard-adapter/codec` | BravePI frame encoding/decoding. |
-| `bravepi-mainboard-adapter` | `bravepi-mainboard-adapter` | BravePI-protocol adapter: transport + codec + sensor drivers → Envelopes. |
-| `rpi-local-adapter` | `rpi-local-adapter` | Direct Linux I2C adapter under its accepted `rpi-local` compatibility name; owns the typed supported-device catalog, driver construction, measurement projection, and inventory metadata. |
-| `bravepi-poc` | `bravepi-mainboard-adapter/poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
-| `iotkit-edge-node` | `iotkit-edge-node` | **Binary.** IoTKit Edge Node composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
-| `iotkit-edge-nodectl` | `iotkit-edge-nodectl` | **Binary.** Edge Node operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
+| `iotkit-core-types` | `edge-node/core/types` | Domain entity types (no protocol specifics). Leaf. |
+| `iotkit-ingest-contract` | `edge-node/ingest/contract` | Ingest wire contract v1: `Envelope`/`Ack`/reason codes. The wire is normative; runtime deps = serde only (serde_json appears only in dev-dependencies). Leaf. |
+| `iotkit-core-storage` | `edge-node/core/storage` | SQLite handle (`DbHandle`) + cross-crate migration harness. Leaf. |
+| `iotkit-core-supervision` | `edge-node/core/supervision` | Frozen supervision / legacy-southbound `AdapterEvent`/`AdapterCommand` vocabulary (D4/D12). Depends only on `types`; its dependent set is pinned by rule 7. |
+| `iotkit-core-engine` | `edge-node/core/engine` | In-memory device-state projection consuming the frozen `AdapterEvent` vocabulary from `edge-node/core/supervision`. Depends only on `types` and `supervision`; adapters must never depend on it. |
+| `iotkit-core-ledger` | `edge-node/core/ledger` | Device ledger: `system_id` issuance, series identity, sightings, epochs, audit events. |
+| `iotkit-core-timeseries` | `edge-node/core/timeseries` | `readings` + staged readings persistence, event-time derivation, queries. |
+| `iotkit-core-publish` | `edge-node/core/publish` | Exit-contract data layer: Edge Node activation admission, `publication_log` (outbox), `target_registry`, cursors. |
+| `iotkit-core-collector` | `edge-node/core/collector` | Ingest actor: dedup, series resolution, quarantine and activation admission, active-record same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
+| `iotkit-core-registry` | `edge-node/core/registry` | D6 measurement registry (standard catalog + deployment overrides); implements `RegistryPolicy`. |
+| `iotkit-core-ops` | `edge-node/core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
+| `iotkit-ingest-client` | `edge-node/ingest/client` | The ingest-contract client adapters use (D4). In-process binding for official adapters; network device builders use the separate HTTP binding. MQTT remains future. |
+| `iotkit-input-adapter-host-api` | `edge-node/input/host-api` | Supervision-free official adapter composition API: validated identities, source-bound ingest, delivery receipts/retry, bounded diagnostics/activity, completion, and shutdown. |
+| `iotkit-input-adapter-testkit` | `edge-node/input/testkit` | Dev-only conformance assertions and a non-catalog two-subject/two-measurement reference adapter. |
+| `iotkit-ingest-http` | `edge-node/ingest/http` | **INGRESS.** Listener parsing, exposure/TLS validation, accepted-peer checks, and transport construction; never control-API routes or measurement domain logic. |
+| `iotkit-polling-adapter-runtime` | `edge-node/input/runtimes/polling` | Supervision-, ingest-, mapping-free I2C polling engine; emits decoded observations and lifecycle facts. The current name is retained for compatibility but its public SPI is I2C-specific. |
+| `rpi4b-transport` | `edge-node/input/hardware/transports/rpi` | Raw host I/O. I2C exposes an injectable device/factory boundary and combined write-read; GPIO/SPI/PWM use Raspberry Pi `rppal`. The historical crate name does not limit support to Pi 4B. |
+| `iotkit-sensor-drivers` | `edge-node/input/hardware/sensor-drivers` | Vendor-neutral per-sensor-IC constants, identity metadata, and datasheet conversion components shared by adapters; not a complete transport-owning driver. |
+| `bravepi-codec` | `edge-node/adapters/bravepi-mainboard/codec` | BravePI frame encoding/decoding. |
+| `bravepi-mainboard-adapter` | `edge-node/adapters/bravepi-mainboard` | BravePI-protocol adapter: transport + codec + sensor drivers → Envelopes. |
+| `rpi-local-adapter` | `edge-node/adapters/rpi-local` | Direct Linux I2C adapter under its accepted `rpi-local` compatibility name; owns the typed supported-device catalog, driver construction, measurement projection, and inventory metadata. |
+| `bravepi-poc` | `edge-node/tools/bravepi-poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
+| `iotkit-edge-node` | `edge-node/apps/node` | **Binary.** IoTKit Edge Node composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
+| `iotkit-edge-nodectl` | `edge-node/apps/nodectl` | **Binary.** Edge Node operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `edge-node/core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
 
 Approved next-slice non-Rust placement:
 
 | Component | Path | Responsibility (one line) |
 |---|---|---|
-| IoTKit Edge | `iotkit-edge/` | MQTT consumer, durable raw acceptance, Edge Node cursor manager, accepted-through publisher, query, future-only semantic projection, and durable MQTT application export. |
-| IoTKit Console browser source | `iotkit-edge/frontend/src/` | TypeScript browser behavior for the server-rendered Console; it does not own authorization, persistence, or domain state transitions. |
-| IoTKit Console API schema | `iotkit-edge/openapi/edge-console-v1.yaml` | Browser-facing JSON contract used to generate TypeScript request and response types. HTML form endpoints are not duplicated here. |
+| IoTKit Edge | `edge/` | MQTT consumer, durable raw acceptance, Edge Node cursor manager, accepted-through publisher, query, future-only semantic projection, and durable MQTT application export. |
+| IoTKit Console browser source | `edge/frontend/src/` | TypeScript browser behavior for the server-rendered Console; it does not own authorization, persistence, or domain state transitions. |
+| IoTKit Console API schema | `edge/openapi/edge-console-v1.yaml` | Browser-facing JSON contract used to generate TypeScript request and response types. HTML form endpoints are not duplicated here. |
 | Cross-language fixtures | `testdata/egress/v1/`, `testdata/egress/v2/` | Normative JSON examples decoded by both Rust and Go tests. Descriptor uses only `v2`; the other current egress messages remain in `v1`. |
 
 ### Layer rules (machine-checked)
 
-1. **Adapters never depend on `core/engine`** — projection machinery is the
+1. **Adapters never depend on `edge-node/core/engine`** — projection machinery is the
    Edge Node composition root's business (D4). Note: the frozen `AdapterEvent`/`AdapterCommand`
-   vocabulary lives in `core/supervision`; rule 7 prevents new dependents,
+   vocabulary lives in `edge-node/core/supervision`; rule 7 prevents new dependents,
    while reviews police usage growth inside existing dependents.
 2. **Adapters reach the data plane only through `iotkit-ingest-client`** —
    never directly on storage/ledger/timeseries/publish/collector/registry/ops.
 3. **`iotkit-ingest-contract`'s runtime deps are serde and nothing else** —
    third-party conformance tests must be able to depend on it alone.
-4. **`core/types` and `core/storage` are leaves**, `core/supervision` depends
-   only on `core/types`, `core/engine` depends only on `core/types` and
-   `core/supervision`, and nothing in `core/*` depends on adapters or binaries
+4. **`edge-node/core/types` and `edge-node/core/storage` are leaves**, `edge-node/core/supervision` depends
+   only on `edge-node/core/types`, `edge-node/core/engine` depends only on `edge-node/core/types` and
+   `edge-node/core/supervision`, and nothing in `edge-node/core/*` depends on adapters or binaries
    (no upward edges).
 5. **A new workspace crate must be classified deliberately** in
    `scripts/check-layers` (and placed on this map) — an unclassified crate
    fails CI.
 6. **`iotkit-ingest-client`'s workspace dependencies are exactly
-   `core/collector` + the contract** — never adapters, binaries, or
-   `core/engine`.
-7. **The non-dev dependent set of `core/supervision` is pinned exactly** — the
+   `edge-node/core/collector` + the contract** — never adapters, binaries, or
+   `edge-node/core/engine`.
+7. **The non-dev dependent set of `edge-node/core/supervision` is pinned exactly** — the
    frozen supervision vocabulary gains no new dependents without a corpus
    decision (D4/D12 decision 8). Dev-dependencies remain exempt.
 8. **`INGRESS` is separate from the control API** — `iotkit-ingest-http` must not
    depend on `iotkit-edge-node`; its internal allowlist is the ingest contract,
-   collector boundary, storage/auth services (`core/ops`), and no other workspace
+   collector boundary, storage/auth services (`edge-node/core/ops`), and no other workspace
    crate. IoTKit Edge Node composes it, never the reverse.
 9. **IoTKit Edge consumes the wire contract, not Edge Node internals** — IoTKit Edge shares JSON
    fixtures and schema semantics only. It never imports Edge Node packages or opens the Edge Node DB.
 10. **Input-adapter supervision reachability is checked transitively** —
-   RPi-local and the polling runtime must not reach `core/supervision` through
+   RPi-local and the polling runtime must not reach `edge-node/core/supervision` through
    helper crates. Only BravePI may reach it for its frozen, separate care path.
 
 Rule numbers match the `scripts/check-layers` error messages. Edge Node binaries may compose their
 allowed layers — with one exception: rule 7 pins the
-`core/supervision` dependent set, so even a binary (today: `iotkit-edge-nodectl`)
+`edge-node/core/supervision` dependent set, so even a binary (today: `iotkit-edge-nodectl`)
 cannot pick up the frozen vocabulary without a deliberate rule-7 + canon update.
 Dev-dependencies are exempt (tests may cross layers); build-dependencies are
 checked.
 
 ### Deliberate exceptions (do not "fix" these)
 
-- **`core/registry` → `core/collector`** looks inverted but is by design:
+- **`edge-node/core/registry` → `edge-node/core/collector`** looks inverted but is by design:
   the *collector* owns the `RegistryPolicy` trait (the port), and the registry
   implements it. Dependency inversion, not layering drift.
 - **`iotkit-ingest-client` reaches the ingest data plane.** Its one normal core
-  dependency is `core/collector` (behind the default `inproc` feature), which
+  dependency is `edge-node/core/collector` (behind the default `inproc` feature), which
   *transitively* pulls ledger, publish, storage, and timeseries — that is the
   in-proc binding (D4): official adapters get durable ingest behind the
-  contract without carrying an HTTP stack. (Its other `core/*` entries are
+  contract without carrying an HTTP stack. (Its other `edge-node/core/*` entries are
   dev-dependencies for tests.)
-- **BravePI-owned subcrates remain colocated intentionally:** `bravepi-codec`
-  and `bravepi-poc` stay nested under `bravepi-mainboard-adapter/`.
+- **BravePI-owned code remains grouped intentionally:** `bravepi-codec` stays
+  nested under `edge-node/adapters/bravepi-mainboard/`; the hardware-only PoC
+  lives under `edge-node/tools/bravepi-poc/` so it is not confused with shipped
+  adapter code.
 - **Some custody-critical SQL lives in IoTKit Edge Node, deliberately.** The
-  retention purge (`iotkit-edge-node/src/retention.rs`) and exit-record
-  materialization (`src/record.rs`) join tables owned by *different* `core/*`
+  retention purge (`edge-node/apps/node/src/retention.rs`) and exit-record
+  materialization (`src/record.rs`) join tables owned by *different* `edge-node/core/*`
   crates, so no single core crate could own them today. Graduation triggers: a
-  `core/retention` crate when retention gains its next feature (active
-  back-pressure); `record.rs` → `core/publish` when the D9 MQTT exit binding
+  `edge-node/core/retention` crate when retention gains its next feature (active
+  back-pressure); `record.rs` → `edge-node/core/publish` when the D9 MQTT exit binding
   needs shared materialization (update `docs/exit-contract.md`'s
   implementation pointers at the same time). Separately, the epoch-start read
-  (`src/epoch_start.rs`) touches only a `core/ledger`-owned table — a
-  temporary raw read queued to become `core/ledger::last_epoch_renewal()`
+  (`src/epoch_start.rs`) touches only a `edge-node/core/ledger`-owned table — a
+  temporary raw read queued to become `edge-node/core/ledger::last_epoch_renewal()`
   (deferred ledger D-11), not a cross-crate join.
-- **`core/ledger` is a deliberate single-crate aggregate** (devices, series,
+- **`edge-node/core/ledger` is a deliberate single-crate aggregate** (devices, series,
   sightings, audit events, epochs share identity rules and transactions).
   Splitting its `store.rs` into modules is fine; splitting it into crates is
   rejected — it would break transaction ownership.
 
 ## Placement rules — "where does new code go?"
 
+Choose the integration boundary before choosing a crate:
+
+1. If a device already emits the versioned Envelope/Ack contract, connect it to
+   `edge-node/ingest/http`; no Rust Input Adapter is needed.
+2. If a new sensor IC fits the existing direct-I2C transport, polling lifecycle,
+   identity, and configuration model, extend `edge-node/adapters/rpi-local`.
+3. If discovery, wire protocol, security, lifecycle, or identity differs, create
+   a sibling family under `edge-node/adapters/` and implement the host contract.
+
 | You are adding… | It goes in… |
 |---|---|
-| Datasheet conversion reusable across acquisition paths | `iotkit-sensor-drivers` |
-| A new IC using the same I2C transport, polling lifecycle, positional identity recipe, and config shape | The typed supported-device catalog in `rpi-local-adapter`; deployment config selects catalog models and settings, while Edge Node treats those fields opaquely and must not learn the IC model. |
-| A device family with different discovery, wire protocol, security, lifecycle, identity recipe, or southbound model | A **new top-level `*-adapter` crate**. Never inside `core/*` or IoTKit Edge Node. |
-| A change to the ingest wire (envelope fields, ack semantics, reason codes) | `iotkit-ingest-contract` **only**, with its conformance tests; consumers adapt. The wire is the contract — the Rust types follow it, not vice versa. |
-| A new Edge Node operator / AI / UI operation that changes state | A descriptor in `core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |
+| Datasheet conversion reusable across acquisition paths | `edge-node/input/hardware/sensor-drivers` |
+| A new IC using the same I2C transport, polling lifecycle, positional identity recipe, and config shape | The typed supported-device catalog in `edge-node/adapters/rpi-local`; deployment config selects catalog models and settings, while Edge Node treats those fields opaquely and must not learn the IC model. |
+| A device family with different discovery, wire protocol, security, lifecycle, identity recipe, or southbound model | A new sibling crate under `edge-node/adapters/`. Never inside `edge-node/core/` or an app composition root. |
+| A change to the ingest wire (envelope fields, ack semantics, reason codes) | `edge-node/ingest/contract` **only**, with its conformance tests; consumers adapt. The wire is the contract — the Rust types follow it, not vice versa. |
+| A new Edge Node operator / AI / UI operation that changes state | A descriptor in `edge-node/core/ops` `standard_catalog()` + R14 dispatch. Never a new SQL mutation path, never a bespoke API handler with its own writes. |
 | A new IoTKit Edge operator / UI operation that changes state | A typed operation in the IoTKit Edge application-service dispatcher, the IoTKit Edge implementation of R14. HTTP, HTML, and CLI remain thin adapters and never write SQL directly. |
-| A new table / column | A migration in the **owning** `core/*` crate's version slice (the binaries concatenate the slices; the `core/storage` harness applies them by set difference). |
-| A new control-plane HTTP API route | `iotkit-edge-node/src/api/` as a thin layer; the logic lives in the owning `core/*` crate. |
+| A new table / column | A migration in the **owning** `edge-node/core/*` crate's version slice (the binaries concatenate the slices; the `edge-node/core/storage` harness applies them by set difference). |
+| A new control-plane HTTP API route | `edge-node/apps/node/src/api/` as a thin layer; the logic lives in the owning `edge-node/core/*` crate. |
 | An authenticated measurement-ingress HTTP binding | `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
-| A new CLI command | `iotkit-edge-nodectl`, calling `core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
-| IoTKit Edge acceptance, query, sensor semantic mapping, or application-export behavior | `iotkit-edge/`; communicate through versioned MQTT contracts and shared fixtures, never Edge Node internals. Business masters, production records, OEE, and alarms stay in applications. |
+| A new CLI command | `iotkit-edge-nodectl`, calling `edge-node/core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
+| IoTKit Edge acceptance, query, sensor semantic mapping, or application-export behavior | `edge/`; communicate through versioned MQTT contracts and shared fixtures, never Edge Node internals. Business masters, production records, OEE, and alarms stay in applications. |
 | Raw bus/pin access | `rpi4b-transport`. |
-| An Edge Node module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `core/<name>` crate.** IoTKit Edge Node is a composition root, not a home for domain logic. |
+| An Edge Node module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `edge-node/core/<name>` crate.** IoTKit Edge Node is a composition root, not a home for domain logic. |
 
 ## Key data structures
 
@@ -454,7 +465,7 @@ Getting these right is most of the design (see D5, D7).
 
 ## Concurrency model
 
-- **One `Arc<Mutex<Connection>>`** for the whole process (`core/storage/DbHandle`).
+- **One `Arc<Mutex<Connection>>`** for the whole process (`edge-node/core/storage/DbHandle`).
   Every subsystem (collector, push, retention, health, API) serializes through it
   via `spawn_blocking`. SQLite has exactly one writer anyway, so a connection pool
   would be over-engineering. WAL + `synchronous=FULL` (D8 amendment:
@@ -473,9 +484,9 @@ Getting these right is most of the design (see D5, D7).
 
 ## Migrations & compatibility
 
-`core/storage/migrate.rs` applies migrations by **set difference** of applied
+`edge-node/core/storage/migrate.rs` applies migrations by **set difference** of applied
 versions (not a `MAX(version)` watermark), because the version-number space is
-split across crates (each `core/*` owns a slice; the binaries concatenate and
+split across crates (each `edge-node/core/*` owns a slice; the binaries concatenate and
 sort them). It refuses to run an older binary against a newer on-disk schema
 (`SchemaVersionAhead`). This is the "don't corrupt the user's data on a
 downgrade" discipline.

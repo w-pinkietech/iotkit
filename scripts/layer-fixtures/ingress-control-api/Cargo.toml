@@ -9,4 +9,4 @@ publish = false
 # Negative fixture only: this forbidden dependency represents putting ingress behind the control
 # API. scripts/check-layers rule 8 must reject the same edge in a workspace package.
 [dependencies]
-iotkit-edge-node = { path = "../../../iotkit-edge-node" }
+iotkit-edge-node = { path = "../../../edge-node/apps/node" }

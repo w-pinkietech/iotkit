@@ -26,7 +26,7 @@ services:
 
   edge:
     build:
-      context: ../iotkit-edge
+      context: ../edge
       target: runtime
     restart: unless-stopped
     user: "${IOTKIT_RUNTIME_UID:?}:${IOTKIT_RUNTIME_GID:?}"

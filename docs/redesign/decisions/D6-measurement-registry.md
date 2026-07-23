@@ -206,7 +206,7 @@ BravePI/BraveJIGはプラットフォームの最初の乗客(Wave 0テストケ
 - **キュー5(南向き契約)へ**: 能力宣言のmeasurement_key×channel構成の形式定義
 - **設計スペックへ**: カタログデータファイルの具体フォーマット(TOML/JSON)、record型の
   vibration_spectrumフィールド定義(レガシー11フィールドの写像)、ドリフトレポートのスキーマ
-  ※カタログ形式はWave 0実装(計画2)でTOML採用済み(`core/registry/catalog/standard-v1.toml`)
+  ※カタログ形式はWave 0実装(計画2)でTOML採用済み(`edge-node/core/registry/catalog/standard-v1.toml`)
 
 ## 監査追記(2026-07-03 実装還流: Wave 0計画2の二重レビューで露呈した未規定の明文化)
 

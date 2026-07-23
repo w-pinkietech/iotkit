@@ -133,7 +133,7 @@ db_query() {
 }
 
 (
-  cd "$repo_root/iotkit-edge"
+  cd "$repo_root/edge"
   env \
     GOCACHE="${GOCACHE:-/tmp/iotkit-go-build}" \
     IOTKIT_TEST_OUTPUT_BROKER_URL="$broker_url" \

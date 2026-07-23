@@ -34,7 +34,7 @@ compatible `rust=true|false` and `edge=true|false` values.
 - Documentation and repository-guidance paths select neither heavy job.
 - Rust workspace source, manifests, lockfile, toolchain, adapters, Edge Node, and
   Rust verification infrastructure select `rust`.
-- `iotkit-edge/`, its deployment assets, and Console/Go verification
+- `edge/`, its deployment assets, and Console/Go verification
   infrastructure select `edge`.
 - Shared fixtures or scripts that exercise both sides select both.
 - Workflow files, the classifier itself, and unknown paths select both. This is

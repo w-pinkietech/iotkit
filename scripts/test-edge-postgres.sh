@@ -37,5 +37,5 @@ export GOCACHE="${GOCACHE:-$repo_root/../.cache/iotkit-edge-go-cache}"
 export TMPDIR="${TMPDIR:-$repo_root/../.tmp/runtime}"
 mkdir -p "$GOTMPDIR" "$GOCACHE" "$TMPDIR"
 
-cd "$repo_root/iotkit-edge"
+cd "$repo_root/edge"
 go test ./internal/store -run "$test_pattern" -count=1

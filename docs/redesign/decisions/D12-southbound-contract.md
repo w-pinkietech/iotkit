@@ -219,7 +219,7 @@ command_id/job_id/desired_revision、能力宣言版、dry-run結果、実行結
   (コマンド受領・desired同期・ジョブ実行報告)。D4の仮称「コマンドサービサ」はコマンド以外
   (desired同期・ジョブ)も受けるため不採用。
 - **南向き語彙は新契約クレート**(`iotkit-southbound-contract` 仮名。依存はserdeのみ——
-  `iotkit-ingest-contract` と同格)。core/typesには足さない(D4継続: 3語彙の再一体化を防ぐ)。
+  `iotkit-ingest-contract` と同格)。edge-node/core/typesには足さない(D4継続: 3語彙の再一体化を防ぐ)。
   `iotkit-ingest-client` に南を混ぜない(北向き専用の名のまま=D4)。
 - **アダプタランタイム=北南両チャネルの合成点**(D4既定の確認)。南向きディスパッチと北南調停
   (DFU中のポーリング停止)はランタイムの責務。
@@ -229,8 +229,8 @@ command_id/job_id/desired_revision、能力宣言版、dry-run結果、実行結
   ブリッジが残る間に旧語彙への依存を増やせば再一体化が再発するため。
   [監査追記 2026-07-10: ブリッジは Wave 0 計画3で削除済みのため上記の終点は失効している。
   凍結の終点は「世話サービサ移行が旧南向き経路(AdapterCommand 経由)を削除するまで」と読み替える。
-  なお宿題のうちリネーム(iotkit-sensor-drivers 化・rpi4b 平坦化)と core/types 分割は実施済み——
-  旧語彙は専用 crate `core/supervision` に隔離され、新規 crate の依存は check-layers rule 7 が
+  なお宿題のうちリネーム(iotkit-sensor-drivers 化・rpi4b 平坦化)と edge-node/core/types 分割は実施済み——
+  旧語彙は専用 crate `edge-node/core/supervision` に隔離され、新規 crate の依存は check-layers rule 7 が
   CI で拒否する(iotkit-next 96c34d5〜fa45967)。event_loop 分割は「世話サービサ移行時に旧経路ごと
   削除」のため見送り(監査裁定)]
 

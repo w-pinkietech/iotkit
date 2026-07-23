@@ -1,0 +1,26 @@
+[package]
+name = "iotkit-ingest-client"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["inproc"]
+inproc = ["dep:iotkit-core-collector", "dep:tokio"]
+test-util = ["inproc"]
+
+[dependencies]
+iotkit-ingest-contract = { path = "../contract" }
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+iotkit-core-collector = { path = "../../core/collector", optional = true }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"], optional = true }
+
+[dev-dependencies]
+iotkit-core-storage = { path = "../../core/storage", features = ["test-util"] }
+iotkit-core-ledger = { path = "../../core/ledger" }
+iotkit-core-timeseries = { path = "../../core/timeseries" }
+iotkit-core-registry = { path = "../../core/registry" }
+iotkit-core-publish = { path = "../../core/publish" }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time", "rt-multi-thread"] }

@@ -124,7 +124,7 @@ mTLS不採用・CA基盤を作らない」。
 - **0025 first-wave implementation stack**: 3点が古い。
   (1) `sqlx`指定 → 実コードはrusqlite(D1のDbHandle記述もrusqlite前提)。rusqlite継続を明記、
   (2) コンポーネント分割(gateway-runtime/api/migrator)が実workspaceにもD4クレート計画
-  (iotkit-ingest-contract/client新設、core/ledger)にも不一致 → 実際のクレートマップ参照に書き直し
+  (edge-node/ingest/contract/client新設、edge-node/core/ledger)にも不一致 → 実際のクレートマップ参照に書き直し
   (host-agent/gatewayctl/migratorは「未実装の将来クレート」と明示)、
   (3) 「rustls for TLS and mTLS」→ mTLS削除
 - **0039 sqlite single-writer batching profile**: (1) 耐久設定の明記が欠落 → 追加。ただし D8波及修正4

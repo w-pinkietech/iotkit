@@ -1,0 +1,14 @@
+[package]
+name = "iotkit-polling-adapter-runtime"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iotkit-core-types = { path = "../../../core/types" }
+tokio = { version = "1", features = ["rt", "sync", "macros", "fs", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "sync", "macros", "fs", "rt-multi-thread", "time"] }

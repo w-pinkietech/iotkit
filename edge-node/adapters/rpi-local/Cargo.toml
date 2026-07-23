@@ -1,0 +1,19 @@
+[package]
+name = "rpi-local-adapter"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iotkit-core-types = { path = "../../core/types" }
+iotkit-input-adapter-host-api = { path = "../../input/host-api" }
+iotkit-ingest-contract = { path = "../../ingest/contract" }
+iotkit-polling-adapter-runtime = { path = "../../input/runtimes/polling" }
+rpi4b-transport = { path = "../../input/hardware/transports/rpi" }
+iotkit-sensor-drivers = { path = "../../input/hardware/sensor-drivers" }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
