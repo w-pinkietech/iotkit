@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "edge",
     "edge-node/ingest/contract",
     "edge-node/ingest/client",
     "edge-node/ingest/http",

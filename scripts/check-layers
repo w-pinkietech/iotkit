@@ -43,7 +43,7 @@ INPUT_ADAPTERS = {
     "bravepi-mainboard-adapter", "rpi-local-adapter",
     "iotkit-polling-adapter-runtime",
 }
-BINARIES = {"iotkit-edge-node", "iotkit-edge-nodectl"}
+BINARIES = {"iotkit-edge", "iotkit-edge-node", "iotkit-edge-nodectl"}
 INGRESS = {"iotkit-ingest-http"}
 CONTRACT = "iotkit-ingest-contract"
 CLIENT = "iotkit-ingest-client"

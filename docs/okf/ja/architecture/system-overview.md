@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 3
+revision: 4
 ---
 
 # Architecture
@@ -124,7 +124,8 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/tools/bravepi-poc` (`bravepi-poc`) | BravePI実機PoC用tool。非配布 |
 | `edge-node/apps/node` (`iotkit-edge-node`) | Edge Node composition root binary |
 | `edge-node/apps/nodectl` (`iotkit-edge-nodectl`) | Edge Node operator CLI |
-| `edge/` | Go製IoTKit Edge、raw acceptance、cursor、query、semantic、application export |
+| `edge/` (`iotkit-edge`) | Issue #83でGo版と外部挙動を比較するRust replacement binary/library。完了前はGo production oracleとDBを共有せずdual-writeしない |
+| `edge/cmd/`, `edge/internal/` | Issue #83完了まで残すGo production oracle。raw acceptance、cursor、query、semantic、Console、application exportの比較元 |
 | `edge/frontend/src/` | SSR ConsoleのTypeScript browser behavior |
 | `edge/openapi/edge-console-v1.yaml` | TypeScript生成元のbrowser JSON contract |
 | `testdata/egress/v1/`, `v2/` | Rust/Go両方がdecodeするcross-language fixture |

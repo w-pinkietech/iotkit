@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 3
+revision: 4
 ---
 
 # Architecture
@@ -302,7 +302,7 @@ archive gap remain post-v1 hardening work.
 
 ## Crate map
 
-Twenty-four crates, five layers. `scripts/check-layers` enforces the layer rules
+Twenty-five crates, five layers. `scripts/check-layers` enforces the layer rules
 below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
@@ -331,12 +331,13 @@ below mechanically (in `verify.sh` and CI).
 | `bravepi-poc` | `edge-node/tools/bravepi-poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
 | `iotkit-edge-node` | `edge-node/apps/node` | **Binary.** IoTKit Edge Node composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
 | `iotkit-edge-nodectl` | `edge-node/apps/nodectl` | **Binary.** Edge Node operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `edge-node/core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
+| `iotkit-edge` | `edge/` | **Binary and library replacement candidate.** Rust composition, lifecycle, and parity slices are built beside the Go production oracle until issue #83 completes its release gate. The two implementations never share a production database or dual-write. |
 
 Approved next-slice non-Rust placement:
 
 | Component | Path | Responsibility (one line) |
 |---|---|---|
-| IoTKit Edge | `edge/` | MQTT consumer, durable raw acceptance, Edge Node cursor manager, accepted-through publisher, query, future-only semantic projection, and durable MQTT application export. |
+| IoTKit Edge Go oracle | `edge/cmd/`, `edge/internal/` | Existing MQTT consumer, durable raw acceptance, cursor, query, semantic, Console, and export behavior used only as the black-box oracle while issue #83 replaces it. |
 | IoTKit Console browser source | `edge/frontend/src/` | TypeScript browser behavior for the server-rendered Console; it does not own authorization, persistence, or domain state transitions. |
 | IoTKit Console API schema | `edge/openapi/edge-console-v1.yaml` | Browser-facing JSON contract used to generate TypeScript request and response types. HTML form endpoints are not duplicated here. |
 | Cross-language fixtures | `testdata/egress/v1/`, `testdata/egress/v2/` | Normative JSON examples decoded by both Rust and Go tests. Descriptor uses only `v2`; the other current egress messages remain in `v1`. |
