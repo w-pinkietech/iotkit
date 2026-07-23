@@ -108,7 +108,7 @@ pub enum IngestError {
 impl IngestError {
     #[must_use]
     pub fn is_fatal_runtime(&self) -> bool {
-        matches!(self, Self::Storage(_))
+        matches!(self, Self::Storage(StorageError::Database(_)))
     }
 }
 

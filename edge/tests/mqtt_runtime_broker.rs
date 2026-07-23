@@ -113,6 +113,30 @@ async fn actual_broker_delivers_descriptor_activation_records_and_ack() {
         .expect("publish descriptor");
     wait_for_state(&storage, EdgeNodeState::Discovered).await;
 
+    client
+        .publish(
+            "iotkit/v1/edge-nodes/edge-node-01/records",
+            QoS::AtLeastOnce,
+            false,
+            fixture("testdata/egress/v1/record-batch.json"),
+        )
+        .await
+        .expect("publish pre-activation records");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), ack_receiver.recv())
+            .await
+            .is_err(),
+        "pre-activation records must not receive an application acknowledgement"
+    );
+    assert!(
+        storage
+            .raw_records("edge-node-01", "epoch-01")
+            .await
+            .expect("inspect pre-activation custody")
+            .is_empty(),
+        "pre-activation records must not enter durable custody"
+    );
+
     let command = storage
         .request_activation("edge-node-01", 1_720_000_000_100)
         .await

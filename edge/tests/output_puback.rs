@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, time::Duration};
 
 use iotkit_edge::{
     application::{
@@ -8,7 +8,7 @@ use iotkit_edge::{
     composition::registered_output_adapters,
     mqtt::output::{DeliveryAction, DeliveryTracker, OutputRuntime, OutputRuntimeConfig},
     semantics::{Detector, RuleSpec, SemanticKind, TriggerMode},
-    storage::{AcceptBatch, RawRecord, Storage, StorageProfile},
+    storage::{AcceptBatch, OutputMark, RawRecord, Storage, StorageProfile},
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
 use rumqttc::MqttOptions;
@@ -48,7 +48,7 @@ fn packet_identifier_is_ephemeral_and_never_part_of_the_claim_identity() {
 
 #[tokio::test]
 #[ignore = "requires a real Mosquitto broker; run scripts/test-edge-output.sh"]
-async fn actual_mosquitto_puback_marks_the_durable_rust_outbox() {
+async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
     assert!(
         std::env::var_os("IOTKIT_REQUIRE_RUST_OUTPUT_GATE").is_some(),
         "the real broker gate must explicitly require its environment"
@@ -154,6 +154,29 @@ async fn actual_mosquitto_puback_marks_the_durable_rust_outbox() {
         .await
         .expect("project durable output");
     assert_eq!(storage.pending_output_count().await.unwrap(), 1);
+    let export_id = storage
+        .claim_output("identity-probe", 1_800_000_000_000, 1)
+        .await
+        .expect("inspect durable export")
+        .expect("one durable export")
+        .export_id;
+    assert!(
+        storage
+            .release_output(&export_id, "identity-probe")
+            .await
+            .expect("release identity probe")
+    );
+    let control = PathBuf::from(
+        std::env::var("IOTKIT_TEST_OUTPUT_CONTROL_DIR").expect("output control directory"),
+    );
+    fs::write(control.join("ready"), b"ready\n").expect("write ready marker");
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !control.join("broker-down").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("broker outage marker");
 
     let host =
         std::env::var("IOTKIT_TEST_OUTPUT_BROKER_HOST").unwrap_or_else(|_| "127.0.0.1".into());
@@ -180,6 +203,13 @@ async fn actual_mosquitto_puback_marks_the_durable_rust_outbox() {
         )
         .run(cancellation.clone()),
     );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        storage.pending_output_count().await.unwrap(),
+        1,
+        "broker outage must leave the durable export pending"
+    );
+    fs::write(control.join("pending"), b"pending\n").expect("write pending marker");
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if storage.pending_output_count().await.expect("pending count") == 0 {
@@ -190,6 +220,14 @@ async fn actual_mosquitto_puback_marks_the_durable_rust_outbox() {
     })
     .await
     .expect("PUBACK did not mark the durable export");
+    assert_eq!(
+        storage
+            .mark_output_published(&export_id, "identity-probe", 1_800_000_000_001)
+            .await
+            .expect("inspect published export"),
+        OutputMark::Published,
+        "reconnect must complete the original durable export identity"
+    );
     cancellation.cancel();
     runtime
         .await

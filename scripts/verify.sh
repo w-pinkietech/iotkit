@@ -25,9 +25,6 @@ cargo test --workspace
 echo "== cargo clippy --workspace --all-targets -- -D warnings =="
 cargo clippy --workspace --all-targets -- -D warnings
 
-echo "== go test ./... =="
-(cd edge && go test ./...)
-
 if [[ "$full" == true ]]; then
   echo "== scripts/test-mqtt-security.sh =="
   scripts/test-mqtt-security.sh
@@ -37,6 +34,10 @@ if [[ "$full" == true ]]; then
   scripts/test-broker-cert-pebble.sh
   echo "== scripts/test-edge-mqtt.sh =="
   scripts/test-edge-mqtt.sh
+  echo "== scripts/test-edge-output.sh (embedded) =="
+  scripts/test-edge-output.sh
+  echo "== scripts/test-edge-output.sh (PostgreSQL) =="
+  IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
   echo "== scripts/test-edge-resilience.sh =="
   scripts/test-edge-resilience.sh
   echo "== scripts/test-edge-bootstrap.sh =="

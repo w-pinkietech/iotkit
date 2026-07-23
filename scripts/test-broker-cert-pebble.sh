@@ -2,10 +2,10 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-# lego pulls every DNS-provider dependency while building. Keep that temporary
-# module cache on the repository filesystem rather than a size-limited /tmp.
 scratch=$(mktemp -d "$repo_root/.pebble-test.XXXXXX")
 project="iotkit-pebble-test-$$"
+lego_container="iotkit-lego-bin-$$"
+lego_image="docker.io/goacme/lego:v4.35.2@sha256:ae124a405844759b201b31efbd7a0ba302dbd16e86f2fb177c4b6db8bdc782c8"
 base_port=$((30000 + $$ % 10000))
 octet=$((20 + $$ % 180))
 export IOTKIT_PEBBLE_PORT=$base_port
@@ -17,6 +17,7 @@ export IOTKIT_PEBBLE_IP="10.31.$octet.2"
 export IOTKIT_PEBBLE_CHALL_IP="10.31.$octet.3"
 
 cleanup() {
+  docker rm -f "$lego_container" >/dev/null 2>&1 || true
   docker compose -p "$project" -f "$repo_root/deploy/compose.pebble.yaml" \
     down --volumes --remove-orphans >/dev/null 2>&1 || true
   chmod -R u+w "$scratch" 2>/dev/null || true
@@ -38,10 +39,12 @@ docker compose -p "$project" -f "$repo_root/deploy/compose.pebble.yaml" \
 curl -ksSf "https://127.0.0.1:$IOTKIT_PEBBLE_CA_PORT/roots/0" \
   >"$scratch/pebble-root.pem"
 
-mkdir -p "$scratch/bin" "$scratch/lego" "$scratch/go-build-cache" "$scratch/go-tmp"
-GOBIN="$scratch/bin" GOMODCACHE="${GOMODCACHE:-$scratch/go-mod}" \
-  GOCACHE="$scratch/go-build-cache" GOTMPDIR="$scratch/go-tmp" \
-  go install github.com/go-acme/lego/v4/cmd/lego@v4.35.2
+mkdir -p "$scratch/lego-data"
+docker create --name "$lego_container" "$lego_image" --version >/dev/null
+docker cp "$lego_container:/lego" "$scratch/lego-bin"
+docker rm "$lego_container" >/dev/null
+chmod 700 "$scratch/lego-bin"
+"$scratch/lego-bin" --version | grep -Fq 'version 4.35.2'
 cat >"$scratch/dns-hook.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -69,15 +72,15 @@ export EXEC_PATH="$scratch/dns-hook.sh"
 export EXEC_POLLING_INTERVAL=1
 export EXEC_PROPAGATION_TIMEOUT=30
 export CHALLTESTSRV_URL="http://127.0.0.1:$IOTKIT_PEBBLE_MGMT_PORT"
-"$scratch/bin/lego" --path "$scratch/lego" \
+"$scratch/lego-bin" --path "$scratch/lego-data" \
   --server "https://localhost:$IOTKIT_PEBBLE_PORT/dir" \
   --email test@iotkit.invalid --domains localhost --accept-tos \
   --dns exec --dns.resolvers "127.0.0.1:$IOTKIT_PEBBLE_DNS_PORT" \
   --dns.propagation-wait 1s run
 
-cert="$scratch/lego/certificates/localhost.crt"
-key="$scratch/lego/certificates/localhost.key"
-issuer="$scratch/lego/certificates/localhost.issuer.crt"
+cert="$scratch/lego-data/certificates/localhost.crt"
+key="$scratch/lego-data/certificates/localhost.key"
+issuer="$scratch/lego-data/certificates/localhost.issuer.crt"
 test -s "$cert" -a -s "$key" -a -s "$issuer"
 chmod 600 "$key"
 touch "$scratch/edge.env" "$scratch/compose.yaml" "$scratch/password"
@@ -96,7 +99,7 @@ chmod 600 "$scratch/cert.env"
   | jq -e '.domain == "localhost" and .state == "valid"' >/dev/null
 
 serial_before=$(openssl x509 -in "$cert" -noout -serial)
-"$scratch/bin/lego" --path "$scratch/lego" \
+"$scratch/lego-bin" --path "$scratch/lego-data" \
   --server "https://localhost:$IOTKIT_PEBBLE_PORT/dir" \
   --email test@iotkit.invalid --domains localhost \
   --dns exec --dns.resolvers "127.0.0.1:$IOTKIT_PEBBLE_DNS_PORT" \

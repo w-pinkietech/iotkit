@@ -14,9 +14,7 @@ fi
 mkdir -m 700 -p "$report_dir"
 
 export TMPDIR="${TMPDIR:-$repo_root/../.tmp/runtime}"
-export GOTMPDIR="${GOTMPDIR:-$repo_root/../.tmp/go-build}"
-export GOCACHE="${GOCACHE:-$repo_root/../.cache/iotkit-edge-go-cache}"
-mkdir -p "$TMPDIR" "$GOTMPDIR" "$GOCACHE"
+mkdir -p "$TMPDIR"
 
 echo "== PostgreSQL clean install, HTTPS login, two Edge Nodes, activation, raw custody =="
 IOTKIT_TEST_STORAGE_PROFILE=postgres "$repo_root/scripts/test-edge-bootstrap.sh"

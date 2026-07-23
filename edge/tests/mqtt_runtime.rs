@@ -31,10 +31,18 @@ async fn runtime(config: IngestRuntimeConfig) -> (TempDir, IngestRuntime) {
 #[test]
 fn only_durable_storage_ingest_errors_are_fatal_to_the_runtime() {
     assert!(
-        IngestError::Storage(StorageError::InvalidRecord(
+        IngestError::Storage(StorageError::Database(sqlx::Error::Protocol(
             "injected durable failure".into()
-        ))
+        )))
         .is_fatal_runtime()
+    );
+    assert!(
+        !IngestError::Storage(StorageError::InvalidRecord("invalid input".into()))
+            .is_fatal_runtime()
+    );
+    assert!(
+        !IngestError::Storage(StorageError::EdgeNodeNotActive).is_fatal_runtime(),
+        "pre-activation input rejection is not a persistence outage"
     );
     assert!(!IngestError::Topic("malformed input".into()).is_fatal_runtime());
 }
