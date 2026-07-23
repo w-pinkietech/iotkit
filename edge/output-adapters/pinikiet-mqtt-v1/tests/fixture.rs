@@ -1,5 +1,7 @@
-use iotkit_output_adapter_api::{Observation, ObservationValue};
-use iotkit_output_adapter_pinikiet_mqtt_v1::PinikietMqttAdapter;
+use iotkit_output_adapter_api::{
+    IdentityScope, Observation, ObservationKind, ObservationValue, ProfilePolicy, ProfileRequest,
+};
+use iotkit_output_adapter_pinikiet_mqtt_v1::{PinikietMqttAdapter, PinikietProfilePolicy};
 use iotkit_output_adapter_testkit::{ConformanceCase, assert_adapter_conformance};
 
 #[test]
@@ -33,4 +35,35 @@ fn matches_the_shared_production_fixture() {
         }],
     )
     .unwrap();
+}
+
+#[test]
+fn profile_policy_uses_edge_owned_source_and_signal_scoped_sensor_identity() {
+    let values = serde_json::Map::new();
+    let proposals = PinikietProfilePolicy
+        .propose(&ProfileRequest {
+            edge_id: "edge-0123456789abcdef0123456789abcdef",
+            rule_id: "rule-01",
+            signal_ref: "edge-node-01:series-01",
+            external_id: "sen-0123456789abcdef0123456789abcdef",
+            observation_kind: ObservationKind::CumulativeValue,
+            mode: "production",
+            values: &values,
+        })
+        .expect("propose Pinikiet route");
+    assert_eq!(
+        PinikietProfilePolicy.identity_policy().scope,
+        IdentityScope::Signal
+    );
+    assert!(
+        PinikietProfilePolicy
+            .setup()
+            .fields
+            .iter()
+            .all(|field| field.key != "source_id")
+    );
+    let config: serde_json::Value =
+        serde_json::from_str(proposals[0].config.get()).expect("decode proposed config");
+    assert_eq!(config["source_id"], "edge-0123456789abcdef0123456789abcdef");
+    assert_eq!(config["sensor_id"], "sen-0123456789abcdef0123456789abcdef");
 }

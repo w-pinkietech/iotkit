@@ -1,5 +1,8 @@
-use iotkit_output_adapter_api::{Observation, ObservationValue, OutputAdapter};
-use iotkit_output_adapter_generic_mqtt_json_v1::GenericMqttJsonAdapter;
+use iotkit_output_adapter_api::{
+    IdentityScope, Observation, ObservationKind, ObservationValue, OutputAdapter, ProfilePolicy,
+    ProfileRequest,
+};
+use iotkit_output_adapter_generic_mqtt_json_v1::{GenericMqttJsonAdapter, GenericMqttJsonPolicy};
 use iotkit_output_adapter_testkit::{ConformanceCase, assert_adapter_conformance};
 
 #[test]
@@ -35,4 +38,28 @@ fn matches_the_shared_cumulative_value_fixture() {
         GenericMqttJsonAdapter.descriptor().id,
         "iotkit.mqtt-json.v1"
     );
+}
+
+#[test]
+fn profile_policy_generates_a_stable_common_topic_without_user_topic_input() {
+    let values = serde_json::Map::new();
+    let proposals = GenericMqttJsonPolicy
+        .propose(&ProfileRequest {
+            edge_id: "edge-0123456789abcdef0123456789abcdef",
+            rule_id: "rule-01",
+            signal_ref: "edge-node-01:series-01",
+            external_id: "sig-0123456789abcdef0123456789abcdef",
+            observation_kind: ObservationKind::Numeric,
+            mode: "observation",
+            values: &values,
+        })
+        .expect("propose generic route");
+    assert_eq!(
+        GenericMqttJsonPolicy.identity_policy().scope,
+        IdentityScope::RuleMode
+    );
+    assert!(GenericMqttJsonPolicy.setup().fields.is_empty());
+    assert!(proposals[0].config.get().contains(
+        "iotkit/v1/sources/edge-0123456789abcdef0123456789abcdef/signals/sig-0123456789abcdef0123456789abcdef/observations"
+    ));
 }

@@ -1,9 +1,9 @@
 //! Pinikiet MQTT Output Adapter v1.
 
 use iotkit_output_adapter_api::{
-    AdapterError, Descriptor, MAX_SAFE_INTEGER, Mode, MqttPublication, Observation,
-    ObservationKind, ObservationValue, OutputAdapter, ProfilePolicy, ProfileRequest, ProfileSetup,
-    RouteProposal, SetupField, SetupFieldKind,
+    AdapterError, Descriptor, IdentityPolicy, IdentityScope, MAX_SAFE_INTEGER, Mode,
+    MqttPublication, Observation, ObservationKind, ObservationValue, OutputAdapter, ProfilePolicy,
+    ProfileRequest, ProfileSetup, RouteProposal, SetupField, SetupFieldKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -37,20 +37,12 @@ static DESCRIPTOR: Descriptor = Descriptor {
     modes: MODES,
 };
 static SETUP: ProfileSetup = ProfileSetup {
-    fields: &[
-        SetupField {
-            key: "source_id",
-            display_name: "Pinikiet source ID",
-            kind: SetupFieldKind::Text,
-            required: true,
-        },
-        SetupField {
-            key: "reason",
-            display_name: "Alarm reason",
-            kind: SetupFieldKind::Text,
-            required: false,
-        },
-    ],
+    fields: &[SetupField {
+        key: "reason",
+        display_name: "Alarm reason",
+        kind: SetupFieldKind::Text,
+        required: false,
+    }],
     requires_external_confirmation: true,
 };
 
@@ -175,12 +167,14 @@ impl ProfilePolicy for PinikietProfilePolicy {
         &SETUP
     }
 
+    fn identity_policy(&self) -> IdentityPolicy {
+        IdentityPolicy {
+            scope: IdentityScope::Signal,
+            prefix: "sen-",
+        }
+    }
+
     fn propose(&self, request: &ProfileRequest<'_>) -> Result<Vec<RouteProposal>, AdapterError> {
-        let source_id = request
-            .values
-            .get("source_id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(request.edge_id);
         let reason = request
             .values
             .get("reason")
@@ -188,8 +182,8 @@ impl ProfilePolicy for PinikietProfilePolicy {
             .unwrap_or("");
         let config = serde_json::value::to_raw_value(&serde_json::json!({
             "schema_version": 1,
-            "source_id": source_id,
-            "sensor_id": request.signal_id,
+            "source_id": request.edge_id,
+            "sensor_id": request.external_id,
             "kind": request.mode,
             "reason": reason
         }))

@@ -1,8 +1,8 @@
 //! IoTKit generic MQTT JSON Output Adapter v1.
 
 use iotkit_output_adapter_api::{
-    AdapterError, Descriptor, Mode, MqttPublication, Observation, ObservationKind, OutputAdapter,
-    ProfilePolicy, ProfileRequest, ProfileSetup, RouteProposal, SetupField, SetupFieldKind,
+    AdapterError, Descriptor, IdentityPolicy, IdentityScope, Mode, MqttPublication, Observation,
+    ObservationKind, OutputAdapter, ProfilePolicy, ProfileRequest, ProfileSetup, RouteProposal,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -25,12 +25,7 @@ static DESCRIPTOR: Descriptor = Descriptor {
     modes: MODES,
 };
 static SETUP: ProfileSetup = ProfileSetup {
-    fields: &[SetupField {
-        key: "topic",
-        display_name: "MQTT topic",
-        kind: SetupFieldKind::Text,
-        required: true,
-    }],
+    fields: &[],
     requires_external_confirmation: false,
 };
 
@@ -107,15 +102,21 @@ impl ProfilePolicy for GenericMqttJsonPolicy {
         &SETUP
     }
 
+    fn identity_policy(&self) -> IdentityPolicy {
+        IdentityPolicy {
+            scope: IdentityScope::RuleMode,
+            prefix: "sig-",
+        }
+    }
+
     fn propose(&self, request: &ProfileRequest<'_>) -> Result<Vec<RouteProposal>, AdapterError> {
         if request.mode != "observation" {
             return Err(AdapterError::InvalidConfiguration);
         }
-        let topic = request
-            .values
-            .get("topic")
-            .and_then(serde_json::Value::as_str)
-            .ok_or(AdapterError::InvalidConfiguration)?;
+        let topic = format!(
+            "iotkit/v1/sources/{}/signals/{}/observations",
+            request.edge_id, request.external_id
+        );
         let config = serde_json::value::to_raw_value(&serde_json::json!({
             "schema_version": 1,
             "topic": topic

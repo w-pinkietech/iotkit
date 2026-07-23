@@ -231,10 +231,24 @@ pub struct ProfileSetup {
     pub requires_external_confirmation: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityScope {
+    RuleMode,
+    Signal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdentityPolicy {
+    pub scope: IdentityScope,
+    pub prefix: &'static str,
+}
+
 #[derive(Debug)]
 pub struct ProfileRequest<'a> {
     pub edge_id: &'a str,
-    pub signal_id: &'a str,
+    pub rule_id: &'a str,
+    pub signal_ref: &'a str,
+    pub external_id: &'a str,
     pub observation_kind: ObservationKind,
     pub mode: &'a str,
     pub values: &'a serde_json::Map<String, serde_json::Value>,
@@ -261,6 +275,8 @@ pub trait OutputAdapter: Send + Sync {
 
 pub trait ProfilePolicy: Send + Sync {
     fn setup(&self) -> &'static ProfileSetup;
+
+    fn identity_policy(&self) -> IdentityPolicy;
 
     fn propose(&self, request: &ProfileRequest<'_>) -> Result<Vec<RouteProposal>, AdapterError>;
 }

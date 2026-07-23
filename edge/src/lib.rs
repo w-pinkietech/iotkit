@@ -3,6 +3,7 @@ pub mod composition;
 pub mod config;
 pub mod lifecycle;
 pub mod mqtt;
+pub mod semantics;
 pub mod storage;
 
 use lifecycle::{ExitReason, Supervisor};
