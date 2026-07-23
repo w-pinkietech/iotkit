@@ -1,11 +1,14 @@
 import { access, mkdtemp } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
-import { removeChromiumProfile } from "./profile-cleanup.mjs";
+import {
+  chromiumDiagnostics,
+  chromiumProfilePrefix,
+  removeChromiumProfile,
+} from "./profile-cleanup.mjs";
 
 const edgeNodeURL = process.env.IOTKIT_EDGE_E2E_URL;
 const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
@@ -178,7 +181,9 @@ const click = (selector) => `(() => {
 const activeNavigation =
   `document.querySelector(".side-nav a[aria-current='page']")?.textContent.trim()`;
 
-const profile = await mkdtemp(join(tmpdir(), "iotkit-console-e2e-"));
+const profile = await mkdtemp(
+  chromiumProfilePrefix(process.env, homedir()),
+);
 const chrome = await executable();
 const debuggingPort = await availablePort();
 let stderr = "";
@@ -203,6 +208,7 @@ browser.stderr.on("data", (chunk) => {
 });
 
 let socket;
+let failure;
 try {
   const target = await waitFor(async () => {
     const response = await fetch(`http://127.0.0.1:${debuggingPort}/json/list`);
@@ -529,14 +535,32 @@ try {
   );
   console.log("IoTKit Console browser journey passed");
 } catch (error) {
-  if (stderr.trim()) error.message += `\nChromium diagnostics:\n${stderr.trim()}`;
-  throw error;
+  failure = error instanceof Error ? error : new Error(String(error));
 } finally {
   if (socket?.readyState === WebSocket.OPEN) socket.close();
-  browser.kill("SIGTERM");
-  await new Promise((resolve) => {
-    browser.once("exit", resolve);
-    setTimeout(resolve, 2_000);
-  });
-  await removeChromiumProfile(profile);
+  if (browser.exitCode === null && browser.signalCode === null) {
+    browser.kill("SIGTERM");
+    await new Promise((resolve) => {
+      browser.once("close", resolve);
+      setTimeout(resolve, 2_000);
+    });
+  }
+  if (failure) {
+    failure.message += `\n${chromiumDiagnostics({
+      executable: chrome,
+      exitCode: browser.exitCode,
+      signalCode: browser.signalCode,
+      stderr,
+    })}`;
+  }
+  try {
+    await removeChromiumProfile(profile);
+  } catch (cleanupError) {
+    if (failure) {
+      failure.message += `\nProfile cleanup failed: ${cleanupError}`;
+    } else {
+      throw cleanupError;
+    }
+  }
 }
+if (failure) throw failure;

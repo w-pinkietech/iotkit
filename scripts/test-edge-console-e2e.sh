@@ -2,6 +2,10 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+test_tmp_root=${IOTKIT_EDGE_E2E_TMPDIR:-${XDG_CACHE_HOME:-$HOME/.cache}/iotkit-edge-console-e2e}
+mkdir -p "$test_tmp_root"
+export TMPDIR="$test_tmp_root"
+export IOTKIT_EDGE_E2E_TMPDIR="$test_tmp_root"
 
 cd "$repo_root"
 cargo test -p iotkit-edge \
