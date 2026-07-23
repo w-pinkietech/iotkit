@@ -59,6 +59,7 @@ HOST_API = "iotkit-input-adapter-host-api"
 ADAPTER_TESTKIT = "iotkit-input-adapter-testkit"
 OUTPUT_ADAPTER_API = "iotkit-output-adapter-api"
 OUTPUT_ADAPTER_TESTKIT = "iotkit-output-adapter-testkit"
+CUSTODY_CONTRACT = "iotkit-edge-custody-contract"
 ENGINE = "iotkit-core-engine"
 SUPERVISION = "iotkit-core-supervision"
 TYPES = "iotkit-core-types"
@@ -66,7 +67,7 @@ STORAGE = "iotkit-core-storage"
 INGRESS_ALLOWED = {CONTRACT, "iotkit-core-collector", STORAGE, "iotkit-core-ops"}
 CLASSIFIED = DATA_PLANE | ADAPTERS | BINARIES | INGRESS | {
     CONTRACT, CLIENT, HOST_API, ADAPTER_TESTKIT, OUTPUT_ADAPTER_API,
-    OUTPUT_ADAPTER_TESTKIT, ENGINE, SUPERVISION, TYPES,
+    OUTPUT_ADAPTER_TESTKIT, CUSTODY_CONTRACT, ENGINE, SUPERVISION, TYPES,
 }
 SUPERVISION_DEPENDENTS = {
     "iotkit-core-engine",
@@ -181,6 +182,15 @@ def main() -> int:
                 errors.append(
                     f"{OUTPUT_ADAPTER_API} grew dependencies beyond its leaf allowlist: "
                     f"{sorted(extra)}"
+                )
+
+        if name == CUSTODY_CONTRACT:
+            external = {d["name"] for d in checked}
+            extra = external - {"serde", "serde_json", "sha2", "thiserror"}
+            if extra:
+                errors.append(
+                    f"{CUSTODY_CONTRACT} grew dependencies beyond its wire-contract "
+                    f"leaf allowlist: {sorted(extra)}"
                 )
 
         if name in INGRESS:

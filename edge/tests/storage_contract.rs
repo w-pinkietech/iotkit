@@ -1,5 +1,8 @@
 use iotkit_edge::storage::{
-    AcceptBatch, RawRecord, Storage, StorageError, StorageProfile, StoredRawRecord,
+    AcceptBatch, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile, StoredRawRecord,
+};
+use iotkit_edge_custody_contract::{
+    ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
 };
 use serde::Deserialize;
 use sqlx::{
@@ -420,6 +423,7 @@ fn postgres_profile_debug_output_redacts_credentials() {
 }
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL; run scripts/test-rust-edge-custody.sh"]
 async fn postgres_obeys_the_same_raw_custody_contract_when_configured() {
     let Some(store) = postgres_store().await else {
         return;
@@ -564,4 +568,65 @@ async fn postgres_obeys_the_same_raw_custody_contract_when_configured() {
             .expect("read PostgreSQL rollback cursor"),
         0
     );
+
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .expect("decode PostgreSQL descriptor");
+    store
+        .apply_descriptor(&descriptor, 1_721_800_001_000)
+        .await
+        .expect("apply PostgreSQL descriptor");
+    let command = store
+        .request_activation(&descriptor.edge_node_id, 1_721_800_001_100)
+        .await
+        .expect("request PostgreSQL activation");
+    let request =
+        ActivationRequest::decode(&command.payload_json).expect("decode PostgreSQL activation");
+    store
+        .apply_activation_result(
+            &ActivationResult {
+                schema_version: 1,
+                activation_id: request.activation_id,
+                edge_id: request.edge_id,
+                edge_node_id: request.edge_node_id,
+                ledger_epoch: request.expected_ledger_epoch,
+                status: "applied".into(),
+                discard_through_reading_seq: 12,
+                first_publication_seq: 1,
+                applied_at: 1_721_800_001_200,
+            },
+            1_721_800_001_200,
+        )
+        .await
+        .expect("apply PostgreSQL activation");
+    assert_eq!(
+        store
+            .edge_node(&descriptor.edge_node_id)
+            .await
+            .expect("read PostgreSQL Edge Node")
+            .state,
+        EdgeNodeState::Active
+    );
+    let wire_batch =
+        RecordBatch::decode(include_bytes!("../../testdata/egress/v1/record-batch.json"))
+            .expect("decode PostgreSQL record batch");
+    store
+        .accept_active_batch(AcceptBatch {
+            edge_node_id: wire_batch.edge_node_id,
+            ledger_epoch: wire_batch.ledger_epoch,
+            publication_id: wire_batch.publication_id,
+            received_at: 1_721_800_001_300,
+            records: wire_batch
+                .records
+                .iter()
+                .enumerate()
+                .map(|(index, record)| {
+                    RawRecord::new(wire_batch.cursor_start + index as i64, record.get())
+                        .expect("PostgreSQL raw record")
+                })
+                .collect(),
+        })
+        .await
+        .expect("PostgreSQL active custody");
 }

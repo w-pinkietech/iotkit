@@ -20,6 +20,9 @@ use sqlx::{
 };
 use tokio::sync::Mutex;
 
+mod activation;
+pub use activation::{ActivationCommand, DescriptorApply, EdgeNode, EdgeNodeState};
+
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");
 
@@ -119,6 +122,12 @@ pub enum StorageError {
     SequenceGap { expected: i64, actual: i64 },
     #[error("raw record at sequence {sequence} conflicts with the accepted record")]
     RecordConflict { sequence: i64 },
+    #[error("Edge Node is not active for IoTKit Edge custody")]
+    EdgeNodeNotActive,
+    #[error("Edge Node activation result conflicts with the pending activation")]
+    ActivationConflict,
+    #[error("descriptor revision conflicts with the previously accepted content")]
+    DescriptorConflict,
 }
 
 #[derive(Clone)]
@@ -192,6 +201,49 @@ impl Storage {
             }
             StorageInner::Postgres { pool, .. } => {
                 let mut transaction = pool.begin().await?;
+                let accepted_through = accept_postgres(&mut transaction, &batch).await?;
+                transaction.commit().await?;
+                Ok(AcceptResult { accepted_through })
+            }
+        }
+    }
+
+    pub async fn accept_active_batch(
+        &self,
+        batch: AcceptBatch,
+    ) -> Result<AcceptResult, StorageError> {
+        validate_batch(&batch)?;
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let mut transaction = pool.begin().await?;
+                let active: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM edge_node_activations \
+                     WHERE edge_node_id = ? AND ledger_epoch = ?",
+                )
+                .bind(&batch.edge_node_id)
+                .bind(&batch.ledger_epoch)
+                .fetch_optional(&mut *transaction)
+                .await?;
+                if active.as_deref() != Some("active") {
+                    return Err(StorageError::EdgeNodeNotActive);
+                }
+                let accepted_through = accept_sqlite(&mut transaction, &batch).await?;
+                transaction.commit().await?;
+                Ok(AcceptResult { accepted_through })
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let mut transaction = pool.begin().await?;
+                let active: Option<String> = sqlx::query_scalar(
+                    "SELECT state FROM edge_node_activations \
+                     WHERE edge_node_id = $1 AND ledger_epoch = $2 FOR UPDATE",
+                )
+                .bind(&batch.edge_node_id)
+                .bind(&batch.ledger_epoch)
+                .fetch_optional(&mut *transaction)
+                .await?;
+                if active.as_deref() != Some("active") {
+                    return Err(StorageError::EdgeNodeNotActive);
+                }
                 let accepted_through = accept_postgres(&mut transaction, &batch).await?;
                 transaction.commit().await?;
                 Ok(AcceptResult { accepted_through })

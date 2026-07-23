@@ -1249,9 +1249,12 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "fs2",
+ "iotkit-edge-custody-contract",
  "iotkit-output-adapter-api",
  "iotkit-output-adapter-generic-mqtt-json-v1",
  "iotkit-output-adapter-pinikiet-mqtt-v1",
+ "rumqttc",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -1263,6 +1266,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "iotkit-edge-custody-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]

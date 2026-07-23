@@ -16,12 +16,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid"] }
 uuid = { version = "1", features = ["v4"] }
 iotkit-output-adapter-api = { path = "output-adapters/api" }
 iotkit-output-adapter-generic-mqtt-json-v1 = { path = "output-adapters/generic-mqtt-json-v1" }
 iotkit-output-adapter-pinikiet-mqtt-v1 = { path = "output-adapters/pinikiet-mqtt-v1" }
+iotkit-edge-custody-contract = { path = "custody-contract" }
 
 [dev-dependencies]
 tempfile = "3"

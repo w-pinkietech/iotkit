@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 4
+revision: 5
 ---
 
 # Architecture
@@ -332,6 +332,7 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-edge-node` | `edge-node/apps/node` | **Binary.** IoTKit Edge Node composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
 | `iotkit-edge-nodectl` | `edge-node/apps/nodectl` | **Binary.** Edge Node operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `edge-node/core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
 | `iotkit-edge` | `edge/` | **Binary and library replacement candidate.** Rust composition, lifecycle, and parity slices are built beside the Go production oracle until issue #83 completes its release gate. The two implementations never share a production database or dual-write. |
+| `iotkit-edge-custody-contract` | `edge/custody-contract` | Leaf Rust representation and strict validation of the versioned Edge Node MQTT descriptor, activation, record-batch, and custody acknowledgement wire messages. |
 | `iotkit-output-adapter-api` | `edge/output-adapters/api` | Leaf Rust API for deterministic Observation-to-MQTT transformation and provider-neutral profile setup policy. |
 | `iotkit-output-adapter-testkit` | `edge/output-adapters/testkit` | Dev-only shared descriptor, configuration, publication, and determinism conformance assertions. |
 | `iotkit-output-adapter-example` | `edge/output-adapters/example` | Compile-tested vendor-neutral author example; deliberately absent from the production registry. |

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "edge",
+    "edge/custody-contract",
     "edge/output-adapters/api",
     "edge/output-adapters/testkit",
     "edge/output-adapters/example",

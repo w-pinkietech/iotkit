@@ -147,3 +147,6 @@ jobs:
       - name: Edge tests
         working-directory: edge
         run: go test ./...
+
+      - name: Rust Edge PostgreSQL and Mosquitto custody
+        run: scripts/test-rust-edge-custody.sh

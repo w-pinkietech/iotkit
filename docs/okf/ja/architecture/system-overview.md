@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 4
+revision: 5
 ---
 
 # Architecture
@@ -125,6 +125,7 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/apps/node` (`iotkit-edge-node`) | Edge Node composition root binary |
 | `edge-node/apps/nodectl` (`iotkit-edge-nodectl`) | Edge Node operator CLI |
 | `edge/` (`iotkit-edge`) | Issue #83でGo版と外部挙動を比較するRust replacement binary/library。完了前はGo production oracleとDBを共有せずdual-writeしない |
+| `edge/custody-contract` (`iotkit-edge-custody-contract`) | Edge Node MQTTのdescriptor、activation、record batch、custody ackを厳格検証するversioned wire contractのleaf Rust表現 |
 | `edge/output-adapters/api` (`iotkit-output-adapter-api`) | ObservationからMQTTへの決定的変換とprovider非依存profile policyのleaf Rust API |
 | `edge/output-adapters/testkit` (`iotkit-output-adapter-testkit`) | Descriptor、config、publication、決定性のdev-only共通conformance assertion |
 | `edge/output-adapters/example` (`iotkit-output-adapter-example`) | Production registryへ登録しないvendor-neutralなcompile-tested作者例 |
