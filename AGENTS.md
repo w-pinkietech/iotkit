@@ -1,187 +1,186 @@
 # AGENTS.md
 
-## Project Context
+This is the common repository guidance for coding agents and human maintainers.
+Agent-specific files may point here but must not redefine these rules.
 
-`iotkit-next` は旧 `iotkit` をゼロから作り直すオンプレミス優先のIoTデータ収集基盤。
-収集側のRust + tokio製`IoTKit Edge Node`（Raspberry Pi向け）と、集約側のGo製
-`IoTKit Edge`からなる。
+## Project overview
 
-レイヤ:
+`iotkit-next` is an on-premises-first IoT data collection foundation rebuilt from
+the former IoTKit. It consists of:
+
+- **IoTKit Edge Node:** Rust + Tokio collection software for Raspberry Pi-class
+  computers. Sensor-specific behavior stays in Input Adapters.
+- **MQTT Broker:** standard infrastructure between Edge Nodes, IoTKit Edge, and
+  external applications. IoTKit does not implement its own Broker.
+- **IoTKit Edge:** Go service that accepts durable raw records, applies generic
+  meanings, serves the Console, and invokes Output Adapters.
 
 ```text
-{core/types, core/supervision} <- {core/engine, adapters} <- iotkit-edge-node
+sensor -> Input Adapter -> IoTKit Edge Node -> MQTT Broker
+       -> IoTKit Edge -> Output Adapter -> external application
+
+contract-native device -> authenticated HTTP ingest -> IoTKit Edge Node
 ```
 
-取り込み経路はアダプタ内クライアント (`iotkit-ingest-client`) が正 (D4)。
-adapters は `core/engine` に依存しない。`AdapterEvent` は engine/監督専用の frozen
-vocabulary であり、新規コードは依存を増やさない。
+Input Adapters use `iotkit-ingest-client`; they do not depend on `core/engine`.
+`AdapterEvent` is a frozen engine/supervision vocabulary, not a new adapter API.
+The HTTP ingest listener is a separate, default-off path for contract-native
+devices. Both paths converge at the Edge Node collector. The complete and
+enforced dependency map is in the architecture document and `scripts/check-layers`.
 
-文書の入口と正本の構成は `docs/README.md`。機械表現・共有fixture/conformance test・
-現行契約文書を一つの契約成果物として扱い、不一致時は一方へ自動追従させない。
-コードの置き場、crate 地図、層規則の正本は
-`docs/okf/ja/architecture/system-overview.md` であり、依存方向は `scripts/check-layers` が検査する。
-新しい crate を作る場合は、同スクリプトの分類と同文書を同時に更新する。
+## Documentation authority
 
-`docs/redesign/`の用語集・責務台帳・決定文書は、現行文書から参照される理由と不変条件を保持する。
-同directoryのinputs/reviews/移行記録と`docs/superpowers/`は履歴であり、現行実装状態や
-作業指示を上書きしない。タスク指示と現行契約成果物が矛盾して見える場合は、
-勝手に解釈せず作業を止めて報告する。旧実装も正しさの基準にはしない。
+Start at `docs/README.md`. The current human-readable product corpus is
+`docs/okf/`. Choose either `ja` or `en` to read; edit both language files together.
 
-## Invariants（絶対に破らない）
+A versioned contract is one artifact made from its paired contract documents,
+machine-readable schema or exported wire types, shared fixtures, and conformance
+tests. None silently overrides the others.
 
-- 秘密情報（トークン、credential、鍵）を Debug 出力、ログ、エラー、監査記録に載せない。
-- データを黙って失わない。ack の意味は D1 に従う。`rejected` は決定的違反専用で、
-  ストレージ失敗には `rejected` を返さない（ack なし）。
-- 変更系操作は所有componentの R14 typed dispatch 経由。Edge Nodeは`core/ops`、IoTKit EdgeはGo
-  application service内のtyped operation dispatcherを使う。API/UI/CLIからSQLへ直書きする
-  変更経路を新設しない。
+All of `docs/redesign/` and `docs/superpowers/` is historical or rationale-only.
+It never overrides the current corpus. Old IoTKit code is not an authority. If
+the task conflicts with a current contract, stop and report the conflict.
 
-## Experimental Raspberry Pi
+## Before changing code
 
-- 実験用PiのSSH接続先は `iotkit@iotkit`。
-- Codexの制限環境では、root所有の `/etc/ssh` 設定が `nobody:nobody` に見えることがあり、通常の
-  `ssh iotkit@iotkit` が次のエラーで開始前に失敗する。
+Read `docs/README.md`, then only the rows relevant to the task. Do not load every
+historical plan.
 
-  ```text
-  Bad owner or permissions on /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf
-  ```
+| Change area | Read before editing | Start in | Focused verification |
+|---|---|---|---|
+| Product boundary or component ownership | `docs/okf/<lang>/concepts/product-model.md`, `docs/okf/<lang>/architecture/system-overview.md` | owning component from the architecture map | affected contract and package tests |
+| Crate, package, dependency, or source placement | `docs/okf/<lang>/architecture/system-overview.md` | `Cargo.toml`, `iotkit-edge/go.mod`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
+| Sensor, driver, polling, UART, or Input Adapter host | `docs/okf/<lang>/contracts/input-adapter-v1.md` | `bravepi-mainboard-adapter/src/`, `rpi-local-adapter/src/`, `iotkit-sensor-drivers/src/`, `iotkit-polling-adapter-runtime/src/` | `cargo test -p <owning-crate>` plus adapter conformance tests when the contract changes |
+| Envelope/Ack, authenticated device ingest, admission, or principal mapping | `docs/okf/<lang>/contracts/ingest-v1.md` and product model | `iotkit-ingest-contract/`, `iotkit-ingest-client/`, `iotkit-ingest-http/`, `core/collector/`; BravePI envelope mapping starts at `bravepi-mainboard-adapter/src/task/ingest_map.rs` | owning crate tests; use ingest conformance fixtures when wire behavior changes |
+| Edge Node activation, MQTT delivery, ack, retention, or data loss | `docs/okf/<lang>/contracts/edge-node-custody-v1.md`, `docs/okf/<lang>/contracts/ingest-v1.md` | `core/ledger/`, `core/publish/`, `core/storage/`, `core/timeseries/`, `iotkit-edge-node/` | owning crate tests, then `scripts/verify.sh` |
+| IoTKit Edge raw storage, meanings, history, or CSV | product model and architecture; for browser JSON also `iotkit-edge/openapi/edge-console-v1.yaml` | `iotkit-edge/internal/store/`, `iotkit-edge/internal/semantic/`, `iotkit-edge/internal/semantics/` | `(cd iotkit-edge && go test ./internal/<owning-package>)` |
+| Output Adapter or external application contract | `docs/okf/<lang>/contracts/output-adapter-v1.md` | `iotkit-edge/internal/outputadapter/`, `iotkit-edge/internal/applicationcontract/` | `(cd iotkit-edge && go test ./internal/outputadapter ./internal/applicationcontract)` |
+| Console HTML, navigation, or browser behavior | architecture; OpenAPI only for endpoints and schemas represented there | `iotkit-edge/internal/edgehttp/`, `iotkit-edge/frontend/` | `scripts/test-edge-console-frontend.sh`, then `scripts/test-edge-console-e2e.sh` for journeys |
+| Account bootstrap or recovery | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `iotkit-edge/cmd/iotkit-edge/main.go`, `iotkit-edge/internal/store/accounts.go`; Console account management starts at `iotkit-edge/internal/edgehttp/console_accounts.go` | `(cd iotkit-edge && go test ./cmd/iotkit-edge ./internal/edgehttp ./internal/store)` |
+| Login, password, session, cookie, CSRF, or authorization | relevant current contract plus `iotkit-edge/internal/edgehttp/server.go` route registration; session endpoints are not currently represented in the Console OpenAPI | `iotkit-edge/internal/edgehttp/server_console_auth_test.go`, `iotkit-edge/internal/edgesession/`, `iotkit-edge/internal/edgeauth/` | `(cd iotkit-edge && go test ./internal/edgehttp ./internal/edgesession ./internal/edgeauth)` |
+| TLS, certificate, or deployment credentials | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 3 | owning service and `deploy/` | focused security or deployment script for the changed path |
+| Encrypted backup or restore | `docs/okf/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `iotkit-edge/cmd/iotkit-edge/main.go`, `iotkit-edge/internal/store/backup_encrypted.go`, `iotkit-edge/internal/store/postgres_backup.go` | `(cd iotkit-edge && go test ./cmd/iotkit-edge ./internal/store)`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
+| Device retirement or hardware replacement | `docs/okf/<lang>/operations/installation-and-recovery.md` section 9 and Edge Node custody contract | owning Edge Node identity/custody path | focused replacement and custody tests |
+| SQLite-to-PostgreSQL migration | `docs/okf/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `iotkit-edge/cmd/iotkit-edge/main.go`, `iotkit-edge/internal/store/postgres_migrations.go` | `scripts/test-edge-postgres.sh` plus affected command tests |
+| Manual update or rollback | `docs/okf/<lang>/operations/installation-and-recovery.md` section 11 | `deploy/`, affected startup and migration code | changed update/rollback journey |
+| Capacity, retention, or storage profile selection | `docs/okf/<lang>/operations/storage-capacity.md` | `iotkit-edge/internal/store/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
+| Vulnerability report or accidental secret exposure | `SECURITY.md` | reporting and containment path; do not copy secrets into repository artifacts | follow reporting policy; do not create a public reproducer with secrets |
+| Contract or documentation change | `docs/README.md`, both language files, schemas/types, fixtures, conformance tests | current authority; never a historical plan | `node scripts/check-okf-docs.mjs` plus affected conformance tests |
+| PR review or field report triage | `.agents/skills/iotkit-battle-tested-review/SKILL.md`, `review/battle-tested/README.md` | selector output and linked evidence | `node scripts/battle-tested-review.mjs check` |
 
-- このエラーをPi側または開発PCの実際の権限不正と断定しない。`/etc/ssh`への`chown`、`chmod`、削除を
-  行わない。Codexからはsystem SSH configを読まない次の形を使う。
+## Common commands
 
-  ```bash
-  ssh -F /dev/null iotkit@iotkit
-  ```
+Run the smallest command that can disprove the change, then widen for risk.
 
-- 自動調査では必要に応じて `BatchMode=yes`、短い`ConnectTimeout`、`/tmp`内の一時known-hosts fileを使う。
-  sandbox内で名前解決が拒否された場合だけ、同じ読み取り専用SSH commandを承認付きで再実行する。
-- 初回接続・診断は読み取り専用とし、Pi上のservice、package、設定、Docker container、UARTを変更または
-  openする前に、現在のタスクがその変更を許可しているか確認する。
-- 確認済みの基準状態: Debian 13 / arm64、`/dev/serial0 -> /dev/ttyAMA0`、`iotkit`は`dialout`所属。
-  BravePI信号は通常停止中なので、ユーザーが再開するまではUART frameが来ないことを異常扱いしない。
+```bash
+# Documentation, dependency, and source/test structure
+node scripts/check-okf-docs.mjs
+scripts/check-layers
+scripts/check-source-layout
 
-## Development Workflow
+# Battle-tested review routing
+node scripts/battle-tested-review.mjs select --base origin/master
 
-### Issue / worktree / PR loop
+# Rust focused / full
+cargo test -p <crate-name>
+scripts/verify.sh
 
-すべての開発taskは、原則として一つのGitHub issueへ紐付ける。`master`を直接変更せず、
-`agent/issue-<number>-<slug>` branchと`.worktrees/issue-<number>-<slug>`を作る。
-実装と検証が完了したら、同branchをpushしてissueをcloseするdraft PRを作り、そこで停止して
-ユーザーreviewを待つ。Review修正は同じbranchとPRで行う。Scopeが実質的に変わる場合だけ
-別issueを作る。
+# IoTKit Edge focused / full
+(cd iotkit-edge && go test ./internal/<package>)
+(cd iotkit-edge && go test ./...)
 
-このissue単位loopに含まれるbranch pushとdraft PR作成は通常の完了操作として承認済みである。
-PRのmerge、release、課金を伴う実行、破壊的操作は引き続き個別の明示承認を必要とする。
-Merge済みbranchをGitHub側で自動削除してよい。Local worktreeとbranchはmerge確認後に削除する。
+# Console schema, generated assets, and browser journey
+scripts/test-edge-console-frontend.sh
+scripts/test-edge-console-e2e.sh
 
-### Battle-tested review
+# Release-candidate host integration only
+scripts/test-edge-host-release-gate.sh NEW_REPORT_DIRECTORY
+```
 
-PR reviewと現場報告triageではproject Skill `$iotkit-battle-tested-review`を使用できる。
-PRの最終review前に`node scripts/battle-tested-review.mjs select --base <base-ref>`を実行し、
-出力された`BT-NNN`だけを確認する。Path選択は下限であるため、公開契約、認証、custody、data loss、
-migration、restore、外部作用の意味を変える場合は該当する`--concern`を明示的に追加する。
-利用可能なconcernは`node scripts/battle-tested-review.mjs concerns`で確認する。
-選択0件や未対応pathを安全の証明にせず、PRへ選択IDまたは該当なしの理由を書く。
+`scripts/verify.sh` runs Rust formatting, layer rules, workspace tests, Clippy
+with `-D warnings`, and Go tests. The host release gate is not a per-PR default.
+Raspberry Pi and physical sensors are required only when the task explicitly
+requires hardware evidence.
 
-現場報告は秘密・顧客情報を除いてtriageし、報告された事実とmaintainerが確認した事実を区別する。
-再発可能な問題だけを`review/battle-tested/catalog.json`へ追加し、再現可能な製品動作はfocused test、
-運用対処はrunbookへ昇格させる。Catalog項目を仮説だけで製品機能へ変えず、全PRで全項目を読まない。
+## Product invariants
 
-### Source and test layout
+- Never expose tokens, credentials, keys, their hashes, customer identifiers, or
+  sensitive configuration in debug output, logs, errors, audit records, fixtures,
+  issues, or pull requests.
+- Never silently lose data. Follow the current ingest and custody contracts.
+  `rejected` is only for deterministic terminal violations. A storage failure
+  does not produce `rejected` or a durable success acknowledgement.
+- Mutations go through the owning typed operation dispatcher: `core/ops` on Edge
+  Node and the Go application service on IoTKit Edge. Do not add API/UI/CLI paths
+  that write SQL directly.
+- Do not treat MQTT PUBACK as IoTKit Edge durable raw acceptance, or downstream
+  business success as IoTKit output custody.
 
-- Rustの製品コードを置く`src/`には、`#[cfg(test)] mod tests { ... }`の本体や
-  `*_test.rs` / `*_tests.rs`を置かない。
-- private APIを検証するunit testは`<crate>/tests/unit/**/*_tests.rs`へ置き、製品moduleから
-  `#[cfg(test)] #[path = "..."] mod tests;`で参照する。公開APIのintegration testは通常どおり
-  `<crate>/tests/*.rs`へ置く。
-- test専用constructor、mock clock、fixture、状態観測helperなどの実装本体も`src/`へ置かず、
-  `tests/support/`から外部moduleとして参照する。製品moduleに残せる`cfg(test)`は、その外部moduleの
-  宣言と、外部test moduleから実装を選ぶ最小限のimportだけとする。
-- test fixtureと共通helperは`tests/support/`または専用testkitへ置き、製品ファイルをtest都合で
-  肥大化させない。この境界は`scripts/check-source-layout`が検査する。
-- Goは言語標準の`*_test.go`を製品ファイルと分離して保ち、巨大になったfileは機能責務ごとに
-  同一package内の複数fileへ分割する。
-- Frontendのunit testは`frontend/tests/unit/`へ置き、`frontend/src/`へ`*.test.ts`や`*.spec.ts`を
-  置かない。
+## Issue, worktree, and pull request loop
 
-Superpowers skills は任意の作業支援ツールであり、全変更に一律適用する必須パイプラインではない。
-ユーザーの直接指示と本ファイルのプロジェクト規則は、plugin skill の一般的な trigger や成果物要件に
-優先する。着手前に現実的なリスクへ応じて次の lane を選び、必要な場合だけ skill を使う。
+Every development task maps to one GitHub issue. Record the intended outcome
+and exclusions before implementation.
 
-### Fast lane
+1. Update `master`.
+2. Create `agent/issue-<number>-<slug>` and
+   `.worktrees/issue-<number>-<slug>`.
+3. Work and verify only in that worktree.
+4. Commit intentionally, push the branch, and open a draft PR that closes the
+   issue.
+5. Stop for human review. Apply feedback on the same branch and PR.
+6. Merge only after explicit approval. After confirmed merge, remove the local
+   worktree and branch.
 
-局所的な bug、refactor、文書、設定、小機能で、公開契約・認証・custody・data loss・restore・
-migration・外部作用へ影響しない作業に使う。
+Keep the diff inside the issue scope. Create a separate issue when the scope
+changes materially.
 
-1. 目的と完了条件を短く確認する。
-2. 製品挙動が変わる場合は focused test を先に追加または更新する。
-3. 実装する。
-4. リスクに比例した focused verification を実行する。
-5. 結果を報告する。
+Branch push and draft PR creation are pre-authorized completion steps for this
+loop. Merge, release, destructive actions, paid actions, and other external
+effects still require explicit approval.
 
-ユーザーが明示しない限り、design spec、永続 implementation plan、worktree、subagent team、
-独立レビューを作らない。
+## Change lanes
 
-### Standard lane
+Choose the lightest lane that covers realistic risk.
 
-複数 crate にまたがる変更、新しい内部境界、または有力な実装案が複数ある作業に使う。
+For every product behavior change, add or update the closest focused test before
+implementation.
 
-1. 原則1ページ以内の簡潔な設計を示す。
-2. 重要な選択が残る場合だけ方向を確認する。
-3. 永続 plan 文書でなく一時 checklist を使う。
-4. 適切なテストとともに実装する。
-5. 1回のレビューとリスクに比例した verification を行う。
+| Lane | Use for | Required process |
+|---|---|---|
+| Fast | local bug, refactor, docs, configuration, or small feature without contract/security/custody/migration/restore impact | focused test when behavior changes, focused verification |
+| Standard | multiple packages, a new internal boundary, or several credible implementations | concise design, one review, proportional tests |
+| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | explicit design, implementation plan when useful, tests first, independent review, broad verification |
 
-新しい spec を作るより既存の正本文書を更新する。完了した一時 plan はリポジトリへ残さない。
+Process plugins and skills are optional aids unless the user names one or this
+file requires one. They do not override the user request or repository rules.
+Prefer current code, executable tests, and existing authority over new process
+documents. Do not create a spec only to repeat an existing decision.
+Use repository-local independent review by default. Call an external review
+model or service only when the user explicitly requests it.
 
-### Full lane
+## Source and test placement
 
-次に影響する変更だけに使う。
+- Rust product `src/` contains product code, not test bodies or test helpers.
+  Private-API tests live under `<crate>/tests/unit/**/*_tests.rs` and are included
+  by a minimal `#[cfg(test)] #[path = "..."] mod tests;`. Public integration
+  tests live under `<crate>/tests/*.rs`.
+- Test constructors, clocks, fixtures, mocks, and observation helpers live in
+  `tests/support/` or a dedicated testkit.
+- Go tests remain in separate `*_test.go` files. Split large product files by
+  responsibility within the same package.
+- Frontend unit tests live under `iotkit-edge/frontend/tests/unit/`, not `src/`.
+- `scripts/check-source-layout` enforces these boundaries.
 
-- 公開 ingest / egress wire contract
-- 認証・認可・秘密情報
-- custody・purge権威・data loss
-- DB migration・backup・restore・rollback
-- 外部に見える破壊的または不可逆な作用
-- 後から変更すると高価な互換性保証
+## Review and verification
 
-この lane では brainstorming、written design、implementation plan、TDD、独立レビュー、広い検証を
-使ってよい。ただし既存 ADR・契約文書へ収まる判断を新しい spec へ重複記載しない。
+Before final review, use `$iotkit-battle-tested-review` or run the selector
+directly. Review only selected `BT-NNN` entries plus semantic concerns that path
+routing cannot infer. Zero selections and unmatched paths are not proof of safety.
 
-### 共通規則
+Verification must match the changed failure paths. Run `scripts/verify.sh` when
+Rust product behavior changes or cannot be excluded. Documentation-only changes
+may use documentation, link, structure, and diff checks. When skipping a check
+normally expected for the change, state the check and the concrete reason.
 
-- 現実的なリスクを覆う最も軽い lane を既定にする。
-- 動くコードと実行可能テストを、重複する説明文より優先する。
-- 既存決定の再記述だけを目的に spec や ADR を作らない。
-- 過去のspec/planはGit履歴にあり、現行指示ではない。現在の正本と実装を優先する。
-- 通常は1レビューで終える。実質的な設計・実装変更があった場合だけ再レビューする。
-- 外部モデルレビューはユーザーの明示依頼時だけ行う。
-- プロセス成果物を、それが導く実装より大きくしない。
-- 完了報告には変更リスクに見合う fresh verification evidence を必ず添える。
-
-## Roles and Authority
-
-- ネイティブな役割 dispatch が利用できる場合、Main と reviewer は Sol/high、
-  implementer と executor は Luna/max を意図する。役割選択は実行支援であり、追加の
-  台帳や証明状態を作らない。
-- worker は指定されたタスクだけを実装し、スコープ外の改善を混ぜず、commit しない。
-- Main は承認済み作業の範囲で設計、実装、検証、レビュー、意図的な commit を行える。
-- Issue単位loopのbranch pushとdraft PRは上記の事前承認に含む。merge、release、課金を伴う実行、
-  その他の外部作用は別のユーザー承認を要する。
-- 破壊的操作や認証情報の公開は、通常の Codex 権限境界に従う。
-
-## Verification Economy（時間は有限）
-
-- 検証は変更範囲、リスク、現実的な失敗経路に比例させる。検査数を増やすこと自体を
-  目的にしない。
-- 結果が変更の信頼性を実質的に高めないと明らかに判断できる検査は省略する。
-- 通常なら実行する検査を省略した場合、完了報告に省略した検査と、変更へ無関係と
-  判断した具体的理由を書く。
-- Rust 製品動作、層境界、認証、秘密情報、data loss/custody、並行処理、外部作用に
-  関係する検査は、その失敗可能性を除外できない限り省略しない。
-- Rust 製品動作へ影響する、または影響を除外できない変更は `scripts/verify.sh`
-  （fmt、層規則、workspace tests、Clippy `-D warnings`）を通す。
-- 文書のみ、または製品動作に影響しない限定的な設定変更は focused checks に絞れる。
-- テスト緑は必要条件であって十分条件ではない。設計正本と不変条件も照合する。
-- 影響範囲が不明な場合は検証を広げる。「時間は有限」は未解決の重大リスクを
-  受け入れる理由にしない。
+Tests passing are necessary, not sufficient: also compare the result with current
+contracts and the product invariants above.

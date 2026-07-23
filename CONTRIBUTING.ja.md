@@ -8,7 +8,7 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 
 ## 最初に読むもの
 
-コードを変更する前に、次の順序で読んでください。
+初回のrepository案内では、次の順序で一度読んでください。
 
 1. [製品モデル](docs/okf/ja/concepts/product-model.md) — IoTKitが所有するものと、
    device・外部applicationに残すもの。
@@ -20,6 +20,9 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 
 `docs/okf/`が現行の人間向け製品知識の正本です。`docs/redesign/`と
 `docs/superpowers/`は履歴であり、現行契約、実行可能fixture、testを上書きしません。
+
+以後の各taskでは、[AGENTS.md](AGENTS.md)の**Before changing code**表を使い、
+変更に該当する行だけを読んでください。
 
 ## 開発環境
 
@@ -102,25 +105,13 @@ directoryを流用してはいけません。
 
 変更したい領域に近い既存testを一つ選び、そのcall pathから製品codeへ入ります。
 最小変更を行い、同じfocused testを再実行します。repository全体を闇雲に検索する前に、
-次の表を使ってください。
+[AGENTS.md](AGENTS.md)の**Before changing code**表を使ってください。
 
 ## 変更目的から場所を探す
 
-| 目的 | 最初に見る場所 | Focused verification |
-|---|---|---|
-| Protocol非依存domain動作の変更 | `core/*` | `cargo test -p <owning-crate>` |
-| Sensor IC変換の追加・変更 | `iotkit-sensor-drivers/` | `cargo test -p iotkit-sensor-drivers` |
-| BravePI UART decode・mappingの変更 | `bravepi-mainboard-adapter/` | `cargo test -p bravepi-mainboard-adapter` |
-| 異なるdevice familyの追加 | top-level `*-adapter` crateとInput Adapter契約 | Adapter conformance testと`scripts/check-layers` |
-| Edge Node composition・CLIの変更 | `iotkit-edge-node/`、`iotkit-edge-nodectl/` | 所有packageのtest |
-| Raw受理、意味付け、account、backup、出力の変更 | `iotkit-edge/internal/` | `(cd iotkit-edge && go test ./internal/<package>)` |
-| Consoleのbrowser動作変更 | `iotkit-edge/frontend/src/` | `npm run check --prefix iotkit-edge/frontend` |
-| Console HTML・navigation変更 | `iotkit-edge/internal/edgehttp/` | Go edgehttp testと`scripts/test-edge-console-e2e.sh` |
-| Browser JSON API変更 | `iotkit-edge/openapi/edge-console-v1.yaml`から開始 | 型生成後、frontendとedgehttp test |
-| 公開wire contract変更 | 日英契約、exported type/schema、共有fixture、conformance test | 完全なcontract gate |
-| 導入・復旧変更 | `scripts/`、`deploy/`、日英operations文書 | 対応するDocker/PostgreSQL/security script |
-
-完全なcrate mapと配置ruleはArchitectureにあります。新しいcrateは、同文書と
+[AGENTS.md](AGENTS.md)のtask-routing表だけを、必読資料、code入口、認証付きHTTP
+ingest、Console認証、運用、契約に関するrepository共通の地図とします。完全なcrate
+mapと配置ruleはArchitectureにあります。新しいcrateは、同文書と
 `scripts/check-layers`へ分類するまで追加しません。
 
 ## 1 issue、1 worktree、1 pull request
@@ -133,8 +124,9 @@ directoryを流用してはいけません。
 4. 製品動作を変更する前に、最も近いfocused testを追加または更新する。
 5. 差分をissueの範囲に収める。範囲が実質的に変わったら別issueにする。
 6. commitしてbranchをpushし、issueをcloseするdraft pull requestを作る。
-7. そこで停止して人間へreviewを依頼する。自分でmergeしない。
+7. そこで停止して人間へreviewを依頼する。
 8. Review指摘は同じbranchとpull requestで修正する。
+9. 明示承認を得てからmergeする。
 
 最終reviewでは、差分に関係する現場の失敗観点だけを選びます。
 

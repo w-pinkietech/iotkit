@@ -8,7 +8,7 @@ maintainer can understand without reconstructing the project's history.
 
 ## Start here
 
-Before changing code, read these in order:
+For initial repository orientation, read these in order once:
 
 1. [Product model](docs/okf/en/concepts/product-model.md) — what IoTKit owns and
    what remains in devices or external applications.
@@ -22,6 +22,9 @@ Before changing code, read these in order:
 `docs/okf/` is the current human-readable product authority.
 `docs/redesign/` and `docs/superpowers/` preserve history; they do not override
 current contracts, executable fixtures, or tests.
+
+For each later task, use the **Before changing code** table in
+[AGENTS.md](AGENTS.md) and read only the rows relevant to that change.
 
 ## Development environment
 
@@ -106,27 +109,16 @@ credentials, certificates, or deployment directories.
 
 Pick one existing test close to the area you want to change. Follow its call
 path into product code, make the smallest change, and rerun that focused test.
-Use the table below instead of searching the whole repository blindly.
+Use the **Before changing code** table in [AGENTS.md](AGENTS.md) instead of
+searching the whole repository blindly.
 
 ## Where to make a change
 
-| Goal | Start here | Focused verification |
-|---|---|---|
-| Change protocol-independent domain behavior | `core/*` | `cargo test -p <owning-crate>` |
-| Add or change a sensor IC conversion | `iotkit-sensor-drivers/` | `cargo test -p iotkit-sensor-drivers` |
-| Change BravePI UART decoding or mapping | `bravepi-mainboard-adapter/` | `cargo test -p bravepi-mainboard-adapter` |
-| Add a different device family | a top-level `*-adapter` crate and the Input Adapter contract | Adapter conformance tests plus `scripts/check-layers` |
-| Change Edge Node composition or CLI | `iotkit-edge-node/`, `iotkit-edge-nodectl/` | the owning package tests |
-| Change raw acceptance, semantics, accounts, backup, or output | `iotkit-edge/internal/` | `(cd iotkit-edge && go test ./internal/<package>)` |
-| Change Console browser behavior | `iotkit-edge/frontend/src/` | `npm run check --prefix iotkit-edge/frontend` |
-| Change Console HTML or navigation | `iotkit-edge/internal/edgehttp/` | Go edgehttp tests and `scripts/test-edge-console-e2e.sh` |
-| Change a browser JSON API | `iotkit-edge/openapi/edge-console-v1.yaml` first | regenerate types, then frontend and edgehttp tests |
-| Change a public wire contract | paired contract docs, exported types/schema, shared fixture, and conformance tests | the complete contract gate |
-| Change installation or recovery | `scripts/`, `deploy/`, paired operations docs | the relevant Docker/PostgreSQL/security script |
-
-The complete crate map and placement rules live in the architecture document.
-Do not create a new crate until it is classified there and in
-`scripts/check-layers`.
+The task-routing table in [AGENTS.md](AGENTS.md) is the single repository map for
+required reading, code entry points, authenticated HTTP ingest, Console
+authentication, operations, and contracts. The complete crate map and placement
+rules live in the architecture document. Do not create a new crate until it is
+classified there and in `scripts/check-layers`.
 
 ## One issue, one worktree, one pull request
 
@@ -139,8 +131,9 @@ Every development task uses the following loop:
 5. Keep the diff inside the issue scope. Open another issue when the scope
    changes materially.
 6. Commit, push the branch, and open a draft pull request that closes the issue.
-7. Stop and request human review. Do not merge the pull request yourself.
+7. Stop and request human review.
 8. Apply review feedback on the same branch and pull request.
+9. Merge only after explicit approval.
 
 For the final review, select only the field failure questions related to the
 change:
