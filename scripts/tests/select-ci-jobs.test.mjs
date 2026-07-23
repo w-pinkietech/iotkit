@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { selectCiJobs } from "../select-ci-jobs.mjs";
 
@@ -51,3 +54,27 @@ for (const { name, paths, expected } of cases) {
     assert.deepEqual(selectCiJobs(paths), expected);
   });
 }
+
+test("CI workflow routes heavy jobs through the classifier", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(workflow, /id: select/);
+  assert.match(workflow, /node scripts\/select-ci-jobs\.mjs/);
+  assert.match(workflow, /needs\.changes\.outputs\.rust == 'true'/);
+  assert.match(workflow, /needs\.changes\.outputs\.edge == 'true'/);
+  assert.match(workflow, /name: lightweight repository checks/);
+});
+
+test("CLI reads changed paths from standard input", () => {
+  const script = fileURLToPath(new URL("../select-ci-jobs.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [script], {
+    input: "docs/README.md\n",
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "rust=false\nedge=false\n");
+});

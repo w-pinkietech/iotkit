@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const rustRoots = [
@@ -92,7 +91,11 @@ export function selectCiJobs(paths) {
 }
 
 async function main() {
-  const input = await readFile(0, "utf8");
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) {
+    input += chunk;
+  }
   const selected = selectCiJobs(input.split(/\r?\n/));
   process.stdout.write(`rust=${selected.rust}\nedge=${selected.edge}\n`);
 }
