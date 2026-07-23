@@ -51,6 +51,11 @@ pub struct SecretDigest([u8; 32]);
 
 impl SecretDigest {
     #[must_use]
+    pub(crate) fn from_digest(value: [u8; 32]) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
     pub fn from_secret(value: &str) -> Self {
         Self(Sha256::digest(value.as_bytes()).into())
     }

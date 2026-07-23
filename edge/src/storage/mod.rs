@@ -21,7 +21,11 @@ use sqlx::{
 use tokio::sync::Mutex;
 
 mod activation;
+mod auth;
 pub use activation::{ActivationCommand, DescriptorApply, EdgeNode, EdgeNodeState};
+pub use auth::{
+    Account, AccountCredential, AccountProvision, AuditActor, AuditEvent, StoredSession,
+};
 
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");
@@ -128,6 +132,18 @@ pub enum StorageError {
     ActivationConflict,
     #[error("descriptor revision conflicts with the previously accepted content")]
     DescriptorConflict,
+    #[error("Edge account was not found")]
+    AccountNotFound,
+    #[error("Edge account revision does not match")]
+    RevisionMismatch,
+    #[error("the last active system administrator cannot be disabled or demoted")]
+    LastSystemAdmin,
+    #[error("Edge session was not found or is no longer active")]
+    SessionNotFound,
+    #[error("Edge account already exists")]
+    AccountConflict,
+    #[error("Edge account operation is invalid: {0}")]
+    InvalidAccount(String),
 }
 
 #[derive(Clone)]

@@ -54,7 +54,11 @@ IOTKIT_TEST_POSTGRES_DSN="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres
   cargo test -p iotkit-edge --test storage_contract \
     postgres_obeys_the_same_raw_custody_contract_when_configured -- --ignored --nocapture
 
+IOTKIT_TEST_POSTGRES_DSN="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres_port/iotkit?sslmode=disable" \
+  cargo test -p iotkit-edge --test auth_storage_contract \
+    postgres_obeys_account_session_and_admin_safety_contract -- --ignored --nocapture
+
 IOTKIT_TEST_MQTT_PORT="$broker_port" \
   cargo test -p iotkit-edge --test mqtt_runtime_broker -- --ignored --nocapture
 
-echo "Rust Edge PostgreSQL and Mosquitto custody tests passed."
+echo "Rust Edge PostgreSQL, auth, and Mosquitto custody tests passed."
