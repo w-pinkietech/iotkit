@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn security_headers_and_route_inventory_are_stable() {
-    let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
+    let app = router(WebConfig::test(), Arc::new(StubApplication::system_admin()));
     for path in [
         "/",
         "/login",
@@ -42,11 +42,10 @@ async fn security_headers_and_route_inventory_are_stable() {
         "/api/v1/system/storage",
         "/api/v1/system/diagnostics",
         "/api/v1/setup/devices",
-        "/api/v1/output/adapters",
-        "/api/v1/output/profiles",
-        "/api/v1/output/bindings",
-        "/api/v1/output/routes",
-        "/api/v1/audit",
+        "/api/v1/output-adapters",
+        "/api/v1/export-profiles",
+        "/api/v1/output-routes",
+        "/api/v1/audit-events",
         "/api/v1/accounts",
         "/static/edge.css",
         "/static/console.js",
@@ -70,12 +69,12 @@ async fn security_headers_and_route_inventory_are_stable() {
         "/console/edge-nodes/edge-1/activation",
         "/console/signals/signal-1/profile",
         "/console/signals/signal-1/calibration",
-        "/console/signals/signal-1/rules",
-        "/console/signals/signal-1/retire",
-        "/console/signals/signal-1/reset",
-        "/console/output/profiles/profile-1/activate",
-        "/console/output/profiles/profile-1/stop",
-        "/console/output/bindings/binding-1/start",
+        "/console/signals/signal-1/semantic-rules",
+        "/console/semantic-rules/rule-1/retire",
+        "/console/semantic-rules/rule-1/counter-resets",
+        "/console/export-profiles",
+        "/console/export-profiles/profile-1/stop",
+        "/console/output-bindings/binding-1/start",
         "/console/accounts",
         "/console/accounts/account-1",
         "/api/v1/session",
@@ -84,12 +83,10 @@ async fn security_headers_and_route_inventory_are_stable() {
         "/api/v1/devices/device-1/profile",
         "/api/v1/signals/signal-1/profile",
         "/api/v1/signals/signal-1/calibration",
-        "/api/v1/signals/signal-1/rules",
-        "/api/v1/signals/signal-1/retire",
-        "/api/v1/signals/signal-1/reset",
-        "/api/v1/output/profiles",
-        "/api/v1/output/bindings",
-        "/api/v1/output/routes",
+        "/api/v1/signals/signal-1/semantic-rules",
+        "/api/v1/semantic-rules/rule-1/counter-resets",
+        "/api/v1/export-profiles",
+        "/api/v1/output-bindings/binding-1/start",
         "/api/v1/accounts",
         "/api/v1/mapping-previews",
     ] {
@@ -185,5 +182,71 @@ async fn login_rejects_unknown_fields_and_oversized_bodies_with_json_errors() {
             response.headers()[header::CONTENT_TYPE],
             "application/json; charset=utf-8"
         );
+    }
+}
+
+#[tokio::test]
+async fn existing_put_routes_are_registered_and_dispatchable() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
+    for path in [
+        "/api/v1/devices/device-1/profile",
+        "/api/v1/signals/signal-1/profile",
+        "/api/v1/signals/signal-1/calibration",
+        "/api/v1/semantic-rules/rule-1",
+        "/api/v1/output-bindings/binding-1",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::put(path)
+                    .header(header::ORIGIN, "http://127.0.0.1:8080")
+                    .header(
+                        header::COOKIE,
+                        "iotkit_edge_session=valid; iotkit_edge_csrf=csrf",
+                    )
+                    .header("x-csrf-token", "csrf")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(response.status(), StatusCode::NOT_FOUND, "PUT {path}");
+        assert_ne!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "PUT {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mutation_status_codes_match_the_existing_api() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::system_admin()));
+    for (path, expected) in [
+        ("/api/v1/edge-nodes/edge-1/activation", StatusCode::ACCEPTED),
+        (
+            "/api/v1/signals/signal-1/semantic-rules",
+            StatusCode::CREATED,
+        ),
+        ("/api/v1/accounts", StatusCode::CREATED),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(path)
+                    .header(header::ORIGIN, "http://127.0.0.1:8080")
+                    .header(
+                        header::COOKIE,
+                        "iotkit_edge_session=valid; iotkit_edge_csrf=csrf",
+                    )
+                    .header("x-csrf-token", "csrf")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{path}");
     }
 }

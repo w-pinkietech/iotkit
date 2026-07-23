@@ -46,6 +46,31 @@ fn clap_preserves_backup_and_diagnose_operational_flags() {
 }
 
 #[test]
+fn serve_preserves_storage_and_console_binding_flags() {
+    let cli = Cli::try_parse_from([
+        "iotkit-edge",
+        "serve",
+        "--storage-profile",
+        "embedded",
+        "--db",
+        "/data/edge.db",
+        "--http-listen",
+        "127.0.0.1:8080",
+        "--public-origin",
+        "https://edge.example",
+    ])
+    .unwrap();
+    match cli.command.unwrap() {
+        Command::Serve(args) => {
+            assert_eq!(args.storage.database, PathBuf::from("/data/edge.db"));
+            assert_eq!(args.http_listen.to_string(), "127.0.0.1:8080");
+            assert_eq!(args.public_origin, "https://edge.example");
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
 fn secrets_are_file_inputs_and_cannot_be_supplied_as_cli_values() {
     assert!(
         Cli::try_parse_from([

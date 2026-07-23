@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{Form, Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -61,16 +61,47 @@ pub struct LoginSession {
     pub principal: Principal,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct RawHistoryRow {
     pub received_at: String,
     pub observed_at: String,
     pub edge_node_id: String,
+    pub ledger_epoch: String,
+    pub pub_seq: i64,
     pub signal_ref: String,
     pub series_key: String,
     pub sensor_name: String,
     pub values: String,
+    pub value_type: String,
     pub unit: String,
+    pub decimal_places: i32,
+    pub display_value_kind: String,
+}
+
+impl Serialize for RawHistoryRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let values =
+            serde_json::from_str::<Value>(&self.values).unwrap_or_else(|_| json!(self.values));
+        json!({
+            "signal_ref": self.signal_ref,
+            "series_key": self.series_key,
+            "edge_node_id": self.edge_node_id,
+            "ledger_epoch": self.ledger_epoch,
+            "pub_seq": self.pub_seq,
+            "received_at": self.received_at.parse::<i64>().unwrap_or_default(),
+            "observed_at": self.observed_at.parse::<i64>().unwrap_or_default(),
+            "values": values,
+            "value_type": self.value_type,
+            "unit": self.unit,
+            "display_name": self.sensor_name,
+            "decimal_places": self.decimal_places,
+            "display_value_kind": self.display_value_kind,
+        })
+        .serialize(serializer)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -105,14 +136,126 @@ pub struct SemanticHistoryPage {
     pub has_more: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct ConsoleRequest {
+    pub path: String,
+    pub query: HashMap<String, String>,
+    pub principal: Principal,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConsoleView {
+    pub notice: String,
+    pub page_error: String,
+    pub edge_nodes: Vec<ConsoleEdgeNode>,
+    pub signals: Vec<ConsoleSignal>,
+    pub selected_edge_node: Option<ConsoleEdgeNode>,
+    pub selected_signal: Option<ConsoleSignal>,
+    pub history: Vec<RawHistoryRow>,
+    pub history_chart_path: String,
+    pub history_raw_export_url: String,
+    pub history_processed_export_url: String,
+    pub outputs: Vec<ConsoleOutput>,
+    pub accounts: Vec<ConsoleAccount>,
+    pub audit: Vec<ConsoleAudit>,
+    pub storage: ConsoleStorage,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleEdgeNode {
+    pub edge_node_ref: String,
+    pub edge_node_id: String,
+    pub name: String,
+    pub location: String,
+    pub state_label: String,
+    pub state_class: String,
+    pub can_activate: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleSignal {
+    pub signal_ref: String,
+    pub device_ref: String,
+    pub edge_node_id: String,
+    pub name: String,
+    pub sensor_type: String,
+    pub value: String,
+    pub unit: String,
+    pub status_label: String,
+    pub status_class: String,
+    pub profile_complete: bool,
+    pub rules: Vec<ConsoleRule>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleRule {
+    pub rule_id: String,
+    pub display_name: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleOutput {
+    pub profile_id: String,
+    pub adapter_id: String,
+    pub display_name: String,
+    pub description: String,
+    pub active: bool,
+    pub bindings: Vec<ConsoleBinding>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleBinding {
+    pub binding_id: String,
+    pub sensor_name: String,
+    pub rule_name: String,
+    pub state_label: String,
+    pub prepared: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleAccount {
+    pub account_ref: String,
+    pub login_id: String,
+    pub display_name: String,
+    pub role: String,
+    pub state: String,
+    pub revision: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleAudit {
+    pub occurred_at: String,
+    pub actor: String,
+    pub action: String,
+    pub target: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConsoleStorage {
+    pub profile_label: String,
+    pub raw_count: i64,
+    pub pending_output_count: i64,
+    pub used_percent: u8,
+    pub host_capacity_available: bool,
+    pub retention_note: String,
+    pub diagnostic_messages: Vec<String>,
+}
+
 #[async_trait]
 pub trait WebApplication: Send + Sync + 'static {
     async fn login(&self, username: &str, password: &str) -> Result<LoginSession, WebError>;
     async fn authenticate(&self, token: &str) -> Result<Principal, WebError>;
     async fn validate_csrf(&self, token: &str, csrf: &str) -> bool;
     async fn logout(&self, token: &str) -> Result<(), WebError>;
+    async fn console(&self, request: ConsoleRequest) -> Result<ConsoleView, WebError>;
     async fn query(&self, operation: ApiQuery) -> Result<Value, WebError>;
-    async fn mutate(&self, operation: ApiMutation, body: Value) -> Result<Value, WebError>;
+    async fn mutate(
+        &self,
+        principal: &Principal,
+        operation: ApiMutation,
+        body: Value,
+    ) -> Result<MutationOutput, WebError>;
     async fn raw_history(&self, query: HistoryQuery, export: bool)
     -> Result<HistoryPage, WebError>;
     async fn history_series(&self, query: HistoryQuery) -> Result<Value, WebError>;
@@ -136,6 +279,38 @@ pub enum ApiMutation {
     },
 }
 
+#[derive(Clone, Debug)]
+pub struct MutationOutput {
+    pub status: StatusCode,
+    pub body: Value,
+}
+
+impl MutationOutput {
+    #[must_use]
+    pub fn ok(body: Value) -> Self {
+        Self {
+            status: StatusCode::OK,
+            body,
+        }
+    }
+
+    #[must_use]
+    pub fn created(body: Value) -> Self {
+        Self {
+            status: StatusCode::CREATED,
+            body,
+        }
+    }
+
+    #[must_use]
+    pub fn accepted(body: Value) -> Self {
+        Self {
+            status: StatusCode::ACCEPTED,
+            body,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct HistoryQuery {
     pub from: Option<String>,
@@ -144,6 +319,7 @@ pub struct HistoryQuery {
     pub cursor: Option<String>,
     pub signal_ref: Option<String>,
     pub edge_node_id: Option<String>,
+    pub bucket_ms: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -176,7 +352,10 @@ pub fn router(config: WebConfig, application: Arc<dyn WebApplication>) -> Router
         .route("/api/v1/mapping-previews", post(api_mutation))
         .route(
             "/api/v1/{*path}",
-            get(api_query).post(api_mutation).delete(api_mutation),
+            get(api_query)
+                .post(api_mutation)
+                .put(api_mutation)
+                .delete(api_mutation),
         )
         .route("/console/{*path}", post(console_mutation));
 
@@ -238,6 +417,8 @@ struct ConsoleTemplate<'a> {
     display_name: &'a str,
     role: &'a str,
     is_owner: bool,
+    is_admin: bool,
+    view: ConsoleView,
 }
 
 #[derive(Template)]
@@ -261,9 +442,25 @@ async fn console_page(
     }
     let csrf = cookie(request.headers(), CSRF_COOKIE).unwrap_or_default();
     let path = request.uri().path();
+    if path == "/monitor" || path == "/signals" {
+        return Ok(Redirect::to("/sensors").into_response());
+    }
     let page = navigation_page(path);
     let title = console_title(path);
     let sensor_view = if path == "/sensors" { "list" } else { "" };
+    let query = request
+        .uri()
+        .query()
+        .map(|value| serde_urlencoded::from_str(value).unwrap_or_default())
+        .unwrap_or_default();
+    let view = state
+        .application
+        .console(ConsoleRequest {
+            path: path.to_owned(),
+            query,
+            principal: principal.clone(),
+        })
+        .await?;
     Ok(Html(
         ConsoleTemplate {
             title,
@@ -273,6 +470,8 @@ async fn console_page(
             display_name: &principal.display_name,
             role: &principal.role,
             is_owner: principal.role == "system_admin",
+            is_admin: principal.role == "admin" || principal.role == "system_admin",
+            view,
         }
         .render()
         .map_err(internal)?,
@@ -346,6 +545,7 @@ async fn password_form(State(state): State<AppState>, request: Request) -> Respo
         || state
             .application
             .mutate(
+                &principal,
                 ApiMutation::Named {
                     route: "/password".into(),
                     params: HashMap::new(),
@@ -511,17 +711,18 @@ async fn logout_form(
 async fn api_query(
     State(state): State<AppState>,
     Path(path): Path<String>,
-    Query(params): Query<HashMap<String, String>>,
+    Query(mut params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, WebError> {
-    api_auth(&state, &headers).await?;
+    let principal = api_auth(&state, &headers).await?;
+    let route = format!("/api/v1/{path}");
+    let path_params = match_known_route(&route, router::API_GET_ROUTES).ok_or_else(not_found)?;
+    params.extend(path_params);
+    authorize_query(&principal, &route)?;
     Ok(Json(
         state
             .application
-            .query(ApiQuery::Named {
-                route: format!("/api/v1/{path}"),
-                params,
-            })
+            .query(ApiQuery::Named { route, params })
             .await?,
     ))
 }
@@ -529,9 +730,17 @@ async fn api_query(
 async fn api_mutation(
     State(state): State<AppState>,
     request: Request,
-) -> Result<Json<Value>, WebError> {
+) -> Result<Response, WebError> {
     let principal = require_mutation(&state, request.headers()).await?;
     let route = request.uri().path().to_owned();
+    let clears_session = route == "/api/v1/session/password";
+    let known = match *request.method() {
+        Method::POST => router::API_POST_ROUTES,
+        Method::PUT => router::API_PUT_ROUTES,
+        Method::DELETE => router::API_DELETE_ROUTES,
+        _ => &[],
+    };
+    let params = match_known_route(&route, known).ok_or_else(not_found)?;
     authorize_mutation(&principal, &route)?;
     let body = axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES)
         .await
@@ -553,18 +762,15 @@ async fn api_mutation(
             )
         })?
     };
-    Ok(Json(
-        state
-            .application
-            .mutate(
-                ApiMutation::Named {
-                    route,
-                    params: HashMap::new(),
-                },
-                value,
-            )
-            .await?,
-    ))
+    let output = state
+        .application
+        .mutate(&principal, ApiMutation::Named { route, params }, value)
+        .await?;
+    let mut response = (output.status, Json(output.body)).into_response();
+    if clears_session {
+        clear_session_cookies(response.headers_mut(), &state.config)?;
+    }
+    Ok(response)
 }
 
 async fn console_mutation(
@@ -573,6 +779,7 @@ async fn console_mutation(
 ) -> Result<Response, WebError> {
     let headers = request.headers().clone();
     let route = request.uri().path().to_owned();
+    let params = match_known_route(&route, router::CONSOLE_POST_ROUTES).ok_or_else(not_found)?;
     let body = axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES)
         .await
         .map_err(|_| {
@@ -587,23 +794,48 @@ async fn console_mutation(
     let principal =
         require_mutation_form(&state, &headers, form.get("_csrf").map(String::as_str)).await?;
     authorize_mutation(&principal, &route)?;
-    state
+    let result = state
         .application
         .mutate(
-            ApiMutation::Named {
-                route,
-                params: HashMap::new(),
-            },
+            &principal,
+            ApiMutation::Named { route, params },
             serde_json::to_value(form).map_err(internal)?,
         )
-        .await?;
-    Ok(Redirect::to(
-        headers
-            .get(header::REFERER)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("/status"),
-    )
-    .into_response())
+        .await;
+    let target = console_result_location(&headers, result.as_ref().err());
+    if let Err(error) = result
+        && error.status == StatusCode::PRECONDITION_FAILED
+    {
+        return Ok((
+            StatusCode::PRECONDITION_FAILED,
+            "画面を再読み込みして、もう一度操作してください。",
+        )
+            .into_response());
+    }
+    Ok(Redirect::to(&target).into_response())
+}
+
+fn console_result_location(headers: &HeaderMap, error: Option<&WebError>) -> String {
+    let mut target = headers
+        .get(header::REFERER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| url::Url::parse(value).ok())
+        .unwrap_or_else(|| {
+            url::Url::parse("http://localhost/status").expect("static URL is valid")
+        });
+    target.set_fragment(None);
+    {
+        let mut query = target.query_pairs_mut();
+        if let Some(error) = error {
+            query.append_pair("error", error.code);
+        } else {
+            query.append_pair("saved", "1");
+        }
+    }
+    match target.query() {
+        Some(query) => format!("{}?{query}", target.path()),
+        None => target.path().into(),
+    }
 }
 
 async fn history_json(
@@ -614,9 +846,11 @@ async fn history_json(
     api_auth(&state, &headers).await?;
     validate_history_query(&query)?;
     let page = state.application.raw_history(query, false).await?;
-    Ok(Json(
-        json!({"items":page.rows,"next_cursor":page.next_cursor}),
-    ))
+    let mut response = json!({"records":page.rows,"has_more":page.has_more});
+    if let Some(cursor) = page.next_cursor {
+        response["next_cursor"] = json!(cursor);
+    }
+    Ok(Json(response))
 }
 
 async fn history_series(
@@ -626,6 +860,25 @@ async fn history_series(
 ) -> Result<Json<Value>, WebError> {
     api_auth(&state, &headers).await?;
     validate_history_query(&query)?;
+    if query.signal_ref.as_deref().unwrap_or("").is_empty() {
+        return Err(WebError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "signal_ref is required",
+        )
+        .field("signal_ref"));
+    }
+    let bucket_ms = query.bucket_ms.unwrap_or_default();
+    let from = parse_history_time(query.from.as_deref(), "from")?;
+    let to = parse_history_time(query.to.as_deref(), "to")?;
+    if bucket_ms <= 0 || (to - from + bucket_ms - 1) / bucket_ms > 1_000 {
+        return Err(WebError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "history series bucket count must be between 1 and 1000",
+        )
+        .field("bucket_ms"));
+    }
     Ok(Json(state.application.history_series(query).await?))
 }
 
@@ -635,7 +888,7 @@ async fn history_csv(
     Query(query): Query<HistoryQuery>,
 ) -> Result<Response, WebError> {
     api_auth(&state, &headers).await?;
-    validate_history_query(&query)?;
+    validate_history_export_query(&query)?;
     let page = state.application.raw_history(query, true).await?;
     if page.has_more || page.rows.len() > MAX_HISTORY_EXPORT_ROWS {
         return Err(WebError::new(
@@ -653,7 +906,7 @@ async fn semantic_history_csv(
     Query(query): Query<HistoryQuery>,
 ) -> Result<Response, WebError> {
     api_auth(&state, &headers).await?;
-    validate_history_query(&query)?;
+    validate_history_export_query(&query)?;
     let page = state.application.semantic_history(query).await?;
     if page.has_more || page.rows.len() > MAX_HISTORY_EXPORT_ROWS {
         return Err(WebError::new(
@@ -669,17 +922,7 @@ async fn semantic_history_csv(
 }
 
 fn validate_history_query(query: &HistoryQuery) -> Result<(), WebError> {
-    if query.from.as_deref().unwrap_or("").is_empty() {
-        return Err(
-            WebError::new(StatusCode::BAD_REQUEST, "invalid_query", "from is required")
-                .field("from"),
-        );
-    }
-    if query.to.as_deref().unwrap_or("").is_empty() {
-        return Err(
-            WebError::new(StatusCode::BAD_REQUEST, "invalid_query", "to is required").field("to"),
-        );
-    }
+    validate_history_range(query)?;
     let limit = query.limit.unwrap_or(200);
     if limit == 0 || limit > MAX_HISTORY_PAGE {
         return Err(WebError::new(
@@ -690,6 +933,65 @@ fn validate_history_query(query: &HistoryQuery) -> Result<(), WebError> {
         .field("limit"));
     }
     Ok(())
+}
+
+fn validate_history_export_query(query: &HistoryQuery) -> Result<(), WebError> {
+    validate_history_range(query)?;
+    if query.cursor.is_some() {
+        return Err(WebError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "cursor is not allowed for CSV export",
+        )
+        .field("cursor"));
+    }
+    Ok(())
+}
+
+fn validate_history_range(query: &HistoryQuery) -> Result<(), WebError> {
+    let from = parse_history_time(query.from.as_deref(), "from")?;
+    let to = parse_history_time(query.to.as_deref(), "to")?;
+    if to <= from {
+        return Err(WebError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "to must be greater than from",
+        )
+        .field("to"));
+    }
+    const MAX_RANGE_MS: i64 = 31 * 24 * 60 * 60 * 1_000;
+    if to - from > MAX_RANGE_MS {
+        return Err(WebError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "history range must not exceed 31 days",
+        )
+        .field("to"));
+    }
+    Ok(())
+}
+
+fn parse_history_time(value: Option<&str>, field: &'static str) -> Result<i64, WebError> {
+    let value = value.filter(|value| !value.is_empty()).ok_or_else(|| {
+        WebError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            format!("{field} is required"),
+        )
+        .field(field)
+    })?;
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| {
+            WebError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_query",
+                format!("{field} must be a non-negative Unix millisecond timestamp"),
+            )
+            .field(field)
+        })
 }
 
 fn raw_csv(rows: &[RawHistoryRow]) -> Vec<u8> {
@@ -906,6 +1208,39 @@ fn unauthenticated() -> WebError {
         "authentication is required",
     )
 }
+
+fn not_found() -> WebError {
+    WebError::new(StatusCode::NOT_FOUND, "not_found", "route was not found")
+}
+
+fn match_known_route(actual: &str, patterns: &[&str]) -> Option<HashMap<String, String>> {
+    patterns
+        .iter()
+        .find_map(|pattern| match_route(actual, pattern))
+}
+
+fn match_route(actual: &str, pattern: &str) -> Option<HashMap<String, String>> {
+    let actual: Vec<_> = actual.trim_matches('/').split('/').collect();
+    let pattern: Vec<_> = pattern.trim_matches('/').split('/').collect();
+    if actual.len() != pattern.len() {
+        return None;
+    }
+    let mut params = HashMap::new();
+    for (actual, pattern) in actual.into_iter().zip(pattern) {
+        if let Some(name) = pattern
+            .strip_prefix('{')
+            .and_then(|value| value.strip_suffix('}'))
+        {
+            if actual.is_empty() {
+                return None;
+            }
+            params.insert(name.into(), actual.into());
+        } else if actual != pattern {
+            return None;
+        }
+    }
+    Some(params)
+}
 fn authorize_mutation(principal: &Principal, route: &str) -> Result<(), WebError> {
     let allowed = if route == "/password" || route == "/api/v1/session/password" {
         true
@@ -913,6 +1248,23 @@ fn authorize_mutation(principal: &Principal, route: &str) -> Result<(), WebError
         principal.role == "system_admin"
     } else {
         principal.role == "admin" || principal.role == "system_admin"
+    };
+    allowed.then_some(()).ok_or_else(|| {
+        WebError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "the account is not allowed to perform this operation",
+        )
+    })
+}
+
+fn authorize_query(principal: &Principal, route: &str) -> Result<(), WebError> {
+    let allowed = if route == "/api/v1/accounts" {
+        principal.role == "system_admin"
+    } else if route == "/api/v1/setup/devices" {
+        principal.role == "admin" || principal.role == "system_admin"
+    } else {
+        true
     };
     allowed.then_some(()).ok_or_else(|| {
         WebError::new(
@@ -966,14 +1318,29 @@ async fn mark_svg() -> impl IntoResponse {
 pub mod test_support {
     use super::*;
 
-    #[derive(Default)]
     pub struct StubApplication {
         authenticated: bool,
+        role: &'static str,
+    }
+    impl Default for StubApplication {
+        fn default() -> Self {
+            Self {
+                authenticated: false,
+                role: "admin",
+            }
+        }
     }
     impl StubApplication {
         pub fn authenticated() -> Self {
             Self {
                 authenticated: true,
+                role: "admin",
+            }
+        }
+        pub fn system_admin() -> Self {
+            Self {
+                authenticated: true,
+                role: "system_admin",
             }
         }
     }
@@ -995,7 +1362,7 @@ pub mod test_support {
                     account_ref: "acct-admin".into(),
                     login_id: "admin".into(),
                     display_name: "Administrator".into(),
-                    role: "admin".into(),
+                    role: self.role.into(),
                     state: "active".into(),
                     must_change_password: false,
                     revision: 1,
@@ -1012,7 +1379,7 @@ pub mod test_support {
                 account_ref: "acct-admin".into(),
                 login_id: "admin".into(),
                 display_name: "Administrator".into(),
-                role: "admin".into(),
+                role: self.role.into(),
                 state: "active".into(),
                 must_change_password: false,
                 revision: 1,
@@ -1026,11 +1393,159 @@ pub mod test_support {
         async fn logout(&self, _token: &str) -> Result<(), WebError> {
             Ok(())
         }
+        async fn console(&self, request: ConsoleRequest) -> Result<ConsoleView, WebError> {
+            let signal = ConsoleSignal {
+                signal_ref: "signal-01".into(),
+                device_ref: "device-01".into(),
+                edge_node_id: "factory-edge-01".into(),
+                name: "乾燥炉入口 温度".into(),
+                sensor_type: "温度".into(),
+                value: "28.5".into(),
+                unit: "℃".into(),
+                status_label: "受信中".into(),
+                status_class: "receiving".into(),
+                profile_complete: true,
+                rules: vec![ConsoleRule {
+                    rule_id: "rule-01".into(),
+                    display_name: "現在温度".into(),
+                    kind: "numeric".into(),
+                }],
+            };
+            let selected_edge_node =
+                request
+                    .path
+                    .contains("/edge-nodes/edge-node-02")
+                    .then(|| ConsoleEdgeNode {
+                        edge_node_ref: "edge-node-02".into(),
+                        edge_node_id: "assembly-edge-02".into(),
+                        name: "assembly-edge-02".into(),
+                        location: "組立ライン".into(),
+                        state_label: "未登録".into(),
+                        state_class: "needs-setup".into(),
+                        can_activate: true,
+                    });
+            let selected_signal = request
+                .path
+                .contains("/sensors/signal-01")
+                .then(|| signal.clone());
+            Ok(ConsoleView {
+                edge_nodes: vec![
+                    ConsoleEdgeNode {
+                        edge_node_ref: "edge-node-01".into(),
+                        edge_node_id: "factory-edge-01".into(),
+                        name: "factory-edge-01".into(),
+                        location: "乾燥炉".into(),
+                        state_label: "登録済み".into(),
+                        state_class: "configured".into(),
+                        can_activate: false,
+                    },
+                    ConsoleEdgeNode {
+                        edge_node_ref: "edge-node-02".into(),
+                        edge_node_id: "assembly-edge-02".into(),
+                        name: "assembly-edge-02".into(),
+                        location: "組立ライン".into(),
+                        state_label: "未登録".into(),
+                        state_class: "needs-setup".into(),
+                        can_activate: true,
+                    },
+                ],
+                signals: vec![signal],
+                selected_edge_node,
+                selected_signal,
+                history: vec![RawHistoryRow {
+                    received_at: "1735689601000".into(),
+                    observed_at: "1735689600000".into(),
+                    edge_node_id: "factory-edge-01".into(),
+                    ledger_epoch: "epoch-01".into(),
+                    pub_seq: 1,
+                    signal_ref: "signal-01".into(),
+                    series_key: "temperature".into(),
+                    sensor_name: "乾燥炉入口 温度".into(),
+                    values: "[28.5]".into(),
+                    value_type: "number".into(),
+                    unit: "℃".into(),
+                    decimal_places: 1,
+                    display_value_kind: "numeric".into(),
+                }],
+                history_chart_path: "M0 90 L120 60 L240 70 L360 20".into(),
+                history_raw_export_url:
+                    "/api/v1/history.csv?from=0&to=2678400000&signal_ref=signal-01".into(),
+                history_processed_export_url:
+                    "/api/v1/semantic-history.csv?from=0&to=2678400000&signal_ref=signal-01".into(),
+                outputs: vec![
+                    ConsoleOutput {
+                        profile_id: String::new(),
+                        adapter_id: "iotkit.mqtt-json.v1".into(),
+                        display_name: "汎用MQTT JSONで送る".into(),
+                        description: "意味づけ済みの値をIoTKit共通形式で送ります。".into(),
+                        active: false,
+                        bindings: Vec::new(),
+                    },
+                    ConsoleOutput {
+                        profile_id: String::new(),
+                        adapter_id: "pinikiet.mqtt.v1".into(),
+                        display_name: "Pinikietへ送る".into(),
+                        description: "累積値・状態・アラームをPinikiet契約へ変換します。".into(),
+                        active: false,
+                        bindings: Vec::new(),
+                    },
+                ],
+                accounts: vec![ConsoleAccount {
+                    account_ref: "acct-owner".into(),
+                    login_id: "owner".into(),
+                    display_name: "システム管理者".into(),
+                    role: "system_admin".into(),
+                    state: "active".into(),
+                    revision: 1,
+                }],
+                audit: vec![ConsoleAudit {
+                    occurred_at: "2025-01-01T00:00:00Z".into(),
+                    actor: "admin".into(),
+                    action: "設定を変更".into(),
+                    target: "signal-01".into(),
+                }],
+                storage: ConsoleStorage {
+                    profile_label: "組み込みSQLite".into(),
+                    raw_count: 1,
+                    pending_output_count: 0,
+                    used_percent: 12,
+                    host_capacity_available: true,
+                    retention_note: "rawの自動削除は無効".into(),
+                    diagnostic_messages: vec!["確認が必要なことはありません".into()],
+                },
+                ..ConsoleView::default()
+            })
+        }
         async fn query(&self, operation: ApiQuery) -> Result<Value, WebError> {
             Ok(json!({"operation":format!("{operation:?}")}))
         }
-        async fn mutate(&self, operation: ApiMutation, _body: Value) -> Result<Value, WebError> {
-            Ok(json!({"operation":format!("{operation:?}")}))
+        async fn mutate(
+            &self,
+            _principal: &Principal,
+            operation: ApiMutation,
+            _body: Value,
+        ) -> Result<MutationOutput, WebError> {
+            let status = match &operation {
+                ApiMutation::Named { route, .. }
+                    if route.ends_with("/activation")
+                        || route.ends_with("/counter-resets")
+                        || route.ends_with("/stop") =>
+                {
+                    StatusCode::ACCEPTED
+                }
+                ApiMutation::Named { route, .. }
+                    if route == "/api/v1/accounts"
+                        || route == "/api/v1/export-profiles"
+                        || route.ends_with("/semantic-rules") =>
+                {
+                    StatusCode::CREATED
+                }
+                _ => StatusCode::OK,
+            };
+            Ok(MutationOutput {
+                status,
+                body: json!({"operation":format!("{operation:?}")}),
+            })
         }
         async fn raw_history(
             &self,
@@ -1039,14 +1554,19 @@ pub mod test_support {
         ) -> Result<HistoryPage, WebError> {
             Ok(HistoryPage {
                 rows: vec![RawHistoryRow {
-                    received_at: "2025-01-01T00:00:00Z".into(),
-                    observed_at: "2025-01-01T00:00:00Z".into(),
+                    received_at: "1735689600000".into(),
+                    observed_at: "1735689600000".into(),
                     edge_node_id: "edge-1".into(),
+                    ledger_epoch: "epoch-1".into(),
+                    pub_seq: 1,
                     signal_ref: "signal-1".into(),
                     series_key: "temperature".into(),
                     sensor_name: "'=danger".into(),
-                    values: "{\"value\":1}".into(),
+                    values: "[1]".into(),
+                    value_type: "number".into(),
                     unit: "C".into(),
+                    decimal_places: 1,
+                    display_value_kind: "numeric".into(),
                 }],
                 next_cursor: None,
                 has_more: false,

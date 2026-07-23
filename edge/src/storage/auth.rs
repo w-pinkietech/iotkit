@@ -252,6 +252,38 @@ impl Storage {
         }
     }
 
+    pub async fn list_accounts(&self, limit: i64) -> Result<Vec<Account>, StorageError> {
+        if !(1..=100).contains(&limit) {
+            return Err(StorageError::InvalidAccount(
+                "account limit must be between 1 and 100".into(),
+            ));
+        }
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let rows = sqlx::query(
+                    "SELECT account_ref,login_id,display_name,role,state,must_change_password,\
+                     revision,created_at,updated_at,disabled_at FROM edge_accounts \
+                     ORDER BY login_id_normalized LIMIT ?",
+                )
+                .bind(limit)
+                .fetch_all(pool)
+                .await?;
+                rows.iter().map(decode_account).collect()
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let rows = sqlx::query(
+                    "SELECT account_ref,login_id,display_name,role,state,must_change_password,\
+                     revision,created_at,updated_at,disabled_at FROM edge_accounts \
+                     ORDER BY login_id_normalized LIMIT $1",
+                )
+                .bind(limit)
+                .fetch_all(pool)
+                .await?;
+                rows.iter().map(decode_account).collect()
+            }
+        }
+    }
+
     pub async fn get_account_credential_by_login(
         &self,
         login_id: &str,

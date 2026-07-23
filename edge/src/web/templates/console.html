@@ -11,20 +11,21 @@
   <a class="skip-link" href="#main-content">本文へ移動</a>
   <aside class="sidebar" id="sidebar">
     <a class="product-mark" href="/status" aria-label="IoTKit システム概要">
-      <img src="/static/pinkietech-mark.svg" alt=""><span><strong>IoTKit</strong><small>IoTKit Console</small></span>
+      <img src="/static/pinkietech-mark.svg" alt="">
+      <span><strong>IoTKit</strong><small>IoTKit Console</small></span>
     </a>
     <nav class="side-nav" aria-label="メインメニュー">
       <p class="nav-heading">状態を見る</p>
-      <a href="/status"{% if page == "status" %} class="active" aria-current="page"{% endif %}>概要</a>
-      <a href="/sensors"{% if page == "sensors" %} class="active" aria-current="page"{% endif %}>センサー一覧</a>
-      <a href="/logs"{% if page == "logs" %} class="active" aria-current="page"{% endif %}>受信履歴</a>
+      <a href="/status"{% if page == "status" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">⌂</span>概要</a>
+      <a href="/sensors"{% if page == "sensors" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">◉</span>センサー一覧</a>
+      <a href="/logs"{% if page == "logs" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">≡</span>受信履歴</a>
       <p class="nav-heading">設定</p>
-      <a href="/equipment"{% if page == "equipment" %} class="active" aria-current="page"{% endif %}>機器管理</a>
-      <a href="/output"{% if page == "output" %} class="active" aria-current="page"{% endif %}>外部出力</a>
+      <a href="/equipment"{% if page == "equipment" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">▣</span>機器管理</a>
+      <a href="/output"{% if page == "output" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">→</span>外部出力</a>
       <p class="nav-heading">管理</p>
-      <a href="/audit"{% if page == "audit" %} class="active" aria-current="page"{% endif %}>変更履歴</a>
-      {% if is_owner %}<a href="/accounts"{% if page == "accounts" %} class="active" aria-current="page"{% endif %}>アカウント</a>{% endif %}
-      <a href="/system"{% if page == "system" %} class="active" aria-current="page"{% endif %}>システム</a>
+      <a href="/audit"{% if page == "audit" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">✓</span>変更履歴</a>
+      {% if is_owner %}<a href="/accounts"{% if page == "accounts" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">人</span>アカウント</a>{% endif %}
+      <a href="/system"{% if page == "system" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">⚙</span>システム</a>
     </nav>
     <div class="sidebar-user">
       <span class="avatar" aria-hidden="true">人</span>
@@ -35,11 +36,270 @@
       </form>
     </div>
   </aside>
+
   <div class="console-area">
-    <header class="mobile-header"><button class="menu-button" type="button" aria-controls="sidebar" aria-expanded="false">☰</button><span>IoTKit Console</span></header>
+    <header class="mobile-header">
+      <button class="menu-button" type="button" aria-controls="sidebar" aria-expanded="false"><span aria-hidden="true">☰</span><span class="sr-only">メニューを開く</span></button>
+      <span>IoTKit Console</span>
+    </header>
     <main id="main-content" tabindex="-1">
-      <header class="page-header"><div><p class="eyebrow">IOTKIT EDGE</p><h1>{{ title }}</h1></div></header>
-      <div id="console-page-data" data-page="{{ page }}"></div>
+      <header class="page-header">
+        <div><p class="eyebrow">IOTKIT EDGE</p><h1>{{ title }}</h1></div>
+      </header>
+      {% if !view.notice.is_empty() %}<div class="feedback success-feedback" role="status">{{ view.notice }}</div>{% endif %}
+      {% if !view.page_error.is_empty() %}<div class="feedback error-feedback" role="alert">{{ view.page_error }}</div>{% endif %}
+
+      {% if page == "status" %}
+      <section class="health-banner healthy" aria-label="システムの状態">
+        <span class="health-icon" aria-hidden="true">✓</span>
+        <div><strong>センサーデータを受信しています</strong><p>IoTKit Edgeとセンサーの間で大きな問題は見つかっていません。</p></div>
+      </section>
+      <section class="metric-grid" aria-label="集計">
+        <article class="metric-card"><span class="metric-label">受信中</span><strong>{{ view.signals.len() }}</strong><small>件のセンサー</small></article>
+        <article class="metric-card"><span class="metric-label">登録済みの収集ノード</span><strong>{{ view.edge_nodes.len() }}</strong><small>台</small></article>
+      </section>
+      <section class="content-section">
+        <div class="section-heading"><div><p class="section-kicker">LIVE</p><h2>センサーの現在値</h2><p>最後に受信した値です。</p></div><a href="/sensors">すべてのセンサーを見る</a></div>
+        {% include "signal-table.html" %}
+      </section>
+      {% endif %}
+
+      {% if page == "sensors" %}
+      {% match view.selected_signal %}
+      {% when Some with (signal) %}
+      <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/sensors">センサー一覧</a><span aria-hidden="true">/</span><strong>{{ signal.name }}</strong></nav>
+      <header class="sensor-detail-header">
+        <div class="sensor-detail-identity"><span>{{ signal.sensor_type }}</span><h1>{{ signal.name }}</h1><small>{{ signal.edge_node_id }}</small></div>
+        <div class="sensor-detail-latest sensor-detail-latest--{{ signal.status_class }}"><span class="status-pill {{ signal.status_class }}">{{ signal.status_label }}</span><strong>{{ signal.value }} <small>{{ signal.unit }}</small></strong></div>
+      </header>
+      <section class="content-section sensor-setting-simulation" data-setting-simulation data-signal-ref="{{ signal.signal_ref }}" data-unit="{{ signal.unit }}" data-can-edit="false">
+        <div class="section-heading"><div><h2>受信値の推移</h2></div></div>
+        <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値のグラフ"><path d="{{ view.history_chart_path }}"></path></svg>
+        <p class="sr-only" data-preview-accessible-summary>受信値を表示しています。</p>
+      </section>
+      {% when None %}
+      <section class="toolbar" aria-label="センサーの絞り込み">
+        <label class="search-field"><span>センサーを探す</span><input type="search" data-table-search="signal-table" placeholder="センサー名、収集ノード、種類"></label>
+        <div class="toolbar-summary"><strong data-table-count="signal-table">{{ view.signals.len() }}</strong><span>件のセンサー</span></div>
+      </section>
+      <section class="content-section flush sensor-list-table">{% include "signal-table.html" %}</section>
+      {% endmatch %}
+      {% endif %}
+
+      {% if page == "equipment" %}
+      {% match view.selected_signal %}
+      {% when Some with (signal) %}
+      <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/equipment">機器管理</a><span aria-hidden="true">/</span><strong>{{ signal.name }}</strong></nav>
+      {% if !is_admin %}<div class="permission-note"><strong>閲覧のみ</strong><span>変更には設定管理者の権限が必要です。</span></div>{% endif %}
+      <div class="sensor-setting-workspace sensor-setting-workspace--settings">
+        <aside class="sensor-setting-preview">
+          <section class="content-section sensor-setting-simulation" data-setting-simulation data-signal-ref="{{ signal.signal_ref }}" data-unit="{{ signal.unit }}" data-can-edit="{% if is_admin %}true{% else %}false{% endif %}">
+            <div class="section-heading"><div><h2>実信号プレビュー</h2></div><button class="simulation-live" type="button" role="switch" aria-checked="true" data-preview-toggle><span>自動更新</span><b data-preview-toggle-state>ON</b></button></div>
+            <div class="sensor-preview-current"><strong data-preview-current-value>{{ signal.value }}</strong> {{ signal.unit }}</div>
+            <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値と設定結果のグラフ"><path d="{{ view.history_chart_path }}"></path><path d="{{ view.history_chart_path }}"></path></svg>
+            <p class="sr-only" data-preview-accessible-summary>受信値と設定結果を表示しています。</p>
+            <p class="simulation-message" data-preview-message role="status">最新の受信値を表示しています。</p>
+          </section>
+        </aside>
+        <div class="sensor-detail-settings" data-setting-tabs data-default-setting-tab="basic">
+          <div class="sensor-setting-tabs" role="tablist" aria-label="設定の種類">
+            <button type="button" role="tab" data-setting-tab="basic" aria-controls="setting-panel-basic">基本設定</button>
+            <button type="button" role="tab" data-setting-tab="normal" aria-controls="setting-panel-normal">通常の値</button>
+            <button type="button" role="tab" data-setting-tab="alarm" aria-controls="setting-panel-alarm">異常検知</button>
+          </div>
+          <section id="setting-panel-basic" data-setting-panel="basic">
+            {% if is_admin %}
+            <details id="sensor-profile" class="sensor-profile-editor">
+              <summary>名前と表示</summary>
+              <form method="post" action="/console/signals/{{ signal.signal_ref }}/profile" data-signal-profile>
+                <input type="hidden" name="_csrf" value="{{ csrf }}">
+                <label>表示名<input name="display_name" value="{{ signal.name }}" required></label>
+                <label>センサー種類<input name="display_sensor_type" value="{{ signal.sensor_type }}"></label>
+                <label>値の種類<select name="display_value_kind"><option value="numeric">数値</option><option value="boolean">ON/OFF</option></select></label>
+                <input type="hidden" name="display_unit_mode" value="custom">
+                <label>単位<input name="display_unit" value="{{ signal.unit }}"></label>
+                <label>小数桁<input name="decimal_places" type="number" value="1"></label>
+                <button type="submit">保存</button>
+              </form>
+            </details>
+            {% endif %}
+          </section>
+          <section id="setting-panel-normal" data-setting-panel="normal">
+            {% if is_admin %}<form method="post" action="/console/signals/{{ signal.signal_ref }}/calibration" class="calibration-form">
+              <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="1">
+              <label>補正倍率<input name="scale" type="number" step="any" value="1"></label>
+              <label>補正加算<input name="offset" type="number" step="any" value="0"></label>
+              <button type="submit">補正を保存</button>
+            </form>{% endif %}
+            {% for rule in signal.rules %}
+            <article class="semantic-rule">
+              <strong>{{ rule.display_name }}</strong><small>{{ rule.kind }}</small>
+              {% if is_admin %}
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="1">
+                <input name="display_name" value="{{ rule.display_name }}"><input type="hidden" name="kind" value="{{ rule.kind }}">
+                <button type="submit">変更</button>
+              </form>
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}/retire">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="1"><button type="submit">停止</button>
+              </form>
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}/counter-resets">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">カウンターをリセット</button>
+              </form>
+              {% endif %}
+            </article>
+            {% endfor %}
+            {% if is_admin %}
+            <details id="rule-create">
+              <summary>値の使い方を追加</summary>
+              <form method="post" action="/console/signals/{{ signal.signal_ref }}/semantic-rules" class="semantic-form">
+                <input type="hidden" name="_csrf" value="{{ csrf }}">
+                <label>表示名<input name="display_name" required></label>
+                <label>種類<select name="kind"><option value="numeric">通常の値</option><option value="cumulative_counter">累積値</option><option value="alarm">アラーム</option></select></label>
+                <input type="hidden" name="detector_mode" value="high_active">
+                <input name="rise_threshold" value="1">
+                <input name="fall_threshold" value="0">
+                <input name="rise_debounce_seconds" value="0">
+                <input name="fall_debounce_seconds" value="0">
+                <input type="hidden" name="trigger" value="on_transition">
+                <button type="submit">追加</button>
+              </form>
+            </details>
+            {% endif %}
+          </section>
+          <section id="setting-panel-alarm" data-setting-panel="alarm" hidden>
+            {% for rule in signal.rules %}{% if rule.kind == "alarm" %}<article class="semantic-rule"><strong>{{ rule.display_name }}</strong></article>{% endif %}{% endfor %}
+          </section>
+        </div>
+      </div>
+      {% when None %}
+      {% match view.selected_edge_node %}
+      {% when Some with (edge_node) %}
+      <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/equipment">機器管理</a><span aria-hidden="true">/</span><strong>{{ edge_node.name }}</strong></nav>
+      <section class="content-section">
+        <h2>{{ edge_node.name }}</h2><p>{{ edge_node.location }}</p><span class="status-pill {{ edge_node.state_class }}">{{ edge_node.state_label }}</span>
+        {% if edge_node.can_activate && is_admin %}
+        <form method="post" action="/console/edge-nodes/{{ edge_node.edge_node_ref }}/activation">
+          <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">登録する</button>
+        </form>
+        {% endif %}
+      </section>
+      {% when None %}
+      <section class="content-section equipment-list">
+        <div class="section-heading"><div><h2>収集ノードとデバイス</h2><p>接続元と登録状態を確認します。</p></div></div>
+        {% for edge_node in view.edge_nodes %}
+        <a class="equipment-row" href="/equipment/edge-nodes/{{ edge_node.edge_node_ref }}">
+          <span><strong>{{ edge_node.name }}</strong><small>{{ edge_node.location }}</small></span>
+          <span class="status-pill {{ edge_node.state_class }}">{{ edge_node.state_label }}</span>
+        </a>
+        {% endfor %}
+      </section>
+      {% endmatch %}
+      {% endmatch %}
+      {% endif %}
+
+      {% if page == "logs" %}
+      <form id="history-filter" class="toolbar" method="get" action="/logs">
+        <label>期間<select name="range"><option value="1h">直近1時間</option><option value="24h">直近24時間</option><option value="7d">直近7日</option><option value="30d">直近30日</option></select></label>
+        <label>センサー<select name="signal_ref">{% for signal in view.signals %}<option value="{{ signal.signal_ref }}">{{ signal.name }}</option>{% endfor %}</select></label>
+        <button type="submit">表示</button>
+      </form>
+      <section class="content-section">
+        <div class="section-heading"><div><h2>受信値の推移</h2></div></div>
+        <svg class="history-chart" viewBox="0 0 760 260" role="img"><path d="{{ view.history_chart_path }}"></path></svg>
+        <div class="button-row"><a href="{{ view.history_processed_export_url }}">加工後CSV</a><a href="{{ view.history_raw_export_url }}">受信した生データCSV</a></div>
+      </section>
+      <section class="content-section flush">
+        <table id="log-table"><thead><tr><th>受信日時</th><th>センサー</th><th>値</th><th>収集ノード</th></tr></thead><tbody>
+          {% for row in view.history %}<tr><td>{{ row.received_at }}</td><td>{{ row.sensor_name }}</td><td>{{ row.values }} {{ row.unit }}</td><td>{{ row.edge_node_id }}</td></tr>{% endfor %}
+        </tbody></table>
+      </section>
+      {% endif %}
+
+      {% if page == "output" %}
+      {% if !is_admin %}<div class="permission-note"><strong>閲覧のみ</strong><span>設定内容を確認できます。</span></div>{% endif %}
+      <section class="content-section">
+        <div class="section-heading"><div><h2>外部アプリへの送信</h2><p>出力先を選び、意味づけ済みの値を送ります。</p></div></div>
+        <div class="output-destination-grid">
+        {% for output in view.outputs %}
+          <article class="output-destination-card">
+            <h2>{{ output.display_name }}</h2><p>{{ output.description }}</p>
+            {% if is_admin && !output.active %}
+            <form method="post" action="/console/export-profiles" class="output-add-card">
+              <input type="hidden" name="_csrf" value="{{ csrf }}">
+              <input type="hidden" name="adapter_id" value="{{ output.adapter_id }}">
+              <label><input type="checkbox" name="auto_bind_future_rules" value="true">今後追加する値も自動で送る</label>
+              <button type="submit">追加</button>
+            </form>
+            {% endif %}
+            {% if is_admin && output.active %}
+            <form method="post" action="/console/export-profiles/{{ output.profile_id }}/stop" class="output-stop-form">
+              <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">送信を停止</button>
+            </form>
+            {% endif %}
+            <table class="output-binding-table"><thead><tr><th>センサー</th><th>値</th><th>状態</th></tr></thead><tbody>
+            {% for binding in output.bindings %}
+              <tr><td>{{ binding.sensor_name }}</td><td>{{ binding.rule_name }}</td><td>{{ binding.state_label }}
+              {% if is_admin && binding.prepared %}
+                <form method="post" action="/console/output-bindings/{{ binding.binding_id }}/start" class="prepared-output-start">
+                  <input type="hidden" name="_csrf" value="{{ csrf }}"><label><input type="checkbox" name="external_registration_complete" value="true">外部登録を完了</label><button type="submit">送信開始</button>
+                </form>
+              {% endif %}
+              {% if is_admin %}
+                <form method="post" action="/console/output-bindings/{{ binding.binding_id }}" class="output-binding-form">
+                  <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="mode" value="automatic"><button type="submit">設定を保存</button>
+                </form>
+              {% endif %}
+              </td></tr>
+            {% endfor %}
+            </tbody></table>
+          </article>
+        {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {% if page == "audit" %}
+      <section class="content-section flush"><table id="audit-table"><thead><tr><th>日時</th><th>操作した人</th><th>変更</th><th>対象</th></tr></thead><tbody>
+        {% for row in view.audit %}<tr><td>{{ row.occurred_at }}</td><td>{{ row.actor }}</td><td>{{ row.action }}</td><td>{{ row.target }}</td></tr>{% endfor %}
+      </tbody></table></section>
+      {% endif %}
+
+      {% if page == "accounts" && is_owner %}
+      <section class="content-section">
+        <div class="section-heading"><div><h2>アカウント</h2><p>Consoleを利用する担当者を管理します。</p></div></div>
+        <form method="post" action="/console/accounts" class="account-create-form">
+          <input type="hidden" name="_csrf" value="{{ csrf }}">
+          <label>ログインID<input name="login_id" required></label>
+          <label>表示名<input name="display_name" required></label>
+          <label>権限<select name="role"><option value="viewer">閲覧担当者</option><option value="admin">設定管理者</option><option value="system_admin">システム管理者</option></select></label>
+          <label>仮パスワード<input type="password" name="temporary_password" required></label>
+          <button type="submit">アカウントを追加</button>
+        </form>
+        <table><tbody>{% for account in view.accounts %}<tr><td>{{ account.login_id }}</td><td>{{ account.display_name }}</td><td>{{ account.role }}</td><td>{{ account.state }}</td><td>
+          <form method="post" action="/console/accounts/{{ account.account_ref }}" class="account-update-form">
+            <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}">
+            <input name="display_name" value="{{ account.display_name }}"><select name="role"><option value="{{ account.role }}">{{ account.role }}</option></select><button type="submit">変更</button>
+          </form>
+          <form method="post" action="/console/accounts/{{ account.account_ref }}/password" class="account-password-form">
+            <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}"><input type="password" name="temporary_password"><button type="submit">仮パスワードを発行</button>
+          </form>
+          <form method="post" action="/console/accounts/{{ account.account_ref }}/disable" class="account-disable-form">
+            <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}"><button type="submit">無効化</button>
+          </form>
+        </td></tr>{% endfor %}</tbody></table>
+      </section>
+      {% endif %}
+
+      {% if page == "system" %}
+      <section class="content-section">
+        <div class="section-heading"><div><h2>保存データの状態</h2><p>{{ view.storage.profile_label }}</p></div></div>
+        <dl class="storage-facts"><div><dt>raw受信データ</dt><dd>{{ view.storage.raw_count }}件</dd></div><div><dt>送信待ち</dt><dd>{{ view.storage.pending_output_count }}件</dd></div></dl>
+        {% if view.storage.host_capacity_available %}<div class="storage-meter"><progress max="100" value="{{ view.storage.used_percent }}"></progress><span>{{ view.storage.used_percent }}%</span></div>{% else %}<p>hostの空き容量は取得できません</p>{% endif %}
+        <p>{{ view.storage.retention_note }}</p>
+      </section>
+      <section class="content-section"><div class="section-heading"><div><h2>確認が必要なこと</h2></div></div><ul>{% for message in view.storage.diagnostic_messages %}<li>{{ message }}</li>{% endfor %}</ul></section>
+      {% endif %}
     </main>
   </div>
   <script src="/static/console.js" defer></script>

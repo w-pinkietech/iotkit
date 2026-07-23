@@ -5,6 +5,7 @@ pub mod commands;
 use std::{
     fs,
     io::Write,
+    net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -54,6 +55,33 @@ pub enum Command {
         #[command(subcommand)]
         command: AccountCommand,
     },
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ServeArgs {
+    #[command(flatten)]
+    pub storage: StorageArgs,
+    #[arg(long = "http-listen", default_value = "127.0.0.1:8080")]
+    pub http_listen: SocketAddr,
+    #[arg(long = "public-origin", default_value = "http://127.0.0.1:8080")]
+    pub public_origin: String,
+}
+
+impl Default for ServeArgs {
+    fn default() -> Self {
+        Self {
+            storage: StorageArgs {
+                profile: StorageProfileArg::Embedded,
+                database: PathBuf::from("edge.db"),
+                postgres_config: None,
+                storage_metadata: None,
+            },
+            http_listen: "127.0.0.1:8080"
+                .parse()
+                .expect("default listen address is valid"),
+            public_origin: "http://127.0.0.1:8080".into(),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

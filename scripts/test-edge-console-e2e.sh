@@ -22,7 +22,12 @@ postgres_container="iotkit-console-postgres-test-$$"
 postgres_dsn=""
 
 cleanup() {
+  if [[ -n "${edge_pid:-}" ]]; then
+    kill "$edge_pid" >/dev/null 2>&1 || true
+    wait "$edge_pid" >/dev/null 2>&1 || true
+  fi
   docker rm --force "$postgres_container" >/dev/null 2>&1 || true
+  rm -rf "${e2e_dir:-}"
 }
 trap cleanup EXIT
 
@@ -52,9 +57,59 @@ if [[ "$storage_profile" == "postgres" ]]; then
   postgres_dsn="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres_port/iotkit?sslmode=disable"
 fi
 
-cd "$repo_root/edge"
-IOTKIT_RUN_BROWSER_E2E=1 \
-  IOTKIT_TEST_CONSOLE_POSTGRES_DSN="$postgres_dsn" \
-  go test ./internal/edgehttp \
-    -run '^TestConsoleOperatorJourneyInBrowser$' \
-    -count=1
+e2e_dir=$(mktemp -d "$test_tmp_root/run.XXXXXX")
+password_file="$e2e_dir/password"
+printf '%s' '現場担当者の 十分に長いパスワード' >"$password_file"
+chmod 600 "$password_file"
+storage_args=(--storage-profile "$storage_profile")
+if [[ "$storage_profile" == "postgres" ]]; then
+  postgres_config="$e2e_dir/postgres.json"
+  printf '{"dsn":"%s"}' "$postgres_dsn" >"$postgres_config"
+  chmod 600 "$postgres_config"
+  storage_args+=(--postgres-config "$postgres_config")
+else
+  storage_args+=(--db "$e2e_dir/edge.db")
+fi
+
+TMPDIR="$test_tmp_root" cargo build -p iotkit-edge --bin iotkit-edge
+edge_binary="$repo_root/target/debug/iotkit-edge"
+"$edge_binary" account bootstrap \
+  "${storage_args[@]}" \
+  --login-id owner \
+  --display-name "第一工場 システム管理者" \
+  --password-file "$password_file" >/dev/null
+
+port=$(node -e '
+  const { createServer } = require("node:net");
+  const server = createServer();
+  server.listen(0, "127.0.0.1", () => {
+    console.log(server.address().port);
+    server.close();
+  });
+')
+origin="http://127.0.0.1:$port"
+"$edge_binary" serve \
+  "${storage_args[@]}" \
+  --http-listen "127.0.0.1:$port" \
+  --public-origin "$origin" \
+  >"$e2e_dir/edge.log" 2>&1 &
+edge_pid=$!
+
+ready=false
+for _ in $(seq 1 100); do
+  if node -e "fetch('$origin/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"; then
+    ready=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$ready" != true ]]; then
+  cat "$e2e_dir/edge.log" >&2
+  echo "Rust IoTKit Edge did not become ready" >&2
+  exit 1
+fi
+
+IOTKIT_EDGE_E2E_URL="$origin" \
+  IOTKIT_EDGE_E2E_PASSWORD="$(<"$password_file")" \
+  IOTKIT_TEST_STORAGE_PROFILE="$storage_profile" \
+  node "$repo_root/edge/frontend/e2e/rust-console-journey.mjs"

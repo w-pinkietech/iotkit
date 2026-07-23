@@ -452,6 +452,48 @@ impl Storage {
         }
     }
 
+    pub async fn list_edge_nodes(&self, limit: i64) -> Result<Vec<EdgeNode>, StorageError> {
+        if !(1..=100).contains(&limit) {
+            return Err(StorageError::InvalidRecord(
+                "Edge Node limit must be between 1 and 100".into(),
+            ));
+        }
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                let ids: Vec<String> = sqlx::query_scalar(
+                    "SELECT edge_node_id FROM edge_node_activations \
+                     ORDER BY edge_node_id LIMIT ?",
+                )
+                .bind(limit)
+                .fetch_all(&mut *tx)
+                .await?;
+                let mut nodes = Vec::with_capacity(ids.len());
+                for id in ids {
+                    nodes.push(load_sqlite(&mut tx, &id).await?);
+                }
+                tx.commit().await?;
+                Ok(nodes)
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let mut tx = pool.begin().await?;
+                let ids: Vec<String> = sqlx::query_scalar(
+                    "SELECT edge_node_id FROM edge_node_activations \
+                     ORDER BY edge_node_id LIMIT $1",
+                )
+                .bind(limit)
+                .fetch_all(&mut *tx)
+                .await?;
+                let mut nodes = Vec::with_capacity(ids.len());
+                for id in ids {
+                    nodes.push(load_postgres(&mut tx, &id).await?);
+                }
+                tx.commit().await?;
+                Ok(nodes)
+            }
+        }
+    }
+
     pub async fn request_activation(
         &self,
         edge_node_id: &str,
