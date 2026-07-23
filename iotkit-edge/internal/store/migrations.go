@@ -1114,6 +1114,140 @@ var schemaMigrations = []migration{
 			raw_record_count INTEGER NOT NULL CHECK(raw_record_count >= 0)
 		);
 	`},
+	{version: 30, sql: `
+		CREATE TABLE output_sensor_identities (
+			output_sensor_identity_id TEXT PRIMARY KEY,
+			signal_ref TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			sensor_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL CHECK(created_at >= 0),
+			registered_at INTEGER CHECK(
+				registered_at IS NULL OR registered_at >= 0
+			),
+			UNIQUE(signal_ref),
+			UNIQUE(source_id, sensor_id)
+		);
+		ALTER TABLE output_profile_rule_bindings
+			ADD COLUMN output_sensor_identity_id TEXT;
+		ALTER TABLE output_profile_rule_bindings
+			ADD COLUMN mode TEXT;
+		UPDATE output_profile_rule_bindings AS binding
+		SET mode = (
+			SELECT identity.mode FROM output_signal_identities AS identity
+			WHERE identity.output_identity_id = binding.output_identity_id
+		);
+
+		INSERT INTO output_sensor_identities(
+			output_sensor_identity_id, signal_ref, source_id,
+			sensor_id, created_at, registered_at
+		)
+		SELECT 'osy_' || lower(hex(randomblob(16))), rule.signal_ref,
+			identity.source_id, 'sen-' || lower(hex(randomblob(16))),
+			MIN(binding.created_at), NULL
+		FROM output_profile_rule_bindings AS binding
+		JOIN export_profiles AS profile ON profile.profile_id = binding.profile_id
+		JOIN semantic_rules_v3 AS rule ON rule.rule_id = binding.rule_id
+		JOIN output_signal_identities AS identity
+			ON identity.output_identity_id = binding.output_identity_id
+		WHERE profile.adapter_id = 'yokakit.mqtt.v1'
+		GROUP BY rule.signal_ref, identity.source_id;
+
+		UPDATE output_profile_rule_bindings AS binding
+		SET output_sensor_identity_id = (
+			SELECT sensor.output_sensor_identity_id
+			FROM semantic_rules_v3 AS rule
+			JOIN output_sensor_identities AS sensor
+				ON sensor.signal_ref = rule.signal_ref
+			WHERE rule.rule_id = binding.rule_id
+		)
+		WHERE EXISTS (
+			SELECT 1 FROM export_profiles AS profile
+			WHERE profile.profile_id = binding.profile_id
+				AND profile.adapter_id = 'yokakit.mqtt.v1'
+		);
+
+		DELETE FROM output_binding_starts
+		WHERE binding_id IN (
+			SELECT binding.binding_id
+			FROM output_profile_rule_bindings AS binding
+			JOIN export_profiles AS profile
+				ON profile.profile_id = binding.profile_id
+			WHERE profile.adapter_id = 'yokakit.mqtt.v1'
+				AND profile.state IN ('preparing', 'active')
+				AND binding.state IN ('prepared', 'active')
+		);
+		UPDATE output_routes
+		SET active = 0
+		WHERE binding_id IN (
+			SELECT binding.binding_id
+			FROM output_profile_rule_bindings AS binding
+			JOIN export_profiles AS profile
+				ON profile.profile_id = binding.profile_id
+			WHERE profile.adapter_id = 'yokakit.mqtt.v1'
+				AND profile.state IN ('preparing', 'active')
+				AND binding.state IN ('prepared', 'active')
+		);
+		UPDATE output_profile_rule_bindings AS binding
+		SET state = 'prepared', activated_at = NULL, revision = revision + 1
+		WHERE binding.state = 'active'
+			AND EXISTS (
+				SELECT 1 FROM export_profiles AS profile
+				WHERE profile.profile_id = binding.profile_id
+					AND profile.adapter_id = 'yokakit.mqtt.v1'
+					AND profile.state IN ('preparing', 'active')
+			);
+		UPDATE export_profiles
+		SET state = 'preparing', revision = revision + 1
+		WHERE adapter_id = 'yokakit.mqtt.v1' AND state = 'active';
+
+		UPDATE output_routes AS route
+		SET config_json = CAST(json_object(
+			'schema_version', 1,
+			'source_id', (
+				SELECT sensor.source_id
+				FROM output_profile_rule_bindings AS binding
+				JOIN output_sensor_identities AS sensor
+					ON sensor.output_sensor_identity_id = binding.output_sensor_identity_id
+				WHERE binding.binding_id = route.binding_id
+			),
+			'sensor_id', (
+				SELECT sensor.sensor_id
+				FROM output_profile_rule_bindings AS binding
+				JOIN output_sensor_identities AS sensor
+					ON sensor.output_sensor_identity_id = binding.output_sensor_identity_id
+				WHERE binding.binding_id = route.binding_id
+			),
+			'kind', json_extract(route.config_json, '$.kind'),
+			'reason', COALESCE(json_extract(route.config_json, '$.reason'), '')
+		) AS BLOB)
+		WHERE route.adapter_id = 'yokakit.mqtt.v1'
+			AND route.binding_id IS NOT NULL;
+
+		UPDATE output_profile_rule_bindings AS binding
+		SET output_identity_id = NULL
+		WHERE EXISTS (
+			SELECT 1 FROM export_profiles AS profile
+			WHERE profile.profile_id = binding.profile_id
+				AND profile.adapter_id = 'yokakit.mqtt.v1'
+		);
+		DELETE FROM output_signal_identities
+		WHERE adapter_id = 'yokakit.mqtt.v1';
+	`},
+	{version: 31, sql: `
+		UPDATE export_profiles
+		SET adapter_id = 'pinikiet.mqtt.v1',
+			display_name = CASE
+				WHEN display_name = 'YokaKit' THEN 'Pinikiet'
+				ELSE display_name
+			END
+		WHERE adapter_id = 'yokakit.mqtt.v1';
+		UPDATE output_routes
+		SET adapter_id = 'pinikiet.mqtt.v1'
+		WHERE adapter_id = 'yokakit.mqtt.v1';
+		UPDATE output_signal_identities
+		SET adapter_id = 'pinikiet.mqtt.v1'
+		WHERE adapter_id = 'yokakit.mqtt.v1';
+	`},
 }
 
 func applyMigrations(

@@ -7,13 +7,13 @@ import (
 )
 
 func TestAdapterDescriptorDefinesStableModes(t *testing.T) {
-	descriptor := (YokaKitAdapter{}).Descriptor()
+	descriptor := (PinikietAdapter{}).Descriptor()
 	if err := descriptor.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if descriptor.ID != "yokakit.mqtt.v1" ||
+	if descriptor.ID != "pinikiet.mqtt.v1" ||
 		descriptor.ConfigSchemaVersion != 1 ||
-		descriptor.DisplayName != "YokaKit MQTT v1" {
+		descriptor.DisplayName != "Pinikiet MQTT v1" {
 		t.Fatalf("descriptor = %#v", descriptor)
 	}
 	if len(descriptor.Modes) != 4 {
@@ -76,7 +76,7 @@ func TestBuiltInRegistryResolvesStableAdapterIDs(t *testing.T) {
 	}
 	for _, id := range []string{
 		"iotkit.mqtt-json.v1",
-		"yokakit.mqtt.v1",
+		"pinikiet.mqtt.v1",
 	} {
 		adapter, ok := registry.Resolve(id)
 		if !ok || adapter.Descriptor().ID != id {
@@ -86,7 +86,7 @@ func TestBuiltInRegistryResolvesStableAdapterIDs(t *testing.T) {
 	descriptors := registry.Descriptors()
 	if len(descriptors) != 2 ||
 		descriptors[0].ID != "iotkit.mqtt-json.v1" ||
-		descriptors[1].ID != "yokakit.mqtt.v1" {
+		descriptors[1].ID != "pinikiet.mqtt.v1" {
 		t.Fatalf("descriptors = %#v", descriptors)
 	}
 }

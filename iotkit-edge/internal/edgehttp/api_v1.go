@@ -520,7 +520,7 @@ func (server *Server) configureExportBinding(
 		server.badRequest(response)
 		return
 	}
-	binding, err := server.store.ConfigureYokaKitBooleanBinding(
+	binding, err := server.store.ConfigurePinikietBooleanBinding(
 		request.Context(),
 		server.actor(auth),
 		request.PathValue("binding_id"),

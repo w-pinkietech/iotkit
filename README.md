@@ -9,7 +9,7 @@ until IoTKit Edge has durably stored it.
 
 > **Status: v1 release candidate.** The complete path—BravePI temperature/contact,
 > one or more Rust IoTKit Edge Nodes, a standard MQTT broker, authenticated IoTKit Console,
-> future-only semantic mapping, and durable YokaKit MQTT output—is implemented. APIs, the
+> future-only semantic mapping, and durable Pinikiet MQTT output—is implemented. APIs, the
 > on-disk schema, and the wire contract may
 > still change. See
 > [Roadmap](#roadmap).
@@ -34,7 +34,7 @@ also the IoTKit-side boundary for archive query, configurable sensor meaning, an
 export. IoTKit Edge maps a stored signal to generic numeric, boolean, cumulative-value, or
 alarm semantics, then a separate Output Adapter converts observations to an
 application-facing MQTT contract. Applications
-such as YokaKit own products, processes, OEE, alarms, business UI, and notifications.
+such as Pinikiet own products, processes, OEE, alarms, business UI, and notifications.
 
 ## What it does today
 
@@ -120,8 +120,8 @@ scripts/bootstrap-edge.sh \
   --tls-cert /secure/path/server-fullchain.pem \
   --tls-key /secure/path/server.key \
   --tls-ca /secure/path/broker-ca.pem \
-  --edge-publish-topic 'yokakit/v1/sources/iotkit-01/signals/press-count/observations' \
-  --edge-publish-topic 'yokakit/v1/sources/iotkit-01/status'
+  --edge-publish-topic 'pinikiet/v1/sources/iotkit-01/sensors/press-sensor/observations' \
+  --edge-publish-topic 'pinikiet/v1/sources/iotkit-01/status'
 docker compose --env-file "$install_root/edge.env" \
   -f deploy/compose.edge.yaml up --build --detach
 ```
@@ -183,11 +183,13 @@ uses only observations received after preview start and never writes a mapping o
 output event. Saving starts a new future-only revision; old raw records are not
 silently recalculated.
 
-Use **Output** to bind a generic semantic definition to a YokaKit `source-id`,
-`signal-id`, and purpose (`production`, `onoff`, `gantt_chart`, or `alarm`).
-IoTKit's cumulative value becomes YokaKit `kind=production` only inside this
+Use **Output** to publish through an Edge-owned `source-id`, a sensor-level
+`sensor-id`, and a Pinikiet purpose (`production`, `onoff`, `gantt_chart`, or
+`alarm`). All purposes derived from one sensor share one registered topic while
+their `series-id` and `sequence` values remain independent.
+IoTKit's cumulative value becomes Pinikiet `kind=production` only inside this
 adapter. Output is QoS 1 and remains in the IoTKit Edge outbox until broker PUBACK.
-YokaKit status is published separately as a retained source status.
+Pinikiet status is published separately as a retained source status.
 
 The internal Edge Node/IoTKit Edge broker and external application broker may be different.
 Install their endpoint, trust bundle, client ID, and credential as deployment
@@ -220,9 +222,6 @@ scripts/test-edge-console-frontend.sh
 # Chromium journey: login, Edge Node registration, sensors, semantics, output, and roles
 scripts/test-edge-console-e2e.sh
 IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-console-e2e.sh
-
-# Consumer contract gate against an adjacent YokaKit checkout
-scripts/test-yokakit-consumer-contract.sh
 
 # v1 host integration gate (provide a new report directory)
 scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
@@ -272,7 +271,7 @@ executable contracts or the documentation index.
 
 - **Wave 0 — "runs in our own environment":** ingest, registry, ledger, retention, snapshot/restore, operator CLI. **Done.**
 - **First implementation gate:** one paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge Node → standard MQTT Broker → IoTKit Edge → raw SQLite → direct CLI query. The real-hardware path, restart/outage matrix, storage failure injection, bounded-capacity behavior, and application `accepted-through` are verified. Purge eligibility advances only after validated `accepted-through`. **Done.**
-- **IoTKit Edge semantic and output slice:** generic numeric/boolean/cumulative/alarm meaning, live preview, no backfill, durable Output Adapter boundary, and the accepted YokaKit source/signal observation contract. **Implemented.**
+- **IoTKit Edge semantic and output slice:** generic numeric/boolean/cumulative/alarm meaning, live preview, no backfill, durable Output Adapter boundary, and the accepted Pinikiet source/signal observation contract. **Implemented.**
 - **Wave 1 — "distributable to others":** onboarding, calibration, configuration authority, and other distribution hardening. Existing HTTP ingress and control-plane work remain available but are not current completion criteria.
 - **Wave 2 — "public OSS":** client libraries, A/B updates, OS image.
 

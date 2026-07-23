@@ -4,7 +4,7 @@
 
 オンプレミスを優先し、データの完全性を重視するIoT収集基盤です。IoTKit Edge Nodeへ対象を絞ったセンサーAdapterを追加すると、IoTKitが耐久収集、再送、IoTKit Edgeへの明示的な保管責任移転を提供します。IoTKit Edgeが耐久保存するまで、データは削除可能になりません。
 
-> **状態: v1リリース候補。** BravePIの温度・接点入力、1台以上のRust製IoTKit Edge Node、標準MQTT Broker、認証付きIoTKit Console、将来分だけに適用する意味付け、YokaKitへの耐久MQTT出力まで、一連の経路を実装済みです。API、ディスク上のschema、wire contractは今後変更される可能性があります。[ロードマップ](#ロードマップ)を参照してください。
+> **状態: v1リリース候補。** BravePIの温度・接点入力、1台以上のRust製IoTKit Edge Node、標準MQTT Broker、認証付きIoTKit Console、将来分だけに適用する意味付け、Pinikietへの耐久MQTT出力まで、一連の経路を実装済みです。API、ディスク上のschema、wire contractは今後変更される可能性があります。[ロードマップ](#ロードマップ)を参照してください。
 
 現行の製品知識はOKF v0.1形式でも提供しています: [日本語](docs/okf/ja/index.md) / [英語](docs/okf/en/index.md)。
 
@@ -14,7 +14,7 @@
 
 IoTKit Edge Nodeは意図的に単純です。**1つのRust binary + SQLite + systemd**で構成し、Node上にcontainer orchestration、ML基盤、中央rule engineを置きません。Edge Nodeは倉庫ではなくbufferであり、IoTKit Edgeが耐久保存を確認するまでデータを保持します。MQTT PUBACKだけでは、その確認になりません。IoTKit Edgeはrecordを耐久保存し、commit後にだけ各Edge Nodeの`accepted-through`を進めます。また、raw query、archive query、センサーの意味付け、application出力のIoTKit側境界を提供します。
 
-IoTKit Edgeは保存済みsignalを汎用的な`numeric`、`boolean`、`cumulative_value`、`alarm`へ写像し、別のOutput Adapterがapplication向けMQTT contractへ変換します。製品、工程、OEE、業務アラーム、業務UI、通知はYokaKitなどのapplicationが所有します。
+IoTKit Edgeは保存済みsignalを汎用的な`numeric`、`boolean`、`cumulative_value`、`alarm`へ写像し、別のOutput Adapterがapplication向けMQTT contractへ変換します。製品、工程、OEE、業務アラーム、業務UI、通知はPinikietなどのapplicationが所有します。
 
 ## 現在できること
 
@@ -88,8 +88,8 @@ scripts/bootstrap-edge.sh \
   --tls-cert /secure/path/server-fullchain.pem \
   --tls-key /secure/path/server.key \
   --tls-ca /secure/path/broker-ca.pem \
-  --edge-publish-topic 'yokakit/v1/sources/iotkit-01/signals/press-count/observations' \
-  --edge-publish-topic 'yokakit/v1/sources/iotkit-01/status'
+  --edge-publish-topic 'pinikiet/v1/sources/iotkit-01/sensors/press-sensor/observations' \
+  --edge-publish-topic 'pinikiet/v1/sources/iotkit-01/status'
 docker compose --env-file "$install_root/edge.env" \
   -f deploy/compose.edge.yaml up --build --detach
 ```
@@ -129,7 +129,7 @@ Windows browserから`IOTKIT_EDGE_ORIGIN`を開きます。LANへ公開するHTT
 
 Consoleの**信号**画面で、補正、threshold/hysteresis、boolean state、累積値count、alarm behaviorを設定します。5分間のlive previewはpreview開始後に受け取った観測だけを使い、mappingやoutput eventを書き込みません。保存すると将来分だけに適用する新しいrevisionが始まり、過去のraw recordを黙って再計算しません。
 
-**出力**画面で、汎用semantic定義をYokaKitの`source-id`、`signal-id`、用途（`production`、`onoff`、`gantt_chart`、`alarm`）へbindします。IoTKitの累積値がYokaKitの`kind=production`になるのは、このAdapter内だけです。出力はQoS 1で、Broker PUBACKまでIoTKit Edge outboxに残ります。YokaKit statusはretained source statusとして別にpublishします。
+**出力**画面で、IoTKit Edgeが発行した`source-id`とセンサー単位の`sensor-id`を使い、用途（`production`、`onoff`、`gantt_chart`、`alarm`）をPinikietへ出力します。同じセンサーの全用途は一つのtopicを共有し、Pinikietへの登録も一度だけです。用途ごとの`series-id`と`sequence`は独立します。IoTKitの累積値がPinikietの`kind=production`になるのは、このAdapter内だけです。出力はQoS 1で、Broker PUBACKまでIoTKit Edge outboxに残ります。Pinikiet statusはretained source statusとして別にpublishします。
 
 Edge NodeとIoTKit Edgeを結ぶ内部Brokerと、外部application Brokerは別にできます。それぞれのendpoint、trust bundle、client ID、credentialをdeployment設定として配置し、external profileを`serve`の`--output-*` flagで渡します。Consoleは状態を表示しますが、Broker credentialは変更できません。
 
@@ -158,9 +158,6 @@ scripts/test-edge-console-frontend.sh
 # Chromiumによるlogin、Edge Node登録、センサー設定、意味付け、外部出力、権限導線
 scripts/test-edge-console-e2e.sh
 IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-console-e2e.sh
-
-# 隣接するYokaKit checkoutとのconsumer contractゲート
-scripts/test-yokakit-consumer-contract.sh
 
 # v1 host統合ゲート。新しいreport directoryを指定する
 scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
@@ -197,7 +194,7 @@ Codex Cloudを含め、単一cloneから開発を再開できます。再開順�
 
 - **Wave 0 —「自分たちの環境で動く」:** ingest、registry、ledger、retention、snapshot/restore、operator CLI。**完了。**
 - **初期実装gate:** paired BravePI temperature sensor → BLE Long Range → BravePI Mainboard → UART → IoTKit Edge Node → standard MQTT Broker → IoTKit Edge → raw SQLite → direct CLI query。実機経路、再起動・停止matrix、storage failure injection、bounded capacity、application `accepted-through`を検証済みです。purge eligibilityは検証済み`accepted-through`の後だけ進みます。**完了。**
-- **IoTKit Edgeのsemantic/output slice:** 汎用numeric/boolean/cumulative/alarm、live preview、no backfill、耐久Output Adapter境界、合意済みYokaKit source/signal observation contract。**実装済み。**
+- **IoTKit Edgeのsemantic/output slice:** 汎用numeric/boolean/cumulative/alarm、live preview、no backfill、耐久Output Adapter境界、合意済みPinikiet source/signal observation contract。**実装済み。**
 - **Wave 1 —「他者へ配布できる」:** onboarding、calibration、configuration authority、その他の配布品質向上。既存HTTP ingressとcontrol-plane実装は残しますが、現在の完了条件ではありません。
 - **Wave 2 —「公開OSS」:** client library、A/B update、OS image。
 

@@ -15,7 +15,7 @@ func TestBuiltInAdaptersMatchSharedContractFixtures(t *testing.T) {
 	}
 	for _, name := range []string{
 		"iotkit-cumulative-value.json",
-		"yokakit-production.json",
+		"pinikiet-production.json",
 	} {
 		t.Run(name, func(t *testing.T) {
 			encoded, err := os.ReadFile(filepath.Join(

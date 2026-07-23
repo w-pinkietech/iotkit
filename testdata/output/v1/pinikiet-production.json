@@ -1,9 +1,9 @@
 {
-  "adapter_id": "yokakit.mqtt.v1",
+  "adapter_id": "pinikiet.mqtt.v1",
   "config": {
     "schema_version": 1,
     "source_id": "iotkit-01",
-    "signal_id": "press-count",
+    "sensor_id": "press-sensor",
     "kind": "production"
   },
   "observation": {
@@ -15,7 +15,7 @@
     "value": 1524
   },
   "publication": {
-    "topic": "yokakit/v1/sources/iotkit-01/signals/press-count/observations",
+    "topic": "pinikiet/v1/sources/iotkit-01/sensors/press-sensor/observations",
     "qos": 1,
     "retain": false,
     "payload": {

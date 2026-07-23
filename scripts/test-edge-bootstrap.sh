@@ -274,9 +274,9 @@ edge_id=$(sed -n 's/^IOTKIT_EDGE_ID=//p' "$output/edge.env")
 }
 grep -Fxq "topic write iotkit/v1/sources/$edge_id/signals/+/observations" \
   "$output/mosquitto/acl"
-grep -Fxq "topic write yokakit/v1/sources/$edge_id/signals/+/observations" \
+grep -Fxq "topic write pinikiet/v1/sources/$edge_id/sensors/+/observations" \
   "$output/mosquitto/acl"
-grep -Fxq "topic write yokakit/v1/sources/$edge_id/status" \
+grep -Fxq "topic write pinikiet/v1/sources/$edge_id/status" \
   "$output/mosquitto/acl"
 grep -Fxq 'IOTKIT_MOSQUITTO_IMAGE=eclipse-mosquitto:2.0.22' "$output/edge.env"
 for setting in \

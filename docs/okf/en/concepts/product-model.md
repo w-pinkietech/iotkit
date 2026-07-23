@@ -90,5 +90,5 @@ infrastructure.
 - Add a wire field or record family only through a versioned contract change with
   cross-language conformance fixtures.
 
-BravePI and YokaKit are the first verified integrations. Neither defines IoTKit's
+BravePI and Pinikiet are the first verified integrations. Neither defines IoTKit's
 generic core model.

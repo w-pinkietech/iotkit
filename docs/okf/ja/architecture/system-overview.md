@@ -71,7 +71,7 @@ IoTKit Edgeはcommit済みraw dataから汎用semantic Observationをprojectし�
 
 Raw batch transactionと`accepted-through`はsemantic projectionやapplication outputを待ちません。Application停止がEdge Node custodyを拘束しないためです。Semantic mappingとMQTT routeはfuture-onlyで、過去dataを暗黙にbackfillしません。
 
-Output Adapterは汎用Observationとroute設定からexact MQTT publicationを作る決定的in-process transformerです。Broker接続、credential、retry、durable outbox、business masterは所有しません。`yokakit.mqtt.v1`は最初の実装ですが、特権core pathではありません。
+Output Adapterは汎用Observationとroute設定からexact MQTT publicationを作る決定的in-process transformerです。Broker接続、credential、retry、durable outbox、business masterは所有しません。`pinikiet.mqtt.v1`は最初の実装ですが、特権core pathではありません。
 
 ## Custody loop
 

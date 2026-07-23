@@ -42,12 +42,12 @@ func TestV1TwoEdgeSemanticOutputJourneySurvivesRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = archive.ApplyYokaKitRoute(
+		_, err = archive.ApplyPinikietRoute(
 			ctx, edgeapp.LocalCLIActor(), definition.ID,
-			outputadapter.YokaKitConfig{
+			outputadapter.PinikietConfig{
 				SourceID: "iotkit-01",
-				SignalID: []string{"press-a-running", "press-b-running"}[index],
-				Kind:     outputadapter.YokaKitOnOff,
+				SensorID: []string{"press-a", "press-b"}[index],
+				Kind:     outputadapter.PinikietOnOff,
 			},
 		)
 		if err != nil {
@@ -67,7 +67,7 @@ func TestV1TwoEdgeSemanticOutputJourneySurvivesRestart(t *testing.T) {
 		t.Fatalf("pending=%#v err=%v", pending, err)
 	}
 	for _, item := range pending {
-		if !strings.HasPrefix(item.Topic, "yokakit/v1/sources/iotkit-01/signals/") {
+		if !strings.HasPrefix(item.Topic, "pinikiet/v1/sources/iotkit-01/sensors/") {
 			t.Fatalf("topic=%q", item.Topic)
 		}
 		var payload struct {

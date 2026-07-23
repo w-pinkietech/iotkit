@@ -14,7 +14,7 @@ import (
 )
 
 type OutputRoute = edgeapp.OutputRoute
-type YokaKitRuleRoute = edgeapp.YokaKitRuleRoute
+type PinikietRuleRoute = edgeapp.PinikietRuleRoute
 
 func (store *Store) ApplyOutputRoute(
 	ctx context.Context,
@@ -109,14 +109,14 @@ func (store *Store) ApplyOutputRoute(
 	return route, nil
 }
 
-func (store *Store) ApplyYokaKitRuleRoute(
+func (store *Store) ApplyPinikietRuleRoute(
 	ctx context.Context,
 	actor edgeapp.Actor,
 	ruleID string,
-	config outputadapter.YokaKitConfig,
-) (YokaKitRuleRoute, error) {
-	var noRoute YokaKitRuleRoute
-	encoded, err := outputadapter.EncodeYokaKitConfig(config)
+	config outputadapter.PinikietConfig,
+) (PinikietRuleRoute, error) {
+	var noRoute PinikietRuleRoute
+	encoded, err := outputadapter.EncodePinikietConfig(config)
 	if err != nil {
 		return noRoute, err
 	}
@@ -124,13 +124,13 @@ func (store *Store) ApplyYokaKitRuleRoute(
 		ctx,
 		actor,
 		ruleID,
-		"yokakit.mqtt.v1",
+		"pinikiet.mqtt.v1",
 		encoded,
 	)
 	if err != nil {
 		return noRoute, err
 	}
-	return yokaKitRuleRoute(route)
+	return pinikietRuleRoute(route)
 }
 
 func (store *Store) ListOutputRoutes(
@@ -203,19 +203,19 @@ func (store *Store) ListOutputRoutes(
 	return routes, rows.Err()
 }
 
-func (store *Store) ListYokaKitRuleRoutes(
+func (store *Store) ListPinikietRuleRoutes(
 	ctx context.Context,
-) ([]YokaKitRuleRoute, error) {
+) ([]PinikietRuleRoute, error) {
 	routes, err := store.ListOutputRoutes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]YokaKitRuleRoute, 0, len(routes))
+	result := make([]PinikietRuleRoute, 0, len(routes))
 	for _, route := range routes {
-		if route.AdapterID != "yokakit.mqtt.v1" {
+		if route.AdapterID != "pinikiet.mqtt.v1" {
 			continue
 		}
-		converted, err := yokaKitRuleRoute(route)
+		converted, err := pinikietRuleRoute(route)
 		if err != nil {
 			return nil, err
 		}
@@ -224,16 +224,16 @@ func (store *Store) ListYokaKitRuleRoutes(
 	return result, nil
 }
 
-func yokaKitRuleRoute(route OutputRoute) (YokaKitRuleRoute, error) {
-	config, err := outputadapter.DecodeYokaKitConfig(route.Config)
+func pinikietRuleRoute(route OutputRoute) (PinikietRuleRoute, error) {
+	config, err := outputadapter.DecodePinikietConfig(route.Config)
 	if err != nil {
-		return YokaKitRuleRoute{}, err
+		return PinikietRuleRoute{}, err
 	}
-	return YokaKitRuleRoute{
+	return PinikietRuleRoute{
 		RouteID:                    route.RouteID,
 		RuleID:                     route.RuleID,
 		SourceID:                   config.SourceID,
-		SignalID:                   config.SignalID,
+		SensorID:                   config.SensorID,
 		Kind:                       config.Kind,
 		Reason:                     config.Reason,
 		StartAfterObservationRowID: route.StartAfterObservationRowID,

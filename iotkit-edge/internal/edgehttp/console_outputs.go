@@ -38,7 +38,7 @@ func (server *Server) consoleConfigureOutputBinding(
 	}
 	revision, err := strconv.ParseInt(request.FormValue("revision"), 10, 64)
 	if err == nil {
-		_, err = server.store.ConfigureYokaKitBooleanBinding(
+		_, err = server.store.ConfigurePinikietBooleanBinding(
 			request.Context(),
 			server.actor(auth),
 			request.PathValue("binding_id"),

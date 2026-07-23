@@ -33,7 +33,7 @@ makes life worse for one of them, that is a review finding, not a taste issue.
 | **Adapter developers** (Rust) | `core/types`, `iotkit-input-adapter-host-api`, `iotkit-input-adapter-testkit`, `iotkit-polling-adapter-runtime`, an existing adapter as template | The adapter boundary is obvious; a new sensor family means a new adapter crate, not core surgery. No knowledge of storage/ledger internals needed. |
 | **Core contributors** (Rust) | `core/*`, IoTKit Edge Node, tests | The crate map fits in one screen. Layer rules are machine-checked, not tribal. Each crate has one responsibility; tests read as the executable spec. |
 | **Raw custody implementers** | The **Edge Node custody contract** | Record families, ack rules, and cursor semantics are documented and versioned; no schema surprises. |
-| **Application integrators** (YokaKit, dashboards, analytics) | The **Output Adapter contract** | They receive application-facing topics and payloads without depending on the raw custody stream. |
+| **Application integrators** (Pinikiet, dashboards, analytics) | The **Output Adapter contract** | They receive application-facing topics and payloads without depending on the raw custody stream. |
 
 ## IoTKit Edge anatomy — what runs where
 
@@ -52,7 +52,7 @@ adapters to sensors. A standalone deployment can stop there (D8: an upstream is
 optional). IoTKit Edge adds durable aggregation, Edge Node cursors, direct raw
 query, Edge Node descriptor replica, configurable Edge-scoped sensor meaning, and the application-export boundary. IoTKit Edge maps one
 stored series to one generic typed meaning such as a cumulative value; a separate exporter converts the
-result to an application-facing MQTT contract. Applications such as YokaKit own business masters
+result to an application-facing MQTT contract. Applications such as Pinikiet own business masters
 and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
 complicates this story needs a strong reason.
 
@@ -60,7 +60,7 @@ The exporter boundary is the versioned
 [Output Adapter contract v1](../contracts/output-adapter-v1.md). An Output Adapter is a deterministic
 in-process transformer from a generic IoTKit Edge observation plus route configuration to one exact MQTT
 publication. It never owns Broker connectivity, credentials, durable outbox state, retries, or
-business masters. `yokakit.mqtt.v1` is the first implementation, not a privileged core path.
+business masters. `pinikiet.mqtt.v1` is the first implementation, not a privileged core path.
 
 The current production-shaped reference installation keeps Edge Node native on its Raspberry Pi and
 co-locates the standard Broker plus IoTKit Edge in Docker on one Linux host. Co-location is not a product
@@ -296,7 +296,7 @@ BravePI Mainboard UART stream. A production-shaped multi-Edge Node bootstrap exi
 TLS boundary. The Broker-host certificate component validates and atomically installs bundles,
 supports `lego` ACME renewal, probes MQTT/HTTPS, and rolls back a failed install. IoTKit Edge has local
 accounts, factual storage/diagnostic views, and encrypted backup/new-path restore with explicit
-archive-gap recovery. YokaKit remains outside IoTKit and is reached through its versioned Output
+archive-gap recovery. Pinikiet remains outside IoTKit and is reached through its versioned Output
 Adapter contract. Short-lived credential enrollment/rotation and retained replay for a restored
 archive gap remain post-v1 hardening work.
 

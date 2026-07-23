@@ -40,23 +40,25 @@ type consoleExportProfileView struct {
 
 type consoleOutputBindingView struct {
 	edgeapp.OutputProfileRuleBinding
-	AdapterLabel      string
-	StateLabel        string
-	StateClass        string
-	KindLabel         string
-	ModeLabel         string
-	Preview           *edgeapp.OutputPublicationPreview
-	PreviewLabel      string
-	PrettyPayload     string
-	HasDiagnostics    bool
-	TransformLabel    string
-	TransformClass    string
-	DeliveryLabel     string
-	DeliveryClass     string
-	PendingCount      int64
-	NeedsAttention    bool
-	TransformError    bool
-	DeliveryAttention bool
+	AdapterLabel             string
+	StateLabel               string
+	StateClass               string
+	KindLabel                string
+	ModeLabel                string
+	Preview                  *edgeapp.OutputPublicationPreview
+	PreviewLabel             string
+	PrettyPayload            string
+	HasDiagnostics           bool
+	TransformLabel           string
+	TransformClass           string
+	DeliveryLabel            string
+	DeliveryClass            string
+	PendingCount             int64
+	NeedsAttention           bool
+	TransformError           bool
+	DeliveryAttention        bool
+	RegistrationAction       bool
+	SharesSensorRegistration bool
 }
 
 func newConsoleExportProfileViews(
@@ -81,8 +83,8 @@ func newConsoleExportProfileViews(
 		switch profile.AdapterID {
 		case "iotkit.mqtt-json.v1":
 			view.AdapterLabel = "汎用MQTT JSON"
-		case "yokakit.mqtt.v1":
-			view.AdapterLabel = "YokaKit"
+		case "pinikiet.mqtt.v1":
+			view.AdapterLabel = "Pinikiet"
 		}
 		switch profile.State {
 		case edgeapp.ExportProfilePreparing:
@@ -91,6 +93,12 @@ func newConsoleExportProfileViews(
 			view.StateLabel, view.StateClass = "使用中", "configured"
 		case edgeapp.ExportProfileDraining:
 			view.StateLabel, view.StateClass = "配送終了処理中", "in-progress"
+		}
+		registrationSensors := map[string]bool{}
+		for _, binding := range profile.Bindings {
+			if binding.State == edgeapp.OutputBindingActive && binding.SensorID != "" {
+				registrationSensors[binding.SensorID] = true
+			}
 		}
 		for _, binding := range profile.Bindings {
 			bindingView := consoleOutputBindingView{
@@ -103,6 +111,12 @@ func newConsoleExportProfileViews(
 			case edgeapp.OutputBindingPrepared:
 				bindingView.StateLabel, bindingView.StateClass = "外部登録待ち", "needs-setup"
 				view.PreparedCount++
+				if binding.SensorID == "" || !registrationSensors[binding.SensorID] {
+					bindingView.RegistrationAction = true
+					registrationSensors[binding.SensorID] = true
+				} else {
+					bindingView.SharesSensorRegistration = true
+				}
 			case edgeapp.OutputBindingActive:
 				bindingView.StateLabel, bindingView.StateClass = "送信対象", "configured"
 				view.ActiveCount++
@@ -336,11 +350,11 @@ func newConsoleOutputRouteViews(
 			if err == nil {
 				view.Destination = config.Topic
 			}
-		case "yokakit.mqtt.v1":
-			view.AdapterLabel = "YokaKit MQTT v1"
-			config, err := outputadapter.DecodeYokaKitConfig(route.Config)
+		case "pinikiet.mqtt.v1":
+			view.AdapterLabel = "Pinikiet MQTT v1"
+			config, err := outputadapter.DecodePinikietConfig(route.Config)
 			if err == nil {
-				view.Destination = config.SourceID + " / " + config.SignalID
+				view.Destination = config.SourceID + " / " + config.SensorID
 			}
 		default:
 			view.AdapterLabel = route.AdapterID

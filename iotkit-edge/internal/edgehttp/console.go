@@ -672,9 +672,9 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 						busyAdapters[profile.AdapterID] = true
 					}
 				}
-				if !busyAdapters["yokakit.mqtt.v1"] {
+				if !busyAdapters["pinikiet.mqtt.v1"] {
 					preview, previewErr := server.store.PreviewExportProfileActivation(
-						request.Context(), "yokakit.mqtt.v1",
+						request.Context(), "pinikiet.mqtt.v1",
 					)
 					if previewErr != nil {
 						err = previewErr
@@ -683,9 +683,9 @@ func (server *Server) consolePage(response http.ResponseWriter, request *http.Re
 					data.AvailableOutputs = append(
 						data.AvailableOutputs,
 						consoleAvailableOutput{
-							AdapterID:               "yokakit.mqtt.v1",
-							DisplayName:             "YokaKitへ送る",
-							Description:             "累積値・状態・アラームをYokaKit契約へ変換します。",
+							AdapterID:               "pinikiet.mqtt.v1",
+							DisplayName:             "Pinikietへ送る",
+							Description:             "累積値・状態・アラームをPinikiet契約へ変換します。",
 							AutomaticCount:          preview.AutomaticCount,
 							NeedsConfigurationCount: preview.NeedsConfigurationCount,
 							IneligibleCount:         preview.IneligibleCount,

@@ -46,7 +46,7 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	genericRouteID, yokakitRouteID, sourceID := prepareOutputRoutes(t, archive)
+	genericRouteID, pinikietRouteID, sourceID := prepareOutputRoutes(t, archive)
 	enqueueOutputTransition(t, archive, 2)
 	pending, err := archive.ListPendingMQTTExports(ctx, 100)
 	if err != nil || len(pending) < 2 {
@@ -71,10 +71,10 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	waitForInitialAdapterMessages(t, messages)
 	waitForNoPendingExports(t, archive, 20*time.Second)
 	initialRoutes := outputRoutePublishedCounts(t, archive)
-	if initialRoutes[genericRouteID] < 1 || initialRoutes[yokakitRouteID] < 1 {
+	if initialRoutes[genericRouteID] < 1 || initialRoutes[pinikietRouteID] < 1 {
 		t.Fatalf("initial published counts = %#v", initialRoutes)
 	}
-	assertRetainedYokaKitStatus(t, brokerURL, observerPassword, sourceID)
+	assertRetainedPinikietStatus(t, brokerURL, observerPassword, sourceID)
 
 	writeTestMarker(t, controlDir, "ready")
 	waitForTestMarker(t, controlDir, "broker-down", 30*time.Second)
@@ -89,7 +89,7 @@ func runOutputAdapterBrokerJourney(t *testing.T) {
 	waitForNoPendingExports(t, archive, 45*time.Second)
 	recoveredRoutes := outputRoutePublishedCounts(t, archive)
 	if recoveredRoutes[genericRouteID] <= initialRoutes[genericRouteID] ||
-		recoveredRoutes[yokakitRouteID] <= initialRoutes[yokakitRouteID] {
+		recoveredRoutes[pinikietRouteID] <= initialRoutes[pinikietRouteID] {
 		t.Fatalf(
 			"published counts did not advance after restart: initial=%#v recovered=%#v",
 			initialRoutes,
@@ -232,20 +232,20 @@ func prepareOutputRoutes(t *testing.T, archive *store.Store) (string, string, st
 	if err != nil {
 		t.Fatal(err)
 	}
-	yokakitProfile, err := archive.ActivateExportProfile(
+	pinikietProfile, err := archive.ActivateExportProfile(
 		ctx,
 		edgeapp.LocalCLIActor(),
-		"YokaKit",
-		"yokakit.mqtt.v1",
+		"Pinikiet",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, binding := range yokakitProfile.Bindings {
+	for _, binding := range pinikietProfile.Bindings {
 		if binding.RuleID != state.ID {
 			continue
 		}
-		configured, err := archive.ConfigureYokaKitBooleanBinding(
+		configured, err := archive.ConfigurePinikietBooleanBinding(
 			ctx,
 			edgeapp.LocalCLIActor(),
 			binding.BindingID,
@@ -268,21 +268,21 @@ func prepareOutputRoutes(t *testing.T, archive *store.Store) (string, string, st
 	if err != nil {
 		t.Fatal(err)
 	}
-	var genericRouteID, yokakitRouteID string
+	var genericRouteID, pinikietRouteID string
 	for _, route := range routes {
 		switch {
 		case route.RuleID == counter.ID &&
 			route.AdapterID == genericProfile.AdapterID:
 			genericRouteID = route.RouteID
 		case route.RuleID == state.ID &&
-			route.AdapterID == yokakitProfile.AdapterID:
-			yokakitRouteID = route.RouteID
+			route.AdapterID == pinikietProfile.AdapterID:
+			pinikietRouteID = route.RouteID
 		}
 	}
-	if genericRouteID == "" || yokakitRouteID == "" {
+	if genericRouteID == "" || pinikietRouteID == "" {
 		t.Fatalf("profile routes not found: %#v", routes)
 	}
-	return genericRouteID, yokakitRouteID, yokakitProfile.Bindings[0].SourceID
+	return genericRouteID, pinikietRouteID, pinikietProfile.Bindings[0].SourceID
 }
 
 func assertWrongSourcePublishDenied(
@@ -415,13 +415,18 @@ func acceptOutputBatch(
 	for index, value := range values {
 		pubSeq := start + int64(index)
 		encoded, err := json.Marshal(map[string]any{
-			"family":         "measurement",
-			"schema_version": 1,
-			"epoch":          epoch,
-			"pub_seq":        pubSeq,
-			"series_key":     seriesKey,
-			"values":         value,
-			"event_time":     pubSeq * 1_000,
+			"family":            "measurement",
+			"schema_version":    1,
+			"epoch":             epoch,
+			"pub_seq":           pubSeq,
+			"series_key":        seriesKey,
+			"values":            value,
+			"event_time":        pubSeq * 1_000,
+			"event_time_source": "received_at",
+			"received_at":       pubSeq * 1_000,
+			"device_time":       nil,
+			"time_source":       "edge_node",
+			"time_quality":      "unsynced",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -495,9 +500,9 @@ func subscribeOutputTestTopics(
 		}
 	}
 	token := client.SubscribeMultiple(map[string]byte{
-		"iotkit/v1/sources/+/signals/+/observations":  1,
-		"yokakit/v1/sources/+/signals/+/observations": 1,
-		"yokakit/v1/sources/+/status":                 1,
+		"iotkit/v1/sources/+/signals/+/observations":   1,
+		"pinikiet/v1/sources/+/sensors/+/observations": 1,
+		"pinikiet/v1/sources/+/status":                 1,
 	}, handler)
 	if !token.WaitTimeout(10 * time.Second) {
 		t.Fatal("MQTT observer subscribe timeout")
@@ -511,10 +516,10 @@ func waitForInitialAdapterMessages(
 	messages <-chan observedMQTTMessage,
 ) {
 	t.Helper()
-	var genericSeen, yokakitSeen bool
+	var genericSeen, pinikietSeen bool
 	deadline := time.NewTimer(20 * time.Second)
 	defer deadline.Stop()
-	for !genericSeen || !yokakitSeen {
+	for !genericSeen || !pinikietSeen {
 		select {
 		case message := <-messages:
 			var payload struct {
@@ -533,26 +538,26 @@ func waitForInitialAdapterMessages(
 				if payload.Kind == string(outputadapter.KindCumulativeValue) {
 					genericSeen = true
 				}
-			case strings.HasPrefix(message.topic, "yokakit/v1/sources/") &&
-				strings.Contains(message.topic, "/signals/"):
+			case strings.HasPrefix(message.topic, "pinikiet/v1/sources/") &&
+				strings.Contains(message.topic, "/sensors/"):
 				if payload.SchemaVersion != 1 {
-					t.Fatalf("YokaKit payload = %s", message.payload)
+					t.Fatalf("Pinikiet payload = %s", message.payload)
 				}
-				if payload.Kind == string(outputadapter.YokaKitOnOff) {
-					yokakitSeen = true
+				if payload.Kind == string(outputadapter.PinikietOnOff) {
+					pinikietSeen = true
 				}
 			}
 		case <-deadline.C:
 			t.Fatalf(
-				"adapter MQTT messages timed out: generic=%t yokakit=%t",
+				"adapter MQTT messages timed out: generic=%t pinikiet=%t",
 				genericSeen,
-				yokakitSeen,
+				pinikietSeen,
 			)
 		}
 	}
 }
 
-func assertRetainedYokaKitStatus(
+func assertRetainedPinikietStatus(
 	t *testing.T,
 	brokerURL string,
 	observerPassword string,
@@ -569,7 +574,7 @@ func assertRetainedYokaKitStatus(
 	defer client.Disconnect(250)
 	statuses := make(chan observedMQTTMessage, 1)
 	token := client.Subscribe(
-		"yokakit/v1/sources/"+sourceID+"/status",
+		"pinikiet/v1/sources/"+sourceID+"/status",
 		1,
 		func(_ mqtt.Client, message mqtt.Message) {
 			statuses <- observedMQTTMessage{
@@ -588,10 +593,10 @@ func assertRetainedYokaKitStatus(
 	case status := <-statuses:
 		if !status.retained ||
 			!strings.Contains(string(status.payload), `"state":"online"`) {
-			t.Fatalf("retained YokaKit status = %#v", status)
+			t.Fatalf("retained Pinikiet status = %#v", status)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("retained YokaKit status timeout")
+		t.Fatal("retained Pinikiet status timeout")
 	}
 }
 

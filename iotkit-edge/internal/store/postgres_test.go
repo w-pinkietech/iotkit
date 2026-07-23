@@ -118,6 +118,10 @@ func TestPostgresUpgradeFromSchema28IsExplicitAndPreservesPrecisionContract(t *t
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`
+		ALTER TABLE output_profile_rule_bindings
+			DROP COLUMN mode,
+			DROP COLUMN output_sensor_identity_id;
+		DROP TABLE output_sensor_identities;
 		DROP TABLE edge_storage_samples;
 		ALTER TABLE signal_calibration_revisions_v3
 			ALTER COLUMN scale TYPE REAL USING scale::REAL,
@@ -139,8 +143,8 @@ func TestPostgresUpgradeFromSchema28IsExplicitAndPreservesPrecisionContract(t *t
 	if err := upgraded.db.QueryRow("SELECT version FROM edge_schema_meta WHERE singleton = 1").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 29 {
-		t.Fatalf("schema version = %d, want 29", version)
+	if version != 31 {
+		t.Fatalf("schema version = %d, want 31", version)
 	}
 }
 
@@ -162,7 +166,9 @@ func TestPostgresCustodyAcceptsReplayAndRejectsConflictAndGap(t *testing.T) {
 	}
 
 	conflict := testBatch(t)
-	conflict.Records[0] = []byte(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":1,"series_key":"series-temperature-01","values":[99]}`)
+	conflict.Records[0] = encodedTestMeasurement(
+		t, "epoch-01", 1, "series-temperature-01", []float64{99}, 1_000,
+	)
 	if _, err := store.AcceptBatch(context.Background(), conflict); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflict error = %v, want ErrConflict", err)
 	}
@@ -170,7 +176,9 @@ func TestPostgresCustodyAcceptsReplayAndRejectsConflictAndGap(t *testing.T) {
 	gap := testBatch(t)
 	gap.CursorStart, gap.CursorEnd = 3, 3
 	gap.PublicationID = "edge-node-01:epoch-01:3:3"
-	gap.Records[0] = []byte(`{"family":"measurement","schema_version":1,"epoch":"epoch-01","pub_seq":3,"series_key":"series-temperature-01","values":[22]}`)
+	gap.Records[0] = encodedTestMeasurement(
+		t, "epoch-01", 3, "series-temperature-01", []float64{22}, 3_000,
+	)
 	if _, err := store.AcceptBatch(context.Background(), gap); !errors.Is(err, ErrGap) {
 		t.Fatalf("gap error = %v, want ErrGap", err)
 	}
@@ -198,11 +206,10 @@ func TestPostgresConcurrentOverlappingBatchesNeverRegressCursor(t *testing.T) {
 				if sequence == 1 {
 					value = 21.5
 				}
-				record, err := json.Marshal(map[string]any{
-					"family": "measurement", "schema_version": 1,
-					"epoch": "epoch-01", "pub_seq": sequence,
-					"series_key": "series-temperature-01", "values": []float64{value},
-				})
+				record, err := json.Marshal(testMeasurementRecord(
+					"epoch-01", sequence, "series-temperature-01",
+					[]float64{value}, sequence*1_000,
+				))
 				if err != nil {
 					errorsCh <- err
 					return
@@ -314,6 +321,10 @@ func TestPostgresEncryptedBackupRestoresOnlyIntoEmptyDatabase(t *testing.T) {
 func TestPostgresSchema28BackupRestoresAndUpgradesInsideCandidate(t *testing.T) {
 	source := openPostgresTestStore(t)
 	if _, err := source.db.Exec(`
+		ALTER TABLE output_profile_rule_bindings
+			DROP COLUMN mode,
+			DROP COLUMN output_sensor_identity_id;
+		DROP TABLE output_sensor_identities;
 		DROP TABLE edge_storage_samples;
 		ALTER TABLE signal_calibration_revisions_v3
 			ALTER COLUMN scale TYPE REAL USING scale::REAL,
@@ -347,8 +358,8 @@ func TestPostgresSchema28BackupRestoresAndUpgradesInsideCandidate(t *testing.T) 
 	if err := restored.db.QueryRow("SELECT version FROM edge_schema_meta WHERE singleton = 1").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 29 {
-		t.Fatalf("restored schema = %d, want 29", version)
+	if version != 31 {
+		t.Fatalf("restored schema = %d, want 31", version)
 	}
 }
 

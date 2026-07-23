@@ -51,7 +51,7 @@ func (store *Store) ActivateExportProfile(
 		return noProfile, err
 	}
 	switch adapterID {
-	case "iotkit.mqtt-json.v1", "yokakit.mqtt.v1":
+	case "iotkit.mqtt-json.v1", "pinikiet.mqtt.v1":
 	default:
 		return noProfile, outputadapter.ErrInvalidConfiguration
 	}
@@ -70,7 +70,7 @@ func (store *Store) ActivateExportProfile(
 	}
 	now := time.Now().UnixMilli()
 	profileState := edgeapp.ExportProfileActive
-	if adapterID == "yokakit.mqtt.v1" {
+	if adapterID == "pinikiet.mqtt.v1" {
 		profileState = edgeapp.ExportProfilePreparing
 	}
 	profile := edgeapp.ExportProfile{
@@ -134,6 +134,21 @@ func (store *Store) ActivateExportProfile(
 			return noProfile, err
 		}
 		profile.Bindings = append(profile.Bindings, binding)
+	}
+	if profile.AdapterID == "pinikiet.mqtt.v1" {
+		for _, binding := range profile.Bindings {
+			if binding.State != edgeapp.OutputBindingActive {
+				continue
+			}
+			profile.State = edgeapp.ExportProfileActive
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE export_profiles SET state = 'active'
+				WHERE profile_id = ? AND state = 'preparing'
+			`, profile.ProfileID); err != nil {
+				return noProfile, err
+			}
+			break
+		}
 	}
 	summary, _ := json.Marshal(map[string]any{
 		"adapter_id":             adapterID,
@@ -213,7 +228,7 @@ func (store *Store) PreviewExportProfileActivation(
 	var preview edgeapp.ExportProfileActivationPreview
 	preview.AdapterID = adapterID
 	switch adapterID {
-	case "iotkit.mqtt-json.v1", "yokakit.mqtt.v1":
+	case "iotkit.mqtt-json.v1", "pinikiet.mqtt.v1":
 	default:
 		return preview, outputadapter.ErrInvalidConfiguration
 	}
@@ -271,18 +286,23 @@ func (store *Store) listProfileBindings(
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT binding.binding_id, binding.profile_id, binding.rule_id,
 			COALESCE(binding.output_identity_id, ''),
+			COALESCE(binding.output_sensor_identity_id, ''),
 			COALESCE(rule.display_name, ''), COALESCE(rule.kind, ''),
 			COALESCE(rule.signal_ref, ''),
 			COALESCE(NULLIF(signal_profile.display_name, ''),
 				'名前未設定のセンサー'),
-			COALESCE(identity.source_id, ''),
-			COALESCE(identity.signal_id, ''), COALESCE(identity.mode, ''),
+			COALESCE(sensor_identity.source_id, identity.source_id, ''),
+			COALESCE(identity.signal_id, ''),
+			COALESCE(sensor_identity.sensor_id, ''), COALESCE(binding.mode, ''),
 			binding.reason, binding.state, binding.ineligible_reason,
 			binding.revision, binding.created_at, binding.activated_at,
 			binding.stopped_at
 		FROM output_profile_rule_bindings AS binding
 		LEFT JOIN output_signal_identities AS identity
 			ON identity.output_identity_id = binding.output_identity_id
+		LEFT JOIN output_sensor_identities AS sensor_identity
+			ON sensor_identity.output_sensor_identity_id =
+				binding.output_sensor_identity_id
 		LEFT JOIN semantic_rules_v3 AS rule ON rule.rule_id = binding.rule_id
 		LEFT JOIN edge_signals AS signal ON signal.signal_ref = rule.signal_ref
 		LEFT JOIN signal_profiles AS signal_profile
@@ -304,12 +324,14 @@ func (store *Store) listProfileBindings(
 			&binding.ProfileID,
 			&binding.RuleID,
 			&binding.OutputIdentityID,
+			&binding.OutputSensorIdentityID,
 			&binding.RuleDisplayName,
 			&binding.RuleKind,
 			&binding.SignalRef,
 			&binding.SensorName,
 			&binding.SourceID,
 			&binding.SignalID,
+			&binding.SensorID,
 			&binding.Mode,
 			&binding.Reason,
 			&binding.State,
@@ -328,7 +350,7 @@ func (store *Store) listProfileBindings(
 	return bindings, rows.Err()
 }
 
-func (store *Store) ConfigureYokaKitBooleanBinding(
+func (store *Store) ConfigurePinikietBooleanBinding(
 	ctx context.Context,
 	actor edgeapp.Actor,
 	bindingID string,
@@ -339,8 +361,8 @@ func (store *Store) ConfigureYokaKitBooleanBinding(
 	if err := authorizeOutputMutation(actor); err != nil {
 		return noBinding, err
 	}
-	if mode != string(outputadapter.YokaKitOnOff) &&
-		mode != string(outputadapter.YokaKitGanttChart) {
+	if mode != string(outputadapter.PinikietOnOff) &&
+		mode != string(outputadapter.PinikietGanttChart) {
 		return noBinding, outputadapter.ErrInvalidConfiguration
 	}
 	tx, err := store.db.BeginTx(ctx, nil)
@@ -351,12 +373,13 @@ func (store *Store) ConfigureYokaKitBooleanBinding(
 	var profile edgeapp.ExportProfile
 	var binding edgeapp.OutputProfileRuleBinding
 	var semanticKind semantics.Kind
+	var edgeNodeID string
 	err = tx.QueryRowContext(ctx, `
 		SELECT profile.profile_id, profile.adapter_id,
 			profile.adapter_schema_version, profile.state,
 			binding.binding_id, binding.rule_id,
 			binding.revision, binding.created_at, binding.state,
-			rule.signal_ref, rule.display_name, rule.kind
+			rule.signal_ref, rule.display_name, rule.kind, signal.edge_node_id
 		FROM output_profile_rule_bindings AS binding
 		JOIN export_profiles AS profile ON profile.profile_id = binding.profile_id
 		JOIN semantic_rules_v3 AS rule ON rule.rule_id = binding.rule_id
@@ -367,7 +390,7 @@ func (store *Store) ConfigureYokaKitBooleanBinding(
 		&profile.AdapterSchemaVersion, &profile.State,
 		&binding.BindingID, &binding.RuleID,
 		&binding.Revision, &binding.CreatedAt, &binding.State,
-		&binding.SignalRef, &binding.RuleDisplayName, &semanticKind,
+		&binding.SignalRef, &binding.RuleDisplayName, &semanticKind, &edgeNodeID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return noBinding, edgeapp.ErrNotFound
@@ -375,7 +398,7 @@ func (store *Store) ConfigureYokaKitBooleanBinding(
 	if err != nil {
 		return noBinding, err
 	}
-	if profile.AdapterID != "yokakit.mqtt.v1" ||
+	if profile.AdapterID != "pinikiet.mqtt.v1" ||
 		(profile.State != edgeapp.ExportProfileActive &&
 			profile.State != edgeapp.ExportProfilePreparing) ||
 		binding.State != edgeapp.OutputBindingNeedsConfiguration ||
@@ -389,20 +412,33 @@ func (store *Store) ConfigureYokaKitBooleanBinding(
 	if err != nil {
 		return noBinding, err
 	}
-	outputIdentityID, signalID, err := findOrCreateOutputSignalIdentityTx(
-		ctx, tx, profile.AdapterID, binding.RuleID, mode, sourceID,
+	outputSensorIdentityID, sensorID, err := findOrCreateOutputSensorIdentityTx(
+		ctx, tx, binding.SignalRef, sourceID,
+	)
+	if err != nil {
+		return noBinding, err
+	}
+	registered, err := outputSensorIdentityRegisteredTx(
+		ctx, tx, outputSensorIdentityID,
 	)
 	if err != nil {
 		return noBinding, err
 	}
 	now := time.Now().UnixMilli()
+	targetState := edgeapp.OutputBindingPrepared
+	var activatedAt any
+	if registered {
+		targetState = edgeapp.OutputBindingActive
+		activatedAt = now
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE output_profile_rule_bindings
-		SET output_identity_id = ?, state = 'prepared',
-			revision = revision + 1
+		SET output_sensor_identity_id = ?, mode = ?, state = ?,
+			revision = revision + 1, activated_at = ?
 		WHERE binding_id = ? AND revision = ?
 			AND state = 'needs_configuration'
-	`, outputIdentityID, bindingID, expectedRevision)
+	`, outputSensorIdentityID, mode, targetState, activatedAt,
+		bindingID, expectedRevision)
 	if err != nil {
 		return noBinding, err
 	}
@@ -411,11 +447,14 @@ func (store *Store) ConfigureYokaKitBooleanBinding(
 		return noBinding, edgeapp.ErrRevisionMismatch
 	}
 	binding.ProfileID = profile.ProfileID
-	binding.OutputIdentityID = outputIdentityID
+	binding.OutputSensorIdentityID = outputSensorIdentityID
 	binding.SourceID = sourceID
-	binding.SignalID = signalID
+	binding.SensorID = sensorID
 	binding.Mode = mode
-	binding.State = edgeapp.OutputBindingPrepared
+	binding.State = targetState
+	if registered {
+		binding.ActivatedAt = &now
+	}
 	binding.RuleKind = string(semanticKind)
 	binding.Revision++
 	config, err := bindingRouteConfig(profile.AdapterID, binding, semanticKind)
@@ -431,10 +470,22 @@ func (store *Store) ConfigureYokaKitBooleanBinding(
 			route_id, rule_id, adapter_id, config_schema_version,
 			config_json, start_after_observation_row_id, active, created_at,
 			binding_id, lifecycle_state
-		) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, 'active')
+		) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 'active')
 	`, routeID, binding.RuleID, profile.AdapterID,
-		profile.AdapterSchemaVersion, []byte(config), now, bindingID); err != nil {
+		profile.AdapterSchemaVersion, []byte(config), registered,
+		now, bindingID); err != nil {
 		return noBinding, err
+	}
+	if registered {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO output_binding_starts(
+				binding_id, ledger_epoch, start_after_pub_seq
+			)
+			SELECT ?, ledger_epoch, accepted_through
+			FROM accepted_cursors WHERE edge_node_id = ?
+		`, bindingID, edgeNodeID); err != nil {
+			return noBinding, err
+		}
 	}
 	summary, _ := json.Marshal(map[string]any{
 		"adapter_id": profile.AdapterID,
@@ -589,15 +640,20 @@ func (store *Store) StartPreparedOutputBinding(
 	err = tx.QueryRowContext(ctx, `
 		SELECT binding.binding_id, binding.profile_id, binding.rule_id,
 			COALESCE(binding.output_identity_id, ''),
-			COALESCE(identity.source_id, ''),
+			COALESCE(binding.output_sensor_identity_id, ''),
+			COALESCE(sensor_identity.source_id, identity.source_id, ''),
 			COALESCE(identity.signal_id, ''),
-			COALESCE(identity.mode, ''), binding.reason, binding.state,
+			COALESCE(sensor_identity.sensor_id, ''),
+			COALESCE(binding.mode, ''), binding.reason, binding.state,
 			binding.revision, binding.created_at,
 			rule.signal_ref, rule.display_name, rule.kind,
 			profile.state, signal.edge_node_id
 		FROM output_profile_rule_bindings AS binding
 		LEFT JOIN output_signal_identities AS identity
 			ON identity.output_identity_id = binding.output_identity_id
+		LEFT JOIN output_sensor_identities AS sensor_identity
+			ON sensor_identity.output_sensor_identity_id =
+				binding.output_sensor_identity_id
 		JOIN export_profiles AS profile ON profile.profile_id = binding.profile_id
 		JOIN semantic_rules_v3 AS rule ON rule.rule_id = binding.rule_id
 		JOIN edge_signals AS signal ON signal.signal_ref = rule.signal_ref
@@ -605,7 +661,8 @@ func (store *Store) StartPreparedOutputBinding(
 	`, bindingID).Scan(
 		&binding.BindingID, &binding.ProfileID, &binding.RuleID,
 		&binding.OutputIdentityID,
-		&binding.SourceID, &binding.SignalID, &binding.Mode,
+		&binding.OutputSensorIdentityID,
+		&binding.SourceID, &binding.SignalID, &binding.SensorID, &binding.Mode,
 		&binding.Reason, &binding.State, &binding.Revision,
 		&binding.CreatedAt, &binding.SignalRef, &binding.RuleDisplayName,
 		&binding.RuleKind, &profileState, &edgeNodeID,
@@ -629,27 +686,47 @@ func (store *Store) StartPreparedOutputBinding(
 		INSERT INTO output_binding_starts(
 			binding_id, ledger_epoch, start_after_pub_seq
 		)
-		SELECT ?, ledger_epoch, accepted_through
-		FROM accepted_cursors WHERE edge_node_id = ?
-	`, bindingID, edgeNodeID); err != nil {
+		SELECT candidate.binding_id, cursor.ledger_epoch,
+			cursor.accepted_through
+		FROM output_profile_rule_bindings AS candidate
+		JOIN semantic_rules_v3 AS rule ON rule.rule_id = candidate.rule_id
+		JOIN edge_signals AS signal ON signal.signal_ref = rule.signal_ref
+		JOIN accepted_cursors AS cursor
+			ON cursor.edge_node_id = signal.edge_node_id
+		WHERE candidate.profile_id = ?
+			AND candidate.output_sensor_identity_id = ?
+			AND candidate.state = 'prepared'
+	`, binding.ProfileID, binding.OutputSensorIdentityID); err != nil {
 		return noBinding, err
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE output_profile_rule_bindings
 		SET state = 'active', revision = revision + 1, activated_at = ?
-		WHERE binding_id = ? AND revision = ? AND state = 'prepared'
-	`, now, bindingID, expectedRevision)
+		WHERE profile_id = ? AND output_sensor_identity_id = ?
+			AND state = 'prepared'
+	`, now, binding.ProfileID, binding.OutputSensorIdentityID)
 	if err != nil {
 		return noBinding, err
 	}
 	changed, _ := result.RowsAffected()
-	if changed != 1 {
-		return noBinding, edgeapp.ErrRevisionMismatch
+	if changed < 1 {
+		return noBinding, errors.New("output sensor has no bindings ready to start")
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE output_routes SET active = 1, lifecycle_state = 'active'
-		WHERE binding_id = ? AND active = 0
-	`, bindingID); err != nil {
+		WHERE binding_id IN (
+			SELECT candidate.binding_id
+			FROM output_profile_rule_bindings AS candidate
+			WHERE candidate.profile_id = ?
+				AND candidate.output_sensor_identity_id = ?
+		)
+	`, binding.ProfileID, binding.OutputSensorIdentityID); err != nil {
+		return noBinding, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE output_sensor_identities SET registered_at = ?
+		WHERE output_sensor_identity_id = ? AND registered_at IS NULL
+	`, now, binding.OutputSensorIdentityID); err != nil {
 		return noBinding, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -666,7 +743,9 @@ func (store *Store) StartPreparedOutputBinding(
 		Operation:   "output_binding.start",
 		ResourceRef: bindingID,
 		Outcome:     auditOutcomeSuccess,
-		Summary:     json.RawMessage(`{"future_only":true}`),
+		Summary: json.RawMessage(fmt.Sprintf(
+			`{"future_only":true,"binding_count":%d}`, changed,
+		)),
 	}); err != nil {
 		return noBinding, err
 	}
@@ -1063,19 +1142,19 @@ func createProfileBindingTx(
 	case "iotkit.mqtt-json.v1":
 		binding.Mode = "observation"
 		binding.State = edgeapp.OutputBindingActive
-	case "yokakit.mqtt.v1":
+	case "pinikiet.mqtt.v1":
 		switch semanticKind {
 		case semantics.KindCumulativeCounter:
-			binding.Mode = string(outputadapter.YokaKitProduction)
+			binding.Mode = string(outputadapter.PinikietProduction)
 			binding.State = edgeapp.OutputBindingPrepared
 		case semantics.KindAlarm:
-			binding.Mode = string(outputadapter.YokaKitAlarm)
+			binding.Mode = string(outputadapter.PinikietAlarm)
 			binding.State = edgeapp.OutputBindingPrepared
 		case semantics.KindBoolean:
 			binding.State = edgeapp.OutputBindingNeedsConfiguration
 		case semantics.KindNumeric:
 			binding.State = edgeapp.OutputBindingIneligible
-			binding.IneligibleReason = "YokaKitは連続数値を受け取りません"
+			binding.IneligibleReason = "Pinikietは連続数値を受け取りません"
 		default:
 			return noBinding, outputadapter.ErrUnsupportedObservation
 		}
@@ -1085,19 +1164,38 @@ func createProfileBindingTx(
 	var activatedAt any
 	if binding.State == edgeapp.OutputBindingActive ||
 		binding.State == edgeapp.OutputBindingPrepared {
-		outputIdentityID, signalID, err := findOrCreateOutputSignalIdentityTx(
-			ctx,
-			tx,
-			profile.AdapterID,
-			binding.RuleID,
-			binding.Mode,
-			binding.SourceID,
-		)
+		var outputIdentityID, outputSensorIdentityID string
+		var signalID, sensorID string
+		var err error
+		if profile.AdapterID == "pinikiet.mqtt.v1" {
+			outputSensorIdentityID, sensorID, err = findOrCreateOutputSensorIdentityTx(
+				ctx, tx, binding.SignalRef, binding.SourceID,
+			)
+		} else {
+			outputIdentityID, signalID, err = findOrCreateOutputSignalIdentityTx(
+				ctx, tx, profile.AdapterID, binding.RuleID, binding.Mode,
+				binding.SourceID,
+			)
+		}
 		if err != nil {
 			return noBinding, err
 		}
 		binding.OutputIdentityID = outputIdentityID
+		binding.OutputSensorIdentityID = outputSensorIdentityID
 		binding.SignalID = signalID
+		binding.SensorID = sensorID
+		if binding.State == edgeapp.OutputBindingPrepared &&
+			outputSensorIdentityID != "" {
+			registered, err := outputSensorIdentityRegisteredTx(
+				ctx, tx, outputSensorIdentityID,
+			)
+			if err != nil {
+				return noBinding, err
+			}
+			if registered {
+				binding.State = edgeapp.OutputBindingActive
+			}
+		}
 		if binding.State == edgeapp.OutputBindingActive {
 			binding.ActivatedAt = &now
 			activatedAt = now
@@ -1106,11 +1204,14 @@ func createProfileBindingTx(
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO output_profile_rule_bindings(
 			binding_id, profile_id, rule_id, output_identity_id,
+			output_sensor_identity_id, mode,
 			reason, state, ineligible_reason, revision,
 			created_at, activated_at
-		) VALUES (?, ?, ?, NULLIF(?, ''), ?, ?, ?, 1, ?, ?)
+		) VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''),
+			?, ?, ?, 1, ?, ?)
 	`, binding.BindingID, binding.ProfileID, binding.RuleID,
-		binding.OutputIdentityID, binding.Reason, binding.State,
+		binding.OutputIdentityID, binding.OutputSensorIdentityID, binding.Mode,
+		binding.Reason, binding.State,
 		binding.IneligibleReason, binding.CreatedAt, activatedAt); err != nil {
 		return noBinding, err
 	}
@@ -1205,6 +1306,65 @@ func findOrCreateOutputSignalIdentityTx(
 	return outputIdentityID, signalID, nil
 }
 
+func findOrCreateOutputSensorIdentityTx(
+	ctx context.Context,
+	tx *sqlTx,
+	signalRef string,
+	sourceID string,
+) (string, string, error) {
+	var identityID, storedSourceID, sensorID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT output_sensor_identity_id, source_id, sensor_id
+		FROM output_sensor_identities
+		WHERE signal_ref = ?
+	`, signalRef).Scan(&identityID, &storedSourceID, &sensorID)
+	if err == nil {
+		if storedSourceID != sourceID {
+			return "", "", errors.New(
+				"output sensor identity belongs to a different Edge",
+			)
+		}
+		return identityID, sensorID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	sensorID, err = newOutputSensorID()
+	if err != nil {
+		return "", "", err
+	}
+	identityID, err = newResourceRef("osy_")
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO output_sensor_identities(
+			output_sensor_identity_id, signal_ref, source_id,
+			sensor_id, created_at
+		) VALUES (?, ?, ?, ?, ?)
+	`, identityID, signalRef, sourceID, sensorID,
+		time.Now().UnixMilli()); err != nil {
+		return "", "", err
+	}
+	return identityID, sensorID, nil
+}
+
+func outputSensorIdentityRegisteredTx(
+	ctx context.Context,
+	tx *sqlTx,
+	identityID string,
+) (bool, error) {
+	var registered bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT registered_at IS NOT NULL
+		FROM output_sensor_identities
+		WHERE output_sensor_identity_id = ?
+	`, identityID).Scan(&registered); err != nil {
+		return false, err
+	}
+	return registered, nil
+}
+
 func bindingRouteConfig(
 	adapterID string,
 	binding edgeapp.OutputProfileRuleBinding,
@@ -1218,11 +1378,11 @@ func bindingRouteConfig(
 					"/signals/" + binding.SignalID + "/observations",
 			},
 		)
-	case "yokakit.mqtt.v1":
-		return outputadapter.EncodeYokaKitConfig(outputadapter.YokaKitConfig{
+	case "pinikiet.mqtt.v1":
+		return outputadapter.EncodePinikietConfig(outputadapter.PinikietConfig{
 			SourceID: binding.SourceID,
-			SignalID: binding.SignalID,
-			Kind:     outputadapter.YokaKitKind(binding.Mode),
+			SensorID: binding.SensorID,
+			Kind:     outputadapter.PinikietKind(binding.Mode),
 			Reason:   binding.Reason,
 		})
 	default:
@@ -1269,6 +1429,14 @@ func newOutputSignalID() (string, error) {
 		return "", fmt.Errorf("generate output signal ID: %w", err)
 	}
 	return "sig-" + hex.EncodeToString(value), nil
+}
+
+func newOutputSensorID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := outputRandomRead(value); err != nil {
+		return "", fmt.Errorf("generate output sensor ID: %w", err)
+	}
+	return "sen-" + hex.EncodeToString(value), nil
 }
 
 func authorizeOutputMutation(actor edgeapp.Actor) error {

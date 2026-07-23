@@ -7,37 +7,37 @@ import (
 	"regexp"
 )
 
-const YokaKitConfigSchemaVersion = 1
+const PinikietConfigSchemaVersion = 1
 
-type YokaKitKind string
+type PinikietKind string
 
 const (
-	YokaKitProduction YokaKitKind = "production"
-	YokaKitOnOff      YokaKitKind = "onoff"
-	YokaKitGanttChart YokaKitKind = "gantt_chart"
-	YokaKitAlarm      YokaKitKind = "alarm"
+	PinikietProduction PinikietKind = "production"
+	PinikietOnOff      PinikietKind = "onoff"
+	PinikietGanttChart PinikietKind = "gantt_chart"
+	PinikietAlarm      PinikietKind = "alarm"
 )
 
-var yokakitID = regexp.MustCompile(
+var pinikietID = regexp.MustCompile(
 	`^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$`,
 )
 
-type YokaKitConfig struct {
-	SourceID string      `json:"source_id"`
-	SignalID string      `json:"signal_id"`
-	Kind     YokaKitKind `json:"kind"`
-	Reason   string      `json:"reason,omitempty"`
+type PinikietConfig struct {
+	SourceID string       `json:"source_id"`
+	SensorID string       `json:"sensor_id"`
+	Kind     PinikietKind `json:"kind"`
+	Reason   string       `json:"reason,omitempty"`
 }
 
-type YokaKitAdapter struct{}
+type PinikietAdapter struct{}
 
-var _ Adapter = YokaKitAdapter{}
+var _ Adapter = PinikietAdapter{}
 
-func (YokaKitAdapter) Descriptor() Descriptor {
+func (PinikietAdapter) Descriptor() Descriptor {
 	return Descriptor{
-		ID:                  "yokakit.mqtt.v1",
-		DisplayName:         "YokaKit MQTT v1",
-		ConfigSchemaVersion: YokaKitConfigSchemaVersion,
+		ID:                  "pinikiet.mqtt.v1",
+		DisplayName:         "Pinikiet MQTT v1",
+		ConfigSchemaVersion: PinikietConfigSchemaVersion,
 		Modes: []Mode{
 			{
 				Key: "production", DisplayName: "累積値",
@@ -59,53 +59,53 @@ func (YokaKitAdapter) Descriptor() Descriptor {
 	}
 }
 
-func EncodeYokaKitConfig(config YokaKitConfig) (json.RawMessage, error) {
+func EncodePinikietConfig(config PinikietConfig) (json.RawMessage, error) {
 	return json.Marshal(struct {
 		SchemaVersion int `json:"schema_version"`
-		YokaKitConfig
+		PinikietConfig
 	}{
-		SchemaVersion: YokaKitConfigSchemaVersion,
-		YokaKitConfig: config,
+		SchemaVersion:  PinikietConfigSchemaVersion,
+		PinikietConfig: config,
 	})
 }
 
-func (YokaKitAdapter) ValidateConfig(
+func (PinikietAdapter) ValidateConfig(
 	raw json.RawMessage,
 	sourceKind ObservationKind,
 ) error {
-	config, err := decodeYokaKitConfig(raw)
+	config, err := decodePinikietConfig(raw)
 	if err != nil {
 		return err
 	}
-	if !yokakitID.MatchString(config.SourceID) ||
-		!yokakitID.MatchString(config.SignalID) {
+	if !pinikietID.MatchString(config.SourceID) ||
+		!pinikietID.MatchString(config.SensorID) {
 		return fmt.Errorf(
-			"%w: YokaKit source_id and signal_id must use the closed topic ID syntax",
+			"%w: Pinikiet source_id and sensor_id must use the closed topic ID syntax",
 			ErrInvalidConfiguration,
 		)
 	}
 	if len(config.Reason) > 512 {
-		return fmt.Errorf("%w: YokaKit alarm reason exceeds 512 bytes",
+		return fmt.Errorf("%w: Pinikiet alarm reason exceeds 512 bytes",
 			ErrInvalidConfiguration)
 	}
 	switch config.Kind {
-	case YokaKitProduction, YokaKitOnOff, YokaKitGanttChart, YokaKitAlarm:
+	case PinikietProduction, PinikietOnOff, PinikietGanttChart, PinikietAlarm:
 	default:
-		return fmt.Errorf("%w: unsupported YokaKit mode %q",
+		return fmt.Errorf("%w: unsupported Pinikiet mode %q",
 			ErrInvalidConfiguration, config.Kind)
 	}
-	if config.Kind != YokaKitAlarm && config.Reason != "" {
-		return fmt.Errorf("%w: reason is only valid for YokaKit alarm",
+	if config.Kind != PinikietAlarm && config.Reason != "" {
+		return fmt.Errorf("%w: reason is only valid for Pinikiet alarm",
 			ErrInvalidConfiguration)
 	}
-	if !compatibleYokaKitKind(sourceKind, config.Kind) {
-		return fmt.Errorf("%w: %s cannot produce YokaKit %s",
+	if !compatiblePinikietKind(sourceKind, config.Kind) {
+		return fmt.Errorf("%w: %s cannot produce Pinikiet %s",
 			ErrUnsupportedObservation, sourceKind, config.Kind)
 	}
 	return nil
 }
 
-func (adapter YokaKitAdapter) Transform(
+func (adapter PinikietAdapter) Transform(
 	raw json.RawMessage,
 	observation Observation,
 ) (MQTTPublication, error) {
@@ -116,16 +116,16 @@ func (adapter YokaKitAdapter) Transform(
 	if err := adapter.ValidateConfig(raw, observation.Kind); err != nil {
 		return noPublication, err
 	}
-	config, err := decodeYokaKitConfig(raw)
+	config, err := decodePinikietConfig(raw)
 	if err != nil {
 		return noPublication, err
 	}
-	if config.Kind == YokaKitProduction {
+	if config.Kind == PinikietProduction {
 		var value int64
 		if err := json.Unmarshal(observation.Value, &value); err != nil ||
 			value > maxSafeInteger {
 			return noPublication, fmt.Errorf(
-				"%w: YokaKit production exceeds its portable integer range",
+				"%w: Pinikiet production exceeds its portable integer range",
 				ErrInvalidObservation,
 			)
 		}
@@ -136,7 +136,7 @@ func (adapter YokaKitAdapter) Transform(
 		SeriesID      string          `json:"series_id"`
 		Sequence      int64           `json:"sequence"`
 		ObservedAt    int64           `json:"observed_at"`
-		Kind          YokaKitKind     `json:"kind"`
+		Kind          PinikietKind    `json:"kind"`
 		Value         json.RawMessage `json:"value"`
 		Reason        string          `json:"reason,omitempty"`
 		Reading       *float64        `json:"reading,omitempty"`
@@ -149,7 +149,7 @@ func (adapter YokaKitAdapter) Transform(
 		Kind:          config.Kind,
 		Value:         observation.Value,
 	}
-	if config.Kind == YokaKitAlarm {
+	if config.Kind == PinikietAlarm {
 		payload.Reason = config.Reason
 		payload.Reading = observation.Reading
 	}
@@ -158,8 +158,8 @@ func (adapter YokaKitAdapter) Transform(
 		return noPublication, err
 	}
 	publication := MQTTPublication{
-		Topic: "yokakit/v1/sources/" + config.SourceID + "/signals/" +
-			config.SignalID + "/observations",
+		Topic: "pinikiet/v1/sources/" + config.SourceID + "/sensors/" +
+			config.SensorID + "/observations",
 		QoS:     1,
 		Retain:  false,
 		Payload: encoded,
@@ -170,54 +170,54 @@ func (adapter YokaKitAdapter) Transform(
 	return publication, nil
 }
 
-func decodeYokaKitConfig(raw json.RawMessage) (YokaKitConfig, error) {
+func decodePinikietConfig(raw json.RawMessage) (PinikietConfig, error) {
 	var wire struct {
 		SchemaVersion int `json:"schema_version"`
-		YokaKitConfig
+		PinikietConfig
 	}
 	if err := decodeClosedConfig(raw, &wire); err != nil {
-		return YokaKitConfig{}, fmt.Errorf("%w: %v",
+		return PinikietConfig{}, fmt.Errorf("%w: %v",
 			ErrInvalidConfiguration, err)
 	}
-	if wire.SchemaVersion != YokaKitConfigSchemaVersion {
-		return YokaKitConfig{}, fmt.Errorf(
-			"%w: unsupported YokaKit config schema version %d",
+	if wire.SchemaVersion != PinikietConfigSchemaVersion {
+		return PinikietConfig{}, fmt.Errorf(
+			"%w: unsupported Pinikiet config schema version %d",
 			ErrInvalidConfiguration,
 			wire.SchemaVersion,
 		)
 	}
-	return wire.YokaKitConfig, nil
+	return wire.PinikietConfig, nil
 }
 
-func DecodeYokaKitConfig(raw json.RawMessage) (YokaKitConfig, error) {
-	return decodeYokaKitConfig(raw)
+func DecodePinikietConfig(raw json.RawMessage) (PinikietConfig, error) {
+	return decodePinikietConfig(raw)
 }
 
-func compatibleYokaKitKind(
+func compatiblePinikietKind(
 	source ObservationKind,
-	target YokaKitKind,
+	target PinikietKind,
 ) bool {
 	switch target {
-	case YokaKitProduction:
+	case PinikietProduction:
 		return source == KindCumulativeValue
-	case YokaKitOnOff, YokaKitGanttChart:
+	case PinikietOnOff, PinikietGanttChart:
 		return source == KindBoolean
-	case YokaKitAlarm:
+	case PinikietAlarm:
 		return source == KindAlarm
 	default:
 		return false
 	}
 }
 
-func YokaKitStatus(
+func PinikietStatus(
 	sourceID string,
 	reportedAt int64,
 ) (MQTTPublication, error) {
 	var noPublication MQTTPublication
-	if !yokakitID.MatchString(sourceID) ||
+	if !pinikietID.MatchString(sourceID) ||
 		reportedAt < 0 ||
 		reportedAt > maxUnixMillis {
-		return noPublication, errors.New("invalid YokaKit source status")
+		return noPublication, errors.New("invalid Pinikiet source status")
 	}
 	payload, err := json.Marshal(struct {
 		SchemaVersion int    `json:"schema_version"`
@@ -228,7 +228,7 @@ func YokaKitStatus(
 		return noPublication, err
 	}
 	publication := MQTTPublication{
-		Topic:   "yokakit/v1/sources/" + sourceID + "/status",
+		Topic:   "pinikiet/v1/sources/" + sourceID + "/status",
 		QoS:     1,
 		Retain:  true,
 		Payload: payload,

@@ -14,7 +14,7 @@ Status: Implemented 2026-07-19.
 
 ## 1. Purpose
 
-An Output Adapter is the boundary that converts generic semantic data established by IoTKit Edge into an external-application-specific MQTT contract. YokaKit is the first implementation, but the generic contract knows none of its topics, purpose names, or payload fields.
+An Output Adapter is the boundary that converts generic semantic data established by IoTKit Edge into an external-application-specific MQTT contract. Pinikiet is the first implementation, but the generic contract knows none of its topics, purpose names, or payload fields.
 
 ```text
 stored raw observation
@@ -65,7 +65,7 @@ type ModeDescriptor struct {
 }
 ```
 
-- `ID` is a stable lowercase ASCII ID identifying the external application, transport, and major contract. Initial IDs are `iotkit.mqtt-json.v1` and `yokakit.mqtt.v1`.
+- `ID` is a stable lowercase ASCII ID identifying the external application, transport, and major contract. Initial IDs are `iotkit.mqtt-json.v1` and `pinikiet.mqtt.v1`.
 - `ConfigSchemaVersion` is the exact route configuration JSON version.
 - `Mode.Key` is an external-application purpose, not a generic kind.
 - `Accepts` is the closed set of generic kinds transformable to that mode.
@@ -136,15 +136,15 @@ active_from_observation
 stopped_at_observation
 ```
 
-The configuration version must match the selected descriptor. Migration converts the old YokaKit-specific route into `adapter_id=yokakit.mqtt.v1` plus versioned JSON while preserving `route_id` and pending outbox rows.
+The configuration version must match the selected descriptor. Migrations convert the legacy YokaKit-specific route into `adapter_id=pinikiet.mqtt.v1` plus versioned JSON while preserving `route_id` and pending outbox rows.
 
 `output_routes` are execution units expanded from the IoTKit-Edge-wide `export_profile` through `profile_rule_binding`, not settings users create per rule. The profile expander derives exact route configuration from IoTKit Edge ID, versioned Adapter ID, semantic rule ID, external purpose, stable logical signal ID, and rule kind. The Adapter does not know the Edge, rule inventory, or future automatic rule additions.
 
 Console/API operations are:
 
 - `GET /api/v1/export-profiles`: list destinations and binding states;
-- `POST /api/v1/export-profiles`: confirm continuous application to current and future rules; generic output begins immediately, while YokaKit prepares topics and IDs;
-- `PUT /api/v1/output-bindings/{binding_id}`: decide a YokaKit boolean purpose and prepare topic/ID;
+- `POST /api/v1/export-profiles`: confirm continuous application to current and future rules; generic output begins immediately, while Pinikiet prepares topics and IDs;
+- `PUT /api/v1/output-bindings/{binding_id}`: decide a Pinikiet boolean purpose and prepare topic/ID;
 - `POST /api/v1/output-bindings/{binding_id}/start`: after external topic registration, start only beyond the saved boundary;
 - `POST /api/v1/export-profiles/{profile_id}/stop`: stop new transformation at a boundary and drain existing delivery;
 - `GET /api/v1/output-bindings/{binding_id}/publication`: inspect the exact topic and payload.
@@ -176,7 +176,7 @@ type MQTTPublication struct {
 
 V1 requires a non-empty exact UTF-8 topic without NUL, `+`, or `#`; exact QoS 1; and valid JSON payload. The Adapter never publishes. The delivery layer durably stores the publication in SQLite before sending it and retries the same topic/payload until PUBACK. The external contract selects retain; ordinary Observations are normally false, while a separate source-status contract may be true.
 
-Shared fixtures live in `testdata/output/v1/` and fix Adapter ID, versioned configuration, generic Observation, expected topic, QoS, retain, and payload together. `scripts/test-edge-output.sh` verifies generic and YokaKit routes through real Mosquitto, persistence while the Broker is down, and convergence after restart. `scripts/test-yokakit-consumer-contract.sh` feeds the same fixture to the adjacent YokaKit decoder to detect drift.
+Shared fixtures live in `testdata/output/v1/` and fix Adapter ID, versioned configuration, generic Observation, expected topic, QoS, retain, and payload together. `scripts/test-edge-output.sh` verifies generic and Pinikiet routes through real Mosquitto, persistence while the Broker is down, and convergence after restart. A consumer contract gate will be added when the Pinikiet repository provides its decoder and matching shared fixture.
 
 ## 9. IoTKit MQTT JSON v1 binding
 
@@ -210,20 +210,26 @@ The topic is complete and at most 65,535 bytes. Templates, placeholders, and sen
 
 A finite `reading` is added only when present on an alarm Observation. The Adapter does not reinterpret kind, value, identity, or time. QoS is 1 and retain is false. A company-specific system unable to consume this common contract uses a Connector outside IoTKit; v1 ships no Connector runtime, implementation, or SDK.
 
-## 10. YokaKit MQTT v1 binding
+## 10. Pinikiet MQTT v1 binding
 
-| Generic kind | YokaKit mode |
+| Generic kind | Pinikiet mode |
 |---|---|
 | `cumulative_value` | `production` |
 | `boolean` | `onoff` |
 | `boolean` | `gantt_chart` |
 | `alarm` | `alarm` |
 
-It never guesses a YokaKit purpose for `numeric`, and v1 has no string Observation, so it exposes no `barcode` mode. Configuration has `schema_version=1`, `source_id`, `signal_id`, `kind`, and optional `reason`, and converts to the agreed YokaKit MQTT Purpose-Bound Signal Contract v1.
+It never guesses a Pinikiet purpose for `numeric`, and v1 has no string Observation, so it exposes no `barcode` mode. Configuration has `schema_version=1`, `source_id`, `sensor_id`, `kind`, and optional `reason`, and converts to the agreed Pinikiet MQTT Purpose-Bound Signal Contract v1.
 
-In YokaKit, the topic is also an input-registration contract. Adding a profile or selecting a boolean purpose prepares but does not publish. The Console/API shows the exact topic and example payload. After an installer registers it in YokaKit, an explicit start operation saves the accepted cursor boundary and moves `prepared -> active`. Earlier Observations are never sent later.
+IoTKit Edge issues `sensor_id` once per `signal_ref` as `sen-<128-bit lowercase hex>`. The `production`, `alarm`, `onoff`, and `gantt_chart` values derived from the same sensor share that ID and the exact topic `pinikiet/v1/sources/{source_id}/sensors/{sensor_id}/observations`.
 
-YokaKit source status is a separate source-level publication, not a semantic Observation route. Production bootstrap issues `edge-<32hex>` before DB creation and gives the same ID to IoTKit Edge and Broker ACL. `iotkit-edge-output-<edge-id>` may write only that source's IoTKit/YokaKit observation and status namespaces. Starting an existing DB with a different `--edge-id` is rejected.
+Each semantic rule owns a distinct `series_id`, and `sequence` increases from 1 within that series. Kinds do not share a global sequence; `(series_id, sequence)` is the deduplication identity. A meaning-changing rule update starts a new series at sequence 1 while preserving `sensor_id` and the topic.
+
+In Pinikiet, the topic is also an input-registration contract. Adding a profile or selecting a boolean purpose prepares but does not publish. The Console/API shows one exact topic per sensor and an example payload. After an installer registers that topic once, an explicit start operation saves an accepted cursor boundary and activates every prepared kind for that sensor. Compatible rules added later reuse the registered topic and start automatically. Observations before each rule's start boundary are never sent later.
+
+When schema 30 upgrades an active legacy YokaKit route, it does not treat the old `/signals/` registration as proof that the new Pinikiet `/sensors/` topic is registered. The profile returns to `preparing` until the new topic is registered. Already queued messages keep their old registered topic and are delivered without being discarded.
+
+Pinikiet source status is a separate source-level publication, not a semantic Observation route. Production bootstrap issues `edge-<32hex>` before DB creation and gives the same ID to IoTKit Edge and Broker ACL. `iotkit-edge-output-<edge-id>` may write only that source's IoTKit/Pinikiet observation and status namespaces. Starting an existing DB with a different `--edge-id` is rejected.
 
 ## 11. V1 exclusions
 

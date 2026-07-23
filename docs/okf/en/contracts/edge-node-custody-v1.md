@@ -15,7 +15,7 @@ implemented, including Edge Node activation and publication admission. The older
 publisher is retained only as transitional code and is not started by the Edge Node composition root.
 
 This contract defines how canonical records leave one Edge Node and when that Edge Node may transfer
-custody. Application meaning such as production, OEE, process, alarm text, or YokaKit state is not
+custody. Application meaning such as production, OEE, process, alarm text, or Pinikiet state is not
 part of this contract.
 
 ## Roles
@@ -27,7 +27,7 @@ part of this contract.
   cursor, then publishes the application custody acknowledgement. It also provides direct raw query
   today and is the Edge-scoped semantic and application export boundary. Semantic projection
   and exporter failure never weaken or roll back raw custody acceptance.
-- **Application consumer** such as YokaKit receives a separately mapped Output Adapter contract.
+- **Application consumer** such as Pinikiet receives a separately mapped Output Adapter contract.
   It does not consume this raw custody stream, and its business result does not authorize Edge Node purge.
 
 ## Topics
@@ -206,7 +206,7 @@ contract change.
   `event_time == device_time`.
 - `received_at`: `event_time == received_at`.
 
-`series_key` is non-empty and opaque to consumers. YokaKit or another application receives a
+`series_key` is non-empty and opaque to consumers. Pinikiet or another application receives a
 separate mapped Output Adapter contract rather than assigning business meaning to this raw record.
 
 ### Annotation
@@ -319,11 +319,11 @@ password_file = "/run/secrets/iotkit-mqtt-password"
 
 Plain MQTT requires `allow_insecure = true` and is only for local Docker testing.
 
-## YokaKit boundary
+## Pinikiet boundary
 
 IoTKit publishes canonical observations. IoTKit Edge is the Edge-scoped boundary that maps
 stored series to configured sensor meanings and outputs such as `production`. That mapping does not
-enter R10, and downstream business success is not a custody ack. YokaKit consumes the mapped signal
+enter R10, and downstream business success is not a custody ack. Pinikiet consumes the mapped signal
 and owns business masters and logic such as products, processes, production records, OEE, alarms,
 UI, and notifications.
 

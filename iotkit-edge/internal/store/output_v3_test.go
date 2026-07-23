@@ -36,14 +36,14 @@ func TestMultipleRuleOutputRouteSurvivesRuleRevisionAndPublishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route, err := archive.ApplyYokaKitRuleRoute(
+	route, err := archive.ApplyPinikietRuleRoute(
 		ctx,
 		edgeapp.LocalCLIActor(),
 		rule.ID,
-		outputadapter.YokaKitConfig{
+		outputadapter.PinikietConfig{
 			SourceID: "line-a",
-			SignalID: "production",
-			Kind:     outputadapter.YokaKitProduction,
+			SensorID: "press",
+			Kind:     outputadapter.PinikietProduction,
 		},
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestMultipleRuleOutputRouteSurvivesRuleRevisionAndPublishes(t *testing.T) {
 		outputRoutes[0].OldestPendingAt == nil {
 		t.Fatalf("output routes=%#v err=%v", outputRoutes, err)
 	}
-	routes, err := archive.ListYokaKitRuleRoutes(ctx)
+	routes, err := archive.ListPinikietRuleRoutes(ctx)
 	if err != nil || len(routes) != 1 ||
 		routes[0].RuleID != rule.ID ||
 		routes[0].RouteID != route.RouteID ||
@@ -102,7 +102,7 @@ func TestMultipleRuleOutputRouteSurvivesRuleRevisionAndPublishes(t *testing.T) {
 	if err := archive.MarkMQTTExportPublished(ctx, pending[0].ExportID); err != nil {
 		t.Fatal(err)
 	}
-	routes, err = archive.ListYokaKitRuleRoutes(ctx)
+	routes, err = archive.ListPinikietRuleRoutes(ctx)
 	if err != nil || routes[0].PublishedCount != 1 {
 		t.Fatalf("published routes=%#v err=%v", routes, err)
 	}
@@ -374,14 +374,14 @@ func TestMultipleRuleStateAndOutputRemainExactlyOnceAcrossRestart(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := archive.ApplyYokaKitRuleRoute(
+	if _, err := archive.ApplyPinikietRuleRoute(
 		ctx,
 		edgeapp.LocalCLIActor(),
 		rule.ID,
-		outputadapter.YokaKitConfig{
+		outputadapter.PinikietConfig{
 			SourceID: "line-a",
-			SignalID: "production",
-			Kind:     outputadapter.YokaKitProduction,
+			SensorID: "press",
+			Kind:     outputadapter.PinikietProduction,
 		},
 	); err != nil {
 		t.Fatal(err)

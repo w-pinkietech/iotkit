@@ -168,7 +168,7 @@ func TestActivateExportProfileRollsBackWhenSignalIdentityEntropyFails(t *testing
 	}
 }
 
-func TestActivateYokaKitProfileClassifiesRulesWithoutGuessingBooleanPurpose(
+func TestActivatePinikietProfileClassifiesRulesWithoutGuessingBooleanPurpose(
 	t *testing.T,
 ) {
 	archive := openTestStore(t)
@@ -178,15 +178,26 @@ func TestActivateYokaKitProfileClassifiesRulesWithoutGuessingBooleanPurpose(
 	profile, err := archive.ActivateExportProfile(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
-		"YokaKit",
-		"yokakit.mqtt.v1",
+		"Pinikiet",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	states := map[string]edgeapp.OutputBindingState{}
+	var sensorID string
 	for _, binding := range profile.Bindings {
 		states[binding.RuleID] = binding.State
+		if binding.State == edgeapp.OutputBindingPrepared {
+			if !regexp.MustCompile(`^sen-[0-9a-f]{32}$`).MatchString(binding.SensorID) {
+				t.Fatalf("binding has invalid sensor_id: %#v", binding)
+			}
+			if sensorID == "" {
+				sensorID = binding.SensorID
+			} else if binding.SensorID != sensorID {
+				t.Fatalf("same sensor uses different sensor IDs: %q and %q", sensorID, binding.SensorID)
+			}
+		}
 	}
 	if states[rules["numeric"].ID] != edgeapp.OutputBindingIneligible ||
 		states[rules["boolean"].ID] != edgeapp.OutputBindingNeedsConfiguration ||
@@ -202,7 +213,7 @@ func TestPreviewExportProfileActivationNamesEveryAffectedRule(t *testing.T) {
 	createOutputProfileRules(t, archive, signalRef)
 	preview, err := archive.PreviewExportProfileActivation(
 		context.Background(),
-		"yokakit.mqtt.v1",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -261,14 +272,14 @@ func TestCreateSemanticRuleAutoBindsActiveProfilesInSameTransaction(t *testing.T
 	}
 }
 
-func TestCreateSemanticRuleAutoBindsPreparingYokaKitProfile(t *testing.T) {
+func TestCreateSemanticRuleAutoBindsPreparingPinikietProfile(t *testing.T) {
 	archive := openTestStore(t)
 	signalRef := semanticV3Signal(t, archive)
 	profile, err := archive.ActivateExportProfile(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
-		"YokaKit",
-		"yokakit.mqtt.v1",
+		"Pinikiet",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -311,15 +322,15 @@ func TestCreateSemanticRuleAutoBindsPreparingYokaKitProfile(t *testing.T) {
 	}
 }
 
-func TestConfigureYokaKitBooleanBindingIssuesIdentityAndRoute(t *testing.T) {
+func TestConfigurePinikietBooleanBindingIssuesIdentityAndRoute(t *testing.T) {
 	archive := openTestStore(t)
 	signalRef := semanticV3Signal(t, archive)
 	rules := createOutputProfileRules(t, archive, signalRef)
 	profile, err := archive.ActivateExportProfile(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
-		"YokaKit",
-		"yokakit.mqtt.v1",
+		"Pinikiet",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +341,7 @@ func TestConfigureYokaKitBooleanBindingIssuesIdentityAndRoute(t *testing.T) {
 			pending = binding
 		}
 	}
-	configured, err := archive.ConfigureYokaKitBooleanBinding(
+	configured, err := archive.ConfigurePinikietBooleanBinding(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
 		pending.BindingID,
@@ -342,7 +353,7 @@ func TestConfigureYokaKitBooleanBindingIssuesIdentityAndRoute(t *testing.T) {
 	}
 	if configured.State != edgeapp.OutputBindingPrepared ||
 		configured.Mode != "gantt_chart" ||
-		!regexp.MustCompile(`^sig-[0-9a-f]{32}$`).MatchString(configured.SignalID) {
+		!regexp.MustCompile(`^sen-[0-9a-f]{32}$`).MatchString(configured.SensorID) {
 		t.Fatalf("configured=%#v", configured)
 	}
 	routes, err := archive.ListOutputRoutes(context.Background())
@@ -352,7 +363,7 @@ func TestConfigureYokaKitBooleanBindingIssuesIdentityAndRoute(t *testing.T) {
 	var found bool
 	for _, route := range routes {
 		if route.RuleID == rules["boolean"].ID &&
-			route.AdapterID == "yokakit.mqtt.v1" && !route.Active {
+			route.AdapterID == "pinikiet.mqtt.v1" && !route.Active {
 			found = true
 		}
 	}
@@ -371,17 +382,140 @@ func TestConfigureYokaKitBooleanBindingIssuesIdentityAndRoute(t *testing.T) {
 	if started.State != edgeapp.OutputBindingActive {
 		t.Fatalf("started=%#v", started)
 	}
+	profiles, err := archive.ListExportProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range profiles[0].Bindings {
+		if binding.SensorID == configured.SensorID &&
+			binding.State == edgeapp.OutputBindingPrepared {
+			t.Fatalf("same sensor still requires duplicate registration: %#v", binding)
+		}
+	}
+	configuration, err := archive.GetSemanticConfiguration(
+		context.Background(), signalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRule, err := archive.CreateSemanticRule(
+		context.Background(),
+		edgeapp.LocalCLIActor(),
+		signalRef,
+		"追加の累積値",
+		semantics.RuleSpec{
+			Kind: semantics.KindCumulativeCounter,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+			Trigger: semantics.TriggerTransition,
+		},
+		edgeapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err = archive.ListExportProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundNewRule := false
+	for _, candidate := range profiles[0].Bindings {
+		if candidate.RuleID == newRule.ID {
+			if candidate.SensorID != configured.SensorID ||
+				candidate.State != edgeapp.OutputBindingActive {
+				t.Fatalf("new rule did not reuse registered sensor: %#v", candidate)
+			}
+			foundNewRule = true
+		}
+	}
+	if !foundNewRule {
+		t.Fatal("new rule was not auto-bound")
+	}
+	configuration, err = archive.GetSemanticConfiguration(
+		context.Background(), signalRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newBooleanRule, err := archive.CreateSemanticRule(
+		context.Background(),
+		edgeapp.LocalCLIActor(),
+		signalRef,
+		"追加のON/OFF",
+		semantics.RuleSpec{
+			Kind: semantics.KindBoolean,
+			Detector: semantics.Detector{
+				Mode: semantics.DetectorBooleanHighActive,
+			},
+		},
+		edgeapp.RevisionPrecondition{Expected: &configuration.Revision},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err = archive.ListExportProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newBooleanBinding edgeapp.OutputProfileRuleBinding
+	for _, candidate := range profiles[0].Bindings {
+		if candidate.RuleID == newBooleanRule.ID {
+			newBooleanBinding = candidate
+		}
+	}
+	configuredBoolean, err := archive.ConfigurePinikietBooleanBinding(
+		context.Background(),
+		edgeapp.LocalCLIActor(),
+		newBooleanBinding.BindingID,
+		string(outputadapter.PinikietOnOff),
+		newBooleanBinding.Revision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuredBoolean.SensorID != configured.SensorID ||
+		configuredBoolean.State != edgeapp.OutputBindingActive {
+		t.Fatalf("configured rule requires duplicate registration: %#v", configuredBoolean)
+	}
+	profiles, err = archive.ListExportProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.RequestExportProfileStop(
+		context.Background(),
+		edgeapp.LocalCLIActor(),
+		profiles[0].ProfileID,
+		profiles[0].Revision,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.ReconcileExportProfileLifecycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	readded, err := archive.ActivateExportProfile(
+		context.Background(),
+		edgeapp.LocalCLIActor(),
+		"Pinikiet再追加",
+		"pinikiet.mqtt.v1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readded.State != edgeapp.ExportProfileActive {
+		t.Fatalf("registered sensor re-add state=%q", readded.State)
+	}
 }
 
-func TestConfigureYokaKitBooleanBindingRejectsRetiredRule(t *testing.T) {
+func TestConfigurePinikietBooleanBindingRejectsRetiredRule(t *testing.T) {
 	archive := openTestStore(t)
 	signalRef := semanticV3Signal(t, archive)
 	rules := createOutputProfileRules(t, archive, signalRef)
 	profile, err := archive.ActivateExportProfile(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
-		"YokaKit",
-		"yokakit.mqtt.v1",
+		"Pinikiet",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -401,7 +535,7 @@ func TestConfigureYokaKitBooleanBindingRejectsRetiredRule(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	_, err = archive.ConfigureYokaKitBooleanBinding(
+	_, err = archive.ConfigurePinikietBooleanBinding(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
 		pending.BindingID,
@@ -630,7 +764,7 @@ func TestReAddStoppedExportProfileReusesLogicalSignalIdentity(t *testing.T) {
 	}
 }
 
-func TestReAddYokaKitBindingReusesOnlyTheSameModeSignalIdentity(t *testing.T) {
+func TestReAddPinikietBindingReusesSensorIdentityAcrossModes(t *testing.T) {
 	archive := openTestStore(t)
 	signalRef := semanticV3Signal(t, archive)
 	rules := createOutputProfileRules(t, archive, signalRef)
@@ -638,14 +772,14 @@ func TestReAddYokaKitBindingReusesOnlyTheSameModeSignalIdentity(t *testing.T) {
 
 	activateAndConfigure := func(
 		displayName string,
-		mode outputadapter.YokaKitKind,
+		mode outputadapter.PinikietKind,
 	) (edgeapp.ExportProfile, edgeapp.OutputProfileRuleBinding) {
 		t.Helper()
 		profile, err := archive.ActivateExportProfile(
 			context.Background(),
 			edgeapp.LocalCLIActor(),
 			displayName,
-			"yokakit.mqtt.v1",
+			"pinikiet.mqtt.v1",
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -660,7 +794,7 @@ func TestReAddYokaKitBindingReusesOnlyTheSameModeSignalIdentity(t *testing.T) {
 		if pending.BindingID == "" {
 			t.Fatalf("boolean binding missing: %#v", profile)
 		}
-		configured, err := archive.ConfigureYokaKitBooleanBinding(
+		configured, err := archive.ConfigurePinikietBooleanBinding(
 			context.Background(),
 			edgeapp.LocalCLIActor(),
 			pending.BindingID,
@@ -690,29 +824,30 @@ func TestReAddYokaKitBindingReusesOnlyTheSameModeSignalIdentity(t *testing.T) {
 	}
 
 	firstProfile, first := activateAndConfigure(
-		"YokaKit ON/OFF",
-		outputadapter.YokaKitOnOff,
+		"Pinikiet ON/OFF",
+		outputadapter.PinikietOnOff,
 	)
 	stop(firstProfile)
 	secondProfile, second := activateAndConfigure(
-		"YokaKit ON/OFF 再追加",
-		outputadapter.YokaKitOnOff,
+		"Pinikiet ON/OFF 再追加",
+		outputadapter.PinikietOnOff,
 	)
 	if first.BindingID == second.BindingID {
 		t.Fatal("same-mode re-add reused binding_id")
 	}
-	if first.SignalID != second.SignalID {
-		t.Fatalf("same-mode signal_id changed first=%q second=%q",
-			first.SignalID, second.SignalID)
+	if first.SensorID != second.SensorID {
+		t.Fatalf("same sensor_id changed first=%q second=%q",
+			first.SensorID, second.SensorID)
 	}
 
 	stop(secondProfile)
 	_, third := activateAndConfigure(
-		"YokaKit 稼働区間",
-		outputadapter.YokaKitGanttChart,
+		"Pinikiet 稼働区間",
+		outputadapter.PinikietGanttChart,
 	)
-	if third.SignalID == second.SignalID {
-		t.Fatalf("different modes shared signal_id=%q", third.SignalID)
+	if third.SensorID != second.SensorID {
+		t.Fatalf("same sensor uses different sensor IDs across modes: %q and %q",
+			second.SensorID, third.SensorID)
 	}
 }
 
@@ -723,8 +858,8 @@ func TestOutputBindingPreviewReturnsSchemaCompleteAdapterPublication(t *testing.
 	profile, err := archive.ActivateExportProfile(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
-		"YokaKit",
-		"yokakit.mqtt.v1",
+		"Pinikiet",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -742,8 +877,8 @@ func TestOutputBindingPreviewReturnsSchemaCompleteAdapterPublication(t *testing.
 		t.Fatal(err)
 	}
 	if preview.Provenance != "sample" ||
-		preview.Topic != "yokakit/v1/sources/"+binding.SourceID+
-			"/signals/"+binding.SignalID+"/observations" ||
+		preview.Topic != "pinikiet/v1/sources/"+binding.SourceID+
+			"/sensors/"+binding.SensorID+"/observations" ||
 		preview.QoS != 1 ||
 		preview.Retain {
 		t.Fatalf("preview=%#v", preview)
@@ -769,8 +904,8 @@ func TestOutputBindingPreviewMatchesDurableOutboxPublication(t *testing.T) {
 	profile, err := archive.ActivateExportProfile(
 		context.Background(),
 		edgeapp.LocalCLIActor(),
-		"YokaKit",
-		"yokakit.mqtt.v1",
+		"Pinikiet",
+		"pinikiet.mqtt.v1",
 	)
 	if err != nil {
 		t.Fatal(err)

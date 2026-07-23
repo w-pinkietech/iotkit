@@ -12,14 +12,14 @@ revision: 2
 
 状態: 承認済みMQTT v1 target contract。Record、descriptor、`accepted-through`、activation、publication admissionを実装済みです。旧HTTPS publisherは移行用codeとして残りますが、composition rootは起動しません。
 
-この契約はcanonical recordが一つのEdge Nodeを出る方法と、Edge Nodeがcustodyを移転できる時点を定義します。Production、OEE、工程、alarm文、YokaKit stateなどapplicationの意味は含みません。
+この契約はcanonical recordが一つのEdge Nodeを出る方法と、Edge Nodeがcustodyを移転できる時点を定義します。Production、OEE、工程、alarm文、Pinikiet stateなどapplicationの意味は含みません。
 
 ## Role
 
 - **Edge Node publisher:** durable outboxを読み、bounded batchをpublish・retryし、local delivery cursorを所有する。
 - **MQTT Broker:** QoS 1 messageを運ぶ。PUBACKはBroker receiptだけ。
 - **IoTKit Edge:** canonical recordと連続cursorを耐久commitしてからapplication custody ackをpublishする。Raw query、Edge scopeのsemantic/output境界も提供するが、その失敗はraw custodyを弱めない。
-- **Application consumer:** YokaKit等は別のOutput Adapter契約を受け取る。Raw custody streamを消費せず、業務成功はEdge Node purgeを許可しない。
+- **Application consumer:** Pinikiet等は別のOutput Adapter契約を受け取る。Raw custody streamを消費せず、業務成功はEdge Node purgeを許可しない。
 
 ## Topic
 
@@ -173,8 +173,8 @@ Storage failure、ENOSPC、corruption、commit前cancel、gap、content conflict
 
 初期実装はoperator提供IP path上のMQTT/TLS、anonymous無効、Edge Node別static credential/topic ACLです。Local network、VPN、private route等を使えますが特定VPN製品を要求しません。SecretはGit、argv、log、Debug、audit detail、query outputへ出しません。Plain MQTTは`allow_insecure=true`を明示したlocal Docker testだけです。
 
-## YokaKit境界と延期項目
+## Pinikiet境界と延期項目
 
-R10はcanonical Observationを運びます。IoTKit Edgeが保存seriesを`production`等へ写像しますが、そのmappingはR10へ入りません。YokaKitの業務成功はcustody ackではなく、製品、工程、生産record、OEE、alarm、UI、通知はYokaKitが所有します。
+R10はcanonical Observationを運びます。IoTKit Edgeが保存seriesを`production`等へ写像しますが、そのmappingはR10へ入りません。Pinikietの業務成功はcustody ackではなく、製品、工程、生産record、OEE、alarm、UI、通知はPinikietが所有します。
 
 Deactivation/reactivation、IoTKit Edge移管、Edge Node ID再利用、clone検出、standalone outbox自動adopt、same-epoch start boundary、terminal/gap repair、fleet operation、Broker fan-out、legacy HTTPS migration、別egress bindingは延期中です。曖昧なlegacy/restore stateは`recovery_hold`にし、自動activationやremote cleanupを行いません。

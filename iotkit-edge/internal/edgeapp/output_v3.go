@@ -29,24 +29,26 @@ const (
 )
 
 type OutputProfileRuleBinding struct {
-	BindingID        string             `json:"binding_id"`
-	ProfileID        string             `json:"profile_id"`
-	RuleID           string             `json:"rule_id"`
-	OutputIdentityID string             `json:"output_identity_id,omitempty"`
-	RuleDisplayName  string             `json:"rule_display_name,omitempty"`
-	RuleKind         string             `json:"rule_kind,omitempty"`
-	SignalRef        string             `json:"signal_ref,omitempty"`
-	SensorName       string             `json:"sensor_name,omitempty"`
-	SourceID         string             `json:"source_id"`
-	SignalID         string             `json:"signal_id,omitempty"`
-	Mode             string             `json:"mode,omitempty"`
-	Reason           string             `json:"reason,omitempty"`
-	State            OutputBindingState `json:"state"`
-	IneligibleReason string             `json:"ineligible_reason,omitempty"`
-	Revision         int64              `json:"revision"`
-	CreatedAt        int64              `json:"created_at"`
-	ActivatedAt      *int64             `json:"activated_at,omitempty"`
-	StoppedAt        *int64             `json:"stopped_at,omitempty"`
+	BindingID              string             `json:"binding_id"`
+	ProfileID              string             `json:"profile_id"`
+	RuleID                 string             `json:"rule_id"`
+	OutputIdentityID       string             `json:"output_identity_id,omitempty"`
+	OutputSensorIdentityID string             `json:"output_sensor_identity_id,omitempty"`
+	RuleDisplayName        string             `json:"rule_display_name,omitempty"`
+	RuleKind               string             `json:"rule_kind,omitempty"`
+	SignalRef              string             `json:"signal_ref,omitempty"`
+	SensorName             string             `json:"sensor_name,omitempty"`
+	SourceID               string             `json:"source_id"`
+	SignalID               string             `json:"signal_id,omitempty"`
+	SensorID               string             `json:"sensor_id,omitempty"`
+	Mode                   string             `json:"mode,omitempty"`
+	Reason                 string             `json:"reason,omitempty"`
+	State                  OutputBindingState `json:"state"`
+	IneligibleReason       string             `json:"ineligible_reason,omitempty"`
+	Revision               int64              `json:"revision"`
+	CreatedAt              int64              `json:"created_at"`
+	ActivatedAt            *int64             `json:"activated_at,omitempty"`
+	StoppedAt              *int64             `json:"stopped_at,omitempty"`
 }
 
 type ExportProfile struct {
@@ -111,18 +113,18 @@ type OutputRoute struct {
 	RuleKind                   string          `json:"rule_kind,omitempty"`
 }
 
-type YokaKitRuleRoute struct {
-	RouteID                    string                    `json:"route_id"`
-	RuleID                     string                    `json:"rule_id"`
-	SourceID                   string                    `json:"source_id"`
-	SignalID                   string                    `json:"signal_id"`
-	Kind                       outputadapter.YokaKitKind `json:"kind"`
-	Reason                     string                    `json:"reason,omitempty"`
-	StartAfterObservationRowID int64                     `json:"start_after_observation_row_id"`
-	Active                     bool                      `json:"active"`
-	CreatedAt                  int64                     `json:"created_at"`
-	PendingCount               int64                     `json:"pending_count"`
-	PublishedCount             int64                     `json:"published_count"`
+type PinikietRuleRoute struct {
+	RouteID                    string                     `json:"route_id"`
+	RuleID                     string                     `json:"rule_id"`
+	SourceID                   string                     `json:"source_id"`
+	SensorID                   string                     `json:"sensor_id"`
+	Kind                       outputadapter.PinikietKind `json:"kind"`
+	Reason                     string                     `json:"reason,omitempty"`
+	StartAfterObservationRowID int64                      `json:"start_after_observation_row_id"`
+	Active                     bool                       `json:"active"`
+	CreatedAt                  int64                      `json:"created_at"`
+	PendingCount               int64                      `json:"pending_count"`
+	PublishedCount             int64                      `json:"published_count"`
 }
 
 type RuleOutputRepository interface {
@@ -143,14 +145,14 @@ func NewRuleOutputService(repository RuleOutputRepository) *RuleOutputService {
 	return &RuleOutputService{repository: repository}
 }
 
-func (service *RuleOutputService) CreateYokaKitRoute(
+func (service *RuleOutputService) CreatePinikietRoute(
 	ctx context.Context,
 	actor Actor,
 	ruleID string,
-	config outputadapter.YokaKitConfig,
-) (YokaKitRuleRoute, error) {
-	var noRoute YokaKitRuleRoute
-	encoded, err := outputadapter.EncodeYokaKitConfig(config)
+	config outputadapter.PinikietConfig,
+) (PinikietRuleRoute, error) {
+	var noRoute PinikietRuleRoute
+	encoded, err := outputadapter.EncodePinikietConfig(config)
 	if err != nil {
 		return noRoute, err
 	}
@@ -158,17 +160,17 @@ func (service *RuleOutputService) CreateYokaKitRoute(
 		ctx,
 		actor,
 		ruleID,
-		"yokakit.mqtt.v1",
+		"pinikiet.mqtt.v1",
 		encoded,
 	)
 	if err != nil {
 		return noRoute, err
 	}
-	return YokaKitRuleRoute{
+	return PinikietRuleRoute{
 		RouteID:                    route.RouteID,
 		RuleID:                     route.RuleID,
 		SourceID:                   config.SourceID,
-		SignalID:                   config.SignalID,
+		SensorID:                   config.SensorID,
 		Kind:                       config.Kind,
 		Reason:                     config.Reason,
 		StartAfterObservationRowID: route.StartAfterObservationRowID,

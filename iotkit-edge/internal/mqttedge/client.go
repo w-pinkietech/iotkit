@@ -64,8 +64,8 @@ type activationCommandQueue interface {
 	MarkActivationCommandAttempt(context.Context, string, int64) error
 }
 
-type yokakitStatusQueue interface {
-	ListYokaKitSourceIDs(context.Context) ([]string, error)
+type pinikietStatusQueue interface {
+	ListPinikietSourceIDs(context.Context) ([]string, error)
 }
 
 type exportPublish func(topic string, qos byte, payload []byte) error
@@ -164,7 +164,7 @@ func runEdge(
 	statusTicker := time.NewTicker(statusPublishInterval)
 	defer statusTicker.Stop()
 	if publishOutputs {
-		publishYokaKitStatuses(ctx, queue, func(topic string, qos byte, retained bool, payload []byte) error {
+		publishPinikietStatuses(ctx, queue, func(topic string, qos byte, retained bool, payload []byte) error {
 			return publishWithTimeout(ctx, func() publishToken {
 				return client.Publish(topic, qos, retained, payload)
 			})
@@ -202,7 +202,7 @@ func runEdge(
 			}
 		case <-statusTicker.C:
 			if publishOutputs {
-				publishYokaKitStatuses(ctx, queue, func(topic string, qos byte, retained bool, payload []byte) error {
+				publishPinikietStatuses(ctx, queue, func(topic string, qos byte, retained bool, payload []byte) error {
 					return publishWithTimeout(ctx, func() publishToken {
 						return client.Publish(topic, qos, retained, payload)
 					})
@@ -250,7 +250,7 @@ func RunOutput(
 	defer ticker.Stop()
 	statusTicker := time.NewTicker(statusPublishInterval)
 	defer statusTicker.Stop()
-	publishYokaKitStatuses(ctx, queue, statusPublish, logger)
+	publishPinikietStatuses(ctx, queue, statusPublish, logger)
 	for {
 		select {
 		case <-ticker.C:
@@ -259,35 +259,35 @@ func RunOutput(
 				logger.Error("MQTT application export failed", "error", err)
 			}
 		case <-statusTicker.C:
-			publishYokaKitStatuses(ctx, queue, statusPublish, logger)
+			publishPinikietStatuses(ctx, queue, statusPublish, logger)
 		case <-ctx.Done():
 			return nil
 		}
 	}
 }
 
-func publishYokaKitStatuses(
+func publishPinikietStatuses(
 	ctx context.Context,
 	queue ExportQueue,
 	publish func(string, byte, bool, []byte) error,
 	logger *slog.Logger,
 ) {
-	statuses, ok := queue.(yokakitStatusQueue)
+	statuses, ok := queue.(pinikietStatusQueue)
 	if !ok {
 		return
 	}
-	sourceIDs, err := statuses.ListYokaKitSourceIDs(ctx)
+	sourceIDs, err := statuses.ListPinikietSourceIDs(ctx)
 	if err != nil {
-		logger.Error("YokaKit source status query failed", "error", err)
+		logger.Error("Pinikiet source status query failed", "error", err)
 		return
 	}
 	for _, sourceID := range sourceIDs {
-		message, err := outputadapter.YokaKitStatus(sourceID, time.Now().UnixMilli())
+		message, err := outputadapter.PinikietStatus(sourceID, time.Now().UnixMilli())
 		if err == nil {
 			err = publish(message.Topic, message.QoS, message.Retain, message.Payload)
 		}
 		if err != nil {
-			logger.Error("YokaKit source status publish failed",
+			logger.Error("Pinikiet source status publish failed",
 				"source_id", sourceID, "error", err)
 		}
 	}

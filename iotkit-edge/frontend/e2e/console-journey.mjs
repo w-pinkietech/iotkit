@@ -354,36 +354,39 @@ try {
 
   await devtools.evaluate(
     setFormValues(
-      "form.output-add-card:has(input[value='yokakit.mqtt.v1'])",
+      "form.output-add-card:has(input[value='pinikiet.mqtt.v1'])",
       { auto_bind_future_rules: true },
     ),
   );
   await devtools.waitForExpression(
-    `location.pathname === "/output" && location.search.includes("saved=1") && document.body.textContent.includes("YokaKitへ送る")`,
-    "YokaKit output preparation",
+    `location.pathname === "/output" && location.search.includes("saved=1") && document.body.textContent.includes("Pinikietへ送る")`,
+    "Pinikiet output preparation",
   );
   const preparedCount = await devtools.evaluate(`(() => {
     const card = [...document.querySelectorAll(".output-destination-card")]
-      .find((candidate) => candidate.querySelector("h2")?.textContent === "YokaKitへ送る");
+      .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
     return card?.querySelectorAll("form.prepared-output-start").length;
   })()`);
-  assert(preparedCount === 2, `YokaKit prepared binding count is ${preparedCount}, want 2`);
+  assert(
+    preparedCount === 1,
+    `Pinikiet sensor registration count is ${preparedCount}, want 1`,
+  );
   await devtools.evaluate(`(() => {
     const card = [...document.querySelectorAll(".output-destination-card")]
-      .find((candidate) => candidate.querySelector("h2")?.textContent === "YokaKitへ送る");
+      .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
     const form = card?.querySelector("form.prepared-output-start");
-    if (!form) throw new Error("prepared YokaKit binding was not found");
+    if (!form) throw new Error("prepared Pinikiet binding was not found");
     form.elements.namedItem("external_registration_complete").checked = true;
     form.requestSubmit();
   })()`);
   await devtools.waitForExpression(
     `location.pathname === "/output" && location.search.includes("saved=1") && (() => {
       const card = [...document.querySelectorAll(".output-destination-card")]
-        .find((candidate) => candidate.querySelector("h2")?.textContent === "YokaKitへ送る");
-      return card?.querySelectorAll("form.prepared-output-start").length === 1 &&
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      return card?.querySelectorAll("form.prepared-output-start").length === 0 &&
         card?.textContent.includes("送信対象");
     })()`,
-    "YokaKit output start",
+    "Pinikiet output start",
   );
 
   await devtools.evaluate(`document.querySelector(".logout-form").requestSubmit()`);

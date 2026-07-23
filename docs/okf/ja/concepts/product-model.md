@@ -59,4 +59,4 @@ BrokerはIoTKit Edgeと同じhostにも別hostにも配置できます。Hostnam
 - ベンダー固有・application固有のidentifierを各Adapter内に留める。
 - Wire fieldやrecord familyは、cross-language conformance fixtureを伴うversioned contract変更でだけ追加する。
 
-BravePIとYokaKitは最初に検証したintegrationです。どちらもIoTKitの汎用core modelを定義しません。
+BravePIとPinikietは最初に検証したintegrationです。どちらもIoTKitの汎用core modelを定義しません。

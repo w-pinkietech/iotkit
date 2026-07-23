@@ -265,8 +265,8 @@ topic write iotkit/v1/edge-nodes/+/activation/request
 
 user $edge_output_principal
 topic write iotkit/v1/sources/$edge_id/signals/+/observations
-topic write yokakit/v1/sources/$edge_id/signals/+/observations
-topic write yokakit/v1/sources/$edge_id/status
+topic write pinikiet/v1/sources/$edge_id/sensors/+/observations
+topic write pinikiet/v1/sources/$edge_id/status
 EOF
 for topic in "${edge_publish_topics[@]}"; do
   printf 'topic write %s\n' "$topic" >>"$stage/mosquitto/acl"

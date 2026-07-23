@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-func TestYokaKitTransformsGenericCumulativeValueToProductionContract(t *testing.T) {
-	config, err := EncodeYokaKitConfig(YokaKitConfig{
+func TestPinikietTransformsGenericCumulativeValueToProductionContract(t *testing.T) {
+	config, err := EncodePinikietConfig(PinikietConfig{
 		SourceID: "iotkit-01",
-		SignalID: "press-count",
-		Kind:     YokaKitProduction,
+		SensorID: "press-sensor",
+		Kind:     PinikietProduction,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err := (YokaKitAdapter{}).Transform(config, Observation{
+	message, err := (PinikietAdapter{}).Transform(config, Observation{
 		ObservationID: "d36cb7b3-7010-43b3-afc6-1931ed705dea",
 		SeriesID:      "a921df88-6af2-46ca-a5f1-f346bf4433bb",
 		Sequence:      42,
@@ -26,7 +26,7 @@ func TestYokaKitTransformsGenericCumulativeValueToProductionContract(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.Topic != "yokakit/v1/sources/iotkit-01/signals/press-count/observations" ||
+	if message.Topic != "pinikiet/v1/sources/iotkit-01/sensors/press-sensor/observations" ||
 		message.QoS != 1 || message.Retain {
 		t.Fatalf("message routing = %#v", message)
 	}
@@ -40,16 +40,16 @@ func TestYokaKitTransformsGenericCumulativeValueToProductionContract(t *testing.
 	}
 }
 
-func TestYokaKitRejectsIncompatibleMeaningAndUnsafeTopicIdentity(t *testing.T) {
-	config, err := EncodeYokaKitConfig(YokaKitConfig{
+func TestPinikietRejectsIncompatibleMeaningAndUnsafeTopicIdentity(t *testing.T) {
+	config, err := EncodePinikietConfig(PinikietConfig{
 		SourceID: "iotkit-01",
-		SignalID: "press-running",
-		Kind:     YokaKitProduction,
+		SensorID: "press-sensor",
+		Kind:     PinikietProduction,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = (YokaKitAdapter{}).Transform(config, Observation{
+	_, err = (PinikietAdapter{}).Transform(config, Observation{
 		ObservationID: "70f83542-9033-437a-925e-8d61fc147498",
 		SeriesID:      "a0ec47fa-3abe-4230-bff5-a794906f8305",
 		Sequence:      18,
@@ -60,15 +60,15 @@ func TestYokaKitRejectsIncompatibleMeaningAndUnsafeTopicIdentity(t *testing.T) {
 	if !errors.Is(err, ErrUnsupportedObservation) {
 		t.Fatalf("error = %v", err)
 	}
-	unsafeConfig, err := EncodeYokaKitConfig(YokaKitConfig{
+	unsafeConfig, err := EncodePinikietConfig(PinikietConfig{
 		SourceID: "../bad",
-		SignalID: "x",
-		Kind:     YokaKitOnOff,
+		SensorID: "x",
+		Kind:     PinikietOnOff,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (YokaKitAdapter{}).ValidateConfig(
+	if err := (PinikietAdapter{}).ValidateConfig(
 		unsafeConfig,
 		KindBoolean,
 	); !errors.Is(err, ErrInvalidConfiguration) {
@@ -76,12 +76,13 @@ func TestYokaKitRejectsIncompatibleMeaningAndUnsafeTopicIdentity(t *testing.T) {
 	}
 }
 
-func TestYokaKitConfigurationIsVersionedAndClosed(t *testing.T) {
-	adapter := YokaKitAdapter{}
+func TestPinikietConfigurationIsVersionedAndClosed(t *testing.T) {
+	adapter := PinikietAdapter{}
 	for _, config := range []json.RawMessage{
-		json.RawMessage(`{"schema_version":2,"source_id":"line-a","signal_id":"count","kind":"production"}`),
-		json.RawMessage(`{"schema_version":1,"source_id":"line-a","signal_id":"count","kind":"production","unknown":true}`),
-		json.RawMessage(`{"schema_version":1,"source_id":"line-a","signal_id":"count","kind":"production"} trailing`),
+		json.RawMessage(`{"schema_version":2,"source_id":"line-a","sensor_id":"press","kind":"production"}`),
+		json.RawMessage(`{"schema_version":1,"source_id":"line-a","sensor_id":"press","kind":"production","unknown":true}`),
+		json.RawMessage(`{"schema_version":1,"source_id":"line-a","sensor_id":"press","kind":"production"} trailing`),
+		json.RawMessage(`{"schema_version":1,"source_id":"line-a","signal_id":"press","kind":"production"}`),
 	} {
 		if err := adapter.ValidateConfig(
 			config,
@@ -92,11 +93,11 @@ func TestYokaKitConfigurationIsVersionedAndClosed(t *testing.T) {
 	}
 }
 
-func TestYokaKitConfigurationRejectsUnknownModeAndIrrelevantReason(t *testing.T) {
-	adapter := YokaKitAdapter{}
+func TestPinikietConfigurationRejectsUnknownModeAndIrrelevantReason(t *testing.T) {
+	adapter := PinikietAdapter{}
 	for _, config := range []json.RawMessage{
-		json.RawMessage(`{"schema_version":1,"source_id":"line-a","signal_id":"count","kind":"unknown"}`),
-		json.RawMessage(`{"schema_version":1,"source_id":"line-a","signal_id":"count","kind":"production","reason":"unused"}`),
+		json.RawMessage(`{"schema_version":1,"source_id":"line-a","sensor_id":"press","kind":"unknown"}`),
+		json.RawMessage(`{"schema_version":1,"source_id":"line-a","sensor_id":"press","kind":"production","reason":"unused"}`),
 	} {
 		if err := adapter.ValidateConfig(
 			config,
@@ -107,16 +108,16 @@ func TestYokaKitConfigurationRejectsUnknownModeAndIrrelevantReason(t *testing.T)
 	}
 }
 
-func TestYokaKitProductionRejectsValueOutsideContractRange(t *testing.T) {
-	config, err := EncodeYokaKitConfig(YokaKitConfig{
+func TestPinikietProductionRejectsValueOutsideContractRange(t *testing.T) {
+	config, err := EncodePinikietConfig(PinikietConfig{
 		SourceID: "line-a",
-		SignalID: "count",
-		Kind:     YokaKitProduction,
+		SensorID: "press",
+		Kind:     PinikietProduction,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = (YokaKitAdapter{}).Transform(config, Observation{
+	_, err = (PinikietAdapter{}).Transform(config, Observation{
 		ObservationID: "d36cb7b3-7010-43b3-afc6-1931ed705dea",
 		SeriesID:      "a921df88-6af2-46ca-a5f1-f346bf4433bb",
 		Sequence:      42,
@@ -129,12 +130,12 @@ func TestYokaKitProductionRejectsValueOutsideContractRange(t *testing.T) {
 	}
 }
 
-func TestYokaKitSourceStatusIsRetained(t *testing.T) {
-	message, err := YokaKitStatus("iotkit-01", 1784190000123)
+func TestPinikietSourceStatusIsRetained(t *testing.T) {
+	message, err := PinikietStatus("iotkit-01", 1784190000123)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.Topic != "yokakit/v1/sources/iotkit-01/status" ||
+	if message.Topic != "pinikiet/v1/sources/iotkit-01/status" ||
 		!message.Retain || message.QoS != 1 {
 		t.Fatalf("status = %#v", message)
 	}

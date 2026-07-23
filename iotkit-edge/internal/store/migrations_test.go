@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -269,7 +270,7 @@ func TestMigrationFifteenCreatesGenericOutputSchemaWithoutDroppingV2(t *testing.
 	}
 }
 
-func TestMigrationFifteenConvertsYokaKitRoutesToGenericOutputRoutes(t *testing.T) {
+func TestMigrationsConvertLegacyYokaKitRoutesToPinikietOutputRoutes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "edge.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -326,7 +327,7 @@ func TestMigrationFifteenConvertsYokaKitRoutesToGenericOutputRoutes(t *testing.T
 	`).Scan(&adapterID, &configSchema, &configJSON, &startAfter); err != nil {
 		t.Fatal(err)
 	}
-	if adapterID != "yokakit.mqtt.v1" || configSchema != 1 ||
+	if adapterID != "pinikiet.mqtt.v1" || configSchema != 1 ||
 		startAfter != 42 {
 		t.Fatalf(
 			"adapter=%q schema=%d start=%d config=%s",
@@ -363,7 +364,7 @@ func TestMigrationFifteenConvertsYokaKitRoutesToGenericOutputRoutes(t *testing.T
 	}
 }
 
-func TestMigrationFifteenRollsBackBeforeDroppingYokaKitRoutes(t *testing.T) {
+func TestMigrationFifteenRollsBackBeforeDroppingPinikietRoutes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "edge.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -722,10 +723,28 @@ func TestMigrationUpgradesPrePreparedOutputBindingConstraint(t *testing.T) {
 			),
 			UNIQUE(profile_id, rule_id, mode)
 		);
+		CREATE TABLE output_binding_starts (
+			binding_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			start_after_pub_seq INTEGER NOT NULL,
+			PRIMARY KEY(binding_id, ledger_epoch)
+		);
 		CREATE TABLE output_routes (
+			route_id TEXT PRIMARY KEY,
 			binding_id TEXT,
+			adapter_id TEXT NOT NULL,
+			config_json BLOB NOT NULL,
 			active INTEGER NOT NULL,
 			lifecycle_state TEXT NOT NULL
+		);
+		CREATE TABLE output_outbox_v3 (
+			route_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			published_at INTEGER
+		);
+		CREATE TABLE semantic_rules_v3 (
+			rule_id TEXT PRIMARY KEY,
+			signal_ref TEXT NOT NULL
 		);
 		CREATE TABLE raw_records (
 			received_at INTEGER NOT NULL,
@@ -751,7 +770,7 @@ func TestMigrationUpgradesPrePreparedOutputBindingConstraint(t *testing.T) {
 			source_id, signal_id, created_at
 		) VALUES(
 			'osi_0123456789abcdef0123456789abcdef',
-			'yokakit.mqtt.v1', 'rule_counter', 'production',
+			'pinikiet.mqtt.v1', 'rule_counter', 'production',
 			'edge-0123456789abcdef0123456789abcdef',
 			'sig-0123456789abcdef0123456789abcdef', 1000
 		);
@@ -816,10 +835,28 @@ func TestMigrationUpgradesPrePreparingExportProfileConstraint(t *testing.T) {
 			activated_at INTEGER,
 			stopped_at INTEGER
 		);
+		CREATE TABLE output_binding_starts (
+			binding_id TEXT NOT NULL,
+			ledger_epoch TEXT NOT NULL,
+			start_after_pub_seq INTEGER NOT NULL,
+			PRIMARY KEY(binding_id, ledger_epoch)
+		);
 		CREATE TABLE output_routes (
+			route_id TEXT PRIMARY KEY,
 			binding_id TEXT,
+			adapter_id TEXT NOT NULL,
+			config_json BLOB NOT NULL,
 			active INTEGER NOT NULL,
 			lifecycle_state TEXT NOT NULL
+		);
+		CREATE TABLE output_outbox_v3 (
+			route_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			published_at INTEGER
+		);
+		CREATE TABLE semantic_rules_v3 (
+			rule_id TEXT PRIMARY KEY,
+			signal_ref TEXT NOT NULL
 		);
 		CREATE TABLE raw_records (
 			received_at INTEGER NOT NULL,
@@ -845,7 +882,7 @@ func TestMigrationUpgradesPrePreparingExportProfileConstraint(t *testing.T) {
 			adapter_schema_version, profile_config_json, state,
 			auto_bind_future_rules, revision, created_at
 		) VALUES(
-			'exp_yokakit', 'YokaKit', 'yokakit.mqtt.v1',
+			'exp_pinikiet', 'Pinikiet', 'pinikiet.mqtt.v1',
 			1, '{"schema_version":1}', 'preparing', 1, 1, 1000
 		)
 	`); err != nil {
@@ -1025,6 +1062,149 @@ func TestMigrationTwentyFiveNormalizesOutputSignalIdentities(t *testing.T) {
 	if migratedConfig != routeConfig || migratedPayload != outboxPayload {
 		t.Fatalf("publication data changed config=%s payload=%s",
 			migratedConfig, migratedPayload)
+	}
+}
+
+func TestMigrationThirtyGroupsPinikietRulesUnderOneSensorIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "edge.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTestMigrationsThrough(t, db, 29)
+	if _, err := db.Exec(`
+		INSERT INTO semantic_rules_v3(
+			rule_id, signal_ref, display_name, kind, series_id,
+			display_order, created_at
+		) VALUES
+			('rule_count', 'signal_press', '累積値', 'cumulative_counter',
+			 '00000000-0000-4000-8000-000000000001', 1, 1000),
+			('rule_alarm', 'signal_press', '異常', 'alarm',
+			 '00000000-0000-4000-8000-000000000002', 2, 1000);
+		INSERT INTO export_profiles(
+			profile_id, display_name, adapter_id, adapter_schema_version,
+			profile_config_json, state, auto_bind_future_rules,
+			revision, created_at
+		) VALUES(
+			'exp_yokakit', 'Pinikiet', 'yokakit.mqtt.v1', 1,
+			'{"schema_version":1}', 'active', 1, 1, 1000
+		);
+		INSERT INTO output_signal_identities(
+			output_identity_id, adapter_id, rule_id, mode,
+			source_id, signal_id, created_at
+		) VALUES
+			('osi_count', 'yokakit.mqtt.v1', 'rule_count', 'production',
+			 'edge-0123456789abcdef0123456789abcdef', 'sig-count', 1000),
+			('osi_alarm', 'yokakit.mqtt.v1', 'rule_alarm', 'alarm',
+			 'edge-0123456789abcdef0123456789abcdef', 'sig-alarm', 1000);
+		INSERT INTO output_profile_rule_bindings(
+			binding_id, profile_id, rule_id, output_identity_id,
+			reason, state, revision, created_at, activated_at
+		) VALUES
+			('bind_count', 'exp_yokakit', 'rule_count', 'osi_count',
+			 '', 'active', 1, 1000, 1100),
+			('bind_alarm', 'exp_yokakit', 'rule_alarm', 'osi_alarm',
+			 '', 'prepared', 1, 1000, NULL);
+		INSERT INTO output_routes(
+			route_id, rule_id, adapter_id, config_schema_version,
+			config_json, start_after_observation_row_id, active, created_at,
+			binding_id, lifecycle_state
+		) VALUES
+			('out_count', 'rule_count', 'yokakit.mqtt.v1', 1,
+			 '{"schema_version":1,"source_id":"edge-0123456789abcdef0123456789abcdef","signal_id":"sig-count","kind":"production"}',
+			 0, 1, 1000, 'bind_count', 'active'),
+			('out_alarm', 'rule_alarm', 'yokakit.mqtt.v1', 1,
+			 '{"schema_version":1,"source_id":"edge-0123456789abcdef0123456789abcdef","signal_id":"sig-alarm","kind":"alarm"}',
+			 0, 0, 1000, 'bind_alarm', 'active');
+		INSERT INTO output_outbox_v3(
+			export_id, route_id, observation_id, topic, qos,
+			payload_json, created_at
+		) VALUES(
+			'export_count', 'out_count', 'observation_count',
+			'yokakit/v1/sources/edge-0123456789abcdef0123456789abcdef/signals/sig-count/observations',
+			1, '{"schema_version":1}', 1200
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	var identityCount, oldIdentityCount int
+	var sensorID, topic, configJSON string
+	var registeredAt sql.NullInt64
+	if err := archive.db.QueryRow(`
+		SELECT count(*), MIN(sensor_id), MIN(registered_at)
+		FROM output_sensor_identities WHERE signal_ref = 'signal_press'
+	`).Scan(&identityCount, &sensorID, &registeredAt); err != nil {
+		t.Fatal(err)
+	}
+	if identityCount != 1 ||
+		!regexp.MustCompile(`^sen-[0-9a-f]{32}$`).MatchString(sensorID) ||
+		registeredAt.Valid {
+		t.Fatalf("sensor identity count=%d id=%q registered=%#v",
+			identityCount, sensorID, registeredAt)
+	}
+	if err := archive.db.QueryRow(`
+		SELECT count(*) FROM output_signal_identities
+		WHERE adapter_id = 'yokakit.mqtt.v1'
+	`).Scan(&oldIdentityCount); err != nil {
+		t.Fatal(err)
+	}
+	if oldIdentityCount != 0 {
+		t.Fatalf("old Pinikiet identities=%d", oldIdentityCount)
+	}
+	if err := archive.db.QueryRow(`
+		SELECT CAST(config_json AS TEXT) FROM output_routes
+		WHERE route_id = 'out_count'
+	`).Scan(&configJSON); err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		SourceID string `json:"source_id"`
+		SensorID string `json:"sensor_id"`
+	}
+	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.SensorID != sensorID || config.SourceID == "" {
+		t.Fatalf("config=%s sensor_id=%q", configJSON, sensorID)
+	}
+	if err := archive.db.QueryRow(`
+		SELECT topic FROM output_outbox_v3 WHERE export_id = 'export_count'
+	`).Scan(&topic); err != nil {
+		t.Fatal(err)
+	}
+	wantTopic := "yokakit/v1/sources/edge-0123456789abcdef0123456789abcdef/" +
+		"signals/sig-count/observations"
+	if topic != wantTopic {
+		t.Fatalf("topic=%q, want %q", topic, wantTopic)
+	}
+	var profileState, countState, adapterID, routeAdapterID string
+	if err := archive.db.QueryRow(`
+		SELECT profile.state, binding.state, profile.adapter_id, route.adapter_id
+		FROM export_profiles AS profile
+		JOIN output_profile_rule_bindings AS binding
+			ON binding.profile_id = profile.profile_id
+		JOIN output_routes AS route ON route.binding_id = binding.binding_id
+		WHERE binding.binding_id = 'bind_count'
+	`).Scan(&profileState, &countState, &adapterID, &routeAdapterID); err != nil {
+		t.Fatal(err)
+	}
+	if profileState != "preparing" || countState != "prepared" {
+		t.Fatalf("migrated registration state profile=%q binding=%q",
+			profileState, countState)
+	}
+	if adapterID != "pinikiet.mqtt.v1" ||
+		routeAdapterID != "pinikiet.mqtt.v1" {
+		t.Fatalf("migrated adapters profile=%q route=%q",
+			adapterID, routeAdapterID)
 	}
 }
 

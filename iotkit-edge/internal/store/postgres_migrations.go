@@ -225,11 +225,23 @@ func applyPostgresMigrations(ctx context.Context, db *sql.DB, configuredEdgeID s
 	if current > latest {
 		return fmt.Errorf("Edge schema version %d is newer than supported version %d", current, latest)
 	}
-	if current == 28 && latest == 29 {
+	if current == 28 && latest >= 29 {
 		if err := migratePostgres28To29(ctx, db); err != nil {
 			return err
 		}
 		current = 29
+	}
+	if current == 29 && latest >= 30 {
+		if err := migratePostgres29To30(ctx, db); err != nil {
+			return err
+		}
+		current = 30
+	}
+	if current == 30 && latest >= 31 {
+		if err := migratePostgres30To31(ctx, db); err != nil {
+			return err
+		}
+		current = 31
 	}
 	if current > 0 && current < latest {
 		return errors.New("automatic PostgreSQL schema upgrades are not supported; use a verified offline migration")
@@ -243,6 +255,9 @@ func applyPostgresMigrations(ctx context.Context, db *sql.DB, configuredEdgeID s
 			return fmt.Errorf("begin PostgreSQL Edge schema migration %d: %w", migration.version, err)
 		}
 		migrationSQL := postgresMigrationSQL(migration.sql)
+		if migration.version == 30 {
+			migrationSQL = postgresMigration30SQL
+		}
 		if migrationSQL != "" {
 			if _, err := tx.ExecContext(ctx, migrationSQL); err != nil {
 				_ = tx.Rollback()
@@ -273,8 +288,110 @@ func applyPostgresMigrations(ctx context.Context, db *sql.DB, configuredEdgeID s
 	return nil
 }
 
+const postgresMigration30SQL = `
+	CREATE TABLE output_sensor_identities (
+		output_sensor_identity_id TEXT PRIMARY KEY,
+		signal_ref TEXT NOT NULL,
+		source_id TEXT NOT NULL,
+		sensor_id TEXT NOT NULL,
+		created_at BIGINT NOT NULL CHECK(created_at >= 0),
+		registered_at BIGINT CHECK(
+			registered_at IS NULL OR registered_at >= 0
+		),
+		UNIQUE(signal_ref),
+		UNIQUE(source_id, sensor_id)
+	);
+	ALTER TABLE output_profile_rule_bindings
+		ADD COLUMN output_sensor_identity_id TEXT;
+	ALTER TABLE output_profile_rule_bindings
+		ADD COLUMN mode TEXT;
+	UPDATE output_profile_rule_bindings AS binding
+	SET mode = identity.mode
+	FROM output_signal_identities AS identity
+	WHERE identity.output_identity_id = binding.output_identity_id;
+
+	INSERT INTO output_sensor_identities(
+		output_sensor_identity_id, signal_ref, source_id,
+		sensor_id, created_at, registered_at
+	)
+	SELECT 'osy_' || encode(randomblob(16), 'hex'), rule.signal_ref,
+		identity.source_id, 'sen-' || encode(randomblob(16), 'hex'),
+		MIN(binding.created_at), NULL
+	FROM output_profile_rule_bindings AS binding
+	JOIN export_profiles AS profile ON profile.profile_id = binding.profile_id
+	JOIN semantic_rules_v3 AS rule ON rule.rule_id = binding.rule_id
+	JOIN output_signal_identities AS identity
+		ON identity.output_identity_id = binding.output_identity_id
+	WHERE profile.adapter_id = 'yokakit.mqtt.v1'
+	GROUP BY rule.signal_ref, identity.source_id;
+
+	UPDATE output_profile_rule_bindings AS binding
+	SET output_sensor_identity_id = sensor.output_sensor_identity_id
+	FROM semantic_rules_v3 AS rule
+	JOIN output_sensor_identities AS sensor
+		ON sensor.signal_ref = rule.signal_ref,
+		export_profiles AS profile
+	WHERE rule.rule_id = binding.rule_id
+		AND profile.profile_id = binding.profile_id
+		AND profile.adapter_id = 'yokakit.mqtt.v1';
+
+	DELETE FROM output_binding_starts AS starts
+	USING output_profile_rule_bindings AS binding,
+		export_profiles AS profile
+	WHERE starts.binding_id = binding.binding_id
+		AND profile.profile_id = binding.profile_id
+		AND profile.adapter_id = 'yokakit.mqtt.v1'
+		AND profile.state IN ('preparing', 'active')
+		AND binding.state IN ('prepared', 'active');
+	UPDATE output_routes AS route
+	SET active = 0
+	FROM output_profile_rule_bindings AS binding,
+		export_profiles AS profile
+	WHERE binding.binding_id = route.binding_id
+		AND profile.profile_id = binding.profile_id
+		AND profile.adapter_id = 'yokakit.mqtt.v1'
+		AND profile.state IN ('preparing', 'active')
+		AND binding.state IN ('prepared', 'active');
+	UPDATE output_profile_rule_bindings AS binding
+	SET state = 'prepared', activated_at = NULL,
+		revision = binding.revision + 1
+	FROM export_profiles AS profile
+	WHERE profile.profile_id = binding.profile_id
+		AND profile.adapter_id = 'yokakit.mqtt.v1'
+		AND profile.state IN ('preparing', 'active')
+		AND binding.state = 'active';
+	UPDATE export_profiles
+	SET state = 'preparing', revision = revision + 1
+	WHERE adapter_id = 'yokakit.mqtt.v1' AND state = 'active';
+
+	UPDATE output_routes AS route
+	SET config_json = convert_to(json_build_object(
+		'schema_version', 1,
+		'source_id', sensor.source_id,
+		'sensor_id', sensor.sensor_id,
+		'kind', json_extract(route.config_json, '$.kind'),
+		'reason', COALESCE(json_extract(route.config_json, '$.reason'), '')
+	)::text, 'UTF8')
+	FROM output_profile_rule_bindings AS binding
+	JOIN output_sensor_identities AS sensor
+		ON sensor.output_sensor_identity_id = binding.output_sensor_identity_id
+	WHERE binding.binding_id = route.binding_id
+		AND route.adapter_id = 'yokakit.mqtt.v1';
+
+	UPDATE output_profile_rule_bindings AS binding
+	SET output_identity_id = NULL
+	FROM export_profiles AS profile
+	WHERE profile.profile_id = binding.profile_id
+		AND profile.adapter_id = 'yokakit.mqtt.v1';
+	DELETE FROM output_signal_identities
+	WHERE adapter_id = 'yokakit.mqtt.v1';
+`
+
 func canUpgradePostgresSchema(current int, latest int) bool {
-	return current == latest || (current == 28 && latest == 29)
+	return current == latest ||
+		(current == 28 && latest >= 29 && latest <= 31) ||
+		(current == 29 && latest >= 30 && latest <= 31) ||
+		(current == 30 && latest == 31)
 }
 
 func migratePostgres28To29(ctx context.Context, db *sql.DB) error {
@@ -304,6 +421,63 @@ func migratePostgres28To29(ctx context.Context, db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return errors.New("commit PostgreSQL schema migration 29")
+	}
+	return nil
+}
+
+func migratePostgres29To30(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.New("begin PostgreSQL schema migration 30")
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, postgresMigration30SQL); err != nil {
+		return fmt.Errorf("apply PostgreSQL schema migration 30: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE edge_schema_meta SET version = 30
+		WHERE singleton = 1 AND version = 29
+	`); err != nil {
+		return fmt.Errorf("record PostgreSQL schema migration 30: %w", err)
+	}
+	var version int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT version FROM edge_schema_meta WHERE singleton = 1",
+	).Scan(&version); err != nil || version != 30 {
+		return errors.New("verify PostgreSQL schema migration 30")
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New("commit PostgreSQL schema migration 30")
+	}
+	return nil
+}
+
+func migratePostgres30To31(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.New("begin PostgreSQL schema migration 31")
+	}
+	defer tx.Rollback()
+	migrationSQL := postgresMigrationSQL(
+		schemaMigrations[len(schemaMigrations)-1].sql,
+	)
+	if _, err := tx.ExecContext(ctx, migrationSQL); err != nil {
+		return fmt.Errorf("apply PostgreSQL schema migration 31: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE edge_schema_meta SET version = 31
+		WHERE singleton = 1 AND version = 30
+	`); err != nil {
+		return fmt.Errorf("record PostgreSQL schema migration 31: %w", err)
+	}
+	var version int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT version FROM edge_schema_meta WHERE singleton = 1",
+	).Scan(&version); err != nil || version != 31 {
+		return errors.New("verify PostgreSQL schema migration 31")
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New("commit PostgreSQL schema migration 31")
 	}
 	return nil
 }

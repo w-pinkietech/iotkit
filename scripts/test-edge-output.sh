@@ -64,13 +64,13 @@ chmod 600 "$scratch/config/passwords"
 cat >"$scratch/config/acl" <<'EOF'
 user edge-output
 topic write iotkit/v1/sources/+/signals/+/observations
-topic write yokakit/v1/sources/+/signals/+/observations
-topic write yokakit/v1/sources/+/status
+topic write pinikiet/v1/sources/+/sensors/+/observations
+topic write pinikiet/v1/sources/+/status
 
 user observer
 topic read iotkit/v1/sources/+/signals/+/observations
-topic read yokakit/v1/sources/+/signals/+/observations
-topic read yokakit/v1/sources/+/status
+topic read pinikiet/v1/sources/+/sensors/+/observations
+topic read pinikiet/v1/sources/+/status
 EOF
 chmod 600 "$scratch/config/acl"
 
@@ -186,12 +186,12 @@ edge_id=$(db_query "SELECT edge_id FROM edge_meta WHERE singleton=1")
 {
   printf 'user edge-output\n'
   printf 'topic write iotkit/v1/sources/%s/signals/+/observations\n' "$edge_id"
-  printf 'topic write yokakit/v1/sources/%s/signals/+/observations\n' "$edge_id"
-  printf 'topic write yokakit/v1/sources/%s/status\n\n' "$edge_id"
+  printf 'topic write pinikiet/v1/sources/%s/sensors/+/observations\n' "$edge_id"
+  printf 'topic write pinikiet/v1/sources/%s/status\n\n' "$edge_id"
   printf 'user observer\n'
   printf 'topic read iotkit/v1/sources/+/signals/+/observations\n'
-  printf 'topic read yokakit/v1/sources/+/signals/+/observations\n'
-  printf 'topic read yokakit/v1/sources/+/status\n'
+  printf 'topic read pinikiet/v1/sources/+/sensors/+/observations\n'
+  printf 'topic read pinikiet/v1/sources/+/status\n'
 } >"$scratch/config/acl"
 chmod 600 "$scratch/config/acl"
 

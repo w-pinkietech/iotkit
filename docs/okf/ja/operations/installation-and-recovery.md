@@ -22,7 +22,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 
 1. 全Edge Nodeへ異なる`edge_node_id`を与え、`mqtt-binding`を出力する。
 2. IoTKit Edge hostを対象にするDNS名、full-chain server certificate、owner-only private key、root trust bundleを準備する。
-3. 最初のEdge Nodeについて`scripts/bootstrap-edge.sh`を実行する。Bootstrapは起動前にIoTKit Edge source IDを割り当て、`iotkit-edge-output-<edge-id>`のwrite ACLをそのEdgeのIoTKit/YokaKit Observation/status namespaceだけに限定する。追加legacy topicだけ`--edge-publish-topic`を繰り返す。
+3. 最初のEdge Nodeについて`scripts/bootstrap-edge.sh`を実行する。Bootstrapは起動前にIoTKit Edge source IDを割り当て、`iotkit-edge-output-<edge-id>`のwrite ACLをそのEdgeのIoTKit/Pinikiet Observation/status namespaceだけに限定する。追加legacy topicだけ`--edge-publish-topic`を繰り返す。
 4. `embedded`は`deploy/compose.edge.yaml`、`postgres`はさらに`deploy/compose.edge-postgres.yaml`を重ねて起動する。Profile metadataと起動profileが違えば停止する。
 5. Owner-only password fileから`iotkit-edge account bootstrap`を実行し、最初の`system_admin`を作る。使用後fileを削除する。
    初回ログイン後、設定管理者とsystem adminの概要画面には**利用開始までの設定**が表示される。これは
@@ -50,7 +50,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 
 ## 3. Certificate自動更新
 
-`scripts/iotkit-broker-cert`はIoTKitのsensor意味やYokaKitから独立し、Broker host上のMosquitto/Caddy certificate bundleを管理します。
+`scripts/iotkit-broker-cert`はIoTKitのsensor意味やPinikietから独立し、Broker host上のMosquitto/Caddy certificate bundleを管理します。
 
 - `install`はchain、hostname、expiry、keyを検証し、3 fileをswitchし、Mosquitto reload、trust再読込のためIoTKit Edge restart、Caddy reload、新MQTT TLS/HTTPS probeを行う。
 - Probe失敗時は3 fileを前versionへ戻しserviceをreloadする。

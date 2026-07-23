@@ -15,7 +15,7 @@ Status: Implemented 2026-07-19
 ## 1. Purpose
 
 Output Adapterは、IoTKit Edgeで確定した汎用的な意味データを、外部application固有のMQTT契約へ
-変換する境界である。YokaKitは最初の実装だが、汎用契約はYokaKitのtopic、用途名、payload fieldを
+変換する境界である。Pinikietは最初の実装だが、汎用契約はPinikietのtopic、用途名、payload fieldを
 知らない。
 
 ```text
@@ -73,7 +73,7 @@ type Mode struct {
 ```
 
 - `ID`は小文字ASCIIのstable IDとし、外部application、transport、major contractを識別する。
-  初期実装は`iotkit.mqtt-json.v1`と`yokakit.mqtt.v1`。
+  初期実装は`iotkit.mqtt-json.v1`と`pinikiet.mqtt.v1`。
 - `ConfigSchemaVersion`はroute設定JSONのexact versionである。
 - `Mode.Key`は外部application側の用途であり、汎用Observation種別ではない。
 - `Accepts`はそのmodeへ変換できる汎用Observation種別の閉じた集合である。
@@ -166,7 +166,7 @@ created_at
 ```
 
 `config_schema_version`は選択されたAdapter descriptorと一致しなければならない。既存の
-YokaKit専用routeはmigrationで`adapter_id=yokakit.mqtt.v1`とversion付きconfig JSONへ変換する。
+旧YokaKit専用routeはmigrationで`adapter_id=pinikiet.mqtt.v1`とversion付きconfig JSONへ変換する。
 outboxの`route_id`は維持し、配送待ちmessageを失わない。
 
 `output_routes`は現在、利用者がruleごとに作る設定ではなく、IoTKit Edge全体の`export_profile`から
@@ -178,8 +178,8 @@ Console/APIが利用するIoTKit Edge全体の操作面は次である。
 
 - `GET /api/v1/export-profiles`: 外部出力先とbinding状態を一覧する
 - `POST /api/v1/export-profiles`: 対応する現在・将来ruleへの継続適用を確認する。汎用出力は即時開始し、
-  YokaKitはtopicとIDだけを準備する
-- `PUT /api/v1/output-bindings/{binding_id}`: YokaKit boolean用途を確定し、topicとIDを準備する
+  PinikietはtopicとIDだけを準備する
+- `PUT /api/v1/output-bindings/{binding_id}`: Pinikiet boolean用途を確定し、topicとIDを準備する
 - `POST /api/v1/output-bindings/{binding_id}/start`: topicを外部へ登録した確認後に、
   その時点より後のデータだけを送信開始する
 - `POST /api/v1/export-profiles/{profile_id}/stop`: 新規変換を境界で終了し、既存配送をdrainする
@@ -253,10 +253,9 @@ v1では次を必須とする。
 
 組み込みAdapterの共有fixtureは`testdata/output/v1/`に置く。fixtureはAdapter ID、version付き設定、
 汎用Observation、期待するtopic、QoS、retain、payloadを一組で固定する。
-`scripts/test-edge-output.sh`は実Mosquittoに対して汎用JSONとYokaKitの両routeを配送し、Broker停止中は
+`scripts/test-edge-output.sh`は実Mosquittoに対して汎用JSONとPinikietの両routeを配送し、Broker停止中は
 outboxへ残ること、再起動後に同じexport identityがPUBACK済みへ収束することを検証する。
-YokaKit repositoryを隣接checkoutした環境では、`scripts/test-yokakit-consumer-contract.sh`が同じfixtureを
-YokaKitの実decoderへ渡し、送信側とconsumer側のcontract driftを検出する。
+Pinikiet側のconsumer contract gateは、Pinikiet repositoryにdecoderと共有fixtureが用意された段階で追加する。
 
 ## 9. IoTKit MQTT JSON v1 binding
 
@@ -310,36 +309,53 @@ alarm判断時に入力Observationが`reading`を持つ場合だけ、有限数�
 この共通contractを受け取れない会社固有システムには、IoTKit外部のConnectorで変換する。v1は
 Connector実装、SDK、実行基盤を提供しない。
 
-## 10. YokaKit MQTT v1 binding
+## 10. Pinikiet MQTT v1 binding
 
-`yokakit.mqtt.v1`は次のmodeだけを提供する。
+`pinikiet.mqtt.v1`は次のmodeだけを提供する。
 
-| Generic kind | YokaKit mode |
+| Generic kind | Pinikiet mode |
 |---|---|
 | `cumulative_value` | `production` |
 | `boolean` | `onoff` |
 | `boolean` | `gantt_chart` |
 | `alarm` | `alarm` |
 
-`numeric`をYokaKit用途へ推測変換しない。IoTKit v1は文字列Observationを持たないため、
-YokaKitの`barcode` modeも提供しない。
+`numeric`をPinikiet用途へ推測変換しない。IoTKit v1は文字列Observationを持たないため、
+Pinikietの`barcode` modeも提供しない。
 
-route設定は`schema_version=1`、`source_id`、`signal_id`、`kind`、任意の`reason`を持つ。
-topicとpayloadはYokaKitの合意済み
-`YokaKit MQTT Purpose-Bound Signal Contract v1`へ変換する。
+route設定は`schema_version=1`、`source_id`、`sensor_id`、`kind`、任意の`reason`を持つ。
+topicとpayloadはPinikietの合意済み
+`Pinikiet MQTT Purpose-Bound Signal Contract v1`へ変換する。
 
-YokaKitではtopicが入力登録契約でもある。profile追加やboolean用途確定だけではpublishせず、
-Console/APIがexact topicとpayload例を提示する。導入担当者がそのtopicをYokaKitへ登録した後、
-明示的な開始操作でaccepted cursor境界を保存して`prepared -> active`へ遷移する。登録確認より前の
-Observationは後から送らない。
+`sensor_id`はIoTKit Edgeの`signal_ref`ごとに`sen-<128-bit lowercase hex>`形式で一度だけ発行する。
+同じセンサーから作る`production`、`alarm`、`onoff`、`gantt_chart`は同じ`sensor_id`と次のexact topicを共有する。
 
-YokaKit source statusはsemantic Observationの変換ではないため、Observation routeとは別の
+```text
+pinikiet/v1/sources/<source-id>/sensors/<sensor-id>/observations
+```
+
+各semantic ruleは固有の`series_id`を持ち、`sequence`はそのseries内で1から単調増加する。
+したがって全kindで一つのsequenceを共有せず、重複排除の単位は`(series_id, sequence)`である。
+意味を変えるrule更新では新しい`series_id`とsequence 1を使うが、`sensor_id`とtopicは維持する。
+
+Pinikietではtopicが入力登録契約でもある。profile追加やboolean用途確定だけではpublishせず、
+Console/APIがセンサーごとのexact topicとpayload例を提示する。導入担当者がそのtopicをPinikietへ一度登録した後、
+明示的な開始操作で同じセンサーのpreparedな全kindについてaccepted cursor境界を保存して
+`prepared -> active`へ遷移する。登録済みセンサーへ後から追加した対応ruleは同じtopicで自動開始する。
+各ruleの開始境界より前のObservationは後から送らない。
+
+schema 30への移行では、旧YokaKit `/signals/` topicの登録を新Pinikiet `/sensors/` topicの
+登録済み証拠として扱わない。
+稼働中だったprofileは、新topicを登録するまで`preparing`へ戻す。ただし、既に送信待ちになっているmessageは
+登録済みの旧topicを維持して配送し、破棄しない。
+
+Pinikiet source statusはsemantic Observationの変換ではないため、Observation routeとは別の
 source-level publicationとして扱う。
 
 production bootstrapはDB作成前に`edge-<32hex>`を発行し、IoTKit Edgeの`--edge-id`とBroker ACLへ同じ値を
 渡す。`iotkit-edge-output-<edge-id>`は
 `iotkit/v1/sources/<edge-id>/signals/+/observations`、
-`yokakit/v1/sources/<edge-id>/signals/+/observations`、同sourceのstatusだけを書ける。
+`pinikiet/v1/sources/<edge-id>/sensors/+/observations`、同sourceのstatusだけを書ける。
 既存DBを別の`--edge-id`で起動した場合は起動を拒否する。
 
 ## 11. v1 exclusions

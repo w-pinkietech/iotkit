@@ -138,7 +138,7 @@ func TestOutputAdapterAPIHasNoIndividualRouteCreation(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), `"id":"iotkit.mqtt-json.v1"`) ||
-		!strings.Contains(response.Body.String(), `"id":"yokakit.mqtt.v1"`) ||
+		!strings.Contains(response.Body.String(), `"id":"pinikiet.mqtt.v1"`) ||
 		!strings.Contains(response.Body.String(), `"cumulative_value"`) {
 		t.Fatalf("adapters status=%d body=%s",
 			response.Code, response.Body.String())
@@ -660,6 +660,36 @@ func TestExportProfileSummaryShowsRegistrationWaitBeforeNormalDelivery(t *testin
 	}
 }
 
+func TestPinikietConsoleOffersOneRegistrationActionPerSensor(t *testing.T) {
+	views := newConsoleExportProfileViews(
+		[]edgeapp.ExportProfile{{
+			ProfileID: "exp_0123456789abcdef0123456789abcdef",
+			AdapterID: "pinikiet.mqtt.v1",
+			State:     edgeapp.ExportProfilePreparing,
+			Bindings: []edgeapp.OutputProfileRuleBinding{
+				{
+					BindingID: "bind_0123456789abcdef0123456789abcdef",
+					SensorID:  "sen-0123456789abcdef0123456789abcdef",
+					State:     edgeapp.OutputBindingPrepared,
+				},
+				{
+					BindingID: "bind_1123456789abcdef0123456789abcdef",
+					SensorID:  "sen-0123456789abcdef0123456789abcdef",
+					State:     edgeapp.OutputBindingPrepared,
+				},
+			},
+		}},
+		nil,
+		nil,
+	)
+	if len(views) != 1 || len(views[0].Bindings) != 2 ||
+		!views[0].Bindings[0].RegistrationAction ||
+		views[0].Bindings[1].RegistrationAction ||
+		!views[0].Bindings[1].SharesSensorRegistration {
+		t.Fatalf("views=%#v", views)
+	}
+}
+
 func TestExportProfileTransformFailureIsCountedAsAttention(t *testing.T) {
 	views := newConsoleExportProfileViews(
 		[]edgeapp.ExportProfile{{
@@ -758,7 +788,7 @@ func TestOutputConsoleDoesNotExposeIndividualOutputRoutes(t *testing.T) {
 	}
 	for _, want := range []string{
 		"汎用MQTT JSONで送る",
-		"YokaKitへ送る",
+		"Pinikietへ送る",
 		"現在の対応値と、今後追加する対応値を自動で送信する",
 	} {
 		if !strings.Contains(body, want) {

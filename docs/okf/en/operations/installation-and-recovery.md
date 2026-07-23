@@ -31,7 +31,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
    root trust bundle that covers the IoTKit Edge host. The key file must be owner-only.
 3. Run `scripts/bootstrap-edge.sh` for the first Edge Node. Bootstrap assigns the
    IoTKit Edge source ID before startup and gives `iotkit-edge-output-<edge-id>` write access only to
-   that IoTKit Edge's IoTKit/YokaKit observation and status namespace. Use repeated
+   that IoTKit Edge's IoTKit/Pinikiet observation and status namespace. Use repeated
    `--edge-publish-topic` only for additional exact legacy application topics.
 4. Start `embedded` with `deploy/compose.edge.yaml`. For `postgres`, add
    `deploy/compose.edge-postgres.yaml`. IoTKit Edge stops when profile metadata and
@@ -90,7 +90,7 @@ fallback.
 ## 3. Certificate renewal
 
 `scripts/iotkit-broker-cert` is independent of IoTKit sensor meaning and
-YokaKit. It manages the Mosquitto/Caddy certificate bundle on the broker host.
+Pinikiet. It manages the Mosquitto/Caddy certificate bundle on the broker host.
 
 - `install` validates the chain, hostname, expiry, and key; switches the three
   files; reloads Mosquitto; restarts IoTKit Edge so trust changes are read; reloads

@@ -40,9 +40,6 @@ echo "== Broker certificate install/rollback and ACME renewal =="
 "$repo_root/scripts/test-broker-cert.sh"
 "$repo_root/scripts/test-broker-cert-pebble.sh"
 
-echo "== YokaKit consumer contract =="
-"$repo_root/scripts/test-yokakit-consumer-contract.sh"
-
 echo "== embedded/PostgreSQL capacity regression reports =="
 "$repo_root/scripts/test-edge-capacity.sh" "$report_dir/capacity"
 

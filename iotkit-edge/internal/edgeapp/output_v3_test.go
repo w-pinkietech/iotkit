@@ -33,12 +33,12 @@ func TestRuleOutputServiceRequiresAdminForMutation(t *testing.T) {
 		"acct_0123456789abcdef0123456789abcdef",
 		AccountRoleViewer,
 	)
-	adapter := outputadapter.YokaKitConfig{
+	adapter := outputadapter.PinikietConfig{
 		SourceID: "line-a",
-		SignalID: "production",
-		Kind:     outputadapter.YokaKitProduction,
+		SensorID: "press",
+		Kind:     outputadapter.PinikietProduction,
 	}
-	if _, err := service.CreateYokaKitRoute(
+	if _, err := service.CreatePinikietRoute(
 		context.Background(),
 		viewer,
 		"rule_0123456789abcdef0123456789abcdef",
@@ -50,7 +50,7 @@ func TestRuleOutputServiceRequiresAdminForMutation(t *testing.T) {
 		"acct_0123456789abcdef0123456789abcdef",
 		AccountRoleAdmin,
 	)
-	if _, err := service.CreateYokaKitRoute(
+	if _, err := service.CreatePinikietRoute(
 		context.Background(),
 		admin,
 		"rule_0123456789abcdef0123456789abcdef",

@@ -12,31 +12,31 @@ import (
 	"github.com/w-pinkietech/iotkit-next/iotkit-edge/internal/semantics"
 )
 
-type YokaKitRoute struct {
-	RouteID                    string                    `json:"route_id"`
-	DefinitionID               string                    `json:"definition_id"`
-	SourceID                   string                    `json:"source_id"`
-	SignalID                   string                    `json:"signal_id"`
-	Kind                       outputadapter.YokaKitKind `json:"kind"`
-	Reason                     string                    `json:"reason,omitempty"`
-	StartAfterObservationRowID int64                     `json:"start_after_observation_row_id"`
-	Active                     bool                      `json:"active"`
-	CreatedAt                  int64                     `json:"created_at"`
-	PendingCount               int64                     `json:"pending_count"`
-	PublishedCount             int64                     `json:"published_count"`
+type PinikietRoute struct {
+	RouteID                    string                     `json:"route_id"`
+	DefinitionID               string                     `json:"definition_id"`
+	SourceID                   string                     `json:"source_id"`
+	SensorID                   string                     `json:"sensor_id"`
+	Kind                       outputadapter.PinikietKind `json:"kind"`
+	Reason                     string                     `json:"reason,omitempty"`
+	StartAfterObservationRowID int64                      `json:"start_after_observation_row_id"`
+	Active                     bool                       `json:"active"`
+	CreatedAt                  int64                      `json:"created_at"`
+	PendingCount               int64                      `json:"pending_count"`
+	PublishedCount             int64                      `json:"published_count"`
 }
 
-func (store *Store) ApplyYokaKitRoute(
+func (store *Store) ApplyPinikietRoute(
 	ctx context.Context,
 	actor edgeapp.Actor,
 	definitionID string,
-	config outputadapter.YokaKitConfig,
-) (YokaKitRoute, error) {
-	var noRoute YokaKitRoute
+	config outputadapter.PinikietConfig,
+) (PinikietRoute, error) {
+	var noRoute PinikietRoute
 	if err := actor.Validate(); err != nil {
 		return noRoute, err
 	}
-	encodedConfig, err := outputadapter.EncodeYokaKitConfig(config)
+	encodedConfig, err := outputadapter.EncodePinikietConfig(config)
 	if err != nil {
 		return noRoute, err
 	}
@@ -71,7 +71,7 @@ func (store *Store) ApplyYokaKitRoute(
 	if err != nil {
 		return noRoute, err
 	}
-	if err := (outputadapter.YokaKitAdapter{}).ValidateConfig(
+	if err := (outputadapter.PinikietAdapter{}).ValidateConfig(
 		encodedConfig,
 		outputKind,
 	); err != nil {
@@ -87,9 +87,9 @@ func (store *Store) ApplyYokaKitRoute(
 	if err != nil {
 		return noRoute, err
 	}
-	route := YokaKitRoute{
+	route := PinikietRoute{
 		RouteID: routeID, DefinitionID: definitionID,
-		SourceID: config.SourceID, SignalID: config.SignalID,
+		SourceID: config.SourceID, SensorID: config.SensorID,
 		Kind: config.Kind, Reason: config.Reason,
 		StartAfterObservationRowID: start, Active: true,
 		CreatedAt: time.Now().UnixMilli(),
@@ -99,19 +99,19 @@ func (store *Store) ApplyYokaKitRoute(
 			route_id, definition_id, source_id, signal_id, kind, reason,
 			start_after_observation_row_id, active, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-	`, route.RouteID, route.DefinitionID, route.SourceID, route.SignalID,
+	`, route.RouteID, route.DefinitionID, route.SourceID, route.SensorID,
 		route.Kind, route.Reason, route.StartAfterObservationRowID,
 		route.CreatedAt); err != nil {
 		return noRoute, err
 	}
 	summary, _ := json.Marshal(struct {
-		SourceID string                    `json:"source_id"`
-		SignalID string                    `json:"signal_id"`
-		Kind     outputadapter.YokaKitKind `json:"kind"`
-	}{route.SourceID, route.SignalID, route.Kind})
+		SourceID string                     `json:"source_id"`
+		SensorID string                     `json:"sensor_id"`
+		Kind     outputadapter.PinikietKind `json:"kind"`
+	}{route.SourceID, route.SensorID, route.Kind})
 	if err := insertAuditEventTx(ctx, tx, edgeapp.AuditEvent{
 		OccurredAt: route.CreatedAt, ActorClass: actor.Class, ActorRef: actor.Ref,
-		Operation: "yokakit_route.create", ResourceRef: route.RouteID,
+		Operation: "pinikiet_route.create", ResourceRef: route.RouteID,
 		Outcome: auditOutcomeSuccess, Summary: summary,
 	}); err != nil {
 		return noRoute, err
@@ -122,7 +122,7 @@ func (store *Store) ApplyYokaKitRoute(
 	return route, nil
 }
 
-func (store *Store) ListYokaKitRoutes(ctx context.Context) ([]YokaKitRoute, error) {
+func (store *Store) ListPinikietRoutes(ctx context.Context) ([]PinikietRoute, error) {
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT route.route_id, route.definition_id, route.source_id,
 			route.signal_id, route.kind, route.reason,
@@ -140,11 +140,11 @@ func (store *Store) ListYokaKitRoutes(ctx context.Context) ([]YokaKitRoute, erro
 		return nil, err
 	}
 	defer rows.Close()
-	var routes []YokaKitRoute
+	var routes []PinikietRoute
 	for rows.Next() {
-		var route YokaKitRoute
+		var route PinikietRoute
 		if err := rows.Scan(
-			&route.RouteID, &route.DefinitionID, &route.SourceID, &route.SignalID,
+			&route.RouteID, &route.DefinitionID, &route.SourceID, &route.SensorID,
 			&route.Kind, &route.Reason, &route.StartAfterObservationRowID,
 			&route.Active, &route.CreatedAt, &route.PendingCount,
 			&route.PublishedCount,
@@ -156,7 +156,7 @@ func (store *Store) ListYokaKitRoutes(ctx context.Context) ([]YokaKitRoute, erro
 	return routes, rows.Err()
 }
 
-func (store *Store) ListYokaKitSourceIDs(ctx context.Context) ([]string, error) {
+func (store *Store) ListPinikietSourceIDs(ctx context.Context) ([]string, error) {
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT source_id FROM yokakit_routes
 		WHERE active = 1
@@ -164,7 +164,7 @@ func (store *Store) ListYokaKitSourceIDs(ctx context.Context) ([]string, error) 
 		SELECT CAST(json_extract(config_json, '$.source_id') AS TEXT)
 		FROM output_routes
 		WHERE active = 1
-			AND adapter_id = 'yokakit.mqtt.v1'
+			AND adapter_id = 'pinikiet.mqtt.v1'
 		ORDER BY 1
 	`)
 	if err != nil {
@@ -211,7 +211,7 @@ func (store *Store) EnqueueOutputExports(ctx context.Context, limit int) (int, e
 	}
 	type candidate struct {
 		routeID, sourceID, signalID, reason string
-		kind                                outputadapter.YokaKitKind
+		kind                                outputadapter.PinikietKind
 		rowID                               int64
 		observation                         semantics.Observation
 	}
@@ -246,9 +246,9 @@ func (store *Store) EnqueueOutputExports(ctx context.Context, limit int) (int, e
 	defer func() { _ = tx.Rollback() }()
 	inserted := 0
 	for _, item := range candidates {
-		config, err := outputadapter.EncodeYokaKitConfig(
-			outputadapter.YokaKitConfig{
-				SourceID: item.sourceID, SignalID: item.signalID,
+		config, err := outputadapter.EncodePinikietConfig(
+			outputadapter.PinikietConfig{
+				SourceID: item.sourceID, SensorID: item.signalID,
 				Kind: item.kind, Reason: item.reason,
 			},
 		)
@@ -259,7 +259,7 @@ func (store *Store) EnqueueOutputExports(ctx context.Context, limit int) (int, e
 		if err != nil {
 			return 0, err
 		}
-		message, err := (outputadapter.YokaKitAdapter{}).Transform(
+		message, err := (outputadapter.PinikietAdapter{}).Transform(
 			config,
 			observation,
 		)

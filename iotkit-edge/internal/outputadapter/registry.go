@@ -37,7 +37,7 @@ func NewRegistry(adapters ...Adapter) (Registry, error) {
 func BuiltInRegistry() (Registry, error) {
 	return NewRegistry(
 		GenericMQTTJSONAdapter{},
-		YokaKitAdapter{},
+		PinikietAdapter{},
 	)
 }
 
