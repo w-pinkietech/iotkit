@@ -7,7 +7,38 @@ use iotkit_edge::composition::generic_output_adapter;
 use iotkit_edge::composition::registered_output_adapters;
 use iotkit_edge::storage::{AcceptBatch, RawRecord, Storage, StorageProfile};
 use iotkit_edge::storage::{StorageError, migrate_sqlite_to_postgres};
+use iotkit_edge_custody_contract::DescriptorSnapshot;
 use tempfile::TempDir;
+
+async fn apply_contact_descriptor(storage: &Storage, edge_node_id: &str) {
+    let descriptor = DescriptorSnapshot::decode(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
+            "edge_node_id": edge_node_id,
+            "ledger_epoch": "epoch-01",
+            "descriptor_revision": 1,
+            "complete": true,
+            "devices": [{
+                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "identifier": "cli-contract-device",
+                "state": "active",
+                "model_id": "contract"
+            }],
+            "signals": [{
+                "series_key": "018f0000-0000-7000-8000-000000000001:contact:na:primary",
+                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "measurement_key": "contact",
+                "channel_index": null,
+                "variant": "primary",
+                "unit": null,
+                "value_type": "bool"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
+}
 
 #[test]
 fn compatibility_ids_are_lowercase_and_reversible() {
@@ -118,12 +149,13 @@ async fn mapping_lifecycle_is_a_reversible_semantic_rule_view() {
     })
     .await
     .unwrap();
+    apply_contact_descriptor(&storage, "edge-node-01").await;
     let mappings = LegacyMappings::new(storage.clone());
     let first = mappings
         .put(
             LegacyMappingSpec {
                 edge_node_id: "edge-node-01".into(),
-                series_key: "contact".into(),
+                series_key: "018f0000-0000-7000-8000-000000000001:contact:na:primary".into(),
                 meaning: "production_pulse".into(),
                 trigger_mode: LegacyTriggerMode::ActiveSample,
                 active_value: 1,
@@ -136,7 +168,7 @@ async fn mapping_lifecycle_is_a_reversible_semantic_rule_view() {
         .put(
             LegacyMappingSpec {
                 edge_node_id: "edge-node-01".into(),
-                series_key: "contact".into(),
+                series_key: "018f0000-0000-7000-8000-000000000001:contact:na:primary".into(),
                 meaning: "production_pulse".into(),
                 trigger_mode: LegacyTriggerMode::ActiveEdge,
                 active_value: 0,
@@ -153,7 +185,11 @@ async fn mapping_lifecycle_is_a_reversible_semantic_rule_view() {
     assert_eq!(revisions[0].trigger_mode, LegacyTriggerMode::ActiveSample);
     assert_eq!(revisions[1].trigger_mode, LegacyTriggerMode::ActiveEdge);
     let retired = mappings
-        .deactivate("edge-node-01", "contact", 30)
+        .deactivate(
+            "edge-node-01",
+            "018f0000-0000-7000-8000-000000000001:contact:na:primary",
+            30,
+        )
         .await
         .unwrap();
     assert!(!retired.active);
@@ -181,11 +217,12 @@ async fn route_add_is_idempotent_and_supports_topic_fanout() {
     })
     .await
     .unwrap();
+    apply_contact_descriptor(&storage, "edge-node-01").await;
     let mapping = LegacyMappings::new(storage.clone())
         .put(
             LegacyMappingSpec {
                 edge_node_id: "edge-node-01".into(),
-                series_key: "contact".into(),
+                series_key: "018f0000-0000-7000-8000-000000000001:contact:na:primary".into(),
                 meaning: "production_pulse".into(),
                 trigger_mode: LegacyTriggerMode::ActiveEdge,
                 active_value: 1,
@@ -271,7 +308,7 @@ async fn accept_contact(storage: &Storage, sequence: i64, value: i32) {
         "schema_version": 1,
         "epoch": "epoch-01",
         "pub_seq": sequence,
-        "series_key": "contact",
+        "series_key": "018f0000-0000-7000-8000-000000000001:contact:na:primary",
         "values": [value],
         "event_time": 1_720_000_000_000_i64 + sequence,
         "event_time_source": "received_at",
@@ -305,11 +342,12 @@ async fn routes_are_future_only_and_fan_out_one_observation() {
     })
     .await
     .unwrap();
+    apply_contact_descriptor(&storage, "edge-node-01").await;
     let mapping = LegacyMappings::new(storage.clone())
         .put(
             LegacyMappingSpec {
                 edge_node_id: "edge-node-01".into(),
-                series_key: "contact".into(),
+                series_key: "018f0000-0000-7000-8000-000000000001:contact:na:primary".into(),
                 meaning: "production_pulse".into(),
                 trigger_mode: LegacyTriggerMode::ActiveEdge,
                 active_value: 1,
@@ -418,12 +456,13 @@ async fn postgres_mapping_and_route_contracts_match_when_configured() {
     let storage = Storage::connect(StorageProfile::Postgres { dsn })
         .await
         .unwrap();
+    apply_contact_descriptor(&storage, "edge-node-pg").await;
     let mappings = LegacyMappings::new(storage.clone());
     let mapping = mappings
         .put(
             LegacyMappingSpec {
                 edge_node_id: "edge-node-pg".into(),
-                series_key: "contact".into(),
+                series_key: "018f0000-0000-7000-8000-000000000001:contact:na:primary".into(),
                 meaning: "production_pulse".into(),
                 trigger_mode: LegacyTriggerMode::ActiveEdge,
                 active_value: 1,
@@ -440,7 +479,11 @@ async fn postgres_mapping_and_route_contracts_match_when_configured() {
     assert_eq!(routes.list().await.unwrap().len(), 1);
     assert!(
         !mappings
-            .deactivate("edge-node-pg", "contact", 30)
+            .deactivate(
+                "edge-node-pg",
+                "018f0000-0000-7000-8000-000000000001:contact:na:primary",
+                30,
+            )
             .await
             .unwrap()
             .active

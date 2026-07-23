@@ -9,9 +9,15 @@ use iotkit_edge::{
     semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
     storage::{AcceptBatch, OutputMark, RawRecord, Storage, StorageProfile},
 };
+use iotkit_edge_custody_contract::DescriptorSnapshot;
 use serde_json::{Map, Value};
 use sqlx::{Executor, PgPool, SqlitePool, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;
+
+const TEMPERATURE_1: &str = "018f0000-0000-7000-8000-000000000001:temperature_1:na:primary";
+const TEMPERATURE_2: &str = "018f0000-0000-7000-8000-000000000001:temperature_2:na:primary";
+const TEMPERATURE_3: &str = "018f0000-0000-7000-8000-000000000001:temperature_3:na:primary";
+const CONTACT: &str = "018f0000-0000-7000-8000-000000000001:contact:na:primary";
 
 async fn store() -> (TempDir, Storage) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -29,13 +35,55 @@ async fn store() -> (TempDir, Storage) {
         .initialize_edge_identity(1_720_000_000_000)
         .await
         .expect("initialize Edge identity");
+    apply_output_descriptor(&storage).await;
     (directory, storage)
+}
+
+async fn apply_output_descriptor(storage: &Storage) {
+    let signals = [
+        (TEMPERATURE_1, "temperature_1"),
+        (TEMPERATURE_2, "temperature_2"),
+        (TEMPERATURE_3, "temperature_3"),
+        (CONTACT, "contact"),
+    ]
+    .into_iter()
+    .map(|(series_key, measurement_key)| {
+        serde_json::json!({
+            "series_key": series_key,
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": measurement_key,
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "float"
+        })
+    })
+    .collect::<Vec<_>>();
+    let descriptor = DescriptorSnapshot::decode(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
+            "edge_node_id": "edge-node-01",
+            "ledger_epoch": "epoch-01",
+            "descriptor_revision": 1,
+            "complete": true,
+            "devices": [{
+                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "identifier": "output-contract-device",
+                "state": "active",
+                "model_id": "contract"
+            }],
+            "signals": signals
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
 }
 
 fn numeric_rule() -> SemanticRuleDraft {
     SemanticRuleDraft {
         edge_node_id: "edge-node-01".into(),
-        series_key: "series-temperature-01".into(),
+        series_key: TEMPERATURE_1.into(),
         display_name: "Temperature".into(),
         spec: RuleSpec {
             kind: SemanticKind::Numeric,
@@ -48,7 +96,7 @@ fn numeric_rule() -> SemanticRuleDraft {
 fn counter_rule() -> SemanticRuleDraft {
     SemanticRuleDraft {
         edge_node_id: "edge-node-01".into(),
-        series_key: "series-contact-01".into(),
+        series_key: CONTACT.into(),
         display_name: "Production".into(),
         spec: RuleSpec {
             kind: SemanticKind::CumulativeCounter,
@@ -150,7 +198,7 @@ async fn semantic_projection_and_exact_outbox_are_one_atomic_operation() {
     assert_eq!(profile.bindings.len(), 1);
     assert_eq!(profile.bindings[0].rule_id, rule.rule_id);
 
-    accept(&storage, 1, "series-temperature-01", 21.5).await;
+    accept(&storage, 1, TEMPERATURE_1, 21.5).await;
     let projected = semantics
         .project_pending(10, registered_output_adapters())
         .await
@@ -198,7 +246,7 @@ async fn outbox_insert_failure_rolls_back_observation_and_projection_receipt() {
         .activate("Generic", "iotkit.mqtt-json.v1", Map::new(), 2)
         .await
         .expect("activate");
-    accept(&storage, 1, "series-temperature-01", 21.5).await;
+    accept(&storage, 1, TEMPERATURE_1, 21.5).await;
 
     let options = SqliteConnectOptions::new()
         .filename(directory.path().join("output.db"))
@@ -243,7 +291,7 @@ async fn poison_semantic_input_is_durable_and_does_not_block_an_independent_rule
     let healthy = semantics
         .create_rule(
             SemanticRuleDraft {
-                series_key: "series-temperature-02".into(),
+                series_key: TEMPERATURE_2.into(),
                 display_name: "Healthy temperature".into(),
                 ..numeric_rule()
             },
@@ -254,8 +302,8 @@ async fn poison_semantic_input_is_durable_and_does_not_block_an_independent_rule
     accept_values(
         &storage,
         &[
-            (1, "series-temperature-01", Vec::new()),
-            (2, "series-temperature-02", vec![19.25]),
+            (1, TEMPERATURE_1, Vec::new()),
+            (2, TEMPERATURE_2, vec![19.25]),
         ],
     )
     .await;
@@ -304,17 +352,17 @@ async fn rule_and_calibration_revisions_apply_only_after_their_captured_cursors(
         .create_rule(numeric_rule(), 1)
         .await
         .expect("create rule");
-    accept(&storage, 1, "series-temperature-01", 10.0).await;
+    accept(&storage, 1, TEMPERATURE_1, 10.0).await;
     semantics
         .revise_rule(&rule.rule_id, "Temperature revised", numeric_rule().spec, 2)
         .await
         .expect("revise after accepted input");
-    accept(&storage, 2, "series-temperature-01", 20.0).await;
+    accept(&storage, 2, TEMPERATURE_1, 20.0).await;
     semantics
         .update_calibration(&rule.signal_ref, 2.0, 0.0, 3)
         .await
         .expect("calibrate after accepted input");
-    accept(&storage, 3, "series-temperature-01", 30.0).await;
+    accept(&storage, 3, TEMPERATURE_1, 30.0).await;
     semantics
         .project_pending(10, registered_output_adapters())
         .await
@@ -357,7 +405,7 @@ async fn failed_routes_retry_fairly_oldest_first_and_converge_after_storage_rest
     semantics
         .create_rule(
             SemanticRuleDraft {
-                series_key: "series-temperature-02".into(),
+                series_key: TEMPERATURE_2.into(),
                 display_name: "Temperature two".into(),
                 ..numeric_rule()
             },
@@ -383,8 +431,8 @@ async fn failed_routes_retry_fairly_oldest_first_and_converge_after_storage_rest
     accept_values(
         &storage,
         &[
-            (1, "series-temperature-01", vec![21.0]),
-            (2, "series-temperature-02", vec![22.0]),
+            (1, TEMPERATURE_1, vec![21.0]),
+            (2, TEMPERATURE_2, vec![22.0]),
         ],
     )
     .await;
@@ -433,6 +481,7 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
         .initialize_edge_identity(1_720_000_000_000)
         .await
         .expect("initialize identity");
+    apply_output_descriptor(&storage).await;
     let semantics = Semantics::new(storage.clone());
     semantics
         .create_rule(numeric_rule(), 1)
@@ -441,7 +490,7 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
     semantics
         .create_rule(
             SemanticRuleDraft {
-                series_key: "series-temperature-02".into(),
+                series_key: TEMPERATURE_2.into(),
                 display_name: "Temperature two".into(),
                 ..numeric_rule()
             },
@@ -461,8 +510,8 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
     accept_values(
         &storage,
         &[
-            (1, "series-temperature-01", vec![21.0]),
-            (2, "series-temperature-02", vec![22.0]),
+            (1, TEMPERATURE_1, vec![21.0]),
+            (2, TEMPERATURE_2, vec![22.0]),
         ],
     )
     .await;
@@ -499,7 +548,7 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
     let ordered_rule = Semantics::new(restarted.clone())
         .create_rule(
             SemanticRuleDraft {
-                series_key: "series-temperature-03".into(),
+                series_key: TEMPERATURE_3.into(),
                 display_name: "Ordered temperature".into(),
                 ..numeric_rule()
             },
@@ -507,8 +556,8 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
         )
         .await
         .expect("create ordered rule");
-    accept(&restarted, 3, "series-temperature-03", 23.0).await;
-    accept(&restarted, 4, "series-temperature-03", 24.0).await;
+    accept(&restarted, 3, TEMPERATURE_3, 23.0).await;
+    accept(&restarted, 4, TEMPERATURE_3, 24.0).await;
 
     let inspection = PgPool::connect(&dsn).await.expect("inspection pool");
     let mut raw_lock = inspection.begin().await.expect("raw lock transaction");
@@ -623,7 +672,7 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
         .expect("calibration timed out")
         .expect("join calibration")
         .expect("update calibration");
-    accept(&restarted, 5, "series-temperature-03", 25.0).await;
+    accept(&restarted, 5, TEMPERATURE_3, 25.0).await;
     Semantics::new(restarted.clone())
         .project_pending(10, registered_output_adapters())
         .await
@@ -638,8 +687,8 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
     .expect("read applied boundaries");
     assert_eq!(applied, vec![(4, 1, 1), (5, 2, 2)]);
 
-    accept(&restarted, 6, "series-temperature-03", 26.0).await;
-    accept(&restarted, 7, "series-temperature-01", 27.0).await;
+    accept(&restarted, 6, TEMPERATURE_3, 26.0).await;
+    accept(&restarted, 7, TEMPERATURE_1, 27.0).await;
     let mut per_rule_raw_lock = inspection
         .begin()
         .await
@@ -818,7 +867,7 @@ async fn claim_is_read_only_until_puback_mark_and_stale_claim_cannot_mark() {
         .activate("Generic", "iotkit.mqtt-json.v1", Map::new(), 2)
         .await
         .expect("activate");
-    accept(&storage, 1, "series-temperature-01", 21.5).await;
+    accept(&storage, 1, TEMPERATURE_1, 21.5).await;
     semantics
         .project_pending(10, registered_output_adapters())
         .await
@@ -876,7 +925,7 @@ async fn live_oldest_route_lease_blocks_its_successor_but_not_another_route() {
     semantics
         .create_rule(
             SemanticRuleDraft {
-                series_key: "series-temperature-02".into(),
+                series_key: TEMPERATURE_2.into(),
                 display_name: "Temperature two".into(),
                 ..numeric_rule()
             },
@@ -891,9 +940,9 @@ async fn live_oldest_route_lease_blocks_its_successor_but_not_another_route() {
     accept_values(
         &storage,
         &[
-            (1, "series-temperature-01", vec![21.0]),
-            (2, "series-temperature-01", vec![22.0]),
-            (3, "series-temperature-02", vec![23.0]),
+            (1, TEMPERATURE_1, vec![21.0]),
+            (2, TEMPERATURE_1, vec![22.0]),
+            (3, TEMPERATURE_2, vec![23.0]),
         ],
     )
     .await;
