@@ -23,6 +23,11 @@ const cases = [
     expected: { rust: false, edge: true },
   },
   {
+    name: "IoTKit Edge verification scripts select only Edge",
+    paths: ["scripts/test-edge-console-e2e.sh"],
+    expected: { rust: false, edge: true },
+  },
+  {
     name: "shared contract fixtures select both",
     paths: ["testdata/egress/v1/record-batch.json"],
     expected: { rust: true, edge: true },

@@ -24,6 +24,14 @@ const rustFiles = new Set([
   "rust-toolchain.toml",
 ]);
 
+const edgeFiles = new Set([
+  "scripts/test-edge-capacity.sh",
+  "scripts/test-edge-console-e2e.sh",
+  "scripts/test-edge-console-frontend.sh",
+  "scripts/test-edge-output.sh",
+  "scripts/test-edge-postgres.sh",
+]);
+
 const lightweightPrefixes = [
   ".agents/",
   ".codex/",
@@ -61,7 +69,7 @@ function classify(path) {
   if (rustFiles.has(path) || rustRoots.some((prefix) => path.startsWith(prefix))) {
     return { rust: true, edge: false };
   }
-  if (path.startsWith("iotkit-edge/")) {
+  if (edgeFiles.has(path) || path.startsWith("iotkit-edge/")) {
     return { rust: false, edge: true };
   }
   if (path.startsWith("testdata/") ||
