@@ -28,7 +28,7 @@ pub use activation::{ActivationCommand, DescriptorApply, EdgeNode, EdgeNodeState
 pub use auth::{
     Account, AccountCredential, AccountProvision, AuditActor, AuditEvent, StoredSession,
 };
-pub use semantic_output::ClaimedOutput;
+pub use semantic_output::{ClaimedOutput, OutputMark};
 
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");

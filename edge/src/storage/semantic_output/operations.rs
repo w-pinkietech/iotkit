@@ -29,6 +29,12 @@ pub struct ClaimedOutput {
     pub attempts: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMark {
+    Published,
+    ClaimLost,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProjectedOne {
     pub receipt: bool,
@@ -158,6 +164,15 @@ impl Storage {
             }
             StorageInner::Postgres { pool, .. } => {
                 let mut tx = pool.begin().await?;
+                let edge_node_id: Option<String> = sqlx::query_scalar(
+                    "SELECT edge_node_id FROM semantic_signals WHERE signal_ref=$1",
+                )
+                .bind(signal_ref)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let edge_node_id = edge_node_id.ok_or(StorageError::SemanticNotFound)?;
+                lock_edge_cursors_postgres(&mut tx, &edge_node_id).await?;
+                lock_signal_runtimes_postgres(&mut tx, signal_ref).await?;
                 let revision: Option<i64> = sqlx::query_scalar(
                     "UPDATE semantic_signals SET calibration_revision=calibration_revision+1, \
                      scale=$1, calibration_offset=$2 WHERE signal_ref=$3 RETURNING calibration_revision",
@@ -249,6 +264,17 @@ impl Storage {
             }
             StorageInner::Postgres { pool, .. } => {
                 let mut tx = pool.begin().await?;
+                let edge_node_id: Option<String> = sqlx::query_scalar(
+                    "SELECT signal.edge_node_id FROM semantic_rules AS rule \
+                     JOIN semantic_signals AS signal ON signal.signal_ref=rule.signal_ref \
+                     WHERE rule.rule_id=$1 AND rule.active=TRUE",
+                )
+                .bind(rule_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let edge_node_id = edge_node_id.ok_or(StorageError::SemanticNotFound)?;
+                lock_edge_cursors_postgres(&mut tx, &edge_node_id).await?;
+                lock_rule_runtime_postgres(&mut tx, rule_id).await?;
                 sqlx::query(
                     "INSERT INTO semantic_rule_ends(rule_id,ledger_epoch,end_at_pub_seq) \
                      SELECT $1,cursor.ledger_epoch,cursor.accepted_through \
@@ -555,8 +581,8 @@ impl Storage {
         export_id: &str,
         claim_token: &str,
         now: i64,
-    ) -> Result<bool, StorageError> {
-        let affected = match self.inner.as_ref() {
+    ) -> Result<OutputMark, StorageError> {
+        match self.inner.as_ref() {
             StorageInner::Sqlite { pool, .. } => {
                 let mut tx = pool.begin().await?;
                 let result = sqlx::query(
@@ -569,9 +595,24 @@ impl Storage {
                 .bind(claim_token)
                 .execute(&mut *tx)
                 .await?;
+                if result.rows_affected() == 0 {
+                    let published: Option<i64> = sqlx::query_scalar(
+                        "SELECT published_at FROM output_outbox WHERE export_id=?",
+                    )
+                    .bind(export_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .flatten();
+                    tx.commit().await?;
+                    return Ok(if published.is_some() {
+                        OutputMark::Published
+                    } else {
+                        OutputMark::ClaimLost
+                    });
+                }
                 reconcile_profiles_sqlite(&mut tx, now).await?;
                 tx.commit().await?;
-                result.rows_affected()
+                Ok(OutputMark::Published)
             }
             StorageInner::Postgres { pool, .. } => {
                 let mut tx = pool.begin().await?;
@@ -585,12 +626,26 @@ impl Storage {
                 .bind(claim_token)
                 .execute(&mut *tx)
                 .await?;
+                if result.rows_affected() == 0 {
+                    let published: Option<i64> = sqlx::query_scalar(
+                        "SELECT published_at FROM output_outbox WHERE export_id=$1",
+                    )
+                    .bind(export_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .flatten();
+                    tx.commit().await?;
+                    return Ok(if published.is_some() {
+                        OutputMark::Published
+                    } else {
+                        OutputMark::ClaimLost
+                    });
+                }
                 reconcile_profiles_postgres(&mut tx, now).await?;
                 tx.commit().await?;
-                result.rows_affected()
+                Ok(OutputMark::Published)
             }
-        };
-        Ok(affected == 1)
+        }
     }
 
     pub(crate) async fn project_one_semantic(

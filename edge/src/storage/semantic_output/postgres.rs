@@ -3,6 +3,11 @@ async fn create_rule_postgres(
     draft: SemanticRuleDraft,
     now: i64,
 ) -> Result<SemanticRule, StorageError> {
+    // PostgreSQL future-only lock order is always:
+    // accepted cursor(s) -> semantic runtime(s) -> definition row(s) -> raw candidate.
+    // Ingest only takes the first lock and projectors take the latter two, so the
+    // order serializes cutovers without a database-wide projector lock.
+    lock_edge_cursors_postgres(tx, &draft.edge_node_id).await?;
     let signal_ref = ensure_signal_postgres(
         tx,
         &draft.edge_node_id,
@@ -118,6 +123,17 @@ async fn revise_rule_postgres(
     spec: RuleSpec,
     now: i64,
 ) -> Result<SemanticRule, StorageError> {
+    let edge_node_id: Option<String> = sqlx::query_scalar(
+        "SELECT signal.edge_node_id FROM semantic_rules AS rule \
+         JOIN semantic_signals AS signal ON signal.signal_ref=rule.signal_ref \
+         WHERE rule.rule_id=$1 AND rule.active=TRUE",
+    )
+    .bind(rule_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let edge_node_id = edge_node_id.ok_or(StorageError::SemanticNotFound)?;
+    lock_edge_cursors_postgres(tx, &edge_node_id).await?;
+    lock_rule_runtime_postgres(tx, rule_id).await?;
     let row = sqlx::query(
         "SELECT rule.signal_ref,signal.edge_node_id,signal.series_key,rule.kind,\
          rule.series_id,rule.revision,rule.spec_json FROM semantic_rules AS rule \
@@ -165,7 +181,6 @@ async fn revise_rule_postgres(
     .bind(now)
     .execute(&mut **tx)
     .await?;
-    let edge_node_id: String = row.try_get("edge_node_id")?;
     sqlx::query(
         "INSERT INTO semantic_rule_starts(rule_id,revision,ledger_epoch,start_after_pub_seq) \
          SELECT $1,$2,ledger_epoch,accepted_through FROM accepted_cursors WHERE edge_node_id=$3",
@@ -195,6 +210,17 @@ async fn apply_reset_postgres(
     _observation_id: &str,
     now: i64,
 ) -> Result<(), StorageError> {
+    let edge_node_id: Option<String> = sqlx::query_scalar(
+        "SELECT signal.edge_node_id FROM semantic_rules AS rule \
+         JOIN semantic_signals AS signal ON signal.signal_ref=rule.signal_ref \
+         WHERE rule.rule_id=$1 AND rule.active=TRUE",
+    )
+    .bind(rule_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let edge_node_id = edge_node_id.ok_or(StorageError::SemanticNotFound)?;
+    lock_edge_cursors_postgres(tx, &edge_node_id).await?;
+    lock_rule_runtime_postgres(tx, rule_id).await?;
     let kind: Option<String> = sqlx::query_scalar(
         "SELECT kind FROM semantic_rules WHERE rule_id=$1 AND active=TRUE FOR UPDATE",
     )
@@ -795,12 +821,13 @@ async fn claim_postgres(
             JOIN semantic_observations AS observation
               ON observation.observation_id=outbox.observation_id
             WHERE outbox.published_at IS NULL
-              AND (outbox.claim_token IS NULL OR outbox.claim_until<=$1)
         )
         SELECT outbox.export_id,outbox.route_id,outbox.topic,outbox.qos,outbox.retain,
           outbox.payload_json,outbox.attempts
         FROM output_outbox AS outbox JOIN ranked ON ranked.export_id=outbox.export_id
-        WHERE ranked.route_rank=1 ORDER BY outbox.attempts,outbox.created_at,outbox.export_id
+        WHERE ranked.route_rank=1
+          AND (outbox.claim_token IS NULL OR outbox.claim_until<=$1)
+        ORDER BY outbox.attempts,outbox.created_at,outbox.export_id
         LIMIT 1 FOR UPDATE OF outbox SKIP LOCKED",
     )
     .bind(now)
@@ -850,7 +877,14 @@ async fn project_postgres(
             publications,
         }));
     }
-    let Some(candidate) = candidate_postgres(tx).await? else {
+    let Some(rule_id) = ready_rule_postgres(tx).await? else {
+        return Ok(retry.attempted.then_some(ProjectedOne {
+            receipt: false,
+            observation: false,
+            publications: retry.publications,
+        }));
+    };
+    let Some(candidate) = candidate_postgres(tx, &rule_id).await? else {
         return Ok(retry.attempted.then_some(ProjectedOne {
             receipt: false,
             observation: false,
@@ -878,8 +912,7 @@ async fn project_postgres(
     let runtime = sqlx::query(
         "SELECT initialized,detector_active,counter,pending,pending_active,pending_since,\
          applied_revision,applied_calibration_revision,applied_ledger_epoch,\
-         applied_series_id,next_sequence FROM semantic_rule_runtime \
-         WHERE rule_id=$1 FOR UPDATE",
+         applied_series_id,next_sequence FROM semantic_rule_runtime WHERE rule_id=$1",
     )
     .bind(&candidate.rule_id)
     .fetch_one(&mut **tx)
@@ -993,8 +1026,45 @@ async fn record_projection_failure_postgres(
     }))
 }
 
+async fn ready_rule_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<Option<String>, StorageError> {
+    sqlx::query_scalar(
+        "SELECT runtime.rule_id FROM semantic_rule_runtime AS runtime \
+         JOIN semantic_rules AS rule ON rule.rule_id=runtime.rule_id \
+         JOIN semantic_signals AS signal ON signal.signal_ref=rule.signal_ref \
+         JOIN LATERAL ( \
+           SELECT raw.received_at,raw.edge_node_id,raw.ledger_epoch,raw.pub_seq \
+           FROM raw_records AS raw \
+           WHERE raw.edge_node_id=signal.edge_node_id \
+             AND (convert_from(raw.record_json,'UTF8')::jsonb->>'series_key')=signal.series_key \
+             AND convert_from(raw.record_json,'UTF8')::jsonb->>'family'='measurement' \
+             AND NOT EXISTS(SELECT 1 FROM semantic_projection_receipts receipt \
+               WHERE receipt.rule_id=rule.rule_id AND receipt.ledger_epoch=raw.ledger_epoch \
+               AND receipt.pub_seq=raw.pub_seq) \
+             AND (NOT EXISTS(SELECT 1 FROM semantic_rule_starts start \
+               WHERE start.rule_id=rule.rule_id AND start.ledger_epoch=raw.ledger_epoch) \
+               OR raw.pub_seq>(SELECT MIN(start.start_after_pub_seq) \
+                 FROM semantic_rule_starts start WHERE start.rule_id=rule.rule_id \
+                 AND start.ledger_epoch=raw.ledger_epoch)) \
+             AND (NOT EXISTS(SELECT 1 FROM semantic_rule_ends finish \
+               WHERE finish.rule_id=rule.rule_id AND finish.ledger_epoch=raw.ledger_epoch) \
+               OR raw.pub_seq<=(SELECT finish.end_at_pub_seq FROM semantic_rule_ends finish \
+                 WHERE finish.rule_id=rule.rule_id AND finish.ledger_epoch=raw.ledger_epoch)) \
+           ORDER BY raw.received_at,raw.edge_node_id,raw.ledger_epoch,raw.pub_seq LIMIT 1 \
+         ) AS pending ON TRUE \
+         ORDER BY pending.received_at,pending.edge_node_id,pending.ledger_epoch,pending.pub_seq,\
+           rule.created_at,runtime.rule_id \
+         LIMIT 1 FOR UPDATE OF runtime SKIP LOCKED",
+    )
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(Into::into)
+}
+
 async fn candidate_postgres(
     tx: &mut Transaction<'_, Postgres>,
+    rule_id: &str,
 ) -> Result<Option<ProjectionCandidate>, StorageError> {
     let row = sqlx::query(
         "SELECT rule.rule_id,rule.signal_ref,signal.edge_node_id,raw.ledger_epoch,raw.pub_seq,\
@@ -1027,7 +1097,8 @@ async fn candidate_postgres(
                WHERE start.signal_ref=signal.signal_ref \
                  AND start.ledger_epoch=raw.ledger_epoch)) \
            ELSE signal.calibration_revision END \
-         WHERE convert_from(raw.record_json,'UTF8')::jsonb->>'family'='measurement' \
+         WHERE rule.rule_id=$1 \
+         AND convert_from(raw.record_json,'UTF8')::jsonb->>'family'='measurement' \
          AND NOT EXISTS(SELECT 1 FROM semantic_projection_receipts receipt \
            WHERE receipt.rule_id=rule.rule_id AND receipt.ledger_epoch=raw.ledger_epoch \
            AND receipt.pub_seq=raw.pub_seq) \
@@ -1036,8 +1107,9 @@ async fn candidate_postgres(
            OR raw.pub_seq<=(SELECT finish.end_at_pub_seq FROM semantic_rule_ends finish \
              WHERE finish.rule_id=rule.rule_id AND finish.ledger_epoch=raw.ledger_epoch)) \
          ORDER BY raw.received_at,raw.edge_node_id,raw.ledger_epoch,raw.pub_seq,rule.created_at \
-         LIMIT 1 FOR UPDATE OF raw SKIP LOCKED",
+         LIMIT 1 FOR UPDATE OF raw",
     )
+    .bind(rule_id)
     .fetch_optional(&mut **tx)
     .await?;
     row.map(|row| {
@@ -1459,6 +1531,46 @@ async fn reconcile_profiles_postgres(
     )
     .bind(now)
     .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn lock_edge_cursors_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    edge_node_id: &str,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "SELECT ledger_epoch FROM accepted_cursors WHERE edge_node_id=$1 \
+         ORDER BY ledger_epoch FOR UPDATE",
+    )
+    .bind(edge_node_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn lock_rule_runtime_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    rule_id: &str,
+) -> Result<(), StorageError> {
+    sqlx::query("SELECT rule_id FROM semantic_rule_runtime WHERE rule_id=$1 FOR UPDATE")
+        .bind(rule_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn lock_signal_runtimes_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    signal_ref: &str,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "SELECT runtime.rule_id FROM semantic_rule_runtime AS runtime \
+         JOIN semantic_rules AS rule ON rule.rule_id=runtime.rule_id \
+         WHERE rule.signal_ref=$1 ORDER BY runtime.rule_id FOR UPDATE OF runtime",
+    )
+    .bind(signal_ref)
+    .fetch_all(&mut **tx)
     .await?;
     Ok(())
 }

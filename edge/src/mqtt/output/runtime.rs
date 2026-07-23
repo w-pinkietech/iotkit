@@ -4,7 +4,7 @@ use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Outgoing, QoS};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::storage::{ClaimedOutput, Storage, StorageError};
+use crate::storage::{ClaimedOutput, OutputMark, Storage, StorageError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeliveryAction {
@@ -154,8 +154,8 @@ impl OutputRuntime {
                                 .mark_output_published(&export_id, &claim_token, unix_millis()?)
                                 .await
                             {
-                                Ok(true) => return Ok(true),
-                                Ok(false) => {
+                                Ok(OutputMark::Published) => return Ok(true),
+                                Ok(OutputMark::ClaimLost) => {
                                     return Err(OutputRuntimeError::ClaimLost(export_id));
                                 }
                                 Err(error) => {

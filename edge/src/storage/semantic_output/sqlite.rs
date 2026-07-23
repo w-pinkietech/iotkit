@@ -796,12 +796,13 @@ async fn claim_sqlite(
             JOIN semantic_observations AS observation
               ON observation.observation_id=outbox.observation_id
             WHERE outbox.published_at IS NULL
-              AND (outbox.claim_token IS NULL OR outbox.claim_until<=?)
         )
         SELECT outbox.export_id,outbox.route_id,outbox.topic,outbox.qos,outbox.retain,
           outbox.payload_json,outbox.attempts
         FROM output_outbox AS outbox JOIN ranked ON ranked.export_id=outbox.export_id
-        WHERE ranked.route_rank=1 ORDER BY outbox.attempts,outbox.created_at,outbox.export_id
+        WHERE ranked.route_rank=1
+          AND (outbox.claim_token IS NULL OR outbox.claim_until<=?)
+        ORDER BY outbox.attempts,outbox.created_at,outbox.export_id
         LIMIT 1",
     )
     .bind(now)

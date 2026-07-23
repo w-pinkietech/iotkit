@@ -7,7 +7,7 @@ use iotkit_edge::{
     },
     composition::registered_output_adapters,
     semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
-    storage::{AcceptBatch, RawRecord, Storage, StorageProfile},
+    storage::{AcceptBatch, OutputMark, RawRecord, Storage, StorageProfile},
 };
 use serde_json::{Map, Value};
 use sqlx::{Executor, PgPool, SqlitePool, sqlite::SqliteConnectOptions};
@@ -487,7 +487,7 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
     inspection.close().await;
     drop(semantics);
     drop(storage);
-    let restarted = Storage::connect(StorageProfile::Postgres { dsn })
+    let restarted = Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
         .await
         .expect("restart PostgreSQL storage");
     Semantics::new(restarted.clone())
@@ -495,6 +495,249 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
         .await
         .expect("retry after restart");
     assert_eq!(restarted.pending_output_count().await.unwrap(), 2);
+
+    let ordered_rule = Semantics::new(restarted.clone())
+        .create_rule(
+            SemanticRuleDraft {
+                series_key: "series-temperature-03".into(),
+                display_name: "Ordered temperature".into(),
+                ..numeric_rule()
+            },
+            10,
+        )
+        .await
+        .expect("create ordered rule");
+    accept(&restarted, 3, "series-temperature-03", 23.0).await;
+    accept(&restarted, 4, "series-temperature-03", 24.0).await;
+
+    let inspection = PgPool::connect(&dsn).await.expect("inspection pool");
+    let mut raw_lock = inspection.begin().await.expect("raw lock transaction");
+    sqlx::query(
+        "SELECT pub_seq FROM raw_records WHERE edge_node_id=$1 AND ledger_epoch=$2 \
+         AND pub_seq=3 FOR UPDATE",
+    )
+    .bind("edge-node-01")
+    .bind("epoch-01")
+    .fetch_one(&mut *raw_lock)
+    .await
+    .expect("lock oldest raw row");
+    let projection = tokio::spawn({
+        let storage = restarted.clone();
+        async move {
+            Semantics::new(storage)
+                .project_pending(1, registered_output_adapters())
+                .await
+        }
+    });
+    tokio::pin!(projection);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(150), &mut projection)
+            .await
+            .is_err(),
+        "a projector must wait for the same rule's oldest raw row"
+    );
+    raw_lock.rollback().await.expect("release oldest raw row");
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut projection)
+        .await
+        .expect("ordered projector timed out")
+        .expect("join ordered projector")
+        .expect("ordered projection");
+    let first_projected: i64 = sqlx::query_scalar(
+        "SELECT source_pub_seq FROM semantic_observations WHERE rule_id=$1 \
+         ORDER BY observation_row_id LIMIT 1",
+    )
+    .bind(&ordered_rule.rule_id)
+    .fetch_one(&inspection)
+    .await
+    .expect("first ordered observation");
+    assert_eq!(first_projected, 3);
+
+    let mut cursor_lock = inspection.begin().await.expect("cursor lock transaction");
+    sqlx::query(
+        "SELECT accepted_through FROM accepted_cursors WHERE edge_node_id=$1 \
+         AND ledger_epoch=$2 FOR UPDATE",
+    )
+    .bind("edge-node-01")
+    .bind("epoch-01")
+    .fetch_one(&mut *cursor_lock)
+    .await
+    .expect("lock accepted cursor");
+    let revision = tokio::spawn({
+        let storage = restarted.clone();
+        let rule_id = ordered_rule.rule_id.clone();
+        async move {
+            Semantics::new(storage)
+                .revise_rule(&rule_id, "Ordered revised", numeric_rule().spec, 20)
+                .await
+        }
+    });
+    tokio::pin!(revision);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(150), &mut revision)
+            .await
+            .is_err(),
+        "future-only revision must serialize on the accepted cursor"
+    );
+    cursor_lock
+        .rollback()
+        .await
+        .expect("release accepted cursor");
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut revision)
+        .await
+        .expect("revision timed out")
+        .expect("join revision")
+        .expect("revise rule");
+
+    let mut calibration_cursor_lock = inspection.begin().await.expect("calibration cursor lock");
+    sqlx::query(
+        "SELECT accepted_through FROM accepted_cursors WHERE edge_node_id=$1 \
+         AND ledger_epoch=$2 FOR UPDATE",
+    )
+    .bind("edge-node-01")
+    .bind("epoch-01")
+    .fetch_one(&mut *calibration_cursor_lock)
+    .await
+    .expect("lock calibration cursor");
+    let calibration = tokio::spawn({
+        let storage = restarted.clone();
+        let signal_ref = ordered_rule.signal_ref.clone();
+        async move {
+            Semantics::new(storage)
+                .update_calibration(&signal_ref, 2.0, 0.0, 30)
+                .await
+        }
+    });
+    tokio::pin!(calibration);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(150), &mut calibration)
+            .await
+            .is_err(),
+        "future-only calibration must serialize on the accepted cursor"
+    );
+    calibration_cursor_lock
+        .rollback()
+        .await
+        .expect("release calibration cursor");
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut calibration)
+        .await
+        .expect("calibration timed out")
+        .expect("join calibration")
+        .expect("update calibration");
+    accept(&restarted, 5, "series-temperature-03", 25.0).await;
+    Semantics::new(restarted.clone())
+        .project_pending(10, registered_output_adapters())
+        .await
+        .expect("project across revision and calibration boundaries");
+    let applied: Vec<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT source_pub_seq,revision,calibration_revision FROM semantic_observations \
+         WHERE rule_id=$1 AND source_pub_seq IN (4,5) ORDER BY source_pub_seq",
+    )
+    .bind(&ordered_rule.rule_id)
+    .fetch_all(&inspection)
+    .await
+    .expect("read applied boundaries");
+    assert_eq!(applied, vec![(4, 1, 1), (5, 2, 2)]);
+
+    accept(&restarted, 6, "series-temperature-03", 26.0).await;
+    accept(&restarted, 7, "series-temperature-01", 27.0).await;
+    let mut per_rule_raw_lock = inspection
+        .begin()
+        .await
+        .expect("per-rule raw lock transaction");
+    sqlx::query(
+        "SELECT pub_seq FROM raw_records WHERE edge_node_id=$1 AND ledger_epoch=$2 \
+         AND pub_seq=6 FOR UPDATE",
+    )
+    .bind("edge-node-01")
+    .bind("epoch-01")
+    .fetch_one(&mut *per_rule_raw_lock)
+    .await
+    .expect("lock one rule's oldest raw row");
+    let blocked_rule_projection = tokio::spawn({
+        let storage = restarted.clone();
+        async move {
+            Semantics::new(storage)
+                .project_pending(1, registered_output_adapters())
+                .await
+        }
+    });
+    tokio::pin!(blocked_rule_projection);
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            &mut blocked_rule_projection
+        )
+        .await
+        .is_err(),
+        "the projector chosen for the locked rule must remain blocked"
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        Semantics::new(restarted.clone()).project_pending(1, registered_output_adapters()),
+    )
+    .await
+    .expect("a different rule must not be globally serialized")
+    .expect("project a different rule");
+    let independently_projected: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM semantic_observations WHERE source_pub_seq=7")
+            .fetch_one(&inspection)
+            .await
+            .expect("read independently projected observation");
+    assert_eq!(independently_projected, 1);
+    per_rule_raw_lock
+        .rollback()
+        .await
+        .expect("release per-rule raw row");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        &mut blocked_rule_projection,
+    )
+    .await
+    .expect("blocked rule projector timed out")
+    .expect("join blocked rule projector")
+    .expect("project blocked rule after release");
+
+    let first_claim = restarted
+        .claim_output("postgres-oldest", 100, 1_000)
+        .await
+        .expect("claim PostgreSQL oldest")
+        .expect("PostgreSQL oldest output");
+    let second_claim = restarted
+        .claim_output("postgres-other", 101, 1_000)
+        .await
+        .expect("claim PostgreSQL other route")
+        .expect("PostgreSQL other route remains eligible");
+    assert_ne!(first_claim.route_id, second_claim.route_id);
+    let third_claim = restarted
+        .claim_output("postgres-third", 101, 1_000)
+        .await
+        .expect("claim PostgreSQL third route")
+        .expect("PostgreSQL third route remains eligible");
+    assert_ne!(first_claim.route_id, third_claim.route_id);
+    assert_ne!(second_claim.route_id, third_claim.route_id);
+    assert!(
+        restarted
+            .claim_output("postgres-successor", 101, 1_000)
+            .await
+            .expect("check PostgreSQL blocked successor")
+            .is_none()
+    );
+    assert_eq!(
+        restarted
+            .mark_output_published(&first_claim.export_id, "postgres-oldest", 102)
+            .await
+            .expect("mark PostgreSQL output"),
+        OutputMark::Published
+    );
+    assert_eq!(
+        restarted
+            .mark_output_published(&first_claim.export_id, "postgres-oldest", 103)
+            .await
+            .expect("replay after a simulated lost PostgreSQL commit response"),
+        OutputMark::Published,
+        "PostgreSQL must read back an already-published durable outcome"
+    );
+    inspection.close().await;
 }
 
 #[tokio::test]
@@ -597,17 +840,85 @@ async fn claim_is_read_only_until_puback_mark_and_stale_claim_cannot_mark() {
         .expect("reclaim")
         .expect("row");
     assert_eq!(reclaimed.export_id, claimed.export_id);
-    assert!(
-        !storage
+    assert_eq!(
+        storage
             .mark_output_published(&claimed.export_id, "claim-old", 22)
             .await
-            .expect("stale mark")
+            .expect("stale mark"),
+        OutputMark::ClaimLost
     );
-    assert!(
+    assert_eq!(
         storage
             .mark_output_published(&claimed.export_id, "claim-new", 23)
             .await
-            .expect("matching mark")
+            .expect("matching mark"),
+        OutputMark::Published
+    );
+    assert_eq!(
+        storage
+            .mark_output_published(&claimed.export_id, "claim-new", 24)
+            .await
+            .expect("replay after a lost commit response"),
+        OutputMark::Published,
+        "a retry must read back the already-published durable outcome"
     );
     assert_eq!(storage.pending_output_count().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn live_oldest_route_lease_blocks_its_successor_but_not_another_route() {
+    let (_directory, storage) = store().await;
+    let semantics = Semantics::new(storage.clone());
+    semantics
+        .create_rule(numeric_rule(), 1)
+        .await
+        .expect("create first rule");
+    semantics
+        .create_rule(
+            SemanticRuleDraft {
+                series_key: "series-temperature-02".into(),
+                display_name: "Temperature two".into(),
+                ..numeric_rule()
+            },
+            2,
+        )
+        .await
+        .expect("create second rule");
+    OutputProfiles::new(storage.clone(), registered_output_adapters())
+        .activate("Generic", "iotkit.mqtt-json.v1", Map::new(), 3)
+        .await
+        .expect("activate routes");
+    accept_values(
+        &storage,
+        &[
+            (1, "series-temperature-01", vec![21.0]),
+            (2, "series-temperature-01", vec![22.0]),
+            (3, "series-temperature-02", vec![23.0]),
+        ],
+    )
+    .await;
+    semantics
+        .project_pending(10, registered_output_adapters())
+        .await
+        .expect("project outputs");
+
+    let oldest = storage
+        .claim_output("claim-oldest", 10, 100)
+        .await
+        .expect("claim oldest")
+        .expect("oldest output");
+    let other_route = storage
+        .claim_output("claim-other", 20, 100)
+        .await
+        .expect("claim another route")
+        .expect("another route remains eligible");
+    assert_ne!(other_route.route_id, oldest.route_id);
+    assert!(
+        storage
+            .claim_output("claim-successor", 20, 100)
+            .await
+            .expect("check blocked successor")
+            .is_none(),
+        "a live oldest lease must keep the same route's successor ineligible"
+    );
 }
