@@ -23,6 +23,92 @@ async fn service() -> (TempDir, AccountService) {
     (directory, AccountService::new(storage))
 }
 
+#[tokio::test]
+async fn local_recovery_is_restricted_to_active_system_administrators() {
+    let (_directory, service) = service().await;
+    let owner = service
+        .create_initial_system_admin(
+            "owner",
+            "System Owner",
+            Password::new("initial owner password").unwrap(),
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+    let owner_principal = principal(
+        &owner.account_ref,
+        &owner.login_id,
+        AccountRole::SystemAdmin,
+        false,
+    );
+    service
+        .create_account(
+            &owner_principal,
+            "ordinary-admin",
+            "Ordinary Admin",
+            AccountRole::Admin,
+            Password::new("ordinary admin password").unwrap(),
+            1_700_000_000_100,
+        )
+        .await
+        .unwrap();
+    let disabled_owner = service
+        .create_account(
+            &owner_principal,
+            "disabled-owner",
+            "Disabled Owner",
+            AccountRole::SystemAdmin,
+            Password::new("disabled owner password").unwrap(),
+            1_700_000_000_150,
+        )
+        .await
+        .unwrap();
+    service
+        .disable_account(
+            &owner_principal,
+            &disabled_owner.account_ref,
+            disabled_owner.revision,
+            1_700_000_000_175,
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        service
+            .recover_system_admin_password(
+                "ordinary-admin",
+                Password::new("replacement password value").unwrap(),
+                1_700_000_000_200,
+            )
+            .await,
+        Err(AccountApplicationError::Authorization(
+            AuthorizationError::Forbidden
+        ))
+    ));
+    assert!(matches!(
+        service
+            .recover_system_admin_password(
+                "disabled-owner",
+                Password::new("replacement password value").unwrap(),
+                1_700_000_000_250,
+            )
+            .await,
+        Err(AccountApplicationError::Authorization(
+            AuthorizationError::Forbidden
+        ))
+    ));
+    let recovered = service
+        .recover_system_admin_password(
+            "owner",
+            Password::new("replacement owner password").unwrap(),
+            1_700_000_000_300,
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovered.role, AccountRole::SystemAdmin);
+    assert!(!recovered.must_change_password);
+}
+
 fn principal(
     account_ref: &str,
     login_id: &str,

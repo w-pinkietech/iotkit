@@ -82,9 +82,6 @@ pub(super) async fn restore(
     )
     .fetch_one(&pool)
     .await?;
-    if table_count != 0 {
-        return Err(BackupError::DestinationExists);
-    }
     let acquired: bool = sqlx::query_scalar(
         "SELECT pg_try_advisory_lock(\
          hashtextextended('iotkit-edge-storage:' || current_database(), 0))",
@@ -93,6 +90,24 @@ pub(super) async fn restore(
     .await?;
     if !acquired {
         return Err(BackupError::DestinationExists);
+    }
+    let restore_state: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('iotkit.restore_state', true)")
+            .fetch_one(&pool)
+            .await?;
+    if table_count != 0 && restore_state.as_deref() != Some("incomplete") {
+        return Err(BackupError::DestinationExists);
+    }
+    set_restore_state(&pool, "incomplete").await?;
+    if table_count != 0 {
+        let mut cleanup = pool.begin().await?;
+        sqlx::query("DROP SCHEMA public CASCADE")
+            .execute(&mut *cleanup)
+            .await?;
+        sqlx::query("CREATE SCHEMA public")
+            .execute(&mut *cleanup)
+            .await?;
+        cleanup.commit().await?;
     }
 
     let directory =
@@ -146,12 +161,29 @@ pub(super) async fn restore(
         let inspected = inspect_pool(&pool).await?;
         sqlite::validate_manifest(&manifest, &inspected)?;
         prepare_restored_pool(&pool, &manifest).await?;
+        set_restore_state(&pool, "ready").await?;
         Ok(manifest)
     }
     .await;
     pool.close().await;
     let _ = fs::remove_dir_all(directory);
     result
+}
+
+async fn set_restore_state(pool: &PgPool, state: &str) -> Result<(), BackupError> {
+    if !matches!(state, "incomplete" | "ready") {
+        return Err(BackupError::PostgresConfiguration);
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let quoted = format!("\"{}\"", database.replace('"', "\"\""));
+    sqlx::query(&format!(
+        "ALTER DATABASE {quoted} SET iotkit.restore_state = '{state}'"
+    ))
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn inspect_transaction(

@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 
 mod activation;
 mod auth;
+mod recovery;
 mod semantic_output;
 pub use activation::{ActivationCommand, DescriptorApply, EdgeNode, EdgeNodeState};
 pub use auth::{
@@ -116,6 +117,8 @@ pub enum StorageError {
     Guard(std::io::Error),
     #[error("storage is already in use by another IoTKit Edge process")]
     AlreadyInUse,
+    #[error("PostgreSQL restore is incomplete and the database is quarantined")]
+    RestoreIncomplete,
     #[error(
         "the database uses the unsupported pre-Rust IoTKit Edge schema; start with a fresh database"
     )]
@@ -130,6 +133,12 @@ pub enum StorageError {
     RecordConflict { sequence: i64 },
     #[error("Edge Node is not active for IoTKit Edge custody")]
     EdgeNodeNotActive,
+    #[error("restored archive cursor requires operator recovery review")]
+    ArchiveRecoveryRequired,
+    #[error("no restored archive-loss decision is pending for this Edge Node stream")]
+    NoArchiveLossDecision,
+    #[error("confirmed IoTKit Edge ID does not match this IoTKit Edge")]
+    EdgeIdentityMismatch,
     #[error("Edge Node activation result conflicts with the pending activation")]
     ActivationConflict,
     #[error("descriptor revision conflicts with the previously accepted content")]
@@ -215,6 +224,7 @@ impl Storage {
                     .connect(&dsn)
                     .await?;
                 let guard = acquire_postgres_guard(&pool).await?;
+                reject_incomplete_postgres_restore(&pool).await?;
                 validate_postgres_durability(&pool).await?;
                 reject_legacy_postgres_schema(&pool).await?;
                 POSTGRES_MIGRATOR.run(&pool).await?;
@@ -291,7 +301,69 @@ impl Storage {
                 if active.as_deref() != Some("active") {
                     return Err(StorageError::EdgeNodeNotActive);
                 }
+                let pending: Option<String> = sqlx::query_scalar(
+                    "SELECT checks.restore_id FROM edge_restore_cursor_checks AS checks \
+                     JOIN edge_restore_events AS events ON events.restore_id=checks.restore_id \
+                     WHERE checks.edge_node_id=? AND checks.ledger_epoch=? \
+                       AND checks.state='pending' \
+                     ORDER BY events.restored_at DESC, checks.restore_id DESC LIMIT 1",
+                )
+                .bind(&batch.edge_node_id)
+                .bind(&batch.ledger_epoch)
+                .fetch_optional(&mut *transaction)
+                .await?;
+                let cursor: i64 = sqlx::query_scalar(
+                    "SELECT accepted_through FROM accepted_cursors \
+                     WHERE edge_node_id=? AND ledger_epoch=?",
+                )
+                .bind(&batch.edge_node_id)
+                .bind(&batch.ledger_epoch)
+                .fetch_optional(&mut *transaction)
+                .await?
+                .unwrap_or(0);
+                if let Some(restore_id) = pending.as_deref()
+                    && batch.records[0].pub_seq > cursor + 1
+                {
+                    sqlx::query(
+                        "UPDATE edge_restore_cursor_checks SET state='recovery_required', \
+                         observed_cursor_start=?, updated_at=? WHERE restore_id=? \
+                         AND edge_node_id=? AND ledger_epoch=? AND state='pending'",
+                    )
+                    .bind(batch.records[0].pub_seq)
+                    .bind(batch.received_at)
+                    .bind(restore_id)
+                    .bind(&batch.edge_node_id)
+                    .bind(&batch.ledger_epoch)
+                    .execute(&mut *transaction)
+                    .await?;
+                    sqlx::query(
+                        "UPDATE edge_node_activations SET state='recovery_hold', \
+                         revision=revision+1, updated_at=? WHERE edge_node_id=? \
+                         AND ledger_epoch=? AND state='active'",
+                    )
+                    .bind(batch.received_at)
+                    .bind(&batch.edge_node_id)
+                    .bind(&batch.ledger_epoch)
+                    .execute(&mut *transaction)
+                    .await?;
+                    transaction.commit().await?;
+                    return Err(StorageError::ArchiveRecoveryRequired);
+                }
                 let accepted_through = accept_sqlite(&mut transaction, &batch).await?;
+                if let Some(restore_id) = pending {
+                    sqlx::query(
+                        "UPDATE edge_restore_cursor_checks SET state='matched', \
+                         observed_cursor_start=?, updated_at=? WHERE restore_id=? \
+                         AND edge_node_id=? AND ledger_epoch=? AND state='pending'",
+                    )
+                    .bind(batch.records[0].pub_seq)
+                    .bind(batch.received_at)
+                    .bind(restore_id)
+                    .bind(&batch.edge_node_id)
+                    .bind(&batch.ledger_epoch)
+                    .execute(&mut *transaction)
+                    .await?;
+                }
                 transaction.commit().await?;
                 Ok(AcceptResult { accepted_through })
             }
@@ -308,7 +380,69 @@ impl Storage {
                 if active.as_deref() != Some("active") {
                     return Err(StorageError::EdgeNodeNotActive);
                 }
+                let pending: Option<String> = sqlx::query_scalar(
+                    "SELECT checks.restore_id FROM edge_restore_cursor_checks AS checks \
+                     JOIN edge_restore_events AS events ON events.restore_id=checks.restore_id \
+                     WHERE checks.edge_node_id=$1 AND checks.ledger_epoch=$2 \
+                       AND checks.state='pending' \
+                     ORDER BY events.restored_at DESC, checks.restore_id DESC LIMIT 1",
+                )
+                .bind(&batch.edge_node_id)
+                .bind(&batch.ledger_epoch)
+                .fetch_optional(&mut *transaction)
+                .await?;
+                let cursor: i64 = sqlx::query_scalar(
+                    "SELECT accepted_through FROM accepted_cursors \
+                     WHERE edge_node_id=$1 AND ledger_epoch=$2",
+                )
+                .bind(&batch.edge_node_id)
+                .bind(&batch.ledger_epoch)
+                .fetch_optional(&mut *transaction)
+                .await?
+                .unwrap_or(0);
+                if let Some(restore_id) = pending.as_deref()
+                    && batch.records[0].pub_seq > cursor + 1
+                {
+                    sqlx::query(
+                        "UPDATE edge_restore_cursor_checks SET state='recovery_required', \
+                         observed_cursor_start=$1, updated_at=$2 WHERE restore_id=$3 \
+                         AND edge_node_id=$4 AND ledger_epoch=$5 AND state='pending'",
+                    )
+                    .bind(batch.records[0].pub_seq)
+                    .bind(batch.received_at)
+                    .bind(restore_id)
+                    .bind(&batch.edge_node_id)
+                    .bind(&batch.ledger_epoch)
+                    .execute(&mut *transaction)
+                    .await?;
+                    sqlx::query(
+                        "UPDATE edge_node_activations SET state='recovery_hold', \
+                         revision=revision+1, updated_at=$1 WHERE edge_node_id=$2 \
+                         AND ledger_epoch=$3 AND state='active'",
+                    )
+                    .bind(batch.received_at)
+                    .bind(&batch.edge_node_id)
+                    .bind(&batch.ledger_epoch)
+                    .execute(&mut *transaction)
+                    .await?;
+                    transaction.commit().await?;
+                    return Err(StorageError::ArchiveRecoveryRequired);
+                }
                 let accepted_through = accept_postgres(&mut transaction, &batch).await?;
+                if let Some(restore_id) = pending {
+                    sqlx::query(
+                        "UPDATE edge_restore_cursor_checks SET state='matched', \
+                         observed_cursor_start=$1, updated_at=$2 WHERE restore_id=$3 \
+                         AND edge_node_id=$4 AND ledger_epoch=$5 AND state='pending'",
+                    )
+                    .bind(batch.records[0].pub_seq)
+                    .bind(batch.received_at)
+                    .bind(restore_id)
+                    .bind(&batch.edge_node_id)
+                    .bind(&batch.ledger_epoch)
+                    .execute(&mut *transaction)
+                    .await?;
+                }
                 transaction.commit().await?;
                 Ok(AcceptResult { accepted_through })
             }
@@ -621,6 +755,17 @@ async fn validate_postgres_durability(pool: &PgPool) -> Result<(), StorageError>
                 "PostgreSQL {setting} must be {expected}"
             )));
         }
+    }
+    Ok(())
+}
+
+async fn reject_incomplete_postgres_restore(pool: &PgPool) -> Result<(), StorageError> {
+    let state: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('iotkit.restore_state', true)")
+            .fetch_one(pool)
+            .await?;
+    if state.as_deref() == Some("incomplete") {
+        return Err(StorageError::RestoreIncomplete);
     }
     Ok(())
 }

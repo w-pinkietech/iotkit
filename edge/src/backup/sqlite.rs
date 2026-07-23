@@ -23,9 +23,10 @@ pub(super) async fn snapshot(
     crypto::protect_directory(&directory)?;
     let path = directory.join("snapshot.db");
     let result = async {
-        if fs2::available_space(&directory)? < fs::metadata(source_path)?.len() {
-            return Err(BackupError::InsufficientCapacity);
-        }
+        ensure_snapshot_capacity(
+            fs2::available_space(&directory)?,
+            fs::metadata(source_path)?.len(),
+        )?;
         let encoded = path.to_string_lossy().into_owned();
         sqlx::query("VACUUM INTO ?")
             .bind(encoded)
@@ -41,6 +42,14 @@ pub(super) async fn snapshot(
         let _ = fs::remove_dir_all(directory);
     }
     result
+}
+
+fn ensure_snapshot_capacity(available: u64, source_bytes: u64) -> Result<(), BackupError> {
+    if available < source_bytes {
+        Err(BackupError::InsufficientCapacity)
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) async fn inspect_path(path: &Path) -> Result<SnapshotInfo, BackupError> {
@@ -264,4 +273,18 @@ pub(super) fn validate_manifest(
         return Err(BackupError::ManifestMismatch);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capacity_preflight_rejects_a_snapshot_larger_than_available_space() {
+        assert!(matches!(
+            ensure_snapshot_capacity(99, 100),
+            Err(BackupError::InsufficientCapacity)
+        ));
+        assert!(ensure_snapshot_capacity(100, 100).is_ok());
+    }
 }

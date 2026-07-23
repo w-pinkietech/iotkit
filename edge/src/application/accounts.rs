@@ -42,6 +42,35 @@ impl AccountService {
             .map_err(Into::into)
     }
 
+    pub async fn recover_system_admin_password(
+        &self,
+        login_id: &str,
+        password: Password,
+        now: i64,
+    ) -> Result<Account, AccountApplicationError> {
+        let credential = self
+            .storage
+            .get_account_credential_by_login(login_id)
+            .await?;
+        if credential.account.role != AccountRole::SystemAdmin
+            || credential.account.state != crate::auth::principal::AccountState::Active
+        {
+            return Err(AuthorizationError::Forbidden.into());
+        }
+        let replacement_hash = hash_password(&password)?;
+        self.storage
+            .replace_account_password(
+                &credential.account.account_ref,
+                credential.account.revision,
+                replacement_hash,
+                false,
+                AuditActor::local_cli(),
+                now,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create_account(
         &self,

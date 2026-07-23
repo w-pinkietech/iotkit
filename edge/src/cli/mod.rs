@@ -17,16 +17,13 @@ use serde_json::json;
 use crate::{
     Application,
     application::accounts::AccountService,
-    auth::{
-        password::{Password, hash_password},
-        principal::AccountRole,
-    },
+    auth::{password::Password, principal::AccountRole},
     backup::{
         create_encrypted_backup, restore_encrypted_backup_postgres, restore_encrypted_backup_sqlite,
     },
-    diagnostics::{diagnostics, storage_status},
+    diagnostics::{diagnostics_with_certificate, storage_status},
     lifecycle::ExitReason,
-    storage::{AuditActor, Storage, StorageProfile},
+    storage::{Storage, StorageProfile},
 };
 
 #[derive(Debug, Parser)]
@@ -39,7 +36,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run the IoTKit Edge server.
-    Serve,
+    Serve(Box<ServeArgs>),
     /// Create or restore an encrypted operational backup.
     Backup {
         #[command(subcommand)]
@@ -60,6 +57,53 @@ pub enum Command {
 pub enum BackupCommand {
     Create(BackupCreateArgs),
     Restore(BackupRestoreArgs),
+    AcceptArchiveLoss(AcceptArchiveLossArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ServeArgs {
+    #[command(flatten)]
+    pub storage: StorageArgs,
+    #[arg(long)]
+    pub edge_id: String,
+    #[arg(long)]
+    pub broker_url: String,
+    #[arg(long, default_value = "iotkit-edge")]
+    pub client_id: String,
+    #[arg(long)]
+    pub username: String,
+    #[arg(long)]
+    pub password_file: PathBuf,
+    #[arg(long)]
+    pub trust_mode: Option<String>,
+    #[arg(long)]
+    pub ca_file: Option<PathBuf>,
+    #[arg(long)]
+    pub allow_insecure: bool,
+    #[arg(long, default_value = "127.0.0.1:8080")]
+    pub http_listen: String,
+    #[arg(long)]
+    pub public_origin: String,
+    #[arg(long)]
+    pub development_http: bool,
+    #[arg(long)]
+    pub broker_certificate_file: Option<PathBuf>,
+    #[arg(long, default_value_t = 90)]
+    pub storage_warning_percent: i32,
+    #[arg(long)]
+    pub output_broker_url: Option<String>,
+    #[arg(long, default_value = "iotkit-edge-output")]
+    pub output_client_id: String,
+    #[arg(long)]
+    pub output_username: Option<String>,
+    #[arg(long)]
+    pub output_password_file: Option<PathBuf>,
+    #[arg(long)]
+    pub output_trust_mode: Option<String>,
+    #[arg(long)]
+    pub output_ca_file: Option<PathBuf>,
+    #[arg(long)]
+    pub output_allow_insecure: bool,
 }
 
 #[derive(Debug, Args)]
@@ -83,11 +127,27 @@ pub struct BackupRestoreArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AcceptArchiveLossArgs {
+    #[command(flatten)]
+    pub storage: StorageArgs,
+    #[arg(long)]
+    pub edge_node_id: String,
+    #[arg(long)]
+    pub ledger_epoch: String,
+    #[arg(long)]
+    pub confirm_edge_id: String,
+    #[arg(long)]
+    pub reason: String,
+}
+
+#[derive(Debug, Args)]
 pub struct DiagnoseArgs {
     #[command(flatten)]
     pub storage: StorageArgs,
     #[arg(long = "storage-warning-percent", default_value_t = 90)]
     pub storage_warning_percent: i32,
+    #[arg(long = "broker-certificate-file")]
+    pub broker_certificate_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -152,6 +212,10 @@ pub enum CliError {
     UnexpectedPostgresConfiguration,
     #[error("--postgres-config is required for postgres storage")]
     MissingPostgresConfiguration,
+    #[error("usage: iotkit-edge <serve|account|backup|diagnose|capacity> [options]")]
+    Usage,
+    #[error("serve configuration is invalid: {0}")]
+    ServeConfiguration(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -169,8 +233,11 @@ pub enum CliError {
 }
 
 pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
-    match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => Ok(Application::new().run().await),
+    match cli.command.ok_or(CliError::Usage)? {
+        Command::Serve(args) => {
+            args.validate()?;
+            Ok(Application::new().run().await)
+        }
         Command::Backup { command } => {
             match command {
                 BackupCommand::Create(args) => {
@@ -200,13 +267,35 @@ pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
                     };
                     write_json(&manifest)?;
                 }
+                BackupCommand::AcceptArchiveLoss(args) => {
+                    let storage = args.storage.connect().await?;
+                    storage
+                        .accept_restored_archive_loss(
+                            &args.edge_node_id,
+                            &args.ledger_epoch,
+                            &args.confirm_edge_id,
+                            &args.reason,
+                            unix_milliseconds()?,
+                        )
+                        .await?;
+                    write_json(&json!({
+                        "status": "archive_lost",
+                        "edge_node_id": args.edge_node_id,
+                        "ledger_epoch": args.ledger_epoch,
+                    }))?;
+                }
             }
             Ok(ExitReason::Requested)
         }
         Command::Diagnose(args) => {
             let storage = args.storage.connect().await?;
-            let report =
-                diagnostics(&storage, args.storage_warning_percent, unix_milliseconds()?).await?;
+            let report = diagnostics_with_certificate(
+                &storage,
+                args.storage_warning_percent,
+                unix_milliseconds()?,
+                args.broker_certificate_file.as_deref(),
+            )
+            .await?;
             write_json(&report)?;
             Ok(ExitReason::Requested)
         }
@@ -233,16 +322,10 @@ pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
                 AccountCommand::Recover(args) => {
                     let password = Password::new(read_owner_only_secret(&args.password_file)?)?;
                     let storage = args.storage.connect().await?;
-                    let credential = storage
-                        .get_account_credential_by_login(&args.login_id)
-                        .await?;
-                    let account = storage
-                        .replace_account_password(
-                            &credential.account.account_ref,
-                            credential.account.revision,
-                            hash_password(&password)?,
-                            false,
-                            AuditActor::local_cli(),
+                    let account = AccountService::new(storage)
+                        .recover_system_admin_password(
+                            &args.login_id,
+                            password,
                             unix_milliseconds()?,
                         )
                         .await?;
@@ -251,6 +334,54 @@ pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
             }
             Ok(ExitReason::Requested)
         }
+    }
+}
+
+impl ServeArgs {
+    fn validate(&self) -> Result<(), CliError> {
+        self.storage.validate_profile()?;
+        if self.edge_id.is_empty()
+            || self.broker_url.is_empty()
+            || self.username.is_empty()
+            || self.public_origin.is_empty()
+        {
+            return Err(CliError::ServeConfiguration(
+                "edge ID, broker URL, username, and public origin are required".into(),
+            ));
+        }
+        let _password = read_owner_only_secret(&self.password_file)?;
+        if self.allow_insecure && (self.trust_mode.is_some() || self.ca_file.is_some()) {
+            return Err(CliError::ServeConfiguration(
+                "allow-insecure conflicts with TLS trust options".into(),
+            ));
+        }
+        if !self.allow_insecure && self.trust_mode.is_none() {
+            return Err(CliError::ServeConfiguration(
+                "trust-mode is required for broker TLS".into(),
+            ));
+        }
+        if self.output_broker_url.is_some() {
+            if self.output_username.as_deref().unwrap_or("").is_empty()
+                || self.output_password_file.is_none()
+            {
+                return Err(CliError::ServeConfiguration(
+                    "output username and password file are required".into(),
+                ));
+            }
+            let _output_password =
+                read_owner_only_secret(self.output_password_file.as_deref().unwrap())?;
+            if !self.output_allow_insecure && self.output_trust_mode.is_none() {
+                return Err(CliError::ServeConfiguration(
+                    "output trust-mode is required for TLS".into(),
+                ));
+            }
+        }
+        if !(50..=99).contains(&self.storage_warning_percent) {
+            return Err(CliError::ServeConfiguration(
+                "storage warning percent must be between 50 and 99".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -291,7 +422,12 @@ impl StorageArgs {
                 return Err(CliError::ProfileMetadata);
             }
         }
-        if self.profile == StorageProfileArg::Embedded && self.postgres_config.is_some() {
+        if self.profile == StorageProfileArg::Embedded
+            && self
+                .postgres_config
+                .as_ref()
+                .is_some_and(|path| !path.as_os_str().is_empty())
+        {
             return Err(CliError::UnexpectedPostgresConfiguration);
         }
         Ok(())
@@ -301,6 +437,7 @@ impl StorageArgs {
         let path = self
             .postgres_config
             .as_ref()
+            .filter(|path| !path.as_os_str().is_empty())
             .ok_or(CliError::MissingPostgresConfiguration)?;
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]

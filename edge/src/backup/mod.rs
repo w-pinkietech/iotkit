@@ -126,6 +126,12 @@ pub async fn create_encrypted_backup(
         OperationBackend::Postgres { pool, dsn } => postgres::snapshot(pool, dsn).await?,
     };
     let result = async {
+        let destination_parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(destination_parent)?;
+        ensure_encryption_capacity(
+            fs2::available_space(destination_parent)?,
+            fs::metadata(&snapshot_path)?.len(),
+        )?;
         let digest = file_sha256(&snapshot_path)?;
         let manifest = BackupManifest {
             format_version: 1,
@@ -182,6 +188,18 @@ fn validate_passphrase(passphrase: &str) -> Result<(), BackupError> {
         return Err(BackupError::InvalidPassphrase);
     }
     Ok(())
+}
+
+fn ensure_encryption_capacity(available: u64, payload_bytes: u64) -> Result<(), BackupError> {
+    const CONTAINER_ALLOWANCE_BYTES: u64 = 128 * 1024;
+    let required = payload_bytes
+        .checked_add(CONTAINER_ALLOWANCE_BYTES)
+        .ok_or(BackupError::InsufficientCapacity)?;
+    if available < required {
+        Err(BackupError::InsufficientCapacity)
+    } else {
+        Ok(())
+    }
 }
 
 async fn record_completed_backup(
@@ -293,4 +311,18 @@ fn unix_milliseconds() -> Result<i64, BackupError> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| BackupError::Clock)?;
     i64::try_from(duration.as_millis()).map_err(|_| BackupError::Clock)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encryption_capacity_includes_container_overhead() {
+        assert!(matches!(
+            ensure_encryption_capacity(256 * 1024, 256 * 1024),
+            Err(BackupError::InsufficientCapacity)
+        ));
+        assert!(ensure_encryption_capacity(384 * 1024, 256 * 1024).is_ok());
+    }
 }
