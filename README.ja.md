@@ -2,6 +2,8 @@
 
 [English](README.md) | 日本語
 
+[開発参加ガイド](CONTRIBUTING.ja.md) | [Contributing in English](CONTRIBUTING.md)
+
 オンプレミスを優先し、データの完全性を重視するIoT収集基盤です。IoTKit Edge Nodeへ対象を絞ったセンサーAdapterを追加すると、IoTKitが耐久収集、再送、IoTKit Edgeへの明示的な保管責任移転を提供します。IoTKit Edgeが耐久保存するまで、データは削除可能になりません。
 
 > **状態: v1リリース候補。** BravePIの温度・接点入力、1台以上のRust製IoTKit Edge Node、標準MQTT Broker、認証付きIoTKit Console、将来分だけに適用する意味付け、Pinikietへの耐久MQTT出力まで、一連の経路を実装済みです。API、ディスク上のschema、wire contractは今後変更される可能性があります。[ロードマップ](#ロードマップ)を参照してください。

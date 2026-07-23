@@ -5,6 +5,11 @@ Choose the complete current product documentation for your language:
 - [English](okf/en/index.md)
 - [Japanese](okf/ja/index.md)
 
+To change the product, start with the contributor guide:
+
+- [English](../CONTRIBUTING.md)
+- [Japanese](../CONTRIBUTING.ja.md)
+
 The two trees have the same relative paths, translation keys, document types,
 statuses, and revisions. `scripts/check-okf-docs.mjs` enforces that structure and
 requires both translations to change together.

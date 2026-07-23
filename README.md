@@ -2,6 +2,8 @@
 
 English | [Japanese](README.ja.md)
 
+[Contributing](CONTRIBUTING.md) | [日本語の開発参加ガイド](CONTRIBUTING.ja.md)
+
 An on-premises-first, data-integrity-focused IoT collection platform. Add a focused
 sensor adapter to IoTKit Edge Node and IoTKit supplies durable collection, retry, and an
 explicit transfer of storage responsibility to IoTKit Edge: data is not purge-eligible

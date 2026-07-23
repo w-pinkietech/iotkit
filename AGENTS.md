@@ -62,6 +62,18 @@ vocabulary であり、新規コードは依存を増やさない。
 
 ## Development Workflow
 
+### Issue / worktree / PR loop
+
+すべての開発taskは、原則として一つのGitHub issueへ紐付ける。`master`を直接変更せず、
+`agent/issue-<number>-<slug>` branchと`.worktrees/issue-<number>-<slug>`を作る。
+実装と検証が完了したら、同branchをpushしてissueをcloseするdraft PRを作り、そこで停止して
+ユーザーreviewを待つ。Review修正は同じbranchとPRで行う。Scopeが実質的に変わる場合だけ
+別issueを作る。
+
+このissue単位loopに含まれるbranch pushとdraft PR作成は通常の完了操作として承認済みである。
+PRのmerge、release、課金を伴う実行、破壊的操作は引き続き個別の明示承認を必要とする。
+Merge済みbranchをGitHub側で自動削除してよい。Local worktreeとbranchはmerge確認後に削除する。
+
 ### Source and test layout
 
 - Rustの製品コードを置く`src/`には、`#[cfg(test)] mod tests { ... }`の本体や
@@ -141,7 +153,8 @@ migration・外部作用へ影響しない作業に使う。
   台帳や証明状態を作らない。
 - worker は指定されたタスクだけを実装し、スコープ外の改善を混ぜず、commit しない。
 - Main は承認済み作業の範囲で設計、実装、検証、レビュー、意図的な commit を行える。
-- push、PR、merge、release、課金を伴う実行、その他の外部作用は別のユーザー承認を要する。
+- Issue単位loopのbranch pushとdraft PRは上記の事前承認に含む。merge、release、課金を伴う実行、
+  その他の外部作用は別のユーザー承認を要する。
 - 破壊的操作や認証情報の公開は、通常の Codex 権限境界に従う。
 
 ## Verification Economy（時間は有限）
