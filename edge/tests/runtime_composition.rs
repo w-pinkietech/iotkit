@@ -96,20 +96,15 @@ fn typed_runtime_config_rejects_scheme_trust_and_partial_output_conflicts() {
 }
 
 #[tokio::test]
-async fn production_runtime_fails_closed_without_a_web_adapter() {
+async fn production_runtime_composes_the_storage_backed_web_adapter() {
     let directory = TempDir::new().unwrap();
-    let mut args = serve_args(&directory);
-    args.broker_url = "tcp://127.0.0.1:1883".into();
-    args.trust_mode = None;
-    args.ca_file = None;
-    args.allow_insecure = true;
-    args.development_http = true;
-    args.public_origin = "http://127.0.0.1:8080".into();
-    let config = RuntimeConfig::from_serve_args(&args).unwrap();
+    let storage = Storage::connect(iotkit_edge::storage::StorageProfile::Sqlite {
+        path: directory.path().join("web.db"),
+    })
+    .await
+    .unwrap();
 
-    let result = run_runtime(config, &ProductionRuntimeFactory, std::future::pending()).await;
-
-    assert!(matches!(result, Err(RuntimeError::WebAdapterUnavailable)));
+    assert!(ProductionRuntimeFactory.web_application(storage).is_ok());
 }
 
 #[tokio::test]
@@ -131,7 +126,7 @@ async fn runtime_identity_is_stable_across_restart_and_rejects_reconfiguration()
         let result = run_runtime(
             RuntimeConfig::from_serve_args(&args).unwrap(),
             &ProductionRuntimeFactory,
-            std::future::pending(),
+            std::future::ready(()),
         )
         .await;
         if edge_id == "edge-fedcba9876543210fedcba9876543210" {
@@ -140,7 +135,7 @@ async fn runtime_identity_is_stable_across_restart_and_rejects_reconfiguration()
                 Err(RuntimeError::Storage(StorageError::EdgeIdentityMismatch))
             ));
         } else {
-            assert!(matches!(result, Err(RuntimeError::WebAdapterUnavailable)));
+            assert_eq!(result.unwrap(), ExitReason::Requested);
         }
     }
 }

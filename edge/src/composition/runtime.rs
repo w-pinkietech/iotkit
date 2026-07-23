@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    registered_output_adapters,
+    StorageWebApplication, registered_output_adapters,
     runtime_config::{MqttConnectionConfig, MqttTransportConfig, RuntimeConfig},
 };
 
@@ -32,8 +32,8 @@ pub trait RuntimeFactory: Send + Sync {
 pub struct ProductionRuntimeFactory;
 
 impl RuntimeFactory for ProductionRuntimeFactory {
-    fn web_application(&self, _storage: Storage) -> Result<Arc<dyn WebApplication>, RuntimeError> {
-        Err(RuntimeError::WebAdapterUnavailable)
+    fn web_application(&self, storage: Storage) -> Result<Arc<dyn WebApplication>, RuntimeError> {
+        Ok(Arc::new(StorageWebApplication::new(storage)))
     }
 }
 
@@ -227,8 +227,6 @@ fn unix_millis() -> Result<i64, RuntimeError> {
 pub enum RuntimeError {
     #[error("storage startup failed: {0}")]
     Storage(#[from] StorageError),
-    #[error("the production web application adapter is unavailable")]
-    WebAdapterUnavailable,
     #[error("bind HTTP listener: {0}")]
     HttpBind(std::io::Error),
     #[error("install shutdown signal handler: {0}")]
