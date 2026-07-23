@@ -102,6 +102,44 @@ impl Storage {
         self.edge_id().await
     }
 
+    pub async fn ensure_edge_identity(
+        &self,
+        expected_edge_id: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        if expected_edge_id.is_empty() || now < 0 {
+            return Err(StorageError::InvalidRecord(
+                "Edge identity and timestamp must be valid".into(),
+            ));
+        }
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                sqlx::query(
+                    "INSERT INTO edge_meta(singleton, edge_id, created_at) VALUES(1, ?, ?) \
+                     ON CONFLICT(singleton) DO NOTHING",
+                )
+                .bind(expected_edge_id)
+                .bind(now)
+                .execute(pool)
+                .await?;
+            }
+            StorageInner::Postgres { pool, .. } => {
+                sqlx::query(
+                    "INSERT INTO edge_meta(singleton, edge_id, created_at) VALUES(1, $1, $2) \
+                     ON CONFLICT(singleton) DO NOTHING",
+                )
+                .bind(expected_edge_id)
+                .bind(now)
+                .execute(pool)
+                .await?;
+            }
+        }
+        if self.edge_id().await? != expected_edge_id {
+            return Err(StorageError::EdgeIdentityMismatch);
+        }
+        Ok(())
+    }
+
     pub async fn apply_descriptor(
         &self,
         descriptor: &DescriptorSnapshot,

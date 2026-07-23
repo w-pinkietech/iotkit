@@ -15,11 +15,14 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    Application,
     application::accounts::AccountService,
     auth::{password::Password, principal::AccountRole},
     backup::{
         create_encrypted_backup, restore_encrypted_backup_postgres, restore_encrypted_backup_sqlite,
+    },
+    composition::{
+        runtime::{ProductionRuntimeFactory, run_runtime, shutdown_signal},
+        runtime_config::RuntimeConfig,
     },
     diagnostics::{diagnostics_with_certificate, storage_status},
     lifecycle::ExitReason,
@@ -230,13 +233,21 @@ pub enum CliError {
     Password(#[from] crate::auth::password::PasswordError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    RuntimeConfig(#[from] crate::composition::runtime_config::RuntimeConfigError),
+    #[error(transparent)]
+    Runtime(#[from] crate::composition::runtime::RuntimeError),
 }
 
 pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
     match cli.command.ok_or(CliError::Usage)? {
         Command::Serve(args) => {
             args.validate()?;
-            Ok(Application::new().run().await)
+            let config = RuntimeConfig::from_serve_args(&args)?;
+            let shutdown = shutdown_signal()?;
+            run_runtime(config, &ProductionRuntimeFactory, shutdown)
+                .await
+                .map_err(Into::into)
         }
         Command::Backup { command } => {
             match command {
@@ -340,42 +351,6 @@ pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
 impl ServeArgs {
     fn validate(&self) -> Result<(), CliError> {
         self.storage.validate_profile()?;
-        if self.edge_id.is_empty()
-            || self.broker_url.is_empty()
-            || self.username.is_empty()
-            || self.public_origin.is_empty()
-        {
-            return Err(CliError::ServeConfiguration(
-                "edge ID, broker URL, username, and public origin are required".into(),
-            ));
-        }
-        let _password = read_owner_only_secret(&self.password_file)?;
-        if self.allow_insecure && (self.trust_mode.is_some() || self.ca_file.is_some()) {
-            return Err(CliError::ServeConfiguration(
-                "allow-insecure conflicts with TLS trust options".into(),
-            ));
-        }
-        if !self.allow_insecure && self.trust_mode.is_none() {
-            return Err(CliError::ServeConfiguration(
-                "trust-mode is required for broker TLS".into(),
-            ));
-        }
-        if self.output_broker_url.is_some() {
-            if self.output_username.as_deref().unwrap_or("").is_empty()
-                || self.output_password_file.is_none()
-            {
-                return Err(CliError::ServeConfiguration(
-                    "output username and password file are required".into(),
-                ));
-            }
-            let _output_password =
-                read_owner_only_secret(self.output_password_file.as_deref().unwrap())?;
-            if !self.output_allow_insecure && self.output_trust_mode.is_none() {
-                return Err(CliError::ServeConfiguration(
-                    "output trust-mode is required for TLS".into(),
-                ));
-            }
-        }
         if !(50..=99).contains(&self.storage_warning_percent) {
             return Err(CliError::ServeConfiguration(
                 "storage warning percent must be between 50 and 99".into(),
@@ -387,8 +362,14 @@ impl ServeArgs {
 
 impl StorageArgs {
     async fn connect(&self) -> Result<Storage, CliError> {
+        Storage::connect(self.storage_profile()?)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn storage_profile(&self) -> Result<StorageProfile, CliError> {
         self.validate_profile()?;
-        Storage::connect(match self.profile {
+        Ok(match self.profile {
             StorageProfileArg::Embedded => StorageProfile::Sqlite {
                 path: self.database.clone(),
             },
@@ -396,8 +377,6 @@ impl StorageArgs {
                 dsn: self.postgres_dsn()?,
             },
         })
-        .await
-        .map_err(Into::into)
     }
 
     fn validate_profile(&self) -> Result<(), CliError> {
@@ -454,7 +433,7 @@ impl StorageArgs {
     }
 }
 
-fn read_owner_only_secret(path: &Path) -> Result<String, CliError> {
+pub(crate) fn read_owner_only_secret(path: &Path) -> Result<String, CliError> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o077 != 0 {
         return Err(CliError::SecretPermissions);

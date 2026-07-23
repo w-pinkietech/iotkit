@@ -17,6 +17,7 @@ const edgeFiles = new Set([
   "scripts/test-edge-output.sh",
   "scripts/test-edge-postgres.sh",
   "scripts/test-rust-edge-custody.sh",
+  "scripts/test-rust-edge-runtime.sh",
 ]);
 
 const lightweightPrefixes = [

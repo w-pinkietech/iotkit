@@ -206,7 +206,7 @@ impl IngestRuntime {
     }
 }
 
-fn install_crypto_provider() -> Result<(), RuntimeError> {
+pub(crate) fn install_crypto_provider() -> Result<(), RuntimeError> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
