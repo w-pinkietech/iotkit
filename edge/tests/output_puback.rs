@@ -10,6 +10,7 @@ use iotkit_edge::{
     semantics::{Detector, RuleSpec, SemanticKind, TriggerMode},
     storage::{AcceptBatch, RawRecord, Storage, StorageProfile},
 };
+use iotkit_edge_custody_contract::DescriptorSnapshot;
 use rumqttc::MqttOptions;
 use serde_json::Map;
 use tokio_util::sync::CancellationToken;
@@ -69,12 +70,43 @@ async fn actual_mosquitto_puback_marks_the_durable_rust_outbox() {
         .initialize_edge_identity(1_720_000_000_000)
         .await
         .expect("initialize identity");
+    let series_key = "018f0000-0000-7000-8000-000000000001:temperature:na:primary";
+    let descriptor = DescriptorSnapshot::decode(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
+            "edge_node_id": "edge-output-gate",
+            "ledger_epoch": "gate-epoch",
+            "descriptor_revision": 1,
+            "complete": true,
+            "devices": [{
+                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "identifier": "output-gate-device",
+                "state": "active",
+                "model_id": "contract"
+            }],
+            "signals": [{
+                "series_key": series_key,
+                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "measurement_key": "temperature",
+                "channel_index": null,
+                "variant": "primary",
+                "unit": "Cel",
+                "value_type": "float"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    storage
+        .apply_descriptor(&descriptor, 1_720_000_000_000)
+        .await
+        .expect("apply descriptor");
     let semantics = Semantics::new(storage.clone());
     semantics
         .create_rule(
             SemanticRuleDraft {
                 edge_node_id: "edge-output-gate".into(),
-                series_key: "gate-temperature".into(),
+                series_key: series_key.into(),
                 display_name: "Gate temperature".into(),
                 spec: RuleSpec {
                     kind: SemanticKind::Numeric,
@@ -95,7 +127,7 @@ async fn actual_mosquitto_puback_marks_the_durable_rust_outbox() {
         "schema_version": 1,
         "epoch": "gate-epoch",
         "pub_seq": 1,
-        "series_key": "gate-temperature",
+        "series_key": series_key,
         "values": [23.75],
         "event_time": 1_720_000_000_003_i64,
         "event_time_source": "received_at",
