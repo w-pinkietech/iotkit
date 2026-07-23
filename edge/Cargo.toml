@@ -30,7 +30,7 @@ sha2 = "0.10"
 subtle = "2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid"] }
 url = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 iotkit-output-adapter-api = { path = "output-adapters/api" }
 iotkit-output-adapter-generic-mqtt-json-v1 = { path = "output-adapters/generic-mqtt-json-v1" }
 iotkit-output-adapter-pinikiet-mqtt-v1 = { path = "output-adapters/pinikiet-mqtt-v1" }

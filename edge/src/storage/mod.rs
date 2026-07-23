@@ -22,10 +22,12 @@ use tokio::sync::Mutex;
 
 mod activation;
 mod auth;
+mod semantic_output;
 pub use activation::{ActivationCommand, DescriptorApply, EdgeNode, EdgeNodeState};
 pub use auth::{
     Account, AccountCredential, AccountProvision, AuditActor, AuditEvent, StoredSession,
 };
+pub use semantic_output::ClaimedOutput;
 
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");
@@ -144,6 +146,12 @@ pub enum StorageError {
     AccountConflict,
     #[error("Edge account operation is invalid: {0}")]
     InvalidAccount(String),
+    #[error("semantic operation is invalid: {0}")]
+    InvalidSemantic(String),
+    #[error("output operation is invalid: {0}")]
+    InvalidOutput(String),
+    #[error("semantic or output resource was not found")]
+    SemanticNotFound,
 }
 
 #[derive(Clone)]

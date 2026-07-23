@@ -119,6 +119,19 @@ impl DefinitionSpec {
     }
 }
 
+impl RuleSpec {
+    pub fn validate(self) -> Result<(), SemanticError> {
+        DefinitionSpec {
+            kind: self.kind,
+            scale: 1.0,
+            offset: 0.0,
+            detector: self.detector,
+            trigger: self.trigger,
+        }
+        .validate()
+    }
+}
+
 impl Detector {
     fn validate(self) -> Result<(), SemanticError> {
         if !self.rise_threshold.is_finite()

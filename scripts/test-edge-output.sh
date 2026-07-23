@@ -97,6 +97,8 @@ docker run --detach --name "$container" \
 
 broker_url="tcp://127.0.0.1:$broker_port"
 postgres_dsn=""
+rust_postgres_dsn=""
+rust_postgres_contract_dsn=""
 if [[ "$storage_profile" == "postgres" ]]; then
   docker run --detach --name "$postgres_container" \
     --env POSTGRES_DB=iotkit \
@@ -120,6 +122,41 @@ if [[ "$storage_profile" == "postgres" ]]; then
     exit 1
   }
   postgres_dsn="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres_port/iotkit?sslmode=disable"
+  docker exec "$postgres_container" createdb --username iotkit iotkit_rust
+  docker exec "$postgres_container" createdb --username iotkit iotkit_rust_contract
+  rust_postgres_dsn="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres_port/iotkit_rust?sslmode=disable"
+  rust_postgres_contract_dsn="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres_port/iotkit_rust_contract?sslmode=disable"
+fi
+
+mkdir -p "$repo_root/target/tmp"
+rust_gate_env=(
+  IOTKIT_REQUIRE_RUST_OUTPUT_GATE=1
+  IOTKIT_TEST_OUTPUT_BROKER_HOST=127.0.0.1
+  IOTKIT_TEST_OUTPUT_BROKER_PORT="$broker_port"
+  IOTKIT_TEST_OUTPUT_PASSWORD="$(tr -d '\r\n' <"$scratch/config/output-password")"
+)
+if [[ "$storage_profile" == "postgres" ]]; then
+  rust_gate_env+=(IOTKIT_TEST_RUST_OUTPUT_POSTGRES_DSN="$rust_postgres_dsn")
+else
+  rust_gate_env+=(IOTKIT_TEST_RUST_OUTPUT_SQLITE="$scratch/control/rust-edge.db")
+fi
+(
+  cd "$repo_root"
+  env "${rust_gate_env[@]}" TMPDIR="$repo_root/target/tmp" \
+    cargo test -p iotkit-edge --test output_puback \
+      actual_mosquitto_puback_marks_the_durable_rust_outbox \
+      -- --ignored --exact --nocapture
+)
+if [[ "$storage_profile" == "postgres" ]]; then
+  (
+    cd "$repo_root"
+    env \
+      IOTKIT_TEST_RUST_OUTPUT_POSTGRES_CONTRACT_DSN="$rust_postgres_contract_dsn" \
+      TMPDIR="$repo_root/target/tmp" \
+      cargo test -p iotkit-edge --test output_contract \
+        postgres_failed_routes_retry_fairly_and_converge_after_storage_restart \
+        -- --ignored --exact --nocapture
+  )
 fi
 
 db_query() {
