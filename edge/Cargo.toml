@@ -7,8 +7,11 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+argon2 = "0.5"
+base64 = "0.22"
 clap = { version = "4.6", features = ["derive"] }
 fs2 = "0.4"
+getrandom = "0.4"
 thiserror = "2"
 tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -19,7 +22,9 @@ serde_json = { version = "1", features = ["raw_value"] }
 rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
+subtle = "2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid"] }
+url = "2"
 uuid = { version = "1", features = ["v4"] }
 iotkit-output-adapter-api = { path = "output-adapters/api" }
 iotkit-output-adapter-generic-mqtt-json-v1 = { path = "output-adapters/generic-mqtt-json-v1" }

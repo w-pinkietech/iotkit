@@ -1,4 +1,5 @@
 pub mod application;
+pub mod auth;
 pub mod composition;
 pub mod config;
 pub mod lifecycle;

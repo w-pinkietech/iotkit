@@ -1247,8 +1247,11 @@ version = "0.1.0"
 name = "iotkit-edge"
 version = "0.1.0"
 dependencies = [
+ "argon2",
+ "base64",
  "clap",
  "fs2",
+ "getrandom 0.4.2",
  "iotkit-edge-custody-contract",
  "iotkit-output-adapter-api",
  "iotkit-output-adapter-generic-mqtt-json-v1",
@@ -1259,12 +1262,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "subtle",
  "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
