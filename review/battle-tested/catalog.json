@@ -31,6 +31,7 @@
         "edge/src/mqtt/",
         "edge/src/application/output_profiles.rs",
         "edge/src/storage/semantic_output.rs",
+        "edge/src/storage/semantic_output/",
         "edge/output-adapters/",
         "scripts/test-edge-output.sh",
         "scripts/test-edge-resilience.sh"

@@ -25,7 +25,7 @@ test("storage changes select power-loss, pressure, and replacement questions", (
 
 test("MQTT output changes select the reproduced convergence question", () => {
   const result = selectEntries(catalog, [
-    "edge/internal/outputadapter/worker.go",
+    "edge/src/mqtt/output/runtime.rs",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
@@ -33,13 +33,13 @@ test("MQTT output changes select the reproduced convergence question", () => {
   );
 });
 
-test("durable output changes select convergence and storage failure questions", () => {
+test("durable output changes select convergence, storage, and diagnosis questions", () => {
   const result = selectEntries(catalog, [
-    "edge/internal/store/output_v3.go",
+    "edge/src/storage/semantic_output/operations.rs",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
-    ["BT-001", "BT-002", "BT-003"],
+    ["BT-001", "BT-002", "BT-003", "BT-005"],
   );
 });
 
