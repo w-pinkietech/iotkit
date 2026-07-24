@@ -27,7 +27,7 @@ use crate::{
         semantics::{SemanticRuleDraft, Semantics},
     },
     auth::{
-        password::{Password, PasswordCandidate, verify_password},
+        password::{Password, PasswordCandidate, PasswordHash, verify_password},
         principal::{AccountRole, AccountState, Principal as ApplicationPrincipal},
         session::{IDLE_SESSION_LIFETIME_MS, SecretDigest, SessionSecrets, SessionWindow},
     },
@@ -44,6 +44,8 @@ use crate::{
         SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
     },
 };
+
+const DUMMY_PASSWORD_PHC: &str = "$argon2id$v=19$m=65536,t=3,p=1$knuL0IBLO4j6mUvzLJIPUA$3nE/zZlE1o4o0jpG+2c0KByiUBDKpUCxUQKYcDNxHMY";
 
 #[derive(Debug, Clone)]
 pub struct LoginPolicy {
@@ -351,16 +353,21 @@ impl WebApplication for StorageWebApplication {
     async fn login(&self, username: &str, password: &str) -> Result<LoginSession, WebError> {
         let admission_key = username.trim().to_ascii_lowercase();
         let _admission = self.login_admission.begin(&admission_key)?;
-        let credential = match self.storage.get_account_credential_by_login(username).await {
-            Ok(credential) => credential,
-            Err(error) => {
-                self.login_admission.failed(&admission_key);
-                return Err(authentication_error(error));
-            }
+        let credential = self
+            .storage
+            .get_account_credential_by_login(username)
+            .await
+            .ok();
+        let dummy_password_hash = PasswordHash::new(DUMMY_PASSWORD_PHC);
+        let password_hash = credential
+            .as_ref()
+            .map_or(&dummy_password_hash, |credential| &credential.password_hash);
+        let verification = verify_password(password_hash, &PasswordCandidate::new(password))
+            .map_err(authentication_error)?;
+        let Some(credential) = credential else {
+            self.login_admission.failed(&admission_key);
+            return Err(invalid_credentials());
         };
-        let verification =
-            verify_password(&credential.password_hash, &PasswordCandidate::new(password))
-                .map_err(authentication_error)?;
         if !verification.matches || credential.account.state != AccountState::Active {
             self.login_admission.failed(&admission_key);
             return Err(invalid_credentials());
@@ -684,7 +691,7 @@ impl WebApplication for StorageWebApplication {
         } = operation;
         let _mutation = self.mutation_lock.lock().await;
         if let Some(expected_revision) = expected_revision {
-            let current_revision = self.resource_revision(&params).await?;
+            let current_revision = self.resource_revision(&route, &params).await?;
             if current_revision != expected_revision {
                 return Err(revision_mismatch());
             }
@@ -822,6 +829,7 @@ impl WebApplication for StorageWebApplication {
                         signal_ref,
                         required_f64(&body, "scale")?,
                         required_f64(&body, "offset")?,
+                        expected_revision,
                         now(),
                     )
                     .await
@@ -1262,7 +1270,11 @@ impl WebApplication for StorageWebApplication {
 }
 
 impl StorageWebApplication {
-    async fn resource_revision(&self, params: &HashMap<String, String>) -> Result<i64, WebError> {
+    async fn resource_revision(
+        &self,
+        route: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<i64, WebError> {
         if let Some(rule_id) = params.get("rule_id") {
             return self
                 .storage
@@ -1275,6 +1287,13 @@ impl StorageWebApplication {
                 .ok_or_else(not_found_error);
         }
         if let Some(signal_ref) = params.get("signal_ref") {
+            if route.ends_with("/calibration") {
+                return self
+                    .storage
+                    .semantic_calibration_revision(signal_ref)
+                    .await
+                    .map_err(operation_error);
+            }
             return Ok(self
                 .storage
                 .list_semantic_rules()

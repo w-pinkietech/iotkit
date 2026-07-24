@@ -421,9 +421,35 @@ impl Storage {
             signal_ref,
             scale,
             offset,
+            None,
             now,
         )
         .await
+    }
+
+    pub async fn semantic_calibration_revision(
+        &self,
+        signal_ref: &str,
+    ) -> Result<i64, StorageError> {
+        let revision = match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                sqlx::query_scalar(
+                    "SELECT calibration_revision FROM semantic_signals WHERE signal_ref=?",
+                )
+                .bind(signal_ref)
+                .fetch_optional(pool)
+                .await?
+            }
+            StorageInner::Postgres { pool, .. } => {
+                sqlx::query_scalar(
+                    "SELECT calibration_revision FROM semantic_signals WHERE signal_ref=$1",
+                )
+                .bind(signal_ref)
+                .fetch_optional(pool)
+                .await?
+            }
+        };
+        revision.ok_or(StorageError::SemanticNotFound)
     }
 
     pub async fn update_semantic_calibration_as(
@@ -432,6 +458,7 @@ impl Storage {
         signal_ref: &str,
         scale: f64,
         offset: f64,
+        expected_revision: Option<i64>,
         now: i64,
     ) -> Result<i64, StorageError> {
         if signal_ref.is_empty() || now < 0 {
@@ -442,16 +469,36 @@ impl Storage {
         let revision = match self.inner.as_ref() {
             StorageInner::Sqlite { pool, .. } => {
                 let mut tx = pool.begin().await?;
-                let revision: Option<i64> = sqlx::query_scalar(
-                    "UPDATE semantic_signals SET calibration_revision=calibration_revision+1, \
-                     scale=?, calibration_offset=? WHERE signal_ref=? RETURNING calibration_revision",
-                )
-                .bind(scale)
-                .bind(offset)
-                .bind(signal_ref)
-                .fetch_optional(&mut *tx)
-                .await?;
-                let revision = revision.ok_or(StorageError::SemanticNotFound)?;
+                let revision: Option<i64> = if let Some(expected_revision) = expected_revision {
+                    sqlx::query_scalar(
+                        "UPDATE semantic_signals SET calibration_revision=calibration_revision+1, \
+                         scale=?, calibration_offset=? WHERE signal_ref=? \
+                         AND calibration_revision=? \
+                         RETURNING calibration_revision",
+                    )
+                    .bind(scale)
+                    .bind(offset)
+                    .bind(signal_ref)
+                    .bind(expected_revision)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                } else {
+                    sqlx::query_scalar(
+                        "UPDATE semantic_signals SET calibration_revision=calibration_revision+1, \
+                         scale=?, calibration_offset=? WHERE signal_ref=? \
+                         RETURNING calibration_revision",
+                    )
+                    .bind(scale)
+                    .bind(offset)
+                    .bind(signal_ref)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                };
+                let revision = revision.ok_or(if expected_revision.is_some() {
+                    StorageError::RevisionMismatch
+                } else {
+                    StorageError::SemanticNotFound
+                })?;
                 sqlx::query(
                     "INSERT INTO semantic_calibration_revisions(\
                      signal_ref,revision,scale,calibration_offset,created_at) VALUES(?,?,?,?,?)",
@@ -498,16 +545,35 @@ impl Storage {
                 let edge_node_id = edge_node_id.ok_or(StorageError::SemanticNotFound)?;
                 lock_edge_cursors_postgres(&mut tx, &edge_node_id).await?;
                 lock_signal_runtimes_postgres(&mut tx, signal_ref).await?;
-                let revision: Option<i64> = sqlx::query_scalar(
-                    "UPDATE semantic_signals SET calibration_revision=calibration_revision+1, \
-                     scale=$1, calibration_offset=$2 WHERE signal_ref=$3 RETURNING calibration_revision",
-                )
-                .bind(scale)
-                .bind(offset)
-                .bind(signal_ref)
-                .fetch_optional(&mut *tx)
-                .await?;
-                let revision = revision.ok_or(StorageError::SemanticNotFound)?;
+                let revision: Option<i64> = if let Some(expected_revision) = expected_revision {
+                    sqlx::query_scalar(
+                        "UPDATE semantic_signals SET calibration_revision=calibration_revision+1, \
+                         scale=$1, calibration_offset=$2 WHERE signal_ref=$3 \
+                         AND calibration_revision=$4 RETURNING calibration_revision",
+                    )
+                    .bind(scale)
+                    .bind(offset)
+                    .bind(signal_ref)
+                    .bind(expected_revision)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                } else {
+                    sqlx::query_scalar(
+                        "UPDATE semantic_signals SET calibration_revision=calibration_revision+1, \
+                         scale=$1, calibration_offset=$2 WHERE signal_ref=$3 \
+                         RETURNING calibration_revision",
+                    )
+                    .bind(scale)
+                    .bind(offset)
+                    .bind(signal_ref)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                };
+                let revision = revision.ok_or(if expected_revision.is_some() {
+                    StorageError::RevisionMismatch
+                } else {
+                    StorageError::SemanticNotFound
+                })?;
                 sqlx::query(
                     "INSERT INTO semantic_calibration_revisions(\
                      signal_ref,revision,scale,calibration_offset,created_at) VALUES($1,$2,$3,$4,$5)",

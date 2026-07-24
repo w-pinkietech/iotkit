@@ -7,7 +7,9 @@ use iotkit_edge::{
     },
     composition::registered_output_adapters,
     semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
-    storage::{AcceptBatch, OutputMark, RawRecord, Storage, StorageProfile},
+    storage::{
+        AcceptBatch, AuditActor, OutputMark, RawRecord, Storage, StorageError, StorageProfile,
+    },
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
 use serde_json::{Map, Value};
@@ -391,6 +393,78 @@ async fn rule_and_calibration_revisions_apply_only_after_their_captured_cursors(
             (2, 2, "60.0".into())
         ]
     );
+}
+
+async fn assert_stale_calibration_writer_is_rejected(storage: &Storage) {
+    let rule = Semantics::new(storage.clone())
+        .create_rule(numeric_rule(), 1)
+        .await
+        .expect("create calibration rule");
+    let first = storage
+        .update_semantic_calibration_as(
+            AuditActor::local_cli(),
+            &rule.signal_ref,
+            2.0,
+            1.0,
+            Some(1),
+            2,
+        )
+        .await
+        .expect("matching calibration revision");
+    assert_eq!(first, 2);
+
+    let stale = storage
+        .update_semantic_calibration_as(
+            AuditActor::local_cli(),
+            &rule.signal_ref,
+            3.0,
+            2.0,
+            Some(1),
+            3,
+        )
+        .await
+        .expect_err("stale calibration revision");
+    assert!(matches!(stale, StorageError::RevisionMismatch));
+    assert_eq!(
+        storage
+            .semantic_calibration_revision(&rule.signal_ref)
+            .await
+            .expect("calibration revision after stale write"),
+        2
+    );
+    let updates = storage
+        .list_audit_events(100)
+        .await
+        .expect("calibration audits")
+        .into_iter()
+        .filter(|event| {
+            event.operation == "semantic_calibration.update"
+                && event.resource_ref == rule.signal_ref
+        })
+        .count();
+    assert_eq!(updates, 1, "stale write must not produce an audit event");
+}
+
+#[tokio::test]
+async fn sqlite_calibration_revision_check_is_atomic() {
+    let (_directory, storage) = store().await;
+    assert_stale_calibration_writer_is_rejected(&storage).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; run with IOTKIT_TEST_RUST_OUTPUT_POSTGRES_CONTRACT_DSN"]
+async fn postgres_calibration_revision_check_is_atomic() {
+    let dsn =
+        std::env::var("IOTKIT_TEST_RUST_OUTPUT_POSTGRES_CONTRACT_DSN").expect("contract test DSN");
+    let storage = Storage::connect(StorageProfile::Postgres { dsn })
+        .await
+        .expect("connect PostgreSQL storage");
+    storage
+        .initialize_edge_identity(1_720_000_000_000)
+        .await
+        .expect("initialize Edge identity");
+    apply_output_descriptor(&storage).await;
+    assert_stale_calibration_writer_is_rejected(&storage).await;
 }
 
 #[tokio::test]

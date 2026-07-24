@@ -232,8 +232,15 @@ impl Semantics {
         offset: f64,
         now: i64,
     ) -> Result<i64, StorageError> {
-        self.update_calibration_as(AuditActor::local_cli(), signal_ref, scale, offset, now)
-            .await
+        self.update_calibration_as(
+            AuditActor::local_cli(),
+            signal_ref,
+            scale,
+            offset,
+            None,
+            now,
+        )
+        .await
     }
 
     pub async fn update_calibration_as(
@@ -242,13 +249,21 @@ impl Semantics {
         signal_ref: &str,
         scale: f64,
         offset: f64,
+        expected_revision: Option<i64>,
         now: i64,
     ) -> Result<i64, StorageError> {
         crate::semantics::Calibration { scale, offset }
             .validate()
             .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
         self.storage
-            .update_semantic_calibration_as(actor, signal_ref, scale, offset, now)
+            .update_semantic_calibration_as(
+                actor,
+                signal_ref,
+                scale,
+                offset,
+                expected_revision,
+                now,
+            )
             .await
     }
 

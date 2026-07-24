@@ -11,9 +11,18 @@ use iotkit_edge::{
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
 
+fn test_directory() -> tempfile::TempDir {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("target")
+        .join("test-tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    tempfile::TempDir::new_in(root).unwrap()
+}
+
 #[tokio::test]
 async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("edge.db"),
     })
@@ -85,7 +94,7 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
 
 #[tokio::test]
 async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("rate-limit.db"),
     })
@@ -171,8 +180,47 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
 }
 
 #[tokio::test]
+async fn unknown_login_performs_the_same_password_verification_work() {
+    let directory = test_directory();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: PathBuf::from(directory.path()).join("login-timing.db"),
+    })
+    .await
+    .unwrap();
+    AccountService::new(storage.clone())
+        .create_initial_system_admin(
+            "owner",
+            "System Owner",
+            Password::new("long enough owner password").unwrap(),
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+    let application = StorageWebApplication::new(storage);
+
+    let known_started = std::time::Instant::now();
+    application
+        .login("owner", "wrong password")
+        .await
+        .expect_err("known account password is invalid");
+    let known_elapsed = known_started.elapsed();
+
+    let unknown_started = std::time::Instant::now();
+    application
+        .login("missing", "wrong password")
+        .await
+        .expect_err("unknown account is invalid");
+    let unknown_elapsed = unknown_started.elapsed();
+
+    assert!(
+        unknown_elapsed.saturating_mul(2) >= known_elapsed,
+        "unknown login returned in {unknown_elapsed:?}, known login took {known_elapsed:?}"
+    );
+}
+
+#[tokio::test]
 async fn mutation_dispatch_preserves_put_and_delete_semantics() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("methods.db"),
     })
@@ -238,6 +286,38 @@ async fn mutation_dispatch_preserves_put_and_delete_semantics() {
             .find(|candidate| candidate.rule_id == rule.rule_id)
             .unwrap()
             .active
+    );
+
+    let calibrated = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::PUT,
+                route: format!("/api/v1/signals/{}/calibration", rule.signal_ref),
+                params: HashMap::from([("signal_ref".into(), rule.signal_ref.clone())]),
+                expected_revision: Some(1),
+            },
+            serde_json::json!({"scale":2.0,"offset":1.0}),
+        )
+        .await
+        .expect("matching calibration revision updates the signal");
+    assert_eq!(calibrated.body["revision"], 2);
+    let stale_calibration = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::PUT,
+                route: format!("/api/v1/signals/{}/calibration", rule.signal_ref),
+                params: HashMap::from([("signal_ref".into(), rule.signal_ref.clone())]),
+                expected_revision: Some(1),
+            },
+            serde_json::json!({"scale":3.0,"offset":2.0}),
+        )
+        .await
+        .expect_err("stale calibration revision must fail");
+    assert_eq!(
+        stale_calibration.status,
+        axum::http::StatusCode::PRECONDITION_FAILED
     );
 
     let revised = application
@@ -366,7 +446,7 @@ async fn postgres_enforces_the_same_web_revision_precondition() {
 
 #[tokio::test]
 async fn production_web_diagnostics_use_the_runtime_threshold_and_certificate_file() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("diagnostics.db"),
     })
