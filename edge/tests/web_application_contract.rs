@@ -143,6 +143,69 @@ async fn activation_response_does_not_expose_internal_command_identity() {
 }
 
 #[tokio::test]
+async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing_rule() {
+    let directory = test_directory();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: PathBuf::from(directory.path()).join("first-rule.db"),
+    })
+    .await
+    .unwrap();
+    AccountService::new(storage.clone())
+        .create_initial_system_admin(
+            "owner",
+            "System Owner",
+            Password::new("long enough owner password").unwrap(),
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
+    assert!(
+        storage.list_semantic_rules().await.unwrap().is_empty(),
+        "the regression requires a signal with no semantic identity fallback"
+    );
+    let signal = storage
+        .inventory_signals()
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let application = StorageWebApplication::new(storage);
+    let principal = application
+        .login("owner", "long enough owner password")
+        .await
+        .unwrap()
+        .principal;
+    let mut params = HashMap::new();
+    params.insert("signal_ref".into(), signal.signal_ref.clone());
+
+    let created = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/signals/{}/semantic-rules", signal.signal_ref),
+                params,
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "display_name": "First numeric rule",
+                "kind": "numeric",
+            }),
+        )
+        .await
+        .expect("first semantic rule must resolve through inventory");
+
+    assert_eq!(created.status, axum::http::StatusCode::CREATED);
+    assert_eq!(created.body["display_name"], "First numeric rule");
+}
+
+#[tokio::test]
 async fn console_commissioning_distinguishes_discovery_registration_and_setup() {
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {

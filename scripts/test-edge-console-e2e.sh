@@ -210,3 +210,28 @@ IOTKIT_EDGE_E2E_URL="$origin" \
   IOTKIT_EDGE_E2E_PASSWORD="$(<"$password_file")" \
   IOTKIT_TEST_STORAGE_PROFILE="$storage_profile" \
   node "$repo_root/edge/frontend/e2e/rust-console-journey.mjs"
+
+commissioning_fixture_finished=false
+for _ in $(seq 1 300); do
+  if ! jobs -pr | grep -Fxq "$commissioning_fixture_pid"; then
+    commissioning_fixture_finished=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$commissioning_fixture_finished" != true ]]; then
+  echo "Commissioning fixture did not finish after the browser journey" >&2
+  cat "$e2e_dir/commissioning-fixture.log" >&2
+  exit 1
+fi
+if wait "$commissioning_fixture_pid"; then
+  commissioning_fixture_status=0
+else
+  commissioning_fixture_status=$?
+fi
+commissioning_fixture_pid=""
+if ((commissioning_fixture_status != 0)); then
+  echo "Commissioning fixture failed after the browser journey" >&2
+  cat "$e2e_dir/commissioning-fixture.log" >&2
+  exit "$commissioning_fixture_status"
+fi
