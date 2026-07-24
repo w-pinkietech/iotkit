@@ -557,10 +557,15 @@ async fn activating_pages_explain_live_checks_and_only_mark_activation_views_for
         assert!(html.contains(r#"data-activation-refresh="true""#), "{path}");
         assert!(html.contains("3秒ごとに登録状態を自動確認します"), "{path}");
         assert!(
-            html.contains("この画面を離れても登録処理は続きます"),
+            html.contains("この画面を離れてもサーバー側の登録処理は続きます"),
             "{path}"
         );
         assert!(html.contains("最終確認"), "{path}");
+        assert!(
+            html.contains(r#"data-activation-check-now>今すぐ確認</button>"#),
+            "{path}"
+        );
+        assert!(html.contains("サーバー側の登録処理は続きます"), "{path}");
     }
 
     let response = app

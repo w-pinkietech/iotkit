@@ -49,10 +49,11 @@
       {% if !view.notice.is_empty() %}<div class="feedback success-feedback" role="status">{{ view.notice }}</div>{% endif %}
       {% if !view.page_error.is_empty() %}<div class="feedback error-feedback" role="alert">{{ view.page_error }}</div>{% endif %}
       {% if activation_refresh %}
-      <div class="feedback activation-feedback" role="status">
-        <strong>登録状態を自動確認中</strong>
-        <span>3秒ごとに登録状態を自動確認します。この画面を離れても登録処理は続きます。</span>
+      <div class="feedback activation-feedback" role="status" data-activation-feedback>
+        <strong data-activation-state>登録状態を自動確認中</strong>
+        <span data-activation-guidance>3秒ごとに登録状態を自動確認します。この画面を離れてもサーバー側の登録処理は続きます。</span>
         <small>最終確認 <time data-activation-checked-at>画面表示時</time></small>
+        <button type="button" class="button secondary" data-activation-check-now>今すぐ確認</button>
       </div>
       {% endif %}
 

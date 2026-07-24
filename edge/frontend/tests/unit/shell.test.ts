@@ -16,7 +16,14 @@ describe("console shell", () => {
     vi.useFakeTimers();
     document.body.dataset.activationRefresh = "true";
     document.body.innerHTML = `
-      <time data-activation-checked-at>画面表示時</time>
+      <div data-activation-feedback>
+        <strong data-activation-state>登録状態を自動確認中</strong>
+        <span data-activation-guidance>
+          3秒ごとに登録状態を自動確認します。サーバー側の登録処理は続きます。
+        </span>
+        <time data-activation-checked-at>画面表示時</time>
+        <button type="button" data-activation-check-now>今すぐ確認</button>
+      </div>
     `;
     const reload = vi.fn();
 
@@ -33,8 +40,20 @@ describe("console shell", () => {
     vi.clearAllTimers();
     sessionStorage.setItem("iotkit-activation-refresh:/", "20");
     initializeShell(reload);
+    expect(
+      document.querySelector("[data-activation-state]")?.textContent,
+    ).toBe("自動確認を一時停止しました");
+    expect(
+      document.querySelector("[data-activation-guidance]")?.textContent,
+    ).toContain("サーバー側の登録処理は続いています");
     await vi.advanceTimersByTimeAsync(3_000);
     expect(reload).toHaveBeenCalledOnce();
+
+    document
+      .querySelector<HTMLButtonElement>("[data-activation-check-now]")!
+      .click();
+    expect(sessionStorage.getItem("iotkit-activation-refresh:/")).toBe("0");
+    expect(reload).toHaveBeenCalledTimes(2);
   });
 
   it("does not reload an unrelated form while another activation is in progress", async () => {

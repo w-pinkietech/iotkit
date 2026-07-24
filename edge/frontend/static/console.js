@@ -252,8 +252,24 @@
       sessionStorage.removeItem(key);
       return;
     }
+    const checkNow = query("[data-activation-check-now]");
+    if (checkNow && checkNow.dataset.activationBound !== "true") {
+      checkNow.dataset.activationBound = "true";
+      checkNow.addEventListener("click", () => {
+        sessionStorage.setItem(key, "0");
+        reload();
+      });
+    }
     const attempts = Number(sessionStorage.getItem(key) ?? "0");
-    if (!Number.isFinite(attempts) || attempts >= 20) return;
+    if (!Number.isFinite(attempts) || attempts >= 20) {
+      const state = query("[data-activation-state]");
+      const guidance = query("[data-activation-guidance]");
+      if (state) state.textContent = "\u81EA\u52D5\u78BA\u8A8D\u3092\u4E00\u6642\u505C\u6B62\u3057\u307E\u3057\u305F";
+      if (guidance) {
+        guidance.textContent = "\u81EA\u52D5\u78BA\u8A8D\u306E\u4E0A\u9650\u306B\u9054\u3057\u305F\u305F\u3081\u4E00\u6642\u505C\u6B62\u3057\u307E\u3057\u305F\u3002\u30B5\u30FC\u30D0\u30FC\u5074\u306E\u767B\u9332\u51E6\u7406\u306F\u7D9A\u3044\u3066\u3044\u307E\u3059\u3002\u300C\u4ECA\u3059\u3050\u78BA\u8A8D\u300D\u3067\u78BA\u8A8D\u3092\u518D\u958B\u3067\u304D\u307E\u3059\u3002";
+      }
+      return;
+    }
     window.setTimeout(() => {
       sessionStorage.setItem(key, String(attempts + 1));
       reload();

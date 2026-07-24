@@ -196,8 +196,27 @@ function initializeActivationRefresh(reload: () => void): void {
     sessionStorage.removeItem(key);
     return;
   }
+  const checkNow = query<HTMLButtonElement>("[data-activation-check-now]");
+  if (checkNow && checkNow.dataset.activationBound !== "true") {
+    checkNow.dataset.activationBound = "true";
+    checkNow.addEventListener("click", () => {
+      sessionStorage.setItem(key, "0");
+      reload();
+    });
+  }
   const attempts = Number(sessionStorage.getItem(key) ?? "0");
-  if (!Number.isFinite(attempts) || attempts >= 20) return;
+  if (!Number.isFinite(attempts) || attempts >= 20) {
+    const state = query<HTMLElement>("[data-activation-state]");
+    const guidance = query<HTMLElement>("[data-activation-guidance]");
+    if (state) state.textContent = "自動確認を一時停止しました";
+    if (guidance) {
+      guidance.textContent =
+        "自動確認の上限に達したため一時停止しました。" +
+        "サーバー側の登録処理は続いています。" +
+        "「今すぐ確認」で確認を再開できます。";
+    }
+    return;
+  }
   window.setTimeout(() => {
     sessionStorage.setItem(key, String(attempts + 1));
     reload();
