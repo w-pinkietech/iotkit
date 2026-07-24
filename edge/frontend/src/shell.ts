@@ -111,7 +111,11 @@ function initializeSettingTabs(): void {
     const panels = queryAll<HTMLElement>("[data-setting-panel]", root);
     if (!tabs.length || !panels.length) continue;
 
-    const activate = (key: string, focus = false): void => {
+    const activate = (
+      key: string,
+      focus = false,
+      replaceTabQuery = false,
+    ): void => {
       for (const tab of tabs) {
         const selected = tab.dataset.settingTab === key;
         tab.setAttribute("aria-selected", String(selected));
@@ -120,6 +124,11 @@ function initializeSettingTabs(): void {
       }
       for (const panel of panels) {
         panel.hidden = panel.dataset.settingPanel !== key;
+      }
+      if (replaceTabQuery) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", key);
+        window.history.replaceState(window.history.state, "", url);
       }
     };
 
@@ -138,7 +147,7 @@ function initializeSettingTabs(): void {
 
     tabs.forEach((tab, index) => {
       tab.addEventListener("click", () => {
-        activate(tab.dataset.settingTab ?? "");
+        activate(tab.dataset.settingTab ?? "", false, true);
       });
       tab.addEventListener("keydown", (event) => {
         let next = index;
@@ -149,7 +158,7 @@ function initializeSettingTabs(): void {
         else if (event.key === "End") next = tabs.length - 1;
         else return;
         event.preventDefault();
-        activate(tabs[next].dataset.settingTab ?? "", true);
+        activate(tabs[next].dataset.settingTab ?? "", true, true);
       });
     });
   }

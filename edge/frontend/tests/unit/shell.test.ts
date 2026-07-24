@@ -9,6 +9,7 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   sessionStorage.clear();
+  window.history.replaceState(null, "", "/");
 });
 
 describe("console shell", () => {
@@ -189,5 +190,47 @@ describe("console shell", () => {
         '[data-setting-panel="alarm"]',
       )?.hidden,
     ).toBe(false);
+  });
+
+  it("replaces the sensor setting tab query without losing unrelated parameters", () => {
+    window.history.replaceState(
+      { source: "test" },
+      "",
+      "/equipment/devices/device-01/sensors/signal-01?keep=1&tab=basic&tab=alarm&saved=1#rules",
+    );
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    const pushState = vi.spyOn(window.history, "pushState");
+    const historyLength = window.history.length;
+    document.body.innerHTML = `
+      <section data-setting-tabs data-default-setting-tab="basic">
+        <div role="tablist">
+          <button type="button" role="tab" data-setting-tab="basic">
+            基本設定
+          </button>
+          <button type="button" role="tab" data-setting-tab="normal">
+            計測ルール
+          </button>
+        </div>
+        <div role="tabpanel" data-setting-panel="basic"></div>
+        <div role="tabpanel" data-setting-panel="normal"></div>
+      </section>
+    `;
+
+    initializeShell();
+    document
+      .querySelector<HTMLButtonElement>('[data-setting-tab="normal"]')!
+      .click();
+
+    expect(replaceState).toHaveBeenCalledOnce();
+    expect(pushState).not.toHaveBeenCalled();
+    expect(window.history.length).toBe(historyLength);
+    expect(window.location.pathname).toBe(
+      "/equipment/devices/device-01/sensors/signal-01",
+    );
+    expect(window.location.search).toBe("?keep=1&tab=normal&saved=1");
+    expect(window.location.hash).toBe("#rules");
+    expect(
+      new URLSearchParams(window.location.search).getAll("tab"),
+    ).toEqual(["normal"]);
   });
 });
