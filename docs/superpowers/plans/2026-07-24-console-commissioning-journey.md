@@ -34,9 +34,9 @@
 - Consumes: `ConsoleEdgeNode`, `ConsoleDevice`, `ConsoleSignal`, `EdgeNodeState`, profile revisions, and active semantic rules.
 - Produces: `CommissioningView { stage, title, explanation, action_label, action_href, completed_steps, total_steps, pending_edge_nodes, pending_devices, pending_signals }`.
 
-- [ ] **Step 1: Write failing Console contract tests**
+- [ ] **Step 1: Write failing Console projection tests**
 
-Add assertions that the status page contains `data-commissioning-stage="activate-edge-node"`, a link to the discovered Edge Node, and setup counts. Add storage-backed tests proving an active node with an unconfigured device produces `setup-device`, and a configured device with an unconfigured signal produces `setup-sensor`.
+Add pure projection assertions for discovered, activating, and recovery Edge Nodes; an active node with an unconfigured device; a configured device with an unconfigured signal; a configured signal without an active rule; and a completed setup. Add storage-backed assertions proving the real `ConsoleView` advances from `activate-edge-node` to `setup-device` and `setup-sensor`. HTML hooks belong to Task 2.
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
@@ -47,7 +47,7 @@ TMPDIR=$PWD/target/test-tmp/issue-98 cargo test -p iotkit-edge \
   --test console_contract --test web_application_contract commissioning
 ```
 
-Expected: FAIL because the commissioning projection and HTML hooks do not exist.
+Expected: FAIL because the commissioning projection does not exist.
 
 - [ ] **Step 3: Implement the pure projection**
 
@@ -306,4 +306,3 @@ Expected: all commands PASS.
 git add edge review/battle-tested scripts
 git commit -m "fix(console): refine commissioning from operator review"
 ```
-
