@@ -785,8 +785,7 @@ impl WebApplication for StorageWebApplication {
                         "Edge Node was not found",
                     )
                 })?;
-            let command = self
-                .storage
+            self.storage
                 .request_activation_as(
                     AuditActor::account(&principal.account_ref),
                     &node.edge_node_id,
@@ -795,7 +794,6 @@ impl WebApplication for StorageWebApplication {
                 .await
                 .map_err(internal)?;
             return Ok(MutationOutput::accepted(json!({
-                "activation_id": command.activation_id,
                 "edge_node_ref": node.edge_node_ref,
                 "state": "activating",
             })));

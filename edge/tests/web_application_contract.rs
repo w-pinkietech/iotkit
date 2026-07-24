@@ -93,6 +93,56 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
 }
 
 #[tokio::test]
+async fn activation_response_does_not_expose_internal_command_identity() {
+    let directory = test_directory();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: PathBuf::from(directory.path()).join("activation-response.db"),
+    })
+    .await
+    .unwrap();
+    AccountService::new(storage.clone())
+        .create_initial_system_admin(
+            "owner",
+            "System Owner",
+            Password::new("long enough owner password").unwrap(),
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
+    let application = StorageWebApplication::new(storage);
+    let principal = application
+        .login("owner", "long enough owner password")
+        .await
+        .unwrap()
+        .principal;
+
+    let response = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/api/v1/edge-nodes/{}/activation", descriptor.edge_node_id),
+                params: HashMap::new(),
+                expected_revision: None,
+            },
+            serde_json::json!({}),
+        )
+        .await
+        .expect("activation request is accepted");
+
+    assert_eq!(response.status, axum::http::StatusCode::ACCEPTED);
+    assert_eq!(response.body["state"], "activating");
+    assert!(response.body["edge_node_ref"].is_string());
+    assert_eq!(response.body.get("activation_id"), None);
+    assert_eq!(response.body.get("grant_revision"), None);
+}
+
+#[tokio::test]
 async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {

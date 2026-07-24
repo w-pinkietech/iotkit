@@ -18,6 +18,10 @@ const sources = Object.fromEntries(
     readFileSync(new URL(`../${name}`, import.meta.url), "utf8"),
   ]),
 );
+const bootstrapGate = readFileSync(
+  new URL("../test-edge-bootstrap.sh", import.meta.url),
+  "utf8",
+);
 
 test("active Rust Edge release gates do not require the Go toolchain", () => {
   for (const [name, source] of Object.entries(sources)) {
@@ -119,4 +123,43 @@ test("real output outage covers generic and Pinikiet exports", () => {
   assert.match(rustTest, /pinikiet\.mqtt\.v1/);
   assert.match(rustTest, /generic_export_id/);
   assert.match(rustTest, /pinikiet_export_id/);
+});
+
+test("bootstrap creates the first administrator before starting the Edge owner", () => {
+  const accountBootstrap = bootstrapGate.indexOf("edge account bootstrap");
+  const edgeStart = bootstrapGate.indexOf(
+    '"${compose[@]}" up --build --detach',
+  );
+  assert.notEqual(accountBootstrap, -1);
+  assert.notEqual(edgeStart, -1);
+  assert.ok(
+    accountBootstrap < edgeStart,
+    "the one-shot bootstrap must own storage before the long-running Edge starts",
+  );
+});
+
+test("bootstrap expects the current API state for discovered Edge Nodes", () => {
+  assert.match(bootstrapGate, /\.state == "needs-setup"/);
+  assert.match(bootstrapGate, /\.state == "configured"/);
+  assert.doesNotMatch(bootstrapGate, /\.state == "discovered"/);
+  assert.doesNotMatch(bootstrapGate, /\.state == "active"/);
+});
+
+test("running bootstrap verifies custody through the authenticated API", () => {
+  assert.match(
+    bootstrapGate,
+    /api\/v1\/history\?from=\$history_from&to=\$history_to&limit=10/,
+  );
+  assert.match(bootstrapGate, /history_from=\$\(\(history_to - 60000\)\)/);
+  const retryLoop = bootstrapGate.indexOf("for _ in $(seq 1 60); do");
+  const historyWindow = bootstrapGate.indexOf(
+    "history_to=$(date +%s%3N)",
+    retryLoop,
+  );
+  const historyRequest = bootstrapGate.indexOf(
+    "api/v1/history?from=$history_from&to=$history_to&limit=10",
+    historyWindow,
+  );
+  assert.ok(retryLoop < historyWindow && historyWindow < historyRequest);
+  assert.doesNotMatch(bootstrapGate, /exec -T edge[\s\S]+iotkit-edge query/);
 });

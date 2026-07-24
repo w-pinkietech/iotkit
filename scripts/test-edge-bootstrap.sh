@@ -331,8 +331,27 @@ if grep -Fq "$archive_password" "$scratch/compose.rendered" \
   exit 1
 fi
 
-"${compose[@]}" up --build --detach
+openssl rand -base64 24 >"$scratch/admin-password"
+chmod 600 "$scratch/admin-password"
+storage_args=(--storage-profile "$storage_profile"
+  --storage-metadata /run/iotkit/storage-profile.json)
+if [[ "$storage_profile" == "postgres" ]]; then
+  storage_args+=(--postgres-config /run/iotkit/postgres.json)
+else
+  storage_args+=(--db /data/edge.db)
+fi
 compose_started=true
+if ! "${compose[@]}" run --rm --build \
+  -v "$scratch/admin-password:/run/iotkit/admin-password:ro" \
+  edge account bootstrap "${storage_args[@]}" --login-id admin \
+  --display-name '試験管理者' --password-file /run/iotkit/admin-password \
+  >"$scratch/account-bootstrap.stdout" 2>"$scratch/account-bootstrap.stderr"; then
+  sed -n '1,120p' "$scratch/account-bootstrap.stderr" >&2
+  echo "initial Edge administrator bootstrap failed" >&2
+  exit 1
+fi
+
+"${compose[@]}" up --build --detach
 for _ in $(seq 1 60); do
   if [[ "$storage_profile" == "postgres" ]]; then
     stored_edge_id=$("${compose[@]}" exec -T postgres \
@@ -350,24 +369,6 @@ done
   exit 1
 }
 
-openssl rand -base64 24 >"$scratch/admin-password"
-chmod 600 "$scratch/admin-password"
-storage_args=(--storage-profile "$storage_profile"
-  --storage-metadata /run/iotkit/storage-profile.json)
-if [[ "$storage_profile" == "postgres" ]]; then
-  storage_args+=(--postgres-config /run/iotkit/postgres.json)
-else
-  storage_args+=(--db /data/edge.db)
-fi
-if ! "${compose[@]}" run --rm \
-  -v "$scratch/admin-password:/run/iotkit/admin-password:ro" \
-  edge account bootstrap "${storage_args[@]}" --login-id admin \
-  --display-name '試験管理者' --password-file /run/iotkit/admin-password \
-  >"$scratch/account-bootstrap.stdout" 2>"$scratch/account-bootstrap.stderr"; then
-  sed -n '1,120p' "$scratch/account-bootstrap.stderr" >&2
-  echo "initial Edge administrator bootstrap failed" >&2
-  exit 1
-fi
 admin_password=$(<"$scratch/admin-password")
 login_payload=$(jq -nc --arg password "$admin_password" \
   '{login_id:"admin", password:$password}')
@@ -488,8 +489,8 @@ for _ in $(seq 1 60); do
     >"$scratch/edge-nodes.json"
   if jq -e --arg first "$edge_node_id" --arg second "$edge_node_id2" \
     '.items | length == 2
-      and any(.[]; .edge_node_id == $first and .state == "discovered")
-      and any(.[]; .edge_node_id == $second and .state == "discovered")' \
+      and any(.[]; .edge_node_id == $first and .state == "needs-setup")
+      and any(.[]; .edge_node_id == $second and .state == "needs-setup")' \
     "$scratch/edge-nodes.json" >/dev/null; then
     edges_discovered=true
     break
@@ -498,6 +499,9 @@ for _ in $(seq 1 60); do
 done
 [[ "$edges_discovered" == true ]] || {
   "${compose[@]}" logs broker edge
+  sed -n '1,200p' "$scratch/edge.log"
+  sed -n '1,200p' "$scratch/edge2.log"
+  cat "$scratch/edge-nodes.json"
   echo "fresh Edges were not discovered as unregistered" >&2
   exit 1
 }
@@ -527,7 +531,7 @@ for _ in $(seq 1 60); do
   curl -sS --cacert "$scratch/ca.pem" -b "$scratch/cookies" \
     "https://localhost:$edge_port/api/v1/edge-nodes" \
     >"$scratch/edge-nodes.json"
-  if jq -e '.items | length == 2 and all(.[]; .state == "active")' \
+  if jq -e '.items | length == 2 and all(.[]; .state == "configured")' \
     "$scratch/edge-nodes.json" >/dev/null; then
     edges_active=true
     break
@@ -538,6 +542,7 @@ done
   "${compose[@]}" logs broker edge
   sed -n '1,200p' "$scratch/edge.log"
   sed -n '1,200p' "$scratch/edge2.log"
+  cat "$scratch/edge-nodes.json"
   echo "Edge Node activation did not converge" >&2
   exit 1
 }
@@ -582,8 +587,11 @@ for _ in $(seq 1 60); do
     --ledger-epoch "$smoke_epoch" --pub-seq "$smoke_pub_seq" 2>/dev/null || true)
   status_output2=$("$cargo_target_dir/debug/iotkit-edge-nodectl" --db "$scratch/edge2.db" smoke status \
     --ledger-epoch "$smoke_epoch2" --pub-seq "$smoke_pub_seq2" 2>/dev/null || true)
-  query_output=$("${compose[@]}" exec -T edge \
-    iotkit-edge query "${storage_args[@]}" --limit 10 2>/dev/null || true)
+  history_to=$(date +%s%3N)
+  history_from=$((history_to - 60000))
+  query_output=$(curl -sS --cacert "$scratch/ca.pem" -b "$scratch/cookies" \
+    "https://localhost:$edge_port/api/v1/history?from=$history_from&to=$history_to&limit=10" \
+    2>/dev/null || true)
   if jq -e '.status == "delivered"' <<<"$status_output" >/dev/null 2>&1 \
     && jq -e '.status == "delivered"' <<<"$status_output2" >/dev/null 2>&1 \
     && grep -Fq "$smoke_test_id" <<<"$query_output" \
