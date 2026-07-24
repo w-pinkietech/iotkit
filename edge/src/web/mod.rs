@@ -1627,6 +1627,16 @@ pub mod test_support {
                 include_pending_node: false,
             }
         }
+        pub fn post_activation_viewer() -> Self {
+            Self {
+                authenticated: true,
+                role: "viewer",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: false,
+                include_pending_node: false,
+            }
+        }
         pub fn viewer() -> Self {
             Self {
                 authenticated: true,
@@ -1701,8 +1711,16 @@ pub mod test_support {
                 edge_node_id: "factory-edge-01".into(),
                 name: "乾燥炉入口 BravePI".into(),
                 location: "乾燥炉".into(),
-                state_label: "登録済み".into(),
-                state_class: "configured".into(),
+                state_label: if resources_configured {
+                    "登録済み".into()
+                } else {
+                    "設定が必要".into()
+                },
+                state_class: if resources_configured {
+                    "configured".into()
+                } else {
+                    "needs-setup".into()
+                },
                 identifier: "01234567".into(),
                 model_id: "bravepi".into(),
                 descriptor_current: true,

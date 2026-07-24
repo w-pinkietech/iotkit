@@ -666,6 +666,37 @@ async fn completed_activation_on_node_detail_names_the_next_device_setup_action(
 }
 
 #[tokio::test]
+async fn viewer_sees_post_activation_state_without_an_actionable_setup_link() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::post_activation_viewer()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/edge-nodes/edge-node-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(html.contains("登録済み"));
+    assert!(html.contains("設定が必要"));
+    assert!(html.contains("閲覧のみ"));
+    assert!(html.contains("設定管理者に機器設定を依頼してください"));
+    assert!(!html.contains("data-next-device-setup"));
+    assert!(!html.contains("次へ: 機器を設定"));
+}
+
+#[tokio::test]
 async fn console_mutation_redirect_replaces_transient_query_values() {
     let app = router(
         WebConfig::test(),

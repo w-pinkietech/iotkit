@@ -430,10 +430,17 @@
         <div><dt>登録状態</dt><dd>{{ edge_node.state_label }}</dd></div>
       </dl>
       {% if !next_device_setup_href.is_empty() %}
+      {% if is_admin %}
       <section class="equipment-action-card">
         <div><h3>登録が完了しました</h3><p>最初の機器の名前と設置場所を設定します。</p></div>
         <a class="button onboarding-primary" data-next-device-setup href="{{ next_device_setup_href }}">次へ: 機器を設定</a>
       </section>
+      {% else %}
+      <div class="permission-note">
+        <strong>閲覧のみ</strong>
+        <span>機器の設定が必要です。設定管理者に機器設定を依頼してください。</span>
+      </div>
+      {% endif %}
       {% endif %}
       {% if edge_node.needs_recovery_review %}
       <section class="equipment-recovery-help" aria-labelledby="recovery-help-title">
