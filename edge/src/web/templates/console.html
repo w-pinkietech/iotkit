@@ -391,7 +391,7 @@
           {% if device.revision > 0 %}<input type="hidden" name="revision" value="{{ device.revision }}">{% endif %}
           <div class="form-row">
             <label>デバイス名<input name="display_name" value="{{ device.name }}" required></label>
-            <label>設置場所<input name="location" value="{% if device.revision > 0 %}{{ device.location }}{% endif %}" placeholder="例：第1工場 乾燥炉入口" required></label>
+            <label>設置場所<input name="location" value="{% if device.revision > 0 %}{{ device.location }}{% endif %}" placeholder="例：乾燥炉入口" required></label>
           </div>
           <button type="submit">保存</button>
         </form>

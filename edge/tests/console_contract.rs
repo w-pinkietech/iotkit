@@ -903,9 +903,7 @@ async fn device_location_editor_uses_revision_to_separate_placeholder_from_saved
     )
     .unwrap();
     assert!(html.contains("<p>設置場所 未設定</p>"));
-    assert!(
-        html.contains(r#"name="location" value="" placeholder="例：第1工場 乾燥炉入口" required"#)
-    );
+    assert!(html.contains(r#"name="location" value="" placeholder="例：乾燥炉入口" required"#));
     assert!(!html.contains(r#"name="location" value="設置場所 未設定""#));
 
     let configured = router(
@@ -928,9 +926,9 @@ async fn device_location_editor_uses_revision_to_separate_placeholder_from_saved
             .to_vec(),
     )
     .unwrap();
-    assert!(html.contains(
-        r#"name="location" value="乾燥炉" placeholder="例：第1工場 乾燥炉入口" required"#
-    ));
+    assert!(
+        html.contains(r#"name="location" value="乾燥炉" placeholder="例：乾燥炉入口" required"#)
+    );
 }
 
 #[tokio::test]
