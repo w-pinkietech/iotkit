@@ -509,7 +509,7 @@ impl WebApplication for StorageWebApplication {
                 state_label: if device.profile_revision.is_some() {
                     "登録済み".into()
                 } else {
-                    "要設定".into()
+                    "設定が必要".into()
                 },
                 state_class: if device.profile_revision.is_some() {
                     "configured".into()
@@ -1614,6 +1614,8 @@ fn console_edge_node_with_devices(
     ConsoleEdgeNode {
         edge_node_ref: node.edge_node_ref.clone(),
         edge_node_id: node.edge_node_id.clone(),
+        ledger_epoch: node.ledger_epoch.clone(),
+        descriptor_received_at: format!("{} (Unix ms)", node.last_descriptor_at),
         name: node.edge_node_id.clone(),
         location: "設置場所 未設定".into(),
         state: node.state,

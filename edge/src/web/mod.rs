@@ -172,6 +172,8 @@ pub struct ConsoleView {
 pub struct ConsoleEdgeNode {
     pub edge_node_ref: String,
     pub edge_node_id: String,
+    pub ledger_epoch: String,
+    pub descriptor_received_at: String,
     pub name: String,
     pub location: String,
     pub state: EdgeNodeState,
@@ -460,6 +462,7 @@ struct ConsoleTemplate<'a> {
     title: &'a str,
     page: &'a str,
     sensor_view: &'a str,
+    show_commissioning: bool,
     csrf: &'a str,
     display_name: &'a str,
     role: &'a str,
@@ -513,6 +516,7 @@ async fn console_page(
             title,
             page,
             sensor_view,
+            show_commissioning: path == "/status" || path == "/equipment",
             csrf: &csrf,
             display_name: &principal.display_name,
             role: &principal.role,
@@ -1450,6 +1454,8 @@ pub mod test_support {
         authenticated: bool,
         role: &'static str,
         rate_limited: bool,
+        pending_node_state: EdgeNodeState,
+        resources_configured: bool,
     }
     impl Default for StubApplication {
         fn default() -> Self {
@@ -1457,6 +1463,8 @@ pub mod test_support {
                 authenticated: false,
                 role: "admin",
                 rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
             }
         }
     }
@@ -1466,6 +1474,35 @@ pub mod test_support {
                 authenticated: true,
                 role: "admin",
                 rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+            }
+        }
+        pub fn unconfigured() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: false,
+            }
+        }
+        pub fn viewer() -> Self {
+            Self {
+                authenticated: true,
+                role: "viewer",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+            }
+        }
+        pub fn recovery() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::RecoveryHold,
+                resources_configured: true,
             }
         }
         pub fn system_admin() -> Self {
@@ -1473,6 +1510,8 @@ pub mod test_support {
                 authenticated: true,
                 role: "system_admin",
                 rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
             }
         }
         pub fn rate_limited() -> Self {
@@ -1480,6 +1519,8 @@ pub mod test_support {
                 authenticated: false,
                 role: "admin",
                 rate_limited: true,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
             }
         }
     }
@@ -1535,6 +1576,16 @@ pub mod test_support {
                 "factory-edge-01".into()
             } else {
                 "assembly-edge-02".into()
+            },
+            ledger_epoch: if active {
+                "epoch-01".into()
+            } else {
+                "epoch-02".into()
+            },
+            descriptor_received_at: if active {
+                "2025-01-01T00:00:01Z".into()
+            } else {
+                "2025-01-01T00:00:02Z".into()
             },
             name: if active {
                 "factory-edge-01".into()
@@ -1635,35 +1686,56 @@ pub mod test_support {
                 value_kind: "numeric".into(),
                 unit_mode: "unit".into(),
                 decimal_places: 1,
-                revision: 1,
+                revision: i64::from(self.resources_configured),
                 status_label: "受信中".into(),
                 status_class: "receiving".into(),
-                profile_complete: true,
+                profile_complete: self.resources_configured,
                 input_is_boolean: false,
                 calibration_scale: 1.0,
                 calibration_offset: 0.0,
                 calibration_revision: 1,
                 has_alarm_rules: false,
-                rules: vec![ConsoleRule {
-                    rule_id: "rule-01".into(),
-                    display_name: "現在温度".into(),
-                    kind: "numeric".into(),
-                    kind_label: "測定値".into(),
-                    count_summary: String::new(),
-                    revision: 1,
-                    detector_mode: String::new(),
-                    detector_is_boolean: false,
-                    rise_threshold: 0.0,
-                    fall_threshold: 0.0,
-                    rise_debounce_seconds: 0.0,
-                    fall_debounce_seconds: 0.0,
-                    trigger: String::new(),
-                }],
+                rules: self
+                    .resources_configured
+                    .then(|| ConsoleRule {
+                        rule_id: "rule-01".into(),
+                        display_name: "現在温度".into(),
+                        kind: "numeric".into(),
+                        kind_label: "測定値".into(),
+                        count_summary: String::new(),
+                        revision: 1,
+                        detector_mode: String::new(),
+                        detector_is_boolean: false,
+                        rise_threshold: 0.0,
+                        fall_threshold: 0.0,
+                        rise_debounce_seconds: 0.0,
+                        fall_debounce_seconds: 0.0,
+                        trigger: String::new(),
+                    })
+                    .into_iter()
+                    .collect(),
             };
+            let mut pending_node = console_stub_edge_node(false);
+            match self.pending_node_state {
+                EdgeNodeState::Discovered => {}
+                EdgeNodeState::Activating => {
+                    pending_node.state = EdgeNodeState::Activating;
+                    pending_node.state_label = "登録処理中".into();
+                    pending_node.state_class = "stale".into();
+                    pending_node.can_activate = false;
+                }
+                EdgeNodeState::RecoveryHold => {
+                    pending_node.state = EdgeNodeState::RecoveryHold;
+                    pending_node.state_label = "復旧確認待ち".into();
+                    pending_node.state_class = "stale".into();
+                    pending_node.can_activate = false;
+                }
+                EdgeNodeState::Active => unreachable!("pending test node cannot be active"),
+            }
             let selected_edge_node = request
                 .path
                 .contains("/edge-nodes/edge-node-02")
-                .then(|| console_stub_edge_node(false))
+                .then(|| pending_node.clone())
                 .or_else(|| {
                     request
                         .path
@@ -1676,11 +1748,19 @@ pub mod test_support {
                 edge_node_id: "factory-edge-01".into(),
                 name: "乾燥炉入口 BravePI".into(),
                 location: "乾燥炉".into(),
-                state_label: "登録済み".into(),
-                state_class: "configured".into(),
+                state_label: if self.resources_configured {
+                    "登録済み".into()
+                } else {
+                    "設定が必要".into()
+                },
+                state_class: if self.resources_configured {
+                    "configured".into()
+                } else {
+                    "needs-setup".into()
+                },
                 identifier: "01234567".into(),
                 model_id: "bravepi".into(),
-                revision: 1,
+                revision: i64::from(self.resources_configured),
                 signals: vec![signal.clone()],
             };
             let selected_device = request
@@ -1691,12 +1771,18 @@ pub mod test_support {
                 .path
                 .contains("/sensors/signal-01")
                 .then(|| signal.clone());
+            let edge_nodes = vec![console_stub_edge_node(true), pending_node];
+            let devices = vec![device];
+            let signals = vec![signal];
+            let commissioning =
+                console::commissioning::commissioning_view(&edge_nodes, &devices, &signals);
             Ok(ConsoleView {
-                edge_nodes: vec![console_stub_edge_node(true), console_stub_edge_node(false)],
+                commissioning,
+                edge_nodes,
                 registered_edge_node_count: 1,
                 receiving_signal_count: 1,
-                devices: vec![device],
-                signals: vec![signal],
+                devices,
+                signals,
                 selected_edge_node,
                 selected_device,
                 selected_signal,

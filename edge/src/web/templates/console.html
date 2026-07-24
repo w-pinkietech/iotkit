@@ -49,6 +49,55 @@
       {% if !view.notice.is_empty() %}<div class="feedback success-feedback" role="status">{{ view.notice }}</div>{% endif %}
       {% if !view.page_error.is_empty() %}<div class="feedback error-feedback" role="alert">{{ view.page_error }}</div>{% endif %}
 
+      {% if show_commissioning %}
+      <section class="onboarding" data-commissioning-stage="{{ view.commissioning.stage }}">
+        <div class="onboarding-heading">
+          <div>
+            <p class="section-kicker">はじめの設定</p>
+            <h2>{{ view.commissioning.title }}</h2>
+            <p>{{ view.commissioning.explanation }}</p>
+          </div>
+          <strong><span>{{ view.commissioning.completed_steps }} / {{ view.commissioning.total_steps }}</span>完了</strong>
+        </div>
+        <ol class="onboarding-steps" aria-label="初回設定の進み具合">
+          <li class="onboarding-step {% if view.commissioning.completed_steps >= 1 %}complete{% else %}current{% endif %}"{% if view.commissioning.completed_steps < 1 %} aria-current="step"{% endif %}>
+            <span class="onboarding-number" aria-hidden="true">{% if view.commissioning.completed_steps >= 1 %}✓{% else %}1{% endif %}</span>
+            <div><strong>収集ノードを登録</strong><small>検出した収集ノードを確認します。</small></div>
+            <span class="onboarding-state">{% if view.commissioning.completed_steps >= 1 %}✓ 完了{% else %}● 現在{% endif %}</span>
+          </li>
+          <li class="onboarding-step {% if view.commissioning.completed_steps >= 2 %}complete{% else if view.commissioning.completed_steps == 1 %}current{% else %}pending{% endif %}"{% if view.commissioning.completed_steps == 1 %} aria-current="step"{% endif %}>
+            <span class="onboarding-number" aria-hidden="true">{% if view.commissioning.completed_steps >= 2 %}✓{% else %}2{% endif %}</span>
+            <div><strong>機器を確認</strong><small>名前と設置場所を確認します。</small></div>
+            <span class="onboarding-state">{% if view.commissioning.completed_steps >= 2 %}✓ 完了{% else if view.commissioning.completed_steps == 1 %}● 現在{% else %}○ 未着手{% endif %}</span>
+          </li>
+          <li class="onboarding-step {% if view.commissioning.completed_steps >= 3 %}complete{% else if view.commissioning.completed_steps == 2 %}current{% else %}pending{% endif %}"{% if view.commissioning.completed_steps == 2 %} aria-current="step"{% endif %}>
+            <span class="onboarding-number" aria-hidden="true">{% if view.commissioning.completed_steps >= 3 %}✓{% else %}3{% endif %}</span>
+            <div><strong>センサーを設定</strong><small>種類、単位、補正を設定します。</small></div>
+            <span class="onboarding-state">{% if view.commissioning.completed_steps >= 3 %}✓ 完了{% else if view.commissioning.completed_steps == 2 %}● 現在{% else %}○ 未着手{% endif %}</span>
+          </li>
+          <li class="onboarding-step {% if view.commissioning.completed_steps >= 4 %}complete{% else if view.commissioning.completed_steps == 3 %}current{% else %}pending{% endif %}"{% if view.commissioning.completed_steps == 3 %} aria-current="step"{% endif %}>
+            <span class="onboarding-number" aria-hidden="true">{% if view.commissioning.completed_steps >= 4 %}✓{% else %}4{% endif %}</span>
+            <div><strong>計測を開始</strong><small>値の使い方を決めて計測を始めます。</small></div>
+            <span class="onboarding-state">{% if view.commissioning.completed_steps >= 4 %}✓ 完了{% else if view.commissioning.completed_steps == 3 %}● 現在{% else %}○ 未着手{% endif %}</span>
+          </li>
+        </ol>
+        <div class="onboarding-next">
+          <div>
+            <span>次に行うこと</span>
+            <strong>{{ view.commissioning.title }}</strong>
+          </div>
+          {% if is_admin %}
+          <a class="button onboarding-primary" href="{{ view.commissioning.action_href }}">{{ view.commissioning.action_label }} <span aria-hidden="true">→</span></a>
+          {% else %}
+          <p class="onboarding-read-only"><strong>閲覧のみ</strong><span>現在の状態を確認できます。次の操作は設定管理者が行います。</span></p>
+          {% endif %}
+        </div>
+        <p class="onboarding-optional">
+          未完了: 収集ノード {{ view.commissioning.pending_edge_nodes }}台・機器 {{ view.commissioning.pending_devices }}台・センサー {{ view.commissioning.pending_signals }}件
+        </p>
+      </section>
+      {% endif %}
+
       {% if page == "status" %}
       {% if view.receiving_signal_count > 0 %}
       <section class="health-banner healthy" aria-label="システムの状態">
@@ -108,7 +157,7 @@
       {% if !is_admin %}<div class="permission-note"><strong>閲覧のみ</strong><span>変更には設定管理者の権限が必要です。</span></div>{% endif %}
       <header class="sensor-detail-header">
         <div class="sensor-detail-identity">
-          <span>{{ signal.sensor_type }}</span>
+          <span>{{ signal.sensor_type }}{% if !signal.profile_complete %} · 設定が必要{% endif %}</span>
           <h1>{{ signal.name }}</h1>
           <small>{{ signal.edge_node_id }}</small>
         </div>
@@ -347,7 +396,7 @@
         <div class="equipment-sensor-grid">
           {% for child_signal in device.signals %}
           <article class="equipment-sensor-card">
-            <header><div><p class="section-kicker">{{ child_signal.sensor_type }}</p><h3>{{ child_signal.name }}</h3></div><span class="status-pill {{ child_signal.status_class }}">{{ child_signal.status_label }}</span></header>
+            <header><div><p class="section-kicker">{{ child_signal.sensor_type }}</p><h3>{{ child_signal.name }}</h3>{% if !child_signal.profile_complete %}<span class="status-pill needs-setup">設定が必要</span>{% endif %}</div><span class="status-pill {{ child_signal.status_class }}">{{ child_signal.status_label }}</span></header>
             <div class="sensor-current-value"><span>現在の値</span><strong>{{ child_signal.value }} <small>{{ child_signal.unit }}</small></strong></div>
             <footer class="equipment-sensor-actions"><a class="button secondary" href="/equipment/devices/{{ device.device_ref }}/sensors/{{ child_signal.signal_ref }}">センサー設定を開く</a></footer>
           </article>
@@ -364,10 +413,14 @@
         <span class="status-pill {{ edge_node.state_class }}">{{ edge_node.state_label }}</span>
       </section>
       <dl class="equipment-detail-facts">
-        <div><dt>デバイス</dt><dd>{{ edge_node.devices.len() }}台</dd></div>
-        <div><dt>センサー</dt><dd>{{ edge_node.signal_count }}件</dd></div>
+        <div><dt>Edge Node ID</dt><dd>{{ edge_node.edge_node_id }}</dd></div>
+        <div><dt>ledger epoch</dt><dd>{{ edge_node.ledger_epoch }}</dd></div>
+        <div><dt>descriptor受信時刻</dt><dd>{{ edge_node.descriptor_received_at }}</dd></div>
+        <div><dt>検出したデバイス</dt><dd>{{ edge_node.devices.len() }}台</dd></div>
+        <div><dt>検出したセンサー</dt><dd>{{ edge_node.signal_count }}件</dd></div>
         <div><dt>登録状態</dt><dd>{{ edge_node.state_label }}</dd></div>
       </dl>
+      {% if edge_node.can_activate %}<p class="equipment-history-boundary"><span aria-hidden="true">ⓘ</span>正式な履歴は登録完了後に受信した値から始まります。</p>{% endif %}
       {% if edge_node.can_activate && is_admin %}
       <section class="equipment-action-card">
         <div><h3>この収集ノードを登録します</h3><p>登録完了後に受信した値から正式な履歴として保存します。</p></div>

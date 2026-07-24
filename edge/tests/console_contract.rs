@@ -76,6 +76,8 @@ fn commissioning_node(state: EdgeNodeState) -> ConsoleEdgeNode {
     ConsoleEdgeNode {
         edge_node_ref: "node-01".into(),
         edge_node_id: "edge-01".into(),
+        ledger_epoch: "epoch-01".into(),
+        descriptor_received_at: "2025-01-01T00:00:00Z".into(),
         name: "Edge Node".into(),
         location: "工場".into(),
         state,
@@ -96,6 +98,16 @@ fn commissioning_projection_prioritizes_edge_node_activation() {
     assert_eq!(view.completed_steps, 0);
     assert_eq!(view.total_steps, 4);
     assert_eq!(view.pending_edge_nodes, 1);
+}
+
+#[test]
+fn commissioning_projection_waits_for_the_first_descriptor_without_claiming_completion() {
+    let view = commissioning_view(&[], &[], &[]);
+
+    assert_eq!(view.stage, "waiting-edge-node");
+    assert_eq!(view.completed_steps, 0);
+    assert_eq!(view.title, "収集ノードの接続を待っています");
+    assert_eq!(view.action_href, "/equipment");
 }
 
 #[test]
@@ -379,6 +391,206 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
         for hook in hooks {
             assert!(html.contains(hook), "{path} missing {hook}");
         }
+    }
+}
+
+#[tokio::test]
+async fn commissioning_panel_leads_status_and_equipment_with_one_admin_next_action() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+
+    for path in ["/status", "/equipment"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 2_000_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(
+            html.contains(
+                r#"<section class="onboarding" data-commissioning-stage="activate-edge-node">"#
+            ),
+            "{path} must expose the stable commissioning stage"
+        );
+        let mut previous = 0;
+        for concept in [
+            "収集ノードを登録",
+            "機器を確認",
+            "センサーを設定",
+            "計測を開始",
+        ] {
+            let position = html.find(concept).expect("ordered commissioning concept");
+            assert!(
+                position >= previous,
+                "{concept} must remain in journey order"
+            );
+            previous = position;
+        }
+        assert_eq!(
+            html.matches(r#"class="button onboarding-primary""#).count(),
+            1,
+            "{path} must present exactly one primary next action"
+        );
+
+        let onboarding = html.find(r#"class="onboarding""#).unwrap();
+        let page_content = if path == "/status" {
+            html.find(r#"class="health-banner"#).unwrap()
+        } else {
+            html.find(r#"class="equipment-overview""#).unwrap()
+        };
+        assert!(
+            onboarding < page_content,
+            "{path} must place the next action before supporting content"
+        );
+    }
+}
+
+#[tokio::test]
+async fn discovered_edge_node_detail_explains_descriptor_and_history_boundary() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/edge-nodes/edge-node-02")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    for fact in [
+        "Edge Node ID",
+        "assembly-edge-02",
+        "ledger epoch",
+        "epoch-02",
+        "descriptor受信時刻",
+        "2025-01-01T00:00:02Z",
+        "検出したデバイス",
+        "0台",
+        "検出したセンサー",
+        "0件",
+        "正式な履歴は登録完了後に受信した値から始まります",
+    ] {
+        assert!(html.contains(fact), "missing discovered-node fact: {fact}");
+    }
+}
+
+#[tokio::test]
+async fn commissioning_is_read_only_for_viewers_and_recovery_never_offers_activation() {
+    let viewer = router(WebConfig::test(), Arc::new(StubApplication::viewer()));
+    for path in ["/status", "/equipment"] {
+        let response = viewer
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 2_000_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(html.contains(r#"data-commissioning-stage="activate-edge-node""#));
+        assert!(html.contains(r#"class="onboarding-read-only""#));
+        assert!(html.contains("次の操作は設定管理者が行います"));
+        assert!(!html.contains(r#"class="button onboarding-primary""#));
+    }
+
+    let recovery = router(WebConfig::test(), Arc::new(StubApplication::recovery()));
+    for path in ["/status", "/equipment/edge-nodes/edge-node-02"] {
+        let response = recovery
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 2_000_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(!html.contains(r#"/activation""#), "{path}");
+        assert!(!html.contains(">登録する<"), "{path}");
+        if path == "/status" {
+            assert!(html.contains(r#"data-commissioning-stage="recovery""#));
+            assert!(html.contains("収集ノードの復旧を確認"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn active_unconfigured_resources_keep_raw_values_visible_beside_setup_help() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::unconfigured()));
+
+    for path in [
+        "/equipment/devices/device-01",
+        "/equipment/devices/device-01/sensors/signal-01",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 2_000_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(html.contains("設定が必要"), "{path}");
+        assert!(
+            html.contains("28.5"),
+            "{path} must preserve the received raw value"
+        );
+        assert!(
+            html.contains("受信中"),
+            "{path} must preserve raw reception state"
+        );
     }
 }
 

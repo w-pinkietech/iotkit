@@ -33,7 +33,16 @@ pub fn commissioning_view(
         .filter(|signal| !signal.profile_complete || signal.rules.is_empty())
         .count();
 
-    let stage = if let Some(node) = edge_nodes
+    let stage = if edge_nodes.is_empty() {
+        stage(
+            "waiting-edge-node",
+            "収集ノードの接続を待っています",
+            "収集ノードからdescriptorを受信すると、ここに登録手順が表示されます。",
+            "接続状況を確認",
+            "/equipment".into(),
+            0,
+        )
+    } else if let Some(node) = edge_nodes
         .iter()
         .find(|node| node.state == EdgeNodeState::RecoveryHold)
     {
