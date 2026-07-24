@@ -1665,11 +1665,18 @@ fn descriptor_signal_ref(signal: &DescriptorSignal) -> String {
 }
 
 async fn resolve_signal(storage: &Storage, signal_ref: &str) -> Result<DescriptorSignal, WebError> {
-    let rules = storage.list_semantic_rules().await.map_err(internal)?;
-    let identity = rules
+    let inventory = storage.inventory_signals().await.map_err(internal)?;
+    let inventory_identity = inventory
         .iter()
-        .find(|rule| rule.signal_ref == signal_ref)
-        .map(|rule| (rule.edge_node_id.as_str(), rule.series_key.as_str()));
+        .find(|signal| signal.signal_ref == signal_ref)
+        .map(|signal| (signal.edge_node_id.as_str(), signal.series_key.as_str()));
+    let rules = storage.list_semantic_rules().await.map_err(internal)?;
+    let identity = inventory_identity.or_else(|| {
+        rules
+            .iter()
+            .find(|rule| rule.signal_ref == signal_ref)
+            .map(|rule| (rule.edge_node_id.as_str(), rule.series_key.as_str()))
+    });
     storage
         .list_descriptor_signals()
         .await

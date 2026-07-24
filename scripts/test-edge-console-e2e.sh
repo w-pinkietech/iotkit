@@ -23,6 +23,27 @@ broker_container="iotkit-console-broker-test-$$"
 postgres_dsn=""
 
 cleanup() {
+  status=$?
+  if ((status != 0)) && [[ -n "${e2e_dir:-}" ]]; then
+    if [[ -f "$e2e_dir/commissioning-fixture.log" ]]; then
+      echo "== commissioning fixture log ==" >&2
+      cat "$e2e_dir/commissioning-fixture.log" >&2
+    fi
+    if [[ -f "$e2e_dir/edge.log" ]]; then
+      echo "== IoTKit Edge log ==" >&2
+      cat "$e2e_dir/edge.log" >&2
+    fi
+    if [[ "$storage_profile" == "postgres" ]]; then
+      echo "== PostgreSQL log ==" >&2
+      docker logs "$postgres_container" >&2 || true
+    fi
+    echo "== Mosquitto log ==" >&2
+    docker logs "$broker_container" >&2 || true
+  fi
+  if [[ -n "${commissioning_fixture_pid:-}" ]]; then
+    kill "$commissioning_fixture_pid" >/dev/null 2>&1 || true
+    wait "$commissioning_fixture_pid" >/dev/null 2>&1 || true
+  fi
   if [[ -n "${edge_pid:-}" ]]; then
     kill "$edge_pid" >/dev/null 2>&1 || true
     wait "$edge_pid" >/dev/null 2>&1 || true
@@ -34,7 +55,14 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$storage_profile" == "postgres" ]]; then
-  postgres_port=$((20000 + $$ % 20000))
+  postgres_port=$(node -e '
+    const { createServer } = require("node:net");
+    const server = createServer();
+    server.listen(0, "127.0.0.1", () => {
+      console.log(server.address().port);
+      server.close();
+    });
+  ')
   docker run --detach --name "$postgres_container" \
     --env POSTGRES_DB=iotkit \
     --env POSTGRES_USER=iotkit \
@@ -105,15 +133,32 @@ printf '%s\n' \
   'allow_anonymous false' \
   'password_file /mosquitto/config/passwords' \
   'persistence false' >"$broker_dir/mosquitto.conf"
-docker run --rm --user "$(id -u):$(id -g)" \
+printf '%s\n%s\n' "$broker_password" "$broker_password" | docker run --rm --user "$(id -u):$(id -g)" --interactive \
   --volume "$broker_dir:/mosquitto/config" \
   eclipse-mosquitto:2.0.22 \
-  mosquitto_passwd -b -c /mosquitto/config/passwords \
-  "$broker_username" "$broker_password"
-docker run --detach --name "$broker_container" \
+  mosquitto_passwd -c /mosquitto/config/passwords "$broker_username"
+chmod 600 "$broker_dir/passwords"
+docker run --detach --name "$broker_container" --user "$(id -u):$(id -g)" \
   --publish "127.0.0.1:$broker_port:1883" \
   --volume "$broker_dir:/mosquitto/config:ro" \
   eclipse-mosquitto:2.0.22 >/dev/null
+broker_ready=false
+for _ in $(seq 1 100); do
+  if node -e "
+    const socket = require('node:net').connect($broker_port, '127.0.0.1');
+    socket.once('connect', () => { socket.destroy(); process.exit(0); });
+    socket.once('error', () => process.exit(1));
+  "; then
+    broker_ready=true
+    break
+  fi
+  sleep 0.05
+done
+[[ "$broker_ready" == true ]] || {
+  docker logs "$broker_container" >&2
+  echo "Mosquitto did not become ready" >&2
+  exit 1
+}
 broker_password_file="$e2e_dir/broker-password"
 printf '%s' "$broker_password" >"$broker_password_file"
 chmod 600 "$broker_password_file"
@@ -153,6 +198,13 @@ if [[ "$ready" != true ]]; then
   echo "Rust IoTKit Edge did not become ready" >&2
   exit 1
 fi
+
+TMPDIR="$test_tmp_root" cargo build -p iotkit-edge --example console_commissioning_fixture
+commissioning_fixture="$repo_root/target/debug/examples/console_commissioning_fixture"
+"$commissioning_fixture" \
+  127.0.0.1 "$broker_port" "$broker_username" "$broker_password_file" \
+  >"$e2e_dir/commissioning-fixture.log" 2>&1 &
+commissioning_fixture_pid=$!
 
 IOTKIT_EDGE_E2E_URL="$origin" \
   IOTKIT_EDGE_E2E_PASSWORD="$(<"$password_file")" \
