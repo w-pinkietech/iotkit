@@ -319,7 +319,7 @@
               <form method="post" action="/console/signals/{{ signal.signal_ref }}/semantic-rules" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-boolean-input="{{ signal.input_is_boolean }}">
                 <input type="hidden" name="_csrf" value="{{ csrf }}">
                 <label><span>ルール名</span><input name="display_name" required></label>
-                <label><span>作る結果</span><select name="kind" data-semantic-kind><option value="numeric">測定値</option><option value="boolean">ON / OFF</option><option value="cumulative_counter">累積値</option><option value="alarm">異常検知</option></select></label>
+                <label><span>作る結果</span><select name="kind" data-semantic-kind><option value="numeric">測定値</option><option value="boolean">ON / OFF</option><option value="cumulative_counter">累積値</option><option value="alarm">異常検知</option></select><small class="field-help">「測定値」は、センサーの値をそのまま記録・出力するときに選びます。</small></label>
                 <div class="conditional-fields detector-fields" data-semantic-detector hidden>
                   <label><span>有効とみなす側</span><select name="detector_mode"><option value="boolean_high_active" data-detector-boolean>High（1）</option><option value="boolean_low_active" data-detector-boolean>Low（0）</option><option value="high_active" data-detector-analog>値が上がった側</option><option value="low_active" data-detector-analog>値が下がった側</option></select></label>
                   <div class="form-row" data-semantic-thresholds><label><span>立ち上がりしきい値</span><input name="rise_threshold" type="number" step="any" value="0"></label><label><span>立ち下がりしきい値</span><input name="fall_threshold" type="number" step="any" value="0"></label></div>
@@ -391,7 +391,7 @@
           {% if device.revision > 0 %}<input type="hidden" name="revision" value="{{ device.revision }}">{% endif %}
           <div class="form-row">
             <label>デバイス名<input name="display_name" value="{{ device.name }}" required></label>
-            <label>設置場所<input name="location" value="{{ device.location }}" required></label>
+            <label>設置場所<input name="location" value="{% if device.revision > 0 %}{{ device.location }}{% endif %}" placeholder="例：第1工場 乾燥炉入口" required></label>
           </div>
           <button type="submit">保存</button>
         </form>

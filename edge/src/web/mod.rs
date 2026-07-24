@@ -1710,7 +1710,11 @@ pub mod test_support {
                 edge_node_ref: "edge-node-01".into(),
                 edge_node_id: "factory-edge-01".into(),
                 name: "乾燥炉入口 BravePI".into(),
-                location: "乾燥炉".into(),
+                location: if resources_configured {
+                    "乾燥炉".into()
+                } else {
+                    "設置場所 未設定".into()
+                },
                 state_label: if resources_configured {
                     "登録済み".into()
                 } else {
@@ -1920,7 +1924,11 @@ pub mod test_support {
                 edge_node_ref: "edge-node-01".into(),
                 edge_node_id: "factory-edge-01".into(),
                 name: "乾燥炉入口 BravePI".into(),
-                location: "乾燥炉".into(),
+                location: if self.resources_configured {
+                    "乾燥炉".into()
+                } else {
+                    "設置場所 未設定".into()
+                },
                 state_label: if self.resources_configured {
                     "登録済み".into()
                 } else {

@@ -884,6 +884,86 @@ async fn active_unconfigured_resources_keep_raw_values_visible_beside_setup_help
 }
 
 #[tokio::test]
+async fn device_location_editor_uses_revision_to_separate_placeholder_from_saved_value() {
+    let unconfigured = router(WebConfig::test(), Arc::new(StubApplication::unconfigured()));
+    let response = unconfigured
+        .oneshot(
+            Request::get("/equipment/devices/device-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("<p>設置場所 未設定</p>"));
+    assert!(
+        html.contains(r#"name="location" value="" placeholder="例：第1工場 乾燥炉入口" required"#)
+    );
+    assert!(!html.contains(r#"name="location" value="設置場所 未設定""#));
+
+    let configured = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = configured
+        .oneshot(
+            Request::get("/equipment/devices/device-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains(
+        r#"name="location" value="乾燥炉" placeholder="例：第1工場 乾燥炉入口" required"#
+    ));
+}
+
+#[tokio::test]
+async fn numeric_rule_creation_explains_the_measurement_choice() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices/device-01/sensors/signal-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    let create = html.find(r#"<details id="rule-create""#).unwrap();
+    let help = html
+        .find("センサーの値をそのまま記録・出力するときに選びます")
+        .unwrap();
+    assert!(help > create);
+}
+
+#[tokio::test]
 async fn device_collection_without_a_selected_device_is_not_a_valid_console_page() {
     let app = router(
         WebConfig::test(),
