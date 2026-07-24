@@ -41,6 +41,7 @@ use crate::{
         ConsoleEdgeNode, ConsoleOutput, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage,
         ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal,
         RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
+        console::commissioning::commissioning_view,
     },
 };
 
@@ -213,7 +214,10 @@ impl StorageWebApplication {
         let inventory = self.storage.inventory_signals().await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
         let mut signals = Vec::with_capacity(inventory.len());
-        for signal in inventory {
+        for signal in inventory
+            .into_iter()
+            .filter(|signal| signal.presence == "current")
+        {
             let latest = self
                 .storage
                 .recent_signal_inputs(&signal.signal_ref, 1)
@@ -286,13 +290,13 @@ impl StorageWebApplication {
                 sensor_type,
                 sensor_type_code,
                 value,
-                unit: if signal.display_unit_mode == "dimensionless" {
+                unit: console_unit_label(&if signal.display_unit_mode == "dimensionless" {
                     String::new()
                 } else if signal.display_unit.is_empty() {
                     signal.unit
                 } else {
                     signal.display_unit
-                },
+                }),
                 value_kind: if signal.display_value_kind.is_empty() {
                     signal.value_type
                 } else {
@@ -311,6 +315,7 @@ impl StorageWebApplication {
                 } else {
                     "never".into()
                 },
+                descriptor_current: signal.presence == "current",
                 profile_complete: signal.profile_revision.is_some(),
                 input_is_boolean,
                 calibration_scale: calibration.map_or(1.0, |value| value.calibration.scale),
@@ -476,7 +481,10 @@ impl WebApplication for StorageWebApplication {
         let signals = self.console_signals().await?;
         let inventory_devices = self.storage.inventory_devices().await.map_err(internal)?;
         let mut devices = Vec::with_capacity(inventory_devices.len());
-        for device in inventory_devices {
+        for device in inventory_devices
+            .into_iter()
+            .filter(|device| device.presence == "current")
+        {
             let edge_node_ref = nodes
                 .iter()
                 .find(|node| node.edge_node_id == device.edge_node_id)
@@ -508,7 +516,7 @@ impl WebApplication for StorageWebApplication {
                 state_label: if device.profile_revision.is_some() {
                     "登録済み".into()
                 } else {
-                    "要設定".into()
+                    "設定が必要".into()
                 },
                 state_class: if device.profile_revision.is_some() {
                     "configured".into()
@@ -517,6 +525,7 @@ impl WebApplication for StorageWebApplication {
                 },
                 identifier: device.identifier,
                 model_id: device.model_id,
+                descriptor_current: device.presence == "current",
                 revision: device.profile_revision.unwrap_or_default(),
                 signals: device_signals,
             });
@@ -529,11 +538,7 @@ impl WebApplication for StorageWebApplication {
                     .filter(|device| device.edge_node_id == node.edge_node_id)
                     .cloned()
                     .collect();
-                let signal_count = child_devices
-                    .iter()
-                    .map(|device| device.signals.len())
-                    .sum();
-                console_edge_node_with_devices(node, child_devices, signal_count)
+                console_edge_node_with_devices(node, child_devices)
             })
             .collect::<Vec<_>>();
         let selected_edge_node = if let Some(reference) =
@@ -629,7 +634,9 @@ impl WebApplication for StorageWebApplication {
         } else {
             Vec::new()
         };
+        let commissioning = commissioning_view(&edge_nodes, &devices, &signals);
         Ok(ConsoleView {
+            commissioning,
             registered_edge_node_count: nodes
                 .iter()
                 .filter(|node| node.state == EdgeNodeState::Active)
@@ -1594,13 +1601,12 @@ fn account_json(account: &crate::storage::Account) -> Value {
 }
 
 fn console_edge_node(node: &crate::storage::EdgeNode) -> ConsoleEdgeNode {
-    console_edge_node_with_devices(node, Vec::new(), 0)
+    console_edge_node_with_devices(node, Vec::new())
 }
 
 fn console_edge_node_with_devices(
     node: &crate::storage::EdgeNode,
     devices: Vec<ConsoleDevice>,
-    signal_count: usize,
 ) -> ConsoleEdgeNode {
     let (state_label, state_class, can_activate) = match node.state {
         EdgeNodeState::Discovered => ("未登録", "needs-setup", true),
@@ -1608,16 +1614,38 @@ fn console_edge_node_with_devices(
         EdgeNodeState::Active => ("登録済み", "configured", false),
         EdgeNodeState::RecoveryHold => ("復旧確認待ち", "stale", false),
     };
+    let descriptor_device_count = devices
+        .iter()
+        .filter(|device| device.descriptor_current)
+        .count();
+    let descriptor_signal_count = devices
+        .iter()
+        .flat_map(|device| &device.signals)
+        .filter(|signal| signal.descriptor_current)
+        .count();
     ConsoleEdgeNode {
         edge_node_ref: node.edge_node_ref.clone(),
         edge_node_id: node.edge_node_id.clone(),
+        ledger_epoch: node.ledger_epoch.clone(),
+        first_detected_at: node.first_detected_at.to_string(),
         name: node.edge_node_id.clone(),
         location: "設置場所 未設定".into(),
+        state: node.state,
         state_label: state_label.into(),
         state_class: state_class.into(),
         can_activate,
+        needs_recovery_review: node.state == EdgeNodeState::RecoveryHold,
         devices,
-        signal_count,
+        descriptor_device_count,
+        descriptor_signal_count,
+        signal_count: descriptor_signal_count,
+    }
+}
+
+fn console_unit_label(unit: &str) -> String {
+    match unit {
+        "Cel" => "°C".into(),
+        _ => unit.into(),
     }
 }
 
@@ -1644,11 +1672,18 @@ fn descriptor_signal_ref(signal: &DescriptorSignal) -> String {
 }
 
 async fn resolve_signal(storage: &Storage, signal_ref: &str) -> Result<DescriptorSignal, WebError> {
-    let rules = storage.list_semantic_rules().await.map_err(internal)?;
-    let identity = rules
+    let inventory = storage.inventory_signals().await.map_err(internal)?;
+    let inventory_identity = inventory
         .iter()
-        .find(|rule| rule.signal_ref == signal_ref)
-        .map(|rule| (rule.edge_node_id.as_str(), rule.series_key.as_str()));
+        .find(|signal| signal.signal_ref == signal_ref)
+        .map(|signal| (signal.edge_node_id.as_str(), signal.series_key.as_str()));
+    let rules = storage.list_semantic_rules().await.map_err(internal)?;
+    let identity = inventory_identity.or_else(|| {
+        rules
+            .iter()
+            .find(|rule| rule.signal_ref == signal_ref)
+            .map(|rule| (rule.edge_node_id.as_str(), rule.series_key.as_str()))
+    });
     storage
         .list_descriptor_signals()
         .await
@@ -1871,6 +1906,7 @@ fn display_raw_value(value: &Value, decimal_places: i32) -> String {
 fn sensor_type_label<'a>(code: &'a str, custom_label: &'a str) -> &'a str {
     match code {
         "thermocouple" => "熱電対",
+        "temperature" => "温度（方式未確認）",
         "contact" => "接点入力",
         "illuminance" => "照度",
         "distance" => "距離",

@@ -1,9 +1,20 @@
-use iotkit_edge::storage::{
-    AcceptBatch, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile, StoredRawRecord,
+use iotkit_edge::{
+    application::{
+        profiles::{InventoryProfiles, SignalProfileInput},
+        semantics::{SemanticRuleDraft, Semantics},
+    },
+    composition::registered_output_adapters,
+    mqtt::ingest::IngestProcessor,
+    semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
+    storage::{
+        AcceptBatch, AuditActor, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile,
+        StoredRawRecord,
+    },
 };
 use iotkit_edge_custody_contract::{
-    ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
+    AcceptedThrough, ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
 };
+use iotkit_output_adapter_api::ObservationValue;
 use serde::Deserialize;
 use sqlx::{
     Executor,
@@ -162,6 +173,187 @@ async fn accepts_a_contiguous_batch_and_advances_the_cursor_atomically() {
             1_721_800_000_999,
         )
     );
+}
+
+#[tokio::test]
+async fn unconfigured_signal_does_not_block_or_falsely_advance_raw_custody() {
+    let (_directory, _database, store) = sqlite_store().await;
+    let mut descriptor_json: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .expect("decode descriptor JSON");
+    let mut second_signal = descriptor_json["signals"][0].clone();
+    second_signal["series_key"] =
+        "018f0000-0000-7000-8000-000000000001:temperature:na:primary".into();
+    second_signal["measurement_key"] = "temperature".into();
+    second_signal["unit"] = "Cel".into();
+    second_signal["value_type"] = "float".into();
+    descriptor_json["signals"]
+        .as_array_mut()
+        .expect("descriptor signals")
+        .push(second_signal);
+    let descriptor = DescriptorSnapshot::decode(
+        &serde_json::to_vec(&descriptor_json).expect("encode descriptor JSON"),
+    )
+    .expect("decode two-signal descriptor");
+    store
+        .apply_descriptor(&descriptor, 1_721_800_000_000)
+        .await
+        .expect("apply two-signal descriptor");
+
+    let inventory = InventoryProfiles::new(store.clone());
+    let configured_series = &descriptor.signals[0].series_key;
+    let configured_signal = inventory
+        .signals()
+        .await
+        .expect("list descriptor signals")
+        .into_iter()
+        .find(|signal| signal.series_key == *configured_series)
+        .expect("configured signal");
+    inventory
+        .update_signal(
+            AuditActor::local_cli(),
+            &configured_signal.signal_ref,
+            SignalProfileInput {
+                display_name: "Commissioned contact".into(),
+                display_sensor_type: "contact".into(),
+                display_sensor_type_label: String::new(),
+                display_value_kind: "boolean".into(),
+                display_unit_mode: "dimensionless".into(),
+                display_unit: String::new(),
+                decimal_places: 0,
+            },
+            None,
+            1_721_800_000_010,
+        )
+        .await
+        .expect("configure one signal profile");
+    let semantics = Semantics::new(store.clone());
+    let rule = semantics
+        .create_rule(
+            SemanticRuleDraft {
+                edge_node_id: descriptor.edge_node_id.clone(),
+                series_key: configured_series.clone(),
+                display_name: "Commissioned contact state".into(),
+                spec: RuleSpec {
+                    kind: SemanticKind::Boolean,
+                    detector: Detector {
+                        mode: DetectorMode::BooleanHighActive,
+                        ..Detector::default()
+                    },
+                    trigger: TriggerMode::None,
+                },
+            },
+            1_721_800_000_020,
+        )
+        .await
+        .expect("configure one semantic rule");
+
+    let command = store
+        .request_activation(&descriptor.edge_node_id, 1_721_800_000_100)
+        .await
+        .expect("request exact activation");
+    let request =
+        ActivationRequest::decode(&command.payload_json).expect("decode activation request");
+    store
+        .apply_activation_result(
+            &ActivationResult {
+                schema_version: 1,
+                activation_id: request.activation_id,
+                edge_id: request.edge_id,
+                edge_node_id: request.edge_node_id,
+                ledger_epoch: request.expected_ledger_epoch,
+                status: "applied".into(),
+                discard_through_reading_seq: 12,
+                first_publication_seq: 1,
+                applied_at: 1_721_800_000_200,
+            },
+            1_721_800_000_200,
+        )
+        .await
+        .expect("apply exact activation result");
+
+    let batch = RecordBatch::decode(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "edge_node_id": descriptor.edge_node_id,
+            "ledger_epoch": descriptor.ledger_epoch,
+            "publication_id": "edge-node-01:epoch-01:1:2",
+            "cursor_start": 1,
+            "cursor_end": 2,
+            "records": [{
+                "family": "measurement",
+                "schema_version": 1,
+                "epoch": "epoch-01",
+                "pub_seq": 1,
+                "series_key": configured_series,
+                "values": [1.0],
+                "event_time": 1_721_800_001_001_i64,
+                "event_time_source": "received_at",
+                "time_source": "edge_node",
+                "time_quality": "unsynced",
+                "received_at": 1_721_800_001_001_i64,
+                "device_time": null
+            }, {
+                "family": "measurement",
+                "schema_version": 1,
+                "epoch": "epoch-01",
+                "pub_seq": 2,
+                "series_key": descriptor.signals[1].series_key,
+                "values": [24.5],
+                "event_time": 1_721_800_001_002_i64,
+                "event_time_source": "received_at",
+                "time_source": "edge_node",
+                "time_quality": "unsynced",
+                "received_at": 1_721_800_001_002_i64,
+                "device_time": null
+            }]
+        }))
+        .expect("encode wire record batch"),
+    )
+    .expect("valid wire record batch");
+    let batch_payload = serde_json::to_vec(&batch).expect("encode validated wire batch");
+    let ack_publication = IngestProcessor::new(store.clone())
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/records",
+            &batch_payload,
+            1_721_800_001_100,
+        )
+        .await
+        .expect("setup state must not block MQTT raw custody")
+        .expect("valid records produce an accepted-through acknowledgement");
+    let ack =
+        AcceptedThrough::decode(&ack_publication.payload).expect("decode accepted-through ACK");
+
+    assert_eq!(ack.accepted_through, batch.cursor_end);
+    assert_eq!(
+        store
+            .raw_records(&descriptor.edge_node_id, &descriptor.ledger_epoch)
+            .await
+            .expect("read durable raw records")
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .accepted_through(&descriptor.edge_node_id, &descriptor.ledger_epoch)
+            .await
+            .expect("read accepted-through"),
+        batch.cursor_end
+    );
+
+    let projected = semantics
+        .project_pending(10, registered_output_adapters())
+        .await
+        .expect("project configured semantics");
+    assert_eq!(projected.observations, 1);
+    let observations = store
+        .semantic_observations(&rule.rule_id)
+        .await
+        .expect("read semantic observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].value, ObservationValue::Boolean(true));
+    assert_eq!(observations[0].observed_at, 1_721_800_001_001);
 }
 
 #[tokio::test]

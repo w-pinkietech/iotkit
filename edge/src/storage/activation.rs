@@ -37,6 +37,7 @@ pub struct EdgeNode {
     pub edge_node_ref: String,
     pub edge_node_id: String,
     pub ledger_epoch: String,
+    pub first_detected_at: i64,
     pub state: EdgeNodeState,
     pub activation_id: Option<String>,
     pub revision: i64,
@@ -1008,7 +1009,7 @@ async fn load_sqlite(
     edge_node_id: &str,
 ) -> Result<EdgeNode, StorageError> {
     let row = sqlx::query(
-        "SELECT edge_node_ref,edge_node_id,ledger_epoch,state,activation_id,revision \
+        "SELECT edge_node_ref,edge_node_id,ledger_epoch,created_at AS first_detected_at,state,activation_id,revision \
          FROM edge_node_activations WHERE edge_node_id=?",
     )
     .bind(edge_node_id)
@@ -1022,7 +1023,7 @@ async fn load_postgres(
     edge_node_id: &str,
 ) -> Result<EdgeNode, StorageError> {
     let row = sqlx::query(
-        "SELECT edge_node_ref,edge_node_id,ledger_epoch,state,activation_id,revision \
+        "SELECT edge_node_ref,edge_node_id,ledger_epoch,created_at AS first_detected_at,state,activation_id,revision \
          FROM edge_node_activations WHERE edge_node_id=$1 FOR UPDATE",
     )
     .bind(edge_node_id)
@@ -1044,6 +1045,7 @@ where
         edge_node_ref: row.try_get("edge_node_ref")?,
         edge_node_id: row.try_get("edge_node_id")?,
         ledger_epoch: row.try_get("ledger_epoch")?,
+        first_detected_at: row.try_get("first_detected_at")?,
         state: EdgeNodeState::parse(&state)?,
         activation_id: row.try_get("activation_id")?,
         revision: row.try_get("revision")?,

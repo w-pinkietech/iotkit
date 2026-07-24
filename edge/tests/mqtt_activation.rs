@@ -1,5 +1,6 @@
-use iotkit_edge::storage::{
-    AcceptBatch, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile,
+use iotkit_edge::{
+    mqtt::ingest::{IngestError, IngestProcessor},
+    storage::{AcceptBatch, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile},
 };
 use iotkit_edge_custody_contract::{
     ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
@@ -172,5 +173,52 @@ async fn discovery_requires_activation_before_raw_custody() {
             .expect("read new epoch fence")
             .state,
         EdgeNodeState::RecoveryHold
+    );
+}
+
+#[tokio::test]
+async fn unconfigured_inactive_node_stores_no_raw_records_and_emits_no_acknowledgement() {
+    let (_directory, store) = store().await;
+    let processor = IngestProcessor::new(store.clone());
+    let descriptor = fixture("testdata/egress/v2/descriptor-snapshot.json");
+    assert!(
+        processor
+            .handle(
+                "iotkit/v1/edge-nodes/edge-node-01/descriptors",
+                &descriptor,
+                1_720_000_000_000,
+            )
+            .await
+            .expect("apply descriptor")
+            .is_none(),
+        "descriptors do not produce custody acknowledgements"
+    );
+
+    let error = processor
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/records",
+            &fixture("testdata/egress/v1/record-batch.json"),
+            1_720_000_000_050,
+        )
+        .await
+        .expect_err("inactive records must not produce an acknowledgement");
+
+    assert!(matches!(
+        error,
+        IngestError::Storage(StorageError::EdgeNodeNotActive)
+    ));
+    assert!(
+        store
+            .raw_records("edge-node-01", "epoch-01")
+            .await
+            .expect("read raw records")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .accepted_through("edge-node-01", "epoch-01")
+            .await
+            .expect("read custody cursor"),
+        0
     );
 }

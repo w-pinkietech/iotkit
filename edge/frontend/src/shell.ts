@@ -111,7 +111,11 @@ function initializeSettingTabs(): void {
     const panels = queryAll<HTMLElement>("[data-setting-panel]", root);
     if (!tabs.length || !panels.length) continue;
 
-    const activate = (key: string, focus = false): void => {
+    const activate = (
+      key: string,
+      focus = false,
+      replaceTabQuery = false,
+    ): void => {
       for (const tab of tabs) {
         const selected = tab.dataset.settingTab === key;
         tab.setAttribute("aria-selected", String(selected));
@@ -120,6 +124,11 @@ function initializeSettingTabs(): void {
       }
       for (const panel of panels) {
         panel.hidden = panel.dataset.settingPanel !== key;
+      }
+      if (replaceTabQuery) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", key);
+        window.history.replaceState(window.history.state, "", url);
       }
     };
 
@@ -138,7 +147,7 @@ function initializeSettingTabs(): void {
 
     tabs.forEach((tab, index) => {
       tab.addEventListener("click", () => {
-        activate(tab.dataset.settingTab ?? "");
+        activate(tab.dataset.settingTab ?? "", false, true);
       });
       tab.addEventListener("keydown", (event) => {
         let next = index;
@@ -149,7 +158,7 @@ function initializeSettingTabs(): void {
         else if (event.key === "End") next = tabs.length - 1;
         else return;
         event.preventDefault();
-        activate(tabs[next].dataset.settingTab ?? "", true);
+        activate(tabs[next].dataset.settingTab ?? "", true, true);
       });
     });
   }
@@ -167,6 +176,60 @@ function initializeFocusedSection(): void {
   }
   target.setAttribute("tabindex", "-1");
   target.focus();
+}
+
+function initializeLocalizedTimes(): void {
+  for (const time of queryAll<HTMLTimeElement>("time[data-unix-ms]")) {
+    const milliseconds = Number(time.dataset.unixMs);
+    if (!Number.isFinite(milliseconds)) continue;
+    const date = new Date(milliseconds);
+    if (Number.isNaN(date.getTime())) continue;
+    time.dateTime = date.toISOString();
+    time.textContent = date.toLocaleString("ja-JP");
+  }
+  const checkedAt = query<HTMLTimeElement>("[data-activation-checked-at]");
+  if (checkedAt) {
+    const now = new Date();
+    checkedAt.dateTime = now.toISOString();
+    checkedAt.textContent = now.toLocaleTimeString("ja-JP", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+}
+
+function initializeActivationRefresh(reload: () => void): void {
+  const key = `iotkit-activation-refresh:${window.location.pathname}`;
+  if (document.body.dataset.activationRefresh !== "true") {
+    sessionStorage.removeItem(key);
+    return;
+  }
+  const checkNow = query<HTMLButtonElement>("[data-activation-check-now]");
+  if (checkNow && checkNow.dataset.activationBound !== "true") {
+    checkNow.dataset.activationBound = "true";
+    checkNow.addEventListener("click", () => {
+      sessionStorage.setItem(key, "0");
+      reload();
+    });
+  }
+  const attempts = Number(sessionStorage.getItem(key) ?? "0");
+  if (!Number.isFinite(attempts) || attempts >= 20) {
+    const state = query<HTMLElement>("[data-activation-state]");
+    const guidance = query<HTMLElement>("[data-activation-guidance]");
+    if (state) state.textContent = "自動確認を一時停止しました";
+    if (guidance) {
+      guidance.textContent =
+        "自動確認の上限に達したため一時停止しました。" +
+        "サーバー側の登録処理は続いています。" +
+        "「今すぐ確認」で確認を再開できます。";
+    }
+    return;
+  }
+  window.setTimeout(() => {
+    sessionStorage.setItem(key, String(attempts + 1));
+    reload();
+  }, 3_000);
 }
 
 function initializeSignalProfile(form: HTMLFormElement): void {
@@ -215,11 +278,15 @@ function initializeSignalProfile(form: HTMLFormElement): void {
   update();
 }
 
-export function initializeShell(): void {
+export function initializeShell(
+  reload: () => void = () => window.location.reload(),
+): void {
   initializeMenu();
   initializeTableFilter("signal-table");
   initializeTableFilter("log-table");
   initializeDocumentActions();
+  initializeLocalizedTimes();
+  initializeActivationRefresh(reload);
   initializeSettingTabs();
   for (const form of queryAll<HTMLFormElement>("form[data-signal-profile]")) {
     initializeSignalProfile(form);

@@ -215,6 +215,134 @@ try {
       ),
     "owner login",
   );
+
+  const commissioningEdgeNodeId = "edge-node-commissioning";
+  await waitFor(async () => {
+    await devtools.navigate("/status");
+    return devtools.evaluate(
+      `document.querySelector("[data-commissioning-stage='activate-edge-node']")?.textContent.includes("検出した収集ノードを登録してください")`,
+    );
+  }, "commissioning descriptor discovery");
+  const commissioningEdgeNodeHref = await devtools.evaluate(
+    `document.querySelector("[data-commissioning-stage='activate-edge-node'] .onboarding-primary")?.getAttribute("href")`,
+  );
+  assert(
+    commissioningEdgeNodeHref?.startsWith("/equipment/edge-nodes/"),
+    "commissioning action did not target the exact discovered Edge Node",
+  );
+  await devtools.navigate(commissioningEdgeNodeHref);
+  assert(
+    await devtools.evaluate(
+      `document.body.textContent.includes(${JSON.stringify(commissioningEdgeNodeId)}) && Boolean(document.querySelector("form[action$='/activation']"))`,
+    ),
+    "discovered commissioning Edge Node detail was not activatable",
+  );
+  await devtools.evaluate(
+    "document.querySelector(\"form[action$='/activation']\").requestSubmit()",
+  );
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && document.readyState === 'complete'",
+      ),
+    "activation form submission",
+  );
+  await waitFor(async () => {
+    await devtools.navigate(commissioningEdgeNodeHref);
+    return devtools.evaluate(
+      "document.body.textContent.includes('登録処理中') && !document.querySelector(\"form[action$='/activation']\")",
+    );
+  }, "single activation entering the in-progress state");
+
+  const commissioningDeviceHref = await waitFor(async () => {
+    await devtools.navigate("/status");
+    if (
+      !(await devtools.evaluate(
+        "document.querySelector(\"[data-commissioning-stage='setup-device']\") !== null",
+      ))
+    ) {
+      return undefined;
+    }
+    return devtools.evaluate(
+      "document.querySelector(\"[data-commissioning-stage='setup-device'] .onboarding-primary\")?.getAttribute('href')",
+    );
+  }, "matching activation result and device setup work");
+  await devtools.navigate(commissioningDeviceHref);
+  assert(
+    await devtools.evaluate(
+      "Boolean(document.querySelector(\"form[action^='/console/devices/'][action$='/profile']\")) && document.body.textContent.includes('設定が必要')",
+    ),
+    "commissioning device was not shown as configuration work",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector("form[action^='/console/devices/'][action$='/profile']");
+    form.elements.namedItem("display_name").value = "第一工場 蒸気温度計";
+    form.elements.namedItem("location").value = "第一工場 ボイラー室";
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && document.body.textContent.includes('第一工場 蒸気温度計')",
+      ),
+    "commissioning device profile save",
+  );
+  const commissioningSignalHref = await devtools.evaluate(
+    "document.querySelector(\"a[href*='/sensors/']\")?.getAttribute('href')",
+  );
+  assert(commissioningSignalHref, "commissioning device had no sensor setup link");
+  await devtools.navigate(commissioningSignalHref);
+  assert(
+    await devtools.evaluate(
+      "Boolean(document.querySelector('[data-signal-profile]')) && document.body.textContent.includes('設定が必要') && Number.isFinite(Number(document.querySelector('[data-source-value]')?.dataset.sourceValue))",
+    ),
+    "unconfigured commissioning sensor did not expose its received raw value",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector("[data-signal-profile]");
+    form.elements.namedItem("display_name").value = "蒸気温度";
+    form.elements.namedItem("display_sensor_type").value = "thermocouple";
+    form.elements.namedItem("display_value_kind").value = "numeric";
+    form.elements.namedItem("display_unit_mode").value = "unit";
+    form.elements.namedItem("display_unit").value = "°C";
+    form.elements.namedItem("decimal_places").value = "1";
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && document.body.textContent.includes('蒸気温度')",
+      ),
+    "commissioning sensor basic profile save",
+  );
+  await devtools.evaluate(`(() => {
+    const disclosure = document.querySelector("#rule-create");
+    disclosure.open = true;
+    const form = disclosure.querySelector(".semantic-form");
+    form.elements.namedItem("display_name").value = "現在の蒸気温度";
+    form.elements.namedItem("kind").value = "numeric";
+    form.requestSubmit();
+  })()`);
+  try {
+    await waitFor(
+      () =>
+        devtools.evaluate(
+          "location.search.includes('saved=1') && document.body.textContent.includes('現在の蒸気温度')",
+        ),
+      "commissioning numeric semantic rule creation",
+    );
+  } catch (error) {
+    const diagnostic = await devtools.evaluate(
+      "JSON.stringify({location: location.href, text: document.body.textContent.slice(0, 1200)})",
+    );
+    throw new Error(`${error}\nPage state: ${diagnostic}`);
+  }
+  await devtools.navigate("/status");
+  assert(
+    await devtools.evaluate("document.querySelector('.onboarding') === null"),
+    "commissioning panel remained after all required setup",
+  );
+
   assert(
     await devtools.evaluate(
       "Boolean(document.querySelector('.health-banner') && document.querySelector('#signal-table')) && document.body.textContent.includes('乾燥炉入口 温度') && document.body.textContent.includes('29') && document.body.textContent.includes('製造機 青色パトランプ') && document.body.textContent.includes('プレス機 稼働接点') && document.body.textContent.includes('登録済みの収集ノード')",

@@ -143,7 +143,70 @@ async fn activation_response_does_not_expose_internal_command_identity() {
 }
 
 #[tokio::test]
-async fn console_distinguishes_discovery_from_registration_and_actual_reception() {
+async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing_rule() {
+    let directory = test_directory();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: PathBuf::from(directory.path()).join("first-rule.db"),
+    })
+    .await
+    .unwrap();
+    AccountService::new(storage.clone())
+        .create_initial_system_admin(
+            "owner",
+            "System Owner",
+            Password::new("long enough owner password").unwrap(),
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
+    assert!(
+        storage.list_semantic_rules().await.unwrap().is_empty(),
+        "the regression requires a signal with no semantic identity fallback"
+    );
+    let signal = storage
+        .inventory_signals()
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let application = StorageWebApplication::new(storage);
+    let principal = application
+        .login("owner", "long enough owner password")
+        .await
+        .unwrap()
+        .principal;
+    let mut params = HashMap::new();
+    params.insert("signal_ref".into(), signal.signal_ref.clone());
+
+    let created = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/signals/{}/semantic-rules", signal.signal_ref),
+                params,
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "display_name": "First numeric rule",
+                "kind": "numeric",
+            }),
+        )
+        .await
+        .expect("first semantic rule must resolve through inventory");
+
+    assert_eq!(created.status, axum::http::StatusCode::CREATED);
+    assert_eq!(created.body["display_name"], "First numeric rule");
+}
+
+#[tokio::test]
+async fn console_commissioning_distinguishes_discovery_registration_and_setup() {
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("console-state.db"),
@@ -167,6 +230,8 @@ async fn console_distinguishes_discovery_from_registration_and_actual_reception(
         "../../testdata/egress/v2/descriptor-snapshot.json"
     ))
     .unwrap();
+    let mut reduced_descriptor = descriptor.clone();
+    let mut restored_descriptor = descriptor.clone();
     storage.apply_descriptor(&descriptor, 1).await.unwrap();
     let application = StorageWebApplication::new(storage.clone());
     let principal = application
@@ -183,6 +248,7 @@ async fn console_distinguishes_discovery_from_registration_and_actual_reception(
         })
         .await
         .unwrap();
+    assert_eq!(discovered.commissioning.stage, "activate-edge-node");
     assert_eq!(discovered.registered_edge_node_count, 0);
     assert_eq!(discovered.receiving_signal_count, 0);
     assert_eq!(discovered.signals[0].status_label, "未受信");
@@ -239,12 +305,82 @@ async fn console_distinguishes_discovery_from_registration_and_actual_reception(
         })
         .await
         .unwrap();
+    assert_eq!(active.commissioning.stage, "setup-device");
+    assert_eq!(active.commissioning.pending_devices, 1);
     assert_eq!(active.registered_edge_node_count, 1);
     assert_eq!(active.receiving_signal_count, 1);
     assert_eq!(active.signals[0].status_label, "受信中");
     assert_eq!(active.signals[0].value, "ON");
     assert_eq!(active.devices.len(), 1);
     assert_eq!(active.edge_nodes[0].devices.len(), 1);
+
+    reduced_descriptor.descriptor_revision += 1;
+    reduced_descriptor.devices.clear();
+    reduced_descriptor.signals.clear();
+    storage
+        .apply_descriptor(&reduced_descriptor, 5)
+        .await
+        .unwrap();
+    let reduced = application
+        .console(ConsoleRequest {
+            path: "/equipment".into(),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.inventory_devices().await.unwrap().len(),
+        1,
+        "durable historical inventory remains intact"
+    );
+    assert!(reduced.devices.is_empty());
+    assert!(reduced.signals.is_empty());
+    assert!(reduced.edge_nodes[0].devices.is_empty());
+    assert_eq!(reduced.edge_nodes[0].descriptor_device_count, 0);
+    assert_eq!(reduced.edge_nodes[0].descriptor_signal_count, 0);
+    assert_eq!(reduced.commissioning.stage, "complete");
+    assert_eq!(reduced.commissioning.pending_devices, 0);
+    assert_eq!(reduced.commissioning.pending_signals, 0);
+    assert_eq!(reduced.commissioning.action_href, "/sensors");
+    assert_eq!(reduced.edge_nodes[0].first_detected_at, "1");
+
+    restored_descriptor.descriptor_revision += 2;
+    storage
+        .apply_descriptor(&restored_descriptor, 6)
+        .await
+        .unwrap();
+
+    let device_ref = active.devices[0].device_ref.clone();
+    let mut device_params = HashMap::new();
+    device_params.insert("device_ref".into(), device_ref.clone());
+    application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/devices/{device_ref}/profile"),
+                params: device_params,
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "display_name": "接点デバイス",
+                "location": "第1工場",
+            }),
+        )
+        .await
+        .unwrap();
+    let needs_signal_setup = application
+        .console(ConsoleRequest {
+            path: "/status".into(),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(needs_signal_setup.commissioning.stage, "setup-sensor");
+    assert_eq!(needs_signal_setup.commissioning.pending_devices, 0);
+    assert_eq!(needs_signal_setup.commissioning.pending_signals, 1);
 
     let signal_ref = active.signals[0].signal_ref.clone();
     let mut params = HashMap::new();
@@ -288,6 +424,42 @@ async fn console_distinguishes_discovery_from_registration_and_actual_reception(
         .await
         .expect("HTML form revision strings must update existing profiles");
     assert_eq!(updated.body["revision"], 2);
+
+    let mut temperature_params = HashMap::new();
+    temperature_params.insert("signal_ref".into(), signal_ref.clone());
+    application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/signals/{signal_ref}/profile"),
+                params: temperature_params,
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "display_name": "方式未確認の温度",
+                "display_sensor_type": "temperature",
+                "display_value_kind": "numeric",
+                "display_unit_mode": "unit",
+                "display_unit": "°C",
+                "decimal_places": "1",
+                "revision": "2",
+            }),
+        )
+        .await
+        .unwrap();
+    let temperature = application
+        .console(ConsoleRequest {
+            path: format!("/equipment/devices/{device_ref}/sensors/{signal_ref}"),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        temperature.selected_signal.unwrap().sensor_type,
+        "温度（方式未確認）"
+    );
 }
 
 #[tokio::test]

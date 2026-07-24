@@ -18,6 +18,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::storage::EdgeNodeState;
+
 pub use error::WebError;
 
 pub const SESSION_COOKIE: &str = "iotkit_edge_session";
@@ -147,6 +149,7 @@ pub struct ConsoleRequest {
 pub struct ConsoleView {
     pub notice: String,
     pub page_error: String,
+    pub commissioning: console::commissioning::CommissioningView,
     pub edge_nodes: Vec<ConsoleEdgeNode>,
     pub registered_edge_node_count: usize,
     pub receiving_signal_count: usize,
@@ -169,12 +172,18 @@ pub struct ConsoleView {
 pub struct ConsoleEdgeNode {
     pub edge_node_ref: String,
     pub edge_node_id: String,
+    pub ledger_epoch: String,
+    pub first_detected_at: String,
     pub name: String,
     pub location: String,
+    pub state: EdgeNodeState,
     pub state_label: String,
     pub state_class: String,
     pub can_activate: bool,
+    pub needs_recovery_review: bool,
     pub devices: Vec<ConsoleDevice>,
+    pub descriptor_device_count: usize,
+    pub descriptor_signal_count: usize,
     pub signal_count: usize,
 }
 
@@ -189,6 +198,7 @@ pub struct ConsoleDevice {
     pub state_class: String,
     pub identifier: String,
     pub model_id: String,
+    pub descriptor_current: bool,
     pub revision: i64,
     pub signals: Vec<ConsoleSignal>,
 }
@@ -209,6 +219,7 @@ pub struct ConsoleSignal {
     pub revision: i64,
     pub status_label: String,
     pub status_class: String,
+    pub descriptor_current: bool,
     pub profile_complete: bool,
     pub input_is_boolean: bool,
     pub calibration_scale: f64,
@@ -456,6 +467,10 @@ struct ConsoleTemplate<'a> {
     title: &'a str,
     page: &'a str,
     sensor_view: &'a str,
+    default_setting_tab: &'a str,
+    next_device_setup_href: String,
+    activation_refresh: bool,
+    show_commissioning: bool,
     csrf: &'a str,
     display_name: &'a str,
     role: &'a str,
@@ -491,24 +506,75 @@ async fn console_page(
     let page = navigation_page(path);
     let title = console_title(path);
     let sensor_view = if path == "/sensors" { "list" } else { "" };
-    let query = request
+    let query: HashMap<String, String> = request
         .uri()
         .query()
         .map(|value| serde_urlencoded::from_str(value).unwrap_or_default())
         .unwrap_or_default();
-    let view = state
+    let saved_result = query.get("result").cloned();
+    let default_setting_tab = query
+        .get("tab")
+        .filter(|tab| matches!(tab.as_str(), "basic" | "normal" | "alarm"))
+        .map_or("basic", String::as_str);
+    let mut view = state
         .application
         .console(ConsoleRequest {
             path: path.to_owned(),
-            query,
+            query: query.clone(),
             principal: principal.clone(),
         })
         .await?;
+    if query.get("saved").is_some_and(|value| value == "1") {
+        view.notice = match saved_result.as_deref() {
+            Some("device-profile") => "機器の設定を保存しました。".into(),
+            Some("signal-profile") => "センサーの基本設定を保存しました。".into(),
+            Some("semantic-rule") if view.commissioning.stage == "complete" => {
+                "計測ルールを保存しました。初回設定が完了しました。「概要」で現在の計測状態を確認できます。".into()
+            }
+            Some("semantic-rule") => "計測ルールを保存しました。".into(),
+            Some("calibration") => "補正設定を保存しました。".into(),
+            Some("activation")
+                if view
+                    .selected_edge_node
+                    .as_ref()
+                    .is_some_and(|node| node.state == EdgeNodeState::Active) =>
+            {
+                "収集ノードの登録が完了しました。続けて機器を設定してください。".into()
+            }
+            Some("activation") => "収集ノードの登録を受け付けました。".into(),
+            _ => "変更を保存しました。".into(),
+        };
+    }
+    let show_commissioning =
+        (path == "/status" || path == "/equipment") && view.commissioning.stage != "complete";
+    let activation_refresh = view.commissioning.stage == "activation-in-progress"
+        && (path == "/status"
+            || path == "/equipment"
+            || view
+                .selected_edge_node
+                .as_ref()
+                .is_some_and(|node| node.state == EdgeNodeState::Activating));
+    let next_device_setup_href = view
+        .selected_edge_node
+        .as_ref()
+        .filter(|node| node.state == EdgeNodeState::Active)
+        .and_then(|node| {
+            node.devices
+                .iter()
+                .find(|device| device.descriptor_current && device.revision == 0)
+        })
+        .map_or_else(String::new, |device| {
+            format!("/equipment/devices/{}", device.device_ref)
+        });
     Ok(Html(
         ConsoleTemplate {
             title,
             page,
             sensor_view,
+            default_setting_tab,
+            next_device_setup_href,
+            activation_refresh,
+            show_commissioning,
             csrf: &csrf,
             display_name: &principal.display_name,
             role: &principal.role,
@@ -874,6 +940,7 @@ async fn console_mutation(
     let principal =
         require_mutation_form(&state, &headers, form.get("_csrf").map(String::as_str)).await?;
     authorize_mutation(&principal, &route)?;
+    let (result_name, result_tab) = console_mutation_result(&route, &form);
     let result = state
         .application
         .mutate(
@@ -884,10 +951,10 @@ async fn console_mutation(
                 params,
                 expected_revision: None,
             },
-            serde_json::to_value(form).map_err(internal)?,
+            serde_json::to_value(&form).map_err(internal)?,
         )
         .await;
-    let target = console_result_location(&headers, result.as_ref().err());
+    let target = console_result_location(&headers, result.as_ref().err(), result_name, result_tab);
     if let Err(error) = result
         && error.status == StatusCode::PRECONDITION_FAILED
     {
@@ -900,7 +967,41 @@ async fn console_mutation(
     Ok(Redirect::to(&target).into_response())
 }
 
-fn console_result_location(headers: &HeaderMap, error: Option<&WebError>) -> String {
+fn console_mutation_result(
+    route: &str,
+    form: &HashMap<String, String>,
+) -> (&'static str, Option<&'static str>) {
+    if route.ends_with("/activation") {
+        ("activation", None)
+    } else if route.contains("/devices/") && route.ends_with("/profile") {
+        ("device-profile", None)
+    } else if route.contains("/signals/") && route.ends_with("/profile") {
+        ("signal-profile", Some("basic"))
+    } else if route.ends_with("/calibration") {
+        ("calibration", Some("normal"))
+    } else if (route.ends_with("/semantic-rules")
+        || (route.contains("/semantic-rules/") && !route.ends_with("/retire")))
+        && !route.ends_with("/counter-resets")
+    {
+        (
+            "semantic-rule",
+            Some(if form.get("kind").is_some_and(|kind| kind == "alarm") {
+                "alarm"
+            } else {
+                "normal"
+            }),
+        )
+    } else {
+        ("change", None)
+    }
+}
+
+fn console_result_location(
+    headers: &HeaderMap,
+    error: Option<&WebError>,
+    result: &str,
+    tab: Option<&str>,
+) -> String {
     let mut target = headers
         .get(header::REFERER)
         .and_then(|value| value.to_str().ok())
@@ -909,12 +1010,25 @@ fn console_result_location(headers: &HeaderMap, error: Option<&WebError>) -> Str
             url::Url::parse("http://localhost/status").expect("static URL is valid")
         });
     target.set_fragment(None);
+    let retained_query = target
+        .query_pairs()
+        .filter(|(key, _)| !matches!(key.as_ref(), "saved" | "result" | "tab" | "error"))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    target.set_query(None);
     {
         let mut query = target.query_pairs_mut();
+        for (key, value) in retained_query {
+            query.append_pair(&key, &value);
+        }
         if let Some(error) = error {
             query.append_pair("error", error.code);
         } else {
             query.append_pair("saved", "1");
+            query.append_pair("result", result);
+            if let Some(tab) = tab {
+                query.append_pair("tab", tab);
+            }
         }
     }
     match target.query() {
@@ -1446,6 +1560,9 @@ pub mod test_support {
         authenticated: bool,
         role: &'static str,
         rate_limited: bool,
+        pending_node_state: EdgeNodeState,
+        resources_configured: bool,
+        include_pending_node: bool,
     }
     impl Default for StubApplication {
         fn default() -> Self {
@@ -1453,6 +1570,9 @@ pub mod test_support {
                 authenticated: false,
                 role: "admin",
                 rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: true,
             }
         }
     }
@@ -1462,6 +1582,79 @@ pub mod test_support {
                 authenticated: true,
                 role: "admin",
                 rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: true,
+            }
+        }
+        pub fn complete() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: false,
+            }
+        }
+        pub fn unconfigured() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: false,
+                include_pending_node: true,
+            }
+        }
+        pub fn activating() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Activating,
+                resources_configured: true,
+                include_pending_node: true,
+            }
+        }
+        pub fn post_activation() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: false,
+                include_pending_node: false,
+            }
+        }
+        pub fn post_activation_viewer() -> Self {
+            Self {
+                authenticated: true,
+                role: "viewer",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: false,
+                include_pending_node: false,
+            }
+        }
+        pub fn viewer() -> Self {
+            Self {
+                authenticated: true,
+                role: "viewer",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: true,
+            }
+        }
+        pub fn recovery() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::RecoveryHold,
+                resources_configured: true,
+                include_pending_node: true,
             }
         }
         pub fn system_admin() -> Self {
@@ -1469,6 +1662,9 @@ pub mod test_support {
                 authenticated: true,
                 role: "system_admin",
                 rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: true,
             }
         }
         pub fn rate_limited() -> Self {
@@ -1476,11 +1672,14 @@ pub mod test_support {
                 authenticated: false,
                 role: "admin",
                 rate_limited: true,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: true,
             }
         }
     }
 
-    fn console_stub_edge_node(active: bool) -> ConsoleEdgeNode {
+    fn console_stub_edge_node(active: bool, resources_configured: bool) -> ConsoleEdgeNode {
         let signal = ConsoleSignal {
             signal_ref: "signal-01".into(),
             device_ref: "device-01".into(),
@@ -1489,14 +1688,15 @@ pub mod test_support {
             sensor_type: "温度".into(),
             sensor_type_code: "thermocouple".into(),
             value: "28.5".into(),
-            unit: "℃".into(),
+            unit: if active { "℃".into() } else { "Cel".into() },
             value_kind: "numeric".into(),
             unit_mode: "unit".into(),
             decimal_places: 1,
-            revision: 1,
+            revision: i64::from(resources_configured),
             status_label: "受信中".into(),
             status_class: "receiving".into(),
-            profile_complete: true,
+            descriptor_current: true,
+            profile_complete: resources_configured,
             input_is_boolean: false,
             calibration_scale: 1.0,
             calibration_offset: 0.0,
@@ -1510,12 +1710,25 @@ pub mod test_support {
                 edge_node_ref: "edge-node-01".into(),
                 edge_node_id: "factory-edge-01".into(),
                 name: "乾燥炉入口 BravePI".into(),
-                location: "乾燥炉".into(),
-                state_label: "登録済み".into(),
-                state_class: "configured".into(),
+                location: if resources_configured {
+                    "乾燥炉".into()
+                } else {
+                    "設置場所 未設定".into()
+                },
+                state_label: if resources_configured {
+                    "登録済み".into()
+                } else {
+                    "設定が必要".into()
+                },
+                state_class: if resources_configured {
+                    "configured".into()
+                } else {
+                    "needs-setup".into()
+                },
                 identifier: "01234567".into(),
                 model_id: "bravepi".into(),
-                revision: 1,
+                descriptor_current: true,
+                revision: i64::from(resources_configured),
                 signals: vec![signal],
             }]
         } else {
@@ -1532,6 +1745,16 @@ pub mod test_support {
             } else {
                 "assembly-edge-02".into()
             },
+            ledger_epoch: if active {
+                "epoch-01".into()
+            } else {
+                "epoch-02".into()
+            },
+            first_detected_at: if active {
+                "1735689601000".into()
+            } else {
+                "1735689602000".into()
+            },
             name: if active {
                 "factory-edge-01".into()
             } else {
@@ -1541,6 +1764,11 @@ pub mod test_support {
                 "乾燥炉".into()
             } else {
                 "組立ライン".into()
+            },
+            state: if active {
+                EdgeNodeState::Active
+            } else {
+                EdgeNodeState::Discovered
             },
             state_label: if active {
                 "登録済み".into()
@@ -1553,6 +1781,9 @@ pub mod test_support {
                 "needs-setup".into()
             },
             can_activate: !active,
+            needs_recovery_review: false,
+            descriptor_device_count: devices.len(),
+            descriptor_signal_count: devices.iter().map(|device| device.signals.len()).sum(),
             signal_count: devices.iter().map(|device| device.signals.len()).sum(),
             devices,
         }
@@ -1622,56 +1853,96 @@ pub mod test_support {
                 sensor_type: "温度".into(),
                 sensor_type_code: "thermocouple".into(),
                 value: "28.5".into(),
-                unit: "℃".into(),
+                unit: if self.resources_configured {
+                    "℃".into()
+                } else {
+                    "°C".into()
+                },
                 value_kind: "numeric".into(),
                 unit_mode: "unit".into(),
                 decimal_places: 1,
-                revision: 1,
+                revision: i64::from(self.resources_configured),
                 status_label: "受信中".into(),
                 status_class: "receiving".into(),
-                profile_complete: true,
+                descriptor_current: true,
+                profile_complete: self.resources_configured,
                 input_is_boolean: false,
                 calibration_scale: 1.0,
                 calibration_offset: 0.0,
                 calibration_revision: 1,
                 has_alarm_rules: false,
-                rules: vec![ConsoleRule {
-                    rule_id: "rule-01".into(),
-                    display_name: "現在温度".into(),
-                    kind: "numeric".into(),
-                    kind_label: "測定値".into(),
-                    count_summary: String::new(),
-                    revision: 1,
-                    detector_mode: String::new(),
-                    detector_is_boolean: false,
-                    rise_threshold: 0.0,
-                    fall_threshold: 0.0,
-                    rise_debounce_seconds: 0.0,
-                    fall_debounce_seconds: 0.0,
-                    trigger: String::new(),
-                }],
+                rules: self
+                    .resources_configured
+                    .then(|| ConsoleRule {
+                        rule_id: "rule-01".into(),
+                        display_name: "現在温度".into(),
+                        kind: "numeric".into(),
+                        kind_label: "測定値".into(),
+                        count_summary: String::new(),
+                        revision: 1,
+                        detector_mode: String::new(),
+                        detector_is_boolean: false,
+                        rise_threshold: 0.0,
+                        fall_threshold: 0.0,
+                        rise_debounce_seconds: 0.0,
+                        fall_debounce_seconds: 0.0,
+                        trigger: String::new(),
+                    })
+                    .into_iter()
+                    .collect(),
             };
+            let mut pending_node = console_stub_edge_node(false, self.resources_configured);
+            match self.pending_node_state {
+                EdgeNodeState::Discovered => {}
+                EdgeNodeState::Activating => {
+                    pending_node.state = EdgeNodeState::Activating;
+                    pending_node.state_label = "登録処理中".into();
+                    pending_node.state_class = "stale".into();
+                    pending_node.can_activate = false;
+                }
+                EdgeNodeState::RecoveryHold => {
+                    pending_node.state = EdgeNodeState::RecoveryHold;
+                    pending_node.state_label = "復旧確認待ち".into();
+                    pending_node.state_class = "stale".into();
+                    pending_node.can_activate = false;
+                    pending_node.needs_recovery_review = true;
+                }
+                EdgeNodeState::Active => unreachable!("pending test node cannot be active"),
+            }
             let selected_edge_node = request
                 .path
                 .contains("/edge-nodes/edge-node-02")
-                .then(|| console_stub_edge_node(false))
+                .then(|| pending_node.clone())
                 .or_else(|| {
                     request
                         .path
                         .contains("/edge-nodes/edge-node-01")
-                        .then(|| console_stub_edge_node(true))
+                        .then(|| console_stub_edge_node(true, self.resources_configured))
                 });
             let device = ConsoleDevice {
                 device_ref: "device-01".into(),
                 edge_node_ref: "edge-node-01".into(),
                 edge_node_id: "factory-edge-01".into(),
                 name: "乾燥炉入口 BravePI".into(),
-                location: "乾燥炉".into(),
-                state_label: "登録済み".into(),
-                state_class: "configured".into(),
+                location: if self.resources_configured {
+                    "乾燥炉".into()
+                } else {
+                    "設置場所 未設定".into()
+                },
+                state_label: if self.resources_configured {
+                    "登録済み".into()
+                } else {
+                    "設定が必要".into()
+                },
+                state_class: if self.resources_configured {
+                    "configured".into()
+                } else {
+                    "needs-setup".into()
+                },
                 identifier: "01234567".into(),
                 model_id: "bravepi".into(),
-                revision: 1,
+                descriptor_current: true,
+                revision: i64::from(self.resources_configured),
                 signals: vec![signal.clone()],
             };
             let selected_device = request
@@ -1682,12 +1953,21 @@ pub mod test_support {
                 .path
                 .contains("/sensors/signal-01")
                 .then(|| signal.clone());
+            let mut edge_nodes = vec![console_stub_edge_node(true, self.resources_configured)];
+            if self.include_pending_node {
+                edge_nodes.push(pending_node);
+            }
+            let devices = vec![device];
+            let signals = vec![signal];
+            let commissioning =
+                console::commissioning::commissioning_view(&edge_nodes, &devices, &signals);
             Ok(ConsoleView {
-                edge_nodes: vec![console_stub_edge_node(true), console_stub_edge_node(false)],
+                commissioning,
+                edge_nodes,
                 registered_edge_node_count: 1,
                 receiving_signal_count: 1,
-                devices: vec![device],
-                signals: vec![signal],
+                devices,
+                signals,
                 selected_edge_node,
                 selected_device,
                 selected_signal,

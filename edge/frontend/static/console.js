@@ -175,7 +175,7 @@
       const tabs = queryAll("[data-setting-tab]", root);
       const panels = queryAll("[data-setting-panel]", root);
       if (!tabs.length || !panels.length) continue;
-      const activate = (key, focus = false) => {
+      const activate = (key, focus = false, replaceTabQuery = false) => {
         for (const tab of tabs) {
           const selected = tab.dataset.settingTab === key;
           tab.setAttribute("aria-selected", String(selected));
@@ -184,6 +184,11 @@
         }
         for (const panel of panels) {
           panel.hidden = panel.dataset.settingPanel !== key;
+        }
+        if (replaceTabQuery) {
+          const url = new URL(window.location.href);
+          url.searchParams.set("tab", key);
+          window.history.replaceState(window.history.state, "", url);
         }
       };
       let initial = root.dataset.defaultSettingTab ?? tabs[0].dataset.settingTab;
@@ -197,7 +202,7 @@
       root.classList.add("setting-tabs-ready");
       tabs.forEach((tab, index) => {
         tab.addEventListener("click", () => {
-          activate(tab.dataset.settingTab ?? "");
+          activate(tab.dataset.settingTab ?? "", false, true);
         });
         tab.addEventListener("keydown", (event) => {
           let next = index;
@@ -208,7 +213,7 @@
           else if (event.key === "End") next = tabs.length - 1;
           else return;
           event.preventDefault();
-          activate(tabs[next].dataset.settingTab ?? "", true);
+          activate(tabs[next].dataset.settingTab ?? "", true, true);
         });
       });
     }
@@ -225,6 +230,55 @@
     }
     target.setAttribute("tabindex", "-1");
     target.focus();
+  }
+  function initializeLocalizedTimes() {
+    for (const time of queryAll("time[data-unix-ms]")) {
+      const milliseconds = Number(time.dataset.unixMs);
+      if (!Number.isFinite(milliseconds)) continue;
+      const date = new Date(milliseconds);
+      if (Number.isNaN(date.getTime())) continue;
+      time.dateTime = date.toISOString();
+      time.textContent = date.toLocaleString("ja-JP");
+    }
+    const checkedAt = query("[data-activation-checked-at]");
+    if (checkedAt) {
+      const now = /* @__PURE__ */ new Date();
+      checkedAt.dateTime = now.toISOString();
+      checkedAt.textContent = now.toLocaleTimeString("ja-JP", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+  }
+  function initializeActivationRefresh(reload) {
+    const key = `iotkit-activation-refresh:${window.location.pathname}`;
+    if (document.body.dataset.activationRefresh !== "true") {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    const checkNow = query("[data-activation-check-now]");
+    if (checkNow && checkNow.dataset.activationBound !== "true") {
+      checkNow.dataset.activationBound = "true";
+      checkNow.addEventListener("click", () => {
+        sessionStorage.setItem(key, "0");
+        reload();
+      });
+    }
+    const attempts = Number(sessionStorage.getItem(key) ?? "0");
+    if (!Number.isFinite(attempts) || attempts >= 20) {
+      const state = query("[data-activation-state]");
+      const guidance = query("[data-activation-guidance]");
+      if (state) state.textContent = "\u81EA\u52D5\u78BA\u8A8D\u3092\u4E00\u6642\u505C\u6B62\u3057\u307E\u3057\u305F";
+      if (guidance) {
+        guidance.textContent = "\u81EA\u52D5\u78BA\u8A8D\u306E\u4E0A\u9650\u306B\u9054\u3057\u305F\u305F\u3081\u4E00\u6642\u505C\u6B62\u3057\u307E\u3057\u305F\u3002\u30B5\u30FC\u30D0\u30FC\u5074\u306E\u767B\u9332\u51E6\u7406\u306F\u7D9A\u3044\u3066\u3044\u307E\u3059\u3002\u300C\u4ECA\u3059\u3050\u78BA\u8A8D\u300D\u3067\u78BA\u8A8D\u3092\u518D\u958B\u3067\u304D\u307E\u3059\u3002";
+      }
+      return;
+    }
+    window.setTimeout(() => {
+      sessionStorage.setItem(key, String(attempts + 1));
+      reload();
+    }, 3e3);
   }
   function initializeSignalProfile(form) {
     const sensorType = query("[data-sensor-type]", form);
@@ -262,11 +316,13 @@
     unitMode?.addEventListener("change", update);
     update();
   }
-  function initializeShell() {
+  function initializeShell(reload = () => window.location.reload()) {
     initializeMenu();
     initializeTableFilter("signal-table");
     initializeTableFilter("log-table");
     initializeDocumentActions();
+    initializeLocalizedTimes();
+    initializeActivationRefresh(reload);
     initializeSettingTabs();
     for (const form of queryAll("form[data-signal-profile]")) {
       initializeSignalProfile(form);
@@ -427,8 +483,16 @@
       maximumFractionDigits: 3
     });
   }
-  function formatCurrentValue(value, valueKind) {
-    return valueKind === "boolean" ? Number(value) === 0 ? "OFF" : "ON" : formatNumber(value);
+  function formatCurrentValue(value, valueKind, decimalPlaces) {
+    if (valueKind === "boolean") {
+      return Number(value) === 0 ? "OFF" : "ON";
+    }
+    if (!Number.isInteger(decimalPlaces)) return formatNumber(value);
+    const digits = Math.min(6, Math.max(0, Number(decimalPlaces)));
+    return Number(value).toLocaleString("ja-JP", {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits
+    });
   }
   function formatDuration(start, end) {
     const milliseconds = Math.max(0, end - start);
@@ -751,6 +815,13 @@
         display_name: formField(candidate, "display_name")?.value.trim() || `\u30EB\u30FC\u30EB ${index + 1}`,
         spec: ruleSpec(candidate)
       }));
+      if (!rules.length && firstForm?.action.endsWith("/semantic-rules")) {
+        rules.push({
+          rule_id: "draft-1",
+          display_name: "\u53D7\u4FE1\u5024\uFF08\u4FDD\u5B58\u524D\uFF09",
+          spec: ruleSpec(firstForm)
+        });
+      }
       if (rules.length) {
         body.calibration = {
           scale: calibrationForm ? numericFormField(calibrationForm, "scale") : 1,
@@ -811,6 +882,9 @@
     const sourceCurrentReceived = sourceSummary ? query("[data-source-current-received]", sourceSummary) : null;
     const valueKind = query(
       'form[data-signal-profile] [name="display_value_kind"]'
+    );
+    const decimalPlaces = query(
+      'form[data-signal-profile] [name="decimal_places"]'
     );
     let controller;
     let debounce;
@@ -901,11 +975,16 @@
         if (latest && currentValue) {
           currentValue.textContent = formatCurrentValue(
             latest.input,
-            valueKind?.value
+            valueKind?.value,
+            decimalPlaces ? Number(decimalPlaces.value) : void 0
           );
         }
         if (latest && sourceCurrentValue && sourceSummary) {
-          const rawValue = formatNumber(latest.input);
+          const rawValue = formatCurrentValue(
+            latest.input,
+            valueKind?.value,
+            decimalPlaces ? Number(decimalPlaces.value) : void 0
+          );
           sourceCurrentValue.textContent = rawValue;
           sourceSummary.dataset.sourceValue = rawValue;
         }
