@@ -424,6 +424,42 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
         .await
         .expect("HTML form revision strings must update existing profiles");
     assert_eq!(updated.body["revision"], 2);
+
+    let mut temperature_params = HashMap::new();
+    temperature_params.insert("signal_ref".into(), signal_ref.clone());
+    application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/signals/{signal_ref}/profile"),
+                params: temperature_params,
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "display_name": "方式未確認の温度",
+                "display_sensor_type": "temperature",
+                "display_value_kind": "numeric",
+                "display_unit_mode": "unit",
+                "display_unit": "°C",
+                "decimal_places": "1",
+                "revision": "2",
+            }),
+        )
+        .await
+        .unwrap();
+    let temperature = application
+        .console(ConsoleRequest {
+            path: format!("/equipment/devices/{device_ref}/sensors/{signal_ref}"),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        temperature.selected_signal.unwrap().sensor_type,
+        "温度（方式未確認）"
+    );
 }
 
 #[tokio::test]

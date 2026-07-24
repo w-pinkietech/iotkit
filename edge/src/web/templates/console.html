@@ -429,6 +429,12 @@
         <div><dt>検出したセンサー</dt><dd>{{ edge_node.descriptor_signal_count }}件</dd></div>
         <div><dt>登録状態</dt><dd>{{ edge_node.state_label }}</dd></div>
       </dl>
+      {% if !next_device_setup_href.is_empty() %}
+      <section class="equipment-action-card">
+        <div><h3>登録が完了しました</h3><p>最初の機器の名前と設置場所を設定します。</p></div>
+        <a class="button onboarding-primary" data-next-device-setup href="{{ next_device_setup_href }}">次へ: 機器を設定</a>
+      </section>
+      {% endif %}
       {% if edge_node.needs_recovery_review %}
       <section class="equipment-recovery-help" aria-labelledby="recovery-help-title">
         <span class="health-icon" aria-hidden="true">!</span>

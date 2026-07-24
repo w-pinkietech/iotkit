@@ -1906,6 +1906,7 @@ fn display_raw_value(value: &Value, decimal_places: i32) -> String {
 fn sensor_type_label<'a>(code: &'a str, custom_label: &'a str) -> &'a str {
     match code {
         "thermocouple" => "熱電対",
+        "temperature" => "温度（方式未確認）",
         "contact" => "接点入力",
         "illuminance" => "照度",
         "distance" => "距離",

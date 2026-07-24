@@ -468,6 +468,7 @@ struct ConsoleTemplate<'a> {
     page: &'a str,
     sensor_view: &'a str,
     default_setting_tab: &'a str,
+    next_device_setup_href: String,
     activation_refresh: bool,
     show_commissioning: bool,
     csrf: &'a str,
@@ -532,6 +533,14 @@ async fn console_page(
             }
             Some("semantic-rule") => "計測ルールを保存しました。".into(),
             Some("calibration") => "補正設定を保存しました。".into(),
+            Some("activation")
+                if view
+                    .selected_edge_node
+                    .as_ref()
+                    .is_some_and(|node| node.state == EdgeNodeState::Active) =>
+            {
+                "収集ノードの登録が完了しました。続けて機器を設定してください。".into()
+            }
             Some("activation") => "収集ノードの登録を受け付けました。".into(),
             _ => "変更を保存しました。".into(),
         };
@@ -545,12 +554,25 @@ async fn console_page(
                 .selected_edge_node
                 .as_ref()
                 .is_some_and(|node| node.state == EdgeNodeState::Activating));
+    let next_device_setup_href = view
+        .selected_edge_node
+        .as_ref()
+        .filter(|node| node.state == EdgeNodeState::Active)
+        .and_then(|node| {
+            node.devices
+                .iter()
+                .find(|device| device.descriptor_current && device.revision == 0)
+        })
+        .map_or_else(String::new, |device| {
+            format!("/equipment/devices/{}", device.device_ref)
+        });
     Ok(Html(
         ConsoleTemplate {
             title,
             page,
             sensor_view,
             default_setting_tab,
+            next_device_setup_href,
             activation_refresh,
             show_commissioning,
             csrf: &csrf,
@@ -988,8 +1010,17 @@ fn console_result_location(
             url::Url::parse("http://localhost/status").expect("static URL is valid")
         });
     target.set_fragment(None);
+    let retained_query = target
+        .query_pairs()
+        .filter(|(key, _)| !matches!(key.as_ref(), "saved" | "result" | "tab" | "error"))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    target.set_query(None);
     {
         let mut query = target.query_pairs_mut();
+        for (key, value) in retained_query {
+            query.append_pair(&key, &value);
+        }
         if let Some(error) = error {
             query.append_pair("error", error.code);
         } else {
@@ -1586,6 +1617,16 @@ pub mod test_support {
                 include_pending_node: true,
             }
         }
+        pub fn post_activation() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: false,
+                include_pending_node: false,
+            }
+        }
         pub fn viewer() -> Self {
             Self {
                 authenticated: true,
@@ -1628,7 +1669,7 @@ pub mod test_support {
         }
     }
 
-    fn console_stub_edge_node(active: bool) -> ConsoleEdgeNode {
+    fn console_stub_edge_node(active: bool, resources_configured: bool) -> ConsoleEdgeNode {
         let signal = ConsoleSignal {
             signal_ref: "signal-01".into(),
             device_ref: "device-01".into(),
@@ -1641,11 +1682,11 @@ pub mod test_support {
             value_kind: "numeric".into(),
             unit_mode: "unit".into(),
             decimal_places: 1,
-            revision: 1,
+            revision: i64::from(resources_configured),
             status_label: "受信中".into(),
             status_class: "receiving".into(),
             descriptor_current: true,
-            profile_complete: true,
+            profile_complete: resources_configured,
             input_is_boolean: false,
             calibration_scale: 1.0,
             calibration_offset: 0.0,
@@ -1665,7 +1706,7 @@ pub mod test_support {
                 identifier: "01234567".into(),
                 model_id: "bravepi".into(),
                 descriptor_current: true,
-                revision: 1,
+                revision: i64::from(resources_configured),
                 signals: vec![signal],
             }]
         } else {
@@ -1828,7 +1869,7 @@ pub mod test_support {
                     .into_iter()
                     .collect(),
             };
-            let mut pending_node = console_stub_edge_node(false);
+            let mut pending_node = console_stub_edge_node(false, self.resources_configured);
             match self.pending_node_state {
                 EdgeNodeState::Discovered => {}
                 EdgeNodeState::Activating => {
@@ -1854,7 +1895,7 @@ pub mod test_support {
                     request
                         .path
                         .contains("/edge-nodes/edge-node-01")
-                        .then(|| console_stub_edge_node(true))
+                        .then(|| console_stub_edge_node(true, self.resources_configured))
                 });
             let device = ConsoleDevice {
                 device_ref: "device-01".into(),
@@ -1886,7 +1927,7 @@ pub mod test_support {
                 .path
                 .contains("/sensors/signal-01")
                 .then(|| signal.clone());
-            let mut edge_nodes = vec![console_stub_edge_node(true)];
+            let mut edge_nodes = vec![console_stub_edge_node(true, self.resources_configured)];
             if self.include_pending_node {
                 edge_nodes.push(pending_node);
             }

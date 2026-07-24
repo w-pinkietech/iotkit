@@ -637,6 +637,69 @@ async fn successful_console_mutations_render_notices_and_preserve_rule_context()
 }
 
 #[tokio::test]
+async fn completed_activation_on_node_detail_names_the_next_device_setup_action() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::post_activation()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/edge-nodes/edge-node-01?saved=1&result=activation")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(html.contains("収集ノードの登録が完了しました"));
+    assert!(!html.contains("収集ノードの登録を受け付けました"));
+    assert_eq!(html.matches("次へ: 機器を設定").count(), 1);
+    assert!(html.contains(r#"data-next-device-setup href="/equipment/devices/device-01""#));
+}
+
+#[tokio::test]
+async fn console_mutation_redirect_replaces_transient_query_values() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::post("/console/signals/signal-01/profile")
+                .header("origin", "http://127.0.0.1:8080")
+                .header(
+                    "referer",
+                    "http://127.0.0.1:8080/equipment/devices/device-01/sensors/signal-01?keep=1&saved=1&result=semantic-rule&tab=normal&error=old",
+                )
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("_csrf=csrf"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()["location"].to_str().unwrap();
+    assert_eq!(location.matches("saved=").count(), 1, "{location}");
+    assert_eq!(location.matches("result=").count(), 1, "{location}");
+    assert_eq!(location.matches("tab=").count(), 1, "{location}");
+    assert!(!location.contains("error="), "{location}");
+    assert!(location.contains("keep=1"), "{location}");
+    assert!(location.contains("saved=1"), "{location}");
+    assert!(location.contains("result=signal-profile"), "{location}");
+    assert!(location.contains("tab=basic"), "{location}");
+}
+
+#[tokio::test]
 async fn sensor_profile_offers_generic_temperature_and_humanizes_ucum_celsius() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::unconfigured()));
     let response = app
