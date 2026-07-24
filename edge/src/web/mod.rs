@@ -173,14 +173,17 @@ pub struct ConsoleEdgeNode {
     pub edge_node_ref: String,
     pub edge_node_id: String,
     pub ledger_epoch: String,
-    pub descriptor_received_at: String,
+    pub first_detected_at: String,
     pub name: String,
     pub location: String,
     pub state: EdgeNodeState,
     pub state_label: String,
     pub state_class: String,
     pub can_activate: bool,
+    pub needs_recovery_review: bool,
     pub devices: Vec<ConsoleDevice>,
+    pub descriptor_device_count: usize,
+    pub descriptor_signal_count: usize,
     pub signal_count: usize,
 }
 
@@ -195,6 +198,7 @@ pub struct ConsoleDevice {
     pub state_class: String,
     pub identifier: String,
     pub model_id: String,
+    pub descriptor_current: bool,
     pub revision: i64,
     pub signals: Vec<ConsoleSignal>,
 }
@@ -215,6 +219,7 @@ pub struct ConsoleSignal {
     pub revision: i64,
     pub status_label: String,
     pub status_class: String,
+    pub descriptor_current: bool,
     pub profile_complete: bool,
     pub input_is_boolean: bool,
     pub calibration_scale: f64,
@@ -511,12 +516,14 @@ async fn console_page(
             principal: principal.clone(),
         })
         .await?;
+    let show_commissioning =
+        (path == "/status" || path == "/equipment") && view.commissioning.stage != "complete";
     Ok(Html(
         ConsoleTemplate {
             title,
             page,
             sensor_view,
-            show_commissioning: path == "/status" || path == "/equipment",
+            show_commissioning,
             csrf: &csrf,
             display_name: &principal.display_name,
             role: &principal.role,
@@ -1456,6 +1463,7 @@ pub mod test_support {
         rate_limited: bool,
         pending_node_state: EdgeNodeState,
         resources_configured: bool,
+        include_pending_node: bool,
     }
     impl Default for StubApplication {
         fn default() -> Self {
@@ -1465,6 +1473,7 @@ pub mod test_support {
                 rate_limited: false,
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
+                include_pending_node: true,
             }
         }
     }
@@ -1476,6 +1485,17 @@ pub mod test_support {
                 rate_limited: false,
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
+                include_pending_node: true,
+            }
+        }
+        pub fn complete() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: false,
             }
         }
         pub fn unconfigured() -> Self {
@@ -1485,6 +1505,7 @@ pub mod test_support {
                 rate_limited: false,
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: false,
+                include_pending_node: true,
             }
         }
         pub fn viewer() -> Self {
@@ -1494,6 +1515,7 @@ pub mod test_support {
                 rate_limited: false,
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
+                include_pending_node: true,
             }
         }
         pub fn recovery() -> Self {
@@ -1503,6 +1525,7 @@ pub mod test_support {
                 rate_limited: false,
                 pending_node_state: EdgeNodeState::RecoveryHold,
                 resources_configured: true,
+                include_pending_node: true,
             }
         }
         pub fn system_admin() -> Self {
@@ -1512,6 +1535,7 @@ pub mod test_support {
                 rate_limited: false,
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
+                include_pending_node: true,
             }
         }
         pub fn rate_limited() -> Self {
@@ -1521,6 +1545,7 @@ pub mod test_support {
                 rate_limited: true,
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
+                include_pending_node: true,
             }
         }
     }
@@ -1541,6 +1566,7 @@ pub mod test_support {
             revision: 1,
             status_label: "受信中".into(),
             status_class: "receiving".into(),
+            descriptor_current: true,
             profile_complete: true,
             input_is_boolean: false,
             calibration_scale: 1.0,
@@ -1560,6 +1586,7 @@ pub mod test_support {
                 state_class: "configured".into(),
                 identifier: "01234567".into(),
                 model_id: "bravepi".into(),
+                descriptor_current: true,
                 revision: 1,
                 signals: vec![signal],
             }]
@@ -1582,7 +1609,7 @@ pub mod test_support {
             } else {
                 "epoch-02".into()
             },
-            descriptor_received_at: if active {
+            first_detected_at: if active {
                 "2025-01-01T00:00:01Z".into()
             } else {
                 "2025-01-01T00:00:02Z".into()
@@ -1613,6 +1640,9 @@ pub mod test_support {
                 "needs-setup".into()
             },
             can_activate: !active,
+            needs_recovery_review: false,
+            descriptor_device_count: devices.len(),
+            descriptor_signal_count: devices.iter().map(|device| device.signals.len()).sum(),
             signal_count: devices.iter().map(|device| device.signals.len()).sum(),
             devices,
         }
@@ -1689,6 +1719,7 @@ pub mod test_support {
                 revision: i64::from(self.resources_configured),
                 status_label: "受信中".into(),
                 status_class: "receiving".into(),
+                descriptor_current: true,
                 profile_complete: self.resources_configured,
                 input_is_boolean: false,
                 calibration_scale: 1.0,
@@ -1729,6 +1760,7 @@ pub mod test_support {
                     pending_node.state_label = "復旧確認待ち".into();
                     pending_node.state_class = "stale".into();
                     pending_node.can_activate = false;
+                    pending_node.needs_recovery_review = true;
                 }
                 EdgeNodeState::Active => unreachable!("pending test node cannot be active"),
             }
@@ -1760,6 +1792,7 @@ pub mod test_support {
                 },
                 identifier: "01234567".into(),
                 model_id: "bravepi".into(),
+                descriptor_current: true,
                 revision: i64::from(self.resources_configured),
                 signals: vec![signal.clone()],
             };
@@ -1771,7 +1804,10 @@ pub mod test_support {
                 .path
                 .contains("/sensors/signal-01")
                 .then(|| signal.clone());
-            let edge_nodes = vec![console_stub_edge_node(true), pending_node];
+            let mut edge_nodes = vec![console_stub_edge_node(true)];
+            if self.include_pending_node {
+                edge_nodes.push(pending_node);
+            }
             let devices = vec![device];
             let signals = vec![signal];
             let commissioning =

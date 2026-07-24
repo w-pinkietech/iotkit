@@ -59,6 +59,17 @@
           </div>
           <strong><span>{{ view.commissioning.completed_steps }} / {{ view.commissioning.total_steps }}</span>完了</strong>
         </div>
+        <div class="onboarding-next">
+          <div>
+            <span>次に行うこと</span>
+            <strong>{{ view.commissioning.title }}</strong>
+          </div>
+          {% if is_admin %}
+          <a class="button onboarding-primary" href="{{ view.commissioning.action_href }}">{{ view.commissioning.action_label }} <span aria-hidden="true">→</span></a>
+          {% else %}
+          <p class="onboarding-read-only"><strong>閲覧のみ</strong><span>現在の状態を確認できます。次の操作は設定管理者が行います。</span></p>
+          {% endif %}
+        </div>
         <ol class="onboarding-steps" aria-label="初回設定の進み具合">
           <li class="onboarding-step {% if view.commissioning.completed_steps >= 1 %}complete{% else %}current{% endif %}"{% if view.commissioning.completed_steps < 1 %} aria-current="step"{% endif %}>
             <span class="onboarding-number" aria-hidden="true">{% if view.commissioning.completed_steps >= 1 %}✓{% else %}1{% endif %}</span>
@@ -81,17 +92,6 @@
             <span class="onboarding-state">{% if view.commissioning.completed_steps >= 4 %}✓ 完了{% else if view.commissioning.completed_steps == 3 %}● 現在{% else %}○ 未着手{% endif %}</span>
           </li>
         </ol>
-        <div class="onboarding-next">
-          <div>
-            <span>次に行うこと</span>
-            <strong>{{ view.commissioning.title }}</strong>
-          </div>
-          {% if is_admin %}
-          <a class="button onboarding-primary" href="{{ view.commissioning.action_href }}">{{ view.commissioning.action_label }} <span aria-hidden="true">→</span></a>
-          {% else %}
-          <p class="onboarding-read-only"><strong>閲覧のみ</strong><span>現在の状態を確認できます。次の操作は設定管理者が行います。</span></p>
-          {% endif %}
-        </div>
         <p class="onboarding-optional">
           未完了: 収集ノード {{ view.commissioning.pending_edge_nodes }}台・機器 {{ view.commissioning.pending_devices }}台・センサー {{ view.commissioning.pending_signals }}件
         </p>
@@ -415,11 +415,21 @@
       <dl class="equipment-detail-facts">
         <div><dt>Edge Node ID</dt><dd>{{ edge_node.edge_node_id }}</dd></div>
         <div><dt>ledger epoch</dt><dd>{{ edge_node.ledger_epoch }}</dd></div>
-        <div><dt>descriptor受信時刻</dt><dd>{{ edge_node.descriptor_received_at }}</dd></div>
-        <div><dt>検出したデバイス</dt><dd>{{ edge_node.devices.len() }}台</dd></div>
-        <div><dt>検出したセンサー</dt><dd>{{ edge_node.signal_count }}件</dd></div>
+        <div><dt>初回検出時刻</dt><dd>{{ edge_node.first_detected_at }}</dd></div>
+        <div><dt>検出したデバイス</dt><dd>{{ edge_node.descriptor_device_count }}台</dd></div>
+        <div><dt>検出したセンサー</dt><dd>{{ edge_node.descriptor_signal_count }}件</dd></div>
         <div><dt>登録状態</dt><dd>{{ edge_node.state_label }}</dd></div>
       </dl>
+      {% if edge_node.needs_recovery_review %}
+      <section class="equipment-recovery-help" aria-labelledby="recovery-help-title">
+        <span class="health-icon" aria-hidden="true">!</span>
+        <div>
+          <h3 id="recovery-help-title">復旧確認が必要です</h3>
+          <p>Edge NodeとIoTKit Edgeの両方のデータベースを保全し、identityとrestore履歴を調査してください。</p>
+          <p><strong>行の削除、新しいEdge Node identityの発行、状態の手動編集は行わないでください。</strong></p>
+        </div>
+      </section>
+      {% endif %}
       {% if edge_node.can_activate %}<p class="equipment-history-boundary"><span aria-hidden="true">ⓘ</span>正式な履歴は登録完了後に受信した値から始まります。</p>{% endif %}
       {% if edge_node.can_activate && is_admin %}
       <section class="equipment-action-card">

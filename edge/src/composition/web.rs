@@ -312,6 +312,7 @@ impl StorageWebApplication {
                 } else {
                     "never".into()
                 },
+                descriptor_current: signal.presence == "current",
                 profile_complete: signal.profile_revision.is_some(),
                 input_is_boolean,
                 calibration_scale: calibration.map_or(1.0, |value| value.calibration.scale),
@@ -518,6 +519,7 @@ impl WebApplication for StorageWebApplication {
                 },
                 identifier: device.identifier,
                 model_id: device.model_id,
+                descriptor_current: device.presence == "current",
                 revision: device.profile_revision.unwrap_or_default(),
                 signals: device_signals,
             });
@@ -530,11 +532,7 @@ impl WebApplication for StorageWebApplication {
                     .filter(|device| device.edge_node_id == node.edge_node_id)
                     .cloned()
                     .collect();
-                let signal_count = child_devices
-                    .iter()
-                    .map(|device| device.signals.len())
-                    .sum();
-                console_edge_node_with_devices(node, child_devices, signal_count)
+                console_edge_node_with_devices(node, child_devices)
             })
             .collect::<Vec<_>>();
         let selected_edge_node = if let Some(reference) =
@@ -1597,13 +1595,12 @@ fn account_json(account: &crate::storage::Account) -> Value {
 }
 
 fn console_edge_node(node: &crate::storage::EdgeNode) -> ConsoleEdgeNode {
-    console_edge_node_with_devices(node, Vec::new(), 0)
+    console_edge_node_with_devices(node, Vec::new())
 }
 
 fn console_edge_node_with_devices(
     node: &crate::storage::EdgeNode,
     devices: Vec<ConsoleDevice>,
-    signal_count: usize,
 ) -> ConsoleEdgeNode {
     let (state_label, state_class, can_activate) = match node.state {
         EdgeNodeState::Discovered => ("未登録", "needs-setup", true),
@@ -1611,19 +1608,31 @@ fn console_edge_node_with_devices(
         EdgeNodeState::Active => ("登録済み", "configured", false),
         EdgeNodeState::RecoveryHold => ("復旧確認待ち", "stale", false),
     };
+    let descriptor_device_count = devices
+        .iter()
+        .filter(|device| device.descriptor_current)
+        .count();
+    let descriptor_signal_count = devices
+        .iter()
+        .flat_map(|device| &device.signals)
+        .filter(|signal| signal.descriptor_current)
+        .count();
     ConsoleEdgeNode {
         edge_node_ref: node.edge_node_ref.clone(),
         edge_node_id: node.edge_node_id.clone(),
         ledger_epoch: node.ledger_epoch.clone(),
-        descriptor_received_at: format!("{} (Unix ms)", node.last_descriptor_at),
+        first_detected_at: format!("{} (Unix ms)", node.first_detected_at),
         name: node.edge_node_id.clone(),
         location: "設置場所 未設定".into(),
         state: node.state,
         state_label: state_label.into(),
         state_class: state_class.into(),
         can_activate,
+        needs_recovery_review: node.state == EdgeNodeState::RecoveryHold,
         devices,
-        signal_count,
+        descriptor_device_count,
+        descriptor_signal_count,
+        signal_count: descriptor_signal_count,
     }
 }
 

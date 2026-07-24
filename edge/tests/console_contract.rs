@@ -29,6 +29,7 @@ fn commissioning_signal(profile_complete: bool, has_rule: bool) -> ConsoleSignal
         revision: usize::from(profile_complete) as i64,
         status_label: "未受信".into(),
         status_class: "never".into(),
+        descriptor_current: true,
         profile_complete,
         input_is_boolean: false,
         calibration_scale: 1.0,
@@ -67,6 +68,7 @@ fn commissioning_device(revision: i64, signals: Vec<ConsoleSignal>) -> ConsoleDe
         state_class: "configured".into(),
         identifier: "device".into(),
         model_id: "model".into(),
+        descriptor_current: true,
         revision,
         signals,
     }
@@ -77,14 +79,17 @@ fn commissioning_node(state: EdgeNodeState) -> ConsoleEdgeNode {
         edge_node_ref: "node-01".into(),
         edge_node_id: "edge-01".into(),
         ledger_epoch: "epoch-01".into(),
-        descriptor_received_at: "2025-01-01T00:00:00Z".into(),
+        first_detected_at: "2025-01-01T00:00:00Z".into(),
         name: "Edge Node".into(),
         location: "工場".into(),
         state,
         state_label: "登録済み".into(),
         state_class: "configured".into(),
         can_activate: state == EdgeNodeState::Discovered,
+        needs_recovery_review: state == EdgeNodeState::RecoveryHold,
         devices: Vec::new(),
+        descriptor_device_count: 0,
+        descriptor_signal_count: 0,
         signal_count: 0,
     }
 }
@@ -445,6 +450,11 @@ async fn commissioning_panel_leads_status_and_equipment_with_one_admin_next_acti
             1,
             "{path} must present exactly one primary next action"
         );
+        assert!(
+            html.find(r#"class="onboarding-next""#).unwrap()
+                < html.find(r#"class="onboarding-steps""#).unwrap(),
+            "{path} must put the contextual next action before progress details"
+        );
 
         let onboarding = html.find(r#"class="onboarding""#).unwrap();
         let page_content = if path == "/status" {
@@ -487,7 +497,7 @@ async fn discovered_edge_node_detail_explains_descriptor_and_history_boundary() 
         "assembly-edge-02",
         "ledger epoch",
         "epoch-02",
-        "descriptor受信時刻",
+        "初回検出時刻",
         "2025-01-01T00:00:02Z",
         "検出したデバイス",
         "0台",
@@ -497,6 +507,31 @@ async fn discovered_edge_node_detail_explains_descriptor_and_history_boundary() 
     ] {
         assert!(html.contains(fact), "missing discovered-node fact: {fact}");
     }
+}
+
+#[tokio::test]
+async fn completed_commissioning_does_not_displace_the_normal_monitor() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::complete()));
+    let response = app
+        .oneshot(
+            Request::get("/status")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(!html.contains(r#"class="onboarding""#));
+    assert!(html.contains("センサーデータを受信しています"));
+    assert!(html.contains("センサーの現在値"));
 }
 
 #[tokio::test]
@@ -552,6 +587,14 @@ async fn commissioning_is_read_only_for_viewers_and_recovery_never_offers_activa
         if path == "/status" {
             assert!(html.contains(r#"data-commissioning-stage="recovery""#));
             assert!(html.contains("収集ノードの復旧を確認"));
+        } else {
+            for guidance in [
+                "両方のデータベースを保全",
+                "identityとrestore履歴を調査",
+                "行の削除、新しいEdge Node identityの発行、状態の手動編集は行わない",
+            ] {
+                assert!(html.contains(guidance), "missing recovery help: {guidance}");
+            }
         }
     }
 }

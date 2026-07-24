@@ -511,6 +511,11 @@ tr.selected-route td { background: var(--teal-soft); }
 .equipment-detail-facts dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: .82rem; font-weight: 600; }
 .equipment-history-boundary { display: flex; align-items: flex-start; gap: 8px; margin: -8px 0 20px; color: var(--ink-soft); font-size: .8rem; }
 .equipment-history-boundary span { color: var(--teal-dark); font-weight: 700; }
+.equipment-recovery-help { display: flex; align-items: flex-start; gap: 14px; margin: -8px 0 20px; padding: 16px 18px; border: 1px solid #efcf8a; border-radius: var(--radius); background: var(--warning-soft); }
+.equipment-recovery-help .health-icon { flex-basis: 32px; width: 32px; height: 32px; color: var(--warning); }
+.equipment-recovery-help h3 { margin: 0 0 4px; }
+.equipment-recovery-help p { margin: 0; color: var(--ink-soft); font-size: .8rem; }
+.equipment-recovery-help p + p { margin-top: 4px; }
 .equipment-action-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 20px; padding: 20px 22px; border: 1px solid #f4c7ad; border-radius: var(--radius); background: var(--orange-soft); }
 .equipment-action-card h3 { margin: 0 0 2px; }
 .equipment-action-card p { max-width: 720px; margin: 0; color: var(--ink-soft); font-size: .78rem; }
