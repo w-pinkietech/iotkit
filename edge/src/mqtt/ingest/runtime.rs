@@ -4,12 +4,15 @@ use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, Transport};
 use tokio_util::sync::CancellationToken;
 
 use super::IngestProcessor;
+use iotkit_edge_custody_contract::{MAX_BATCH_BYTES, MAX_DESCRIPTOR_BYTES};
 
 const SUBSCRIPTIONS: [&str; 3] = [
     "iotkit/v1/edge-nodes/+/records",
     "iotkit/v1/edge-nodes/+/descriptors",
     "iotkit/v1/edge-nodes/+/activation/result",
 ];
+const MAX_MQTT_TOPIC_BYTES: usize = u16::MAX as usize;
+const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
 
 #[derive(Clone)]
 pub struct IngestRuntimeConfig {
@@ -70,6 +73,7 @@ impl IngestRuntime {
             &self.config.broker_host,
             self.config.broker_port,
         );
+        configure_packet_limits(&mut options);
         options.set_keep_alive(Duration::from_secs(15));
         options.set_clean_session(false);
         match &self.config.transport {
@@ -209,6 +213,13 @@ impl IngestRuntime {
     }
 }
 
+fn configure_packet_limits(options: &mut MqttOptions) {
+    let limit = MAX_BATCH_BYTES.max(MAX_DESCRIPTOR_BYTES)
+        + MAX_MQTT_TOPIC_BYTES
+        + MQTT_PACKET_OVERHEAD_BYTES;
+    options.set_max_packet_size(limit, limit);
+}
+
 pub(crate) fn install_crypto_provider() -> Result<(), RuntimeError> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -250,4 +261,21 @@ pub enum RuntimeError {
     Ingest(#[from] super::IngestError),
     #[error("MQTT activation storage error: {0}")]
     Storage(#[from] crate::storage::StorageError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mqtt_packet_limit_covers_the_largest_custody_payload_and_topic() {
+        let mut options = MqttOptions::new("test", "localhost", 1883);
+
+        configure_packet_limits(&mut options);
+
+        assert!(
+            options.max_packet_size()
+                >= MAX_BATCH_BYTES + MAX_MQTT_TOPIC_BYTES + MQTT_PACKET_OVERHEAD_BYTES
+        );
+    }
 }
