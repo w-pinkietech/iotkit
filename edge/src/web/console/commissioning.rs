@@ -27,10 +27,15 @@ pub fn commissioning_view(
         .iter()
         .filter(|node| node.state != EdgeNodeState::Active)
         .count();
-    let pending_devices = devices.iter().filter(|device| device.revision == 0).count();
+    let pending_devices = devices
+        .iter()
+        .filter(|device| device.descriptor_current && device.revision == 0)
+        .count();
     let pending_signals = signals
         .iter()
-        .filter(|signal| !signal.profile_complete || signal.rules.is_empty())
+        .filter(|signal| {
+            signal.descriptor_current && (!signal.profile_complete || signal.rules.is_empty())
+        })
         .count();
 
     let stage = if edge_nodes.is_empty() {
@@ -78,7 +83,10 @@ pub fn commissioning_view(
             edge_node_href(node),
             0,
         )
-    } else if let Some(device) = devices.iter().find(|device| device.revision == 0) {
+    } else if let Some(device) = devices
+        .iter()
+        .find(|device| device.descriptor_current && device.revision == 0)
+    {
         stage(
             "setup-device",
             "機器を確認",
@@ -87,7 +95,10 @@ pub fn commissioning_view(
             format!("/equipment/devices/{}", device.device_ref),
             1,
         )
-    } else if let Some(signal) = signals.iter().find(|signal| !signal.profile_complete) {
+    } else if let Some(signal) = signals
+        .iter()
+        .find(|signal| signal.descriptor_current && !signal.profile_complete)
+    {
         stage(
             "setup-sensor",
             "センサーを設定",
@@ -96,7 +107,10 @@ pub fn commissioning_view(
             signal_href(signal),
             2,
         )
-    } else if let Some(signal) = signals.iter().find(|signal| signal.rules.is_empty()) {
+    } else if let Some(signal) = signals
+        .iter()
+        .find(|signal| signal.descriptor_current && signal.rules.is_empty())
+    {
         stage(
             "setup-rule",
             "計測ルールを設定",

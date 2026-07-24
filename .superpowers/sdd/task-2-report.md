@@ -19,8 +19,9 @@ responsive four-step panel with stable `data-commissioning-stage`. The panel:
 Discovered Edge Node detail now shows the exact Edge Node ID, ledger epoch,
 truthfully labeled first-detected time, current-descriptor device and sensor
 counts, and the post-activation formal-history boundary. Historical inventory
-rows remain available, but only resources whose existing presence is `current`
-contribute to descriptor snapshot counts. The existing Edge Node storage read
+rows remain durable in storage, but the current equipment/sensor presentation
+and commissioning work list include only resources whose existing presence is
+`current`. The existing Edge Node storage read
 carries its original `created_at` through the read model; this adds no query,
 schema, mutation, or custody behavior.
 
@@ -76,6 +77,14 @@ Review follow-up RED evidence:
   `.onboarding-next` followed `.onboarding-steps`; the complete-scenario compile
   failure blocked that focused test binary until the scenario was added.
 
+The final stale-resource review added two more RED cases:
+
+- the pure projection selected `setup-device` instead of `complete` for an
+  unconfigured device and signal whose `descriptor_current` was false;
+- after applying a newer complete descriptor that removed the still-
+  unconfigured resource, the storage-backed Console continued returning it in
+  `reduced.devices`.
+
 ### GREEN
 
 Each focused test was rerun after its minimal implementation and passed.
@@ -86,10 +95,11 @@ TMPDIR=$PWD/target/test-tmp/issue-98-task2 \
   cargo test -p iotkit-edge --test console_contract
 ```
 
-passed 18 tests with 0 failures. Coverage includes panel placement and order,
+passed 19 tests with 0 failures. Coverage includes panel placement and order,
 exactly one admin primary action, viewer read-only rendering, recovery without
 activation, discovered facts and history boundary, unconfigured raw-value
-visibility, empty-installation waiting, and completed-installation suppression.
+visibility, stale-resource exclusion, empty-installation waiting, and
+completed-installation suppression.
 
 The storage-backed commissioning transition test also passed:
 
@@ -103,9 +113,13 @@ Result: 1 passed, 0 failed.
 
 The review follow-up extended this storage-backed test with a newer complete
 descriptor containing zero devices and signals. RED failed because no
-current-snapshot count fields existed. GREEN confirms the historical device
-remains available while displayed descriptor counts become exactly 0 devices
-and 0 sensors, and the first-detected timestamp remains unchanged.
+current-snapshot count fields existed. The final GREEN regression starts while
+the resource is still unconfigured, applies the newer empty descriptor, and
+confirms that durable storage still contains its inventory row while the
+current Console contains no device/signal, commissioning has no pending work or
+stale action, descriptor counts are exactly 0/0, and first-detected time is
+unchanged. A subsequent newer descriptor restores the current resource so the
+existing profile journey continues to be tested.
 
 ## Files
 
@@ -138,8 +152,10 @@ Console read model.
 - Label the persisted creation timestamp as `初回検出時刻` and display its
   production representation as Unix milliseconds. It does not imply the
   descriptor is fresh.
-- Preserve stale inventory resources for historical/profile continuity while
-  counting only `presence == current` for descriptor snapshot facts.
+- Preserve stale inventory rows durably for history/profile continuity, but
+  exclude them from current Console equipment/sensor lists and every
+  commissioning stage, pending count, and action. Count only
+  `presence == current` for descriptor snapshot facts.
 - Put recovery instructions beside the affected Edge Node and mirror the
   runbook: preserve both databases, investigate identity/restore history, and
   do not delete rows, issue a new identity, or manually edit state.
@@ -157,7 +173,7 @@ Result:
 
 - generated asset check and TypeScript compile: passed;
 - frontend unit tests: 6 files, 21 tests passed;
-- Rust `console_contract`: 18 passed, 0 failed.
+- Rust `console_contract`: 19 passed, 0 failed.
 
 Additional scoped checks:
 

@@ -214,7 +214,10 @@ impl StorageWebApplication {
         let inventory = self.storage.inventory_signals().await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
         let mut signals = Vec::with_capacity(inventory.len());
-        for signal in inventory {
+        for signal in inventory
+            .into_iter()
+            .filter(|signal| signal.presence == "current")
+        {
             let latest = self
                 .storage
                 .recent_signal_inputs(&signal.signal_ref, 1)
@@ -478,7 +481,10 @@ impl WebApplication for StorageWebApplication {
         let signals = self.console_signals().await?;
         let inventory_devices = self.storage.inventory_devices().await.map_err(internal)?;
         let mut devices = Vec::with_capacity(inventory_devices.len());
-        for device in inventory_devices {
+        for device in inventory_devices
+            .into_iter()
+            .filter(|device| device.presence == "current")
+        {
             let edge_node_ref = nodes
                 .iter()
                 .find(|node| node.edge_node_id == device.edge_node_id)

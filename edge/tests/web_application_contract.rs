@@ -168,6 +168,7 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
     ))
     .unwrap();
     let mut reduced_descriptor = descriptor.clone();
+    let mut restored_descriptor = descriptor.clone();
     storage.apply_descriptor(&descriptor, 1).await.unwrap();
     let application = StorageWebApplication::new(storage.clone());
     let principal = application
@@ -250,6 +251,43 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
     assert_eq!(active.devices.len(), 1);
     assert_eq!(active.edge_nodes[0].devices.len(), 1);
 
+    reduced_descriptor.descriptor_revision += 1;
+    reduced_descriptor.devices.clear();
+    reduced_descriptor.signals.clear();
+    storage
+        .apply_descriptor(&reduced_descriptor, 5)
+        .await
+        .unwrap();
+    let reduced = application
+        .console(ConsoleRequest {
+            path: "/equipment".into(),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.inventory_devices().await.unwrap().len(),
+        1,
+        "durable historical inventory remains intact"
+    );
+    assert!(reduced.devices.is_empty());
+    assert!(reduced.signals.is_empty());
+    assert!(reduced.edge_nodes[0].devices.is_empty());
+    assert_eq!(reduced.edge_nodes[0].descriptor_device_count, 0);
+    assert_eq!(reduced.edge_nodes[0].descriptor_signal_count, 0);
+    assert_eq!(reduced.commissioning.stage, "complete");
+    assert_eq!(reduced.commissioning.pending_devices, 0);
+    assert_eq!(reduced.commissioning.pending_signals, 0);
+    assert_eq!(reduced.commissioning.action_href, "/sensors");
+    assert_eq!(reduced.edge_nodes[0].first_detected_at, "1 (Unix ms)");
+
+    restored_descriptor.descriptor_revision += 2;
+    storage
+        .apply_descriptor(&restored_descriptor, 6)
+        .await
+        .unwrap();
+
     let device_ref = active.devices[0].device_ref.clone();
     let mut device_params = HashMap::new();
     device_params.insert("device_ref".into(), device_ref.clone());
@@ -323,30 +361,6 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
         .await
         .expect("HTML form revision strings must update existing profiles");
     assert_eq!(updated.body["revision"], 2);
-
-    reduced_descriptor.descriptor_revision += 1;
-    reduced_descriptor.devices.clear();
-    reduced_descriptor.signals.clear();
-    storage
-        .apply_descriptor(&reduced_descriptor, 5)
-        .await
-        .unwrap();
-    let reduced = application
-        .console(ConsoleRequest {
-            path: "/equipment".into(),
-            query: HashMap::new(),
-            principal,
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        reduced.edge_nodes[0].devices.len(),
-        1,
-        "historical inventory remains available"
-    );
-    assert_eq!(reduced.edge_nodes[0].descriptor_device_count, 0);
-    assert_eq!(reduced.edge_nodes[0].descriptor_signal_count, 0);
-    assert_eq!(reduced.edge_nodes[0].first_detected_at, "1 (Unix ms)");
 }
 
 #[tokio::test]

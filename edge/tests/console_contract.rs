@@ -197,6 +197,25 @@ fn commissioning_projection_requires_rules_before_completion() {
     assert_eq!(complete.pending_signals, 0);
 }
 
+#[test]
+fn commissioning_projection_ignores_stale_descriptor_resources() {
+    let mut stale_signal = commissioning_signal(false, false);
+    stale_signal.descriptor_current = false;
+    let mut stale_device = commissioning_device(0, vec![stale_signal.clone()]);
+    stale_device.descriptor_current = false;
+
+    let view = commissioning_view(
+        &[commissioning_node(EdgeNodeState::Active)],
+        &[stale_device],
+        &[stale_signal],
+    );
+
+    assert_eq!(view.stage, "complete");
+    assert_eq!(view.pending_devices, 0);
+    assert_eq!(view.pending_signals, 0);
+    assert_eq!(view.action_href, "/sensors");
+}
+
 #[tokio::test]
 async fn login_page_keeps_console_hooks() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
