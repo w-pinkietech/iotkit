@@ -4,6 +4,7 @@ use iotkit_edge::{
         semantics::{SemanticRuleDraft, Semantics},
     },
     composition::registered_output_adapters,
+    mqtt::ingest::IngestProcessor,
     semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
     storage::{
         AcceptBatch, AuditActor, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile,
@@ -11,8 +12,9 @@ use iotkit_edge::{
     },
 };
 use iotkit_edge_custody_contract::{
-    ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
+    AcceptedThrough, ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
 };
+use iotkit_output_adapter_api::ObservationValue;
 use serde::Deserialize;
 use sqlx::{
     Executor,
@@ -271,45 +273,59 @@ async fn unconfigured_signal_does_not_block_or_falsely_advance_raw_custody() {
         .await
         .expect("apply exact activation result");
 
-    let ledger_epoch = descriptor.ledger_epoch.clone();
-    let measurement = |sequence: i64, series_key: &str, value: f64| {
-        RawRecord::new(
-            sequence,
-            serde_json::to_vec(&serde_json::json!({
+    let batch = RecordBatch::decode(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "edge_node_id": descriptor.edge_node_id,
+            "ledger_epoch": descriptor.ledger_epoch,
+            "publication_id": "edge-node-01:epoch-01:1:2",
+            "cursor_start": 1,
+            "cursor_end": 2,
+            "records": [{
                 "family": "measurement",
                 "schema_version": 1,
-                "epoch": ledger_epoch,
-                "pub_seq": sequence,
-                "series_key": series_key,
-                "values": [value],
-                "event_time": 1_721_800_001_000_i64 + sequence,
+                "epoch": "epoch-01",
+                "pub_seq": 1,
+                "series_key": configured_series,
+                "values": [1.0],
+                "event_time": 1_721_800_001_001_i64,
                 "event_time_source": "received_at",
                 "time_source": "edge_node",
                 "time_quality": "unsynced",
-                "received_at": 1_721_800_001_000_i64 + sequence,
+                "received_at": 1_721_800_001_001_i64,
                 "device_time": null
-            }))
-            .expect("encode measurement"),
+            }, {
+                "family": "measurement",
+                "schema_version": 1,
+                "epoch": "epoch-01",
+                "pub_seq": 2,
+                "series_key": descriptor.signals[1].series_key,
+                "values": [24.5],
+                "event_time": 1_721_800_001_002_i64,
+                "event_time_source": "received_at",
+                "time_source": "edge_node",
+                "time_quality": "unsynced",
+                "received_at": 1_721_800_001_002_i64,
+                "device_time": null
+            }]
+        }))
+        .expect("encode wire record batch"),
+    )
+    .expect("valid wire record batch");
+    let batch_payload = serde_json::to_vec(&batch).expect("encode validated wire batch");
+    let ack_publication = IngestProcessor::new(store.clone())
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/records",
+            &batch_payload,
+            1_721_800_001_100,
         )
-        .expect("valid measurement")
-    };
-    let batch = AcceptBatch {
-        edge_node_id: descriptor.edge_node_id.clone(),
-        ledger_epoch: descriptor.ledger_epoch.clone(),
-        publication_id: "edge-node-01:epoch-01:1:2".into(),
-        received_at: 1_721_800_001_100,
-        records: vec![
-            measurement(1, configured_series, 1.0),
-            measurement(2, &descriptor.signals[1].series_key, 24.5),
-        ],
-    };
-    let cursor_end = batch.records.last().expect("batch record").pub_seq;
-    let ack = store
-        .accept_active_batch(batch)
         .await
-        .expect("setup state must not block raw custody");
+        .expect("setup state must not block MQTT raw custody")
+        .expect("valid records produce an accepted-through acknowledgement");
+    let ack =
+        AcceptedThrough::decode(&ack_publication.payload).expect("decode accepted-through ACK");
 
-    assert_eq!(ack.accepted_through, cursor_end);
+    assert_eq!(ack.accepted_through, batch.cursor_end);
     assert_eq!(
         store
             .raw_records(&descriptor.edge_node_id, &descriptor.ledger_epoch)
@@ -323,7 +339,7 @@ async fn unconfigured_signal_does_not_block_or_falsely_advance_raw_custody() {
             .accepted_through(&descriptor.edge_node_id, &descriptor.ledger_epoch)
             .await
             .expect("read accepted-through"),
-        cursor_end
+        batch.cursor_end
     );
 
     let projected = semantics
@@ -331,14 +347,13 @@ async fn unconfigured_signal_does_not_block_or_falsely_advance_raw_custody() {
         .await
         .expect("project configured semantics");
     assert_eq!(projected.observations, 1);
-    assert_eq!(
-        store
-            .semantic_observations(&rule.rule_id)
-            .await
-            .expect("read semantic observations")
-            .len(),
-        1
-    );
+    let observations = store
+        .semantic_observations(&rule.rule_id)
+        .await
+        .expect("read semantic observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].value, ObservationValue::Boolean(true));
+    assert_eq!(observations[0].observed_at, 1_721_800_001_001);
 }
 
 #[tokio::test]
