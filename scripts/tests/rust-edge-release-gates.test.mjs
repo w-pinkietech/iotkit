@@ -58,3 +58,65 @@ test("Pebble gate uses the pinned official lego image", () => {
   );
   assert.match(source, /docker (?:run|create)/);
 });
+
+test("certificate renewal exercises the production renew command", () => {
+  assert.match(
+    sources["test-broker-cert-pebble.sh"],
+    /iotkit-broker-cert"\s+renew/,
+  );
+  assert.match(
+    sources["test-broker-cert-pebble.sh"],
+    /serial_before[\s\S]+serial_after/,
+  );
+  const certificateCommand = readFileSync(
+    new URL("../iotkit-broker-cert", import.meta.url),
+    "utf8",
+  );
+  assert.match(certificateCommand, /"\$\{challenge_args\[@\]\}"\s+renew\b/);
+  assert.doesNotMatch(certificateCommand, /"\$\{challenge_args\[@\]\}"\s+run\b/);
+});
+
+test("resilience gate supplies identity and checks both SQLite databases", () => {
+  const compose = readFileSync(
+    new URL("../../compose.dev.yaml", import.meta.url),
+    "utf8",
+  );
+  const resilience = readFileSync(
+    new URL("../test-edge-resilience.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(compose, /--edge-id[\s\S]+IOTKIT_EDGE_ID/);
+  assert.match(resilience, /export IOTKIT_EDGE_ID=/);
+  assert.match(resilience, /edge_node_check=/);
+  assert.match(resilience, /central_edge_check=/);
+});
+
+test("PostgreSQL gate covers upgrades, profile migration, and recovery hold", () => {
+  const source = sources["test-edge-postgres.sh"];
+  assert.match(source, /schema_upgrade_contract/);
+  assert.match(
+    source,
+    /postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configured/,
+  );
+  assert.match(
+    source,
+    /postgres_migration_failure_rolls_back_every_copied_row_when_configured/,
+  );
+  assert.match(
+    source,
+    /postgres_restored_gap_requires_audited_archive_loss_acceptance/,
+  );
+});
+
+test("real output outage covers generic and Pinikiet exports", () => {
+  const source = sources["test-edge-output.sh"];
+  const rustTest = readFileSync(
+    new URL("../../edge/tests/output_puback.rs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /pinikiet\/v1\/sources\/\+\/sensors\/\+\/observations/);
+  assert.match(source, /pinikiet\/v1\/sources\/\+\/status/);
+  assert.match(rustTest, /pinikiet\.mqtt\.v1/);
+  assert.match(rustTest, /generic_export_id/);
+  assert.match(rustTest, /pinikiet_export_id/);
+});

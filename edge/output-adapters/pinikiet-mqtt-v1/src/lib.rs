@@ -81,8 +81,33 @@ struct Payload<'a> {
     reading: Option<f64>,
 }
 
+#[derive(Serialize)]
+struct SourceStatus {
+    schema_version: u32,
+    reported_at: i64,
+    state: &'static str,
+}
+
 pub struct PinikietMqttAdapter;
 pub struct PinikietProfilePolicy;
+
+pub fn source_status(source_id: &str, reported_at: i64) -> Result<MqttPublication, AdapterError> {
+    if !valid_id(source_id) || !(0..=253_402_300_799_999).contains(&reported_at) {
+        return Err(AdapterError::InvalidConfiguration);
+    }
+    let payload = serde_json::value::to_raw_value(&SourceStatus {
+        schema_version: 1,
+        reported_at,
+        state: "online",
+    })
+    .map_err(|_| AdapterError::TransformFailed)?;
+    MqttPublication::new(
+        format!("pinikiet/v1/sources/{source_id}/status"),
+        1,
+        true,
+        payload,
+    )
+}
 
 impl OutputAdapter for PinikietMqttAdapter {
     fn descriptor(&self) -> &'static Descriptor {

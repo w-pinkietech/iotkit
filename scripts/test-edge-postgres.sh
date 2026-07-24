@@ -49,6 +49,12 @@ export IOTKIT_TEST_POSTGRES_DSN="postgres://iotkit:iotkit-test-only@127.0.0.1:${
 mkdir -p "$repo_root/target/tmp"
 export TMPDIR="${TMPDIR:-$repo_root/target/tmp}"
 
+reset_database() {
+  docker exec "$container" \
+    dropdb --force --if-exists --username iotkit iotkit >/dev/null
+  docker exec "$container" createdb --username iotkit iotkit
+}
+
 cd "$repo_root"
 if [[ "$mode" == "capacity" ]]; then
   scratch=$(mktemp -d "$repo_root/target/tmp/rust-edge-postgres-capacity.XXXXXX")
@@ -67,16 +73,43 @@ IOTKIT_REQUIRE_POSTGRES=1 \
     postgres_obeys_the_same_raw_custody_contract_when_configured \
     -- --ignored --exact --nocapture
 
+reset_database
 cargo test -p iotkit-edge --test auth_storage_contract \
   postgres_obeys_account_session_and_admin_safety_contract \
   -- --ignored --exact --nocapture
 
+reset_database
 cargo test -p iotkit-edge --test web_application_contract \
   postgres_enforces_the_same_web_revision_precondition \
   -- --ignored --exact --nocapture
 
-docker exec "$container" dropdb --if-exists --username iotkit iotkit >/dev/null
-docker exec "$container" createdb --username iotkit iotkit
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test schema_upgrade_contract \
+    postgres_startup_upgrades_a_v6_database_without_losing_identity \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test cli_parity_contract \
+    postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configured \
+    -- --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test cli_parity_contract \
+    postgres_migration_failure_rolls_back_every_copied_row_when_configured \
+    -- --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test backup_contract \
+    postgres_restored_gap_requires_audited_archive_loss_acceptance \
+    -- --ignored --exact --nocapture
+
+reset_database
+docker exec "$container" dropdb --force --if-exists \
+  --username iotkit iotkit_restore >/dev/null
 docker exec "$container" createdb --username iotkit iotkit_restore
 export IOTKIT_TEST_POSTGRES_RESTORE_DSN="postgres://iotkit:iotkit-test-only@127.0.0.1:${port}/iotkit_restore?sslmode=disable"
 export IOTKIT_REQUIRE_POSTGRES=1
@@ -84,4 +117,4 @@ cargo test -p iotkit-edge --test backup_contract \
   postgres_custom_snapshot_round_trips_through_real_tools_when_required \
   -- --exact --nocapture
 
-echo "Rust Edge PostgreSQL custody, auth, revision, backup, and restore tests passed."
+echo "Rust Edge PostgreSQL custody, auth, revision, upgrade, migration, recovery, backup, and restore tests passed."

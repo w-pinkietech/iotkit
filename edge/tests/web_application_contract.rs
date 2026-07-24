@@ -385,12 +385,26 @@ async fn postgres_enforces_the_same_web_revision_precondition() {
         .initialize_edge_identity(1_700_000_000_000)
         .await
         .unwrap();
+    AccountService::new(storage.clone())
+        .create_initial_system_admin(
+            "postgres-test",
+            "PostgreSQL Test",
+            Password::new("long enough postgres password").unwrap(),
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
     let unique = uuid::Uuid::new_v4().simple().to_string();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
     let rule = Semantics::new(storage.clone())
         .create_rule(
             SemanticRuleDraft {
-                edge_node_id: format!("edge-node-{unique}"),
-                series_key: format!("temperature-{unique}"),
+                edge_node_id: descriptor.edge_node_id,
+                series_key: descriptor.signals[0].series_key.clone(),
                 display_name: format!("Temperature {unique}"),
                 spec: RuleSpec {
                     kind: SemanticKind::Numeric,
@@ -402,21 +416,23 @@ async fn postgres_enforces_the_same_web_revision_precondition() {
         )
         .await
         .unwrap();
-    let principal = iotkit_edge::web::Principal {
-        account_ref: "acct-postgres-test".into(),
-        login_id: "postgres-test".into(),
-        display_name: "PostgreSQL Test".into(),
-        role: "system_admin".into(),
-        state: "active".into(),
-        must_change_password: false,
-        revision: 1,
-        created_at: 1,
-        updated_at: 1,
-    };
+    assert!(
+        storage
+            .list_semantic_rules()
+            .await
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate.rule_id == rule.rule_id),
+        "new PostgreSQL semantic rule must be visible before revision"
+    );
     let application = StorageWebApplication::new(storage);
+    let login = application
+        .login("postgres-test", "long enough postgres password")
+        .await
+        .unwrap();
     let revised = application
         .mutate(
-            &principal,
+            &login.principal,
             ApiMutation::Named {
                 method: axum::http::Method::PUT,
                 route: format!("/api/v1/semantic-rules/{}", rule.rule_id),
@@ -430,7 +446,7 @@ async fn postgres_enforces_the_same_web_revision_precondition() {
     assert_eq!(revised.body["revision"], 2);
     let stale = application
         .mutate(
-            &principal,
+            &login.principal,
             ApiMutation::Named {
                 method: axum::http::Method::PUT,
                 route: format!("/api/v1/semantic-rules/{}", rule.rule_id),

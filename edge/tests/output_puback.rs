@@ -7,7 +7,7 @@ use iotkit_edge::{
     },
     composition::registered_output_adapters,
     mqtt::output::{DeliveryAction, DeliveryTracker, OutputRuntime, OutputRuntimeConfig},
-    semantics::{Detector, RuleSpec, SemanticKind, TriggerMode},
+    semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
     storage::{AcceptBatch, OutputMark, RawRecord, Storage, StorageProfile},
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
@@ -70,7 +70,7 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
         .initialize_edge_identity(1_720_000_000_000)
         .await
         .expect("initialize identity");
-    let series_key = "018f0000-0000-7000-8000-000000000001:temperature:na:primary";
+    let series_key = "018f0000-0000-7000-8000-000000000001:contact:na:primary";
     let descriptor = DescriptorSnapshot::decode(
         &serde_json::to_vec(&serde_json::json!({
             "schema_version": 2,
@@ -87,10 +87,10 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
             "signals": [{
                 "series_key": series_key,
                 "system_id": "018f0000-0000-7000-8000-000000000001",
-                "measurement_key": "temperature",
+                "measurement_key": "contact",
                 "channel_index": null,
                 "variant": "primary",
-                "unit": "Cel",
+                "unit": null,
                 "value_type": "float"
             }]
         }))
@@ -102,40 +102,59 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
         .await
         .expect("apply descriptor");
     let semantics = Semantics::new(storage.clone());
-    semantics
+    let rule = semantics
         .create_rule(
             SemanticRuleDraft {
                 edge_node_id: "edge-output-gate".into(),
                 series_key: series_key.into(),
-                display_name: "Gate temperature".into(),
+                display_name: "Gate production counter".into(),
                 spec: RuleSpec {
-                    kind: SemanticKind::Numeric,
-                    detector: Detector::default(),
-                    trigger: TriggerMode::None,
+                    kind: SemanticKind::CumulativeCounter,
+                    detector: Detector {
+                        mode: DetectorMode::BooleanHighActive,
+                        ..Detector::default()
+                    },
+                    trigger: TriggerMode::OnTransition,
                 },
             },
             1,
         )
         .await
         .expect("create semantic rule");
-    OutputProfiles::new(storage.clone(), registered_output_adapters())
+    let profiles = OutputProfiles::new(storage.clone(), registered_output_adapters());
+    profiles
         .activate("Gate MQTT", "iotkit.mqtt-json.v1", Map::new(), 2)
         .await
         .expect("activate output profile");
-    let record = serde_json::json!({
-        "family": "measurement",
-        "schema_version": 1,
-        "epoch": "gate-epoch",
-        "pub_seq": 1,
-        "series_key": series_key,
-        "values": [23.75],
-        "event_time": 1_720_000_000_003_i64,
-        "event_time_source": "received_at",
-        "time_source": "edge_node",
-        "time_quality": "unsynced",
-        "received_at": 1_720_000_000_003_i64,
-        "device_time": null
-    });
+    let pinikiet = profiles
+        .activate("Gate Pinikiet", "pinikiet.mqtt.v1", Map::new(), 3)
+        .await
+        .expect("prepare Pinikiet output profile");
+    let pinikiet_binding = pinikiet
+        .bindings
+        .iter()
+        .find(|binding| binding.rule_id == rule.rule_id)
+        .expect("Pinikiet production binding");
+    profiles
+        .confirm(&pinikiet_binding.binding_id, 4)
+        .await
+        .expect("confirm Pinikiet sensor identity");
+    let record = |sequence: i64, value: f64| {
+        serde_json::json!({
+            "family": "measurement",
+            "schema_version": 1,
+            "epoch": "gate-epoch",
+            "pub_seq": sequence,
+            "series_key": series_key,
+            "values": [value],
+            "event_time": 1_720_000_000_003_i64 + sequence,
+            "event_time_source": "received_at",
+            "time_source": "edge_node",
+            "time_quality": "unsynced",
+            "received_at": 1_720_000_000_003_i64 + sequence,
+            "device_time": null
+        })
+    };
     storage
         .accept_batch(AcceptBatch {
             edge_node_id: "edge-output-gate".into(),
@@ -143,8 +162,16 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
             publication_id: "gate-publication".into(),
             received_at: 1_720_000_000_003,
             records: vec![
-                RawRecord::new(1, serde_json::to_vec(&record).expect("serialize record"))
-                    .expect("valid record"),
+                RawRecord::new(
+                    1,
+                    serde_json::to_vec(&record(1, 0.0)).expect("serialize record"),
+                )
+                .expect("valid record"),
+                RawRecord::new(
+                    2,
+                    serde_json::to_vec(&record(2, 1.0)).expect("serialize record"),
+                )
+                .expect("valid record"),
             ],
         })
         .await
@@ -153,16 +180,38 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
         .project_pending(10, registered_output_adapters())
         .await
         .expect("project durable output");
-    assert_eq!(storage.pending_output_count().await.unwrap(), 1);
-    let export_id = storage
-        .claim_output("identity-probe", 1_800_000_000_000, 1)
+    assert_eq!(storage.pending_output_count().await.unwrap(), 2);
+    let first = storage
+        .claim_output("identity-probe-1", 1_800_000_000_000, 1)
         .await
         .expect("inspect durable export")
-        .expect("one durable export")
-        .export_id;
+        .expect("first durable export");
+    let second = storage
+        .claim_output("identity-probe-2", 1_800_000_000_000, 1)
+        .await
+        .expect("inspect durable export")
+        .expect("second durable export");
+    let (generic_export_id, pinikiet_export_id) = if first.topic.starts_with("iotkit/") {
+        (first.export_id.clone(), second.export_id.clone())
+    } else {
+        (second.export_id.clone(), first.export_id.clone())
+    };
+    assert!(first.topic.starts_with("iotkit/") || first.topic.starts_with("pinikiet/"));
+    assert!(second.topic.starts_with("iotkit/") || second.topic.starts_with("pinikiet/"));
+    assert_ne!(
+        first.topic.starts_with("iotkit/"),
+        second.topic.starts_with("iotkit/"),
+        "the live outage must cover one generic and one Pinikiet publication"
+    );
     assert!(
         storage
-            .release_output(&export_id, "identity-probe")
+            .release_output(&first.export_id, "identity-probe-1")
+            .await
+            .expect("release identity probe")
+    );
+    assert!(
+        storage
+            .release_output(&second.export_id, "identity-probe-2")
             .await
             .expect("release identity probe")
     );
@@ -195,7 +244,7 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
             storage.clone(),
             OutputRuntimeConfig {
                 mqtt,
-                request_capacity: 1,
+                request_capacity: 2,
                 claim_lease: Duration::from_secs(30),
                 idle_poll: Duration::from_millis(20),
                 reconnect_delay: Duration::from_millis(50),
@@ -206,8 +255,8 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         storage.pending_output_count().await.unwrap(),
-        1,
-        "broker outage must leave the durable export pending"
+        2,
+        "broker outage must leave both durable exports pending"
     );
     fs::write(control.join("pending"), b"pending\n").expect("write pending marker");
     tokio::time::timeout(Duration::from_secs(15), async {
@@ -222,11 +271,19 @@ async fn actual_mosquitto_outage_retries_same_durable_export_until_puback() {
     .expect("PUBACK did not mark the durable export");
     assert_eq!(
         storage
-            .mark_output_published(&export_id, "identity-probe", 1_800_000_000_001)
+            .mark_output_published(&generic_export_id, "identity-probe-1", 1_800_000_000_001,)
             .await
             .expect("inspect published export"),
         OutputMark::Published,
-        "reconnect must complete the original durable export identity"
+        "reconnect must complete the original generic durable export identity"
+    );
+    assert_eq!(
+        storage
+            .mark_output_published(&pinikiet_export_id, "identity-probe-2", 1_800_000_000_001,)
+            .await
+            .expect("inspect published export"),
+        OutputMark::Published,
+        "reconnect must complete the original Pinikiet durable export identity"
     );
     cancellation.cancel();
     runtime

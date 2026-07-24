@@ -83,29 +83,51 @@ key="$scratch/lego-data/certificates/localhost.key"
 issuer="$scratch/lego-data/certificates/localhost.issuer.crt"
 test -s "$cert" -a -s "$key" -a -s "$issuer"
 chmod 600 "$key"
+mkdir "$scratch/active" "$scratch/mock-bin"
+cp "$cert" "$scratch/active/server.pem"
+cp "$key" "$scratch/active/server.key"
+cp "$scratch/pebble-root.pem" "$scratch/active/ca.pem"
+chmod 600 "$scratch/active"/*
+ln -s "$scratch/lego-bin" "$scratch/mock-bin/lego"
+cat >"$scratch/mock-bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"$scratch/mock-bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+printf 'Verify return code: 0 (ok)\n'
+EOF
+chmod 700 "$scratch/mock-bin/docker" "$scratch/mock-bin/timeout"
 touch "$scratch/edge.env" "$scratch/compose.yaml" "$scratch/password"
 cat >"$scratch/cert.env" <<EOF
 IOTKIT_CERT_DOMAIN=localhost
-IOTKIT_CERT_FILE=$cert
-IOTKIT_CERT_KEY_FILE=$key
-IOTKIT_CERT_CA_FILE=$scratch/pebble-root.pem
+IOTKIT_CERT_FILE=$scratch/active/server.pem
+IOTKIT_CERT_KEY_FILE=$scratch/active/server.key
+IOTKIT_CERT_CA_FILE=$scratch/active/ca.pem
 IOTKIT_CERT_EDGE_ENV=$scratch/edge.env
 IOTKIT_CERT_COMPOSE_FILE=$scratch/compose.yaml
 IOTKIT_CERT_BROKER_PORT=18883
 IOTKIT_CERT_EDGE_ARCHIVE_PASSWORD_FILE=$scratch/password
+IOTKIT_CERT_LEGO_PATH=$scratch/lego-data
+IOTKIT_CERT_LEGO_EMAIL=test@iotkit.invalid
+IOTKIT_CERT_LEGO_SERVER=https://localhost:$IOTKIT_PEBBLE_PORT/dir
+IOTKIT_CERT_LEGO_CHALLENGE=dns
+IOTKIT_CERT_LEGO_DNS_PROVIDER=exec
+IOTKIT_CERT_LEGO_DNS_RESOLVERS=127.0.0.1:$IOTKIT_PEBBLE_DNS_PORT
+IOTKIT_CERT_RENEW_DAYS=100
+IOTKIT_CERT_LEGO_ARI_DISABLE=true
+IOTKIT_CERT_LEGO_NO_RANDOM_SLEEP=true
 EOF
 chmod 600 "$scratch/cert.env"
 "$repo_root/scripts/iotkit-broker-cert" status --config "$scratch/cert.env" \
   | jq -e '.domain == "localhost" and .state == "valid"' >/dev/null
 
-serial_before=$(openssl x509 -in "$cert" -noout -serial)
-"$scratch/lego-bin" --path "$scratch/lego-data" \
-  --server "https://localhost:$IOTKIT_PEBBLE_PORT/dir" \
-  --email test@iotkit.invalid --domains localhost \
-  --dns exec --dns.resolvers "127.0.0.1:$IOTKIT_PEBBLE_DNS_PORT" \
-  --dns.propagation-wait 1s \
-  renew --days 100 --ari-disable --no-random-sleep
-serial_after=$(openssl x509 -in "$cert" -noout -serial)
+serial_before=$(openssl x509 -in "$scratch/active/server.pem" -noout -serial)
+PATH="$scratch/mock-bin:$PATH" \
+  "$repo_root/scripts/iotkit-broker-cert" renew --config "$scratch/cert.env" \
+  >"$scratch/renew.json"
+jq -e '.domain == "localhost" and .state == "valid"' "$scratch/renew.json" >/dev/null
+serial_after=$(openssl x509 -in "$scratch/active/server.pem" -noout -serial)
 [[ "$serial_before" != "$serial_after" ]] || {
   echo "Pebble renewal did not replace the certificate" >&2
   exit 1

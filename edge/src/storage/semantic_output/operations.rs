@@ -1375,6 +1375,25 @@ impl Storage {
         }
     }
 
+    pub(crate) async fn pinikiet_status_source_ids(&self) -> Result<Vec<String>, StorageError> {
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => Ok(sqlx::query_scalar(
+                "SELECT DISTINCT json_extract(config_json,'$.source_id') \
+                 FROM output_routes WHERE adapter_id='pinikiet.mqtt.v1' \
+                 AND active=1 AND lifecycle_state='active' ORDER BY 1",
+            )
+            .fetch_all(pool)
+            .await?),
+            StorageInner::Postgres { pool, .. } => Ok(sqlx::query_scalar(
+                "SELECT DISTINCT config_json->>'source_id' \
+                 FROM output_routes WHERE adapter_id='pinikiet.mqtt.v1' \
+                 AND active=TRUE AND lifecycle_state='active' ORDER BY 1",
+            )
+            .fetch_all(pool)
+            .await?),
+        }
+    }
+
     pub async fn claim_output(
         &self,
         claim_token: &str,

@@ -4,6 +4,8 @@ use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, Outgoing, QoS};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use iotkit_output_adapter_pinikiet_mqtt_v1::source_status;
+
 use crate::storage::{ClaimedOutput, OutputMark, Storage, StorageError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +86,7 @@ impl OutputRuntime {
         }
         let (client, mut eventloop) =
             AsyncClient::new(self.config.mqtt.clone(), self.config.request_capacity);
+        let mut statuses_published = false;
         while !cancellation.is_cancelled() {
             let token = format!("claim-{}", Uuid::new_v4().simple());
             let Some(claimed) = self
@@ -95,6 +98,15 @@ impl OutputRuntime {
                 )
                 .await?
             else {
+                if !statuses_published {
+                    if !self
+                        .publish_statuses(&client, &mut eventloop, &cancellation)
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    statuses_published = true;
+                }
                 tokio::select! {
                     () = cancellation.cancelled() => break,
                     () = tokio::time::sleep(self.config.idle_poll) => {}
@@ -122,8 +134,78 @@ impl OutputRuntime {
             {
                 break;
             }
+            if !statuses_published {
+                if !self
+                    .publish_statuses(&client, &mut eventloop, &cancellation)
+                    .await?
+                {
+                    return Ok(());
+                }
+                statuses_published = true;
+            }
         }
         Ok(())
+    }
+
+    async fn publish_statuses(
+        &self,
+        client: &AsyncClient,
+        eventloop: &mut rumqttc::EventLoop,
+        cancellation: &CancellationToken,
+    ) -> Result<bool, OutputRuntimeError> {
+        for source_id in self.storage.pinikiet_status_source_ids().await? {
+            let publication = source_status(&source_id, unix_millis()?)?;
+            if !self
+                .publish_untracked(
+                    client,
+                    eventloop,
+                    publication.topic(),
+                    publication.retain(),
+                    publication.payload().get().as_bytes(),
+                    cancellation,
+                )
+                .await?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn publish_untracked(
+        &self,
+        client: &AsyncClient,
+        eventloop: &mut rumqttc::EventLoop,
+        topic: &str,
+        retain: bool,
+        payload: &[u8],
+        cancellation: &CancellationToken,
+    ) -> Result<bool, OutputRuntimeError> {
+        client
+            .publish(topic, QoS::AtLeastOnce, retain, payload)
+            .await?;
+        let mut packet_id = None;
+        loop {
+            let event = tokio::select! {
+                () = cancellation.cancelled() => return Ok(false),
+                result = eventloop.poll() => result,
+            };
+            match event {
+                Ok(Event::Outgoing(Outgoing::Publish(id))) if packet_id.is_none() => {
+                    packet_id = Some(id);
+                }
+                Ok(Event::Incoming(Incoming::PubAck(ack))) if packet_id == Some(ack.pkid) => {
+                    return Ok(true);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    tokio::select! {
+                        () = cancellation.cancelled() => return Ok(false),
+                        () = tokio::time::sleep(self.config.reconnect_delay) => {}
+                    }
+                }
+            }
+        }
     }
 
     async fn drive_publication(
@@ -209,6 +291,8 @@ pub enum OutputRuntimeError {
     Storage(#[from] StorageError),
     #[error("queue output publication: {0}")]
     Client(#[from] rumqttc::ClientError),
+    #[error("create Pinikiet source status: {0}")]
+    Adapter(#[from] iotkit_output_adapter_api::AdapterError),
     #[error("the durable output claim was lost before PUBACK mark: {0}")]
     ClaimLost(String),
 }

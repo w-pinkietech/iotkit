@@ -20,6 +20,8 @@ services:
       - serve
       - --db
       - /data/edge.db
+      - --edge-id
+      - ${IOTKIT_EDGE_ID:?set IOTKIT_EDGE_ID}
       - --broker-url
       - tcp://broker:1883
       - --client-id

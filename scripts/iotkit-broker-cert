@@ -154,9 +154,19 @@ case "$command_name" in
         ;;
       *) fail "unsupported ACME challenge: $challenge" ;;
     esac
+    renew_days=${IOTKIT_CERT_RENEW_DAYS:-30}
+    [[ "$renew_days" =~ ^[0-9]+$ ]] && ((renew_days >= 1 && renew_days <= 365)) \
+      || fail "IOTKIT_CERT_RENEW_DAYS must be between 1 and 365"
+    renew_args=(--days "$renew_days")
+    if [[ "${IOTKIT_CERT_LEGO_ARI_DISABLE:-false}" == true ]]; then
+      renew_args+=(--ari-disable)
+    fi
+    if [[ "${IOTKIT_CERT_LEGO_NO_RANDOM_SLEEP:-false}" == true ]]; then
+      renew_args+=(--no-random-sleep)
+    fi
     lego --path "$IOTKIT_CERT_LEGO_PATH" --server "$IOTKIT_CERT_LEGO_SERVER" \
       --email "$IOTKIT_CERT_LEGO_EMAIL" --domains "$IOTKIT_CERT_DOMAIN" \
-      --accept-tos "${challenge_args[@]}" run
+      --accept-tos "${challenge_args[@]}" renew "${renew_args[@]}"
     lego_cert="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.crt"
     lego_key="$IOTKIT_CERT_LEGO_PATH/certificates/$IOTKIT_CERT_DOMAIN.key"
     install_bundle "$lego_cert" "$lego_key" "$IOTKIT_CERT_CA_FILE"

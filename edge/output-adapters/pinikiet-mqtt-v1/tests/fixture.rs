@@ -1,7 +1,9 @@
 use iotkit_output_adapter_api::{
     IdentityScope, Observation, ObservationKind, ObservationValue, ProfilePolicy, ProfileRequest,
 };
-use iotkit_output_adapter_pinikiet_mqtt_v1::{PinikietMqttAdapter, PinikietProfilePolicy};
+use iotkit_output_adapter_pinikiet_mqtt_v1::{
+    PinikietMqttAdapter, PinikietProfilePolicy, source_status,
+};
 use iotkit_output_adapter_testkit::{ConformanceCase, assert_adapter_conformance};
 
 #[test]
@@ -83,5 +85,21 @@ fn profile_policy_rejects_incompatible_kind_and_mode() {
                 values: &values,
             })
             .is_err()
+    );
+}
+
+#[test]
+fn source_status_is_online_qos_one_and_retained() {
+    let status = source_status("edge-0123456789abcdef0123456789abcdef", 1_784_190_000_123)
+        .expect("valid Pinikiet status");
+    assert_eq!(
+        status.topic(),
+        "pinikiet/v1/sources/edge-0123456789abcdef0123456789abcdef/status"
+    );
+    assert_eq!(status.qos(), 1);
+    assert!(status.retain());
+    assert_eq!(
+        status.payload().get(),
+        r#"{"schema_version":1,"reported_at":1784190000123,"state":"online"}"#
     );
 }

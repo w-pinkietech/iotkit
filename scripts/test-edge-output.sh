@@ -41,6 +41,9 @@ docker run --rm --user "$(id -u):$(id -g)" \
 cat >"$scratch/acl" <<'EOF'
 user edge-output
 topic write iotkit/v1/sources/+/signals/+/observations
+topic write pinikiet/v1/sources/+/sensors/+/observations
+topic write pinikiet/v1/sources/+/status
+topic read pinikiet/v1/sources/+/status
 EOF
 cat >"$scratch/mosquitto.conf" <<'EOF'
 listener 1883 0.0.0.0
@@ -141,6 +144,20 @@ if ! wait "$test_pid"; then
   exit 1
 fi
 test_pid=""
+
+retained_status=$(
+  timeout 10 docker exec "$broker" mosquitto_sub \
+    --host 127.0.0.1 --port 1883 \
+    --username edge-output \
+    -P "$(tr -d '\r\n' <"$scratch/output-password")" \
+    --topic 'pinikiet/v1/sources/+/status' \
+    -C 1
+)
+jq -e '
+  .schema_version == 1 and
+  .state == "online" and
+  (.reported_at | type == "number")
+' <<<"$retained_status" >/dev/null
 
 cd "$repo_root"
 TMPDIR="$repo_root/target/tmp" \

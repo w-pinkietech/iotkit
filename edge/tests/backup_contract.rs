@@ -400,3 +400,149 @@ async fn restored_gap_enters_durable_recovery_hold_until_audited_archive_loss_ac
     drop(pool);
     drop(directory);
 }
+
+#[tokio::test]
+#[ignore = "requires IOTKIT_TEST_POSTGRES_DSN; run scripts/test-edge-postgres.sh"]
+async fn postgres_restored_gap_requires_audited_archive_loss_acceptance() {
+    let dsn = match std::env::var("IOTKIT_TEST_POSTGRES_DSN") {
+        Ok(value) => value,
+        Err(_) if std::env::var_os("IOTKIT_REQUIRE_POSTGRES").is_some() => {
+            panic!("IOTKIT_TEST_POSTGRES_DSN is required")
+        }
+        Err(_) => return,
+    };
+    let storage = Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+        .await
+        .expect("open PostgreSQL store");
+    let edge_id = storage
+        .initialize_edge_identity(1)
+        .await
+        .expect("initialize Edge identity");
+    storage
+        .accept_batch(AcceptBatch {
+            edge_node_id: "node-pg".into(),
+            ledger_epoch: "epoch-pg".into(),
+            publication_id: "before-restore".into(),
+            received_at: 1,
+            records: vec![
+                RawRecord::new(1, br#"{"value":20}"#).expect("record"),
+                RawRecord::new(2, br#"{"value":21}"#).expect("record"),
+            ],
+        })
+        .await
+        .expect("seed restored cursor");
+    let pool = sqlx::PgPool::connect(&dsn)
+        .await
+        .expect("open PostgreSQL inspection pool");
+    sqlx::query(
+        "INSERT INTO edge_node_activations(edge_node_ref,edge_node_id,ledger_epoch,state,revision,\
+         created_at,updated_at) VALUES('node-ref-pg','node-pg','epoch-pg','active',1,1,1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO edge_restore_events(restore_id,backup_id,restored_at,backup_created_at,\
+         backup_edge_id,backup_schema_version,backup_sha256) \
+         VALUES('restore-pg','backup-pg',2,1,(SELECT edge_id FROM edge_meta),7,$1)",
+    )
+    .bind("0".repeat(64))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO edge_restore_cursor_checks(restore_id,edge_node_id,ledger_epoch,\
+         backup_accepted_through,state,updated_at) \
+         VALUES('restore-pg','node-pg','epoch-pg',2,'pending',2)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let error = storage
+        .accept_active_batch(AcceptBatch {
+            edge_node_id: "node-pg".into(),
+            ledger_epoch: "epoch-pg".into(),
+            publication_id: "gap-pg".into(),
+            received_at: 3,
+            records: vec![RawRecord::new(5, br#"{"value":25}"#).unwrap()],
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StorageError::ArchiveRecoveryRequired));
+    assert_eq!(
+        storage.edge_node("node-pg").await.unwrap().state,
+        EdgeNodeState::RecoveryHold
+    );
+    assert_eq!(
+        storage
+            .accepted_through("node-pg", "epoch-pg")
+            .await
+            .unwrap(),
+        2
+    );
+
+    drop(storage);
+    let restarted = Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+        .await
+        .expect("restart on recovery-hold database");
+    assert_eq!(
+        restarted.edge_node("node-pg").await.unwrap().state,
+        EdgeNodeState::RecoveryHold,
+        "recovery hold must survive a process restart"
+    );
+    let mismatch = restarted
+        .accept_restored_archive_loss(
+            "node-pg",
+            "epoch-pg",
+            "edge-wrong-confirmation",
+            "original PostgreSQL archive unavailable",
+            4,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(mismatch, StorageError::EdgeIdentityMismatch));
+    restarted
+        .accept_restored_archive_loss(
+            "node-pg",
+            "epoch-pg",
+            &edge_id,
+            "original PostgreSQL archive unavailable",
+            5,
+        )
+        .await
+        .expect("accept audited archive loss");
+    assert_eq!(
+        restarted.edge_node("node-pg").await.unwrap().state,
+        EdgeNodeState::Active
+    );
+    assert_eq!(
+        restarted
+            .accepted_through("node-pg", "epoch-pg")
+            .await
+            .unwrap(),
+        4
+    );
+    drop(restarted);
+
+    let inspection = sqlx::PgPool::connect(&dsn)
+        .await
+        .expect("inspect PostgreSQL recovery result");
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM edge_restore_cursor_checks WHERE restore_id='restore-pg'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events \
+         WHERE operation='edge_restore.accept_archive_loss'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(state, "archive_lost");
+    assert_eq!(audit_count, 1);
+    inspection.close().await;
+}

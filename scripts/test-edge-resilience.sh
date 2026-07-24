@@ -29,6 +29,7 @@ export IOTKIT_EDGE_DATA_DIR="$scratch/data"
 export IOTKIT_DEV_UID="$(id -u)"
 export IOTKIT_DEV_GID="$(id -g)"
 export IOTKIT_DEV_BROKER_PORT="$broker_port"
+export IOTKIT_EDGE_ID="edge-0123456789abcdef0123456789abcdef"
 mkdir -p "$IOTKIT_EDGE_DATA_DIR"
 chmod 700 "$scratch"
 chmod 755 "$IOTKIT_EDGE_DATA_DIR"
@@ -199,7 +200,7 @@ fi
 # starts from an already activated Edge Node so it can focus on transport and
 # custody convergence across process restarts.
 activation_id="act-0123456789abcdef0123456789abcdef"
-edge_id="edge-0123456789abcdef0123456789abcdef"
+edge_id="$IOTKIT_EDGE_ID"
 activated_at=1700000000000
 request_json=$(jq -cn \
   --arg activation_id "$activation_id" \
@@ -336,11 +337,11 @@ wait_for_convergence 304
 stop_edge
 compose stop edge broker
 
-edge_check=$(sqlite3 "$scratch/edge.db" 'PRAGMA quick_check')
-edge_check=$(sqlite3 "$IOTKIT_EDGE_DATA_DIR/edge.db" 'PRAGMA quick_check')
-if [[ "$edge_check" != "ok" || "$edge_check" != "ok" ]]; then
+edge_node_check=$(sqlite3 "$scratch/edge.db" 'PRAGMA quick_check')
+central_edge_check=$(sqlite3 "$IOTKIT_EDGE_DATA_DIR/edge.db" 'PRAGMA quick_check')
+if [[ "$edge_node_check" != "ok" || "$central_edge_check" != "ok" ]]; then
   diagnostics
-  echo "SQLite quick_check failed: Edge=$edge_check Edge=$edge_check" >&2
+  echo "SQLite quick_check failed: Edge Node=$edge_node_check Edge=$central_edge_check" >&2
   exit 1
 fi
 assert_cursor 304
