@@ -781,7 +781,7 @@ Request separate custody/data-loss, authentication/security, operations and
 backup, and Adapter-author/onboarding reviews. Resolve all Critical and
 Important findings and rerun the focused plus complete gates.
 
-- [ ] **Step 6: Commit, push, and create the draft PR**
+- [x] **Step 6: Commit, push, and create the draft PR**
 
 ```bash
 git commit -m "refactor(edge): complete the Rust replacement"
