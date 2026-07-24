@@ -3,57 +3,57 @@
   "groups": [
     {
       "id": "auth-session",
-      "oracle": "edge/internal/edgehttp/server_console_auth_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/auth_contract.rs"
     },
     {
       "id": "backup-restore",
-      "oracle": "edge/internal/store/backup_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/backup_contract.rs"
     },
     {
       "id": "cli",
-      "oracle": "edge/cmd/iotkit-edge/main_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/cli_contract.rs"
     },
     {
       "id": "console",
-      "oracle": "edge/frontend/e2e/console-journey.mjs",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/console_contract.rs"
     },
     {
       "id": "diagnostics",
-      "oracle": "edge/internal/store/diagnostics_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/diagnostics_contract.rs"
     },
     {
       "id": "history-csv",
-      "oracle": "edge/internal/edgehttp/server_history_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/history_contract.rs"
     },
     {
       "id": "http-api",
-      "oracle": "edge/openapi/edge-console-v1.yaml",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/http_contract.rs"
     },
     {
       "id": "mqtt-custody",
-      "oracle": "edge/internal/mqttedge/integration_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/mqtt_custody.rs"
     },
     {
       "id": "mqtt-output",
-      "oracle": "edge/internal/mqttedge/output_e2e_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/output_puback.rs"
     },
     {
       "id": "output-adapters",
-      "oracle": "testdata/output/v1",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/output-adapters/testkit"
     },
     {
       "id": "semantics",
-      "oracle": "edge/internal/semantics/evaluator_test.go",
+      "baseline": "testdata/edge-parity/v1/go-oracle-summary.json",
       "rust": "edge/tests/semantic_contract.rs"
     }
   ]

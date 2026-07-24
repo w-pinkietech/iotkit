@@ -48,9 +48,6 @@ run_surface() {
   run_step manifest \
     cargo test --manifest-path "$repo_root/Cargo.toml" \
       -p iotkit-edge --test parity_manifest
-  run_step go-cli-surface \
-    bash -c 'cd "$1/edge" && go test ./cmd/iotkit-edge -run "$2" -count=1' \
-      parity "$repo_root" '^TestRunUsageNamesIoTKitEdge$'
   run_step rust-cli-surface \
     cargo run --quiet --manifest-path "$repo_root/Cargo.toml" \
       -p iotkit-edge -- --help
@@ -62,8 +59,6 @@ case "$group" in
     ;;
   all)
     run_surface
-    run_step go-oracle \
-      bash -c 'cd "$1/edge" && go test ./... -count=1' parity "$repo_root"
     run_step rust-edge \
       cargo test --manifest-path "$repo_root/Cargo.toml" -p iotkit-edge
     run_step output-adapter-api \

@@ -11,7 +11,7 @@ struct Manifest {
 #[derive(Debug, Deserialize)]
 struct Group {
     id: String,
-    oracle: String,
+    baseline: String,
     rust: String,
 }
 
@@ -46,6 +46,6 @@ fn parity_manifest_names_every_required_external_surface() {
         manifest
             .groups
             .iter()
-            .all(|group| !group.oracle.is_empty() && !group.rust.is_empty())
+            .all(|group| !group.baseline.is_empty() && !group.rust.is_empty())
     );
 }

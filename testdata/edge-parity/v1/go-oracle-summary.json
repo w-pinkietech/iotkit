@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-24",
+  "git_head": "565a2b361e6c184f84040007ac21c712ad93a651",
+  "status": "passed",
+  "scope": [
+    "auth-session",
+    "backup-restore",
+    "cli",
+    "console",
+    "diagnostics",
+    "history-csv",
+    "http-api",
+    "mqtt-custody",
+    "mqtt-output",
+    "output-adapters",
+    "semantics"
+  ],
+  "note": "Final black-box Go oracle run before the Rust-only cutover. The retained Rust contracts and release gates are the executable specification after this point."
+}

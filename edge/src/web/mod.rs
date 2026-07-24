@@ -1382,19 +1382,19 @@ fn internal<E: std::fmt::Display>(_: E) -> WebError {
 async fn edge_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        include_bytes!("../../internal/edgehttp/static/edge.css").as_slice(),
+        include_bytes!("../../frontend/static/edge.css").as_slice(),
     )
 }
 async fn console_js() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_bytes!("../../internal/edgehttp/static/console.js").as_slice(),
+        include_bytes!("../../frontend/static/console.js").as_slice(),
     )
 }
 async fn mark_svg() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "image/svg+xml")],
-        include_bytes!("../../internal/edgehttp/static/pinkietech-mark.svg").as_slice(),
+        include_bytes!("../../frontend/static/pinkietech-mark.svg").as_slice(),
     )
 }
 

@@ -7,9 +7,9 @@ const source = readFileSync(
   "utf8",
 );
 
-test("the final parity gate runs both implementations and records evidence", () => {
+test("the post-cutover parity gate runs only the retained Rust implementation", () => {
   assert.doesNotMatch(source, /full parity is unavailable/);
-  assert.match(source, /go test \.\/\.\.\./);
+  assert.doesNotMatch(source, /\bgo test|edge\/go\.mod|cmd\/iotkit-edge/);
   assert.match(source, /cargo test .*iotkit-edge/);
   assert.match(source, /test-edge-console-e2e\.sh/);
   assert.match(source, /test-edge-output\.sh/);

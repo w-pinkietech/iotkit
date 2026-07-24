@@ -20,3 +20,18 @@ test("the workspace exposes a testable Rust IoTKit Edge application", () => {
     ),
   );
 });
+
+test("the IoTKit Edge product no longer carries a Go implementation", () => {
+  const tracked = execFileSync(
+    "git",
+    ["ls-files", "edge"],
+    { encoding: "utf8" },
+  )
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+
+  assert.equal(tracked.some((path) => path.endsWith(".go")), false);
+  assert.equal(tracked.includes("edge/go.mod"), false);
+  assert.equal(tracked.includes("edge/go.sum"), false);
+});

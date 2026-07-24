@@ -6,6 +6,12 @@
 
 **Architecture:** Build an independent Rust `iotkit-edge` executable beside the Go oracle, implement external behavior in vertical slices, and compare both through language-neutral fixtures and process tests. Keep Edge internals in one crate with private responsibility modules; expose Output Adapter API, testkit, example, and each built-in Adapter as separate leaf crates. Switch deployment only after all Rust journeys pass, then delete Go in the final cutover.
 
+**Execution status (2026-07-24):** Tasks 1–9 are implemented. The final Go/Rust
+oracle gate passed at commit `565a2b361e6c184f84040007ac21c712ad93a651`;
+its durable summary is retained in
+`testdata/edge-parity/v1/go-oracle-summary.json`. Task 10 is in final
+Rust-only verification and independent-review closure.
+
 **Tech Stack:** Rust workspace, Tokio, Axum, Tower, Askama, SQLx SQLite/PostgreSQL, rumqttc/Rustls, Clap, Serde, Argon2, XChaCha20-Poly1305, TypeScript, Mosquitto, Docker Compose.
 
 ## Global Constraints
@@ -713,7 +719,7 @@ git commit -m "build(edge): switch deployment and CI to Rust"
 - Consumes: every prior task.
 - Produces: Rust-only IoTKit Edge and evidence attached to PR #83.
 
-- [ ] **Step 1: Run Go/Rust black-box differential gate before deletion**
+- [x] **Step 1: Run Go/Rust black-box differential gate before deletion**
 
 ```bash
 scripts/test-edge-parity.sh all
@@ -738,7 +744,7 @@ scripts/test-edge-host-release-gate.sh "$PWD/target/final-release"
 
 Expected: PASS.
 
-- [ ] **Step 3: Delete Go and prove no stale dependency remains**
+- [x] **Step 3: Delete Go and prove no stale dependency remains**
 
 Delete Go source/module files and remove `setup-go`, `go test`, GOCACHE, Go
 module paths, and old binary build commands. Do not delete language-neutral
