@@ -6,11 +6,15 @@
 
 **Architecture:** Build an independent Rust `iotkit-edge` executable beside the Go oracle, implement external behavior in vertical slices, and compare both through language-neutral fixtures and process tests. Keep Edge internals in one crate with private responsibility modules; expose Output Adapter API, testkit, example, and each built-in Adapter as separate leaf crates. Switch deployment only after all Rust journeys pass, then delete Go in the final cutover.
 
-**Execution status (2026-07-24):** Tasks 1–9 are implemented. The final Go/Rust
-oracle gate passed at commit `565a2b361e6c184f84040007ac21c712ad93a651`;
-its durable summary is retained in
-`testdata/edge-parity/v1/go-oracle-summary.json`. Task 10 is in final
-Rust-only verification and independent-review closure.
+**Execution status (2026-07-24):** Tasks 1–10 are implemented. The final
+Go/Rust oracle gate passed at commit
+`565a2b361e6c184f84040007ac21c712ad93a651`; its durable summary is retained
+in `testdata/edge-parity/v1/go-oracle-summary.json`. After the Go implementation
+was removed, the Rust-only host release gate and complete workspace verification
+passed at commit `e26938c`. Independent custody, security, operations/backup,
+and Adapter-author reviews have no unresolved Critical or Important findings.
+Only target-hardware capacity measurement remains deliberately outside Issue
+#83.
 
 **Tech Stack:** Rust workspace, Tokio, Axum, Tower, Askama, SQLx SQLite/PostgreSQL, rumqttc/Rustls, Clap, Serde, Argon2, XChaCha20-Poly1305, TypeScript, Mosquitto, Docker Compose.
 
@@ -717,7 +721,7 @@ git commit -m "build(edge): switch deployment and CI to Rust"
 
 **Interfaces:**
 - Consumes: every prior task.
-- Produces: Rust-only IoTKit Edge and evidence attached to PR #83.
+- Produces: Rust-only IoTKit Edge and evidence attached to PR #84.
 
 - [x] **Step 1: Run Go/Rust black-box differential gate before deletion**
 
@@ -729,7 +733,7 @@ Expected: all MQTT, HTTP, Console, CLI, output, diagnostics, and recovery
 scenario groups PASS. Save the report under an ignored `target/` directory and
 summarize it in the PR.
 
-- [ ] **Step 2: Run all Rust release gates before deletion**
+- [x] **Step 2: Run all Rust release gates before deletion**
 
 ```bash
 scripts/test-edge-bootstrap.sh
@@ -759,7 +763,7 @@ rg -n 'setup-go|go test|GOCACHE|edge/go\\.mod|cmd/iotkit-edge|internal/edge' \
 
 Expected: no active Go build/runtime references.
 
-- [ ] **Step 4: Run complete Rust-only verification**
+- [x] **Step 4: Run complete Rust-only verification**
 
 ```bash
 TMPDIR="$PWD/target/tmp" scripts/verify.sh
@@ -771,7 +775,7 @@ git diff --check
 
 Expected: PASS with no Go toolchain invocation.
 
-- [ ] **Step 5: Request independent reviews**
+- [x] **Step 5: Request independent reviews**
 
 Request separate custody/data-loss, authentication/security, operations and
 backup, and Adapter-author/onboarding reviews. Resolve all Critical and
