@@ -1,5 +1,14 @@
-use iotkit_edge::storage::{
-    AcceptBatch, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile, StoredRawRecord,
+use iotkit_edge::{
+    application::{
+        profiles::{InventoryProfiles, SignalProfileInput},
+        semantics::{SemanticRuleDraft, Semantics},
+    },
+    composition::registered_output_adapters,
+    semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
+    storage::{
+        AcceptBatch, AuditActor, EdgeNodeState, RawRecord, Storage, StorageError, StorageProfile,
+        StoredRawRecord,
+    },
 };
 use iotkit_edge_custody_contract::{
     ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
@@ -161,6 +170,174 @@ async fn accepts_a_contiguous_batch_and_advances_the_cursor_atomically() {
             "edge-node-01:epoch-01:1:2",
             1_721_800_000_999,
         )
+    );
+}
+
+#[tokio::test]
+async fn unconfigured_signal_does_not_block_or_falsely_advance_raw_custody() {
+    let (_directory, _database, store) = sqlite_store().await;
+    let mut descriptor_json: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .expect("decode descriptor JSON");
+    let mut second_signal = descriptor_json["signals"][0].clone();
+    second_signal["series_key"] =
+        "018f0000-0000-7000-8000-000000000001:temperature:na:primary".into();
+    second_signal["measurement_key"] = "temperature".into();
+    second_signal["unit"] = "Cel".into();
+    second_signal["value_type"] = "float".into();
+    descriptor_json["signals"]
+        .as_array_mut()
+        .expect("descriptor signals")
+        .push(second_signal);
+    let descriptor = DescriptorSnapshot::decode(
+        &serde_json::to_vec(&descriptor_json).expect("encode descriptor JSON"),
+    )
+    .expect("decode two-signal descriptor");
+    store
+        .apply_descriptor(&descriptor, 1_721_800_000_000)
+        .await
+        .expect("apply two-signal descriptor");
+
+    let inventory = InventoryProfiles::new(store.clone());
+    let configured_series = &descriptor.signals[0].series_key;
+    let configured_signal = inventory
+        .signals()
+        .await
+        .expect("list descriptor signals")
+        .into_iter()
+        .find(|signal| signal.series_key == *configured_series)
+        .expect("configured signal");
+    inventory
+        .update_signal(
+            AuditActor::local_cli(),
+            &configured_signal.signal_ref,
+            SignalProfileInput {
+                display_name: "Commissioned contact".into(),
+                display_sensor_type: "contact".into(),
+                display_sensor_type_label: String::new(),
+                display_value_kind: "boolean".into(),
+                display_unit_mode: "dimensionless".into(),
+                display_unit: String::new(),
+                decimal_places: 0,
+            },
+            None,
+            1_721_800_000_010,
+        )
+        .await
+        .expect("configure one signal profile");
+    let semantics = Semantics::new(store.clone());
+    let rule = semantics
+        .create_rule(
+            SemanticRuleDraft {
+                edge_node_id: descriptor.edge_node_id.clone(),
+                series_key: configured_series.clone(),
+                display_name: "Commissioned contact state".into(),
+                spec: RuleSpec {
+                    kind: SemanticKind::Boolean,
+                    detector: Detector {
+                        mode: DetectorMode::BooleanHighActive,
+                        ..Detector::default()
+                    },
+                    trigger: TriggerMode::None,
+                },
+            },
+            1_721_800_000_020,
+        )
+        .await
+        .expect("configure one semantic rule");
+
+    let command = store
+        .request_activation(&descriptor.edge_node_id, 1_721_800_000_100)
+        .await
+        .expect("request exact activation");
+    let request =
+        ActivationRequest::decode(&command.payload_json).expect("decode activation request");
+    store
+        .apply_activation_result(
+            &ActivationResult {
+                schema_version: 1,
+                activation_id: request.activation_id,
+                edge_id: request.edge_id,
+                edge_node_id: request.edge_node_id,
+                ledger_epoch: request.expected_ledger_epoch,
+                status: "applied".into(),
+                discard_through_reading_seq: 12,
+                first_publication_seq: 1,
+                applied_at: 1_721_800_000_200,
+            },
+            1_721_800_000_200,
+        )
+        .await
+        .expect("apply exact activation result");
+
+    let ledger_epoch = descriptor.ledger_epoch.clone();
+    let measurement = |sequence: i64, series_key: &str, value: f64| {
+        RawRecord::new(
+            sequence,
+            serde_json::to_vec(&serde_json::json!({
+                "family": "measurement",
+                "schema_version": 1,
+                "epoch": ledger_epoch,
+                "pub_seq": sequence,
+                "series_key": series_key,
+                "values": [value],
+                "event_time": 1_721_800_001_000_i64 + sequence,
+                "event_time_source": "received_at",
+                "time_source": "edge_node",
+                "time_quality": "unsynced",
+                "received_at": 1_721_800_001_000_i64 + sequence,
+                "device_time": null
+            }))
+            .expect("encode measurement"),
+        )
+        .expect("valid measurement")
+    };
+    let batch = AcceptBatch {
+        edge_node_id: descriptor.edge_node_id.clone(),
+        ledger_epoch: descriptor.ledger_epoch.clone(),
+        publication_id: "edge-node-01:epoch-01:1:2".into(),
+        received_at: 1_721_800_001_100,
+        records: vec![
+            measurement(1, configured_series, 1.0),
+            measurement(2, &descriptor.signals[1].series_key, 24.5),
+        ],
+    };
+    let cursor_end = batch.records.last().expect("batch record").pub_seq;
+    let ack = store
+        .accept_active_batch(batch)
+        .await
+        .expect("setup state must not block raw custody");
+
+    assert_eq!(ack.accepted_through, cursor_end);
+    assert_eq!(
+        store
+            .raw_records(&descriptor.edge_node_id, &descriptor.ledger_epoch)
+            .await
+            .expect("read durable raw records")
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .accepted_through(&descriptor.edge_node_id, &descriptor.ledger_epoch)
+            .await
+            .expect("read accepted-through"),
+        cursor_end
+    );
+
+    let projected = semantics
+        .project_pending(10, registered_output_adapters())
+        .await
+        .expect("project configured semantics");
+    assert_eq!(projected.observations, 1);
+    assert_eq!(
+        store
+            .semantic_observations(&rule.rule_id)
+            .await
+            .expect("read semantic observations")
+            .len(),
+        1
     );
 }
 
