@@ -5,12 +5,12 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 3
+revision: 6
 ---
 
 # Architecture
 
-IoTKitは、Rust製`iotkit-edge-node`とoperator CLIの`iotkit-edge-nodectl`、別processのGo製`iotkit-edge`、標準MQTT Brokerで構成します。Edge Nodeは単一SQLite DBを使い、Raspberry Pi上でsystemdにより無人運転します。IoTKit Edgeは導入時に`embedded`（SQLite）または`postgres`（PostgreSQL）の正本profileを一つ選びます。
+IoTKitは、Rust製`iotkit-edge-node`とoperator CLIの`iotkit-edge-nodectl`、別processのRust製`iotkit-edge`、標準MQTT Brokerで構成します。Edge Nodeは単一SQLite DBを使い、Raspberry Pi上でsystemdにより無人運転します。IoTKit Edgeは導入時に`embedded`（SQLite）または`postgres`（PostgreSQL）の正本profileを一つ選びます。
 
 この文書は、初見の開発者が10分で配置を理解するための地図であり、code配置の正本です。製品境界は[製品モデル](../concepts/product-model.md)、読む順序は[日本語ドキュメント](../index.md)に従います。
 
@@ -88,7 +88,7 @@ Edge Nodeはprivate address client向けHTTPS APIを持ちます。State変更�
 
 初期ownershipとadmin recoveryはlocal-root maintenanceです。Unownedまたはrecovery中のboxはcontrol API/UIをbindしません。Passphrase resetはcredentialを置換し、operator tokenとsessionをすべて失効します。未認証network setup routeはありません。
 
-IoTKit Edge側の変更もGo application serviceのtyped dispatcherを通します。HTTP、HTML、CLIはthin adapterであり、SQLへ直接writeしません。
+IoTKit Edge側の変更も`edge/src/application/`のtyped operationを通します。HTTP、HTML、CLIはthin adapterであり、SQLへ直接writeしません。
 
 ## 現行実装
 
@@ -124,10 +124,16 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/tools/bravepi-poc` (`bravepi-poc`) | BravePI実機PoC用tool。非配布 |
 | `edge-node/apps/node` (`iotkit-edge-node`) | Edge Node composition root binary |
 | `edge-node/apps/nodectl` (`iotkit-edge-nodectl`) | Edge Node operator CLI |
-| `edge/` | Go製IoTKit Edge、raw acceptance、cursor、query、semantic、application export |
+| `edge/` (`iotkit-edge`) | MQTT custody、storage、semantic、Output Adapter、認証付きConsole、backup、diagnostics、operator CLIのRust composition root |
+| `edge/custody-contract` (`iotkit-edge-custody-contract`) | Edge Node MQTTのdescriptor、activation、record batch、custody ackを厳格検証するversioned wire contractのleaf Rust表現 |
+| `edge/output-adapters/api` (`iotkit-output-adapter-api`) | ObservationからMQTTへの決定的変換とprovider非依存profile policyのleaf Rust API |
+| `edge/output-adapters/testkit` (`iotkit-output-adapter-testkit`) | Descriptor、config、publication、決定性のdev-only共通conformance assertion |
+| `edge/output-adapters/example` (`iotkit-output-adapter-example`) | Production registryへ登録しないvendor-neutralなcompile-tested作者例 |
+| `edge/output-adapters/generic-mqtt-json-v1` | 組み込みIoTKit汎用Observation JSON変換 |
+| `edge/output-adapters/pinikiet-mqtt-v1` | 組み込みPinikiet MQTT変換とprofile policy |
 | `edge/frontend/src/` | SSR ConsoleのTypeScript browser behavior |
 | `edge/openapi/edge-console-v1.yaml` | TypeScript生成元のbrowser JSON contract |
-| `testdata/egress/v1/`, `v2/` | Rust/Go両方がdecodeするcross-language fixture |
+| `testdata/egress/v1/`, `v2/` | Rust conformance testがdecodeするwire fixture |
 
 ## 機械検査するlayer rule
 
@@ -162,7 +168,7 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | Discovery、wire、security、lifecycle、identityが異なるdevice family | `edge-node/adapters/`配下の新しいsibling crate |
 | Ingest wire変更 | `edge-node/ingest/contract`とconformance test |
 | Edge Node state変更operation | `edge-node/core/ops` catalogとdispatch |
-| IoTKit Edge state変更operation | Go application-service typed dispatcher |
+| IoTKit Edge state変更operation | `edge/src/application/`のtyped operation |
 | Table / column | 所有crateのmigration slice |
 | Control-plane route | `edge-node/apps/node/src/api/`のthin layer、logicは所有`edge-node/core/*` |
 | Measurement HTTP binding | `edge-node/ingest/http` (`iotkit-ingest-http`) |

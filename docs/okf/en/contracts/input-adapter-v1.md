@@ -5,7 +5,7 @@ description: "Defines the complete Input Adapter identity, authority, host API, 
 language: en
 translation_key: contracts.input-adapter-v1
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit northbound Input Adapter host contract v1
@@ -211,6 +211,14 @@ Edge Node validates every enabled instance, identity collision, source binding, 
 inventory intent before starting any instance. Factories do not own
 `restart()` or `health()`.
 
+In the current compile-time architecture, the raw instance shape is the closed
+`RawInputAdapterInstance` in `edge-node/apps/node/src/config.rs`. A new adapter
+with new top-level configuration vocabulary must extend that central structure
+and its strict deserialization tests. The private factory in
+`edge-node/apps/node/src/input_adapters.rs` then validates which fields belong
+to its adapter and converts them into the adapter package's typed configuration.
+V1 does not yet pass an opaque raw table directly to an adapter-owned parser.
+
 New configuration names instances explicitly:
 
 ```toml
@@ -383,14 +391,40 @@ tests cover panic/stop cleanup ordering. Layer tests include a transitive
 negative fixture and reject supervision dependencies for every newly
 classified adapter.
 
-Adding a third adapter changes only its focused crate, one Edge Node-private factory
-catalog entry, Cargo/layer classification, architecture map, and conformance
-fixtures. It does not change collector, storage, MQTT custody, IoTKit Edge, semantic,
-or output-adapter code.
+Adding a third adapter requires all of the following compile-time integration:
 
-A test-only non-catalog reference adapter emits two subjects and two
-measurement kinds without BravePI types. It is never shipped as production
-adapter software.
+1. create its focused crate under `edge-node/adapters/` and add it to the root
+   workspace;
+2. add the crate dependency to `edge-node/apps/node/Cargo.toml`;
+3. extend central `RawInputAdapterInstance` fields and config tests when its
+   top-level configuration differs;
+4. add one private `InputAdapterFactory`, parse/start/inventory glue, and one
+   `catalog()` entry in `edge-node/apps/node/src/input_adapters.rs`;
+5. classify the crate in `scripts/check-layers`, update both architecture maps,
+   and add package fixtures plus Edge Node catalog/config tests;
+6. run package, shared testkit, composition, layer, and source-layout checks.
+
+It does not change collector, storage, MQTT custody, IoTKit Edge, semantic, or
+output-adapter code. Provider-specific types remain in the focused crate or the
+Edge Node composition root.
+
+The test-only non-catalog `ReferenceAdapter` emits two subjects and two
+measurement kinds without provider types. Its production-shaped reference path
+exercises descriptor validation, typed config validation, `AdapterStartContext`,
+source-bound submission, `RunningInputAdapter`, shutdown, and requested
+completion. It is never shipped as production adapter software.
+
+Run the authoring checks from the repository root:
+
+```bash
+cargo test -p your-adapter-package
+cargo test -p iotkit-input-adapter-testkit
+cargo test -p iotkit-input-adapter-testkit \
+  reference_adapter_exercises_descriptor_config_start_and_shutdown
+cargo test -p iotkit-edge-node input_adapters
+scripts/check-layers
+scripts/check-source-layout
+```
 
 Implementation ordering and completion bookkeeping belong in the implementation
 plan, not this contract.

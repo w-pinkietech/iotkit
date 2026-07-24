@@ -2,7 +2,7 @@
 
 import { pathToFileURL } from "node:url";
 
-const rustRoots = ["edge-node/"];
+const rustRoots = ["edge-node/", "edge/"];
 
 const rustFiles = new Set([
   "Cargo.lock",
@@ -16,6 +16,8 @@ const edgeFiles = new Set([
   "scripts/test-edge-console-frontend.sh",
   "scripts/test-edge-output.sh",
   "scripts/test-edge-postgres.sh",
+  "scripts/test-rust-edge-custody.sh",
+  "scripts/test-rust-edge-runtime.sh",
 ]);
 
 const lightweightPrefixes = [
@@ -33,6 +35,7 @@ const lightweightFiles = new Set([
   "scripts/check-layers",
   "scripts/check-okf-docs.mjs",
   "scripts/check-source-layout",
+  "scripts/tests/adapter-author-docs.test.mjs",
   "scripts/tests/battle-tested-review.test.mjs",
 ]);
 
@@ -52,11 +55,14 @@ function classify(path) {
   if (isLightweight(path)) {
     return { rust: false, edge: false };
   }
-  if (rustFiles.has(path) || rustRoots.some((prefix) => path.startsWith(prefix))) {
-    return { rust: true, edge: false };
-  }
   if (edgeFiles.has(path) || path.startsWith("edge/")) {
-    return { rust: false, edge: true };
+    return { rust: true, edge: true };
+  }
+  if (rustFiles.has(path)) {
+    return { rust: true, edge: true };
+  }
+  if (rustRoots.some((prefix) => path.startsWith(prefix))) {
+    return { rust: true, edge: false };
   }
   if (path.startsWith("testdata/") ||
       path.startsWith("deploy/") ||

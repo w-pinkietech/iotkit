@@ -5,7 +5,7 @@ description: "Input Adapterのidentity、権限、host API、設定、lifecycle�
 language: ja
 translation_key: contracts.input-adapter-v1
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit northbound Input Adapter host契約 v1
@@ -116,6 +116,13 @@ Built-inは非secret `InputAdapterTypeDescriptor`を返します。
 
 Ingest contract、Adapter API、config、implementation、device `declaration_version`は別version domainです。Factoryは`iotkit-edge-node` privateで、`descriptor()`、`parse_and_validate(raw_config)`、`start(edge_context, validated_config)`だけを公開します。Unknown field/versionを厳格拒否し、全instance、identity collision、source binding、inventory intentをstart前に検証します。
 
+現在のcompile-time architectureでは、raw instance形状は
+`edge-node/apps/node/src/config.rs`のclosedな`RawInputAdapterInstance`です。
+新しいtop-level設定語彙を持つAdapterは、このcentral構造とstrict deserialize testを
+変更する必要があります。その後`edge-node/apps/node/src/input_adapters.rs`のprivate
+factoryが、自Adapterに属するfieldを検証し、Adapter packageのtyped configへ変換します。
+V1はopaque raw tableをAdapter所有parserへ直接渡す形にはまだなっていません。
+
 ```toml
 [adapters.instances.bravepi_main]
 type = "bravepi-mainboard"
@@ -175,7 +182,37 @@ Dev-only testkitは次を再利用可能に検査します。
 - Multiple same-type instance、legacy identity、inventory/runtime parity、reverse shutdown、generation fence
 - Panic/stop cleanup、transitive negative layer fixture
 
-第三Adapter追加で変えるのは、そのcrate、Edge Node-private catalog entry、Cargo/layer分類、architecture map、fixtureだけです。Collector、storage、MQTT custody、IoTKit Edge、semantic、Output Adapterは変更しません。Test-only reference Adapterは2 subject・2 measurementをBravePI typeなしで出しますが配布しません。
+第三Adapter追加には次のcompile-time integrationがすべて必要です。
+
+1. `edge-node/adapters/`配下へ対象crateを作り、root workspaceへ追加する
+2. `edge-node/apps/node/Cargo.toml`から対象crateへ依存する
+3. top-level設定が異なる場合、central `RawInputAdapterInstance` fieldとconfig testを追加する
+4. `edge-node/apps/node/src/input_adapters.rs`へprivateな`InputAdapterFactory`、
+   parse/start/inventory glue、`catalog()` entryを一つ追加する
+5. `scripts/check-layers`でcrateを分類し、日英architecture map、package fixture、
+   Edge Node catalog/config testを更新する
+6. package、共有testkit、composition、layer、source-layout checkを実行する
+
+Collector、storage、MQTT custody、IoTKit Edge、semantic、Output Adapterは変更しません。
+Provider固有typeは対象crateまたはEdge Node composition rootに留めます。
+
+Test-onlyかつnon-catalogの`ReferenceAdapter`はprovider typeなしで2 subject・2
+measurementを出します。Production-shapedなreference pathはdescriptor validation、
+typed config validation、`AdapterStartContext`、source-bound submission、
+`RunningInputAdapter`、shutdown、requested completionを実行しますが、production
+softwareとして配布しません。
+
+Repository rootから作者向けcheckを実行します。
+
+```bash
+cargo test -p your-adapter-package
+cargo test -p iotkit-input-adapter-testkit
+cargo test -p iotkit-input-adapter-testkit \
+  reference_adapter_exercises_descriptor_config_start_and_shutdown
+cargo test -p iotkit-edge-node input_adapters
+scripts/check-layers
+scripts/check-source-layout
+```
 
 ## 9. 対象外
 

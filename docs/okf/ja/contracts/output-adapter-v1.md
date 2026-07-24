@@ -5,7 +5,7 @@ description: "汎用Observation、route設定、変換、MQTT publication、appl
 language: ja
 translation_key: contracts.output-adapter-v1
 status: stable
-revision: 2
+revision: 4
 ---
 
 # IoTKit Output Adapter contract v1
@@ -55,48 +55,65 @@ AdapterはIoTKit Edge process内で動く純粋変換である。storage、clock
 
 ## 3. Adapter identity and capabilities
 
-各Adapterは`Descriptor`を返す。
+各Adapterは`iotkit-output-adapter-api`が定義する`Descriptor`を返す。
+現在のpublic Rust形状は次である。
 
-```go
-type Descriptor struct {
-    ID                  string
-    DisplayName         string
-    ConfigSchemaVersion int
-    Modes               []Mode
+```rust
+pub struct Mode {
+    pub key: &'static str,
+    pub display_name: &'static str,
+    pub accepts: &'static [ObservationKind],
 }
 
-type Mode struct {
-    Key         string
-    DisplayName string
-    Accepts     []ObservationKind
+pub struct Descriptor {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub config_schema_version: u32,
+    pub modes: &'static [Mode],
 }
 ```
 
-- `ID`は小文字ASCIIのstable IDとし、外部application、transport、major contractを識別する。
+- `id`は小文字ASCIIのstable IDとし、外部application、transport、major contractを識別する。
   初期実装は`iotkit.mqtt-json.v1`と`pinikiet.mqtt.v1`。
-- `ConfigSchemaVersion`はroute設定JSONのexact versionである。
-- `Mode.Key`は外部application側の用途であり、汎用Observation種別ではない。
-- `Accepts`はそのmodeへ変換できる汎用Observation種別の閉じた集合である。
+- `config_schema_version`はroute設定JSONのexact versionである。
+- `Mode::key`は外部application側の用途であり、汎用Observation種別ではない。
+- `Mode::accepts`はそのmodeへ変換できる汎用Observation種別の閉じた集合である。
 - 同じAdapter内でmode keyを重複させない。
 
 DescriptorはConsoleの入力候補に使えるが、表示用metadataである。最終的な保存可否は
-`ValidateConfig`が同じ規則で検証する。
+`validate_config`が同じ規則で検証する。
 
 ## 4. Generic Output Observation
 
 Adapterの入力は次のprovider-neutralな構造である。
 
-```go
-type Observation struct {
-    ObservationID string
-    SeriesID      string
-    Sequence      int64
-    ObservedAt    int64
-    Kind          ObservationKind
-    Value         json.RawMessage
-    Reading       *float64
+```rust
+pub enum ObservationKind {
+    Numeric,
+    Boolean,
+    CumulativeValue,
+    Alarm,
+}
+
+pub enum ObservationValue {
+    Numeric(f64),
+    Boolean(bool),
+    CumulativeValue(u64),
+    Alarm { active: bool, reading: Option<f64> },
+}
+
+pub struct Observation {
+    observation_id: String,
+    series_id: String,
+    sequence: u64,
+    observed_at: i64,
+    value: ObservationValue,
 }
 ```
+
+fieldはprivateである。作者は検証済み値を受け取り、`observation_id()`、
+`series_id()`、`sequence()`、`observed_at()`、`kind()`、`value()`、
+`reading()`から読む。検証constructorは`Observation::new`である。
 
 v1の`ObservationKind`は次の4種類である。
 
@@ -123,15 +140,34 @@ Edge Nodeの`ledger_epoch`、`pub_seq`、IoTKit Edgeのraw row ID、custody curs
 設定はUTF-8 JSON objectであり、`schema_version`を必須とする。Adapterは未知field、未知version、
 複数JSON値、末尾garbageを拒否する。暗黙のdefaultやfield推測で古い設定を読み替えない。
 
-```go
-type Adapter interface {
-    Descriptor() Descriptor
-    ValidateConfig(json.RawMessage, ObservationKind) error
-    Transform(json.RawMessage, Observation) (MQTTPublication, error)
+```rust
+pub trait OutputAdapter: Send + Sync {
+    fn descriptor(&self) -> &'static Descriptor;
+
+    fn validate_config(
+        &self,
+        config: &serde_json::value::RawValue,
+        kind: ObservationKind,
+    ) -> Result<(), AdapterError>;
+
+    fn transform(
+        &self,
+        config: &serde_json::value::RawValue,
+        observation: &Observation,
+    ) -> Result<MqttPublication, AdapterError>;
+}
+
+pub trait ProfilePolicy: Send + Sync {
+    fn setup(&self) -> &'static ProfileSetup;
+    fn identity_policy(&self) -> IdentityPolicy;
+    fn propose(
+        &self,
+        request: &ProfileRequest<'_>,
+    ) -> Result<Vec<RouteProposal>, AdapterError>;
 }
 ```
 
-`ValidateConfig`は次を一度に検証する。
+`validate_config`は次を一度に検証する。
 
 - JSONがAdapterの設定schemaに適合する
 - 指定されたmodeが存在する
@@ -152,6 +188,23 @@ route設定へBroker credential、CA、private key、tokenを保存しない。`
 IoTKit Edgeは組み込みAdapterをregistryへ登録する。v1のregistryはcompile-timeであり、runtime plugin discoveryを
 行わない。重複Adapter ID、invalid descriptor、未知Adapter IDはroute作成時に拒否する。
 
+Adapterは`OutputAdapter`と`ProfilePolicy`を実装する信頼済みRust crateである。作者は
+`iotkit-output-adapter-api`へ依存し、`iotkit-output-adapter-testkit`で挙動を証明してから、
+workspaceと一つのstatic production registryへcrateを追加する。Provider固有変換の追加で
+core storage、MQTT、HTTP、Console codeは変更しない。
+
+作者向けsourceは
+[`iotkit-output-adapter-api`](https://github.com/w-pinkietech/iotkit-next/tree/main/edge/output-adapters/api)、
+[compile test済みprovider-neutral example](https://github.com/w-pinkietech/iotkit-next/tree/main/edge/output-adapters/example)、
+[共有testkit](https://github.com/w-pinkietech/iotkit-next/tree/main/edge/output-adapters/testkit)
+である。repository rootから次を実行する。
+
+```bash
+cargo test -p iotkit-output-adapter-example
+cargo test -p iotkit-output-adapter-testkit
+cargo test -p iotkit-edge --test output_registry
+```
+
 generic routeは論理的に次を保存する。
 
 ```text
@@ -165,9 +218,8 @@ active
 created_at
 ```
 
-`config_schema_version`は選択されたAdapter descriptorと一致しなければならない。既存の
-旧YokaKit専用routeはmigrationで`adapter_id=pinikiet.mqtt.v1`とversion付きconfig JSONへ変換する。
-outboxの`route_id`は維持し、配送待ちmessageを失わない。
+`config_schema_version`は選択されたAdapter descriptorと一致しなければならない。Rust schemaは
+fresh baselineであり、以前の実装のrouteとoutbox rowをimportしない。
 
 `output_routes`は現在、利用者がruleごとに作る設定ではなく、IoTKit Edge全体の`export_profile`から
 `profile_rule_binding`を経て展開される実行単位である。profile expanderがIoTKit Edge ID、
@@ -191,21 +243,29 @@ Console/APIが利用するIoTKit Edge全体の操作面は次である。
 - `GET /api/v1/output-routes`: route、非秘密config、配送件数
 
 個別routeを作るAPIとConsole操作は提供しない。これらから任意topic、source ID、signal IDを
-作ることはできない。旧個別routeがDBに残っている場合はmigrationで停止し、未配送outboxだけを
-既存の配送経路で処理する。API handlerやConsole handlerからSQLへ直接書き込まない。
+作ることはできない。API handlerやConsole handlerからSQLへ直接書き込まない。
 
 ## 7. Transformation and errors
 
-`Transform`はObservationと設定を再検証し、成功時にexactly one `MQTTPublication`を返す。
+`transform`はObservationと設定を再検証し、成功時にexactly one `MqttPublication`を返す。
 一つのObservationを複数topicへ出す場合はrouteを複数作る。v1ではAdapter内fan-outを提供しない。
 
-エラー分類:
+public Rust error variantは次である。
 
-- `ErrInvalidDescriptor`: Adapter実装または登録metadataの不備
-- `ErrInvalidConfiguration`: route設定の決定的な不備
-- `ErrInvalidObservation`: generic Observationの決定的な不備
-- `ErrUnsupportedObservation`: source kindと外部modeの非互換
-- `ErrInvalidPublication`: 生成されたMQTT publicationの不備
+```rust
+pub enum AdapterError {
+    InvalidDescriptor,
+    InvalidConfiguration,
+    InvalidObservation,
+    UnsupportedObservation,
+    InvalidPublication,
+    TransformFailed,
+}
+```
+
+表記は`AdapterError::InvalidDescriptor`、`AdapterError::InvalidConfiguration`、
+`AdapterError::InvalidObservation`、`AdapterError::UnsupportedObservation`、
+`AdapterError::InvalidPublication`、`AdapterError::TransformFailed`である。
 
 純粋変換には一時的network errorという分類は存在しない。変換失敗時はoutboxへ不正なmessageを入れず、
 routeを要対応として可視化する。元のsemantic Observationを削除、配送済み扱い、別modeへ推測変換
@@ -229,14 +289,17 @@ routeだけを「配送停止の可能性」として要確認にし、最終配
 
 ## 8. MQTT publication
 
-```go
-type MQTTPublication struct {
-    Topic   string
-    QoS     byte
-    Retain  bool
-    Payload json.RawMessage
+```rust
+pub struct MqttPublication {
+    topic: String,
+    qos: u8,
+    retain: bool,
+    payload: Box<serde_json::value::RawValue>,
 }
 ```
+
+fieldはprivateである。`MqttPublication::new(topic, qos, retain, payload)`が
+検証し、受理済みpublicationは`topic()`、`qos()`、`retain()`、`payload()`で読む。
 
 v1では次を必須とする。
 
@@ -343,11 +406,6 @@ Console/APIがセンサーごとのexact topicとpayload例を提示する。導
 明示的な開始操作で同じセンサーのpreparedな全kindについてaccepted cursor境界を保存して
 `prepared -> active`へ遷移する。登録済みセンサーへ後から追加した対応ruleは同じtopicで自動開始する。
 各ruleの開始境界より前のObservationは後から送らない。
-
-schema 30への移行では、旧YokaKit `/signals/` topicの登録を新Pinikiet `/sensors/` topicの
-登録済み証拠として扱わない。
-稼働中だったprofileは、新topicを登録するまで`preparing`へ戻す。ただし、既に送信待ちになっているmessageは
-登録済みの旧topicを維持して配送し、破棄しない。
 
 Pinikiet source statusはsemantic Observationの変換ではないため、Observation routeとは別の
 source-level publicationとして扱う。

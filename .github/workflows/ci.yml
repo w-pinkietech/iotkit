@@ -64,6 +64,9 @@ jobs:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-okf-docs.mjs
 
+      - name: Adapter author documentation API guard
+        run: node --test scripts/tests/adapter-author-docs.test.mjs
+
       - name: Layer rules
         run: scripts/check-layers
 
@@ -117,17 +120,12 @@ jobs:
         run: cargo test --workspace
 
   edge:
-    name: edge go / console test
+    name: Rust Edge / Console integration
     needs: changes
     if: needs.changes.outputs.edge == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: edge/go.mod
-          cache-dependency-path: edge/go.sum
 
       - uses: actions/setup-node@v4
         with:
@@ -144,6 +142,11 @@ jobs:
       - name: IoTKit Console browser journey
         run: scripts/test-edge-console-e2e.sh
 
-      - name: Edge tests
-        working-directory: edge
-        run: go test ./...
+      - name: Rust Edge tests
+        run: cargo test -p iotkit-edge
+
+      - name: PostgreSQL, MQTT custody, and authentication
+        run: scripts/test-rust-edge-custody.sh
+
+      - name: Durable output delivery
+        run: scripts/test-edge-output.sh

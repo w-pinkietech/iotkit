@@ -10,7 +10,8 @@ publish = false
 iotkit-core-registry = { path = "../../core/registry" }
 iotkit-input-adapter-host-api = { path = "../host-api" }
 iotkit-ingest-contract = { path = "../../ingest/contract" }
+tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]
 iotkit-ingest-client = { path = "../../ingest/client", features = ["test-util"] }
-tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tokio = { version = "1", features = ["macros", "sync"] }

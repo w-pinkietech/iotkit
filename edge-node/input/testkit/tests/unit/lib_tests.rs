@@ -60,3 +60,40 @@ async fn generic_runtime_channels_cover_activity_diagnostics_shutdown_and_comple
         AdapterCompletion::RequestedStop
     );
 }
+
+#[tokio::test]
+async fn reference_adapter_exercises_descriptor_config_start_and_shutdown() {
+    let reference = ReferenceAdapter::new();
+    assert_descriptor_v1(&ReferenceAdapter::descriptor());
+    assert!(
+        ReferenceAdapter::parse_and_validate(ReferenceAdapterConfig {
+            diagnostic_capacity: 0,
+        })
+        .is_err()
+    );
+    let config = ReferenceAdapter::parse_and_validate(ReferenceAdapterConfig {
+        diagnostic_capacity: 1,
+    })
+    .unwrap();
+
+    let (client, mut receiver) = channel_for_test(1);
+    let ingest = SourceBoundIngest::new(reference.source.clone(), client);
+    let context = iotkit_input_adapter_host_api::AdapterStartContext::new(
+        reference.instance_id.clone(),
+        reference.source.clone(),
+        ingest,
+    );
+    let running = reference.start(context, config).unwrap();
+
+    let envelope = receiver.recv().await.unwrap();
+    assert_eq!(envelope.source, reference.source.as_str());
+    assert_eq!(envelope.items, reference.observations());
+    assert!(running.activity.snapshot().last_physical_decode.is_some());
+    assert!(running.activity.snapshot().last_queue_admission.is_some());
+
+    running.shutdown.request();
+    assert_eq!(
+        running.completion.wait().await,
+        AdapterCompletion::RequestedStop
+    );
+}

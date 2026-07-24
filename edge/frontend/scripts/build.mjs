@@ -6,7 +6,7 @@ await build({
   format: "iife",
   legalComments: "none",
   outfile: new URL(
-    "../../internal/edgehttp/static/console.js",
+    "../static/console.js",
     import.meta.url,
   ).pathname,
   target: ["es2022"],

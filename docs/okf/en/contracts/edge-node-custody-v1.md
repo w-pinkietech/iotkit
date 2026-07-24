@@ -5,7 +5,7 @@ description: "Defines the complete MQTT custody transfer, activation, record fam
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -283,7 +283,7 @@ cursor. MQTT PUBACK never advances this cursor and never authorizes retention pu
 
 The shared machine conformance cases at repository path
 `testdata/egress/v1/record-family-cases.json` must produce the same accept/reject result in the
-Rust publisher contract and Go IoTKit Edge decoder.
+Rust Edge Node publisher and Rust IoTKit Edge decoder.
 
 ## Retry and outage behavior
 

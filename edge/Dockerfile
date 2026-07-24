@@ -1,10 +1,9 @@
-FROM golang:1.25-bookworm AS build
+FROM rust:1.95-bookworm AS build
 
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/iotkit-edge ./cmd/iotkit-edge
+RUN cargo build --locked --release -p iotkit-edge \
+    && install -D --mode=0755 target/release/iotkit-edge /out/iotkit-edge
 
 FROM debian:bookworm-slim AS runtime-base
 RUN apt-get update \

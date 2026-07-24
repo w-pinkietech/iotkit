@@ -9,23 +9,38 @@ import { selectCiJobs } from "../select-ci-jobs.mjs";
 const cases = [
   {
     name: "documentation and repository guidance use lightweight checks only",
-    paths: ["docs/okf/en/index.md", "AGENTS.md", "CONTRIBUTING.ja.md"],
+    paths: [
+      "docs/okf/en/index.md",
+      "AGENTS.md",
+      "CONTRIBUTING.ja.md",
+      "scripts/tests/adapter-author-docs.test.mjs",
+    ],
     expected: { rust: false, edge: false },
   },
   {
-    name: "Rust workspace changes select only Rust",
-    paths: ["edge-node/core/ledger/src/lib.rs", "Cargo.lock"],
+    name: "Edge Node-only changes select only Rust",
+    paths: ["edge-node/core/ledger/src/lib.rs"],
     expected: { rust: true, edge: false },
   },
   {
-    name: "IoTKit Edge changes select only Edge",
-    paths: ["edge/internal/store/store.go"],
-    expected: { rust: false, edge: true },
+    name: "workspace dependency changes also select Edge integration",
+    paths: ["Cargo.lock"],
+    expected: { rust: true, edge: true },
   },
   {
-    name: "IoTKit Edge verification scripts select only Edge",
+    name: "Rust IoTKit Edge changes select Rust and Edge integration",
+    paths: ["edge/src/storage/mod.rs"],
+    expected: { rust: true, edge: true },
+  },
+  {
+    name: "Output Adapter changes select Rust and Edge integration",
+    paths: ["edge/output-adapters/example/src/lib.rs"],
+    expected: { rust: true, edge: true },
+  },
+  {
+    name: "IoTKit Edge verification scripts select Rust and integration",
     paths: ["scripts/test-edge-console-e2e.sh"],
-    expected: { rust: false, edge: true },
+    expected: { rust: true, edge: true },
   },
   {
     name: "shared contract fixtures select both",
@@ -71,6 +86,10 @@ test("CI workflow routes heavy jobs through the classifier", () => {
   assert.match(workflow, /needs\.changes\.outputs\.rust == 'true'/);
   assert.match(workflow, /needs\.changes\.outputs\.edge == 'true'/);
   assert.match(workflow, /name: lightweight repository checks/);
+  assert.match(
+    workflow,
+    /node --test scripts\/tests\/adapter-author-docs\.test\.mjs/,
+  );
 });
 
 test("CLI reads changed paths from standard input", () => {

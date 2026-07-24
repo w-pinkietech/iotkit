@@ -2,16 +2,34 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+test_tmp_root=${IOTKIT_EDGE_E2E_TMPDIR:-${XDG_CACHE_HOME:-$HOME/.cache}/iotkit-edge-console-e2e}
+mkdir -p "$test_tmp_root"
+export TMPDIR="$test_tmp_root"
+export IOTKIT_EDGE_E2E_TMPDIR="$test_tmp_root"
+
+cd "$repo_root"
+cargo test -p iotkit-edge \
+  --test http_contract \
+  --test console_contract \
+  --test history_contract
+
 storage_profile=${IOTKIT_TEST_STORAGE_PROFILE:-embedded}
 [[ "$storage_profile" == "embedded" || "$storage_profile" == "postgres" ]] || {
   echo "IOTKIT_TEST_STORAGE_PROFILE must be embedded or postgres" >&2
   exit 1
 }
 postgres_container="iotkit-console-postgres-test-$$"
+broker_container="iotkit-console-broker-test-$$"
 postgres_dsn=""
 
 cleanup() {
+  if [[ -n "${edge_pid:-}" ]]; then
+    kill "$edge_pid" >/dev/null 2>&1 || true
+    wait "$edge_pid" >/dev/null 2>&1 || true
+  fi
   docker rm --force "$postgres_container" >/dev/null 2>&1 || true
+  docker rm --force "$broker_container" >/dev/null 2>&1 || true
+  rm -rf "${e2e_dir:-}"
 }
 trap cleanup EXIT
 
@@ -41,9 +59,102 @@ if [[ "$storage_profile" == "postgres" ]]; then
   postgres_dsn="postgres://iotkit:iotkit-test-only@127.0.0.1:$postgres_port/iotkit?sslmode=disable"
 fi
 
-cd "$repo_root/edge"
-IOTKIT_RUN_BROWSER_E2E=1 \
-  IOTKIT_TEST_CONSOLE_POSTGRES_DSN="$postgres_dsn" \
-  go test ./internal/edgehttp \
-    -run '^TestConsoleOperatorJourneyInBrowser$' \
-    -count=1
+e2e_dir=$(mktemp -d "$test_tmp_root/run.XXXXXX")
+password_file="$e2e_dir/password"
+printf '%s' '現場担当者の 十分に長いパスワード' >"$password_file"
+chmod 600 "$password_file"
+storage_args=(--storage-profile "$storage_profile")
+if [[ "$storage_profile" == "postgres" ]]; then
+  postgres_config="$e2e_dir/postgres.json"
+  printf '{"dsn":"%s"}' "$postgres_dsn" >"$postgres_config"
+  chmod 600 "$postgres_config"
+  storage_args+=(--postgres-config "$postgres_config")
+else
+  storage_args+=(--db "$e2e_dir/edge.db")
+fi
+
+TMPDIR="$test_tmp_root" cargo build -p iotkit-edge --bin iotkit-edge
+edge_binary="$repo_root/target/debug/iotkit-edge"
+"$edge_binary" account bootstrap \
+  "${storage_args[@]}" \
+  --login-id owner \
+  --display-name "第一工場 システム管理者" \
+  --password-file "$password_file" >/dev/null
+if [[ "$storage_profile" == "postgres" ]]; then
+  fixture_location="$postgres_dsn"
+else
+  fixture_location="$e2e_dir/edge.db"
+fi
+fixture_edge_id=$(TMPDIR="$test_tmp_root" cargo run --quiet -p iotkit-edge \
+  --example console_fixture -- "$storage_profile" "$fixture_location")
+
+broker_port=$(node -e '
+  const { createServer } = require("node:net");
+  const server = createServer();
+  server.listen(0, "127.0.0.1", () => {
+    console.log(server.address().port);
+    server.close();
+  });
+')
+broker_dir="$e2e_dir/mosquitto"
+mkdir -p "$broker_dir"
+broker_username="iotkit-edge"
+broker_password="e2e-broker-password"
+printf '%s\n' \
+  'listener 1883 0.0.0.0' \
+  'allow_anonymous false' \
+  'password_file /mosquitto/config/passwords' \
+  'persistence false' >"$broker_dir/mosquitto.conf"
+docker run --rm --user "$(id -u):$(id -g)" \
+  --volume "$broker_dir:/mosquitto/config" \
+  eclipse-mosquitto:2.0.22 \
+  mosquitto_passwd -b -c /mosquitto/config/passwords \
+  "$broker_username" "$broker_password"
+docker run --detach --name "$broker_container" \
+  --publish "127.0.0.1:$broker_port:1883" \
+  --volume "$broker_dir:/mosquitto/config:ro" \
+  eclipse-mosquitto:2.0.22 >/dev/null
+broker_password_file="$e2e_dir/broker-password"
+printf '%s' "$broker_password" >"$broker_password_file"
+chmod 600 "$broker_password_file"
+
+port=$(node -e '
+  const { createServer } = require("node:net");
+  const server = createServer();
+  server.listen(0, "127.0.0.1", () => {
+    console.log(server.address().port);
+    server.close();
+  });
+')
+origin="http://127.0.0.1:$port"
+"$edge_binary" serve \
+  "${storage_args[@]}" \
+  --edge-id "$fixture_edge_id" \
+  --broker-url "tcp://127.0.0.1:$broker_port" \
+  --username "$broker_username" \
+  --password-file "$broker_password_file" \
+  --allow-insecure \
+  --http-listen "127.0.0.1:$port" \
+  --public-origin "$origin" \
+  --development-http \
+  >"$e2e_dir/edge.log" 2>&1 &
+edge_pid=$!
+
+ready=false
+for _ in $(seq 1 100); do
+  if node -e "fetch('$origin/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"; then
+    ready=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$ready" != true ]]; then
+  cat "$e2e_dir/edge.log" >&2
+  echo "Rust IoTKit Edge did not become ready" >&2
+  exit 1
+fi
+
+IOTKIT_EDGE_E2E_URL="$origin" \
+  IOTKIT_EDGE_E2E_PASSWORD="$(<"$password_file")" \
+  IOTKIT_TEST_STORAGE_PROFILE="$storage_profile" \
+  node "$repo_root/edge/frontend/e2e/rust-console-journey.mjs"

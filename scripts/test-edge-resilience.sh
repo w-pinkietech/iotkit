@@ -29,6 +29,7 @@ export IOTKIT_EDGE_DATA_DIR="$scratch/data"
 export IOTKIT_DEV_UID="$(id -u)"
 export IOTKIT_DEV_GID="$(id -g)"
 export IOTKIT_DEV_BROKER_PORT="$broker_port"
+export IOTKIT_EDGE_ID="edge-0123456789abcdef0123456789abcdef"
 mkdir -p "$IOTKIT_EDGE_DATA_DIR"
 chmod 700 "$scratch"
 chmod 755 "$IOTKIT_EDGE_DATA_DIR"
@@ -129,14 +130,13 @@ WITH RECURSIVE n(value) AS (
   SELECT value + 1 FROM n WHERE value < $last
 )
 INSERT INTO publication_log(
-  pub_seq, epoch, kind, subtype, annotation_json, created_at
+  pub_seq, epoch, kind, annotation_json, created_at
 )
 SELECT
   value,
   '$ledger_epoch',
-  'annotation',
-  printf('resilience_%06d', value),
-  '{"prior_epoch":"resilience-prior"}',
+  'commissioning_smoke',
+  json_object('test_id', printf('smoke-%032x', value)),
   1700000000000 + value
 FROM n;
 SQL
@@ -199,7 +199,7 @@ fi
 # starts from an already activated Edge Node so it can focus on transport and
 # custody convergence across process restarts.
 activation_id="act-0123456789abcdef0123456789abcdef"
-edge_id="edge-0123456789abcdef0123456789abcdef"
+edge_id="$IOTKIT_EDGE_ID"
 activated_at=1700000000000
 request_json=$(jq -cn \
   --arg activation_id "$activation_id" \
@@ -239,12 +239,16 @@ cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
+topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
 topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
+topic read iotkit/v1/edge-nodes/$edge_node_id/activation/request
 
 user edge
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
+topic read iotkit/v1/edge-nodes/+/activation/result
 topic write iotkit/v1/edge-nodes/+/accepted-through
+topic write iotkit/v1/edge-nodes/+/activation/request
 EOF
 chmod 644 "$IOTKIT_MOSQUITTO_ACL_FILE"
 
@@ -336,11 +340,11 @@ wait_for_convergence 304
 stop_edge
 compose stop edge broker
 
-edge_check=$(sqlite3 "$scratch/edge.db" 'PRAGMA quick_check')
-edge_check=$(sqlite3 "$IOTKIT_EDGE_DATA_DIR/edge.db" 'PRAGMA quick_check')
-if [[ "$edge_check" != "ok" || "$edge_check" != "ok" ]]; then
+edge_node_check=$(sqlite3 "$scratch/edge.db" 'PRAGMA quick_check')
+central_edge_check=$(sqlite3 "$IOTKIT_EDGE_DATA_DIR/edge.db" 'PRAGMA quick_check')
+if [[ "$edge_node_check" != "ok" || "$central_edge_check" != "ok" ]]; then
   diagnostics
-  echo "SQLite quick_check failed: Edge=$edge_check Edge=$edge_check" >&2
+  echo "SQLite quick_check failed: Edge Node=$edge_node_check Edge=$central_edge_check" >&2
   exit 1
 fi
 assert_cursor 304

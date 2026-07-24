@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転、activation、record family、ack、re
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # Edge Node保管責任契約 v1
@@ -160,7 +160,7 @@ V1は`epoch_start`だけです。`prior_epoch`は必須non-emptyで、measuremen
 
 IoTKit Edgeは一つのcustody transactionで、topic/active state/version/identity/epoch/rangeを認証・検証し、全raw recordをinsertまたはexact replay確認し、contiguous cursorをadvanceし、fingerprintとともに選択正本storeへatomic commitします。そのcommit後だけcorrelated ackをpublishします。
 
-Storage failure、ENOSPC、corruption、commit前cancel、gap、content conflictではackを出しません。Lost ackはexact replayで安全に収束します。Edge Nodeはschema、topic/body identity、epoch、publication ID、monotonicity、batch boundを検証してからcursorを進めます。MQTT PUBACKはcursorもpurge権威も進めません。Rust/Goは`testdata/egress/v1/record-family-cases.json`へ同じaccept/reject結果を返します。
+Storage failure、ENOSPC、corruption、commit前cancel、gap、content conflictではackを出しません。Lost ackはexact replayで安全に収束します。Edge Nodeはschema、topic/body identity、epoch、publication ID、monotonicity、batch boundを検証してからcursorを進めます。MQTT PUBACKはcursorもpurge権威も進めません。Rust製Edge Node publisherとRust製IoTKit Edge decoderは`testdata/egress/v1/record-family-cases.json`へ同じaccept/reject結果を返します。
 
 ## Retry・停止・認証
 

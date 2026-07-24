@@ -10,7 +10,8 @@ services:
 
   edge:
     build:
-      context: ./edge
+      context: .
+      dockerfile: edge/Dockerfile
     restart: on-failure
     user: ${IOTKIT_DEV_UID:-1000}:${IOTKIT_DEV_GID:-1000}
     depends_on:
@@ -19,6 +20,8 @@ services:
       - serve
       - --db
       - /data/edge.db
+      - --edge-id
+      - ${IOTKIT_EDGE_ID:?set IOTKIT_EDGE_ID}
       - --broker-url
       - tcp://broker:1883
       - --client-id

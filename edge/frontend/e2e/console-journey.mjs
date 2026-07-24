@@ -1,10 +1,14 @@
-import { access, mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdtemp } from "node:fs/promises";
 import { constants } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createServer } from "node:net";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
-import { removeChromiumProfile } from "./profile-cleanup.mjs";
+import {
+  chromiumDiagnostics,
+  chromiumProfilePrefix,
+  removeChromiumProfile,
+} from "./profile-cleanup.mjs";
 
 const edgeNodeURL = process.env.IOTKIT_EDGE_E2E_URL;
 const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
@@ -34,6 +38,20 @@ async function executable() {
   throw new Error(
     "Chromium was not found; set IOTKIT_CHROMIUM to a Chrome-compatible executable",
   );
+}
+
+async function availablePort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  if (!address || typeof address === "string") {
+    throw new Error("could not reserve a Chromium debugging port");
+  }
+  return address.port;
 }
 
 async function waitFor(read, description, timeout = 10_000) {
@@ -122,6 +140,21 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+const anonymousResponse = await fetch(`${edgeNodeURL}/login`);
+assert(anonymousResponse.ok, "login page was not available");
+assert(
+  anonymousResponse.headers.get("cache-control") === "no-store",
+  "Console responses must disable caching",
+);
+assert(
+  anonymousResponse.headers.get("x-content-type-options") === "nosniff",
+  "Console responses must prevent content sniffing",
+);
+assert(
+  anonymousResponse.headers.get("content-security-policy")?.includes("frame-ancestors 'none'"),
+  "Console responses must deny framing through CSP",
+);
+
 const setFormValues = (selector, values) => `(() => {
   const form = document.querySelector(${JSON.stringify(selector)});
   if (!form) throw new Error("form not found: " + ${JSON.stringify(selector)});
@@ -148,8 +181,11 @@ const click = (selector) => `(() => {
 const activeNavigation =
   `document.querySelector(".side-nav a[aria-current='page']")?.textContent.trim()`;
 
-const profile = await mkdtemp(join(tmpdir(), "iotkit-console-e2e-"));
+const profile = await mkdtemp(
+  chromiumProfilePrefix(process.env, homedir()),
+);
 const chrome = await executable();
+const debuggingPort = await availablePort();
 let stderr = "";
 const browser = spawn(
   chrome,
@@ -161,7 +197,7 @@ const browser = spawn(
     "--no-default-browser-check",
     "--no-sandbox",
     "--remote-debugging-address=127.0.0.1",
-    "--remote-debugging-port=0",
+    `--remote-debugging-port=${debuggingPort}`,
     `--user-data-dir=${profile}`,
     "about:blank",
   ],
@@ -172,14 +208,10 @@ browser.stderr.on("data", (chunk) => {
 });
 
 let socket;
+let failure;
 try {
-  const activePort = await waitFor(async () => {
-    const content = await readFile(join(profile, "DevToolsActivePort"), "utf8");
-    return content.trim();
-  }, "Chromium DevTools port", 30_000);
-  const [port] = activePort.split("\n");
   const target = await waitFor(async () => {
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+    const response = await fetch(`http://127.0.0.1:${debuggingPort}/json/list`);
     const targets = await response.json();
     return targets.find((candidate) => candidate.type === "page");
   }, "Chromium page target");
@@ -503,14 +535,32 @@ try {
   );
   console.log("IoTKit Console browser journey passed");
 } catch (error) {
-  if (stderr.trim()) error.message += `\nChromium diagnostics:\n${stderr.trim()}`;
-  throw error;
+  failure = error instanceof Error ? error : new Error(String(error));
 } finally {
   if (socket?.readyState === WebSocket.OPEN) socket.close();
-  browser.kill("SIGTERM");
-  await new Promise((resolve) => {
-    browser.once("exit", resolve);
-    setTimeout(resolve, 2_000);
-  });
-  await removeChromiumProfile(profile);
+  if (browser.exitCode === null && browser.signalCode === null) {
+    browser.kill("SIGTERM");
+    await new Promise((resolve) => {
+      browser.once("close", resolve);
+      setTimeout(resolve, 2_000);
+    });
+  }
+  if (failure) {
+    failure.message += `\n${chromiumDiagnostics({
+      executable: chrome,
+      exitCode: browser.exitCode,
+      signalCode: browser.signalCode,
+      stderr,
+    })}`;
+  }
+  try {
+    await removeChromiumProfile(profile);
+  } catch (cleanupError) {
+    if (failure) {
+      failure.message += `\nProfile cleanup failed: ${cleanupError}`;
+    } else {
+      throw cleanupError;
+    }
+  }
 }
+if (failure) throw failure;

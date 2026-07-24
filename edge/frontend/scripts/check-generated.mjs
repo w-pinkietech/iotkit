@@ -22,7 +22,7 @@ try {
   );
 
   const expectedBundle = fileURLToPath(
-    new URL("../../internal/edgehttp/static/console.js", import.meta.url),
+    new URL("../static/console.js", import.meta.url),
   );
   const generatedBundle = join(temporary, "console.js");
   await build({

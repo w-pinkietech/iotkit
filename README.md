@@ -229,13 +229,13 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-console-e2e.sh
 scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 ```
 
-The IoTKit Console keeps server-side rendering in Go and implements only browser
-behavior in TypeScript under `edge/frontend/src/`. JSON API types are
+The IoTKit Console uses typed server-side rendering in Rust and implements
+browser behavior in TypeScript under `edge/frontend/src/`. JSON API types are
 generated from `edge/openapi/edge-console-v1.yaml`. The distribution embeds
 the esbuild output as `static/console.js`, so the IoTKit Edge runtime does not
 require Node.js.
 
-CI checks the crate layer rules, Rust/Go unit tests, generated Console assets, and the embedded
+CI checks the crate layer rules, Rust unit tests, generated Console assets, and the embedded
 browser journey on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Run
 `test-edge-host-release-gate.sh` once before release for integration coverage including Docker,
 PostgreSQL, and Broker failures.
@@ -250,7 +250,7 @@ PostgreSQL, and Broker failures.
 | `edge-node/ingest/` | Envelope/Ack contract plus in-process and authenticated HTTP bindings |
 | `edge-node/input/` | Adapter host API, conformance testkit, polling runtime, transports, and reusable sensor drivers |
 | `edge-node/adapters/` | Concrete sensor-family integrations such as BravePI Mainboard and direct Raspberry Pi I2C |
-| `edge/` | Go IoTKit Edge service, Console, raw/semantic storage, cursor management, and application output |
+| `edge/` | Rust IoTKit Edge service, Console, raw/semantic storage, cursor management, and application output |
 | `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | Shared contracts, deployment, automation, cross-component fixtures, and review policy |
 
 The full crate map, layer rules, and "where does new code go" placement table

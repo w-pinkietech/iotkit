@@ -28,13 +28,11 @@
         "edge-node/apps/node/src/mqtt_publish_task.rs",
         "edge-node/apps/node/src/publish_task.rs",
         "edge-node/apps/node/src/retention.rs",
-        "edge/internal/mqttedge/",
-        "edge/internal/outputadapter/",
-        "edge/internal/store/mqtt_export.go",
-        "edge/internal/store/output_adapter.go",
-        "edge/internal/store/output_profiles.go",
-        "edge/internal/store/output_v2.go",
-        "edge/internal/store/output_v3.go",
+        "edge/src/mqtt/",
+        "edge/src/application/output_profiles.rs",
+        "edge/src/storage/semantic_output.rs",
+        "edge/src/storage/semantic_output/",
+        "edge/output-adapters/",
         "scripts/test-edge-output.sh",
         "scripts/test-edge-resilience.sh"
       ],
@@ -57,7 +55,7 @@
         "edge-node/core/storage/",
         "edge-node/core/ledger/",
         "edge-node/core/publish/",
-        "edge/internal/store/",
+        "edge/src/storage/",
         "deploy/"
       ],
       "review_question": "Does an abrupt Edge Node or IoTKit Edge host power loss preserve the last committed custody boundary and restart without acknowledging uncommitted data?",
@@ -82,7 +80,8 @@
         "edge-node/ingest/http/src/admission.rs",
         "edge-node/ingest/http/src/routes.rs",
         "edge-node/ingest/http/src/transition.rs",
-        "edge/internal/store/",
+        "edge/src/storage/",
+        "edge/src/diagnostics/",
         "scripts/test-edge-capacity.sh"
       ],
       "review_question": "When a write, commit, or allocation fails because storage is full or unavailable, does the system retain retry authority, avoid a terminal success, and show an actionable capacity state?",
@@ -107,10 +106,8 @@
         "edge-node/apps/node/src/network_authority.rs",
         "edge-node/apps/node/src/record.rs",
         "edge-node/apps/nodectl/",
-        "edge/internal/store/activations.go",
-        "edge/internal/store/backup.go",
-        "edge/internal/store/backup_encrypted.go",
-        "edge/internal/store/postgres_backup.go"
+        "edge/src/storage/activation.rs",
+        "edge/src/backup/"
       ],
       "review_question": "If the Raspberry Pi or other Edge Node computer is lost or replaced, is every unrecoverable local record and identity transition explicit rather than silently treated as a sensor-device replacement?",
       "provenance": [
@@ -126,14 +123,10 @@
       "evidence_level": "hypothesis",
       "concerns": ["diagnostics", "operability"],
       "path_prefixes": [
-        "edge/internal/edgehttp/console_output_view.go",
-        "edge/internal/edgehttp/console_signal_view.go",
-        "edge/internal/edgehttp/console_view.go",
-        "edge/internal/edgehttp/system.go",
+        "edge/src/web/",
         "edge/frontend/",
-        "edge/internal/store/descriptors.go",
-        "edge/internal/store/diagnostics.go",
-        "edge/internal/store/storage_status.go",
+        "edge/src/storage/",
+        "edge/src/diagnostics/",
         "edge-node/apps/node/src/health.rs",
         "edge-node/apps/node/src/supervision.rs",
         "scripts/test-edge-console-e2e.sh"

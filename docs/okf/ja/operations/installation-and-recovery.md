@@ -5,12 +5,16 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit Edgeの導入と復旧
 
 一つのIoTKit Edge deploymentに対するoperatorの入口です。Router、DNS、IP払出し、firewall、VPNの設定はIoTKitの範囲外です。
+
+Rust製IoTKit Edgeは固有のfresh schemaから開始します。以前のGo実装が作成したDBと
+暗号化backup artifactは受理、変換、restoreしません。必要な業務dataはcutover前に
+exportし、clean installを行います。
 
 Release候補を現場へ持ち込む前に、既存DB・credentialを再利用せず、新しいreport directoryへhost統合gateを実行します。PostgreSQL clean install、Console、疑似Edge Node 2台、意味付け、external MQTT、restart/通信断、暗号化backup/restore、certificate rollback、両storage profileのcapacity smokeを通します。実BravePI、対象hardwareのcapacity測定、Windows+Caddy確認の代替ではありません。
 

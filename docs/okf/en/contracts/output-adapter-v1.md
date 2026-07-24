@@ -5,7 +5,7 @@ description: "Defines generic observations, route configuration, transformation,
 language: en
 translation_key: contracts.output-adapter-v1
 status: stable
-revision: 2
+revision: 4
 ---
 
 # IoTKit Output Adapter contract v1
@@ -50,42 +50,62 @@ The Adapter is a pure in-process transformation. It must not access storage, clo
 
 ## 3. Adapter identity and capabilities
 
-Every Adapter returns a `Descriptor`:
+Every Adapter returns the `Descriptor` defined by
+`iotkit-output-adapter-api`. Its current public Rust shape is:
 
-```go
-type Descriptor struct {
-    ID                  string
-    ConfigSchemaVersion int
-    Modes               []ModeDescriptor
+```rust
+pub struct Mode {
+    pub key: &'static str,
+    pub display_name: &'static str,
+    pub accepts: &'static [ObservationKind],
 }
 
-type ModeDescriptor struct {
-    Key     string
-    Accepts []ObservationKind
+pub struct Descriptor {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub config_schema_version: u32,
+    pub modes: &'static [Mode],
 }
 ```
 
-- `ID` is a stable lowercase ASCII ID identifying the external application, transport, and major contract. Initial IDs are `iotkit.mqtt-json.v1` and `pinikiet.mqtt.v1`.
-- `ConfigSchemaVersion` is the exact route configuration JSON version.
-- `Mode.Key` is an external-application purpose, not a generic kind.
-- `Accepts` is the closed set of generic kinds transformable to that mode.
+- `id` is a stable lowercase ASCII ID identifying the external application, transport, and major contract. Initial IDs are `iotkit.mqtt-json.v1` and `pinikiet.mqtt.v1`.
+- `config_schema_version` is the exact route configuration JSON version.
+- `Mode::key` is an external-application purpose, not a generic kind.
+- `Mode::accepts` is the closed set of generic kinds transformable to that mode.
 - Mode keys do not repeat inside one Adapter.
 
-The descriptor may populate Console choices, but `ValidateConfig` remains the final authority for persistence.
+The descriptor may populate Console choices, but `validate_config` remains the
+final authority for persistence.
 
 ## 4. Generic Output Observation
 
-```go
-type Observation struct {
-    ObservationID string
-    SeriesID      string
-    Sequence      uint64
-    Kind          ObservationKind
-    Value         any
-    ObservedAt    int64
-    Reading       *float64
+```rust
+pub enum ObservationKind {
+    Numeric,
+    Boolean,
+    CumulativeValue,
+    Alarm,
+}
+
+pub enum ObservationValue {
+    Numeric(f64),
+    Boolean(bool),
+    CumulativeValue(u64),
+    Alarm { active: bool, reading: Option<f64> },
+}
+
+pub struct Observation {
+    observation_id: String,
+    series_id: String,
+    sequence: u64,
+    observed_at: i64,
+    value: ObservationValue,
 }
 ```
+
+The fields are private. Authors receive validated values and read them through
+`observation_id()`, `series_id()`, `sequence()`, `observed_at()`, `kind()`,
+`value()`, and `reading()`. `Observation::new` is the validating constructor.
 
 | Kind | Value | Meaning |
 |---|---|---|
@@ -102,15 +122,34 @@ type Observation struct {
 
 Configuration is one UTF-8 JSON object with required `schema_version`. An Adapter rejects unknown fields, unknown versions, multiple JSON values, and trailing garbage. It never interprets an old configuration through implicit defaults or field guessing.
 
-```go
-type RouteConfig struct {
-    AdapterID          string
-    ConfigSchemaVersion int
-    ConfigJSON         []byte
+```rust
+pub trait OutputAdapter: Send + Sync {
+    fn descriptor(&self) -> &'static Descriptor;
+
+    fn validate_config(
+        &self,
+        config: &serde_json::value::RawValue,
+        kind: ObservationKind,
+    ) -> Result<(), AdapterError>;
+
+    fn transform(
+        &self,
+        config: &serde_json::value::RawValue,
+        observation: &Observation,
+    ) -> Result<MqttPublication, AdapterError>;
+}
+
+pub trait ProfilePolicy: Send + Sync {
+    fn setup(&self) -> &'static ProfileSetup;
+    fn identity_policy(&self) -> IdentityPolicy;
+    fn propose(
+        &self,
+        request: &ProfileRequest<'_>,
+    ) -> Result<Vec<RouteProposal>, AdapterError>;
 }
 ```
 
-`ValidateConfig` checks together:
+`validate_config` checks together:
 
 - JSON conforms to the selected Adapter schema;
 - the requested mode exists;
@@ -126,6 +165,25 @@ Route configuration contains only non-secret transformation settings visible to 
 
 IoTKit Edge registers built-in Adapters in a compile-time registry. V1 has no runtime plugin discovery. Duplicate or invalid descriptors and unknown Adapter IDs are rejected when a route is created.
 
+An Adapter is a trusted Rust crate implementing `OutputAdapter` and
+`ProfilePolicy`. Authors depend on `iotkit-output-adapter-api`, prove behavior
+with `iotkit-output-adapter-testkit`, then add the crate to the workspace and
+the single static production registry. Provider-specific transformations do not
+modify core storage, MQTT, HTTP, or Console code.
+
+Author sources are the
+[`iotkit-output-adapter-api`](https://github.com/w-pinkietech/iotkit-next/tree/main/edge/output-adapters/api),
+[compile-tested vendor-neutral example](https://github.com/w-pinkietech/iotkit-next/tree/main/edge/output-adapters/example),
+and
+[shared testkit](https://github.com/w-pinkietech/iotkit-next/tree/main/edge/output-adapters/testkit).
+From the repository root, begin with:
+
+```bash
+cargo test -p iotkit-output-adapter-example
+cargo test -p iotkit-output-adapter-testkit
+cargo test -p iotkit-edge --test output_registry
+```
+
 ```text
 route_id
 adapter_id
@@ -136,7 +194,9 @@ active_from_observation
 stopped_at_observation
 ```
 
-The configuration version must match the selected descriptor. Migrations convert the legacy YokaKit-specific route into `adapter_id=pinikiet.mqtt.v1` plus versioned JSON while preserving `route_id` and pending outbox rows.
+The configuration version must match the selected descriptor. The Rust schema
+is a fresh baseline and does not import routes or outbox rows from the former
+implementation.
 
 `output_routes` are execution units expanded from the IoTKit-Edge-wide `export_profile` through `profile_rule_binding`, not settings users create per rule. The profile expander derives exact route configuration from IoTKit Edge ID, versioned Adapter ID, semantic rule ID, external purpose, stable logical signal ID, and rule kind. The Adapter does not know the Edge, rule inventory, or future automatic rule additions.
 
@@ -149,13 +209,32 @@ Console/API operations are:
 - `POST /api/v1/export-profiles/{profile_id}/stop`: stop new transformation at a boundary and drain existing delivery;
 - `GET /api/v1/output-bindings/{binding_id}/publication`: inspect the exact topic and payload.
 
-Diagnostic reads remain at `GET /api/v1/output-adapters` and `GET /api/v1/output-routes`. There is no API or Console operation for arbitrary individual routes, topics, source IDs, or signal IDs. Migration stops legacy individual routes and drains only their existing outbox. Handlers never write SQL directly.
+Diagnostic reads remain at `GET /api/v1/output-adapters` and `GET /api/v1/output-routes`. There is no API or Console operation for arbitrary individual routes, topics, source IDs, or signal IDs. Handlers never write SQL directly.
 
 ## 7. Transformation and errors
 
-`Transform` revalidates Observation and configuration, then returns exactly one `MQTTPublication`. Multiple destinations require multiple routes; v1 has no Adapter-internal fan-out.
+`transform` revalidates Observation and configuration, then returns exactly one
+`MqttPublication`. Multiple destinations require multiple routes; v1 has no
+Adapter-internal fan-out.
 
-Error classes are `ErrInvalidDescriptor`, `ErrInvalidConfiguration`, `ErrInvalidObservation`, `ErrUnsupportedObservation`, and `ErrInvalidPublication`. A pure transform has no temporary network-error class.
+The public Rust error variants are:
+
+```rust
+pub enum AdapterError {
+    InvalidDescriptor,
+    InvalidConfiguration,
+    InvalidObservation,
+    UnsupportedObservation,
+    InvalidPublication,
+    TransformFailed,
+}
+```
+
+They are written as `AdapterError::InvalidDescriptor`,
+`AdapterError::InvalidConfiguration`, `AdapterError::InvalidObservation`,
+`AdapterError::UnsupportedObservation`, `AdapterError::InvalidPublication`,
+and `AdapterError::TransformFailed`. A pure transform has no temporary
+network-error class.
 
 On transform failure, IoTKit Edge does not enqueue an invalid message, delete the source Observation, mark it delivered, or guess another mode. It exposes the route as requiring action. It durably stores only a closed `last_transform_error_code` and timestamp: `adapter_unavailable`, `config_version_mismatch`, `invalid_observation`, or `transform_failed`. It does not copy configuration JSON, payload, credentials, or internal error strings into diagnostics.
 
@@ -165,14 +244,18 @@ The Console shows transformation state separately from MQTT state derived from `
 
 ## 8. MQTT publication
 
-```go
-type MQTTPublication struct {
-    Topic   string
-    Payload []byte
-    QoS     byte
-    Retain  bool
+```rust
+pub struct MqttPublication {
+    topic: String,
+    qos: u8,
+    retain: bool,
+    payload: Box<serde_json::value::RawValue>,
 }
 ```
+
+The fields are private. `MqttPublication::new(topic, qos, retain, payload)`
+validates them, and authors read an accepted publication through `topic()`,
+`qos()`, `retain()`, and `payload()`.
 
 V1 requires a non-empty exact UTF-8 topic without NUL, `+`, or `#`; exact QoS 1; and valid JSON payload. The Adapter never publishes. The delivery layer durably stores the publication in SQLite before sending it and retries the same topic/payload until PUBACK. The external contract selects retain; ordinary Observations are normally false, while a separate source-status contract may be true.
 
@@ -226,8 +309,6 @@ IoTKit Edge issues `sensor_id` once per `signal_ref` as `sen-<128-bit lowercase 
 Each semantic rule owns a distinct `series_id`, and `sequence` increases from 1 within that series. Kinds do not share a global sequence; `(series_id, sequence)` is the deduplication identity. A meaning-changing rule update starts a new series at sequence 1 while preserving `sensor_id` and the topic.
 
 In Pinikiet, the topic is also an input-registration contract. Adding a profile or selecting a boolean purpose prepares but does not publish. The Console/API shows one exact topic per sensor and an example payload. After an installer registers that topic once, an explicit start operation saves an accepted cursor boundary and activates every prepared kind for that sensor. Compatible rules added later reuse the registered topic and start automatically. Observations before each rule's start boundary are never sent later.
-
-When schema 30 upgrades an active legacy YokaKit route, it does not treat the old `/signals/` registration as proof that the new Pinikiet `/sensors/` topic is registered. The profile returns to `preparing` until the new topic is registered. Already queued messages keep their old registered topic and are delivered without being discarded.
 
 Pinikiet source status is a separate source-level publication, not a semantic Observation route. Production bootstrap issues `edge-<32hex>` before DB creation and gives the same ID to IoTKit Edge and Broker ACL. `iotkit-edge-output-<edge-id>` may write only that source's IoTKit/Pinikiet observation and status namespaces. Starting an existing DB with a different `--edge-id` is rejected.
 
