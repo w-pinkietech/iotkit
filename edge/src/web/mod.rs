@@ -467,6 +467,8 @@ struct ConsoleTemplate<'a> {
     title: &'a str,
     page: &'a str,
     sensor_view: &'a str,
+    default_setting_tab: &'a str,
+    activation_refresh: bool,
     show_commissioning: bool,
     csrf: &'a str,
     display_name: &'a str,
@@ -503,26 +505,53 @@ async fn console_page(
     let page = navigation_page(path);
     let title = console_title(path);
     let sensor_view = if path == "/sensors" { "list" } else { "" };
-    let query = request
+    let query: HashMap<String, String> = request
         .uri()
         .query()
         .map(|value| serde_urlencoded::from_str(value).unwrap_or_default())
         .unwrap_or_default();
-    let view = state
+    let saved_result = query.get("result").cloned();
+    let default_setting_tab = query
+        .get("tab")
+        .filter(|tab| matches!(tab.as_str(), "basic" | "normal" | "alarm"))
+        .map_or("basic", String::as_str);
+    let mut view = state
         .application
         .console(ConsoleRequest {
             path: path.to_owned(),
-            query,
+            query: query.clone(),
             principal: principal.clone(),
         })
         .await?;
+    if query.get("saved").is_some_and(|value| value == "1") {
+        view.notice = match saved_result.as_deref() {
+            Some("device-profile") => "機器の設定を保存しました。".into(),
+            Some("signal-profile") => "センサーの基本設定を保存しました。".into(),
+            Some("semantic-rule") if view.commissioning.stage == "complete" => {
+                "計測ルールを保存しました。初回設定が完了しました。「概要」で現在の計測状態を確認できます。".into()
+            }
+            Some("semantic-rule") => "計測ルールを保存しました。".into(),
+            Some("calibration") => "補正設定を保存しました。".into(),
+            Some("activation") => "収集ノードの登録を受け付けました。".into(),
+            _ => "変更を保存しました。".into(),
+        };
+    }
     let show_commissioning =
         (path == "/status" || path == "/equipment") && view.commissioning.stage != "complete";
+    let activation_refresh = view.commissioning.stage == "activation-in-progress"
+        && (path == "/status"
+            || path == "/equipment"
+            || view
+                .selected_edge_node
+                .as_ref()
+                .is_some_and(|node| node.state == EdgeNodeState::Activating));
     Ok(Html(
         ConsoleTemplate {
             title,
             page,
             sensor_view,
+            default_setting_tab,
+            activation_refresh,
             show_commissioning,
             csrf: &csrf,
             display_name: &principal.display_name,
@@ -889,6 +918,7 @@ async fn console_mutation(
     let principal =
         require_mutation_form(&state, &headers, form.get("_csrf").map(String::as_str)).await?;
     authorize_mutation(&principal, &route)?;
+    let (result_name, result_tab) = console_mutation_result(&route, &form);
     let result = state
         .application
         .mutate(
@@ -899,10 +929,10 @@ async fn console_mutation(
                 params,
                 expected_revision: None,
             },
-            serde_json::to_value(form).map_err(internal)?,
+            serde_json::to_value(&form).map_err(internal)?,
         )
         .await;
-    let target = console_result_location(&headers, result.as_ref().err());
+    let target = console_result_location(&headers, result.as_ref().err(), result_name, result_tab);
     if let Err(error) = result
         && error.status == StatusCode::PRECONDITION_FAILED
     {
@@ -915,7 +945,41 @@ async fn console_mutation(
     Ok(Redirect::to(&target).into_response())
 }
 
-fn console_result_location(headers: &HeaderMap, error: Option<&WebError>) -> String {
+fn console_mutation_result(
+    route: &str,
+    form: &HashMap<String, String>,
+) -> (&'static str, Option<&'static str>) {
+    if route.ends_with("/activation") {
+        ("activation", None)
+    } else if route.contains("/devices/") && route.ends_with("/profile") {
+        ("device-profile", None)
+    } else if route.contains("/signals/") && route.ends_with("/profile") {
+        ("signal-profile", Some("basic"))
+    } else if route.ends_with("/calibration") {
+        ("calibration", Some("normal"))
+    } else if (route.ends_with("/semantic-rules")
+        || (route.contains("/semantic-rules/") && !route.ends_with("/retire")))
+        && !route.ends_with("/counter-resets")
+    {
+        (
+            "semantic-rule",
+            Some(if form.get("kind").is_some_and(|kind| kind == "alarm") {
+                "alarm"
+            } else {
+                "normal"
+            }),
+        )
+    } else {
+        ("change", None)
+    }
+}
+
+fn console_result_location(
+    headers: &HeaderMap,
+    error: Option<&WebError>,
+    result: &str,
+    tab: Option<&str>,
+) -> String {
     let mut target = headers
         .get(header::REFERER)
         .and_then(|value| value.to_str().ok())
@@ -930,6 +994,10 @@ fn console_result_location(headers: &HeaderMap, error: Option<&WebError>) -> Str
             query.append_pair("error", error.code);
         } else {
             query.append_pair("saved", "1");
+            query.append_pair("result", result);
+            if let Some(tab) = tab {
+                query.append_pair("tab", tab);
+            }
         }
     }
     match target.query() {
@@ -1508,6 +1576,16 @@ pub mod test_support {
                 include_pending_node: true,
             }
         }
+        pub fn activating() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Activating,
+                resources_configured: true,
+                include_pending_node: true,
+            }
+        }
         pub fn viewer() -> Self {
             Self {
                 authenticated: true,
@@ -1559,7 +1637,7 @@ pub mod test_support {
             sensor_type: "温度".into(),
             sensor_type_code: "thermocouple".into(),
             value: "28.5".into(),
-            unit: "℃".into(),
+            unit: if active { "℃".into() } else { "Cel".into() },
             value_kind: "numeric".into(),
             unit_mode: "unit".into(),
             decimal_places: 1,
@@ -1610,9 +1688,9 @@ pub mod test_support {
                 "epoch-02".into()
             },
             first_detected_at: if active {
-                "2025-01-01T00:00:01Z".into()
+                "1735689601000".into()
             } else {
-                "2025-01-01T00:00:02Z".into()
+                "1735689602000".into()
             },
             name: if active {
                 "factory-edge-01".into()
@@ -1712,7 +1790,11 @@ pub mod test_support {
                 sensor_type: "温度".into(),
                 sensor_type_code: "thermocouple".into(),
                 value: "28.5".into(),
-                unit: "℃".into(),
+                unit: if self.resources_configured {
+                    "℃".into()
+                } else {
+                    "°C".into()
+                },
                 value_kind: "numeric".into(),
                 unit_mode: "unit".into(),
                 decimal_places: 1,

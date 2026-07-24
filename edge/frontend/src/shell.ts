@@ -169,6 +169,41 @@ function initializeFocusedSection(): void {
   target.focus();
 }
 
+function initializeLocalizedTimes(): void {
+  for (const time of queryAll<HTMLTimeElement>("time[data-unix-ms]")) {
+    const milliseconds = Number(time.dataset.unixMs);
+    if (!Number.isFinite(milliseconds)) continue;
+    const date = new Date(milliseconds);
+    if (Number.isNaN(date.getTime())) continue;
+    time.dateTime = date.toISOString();
+    time.textContent = date.toLocaleString("ja-JP");
+  }
+  const checkedAt = query<HTMLTimeElement>("[data-activation-checked-at]");
+  if (checkedAt) {
+    const now = new Date();
+    checkedAt.dateTime = now.toISOString();
+    checkedAt.textContent = now.toLocaleTimeString("ja-JP", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+}
+
+function initializeActivationRefresh(reload: () => void): void {
+  const key = `iotkit-activation-refresh:${window.location.pathname}`;
+  if (document.body.dataset.activationRefresh !== "true") {
+    sessionStorage.removeItem(key);
+    return;
+  }
+  const attempts = Number(sessionStorage.getItem(key) ?? "0");
+  if (!Number.isFinite(attempts) || attempts >= 20) return;
+  window.setTimeout(() => {
+    sessionStorage.setItem(key, String(attempts + 1));
+    reload();
+  }, 3_000);
+}
+
 function initializeSignalProfile(form: HTMLFormElement): void {
   const sensorType = query<HTMLSelectElement>("[data-sensor-type]", form);
   const customLabel = query<HTMLElement>("[data-custom-sensor-label]", form);
@@ -215,11 +250,15 @@ function initializeSignalProfile(form: HTMLFormElement): void {
   update();
 }
 
-export function initializeShell(): void {
+export function initializeShell(
+  reload: () => void = () => window.location.reload(),
+): void {
   initializeMenu();
   initializeTableFilter("signal-table");
   initializeTableFilter("log-table");
   initializeDocumentActions();
+  initializeLocalizedTimes();
+  initializeActivationRefresh(reload);
   initializeSettingTabs();
   for (const form of queryAll<HTMLFormElement>("form[data-signal-profile]")) {
     initializeSignalProfile(form);

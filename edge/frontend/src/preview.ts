@@ -42,12 +42,20 @@ function formatNumber(value: unknown): string {
   });
 }
 
-function formatCurrentValue(value: number, valueKind?: string): string {
-  return valueKind === "boolean"
-    ? Number(value) === 0
-      ? "OFF"
-      : "ON"
-    : formatNumber(value);
+function formatCurrentValue(
+  value: number,
+  valueKind?: string,
+  decimalPlaces?: number,
+): string {
+  if (valueKind === "boolean") {
+    return Number(value) === 0 ? "OFF" : "ON";
+  }
+  if (!Number.isInteger(decimalPlaces)) return formatNumber(value);
+  const digits = Math.min(6, Math.max(0, Number(decimalPlaces)));
+  return Number(value).toLocaleString("ja-JP", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
 }
 
 function formatDuration(start: number, end: number): string {
@@ -456,6 +464,13 @@ function buildRequest(
           `ルール ${index + 1}`,
         spec: ruleSpec(candidate),
       }));
+    if (!rules.length && firstForm?.action.endsWith("/semantic-rules")) {
+      rules.push({
+        rule_id: "draft-1",
+        display_name: "受信値（保存前）",
+        spec: ruleSpec(firstForm),
+      });
+    }
     if (rules.length) {
       body.calibration = {
         scale: calibrationForm
@@ -532,6 +547,9 @@ function initializePreview(panel: HTMLElement): void {
     : null;
   const valueKind = query<HTMLSelectElement>(
     'form[data-signal-profile] [name="display_value_kind"]',
+  );
+  const decimalPlaces = query<HTMLInputElement>(
+    'form[data-signal-profile] [name="decimal_places"]',
   );
   let controller: AbortController | undefined;
   let debounce: number | undefined;
@@ -634,10 +652,15 @@ function initializePreview(panel: HTMLElement): void {
         currentValue.textContent = formatCurrentValue(
           latest.input,
           valueKind?.value,
+          decimalPlaces ? Number(decimalPlaces.value) : undefined,
         );
       }
       if (latest && sourceCurrentValue && sourceSummary) {
-        const rawValue = formatNumber(latest.input);
+        const rawValue = formatCurrentValue(
+          latest.input,
+          valueKind?.value,
+          decimalPlaces ? Number(decimalPlaces.value) : undefined,
+        );
         sourceCurrentValue.textContent = rawValue;
         sourceSummary.dataset.sourceValue = rawValue;
       }

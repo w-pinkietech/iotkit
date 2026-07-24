@@ -290,13 +290,13 @@ impl StorageWebApplication {
                 sensor_type,
                 sensor_type_code,
                 value,
-                unit: if signal.display_unit_mode == "dimensionless" {
+                unit: console_unit_label(&if signal.display_unit_mode == "dimensionless" {
                     String::new()
                 } else if signal.display_unit.is_empty() {
                     signal.unit
                 } else {
                     signal.display_unit
-                },
+                }),
                 value_kind: if signal.display_value_kind.is_empty() {
                     signal.value_type
                 } else {
@@ -1627,7 +1627,7 @@ fn console_edge_node_with_devices(
         edge_node_ref: node.edge_node_ref.clone(),
         edge_node_id: node.edge_node_id.clone(),
         ledger_epoch: node.ledger_epoch.clone(),
-        first_detected_at: format!("{} (Unix ms)", node.first_detected_at),
+        first_detected_at: node.first_detected_at.to_string(),
         name: node.edge_node_id.clone(),
         location: "設置場所 未設定".into(),
         state: node.state,
@@ -1639,6 +1639,13 @@ fn console_edge_node_with_devices(
         descriptor_device_count,
         descriptor_signal_count,
         signal_count: descriptor_signal_count,
+    }
+}
+
+fn console_unit_label(unit: &str) -> String {
+    match unit {
+        "Cel" => "°C".into(),
+        _ => unit.into(),
     }
 }
 

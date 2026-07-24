@@ -4,10 +4,62 @@ import { initializeShell } from "../../src/shell";
 afterEach(() => {
   document.body.replaceChildren();
   document.body.removeAttribute("data-focus-target");
+  document.body.removeAttribute("data-activation-refresh");
   vi.restoreAllMocks();
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  sessionStorage.clear();
 });
 
 describe("console shell", () => {
+  it("reloads an activation view every three seconds with a bounded retry count", async () => {
+    vi.useFakeTimers();
+    document.body.dataset.activationRefresh = "true";
+    document.body.innerHTML = `
+      <time data-activation-checked-at>画面表示時</time>
+    `;
+    const reload = vi.fn();
+
+    initializeShell(reload);
+    expect(
+      document.querySelector("time")?.textContent,
+    ).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(reload).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("iotkit-activation-refresh:/")).toBe("1");
+
+    vi.clearAllTimers();
+    sessionStorage.setItem("iotkit-activation-refresh:/", "20");
+    initializeShell(reload);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("does not reload an unrelated form while another activation is in progress", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = `<form data-signal-profile></form>`;
+    const reload = vi.fn();
+
+    initializeShell(reload);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("localizes Unix milliseconds in semantic time elements", () => {
+    document.body.innerHTML = `
+      <time data-unix-ms="1735689602000">1735689602000 (Unix ms)</time>
+    `;
+
+    initializeShell();
+
+    const time = document.querySelector("time")!;
+    expect(time.textContent).not.toContain("Unix ms");
+    expect(time.dateTime).toBe("2025-01-01T00:00:02.000Z");
+  });
+
   it("requires confirmation before submitting a destructive form", () => {
     document.body.innerHTML = `
       <form data-confirm-message="このルールを終了します。">

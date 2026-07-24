@@ -343,7 +343,7 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
     assert_eq!(reduced.commissioning.pending_devices, 0);
     assert_eq!(reduced.commissioning.pending_signals, 0);
     assert_eq!(reduced.commissioning.action_href, "/sensors");
-    assert_eq!(reduced.edge_nodes[0].first_detected_at, "1 (Unix ms)");
+    assert_eq!(reduced.edge_nodes[0].first_detected_at, "1");
 
     restored_descriptor.descriptor_revision += 2;
     storage

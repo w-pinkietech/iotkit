@@ -47,6 +47,26 @@ function installPreviewDOM(): void {
   document.cookie = "iotkit_edge_csrf=csrf-test";
 }
 
+function installNoRulePreviewDOM(): void {
+  installPreviewDOM();
+  document.querySelector("details.semantic-rule-card")?.remove();
+  const form = document.createElement("form");
+  form.className = "semantic-form";
+  form.dataset.signalRef = "sig_01";
+  form.action = "/console/signals/sig_01/semantic-rules";
+  form.innerHTML = `
+    <input name="display_name" value="">
+    <input name="kind" value="numeric">
+    <select name="detector_mode"><option value="" selected>none</option></select>
+    <input name="rise_threshold" value="0">
+    <input name="fall_threshold" value="0">
+    <input name="rise_debounce_seconds" value="0">
+    <input name="fall_debounce_seconds" value="0">
+    <select name="trigger"><option value="" selected>none</option></select>
+  `;
+  document.body.append(form);
+}
+
 function previewResponse(receivedAt = 1000, input = 24.8): Response {
   return new Response(
     JSON.stringify({
@@ -93,6 +113,61 @@ afterEach(() => {
 });
 
 describe("automatic mapping preview", () => {
+  it("uses a temporary numeric draft to preview raw data before the first rule is saved", async () => {
+    installNoRulePreviewDOM();
+    const fetchMock = vi.fn().mockResolvedValue(previewResponse(1_000, 42));
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      signal_ref: "sig_01",
+      calibration: { scale: 1, offset: 0 },
+      rules: [
+        {
+          rule_id: "draft-1",
+          spec: { kind: "numeric" },
+        },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-feed-state]")?.textContent,
+      ).toBe("実データを表示中"),
+    );
+    document
+      .querySelector<HTMLButtonElement>("[data-preview-toggle]")
+      ?.click();
+  });
+
+  it("formats current values with the profile decimal-place setting", async () => {
+    installPreviewDOM();
+    const profile = document.createElement("form");
+    profile.dataset.signalProfile = "";
+    profile.innerHTML = `
+      <select name="display_value_kind"><option value="numeric" selected>数値</option></select>
+      <input name="decimal_places" value="1">
+    `;
+    document.body.append(profile);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(previewResponse(1_000, 42.45)));
+
+    initializePreviews();
+
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-current-value]")?.textContent,
+      ).toBe("42.5"),
+    );
+    expect(
+      document.querySelector("[data-source-current-value]")?.textContent,
+    ).toBe("42.5");
+    document
+      .querySelector<HTMLButtonElement>("[data-preview-toggle]")
+      ?.click();
+  });
+
   it("updates the compact sensor header with the latest received value", async () => {
     installPreviewDOM();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(previewResponse()));

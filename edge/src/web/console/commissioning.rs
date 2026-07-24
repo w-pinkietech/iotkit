@@ -66,7 +66,7 @@ pub fn commissioning_view(
         stage(
             "activation-in-progress",
             "収集ノードを登録中",
-            "収集ノードからの登録結果を待っています。",
+            "3秒ごとに登録状態を自動確認します。この画面を離れても登録処理は続きます。",
             "収集ノードを確認",
             edge_node_href(node),
             0,

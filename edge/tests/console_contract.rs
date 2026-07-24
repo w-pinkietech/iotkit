@@ -514,10 +514,11 @@ async fn discovered_edge_node_detail_explains_descriptor_and_history_boundary() 
     for fact in [
         "Edge Node ID",
         "assembly-edge-02",
-        "ledger epoch",
+        "データ流の世代ID",
+        "データの連続性を区別する識別子です",
         "epoch-02",
         "初回検出時刻",
-        "2025-01-01T00:00:02Z",
+        r#"<time data-unix-ms="1735689602000">1735689602000 (Unix ms)</time>"#,
         "検出したデバイス",
         "0台",
         "検出したセンサー",
@@ -526,6 +527,133 @@ async fn discovered_edge_node_detail_explains_descriptor_and_history_boundary() 
     ] {
         assert!(html.contains(fact), "missing discovered-node fact: {fact}");
     }
+}
+
+#[tokio::test]
+async fn activating_pages_explain_live_checks_and_only_mark_activation_views_for_reload() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::activating()));
+    for path in [
+        "/status",
+        "/equipment",
+        "/equipment/edge-nodes/edge-node-02",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 2_000_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains(r#"data-activation-refresh="true""#), "{path}");
+        assert!(html.contains("3秒ごとに登録状態を自動確認します"), "{path}");
+        assert!(
+            html.contains("この画面を離れても登録処理は続きます"),
+            "{path}"
+        );
+        assert!(html.contains("最終確認"), "{path}");
+    }
+
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices/device-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!html.contains(r#"data-activation-refresh="true""#));
+}
+
+#[tokio::test]
+async fn successful_console_mutations_render_notices_and_preserve_rule_context() {
+    let complete = router(WebConfig::test(), Arc::new(StubApplication::complete()));
+    let response = complete
+        .oneshot(
+            Request::get(
+                "/equipment/devices/device-01/sensors/signal-01?saved=1&result=semantic-rule&tab=normal",
+            )
+            .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("計測ルールを保存しました"));
+    assert!(html.contains("初回設定が完了しました"));
+    assert!(html.contains("「概要」で現在の計測状態を確認できます"));
+    assert!(html.contains(r#"data-default-setting-tab="normal""#));
+
+    let configured = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = configured
+        .oneshot(
+            Request::get("/equipment/devices/device-01?saved=1&result=device-profile")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("機器の設定を保存しました"));
+}
+
+#[tokio::test]
+async fn sensor_profile_offers_generic_temperature_and_humanizes_ucum_celsius() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::unconfigured()));
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices/device-01/sensors/signal-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains(r#"<option value="temperature">温度（方式未確認）</option>"#));
+    assert!(html.contains(r#"<option value="thermocouple""#));
+    assert!(!html.contains(">Cel<"));
+    assert!(html.contains("°C"));
 }
 
 #[tokio::test]

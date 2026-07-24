@@ -7,7 +7,7 @@
   <title>{{ title }} | IoTKit</title>
   <link rel="stylesheet" href="/static/edge.css">
 </head>
-<body class="console-shell" data-console-page="{{ page }}" data-sensor-view="{{ sensor_view }}">
+<body class="console-shell" data-console-page="{{ page }}" data-sensor-view="{{ sensor_view }}"{% if activation_refresh %} data-activation-refresh="true"{% endif %}>
   <a class="skip-link" href="#main-content">本文へ移動</a>
   <aside class="sidebar" id="sidebar">
     <a class="product-mark" href="/status" aria-label="IoTKit システム概要">
@@ -48,6 +48,13 @@
       </header>
       {% if !view.notice.is_empty() %}<div class="feedback success-feedback" role="status">{{ view.notice }}</div>{% endif %}
       {% if !view.page_error.is_empty() %}<div class="feedback error-feedback" role="alert">{{ view.page_error }}</div>{% endif %}
+      {% if activation_refresh %}
+      <div class="feedback activation-feedback" role="status">
+        <strong>登録状態を自動確認中</strong>
+        <span>3秒ごとに登録状態を自動確認します。この画面を離れても登録処理は続きます。</span>
+        <small>最終確認 <time data-activation-checked-at>画面表示時</time></small>
+      </div>
+      {% endif %}
 
       {% if show_commissioning %}
       <section class="onboarding" data-commissioning-stage="{{ view.commissioning.stage }}">
@@ -211,7 +218,7 @@
           </section>
         </aside>
         <div class="sensor-detail-settings sensor-setting-controls">
-          <section class="content-section sensor-settings-panel" data-setting-tabs data-default-setting-tab="basic">
+          <section class="content-section sensor-settings-panel" data-setting-tabs data-default-setting-tab="{{ default_setting_tab }}">
           <div class="sensor-setting-tabs" role="tablist" aria-label="設定の種類">
             <button id="setting-tab-basic" type="button" role="tab" data-setting-tab="basic" aria-controls="setting-panel-basic"><span>基本設定</span><small>名前・種類・単位</small></button>
             <button id="setting-tab-normal" type="button" role="tab" data-setting-tab="normal" aria-controls="setting-panel-normal"><span>計測ルール</span><small>補正・判定・累積</small></button>
@@ -226,6 +233,7 @@
                 <label>表示名<input name="display_name" value="{{ signal.name }}" required></label>
                 <label>センサーの種類<select name="display_sensor_type" data-sensor-type required>
                   <option value="">選択してください</option>
+                  <option value="temperature"{% if signal.sensor_type_code == "temperature" %} selected{% endif %}>温度（方式未確認）</option>
                   <option value="thermocouple"{% if signal.sensor_type_code == "thermocouple" %} selected{% endif %}>熱電対</option>
                   <option value="contact"{% if signal.sensor_type_code == "contact" %} selected{% endif %}>接点入力</option>
                   <option value="illuminance"{% if signal.sensor_type_code == "illuminance" %} selected{% endif %}>照度</option>
@@ -414,8 +422,8 @@
       </section>
       <dl class="equipment-detail-facts">
         <div><dt>Edge Node ID</dt><dd>{{ edge_node.edge_node_id }}</dd></div>
-        <div><dt>ledger epoch</dt><dd>{{ edge_node.ledger_epoch }}</dd></div>
-        <div><dt>初回検出時刻</dt><dd>{{ edge_node.first_detected_at }}</dd></div>
+        <div><dt>データ流の世代ID <small>データの連続性を区別する識別子です</small></dt><dd>{{ edge_node.ledger_epoch }}</dd></div>
+        <div><dt>初回検出時刻</dt><dd><time data-unix-ms="{{ edge_node.first_detected_at }}">{{ edge_node.first_detected_at }} (Unix ms)</time></dd></div>
         <div><dt>検出したデバイス</dt><dd>{{ edge_node.descriptor_device_count }}台</dd></div>
         <div><dt>検出したセンサー</dt><dd>{{ edge_node.descriptor_signal_count }}件</dd></div>
         <div><dt>登録状態</dt><dd>{{ edge_node.state_label }}</dd></div>
