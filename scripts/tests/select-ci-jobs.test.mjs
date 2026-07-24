@@ -9,7 +9,12 @@ import { selectCiJobs } from "../select-ci-jobs.mjs";
 const cases = [
   {
     name: "documentation and repository guidance use lightweight checks only",
-    paths: ["docs/okf/en/index.md", "AGENTS.md", "CONTRIBUTING.ja.md"],
+    paths: [
+      "docs/okf/en/index.md",
+      "AGENTS.md",
+      "CONTRIBUTING.ja.md",
+      "scripts/tests/adapter-author-docs.test.mjs",
+    ],
     expected: { rust: false, edge: false },
   },
   {
@@ -81,6 +86,10 @@ test("CI workflow routes heavy jobs through the classifier", () => {
   assert.match(workflow, /needs\.changes\.outputs\.rust == 'true'/);
   assert.match(workflow, /needs\.changes\.outputs\.edge == 'true'/);
   assert.match(workflow, /name: lightweight repository checks/);
+  assert.match(
+    workflow,
+    /node --test scripts\/tests\/adapter-author-docs\.test\.mjs/,
+  );
 });
 
 test("CLI reads changed paths from standard input", () => {

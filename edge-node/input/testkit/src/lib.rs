@@ -2,7 +2,9 @@
 
 use iotkit_ingest_contract::{ReadingItem, TimeSource};
 use iotkit_input_adapter_host_api::{
-    AdapterInstanceId, ConfiguredSource, InputAdapterTypeDescriptor,
+    AdapterCompletion, AdapterInstanceId, AdapterStartContext, AdapterTypeId, ConfiguredSource,
+    InputAdapterTypeDescriptor, PhysicalTransportKind, RunningInputAdapter, UnexpectedExitReason,
+    runtime_channels,
 };
 
 pub fn assert_descriptor_v1(descriptor: &InputAdapterTypeDescriptor) {
@@ -50,12 +52,37 @@ pub struct ReferenceAdapter {
     pub source: ConfiguredSource,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReferenceAdapterConfig {
+    pub diagnostic_capacity: usize,
+}
+
 impl ReferenceAdapter {
     pub fn new() -> Self {
         Self {
             instance_id: AdapterInstanceId::new("reference_one").unwrap(),
             source: ConfiguredSource::new("input:reference:one").unwrap(),
         }
+    }
+
+    pub fn descriptor() -> InputAdapterTypeDescriptor {
+        InputAdapterTypeDescriptor {
+            adapter_type_id: AdapterTypeId::new("reference-adapter").unwrap(),
+            adapter_api_major: 1,
+            config_schema_version: 1,
+            implementation_version: env!("CARGO_PKG_VERSION"),
+            display_name: "Reference Adapter",
+            physical_transport_kind: PhysicalTransportKind::Other,
+        }
+    }
+
+    pub fn parse_and_validate(
+        config: ReferenceAdapterConfig,
+    ) -> Result<ReferenceAdapterConfig, &'static str> {
+        if config.diagnostic_capacity == 0 {
+            return Err("diagnostic_capacity must be at least 1");
+        }
+        Ok(config)
     }
 
     pub fn observations(&self) -> Vec<ReadingItem> {
@@ -85,6 +112,38 @@ impl ReferenceAdapter {
                 battery_pct: None,
             },
         ]
+    }
+
+    pub fn start(
+        &self,
+        context: AdapterStartContext,
+        config: ReferenceAdapterConfig,
+    ) -> Result<RunningInputAdapter, &'static str> {
+        if context.instance_id != self.instance_id || context.configured_source != self.source {
+            return Err("start context does not match the configured reference adapter");
+        }
+        let items = self.observations();
+        let (mut runtime, running) =
+            runtime_channels(context.instance_id.clone(), config.diagnostic_capacity);
+        tokio::spawn(async move {
+            runtime.activity.physical_decode();
+            if context.ingest.try_submit(items).is_err() {
+                runtime
+                    .completion
+                    .complete(AdapterCompletion::UnexpectedExit(
+                        UnexpectedExitReason::ClientClosed,
+                    ));
+                return;
+            }
+            runtime.activity.queue_admission();
+            let completion = if runtime.stop.changed().await {
+                AdapterCompletion::RequestedStop
+            } else {
+                AdapterCompletion::UnexpectedExit(UnexpectedExitReason::InternalInvariant)
+            };
+            runtime.completion.complete(completion);
+        });
+        Ok(running)
     }
 }
 

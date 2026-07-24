@@ -64,6 +64,9 @@ jobs:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-okf-docs.mjs
 
+      - name: Adapter author documentation API guard
+        run: node --test scripts/tests/adapter-author-docs.test.mjs
+
       - name: Layer rules
         run: scripts/check-layers
 
