@@ -4,8 +4,181 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use iotkit_edge::web::{WebConfig, router, test_support::StubApplication};
+use iotkit_edge::{
+    storage::EdgeNodeState,
+    web::{
+        ConsoleDevice, ConsoleEdgeNode, ConsoleRule, ConsoleSignal, WebConfig,
+        console::commissioning::commissioning_view, router, test_support::StubApplication,
+    },
+};
 use tower::ServiceExt;
+
+fn commissioning_signal(profile_complete: bool, has_rule: bool) -> ConsoleSignal {
+    ConsoleSignal {
+        signal_ref: "signal-01".into(),
+        device_ref: "device-01".into(),
+        edge_node_id: "edge-01".into(),
+        name: "温度".into(),
+        sensor_type: "温度".into(),
+        sensor_type_code: "temperature".into(),
+        value: "—".into(),
+        unit: "℃".into(),
+        value_kind: "numeric".into(),
+        unit_mode: "unit".into(),
+        decimal_places: 1,
+        revision: usize::from(profile_complete) as i64,
+        status_label: "未受信".into(),
+        status_class: "never".into(),
+        profile_complete,
+        input_is_boolean: false,
+        calibration_scale: 1.0,
+        calibration_offset: 0.0,
+        calibration_revision: 1,
+        has_alarm_rules: false,
+        rules: has_rule
+            .then(|| ConsoleRule {
+                rule_id: "rule-01".into(),
+                display_name: "現在温度".into(),
+                kind: "numeric".into(),
+                kind_label: "測定値".into(),
+                count_summary: String::new(),
+                revision: 1,
+                detector_mode: String::new(),
+                detector_is_boolean: false,
+                rise_threshold: 0.0,
+                fall_threshold: 0.0,
+                rise_debounce_seconds: 0.0,
+                fall_debounce_seconds: 0.0,
+                trigger: String::new(),
+            })
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn commissioning_device(revision: i64, signals: Vec<ConsoleSignal>) -> ConsoleDevice {
+    ConsoleDevice {
+        device_ref: "device-01".into(),
+        edge_node_ref: "node-01".into(),
+        edge_node_id: "edge-01".into(),
+        name: "設備".into(),
+        location: "工場".into(),
+        state_label: "登録済み".into(),
+        state_class: "configured".into(),
+        identifier: "device".into(),
+        model_id: "model".into(),
+        revision,
+        signals,
+    }
+}
+
+fn commissioning_node(state: EdgeNodeState) -> ConsoleEdgeNode {
+    ConsoleEdgeNode {
+        edge_node_ref: "node-01".into(),
+        edge_node_id: "edge-01".into(),
+        name: "Edge Node".into(),
+        location: "工場".into(),
+        state,
+        state_label: "登録済み".into(),
+        state_class: "configured".into(),
+        can_activate: state == EdgeNodeState::Discovered,
+        devices: Vec::new(),
+        signal_count: 0,
+    }
+}
+
+#[test]
+fn commissioning_projection_prioritizes_edge_node_activation() {
+    let view = commissioning_view(&[commissioning_node(EdgeNodeState::Discovered)], &[], &[]);
+
+    assert_eq!(view.stage, "activate-edge-node");
+    assert_eq!(view.action_href, "/equipment/edge-nodes/node-01");
+    assert_eq!(view.completed_steps, 0);
+    assert_eq!(view.total_steps, 4);
+    assert_eq!(view.pending_edge_nodes, 1);
+}
+
+#[test]
+fn commissioning_projection_orders_recovery_activation_and_resource_setup() {
+    let recovery = commissioning_view(
+        &[
+            commissioning_node(EdgeNodeState::Discovered),
+            commissioning_node(EdgeNodeState::Activating),
+            commissioning_node(EdgeNodeState::RecoveryHold),
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(recovery.stage, "recovery");
+
+    let activating = commissioning_view(
+        &[
+            commissioning_node(EdgeNodeState::Discovered),
+            commissioning_node(EdgeNodeState::Activating),
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(activating.stage, "activation-in-progress");
+
+    let signal = commissioning_signal(false, false);
+    let unconfigured_device = commissioning_device(0, vec![signal.clone()]);
+    let setup_device = commissioning_view(
+        &[commissioning_node(EdgeNodeState::Active)],
+        &[unconfigured_device],
+        std::slice::from_ref(&signal),
+    );
+    assert_eq!(setup_device.stage, "setup-device");
+    assert_eq!(setup_device.action_href, "/equipment/devices/device-01");
+    assert_eq!(setup_device.completed_steps, 1);
+    assert_eq!(setup_device.pending_devices, 1);
+
+    let configured_device = commissioning_device(1, vec![signal.clone()]);
+    let setup_sensor = commissioning_view(
+        &[commissioning_node(EdgeNodeState::Active)],
+        &[configured_device],
+        &[signal],
+    );
+    assert_eq!(setup_sensor.stage, "setup-sensor");
+    assert_eq!(
+        setup_sensor.action_href,
+        "/equipment/devices/device-01/sensors/signal-01"
+    );
+    assert_eq!(setup_sensor.completed_steps, 2);
+    assert_eq!(setup_sensor.pending_devices, 0);
+    assert_eq!(setup_sensor.pending_signals, 1);
+}
+
+#[test]
+fn commissioning_projection_requires_rules_before_completion() {
+    let signal = commissioning_signal(true, false);
+    let device = commissioning_device(1, vec![signal.clone()]);
+    let setup_rule = commissioning_view(
+        &[commissioning_node(EdgeNodeState::Active)],
+        std::slice::from_ref(&device),
+        &[signal],
+    );
+
+    assert_eq!(setup_rule.stage, "setup-rule");
+    assert_eq!(
+        setup_rule.action_href,
+        "/equipment/devices/device-01/sensors/signal-01"
+    );
+    assert_eq!(setup_rule.completed_steps, 3);
+    assert_eq!(setup_rule.pending_signals, 1);
+
+    let signal = commissioning_signal(true, true);
+    let complete = commissioning_view(
+        &[commissioning_node(EdgeNodeState::Active)],
+        &[device],
+        &[signal],
+    );
+    assert_eq!(complete.stage, "complete");
+    assert_eq!(complete.completed_steps, 4);
+    assert_eq!(complete.pending_edge_nodes, 0);
+    assert_eq!(complete.pending_devices, 0);
+    assert_eq!(complete.pending_signals, 0);
+}
 
 #[tokio::test]
 async fn login_page_keeps_console_hooks() {

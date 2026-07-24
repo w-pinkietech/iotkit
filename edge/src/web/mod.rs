@@ -18,6 +18,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::storage::EdgeNodeState;
+
 pub use error::WebError;
 
 pub const SESSION_COOKIE: &str = "iotkit_edge_session";
@@ -147,6 +149,7 @@ pub struct ConsoleRequest {
 pub struct ConsoleView {
     pub notice: String,
     pub page_error: String,
+    pub commissioning: console::commissioning::CommissioningView,
     pub edge_nodes: Vec<ConsoleEdgeNode>,
     pub registered_edge_node_count: usize,
     pub receiving_signal_count: usize,
@@ -171,6 +174,7 @@ pub struct ConsoleEdgeNode {
     pub edge_node_id: String,
     pub name: String,
     pub location: String,
+    pub state: EdgeNodeState,
     pub state_label: String,
     pub state_class: String,
     pub can_activate: bool,
@@ -1541,6 +1545,11 @@ pub mod test_support {
                 "乾燥炉".into()
             } else {
                 "組立ライン".into()
+            },
+            state: if active {
+                EdgeNodeState::Active
+            } else {
+                EdgeNodeState::Discovered
             },
             state_label: if active {
                 "登録済み".into()

@@ -41,6 +41,7 @@ use crate::{
         ConsoleEdgeNode, ConsoleOutput, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage,
         ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal,
         RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
+        console::commissioning::commissioning_view,
     },
 };
 
@@ -629,7 +630,9 @@ impl WebApplication for StorageWebApplication {
         } else {
             Vec::new()
         };
+        let commissioning = commissioning_view(&edge_nodes, &devices, &signals);
         Ok(ConsoleView {
+            commissioning,
             registered_edge_node_count: nodes
                 .iter()
                 .filter(|node| node.state == EdgeNodeState::Active)
@@ -1613,6 +1616,7 @@ fn console_edge_node_with_devices(
         edge_node_id: node.edge_node_id.clone(),
         name: node.edge_node_id.clone(),
         location: "設置場所 未設定".into(),
+        state: node.state,
         state_label: state_label.into(),
         state_class: state_class.into(),
         can_activate,

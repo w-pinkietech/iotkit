@@ -143,7 +143,7 @@ async fn activation_response_does_not_expose_internal_command_identity() {
 }
 
 #[tokio::test]
-async fn console_distinguishes_discovery_from_registration_and_actual_reception() {
+async fn console_commissioning_distinguishes_discovery_registration_and_setup() {
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("console-state.db"),
@@ -183,6 +183,7 @@ async fn console_distinguishes_discovery_from_registration_and_actual_reception(
         })
         .await
         .unwrap();
+    assert_eq!(discovered.commissioning.stage, "activate-edge-node");
     assert_eq!(discovered.registered_edge_node_count, 0);
     assert_eq!(discovered.receiving_signal_count, 0);
     assert_eq!(discovered.signals[0].status_label, "未受信");
@@ -239,12 +240,45 @@ async fn console_distinguishes_discovery_from_registration_and_actual_reception(
         })
         .await
         .unwrap();
+    assert_eq!(active.commissioning.stage, "setup-device");
+    assert_eq!(active.commissioning.pending_devices, 1);
     assert_eq!(active.registered_edge_node_count, 1);
     assert_eq!(active.receiving_signal_count, 1);
     assert_eq!(active.signals[0].status_label, "受信中");
     assert_eq!(active.signals[0].value, "ON");
     assert_eq!(active.devices.len(), 1);
     assert_eq!(active.edge_nodes[0].devices.len(), 1);
+
+    let device_ref = active.devices[0].device_ref.clone();
+    let mut device_params = HashMap::new();
+    device_params.insert("device_ref".into(), device_ref.clone());
+    application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/devices/{device_ref}/profile"),
+                params: device_params,
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "display_name": "接点デバイス",
+                "location": "第1工場",
+            }),
+        )
+        .await
+        .unwrap();
+    let needs_signal_setup = application
+        .console(ConsoleRequest {
+            path: "/status".into(),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(needs_signal_setup.commissioning.stage, "setup-sensor");
+    assert_eq!(needs_signal_setup.commissioning.pending_devices, 0);
+    assert_eq!(needs_signal_setup.commissioning.pending_signals, 1);
 
     let signal_ref = active.signals[0].signal_ref.clone();
     let mut params = HashMap::new();
