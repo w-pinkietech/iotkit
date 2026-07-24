@@ -124,6 +124,42 @@ async fn acknowledges_records_only_after_activation_and_commit() {
             .expect("read committed cursor"),
         1
     );
+
+    let mut next: Value = serde_json::from_slice(&records).expect("decode next batch");
+    next["publication_id"] = "edge-node-01:epoch-01:2:2".into();
+    next["cursor_start"] = 2.into();
+    next["cursor_end"] = 2.into();
+    next["records"][0]["pub_seq"] = 2.into();
+    let next = serde_json::to_vec(&next).expect("encode next batch");
+    processor
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/records",
+            &next,
+            1_720_000_000_400,
+        )
+        .await
+        .expect("advance custody cursor")
+        .expect("next custody acknowledgement");
+
+    let stale_ack = processor
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/records",
+            &records,
+            1_720_000_000_500,
+        )
+        .await
+        .expect("accept exact stale replay")
+        .expect("stale replay acknowledgement");
+    let stale_ack: Value =
+        serde_json::from_slice(&stale_ack.payload).expect("decode stale replay acknowledgement");
+    assert_eq!(stale_ack["accepted_through"], 1);
+    assert_eq!(
+        storage
+            .accepted_through("edge-node-01", "epoch-01")
+            .await
+            .expect("read high-water cursor"),
+        2
+    );
 }
 
 #[tokio::test]

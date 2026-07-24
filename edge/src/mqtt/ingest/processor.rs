@@ -54,8 +54,7 @@ impl IngestProcessor {
             TopicKind::Records => {
                 let batch = RecordBatch::decode(payload)?;
                 batch.validate_topic_edge_node(&parsed.edge_node_id)?;
-                let accepted = self
-                    .storage
+                self.storage
                     .accept_active_batch(AcceptBatch {
                         edge_node_id: batch.edge_node_id.clone(),
                         ledger_epoch: batch.ledger_epoch.clone(),
@@ -76,7 +75,7 @@ impl IngestProcessor {
                     edge_node_id: batch.edge_node_id.clone(),
                     ledger_epoch: batch.ledger_epoch.clone(),
                     publication_id: batch.publication_id.clone(),
-                    accepted_through: accepted.accepted_through,
+                    accepted_through: batch.cursor_end,
                 };
                 ack.validate_for(&batch, batch.cursor_start - 1)?;
                 Ok(Some(AckPublication {
