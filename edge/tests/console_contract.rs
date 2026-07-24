@@ -96,6 +96,8 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"class="health-banner"#,
                 r#"id="signal-table""#,
                 "センサーの現在値",
+                "登録済みの収集ノード",
+                r#"<strong>1</strong><small>台</small>"#,
             ][..],
         ),
         (
@@ -104,6 +106,24 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"class="equipment-row""#,
                 "/equipment/edge-nodes/edge-node-02",
                 "assembly-edge-02",
+                "接続されている収集ノード",
+            ][..],
+        ),
+        (
+            "/equipment/edge-nodes/edge-node-01",
+            &[
+                "乾燥炉入口 BravePI",
+                "/equipment/devices/device-01",
+                "1件のセンサー",
+            ][..],
+        ),
+        (
+            "/equipment/devices/device-01",
+            &[
+                "factory-edge-01",
+                "乾燥炉入口 BravePI",
+                "/equipment/devices/device-01/sensors/signal-01",
+                "乾燥炉入口 温度",
             ][..],
         ),
         (
@@ -116,10 +136,24 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
         (
             "/equipment/devices/device-01/sensors/signal-01",
             &[
+                r#"class="sensor-detail-header""#,
+                r#"class="sensor-detail-settings sensor-setting-controls""#,
+                r#"class="content-section sensor-settings-panel""#,
+                r#"data-default-setting-tab="basic""#,
+                "計測ルール",
+                r#"data-preview-range"#,
+                r#"class="simulation-chart-wrap""#,
+                r#"data-signal-ref="signal-01""#,
                 r#"data-setting-tabs"#,
                 r#"data-signal-profile"#,
                 r#"id="rule-create""#,
                 r#"data-preview-chart"#,
+                r#"data-preview-feed-state"#,
+                r#"data-preview-checked-at"#,
+                "Edge Nodeから届いた実データ",
+                "/equipment/edge-nodes/edge-node-01",
+                "/equipment/devices/device-01",
+                "乾燥炉入口 BravePI",
             ][..],
         ),
         (
@@ -173,6 +207,119 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             assert!(html.contains(hook), "{path} missing {hook}");
         }
     }
+}
+
+#[tokio::test]
+async fn device_collection_without_a_selected_device_is_not_a_valid_console_page() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn numeric_sensor_rule_uses_the_settings_card_without_counter_actions() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices/device-01/sensors/signal-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains(r#"class="semantic-calibration""#));
+    assert!(html.contains(r#"class="semantic-rule-card""#));
+    assert!(html.contains("測定値"));
+    assert!(!html.contains("/counter-resets"));
+}
+
+#[tokio::test]
+async fn sensor_rules_expose_the_complete_change_processing_editor() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices/device-01/sensors/signal-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    for expected in [
+        r#"<option value="cumulative_counter">累積値</option>"#,
+        r#"data-semantic-detector"#,
+        r#"name="detector_mode""#,
+        r#"name="rise_threshold""#,
+        r#"name="fall_threshold""#,
+        r#"name="rise_debounce_seconds""#,
+        r#"name="fall_debounce_seconds""#,
+        r#"data-semantic-trigger"#,
+        r#"value="on_transition""#,
+        r#"value="on_notification""#,
+        "OFFからONへ変わったとき",
+    ] {
+        assert!(html.contains(expected), "missing {expected}");
+    }
+}
+
+#[tokio::test]
+async fn basic_sensor_settings_show_the_profile_form_without_an_inner_disclosure() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices/device-01/sensors/signal-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains(r#"<form id="sensor-profile""#));
+    assert!(!html.contains(r#"<details id="sensor-profile""#));
+    assert!(html.contains("<span>計測ルール</span>"));
+    assert!(!html.contains("<span>通常の値</span>"));
 }
 
 #[tokio::test]

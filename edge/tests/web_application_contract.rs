@@ -6,10 +6,10 @@ use iotkit_edge::{
     auth::password::Password,
     composition::{LoginPolicy, StorageWebApplication},
     semantics::{Detector, RuleSpec, SemanticKind, TriggerMode},
-    storage::{Storage, StorageProfile},
+    storage::{AcceptBatch, RawRecord, Storage, StorageProfile},
     web::{ApiMutation, ApiQuery, ConsoleRequest, WebApplication},
 };
-use iotkit_edge_custody_contract::DescriptorSnapshot;
+use iotkit_edge_custody_contract::{ActivationRequest, ActivationResult, DescriptorSnapshot};
 
 fn test_directory() -> tempfile::TempDir {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -140,6 +140,154 @@ async fn activation_response_does_not_expose_internal_command_identity() {
     assert!(response.body["edge_node_ref"].is_string());
     assert_eq!(response.body.get("activation_id"), None);
     assert_eq!(response.body.get("grant_revision"), None);
+}
+
+#[tokio::test]
+async fn console_distinguishes_discovery_from_registration_and_actual_reception() {
+    let directory = test_directory();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: PathBuf::from(directory.path()).join("console-state.db"),
+    })
+    .await
+    .unwrap();
+    storage
+        .initialize_edge_identity(1_720_000_000_000)
+        .await
+        .unwrap();
+    AccountService::new(storage.clone())
+        .create_initial_system_admin(
+            "owner",
+            "System Owner",
+            Password::new("long enough owner password").unwrap(),
+            1_720_000_000_000,
+        )
+        .await
+        .unwrap();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
+    let application = StorageWebApplication::new(storage.clone());
+    let principal = application
+        .login("owner", "long enough owner password")
+        .await
+        .unwrap()
+        .principal;
+
+    let discovered = application
+        .console(ConsoleRequest {
+            path: "/status".into(),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(discovered.registered_edge_node_count, 0);
+    assert_eq!(discovered.receiving_signal_count, 0);
+    assert_eq!(discovered.signals[0].status_label, "未受信");
+    assert_eq!(discovered.signals[0].value, "—");
+
+    let command = storage
+        .request_activation(&descriptor.edge_node_id, 2)
+        .await
+        .unwrap();
+    let request = ActivationRequest::decode(&command.payload_json).unwrap();
+    storage
+        .apply_activation_result(
+            &ActivationResult {
+                schema_version: 1,
+                activation_id: request.activation_id,
+                edge_id: request.edge_id,
+                edge_node_id: request.edge_node_id,
+                ledger_epoch: request.expected_ledger_epoch,
+                status: "applied".into(),
+                discard_through_reading_seq: 0,
+                first_publication_seq: 1,
+                applied_at: 3,
+            },
+            3,
+        )
+        .await
+        .unwrap();
+    let record = serde_json::json!({
+        "family": "measurement",
+        "schema_version": 1,
+        "epoch": "epoch-01",
+        "pub_seq": 1,
+        "series_key": descriptor.signals[0].series_key,
+        "values": [true],
+        "event_time": 4,
+        "received_at": 4
+    });
+    storage
+        .accept_batch(AcceptBatch {
+            edge_node_id: descriptor.edge_node_id,
+            ledger_epoch: descriptor.ledger_epoch,
+            publication_id: "console-state-1".into(),
+            received_at: 4,
+            records: vec![RawRecord::new(1, serde_json::to_vec(&record).unwrap()).unwrap()],
+        })
+        .await
+        .unwrap();
+
+    let active = application
+        .console(ConsoleRequest {
+            path: "/status".into(),
+            query: HashMap::new(),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(active.registered_edge_node_count, 1);
+    assert_eq!(active.receiving_signal_count, 1);
+    assert_eq!(active.signals[0].status_label, "受信中");
+    assert_eq!(active.signals[0].value, "ON");
+    assert_eq!(active.devices.len(), 1);
+    assert_eq!(active.edge_nodes[0].devices.len(), 1);
+
+    let signal_ref = active.signals[0].signal_ref.clone();
+    let mut params = HashMap::new();
+    params.insert("signal_ref".into(), signal_ref.clone());
+    let profile = serde_json::json!({
+        "display_name": "接点入力",
+        "display_sensor_type": "contact",
+        "display_value_kind": "boolean",
+        "display_unit_mode": "dimensionless",
+        "display_unit": "",
+        "decimal_places": "0"
+    });
+    let created = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/signals/{signal_ref}/profile"),
+                params: params.clone(),
+                expected_revision: None,
+            },
+            profile.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.body["revision"], 1);
+    let mut revised = profile;
+    revised["display_name"] = serde_json::json!("接点入力 更新後");
+    revised["revision"] = serde_json::json!("1");
+    let updated = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: format!("/console/signals/{signal_ref}/profile"),
+                params,
+                expected_revision: None,
+            },
+            revised,
+        )
+        .await
+        .expect("HTML form revision strings must update existing profiles");
+    assert_eq!(updated.body["revision"], 2);
 }
 
 #[tokio::test]
@@ -422,6 +570,53 @@ async fn mutation_dispatch_preserves_put_and_delete_semantics() {
             .unwrap()
             .active
     );
+}
+
+#[tokio::test]
+async fn semantic_rule_listing_preserves_the_current_change_processing_spec() {
+    let directory = test_directory();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: PathBuf::from(directory.path()).join("semantic-rule-spec.db"),
+    })
+    .await
+    .unwrap();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
+    let expected = RuleSpec {
+        kind: SemanticKind::CumulativeCounter,
+        detector: Detector {
+            mode: iotkit_edge::semantics::DetectorMode::HighActive,
+            rise_threshold: 12.5,
+            fall_threshold: 8.0,
+            rise_debounce_ms: 1_500,
+            fall_debounce_ms: 2_500,
+        },
+        trigger: TriggerMode::OnNotification,
+    };
+    let created = Semantics::new(storage.clone())
+        .create_rule(
+            SemanticRuleDraft {
+                edge_node_id: descriptor.edge_node_id,
+                series_key: descriptor.signals[0].series_key.clone(),
+                display_name: "Production count".into(),
+                spec: expected,
+            },
+            2,
+        )
+        .await
+        .unwrap();
+
+    let loaded = storage
+        .list_semantic_rules()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|rule| rule.rule_id == created.rule_id)
+        .unwrap();
+    assert_eq!(loaded.spec, expected);
 }
 
 #[tokio::test]

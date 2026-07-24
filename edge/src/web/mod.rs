@@ -148,8 +148,12 @@ pub struct ConsoleView {
     pub notice: String,
     pub page_error: String,
     pub edge_nodes: Vec<ConsoleEdgeNode>,
+    pub registered_edge_node_count: usize,
+    pub receiving_signal_count: usize,
+    pub devices: Vec<ConsoleDevice>,
     pub signals: Vec<ConsoleSignal>,
     pub selected_edge_node: Option<ConsoleEdgeNode>,
+    pub selected_device: Option<ConsoleDevice>,
     pub selected_signal: Option<ConsoleSignal>,
     pub history: Vec<RawHistoryRow>,
     pub history_chart_path: String,
@@ -170,6 +174,23 @@ pub struct ConsoleEdgeNode {
     pub state_label: String,
     pub state_class: String,
     pub can_activate: bool,
+    pub devices: Vec<ConsoleDevice>,
+    pub signal_count: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsoleDevice {
+    pub device_ref: String,
+    pub edge_node_ref: String,
+    pub edge_node_id: String,
+    pub name: String,
+    pub location: String,
+    pub state_label: String,
+    pub state_class: String,
+    pub identifier: String,
+    pub model_id: String,
+    pub revision: i64,
+    pub signals: Vec<ConsoleSignal>,
 }
 
 #[derive(Clone, Debug)]
@@ -179,11 +200,21 @@ pub struct ConsoleSignal {
     pub edge_node_id: String,
     pub name: String,
     pub sensor_type: String,
+    pub sensor_type_code: String,
     pub value: String,
     pub unit: String,
+    pub value_kind: String,
+    pub unit_mode: String,
+    pub decimal_places: i32,
+    pub revision: i64,
     pub status_label: String,
     pub status_class: String,
     pub profile_complete: bool,
+    pub input_is_boolean: bool,
+    pub calibration_scale: f64,
+    pub calibration_offset: f64,
+    pub calibration_revision: i64,
+    pub has_alarm_rules: bool,
     pub rules: Vec<ConsoleRule>,
 }
 
@@ -192,6 +223,16 @@ pub struct ConsoleRule {
     pub rule_id: String,
     pub display_name: String,
     pub kind: String,
+    pub kind_label: String,
+    pub count_summary: String,
+    pub revision: i64,
+    pub detector_mode: String,
+    pub detector_is_boolean: bool,
+    pub rise_threshold: f64,
+    pub fall_threshold: f64,
+    pub rise_debounce_seconds: f64,
+    pub fall_debounce_seconds: f64,
+    pub trigger: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1439,6 +1480,84 @@ pub mod test_support {
         }
     }
 
+    fn console_stub_edge_node(active: bool) -> ConsoleEdgeNode {
+        let signal = ConsoleSignal {
+            signal_ref: "signal-01".into(),
+            device_ref: "device-01".into(),
+            edge_node_id: "factory-edge-01".into(),
+            name: "乾燥炉入口 温度".into(),
+            sensor_type: "温度".into(),
+            sensor_type_code: "thermocouple".into(),
+            value: "28.5".into(),
+            unit: "℃".into(),
+            value_kind: "numeric".into(),
+            unit_mode: "unit".into(),
+            decimal_places: 1,
+            revision: 1,
+            status_label: "受信中".into(),
+            status_class: "receiving".into(),
+            profile_complete: true,
+            input_is_boolean: false,
+            calibration_scale: 1.0,
+            calibration_offset: 0.0,
+            calibration_revision: 1,
+            has_alarm_rules: false,
+            rules: Vec::new(),
+        };
+        let devices = if active {
+            vec![ConsoleDevice {
+                device_ref: "device-01".into(),
+                edge_node_ref: "edge-node-01".into(),
+                edge_node_id: "factory-edge-01".into(),
+                name: "乾燥炉入口 BravePI".into(),
+                location: "乾燥炉".into(),
+                state_label: "登録済み".into(),
+                state_class: "configured".into(),
+                identifier: "01234567".into(),
+                model_id: "bravepi".into(),
+                revision: 1,
+                signals: vec![signal],
+            }]
+        } else {
+            Vec::new()
+        };
+        ConsoleEdgeNode {
+            edge_node_ref: if active {
+                "edge-node-01".into()
+            } else {
+                "edge-node-02".into()
+            },
+            edge_node_id: if active {
+                "factory-edge-01".into()
+            } else {
+                "assembly-edge-02".into()
+            },
+            name: if active {
+                "factory-edge-01".into()
+            } else {
+                "assembly-edge-02".into()
+            },
+            location: if active {
+                "乾燥炉".into()
+            } else {
+                "組立ライン".into()
+            },
+            state_label: if active {
+                "登録済み".into()
+            } else {
+                "未登録".into()
+            },
+            state_class: if active {
+                "configured".into()
+            } else {
+                "needs-setup".into()
+            },
+            can_activate: !active,
+            signal_count: devices.iter().map(|device| device.signals.len()).sum(),
+            devices,
+        }
+    }
+
     #[async_trait]
     impl WebApplication for StubApplication {
         async fn login(&self, username: &str, password: &str) -> Result<LoginSession, WebError> {
@@ -1501,57 +1620,76 @@ pub mod test_support {
                 edge_node_id: "factory-edge-01".into(),
                 name: "乾燥炉入口 温度".into(),
                 sensor_type: "温度".into(),
+                sensor_type_code: "thermocouple".into(),
                 value: "28.5".into(),
                 unit: "℃".into(),
+                value_kind: "numeric".into(),
+                unit_mode: "unit".into(),
+                decimal_places: 1,
+                revision: 1,
                 status_label: "受信中".into(),
                 status_class: "receiving".into(),
                 profile_complete: true,
+                input_is_boolean: false,
+                calibration_scale: 1.0,
+                calibration_offset: 0.0,
+                calibration_revision: 1,
+                has_alarm_rules: false,
                 rules: vec![ConsoleRule {
                     rule_id: "rule-01".into(),
                     display_name: "現在温度".into(),
                     kind: "numeric".into(),
+                    kind_label: "測定値".into(),
+                    count_summary: String::new(),
+                    revision: 1,
+                    detector_mode: String::new(),
+                    detector_is_boolean: false,
+                    rise_threshold: 0.0,
+                    fall_threshold: 0.0,
+                    rise_debounce_seconds: 0.0,
+                    fall_debounce_seconds: 0.0,
+                    trigger: String::new(),
                 }],
             };
-            let selected_edge_node =
-                request
-                    .path
-                    .contains("/edge-nodes/edge-node-02")
-                    .then(|| ConsoleEdgeNode {
-                        edge_node_ref: "edge-node-02".into(),
-                        edge_node_id: "assembly-edge-02".into(),
-                        name: "assembly-edge-02".into(),
-                        location: "組立ライン".into(),
-                        state_label: "未登録".into(),
-                        state_class: "needs-setup".into(),
-                        can_activate: true,
-                    });
+            let selected_edge_node = request
+                .path
+                .contains("/edge-nodes/edge-node-02")
+                .then(|| console_stub_edge_node(false))
+                .or_else(|| {
+                    request
+                        .path
+                        .contains("/edge-nodes/edge-node-01")
+                        .then(|| console_stub_edge_node(true))
+                });
+            let device = ConsoleDevice {
+                device_ref: "device-01".into(),
+                edge_node_ref: "edge-node-01".into(),
+                edge_node_id: "factory-edge-01".into(),
+                name: "乾燥炉入口 BravePI".into(),
+                location: "乾燥炉".into(),
+                state_label: "登録済み".into(),
+                state_class: "configured".into(),
+                identifier: "01234567".into(),
+                model_id: "bravepi".into(),
+                revision: 1,
+                signals: vec![signal.clone()],
+            };
+            let selected_device = request
+                .path
+                .contains("/equipment/devices/device-01")
+                .then(|| device.clone());
             let selected_signal = request
                 .path
                 .contains("/sensors/signal-01")
                 .then(|| signal.clone());
             Ok(ConsoleView {
-                edge_nodes: vec![
-                    ConsoleEdgeNode {
-                        edge_node_ref: "edge-node-01".into(),
-                        edge_node_id: "factory-edge-01".into(),
-                        name: "factory-edge-01".into(),
-                        location: "乾燥炉".into(),
-                        state_label: "登録済み".into(),
-                        state_class: "configured".into(),
-                        can_activate: false,
-                    },
-                    ConsoleEdgeNode {
-                        edge_node_ref: "edge-node-02".into(),
-                        edge_node_id: "assembly-edge-02".into(),
-                        name: "assembly-edge-02".into(),
-                        location: "組立ライン".into(),
-                        state_label: "未登録".into(),
-                        state_class: "needs-setup".into(),
-                        can_activate: true,
-                    },
-                ],
+                edge_nodes: vec![console_stub_edge_node(true), console_stub_edge_node(false)],
+                registered_edge_node_count: 1,
+                receiving_signal_count: 1,
+                devices: vec![device],
                 signals: vec![signal],
                 selected_edge_node,
+                selected_device,
                 selected_signal,
                 history: vec![RawHistoryRow {
                     received_at: "1735689601000".into(),

@@ -26,9 +26,16 @@ pub struct SemanticRule {
     pub series_key: String,
     pub display_name: String,
     pub kind: SemanticKind,
+    pub spec: RuleSpec,
     pub series_id: String,
     pub revision: i64,
     pub active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SemanticCalibration {
+    pub calibration: Calibration,
+    pub revision: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]

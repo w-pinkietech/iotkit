@@ -36,6 +36,8 @@ function installPreviewDOM(): void {
       <span data-preview-range></span>
       <span data-preview-count></span>
       <span data-preview-message></span>
+      <span data-preview-feed-state>受信データを確認中</span>
+      <span data-preview-checked-at></span>
       <span data-preview-accessible-summary></span>
       <strong data-preview-current-value></strong>
       <span data-preview-current-received></span>
@@ -45,7 +47,7 @@ function installPreviewDOM(): void {
   document.cookie = "iotkit_edge_csrf=csrf-test";
 }
 
-function previewResponse(): Response {
+function previewResponse(receivedAt = 1000, input = 24.8): Response {
   return new Response(
     JSON.stringify({
       calibration: {
@@ -64,20 +66,20 @@ function previewResponse(): Response {
           plot_count: 1,
           points: [
             {
-              received_at: 1000,
-              input: 24.8,
-              input_min: 24.8,
-              input_max: 24.8,
-              calibrated: 24.8,
-              calibrated_min: 24.8,
-              calibrated_max: 24.8,
+              received_at: receivedAt,
+              input,
+              input_min: input,
+              input_max: input,
+              calibrated: input,
+              calibrated_min: input,
+              calibrated_max: input,
               sample_count: 1,
             },
           ],
         },
       ],
-      window_start: 1000,
-      window_end: 1000,
+      window_start: receivedAt,
+      window_end: receivedAt,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
@@ -110,6 +112,63 @@ describe("automatic mapping preview", () => {
     expect(
       document.querySelector("[data-source-current-received]")?.textContent,
     ).not.toBe("未受信");
+  });
+
+  it("distinguishes newly received data from a successful check with no new data", async () => {
+    vi.useFakeTimers();
+    installPreviewDOM();
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => previewResponse(1_000, 24.8))
+      .mockImplementationOnce(async () => previewResponse(2_000, 25.1))
+      .mockImplementation(async () => previewResponse(2_000, 25.1));
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-feed-state]")?.textContent,
+      ).toBe("実データを表示中"),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-feed-state]")?.textContent,
+      ).toBe("新しいデータを受信"),
+    );
+    expect(
+      document.querySelector("[data-preview-current-value]")?.textContent,
+    ).toBe("25.1");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-feed-state]")?.textContent,
+      ).toBe("新着なし"),
+    );
+    expect(
+      document.querySelector("[data-preview-checked-at]")?.textContent,
+    ).toMatch(/^確認 \d{2}:\d{2}:\d{2}$/);
+  });
+
+  it("shows that automatic reception checks are paused", async () => {
+    installPreviewDOM();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(previewResponse()));
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-feed-state]")?.textContent,
+      ).toBe("実データを表示中"),
+    );
+    document
+      .querySelector<HTMLButtonElement>("[data-preview-toggle]")!
+      .click();
+
+    expect(
+      document.querySelector("[data-preview-feed-state]")?.textContent,
+    ).toBe("更新停止中");
   });
 
   it("debounces edits and sends the complete multi-rule request", async () => {

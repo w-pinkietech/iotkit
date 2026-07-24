@@ -217,11 +217,67 @@ try {
   );
   assert(
     await devtools.evaluate(
-      "Boolean(document.querySelector('.health-banner') && document.querySelector('#signal-table')) && document.body.textContent.includes('contact_state') && document.body.textContent.includes('21.5')",
+      "Boolean(document.querySelector('.health-banner') && document.querySelector('#signal-table')) && document.body.textContent.includes('乾燥炉入口 温度') && document.body.textContent.includes('29') && document.body.textContent.includes('製造機 青色パトランプ') && document.body.textContent.includes('プレス機 稼働接点') && document.body.textContent.includes('登録済みの収集ノード')",
     ),
     "real stored sensor data was not server-rendered",
   );
+  const patrolLampHref = await devtools.evaluate(
+    `[...document.querySelectorAll("#signal-table tbody tr")]
+      .find((row) => row.textContent.includes("製造機 青色パトランプ"))
+      ?.querySelector("a")?.getAttribute("href")`,
+  );
+  await devtools.navigate(patrolLampHref);
+  assert(
+    await devtools.evaluate(
+      "document.body.textContent.includes('製造サイクル回数') && document.body.textContent.includes('OFF→ONで +1') && document.body.textContent.includes('ルールを削除')",
+    ),
+    "configured cumulative rule did not summarize how it counts or expose deletion",
+  );
+  await devtools.evaluate(`(() => {
+    const card = [...document.querySelectorAll(".semantic-rule-card")]
+      .find((candidate) => candidate.textContent.includes("製造サイクル回数"));
+    card.open = true;
+    const form = card.querySelector(".semantic-retire-form");
+    form.removeAttribute("data-confirm-message");
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && !document.body.textContent.includes('製造サイクル回数')",
+      ),
+    "semantic rule deletion",
+  );
 
+  await devtools.navigate("/equipment");
+  assert(
+    await devtools.evaluate(
+      "Boolean(document.querySelector('.equipment-overview') && document.querySelector(\"a[href^='/equipment/edge-nodes/']\")) && document.body.textContent.includes('1台')",
+    ),
+    "registered Edge Node inventory was not rendered",
+  );
+  const edgeNodeHref = await devtools.evaluate(
+    "document.querySelector(\"a[href^='/equipment/edge-nodes/']\")?.getAttribute('href')",
+  );
+  await devtools.navigate(edgeNodeHref);
+  assert(
+    await devtools.evaluate(
+      "document.body.textContent.includes('乾燥炉入口 熱電対変換器') && Boolean(document.querySelector(\"a[href^='/equipment/devices/']\"))",
+    ),
+    "device was not reachable from its Edge Node",
+  );
+  const deviceHref = await devtools.evaluate(
+    "document.querySelector(\"a[href^='/equipment/devices/']\")?.getAttribute('href')",
+  );
+  await devtools.navigate(deviceHref);
+  assert(
+    await devtools.evaluate(
+      "document.body.textContent.includes('乾燥炉入口 温度') && Boolean(document.querySelector(\"a[href*='/sensors/']\"))",
+    ),
+    "sensor was not reachable from its device",
+  );
+
+  await devtools.navigate("/status");
   const signalHref = await devtools.evaluate(
     "document.querySelector('#signal-table tbody a')?.getAttribute('href')",
   );
@@ -229,26 +285,67 @@ try {
   await devtools.navigate(signalHref);
   assert(
     await devtools.evaluate(
-      "document.body.textContent.includes('稼働状態') && Boolean(document.querySelector('.semantic-form'))",
+      "document.body.textContent.includes('現在温度') && Boolean(document.querySelector('.semantic-form'))",
     ),
     "stored semantic rule was not rendered",
+  );
+  try {
+    await waitFor(
+      () =>
+        devtools.evaluate(
+          "document.querySelector('[data-preview-current-received]')?.textContent.includes('最終受信')",
+        ),
+      "fresh fixture receive time",
+    );
+  } catch (error) {
+    const diagnostic = await devtools.evaluate(
+      "JSON.stringify({received: document.querySelector('[data-preview-current-received]')?.textContent, message: document.querySelector('[data-preview-message]')?.textContent, range: document.querySelector('[data-preview-range]')?.textContent, count: document.querySelector('[data-preview-count]')?.textContent, location: location.href})",
+    );
+    throw new Error(`${error}\nPage state: ${diagnostic}`);
+  }
+  assert(
+    await devtools.evaluate(
+      "!/\\d{3,}分前/.test(document.querySelector('[data-preview-current-received]')?.textContent ?? '')",
+    ),
+    "fresh Console fixture was rendered as stale historical data",
+  );
+  await devtools.evaluate(`(() => {
+    const disclosure = document.querySelector("#rule-create");
+    disclosure.open = true;
+    const kind = disclosure.querySelector("[data-semantic-kind]");
+    kind.value = "cumulative_counter";
+    kind.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+  assert(
+    await devtools.evaluate(
+      "Boolean(!document.querySelector('#rule-create [data-semantic-detector]')?.hidden && !document.querySelector('#rule-create [data-semantic-trigger]')?.hidden && document.querySelector('#rule-create [name=trigger]')?.value === 'on_transition')",
+    ),
+    "cumulative value change-processing settings were not revealed",
   );
   await devtools.evaluate(`(() => {
     const form = document.querySelector("[data-signal-profile]");
     form.elements.namedItem("display_name").value = "第一ボイラー温度";
-    form.elements.namedItem("display_sensor_type").value = "temperature";
+    form.elements.namedItem("display_sensor_type").value = "thermocouple";
     form.elements.namedItem("display_value_kind").value = "numeric";
+    form.elements.namedItem("display_unit_mode").value = "unit";
     form.elements.namedItem("display_unit").value = "°C";
     form.elements.namedItem("decimal_places").value = "1";
     form.requestSubmit();
   })()`);
-  await waitFor(
-    () =>
-      devtools.evaluate(
-        "location.search.includes('saved=1') && document.body.textContent.includes('第一ボイラー温度')",
-      ),
-    "signal presentation profile save",
-  );
+  try {
+    await waitFor(
+      () =>
+        devtools.evaluate(
+          "location.search.includes('saved=1') && document.body.textContent.includes('第一ボイラー温度')",
+        ),
+      "signal presentation profile save",
+    );
+  } catch (error) {
+    const diagnostic = await devtools.evaluate(
+      "JSON.stringify({location: location.href, text: document.body.textContent.slice(0, 1000)})",
+    );
+    throw new Error(`${error}\nPage state: ${diagnostic}`);
+  }
   await devtools.navigate(signalHref);
   assert(
     await devtools.evaluate(
@@ -258,13 +355,13 @@ try {
   );
   await devtools.evaluate(`(() => {
     const form = document.querySelector(".semantic-form");
-    form.elements.namedItem("display_name").value = "稼働状態（補正済み）";
+    form.elements.namedItem("display_name").value = "補正後温度";
     form.requestSubmit();
   })()`);
   await waitFor(
     () =>
       devtools.evaluate(
-        "location.search.includes('saved=1') && document.body.textContent.includes('稼働状態（補正済み）')",
+        "location.search.includes('saved=1') && document.body.textContent.includes('補正後温度')",
       ),
     "semantic rule mutation",
   );
@@ -282,7 +379,7 @@ try {
   await devtools.navigate("/output");
   assert(
     await devtools.evaluate(
-      "document.body.textContent.includes('IoTKit MQTT 出力') && document.body.textContent.includes('稼働状態（補正済み）') && Boolean(document.querySelector('.output-stop-form'))",
+      "document.body.textContent.includes('IoTKit MQTT 出力') && document.body.textContent.includes('補正後温度') && Boolean(document.querySelector('.output-stop-form'))",
     ),
     "stored output profile and route were not rendered",
   );
@@ -308,7 +405,7 @@ try {
   for (const [path, expression, description] of [
     [
       "/equipment",
-      "Boolean(document.querySelector('.equipment-list'))",
+      "Boolean(document.querySelector('.equipment-overview'))",
       "equipment inventory",
     ],
     [

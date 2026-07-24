@@ -324,6 +324,22 @@ function renderPreviewChart(svg: SVGSVGElement, payload: PreviewBody): void {
     d: path("calibrated"),
     class: "chart-line chart-line-result",
   });
+  const latestPoint = points.at(-1);
+  if (latestPoint) {
+    addSVG(svg, "circle", {
+      cx: x(points.length - 1),
+      cy: y(latestPoint.calibrated),
+      r: 5,
+      class: "chart-latest-point",
+    });
+    const latestLabel = addSVG(svg, "text", {
+      x: Math.min(width - right - 4, x(points.length - 1) - 8),
+      y: Math.max(top + 13, y(latestPoint.calibrated) - 10),
+      "text-anchor": "end",
+      class: "chart-latest-label",
+    });
+    latestLabel.textContent = "最新";
+  }
 
   if (payload.kind === "cumulative_counter") {
     const maxIncrement = Math.max(
@@ -487,6 +503,8 @@ function initializePreview(panel: HTMLElement): void {
   const range = query<HTMLElement>("[data-preview-range]", panel);
   const count = query<HTMLElement>("[data-preview-count]", panel);
   const message = query<HTMLElement>("[data-preview-message]", panel);
+  const feedState = query<HTMLElement>("[data-preview-feed-state]", panel);
+  const checkedAt = query<HTMLElement>("[data-preview-checked-at]", panel);
   const accessibleSummary = query<HTMLElement>(
     "[data-preview-accessible-summary]",
     panel,
@@ -519,6 +537,23 @@ function initializePreview(panel: HTMLElement): void {
   let debounce: number | undefined;
   let previewUnavailable = false;
   let paused = false;
+  let lastSeenReceivedAt: number | undefined;
+
+  const setFeedState = (state: string): void => {
+    if (feedState) setText(feedState, state);
+  };
+
+  const markChecked = (): void => {
+    if (!checkedAt) return;
+    setText(
+      checkedAt,
+      `確認 ${new Date().toLocaleTimeString("ja-JP", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })}`,
+    );
+  };
 
   const refresh = async (): Promise<void> => {
     controller?.abort();
@@ -550,17 +585,20 @@ function initializePreview(panel: HTMLElement): void {
           ?.textContent?.trim();
         if (result.status === 404 && !forms[0]) {
           previewUnavailable = true;
+          setFeedState("表示するルールがありません");
           setText(
             message,
             "値の変換が設定されると、ここに設定結果を表示します。",
           );
         } else if (fieldLabel && invalidField) {
+          setFeedState("設定内容を確認してください");
           showFieldError(invalidField, fieldLabel);
           setText(message,
             `${fieldLabel}を確認してください。` +
             "最後に確認できたグラフを表示しています。",
           );
         } else {
+          setFeedState("更新を確認できません");
           setText(
             message,
             "設定内容を確認してください。最後に確認できたグラフを表示しています。",
@@ -572,6 +610,7 @@ function initializePreview(panel: HTMLElement): void {
       const selectedRuleID = ruleCards.find((card) => card.open)?.dataset.ruleId;
       const payload = selectedPreview(result.value, selectedRuleID);
       if (!payload) {
+        setFeedState("表示するルールがありません");
         setText(message, "確認できるルールがありません。");
         return;
       }
@@ -579,6 +618,18 @@ function initializePreview(panel: HTMLElement): void {
       updateAccessibleSummary(accessibleSummary, payload);
       const points = payload.points ?? [];
       const latest = points.at(-1);
+      markChecked();
+      if (!latest) {
+        setFeedState("受信待ち");
+      } else if (lastSeenReceivedAt === undefined) {
+        setFeedState("実データを表示中");
+        lastSeenReceivedAt = latest.received_at;
+      } else if (latest.received_at > lastSeenReceivedAt) {
+        setFeedState("新しいデータを受信");
+        lastSeenReceivedAt = latest.received_at;
+      } else {
+        setFeedState("新着なし");
+      }
       if (latest && currentValue) {
         currentValue.textContent = formatCurrentValue(
           latest.input,
@@ -657,6 +708,7 @@ function initializePreview(panel: HTMLElement): void {
       }
     } catch (error: unknown) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setFeedState("更新を確認できません");
         setText(
           message,
           "設定結果を更新できません。データ受信には影響ありません。",
@@ -687,7 +739,12 @@ function initializePreview(panel: HTMLElement): void {
     const state = query<HTMLElement>("[data-preview-toggle-state]", toggle);
     if (state) state.textContent = paused ? "OFF" : "ON";
     panel.classList.toggle("preview-paused", paused);
-    if (!paused) void refresh();
+    if (paused) {
+      setFeedState("更新停止中");
+    } else {
+      setFeedState("受信データを確認中");
+      void refresh();
+    }
   });
   void refresh();
   window.setInterval(() => {

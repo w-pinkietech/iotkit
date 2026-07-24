@@ -649,6 +649,22 @@
       d: path("calibrated"),
       class: "chart-line chart-line-result"
     });
+    const latestPoint = points.at(-1);
+    if (latestPoint) {
+      addSVG(svg, "circle", {
+        cx: x(points.length - 1),
+        cy: y(latestPoint.calibrated),
+        r: 5,
+        class: "chart-latest-point"
+      });
+      const latestLabel = addSVG(svg, "text", {
+        x: Math.min(width - right - 4, x(points.length - 1) - 8),
+        y: Math.max(top + 13, y(latestPoint.calibrated) - 10),
+        "text-anchor": "end",
+        class: "chart-latest-label"
+      });
+      latestLabel.textContent = "\u6700\u65B0";
+    }
     if (payload.kind === "cumulative_counter") {
       const maxIncrement = Math.max(
         1,
@@ -771,6 +787,8 @@
     const range = query("[data-preview-range]", panel);
     const count = query("[data-preview-count]", panel);
     const message = query("[data-preview-message]", panel);
+    const feedState = query("[data-preview-feed-state]", panel);
+    const checkedAt = query("[data-preview-checked-at]", panel);
     const accessibleSummary = query(
       "[data-preview-accessible-summary]",
       panel
@@ -798,6 +816,21 @@
     let debounce;
     let previewUnavailable = false;
     let paused = false;
+    let lastSeenReceivedAt;
+    const setFeedState = (state) => {
+      if (feedState) setText(feedState, state);
+    };
+    const markChecked = () => {
+      if (!checkedAt) return;
+      setText(
+        checkedAt,
+        `\u78BA\u8A8D ${(/* @__PURE__ */ new Date()).toLocaleTimeString("ja-JP", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        })}`
+      );
+    };
     const refresh = async () => {
       controller?.abort();
       controller = new AbortController();
@@ -821,17 +854,20 @@
           const fieldLabel = invalidField?.closest("label")?.querySelector(":scope > span")?.textContent?.trim();
           if (result.status === 404 && !forms[0]) {
             previewUnavailable = true;
+            setFeedState("\u8868\u793A\u3059\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093");
             setText(
               message,
               "\u5024\u306E\u5909\u63DB\u304C\u8A2D\u5B9A\u3055\u308C\u308B\u3068\u3001\u3053\u3053\u306B\u8A2D\u5B9A\u7D50\u679C\u3092\u8868\u793A\u3057\u307E\u3059\u3002"
             );
           } else if (fieldLabel && invalidField) {
+            setFeedState("\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
             showFieldError(invalidField, fieldLabel);
             setText(
               message,
               `${fieldLabel}\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u6700\u5F8C\u306B\u78BA\u8A8D\u3067\u304D\u305F\u30B0\u30E9\u30D5\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
             );
           } else {
+            setFeedState("\u66F4\u65B0\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093");
             setText(
               message,
               "\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u6700\u5F8C\u306B\u78BA\u8A8D\u3067\u304D\u305F\u30B0\u30E9\u30D5\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002"
@@ -842,6 +878,7 @@
         const selectedRuleID = ruleCards.find((card) => card.open)?.dataset.ruleId;
         const payload = selectedPreview(result.value, selectedRuleID);
         if (!payload) {
+          setFeedState("\u8868\u793A\u3059\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093");
           setText(message, "\u78BA\u8A8D\u3067\u304D\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002");
           return;
         }
@@ -849,6 +886,18 @@
         updateAccessibleSummary(accessibleSummary, payload);
         const points = payload.points ?? [];
         const latest = points.at(-1);
+        markChecked();
+        if (!latest) {
+          setFeedState("\u53D7\u4FE1\u5F85\u3061");
+        } else if (lastSeenReceivedAt === void 0) {
+          setFeedState("\u5B9F\u30C7\u30FC\u30BF\u3092\u8868\u793A\u4E2D");
+          lastSeenReceivedAt = latest.received_at;
+        } else if (latest.received_at > lastSeenReceivedAt) {
+          setFeedState("\u65B0\u3057\u3044\u30C7\u30FC\u30BF\u3092\u53D7\u4FE1");
+          lastSeenReceivedAt = latest.received_at;
+        } else {
+          setFeedState("\u65B0\u7740\u306A\u3057");
+        }
         if (latest && currentValue) {
           currentValue.textContent = formatCurrentValue(
             latest.input,
@@ -909,6 +958,7 @@
         }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setFeedState("\u66F4\u65B0\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093");
           setText(
             message,
             "\u8A2D\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u30C7\u30FC\u30BF\u53D7\u4FE1\u306B\u306F\u5F71\u97FF\u3042\u308A\u307E\u305B\u3093\u3002"
@@ -938,7 +988,12 @@
       const state = query("[data-preview-toggle-state]", toggle);
       if (state) state.textContent = paused ? "OFF" : "ON";
       panel.classList.toggle("preview-paused", paused);
-      if (!paused) void refresh();
+      if (paused) {
+        setFeedState("\u66F4\u65B0\u505C\u6B62\u4E2D");
+      } else {
+        setFeedState("\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u78BA\u8A8D\u4E2D");
+        void refresh();
+      }
     });
     void refresh();
     window.setInterval(() => {

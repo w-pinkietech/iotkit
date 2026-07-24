@@ -135,6 +135,8 @@ where
         series_key: row.try_get("series_key")?,
         display_name: row.try_get("display_name")?,
         kind: parse_semantic_kind(&row.try_get::<String, _>("kind")?)?,
+        spec: serde_json::from_str(&row.try_get::<String, _>("spec_json_text")?)
+            .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?,
         series_id: row.try_get("series_id")?,
         revision: row.try_get("revision")?,
         active: row.try_get("active")?,

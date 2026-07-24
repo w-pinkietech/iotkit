@@ -655,6 +655,14 @@ tr.selected-route td { background: var(--teal-soft); }
 .simulation-live b { min-width: 28px; padding: 2px 6px; border-radius: 999px; color: #fff; background: var(--teal-dark); font-size: .68rem; letter-spacing: .04em; }
 .preview-paused .simulation-live i { background: var(--muted); box-shadow: 0 0 0 4px var(--canvas); }
 .preview-paused .simulation-live b { background: var(--muted); }
+.simulation-feed-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -3px 0 12px; padding: 7px 10px; border: 1px solid #dce8e8; border-radius: 8px; background: #f4fafa; }
+.simulation-feed-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--teal-dark); font-size: .74rem; }
+.simulation-feed-state i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px var(--teal-soft); }
+.simulation-feed-state strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simulation-feed-status > small { flex: 0 0 auto; color: var(--muted); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .68rem; }
+.preview-paused .simulation-feed-status { border-color: var(--line); background: var(--canvas); }
+.preview-paused .simulation-feed-state { color: var(--muted); }
+.preview-paused .simulation-feed-state i { background: var(--muted); box-shadow: 0 0 0 3px #e4e7eb; }
 .sensor-preview-current {
   position: relative;
   display: grid;
@@ -685,6 +693,8 @@ tr.selected-route td { background: var(--teal-soft); }
 .chart-line-raw { stroke: #667085; stroke-width: 1.7; }
 .chart-line-result { stroke: var(--teal-dark); stroke-width: 2.5; }
 .chart-line-counter { stroke: #075c61; stroke-width: 2; stroke-dasharray: 4 3; }
+.chart-latest-point { fill: #fff; stroke: var(--teal-dark); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.chart-latest-label { fill: var(--teal-dark); font-family: inherit; font-size: 11px; font-weight: 700; }
 .chart-counter-label { fill: #075c61; font-family: inherit; font-size: 12px; font-weight: 700; }
 .chart-threshold { stroke: #9a4b08; stroke-width: 1.7; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
 .chart-threshold-label { fill: #9a4b08; font-family: inherit; font-size: 12px; font-weight: 650; }

@@ -14,7 +14,6 @@ use std::{
 
 use async_trait::async_trait;
 use axum::http::StatusCode;
-use iotkit_output_adapter_api::ObservationValue;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
@@ -38,10 +37,10 @@ use crate::{
         AuditActor, DescriptorSignal, EdgeNodeState, RawHistoryQuery, Storage, StorageError,
     },
     web::{
-        ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleBinding, ConsoleEdgeNode,
-        ConsoleOutput, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage, ConsoleView,
-        HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal, RawHistoryRow,
-        SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
+        ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleBinding, ConsoleDevice,
+        ConsoleEdgeNode, ConsoleOutput, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage,
+        ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal,
+        RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
     },
 };
 
@@ -213,74 +212,115 @@ impl StorageWebApplication {
     async fn console_signals(&self) -> Result<Vec<ConsoleSignal>, WebError> {
         let inventory = self.storage.inventory_signals().await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
-        let mut latest = HashMap::new();
-        for rule in rules.iter().filter(|rule| rule.active) {
-            if let Some(observation) = self
+        let mut signals = Vec::with_capacity(inventory.len());
+        for signal in inventory {
+            let latest = self
                 .storage
-                .latest_semantic_observation(&rule.rule_id)
+                .recent_signal_inputs(&signal.signal_ref, 1)
                 .await
                 .map_err(internal)?
-            {
-                latest.insert(
-                    rule.signal_ref.clone(),
-                    observation_value(&observation.value),
-                );
-            }
+                .into_iter()
+                .next();
+            let value = latest
+                .as_ref()
+                .and_then(|item| serde_json::from_slice::<Value>(&item.record_json).ok())
+                .and_then(|record| record.get("values").and_then(Value::as_array).cloned())
+                .and_then(|values| values.into_iter().next())
+                .map(|value| display_raw_value(&value, signal.decimal_places))
+                .unwrap_or_else(|| "—".into());
+            let has_received_value = latest.is_some();
+            let sensor_type_code = signal.display_sensor_type.clone();
+            let sensor_type = if sensor_type_code.is_empty() {
+                format!("{}（種類未設定）", signal.measurement_key)
+            } else {
+                sensor_type_label(&sensor_type_code, &signal.display_sensor_type_label).into()
+            };
+            let input_is_boolean = matches!(
+                if signal.display_value_kind.is_empty() {
+                    signal.value_type.as_str()
+                } else {
+                    signal.display_value_kind.as_str()
+                },
+                "bool" | "boolean"
+            );
+            let calibration = self
+                .storage
+                .semantic_calibration(&signal.signal_ref)
+                .await
+                .ok();
+            let signal_rules: Vec<ConsoleRule> = rules
+                .iter()
+                .filter(|rule| {
+                    rule.edge_node_id == signal.edge_node_id
+                        && rule.series_key == signal.series_key
+                        && rule.active
+                })
+                .map(|rule| ConsoleRule {
+                    rule_id: rule.rule_id.clone(),
+                    display_name: rule.display_name.clone(),
+                    kind: semantic_kind(rule.kind).into(),
+                    kind_label: semantic_kind_label(rule.kind).into(),
+                    count_summary: count_summary(rule.spec.trigger).into(),
+                    revision: rule.revision,
+                    detector_mode: detector_mode(rule.spec.detector.mode).into(),
+                    detector_is_boolean: matches!(
+                        rule.spec.detector.mode,
+                        DetectorMode::BooleanHighActive | DetectorMode::BooleanLowActive
+                    ),
+                    rise_threshold: rule.spec.detector.rise_threshold,
+                    fall_threshold: rule.spec.detector.fall_threshold,
+                    rise_debounce_seconds: rule.spec.detector.rise_debounce_ms as f64 / 1_000.0,
+                    fall_debounce_seconds: rule.spec.detector.fall_debounce_ms as f64 / 1_000.0,
+                    trigger: trigger_mode(rule.spec.trigger).into(),
+                })
+                .collect();
+            signals.push(ConsoleSignal {
+                signal_ref: signal.signal_ref,
+                device_ref: signal.device_ref,
+                edge_node_id: signal.edge_node_id,
+                name: if signal.display_name.is_empty() {
+                    signal.measurement_key
+                } else {
+                    signal.display_name
+                },
+                sensor_type,
+                sensor_type_code,
+                value,
+                unit: if signal.display_unit_mode == "dimensionless" {
+                    String::new()
+                } else if signal.display_unit.is_empty() {
+                    signal.unit
+                } else {
+                    signal.display_unit
+                },
+                value_kind: if signal.display_value_kind.is_empty() {
+                    signal.value_type
+                } else {
+                    signal.display_value_kind
+                },
+                unit_mode: signal.display_unit_mode,
+                decimal_places: signal.decimal_places,
+                revision: signal.profile_revision.unwrap_or_default(),
+                status_label: if has_received_value {
+                    "受信中".into()
+                } else {
+                    "未受信".into()
+                },
+                status_class: if has_received_value {
+                    "receiving".into()
+                } else {
+                    "never".into()
+                },
+                profile_complete: signal.profile_revision.is_some(),
+                input_is_boolean,
+                calibration_scale: calibration.map_or(1.0, |value| value.calibration.scale),
+                calibration_offset: calibration.map_or(0.0, |value| value.calibration.offset),
+                calibration_revision: calibration.map_or(1, |value| value.revision),
+                has_alarm_rules: signal_rules.iter().any(|rule| rule.kind == "alarm"),
+                rules: signal_rules,
+            });
         }
-        Ok(inventory
-            .into_iter()
-            .map(|signal| {
-                let signal_rules: Vec<_> = rules
-                    .iter()
-                    .filter(|rule| {
-                        rule.edge_node_id == signal.edge_node_id
-                            && rule.series_key == signal.series_key
-                            && rule.active
-                    })
-                    .map(|rule| ConsoleRule {
-                        rule_id: rule.rule_id.clone(),
-                        display_name: rule.display_name.clone(),
-                        kind: semantic_kind(rule.kind).into(),
-                    })
-                    .collect();
-                ConsoleSignal {
-                    signal_ref: signal.signal_ref.clone(),
-                    device_ref: signal.device_ref,
-                    edge_node_id: signal.edge_node_id,
-                    name: if signal.display_name.is_empty() {
-                        signal.measurement_key
-                    } else {
-                        signal.display_name
-                    },
-                    sensor_type: if signal.display_sensor_type.is_empty() {
-                        signal.variant
-                    } else {
-                        signal.display_sensor_type
-                    },
-                    value: latest
-                        .get(&signal.signal_ref)
-                        .cloned()
-                        .unwrap_or_else(|| "—".into()),
-                    unit: if signal.display_unit.is_empty() {
-                        signal.unit
-                    } else {
-                        signal.display_unit
-                    },
-                    status_label: if signal.presence == "current" {
-                        "受信中".into()
-                    } else {
-                        "未受信".into()
-                    },
-                    status_class: if signal.presence == "current" {
-                        "configured".into()
-                    } else {
-                        "stale".into()
-                    },
-                    profile_complete: signal.profile_revision.is_some(),
-                    rules: signal_rules,
-                }
-            })
-            .collect())
+        Ok(signals)
     }
 
     async fn console_outputs(&self) -> Result<Vec<ConsoleOutput>, WebError> {
@@ -433,17 +473,97 @@ impl WebApplication for StorageWebApplication {
 
     async fn console(&self, request: ConsoleRequest) -> Result<ConsoleView, WebError> {
         let nodes = self.storage.list_edge_nodes(100).await.map_err(internal)?;
-        let edge_nodes: Vec<_> = nodes.iter().map(console_edge_node).collect();
-        let selected_edge_node = request
-            .path
-            .strip_prefix("/equipment/edge-nodes/")
-            .and_then(|reference| {
+        let signals = self.console_signals().await?;
+        let inventory_devices = self.storage.inventory_devices().await.map_err(internal)?;
+        let mut devices = Vec::with_capacity(inventory_devices.len());
+        for device in inventory_devices {
+            let edge_node_ref = nodes
+                .iter()
+                .find(|node| node.edge_node_id == device.edge_node_id)
+                .map(|node| node.edge_node_ref.clone())
+                .unwrap_or_default();
+            let device_signals = signals
+                .iter()
+                .filter(|signal| signal.device_ref == device.device_ref)
+                .cloned()
+                .collect();
+            devices.push(ConsoleDevice {
+                device_ref: device.device_ref,
+                edge_node_ref,
+                edge_node_id: device.edge_node_id,
+                name: if device.display_name.is_empty() {
+                    if device.model_id.is_empty() {
+                        "名前未設定のデバイス".into()
+                    } else {
+                        device.model_id.clone()
+                    }
+                } else {
+                    device.display_name
+                },
+                location: if device.location.is_empty() {
+                    "設置場所 未設定".into()
+                } else {
+                    device.location
+                },
+                state_label: if device.profile_revision.is_some() {
+                    "登録済み".into()
+                } else {
+                    "要設定".into()
+                },
+                state_class: if device.profile_revision.is_some() {
+                    "configured".into()
+                } else {
+                    "needs-setup".into()
+                },
+                identifier: device.identifier,
+                model_id: device.model_id,
+                revision: device.profile_revision.unwrap_or_default(),
+                signals: device_signals,
+            });
+        }
+        let edge_nodes = nodes
+            .iter()
+            .map(|node| {
+                let child_devices: Vec<_> = devices
+                    .iter()
+                    .filter(|device| device.edge_node_id == node.edge_node_id)
+                    .cloned()
+                    .collect();
+                let signal_count = child_devices
+                    .iter()
+                    .map(|device| device.signals.len())
+                    .sum();
+                console_edge_node_with_devices(node, child_devices, signal_count)
+            })
+            .collect::<Vec<_>>();
+        let selected_edge_node = if let Some(reference) =
+            request.path.strip_prefix("/equipment/edge-nodes/")
+        {
+            Some(
                 edge_nodes
                     .iter()
                     .find(|node| node.edge_node_ref == reference || node.edge_node_id == reference)
                     .cloned()
-            });
-        let signals = self.console_signals().await?;
+                    .ok_or_else(not_found_error)?,
+            )
+        } else {
+            None
+        };
+        let selected_device =
+            if let Some(reference) = request.path.strip_prefix("/equipment/devices/") {
+                let reference = reference
+                    .split_once("/sensors/")
+                    .map_or(reference, |(device_ref, _)| device_ref);
+                Some(
+                    devices
+                        .iter()
+                        .find(|device| device.device_ref == reference)
+                        .cloned()
+                        .ok_or_else(not_found_error)?,
+                )
+            } else {
+                None
+            };
         let selected_signal = request
             .path
             .strip_prefix("/sensors/")
@@ -459,6 +579,14 @@ impl WebApplication for StorageWebApplication {
                     .find(|signal| signal.signal_ref == reference)
                     .cloned()
             });
+        if request.path.contains("/sensors/") && selected_signal.is_none() {
+            return Err(not_found_error());
+        }
+        if let (Some(device), Some(signal)) = (&selected_device, &selected_signal)
+            && signal.device_ref != device.device_ref
+        {
+            return Err(not_found_error());
+        }
         let accounts = if request.principal.role == "system_admin" {
             self.storage
                 .list_accounts(100)
@@ -502,9 +630,19 @@ impl WebApplication for StorageWebApplication {
             Vec::new()
         };
         Ok(ConsoleView {
+            registered_edge_node_count: nodes
+                .iter()
+                .filter(|node| node.state == EdgeNodeState::Active)
+                .count(),
+            receiving_signal_count: signals
+                .iter()
+                .filter(|signal| signal.status_class == "receiving")
+                .count(),
             edge_nodes,
+            devices,
             signals,
             selected_edge_node,
+            selected_device,
             selected_signal,
             history,
             outputs: self.console_outputs().await?,
@@ -900,11 +1038,11 @@ impl WebApplication for StorageWebApplication {
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .into(),
-                            decimal_places: required_i64(&body, "decimal_places")?
+                            decimal_places: required_nonnegative_i64(&body, "decimal_places")?
                                 .try_into()
                                 .map_err(|_| bad_request("decimal_places is out of range"))?,
                         },
-                        body.get("revision").and_then(Value::as_i64),
+                        optional_i64(&body, "revision")?,
                         now(),
                     )
                     .await
@@ -1024,7 +1162,7 @@ impl WebApplication for StorageWebApplication {
                         display_name: required_text(&body, "display_name")?.into(),
                         location: required_text(&body, "location")?.into(),
                     },
-                    body.get("revision").and_then(Value::as_i64),
+                    optional_i64(&body, "revision")?,
                     now(),
                 )
                 .await
@@ -1408,6 +1546,39 @@ fn required_i64(body: &Value, field: &'static str) -> Result<i64, WebError> {
         })
 }
 
+fn required_nonnegative_i64(body: &Value, field: &'static str) -> Result<i64, WebError> {
+    body.get(field)
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+        })
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| {
+            WebError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("{field} must be zero or greater"),
+            )
+            .field(field)
+        })
+}
+
+fn optional_i64(body: &Value, field: &'static str) -> Result<Option<i64>, WebError> {
+    let Some(value) = body.get(field) else {
+        return Ok(None);
+    };
+    if value.as_str().is_some_and(str::is_empty) {
+        return Ok(None);
+    }
+    value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+        .filter(|value| *value > 0)
+        .map(Some)
+        .ok_or_else(|| bad_request(format!("{field} must be a positive integer")))
+}
+
 fn account_json(account: &crate::storage::Account) -> Value {
     json!({
         "account_ref": account.account_ref,
@@ -1423,6 +1594,14 @@ fn account_json(account: &crate::storage::Account) -> Value {
 }
 
 fn console_edge_node(node: &crate::storage::EdgeNode) -> ConsoleEdgeNode {
+    console_edge_node_with_devices(node, Vec::new(), 0)
+}
+
+fn console_edge_node_with_devices(
+    node: &crate::storage::EdgeNode,
+    devices: Vec<ConsoleDevice>,
+    signal_count: usize,
+) -> ConsoleEdgeNode {
     let (state_label, state_class, can_activate) = match node.state {
         EdgeNodeState::Discovered => ("未登録", "needs-setup", true),
         EdgeNodeState::Activating => ("登録処理中", "stale", false),
@@ -1437,6 +1616,8 @@ fn console_edge_node(node: &crate::storage::EdgeNode) -> ConsoleEdgeNode {
         state_label: state_label.into(),
         state_class: state_class.into(),
         can_activate,
+        devices,
+        signal_count,
     }
 }
 
@@ -1502,11 +1683,47 @@ fn semantic_kind(kind: SemanticKind) -> &'static str {
     }
 }
 
+fn semantic_kind_label(kind: SemanticKind) -> &'static str {
+    match kind {
+        SemanticKind::Numeric => "測定値",
+        SemanticKind::Boolean => "ON / OFF",
+        SemanticKind::CumulativeCounter => "累積値",
+        SemanticKind::Alarm => "異常検知",
+    }
+}
+
+fn detector_mode(mode: DetectorMode) -> &'static str {
+    match mode {
+        DetectorMode::None => "",
+        DetectorMode::BooleanHighActive => "boolean_high_active",
+        DetectorMode::BooleanLowActive => "boolean_low_active",
+        DetectorMode::HighActive => "high_active",
+        DetectorMode::LowActive => "low_active",
+    }
+}
+
+fn trigger_mode(mode: TriggerMode) -> &'static str {
+    match mode {
+        TriggerMode::None => "",
+        TriggerMode::OnTransition => "on_transition",
+        TriggerMode::OnNotification => "on_notification",
+    }
+}
+
+fn count_summary(mode: TriggerMode) -> &'static str {
+    match mode {
+        TriggerMode::OnTransition => "OFF→ONで +1",
+        TriggerMode::OnNotification => "条件一致の受信ごとに +1",
+        TriggerMode::None => "",
+    }
+}
+
 fn rule_json(rule: crate::application::semantics::SemanticRule) -> Value {
     json!({
         "rule_id": rule.rule_id, "signal_ref": rule.signal_ref,
         "edge_node_id": rule.edge_node_id, "series_key": rule.series_key,
         "display_name": rule.display_name, "kind": semantic_kind(rule.kind),
+        "spec": rule.spec,
         "series_id": rule.series_id, "revision": rule.revision, "active": rule.active
     })
 }
@@ -1633,15 +1850,37 @@ fn not_found_error() -> WebError {
     WebError::new(StatusCode::NOT_FOUND, "not_found", "resource was not found")
 }
 
-fn observation_value(value: &ObservationValue) -> String {
+fn display_raw_value(value: &Value, decimal_places: i32) -> String {
+    if let Some(number) = value.as_f64() {
+        let places = usize::try_from(decimal_places.clamp(0, 6)).unwrap_or_default();
+        return format!("{number:.places$}");
+    }
     match value {
-        ObservationValue::Numeric(value) => value.to_string(),
-        ObservationValue::Boolean(value) => value.to_string(),
-        ObservationValue::CumulativeValue(value) => value.to_string(),
-        ObservationValue::Alarm { active, reading } => reading.map_or_else(
-            || active.to_string(),
-            |reading| format!("{active} ({reading})"),
-        ),
+        Value::Bool(state) => {
+            if *state {
+                "ON".into()
+            } else {
+                "OFF".into()
+            }
+        }
+        Value::String(text) => text.clone(),
+        _ => value.to_string(),
+    }
+}
+
+fn sensor_type_label<'a>(code: &'a str, custom_label: &'a str) -> &'a str {
+    match code {
+        "thermocouple" => "熱電対",
+        "contact" => "接点入力",
+        "illuminance" => "照度",
+        "distance" => "距離",
+        "voltage" => "電圧",
+        "current" => "電流",
+        "pressure" => "圧力",
+        "humidity" => "湿度",
+        "acceleration" => "加速度",
+        "custom" if !custom_label.is_empty() => custom_label,
+        _ => code,
     }
 }
 

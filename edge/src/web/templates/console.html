@@ -50,13 +50,20 @@
       {% if !view.page_error.is_empty() %}<div class="feedback error-feedback" role="alert">{{ view.page_error }}</div>{% endif %}
 
       {% if page == "status" %}
+      {% if view.receiving_signal_count > 0 %}
       <section class="health-banner healthy" aria-label="システムの状態">
         <span class="health-icon" aria-hidden="true">✓</span>
-        <div><strong>センサーデータを受信しています</strong><p>IoTKit Edgeとセンサーの間で大きな問題は見つかっていません。</p></div>
+        <div><strong>センサーデータを受信しています</strong><p>現在値を確認できるセンサーがあります。</p></div>
       </section>
+      {% else %}
+      <section class="health-banner" aria-label="システムの状態">
+        <span class="health-icon" aria-hidden="true">!</span>
+        <div><strong>受信済みのセンサーデータがありません</strong><p>収集ノードの登録状態と接続を確認してください。</p></div>
+      </section>
+      {% endif %}
       <section class="metric-grid" aria-label="集計">
-        <article class="metric-card"><span class="metric-label">受信中</span><strong>{{ view.signals.len() }}</strong><small>件のセンサー</small></article>
-        <article class="metric-card"><span class="metric-label">登録済みの収集ノード</span><strong>{{ view.edge_nodes.len() }}</strong><small>台</small></article>
+        <article class="metric-card"><span class="metric-label">受信中</span><strong>{{ view.receiving_signal_count }}</strong><small>件のセンサー</small></article>
+        <article class="metric-card"><span class="metric-label">登録済みの収集ノード</span><strong>{{ view.registered_edge_node_count }}</strong><small>台</small></article>
       </section>
       <section class="content-section">
         <div class="section-heading"><div><p class="section-kicker">LIVE</p><h2>センサーの現在値</h2><p>最後に受信した値です。</p></div><a href="/sensors">すべてのセンサーを見る</a></div>
@@ -89,111 +96,313 @@
       {% if page == "equipment" %}
       {% match view.selected_signal %}
       {% when Some with (signal) %}
-      <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/equipment">機器管理</a><span aria-hidden="true">/</span><strong>{{ signal.name }}</strong></nav>
+      <nav class="equipment-breadcrumb" aria-label="現在位置">
+        <a href="/equipment">機器管理</a><span aria-hidden="true">/</span>
+        {% match view.selected_device %}
+        {% when Some with (device) %}
+        <a href="/equipment/edge-nodes/{{ device.edge_node_ref }}">{{ device.edge_node_id }}</a><span aria-hidden="true">/</span>
+        <a href="/equipment/devices/{{ device.device_ref }}">{{ device.name }}</a><span aria-hidden="true">/</span>
+        {% when None %}{% endmatch %}
+        <strong>{{ signal.name }}</strong>
+      </nav>
       {% if !is_admin %}<div class="permission-note"><strong>閲覧のみ</strong><span>変更には設定管理者の権限が必要です。</span></div>{% endif %}
+      <header class="sensor-detail-header">
+        <div class="sensor-detail-identity">
+          <span>{{ signal.sensor_type }}</span>
+          <h1>{{ signal.name }}</h1>
+          <small>{{ signal.edge_node_id }}</small>
+        </div>
+        <div class="sensor-detail-header-side">
+          <div class="sensor-detail-latest sensor-detail-latest--{{ signal.status_class }}" data-source-value="{{ signal.value }}" data-source-unit="{{ signal.unit }}">
+            <span class="status-pill {{ signal.status_class }}">{{ signal.status_label }}</span>
+            <strong><span data-source-current-value>{{ signal.value }}</span>{% if !signal.unit.is_empty() %} <small>{{ signal.unit }}</small>{% endif %}</strong>
+            <small data-source-current-received>最新の受信値</small>
+          </div>
+        </div>
+      </header>
       <div class="sensor-setting-workspace sensor-setting-workspace--settings">
         <aside class="sensor-setting-preview">
           <section class="content-section sensor-setting-simulation" data-setting-simulation data-signal-ref="{{ signal.signal_ref }}" data-unit="{{ signal.unit }}" data-can-edit="{% if is_admin %}true{% else %}false{% endif %}">
-            <div class="section-heading"><div><h2>実信号プレビュー</h2></div><button class="simulation-live" type="button" role="switch" aria-checked="true" data-preview-toggle><span>自動更新</span><b data-preview-toggle-state>ON</b></button></div>
-            <div class="sensor-preview-current"><strong data-preview-current-value>{{ signal.value }}</strong> {{ signal.unit }}</div>
-            <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値と設定結果のグラフ"><path d="{{ view.history_chart_path }}"></path><path d="{{ view.history_chart_path }}"></path></svg>
-            <p class="sr-only" data-preview-accessible-summary>受信値と設定結果を表示しています。</p>
-            <p class="simulation-message" data-preview-message role="status">最新の受信値を表示しています。</p>
-          </section>
-        </aside>
-        <div class="sensor-detail-settings" data-setting-tabs data-default-setting-tab="basic">
-          <div class="sensor-setting-tabs" role="tablist" aria-label="設定の種類">
-            <button type="button" role="tab" data-setting-tab="basic" aria-controls="setting-panel-basic">基本設定</button>
-            <button type="button" role="tab" data-setting-tab="normal" aria-controls="setting-panel-normal">通常の値</button>
-            <button type="button" role="tab" data-setting-tab="alarm" aria-controls="setting-panel-alarm">異常検知</button>
-          </div>
-          <section id="setting-panel-basic" data-setting-panel="basic">
+            <div class="section-heading"><div><h2>実信号プレビュー</h2><p>Edge Nodeから届いた実データ</p></div><button class="simulation-live" type="button" role="switch" aria-checked="true" data-preview-toggle><span>自動更新</span><b data-preview-toggle-state>ON</b></button></div>
+            <div class="simulation-feed-status" aria-live="polite">
+              <span class="simulation-feed-state"><i aria-hidden="true"></i><strong data-preview-feed-state>受信データを確認中</strong></span>
+              <small data-preview-checked-at>確認中</small>
+            </div>
+            <div class="sensor-preview-current sensor-preview-current--{{ signal.status_class }}">
+              <span class="status-pill {{ signal.status_class }}">{{ signal.status_label }}</span>
+              <span>現在の値</span>
+              <strong><span data-preview-current-value>{{ signal.value }}</span>{% if !signal.unit.is_empty() %} <small>{{ signal.unit }}</small>{% endif %}</strong>
+              <small data-preview-current-received>最新の受信値</small>
+            </div>
+            <div class="simulation-summary">
+              <strong data-preview-range>受信データを読み込んでいます</strong>
+              <span data-preview-count>設定を変更すると自動で再計算します。</span>
+            </div>
+            <div class="simulation-chart-wrap">
+              <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値と設定結果のグラフ" aria-describedby="sensor-preview-chart-summary">
+                <text x="380" y="130" text-anchor="middle">受信データを読み込んでいます</text>
+              </svg>
+            </div>
+            <p class="sr-only" id="sensor-preview-chart-summary" data-preview-accessible-summary>受信データを読み込んでいます。</p>
+            <div class="simulation-legend" aria-label="グラフの凡例">
+              <span><i class="legend-raw"></i>受信値</span>
+              <span><i class="legend-result"></i>設定結果</span>
+              <span><i class="legend-threshold"></i>立上り・立下り</span>
+            </div>
+            <p class="simulation-message" data-preview-message role="status">読み込み中です。</p>
             {% if is_admin %}
-            <details id="sensor-profile" class="sensor-profile-editor">
-              <summary>名前と表示</summary>
-              <form method="post" action="/console/signals/{{ signal.signal_ref }}/profile" data-signal-profile>
-                <input type="hidden" name="_csrf" value="{{ csrf }}">
-                <label>表示名<input name="display_name" value="{{ signal.name }}" required></label>
-                <label>センサー種類<input name="display_sensor_type" value="{{ signal.sensor_type }}"></label>
-                <label>値の種類<select name="display_value_kind"><option value="numeric">数値</option><option value="boolean">ON/OFF</option></select></label>
-                <input type="hidden" name="display_unit_mode" value="custom">
-                <label>単位<input name="display_unit" value="{{ signal.unit }}"></label>
-                <label>小数桁<input name="decimal_places" type="number" value="1"></label>
-                <button type="submit">保存</button>
-              </form>
+            <details class="simulation-test">
+              <summary>値を指定して結果を確認</summary>
+              <div class="simulation-test-fields">
+                <label><span>試す値</span><input name="preview_test_value" type="number" step="any" inputmode="decimal" placeholder="例：28.5"></label>
+                <div><span>この値なら</span><strong data-preview-test-result>値を入力すると結果を確認できます</strong></div>
+              </div>
             </details>
             {% endif %}
           </section>
-          <section id="setting-panel-normal" data-setting-panel="normal">
-            {% if is_admin %}<form method="post" action="/console/signals/{{ signal.signal_ref }}/calibration" class="calibration-form">
-              <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="1">
-              <label>補正倍率<input name="scale" type="number" step="any" value="1"></label>
-              <label>補正加算<input name="offset" type="number" step="any" value="0"></label>
-              <button type="submit">補正を保存</button>
-            </form>{% endif %}
-            {% for rule in signal.rules %}
-            <article class="semantic-rule">
-              <strong>{{ rule.display_name }}</strong><small>{{ rule.kind }}</small>
+        </aside>
+        <div class="sensor-detail-settings sensor-setting-controls">
+          <section class="content-section sensor-settings-panel" data-setting-tabs data-default-setting-tab="basic">
+          <div class="sensor-setting-tabs" role="tablist" aria-label="設定の種類">
+            <button id="setting-tab-basic" type="button" role="tab" data-setting-tab="basic" aria-controls="setting-panel-basic"><span>基本設定</span><small>名前・種類・単位</small></button>
+            <button id="setting-tab-normal" type="button" role="tab" data-setting-tab="normal" aria-controls="setting-panel-normal"><span>計測ルール</span><small>補正・判定・累積</small></button>
+            <button id="setting-tab-alarm" type="button" role="tab" data-setting-tab="alarm" aria-controls="setting-panel-alarm"><span>異常検知</span><small>異常の判定</small></button>
+          </div>
+          <div class="sensor-settings-sections">
+          <section id="setting-panel-basic" class="sensor-setting-tab-panel" role="tabpanel" aria-labelledby="setting-tab-basic" data-setting-panel="basic">
+            {% if is_admin %}
+              <form id="sensor-profile" class="sensor-profile-form" method="post" action="/console/signals/{{ signal.signal_ref }}/profile" data-signal-profile>
+                <input type="hidden" name="_csrf" value="{{ csrf }}">
+                {% if signal.revision > 0 %}<input type="hidden" name="revision" value="{{ signal.revision }}">{% endif %}
+                <label>表示名<input name="display_name" value="{{ signal.name }}" required></label>
+                <label>センサーの種類<select name="display_sensor_type" data-sensor-type required>
+                  <option value="">選択してください</option>
+                  <option value="thermocouple"{% if signal.sensor_type_code == "thermocouple" %} selected{% endif %}>熱電対</option>
+                  <option value="contact"{% if signal.sensor_type_code == "contact" %} selected{% endif %}>接点入力</option>
+                  <option value="illuminance"{% if signal.sensor_type_code == "illuminance" %} selected{% endif %}>照度</option>
+                  <option value="distance"{% if signal.sensor_type_code == "distance" %} selected{% endif %}>距離</option>
+                  <option value="voltage"{% if signal.sensor_type_code == "voltage" %} selected{% endif %}>電圧</option>
+                  <option value="current"{% if signal.sensor_type_code == "current" %} selected{% endif %}>電流</option>
+                  <option value="pressure"{% if signal.sensor_type_code == "pressure" %} selected{% endif %}>圧力</option>
+                  <option value="humidity"{% if signal.sensor_type_code == "humidity" %} selected{% endif %}>湿度</option>
+                  <option value="acceleration"{% if signal.sensor_type_code == "acceleration" %} selected{% endif %}>加速度</option>
+                  <option value="custom"{% if signal.sensor_type_code == "custom" %} selected{% endif %}>その他</option>
+                </select></label>
+                <label data-custom-sensor-label>「その他」の表示名<input name="display_sensor_type_label" value=""></label>
+                <label>値の見せ方<select name="display_value_kind" required><option value="numeric"{% if signal.value_kind == "numeric" || signal.value_kind == "number" %} selected{% endif %}>数値</option><option value="boolean"{% if signal.value_kind == "boolean" || signal.value_kind == "bool" %} selected{% endif %}>ON/OFF</option></select></label>
+                <label>単位の扱い<select name="display_unit_mode" data-unit-mode required><option value="unit"{% if signal.unit_mode == "unit" %} selected{% endif %}>単位を表示する</option><option value="dimensionless"{% if signal.unit_mode == "dimensionless" %} selected{% endif %}>単位を表示しない</option></select></label>
+                <label data-display-unit>表示単位<input name="display_unit" value="{{ signal.unit }}"></label>
+                <label>小数点以下の桁数<input name="decimal_places" type="number" min="0" max="6" value="{{ signal.decimal_places }}"></label>
+                <button type="submit">保存</button>
+              </form>
+            {% endif %}
+          </section>
+          <section id="setting-panel-normal" class="sensor-setting-tab-panel" role="tabpanel" aria-labelledby="setting-tab-normal" data-setting-panel="normal">
+            <div class="semantic-calibration">
+              <div><strong>入力値の補正</strong><small>すべての値の使い方へ共通で適用</small></div>
+              {% if is_admin %}<form method="post" action="/console/signals/{{ signal.signal_ref }}/calibration" class="calibration-form">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ signal.calibration_revision }}">
+                <label><span>倍率</span><input name="scale" type="number" step="any" value="{{ signal.calibration_scale }}" required></label>
+                <label><span>加算</span><input name="offset" type="number" step="any" value="{{ signal.calibration_offset }}" required></label>
+                <button class="button-secondary" type="submit">保存</button>
+              </form>{% else %}<span>受信値 × {{ signal.calibration_scale }} ＋ {{ signal.calibration_offset }}</span>{% endif %}
+            </div>
+            <div class="semantic-rule-group">
+            {% for rule in signal.rules %}{% if rule.kind != "alarm" %}
+            <details class="semantic-rule-card" id="rule-{{ rule.rule_id }}" data-rule-id="{{ rule.rule_id }}">
+              <summary><span><strong>{{ rule.display_name }}</strong><small>{{ rule.kind_label }}{% if !rule.count_summary.is_empty() %} · {{ rule.count_summary }}{% endif %}</small></span><em>設定を開く</em></summary>
               {% if is_admin %}
-              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form">
-                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="1">
-                <input name="display_name" value="{{ rule.display_name }}"><input type="hidden" name="kind" value="{{ rule.kind }}">
-                <button type="submit">変更</button>
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-rule-id="{{ rule.rule_id }}" data-boolean-input="{{ signal.input_is_boolean }}">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ rule.revision }}">
+                <input type="hidden" name="kind" value="{{ rule.kind }}" data-semantic-kind>
+                <label><span>ルール名</span><input name="display_name" value="{{ rule.display_name }}"></label>
+                {% if rule.kind != "numeric" %}
+                <div class="conditional-fields detector-fields" data-semantic-detector>
+                  <label><span>有効とみなす側</span><select name="detector_mode">
+                    <option value="boolean_high_active" data-detector-boolean{% if rule.detector_mode == "boolean_high_active" %} selected{% endif %}>High（1）を有効にする</option>
+                    <option value="boolean_low_active" data-detector-boolean{% if rule.detector_mode == "boolean_low_active" %} selected{% endif %}>Low（0）を有効にする</option>
+                    <option value="high_active" data-detector-analog{% if rule.detector_mode == "high_active" %} selected{% endif %}>値が上がった側を有効にする</option>
+                    <option value="low_active" data-detector-analog{% if rule.detector_mode == "low_active" %} selected{% endif %}>値が下がった側を有効にする</option>
+                  </select></label>
+                  <div class="form-row" data-semantic-thresholds{% if rule.detector_is_boolean %} hidden{% endif %}>
+                    <label><span>立ち上がりしきい値</span><input name="rise_threshold" type="number" step="any" value="{{ rule.rise_threshold }}"></label>
+                    <label><span>立ち下がりしきい値</span><input name="fall_threshold" type="number" step="any" value="{{ rule.fall_threshold }}"></label>
+                  </div>
+                  <details class="semantic-advanced-settings"><summary>判定の安定化</summary><div class="form-row">
+                    <label><span>立ち上がり確定待ち（秒）</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{ rule.rise_debounce_seconds }}"></label>
+                    <label><span>立ち下がり確定待ち（秒）</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{ rule.fall_debounce_seconds }}"></label>
+                  </div></details>
+                </div>
+                {% endif %}
+                {% if rule.kind == "cumulative_counter" %}<div class="conditional-fields" data-semantic-trigger>
+                  <label><span>数え方</span><select name="trigger">
+                    <option value="on_transition"{% if rule.trigger == "on_transition" %} selected{% endif %}>OFFからONへ変わったとき</option>
+                    <option value="on_notification"{% if rule.trigger == "on_notification" %} selected{% endif %}>条件に合う値を受信するたび</option>
+                  </select></label>
+                </div>{% else if rule.kind != "numeric" %}<div class="conditional-fields" data-semantic-trigger hidden><select name="trigger"><option value="" selected></option></select></div>{% endif %}
+                <div class="semantic-rule-actions"><button type="submit">ルールを保存</button></div>
               </form>
-              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}/retire">
-                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="1"><button type="submit">停止</button>
-              </form>
-              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}/counter-resets">
-                <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">カウンターをリセット</button>
+              {% if rule.kind == "cumulative_counter" %}<details class="semantic-rule-danger">
+                <summary>累積値の操作</summary>
+                <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}/counter-resets" class="counter-reset-form">
+                  <input type="hidden" name="_csrf" value="{{ csrf }}"><button class="button-secondary" type="submit">この累積値を0に戻す</button>
+                </form>
+              </details>{% endif %}
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}/retire" class="semantic-retire-form" data-confirm-message="「{{ rule.display_name }}」を削除します。過去のデータは残りますが、新しい値は作られなくなります。よろしいですか？">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ rule.revision }}"><button class="button-danger" type="submit">ルールを削除</button>
               </form>
               {% endif %}
-            </article>
-            {% endfor %}
+            </details>
+            {% endif %}{% endfor %}
+            </div>
             {% if is_admin %}
-            <details id="rule-create">
+            <details id="rule-create" class="semantic-rule-create">
               <summary>値の使い方を追加</summary>
-              <form method="post" action="/console/signals/{{ signal.signal_ref }}/semantic-rules" class="semantic-form">
+              <form method="post" action="/console/signals/{{ signal.signal_ref }}/semantic-rules" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-boolean-input="{{ signal.input_is_boolean }}">
                 <input type="hidden" name="_csrf" value="{{ csrf }}">
-                <label>表示名<input name="display_name" required></label>
-                <label>種類<select name="kind"><option value="numeric">通常の値</option><option value="cumulative_counter">累積値</option><option value="alarm">アラーム</option></select></label>
-                <input type="hidden" name="detector_mode" value="high_active">
-                <input name="rise_threshold" value="1">
-                <input name="fall_threshold" value="0">
-                <input name="rise_debounce_seconds" value="0">
-                <input name="fall_debounce_seconds" value="0">
-                <input type="hidden" name="trigger" value="on_transition">
+                <label><span>ルール名</span><input name="display_name" required></label>
+                <label><span>作る結果</span><select name="kind" data-semantic-kind><option value="numeric">測定値</option><option value="boolean">ON / OFF</option><option value="cumulative_counter">累積値</option><option value="alarm">異常検知</option></select></label>
+                <div class="conditional-fields detector-fields" data-semantic-detector hidden>
+                  <label><span>有効とみなす側</span><select name="detector_mode"><option value="boolean_high_active" data-detector-boolean>High（1）</option><option value="boolean_low_active" data-detector-boolean>Low（0）</option><option value="high_active" data-detector-analog>値が上がった側</option><option value="low_active" data-detector-analog>値が下がった側</option></select></label>
+                  <div class="form-row" data-semantic-thresholds><label><span>立ち上がりしきい値</span><input name="rise_threshold" type="number" step="any" value="0"></label><label><span>立ち下がりしきい値</span><input name="fall_threshold" type="number" step="any" value="0"></label></div>
+                  <details class="semantic-advanced-settings"><summary>判定の安定化</summary><div class="form-row"><label><span>立ち上がり確定待ち（秒）</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="0"></label><label><span>立ち下がり確定待ち（秒）</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="0"></label></div></details>
+                </div>
+                <div class="conditional-fields" data-semantic-trigger hidden><label><span>数え方</span><select name="trigger"><option value="on_transition">OFFからONへ変わったとき</option><option value="on_notification">条件に合う値を受信するたび</option></select></label></div>
                 <button type="submit">追加</button>
               </form>
             </details>
             {% endif %}
           </section>
-          <section id="setting-panel-alarm" data-setting-panel="alarm" hidden>
-            {% for rule in signal.rules %}{% if rule.kind == "alarm" %}<article class="semantic-rule"><strong>{{ rule.display_name }}</strong></article>{% endif %}{% endfor %}
+          <section id="setting-panel-alarm" class="sensor-setting-tab-panel" role="tabpanel" aria-labelledby="setting-tab-alarm" data-setting-panel="alarm" hidden>
+            <div class="semantic-rule-group">
+            {% for rule in signal.rules %}{% if rule.kind == "alarm" %}
+            <details class="semantic-rule-card" id="rule-{{ rule.rule_id }}" data-rule-id="{{ rule.rule_id }}">
+              <summary><span><strong>{{ rule.display_name }}</strong><small>{{ rule.kind_label }}</small></span><em>設定を開く</em></summary>
+              {% if is_admin %}
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-rule-id="{{ rule.rule_id }}" data-boolean-input="{{ signal.input_is_boolean }}">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ rule.revision }}"><input type="hidden" name="kind" value="alarm" data-semantic-kind>
+                <label><span>ルール名</span><input name="display_name" value="{{ rule.display_name }}"></label>
+                <div class="conditional-fields detector-fields" data-semantic-detector>
+                  <label><span>異常とみなす側</span><select name="detector_mode"><option value="boolean_high_active" data-detector-boolean{% if rule.detector_mode == "boolean_high_active" %} selected{% endif %}>High（1）を異常にする</option><option value="boolean_low_active" data-detector-boolean{% if rule.detector_mode == "boolean_low_active" %} selected{% endif %}>Low（0）を異常にする</option><option value="high_active" data-detector-analog{% if rule.detector_mode == "high_active" %} selected{% endif %}>値が上がった側を異常にする</option><option value="low_active" data-detector-analog{% if rule.detector_mode == "low_active" %} selected{% endif %}>値が下がった側を異常にする</option></select></label>
+                  <div class="form-row" data-semantic-thresholds{% if rule.detector_is_boolean %} hidden{% endif %}><label><span>異常になるしきい値</span><input name="rise_threshold" type="number" step="any" value="{{ rule.rise_threshold }}"></label><label><span>正常に戻るしきい値</span><input name="fall_threshold" type="number" step="any" value="{{ rule.fall_threshold }}"></label></div>
+                  <details class="semantic-advanced-settings"><summary>判定の安定化</summary><div class="form-row"><label><span>異常確定待ち（秒）</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{ rule.rise_debounce_seconds }}"></label><label><span>復帰確定待ち（秒）</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="{{ rule.fall_debounce_seconds }}"></label></div></details>
+                </div>
+                <div class="conditional-fields" data-semantic-trigger hidden><label><span>数え方</span><select name="trigger"><option value=""></option></select></label></div>
+                <div class="semantic-rule-actions"><button type="submit">アラームを保存</button></div>
+              </form>
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}/retire" class="semantic-retire-form" data-confirm-message="「{{ rule.display_name }}」を削除します。過去のデータは残りますが、新しい異常は検知されなくなります。よろしいですか？">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ rule.revision }}"><button class="button-danger" type="submit">ルールを削除</button>
+              </form>
+              {% endif %}
+            </details>
+            {% endif %}{% endfor %}
+            </div>
+            {% if !signal.has_alarm_rules %}<p class="semantic-rule-empty">異常を検知するルールはまだありません。「計測ルール」から新しいルールを追加できます。</p>{% endif %}
+          </section>
+          </div>
           </section>
         </div>
       </div>
       {% when None %}
-      {% match view.selected_edge_node %}
-      {% when Some with (edge_node) %}
-      <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/equipment">機器管理</a><span aria-hidden="true">/</span><strong>{{ edge_node.name }}</strong></nav>
-      <section class="content-section">
-        <h2>{{ edge_node.name }}</h2><p>{{ edge_node.location }}</p><span class="status-pill {{ edge_node.state_class }}">{{ edge_node.state_label }}</span>
-        {% if edge_node.can_activate && is_admin %}
-        <form method="post" action="/console/edge-nodes/{{ edge_node.edge_node_ref }}/activation">
-          <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">登録する</button>
+      {% match view.selected_device %}
+      {% when Some with (device) %}
+      <nav class="equipment-breadcrumb" aria-label="現在位置">
+        <a href="/equipment">機器管理</a><span aria-hidden="true">/</span>
+        <a href="/equipment/edge-nodes/{{ device.edge_node_ref }}">{{ device.edge_node_id }}</a><span aria-hidden="true">/</span>
+        <strong>{{ device.name }}</strong>
+      </nav>
+      <section class="equipment-detail-header">
+        <div class="equipment-detail-identity">
+          <span class="equipment-detail-icon equipment-detail-icon--device" aria-hidden="true">▣</span>
+          <div><p class="section-kicker">DEVICE</p><h2>{{ device.name }}</h2><p>{{ device.location }}</p></div>
+        </div>
+        <span class="status-pill {{ device.state_class }}">{{ device.state_label }}</span>
+      </section>
+      <dl class="equipment-detail-facts">
+        <div><dt>センサー</dt><dd>{{ device.signals.len() }}件</dd></div>
+        <div><dt>収集ノード</dt><dd>{{ device.edge_node_id }}</dd></div>
+        <div><dt>機器モデル</dt><dd>{{ device.model_id }}</dd></div>
+        {% if is_admin %}<div><dt>現物との照合番号</dt><dd>{{ device.identifier }}</dd></div>{% endif %}
+      </dl>
+      {% if is_admin %}
+      <details class="equipment-editor equipment-editor--device"{% if device.revision == 0 %} open{% endif %}>
+        <summary>デバイス名と設置場所を変更</summary>
+        <form method="post" action="/console/devices/{{ device.device_ref }}/profile">
+          <input type="hidden" name="_csrf" value="{{ csrf }}">
+          <input type="hidden" name="return_to" value="/equipment/devices/{{ device.device_ref }}">
+          {% if device.revision > 0 %}<input type="hidden" name="revision" value="{{ device.revision }}">{% endif %}
+          <div class="form-row">
+            <label>デバイス名<input name="display_name" value="{{ device.name }}" required></label>
+            <label>設置場所<input name="location" value="{{ device.location }}" required></label>
+          </div>
+          <button type="submit">保存</button>
         </form>
+      </details>
+      {% endif %}
+      <section class="content-section equipment-sensors">
+        <div class="section-heading"><div><h2>接続されているセンサー</h2><p>現在値を確認し、必要なセンサーの設定を開きます。</p></div></div>
+        {% if device.signals.is_empty() %}
+        <div class="empty-state"><p>このデバイスからセンサー情報が届くと表示されます。</p></div>
+        {% else %}
+        <div class="equipment-sensor-grid">
+          {% for child_signal in device.signals %}
+          <article class="equipment-sensor-card">
+            <header><div><p class="section-kicker">{{ child_signal.sensor_type }}</p><h3>{{ child_signal.name }}</h3></div><span class="status-pill {{ child_signal.status_class }}">{{ child_signal.status_label }}</span></header>
+            <div class="sensor-current-value"><span>現在の値</span><strong>{{ child_signal.value }} <small>{{ child_signal.unit }}</small></strong></div>
+            <footer class="equipment-sensor-actions"><a class="button secondary" href="/equipment/devices/{{ device.device_ref }}/sensors/{{ child_signal.signal_ref }}">センサー設定を開く</a></footer>
+          </article>
+          {% endfor %}
+        </div>
         {% endif %}
       </section>
       {% when None %}
-      <section class="content-section equipment-list">
-        <div class="section-heading"><div><h2>収集ノードとデバイス</h2><p>接続元と登録状態を確認します。</p></div></div>
+      {% match view.selected_edge_node %}
+      {% when Some with (edge_node) %}
+      <nav class="equipment-breadcrumb" aria-label="現在位置"><a href="/equipment">機器管理</a><span aria-hidden="true">/</span><strong>{{ edge_node.name }}</strong></nav>
+      <section class="equipment-detail-header equipment-detail-header--{{ edge_node.state_class }}">
+        <div class="equipment-detail-identity"><span class="equipment-detail-icon" aria-hidden="true">◇</span><div><p class="section-kicker">EDGE NODE</p><h2>{{ edge_node.name }}</h2><p>{{ edge_node.location }}</p></div></div>
+        <span class="status-pill {{ edge_node.state_class }}">{{ edge_node.state_label }}</span>
+      </section>
+      <dl class="equipment-detail-facts">
+        <div><dt>デバイス</dt><dd>{{ edge_node.devices.len() }}台</dd></div>
+        <div><dt>センサー</dt><dd>{{ edge_node.signal_count }}件</dd></div>
+        <div><dt>登録状態</dt><dd>{{ edge_node.state_label }}</dd></div>
+      </dl>
+      {% if edge_node.can_activate && is_admin %}
+      <section class="equipment-action-card">
+        <div><h3>この収集ノードを登録します</h3><p>登録完了後に受信した値から正式な履歴として保存します。</p></div>
+        <form method="post" action="/console/edge-nodes/{{ edge_node.edge_node_ref }}/activation">
+          <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">登録する</button>
+        </form>
+      </section>
+      {% endif %}
+      <section class="content-section">
+        <div class="section-heading"><div><h2>この収集ノードのデバイス</h2><p>デバイスを選ぶと、名前・設置場所・センサーを確認できます。</p></div></div>
+        {% if edge_node.devices.is_empty() %}
+        <div class="empty-state"><p>{% if edge_node.can_activate %}収集ノードの登録完了後にデバイスを確認できます。{% else %}デバイス情報が届くと表示されます。{% endif %}</p></div>
+        {% else %}
+        <div class="equipment-device-table">
+          {% for device in edge_node.devices %}
+          <a href="/equipment/devices/{{ device.device_ref }}"><span class="equipment-device-name"><i aria-hidden="true">▣</i><span><strong>{{ device.name }}</strong><small>{{ device.location }}</small></span></span><span><b class="status-pill {{ device.state_class }}">{{ device.state_label }}</b></span><span>{{ device.signals.len() }}件のセンサー</span><span></span><span aria-hidden="true">›</span></a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </section>
+      {% when None %}
+      <section class="equipment-overview">
+        <div class="section-heading"><div><h2>接続されている収集ノード</h2><p>確認や設定を行う収集ノードを選んでください。</p></div><div class="equipment-overview-count"><strong>{{ view.edge_nodes.len() }}</strong><span>台</span></div></div>
+        <div class="equipment-overview-list">
+        <div class="equipment-row equipment-row--head" aria-hidden="true"><span>収集ノード</span><span>状態</span><span>デバイス</span><span>センサー</span><span></span><span></span></div>
         {% for edge_node in view.edge_nodes %}
         <a class="equipment-row" href="/equipment/edge-nodes/{{ edge_node.edge_node_ref }}">
-          <span><strong>{{ edge_node.name }}</strong><small>{{ edge_node.location }}</small></span>
+          <span class="equipment-row-name"><i aria-hidden="true">◇</i><span><strong>{{ edge_node.name }}</strong><small>{{ edge_node.location }}</small></span></span>
           <span class="status-pill {{ edge_node.state_class }}">{{ edge_node.state_label }}</span>
+          <span>{{ edge_node.devices.len() }}台</span><span>{{ edge_node.signal_count }}件</span><span></span><span class="equipment-row-arrow" aria-hidden="true">›</span>
         </a>
         {% endfor %}
+        </div>
       </section>
+      {% endmatch %}
       {% endmatch %}
       {% endmatch %}
       {% endif %}

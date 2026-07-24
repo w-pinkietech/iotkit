@@ -205,7 +205,8 @@ impl Storage {
             StorageInner::Sqlite { pool, .. } => {
                 let rows = sqlx::query(
                     "SELECT rule.rule_id,rule.signal_ref,signal.edge_node_id,signal.series_key,\
-                     rule.display_name,rule.kind,rule.series_id,rule.revision,rule.active \
+                     rule.display_name,rule.kind,CAST(rule.spec_json AS TEXT) AS spec_json_text,\
+                     rule.series_id,rule.revision,rule.active \
                      FROM semantic_rules AS rule JOIN semantic_signals AS signal \
                      ON signal.signal_ref=rule.signal_ref ORDER BY rule.created_at,rule.rule_id",
                 )
@@ -216,7 +217,8 @@ impl Storage {
             StorageInner::Postgres { pool, .. } => {
                 let rows = sqlx::query(
                     "SELECT rule.rule_id,rule.signal_ref,signal.edge_node_id,signal.series_key,\
-                     rule.display_name,rule.kind,rule.series_id,rule.revision,rule.active \
+                     rule.display_name,rule.kind,rule.spec_json::text AS spec_json_text,\
+                     rule.series_id,rule.revision,rule.active \
                      FROM semantic_rules AS rule JOIN semantic_signals AS signal \
                      ON signal.signal_ref=rule.signal_ref ORDER BY rule.created_at,rule.rule_id",
                 )
@@ -450,6 +452,40 @@ impl Storage {
             }
         };
         revision.ok_or(StorageError::SemanticNotFound)
+    }
+
+    pub async fn semantic_calibration(
+        &self,
+        signal_ref: &str,
+    ) -> Result<crate::application::semantics::SemanticCalibration, StorageError> {
+        let values: (i64, f64, f64) = match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                sqlx::query_as(
+                    "SELECT calibration_revision,scale,calibration_offset \
+                     FROM semantic_signals WHERE signal_ref=?",
+                )
+                .bind(signal_ref)
+                .fetch_optional(pool)
+                .await?
+            }
+            StorageInner::Postgres { pool, .. } => {
+                sqlx::query_as(
+                    "SELECT calibration_revision,scale,calibration_offset \
+                     FROM semantic_signals WHERE signal_ref=$1",
+                )
+                .bind(signal_ref)
+                .fetch_optional(pool)
+                .await?
+            }
+        }
+        .ok_or(StorageError::SemanticNotFound)?;
+        Ok(crate::application::semantics::SemanticCalibration {
+            calibration: crate::semantics::Calibration {
+                scale: values.1,
+                offset: values.2,
+            },
+            revision: values.0,
+        })
     }
 
     pub async fn update_semantic_calibration_as(
