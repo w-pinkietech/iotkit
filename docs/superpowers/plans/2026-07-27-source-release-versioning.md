@@ -35,7 +35,7 @@
 - Consumes: WSL distribution `Ubuntu-26.04` and the pinned Rust toolchain in `rust-toolchain.toml`.
 - Produces: Rust 1.95.0, rustfmt, Clippy, Node.js, native build dependencies, and a clean baseline result for this worktree.
 
-- [ ] **Step 1: Install Linux build prerequisites in the existing WSL distribution**
+- [x] **Step 1: Install Linux build prerequisites in the existing WSL distribution**
 
 Run from PowerShell:
 
@@ -45,7 +45,7 @@ wsl.exe -d Ubuntu-26.04 -u root -- bash -lc 'apt-get update && DEBIAN_FRONTEND=n
 
 Expected: exit 0; `pkg-config`, `libudev-dev`, `curl`, `git`, `node`, and `npm` are installed.
 
-- [ ] **Step 2: Install rustup for the normal WSL user**
+- [x] **Step 2: Install rustup for the normal WSL user**
 
 Run:
 
@@ -55,7 +55,7 @@ wsl.exe -d Ubuntu-26.04 -- bash -lc 'if ! command -v rustup >/dev/null 2>&1; the
 
 Expected: exit 0; the installer is stored only in `/tmp`, and rustup is installed below the WSL user's standard Cargo directory.
 
-- [ ] **Step 3: Install the repository-pinned toolchain and fetch locked dependencies**
+- [x] **Step 3: Install the repository-pinned toolchain and fetch locked dependencies**
 
 Run:
 
@@ -65,7 +65,7 @@ wsl.exe -d Ubuntu-26.04 -- bash -lc 'export PATH="$HOME/.cargo/bin:$PATH"; cd /m
 
 Expected: the active toolchain is `1.95.0`; `cargo fetch --locked` succeeds.
 
-- [ ] **Step 4: Run the clean baseline**
+- [x] **Step 4: Run the clean baseline**
 
 Run:
 
@@ -75,7 +75,7 @@ wsl.exe -d Ubuntu-26.04 -- bash -lc 'export PATH="$HOME/.cargo/bin:$PATH"; expor
 
 Expected: all workspace tests pass; hardware-only tests remain ignored by their existing annotations.
 
-- [ ] **Step 5: Record environment evidence in the implementation notes**
+- [x] **Step 5: Record environment evidence in the implementation notes**
 
 Run:
 
@@ -136,7 +136,7 @@ edge-node/input/runtimes/polling/Cargo.toml
 - Consumes: root `[workspace.package]` metadata and `cargo metadata --no-deps --format-version 1`.
 - Produces: `extractWorkspaceVersion(text) -> string`, `validateReleaseState(input) -> string[]`, and a CLI that exits 0 only when release metadata is consistent.
 
-- [ ] **Step 1: Write failing unit tests for workspace and tag consistency**
+- [x] **Step 1: Write failing unit tests for workspace and tag consistency**
 
 Create `scripts/tests/release-version.test.mjs` with these tests:
 
@@ -178,7 +178,7 @@ test("reports package, document, repository, and tag drift together", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run in WSL:
 
@@ -188,7 +188,7 @@ node --test scripts/tests/release-version.test.mjs
 
 Expected: FAIL because `scripts/check-release-version.mjs` does not exist.
 
-- [ ] **Step 3: Implement the checker functions and CLI**
+- [x] **Step 3: Implement the checker functions and CLI**
 
 Create `scripts/check-release-version.mjs` with these behaviors:
 
@@ -223,7 +223,7 @@ accepts an optional `--tag vX.Y.Z`, prints every package, repository, or tag
 problem to stderr, and exits 1 when any problem exists. Task 5 extends the same
 state and CLI with README and changelog validation.
 
-- [ ] **Step 4: Move product package metadata to the workspace**
+- [x] **Step 4: Move product package metadata to the workspace**
 
 Set the root authority:
 
@@ -248,7 +248,7 @@ version.workspace = true
 
 Do not modify `scripts/layer-fixtures/**/Cargo.toml`.
 
-- [ ] **Step 5: Refresh the lockfile without updating dependencies**
+- [x] **Step 5: Refresh the lockfile without updating dependencies**
 
 Run:
 
@@ -260,7 +260,7 @@ If Cargo reports that the lockfile needs an update, rerun once without
 `--locked`, inspect that only workspace package metadata changed, then rerun
 with `--locked`.
 
-- [ ] **Step 6: Run GREEN verification**
+- [x] **Step 6: Run GREEN verification**
 
 Run:
 
@@ -272,7 +272,7 @@ cargo metadata --locked --no-deps --format-version 1 >/dev/null
 
 Expected: all commands exit 0.
 
-- [ ] **Step 7: Commit the authority and checker**
+- [x] **Step 7: Commit the authority and checker**
 
 ```bash
 git add Cargo.toml Cargo.lock edge edge-node scripts/check-release-version.mjs scripts/tests/release-version.test.mjs
@@ -292,7 +292,7 @@ git commit -m "build: establish unified product version"
 - Consumes: compile-time `env!("CARGO_PKG_VERSION")`.
 - Produces: exact stdout lines for `iotkit-edge`, `iotkit-edge-node`, and `iotkit-edge-nodectl`; version paths exit 0 with empty stderr and no side effects.
 
-- [ ] **Step 1: Write failing process tests for Edge Node and nodectl**
+- [x] **Step 1: Write failing process tests for Edge Node and nodectl**
 
 Add:
 
@@ -328,7 +328,7 @@ fn version_exits_without_opening_a_database() {
 }
 ```
 
-- [ ] **Step 2: Run the two tests and verify RED**
+- [x] **Step 2: Run the two tests and verify RED**
 
 Run:
 
@@ -340,7 +340,7 @@ cargo test -p iotkit-edge-nodectl --test cli version_exits_without_opening_a_dat
 Expected: Edge Node attempts normal startup or rejects the argument; nodectl
 does not produce the required version output.
 
-- [ ] **Step 3: Implement minimal version exits**
+- [x] **Step 3: Implement minimal version exits**
 
 In `edge-node/apps/node/src/main.rs`, inspect arguments before installing
 crypto, logging, storage, or listeners:
@@ -368,7 +368,7 @@ In `edge-node/apps/nodectl/src/main.rs`, change the Clap declaration to:
 struct Cli {
 ```
 
-- [ ] **Step 4: Add the existing IoTKit Edge behavior to the contract suite**
+- [x] **Step 4: Add the existing IoTKit Edge behavior to the contract suite**
 
 Add to `edge/tests/cli_contract.rs`:
 
@@ -388,7 +388,7 @@ fn version_reports_the_workspace_product_version() {
 }
 ```
 
-- [ ] **Step 5: Run GREEN verification**
+- [x] **Step 5: Run GREEN verification**
 
 Run:
 
@@ -400,7 +400,7 @@ cargo test -p iotkit-edge-nodectl --test cli version_exits_without_opening_a_dat
 
 Expected: all three tests pass with exact stdout and empty stderr.
 
-- [ ] **Step 6: Commit CLI visibility**
+- [x] **Step 6: Commit CLI visibility**
 
 ```bash
 git add edge/tests/cli_contract.rs edge-node/apps/node/src/main.rs edge-node/apps/node/tests/cli.rs edge-node/apps/nodectl/src/main.rs edge-node/apps/nodectl/tests/cli.rs
@@ -420,7 +420,7 @@ git commit -m "feat: expose product version in CLIs"
 - Consumes: compile-time `env!("CARGO_PKG_VERSION")`.
 - Produces: `ConsoleView.product_version: String`, the system-page label `IoTKit Edge 0.1.0`, and an explicit Edge Node `/api/v1/box` version assertion.
 
-- [ ] **Step 1: Write the failing Console contract assertion**
+- [x] **Step 1: Write the failing Console contract assertion**
 
 Extend the `/system` expected text in `edge/tests/console_contract.rs`:
 
@@ -434,7 +434,7 @@ Extend the `/system` expected text in `edge/tests/console_contract.rs`:
 ][..]
 ```
 
-- [ ] **Step 2: Run the Console test and verify RED**
+- [x] **Step 2: Run the Console test and verify RED**
 
 Run:
 
@@ -444,7 +444,7 @@ cargo test -p iotkit-edge --test console_contract console_pages_render_the_exist
 
 Expected: FAIL because `/system` does not render `IoTKit Edge 0.1.0`.
 
-- [ ] **Step 3: Add the Console view field and template output**
+- [x] **Step 3: Add the Console view field and template output**
 
 Add to `ConsoleView`:
 
@@ -474,7 +474,7 @@ Add a system card before storage details:
 
 Keep the version visible to every authenticated role and do not add a mutation.
 
-- [ ] **Step 4: Assert the existing Edge Node status version**
+- [x] **Step 4: Assert the existing Edge Node status version**
 
 In `edge-node/apps/node/tests/api_basic.rs`, add after reading
 `/api/v1/box`:
@@ -486,7 +486,7 @@ assert_eq!(
 );
 ```
 
-- [ ] **Step 5: Run GREEN verification**
+- [x] **Step 5: Run GREEN verification**
 
 Run:
 
@@ -497,7 +497,7 @@ cargo test -p iotkit-edge-node --test api_basic box_setup_session_throttle_and_g
 
 Expected: both commands pass.
 
-- [ ] **Step 6: Commit runtime visibility**
+- [x] **Step 6: Commit runtime visibility**
 
 ```bash
 git add edge/src/web/mod.rs edge/src/composition/web.rs edge/src/web/templates/console.html edge/tests/console_contract.rs edge-node/apps/node/tests/api_basic.rs
@@ -518,7 +518,7 @@ git commit -m "feat: show product version in Console"
 - Consumes: workspace version `0.1.0`.
 - Produces: bilingual current-version markers, a product changelog, and a release runbook that refuses tag mismatch and documents explicit publication authority.
 
-- [ ] **Step 1: Write failing checker tests for final document markers**
+- [x] **Step 1: Write failing checker tests for final document markers**
 
 Add tests that pass these exact lines to the parser:
 
@@ -531,7 +531,7 @@ Add tests that pass these exact lines to the parser:
 Also assert that `0.1`, `v0.1.0` in a Cargo version field, and README
 `0.2.0` are rejected.
 
-- [ ] **Step 2: Run the document-marker tests and verify RED**
+- [x] **Step 2: Run the document-marker tests and verify RED**
 
 Run:
 
@@ -541,7 +541,7 @@ node --test scripts/tests/release-version.test.mjs
 
 Expected: FAIL until the checker recognizes and validates the final markers.
 
-- [ ] **Step 3: Replace the README v1 release-candidate copy**
+- [x] **Step 3: Replace the README v1 release-candidate copy**
 
 Use this English status:
 
@@ -561,7 +561,7 @@ Use this Japanese status:
 > [ロードマップ](#ロードマップ)を参照してください。
 ```
 
-- [ ] **Step 4: Write the initial changelog**
+- [x] **Step 4: Write the initial changelog**
 
 `CHANGELOG.md` contains:
 
@@ -582,7 +582,7 @@ configuration, or OKF format identifiers.
 - Durable generic MQTT JSON and Pinikiet output adapters.
 ```
 
-- [ ] **Step 5: Write the maintainer release runbook**
+- [x] **Step 5: Write the maintainer release runbook**
 
 `RELEASING.md` documents:
 
@@ -606,13 +606,13 @@ The document states that tag creation, push, and `gh release create` require
 explicit approval; a tag is never force-moved or deleted by the normal
 procedure; GitHub-generated source archives are the only assets.
 
-- [ ] **Step 6: Complete the checker document validation**
+- [x] **Step 6: Complete the checker document validation**
 
 Update `scripts/check-release-version.mjs` to read both README markers and
 all `CHANGELOG.md` version headings, then feed the extracted values into
 `validateReleaseState`.
 
-- [ ] **Step 7: Run GREEN documentation verification**
+- [x] **Step 7: Run GREEN documentation verification**
 
 Run:
 
@@ -625,7 +625,7 @@ git diff --check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 8: Commit public release documentation**
+- [x] **Step 8: Commit public release documentation**
 
 ```bash
 git add README.md README.ja.md CHANGELOG.md RELEASING.md scripts/check-release-version.mjs scripts/tests/release-version.test.mjs
@@ -644,7 +644,7 @@ git commit -m "docs: define pre-1.0 source releases"
 - Consumes: `node scripts/check-release-version.mjs`.
 - Produces: a lightweight CI gate, repository verification evidence, battle-tested review selection, and a draft PR that closes #102 without publishing a release.
 
-- [ ] **Step 1: Add the version gate to lightweight CI**
+- [x] **Step 1: Add the version gate to lightweight CI**
 
 Add after Node setup and before documentation checks:
 
@@ -653,7 +653,7 @@ Add after Node setup and before documentation checks:
         run: node scripts/check-release-version.mjs
 ```
 
-- [ ] **Step 2: Run focused CI checks**
+- [x] **Step 2: Run focused CI checks**
 
 Run:
 
@@ -670,7 +670,7 @@ cargo test -p iotkit-edge-nodectl --test cli version_exits_without_opening_a_dat
 
 Expected: all commands pass.
 
-- [ ] **Step 3: Run full Rust verification**
+- [x] **Step 3: Run full Rust verification**
 
 Run:
 
@@ -681,7 +681,7 @@ scripts/verify.sh
 Expected: formatting, layer rules, workspace tests, and Clippy all pass with
 warnings denied.
 
-- [ ] **Step 4: Run repository-local operational review routing**
+- [x] **Step 4: Run repository-local operational review routing**
 
 Run:
 
@@ -698,7 +698,7 @@ Review every selected `BT-NNN` entry plus these semantic concerns:
 - no release tag, release page, binary, image, or artifact is published by the PR
 ```
 
-- [ ] **Step 5: Inspect the final diff and repository state**
+- [x] **Step 5: Inspect the final diff and repository state**
 
 Run:
 
@@ -711,7 +711,7 @@ git log --oneline --decorate origin/master..HEAD
 
 Expected: only #102 files are changed, the worktree is clean, and no tag exists.
 
-- [ ] **Step 6: Commit the CI gate**
+- [x] **Step 6: Commit the CI gate**
 
 ```bash
 git add .github/workflows/ci.yml docs/superpowers/plans/2026-07-27-source-release-versioning.md

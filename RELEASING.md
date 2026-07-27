@@ -26,7 +26,11 @@ During pre-1.0 development:
 For the initial release, verify the exact version and full repository gates:
 
 ```bash
-node scripts/check-release-version.mjs --tag v0.1.0
+set -euo pipefail
+version="$(node --input-type=module -e \
+  'import { readFileSync } from "node:fs"; import { extractWorkspaceVersion } from "./scripts/check-release-version.mjs"; process.stdout.write(extractWorkspaceVersion(readFileSync("Cargo.toml", "utf8")));')"
+tag="v${version}"
+node scripts/check-release-version.mjs --tag "$tag"
 scripts/verify.sh
 git status --short --branch
 ```
@@ -41,16 +45,33 @@ approval. After approval, fetch the current remote state and prove that the
 checked-out commit is exactly the merged `master` commit:
 
 ```bash
+set -euo pipefail
+version="$(node --input-type=module -e \
+  'import { readFileSync } from "node:fs"; import { extractWorkspaceVersion } from "./scripts/check-release-version.mjs"; process.stdout.write(extractWorkspaceVersion(readFileSync("Cargo.toml", "utf8")));')"
+tag="v${version}"
+node scripts/check-release-version.mjs --tag "$tag"
 git fetch origin master --tags
+test -z "$(git status --porcelain)"
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
-git tag -a v0.1.0 -m "IoTKit v0.1.0"
-git push origin refs/tags/v0.1.0
-gh release create v0.1.0 \
+if git rev-parse --verify --quiet "refs/tags/$tag"; then
+  echo "tag already exists: $tag" >&2
+  exit 1
+fi
+if gh release view "$tag" --repo w-pinkietech/iotkit >/dev/null 2>&1; then
+  echo "GitHub Release already exists: $tag" >&2
+  exit 1
+fi
+git tag -a "$tag" -m "IoTKit $tag"
+git push origin "refs/tags/$tag"
+gh release create "$tag" \
   --repo w-pinkietech/iotkit \
   --verify-tag \
-  --title "IoTKit v0.1.0" \
+  --title "IoTKit $tag" \
   --generate-notes \
   --notes "Early pre-1.0 source release. Product and public contracts may change during the 0.x series."
+gh release view "$tag" \
+  --repo w-pinkietech/iotkit \
+  --json isDraft,tagName,url
 ```
 
 The normal release procedure never force-moves or deletes a tag. If a tag or

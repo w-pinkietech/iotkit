@@ -1,7 +1,7 @@
 # Source Release Versioning Design
 
-Date: 2026-07-27  
-Issue: [#102](https://github.com/w-pinkietech/iotkit/issues/102)  
+Date: 2026-07-27
+Issue: [#102](https://github.com/w-pinkietech/iotkit/issues/102)
 Status: approved
 
 ## 1. Purpose

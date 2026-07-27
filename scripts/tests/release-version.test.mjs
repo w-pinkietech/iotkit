@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  extractChangelogReleases,
   extractChangelogVersions,
   extractEnglishReadmeVersion,
   extractJapaneseReadmeVersion,
   extractWorkspaceVersion,
+  packageInheritsWorkspaceVersion,
   validateReleaseState,
 } from "../check-release-version.mjs";
 
@@ -35,7 +37,7 @@ test("accepts one inherited 0.1.0 product version", () => {
   );
 });
 
-test("reports package, document, repository, and tag drift together", () => {
+test("reports package, repository, and tag drift together", () => {
   const problems = validateReleaseState({
     version: "0.1.0",
     packages: [
@@ -94,4 +96,45 @@ test("rejects malformed Cargo versions and README version drift", () => {
     }),
     ["README product version is 0.2.0, expected 0.1.0"],
   );
+});
+
+test("accepts workspace version inheritance only from the package table", () => {
+  assert.equal(
+    packageInheritsWorkspaceVersion(
+      `[package]\nname = "iotkit-edge"\nversion.workspace = true\n`,
+    ),
+    true,
+  );
+  assert.equal(
+    packageInheritsWorkspaceVersion(
+      `[package]\nname = "iotkit-edge"\nversion = "0.1.0"\n\n[package.metadata.release]\nversion.workspace = true\n`,
+    ),
+    false,
+  );
+});
+
+test("reports malformed and duplicate changelog release headings", () => {
+  const changelogReleases = extractChangelogReleases(
+    [
+      "## [Unreleased]",
+      "",
+      "## [0.1.0] - 2026-07-27",
+      "",
+      "## [0.1.0] - July 28",
+      "",
+      "## [v0.2.0] - 2026-08-01",
+    ].join("\n"),
+  );
+  const problems = validateReleaseState({
+    version: "0.1.0",
+    packages: [],
+    repository: "https://github.com/w-pinkietech/iotkit",
+    changelogReleases,
+  });
+
+  assert.deepEqual(problems, [
+    "CHANGELOG.md has duplicate release heading for 0.1.0",
+    "CHANGELOG.md release date is invalid for 0.1.0: July 28",
+    "CHANGELOG.md version is not SemVer: v0.2.0",
+  ]);
 });

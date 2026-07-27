@@ -59,6 +59,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Product release version consistency
+        run: |
+          node --test scripts/tests/release-version.test.mjs
+          node scripts/check-release-version.mjs
+
       - name: IoTKit OKF documentation profile
         env:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}

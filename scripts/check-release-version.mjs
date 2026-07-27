@@ -48,10 +48,26 @@ export function extractJapaneseReadmeVersion(readme) {
   return version;
 }
 
+export function extractChangelogReleases(changelog) {
+  return [
+    ...changelog.matchAll(/^## \[([^\]]+)\](?: - (.*))?$/gm),
+  ]
+    .filter((match) => match[1] !== "Unreleased")
+    .map((match) => ({
+      version: match[1],
+      date: match[2] ?? "",
+    }));
+}
+
 export function extractChangelogVersions(changelog) {
-  return [...changelog.matchAll(/^## \[([^\]]+)\] - \d{4}-\d{2}-\d{2}$/gm)].map(
-    (match) => match[1],
-  );
+  return extractChangelogReleases(changelog).map((release) => release.version);
+}
+
+export function packageInheritsWorkspaceVersion(cargoToml) {
+  const packageSection = cargoToml.match(
+    /^\[package\]\r?\n((?:(?!^\[)[\s\S])*)/m,
+  )?.[1];
+  return /^version\.workspace\s*=\s*true\s*$/m.test(packageSection ?? "");
 }
 
 export function validateReleaseState(state) {
@@ -95,17 +111,39 @@ export function validateReleaseState(state) {
       `README.ja product version is ${state.readmeJaVersion}, expected ${state.version}`,
     );
   }
+  const changelogReleases =
+    state.changelogReleases ??
+    state.changelogVersions?.map((version) => ({ version }));
   if (
-    state.changelogVersions !== undefined &&
-    !state.changelogVersions.includes(state.version)
+    changelogReleases !== undefined &&
+    !changelogReleases.some((release) => release.version === state.version)
   ) {
     problems.push(
       `CHANGELOG.md has no release heading for ${state.version}`,
     );
   }
-  for (const version of state.changelogVersions ?? []) {
-    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
-      problems.push(`CHANGELOG.md version is not SemVer: ${version}`);
+  const seenChangelogVersions = new Set();
+  for (const release of changelogReleases ?? []) {
+    if (seenChangelogVersions.has(release.version)) {
+      problems.push(
+        `CHANGELOG.md has duplicate release heading for ${release.version}`,
+      );
+    }
+    seenChangelogVersions.add(release.version);
+  }
+  for (const release of changelogReleases ?? []) {
+    if (
+      !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(release.version)
+    ) {
+      problems.push(`CHANGELOG.md version is not SemVer: ${release.version}`);
+    }
+    if (
+      release.date !== undefined &&
+      !/^\d{4}-\d{2}-\d{2}$/.test(release.date)
+    ) {
+      problems.push(
+        `CHANGELOG.md release date is invalid for ${release.version}: ${release.date || "(missing)"}`,
+      );
     }
   }
   return problems;
@@ -137,7 +175,7 @@ function loadReleaseState(root, tag) {
       return {
         name: pkg.name,
         version: pkg.version,
-        inheritsVersion: /^version\.workspace\s*=\s*true\s*$/m.test(manifest),
+        inheritsVersion: packageInheritsWorkspaceVersion(manifest),
       };
     });
 
@@ -148,7 +186,7 @@ function loadReleaseState(root, tag) {
     tag,
     readmeVersion: extractEnglishReadmeVersion(readme),
     readmeJaVersion: extractJapaneseReadmeVersion(readmeJa),
-    changelogVersions: extractChangelogVersions(changelog),
+    changelogReleases: extractChangelogReleases(changelog),
   };
 }
 
