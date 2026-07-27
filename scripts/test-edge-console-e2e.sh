@@ -181,6 +181,11 @@ origin="http://127.0.0.1:$port"
   --username "$broker_username" \
   --password-file "$broker_password_file" \
   --allow-insecure \
+  --output-broker-url "tcp://127.0.0.1:$broker_port" \
+  --output-client-id "iotkit-edge-console-e2e-output-$$" \
+  --output-username "$broker_username" \
+  --output-password-file "$broker_password_file" \
+  --output-allow-insecure \
   --http-listen "127.0.0.1:$port" \
   --public-origin "$origin" \
   --development-http \
