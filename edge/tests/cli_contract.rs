@@ -8,6 +8,21 @@ use iotkit_edge::{
 use tempfile::TempDir;
 
 #[test]
+fn version_reports_the_workspace_product_version() {
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_iotkit-edge"))
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("iotkit-edge {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
 fn clap_preserves_backup_and_diagnose_operational_flags() {
     let create = Cli::try_parse_from([
         "iotkit-edge",

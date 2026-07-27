@@ -25,7 +25,17 @@ use iotkit_input_adapter_host_api::{
 };
 use tracing_subscriber::EnvFilter;
 
+fn version_requested(args: &[String]) -> bool {
+    matches!(args, [_, value] if value == "--version")
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if version_requested(&args) {
+        println!("iotkit-edge-node {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("ring provider install");
@@ -39,7 +49,6 @@ fn main() {
     // R20: パニックしたタスクのbacktraceを確実にログへ残す(D1)。
     supervision::install_panic_hook();
 
-    let args: Vec<String> = std::env::args().collect();
     let config = match config::load(&args) {
         Ok(c) => c,
         Err(e) => {

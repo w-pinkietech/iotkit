@@ -10,6 +10,18 @@ fn edgectl() -> Command {
 }
 
 #[test]
+fn version_exits_without_opening_a_database() {
+    let output = edgectl().arg("--version").output().unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("iotkit-edge-nodectl {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
 fn legacy_snapshot_export_refuses_device_credentials_without_secret_or_hash_leak() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("credential-export.db");
