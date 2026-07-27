@@ -134,6 +134,9 @@ async fn admin_output_page_leads_with_delivery_state_and_retains_mutation_contro
     assert!(html.contains(
         "action=\"/console/output-bindings/binding-pinikiet-01\" class=\"output-binding-form\""
     ));
+    assert!(!html.contains(
+        "action=\"/console/output-bindings/binding-pinikiet-06\" class=\"output-binding-form\""
+    ));
     assert!(html.contains("<select name=\"mode\" required>"));
     assert!(html.contains("<option value=\"onoff\">ON/OFF</option>"));
     assert!(html.contains("<option value=\"gantt_chart\">稼働状態</option>"));

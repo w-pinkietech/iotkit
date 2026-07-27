@@ -297,6 +297,7 @@ pub struct ConsoleBinding {
     pub prepared: bool,
     pub target: bool,
     pub needs_configuration: bool,
+    pub configuration_required: bool,
     pub delivery_problem: bool,
     pub delivery_unavailable: bool,
     pub waiting_registration: bool,
@@ -2107,6 +2108,7 @@ pub mod test_support {
                                 state_label: "設定が必要".into(),
                                 state_class: "needs-action".into(),
                                 needs_configuration: true,
+                                configuration_required: true,
                                 ..ConsoleBinding::default()
                             },
                             ConsoleBinding {
@@ -2180,6 +2182,26 @@ pub mod test_support {
                                 delivery_problem: true,
                                 delivery_unavailable: true,
                                 technical_error: "配送状態を確認できません".into(),
+                                ..ConsoleBinding::default()
+                            },
+                            ConsoleBinding {
+                                binding_id: "binding-pinikiet-06".into(),
+                                rule_id: "rule-06".into(),
+                                signal_ref: "signal-01".into(),
+                                edge_node_id: "factory-edge-01".into(),
+                                series_id: "series-06".into(),
+                                sensor_name: "乾燥炉入口 温度".into(),
+                                rule_name: "変換確認不能".into(),
+                                revision: 1,
+                                compatible_modes: vec![ConsoleModeOption {
+                                    key: "onoff".into(),
+                                    display_name: "ON/OFF".into(),
+                                }],
+                                state_label: "変換エラー".into(),
+                                state_class: "error".into(),
+                                target: true,
+                                needs_configuration: true,
+                                technical_error: "送信内容を確認できません".into(),
                                 ..ConsoleBinding::default()
                             },
                         ],

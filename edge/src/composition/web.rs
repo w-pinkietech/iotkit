@@ -509,6 +509,7 @@ impl StorageWebApplication {
                     prepared,
                     target: state.target,
                     needs_configuration: state.needs_configuration,
+                    configuration_required: binding.needs_configuration,
                     delivery_problem: state.delivery_problem,
                     delivery_unavailable,
                     waiting_registration: state.waiting_registration,

@@ -259,6 +259,7 @@ async fn production_console_exposes_real_mode_options_and_configuration_advances
         vec![("onoff", "ON/OFF"), ("gantt_chart", "稼働状態")]
     );
     assert_eq!(binding.revision, profile.revision);
+    assert!(binding.configuration_required);
 
     output_profiles
         .configure(&binding_id, "onoff", Map::new(), 9)
@@ -360,6 +361,7 @@ async fn production_console_localizes_transform_and_delivery_read_failures() {
     assert_eq!(binding.state_label, "変換エラー");
     assert_eq!(binding.technical_error, "送信内容を確認できません");
     assert!(binding.needs_configuration);
+    assert!(!binding.configuration_required);
     assert!(!binding.delivery_problem);
 
     sqlx::query("DELETE FROM output_routes WHERE binding_id=?")

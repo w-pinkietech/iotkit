@@ -548,7 +548,7 @@
                   <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ binding.revision }}"><label class="confirmation-check"><input type="checkbox" name="external_registration_complete" value="true" required>外部アプリへの登録が完了しました</label><button type="submit">送信を開始</button>
                 </form>
               {% endif %}
-              {% if is_admin && binding.needs_configuration %}
+              {% if is_admin && binding.configuration_required && !binding.compatible_modes.is_empty() && binding.revision > 0 %}
                 <form method="post" action="/console/output-bindings/{{ binding.binding_id }}" class="output-binding-form">
                   <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ binding.revision }}">
                   <label><span>送信用途</span><select name="mode" required><option value="">用途を選択</option>{% for mode in binding.compatible_modes %}<option value="{{ mode.key }}">{{ mode.display_name }}</option>{% endfor %}</select></label>
