@@ -598,6 +598,7 @@
           <form method="post" action="/console/export-profiles" class="output-add-card">
             <input type="hidden" name="_csrf" value="{{ csrf }}">
             <input type="hidden" name="adapter_id" value="{{ output.adapter_id }}">
+            <input type="hidden" name="display_name" value="{{ output.display_name }}">
             <div><h3>{{ output.display_name }}</h3><p>{{ output.description }}</p></div>
             <div class="output-activation-preview"><span>自動設定 {{ output.automatic_rule_count }}件</span><span>要設定 {{ output.configuration_rule_count }}件</span><span>対象外 {{ output.ineligible_rule_count }}件</span></div>
             <label class="confirmation-check"><input type="checkbox" name="auto_bind_future_rules" value="true" required><span><strong>今後追加する対応可能な値も自動で送ります</strong><small>この送信先に対応するルールは、追加後も自動的に送信対象へ含まれます。</small></span></label>

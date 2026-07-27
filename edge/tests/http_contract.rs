@@ -144,6 +144,7 @@ async fn admin_output_page_leads_with_delivery_state_and_retains_mutation_contro
     assert!(!html.contains("name=\"mode\" value=\"automatic\""));
     assert!(html.contains("配送状態を確認できません"));
     assert!(!html.contains("semantic or output resource was not found"));
+    assert!(html.contains("name=\"display_name\" value=\"汎用MQTT JSONで送る\""));
     assert!(html.contains("name=\"auto_bind_future_rules\" value=\"true\" required"));
     assert!(html.contains("今後追加する対応可能な値も自動で送ります"));
     assert!(html.contains("この内容で送信を開始"));
