@@ -615,10 +615,11 @@ try {
         return devtools.evaluate(`(() => {
           const card = [...document.querySelectorAll(".output-destination-card")]
             .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
-          const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
-            .map((status) => status.textContent.trim());
+          const destinationStatus = card?.querySelector(":scope > header .status-pill")?.textContent.trim();
           const releasedRule = [...(card?.querySelectorAll(".output-rule-row") ?? [])]
-            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "補正後温度");
+            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "現在の蒸気温度");
+          const releasedRuleStatus = releasedRule
+            ?.querySelector(":scope > header .status-pill")?.textContent.trim();
           const releasedPayload = [...(releasedRule?.querySelectorAll(".output-technical pre") ?? [])]
             .some((payload) => {
               try {
@@ -627,8 +628,8 @@ try {
                 return false;
               }
             });
-          return bindingStates.length > 0 &&
-            bindingStates.every((state) => state === "正常に送信中") &&
+          return destinationStatus === "正常に送信中" &&
+            releasedRuleStatus === "正常に送信中" &&
             releasedPayload &&
             card.textContent.includes("送信対象") &&
             card.textContent.includes("最終送信") &&
@@ -765,13 +766,12 @@ try {
           const cards = [...document.querySelectorAll(".output-destination-card")];
           const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
           const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
-          const hasHealthyBindings = (card) => {
-            const states = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
-              .map((status) => status.textContent.trim());
-            return states.length > 0 && states.every((state) => state === "正常に送信中");
-          };
+          const hasHealthyDestination = (card) =>
+            card?.querySelector(":scope > header .status-pill")?.textContent.trim() === "正常に送信中";
           const releasedRule = [...(pinikiet?.querySelectorAll(".output-rule-row") ?? [])]
-            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "補正後温度");
+            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "現在の蒸気温度");
+          const releasedRuleStatus = releasedRule
+            ?.querySelector(":scope > header .status-pill")?.textContent.trim();
           const hasReleasedPayload = [...(releasedRule?.querySelectorAll(".output-technical pre") ?? [])]
             .some((payload) => {
               try {
@@ -780,8 +780,9 @@ try {
                 return false;
               }
             });
-          return hasHealthyBindings(generic) &&
-            hasHealthyBindings(pinikiet) &&
+          return hasHealthyDestination(generic) &&
+            hasHealthyDestination(pinikiet) &&
+            releasedRuleStatus === "正常に送信中" &&
             hasReleasedPayload &&
             !pinikiet.querySelector("form.output-binding-form") &&
             !pinikiet.querySelector("form.prepared-output-start");
