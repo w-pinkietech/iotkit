@@ -16,6 +16,7 @@ const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
 if (!origin || !password) {
   throw new Error("IOTKIT_EDGE_E2E_URL and IOTKIT_EDGE_E2E_PASSWORD are required");
 }
+const viewerPassword = "閲覧担当者の さらに十分に長いパスワード";
 
 const sleep = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -505,11 +506,98 @@ try {
   );
 
   await devtools.navigate("/output");
+  const inactiveOutputState = await devtools.evaluate(`(() => {
+    const summaryCounts = Object.fromEntries(
+      [...document.querySelectorAll(".output-health-card")].map((card) => [
+        card.querySelector("span")?.textContent.trim(),
+        Number(card.querySelector("strong")?.textContent),
+      ]),
+    );
+    const genericAddCard = document.querySelector(
+      ".output-add-grid form.output-add-card:has(input[value='iotkit.mqtt-json.v1'])",
+    );
+    return { summaryCounts, genericAvailable: Boolean(genericAddCard) };
+  })()`);
+  assert(
+    inactiveOutputState.summaryCounts["正常に送信中"] === 0 &&
+      inactiveOutputState.summaryCounts["設定が必要"] === 0 &&
+      inactiveOutputState.summaryCounts["配送に問題"] === 0 &&
+      inactiveOutputState.genericAvailable,
+    `output page did not start with zero delivery summaries and Generic MQTT available: ${JSON.stringify(inactiveOutputState)}`,
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector(
+      ".output-add-grid form.output-add-card:has(input[value='iotkit.mqtt-json.v1'])",
+    );
+    form.elements.namedItem("auto_bind_future_rules").checked = true;
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && Boolean([...document.querySelectorAll('.output-destination-card')].find((card) => card.querySelector('h2')?.textContent === '汎用MQTT JSONで送る'))",
+      ),
+    "generic output activation",
+  );
   assert(
     await devtools.evaluate(
-      "document.body.textContent.includes('IoTKit MQTT 出力') && document.body.textContent.includes('補正後温度') && Boolean(document.querySelector('.output-stop-form'))",
+      `(() => {
+        const card = [...document.querySelectorAll(".output-destination-card")]
+          .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+        return card?.textContent.includes("正常に送信中") &&
+          card.textContent.includes("送信対象") &&
+          card.textContent.includes("最終送信") &&
+          card.textContent.includes("配送待ち") &&
+          Boolean(card.querySelector(".output-technical"));
+      })()`,
     ),
-    "stored output profile and route were not rendered",
+    "generic output did not render its sending state and delivery facts",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector(
+      ".output-add-grid form.output-add-card:has(input[value='pinikiet.mqtt.v1'])",
+    );
+    form.elements.namedItem("auto_bind_future_rules").checked = true;
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && Boolean([...document.querySelectorAll('.output-destination-card')].find((card) => card.querySelector('h2')?.textContent === 'Pinikietへ送る'))",
+      ),
+    "Pinikiet output preparation",
+  );
+  assert(
+    await devtools.evaluate(`(() => {
+      const cards = [...document.querySelectorAll(".output-destination-card")];
+      const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+      const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
+      return generic?.textContent.includes("正常に送信中") &&
+        pinikiet?.textContent.includes("設定が必要") &&
+        pinikiet.textContent.includes("外部アプリで送信先を登録") &&
+        Boolean(pinikiet.querySelector("form.prepared-output-start"));
+    })()`),
+    "Pinikiet did not wait for registration independently of Generic MQTT delivery",
+  );
+  await devtools.evaluate(`(() => {
+    const card = [...document.querySelectorAll(".output-destination-card")]
+      .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+    const form = card?.querySelector("form.prepared-output-start");
+    form.elements.namedItem("external_registration_complete").checked = true;
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(`(() => {
+        const cards = [...document.querySelectorAll(".output-destination-card")];
+        const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+        const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
+        return location.search.includes("saved=1") &&
+          generic?.textContent.includes("正常に送信中") &&
+          pinikiet?.textContent.includes("正常に送信中") &&
+          !pinikiet.querySelector("form.prepared-output-start");
+      })()`),
+    "Pinikiet output start",
   );
   const connectedInventory = await devtools.evaluate(`(async () => {
     const [signals, semantics, profiles, routes] = await Promise.all(
@@ -522,11 +610,163 @@ try {
     connectedInventory.every((count) => count > 0),
     `production inventories were empty: ${connectedInventory}`,
   );
+
+  await devtools.navigate("/accounts");
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector("form[action='/console/accounts']");
+    form.elements.namedItem("login_id").value = "viewer";
+    form.elements.namedItem("display_name").value = "第一工場 閲覧担当者";
+    form.elements.namedItem("role").value = "viewer";
+    form.elements.namedItem("temporary_password").value = ${JSON.stringify(password)};
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.pathname === '/accounts' && location.search.includes('saved=1') && document.body.textContent.includes('第一工場 閲覧担当者')",
+      ),
+    "account creation form",
+  );
   await devtools.evaluate(
-    "document.querySelector('.output-stop-form').requestSubmit()",
+    "document.querySelector('.logout-form').requestSubmit()",
   );
   await waitFor(
-    () => devtools.evaluate("location.search.includes('saved=1')"),
+    () => devtools.evaluate("location.pathname === '/login'"),
+    "owner logout",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector("form[action='/login']");
+    form.elements.namedItem("login_id").value = "viewer";
+    form.elements.namedItem("password").value = ${JSON.stringify(password)};
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () => devtools.evaluate("location.pathname === '/password'"),
+    "temporary-password login",
+  );
+  assert(
+    await devtools.evaluate(
+      "Boolean(document.querySelector(\"form[action='/password']\"))",
+    ),
+    "temporary account was not forced through password change",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector("form[action='/password']");
+    form.elements.namedItem("current_password").value = ${JSON.stringify(password)};
+    form.elements.namedItem("new_password").value = ${JSON.stringify(viewerPassword)};
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () => devtools.evaluate("location.pathname === '/login'"),
+    "viewer password change",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector("form[action='/login']");
+    form.elements.namedItem("login_id").value = "viewer";
+    form.elements.namedItem("password").value = ${JSON.stringify(viewerPassword)};
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () => devtools.evaluate("location.pathname === '/status'"),
+    "viewer login after password change",
+  );
+  await devtools.navigate("/output");
+  assert(
+    await devtools.evaluate(
+      `document.body.textContent.includes("閲覧のみ") &&
+        document.body.textContent.includes("配送待ち") &&
+        Boolean(document.querySelector(".output-technical")) &&
+        !document.querySelector(
+          "form.output-add-card, form.output-binding-form, form.prepared-output-start, form.output-stop-form"
+        )`,
+    ),
+    "viewer did not retain delivery facts without output controls",
+  );
+  assert(
+    await devtools.evaluate(
+      "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
+    ),
+    "output page overflows horizontally at desktop width",
+  );
+  await devtools.send("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  await devtools.navigate("/output");
+  const narrowOutputState = await devtools.evaluate(`(() => {
+    [...document.querySelectorAll(".output-technical")].forEach((details) => {
+      details.open = true;
+    });
+    const topic = document.querySelector(".output-technical .copy-row code")?.textContent ?? "";
+    const payload = document.querySelector(".output-technical .copy-row pre")?.textContent ?? "";
+    const ids = [...document.querySelectorAll(".output-technical dl code")]
+      .map((code) => code.textContent ?? "");
+    return {
+      fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      longTopic: topic.length > 20,
+      longPayload: payload.length > 40,
+      longId: ids.some((id) => id.length > 20),
+    };
+  })()`);
+  assert(
+    narrowOutputState.fits &&
+      narrowOutputState.longTopic &&
+      narrowOutputState.longPayload &&
+      narrowOutputState.longId,
+    `output page overflows or lacks long technical facts at 390px: ${JSON.stringify(narrowOutputState)}`,
+  );
+  await devtools.send("Emulation.clearDeviceMetricsOverride");
+
+  await devtools.evaluate(
+    "document.querySelector('.logout-form').requestSubmit()",
+  );
+  await waitFor(
+    () => devtools.evaluate("location.pathname === '/login'"),
+    "viewer logout",
+  );
+  await devtools.evaluate(`(() => {
+    const form = document.querySelector("form[action='/login']");
+    form.elements.namedItem("login_id").value = "owner";
+    form.elements.namedItem("password").value = ${JSON.stringify(password)};
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () => devtools.evaluate("location.pathname === '/status'"),
+    "owner login after viewer journey",
+  );
+  await devtools.navigate("/output");
+  assert(
+    await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+      return card?.textContent.includes("正常に送信中") &&
+        card.textContent.includes("送信対象") &&
+        card.textContent.includes("最終送信") &&
+        card.textContent.includes("配送待ち") &&
+        Boolean(card.querySelector(".output-technical")) &&
+        Boolean(card.querySelector(".output-stop-form"));
+    })()`),
+    "active Generic MQTT destination facts and stop control were not rendered",
+  );
+  await devtools.evaluate(
+    `(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+      card.querySelector(".output-stop-form").requestSubmit();
+    })()`,
+  );
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        `location.search.includes("saved=1") &&
+          ![...document.querySelectorAll(".output-destination-card")]
+            .some((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る") &&
+          Boolean(document.querySelector(
+            ".output-add-grid form.output-add-card:has(input[value='iotkit.mqtt-json.v1'])"
+          ))`,
+      ),
     "output stop mutation",
   );
 
@@ -556,22 +796,6 @@ try {
     assert(await devtools.evaluate(expression), `${description} was not rendered`);
   }
 
-  await devtools.evaluate(`(() => {
-    const form = document.querySelector("form[action='/console/accounts']");
-    form.elements.namedItem("login_id").value = "viewer";
-    form.elements.namedItem("display_name").value = "第一工場 閲覧担当者";
-    form.elements.namedItem("role").value = "viewer";
-    form.elements.namedItem("temporary_password").value = ${JSON.stringify(password)};
-    form.requestSubmit();
-  })()`);
-  await waitFor(
-    () =>
-      devtools.evaluate(
-        "location.pathname === '/accounts' && location.search.includes('saved=1') && document.body.textContent.includes('第一工場 閲覧担当者')",
-      ),
-    "account creation form",
-  );
-
   const api = await devtools.evaluate(`(async () => {
     const response = await fetch("/api/v1/system/storage");
     return { status: response.status, body: await response.json() };
@@ -583,29 +807,6 @@ try {
           ? "postgres"
           : "embedded"),
     `production storage API failed: ${JSON.stringify(api)}`,
-  );
-  await devtools.evaluate(
-    "document.querySelector('.logout-form').requestSubmit()",
-  );
-  await waitFor(
-    () => devtools.evaluate("location.pathname === '/login'"),
-    "logout",
-  );
-  await devtools.evaluate(`(() => {
-    const form = document.querySelector("form[action='/login']");
-    form.elements.namedItem("login_id").value = "viewer";
-    form.elements.namedItem("password").value = ${JSON.stringify(password)};
-    form.requestSubmit();
-  })()`);
-  await waitFor(
-    () => devtools.evaluate("location.pathname === '/password'"),
-    "temporary-password login",
-  );
-  assert(
-    await devtools.evaluate(
-      "Boolean(document.querySelector(\"form[action='/password']\"))",
-    ),
-    "temporary account was not forced through password change",
   );
   assert(
     devtools.exceptions.length === 0,

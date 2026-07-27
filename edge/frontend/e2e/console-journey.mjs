@@ -357,6 +357,27 @@ try {
 
   await devtools.navigate(`${edgeNodeURL}/output`, "/output");
   assert((await devtools.evaluate(activeNavigation)) === "外部出力", "output navigation is not active");
+  const inactiveOutputState = await devtools.evaluate(`(() => {
+    const summaryCounts = Object.fromEntries(
+      [...document.querySelectorAll(".output-health-card")].map((card) => [
+        card.querySelector("span")?.textContent.trim(),
+        Number(card.querySelector("strong")?.textContent),
+      ]),
+    );
+    return {
+      summaryCounts,
+      genericAvailable: Boolean(document.querySelector(
+        ".output-add-grid form.output-add-card:has(input[value='iotkit.mqtt-json.v1'])",
+      )),
+    };
+  })()`);
+  assert(
+    inactiveOutputState.summaryCounts["正常に送信中"] === 0 &&
+      inactiveOutputState.summaryCounts["設定が必要"] === 0 &&
+      inactiveOutputState.summaryCounts["配送に問題"] === 0 &&
+      inactiveOutputState.genericAvailable,
+    `output page did not start inactive: ${JSON.stringify(inactiveOutputState)}`,
+  );
   await devtools.evaluate(
     setFormValues(
       "form.output-add-card:has(input[value='iotkit.mqtt-json.v1'])",
@@ -379,9 +400,21 @@ try {
   }
   assert(
     (await devtools.evaluate(
-      `document.querySelectorAll(".output-binding-table tbody tr:not(.empty-row)").length`,
+      `document.querySelectorAll(".output-destination-card .output-rule-row").length`,
     )) === 3,
     "generic output did not bind all three semantic rules",
+  );
+  assert(
+    await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+      return card?.textContent.includes("正常に送信中") &&
+        card.textContent.includes("送信対象") &&
+        card.textContent.includes("最終送信") &&
+        card.textContent.includes("配送待ち") &&
+        Boolean(card.querySelector(".output-technical"));
+    })()`),
+    "generic output did not expose its normal delivery state",
   );
 
   await devtools.evaluate(
@@ -393,6 +426,17 @@ try {
   await devtools.waitForExpression(
     `location.pathname === "/output" && location.search.includes("saved=1") && document.body.textContent.includes("Pinikietへ送る")`,
     "Pinikiet output preparation",
+  );
+  assert(
+    await devtools.evaluate(`(() => {
+      const cards = [...document.querySelectorAll(".output-destination-card")];
+      const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+      const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
+      return generic?.textContent.includes("正常に送信中") &&
+        pinikiet?.textContent.includes("設定が必要") &&
+        pinikiet.textContent.includes("外部アプリで送信先を登録");
+    })()`),
+    "Pinikiet did not wait for registration independently of Generic MQTT delivery",
   );
   const preparedCount = await devtools.evaluate(`(() => {
     const card = [...document.querySelectorAll(".output-destination-card")]
@@ -416,7 +460,8 @@ try {
       const card = [...document.querySelectorAll(".output-destination-card")]
         .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
       return card?.querySelectorAll("form.prepared-output-start").length === 0 &&
-        card?.textContent.includes("送信対象");
+        card?.textContent.includes("正常に送信中") &&
+        card.textContent.includes("送信対象");
     })()`,
     "Pinikiet output start",
   );
@@ -506,10 +551,35 @@ try {
   await devtools.navigate(`${edgeNodeURL}/output`, "/output");
   assert(
     await devtools.evaluate(
-      `document.body.textContent.includes("閲覧のみ") && !document.querySelector("form.output-add-card")`,
+      `document.body.textContent.includes("閲覧のみ") &&
+        document.body.textContent.includes("配送待ち") &&
+        Boolean(document.querySelector(".output-technical")) &&
+        !document.querySelector(
+          "form.output-add-card, form.output-binding-form, form.prepared-output-start, form.output-stop-form"
+        )`,
     ),
     "viewer output page does not enforce read-only presentation",
   );
+  assert(
+    await devtools.evaluate(
+      "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
+    ),
+    "output page overflows horizontally at desktop width",
+  );
+  await devtools.send("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  await devtools.navigate(`${edgeNodeURL}/output`, "/output");
+  assert(
+    await devtools.evaluate(
+      "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
+    ),
+    "output page overflows horizontally at 390px",
+  );
+  await devtools.send("Emulation.clearDeviceMetricsOverride");
 
   await devtools.evaluate(`document.querySelector(".logout-form").requestSubmit()`);
   await devtools.waitForExpression(`location.pathname === "/login"`, "viewer logout");
