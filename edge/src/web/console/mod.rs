@@ -4,3 +4,4 @@
 //! mark are served byte-for-byte by the parent module.
 
 pub mod commissioning;
+pub mod output;

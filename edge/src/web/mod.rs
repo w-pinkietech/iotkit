@@ -164,6 +164,7 @@ pub struct ConsoleView {
     pub history_raw_export_url: String,
     pub history_processed_export_url: String,
     pub outputs: Vec<ConsoleOutput>,
+    pub output_summary: ConsoleOutputSummary,
     pub accounts: Vec<ConsoleAccount>,
     pub audit: Vec<ConsoleAudit>,
     pub storage: ConsoleStorage,
@@ -247,23 +248,60 @@ pub struct ConsoleRule {
     pub trigger: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+pub struct ConsoleOutputSummary {
+    pub sending_count: usize,
+    pub needs_configuration_count: usize,
+    pub delivery_problem_count: usize,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct ConsoleOutput {
     pub profile_id: String,
     pub adapter_id: String,
     pub display_name: String,
+    pub adapter_name: String,
     pub description: String,
     pub active: bool,
+    pub draining: bool,
+    pub future_rules_enabled: bool,
+    pub status_label: String,
+    pub status_class: String,
+    pub needs_configuration: bool,
+    pub delivery_problem: bool,
+    pub target_count: usize,
+    pub pending_count: i64,
+    pub oldest_pending_at: Option<i64>,
+    pub last_published_at: Option<i64>,
+    pub automatic_rule_count: usize,
+    pub configuration_rule_count: usize,
+    pub ineligible_rule_count: usize,
     pub bindings: Vec<ConsoleBinding>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ConsoleBinding {
     pub binding_id: String,
+    pub rule_id: String,
+    pub signal_ref: String,
+    pub edge_node_id: String,
+    pub series_id: String,
     pub sensor_name: String,
     pub rule_name: String,
     pub state_label: String,
+    pub state_class: String,
     pub prepared: bool,
+    pub target: bool,
+    pub needs_configuration: bool,
+    pub delivery_problem: bool,
+    pub waiting_registration: bool,
+    pub pending_count: i64,
+    pub oldest_pending_at: Option<i64>,
+    pub last_published_at: Option<i64>,
+    pub topic: String,
+    pub payload: String,
+    pub provenance_label: String,
+    pub technical_error: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2001,6 +2039,7 @@ pub mod test_support {
                         description: "意味づけ済みの値をIoTKit共通形式で送ります。".into(),
                         active: false,
                         bindings: Vec::new(),
+                        ..ConsoleOutput::default()
                     },
                     ConsoleOutput {
                         profile_id: String::new(),
@@ -2009,8 +2048,10 @@ pub mod test_support {
                         description: "累積値・状態・アラームをPinikiet契約へ変換します。".into(),
                         active: false,
                         bindings: Vec::new(),
+                        ..ConsoleOutput::default()
                     },
                 ],
+                output_summary: Default::default(),
                 accounts: vec![ConsoleAccount {
                     account_ref: "acct-owner".into(),
                     login_id: "owner".into(),
