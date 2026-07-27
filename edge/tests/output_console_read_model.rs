@@ -44,11 +44,11 @@ async fn fixture(database_name: &str) -> Fixture {
     .await
     .unwrap();
     storage.initialize_edge_identity(1).await.unwrap();
-    AccountService::new(storage.clone())
+    let owner = AccountService::new(storage.clone())
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(uuid::Uuid::new_v4().to_string()).unwrap(),
             2,
         )
         .await
@@ -101,12 +101,17 @@ async fn fixture(database_name: &str) -> Fixture {
         )
         .await
         .unwrap();
-    let application = StorageWebApplication::new(storage.clone());
-    let principal = application
-        .login("owner", "long enough owner password")
-        .await
-        .unwrap()
-        .principal;
+    let principal = Principal {
+        account_ref: owner.account_ref,
+        login_id: owner.login_id,
+        display_name: owner.display_name,
+        role: owner.role.as_str().into(),
+        state: owner.state.as_str().into(),
+        must_change_password: owner.must_change_password,
+        revision: owner.revision,
+        created_at: owner.created_at,
+        updated_at: owner.updated_at,
+    };
     Fixture {
         _directory: directory,
         database_path,
