@@ -636,6 +636,7 @@ impl WebApplication for StorageWebApplication {
         };
         let commissioning = commissioning_view(&edge_nodes, &devices, &signals);
         Ok(ConsoleView {
+            product_version: env!("CARGO_PKG_VERSION").into(),
             commissioning,
             registered_edge_node_count: nodes
                 .iter()

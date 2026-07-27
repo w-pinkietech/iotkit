@@ -387,6 +387,7 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
         (
             "/system",
             &[
+                "IoTKit Edge 0.1.0",
                 "保存データの状態",
                 "raw受信データ",
                 "確認が必要なこと",

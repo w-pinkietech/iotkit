@@ -586,6 +586,15 @@
       {% endif %}
 
       {% if page == "system" %}
+      <section class="system-grid" aria-label="製品情報">
+        <article class="system-card">
+          <div>
+            <h2>製品情報</h2>
+            <strong>IoTKit Edge {{ view.product_version }}</strong>
+            <p>IoTKit全体の製品バージョンです。</p>
+          </div>
+        </article>
+      </section>
       <section class="content-section">
         <div class="section-heading"><div><h2>保存データの状態</h2><p>{{ view.storage.profile_label }}</p></div></div>
         <dl class="storage-facts"><div><dt>raw受信データ</dt><dd>{{ view.storage.raw_count }}件</dd></div><div><dt>送信待ち</dt><dd>{{ view.storage.pending_output_count }}件</dd></div></dl>
