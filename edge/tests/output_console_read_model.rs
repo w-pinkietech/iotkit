@@ -219,6 +219,39 @@ async fn production_console_composes_live_output_delivery_facts_and_frees_stoppe
 }
 
 #[tokio::test]
+async fn production_console_localizes_available_output_adapter_names() {
+    let fixture = fixture("output-console-available-adapter-names.db").await;
+    let view = StorageWebApplication::new(fixture.storage)
+        .console(ConsoleRequest {
+            path: "/output".into(),
+            query: HashMap::new(),
+            principal: fixture.principal,
+        })
+        .await
+        .expect("compose output console");
+
+    let generic = view
+        .outputs
+        .iter()
+        .find(|output| output.adapter_id == "iotkit.mqtt-json.v1")
+        .expect("generic MQTT output is available");
+    assert!(!generic.active);
+    assert!(!generic.draining);
+    assert_eq!(generic.display_name, "汎用MQTT JSONで送る");
+    assert_eq!(generic.adapter_name, "IoTKit MQTT JSON v1");
+
+    let pinikiet = view
+        .outputs
+        .iter()
+        .find(|output| output.adapter_id == "pinikiet.mqtt.v1")
+        .expect("Pinikiet output is available");
+    assert!(!pinikiet.active);
+    assert!(!pinikiet.draining);
+    assert_eq!(pinikiet.display_name, "Pinikietへ送る");
+    assert_eq!(pinikiet.adapter_name, "Pinikiet MQTT v1");
+}
+
+#[tokio::test]
 async fn production_console_exposes_real_mode_options_and_configuration_advances() {
     let fixture = fixture("output-console-mode-options.db").await;
     create_rule(&fixture, "設備稼働", SemanticKind::Boolean).await;

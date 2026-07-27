@@ -368,7 +368,8 @@ impl StorageWebApplication {
                     .map_err(internal)?;
                 outputs.push(ConsoleOutput {
                     adapter_id: descriptor.id.into(),
-                    display_name: descriptor.display_name.into(),
+                    display_name: output_presentation_name(descriptor.id, descriptor.display_name)
+                        .into(),
                     adapter_name: descriptor.display_name.into(),
                     description: format!(
                         "{} の意味づけ済みデータを送信します。",
@@ -1791,6 +1792,14 @@ fn console_unit_label(unit: &str) -> String {
     match unit {
         "Cel" => "°C".into(),
         _ => unit.into(),
+    }
+}
+
+fn output_presentation_name<'a>(adapter_id: &str, fallback: &'a str) -> &'a str {
+    match adapter_id {
+        "iotkit.mqtt-json.v1" => "汎用MQTT JSONで送る",
+        "pinikiet.mqtt.v1" => "Pinikietへ送る",
+        _ => fallback,
     }
 }
 
