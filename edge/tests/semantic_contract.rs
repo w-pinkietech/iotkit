@@ -33,6 +33,30 @@ fn cumulative_transition_uses_the_first_sample_only_as_baseline() {
 }
 
 #[test]
+fn cumulative_notification_counts_each_active_sample_after_baseline() {
+    let spec = DefinitionSpec {
+        kind: SemanticKind::CumulativeCounter,
+        scale: 1.0,
+        offset: 0.0,
+        detector: Detector {
+            mode: DetectorMode::HighActive,
+            rise_threshold: 40.0,
+            fall_threshold: 39.0,
+            ..Detector::default()
+        },
+        trigger: TriggerMode::OnNotification,
+    };
+    let mut state = EvaluationState::default();
+    let mut values = Vec::new();
+    for (time, input) in [43.0, 44.5, 45.0, 46.5].into_iter().enumerate() {
+        let (result, next) = evaluate_at(spec, state, input, time as i64).expect("evaluate");
+        state = next;
+        values.extend(result.integer);
+    }
+    assert_eq!(values, [1, 2, 3]);
+}
+
+#[test]
 fn high_active_detector_applies_hysteresis_and_independent_debounce() {
     let spec = DefinitionSpec {
         kind: SemanticKind::Boolean,

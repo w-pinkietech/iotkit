@@ -385,6 +385,36 @@ try {
     );
     throw new Error(`${error}\nPage state: ${diagnostic}`);
   }
+  await devtools.evaluate(`(() => {
+    const disclosure = document.querySelector("#rule-create");
+    disclosure.open = true;
+    const form = disclosure.querySelector(".semantic-form");
+    form.elements.namedItem("display_name").value = "蒸気温度通知回数";
+    const kind = form.elements.namedItem("kind");
+    kind.value = "cumulative_counter";
+    kind.dispatchEvent(new Event("change", { bubbles: true }));
+    form.elements.namedItem("detector_mode").value = "high_active";
+    form.elements.namedItem("rise_threshold").value = "40";
+    form.elements.namedItem("fall_threshold").value = "39";
+    form.elements.namedItem("rise_debounce_seconds").value = "0";
+    form.elements.namedItem("fall_debounce_seconds").value = "0";
+    form.elements.namedItem("trigger").value = "on_notification";
+    form.requestSubmit();
+  })()`);
+  try {
+    await waitFor(
+      () =>
+        devtools.evaluate(
+          "location.search.includes('saved=1') && document.body.textContent.includes('蒸気温度通知回数')",
+        ),
+      "commissioning cumulative semantic rule creation",
+    );
+  } catch (error) {
+    const diagnostic = await devtools.evaluate(
+      "JSON.stringify({location: location.href, text: document.body.textContent.slice(0, 1200)})",
+    );
+    throw new Error(`${error}\nPage state: ${diagnostic}`);
+  }
   await devtools.navigate("/status");
   assert(
     await devtools.evaluate("document.querySelector('.onboarding') === null"),
@@ -769,13 +799,13 @@ try {
           const hasHealthyDestination = (card) =>
             card?.querySelector(":scope > header .status-pill")?.textContent.trim() === "正常に送信中";
           const releasedRule = [...(pinikiet?.querySelectorAll(".output-rule-row") ?? [])]
-            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "現在の蒸気温度");
+            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "蒸気温度通知回数");
           const releasedRuleStatus = releasedRule
             ?.querySelector(":scope > header .status-pill")?.textContent.trim();
           const hasReleasedPayload = [...(releasedRule?.querySelectorAll(".output-technical pre") ?? [])]
             .some((payload) => {
               try {
-                return JSON.parse(payload.textContent).sequence === 4;
+                return JSON.parse(payload.textContent).sequence === 3;
               } catch {
                 return false;
               }
