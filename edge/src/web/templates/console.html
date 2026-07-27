@@ -601,7 +601,7 @@
             <button type="submit">この内容で送信を開始</button>
           </form>
           {% else %}
-          <article class="output-available-card"><h3>{{ output.display_name }}</h3><p>{{ output.description }}</p><span class="status-pill waiting">未設定</span></article>
+          <article class="output-available-card"><h3>{{ output.display_name }}</h3><p>{{ output.description }}</p><div class="output-activation-preview"><span>自動設定 {{ output.automatic_rule_count }}件</span><span>要設定 {{ output.configuration_rule_count }}件</span><span>対象外 {{ output.ineligible_rule_count }}件</span></div><span class="status-pill waiting">未設定</span></article>
           {% endif %}
           {% endif %}
         {% endfor %}

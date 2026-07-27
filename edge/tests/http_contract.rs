@@ -157,6 +157,10 @@ async fn viewer_output_page_keeps_delivery_facts_without_mutation_controls() {
     assert!(html.contains("data-unix-ms=\"1735689660000\""));
     assert!(html.contains("Profile ID"));
     assert!(html.contains("binding-pinikiet-01"));
+    assert!(html.contains("class=\"output-activation-preview\""));
+    assert!(html.contains("自動設定 0件"));
+    assert!(html.contains("要設定 0件"));
+    assert!(html.contains("対象外 0件"));
     assert!(!html.contains("class=\"output-add-card\""));
     assert!(!html.contains("class=\"output-binding-form\""));
     assert!(!html.contains("class=\"prepared-output-start\""));
