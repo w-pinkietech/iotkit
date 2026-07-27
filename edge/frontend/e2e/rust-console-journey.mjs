@@ -585,8 +585,17 @@ try {
           .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
         const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
           .map((status) => status.textContent.trim());
+        const releasedPayload = [...(card?.querySelectorAll(".output-technical pre") ?? [])]
+          .some((payload) => {
+            try {
+              return JSON.parse(payload.textContent).sequence === 4;
+            } catch {
+              return false;
+            }
+          });
         return bindingStates.length > 0 &&
           bindingStates.every((state) => state === "正常に送信中") &&
+          releasedPayload &&
           card.textContent.includes("送信対象") &&
           card.textContent.includes("最終送信") &&
           card.textContent.includes("配送待ち") &&
@@ -720,8 +729,17 @@ try {
             .map((status) => status.textContent.trim());
           return states.length > 0 && states.every((state) => state === "正常に送信中");
         };
+        const hasReleasedPayload = [...(pinikiet?.querySelectorAll(".output-technical pre") ?? [])]
+          .some((payload) => {
+            try {
+              return JSON.parse(payload.textContent).sequence === 6;
+            } catch {
+              return false;
+            }
+          });
         return hasHealthyBindings(generic) &&
           hasHealthyBindings(pinikiet) &&
+          hasReleasedPayload &&
           !pinikiet.querySelector("form.output-binding-form") &&
           !pinikiet.querySelector("form.prepared-output-start");
       })()`);
