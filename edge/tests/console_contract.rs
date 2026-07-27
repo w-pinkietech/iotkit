@@ -380,8 +380,9 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             &[
                 r#"class="output-add-card"#,
                 r#"value="iotkit.mqtt-json.v1""#,
-                r#"value="pinikiet.mqtt.v1""#,
-                r#"class="output-binding-table""#,
+                r#"class="output-destinations""#,
+                r#"class="output-destination-card"#,
+                r#"class="output-rule-list""#,
             ][..],
         ),
         (

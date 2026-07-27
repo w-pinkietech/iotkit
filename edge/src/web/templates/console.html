@@ -512,31 +512,40 @@
 
       {% if page == "output" %}
       {% if !is_admin %}<div class="permission-note"><strong>閲覧のみ</strong><span>設定内容を確認できます。</span></div>{% endif %}
-      <section class="content-section">
-        <div class="section-heading"><div><h2>外部アプリへの送信</h2><p>出力先を選び、意味づけ済みの値を送ります。</p></div></div>
-        <div class="output-destination-grid">
+      <section class="output-health-summary" aria-label="外部アプリへの配送状況">
+        <article class="output-health-card healthy"><span>正常に送信中</span><strong>{{ view.output_summary.sending_count }}</strong><small>件</small></article>
+        <article class="output-health-card needs-action"><span>設定が必要</span><strong>{{ view.output_summary.needs_configuration_count }}</strong><small>件</small></article>
+        <article class="output-health-card error"><span>配送に問題</span><strong>{{ view.output_summary.delivery_problem_count }}</strong><small>件</small></article>
+      </section>
+      <section class="content-section output-destinations-section">
+        <div class="section-heading"><div><h2>送信先の状態</h2><p>外部アプリごとの送信対象と配送状況を確認できます。</p></div></div>
+        <div class="output-destinations">
         {% for output in view.outputs %}
-          <article class="output-destination-card">
-            <h2>{{ output.display_name }}</h2><p>{{ output.description }}</p>
-            {% if is_admin && !output.active %}
-            <form method="post" action="/console/export-profiles" class="output-add-card">
-              <input type="hidden" name="_csrf" value="{{ csrf }}">
-              <input type="hidden" name="adapter_id" value="{{ output.adapter_id }}">
-              <label><input type="checkbox" name="auto_bind_future_rules" value="true">今後追加する値も自動で送る</label>
-              <button type="submit">追加</button>
-            </form>
-            {% endif %}
-            {% if is_admin && output.active %}
-            <form method="post" action="/console/export-profiles/{{ output.profile_id }}/stop" class="output-stop-form">
-              <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">送信を停止</button>
-            </form>
-            {% endif %}
-            <table class="output-binding-table"><thead><tr><th>センサー</th><th>値</th><th>状態</th></tr></thead><tbody>
+          {% if output.active || output.draining %}
+          <article class="output-destination-card output-state-{{ output.status_class }}">
+            <header>
+              <div><h2>{{ output.display_name }}</h2><p>{{ output.description }}</p></div>
+              <span class="status-pill {{ output.status_class }}">{{ output.status_label }}</span>
+            </header>
+            <dl class="output-destination-summary">
+              <div><dt>送信対象</dt><dd><strong>{{ output.target_count }}</strong>件</dd></div>
+              <div><dt>最終送信</dt><dd>{% match output.last_published_at %}{% when Some with (timestamp) %}<time data-unix-ms="{{ timestamp }}">{{ timestamp }} (Unix ms)</time>{% when None %}まだ送信されていません{% endmatch %}</dd></div>
+              <div><dt>配送待ち</dt><dd><strong>{{ output.pending_count }}</strong>件</dd></div>
+              <div><dt>最古の配送待ち</dt><dd>{% match output.oldest_pending_at %}{% when Some with (timestamp) %}<time data-unix-ms="{{ timestamp }}">{{ timestamp }} (Unix ms)</time>{% when None %}ありません{% endmatch %}</dd></div>
+            </dl>
+            <p class="output-future-rules">{% if output.future_rules_enabled %}今後追加する対応可能な値も自動で送ります{% else %}今後追加する値は自動では送りません{% endif %}</p>
+            <div class="output-rule-list">
             {% for binding in output.bindings %}
-              <tr><td>{{ binding.sensor_name }}</td><td>{{ binding.rule_name }}</td><td>{{ binding.state_label }}
+              <article class="output-rule-row output-state-{{ binding.state_class }}">
+                <header><div><strong>{{ binding.rule_name }}</strong><span>{{ binding.sensor_name }}</span></div><span class="status-pill {{ binding.state_class }}">{{ binding.state_label }}</span></header>
+                <dl class="output-rule-facts">
+                  <div><dt>配送待ち</dt><dd>{{ binding.pending_count }}件</dd></div>
+                  <div><dt>最終送信</dt><dd>{% match binding.last_published_at %}{% when Some with (timestamp) %}<time data-unix-ms="{{ timestamp }}">{{ timestamp }} (Unix ms)</time>{% when None %}まだ送信されていません{% endmatch %}</dd></div>
+                </dl>
+                {% if binding.waiting_registration %}<p class="output-registration-guidance">外部アプリで送信先を登録し、登録完了を確認してから送信を開始してください。</p>{% endif %}
               {% if is_admin && binding.prepared %}
                 <form method="post" action="/console/output-bindings/{{ binding.binding_id }}/start" class="prepared-output-start">
-                  <input type="hidden" name="_csrf" value="{{ csrf }}"><label><input type="checkbox" name="external_registration_complete" value="true">外部登録を完了</label><button type="submit">送信開始</button>
+                  <input type="hidden" name="_csrf" value="{{ csrf }}"><label class="confirmation-check"><input type="checkbox" name="external_registration_complete" value="true" required>外部アプリへの登録が完了しました</label><button type="submit">送信を開始</button>
                 </form>
               {% endif %}
               {% if is_admin %}
@@ -544,10 +553,57 @@
                   <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="mode" value="automatic"><button type="submit">設定を保存</button>
                 </form>
               {% endif %}
-              </td></tr>
+                <details class="output-technical">
+                  <summary>送信内容と識別情報</summary>
+                  <div>
+                    <dl>
+                      <div><dt>Adapter ID</dt><dd><code>{{ output.adapter_id }}</code></dd></div>
+                      <div><dt>Profile ID</dt><dd><code>{{ output.profile_id }}</code></dd></div>
+                      <div><dt>Binding ID</dt><dd><code>{{ binding.binding_id }}</code></dd></div>
+                      <div><dt>Edge Node ID</dt><dd><code>{{ binding.edge_node_id }}</code></dd></div>
+                      <div><dt>Signal Ref</dt><dd><code>{{ binding.signal_ref }}</code></dd></div>
+                      <div><dt>Series ID</dt><dd><code>{{ binding.series_id }}</code></dd></div>
+                      <div><dt>Rule ID</dt><dd><code>{{ binding.rule_id }}</code></dd></div>
+                      <div><dt>送信内容の由来</dt><dd>{{ binding.provenance_label }}</dd></div>
+                    </dl>
+                    <div class="copy-row"><div><span>Topic</span><code>{{ binding.topic }}</code></div><button type="button" data-copy-text="{{ binding.topic }}">コピー</button></div>
+                    <div class="copy-row"><div><span>Payload</span><pre>{{ binding.payload }}</pre></div><button type="button" data-copy-text="{{ binding.payload }}">コピー</button></div>
+                  </div>
+                </details>
+              </article>
             {% endfor %}
-            </tbody></table>
+            </div>
+            {% if is_admin %}
+            <details class="output-stop">
+              <summary>この送信先を停止</summary>
+              <form method="post" action="/console/export-profiles/{{ output.profile_id }}/stop" class="output-stop-form">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit" class="danger-button">送信を停止</button>
+              </form>
+            </details>
+            {% endif %}
           </article>
+          {% endif %}
+        {% endfor %}
+        </div>
+      </section>
+      <section class="content-section">
+        <div class="section-heading"><div><h2>送信先を追加</h2><p>利用する外部アプリを選び、送信対象を確認して開始します。</p></div></div>
+        <div class="output-add-grid">
+        {% for output in view.outputs %}
+          {% if !output.active && !output.draining %}
+          {% if is_admin %}
+          <form method="post" action="/console/export-profiles" class="output-add-card">
+            <input type="hidden" name="_csrf" value="{{ csrf }}">
+            <input type="hidden" name="adapter_id" value="{{ output.adapter_id }}">
+            <div><h3>{{ output.display_name }}</h3><p>{{ output.description }}</p></div>
+            <div class="output-activation-preview"><span>自動設定 {{ output.automatic_rule_count }}件</span><span>要設定 {{ output.configuration_rule_count }}件</span><span>対象外 {{ output.ineligible_rule_count }}件</span></div>
+            <label class="confirmation-check"><input type="checkbox" name="auto_bind_future_rules" value="true" required><span><strong>今後追加する対応可能な値も自動で送ります</strong><small>この送信先に対応するルールは、追加後も自動的に送信対象へ含まれます。</small></span></label>
+            <button type="submit">この内容で送信を開始</button>
+          </form>
+          {% else %}
+          <article class="output-available-card"><h3>{{ output.display_name }}</h3><p>{{ output.description }}</p><span class="status-pill waiting">未設定</span></article>
+          {% endif %}
+          {% endif %}
         {% endfor %}
         </div>
       </section>

@@ -2053,28 +2053,54 @@ pub mod test_support {
                         status_label: "設定が必要".into(),
                         status_class: "needs-action".into(),
                         needs_configuration: true,
-                        target_count: 1,
-                        bindings: vec![ConsoleBinding {
-                            binding_id: "binding-pinikiet-01".into(),
-                            rule_id: "rule-01".into(),
-                            signal_ref: "signal-01".into(),
-                            edge_node_id: "factory-edge-01".into(),
-                            series_id: "series-01".into(),
-                            sensor_name: "乾燥炉入口 温度".into(),
-                            rule_name: "現在温度".into(),
-                            state_label: "外部登録待ち".into(),
-                            state_class: "needs-action".into(),
-                            prepared: true,
-                            target: true,
-                            needs_configuration: true,
-                            waiting_registration: true,
-                            topic:
-                                "pinikiet/v1/sources/factory-edge-01/sensors/sen-01/observations"
+                        target_count: 2,
+                        pending_count: 2,
+                        oldest_pending_at: Some(1735689630000),
+                        last_published_at: Some(1735689660000),
+                        bindings: vec![
+                            ConsoleBinding {
+                                binding_id: "binding-pinikiet-01".into(),
+                                rule_id: "rule-01".into(),
+                                signal_ref: "signal-01".into(),
+                                edge_node_id: "factory-edge-01".into(),
+                                series_id: "series-01".into(),
+                                sensor_name: "乾燥炉入口 温度".into(),
+                                rule_name: "現在温度".into(),
+                                state_label: "外部登録待ち".into(),
+                                state_class: "needs-action".into(),
+                                prepared: true,
+                                target: true,
+                                needs_configuration: true,
+                                waiting_registration: true,
+                                topic:
+                                    "pinikiet/v1/sources/factory-edge-01/sensors/sen-01/observations"
+                                        .into(),
+                                payload: "{\n  \"schema_version\": 1\n}".into(),
+                                provenance_label: "サンプル".into(),
+                                ..ConsoleBinding::default()
+                            },
+                            ConsoleBinding {
+                                binding_id: "binding-pinikiet-02".into(),
+                                rule_id: "rule-02".into(),
+                                signal_ref: "signal-01".into(),
+                                edge_node_id: "factory-edge-01".into(),
+                                series_id: "series-01".into(),
+                                sensor_name: "乾燥炉入口 温度".into(),
+                                rule_name: "上限アラーム".into(),
+                                state_label: "正常に送信中".into(),
+                                state_class: "healthy".into(),
+                                target: true,
+                                pending_count: 2,
+                                oldest_pending_at: Some(1735689630000),
+                                last_published_at: Some(1735689660000),
+                                topic:
+                                    "pinikiet/v1/sources/factory-edge-01/alarms/rule-02".into(),
+                                payload: "{\n  \"schema_version\": 1,\n  \"active\": false\n}"
                                     .into(),
-                            payload: "{\n  \"schema_version\": 1\n}".into(),
-                            provenance_label: "サンプル".into(),
-                            ..ConsoleBinding::default()
-                        }],
+                                provenance_label: "実際の配送内容".into(),
+                                ..ConsoleBinding::default()
+                            },
+                        ],
                         ..ConsoleOutput::default()
                     },
                 ],
