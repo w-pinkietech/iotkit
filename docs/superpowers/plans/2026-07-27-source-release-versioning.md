@@ -718,7 +718,7 @@ git add .github/workflows/ci.yml docs/superpowers/plans/2026-07-27-source-releas
 git commit -m "ci: verify product release version"
 ```
 
-- [ ] **Step 7: Push and open the draft PR**
+- [x] **Step 7: Push and open the draft PR**
 
 Use the repository publish workflow with:
 
