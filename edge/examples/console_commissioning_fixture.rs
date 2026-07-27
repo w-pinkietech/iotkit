@@ -6,6 +6,7 @@
 
 use std::{
     env, fs,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -44,6 +45,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<u16>()?;
     let username = args.next().ok_or("MQTT username is required")?;
     let password_file = args.next().ok_or("MQTT password file is required")?;
+    let generic_output_release = PathBuf::from(
+        args.next()
+            .ok_or("Generic output release path is required")?,
+    );
+    let pinikiet_output_release = PathBuf::from(
+        args.next()
+            .ok_or("Pinikiet output release path is required")?,
+    );
     if args.next().is_some() {
         return Err("unexpected commissioning fixture argument".into());
     }
@@ -99,7 +108,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("commissioning activation result published");
 
-    let batch = measurement_batch()?;
+    let batch = measurement_batch(1, [41.0, 42.5])?;
     batch.validate()?;
     client
         .publish(
@@ -114,6 +123,50 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let ack = wait_for_ack(&mut event_loop).await?;
     ack.validate_for(&batch, 0)?;
     println!("commissioning accepted-through 2 validated");
+
+    wait_for_release(
+        &mut event_loop,
+        &generic_output_release,
+        "Generic output release",
+    )
+    .await?;
+    let batch = measurement_batch(3, [43.0, 44.5])?;
+    batch.validate()?;
+    client
+        .publish(
+            RECORDS_TOPIC,
+            QoS::AtLeastOnce,
+            false,
+            serde_json::to_vec(&batch)?,
+        )
+        .await?;
+    println!("commissioning records 3-4 published after Generic output release");
+
+    let ack = wait_for_ack(&mut event_loop).await?;
+    ack.validate_for(&batch, 2)?;
+    println!("commissioning accepted-through 4 validated");
+
+    wait_for_release(
+        &mut event_loop,
+        &pinikiet_output_release,
+        "Pinikiet output release",
+    )
+    .await?;
+    let batch = measurement_batch(5, [45.0, 46.5])?;
+    batch.validate()?;
+    client
+        .publish(
+            RECORDS_TOPIC,
+            QoS::AtLeastOnce,
+            false,
+            serde_json::to_vec(&batch)?,
+        )
+        .await?;
+    println!("commissioning records 5-6 published after Pinikiet output release");
+
+    let ack = wait_for_ack(&mut event_loop).await?;
+    ack.validate_for(&batch, 4)?;
+    println!("commissioning accepted-through 6 validated");
     client.disconnect().await?;
     Ok(())
 }
@@ -143,13 +196,17 @@ fn descriptor() -> DescriptorSnapshot {
     }
 }
 
-fn measurement_batch() -> Result<RecordBatch, serde_json::Error> {
+fn measurement_batch(
+    cursor_start: i64,
+    values: [f64; 2],
+) -> Result<RecordBatch, serde_json::Error> {
     let received_at = now_millis();
-    let records = [41.0, 42.5]
+    let cursor_end = cursor_start + values.len() as i64 - 1;
+    let records = values
         .into_iter()
         .enumerate()
         .map(|(index, value)| {
-            let sequence = index as i64 + 1;
+            let sequence = cursor_start + index as i64;
             to_raw_value(&serde_json::json!({
                 "family": "measurement",
                 "schema_version": 1,
@@ -170,11 +227,43 @@ fn measurement_batch() -> Result<RecordBatch, serde_json::Error> {
         schema_version: 1,
         edge_node_id: EDGE_NODE_ID.into(),
         ledger_epoch: LEDGER_EPOCH.into(),
-        publication_id: publication_id(EDGE_NODE_ID, LEDGER_EPOCH, 1, 2),
-        cursor_start: 1,
-        cursor_end: 2,
+        publication_id: publication_id(EDGE_NODE_ID, LEDGER_EPOCH, cursor_start, cursor_end),
+        cursor_start,
+        cursor_end,
         records,
     })
+}
+
+async fn wait_for_release(
+    event_loop: &mut rumqttc::EventLoop,
+    release_path: &Path,
+    description: &'static str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let release_wait = async {
+        loop {
+            if release_path.is_file() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    tokio::pin!(release_wait);
+
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            tokio::select! {
+                () = &mut release_wait => {
+                    return Ok::<_, rumqttc::ConnectionError>(());
+                }
+                event = event_loop.poll() => {
+                    event?;
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| format!("timed out waiting for {description}"))??;
+    Ok(())
 }
 
 async fn wait_for_connack(

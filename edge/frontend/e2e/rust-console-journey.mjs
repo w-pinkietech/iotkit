@@ -1,4 +1,4 @@
-import { access, mkdtemp } from "node:fs/promises";
+import { access, mkdtemp, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
@@ -13,8 +13,17 @@ import {
 
 const origin = process.env.IOTKIT_EDGE_E2E_URL;
 const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
+const genericOutputReleasePath =
+  process.env.IOTKIT_EDGE_E2E_GENERIC_RELEASE_PATH;
+const pinikietOutputReleasePath =
+  process.env.IOTKIT_EDGE_E2E_PINIKIET_RELEASE_PATH;
 if (!origin || !password) {
   throw new Error("IOTKIT_EDGE_E2E_URL and IOTKIT_EDGE_E2E_PASSWORD are required");
+}
+if (!genericOutputReleasePath || !pinikietOutputReleasePath) {
+  throw new Error(
+    "IOTKIT_EDGE_E2E_GENERIC_RELEASE_PATH and IOTKIT_EDGE_E2E_PINIKIET_RELEASE_PATH are required",
+  );
 }
 const viewerPassword = "閲覧担当者の さらに十分に長いパスワード";
 
@@ -558,18 +567,12 @@ try {
           .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
         return location.pathname === "/output" &&
           location.search.includes("saved=1") &&
-          Boolean(card?.querySelector("form.prepared-output-start"));
+          card?.textContent.includes("最初の値を待っています") &&
+          !card?.querySelector("form.prepared-output-start");
       })()`),
-    "generic output preparation",
+    "generic output waiting for first value",
   );
-  await devtools.evaluate(`(() => {
-    const card = [...document.querySelectorAll(".output-destination-card")]
-      .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
-    const form = card?.querySelector("form.prepared-output-start");
-    if (!form) throw new Error("prepared Generic MQTT binding was not found");
-    form.elements.namedItem("external_registration_complete").checked = true;
-    form.requestSubmit();
-  })()`);
+  await writeFile(genericOutputReleasePath, "", { flag: "wx" });
   await waitFor(
     () =>
       devtools.evaluate(`(() => {
@@ -696,6 +699,7 @@ try {
       return card?.querySelectorAll("form.prepared-output-start").length ?? 0;
     })()`);
   }
+  await writeFile(pinikietOutputReleasePath, "", { flag: "wx" });
   await waitFor(
     () =>
       devtools.evaluate(`(() => {

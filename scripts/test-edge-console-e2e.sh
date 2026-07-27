@@ -88,6 +88,8 @@ if [[ "$storage_profile" == "postgres" ]]; then
 fi
 
 e2e_dir=$(mktemp -d "$test_tmp_root/run.XXXXXX")
+generic_output_release="$e2e_dir/generic-output.release"
+pinikiet_output_release="$e2e_dir/pinikiet-output.release"
 password_file="$e2e_dir/password"
 printf '%s' '現場担当者の 十分に長いパスワード' >"$password_file"
 chmod 600 "$password_file"
@@ -203,11 +205,14 @@ TMPDIR="$test_tmp_root" cargo build -p iotkit-edge --example console_commissioni
 commissioning_fixture="$repo_root/target/debug/examples/console_commissioning_fixture"
 "$commissioning_fixture" \
   127.0.0.1 "$broker_port" "$broker_username" "$broker_password_file" \
+  "$generic_output_release" "$pinikiet_output_release" \
   >"$e2e_dir/commissioning-fixture.log" 2>&1 &
 commissioning_fixture_pid=$!
 
 IOTKIT_EDGE_E2E_URL="$origin" \
   IOTKIT_EDGE_E2E_PASSWORD="$(<"$password_file")" \
+  IOTKIT_EDGE_E2E_GENERIC_RELEASE_PATH="$generic_output_release" \
+  IOTKIT_EDGE_E2E_PINIKIET_RELEASE_PATH="$pinikiet_output_release" \
   IOTKIT_TEST_STORAGE_PROFILE="$storage_profile" \
   node "$repo_root/edge/frontend/e2e/rust-console-journey.mjs"
 
