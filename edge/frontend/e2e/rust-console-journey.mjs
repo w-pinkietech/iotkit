@@ -556,6 +556,25 @@ try {
       devtools.evaluate(`(() => {
         const card = [...document.querySelectorAll(".output-destination-card")]
           .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+        return location.pathname === "/output" &&
+          location.search.includes("saved=1") &&
+          Boolean(card?.querySelector("form.prepared-output-start"));
+      })()`),
+    "generic output preparation",
+  );
+  await devtools.evaluate(`(() => {
+    const card = [...document.querySelectorAll(".output-destination-card")]
+      .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+    const form = card?.querySelector("form.prepared-output-start");
+    if (!form) throw new Error("prepared Generic MQTT binding was not found");
+    form.elements.namedItem("external_registration_complete").checked = true;
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(`(() => {
+        const card = [...document.querySelectorAll(".output-destination-card")]
+          .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
         return location.search.includes("saved=1") &&
           card?.textContent.includes("正常に送信中") &&
           card.textContent.includes("送信対象") &&
