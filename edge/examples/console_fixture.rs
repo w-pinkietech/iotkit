@@ -6,7 +6,6 @@ use std::{
 
 use iotkit_edge::{
     application::{
-        output_profiles::OutputProfiles,
         profiles::{DeviceProfileInput, InventoryProfiles, SignalProfileInput},
         semantics::{SemanticRuleDraft, Semantics},
     },
@@ -15,7 +14,6 @@ use iotkit_edge::{
     storage::{AcceptBatch, AuditActor, RawRecord, Storage, StorageProfile},
 };
 use iotkit_edge_custody_contract::{ActivationRequest, ActivationResult, DescriptorSnapshot};
-use serde_json::Map;
 
 #[tokio::main]
 async fn main() {
@@ -296,15 +294,6 @@ async fn main() {
             .await
             .expect("create semantic fixture");
     }
-    OutputProfiles::new(storage.clone(), registered_output_adapters())
-        .activate(
-            "IoTKit MQTT 出力",
-            "iotkit.mqtt-json.v1",
-            Map::new(),
-            fixture_started_at + 20,
-        )
-        .await
-        .expect("create output fixture");
     for (sequence, series_index, value) in [
         (4, 0, 28.5),
         // Natural light while the machine waits.

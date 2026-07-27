@@ -105,6 +105,85 @@ async fn security_headers_and_route_inventory_are_stable() {
 }
 
 #[tokio::test]
+async fn admin_output_page_leads_with_delivery_state_and_retains_mutation_controls() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::system_admin()));
+    let response = app
+        .oneshot(authenticated(
+            Request::get("/output").body(Body::empty()).unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("正常に送信中"));
+    assert!(html.contains("設定が必要"));
+    assert!(html.contains("配送に問題"));
+    assert!(html.contains("送信対象"));
+    assert!(html.contains("最終送信"));
+    assert!(html.contains("配送待ち"));
+    assert_eq!(html.matches("class=\"output-health-card").count(), 3);
+    assert!(html.contains("<details class=\"output-technical\""));
+    assert!(html.contains("data-copy-text="));
+    assert!(html.contains("data-unix-ms=\"1735689660000\""));
+    assert!(html.contains("Profile ID"));
+    assert!(html.contains("binding-pinikiet-01"));
+    assert!(html.contains("<span>乾燥炉入口 温度</span>"));
+    assert_eq!(html.matches("class=\"output-binding-form\"").count(), 1);
+    assert!(html.contains(
+        "action=\"/console/output-bindings/binding-pinikiet-01\" class=\"output-binding-form\""
+    ));
+    assert!(!html.contains(
+        "action=\"/console/output-bindings/binding-pinikiet-06\" class=\"output-binding-form\""
+    ));
+    assert!(html.contains("<select name=\"mode\" required>"));
+    assert!(html.contains("<option value=\"onoff\">ON/OFF</option>"));
+    assert!(html.contains("<option value=\"gantt_chart\">稼働状態</option>"));
+    assert!(html.contains("name=\"revision\" value=\"1\""));
+    assert!(!html.contains("name=\"mode\" value=\"automatic\""));
+    assert!(html.contains("配送状態を確認できません"));
+    assert!(!html.contains("semantic or output resource was not found"));
+    assert!(html.contains("name=\"display_name\" value=\"汎用MQTT JSONで送る\""));
+    assert!(html.contains("name=\"auto_bind_future_rules\" value=\"true\" required"));
+    assert!(html.contains("今後追加する対応可能な値も自動で送ります"));
+    assert!(html.contains("この内容で送信を開始"));
+    assert!(html.contains("class=\"output-stop-form\""));
+}
+
+#[tokio::test]
+async fn viewer_output_page_keeps_delivery_facts_without_mutation_controls() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::viewer()));
+    let response = app
+        .oneshot(authenticated(
+            Request::get("/output").body(Body::empty()).unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("正常に送信中"));
+    assert!(html.contains("設定が必要"));
+    assert!(html.contains("配送に問題"));
+    assert!(html.contains("送信対象"));
+    assert!(html.contains("<details class=\"output-technical\""));
+    assert!(html.contains("data-copy-text="));
+    assert!(html.contains("data-unix-ms=\"1735689660000\""));
+    assert!(html.contains("Profile ID"));
+    assert!(html.contains("binding-pinikiet-01"));
+    assert!(html.contains("class=\"output-activation-preview\""));
+    assert!(html.contains("自動設定 0件"));
+    assert!(html.contains("要設定 0件"));
+    assert!(html.contains("対象外 0件"));
+    assert!(!html.contains("class=\"output-add-card\""));
+    assert!(!html.contains("class=\"output-binding-form\""));
+    assert!(!html.contains("class=\"prepared-output-start\""));
+    assert!(!html.contains("class=\"output-stop-form\""));
+}
+
+#[tokio::test]
 async fn login_sets_strict_host_only_session_and_csrf_cookies() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
     let response = app
