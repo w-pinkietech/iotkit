@@ -38,10 +38,14 @@ use crate::{
     },
     web::{
         ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleBinding, ConsoleDevice,
-        ConsoleEdgeNode, ConsoleOutput, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage,
-        ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal,
-        RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
-        console::commissioning::commissioning_view,
+        ConsoleEdgeNode, ConsoleOutput, ConsoleOutputSummary, ConsoleRequest, ConsoleRule,
+        ConsoleSignal, ConsoleStorage, ConsoleView, HistoryPage, HistoryQuery, LoginSession,
+        MutationOutput, Principal, RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow,
+        WebApplication, WebError,
+        console::{
+            commissioning::commissioning_view,
+            output::{apply_destination_state, binding_state, summarize},
+        },
     },
 };
 
@@ -328,70 +332,149 @@ impl StorageWebApplication {
         Ok(signals)
     }
 
-    async fn console_outputs(&self) -> Result<Vec<ConsoleOutput>, WebError> {
-        let profiles = OutputProfiles::new(self.storage.clone(), registered_output_adapters())
-            .list()
-            .await
-            .map_err(internal)?;
+    async fn console_outputs(
+        &self,
+    ) -> Result<(ConsoleOutputSummary, Vec<ConsoleOutput>), WebError> {
+        let output_profiles =
+            OutputProfiles::new(self.storage.clone(), registered_output_adapters());
+        let profiles = output_profiles.list().await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
-        Ok(registered_output_adapters()
-            .iter()
-            .map(|registration| {
-                let descriptor = registration.adapter.descriptor();
-                let profile = profiles
-                    .iter()
-                    .find(|profile| profile.adapter_id == descriptor.id);
-                ConsoleOutput {
-                    profile_id: profile.map_or_else(String::new, |item| item.profile_id.clone()),
+        let current_time = now();
+        let mut outputs = Vec::with_capacity(registered_output_adapters().len());
+
+        for registration in registered_output_adapters() {
+            let descriptor = registration.adapter.descriptor();
+            let profile = profiles.iter().find(|profile| {
+                profile.adapter_id == descriptor.id
+                    && matches!(
+                        profile.state,
+                        ProfileState::Preparing | ProfileState::Active | ProfileState::Draining
+                    )
+            });
+            let Some(profile) = profile else {
+                let preview = output_profiles
+                    .preview_activation(descriptor.id)
+                    .await
+                    .map_err(internal)?;
+                outputs.push(ConsoleOutput {
                     adapter_id: descriptor.id.into(),
-                    display_name: profile.map_or_else(
-                        || descriptor.display_name.into(),
-                        |item| item.display_name.clone(),
-                    ),
+                    display_name: descriptor.display_name.into(),
+                    adapter_name: descriptor.display_name.into(),
                     description: format!(
                         "{} の意味づけ済みデータを送信します。",
                         descriptor.display_name
                     ),
-                    active: profile.is_some_and(|item| {
-                        matches!(item.state, ProfileState::Preparing | ProfileState::Active)
-                    }),
-                    bindings: profile
-                        .map(|item| {
-                            item.bindings
-                                .iter()
-                                .map(|binding| {
-                                    let rule =
-                                        rules.iter().find(|rule| rule.rule_id == binding.rule_id);
-                                    ConsoleBinding {
-                                        binding_id: binding.binding_id.clone(),
-                                        sensor_name: rule.map_or_else(String::new, |rule| {
-                                            rule.series_key.clone()
-                                        }),
-                                        rule_name: rule.map_or_else(
-                                            || binding.rule_id.clone(),
-                                            |rule| rule.display_name.clone(),
-                                        ),
-                                        state_label: if binding.active {
-                                            "送信中"
-                                        } else if binding.needs_configuration {
-                                            "設定が必要"
-                                        } else {
-                                            "開始待ち"
-                                        }
-                                        .into(),
-                                        prepared: !binding.active
-                                            && !binding.needs_configuration
-                                            && binding.ineligible_reason.is_empty(),
-                                        ..ConsoleBinding::default()
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                    automatic_rule_count: preview.automatic_count,
+                    configuration_rule_count: preview.needs_configuration_count,
+                    ineligible_rule_count: preview.ineligible_count,
                     ..ConsoleOutput::default()
+                });
+                continue;
+            };
+
+            let mut output = ConsoleOutput {
+                profile_id: profile.profile_id.clone(),
+                adapter_id: descriptor.id.into(),
+                display_name: profile.display_name.clone(),
+                adapter_name: descriptor.display_name.into(),
+                description: format!(
+                    "{} の意味づけ済みデータを送信します。",
+                    descriptor.display_name
+                ),
+                active: matches!(
+                    profile.state,
+                    ProfileState::Preparing | ProfileState::Active
+                ),
+                draining: profile.state == ProfileState::Draining,
+                future_rules_enabled: true,
+                bindings: Vec::with_capacity(profile.bindings.len()),
+                ..ConsoleOutput::default()
+            };
+
+            for binding in &profile.bindings {
+                let rule = rules.iter().find(|rule| rule.rule_id == binding.rule_id);
+                let ineligible = !binding.ineligible_reason.is_empty();
+                let prepared = !binding.active && !binding.needs_configuration && !ineligible;
+                let mut delivery_state = None;
+                let mut pending_count = 0;
+                let mut oldest_pending_at = None;
+                let mut last_published_at = None;
+                let mut topic = String::new();
+                let mut payload = String::new();
+                let mut provenance_label = String::new();
+                let mut preview_failed = false;
+                let mut technical_error = String::new();
+
+                if !ineligible && !binding.needs_configuration {
+                    match output_profiles
+                        .publication(&binding.binding_id, current_time)
+                        .await
+                    {
+                        Ok(publication) => {
+                            delivery_state = Some(publication.delivery.state);
+                            pending_count = publication.delivery.pending_count;
+                            oldest_pending_at = publication.delivery.oldest_pending_at;
+                            last_published_at = publication.delivery.last_published_at;
+                            topic = publication.topic;
+                            provenance_label = match publication.provenance {
+                                PublicationProvenance::Actual => "実際の配送内容",
+                                PublicationProvenance::LatestObservation => "最新値からの確認",
+                                PublicationProvenance::Sample => "サンプル",
+                            }
+                            .into();
+                            match serde_json::to_string_pretty(&publication.payload) {
+                                Ok(value) => payload = value,
+                                Err(_) => {
+                                    preview_failed = true;
+                                    technical_error = "送信内容を確認できません".into();
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            preview_failed = true;
+                            technical_error = "送信内容を確認できません".into();
+                        }
+                    }
                 }
-            })
-            .collect())
+
+                let state = binding_state(
+                    binding.active,
+                    binding.needs_configuration,
+                    ineligible,
+                    prepared,
+                    delivery_state.as_deref(),
+                    preview_failed,
+                );
+                output.bindings.push(ConsoleBinding {
+                    binding_id: binding.binding_id.clone(),
+                    rule_id: binding.rule_id.clone(),
+                    signal_ref: rule.map_or_else(String::new, |rule| rule.signal_ref.clone()),
+                    edge_node_id: rule.map_or_else(String::new, |rule| rule.edge_node_id.clone()),
+                    series_id: rule.map_or_else(String::new, |rule| rule.series_id.clone()),
+                    sensor_name: rule.map_or_else(String::new, |rule| rule.series_key.clone()),
+                    rule_name: rule
+                        .map_or_else(|| binding.rule_id.clone(), |rule| rule.display_name.clone()),
+                    state_label: state.label.into(),
+                    state_class: state.class_name.into(),
+                    prepared,
+                    target: state.target,
+                    needs_configuration: state.needs_configuration,
+                    delivery_problem: state.delivery_problem,
+                    waiting_registration: state.waiting_registration,
+                    pending_count,
+                    oldest_pending_at,
+                    last_published_at,
+                    topic,
+                    payload,
+                    provenance_label,
+                    technical_error,
+                });
+            }
+            apply_destination_state(&mut output);
+            outputs.push(output);
+        }
+
+        Ok((summarize(&outputs), outputs))
     }
 }
 
@@ -637,6 +720,7 @@ impl WebApplication for StorageWebApplication {
             Vec::new()
         };
         let commissioning = commissioning_view(&edge_nodes, &devices, &signals);
+        let (output_summary, outputs) = self.console_outputs().await?;
         Ok(ConsoleView {
             product_version: env!("CARGO_PKG_VERSION").into(),
             commissioning,
@@ -655,8 +739,8 @@ impl WebApplication for StorageWebApplication {
             selected_device,
             selected_signal,
             history,
-            outputs: self.console_outputs().await?,
-            output_summary: Default::default(),
+            outputs,
+            output_summary,
             accounts,
             audit,
             storage,

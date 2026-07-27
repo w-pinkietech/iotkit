@@ -2036,22 +2036,52 @@ pub mod test_support {
                         profile_id: String::new(),
                         adapter_id: "iotkit.mqtt-json.v1".into(),
                         display_name: "汎用MQTT JSONで送る".into(),
+                        adapter_name: "IoTKit MQTT JSON v1".into(),
                         description: "意味づけ済みの値をIoTKit共通形式で送ります。".into(),
                         active: false,
                         bindings: Vec::new(),
                         ..ConsoleOutput::default()
                     },
                     ConsoleOutput {
-                        profile_id: String::new(),
+                        profile_id: "profile-pinikiet-01".into(),
                         adapter_id: "pinikiet.mqtt.v1".into(),
                         display_name: "Pinikietへ送る".into(),
+                        adapter_name: "Pinikiet MQTT v1".into(),
                         description: "累積値・状態・アラームをPinikiet契約へ変換します。".into(),
-                        active: false,
-                        bindings: Vec::new(),
+                        active: true,
+                        future_rules_enabled: true,
+                        status_label: "設定が必要".into(),
+                        status_class: "needs-action".into(),
+                        needs_configuration: true,
+                        target_count: 1,
+                        bindings: vec![ConsoleBinding {
+                            binding_id: "binding-pinikiet-01".into(),
+                            rule_id: "rule-01".into(),
+                            signal_ref: "signal-01".into(),
+                            edge_node_id: "factory-edge-01".into(),
+                            series_id: "series-01".into(),
+                            sensor_name: "乾燥炉入口 温度".into(),
+                            rule_name: "現在温度".into(),
+                            state_label: "外部登録待ち".into(),
+                            state_class: "needs-action".into(),
+                            prepared: true,
+                            target: true,
+                            needs_configuration: true,
+                            waiting_registration: true,
+                            topic:
+                                "pinikiet/v1/sources/factory-edge-01/sensors/sen-01/observations"
+                                    .into(),
+                            payload: "{\n  \"schema_version\": 1\n}".into(),
+                            provenance_label: "サンプル".into(),
+                            ..ConsoleBinding::default()
+                        }],
                         ..ConsoleOutput::default()
                     },
                 ],
-                output_summary: Default::default(),
+                output_summary: ConsoleOutputSummary {
+                    needs_configuration_count: 1,
+                    ..ConsoleOutputSummary::default()
+                },
                 accounts: vec![ConsoleAccount {
                     account_ref: "acct-owner".into(),
                     login_id: "owner".into(),
