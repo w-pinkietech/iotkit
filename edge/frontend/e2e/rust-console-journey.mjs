@@ -565,26 +565,34 @@ try {
       devtools.evaluate(`(() => {
         const card = [...document.querySelectorAll(".output-destination-card")]
           .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+        const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
+          .map((status) => status.textContent.trim());
+        const deliveryStates = ["最初の値を待っています", "配送中", "正常に送信中"];
         return location.pathname === "/output" &&
           location.search.includes("saved=1") &&
-          card?.textContent.includes("最初の値を待っています") &&
-          !card?.querySelector("form.prepared-output-start");
+          bindingStates.length > 0 &&
+          bindingStates.every((state) => deliveryStates.includes(state)) &&
+          !card?.querySelector("form.output-binding-form, form.prepared-output-start");
       })()`),
-    "generic output waiting for first value",
+    "active Generic output without actionable bindings",
   );
   await writeFile(genericOutputReleasePath, "", { flag: "wx" });
   await waitFor(
-    () =>
-      devtools.evaluate(`(() => {
+    async () => {
+      await devtools.navigate("/output");
+      return devtools.evaluate(`(() => {
         const card = [...document.querySelectorAll(".output-destination-card")]
           .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
-        return location.search.includes("saved=1") &&
-          card?.textContent.includes("正常に送信中") &&
+        const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
+          .map((status) => status.textContent.trim());
+        return bindingStates.length > 0 &&
+          bindingStates.every((state) => state === "正常に送信中") &&
           card.textContent.includes("送信対象") &&
           card.textContent.includes("最終送信") &&
           card.textContent.includes("配送待ち") &&
           Boolean(card.querySelector(".output-technical"));
-      })()`),
+      })()`);
+    },
     "generic output activation",
   );
   await devtools.evaluate(`(() => {
@@ -701,17 +709,23 @@ try {
   }
   await writeFile(pinikietOutputReleasePath, "", { flag: "wx" });
   await waitFor(
-    () =>
-      devtools.evaluate(`(() => {
+    async () => {
+      await devtools.navigate("/output");
+      return devtools.evaluate(`(() => {
         const cards = [...document.querySelectorAll(".output-destination-card")];
         const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
         const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
-        return location.search.includes("saved=1") &&
-          generic?.textContent.includes("正常に送信中") &&
-          pinikiet?.textContent.includes("正常に送信中") &&
+        const hasHealthyBindings = (card) => {
+          const states = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
+            .map((status) => status.textContent.trim());
+          return states.length > 0 && states.every((state) => state === "正常に送信中");
+        };
+        return hasHealthyBindings(generic) &&
+          hasHealthyBindings(pinikiet) &&
           !pinikiet.querySelector("form.output-binding-form") &&
           !pinikiet.querySelector("form.prepared-output-start");
-      })()`),
+      })()`);
+    },
     "Pinikiet output start",
   );
   const connectedInventory = await devtools.evaluate(`(async () => {
