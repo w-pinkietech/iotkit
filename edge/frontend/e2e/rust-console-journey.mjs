@@ -159,16 +159,18 @@ const outputDeliveryDiagnostics = `(() =>
   [...document.querySelectorAll(".output-destination-card")].map((card) => ({
     name: card.querySelector("h2")?.textContent.trim() ?? null,
     status: card.querySelector(":scope > header .status-pill")?.textContent.trim() ?? null,
-    bindingStatuses: [...card.querySelectorAll(".output-rule-row > header .status-pill")]
-      .map((status) => status.textContent.trim()),
-    payloadSequences: [...card.querySelectorAll(".output-technical pre")]
-      .map((payload) => {
-        try {
-          return JSON.parse(payload.textContent).sequence ?? null;
-        } catch {
-          return "invalid-json";
-        }
-      }),
+    rows: [...card.querySelectorAll(".output-rule-row")].map((row) => ({
+      ruleName: row.querySelector(":scope > header strong")?.textContent.trim() ?? null,
+      status: row.querySelector(":scope > header .status-pill")?.textContent.trim() ?? null,
+      payloadSequences: [...row.querySelectorAll(".output-technical pre")]
+        .map((payload) => {
+          try {
+            return JSON.parse(payload.textContent).sequence ?? null;
+          } catch {
+            return "invalid-json";
+          }
+        }),
+    })),
   }))
 )()`;
 
@@ -615,7 +617,9 @@ try {
             .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
           const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
             .map((status) => status.textContent.trim());
-          const releasedPayload = [...(card?.querySelectorAll(".output-technical pre") ?? [])]
+          const releasedRule = [...(card?.querySelectorAll(".output-rule-row") ?? [])]
+            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "補正後温度");
+          const releasedPayload = [...(releasedRule?.querySelectorAll(".output-technical pre") ?? [])]
             .some((payload) => {
               try {
                 return JSON.parse(payload.textContent).sequence === 2;
@@ -766,7 +770,9 @@ try {
               .map((status) => status.textContent.trim());
             return states.length > 0 && states.every((state) => state === "正常に送信中");
           };
-          const hasReleasedPayload = [...(pinikiet?.querySelectorAll(".output-technical pre") ?? [])]
+          const releasedRule = [...(pinikiet?.querySelectorAll(".output-rule-row") ?? [])]
+            .find((row) => row.querySelector(":scope > header strong")?.textContent.trim() === "補正後温度");
+          const hasReleasedPayload = [...(releasedRule?.querySelectorAll(".output-technical pre") ?? [])]
             .some((payload) => {
               try {
                 return JSON.parse(payload.textContent).sequence === 4;
