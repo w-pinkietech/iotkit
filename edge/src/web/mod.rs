@@ -269,6 +269,8 @@ pub struct ConsoleOutput {
     pub status_class: String,
     pub needs_configuration: bool,
     pub delivery_problem: bool,
+    pub delivery_unavailable: bool,
+    pub waiting_registration: bool,
     pub target_count: usize,
     pub pending_count: i64,
     pub oldest_pending_at: Option<i64>,
@@ -288,12 +290,15 @@ pub struct ConsoleBinding {
     pub series_id: String,
     pub sensor_name: String,
     pub rule_name: String,
+    pub revision: i64,
+    pub compatible_modes: Vec<ConsoleModeOption>,
     pub state_label: String,
     pub state_class: String,
     pub prepared: bool,
     pub target: bool,
     pub needs_configuration: bool,
     pub delivery_problem: bool,
+    pub delivery_unavailable: bool,
     pub waiting_registration: bool,
     pub pending_count: i64,
     pub oldest_pending_at: Option<i64>,
@@ -302,6 +307,12 @@ pub struct ConsoleBinding {
     pub payload: String,
     pub provenance_label: String,
     pub technical_error: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConsoleModeOption {
+    pub key: String,
+    pub display_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -979,6 +990,22 @@ async fn console_mutation(
     let principal =
         require_mutation_form(&state, &headers, form.get("_csrf").map(String::as_str)).await?;
     authorize_mutation(&principal, &route)?;
+    let expected_revision = if route.contains("/output-bindings/") {
+        Some(
+            form.get("revision")
+                .and_then(|value| value.parse::<i64>().ok())
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    WebError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "revision_required",
+                        "revision is required",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let (result_name, result_tab) = console_mutation_result(&route, &form);
     let result = state
         .application
@@ -988,7 +1015,7 @@ async fn console_mutation(
                 method: Method::POST,
                 route,
                 params,
-                expected_revision: None,
+                expected_revision,
             },
             serde_json::to_value(&form).map_err(internal)?,
         )
@@ -2066,11 +2093,35 @@ pub mod test_support {
                                 series_id: "series-01".into(),
                                 sensor_name: "乾燥炉入口 温度".into(),
                                 rule_name: "現在温度".into(),
+                                revision: 1,
+                                compatible_modes: vec![
+                                    ConsoleModeOption {
+                                        key: "onoff".into(),
+                                        display_name: "ON/OFF".into(),
+                                    },
+                                    ConsoleModeOption {
+                                        key: "gantt_chart".into(),
+                                        display_name: "稼働状態".into(),
+                                    },
+                                ],
+                                state_label: "設定が必要".into(),
+                                state_class: "needs-action".into(),
+                                needs_configuration: true,
+                                ..ConsoleBinding::default()
+                            },
+                            ConsoleBinding {
+                                binding_id: "binding-pinikiet-02".into(),
+                                rule_id: "rule-02".into(),
+                                signal_ref: "signal-01".into(),
+                                edge_node_id: "factory-edge-01".into(),
+                                series_id: "series-02".into(),
+                                sensor_name: "乾燥炉入口 温度".into(),
+                                rule_name: "ON/OFF状態".into(),
+                                revision: 1,
                                 state_label: "外部登録待ち".into(),
                                 state_class: "needs-action".into(),
                                 prepared: true,
                                 target: true,
-                                needs_configuration: true,
                                 waiting_registration: true,
                                 topic:
                                     "pinikiet/v1/sources/factory-edge-01/sensors/sen-01/observations"
@@ -2080,13 +2131,14 @@ pub mod test_support {
                                 ..ConsoleBinding::default()
                             },
                             ConsoleBinding {
-                                binding_id: "binding-pinikiet-02".into(),
-                                rule_id: "rule-02".into(),
+                                binding_id: "binding-pinikiet-03".into(),
+                                rule_id: "rule-03".into(),
                                 signal_ref: "signal-01".into(),
                                 edge_node_id: "factory-edge-01".into(),
-                                series_id: "series-01".into(),
+                                series_id: "series-03".into(),
                                 sensor_name: "乾燥炉入口 温度".into(),
                                 rule_name: "上限アラーム".into(),
+                                revision: 1,
                                 state_label: "正常に送信中".into(),
                                 state_class: "healthy".into(),
                                 target: true,
@@ -2098,6 +2150,36 @@ pub mod test_support {
                                 payload: "{\n  \"schema_version\": 1,\n  \"active\": false\n}"
                                     .into(),
                                 provenance_label: "実際の配送内容".into(),
+                                ..ConsoleBinding::default()
+                            },
+                            ConsoleBinding {
+                                binding_id: "binding-pinikiet-04".into(),
+                                rule_id: "rule-04".into(),
+                                signal_ref: "signal-01".into(),
+                                edge_node_id: "factory-edge-01".into(),
+                                series_id: "series-04".into(),
+                                sensor_name: "乾燥炉入口 温度".into(),
+                                rule_name: "対象外の測定値".into(),
+                                revision: 1,
+                                state_label: "対象外".into(),
+                                state_class: "muted".into(),
+                                ..ConsoleBinding::default()
+                            },
+                            ConsoleBinding {
+                                binding_id: "binding-pinikiet-05".into(),
+                                rule_id: "rule-05".into(),
+                                signal_ref: "signal-01".into(),
+                                edge_node_id: "factory-edge-01".into(),
+                                series_id: "series-05".into(),
+                                sensor_name: "乾燥炉入口 温度".into(),
+                                rule_name: "配送確認不能".into(),
+                                revision: 1,
+                                state_label: "配送状態を確認できません".into(),
+                                state_class: "error".into(),
+                                target: true,
+                                delivery_problem: true,
+                                delivery_unavailable: true,
+                                technical_error: "配送状態を確認できません".into(),
                                 ..ConsoleBinding::default()
                             },
                         ],

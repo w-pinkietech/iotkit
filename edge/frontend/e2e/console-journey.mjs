@@ -433,28 +433,46 @@ try {
       const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
       const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
       return generic?.textContent.includes("正常に送信中") &&
-        pinikiet?.textContent.includes("設定が必要") &&
+        pinikiet?.textContent.includes("外部登録待ち") &&
+        pinikiet.textContent.includes("乾燥炉入口 温度") &&
+        !pinikiet.querySelector("form.output-binding-form") &&
         pinikiet.textContent.includes("外部アプリで送信先を登録");
     })()`),
     "Pinikiet did not wait for registration independently of Generic MQTT delivery",
   );
-  const preparedCount = await devtools.evaluate(`(() => {
+  let preparedCount = await devtools.evaluate(`(() => {
     const card = [...document.querySelectorAll(".output-destination-card")]
       .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
     return card?.querySelectorAll("form.prepared-output-start").length;
   })()`);
   assert(
-    preparedCount === 1,
-    `Pinikiet sensor registration count is ${preparedCount}, want 1`,
+    preparedCount > 0,
+    `Pinikiet sensor registration count is ${preparedCount}, want at least 1`,
   );
-  await devtools.evaluate(`(() => {
-    const card = [...document.querySelectorAll(".output-destination-card")]
-      .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
-    const form = card?.querySelector("form.prepared-output-start");
-    if (!form) throw new Error("prepared Pinikiet binding was not found");
-    form.elements.namedItem("external_registration_complete").checked = true;
-    form.requestSubmit();
-  })()`);
+  while (preparedCount > 0) {
+    const previousCount = preparedCount;
+    await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      const form = card?.querySelector("form.prepared-output-start");
+      if (!form) throw new Error("prepared Pinikiet binding was not found");
+      form.elements.namedItem("external_registration_complete").checked = true;
+      form.requestSubmit();
+    })()`);
+    await devtools.waitForExpression(
+      `location.pathname === "/output" && location.search.includes("saved=1") && (() => {
+        const card = [...document.querySelectorAll(".output-destination-card")]
+          .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+        return (card?.querySelectorAll("form.prepared-output-start").length ?? 0) < ${previousCount};
+      })()`,
+      "Pinikiet external registration confirmation",
+    );
+    preparedCount = await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      return card?.querySelectorAll("form.prepared-output-start").length ?? 0;
+    })()`);
+  }
   await devtools.waitForExpression(
     `location.pathname === "/output" && location.search.includes("saved=1") && (() => {
       const card = [...document.querySelectorAll(".output-destination-card")]

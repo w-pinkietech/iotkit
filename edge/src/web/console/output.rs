@@ -19,15 +19,25 @@ pub fn binding_state(
     prepared: bool,
     delivery_state: Option<&str>,
     preview_failed: bool,
+    delivery_unavailable: bool,
 ) -> ConsoleBindingState {
     if preview_failed {
         state("変換エラー", "error", true, true, false, false)
     } else if needs_configuration {
         state("設定が必要", "needs-action", false, true, false, false)
+    } else if delivery_unavailable {
+        state(
+            "配送状態を確認できません",
+            "error",
+            true,
+            false,
+            true,
+            false,
+        )
     } else if delivery_state == Some("possible_delivery_stall") {
         state("配送停止の可能性", "error", true, false, true, false)
     } else if prepared {
-        state("外部登録待ち", "needs-action", true, true, false, true)
+        state("外部登録待ち", "needs-action", true, false, false, true)
     } else if ineligible {
         state("対象外", "muted", false, false, false, false)
     } else if active && delivery_state == Some("delivering") {
@@ -97,13 +107,36 @@ pub fn apply_destination_state(output: &mut ConsoleOutput) {
             .bindings
             .iter()
             .any(|binding| binding.delivery_problem);
+    output.delivery_unavailable = output.delivery_problem
+        && output
+            .bindings
+            .iter()
+            .any(|binding| binding.delivery_unavailable);
+    output.waiting_registration = !output.needs_configuration
+        && !output.delivery_problem
+        && output
+            .bindings
+            .iter()
+            .any(|binding| binding.waiting_registration);
 
     let (label, class_name) = if output.needs_configuration {
         ("設定が必要", "needs-action")
+    } else if output.delivery_unavailable {
+        ("配送状態を確認できません", "error")
     } else if output.delivery_problem {
         ("配送停止の可能性", "error")
-    } else if output.active || output.draining {
+    } else if output.waiting_registration {
+        ("外部登録待ち", "needs-action")
+    } else if output.draining {
+        ("停止処理中", "draining")
+    } else if output
+        .bindings
+        .iter()
+        .any(|binding| binding.state_class == "delivering")
+    {
         ("配送中", "delivering")
+    } else if output.active {
+        ("正常に送信中", "healthy")
     } else {
         ("開始待ち", "waiting")
     };
@@ -117,7 +150,7 @@ pub fn summarize(outputs: &[ConsoleOutput]) -> ConsoleOutputSummary {
         .iter()
         .filter(|output| output.active || output.draining)
     {
-        if output.needs_configuration {
+        if output.needs_configuration || output.waiting_registration {
             summary.needs_configuration_count += 1;
         } else if output.delivery_problem {
             summary.delivery_problem_count += 1;

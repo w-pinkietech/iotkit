@@ -4,6 +4,7 @@ use iotkit_output_adapter_api::{Observation, ObservationKind, ObservationValue};
 use serde_json::{Map, Value, value::RawValue};
 
 use crate::{
+    application::semantics::SemanticRule,
     composition::OutputAdapterRegistration,
     storage::{AuditActor, Storage, StorageError},
 };
@@ -76,6 +77,18 @@ pub struct OutputPublicationPreview {
     pub retain: bool,
     pub payload: Value,
     pub delivery: OutputDelivery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PublicationFailureKind {
+    Preview,
+    DeliveryUnavailable,
+}
+
+pub(crate) struct PublicationFailure {
+    pub kind: PublicationFailureKind,
+    pub delivery: Option<OutputDelivery>,
+    error: StorageError,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +164,15 @@ impl OutputProfiles {
         &self,
         adapter_id: &str,
     ) -> Result<ExportProfileActivationPreview, StorageError> {
+        let rules = self.storage.list_semantic_rules().await?;
+        self.preview_activation_with_rules(adapter_id, &rules)
+    }
+
+    pub(crate) fn preview_activation_with_rules(
+        &self,
+        adapter_id: &str,
+        rules: &[SemanticRule],
+    ) -> Result<ExportProfileActivationPreview, StorageError> {
         let registration = self
             .adapters
             .iter()
@@ -159,8 +181,8 @@ impl OutputProfiles {
         let mut automatic_count = 0;
         let mut needs_configuration_count = 0;
         let mut ineligible_count = 0;
-        let mut rules = Vec::new();
-        for rule in self.storage.list_semantic_rules().await? {
+        let mut rule_previews = Vec::new();
+        for rule in rules {
             if !rule.active {
                 continue;
             }
@@ -187,8 +209,8 @@ impl OutputProfiles {
                     "needs_configuration"
                 }
             };
-            rules.push(ExportRuleActivationPreview {
-                rule_id: rule.rule_id,
+            rule_previews.push(ExportRuleActivationPreview {
+                rule_id: rule.rule_id.clone(),
                 state: state.into(),
                 compatible_modes,
             });
@@ -198,7 +220,7 @@ impl OutputProfiles {
             automatic_count,
             needs_configuration_count,
             ineligible_count,
-            rules,
+            rules: rule_previews,
         })
     }
 
@@ -207,7 +229,25 @@ impl OutputProfiles {
         binding_id: &str,
         now: i64,
     ) -> Result<OutputPublicationPreview, StorageError> {
-        let snapshot = self.storage.output_publication_snapshot(binding_id).await?;
+        self.publication_with_failure(binding_id, now)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    pub(crate) async fn publication_with_failure(
+        &self,
+        binding_id: &str,
+        now: i64,
+    ) -> Result<OutputPublicationPreview, PublicationFailure> {
+        let snapshot = self
+            .storage
+            .output_publication_snapshot(binding_id)
+            .await
+            .map_err(|error| PublicationFailure {
+                kind: PublicationFailureKind::DeliveryUnavailable,
+                delivery: None,
+                error,
+            })?;
         let delivery = OutputDelivery {
             state: delivery_state(
                 snapshot.pending_count,
@@ -228,8 +268,9 @@ impl OutputProfiles {
                 topic: actual.topic,
                 qos: actual.qos,
                 retain: actual.retain,
-                payload: serde_json::from_slice(&actual.payload)
-                    .map_err(|error| StorageError::InvalidOutput(error.to_string()))?,
+                payload: serde_json::from_slice(&actual.payload).map_err(|error| {
+                    preview_failure(StorageError::InvalidOutput(error.to_string()), &delivery)
+                })?,
                 delivery,
             });
         }
@@ -237,9 +278,15 @@ impl OutputProfiles {
             .adapters
             .iter()
             .find(|item| item.adapter.descriptor().id == snapshot.adapter_id)
-            .ok_or_else(|| StorageError::InvalidOutput("output adapter is unavailable".into()))?;
-        let config: Box<RawValue> = serde_json::from_slice(&snapshot.config)
-            .map_err(|error| StorageError::InvalidOutput(error.to_string()))?;
+            .ok_or_else(|| {
+                preview_failure(
+                    StorageError::InvalidOutput("output adapter is unavailable".into()),
+                    &delivery,
+                )
+            })?;
+        let config: Box<RawValue> = serde_json::from_slice(&snapshot.config).map_err(|error| {
+            preview_failure(StorageError::InvalidOutput(error.to_string()), &delivery)
+        })?;
         let (observation, provenance) = match snapshot.observation {
             Some(observation) => (
                 Observation::new(
@@ -249,26 +296,32 @@ impl OutputProfiles {
                     observation.observed_at,
                     observation.value,
                 )
-                .map_err(|error| StorageError::InvalidOutput(error.to_string()))?,
+                .map_err(|error| {
+                    preview_failure(StorageError::InvalidOutput(error.to_string()), &delivery)
+                })?,
                 PublicationProvenance::LatestObservation,
             ),
             None => (
-                sample_observation(snapshot.kind, now)?,
+                sample_observation(snapshot.kind, now)
+                    .map_err(|error| preview_failure(error, &delivery))?,
                 PublicationProvenance::Sample,
             ),
         };
         let publication = registration
             .adapter
             .transform(&config, &observation)
-            .map_err(|error| StorageError::InvalidOutput(error.to_string()))?;
+            .map_err(|error| {
+                preview_failure(StorageError::InvalidOutput(error.to_string()), &delivery)
+            })?;
         Ok(OutputPublicationPreview {
             binding_id: binding_id.into(),
             provenance,
             topic: publication.topic().into(),
             qos: publication.qos(),
             retain: publication.retain(),
-            payload: serde_json::from_str(publication.payload().get())
-                .map_err(|error| StorageError::InvalidOutput(error.to_string()))?,
+            payload: serde_json::from_str(publication.payload().get()).map_err(|error| {
+                preview_failure(StorageError::InvalidOutput(error.to_string()), &delivery)
+            })?,
             delivery,
         })
     }
@@ -330,6 +383,14 @@ impl OutputProfiles {
 
     pub async fn list(&self) -> Result<Vec<ExportProfile>, StorageError> {
         self.storage.list_output_profiles().await
+    }
+}
+
+fn preview_failure(error: StorageError, delivery: &OutputDelivery) -> PublicationFailure {
+    PublicationFailure {
+        kind: PublicationFailureKind::Preview,
+        delivery: Some(delivery.clone()),
+        error,
     }
 }
 
@@ -410,3 +471,7 @@ fn validate_setup(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/output_profiles_tests.rs"]
+mod tests;

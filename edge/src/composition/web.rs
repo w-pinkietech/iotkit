@@ -14,6 +14,7 @@ use std::{
 
 use async_trait::async_trait;
 use axum::http::StatusCode;
+use iotkit_output_adapter_api::ObservationKind;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
@@ -21,9 +22,11 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use crate::{
     application::{
         accounts::AccountService,
-        output_profiles::{OutputProfiles, ProfileState, PublicationProvenance},
+        output_profiles::{
+            OutputProfiles, ProfileState, PublicationFailureKind, PublicationProvenance,
+        },
         profiles::{DeviceProfileInput, InventoryProfiles, SignalProfileInput},
-        semantics::{SemanticRuleDraft, Semantics},
+        semantics::{SemanticRule, SemanticRuleDraft, Semantics},
     },
     auth::{
         password::{Password, PasswordCandidate, PasswordHash, verify_password},
@@ -38,10 +41,10 @@ use crate::{
     },
     web::{
         ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleBinding, ConsoleDevice,
-        ConsoleEdgeNode, ConsoleOutput, ConsoleOutputSummary, ConsoleRequest, ConsoleRule,
-        ConsoleSignal, ConsoleStorage, ConsoleView, HistoryPage, HistoryQuery, LoginSession,
-        MutationOutput, Principal, RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow,
-        WebApplication, WebError,
+        ConsoleEdgeNode, ConsoleModeOption, ConsoleOutput, ConsoleOutputSummary, ConsoleRequest,
+        ConsoleRule, ConsoleSignal, ConsoleStorage, ConsoleView, HistoryPage, HistoryQuery,
+        LoginSession, MutationOutput, Principal, RawHistoryRow, SemanticHistoryPage,
+        SemanticHistoryRow, WebApplication, WebError,
         console::{
             commissioning::commissioning_view,
             output::{apply_destination_state, binding_state, summarize},
@@ -215,8 +218,15 @@ impl StorageWebApplication {
     }
 
     async fn console_signals(&self) -> Result<Vec<ConsoleSignal>, WebError> {
-        let inventory = self.storage.inventory_signals().await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        self.console_signals_with_rules(&rules).await
+    }
+
+    async fn console_signals_with_rules(
+        &self,
+        rules: &[SemanticRule],
+    ) -> Result<Vec<ConsoleSignal>, WebError> {
+        let inventory = self.storage.inventory_signals().await.map_err(internal)?;
         let mut signals = Vec::with_capacity(inventory.len());
         for signal in inventory
             .into_iter()
@@ -334,11 +344,12 @@ impl StorageWebApplication {
 
     async fn console_outputs(
         &self,
+        rules: &[SemanticRule],
+        signals: &[ConsoleSignal],
     ) -> Result<(ConsoleOutputSummary, Vec<ConsoleOutput>), WebError> {
         let output_profiles =
             OutputProfiles::new(self.storage.clone(), registered_output_adapters());
         let profiles = output_profiles.list().await.map_err(internal)?;
-        let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
         let current_time = now();
         let mut outputs = Vec::with_capacity(registered_output_adapters().len());
 
@@ -353,8 +364,7 @@ impl StorageWebApplication {
             });
             let Some(profile) = profile else {
                 let preview = output_profiles
-                    .preview_activation(descriptor.id)
-                    .await
+                    .preview_activation_with_rules(descriptor.id, rules)
                     .map_err(internal)?;
                 outputs.push(ConsoleOutput {
                     adapter_id: descriptor.id.into(),
@@ -403,11 +413,12 @@ impl StorageWebApplication {
                 let mut payload = String::new();
                 let mut provenance_label = String::new();
                 let mut preview_failed = false;
+                let mut delivery_unavailable = false;
                 let mut technical_error = String::new();
 
                 if !ineligible && !binding.needs_configuration {
                     match output_profiles
-                        .publication(&binding.binding_id, current_time)
+                        .publication_with_failure(&binding.binding_id, current_time)
                         .await
                     {
                         Ok(publication) => {
@@ -430,9 +441,23 @@ impl StorageWebApplication {
                                 }
                             }
                         }
-                        Err(_) => {
-                            preview_failed = true;
-                            technical_error = "送信内容を確認できません".into();
+                        Err(failure) => {
+                            if let Some(delivery) = failure.delivery {
+                                delivery_state = Some(delivery.state);
+                                pending_count = delivery.pending_count;
+                                oldest_pending_at = delivery.oldest_pending_at;
+                                last_published_at = delivery.last_published_at;
+                            }
+                            match failure.kind {
+                                PublicationFailureKind::Preview => {
+                                    preview_failed = true;
+                                    technical_error = "送信内容を確認できません".into();
+                                }
+                                PublicationFailureKind::DeliveryUnavailable => {
+                                    delivery_unavailable = true;
+                                    technical_error = "配送状態を確認できません".into();
+                                }
+                            }
                         }
                     }
                 }
@@ -444,22 +469,48 @@ impl StorageWebApplication {
                     prepared,
                     delivery_state.as_deref(),
                     preview_failed,
+                    delivery_unavailable,
                 );
+                let compatible_modes = rule.map_or_else(Vec::new, |rule| {
+                    let kind = output_observation_kind(rule.kind);
+                    descriptor
+                        .modes
+                        .iter()
+                        .filter(|mode| mode.accepts.contains(&kind))
+                        .map(|mode| ConsoleModeOption {
+                            key: mode.key.into(),
+                            display_name: mode.display_name.into(),
+                        })
+                        .collect()
+                });
+                let sensor_name = rule
+                    .and_then(|rule| {
+                        signals
+                            .iter()
+                            .find(|signal| signal.signal_ref == rule.signal_ref)
+                    })
+                    .map_or_else(
+                        || "名前未設定のセンサー".into(),
+                        |signal| signal.name.clone(),
+                    );
                 output.bindings.push(ConsoleBinding {
                     binding_id: binding.binding_id.clone(),
                     rule_id: binding.rule_id.clone(),
                     signal_ref: rule.map_or_else(String::new, |rule| rule.signal_ref.clone()),
                     edge_node_id: rule.map_or_else(String::new, |rule| rule.edge_node_id.clone()),
                     series_id: rule.map_or_else(String::new, |rule| rule.series_id.clone()),
-                    sensor_name: rule.map_or_else(String::new, |rule| rule.series_key.clone()),
+                    sensor_name,
                     rule_name: rule
                         .map_or_else(|| binding.rule_id.clone(), |rule| rule.display_name.clone()),
+                    revision: profile.revision,
+                    compatible_modes,
                     state_label: state.label.into(),
                     state_class: state.class_name.into(),
                     prepared,
                     target: state.target,
                     needs_configuration: state.needs_configuration,
                     delivery_problem: state.delivery_problem,
+                    delivery_unavailable,
                     waiting_registration: state.waiting_registration,
                     pending_count,
                     oldest_pending_at,
@@ -563,7 +614,8 @@ impl WebApplication for StorageWebApplication {
 
     async fn console(&self, request: ConsoleRequest) -> Result<ConsoleView, WebError> {
         let nodes = self.storage.list_edge_nodes(100).await.map_err(internal)?;
-        let signals = self.console_signals().await?;
+        let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        let signals = self.console_signals_with_rules(&rules).await?;
         let inventory_devices = self.storage.inventory_devices().await.map_err(internal)?;
         let mut devices = Vec::with_capacity(inventory_devices.len());
         for device in inventory_devices
@@ -720,7 +772,11 @@ impl WebApplication for StorageWebApplication {
             Vec::new()
         };
         let commissioning = commissioning_view(&edge_nodes, &devices, &signals);
-        let (output_summary, outputs) = self.console_outputs().await?;
+        let (output_summary, outputs) = if request.path == "/output" {
+            self.console_outputs(&rules, &signals).await?
+        } else {
+            (ConsoleOutputSummary::default(), Vec::new())
+        };
         Ok(ConsoleView {
             product_version: env!("CARGO_PKG_VERSION").into(),
             commissioning,
@@ -1803,6 +1859,15 @@ fn semantic_kind(kind: SemanticKind) -> &'static str {
         SemanticKind::Boolean => "boolean",
         SemanticKind::CumulativeCounter => "cumulative_counter",
         SemanticKind::Alarm => "alarm",
+    }
+}
+
+fn output_observation_kind(kind: SemanticKind) -> ObservationKind {
+    match kind {
+        SemanticKind::Numeric => ObservationKind::Numeric,
+        SemanticKind::Boolean => ObservationKind::Boolean,
+        SemanticKind::CumulativeCounter => ObservationKind::CumulativeValue,
+        SemanticKind::Alarm => ObservationKind::Alarm,
     }
 }
 

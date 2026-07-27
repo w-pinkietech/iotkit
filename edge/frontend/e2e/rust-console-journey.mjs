@@ -584,20 +584,99 @@ try {
       const cards = [...document.querySelectorAll(".output-destination-card")];
       const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
       const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
+      const configuration = pinikiet?.querySelector("form.output-binding-form");
+      const modes = [...(configuration?.querySelectorAll("select[name='mode'] option") ?? [])]
+        .map((option) => [option.value, option.textContent.trim()]);
       return generic?.textContent.includes("正常に送信中") &&
         pinikiet?.textContent.includes("設定が必要") &&
+        pinikiet.textContent.includes("製造機 青色パトランプ") &&
         pinikiet.textContent.includes("外部アプリで送信先を登録") &&
+        configuration?.querySelector("select[name='mode'][required]") &&
+        configuration.querySelector("input[name='_csrf']") &&
+        Number(configuration.querySelector("input[name='revision']")?.value) > 0 &&
+        modes.some(([value, label]) => value === "onoff" && label === "ON/OFF") &&
+        modes.some(([value, label]) => value === "gantt_chart" && label === "稼働状態") &&
         Boolean(pinikiet.querySelector("form.prepared-output-start"));
     })()`),
-    "Pinikiet did not wait for registration independently of Generic MQTT delivery",
+    "Pinikiet did not expose real mode configuration independently of Generic MQTT delivery",
   );
-  await devtools.evaluate(`(() => {
+  let remainingConfigurations = await devtools.evaluate(`(() => {
     const card = [...document.querySelectorAll(".output-destination-card")]
       .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
-    const form = card?.querySelector("form.prepared-output-start");
-    form.elements.namedItem("external_registration_complete").checked = true;
-    form.requestSubmit();
+    return card?.querySelectorAll("form.output-binding-form").length ?? 0;
   })()`);
+  assert(
+    remainingConfigurations > 0,
+    "Pinikiet fixture did not expose a needs-configuration binding",
+  );
+  while (remainingConfigurations > 0) {
+    const previousCount = remainingConfigurations;
+    await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      const form = card?.querySelector("form.output-binding-form");
+      if (!form) throw new Error("Pinikiet configuration form was not found");
+      form.elements.namedItem("mode").value = "onoff";
+      form.requestSubmit();
+    })()`);
+    await waitFor(
+      () =>
+        devtools.evaluate(`(() => {
+          const card = [...document.querySelectorAll(".output-destination-card")]
+            .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+          return location.search.includes("saved=1") &&
+            (card?.querySelectorAll("form.output-binding-form").length ?? 0) < ${previousCount};
+        })()`),
+      "Pinikiet real mode configuration",
+    );
+    remainingConfigurations = await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      return card?.querySelectorAll("form.output-binding-form").length ?? 0;
+    })()`);
+  }
+  assert(
+    await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      return card?.querySelector(":scope > header .status-pill")?.textContent.trim() === "外部登録待ち" &&
+        !card.querySelector("form.output-binding-form") &&
+        Boolean(card.querySelector("form.prepared-output-start"));
+    })()`),
+    "Pinikiet mode configuration did not advance to external registration wait",
+  );
+  let remainingRegistrations = await devtools.evaluate(`(() => {
+    const card = [...document.querySelectorAll(".output-destination-card")]
+      .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+    return card?.querySelectorAll("form.prepared-output-start").length ?? 0;
+  })()`);
+  assert(remainingRegistrations > 0, "Pinikiet had no external registration work");
+  while (remainingRegistrations > 0) {
+    const previousCount = remainingRegistrations;
+    await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      const form = card?.querySelector("form.prepared-output-start");
+      if (!form) throw new Error("prepared Pinikiet binding was not found");
+      form.elements.namedItem("external_registration_complete").checked = true;
+      form.requestSubmit();
+    })()`);
+    await waitFor(
+      () =>
+        devtools.evaluate(`(() => {
+          const card = [...document.querySelectorAll(".output-destination-card")]
+            .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+          return location.search.includes("saved=1") &&
+            (card?.querySelectorAll("form.prepared-output-start").length ?? 0) < ${previousCount};
+        })()`),
+      "Pinikiet external registration confirmation",
+    );
+    remainingRegistrations = await devtools.evaluate(`(() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "Pinikietへ送る");
+      return card?.querySelectorAll("form.prepared-output-start").length ?? 0;
+    })()`);
+  }
   await waitFor(
     () =>
       devtools.evaluate(`(() => {
@@ -607,6 +686,7 @@ try {
         return location.search.includes("saved=1") &&
           generic?.textContent.includes("正常に送信中") &&
           pinikiet?.textContent.includes("正常に送信中") &&
+          !pinikiet.querySelector("form.output-binding-form") &&
           !pinikiet.querySelector("form.prepared-output-start");
       })()`),
     "Pinikiet output start",

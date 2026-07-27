@@ -129,6 +129,18 @@ async fn admin_output_page_leads_with_delivery_state_and_retains_mutation_contro
     assert!(html.contains("data-unix-ms=\"1735689660000\""));
     assert!(html.contains("Profile ID"));
     assert!(html.contains("binding-pinikiet-01"));
+    assert!(html.contains("<span>乾燥炉入口 温度</span>"));
+    assert_eq!(html.matches("class=\"output-binding-form\"").count(), 1);
+    assert!(html.contains(
+        "action=\"/console/output-bindings/binding-pinikiet-01\" class=\"output-binding-form\""
+    ));
+    assert!(html.contains("<select name=\"mode\" required>"));
+    assert!(html.contains("<option value=\"onoff\">ON/OFF</option>"));
+    assert!(html.contains("<option value=\"gantt_chart\">稼働状態</option>"));
+    assert!(html.contains("name=\"revision\" value=\"1\""));
+    assert!(!html.contains("name=\"mode\" value=\"automatic\""));
+    assert!(html.contains("配送状態を確認できません"));
+    assert!(!html.contains("semantic or output resource was not found"));
     assert!(html.contains("name=\"auto_bind_future_rules\" value=\"true\" required"));
     assert!(html.contains("今後追加する対応可能な値も自動で送ります"));
     assert!(html.contains("この内容で送信を開始"));
