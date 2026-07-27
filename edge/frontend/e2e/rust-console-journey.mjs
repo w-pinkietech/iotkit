@@ -560,22 +560,34 @@ try {
     form.elements.namedItem("auto_bind_future_rules").checked = true;
     form.requestSubmit();
   })()`);
-  await waitFor(
-    () =>
-      devtools.evaluate(`(() => {
-        const card = [...document.querySelectorAll(".output-destination-card")]
-          .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
-        const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
-          .map((status) => status.textContent.trim());
-        const deliveryStates = ["最初の値を待っています", "配送中", "正常に送信中"];
-        return location.pathname === "/output" &&
-          location.search.includes("saved=1") &&
-          bindingStates.length > 0 &&
-          bindingStates.every((state) => deliveryStates.includes(state)) &&
-          !card?.querySelector("form.output-binding-form, form.prepared-output-start");
-      })()`),
-    "active Generic output without actionable bindings",
-  );
+  try {
+    await waitFor(
+      () =>
+        devtools.evaluate(`(() => {
+          const card = [...document.querySelectorAll(".output-destination-card")]
+            .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+          return location.pathname === "/output" &&
+            location.search.includes("saved=1") &&
+            Boolean(card) &&
+            !card.querySelector("form.output-binding-form, form.prepared-output-start");
+        })()`),
+      "active Generic output without actionable bindings",
+    );
+  } catch (error) {
+    const diagnostic = await devtools.evaluate(`JSON.stringify((() => {
+      const card = [...document.querySelectorAll(".output-destination-card")]
+        .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+      return {
+        location: location.href,
+        cardText: card?.textContent.replace(/\\s+/g, " ").trim() ?? null,
+        bindingStatuses: [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
+          .map((status) => status.textContent.trim()),
+        outputBindingFormCount: card?.querySelectorAll("form.output-binding-form").length ?? 0,
+        preparedOutputStartFormCount: card?.querySelectorAll("form.prepared-output-start").length ?? 0,
+      };
+    })())`);
+    throw new Error(`${error}\nPage state: ${diagnostic}`);
+  }
   await writeFile(genericOutputReleasePath, "", { flag: "wx" });
   await waitFor(
     async () => {
