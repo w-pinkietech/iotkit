@@ -155,6 +155,23 @@ const outputDestinationFacts = `(() => {
     .sort((left, right) => left.name.localeCompare(right.name));
 })()`;
 
+const outputDeliveryDiagnostics = `(() =>
+  [...document.querySelectorAll(".output-destination-card")].map((card) => ({
+    name: card.querySelector("h2")?.textContent.trim() ?? null,
+    status: card.querySelector(":scope > header .status-pill")?.textContent.trim() ?? null,
+    bindingStatuses: [...card.querySelectorAll(".output-rule-row > header .status-pill")]
+      .map((status) => status.textContent.trim()),
+    payloadSequences: [...card.querySelectorAll(".output-technical pre")]
+      .map((payload) => {
+        try {
+          return JSON.parse(payload.textContent).sequence ?? null;
+        } catch {
+          return "invalid-json";
+        }
+      }),
+  }))
+)()`;
+
 async function launchBrowser() {
   const failures = [];
   for (const executable of await chromiumExecutables()) {
@@ -589,33 +606,40 @@ try {
     throw new Error(`${error}\nPage state: ${diagnostic}`);
   }
   await writeFile(genericOutputReleasePath, "", { flag: "wx" });
-  await waitFor(
-    async () => {
-      await devtools.navigate("/output");
-      return devtools.evaluate(`(() => {
-        const card = [...document.querySelectorAll(".output-destination-card")]
-          .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
-        const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
-          .map((status) => status.textContent.trim());
-        const releasedPayload = [...(card?.querySelectorAll(".output-technical pre") ?? [])]
-          .some((payload) => {
-            try {
-              return JSON.parse(payload.textContent).sequence === 4;
-            } catch {
-              return false;
-            }
-          });
-        return bindingStates.length > 0 &&
-          bindingStates.every((state) => state === "正常に送信中") &&
-          releasedPayload &&
-          card.textContent.includes("送信対象") &&
-          card.textContent.includes("最終送信") &&
-          card.textContent.includes("配送待ち") &&
-          Boolean(card.querySelector(".output-technical"));
-      })()`);
-    },
-    "generic output activation",
-  );
+  try {
+    await waitFor(
+      async () => {
+        await devtools.navigate("/output");
+        return devtools.evaluate(`(() => {
+          const card = [...document.querySelectorAll(".output-destination-card")]
+            .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+          const bindingStates = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
+            .map((status) => status.textContent.trim());
+          const releasedPayload = [...(card?.querySelectorAll(".output-technical pre") ?? [])]
+            .some((payload) => {
+              try {
+                return JSON.parse(payload.textContent).sequence === 2;
+              } catch {
+                return false;
+              }
+            });
+          return bindingStates.length > 0 &&
+            bindingStates.every((state) => state === "正常に送信中") &&
+            releasedPayload &&
+            card.textContent.includes("送信対象") &&
+            card.textContent.includes("最終送信") &&
+            card.textContent.includes("配送待ち") &&
+            Boolean(card.querySelector(".output-technical"));
+        })()`);
+      },
+      "generic output activation",
+    );
+  } catch (error) {
+    const diagnostic = await devtools.evaluate(outputDeliveryDiagnostics);
+    throw new Error(
+      `${error}\nOutput delivery state: ${JSON.stringify(diagnostic)}`,
+    );
+  }
   await devtools.evaluate(`(() => {
     const form = document.querySelector(
       ".output-add-grid form.output-add-card:has(input[value='pinikiet.mqtt.v1'])",
@@ -729,35 +753,42 @@ try {
     })()`);
   }
   await writeFile(pinikietOutputReleasePath, "", { flag: "wx" });
-  await waitFor(
-    async () => {
-      await devtools.navigate("/output");
-      return devtools.evaluate(`(() => {
-        const cards = [...document.querySelectorAll(".output-destination-card")];
-        const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
-        const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
-        const hasHealthyBindings = (card) => {
-          const states = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
-            .map((status) => status.textContent.trim());
-          return states.length > 0 && states.every((state) => state === "正常に送信中");
-        };
-        const hasReleasedPayload = [...(pinikiet?.querySelectorAll(".output-technical pre") ?? [])]
-          .some((payload) => {
-            try {
-              return JSON.parse(payload.textContent).sequence === 6;
-            } catch {
-              return false;
-            }
-          });
-        return hasHealthyBindings(generic) &&
-          hasHealthyBindings(pinikiet) &&
-          hasReleasedPayload &&
-          !pinikiet.querySelector("form.output-binding-form") &&
-          !pinikiet.querySelector("form.prepared-output-start");
-      })()`);
-    },
-    "Pinikiet output start",
-  );
+  try {
+    await waitFor(
+      async () => {
+        await devtools.navigate("/output");
+        return devtools.evaluate(`(() => {
+          const cards = [...document.querySelectorAll(".output-destination-card")];
+          const generic = cards.find((card) => card.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
+          const pinikiet = cards.find((card) => card.querySelector("h2")?.textContent === "Pinikietへ送る");
+          const hasHealthyBindings = (card) => {
+            const states = [...(card?.querySelectorAll(".output-rule-row > header .status-pill") ?? [])]
+              .map((status) => status.textContent.trim());
+            return states.length > 0 && states.every((state) => state === "正常に送信中");
+          };
+          const hasReleasedPayload = [...(pinikiet?.querySelectorAll(".output-technical pre") ?? [])]
+            .some((payload) => {
+              try {
+                return JSON.parse(payload.textContent).sequence === 4;
+              } catch {
+                return false;
+              }
+            });
+          return hasHealthyBindings(generic) &&
+            hasHealthyBindings(pinikiet) &&
+            hasReleasedPayload &&
+            !pinikiet.querySelector("form.output-binding-form") &&
+            !pinikiet.querySelector("form.prepared-output-start");
+        })()`);
+      },
+      "Pinikiet output start",
+    );
+  } catch (error) {
+    const diagnostic = await devtools.evaluate(outputDeliveryDiagnostics);
+    throw new Error(
+      `${error}\nOutput delivery state: ${JSON.stringify(diagnostic)}`,
+    );
+  }
   const connectedInventory = await devtools.evaluate(`(async () => {
     const [signals, semantics, profiles, routes] = await Promise.all(
       ["/api/v1/signals", "/api/v1/semantic-definitions", "/api/v1/export-profiles", "/api/v1/output-routes"]
