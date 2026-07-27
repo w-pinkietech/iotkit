@@ -382,11 +382,13 @@ impl StorageWebApplication {
                                         prepared: !binding.active
                                             && !binding.needs_configuration
                                             && binding.ineligible_reason.is_empty(),
+                                        ..ConsoleBinding::default()
                                     }
                                 })
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    ..ConsoleOutput::default()
                 }
             })
             .collect())
@@ -654,6 +656,7 @@ impl WebApplication for StorageWebApplication {
             selected_signal,
             history,
             outputs: self.console_outputs().await?,
+            output_summary: Default::default(),
             accounts,
             audit,
             storage,
