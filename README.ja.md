@@ -6,7 +6,10 @@
 
 オンプレミスを優先し、データの完全性を重視するIoT収集基盤です。IoTKit Edge Nodeへ対象を絞ったセンサーAdapterを追加すると、IoTKitが耐久収集、再送、IoTKit Edgeへの明示的な保管責任移転を提供します。IoTKit Edgeが耐久保存するまで、データは削除可能になりません。
 
-> **状態: v1リリース候補。** BravePIの温度・接点入力、1台以上のRust製IoTKit Edge Node、標準MQTT Broker、認証付きIoTKit Console、将来分だけに適用する意味付け、Pinikietへの耐久MQTT出力まで、一連の経路を実装済みです。API、ディスク上のschema、wire contractは今後変更される可能性があります。[ロードマップ](#ロードマップ)を参照してください。
+> **現在の製品バージョン: 0.1.0（pre-1.0）。** IoTKitは早期source releaseとして
+> 公開しています。0.xの間はAPI、ディスク上のschema、wire contractが変更される可能性があります。
+> [GitHub Releases](https://github.com/w-pinkietech/iotkit/releases)と
+> [ロードマップ](#ロードマップ)を参照してください。
 
 現行の製品知識はOKF v0.1形式でも提供しています: [日本語](docs/okf/ja/index.md) / [英語](docs/okf/en/index.md)。
 

@@ -26,6 +26,34 @@ export function extractWorkspaceVersion(cargoToml) {
   return version;
 }
 
+export function extractEnglishReadmeVersion(readme) {
+  const version = readme.match(
+    /^> \*\*Current product version: ([^ ]+) \(pre-1\.0\)\.\*\*/m,
+  )?.[1];
+  if (!version) {
+    throw new Error("README.md is missing the current product version marker");
+  }
+  return version;
+}
+
+export function extractJapaneseReadmeVersion(readme) {
+  const version = readme.match(
+    /^> \*\*現在の製品バージョン: ([^（]+)（pre-1\.0）。\*\*/m,
+  )?.[1];
+  if (!version) {
+    throw new Error(
+      "README.ja.md is missing the current product version marker",
+    );
+  }
+  return version;
+}
+
+export function extractChangelogVersions(changelog) {
+  return [...changelog.matchAll(/^## \[([^\]]+)\] - \d{4}-\d{2}-\d{2}$/gm)].map(
+    (match) => match[1],
+  );
+}
+
 export function validateReleaseState(state) {
   const problems = [];
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(state.version)) {
@@ -51,6 +79,35 @@ export function validateReleaseState(state) {
   if (state.tag && state.tag !== `v${state.version}`) {
     problems.push(`tag must be v${state.version}`);
   }
+  if (
+    state.readmeVersion !== undefined &&
+    state.readmeVersion !== state.version
+  ) {
+    problems.push(
+      `README product version is ${state.readmeVersion}, expected ${state.version}`,
+    );
+  }
+  if (
+    state.readmeJaVersion !== undefined &&
+    state.readmeJaVersion !== state.version
+  ) {
+    problems.push(
+      `README.ja product version is ${state.readmeJaVersion}, expected ${state.version}`,
+    );
+  }
+  if (
+    state.changelogVersions !== undefined &&
+    !state.changelogVersions.includes(state.version)
+  ) {
+    problems.push(
+      `CHANGELOG.md has no release heading for ${state.version}`,
+    );
+  }
+  for (const version of state.changelogVersions ?? []) {
+    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+      problems.push(`CHANGELOG.md version is not SemVer: ${version}`);
+    }
+  }
   return problems;
 }
 
@@ -62,6 +119,9 @@ function parseTag(args) {
 
 function loadReleaseState(root, tag) {
   const rootManifest = readFileSync(resolve(root, "Cargo.toml"), "utf8");
+  const readme = readFileSync(resolve(root, "README.md"), "utf8");
+  const readmeJa = readFileSync(resolve(root, "README.ja.md"), "utf8");
+  const changelog = readFileSync(resolve(root, "CHANGELOG.md"), "utf8");
   const metadata = JSON.parse(
     execFileSync(
       "cargo",
@@ -86,6 +146,9 @@ function loadReleaseState(root, tag) {
     packages,
     repository: extractWorkspaceField(rootManifest, "repository"),
     tag,
+    readmeVersion: extractEnglishReadmeVersion(readme),
+    readmeJaVersion: extractJapaneseReadmeVersion(readmeJa),
+    changelogVersions: extractChangelogVersions(changelog),
   };
 }
 
