@@ -9,12 +9,10 @@ sensor adapter to IoTKit Edge Node and IoTKit supplies durable collection, retry
 explicit transfer of storage responsibility to IoTKit Edge: data is not purge-eligible
 until IoTKit Edge has durably stored it.
 
-> **Status: v1 release candidate.** The complete path—BravePI temperature/contact,
-> one or more Rust IoTKit Edge Nodes, a standard MQTT broker, authenticated IoTKit Console,
-> future-only semantic mapping, and durable Pinikiet MQTT output—is implemented. APIs, the
-> on-disk schema, and the wire contract may
-> still change. See
-> [Roadmap](#roadmap).
+> **Current product version: 0.1.0 (pre-1.0).** IoTKit is available as an
+> early source release. APIs, the on-disk schema, and wire contracts may change
+> during the 0.x series. See [GitHub Releases](https://github.com/w-pinkietech/iotkit/releases)
+> and the [Roadmap](#roadmap).
 
 Current product knowledge is also available as an OKF v0.1 bundle in
 [Japanese](docs/okf/ja/index.md) and [English](docs/okf/en/index.md).

@@ -147,6 +147,7 @@ pub struct ConsoleRequest {
 
 #[derive(Clone, Debug, Default)]
 pub struct ConsoleView {
+    pub product_version: String,
     pub notice: String,
     pub page_error: String,
     pub commissioning: console::commissioning::CommissioningView,
@@ -1962,6 +1963,7 @@ pub mod test_support {
             let commissioning =
                 console::commissioning::commissioning_view(&edge_nodes, &devices, &signals);
             Ok(ConsoleView {
+                product_version: env!("CARGO_PKG_VERSION").into(),
                 commissioning,
                 edge_nodes,
                 registered_edge_node_count: 1,

@@ -159,6 +159,10 @@ async fn box_setup_session_throttle_and_graceful_shutdown() {
         .json()
         .await
         .unwrap();
+    assert_eq!(
+        box_before["version"],
+        serde_json::Value::String(env!("CARGO_PKG_VERSION").into())
+    );
     assert_eq!(box_before["edge_node_name"], "test-edge");
     assert!(box_before.get("gateway_name").is_none());
     assert_eq!(box_before["epoch"], "epoch-test");
