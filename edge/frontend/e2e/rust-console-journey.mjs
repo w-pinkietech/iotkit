@@ -127,6 +127,25 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+const outputDestinationFacts = `(() => {
+  const normalize = (value) => value?.replace(/\\s+/g, " ").trim() ?? "";
+  return [...document.querySelectorAll(".output-destination-card")]
+    .map((card) => ({
+      name: normalize(card.querySelector("h2")?.textContent),
+      status: normalize(card.querySelector(":scope > header .status-pill")?.textContent),
+      summary: Object.fromEntries(
+        [...card.querySelectorAll(".output-destination-summary > div")].map((fact) => [
+          normalize(fact.querySelector("dt")?.textContent),
+          normalize(fact.querySelector("dd")?.textContent),
+        ]),
+      ),
+      technical: [...card.querySelectorAll(".output-technical")]
+        .map((details) => normalize(details.textContent))
+        .sort(),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+})()`;
+
 async function launchBrowser() {
   const failures = [];
   for (const executable of await chromiumExecutables()) {
@@ -534,24 +553,17 @@ try {
   })()`);
   await waitFor(
     () =>
-      devtools.evaluate(
-        "location.search.includes('saved=1') && Boolean([...document.querySelectorAll('.output-destination-card')].find((card) => card.querySelector('h2')?.textContent === '汎用MQTT JSONで送る'))",
-      ),
-    "generic output activation",
-  );
-  assert(
-    await devtools.evaluate(
-      `(() => {
+      devtools.evaluate(`(() => {
         const card = [...document.querySelectorAll(".output-destination-card")]
           .find((candidate) => candidate.querySelector("h2")?.textContent === "汎用MQTT JSONで送る");
-        return card?.textContent.includes("正常に送信中") &&
+        return location.search.includes("saved=1") &&
+          card?.textContent.includes("正常に送信中") &&
           card.textContent.includes("送信対象") &&
           card.textContent.includes("最終送信") &&
           card.textContent.includes("配送待ち") &&
           Boolean(card.querySelector(".output-technical"));
-      })()`,
-    ),
-    "generic output did not render its sending state and delivery facts",
+      })()`),
+    "generic output activation",
   );
   await devtools.evaluate(`(() => {
     const form = document.querySelector(
@@ -624,8 +636,25 @@ try {
     () =>
       devtools.evaluate(
         "location.pathname === '/accounts' && location.search.includes('saved=1') && document.body.textContent.includes('第一工場 閲覧担当者')",
-      ),
+    ),
     "account creation form",
+  );
+  await devtools.navigate("/output");
+  const ownerOutputFacts = await devtools.evaluate(outputDestinationFacts);
+  assert(
+    ownerOutputFacts.length === 2 &&
+      ownerOutputFacts.some(({ name }) => name === "汎用MQTT JSONで送る") &&
+      ownerOutputFacts.some(({ name }) => name === "Pinikietへ送る") &&
+      ownerOutputFacts.every(
+        ({ status, summary, technical }) =>
+          status === "正常に送信中" &&
+          Boolean(summary["送信対象"]) &&
+          Boolean(summary["最終送信"]) &&
+          Boolean(summary["配送待ち"]) &&
+          technical.length > 0 &&
+          technical.every(Boolean),
+      ),
+    `owner output facts were incomplete: ${JSON.stringify(ownerOutputFacts)}`,
   );
   await devtools.evaluate(
     "document.querySelector('.logout-form').requestSubmit()",
@@ -671,16 +700,22 @@ try {
     "viewer login after password change",
   );
   await devtools.navigate("/output");
+  const viewerOutputFacts = await devtools.evaluate(outputDestinationFacts);
+  assert(
+    JSON.stringify(viewerOutputFacts) === JSON.stringify(ownerOutputFacts),
+    `viewer output facts differ from owner facts: ${JSON.stringify({
+      owner: ownerOutputFacts,
+      viewer: viewerOutputFacts,
+    })}`,
+  );
   assert(
     await devtools.evaluate(
       `document.body.textContent.includes("閲覧のみ") &&
-        document.body.textContent.includes("配送待ち") &&
-        Boolean(document.querySelector(".output-technical")) &&
         !document.querySelector(
           "form.output-add-card, form.output-binding-form, form.prepared-output-start, form.output-stop-form"
         )`,
     ),
-    "viewer did not retain delivery facts without output controls",
+    "viewer output page exposed mutation controls",
   );
   assert(
     await devtools.evaluate(
