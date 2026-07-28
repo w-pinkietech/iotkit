@@ -7,42 +7,88 @@ function installPreviewDOM(): void {
       <span data-source-current-value>0</span>
       <span data-source-current-received>未受信</span>
     </div>
-    <form action="/console/signals/sig_01/calibration">
-      <input name="scale" value="1">
-      <input name="offset" value="0">
-    </form>
-    <details class="semantic-rule-card" data-rule-id="rule-01" open>
-      <form class="semantic-form"
-        data-signal-ref="sig_01"
-        data-rule-id="rule-01"
-        action="/console/semantic-rules/rule-01">
-        <input name="display_name" value="温度">
-        <input name="kind" value="numeric">
-        <select name="detector_mode"><option value="" selected>none</option></select>
-        <label><span>立ち上がりしきい値</span>
-          <input name="rise_threshold" value="0">
-        </label>
-        <input name="fall_threshold" value="0">
-        <input name="rise_debounce_seconds" value="0">
-        <input name="fall_debounce_seconds" value="0">
-        <select name="trigger"><option value="" selected>none</option></select>
+    <div class="sensor-setting-workspace">
+      <form action="/console/signals/sig_01/calibration">
+        <input name="scale" value="1">
+        <input name="offset" value="0">
       </form>
-    </details>
-    <section data-setting-simulation data-signal-ref="sig_01">
-      <button type="button" role="switch" aria-checked="true"
-        data-preview-toggle>自動更新</button>
-      <input name="preview_test_value">
-      <span data-preview-test-result></span>
-      <span data-preview-range></span>
-      <span data-preview-count></span>
-      <span data-preview-message></span>
-      <span data-preview-feed-state>受信データを確認中</span>
-      <span data-preview-checked-at></span>
-      <span data-preview-accessible-summary></span>
-      <strong data-preview-current-value></strong>
-      <span data-preview-current-received></span>
-      <svg data-preview-chart></svg>
-    </section>
+      <section data-setting-panel="normal">
+        <details class="semantic-rule-card" data-rule-id="rule-01"
+          data-preview-target open>
+          <form class="semantic-form"
+            data-signal-ref="sig_01"
+            data-rule-id="rule-01"
+            data-preview-id="rule-01"
+            action="/console/semantic-rules/rule-01">
+            <input name="display_name" value="温度">
+            <input name="kind" value="numeric">
+            <select name="detector_mode"><option value="" selected>none</option></select>
+            <label><span>立ち上がりしきい値</span>
+              <input name="rise_threshold" value="0">
+            </label>
+            <input name="fall_threshold" value="0">
+            <input name="rise_debounce_seconds" value="0">
+            <input name="fall_debounce_seconds" value="0">
+            <select name="trigger"><option value="" selected>none</option></select>
+          </form>
+        </details>
+        <details class="semantic-rule-create" data-preview-target>
+          <form class="semantic-form"
+            data-signal-ref="sig_01"
+            data-preview-id="draft-normal"
+            action="/console/signals/sig_01/semantic-rules">
+            <input name="display_name" value="">
+            <input name="kind" value="numeric">
+            <select name="detector_mode"><option value="" selected>none</option></select>
+            <input name="rise_threshold" value="0">
+            <input name="fall_threshold" value="0">
+            <input name="rise_debounce_seconds" value="0">
+            <input name="fall_debounce_seconds" value="0">
+            <select name="trigger"><option value="" selected>none</option></select>
+          </form>
+        </details>
+      </section>
+      <section data-setting-panel="alarm" hidden>
+        <details class="semantic-rule-create" data-preview-target open>
+          <form class="semantic-form"
+            data-signal-ref="sig_01"
+            data-preview-id="draft-alarm"
+            action="/console/signals/sig_01/semantic-rules">
+            <input name="display_name" value="">
+            <input name="kind" value="alarm">
+            <select name="detector_mode"><option value="high_active" selected>high</option></select>
+            <input name="rise_threshold" value="10">
+            <input name="fall_threshold" value="5">
+            <input name="rise_debounce_seconds" value="0">
+            <input name="fall_debounce_seconds" value="0">
+            <select name="trigger"><option value="" selected>none</option></select>
+          </form>
+        </details>
+      </section>
+      <section data-setting-simulation data-signal-ref="sig_01" data-unit="℃">
+        <button type="button" role="switch" aria-checked="true"
+          data-preview-toggle>自動更新</button>
+        <input name="preview_test_value">
+        <span data-preview-test-result></span>
+        <span data-preview-range></span>
+        <span data-preview-count></span>
+        <span data-preview-message></span>
+        <span data-preview-feed-state>受信データを確認中</span>
+        <span data-preview-checked-at></span>
+        <span data-preview-accessible-summary></span>
+        <strong data-preview-current-value></strong>
+        <span data-preview-current-received></span>
+        <svg data-preview-chart></svg>
+        <span data-preview-result-legend hidden>設定結果</span>
+        <span data-preview-threshold-legend hidden>立上り・立下り</span>
+        <section data-preview-rule-result>
+          <dd data-preview-rule-name>選択中のルールはありません</dd>
+          <dd data-preview-rule-kind>—</dd>
+          <strong data-preview-rule-value>—</strong>
+          <p data-preview-rule-detail>ルールを開くと判定結果を確認できます。</p>
+        </section>
+      </section>
+    </div>
   `;
   document.cookie = "iotkit_edge_csrf=csrf-test";
 }
@@ -67,7 +113,41 @@ function installNoRulePreviewDOM(): void {
   document.body.append(form);
 }
 
-function previewResponse(receivedAt = 1000, input = 24.8): Response {
+type PreviewKind = "numeric" | "boolean" | "cumulative_counter" | "alarm";
+
+interface PreviewResponseOptions {
+  kind?: PreviewKind;
+  point?: Record<string, unknown>;
+  points?: Array<Record<string, unknown>>;
+  displayName?: string;
+  testResult?: Record<string, unknown>;
+  riseThreshold?: number;
+  fallThreshold?: number;
+}
+
+function okPreviewResponse({
+  kind = "numeric",
+  point,
+  points,
+  displayName = "温度",
+  testResult,
+  riseThreshold,
+  fallThreshold,
+}: PreviewResponseOptions = {}): Response {
+  const receivedAt = Number(point?.received_at ?? 1_000);
+  const input = Number(point?.input ?? 24.8);
+  const calibrated = Number(point?.calibrated ?? input);
+  const basePoint = {
+    received_at: receivedAt,
+    input,
+    input_min: Number(point?.input_min ?? input),
+    input_max: Number(point?.input_max ?? input),
+    calibrated,
+    calibrated_min: Number(point?.calibrated_min ?? calibrated),
+    calibrated_max: Number(point?.calibrated_max ?? calibrated),
+    sample_count: 1,
+  };
+  const resolvedPoints = points ?? [{ ...basePoint, ...point }];
   return new Response(
     JSON.stringify({
       calibration: {
@@ -80,24 +160,41 @@ function previewResponse(receivedAt = 1000, input = 24.8): Response {
       rules: [
         {
           rule_id: "rule-01",
-          display_name: "温度",
-          kind: "numeric",
-          input_count: 1,
-          plot_count: 1,
-          points: [
-            {
-              received_at: receivedAt,
-              input,
-              input_min: input,
-              input_max: input,
-              calibrated: input,
-              calibrated_min: input,
-              calibrated_max: input,
-              sample_count: 1,
-            },
-          ],
+          display_name: displayName,
+          kind,
+          input_count: resolvedPoints.length,
+          plot_count: resolvedPoints.length,
+          rise_threshold: riseThreshold,
+          fall_threshold: fallThreshold,
+          test_result: testResult,
+          points: resolvedPoints,
         },
       ],
+      window_start: resolvedPoints[0]?.received_at ?? receivedAt,
+      window_end: resolvedPoints.at(-1)?.received_at ?? receivedAt,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+function previewResponse(receivedAt = 1000, input = 24.8): Response {
+  return okPreviewResponse({ point: { received_at: receivedAt, input } });
+}
+
+function multiplePreviewResponse(
+  rules: Array<Record<string, unknown>>,
+  receivedAt = 1_000,
+): Response {
+  return new Response(
+    JSON.stringify({
+      calibration: {
+        signal_ref: "sig_01",
+        revision: 1,
+        scale: 1,
+        offset: 0,
+        created_at: 1,
+      },
+      rules,
       window_start: receivedAt,
       window_end: receivedAt,
     }),
@@ -106,6 +203,11 @@ function previewResponse(receivedAt = 1000, input = 24.8): Response {
 }
 
 afterEach(() => {
+  for (const toggle of document.querySelectorAll<HTMLButtonElement>(
+    "[data-preview-toggle]",
+  )) {
+    if (toggle.getAttribute("aria-checked") === "true") toggle.click();
+  }
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -113,6 +215,187 @@ afterEach(() => {
 });
 
 describe("automatic mapping preview", () => {
+  it("uses the stable normal draft ID when its target is open", async () => {
+    installPreviewDOM();
+    const normal = document.querySelector<HTMLElement>(
+      '[data-setting-panel="normal"]',
+    )!;
+    const alarm = document.querySelector<HTMLElement>(
+      '[data-setting-panel="alarm"]',
+    )!;
+    alarm.hidden = true;
+    const saved = normal.querySelector<HTMLDetailsElement>(
+      ".semantic-rule-card",
+    )!;
+    const draft = normal.querySelector<HTMLDetailsElement>(
+      ".semantic-rule-create",
+    )!;
+    saved.open = false;
+    draft.open = true;
+    const fetchMock = vi.fn().mockResolvedValue(
+      multiplePreviewResponse([
+        {
+          rule_id: "draft-normal",
+          display_name: "新しい計測ルール",
+          kind: "numeric",
+          input_count: 0,
+          plot_count: 0,
+          points: [],
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const requestRules = JSON.parse(String(request.body)).rules as Array<{
+      rule_id: string;
+    }>;
+    expect(requestRules.map((rule) => rule.rule_id)).toContain("draft-normal");
+    expect(requestRules.map((rule) => rule.rule_id)).not.toContain("draft-1");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("previews only the open target in the visible settings panel", async () => {
+    installPreviewDOM();
+    const normal = document.querySelector<HTMLElement>(
+      '[data-setting-panel="normal"]',
+    )!;
+    const alarm = document.querySelector<HTMLElement>(
+      '[data-setting-panel="alarm"]',
+    )!;
+    normal.hidden = true;
+    alarm.hidden = false;
+    const fetchMock = vi.fn().mockResolvedValue(
+      multiplePreviewResponse([
+        {
+          rule_id: "rule-01",
+          display_name: "温度",
+          kind: "numeric",
+          input_count: 1,
+          plot_count: 1,
+          points: [],
+        },
+        {
+          rule_id: "draft-alarm",
+          display_name: "新しい異常検知",
+          kind: "alarm",
+          input_count: 1,
+          plot_count: 1,
+          points: [],
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const requestRules = JSON.parse(String(request.body)).rules as Array<{
+      rule_id: string;
+    }>;
+    expect(requestRules.map((rule) => rule.rule_id)).toContain("draft-alarm");
+    expect(requestRules.map((rule) => rule.rule_id)).not.toContain(
+      "draft-normal",
+    );
+    expect(
+      document.querySelector("[data-preview-rule-name]")?.textContent,
+    ).toContain("選択中のルールはありません");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("keeps raw data when the active target returns an error", async () => {
+    installPreviewDOM();
+    const normal = document.querySelector<HTMLElement>(
+      '[data-setting-panel="normal"]',
+    )!;
+    const alarm = document.querySelector<HTMLElement>(
+      '[data-setting-panel="alarm"]',
+    )!;
+    normal.hidden = true;
+    alarm.hidden = false;
+    const testInput = document.querySelector<HTMLInputElement>(
+      '[name="preview_test_value"]',
+    )!;
+    testInput.value = "7";
+    const fetchMock = vi.fn().mockResolvedValue(
+      multiplePreviewResponse([
+        {
+          rule_id: "rule-01",
+          display_name: "温度",
+          kind: "boolean",
+          input_count: 1,
+          plot_count: 1,
+          test_result: {
+            emitted: true,
+            boolean: true,
+            calibrated: 99,
+          },
+          points: [
+            {
+              received_at: 1_000,
+              input: 12,
+              input_min: 12,
+              input_max: 12,
+              calibrated: 99,
+              calibrated_min: 99,
+              calibrated_max: 99,
+              active: true,
+              active_samples: 1,
+              sample_count: 1,
+            },
+          ],
+        },
+        {
+          rule_id: "draft-alarm",
+          display_name: "新しい異常検知",
+          kind: "alarm",
+          input_count: 1,
+          plot_count: 1,
+          error: "invalid detector",
+          points: [
+            {
+              received_at: 1_000,
+              input: 12,
+              input_min: 12,
+              input_max: 12,
+              calibrated: 88,
+              calibrated_min: 88,
+              calibrated_max: 88,
+              active: true,
+              active_samples: 1,
+              sample_count: 1,
+            },
+          ],
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body)).test_value).toBe(7);
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-accessible-summary]")
+          ?.textContent,
+      ).toContain("受信値は12から12"),
+    );
+
+    expect(
+      document.querySelector("[data-preview-accessible-summary]")?.textContent,
+    ).not.toContain("99");
+    expect(document.querySelector(".chart-active-band")).toBeNull();
+    expect(
+      document.querySelector("[data-preview-test-result]")?.textContent,
+    ).toBe("値を入力すると結果を確認できます");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
   it("uses a temporary numeric draft to preview raw data before the first rule is saved", async () => {
     installNoRulePreviewDOM();
     const fetchMock = vi.fn().mockResolvedValue(previewResponse(1_000, 42));
@@ -127,7 +410,7 @@ describe("automatic mapping preview", () => {
       calibration: { scale: 1, offset: 0 },
       rules: [
         {
-          rule_id: "draft-1",
+          rule_id: "draft-raw",
           spec: { kind: "numeric" },
         },
       ],
@@ -244,6 +527,438 @@ describe("automatic mapping preview", () => {
     expect(
       document.querySelector("[data-preview-feed-state]")?.textContent,
     ).toBe("更新停止中");
+  });
+
+  it.each([
+    ["numeric", { calibrated: 24.5 }, "24.5 ℃"],
+    ["boolean", { active: true }, "ON"],
+    ["cumulative_counter", { counter: 42, increment: 1 }, "累積 42"],
+    ["alarm", { active: false }, "正常"],
+    ["alarm", { active: true }, "異常"],
+  ])("renders the selected %s outcome", async (kind, point, expected) => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: kind as PreviewKind,
+          point,
+          displayName: "確認対象",
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-rule-value]")?.textContent,
+      ).toContain(expected),
+    );
+
+    expect(
+      document.querySelector("[data-preview-accessible-summary]")?.textContent,
+    ).toContain("確認対象");
+    expect(
+      document.querySelector("[data-preview-accessible-summary]")?.textContent,
+    ).toContain(expected);
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it.each([
+    ["numeric", { number: 24.5, calibrated: 24.5 }, "24.5 ℃"],
+    ["boolean", { boolean: true, calibrated: 1 }, "ON"],
+    ["cumulative_counter", { integer: 42, calibrated: 42 }, "累積 42"],
+    ["alarm", { boolean: false, calibrated: 0 }, "正常"],
+    ["alarm", { boolean: true, calibrated: 1 }, "異常"],
+  ])("formats the %s test-input outcome", async (kind, testResult, expected) => {
+    installPreviewDOM();
+    document.querySelector<HTMLInputElement>('[name="preview_test_value"]')!.value =
+      "7";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: kind as PreviewKind,
+          point:
+            kind === "alarm"
+              ? { active: (testResult as { boolean?: boolean }).boolean }
+              : undefined,
+          testResult,
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-test-result]")?.textContent,
+      ).toContain(expected),
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it.each(["http", "network"] as const)(
+    "neutralizes auxiliary semantic output after a %s failure",
+    async (failure) => {
+      vi.useFakeTimers();
+      installPreviewDOM();
+      const first = okPreviewResponse({
+        kind: "alarm",
+        displayName: "ルールA",
+        point: { active: true },
+        testResult: { emitted: true, boolean: true, calibrated: 1 },
+      });
+      const fetchMock = vi.fn().mockResolvedValueOnce(first);
+      if (failure === "http") {
+        fetchMock.mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "invalid_request",
+                message: "入力内容を確認してください。",
+                request_id: "req_02",
+              },
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      } else {
+        fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+      }
+      vi.stubGlobal("fetch", fetchMock);
+
+      initializePreviews();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector("[data-preview-accessible-summary]")?.textContent,
+        ).toContain("ルールA");
+        expect(
+          document.querySelector("[data-preview-test-result]")?.textContent,
+        ).toBe("異常");
+      });
+
+      document
+        .querySelector<HTMLInputElement>('[name="preview_test_value"]')!
+        .dispatchEvent(new Event("input"));
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector("[data-preview-accessible-summary]")?.textContent,
+        ).not.toContain("ルールA");
+        expect(
+          document.querySelector("[data-preview-accessible-summary]")?.textContent,
+        ).not.toContain("異常");
+        expect(
+          document.querySelector("[data-preview-test-result]")?.textContent,
+        ).toBe("値を入力すると結果を確認できます");
+      });
+      document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    },
+  );
+
+  it("renders a no-selection result without borrowing another rule", async () => {
+    installPreviewDOM();
+    document.querySelector<HTMLDetailsElement>(
+      '[data-setting-panel="normal"] details[data-preview-target][open]',
+    )!.open = false;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okPreviewResponse()));
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-rule-name]")?.textContent,
+      ).toContain("選択中のルールはありません"),
+    );
+    expect(
+      document.querySelector("[data-preview-rule-value]")?.textContent,
+    ).toBe("—");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("renders only the raw graph and legend when no preview target is open", async () => {
+    installPreviewDOM();
+    document.querySelector<HTMLDetailsElement>(
+      '[data-setting-panel="normal"] details[data-preview-target][open]',
+    )!.open = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: "alarm",
+          point: {
+            input: 24,
+            input_min: 23,
+            input_max: 25,
+            calibrated: 48,
+            calibrated_min: 46,
+            calibrated_max: 50,
+            sample_count: 2,
+            active: true,
+            active_samples: 2,
+          },
+          riseThreshold: 30,
+          fallThreshold: 20,
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".chart-line-raw")).not.toBeNull(),
+    );
+
+    expect(document.querySelector(".chart-line-result")).toBeNull();
+    expect(document.querySelector(".chart-range")).not.toBeNull();
+    expect(document.querySelector(".chart-range-result")).toBeNull();
+    expect(document.querySelector(".chart-latest-point")).toBeNull();
+    expect(document.querySelector(".chart-threshold")).toBeNull();
+    expect(document.querySelector(".chart-active-band")).toBeNull();
+    expect(document.querySelector(".chart-line-counter")).toBeNull();
+    expect(document.querySelector(".chart-increment")).toBeNull();
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-result-legend]")
+        ?.hidden,
+    ).toBe(true);
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-threshold-legend]")
+        ?.hidden,
+    ).toBe(true);
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("renders semantic overlays and legends for a successful selected rule", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: "alarm",
+          point: {
+            input: 24,
+            input_min: 23,
+            input_max: 25,
+            calibrated: 48,
+            calibrated_min: 46,
+            calibrated_max: 50,
+            sample_count: 2,
+            active: true,
+            active_samples: 2,
+          },
+          riseThreshold: 30,
+          fallThreshold: 20,
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".chart-line-result")).not.toBeNull(),
+    );
+
+    expect(document.querySelector(".chart-range-result")).not.toBeNull();
+    expect(document.querySelector(".chart-latest-point")).not.toBeNull();
+    expect(document.querySelectorAll(".chart-threshold")).toHaveLength(2);
+    expect(document.querySelector(".chart-active-band")).not.toBeNull();
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-result-legend]")
+        ?.hidden,
+    ).toBe(false);
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-threshold-legend]")
+        ?.hidden,
+    ).toBe(false);
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("renders an error result when the selected rule fails", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        multiplePreviewResponse([
+          {
+            rule_id: "rule-01",
+            display_name: "確認対象",
+            kind: "alarm",
+            input_count: 1,
+            plot_count: 1,
+            error: "invalid detector",
+            points: [],
+          },
+        ]),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-rule-name]")?.textContent,
+      ).toContain("判定結果を更新できません"),
+    );
+    expect(
+      document.querySelector("[data-preview-rule-value]")?.textContent,
+    ).toBe("—");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("announces the selected error while keeping only raw reception visible", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        multiplePreviewResponse([
+          {
+            rule_id: "rule-01",
+            display_name: "確認対象",
+            kind: "alarm",
+            input_count: 1,
+            plot_count: 1,
+            error: "invalid detector",
+            points: [],
+          },
+          {
+            rule_id: "rule-02",
+            display_name: "別のルール",
+            kind: "numeric",
+            input_count: 1,
+            plot_count: 1,
+            points: [
+              {
+                received_at: 1_000,
+                input: 24.8,
+                input_min: 24.8,
+                input_max: 24.8,
+                calibrated: 99,
+                calibrated_min: 99,
+                calibrated_max: 99,
+                sample_count: 1,
+              },
+            ],
+          },
+        ]),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-rule-name]")?.textContent,
+      ).toContain("確認対象"),
+    );
+
+    const cardName = document.querySelector("[data-preview-rule-name]")
+      ?.textContent;
+    const cardKind = document.querySelector("[data-preview-rule-kind]")
+      ?.textContent;
+    const cardDetail = document.querySelector("[data-preview-rule-detail]")
+      ?.textContent;
+    const summary = document.querySelector("[data-preview-accessible-summary]")
+      ?.textContent;
+    expect(cardName).toContain("判定結果を更新できません");
+    expect(cardKind).toBe("異常検知");
+    expect(cardDetail).toContain("受信値はそのまま確認できます");
+    expect(summary).toContain("確認対象");
+    expect(summary).toContain("異常検知");
+    expect(summary).toContain("判定結果を更新できません");
+    expect(summary).not.toContain("選択中のルールはありません");
+    expect(summary).not.toContain("別のルール");
+    expect(
+      document.querySelector("[data-preview-message]")?.textContent,
+    ).toContain("判定結果を更新できません");
+    expect(
+      document.querySelector("[data-preview-current-value]")?.textContent,
+    ).toBe("24.8");
+    expect(
+      document.querySelector("[data-preview-rule-value]")?.textContent,
+    ).toBe("—");
+    expect(document.querySelector(".chart-line-result")).toBeNull();
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("renders a waiting result for an empty selected rule", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: "numeric",
+          points: [],
+          displayName: "確認対象",
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-rule-value]")?.textContent,
+      ).toBe("受信待ち"),
+    );
+    expect(
+      document.querySelector("[data-preview-accessible-summary]")?.textContent,
+    ).toContain("確認対象は受信データを待っています。");
+    expect(
+      document.querySelector("[data-preview-feed-state]")?.textContent,
+    ).toBe("受信待ち");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("renders a validation state when the preview request is rejected", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "invalid_request",
+              message: "入力内容を確認してください。",
+              request_id: "req_01",
+            },
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-rule-name]")?.textContent,
+      ).toContain("設定内容を確認してください"),
+    );
+    expect(
+      document.querySelector("[data-preview-rule-value]")?.textContent,
+    ).toBe("—");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("retains the last raw value when the whole preview request fails", async () => {
+    vi.useFakeTimers();
+    installPreviewDOM();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(previewResponse(1_000, 24.8))
+      .mockRejectedValueOnce(new Error("network unavailable"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-current-value]")?.textContent,
+      ).toBe("24.8"),
+    );
+
+    document
+      .querySelector<HTMLInputElement>('[name="preview_test_value"]')!
+      .dispatchEvent(new Event("input"));
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(
+      document.querySelector("[data-preview-current-value]")?.textContent,
+    ).toBe("24.8");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
   it("debounces edits and sends the complete multi-rule request", async () => {
@@ -453,5 +1168,56 @@ describe("automatic mapping preview", () => {
       document.querySelector("[data-preview-accessible-summary]")
         ?.textContent,
     ).toContain("1件");
+  });
+
+  it("includes raw and calibrated ranges in a successful numeric summary", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: "numeric",
+          displayName: "確認対象",
+          points: [
+            {
+              received_at: 1_000,
+              input: 10,
+              input_min: 9,
+              input_max: 11,
+              calibrated: 20,
+              calibrated_min: 18,
+              calibrated_max: 22,
+              sample_count: 1,
+            },
+            {
+              received_at: 2_000,
+              input: 12,
+              input_min: 11,
+              input_max: 13,
+              calibrated: 24,
+              calibrated_min: 23,
+              calibrated_max: 25,
+              sample_count: 1,
+            },
+          ],
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-accessible-summary]")
+          ?.textContent,
+      ).toContain("受信値は9から13"),
+    );
+    const summary = document.querySelector("[data-preview-accessible-summary]")
+      ?.textContent;
+    expect(summary).toContain("補正後は18から25");
+    expect(summary).toContain("最新の補正後は24 ℃");
+    expect(summary).toContain("確認対象");
+    expect(summary).toContain("測定値");
+    expect(summary).toContain("2件");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 });

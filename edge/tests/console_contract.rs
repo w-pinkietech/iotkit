@@ -982,6 +982,56 @@ async fn numeric_rule_creation_explains_the_measurement_choice() {
 }
 
 #[tokio::test]
+async fn sensor_rule_creation_and_preview_targets_are_scoped_by_tab() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/equipment/devices/device-01/sensors/signal-01")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(html.contains("data-preview-rule-result"));
+    assert!(html.contains("data-preview-rule-name"));
+    assert!(html.contains("data-preview-rule-kind"));
+    assert!(html.contains("data-preview-rule-value"));
+    assert!(html.contains("data-preview-rule-detail"));
+
+    let normal_start = html.find(r#"id="setting-panel-normal""#).unwrap();
+    let alarm_start = html.find(r#"id="setting-panel-alarm""#).unwrap();
+    let normal = &html[normal_start..alarm_start];
+    let alarm = &html[alarm_start..];
+
+    assert!(normal.contains(r#"data-preview-id="draft-normal""#));
+    assert!(!normal.contains(r#"<option value="alarm">"#));
+    assert!(alarm.contains(r#"id="alarm-rule-create""#));
+    assert!(alarm.contains(r#"data-preview-id="draft-alarm""#));
+    assert!(alarm.contains(r#"name="kind" value="alarm""#));
+    for label in [
+        "異常とみなす側",
+        "異常になるしきい値",
+        "正常に戻るしきい値",
+        "異常確定待ち",
+        "復帰確定待ち",
+    ] {
+        assert!(alarm.contains(label), "missing alarm label: {label}");
+    }
+}
+
+#[tokio::test]
 async fn device_collection_without_a_selected_device_is_not_a_valid_console_page() {
     let app = router(
         WebConfig::test(),

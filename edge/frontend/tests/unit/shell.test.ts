@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initializeShell } from "../../src/shell";
+import {
+  initializeShell,
+  SETTING_TAB_CHANGE_EVENT,
+} from "../../src/shell";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -306,6 +309,40 @@ describe("console shell", () => {
       document.querySelector<HTMLElement>(
         '[data-setting-panel="alarm"]',
       )?.hidden,
+    ).toBe(false);
+  });
+
+  it("bubbles the active settings panel change to the sensor workspace", () => {
+    document.body.innerHTML = `
+      <section class="sensor-setting-workspace">
+        <div data-setting-tabs data-default-setting-tab="normal">
+          <div role="tablist">
+            <button type="button" role="tab" data-setting-tab="normal">
+              通常の値
+            </button>
+            <button type="button" role="tab" data-setting-tab="alarm">
+              異常検知
+            </button>
+          </div>
+          <div role="tabpanel" data-setting-panel="normal"></div>
+          <div role="tabpanel" data-setting-panel="alarm"></div>
+        </div>
+      </section>
+    `;
+    const workspace = document.querySelector<HTMLElement>(
+      ".sensor-setting-workspace",
+    )!;
+    const changes: string[] = [];
+    workspace.addEventListener(SETTING_TAB_CHANGE_EVENT, (event) => {
+      changes.push((event as CustomEvent<{ key: string }>).detail.key);
+    });
+
+    initializeShell();
+    document.querySelector<HTMLButtonElement>('[data-setting-tab="alarm"]')!.click();
+
+    expect(changes.at(-1)).toBe("alarm");
+    expect(
+      document.querySelector<HTMLElement>('[data-setting-panel="alarm"]')!.hidden,
     ).toBe(false);
   });
 

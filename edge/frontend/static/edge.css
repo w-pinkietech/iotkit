@@ -692,6 +692,52 @@ tr.selected-route td { background: var(--teal-soft); }
 .sensor-preview-current > strong { grid-row: span 2; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 1.65rem; font-weight: 500; line-height: 1.15; }
 .sensor-preview-current > strong small { color: var(--ink-soft); font-family: inherit; font-size: .85rem; }
 .sensor-preview-current > small { color: var(--muted); font-size: .72rem; }
+.preview-rule-result {
+  display: grid;
+  gap: 0.7rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+}
+.preview-rule-result dl {
+  display: grid;
+  gap: .35rem;
+  margin: 0;
+}
+.preview-rule-result dl > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.preview-rule-result dt {
+  color: var(--muted);
+  font-size: .7rem;
+}
+.preview-rule-result dd {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: .78rem;
+  font-weight: 650;
+  text-align: right;
+}
+.preview-rule-result > strong {
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  overflow-wrap: anywhere;
+}
+.preview-rule-result > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .78rem;
+}
+.preview-rule-result.is-alarm {
+  border-color: #f2b8b2;
+  background: var(--danger-soft);
+}
+.preview-rule-result.is-alarm > strong {
+  color: var(--danger);
+}
 .simulation-summary { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 10px; }
 .simulation-summary strong { font-size: .82rem; }
 .simulation-summary span { color: var(--muted); font-size: .78rem; text-align: right; }

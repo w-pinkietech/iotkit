@@ -196,6 +196,18 @@
               <strong><span data-preview-current-value>{{ signal.value }}</span>{% if !signal.unit.is_empty() %} <small>{{ signal.unit }}</small>{% endif %}</strong>
               <small data-preview-current-received>最新の受信値</small>
             </div>
+            <section class="preview-rule-result" data-preview-rule-result aria-labelledby="preview-rule-result-title">
+              <div>
+                <p class="section-kicker">SELECTED RULE</p>
+                <h3 id="preview-rule-result-title">選択中ルールの結果</h3>
+              </div>
+              <dl>
+                <div><dt>ルール</dt><dd data-preview-rule-name>選択中のルールはありません</dd></div>
+                <div><dt>種類</dt><dd data-preview-rule-kind>—</dd></div>
+              </dl>
+              <strong data-preview-rule-value>—</strong>
+              <p data-preview-rule-detail>ルールを開くと判定結果を確認できます。</p>
+            </section>
             <div class="simulation-summary">
               <strong data-preview-range>受信データを読み込んでいます</strong>
               <span data-preview-count>設定を変更すると自動で再計算します。</span>
@@ -208,8 +220,8 @@
             <p class="sr-only" id="sensor-preview-chart-summary" data-preview-accessible-summary>受信データを読み込んでいます。</p>
             <div class="simulation-legend" aria-label="グラフの凡例">
               <span><i class="legend-raw"></i>受信値</span>
-              <span><i class="legend-result"></i>設定結果</span>
-              <span><i class="legend-threshold"></i>立上り・立下り</span>
+              <span data-preview-result-legend hidden><i class="legend-result"></i>設定結果</span>
+              <span data-preview-threshold-legend hidden><i class="legend-threshold"></i>立上り・立下り</span>
             </div>
             <p class="simulation-message" data-preview-message role="status">読み込み中です。</p>
             {% if is_admin %}
@@ -272,10 +284,10 @@
             </div>
             <div class="semantic-rule-group">
             {% for rule in signal.rules %}{% if rule.kind != "alarm" %}
-            <details class="semantic-rule-card" id="rule-{{ rule.rule_id }}" data-rule-id="{{ rule.rule_id }}">
+            <details class="semantic-rule-card" id="rule-{{ rule.rule_id }}" data-rule-id="{{ rule.rule_id }}" data-preview-target>
               <summary><span><strong>{{ rule.display_name }}</strong><small>{{ rule.kind_label }}{% if !rule.count_summary.is_empty() %} · {{ rule.count_summary }}{% endif %}</small></span><em>設定を開く</em></summary>
               {% if is_admin %}
-              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-rule-id="{{ rule.rule_id }}" data-boolean-input="{{ signal.input_is_boolean }}">
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-rule-id="{{ rule.rule_id }}" data-preview-id="{{ rule.rule_id }}" data-boolean-input="{{ signal.input_is_boolean }}">
                 <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ rule.revision }}">
                 <input type="hidden" name="kind" value="{{ rule.kind }}" data-semantic-kind>
                 <label><span>ルール名</span><input name="display_name" value="{{ rule.display_name }}"></label>
@@ -319,12 +331,12 @@
             {% endif %}{% endfor %}
             </div>
             {% if is_admin %}
-            <details id="rule-create" class="semantic-rule-create">
+            <details id="rule-create" class="semantic-rule-create" data-preview-target>
               <summary>値の使い方を追加</summary>
-              <form method="post" action="/console/signals/{{ signal.signal_ref }}/semantic-rules" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-boolean-input="{{ signal.input_is_boolean }}">
+              <form method="post" action="/console/signals/{{ signal.signal_ref }}/semantic-rules" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-preview-id="draft-normal" data-boolean-input="{{ signal.input_is_boolean }}">
                 <input type="hidden" name="_csrf" value="{{ csrf }}">
                 <label><span>ルール名</span><input name="display_name" required></label>
-                <label><span>作る結果</span><select name="kind" data-semantic-kind><option value="numeric">測定値</option><option value="boolean">ON / OFF</option><option value="cumulative_counter">累積値</option><option value="alarm">異常検知</option></select><small class="field-help">「測定値」は、センサーの値をそのまま記録・出力するときに選びます。</small></label>
+                <label><span>作る結果</span><select name="kind" data-semantic-kind><option value="numeric">測定値</option><option value="boolean">ON / OFF</option><option value="cumulative_counter">累積値</option></select><small class="field-help">「測定値」は、センサーの値をそのまま記録・出力するときに選びます。</small></label>
                 <div class="conditional-fields detector-fields" data-semantic-detector hidden>
                   <label><span>有効とみなす側</span><select name="detector_mode"><option value="boolean_high_active" data-detector-boolean>High（1）</option><option value="boolean_low_active" data-detector-boolean>Low（0）</option><option value="high_active" data-detector-analog>値が上がった側</option><option value="low_active" data-detector-analog>値が下がった側</option></select></label>
                   <div class="form-row" data-semantic-thresholds><label><span>立ち上がりしきい値</span><input name="rise_threshold" type="number" step="any" value="0"></label><label><span>立ち下がりしきい値</span><input name="fall_threshold" type="number" step="any" value="0"></label></div>
@@ -339,10 +351,10 @@
           <section id="setting-panel-alarm" class="sensor-setting-tab-panel" role="tabpanel" aria-labelledby="setting-tab-alarm" data-setting-panel="alarm" hidden>
             <div class="semantic-rule-group">
             {% for rule in signal.rules %}{% if rule.kind == "alarm" %}
-            <details class="semantic-rule-card" id="rule-{{ rule.rule_id }}" data-rule-id="{{ rule.rule_id }}">
+            <details class="semantic-rule-card" id="rule-{{ rule.rule_id }}" data-rule-id="{{ rule.rule_id }}" data-preview-target>
               <summary><span><strong>{{ rule.display_name }}</strong><small>{{ rule.kind_label }}</small></span><em>設定を開く</em></summary>
               {% if is_admin %}
-              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-rule-id="{{ rule.rule_id }}" data-boolean-input="{{ signal.input_is_boolean }}">
+              <form method="post" action="/console/semantic-rules/{{ rule.rule_id }}" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-rule-id="{{ rule.rule_id }}" data-preview-id="{{ rule.rule_id }}" data-boolean-input="{{ signal.input_is_boolean }}">
                 <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ rule.revision }}"><input type="hidden" name="kind" value="alarm" data-semantic-kind>
                 <label><span>ルール名</span><input name="display_name" value="{{ rule.display_name }}"></label>
                 <div class="conditional-fields detector-fields" data-semantic-detector>
@@ -360,7 +372,37 @@
             </details>
             {% endif %}{% endfor %}
             </div>
-            {% if !signal.has_alarm_rules %}<p class="semantic-rule-empty">異常を検知するルールはまだありません。「計測ルール」から新しいルールを追加できます。</p>{% endif %}
+            {% if is_admin %}
+            <details id="alarm-rule-create" class="semantic-rule-create" data-preview-target>
+              <summary>異常検知を追加</summary>
+              <form method="post" action="/console/signals/{{ signal.signal_ref }}/semantic-rules" class="semantic-form compact-form" data-signal-ref="{{ signal.signal_ref }}" data-preview-id="draft-alarm" data-boolean-input="{{ signal.input_is_boolean }}">
+                <input type="hidden" name="_csrf" value="{{ csrf }}">
+                <input type="hidden" name="kind" value="alarm" data-semantic-kind>
+                <label><span>ルール名</span><input name="display_name" required></label>
+                <div class="conditional-fields detector-fields" data-semantic-detector>
+                  <label><span>異常とみなす側</span><select name="detector_mode">
+                    <option value="boolean_high_active" data-detector-boolean>High（1）を異常にする</option>
+                    <option value="boolean_low_active" data-detector-boolean>Low（0）を異常にする</option>
+                    <option value="high_active" data-detector-analog>値が上がった側を異常にする</option>
+                    <option value="low_active" data-detector-analog>値が下がった側を異常にする</option>
+                  </select></label>
+                  <div class="form-row" data-semantic-thresholds>
+                    <label><span>異常になるしきい値</span><input name="rise_threshold" type="number" step="any" value="0"></label>
+                    <label><span>正常に戻るしきい値</span><input name="fall_threshold" type="number" step="any" value="0"></label>
+                  </div>
+                  <details class="semantic-advanced-settings"><summary>判定の安定化</summary><div class="form-row">
+                    <label><span>異常確定待ち（秒）</span><input name="rise_debounce_seconds" type="number" step="0.1" min="0" max="300" value="0"></label>
+                    <label><span>復帰確定待ち（秒）</span><input name="fall_debounce_seconds" type="number" step="0.1" min="0" max="300" value="0"></label>
+                  </div></details>
+                </div>
+                <div class="conditional-fields" data-semantic-trigger hidden>
+                  <select name="trigger"><option value=""></option></select>
+                </div>
+                <button type="submit">異常検知を追加</button>
+              </form>
+            </details>
+            {% endif %}
+            {% if !signal.has_alarm_rules %}<p class="semantic-rule-empty">異常を検知するルールはまだありません。「異常検知を追加」から作成できます。</p>{% endif %}
           </section>
           </div>
           </section>
