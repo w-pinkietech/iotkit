@@ -990,10 +990,7 @@ async fn sensor_rule_creation_and_preview_targets_are_scoped_by_tab() {
     let response = app
         .oneshot(
             Request::get("/equipment/devices/device-01/sensors/signal-01")
-                .header(
-                    "cookie",
-                    "iotkit_edge_session=valid; iotkit_edge_csrf=csrf",
-                )
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
                 .body(Body::empty())
                 .unwrap(),
         )
