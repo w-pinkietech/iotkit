@@ -20,7 +20,10 @@ function initializeMenu(): void {
     overlay.hidden = !open;
 
     if (open) {
-      query<HTMLAnchorElement>(".side-nav a.active", sidebar)?.focus();
+      (
+        query<HTMLAnchorElement>(".side-nav a.active", sidebar) ??
+        query<HTMLAnchorElement>(".side-nav a", sidebar)
+      )?.focus();
     } else if (restoreFocus) {
       menuButton.focus();
     }

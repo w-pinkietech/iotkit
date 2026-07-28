@@ -125,7 +125,9 @@
       </section>
       <section class="content-section">
         <div class="section-heading"><div><p class="section-kicker">LIVE</p><h2>センサーの現在値</h2><p>最後に受信した値です。</p></div><a href="/sensors">すべてのセンサーを見る</a></div>
-        {% include "signal-table.html" %}
+        <div class="signal-table-wrap status-signal-table">
+          {% include "signal-table.html" %}
+        </div>
       </section>
       {% endif %}
 
@@ -147,7 +149,9 @@
         <label class="search-field"><span>センサーを探す</span><input type="search" data-table-search="signal-table" placeholder="センサー名、収集ノード、種類"></label>
         <div class="toolbar-summary"><strong data-table-count="signal-table">{{ view.signals.len() }}</strong><span>件のセンサー</span></div>
       </section>
-      <section class="content-section flush sensor-list-table">{% include "signal-table.html" %}</section>
+      <section class="content-section flush sensor-list-table">
+        <div class="signal-table-wrap">{% include "signal-table.html" %}</div>
+      </section>
       {% endmatch %}
       {% endif %}
 
@@ -505,9 +509,11 @@
         <div class="button-row"><a href="{{ view.history_processed_export_url }}">加工後CSV</a><a href="{{ view.history_raw_export_url }}">受信した生データCSV</a></div>
       </section>
       <section class="content-section flush">
-        <table id="log-table"><thead><tr><th>受信日時</th><th>センサー</th><th>値</th><th>収集ノード</th></tr></thead><tbody>
-          {% for row in view.history %}<tr><td>{{ row.received_at }}</td><td>{{ row.sensor_name }}</td><td>{{ row.values }} {{ row.unit }}</td><td>{{ row.edge_node_id }}</td></tr>{% endfor %}
-        </tbody></table>
+        <div class="table-wrap history-table-wrap">
+          <table id="log-table"><thead><tr><th>受信日時</th><th>センサー</th><th>値</th><th>収集ノード</th></tr></thead><tbody>
+            {% for row in view.history %}<tr><td>{{ row.received_at }}</td><td>{{ row.sensor_name }}</td><td>{{ row.values }} {{ row.unit }}</td><td>{{ row.edge_node_id }}</td></tr>{% endfor %}
+          </tbody></table>
+        </div>
       </section>
       {% endif %}
 
@@ -615,9 +621,13 @@
       {% endif %}
 
       {% if page == "audit" %}
-      <section class="content-section flush"><table id="audit-table"><thead><tr><th>日時</th><th>操作した人</th><th>変更</th><th>対象</th></tr></thead><tbody>
-        {% for row in view.audit %}<tr><td>{{ row.occurred_at }}</td><td>{{ row.actor }}</td><td>{{ row.action }}</td><td>{{ row.target }}</td></tr>{% endfor %}
-      </tbody></table></section>
+      <section class="content-section flush">
+        <div class="table-wrap audit-table-wrap">
+          <table id="audit-table"><thead><tr><th>日時</th><th>操作した人</th><th>変更</th><th>対象</th></tr></thead><tbody>
+            {% for row in view.audit %}<tr><td>{{ row.occurred_at }}</td><td>{{ row.actor }}</td><td>{{ row.action }}</td><td>{{ row.target }}</td></tr>{% endfor %}
+          </tbody></table>
+        </div>
+      </section>
       {% endif %}
 
       {% if page == "accounts" && is_owner %}
@@ -631,18 +641,27 @@
           <label>仮パスワード<input type="password" name="temporary_password" required></label>
           <button type="submit">アカウントを追加</button>
         </form>
-        <table><tbody>{% for account in view.accounts %}<tr><td>{{ account.login_id }}</td><td>{{ account.display_name }}</td><td>{{ account.role }}</td><td>{{ account.state }}</td><td>
-          <form method="post" action="/console/accounts/{{ account.account_ref }}" class="account-update-form">
-            <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}">
-            <input name="display_name" value="{{ account.display_name }}"><select name="role"><option value="{{ account.role }}">{{ account.role }}</option></select><button type="submit">変更</button>
-          </form>
-          <form method="post" action="/console/accounts/{{ account.account_ref }}/password" class="account-password-form">
-            <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}"><input type="password" name="temporary_password"><button type="submit">仮パスワードを発行</button>
-          </form>
-          <form method="post" action="/console/accounts/{{ account.account_ref }}/disable" class="account-disable-form">
-            <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}"><button type="submit">無効化</button>
-          </form>
-        </td></tr>{% endfor %}</tbody></table>
+        <table class="account-table">
+          <thead><tr><th>ログインID</th><th>表示名</th><th>権限</th><th>状態</th><th>操作</th></tr></thead>
+          <tbody>{% for account in view.accounts %}<tr>
+            <td data-label="ログインID">{{ account.login_id }}</td>
+            <td data-label="表示名">{{ account.display_name }}</td>
+            <td data-label="権限">{{ account.role }}</td>
+            <td data-label="状態">{{ account.state }}</td>
+            <td data-label="操作">
+              <form method="post" action="/console/accounts/{{ account.account_ref }}" class="account-update-form">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}">
+                <input name="display_name" value="{{ account.display_name }}"><select name="role"><option value="{{ account.role }}">{{ account.role }}</option></select><button type="submit">変更</button>
+              </form>
+              <form method="post" action="/console/accounts/{{ account.account_ref }}/password" class="account-password-form">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}"><input type="password" name="temporary_password"><button type="submit">仮パスワードを発行</button>
+              </form>
+              <form method="post" action="/console/accounts/{{ account.account_ref }}/disable" class="account-disable-form">
+                <input type="hidden" name="_csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ account.revision }}"><button type="submit">無効化</button>
+              </form>
+            </td>
+          </tr>{% endfor %}</tbody>
+        </table>
       </section>
       {% endif %}
 
