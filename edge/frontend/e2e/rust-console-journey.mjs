@@ -428,17 +428,131 @@ try {
     ),
     "real stored sensor data was not server-rendered",
   );
+  const temperatureHref = await devtools.evaluate(
+    `[...document.querySelectorAll("#signal-table tbody tr")]
+      .find((row) => row.textContent.includes("乾燥炉入口 温度"))
+      ?.querySelector("a")?.getAttribute("href")`,
+  );
   const patrolLampHref = await devtools.evaluate(
     `[...document.querySelectorAll("#signal-table tbody tr")]
       .find((row) => row.textContent.includes("製造機 青色パトランプ"))
       ?.querySelector("a")?.getAttribute("href")`,
   );
+  const contactHref = await devtools.evaluate(
+    `[...document.querySelectorAll("#signal-table tbody tr")]
+      .find((row) => row.textContent.includes("プレス機 稼働接点"))
+      ?.querySelector("a")?.getAttribute("href")`,
+  );
+  assert(temperatureHref, "temperature fixture had no equipment link");
+  assert(patrolLampHref, "patrol lamp fixture had no equipment link");
+  assert(contactHref, "contact fixture had no equipment link");
   await devtools.navigate(patrolLampHref);
   assert(
     await devtools.evaluate(
       "document.body.textContent.includes('製造サイクル回数') && document.body.textContent.includes('OFF→ONで +1') && document.body.textContent.includes('ルールを削除')",
     ),
     "configured cumulative rule did not summarize how it counts or expose deletion",
+  );
+
+  await devtools.evaluate(`(() => {
+    const tab = [...document.querySelectorAll("button[role='tab']")]
+      .find((candidate) => candidate.textContent.includes("異常検知"));
+    if (!tab) throw new Error("異常検知 tab was not found");
+    tab.click();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(`(() => {
+        const panel = document.querySelector("[data-setting-panel='alarm']");
+        return document.querySelector("button[role='tab'][aria-selected='true']")?.textContent.includes("異常検知") &&
+          panel && !panel.hidden &&
+          document.querySelector("[data-preview-rule-name]")?.textContent.trim() === "選択中のルールはありません" &&
+          !document.querySelector("[data-preview-rule-value]")?.textContent.includes("累積") &&
+          [...panel.querySelectorAll("summary")].some((summary) => summary.textContent.trim() === "異常検知を追加");
+      })()`),
+    "empty patrol lamp alarm tab",
+  );
+  assert(
+    await devtools.evaluate(
+      `Boolean([...document.querySelectorAll("[data-setting-panel='alarm'] summary")]
+        .find((summary) => summary.textContent.trim() === "異常検知を追加"))`,
+    ),
+    "patrol lamp alarm tab did not expose its dedicated creation entry",
+  );
+  await devtools.evaluate(`(() => {
+    const draft = [...document.querySelectorAll("details.semantic-rule-create")]
+      .find((candidate) => candidate.querySelector("summary")?.textContent.trim() === "異常検知を追加");
+    if (!draft) throw new Error("alarm creation disclosure was not found");
+    draft.open = true;
+    const form = draft.querySelector("form.semantic-form");
+    if (!form) throw new Error("alarm creation form was not found");
+    const fields = {
+      display_name: "照度異常",
+      rise_threshold: "900",
+      fall_threshold: "850",
+    };
+    for (const [name, value] of Object.entries(fields)) {
+      const field = form.elements.namedItem(name);
+      if (!(field instanceof HTMLInputElement)) throw new Error("alarm field " + name + " was not found");
+      field.value = value;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        `document.querySelector("[data-preview-rule-name]")?.textContent.trim() === "照度異常"`,
+      ),
+    "illuminance alarm draft preview",
+  );
+  await devtools.evaluate(`(() => {
+    const draft = [...document.querySelectorAll("details.semantic-rule-create")]
+      .find((candidate) => candidate.querySelector("summary")?.textContent.trim() === "異常検知を追加");
+    const form = draft?.querySelector("form.semantic-form");
+    if (!form) throw new Error("alarm creation form was not found for submit");
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.pathname.includes('/sensors/') && location.search.includes('saved=1') && location.search.includes('tab=alarm') && document.readyState === 'complete'",
+      ),
+    "illuminance alarm save and alarm-tab redirect",
+  );
+  await waitFor(
+    () =>
+      devtools.evaluate(`(() => {
+        const alarmTab = [...document.querySelectorAll("button[role='tab']")]
+          .find((candidate) => candidate.textContent.includes("異常検知"));
+        const alarmPanel = document.querySelector("[data-setting-panel='alarm']");
+        const card = [...(alarmPanel?.querySelectorAll("details.semantic-rule-card") ?? [])]
+          .find((candidate) => candidate.querySelector("summary strong")?.textContent.trim() === "照度異常");
+        const previewName = document.querySelector("[data-preview-rule-name]")?.textContent.trim();
+        const previewValue = document.querySelector("[data-preview-rule-value]")?.textContent.trim() ?? "";
+        const accessible = document.querySelector("[data-preview-accessible-summary]")?.textContent ?? "";
+        return alarmTab?.getAttribute("aria-selected") === "true" &&
+          alarmPanel && !alarmPanel.hidden && card?.open &&
+          previewName === "照度異常" && /^(正常|異常)$/.test(previewValue) &&
+          accessible.includes("照度異常") && /正常|異常/.test(accessible);
+      })()`),
+    "saved illuminance alarm selection and preview",
+  );
+  await devtools.evaluate(`(() => {
+    const alarmPanel = document.querySelector("[data-setting-panel='alarm']");
+    const card = [...(alarmPanel?.querySelectorAll("details.semantic-rule-card") ?? [])]
+      .find((candidate) => candidate.querySelector("summary strong")?.textContent.trim() === "照度異常");
+    const form = card?.querySelector("form.semantic-retire-form");
+    if (!form) throw new Error("saved illuminance alarm retire form was not found");
+    form.removeAttribute("data-confirm-message");
+    form.requestSubmit();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        "location.search.includes('saved=1') && !document.body.textContent.includes('照度異常')",
+      ),
+    "illuminance alarm fixture cleanup",
   );
   await devtools.evaluate(`(() => {
     const card = [...document.querySelectorAll(".semantic-rule-card")]
@@ -454,6 +568,90 @@ try {
         "location.search.includes('saved=1') && !document.body.textContent.includes('製造サイクル回数')",
       ),
     "semantic rule deletion",
+  );
+
+  await devtools.navigate(temperatureHref);
+  await devtools.evaluate(`(() => {
+    const tab = [...document.querySelectorAll("button[role='tab']")]
+      .find((candidate) => candidate.textContent.includes("異常検知"));
+    if (!tab) throw new Error("temperature alarm tab was not found");
+    tab.click();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        `document.querySelector("button[role='tab'][aria-selected='true']")?.textContent.includes("異常検知") && !document.querySelector("[data-setting-panel='alarm']")?.hidden`,
+      ),
+    "temperature alarm tab",
+  );
+  await devtools.evaluate(`(() => {
+    const panel = document.querySelector("[data-setting-panel='alarm']");
+    const card = [...(panel?.querySelectorAll("details.semantic-rule-card") ?? [])]
+      .find((candidate) => candidate.querySelector("summary strong")?.textContent.trim() === "高温アラーム");
+    if (!card) throw new Error("saved temperature alarm card was not found");
+    card.open = true;
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(`(() => {
+        const value = document.querySelector("[data-preview-rule-value]")?.textContent.trim() ?? "";
+        const name = document.querySelector("[data-preview-rule-name]")?.textContent.trim();
+        const accessible = document.querySelector("[data-preview-accessible-summary]")?.textContent ?? "";
+        return name === "高温アラーム" && /^(正常|異常)$/.test(value) &&
+          accessible.includes("高温アラーム") && /正常|異常/.test(accessible);
+      })()`),
+    "temperature alarm preview result",
+  );
+
+  await devtools.navigate(contactHref);
+  await devtools.evaluate(`(() => {
+    const tab = [...document.querySelectorAll("button[role='tab']")]
+      .find((candidate) => candidate.textContent.includes("計測ルール"));
+    if (!tab) throw new Error("contact normal tab was not found");
+    tab.click();
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(
+        `document.querySelector("button[role='tab'][aria-selected='true']")?.textContent.includes("計測ルール") && !document.querySelector("[data-setting-panel='normal']")?.hidden`,
+      ),
+    "contact normal tab",
+  );
+  await devtools.evaluate(`(() => {
+    const panel = document.querySelector("[data-setting-panel='normal']");
+    const card = [...(panel?.querySelectorAll("details.semantic-rule-card") ?? [])]
+      .find((candidate) => candidate.querySelector("summary strong")?.textContent.trim() === "設備稼働");
+    if (!card) throw new Error("saved contact boolean card was not found");
+    card.open = true;
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(`(() => {
+        const value = document.querySelector("[data-preview-rule-value]")?.textContent.trim() ?? "";
+        const name = document.querySelector("[data-preview-rule-name]")?.textContent.trim();
+        const accessible = document.querySelector("[data-preview-accessible-summary]")?.textContent ?? "";
+        return name === "設備稼働" && /^(ON|OFF)$/.test(value) &&
+          accessible.includes("設備稼働") && /ON|OFF/.test(accessible);
+      })()`),
+    "contact boolean preview result",
+  );
+  await devtools.evaluate(`(() => {
+    const panel = document.querySelector("[data-setting-panel='normal']");
+    const card = [...(panel?.querySelectorAll("details.semantic-rule-card") ?? [])]
+      .find((candidate) => candidate.querySelector("summary strong")?.textContent.trim() === "稼働開始回数");
+    if (!card) throw new Error("saved contact cumulative card was not found");
+    card.open = true;
+  })()`);
+  await waitFor(
+    () =>
+      devtools.evaluate(`(() => {
+        const value = document.querySelector("[data-preview-rule-value]")?.textContent.trim() ?? "";
+        const name = document.querySelector("[data-preview-rule-name]")?.textContent.trim();
+        const accessible = document.querySelector("[data-preview-accessible-summary]")?.textContent ?? "";
+        return name === "稼働開始回数" && /^累積 /.test(value) &&
+          accessible.includes("稼働開始回数") && accessible.includes("累積");
+      })()`),
+    "contact cumulative preview result",
   );
 
   await devtools.navigate("/equipment");
