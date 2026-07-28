@@ -220,8 +220,8 @@
             <p class="sr-only" id="sensor-preview-chart-summary" data-preview-accessible-summary>受信データを読み込んでいます。</p>
             <div class="simulation-legend" aria-label="グラフの凡例">
               <span><i class="legend-raw"></i>受信値</span>
-              <span data-preview-result-legend><i class="legend-result"></i>設定結果</span>
-              <span><i class="legend-threshold"></i>立上り・立下り</span>
+              <span data-preview-result-legend hidden><i class="legend-result"></i>設定結果</span>
+              <span data-preview-threshold-legend hidden><i class="legend-threshold"></i>立上り・立下り</span>
             </div>
             <p class="simulation-message" data-preview-message role="status">読み込み中です。</p>
             {% if is_admin %}

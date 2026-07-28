@@ -79,6 +79,8 @@ function installPreviewDOM(): void {
         <strong data-preview-current-value></strong>
         <span data-preview-current-received></span>
         <svg data-preview-chart></svg>
+        <span data-preview-result-legend hidden>設定結果</span>
+        <span data-preview-threshold-legend hidden>立上り・立下り</span>
         <section data-preview-rule-result>
           <dd data-preview-rule-name>選択中のルールはありません</dd>
           <dd data-preview-rule-kind>—</dd>
@@ -119,6 +121,8 @@ interface PreviewResponseOptions {
   points?: Array<Record<string, unknown>>;
   displayName?: string;
   testResult?: Record<string, unknown>;
+  riseThreshold?: number;
+  fallThreshold?: number;
 }
 
 function okPreviewResponse({
@@ -127,6 +131,8 @@ function okPreviewResponse({
   points,
   displayName = "温度",
   testResult,
+  riseThreshold,
+  fallThreshold,
 }: PreviewResponseOptions = {}): Response {
   const receivedAt = Number(point?.received_at ?? 1_000);
   const input = Number(point?.input ?? 24.8);
@@ -158,6 +164,8 @@ function okPreviewResponse({
           kind,
           input_count: resolvedPoints.length,
           plot_count: resolvedPoints.length,
+          rise_threshold: riseThreshold,
+          fall_threshold: fallThreshold,
           test_result: testResult,
           points: resolvedPoints,
         },
@@ -668,6 +676,101 @@ describe("automatic mapping preview", () => {
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
+  it("renders only the raw graph and legend when no preview target is open", async () => {
+    installPreviewDOM();
+    document.querySelector<HTMLDetailsElement>(
+      '[data-setting-panel="normal"] details[data-preview-target][open]',
+    )!.open = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: "alarm",
+          point: {
+            input: 24,
+            input_min: 23,
+            input_max: 25,
+            calibrated: 48,
+            calibrated_min: 46,
+            calibrated_max: 50,
+            sample_count: 2,
+            active: true,
+            active_samples: 2,
+          },
+          riseThreshold: 30,
+          fallThreshold: 20,
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".chart-line-raw")).not.toBeNull(),
+    );
+
+    expect(document.querySelector(".chart-line-result")).toBeNull();
+    expect(document.querySelector(".chart-range")).not.toBeNull();
+    expect(document.querySelector(".chart-range-result")).toBeNull();
+    expect(document.querySelector(".chart-latest-point")).toBeNull();
+    expect(document.querySelector(".chart-threshold")).toBeNull();
+    expect(document.querySelector(".chart-active-band")).toBeNull();
+    expect(document.querySelector(".chart-line-counter")).toBeNull();
+    expect(document.querySelector(".chart-increment")).toBeNull();
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-result-legend]")
+        ?.hidden,
+    ).toBe(true);
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-threshold-legend]")
+        ?.hidden,
+    ).toBe(true);
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("renders semantic overlays and legends for a successful selected rule", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: "alarm",
+          point: {
+            input: 24,
+            input_min: 23,
+            input_max: 25,
+            calibrated: 48,
+            calibrated_min: 46,
+            calibrated_max: 50,
+            sample_count: 2,
+            active: true,
+            active_samples: 2,
+          },
+          riseThreshold: 30,
+          fallThreshold: 20,
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".chart-line-result")).not.toBeNull(),
+    );
+
+    expect(document.querySelector(".chart-range-result")).not.toBeNull();
+    expect(document.querySelector(".chart-latest-point")).not.toBeNull();
+    expect(document.querySelectorAll(".chart-threshold")).toHaveLength(2);
+    expect(document.querySelector(".chart-active-band")).not.toBeNull();
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-result-legend]")
+        ?.hidden,
+    ).toBe(false);
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-threshold-legend]")
+        ?.hidden,
+    ).toBe(false);
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
   it("renders an error result when the selected rule fails", async () => {
     installPreviewDOM();
     vi.stubGlobal(
@@ -696,6 +799,80 @@ describe("automatic mapping preview", () => {
     expect(
       document.querySelector("[data-preview-rule-value]")?.textContent,
     ).toBe("—");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("announces the selected error while keeping only raw reception visible", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        multiplePreviewResponse([
+          {
+            rule_id: "rule-01",
+            display_name: "確認対象",
+            kind: "alarm",
+            input_count: 1,
+            plot_count: 1,
+            error: "invalid detector",
+            points: [],
+          },
+          {
+            rule_id: "rule-02",
+            display_name: "別のルール",
+            kind: "numeric",
+            input_count: 1,
+            plot_count: 1,
+            points: [
+              {
+                received_at: 1_000,
+                input: 24.8,
+                input_min: 24.8,
+                input_max: 24.8,
+                calibrated: 99,
+                calibrated_min: 99,
+                calibrated_max: 99,
+                sample_count: 1,
+              },
+            ],
+          },
+        ]),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-rule-name]")?.textContent,
+      ).toContain("確認対象"),
+    );
+
+    const cardName = document.querySelector("[data-preview-rule-name]")
+      ?.textContent;
+    const cardKind = document.querySelector("[data-preview-rule-kind]")
+      ?.textContent;
+    const cardDetail = document.querySelector("[data-preview-rule-detail]")
+      ?.textContent;
+    const summary = document.querySelector("[data-preview-accessible-summary]")
+      ?.textContent;
+    expect(cardName).toContain("判定結果を更新できません");
+    expect(cardKind).toBe("異常検知");
+    expect(cardDetail).toContain("受信値はそのまま確認できます");
+    expect(summary).toContain("確認対象");
+    expect(summary).toContain("異常検知");
+    expect(summary).toContain("判定結果を更新できません");
+    expect(summary).not.toContain("選択中のルールはありません");
+    expect(summary).not.toContain("別のルール");
+    expect(
+      document.querySelector("[data-preview-message]")?.textContent,
+    ).toContain("判定結果を更新できません");
+    expect(
+      document.querySelector("[data-preview-current-value]")?.textContent,
+    ).toBe("24.8");
+    expect(
+      document.querySelector("[data-preview-rule-value]")?.textContent,
+    ).toBe("—");
+    expect(document.querySelector(".chart-line-result")).toBeNull();
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -991,5 +1168,56 @@ describe("automatic mapping preview", () => {
       document.querySelector("[data-preview-accessible-summary]")
         ?.textContent,
     ).toContain("1件");
+  });
+
+  it("includes raw and calibrated ranges in a successful numeric summary", async () => {
+    installPreviewDOM();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: "numeric",
+          displayName: "確認対象",
+          points: [
+            {
+              received_at: 1_000,
+              input: 10,
+              input_min: 9,
+              input_max: 11,
+              calibrated: 20,
+              calibrated_min: 18,
+              calibrated_max: 22,
+              sample_count: 1,
+            },
+            {
+              received_at: 2_000,
+              input: 12,
+              input_min: 11,
+              input_max: 13,
+              calibrated: 24,
+              calibrated_min: 23,
+              calibrated_max: 25,
+              sample_count: 1,
+            },
+          ],
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-accessible-summary]")
+          ?.textContent,
+      ).toContain("受信値は9から13"),
+    );
+    const summary = document.querySelector("[data-preview-accessible-summary]")
+      ?.textContent;
+    expect(summary).toContain("補正後は18から25");
+    expect(summary).toContain("最新の補正後は24 ℃");
+    expect(summary).toContain("確認対象");
+    expect(summary).toContain("測定値");
+    expect(summary).toContain("2件");
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 });

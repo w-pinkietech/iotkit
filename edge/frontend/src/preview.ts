@@ -191,6 +191,16 @@ function renderRuleResult(
   if (!container || !name || !kind || !value || !detail) return null;
 
   container.classList.remove("is-alarm");
+  if (state === "error" && selected?.error) {
+    setText(
+      name,
+      `${selected.display_name}（判定結果を更新できません）`,
+    );
+    setText(kind, kindLabel(selected.kind));
+    setText(value, "—");
+    setText(detail, "受信値はそのまま確認できます。");
+    return null;
+  }
   if (state !== "ready" || !selected) {
     const messages = {
       none: [
@@ -247,9 +257,34 @@ function updateAccessibleSummary(
   raw: PreviewBody,
   selected: SemanticRulePreview | null,
   outcome: RuleOutcome | null,
+  unit: string,
 ): void {
   if (!summary) return;
   const points = raw.points ?? [];
+  if (selected?.error) {
+    if (!points.length) {
+      setText(
+        summary,
+        `受信値はまだありません。選択中は${selected.display_name}、` +
+          `${kindLabel(selected.kind)}ですが、判定結果を更新できません。`,
+      );
+      return;
+    }
+    const inputs = points.flatMap((point) => [
+      Number(point.input_min),
+      Number(point.input_max),
+    ]);
+    const count = raw.input_count ?? points.length;
+    setText(
+      summary,
+      `受信値は${formatNumber(Math.min(...inputs))}から` +
+        `${formatNumber(Math.max(...inputs))}です。` +
+        `選択中は${selected.display_name}、${kindLabel(selected.kind)}ですが、` +
+        "判定結果を更新できません。受信値はそのまま確認できます。" +
+        `${count}件の受信データを表示しています。`,
+    );
+    return;
+  }
   if (!points.length) {
     setText(
       summary,
@@ -267,10 +302,26 @@ function updateAccessibleSummary(
   const ruleText = selected && outcome
     ? `選択中は${selected.display_name}、${kindLabel(selected.kind)}、現在は${outcome.value}です。`
     : "選択中のルールはありません。";
+  const calibratedText =
+    selected?.kind === "numeric" && outcome
+      ? (() => {
+          const calibrated = points.flatMap((point) => [
+            Number(point.calibrated_min),
+            Number(point.calibrated_max),
+          ]);
+          const latest = points.at(-1);
+          if (!latest || !calibrated.length) return "";
+          return (
+            `補正後は${formatNumber(Math.min(...calibrated))}から` +
+            `${formatNumber(Math.max(...calibrated))}、最新の補正後は` +
+            `${formatNumber(latest.calibrated)}${unit ? ` ${unit}` : ""}です。`
+          );
+        })()
+      : "";
   setText(
     summary,
     `受信値は${formatNumber(Math.min(...inputs))}から` +
-      `${formatNumber(Math.max(...inputs))}です。${ruleText}` +
+      `${formatNumber(Math.max(...inputs))}です。${calibratedText}${ruleText}` +
       `${count}件の受信データを表示しています。`,
   );
 }
@@ -310,7 +361,11 @@ function renderEmptyChart(
     : "試す値を入力して、設定結果を確認できます";
 }
 
-function renderPreviewChart(svg: SVGSVGElement, payload: PreviewBody): void {
+function renderPreviewChart(
+  svg: SVGSVGElement,
+  payload: PreviewBody,
+  showSemanticOverlays: boolean,
+): void {
   svg.replaceChildren();
   const points = payload.points ?? [];
   const width = 760;
@@ -328,19 +383,22 @@ function renderPreviewChart(svg: SVGSVGElement, payload: PreviewBody): void {
 
   const values: number[] = [];
   for (const point of points) {
-    for (const value of [
-      point.input_min,
-      point.input_max,
-      point.calibrated_min,
-      point.calibrated_max,
-    ]) {
+    const pointValues = showSemanticOverlays
+      ? [
+          point.input_min,
+          point.input_max,
+          point.calibrated_min,
+          point.calibrated_max,
+        ]
+      : [point.input_min, point.input_max];
+    for (const value of pointValues) {
       if (isFiniteNumber(value)) values.push(Number(value));
     }
   }
-  if (isFiniteNumber(payload.rise_threshold)) {
+  if (showSemanticOverlays && isFiniteNumber(payload.rise_threshold)) {
     values.push(payload.rise_threshold);
   }
-  if (isFiniteNumber(payload.fall_threshold)) {
+  if (showSemanticOverlays && isFiniteNumber(payload.fall_threshold)) {
     values.push(payload.fall_threshold);
   }
   let minValue = Math.min(...values);
@@ -413,8 +471,10 @@ function renderPreviewChart(svg: SVGSVGElement, payload: PreviewBody): void {
     });
     label.textContent = `${labelText} ${formatNumber(value)}`;
   };
-  drawThreshold(payload.rise_threshold, "立上り");
-  drawThreshold(payload.fall_threshold, "立下り");
+  if (showSemanticOverlays) {
+    drawThreshold(payload.rise_threshold, "立上り");
+    drawThreshold(payload.fall_threshold, "立下り");
+  }
 
   points.forEach((point, index) => {
     if (point.sample_count > 1) {
@@ -425,15 +485,17 @@ function renderPreviewChart(svg: SVGSVGElement, payload: PreviewBody): void {
         y2: y(point.input_max),
         class: "chart-range",
       });
-      addSVG(svg, "line", {
-        x1: x(index) + 2,
-        x2: x(index) + 2,
-        y1: y(point.calibrated_min),
-        y2: y(point.calibrated_max),
-        class: "chart-range-result",
-      });
+      if (showSemanticOverlays) {
+        addSVG(svg, "line", {
+          x1: x(index) + 2,
+          x2: x(index) + 2,
+          y1: y(point.calibrated_min),
+          y2: y(point.calibrated_max),
+          class: "chart-range-result",
+        });
+      }
     }
-    if (payload.kind !== "numeric") {
+    if (showSemanticOverlays && payload.kind !== "numeric") {
       const ratio = point.sample_count
         ? Number(point.active_samples ?? 0) / point.sample_count
         : 0;
@@ -464,12 +526,14 @@ function renderPreviewChart(svg: SVGSVGElement, payload: PreviewBody): void {
     d: path("input"),
     class: "chart-line chart-line-raw",
   });
-  addSVG(svg, "path", {
-    d: path("calibrated"),
-    class: "chart-line chart-line-result",
-  });
+  if (showSemanticOverlays) {
+    addSVG(svg, "path", {
+      d: path("calibrated"),
+      class: "chart-line chart-line-result",
+    });
+  }
   const latestPoint = points.at(-1);
-  if (latestPoint) {
+  if (showSemanticOverlays && latestPoint) {
     addSVG(svg, "circle", {
       cx: x(points.length - 1),
       cy: y(latestPoint.calibrated),
@@ -485,7 +549,7 @@ function renderPreviewChart(svg: SVGSVGElement, payload: PreviewBody): void {
     latestLabel.textContent = "最新";
   }
 
-  if (payload.kind === "cumulative_counter") {
+  if (showSemanticOverlays && payload.kind === "cumulative_counter") {
     const maxIncrement = Math.max(
       1,
       ...points.map((point) => Number(point.increment ?? 0)),
@@ -703,6 +767,14 @@ function initializePreview(panel: HTMLElement): void {
   );
   const toggle = query<HTMLButtonElement>("[data-preview-toggle]", panel);
   const chart = query<SVGSVGElement>("[data-preview-chart]", panel);
+  const resultLegend = query<HTMLElement>(
+    "[data-preview-result-legend]",
+    panel,
+  );
+  const thresholdLegend = query<HTMLElement>(
+    "[data-preview-threshold-legend]",
+    panel,
+  );
   const currentValue = query<HTMLElement>(
     "[data-preview-current-value]",
     panel,
@@ -735,6 +807,20 @@ function initializePreview(panel: HTMLElement): void {
   let paused = false;
   let lastSeenReceivedAt: number | undefined;
 
+  const setSemanticLegends = (
+    visible: boolean,
+    payload?: PreviewBody | null,
+  ): void => {
+    if (resultLegend) resultLegend.hidden = !visible;
+    if (thresholdLegend) {
+      thresholdLegend.hidden =
+        !visible ||
+        !payload ||
+        (!isFiniteNumber(payload.rise_threshold) &&
+          !isFiniteNumber(payload.fall_threshold));
+    }
+  };
+
   const setFeedState = (state: string): void => {
     if (feedState) setText(feedState, state);
   };
@@ -756,6 +842,7 @@ function initializePreview(panel: HTMLElement): void {
     controller = new AbortController();
     clearFieldErrors(previewScope);
     const activeID = activePreviewID(previewScope);
+    setSemanticLegends(false);
 
     const body = buildRequest(
       signalRef,
@@ -828,6 +915,8 @@ function initializePreview(panel: HTMLElement): void {
         selection.selected && !selection.selected.error
           ? selection.selected
           : null;
+      const selectedFailure =
+        selection.selected?.error ? selection.selected : null;
       const payload =
         selectedReady ??
         (selection.raw ? rawOnlyPreview(selection.raw) : null);
@@ -847,7 +936,8 @@ function initializePreview(panel: HTMLElement): void {
         setText(message, "確認できるルールがありません。");
         return;
       }
-      renderPreviewChart(chart, payload);
+      setSemanticLegends(Boolean(selectedReady), payload);
+      renderPreviewChart(chart, payload, Boolean(selectedReady));
       const resultState: "ready" | "none" | "error" = !activeID
         ? "none"
         : selectedReady
@@ -855,15 +945,16 @@ function initializePreview(panel: HTMLElement): void {
           : "error";
       const outcome = renderRuleResult(
         panel,
-        selectedReady,
+        selectedReady ?? selectedFailure,
         resultState,
         unit,
       );
       updateAccessibleSummary(
         accessibleSummary,
         payload,
-        selectedReady,
+        selectedReady ?? selectedFailure,
         outcome,
+        unit,
       );
       const points = payload.points ?? [];
       const latest = selection.raw?.points?.at(-1);
@@ -938,7 +1029,13 @@ function initializePreview(panel: HTMLElement): void {
                 "先頭の値は数えません。"
               : valuesOverlap
                 ? "変換前後の値は同じです。補正を変更すると差を確認できます。"
-              : "設定を変えると、保存前の結果をこのグラフで確認できます。",
+                : "設定を変えると、保存前の結果をこのグラフで確認できます。",
+        );
+      }
+      if (selectedFailure) {
+        setText(
+          message,
+          "判定結果を更新できません。受信値はそのまま確認できます。",
         );
       }
 

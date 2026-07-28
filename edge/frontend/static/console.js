@@ -613,6 +613,16 @@
     const detail = query("[data-preview-rule-detail]", panel);
     if (!container || !name || !kind || !value || !detail) return null;
     container.classList.remove("is-alarm");
+    if (state === "error" && selected?.error) {
+      setText(
+        name,
+        `${selected.display_name}\uFF08\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\uFF09`
+      );
+      setText(kind, kindLabel(selected.kind));
+      setText(value, "\u2014");
+      setText(detail, "\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002");
+      return null;
+    }
     if (state !== "ready" || !selected) {
       const messages = {
         none: [
@@ -657,9 +667,28 @@
       setText(testResult, "\u5024\u3092\u5165\u529B\u3059\u308B\u3068\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059");
     }
   }
-  function updateAccessibleSummary(summary, raw, selected, outcome) {
+  function updateAccessibleSummary(summary, raw, selected, outcome, unit) {
     if (!summary) return;
     const points = raw.points ?? [];
+    if (selected?.error) {
+      if (!points.length) {
+        setText(
+          summary,
+          `\u53D7\u4FE1\u5024\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3067\u3059\u304C\u3001\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002`
+        );
+        return;
+      }
+      const inputs2 = points.flatMap((point) => [
+        Number(point.input_min),
+        Number(point.input_max)
+      ]);
+      const count2 = raw.input_count ?? points.length;
+      setText(
+        summary,
+        `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs2))}\u304B\u3089${formatNumber(Math.max(...inputs2))}\u3067\u3059\u3002\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3067\u3059\u304C\u3001\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002${count2}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+      );
+      return;
+    }
     if (!points.length) {
       setText(
         summary,
@@ -673,9 +702,18 @@
     ]);
     const count = raw.input_count ?? points.length;
     const ruleText = selected && outcome ? `\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3001\u73FE\u5728\u306F${outcome.value}\u3067\u3059\u3002` : "\u9078\u629E\u4E2D\u306E\u30EB\u30FC\u30EB\u306F\u3042\u308A\u307E\u305B\u3093\u3002";
+    const calibratedText = selected?.kind === "numeric" && outcome ? (() => {
+      const calibrated = points.flatMap((point) => [
+        Number(point.calibrated_min),
+        Number(point.calibrated_max)
+      ]);
+      const latest = points.at(-1);
+      if (!latest || !calibrated.length) return "";
+      return `\u88DC\u6B63\u5F8C\u306F${formatNumber(Math.min(...calibrated))}\u304B\u3089${formatNumber(Math.max(...calibrated))}\u3001\u6700\u65B0\u306E\u88DC\u6B63\u5F8C\u306F${formatNumber(latest.calibrated)}${unit ? ` ${unit}` : ""}\u3067\u3059\u3002`;
+    })() : "";
     setText(
       summary,
-      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3067\u3059\u3002${ruleText}${count}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3067\u3059\u3002${calibratedText}${ruleText}${count}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
     );
   }
   function previewWindow(payload, points) {
@@ -701,7 +739,7 @@
     });
     hint.textContent = payload.error ? "\u5165\u529B\u5024\u306E\u88DC\u6B63\u3068\u5224\u5B9A\u6761\u4EF6\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044" : "\u8A66\u3059\u5024\u3092\u5165\u529B\u3057\u3066\u3001\u8A2D\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059";
   }
-  function renderPreviewChart(svg, payload) {
+  function renderPreviewChart(svg, payload, showSemanticOverlays) {
     svg.replaceChildren();
     const points = payload.points ?? [];
     const width = 760;
@@ -718,19 +756,20 @@
     }
     const values = [];
     for (const point of points) {
-      for (const value of [
+      const pointValues = showSemanticOverlays ? [
         point.input_min,
         point.input_max,
         point.calibrated_min,
         point.calibrated_max
-      ]) {
+      ] : [point.input_min, point.input_max];
+      for (const value of pointValues) {
         if (isFiniteNumber(value)) values.push(Number(value));
       }
     }
-    if (isFiniteNumber(payload.rise_threshold)) {
+    if (showSemanticOverlays && isFiniteNumber(payload.rise_threshold)) {
       values.push(payload.rise_threshold);
     }
-    if (isFiniteNumber(payload.fall_threshold)) {
+    if (showSemanticOverlays && isFiniteNumber(payload.fall_threshold)) {
       values.push(payload.fall_threshold);
     }
     let minValue = Math.min(...values);
@@ -792,8 +831,10 @@
       });
       label.textContent = `${labelText} ${formatNumber(value)}`;
     };
-    drawThreshold(payload.rise_threshold, "\u7ACB\u4E0A\u308A");
-    drawThreshold(payload.fall_threshold, "\u7ACB\u4E0B\u308A");
+    if (showSemanticOverlays) {
+      drawThreshold(payload.rise_threshold, "\u7ACB\u4E0A\u308A");
+      drawThreshold(payload.fall_threshold, "\u7ACB\u4E0B\u308A");
+    }
     points.forEach((point, index) => {
       if (point.sample_count > 1) {
         addSVG(svg, "line", {
@@ -803,15 +844,17 @@
           y2: y(point.input_max),
           class: "chart-range"
         });
-        addSVG(svg, "line", {
-          x1: x(index) + 2,
-          x2: x(index) + 2,
-          y1: y(point.calibrated_min),
-          y2: y(point.calibrated_max),
-          class: "chart-range-result"
-        });
+        if (showSemanticOverlays) {
+          addSVG(svg, "line", {
+            x1: x(index) + 2,
+            x2: x(index) + 2,
+            y1: y(point.calibrated_min),
+            y2: y(point.calibrated_max),
+            class: "chart-range-result"
+          });
+        }
       }
-      if (payload.kind !== "numeric") {
+      if (showSemanticOverlays && payload.kind !== "numeric") {
         const ratio = point.sample_count ? Number(point.active_samples ?? 0) / point.sample_count : 0;
         if (ratio > 0) {
           addSVG(svg, "rect", {
@@ -832,12 +875,14 @@
       d: path("input"),
       class: "chart-line chart-line-raw"
     });
-    addSVG(svg, "path", {
-      d: path("calibrated"),
-      class: "chart-line chart-line-result"
-    });
+    if (showSemanticOverlays) {
+      addSVG(svg, "path", {
+        d: path("calibrated"),
+        class: "chart-line chart-line-result"
+      });
+    }
     const latestPoint = points.at(-1);
-    if (latestPoint) {
+    if (showSemanticOverlays && latestPoint) {
       addSVG(svg, "circle", {
         cx: x(points.length - 1),
         cy: y(latestPoint.calibrated),
@@ -852,7 +897,7 @@
       });
       latestLabel.textContent = "\u6700\u65B0";
     }
-    if (payload.kind === "cumulative_counter") {
+    if (showSemanticOverlays && payload.kind === "cumulative_counter") {
       const maxIncrement = Math.max(
         1,
         ...points.map((point) => Number(point.increment ?? 0))
@@ -1026,6 +1071,14 @@
     );
     const toggle = query("[data-preview-toggle]", panel);
     const chart = query("[data-preview-chart]", panel);
+    const resultLegend = query(
+      "[data-preview-result-legend]",
+      panel
+    );
+    const thresholdLegend = query(
+      "[data-preview-threshold-legend]",
+      panel
+    );
     const currentValue = query(
       "[data-preview-current-value]",
       panel
@@ -1052,6 +1105,12 @@
     let previewUnavailable = false;
     let paused = false;
     let lastSeenReceivedAt;
+    const setSemanticLegends = (visible, payload) => {
+      if (resultLegend) resultLegend.hidden = !visible;
+      if (thresholdLegend) {
+        thresholdLegend.hidden = !visible || !payload || !isFiniteNumber(payload.rise_threshold) && !isFiniteNumber(payload.fall_threshold);
+      }
+    };
     const setFeedState = (state) => {
       if (feedState) setText(feedState, state);
     };
@@ -1071,6 +1130,7 @@
       controller = new AbortController();
       clearFieldErrors(previewScope);
       const activeID = activePreviewID(previewScope);
+      setSemanticLegends(false);
       const body = buildRequest(
         signalRef,
         forms,
@@ -1132,6 +1192,7 @@
         }
         const selection = selectPreview(result.value, activeID);
         const selectedReady = selection.selected && !selection.selected.error ? selection.selected : null;
+        const selectedFailure = selection.selected?.error ? selection.selected : null;
         const payload = selectedReady ?? (selection.raw ? rawOnlyPreview(selection.raw) : null);
         if (!payload) {
           renderRuleResult(
@@ -1149,19 +1210,21 @@
           setText(message, "\u78BA\u8A8D\u3067\u304D\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002");
           return;
         }
-        renderPreviewChart(chart, payload);
+        setSemanticLegends(Boolean(selectedReady), payload);
+        renderPreviewChart(chart, payload, Boolean(selectedReady));
         const resultState = !activeID ? "none" : selectedReady ? "ready" : "error";
         const outcome = renderRuleResult(
           panel,
-          selectedReady,
+          selectedReady ?? selectedFailure,
           resultState,
           unit
         );
         updateAccessibleSummary(
           accessibleSummary,
           payload,
-          selectedReady,
-          outcome
+          selectedReady ?? selectedFailure,
+          outcome,
+          unit
         );
         const points = payload.points ?? [];
         const latest = selection.raw?.points?.at(-1);
@@ -1222,6 +1285,12 @@
           setText(
             message,
             payload.truncated_by === "input_count" ? "\u9AD8\u901F\u306A\u4FE1\u53F7\u306E\u305F\u3081\u3001\u6700\u65B020,000\u4EF6\u3092\u8981\u7D04\u3057\u3066\u3044\u307E\u3059\u3002" : payload.kind === "cumulative_counter" ? `\u8868\u793A\u7BC4\u56F2\u5185\u306E\u7D2F\u7A4D\u5024\u306F ${points.at(-1)?.counter ?? 0} \u3067\u3059\u3002\u5148\u982D\u306E\u5024\u306F\u6570\u3048\u307E\u305B\u3093\u3002` : valuesOverlap ? "\u5909\u63DB\u524D\u5F8C\u306E\u5024\u306F\u540C\u3058\u3067\u3059\u3002\u88DC\u6B63\u3092\u5909\u66F4\u3059\u308B\u3068\u5DEE\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002" : "\u8A2D\u5B9A\u3092\u5909\u3048\u308B\u3068\u3001\u4FDD\u5B58\u524D\u306E\u7D50\u679C\u3092\u3053\u306E\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+          );
+        }
+        if (selectedFailure) {
+          setText(
+            message,
+            "\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
           );
         }
         if (testResult) {
