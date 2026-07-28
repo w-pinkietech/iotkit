@@ -167,14 +167,24 @@ export function initializeSemanticForms(): void {
   for (const form of queryAll<HTMLFormElement>("form.semantic-form")) {
     initializeSemanticFields(form);
   }
-  const cards = queryAll<HTMLDetailsElement>("details.semantic-rule-card");
-  if (cards[0] && !cards.some((card) => card.open)) cards[0].open = true;
-  for (const card of cards) {
-    card.addEventListener("toggle", () => {
-      if (!card.open) return;
-      for (const other of cards) {
-        if (other !== card) other.open = false;
-      }
-    });
+  for (const panel of queryAll<HTMLElement>("[data-setting-panel]")) {
+    const targets = queryAll<HTMLDetailsElement>(
+      "details[data-preview-target]",
+      panel,
+    );
+    const savedCards = targets.filter((target) =>
+      target.classList.contains("semantic-rule-card"),
+    );
+    if (savedCards.length && !targets.some((target) => target.open)) {
+      savedCards[0].open = true;
+    }
+    for (const target of targets) {
+      target.addEventListener("toggle", () => {
+        if (!target.open) return;
+        for (const peer of targets) {
+          if (peer !== target) peer.open = false;
+        }
+      });
+    }
   }
 }

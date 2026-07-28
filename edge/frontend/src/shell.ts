@@ -1,5 +1,7 @@
 import { query, queryAll } from "./dom";
 
+export const SETTING_TAB_CHANGE_EVENT = "iotkit:setting-tab-change";
+
 export function csrfToken(): string {
   const value = document.cookie
     .split("; ")
@@ -146,6 +148,11 @@ function initializeSettingTabs(): void {
         url.searchParams.set("tab", key);
         window.history.replaceState(window.history.state, "", url);
       }
+      root.dispatchEvent(
+        new CustomEvent<{ key: string }>(SETTING_TAB_CHANGE_EVENT, {
+          detail: { key },
+        }),
+      );
     };
 
     let initial = root.dataset.defaultSettingTab ?? tabs[0].dataset.settingTab;

@@ -21,6 +21,32 @@ describe("semantic form behavior", () => {
     expect(cards[1].open).toBe(true);
   });
 
+  it("keeps one preview target open per settings panel", () => {
+    document.body.innerHTML = `
+      <section data-setting-panel="normal">
+        <details class="semantic-rule-card" data-preview-target open></details>
+        <details class="semantic-rule-create" data-preview-target></details>
+      </section>
+      <section data-setting-panel="alarm" hidden>
+        <details class="semantic-rule-card" data-preview-target open></details>
+        <details class="semantic-rule-create" data-preview-target></details>
+      </section>`;
+
+    initializeSemanticForms();
+    const normalTargets = document.querySelectorAll<HTMLDetailsElement>(
+      '[data-setting-panel="normal"] details[data-preview-target]',
+    );
+    const alarmCard = document.querySelector<HTMLDetailsElement>(
+      '[data-setting-panel="alarm"] .semantic-rule-card',
+    )!;
+    normalTargets[1].open = true;
+    normalTargets[1].dispatchEvent(new Event("toggle"));
+
+    expect(normalTargets[0].open).toBe(false);
+    expect(normalTargets[1].open).toBe(true);
+    expect(alarmCard.open).toBe(true);
+  });
+
   it("shows only fields that affect the selected result kind", () => {
     document.body.innerHTML = `
       <form class="semantic-form" data-boolean-input="false">
