@@ -283,6 +283,10 @@ async fn console_redirects_anonymous_users_and_preserves_shell_hooks() {
     for hook in [
         r#"class="console-shell""#,
         r#"class="side-nav""#,
+        r#"class="menu-button""#,
+        r#"aria-controls="sidebar""#,
+        r#"class="mobile-overlay""#,
+        r#"aria-label="メニューを閉じる""#,
         r#"aria-current="page""#,
         r#"id="main-content""#,
         r#"class="logout-form""#,
