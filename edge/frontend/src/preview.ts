@@ -473,6 +473,7 @@ function rawOnlyPreview(payload: PreviewBody): PreviewBody {
   return {
     ...payload,
     kind: "numeric",
+    test_result: undefined,
     rise_threshold: undefined,
     fall_threshold: undefined,
     points: (payload.points ?? []).map((point) => ({

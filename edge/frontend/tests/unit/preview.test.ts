@@ -275,6 +275,10 @@ describe("automatic mapping preview", () => {
     )!;
     normal.hidden = true;
     alarm.hidden = false;
+    const testInput = document.querySelector<HTMLInputElement>(
+      '[name="preview_test_value"]',
+    )!;
+    testInput.value = "7";
     const fetchMock = vi.fn().mockResolvedValue(
       multiplePreviewResponse([
         {
@@ -283,6 +287,11 @@ describe("automatic mapping preview", () => {
           kind: "boolean",
           input_count: 1,
           plot_count: 1,
+          test_result: {
+            emitted: true,
+            boolean: true,
+            calibrated: 99,
+          },
           points: [
             {
               received_at: 1_000,
@@ -326,6 +335,8 @@ describe("automatic mapping preview", () => {
 
     initializePreviews();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body)).test_value).toBe(7);
     await vi.waitFor(() =>
       expect(
         document.querySelector("[data-preview-accessible-summary]")
@@ -337,6 +348,9 @@ describe("automatic mapping preview", () => {
       document.querySelector("[data-preview-accessible-summary]")?.textContent,
     ).not.toContain("99");
     expect(document.querySelector(".chart-active-band")).toBeNull();
+    expect(
+      document.querySelector("[data-preview-test-result]")?.textContent,
+    ).toBe("値を入力すると結果を確認できます");
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
