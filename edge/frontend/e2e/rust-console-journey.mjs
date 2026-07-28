@@ -10,6 +10,7 @@ import {
   chromiumProfilePrefix,
   removeChromiumProfile,
 } from "./profile-cleanup.mjs";
+import { verifyResponsiveConsole } from "./responsive-console.mjs";
 
 const origin = process.env.IOTKIT_EDGE_E2E_URL;
 const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
@@ -932,12 +933,6 @@ try {
     ),
     "viewer output page exposed mutation controls",
   );
-  assert(
-    await devtools.evaluate(
-      "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
-    ),
-    "output page overflows horizontally at desktop width",
-  );
   await devtools.send("Emulation.setDeviceMetricsOverride", {
     width: 390,
     height: 844,
@@ -954,18 +949,16 @@ try {
     const ids = [...document.querySelectorAll(".output-technical dl code")]
       .map((code) => code.textContent ?? "");
     return {
-      fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       longTopic: topic.length > 20,
       longPayload: payload.length > 40,
       longId: ids.some((id) => id.length > 20),
     };
   })()`);
   assert(
-    narrowOutputState.fits &&
-      narrowOutputState.longTopic &&
+    narrowOutputState.longTopic &&
       narrowOutputState.longPayload &&
       narrowOutputState.longId,
-    `output page overflows or lacks long technical facts at 390px: ${JSON.stringify(narrowOutputState)}`,
+    `output page lacks long technical facts at 390px: ${JSON.stringify(narrowOutputState)}`,
   );
   await devtools.send("Emulation.clearDeviceMetricsOverride");
 
@@ -986,6 +979,10 @@ try {
     () => devtools.evaluate("location.pathname === '/status'"),
     "owner login after viewer journey",
   );
+  await verifyResponsiveConsole({
+    devtools,
+    navigate: (path) => devtools.navigate(path),
+  });
   await devtools.navigate("/output");
   assert(
     await devtools.evaluate(`(() => {

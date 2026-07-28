@@ -9,6 +9,7 @@ import {
   chromiumProfilePrefix,
   removeChromiumProfile,
 } from "./profile-cleanup.mjs";
+import { verifyResponsiveConsole } from "./responsive-console.mjs";
 
 const edgeNodeURL = process.env.IOTKIT_EDGE_E2E_URL;
 const password = process.env.IOTKIT_EDGE_E2E_PASSWORD;
@@ -578,27 +579,6 @@ try {
     ),
     "viewer output page does not enforce read-only presentation",
   );
-  assert(
-    await devtools.evaluate(
-      "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
-    ),
-    "output page overflows horizontally at desktop width",
-  );
-  await devtools.send("Emulation.setDeviceMetricsOverride", {
-    width: 390,
-    height: 844,
-    deviceScaleFactor: 1,
-    mobile: true,
-  });
-  await devtools.navigate(`${edgeNodeURL}/output`, "/output");
-  assert(
-    await devtools.evaluate(
-      "document.documentElement.scrollWidth <= document.documentElement.clientWidth",
-    ),
-    "output page overflows horizontally at 390px",
-  );
-  await devtools.send("Emulation.clearDeviceMetricsOverride");
-
   await devtools.evaluate(`document.querySelector(".logout-form").requestSubmit()`);
   await devtools.waitForExpression(`location.pathname === "/login"`, "viewer logout");
   await devtools.evaluate(
@@ -616,6 +596,11 @@ try {
     ),
     "system administrator cannot access account issuance",
   );
+  await verifyResponsiveConsole({
+    devtools,
+    navigate: (path) =>
+      devtools.navigate(`${edgeNodeURL}${path}`, path),
+  });
 
   assert(
     devtools.exceptions.length === 0,

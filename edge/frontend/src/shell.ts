@@ -9,23 +9,39 @@ export function csrfToken(): string {
 
 function initializeMenu(): void {
   const menuButton = query<HTMLButtonElement>(".menu-button");
-  const overlay = query<HTMLElement>(".mobile-overlay");
-  const closeMenu = (): void => {
-    document.body.classList.remove("menu-open");
-    menuButton?.setAttribute("aria-expanded", "false");
-    if (overlay) overlay.hidden = true;
-  };
-  if (!menuButton || !overlay) return;
+  const overlay = query<HTMLButtonElement>(".mobile-overlay");
+  const sidebar = query<HTMLElement>(".sidebar");
+  if (!menuButton || !overlay || !sidebar) return;
 
-  menuButton.addEventListener("click", () => {
-    const open = !document.body.classList.contains("menu-open");
+  const compactLayout = window.matchMedia("(max-width: 960px)");
+  const setOpen = (open: boolean, restoreFocus = false): void => {
     document.body.classList.toggle("menu-open", open);
     menuButton.setAttribute("aria-expanded", String(open));
     overlay.hidden = !open;
+
+    if (open) {
+      (
+        query<HTMLAnchorElement>(".side-nav a.active", sidebar) ??
+        query<HTMLAnchorElement>(".side-nav a", sidebar)
+      )?.focus();
+    } else if (restoreFocus) {
+      menuButton.focus();
+    }
+  };
+
+  menuButton.addEventListener("click", () => {
+    const open = !document.body.classList.contains("menu-open");
+    setOpen(open);
   });
-  overlay.addEventListener("click", closeMenu);
+  overlay.addEventListener("click", () => setOpen(false, true));
+  for (const link of queryAll<HTMLAnchorElement>(".side-nav a", sidebar)) {
+    link.addEventListener("click", () => setOpen(false));
+  }
   window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeMenu();
+    if (event.key === "Escape") setOpen(false, true);
+  });
+  compactLayout.addEventListener("change", (event) => {
+    if (!event.matches) setOpen(false);
   });
 }
 

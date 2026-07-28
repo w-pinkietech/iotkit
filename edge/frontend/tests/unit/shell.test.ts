@@ -5,14 +5,131 @@ afterEach(() => {
   document.body.replaceChildren();
   document.body.removeAttribute("data-focus-target");
   document.body.removeAttribute("data-activation-refresh");
+  document.body.classList.remove("menu-open");
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.clearAllTimers();
   vi.useRealTimers();
   sessionStorage.clear();
   window.history.replaceState(null, "", "/");
 });
 
+function renderMobileShell(): void {
+  document.body.innerHTML = `
+    <button class="menu-button" aria-controls="sidebar" aria-expanded="false">
+      メニュー
+    </button>
+    <aside class="sidebar" id="sidebar">
+      <nav class="side-nav">
+        <a class="active" href="/status">概要</a>
+        <a href="/equipment">機器管理</a>
+      </nav>
+    </aside>
+    <button class="mobile-overlay" type="button" hidden
+      aria-label="メニューを閉じる"></button>
+  `;
+}
+
+function stubCompactLayout(initialMatches = true): {
+  change: (matches: boolean) => void;
+} {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const mediaQuery = {
+    matches: initialMatches,
+    media: "(max-width: 960px)",
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(
+      (
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+      ): void => {
+        if (type !== "change" || typeof listener !== "function") return;
+        listeners.add(listener as (event: MediaQueryListEvent) => void);
+      },
+    ),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  } as unknown as MediaQueryList;
+  vi.stubGlobal("matchMedia", vi.fn(() => mediaQuery));
+  return {
+    change: (matches: boolean): void => {
+      Object.defineProperty(mediaQuery, "matches", {
+        configurable: true,
+        value: matches,
+      });
+      const event = { matches, media: mediaQuery.media } as MediaQueryListEvent;
+      for (const listener of listeners) listener(event);
+    },
+  };
+}
+
 describe("console shell", () => {
+  it("opens the mobile navigation and restores focus when it closes", () => {
+    renderMobileShell();
+    stubCompactLayout();
+    initializeShell();
+    const button = document.querySelector<HTMLButtonElement>(".menu-button")!;
+    const overlay =
+      document.querySelector<HTMLButtonElement>(".mobile-overlay")!;
+    const active = document.querySelector<HTMLAnchorElement>(
+      ".side-nav a.active",
+    )!;
+
+    button.focus();
+    button.click();
+
+    expect(document.body.classList.contains("menu-open")).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(overlay.hidden).toBe(false);
+    expect(document.activeElement).toBe(active);
+
+    overlay.click();
+
+    expect(document.body.classList.contains("menu-open")).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(overlay.hidden).toBe(true);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("closes mobile navigation for Escape, navigation, and desktop layout", () => {
+    renderMobileShell();
+    const layout = stubCompactLayout();
+    initializeShell();
+    const button = document.querySelector<HTMLButtonElement>(".menu-button")!;
+    const equipment = document.querySelector<HTMLAnchorElement>(
+      '.side-nav a[href="/equipment"]',
+    )!;
+
+    button.click();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(document.body.classList.contains("menu-open")).toBe(false);
+    expect(document.activeElement).toBe(button);
+
+    equipment.addEventListener("click", (event) => event.preventDefault());
+    button.click();
+    equipment.click();
+    expect(document.body.classList.contains("menu-open")).toBe(false);
+
+    button.click();
+    layout.change(false);
+    expect(document.body.classList.contains("menu-open")).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("ignores incomplete mobile navigation markup", () => {
+    stubCompactLayout();
+    document.body.innerHTML = `
+      <button class="menu-button" aria-expanded="false">メニュー</button>
+      <aside class="sidebar" id="sidebar"></aside>
+    `;
+
+    expect(() => initializeShell()).not.toThrow();
+    document.querySelector<HTMLButtonElement>(".menu-button")!.click();
+    expect(document.body.classList.contains("menu-open")).toBe(false);
+  });
+
   it("reloads an activation view every three seconds with a bounded retry count", async () => {
     vi.useFakeTimers();
     document.body.dataset.activationRefresh = "true";

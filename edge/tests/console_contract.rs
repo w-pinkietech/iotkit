@@ -283,6 +283,10 @@ async fn console_redirects_anonymous_users_and_preserves_shell_hooks() {
     for hook in [
         r#"class="console-shell""#,
         r#"class="side-nav""#,
+        r#"class="menu-button""#,
+        r#"aria-controls="sidebar""#,
+        r#"class="mobile-overlay""#,
+        r#"aria-label="メニューを閉じる""#,
         r#"aria-current="page""#,
         r#"id="main-content""#,
         r#"class="logout-form""#,
@@ -294,16 +298,14 @@ async fn console_redirects_anonymous_users_and_preserves_shell_hooks() {
 
 #[tokio::test]
 async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
-    let app = router(
-        WebConfig::test(),
-        Arc::new(StubApplication::authenticated()),
-    );
+    let app = router(WebConfig::test(), Arc::new(StubApplication::system_admin()));
     for (path, hooks) in [
         (
             "/status",
             &[
                 r#"class="health-banner"#,
                 r#"id="signal-table""#,
+                r#"class="signal-table-wrap status-signal-table""#,
                 "センサーの現在値",
                 "登録済みの収集ノード",
                 r#"<strong>1</strong><small>台</small>"#,
@@ -371,6 +373,7 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"id="history-filter""#,
                 r#"class="history-chart""#,
                 r#"id="log-table""#,
+                r#"class="table-wrap history-table-wrap""#,
                 "加工後CSV",
                 "受信した生データCSV",
             ][..],
@@ -383,6 +386,21 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"class="output-destinations""#,
                 r#"class="output-destination-card"#,
                 r#"class="output-rule-list""#,
+            ][..],
+        ),
+        (
+            "/audit",
+            &[
+                r#"id="audit-table""#,
+                r#"class="table-wrap audit-table-wrap""#,
+            ][..],
+        ),
+        (
+            "/accounts",
+            &[
+                r#"class="account-table""#,
+                r#"data-label="ログインID""#,
+                r#"class="account-create-form""#,
             ][..],
         ),
         (
