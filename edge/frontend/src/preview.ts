@@ -11,7 +11,11 @@ import {
   queryAll,
 } from "./dom";
 import { csrfToken, SETTING_TAB_CHANGE_EVENT } from "./shell";
-import { definitionSpec, ruleSpec } from "./semantic";
+import {
+  definitionSpec,
+  ruleSpec,
+  type SemanticKind,
+} from "./semantic";
 
 type PreviewBody = components["schemas"]["PreviewBody"];
 type PreviewPoint = components["schemas"]["PreviewPoint"];
@@ -21,6 +25,19 @@ interface PreviewSelection {
   raw: PreviewBody | null;
   selected: SemanticRulePreview | null;
 }
+
+interface RuleOutcome {
+  value: string;
+  detail: string;
+  alarm: boolean;
+}
+
+const kindLabels: Record<SemanticKind, string> = {
+  numeric: "測定値",
+  boolean: "ON / OFF",
+  cumulative_counter: "累積値",
+  alarm: "異常検知",
+};
 
 const svgNamespace = "http://www.w3.org/2000/svg";
 
@@ -113,33 +130,131 @@ function showFieldError(
   field.setAttribute("aria-describedby", Array.from(describedBy).join(" "));
 }
 
+function kindLabel(kind: SemanticKind): string {
+  return kindLabels[kind];
+}
+
+function latestRuleOutcome(
+  payload: PreviewBody,
+  unit: string,
+): RuleOutcome {
+  const latest = payload.points?.at(-1);
+  if (!latest) {
+    return {
+      value: "受信待ち",
+      detail: "受信データを待っています。",
+      alarm: false,
+    };
+  }
+  switch (payload.kind) {
+    case "boolean":
+      return {
+        value: latest.active ? "ON" : "OFF",
+        detail: "現在の判定",
+        alarm: false,
+      };
+    case "cumulative_counter":
+      return {
+        value: `累積 ${formatNumber(latest.counter ?? 0)}`,
+        detail:
+          Number(latest.increment ?? 0) > 0
+            ? `今回 +${formatNumber(latest.increment)}`
+            : "今回の増分なし",
+        alarm: false,
+      };
+    case "alarm":
+      return {
+        value: latest.active ? "異常" : "正常",
+        detail: latest.active ? "異常条件に該当" : "正常範囲",
+        alarm: Boolean(latest.active),
+      };
+    default:
+      return {
+        value: `${formatNumber(latest.calibrated)}${unit ? ` ${unit}` : ""}`,
+        detail: "補正後の値",
+        alarm: false,
+      };
+  }
+}
+
+function renderRuleResult(
+  panel: HTMLElement,
+  selected: SemanticRulePreview | null,
+  state: "ready" | "none" | "invalid" | "error",
+  unit: string,
+): RuleOutcome | null {
+  const container = query<HTMLElement>("[data-preview-rule-result]", panel);
+  const name = query<HTMLElement>("[data-preview-rule-name]", panel);
+  const kind = query<HTMLElement>("[data-preview-rule-kind]", panel);
+  const value = query<HTMLElement>("[data-preview-rule-value]", panel);
+  const detail = query<HTMLElement>("[data-preview-rule-detail]", panel);
+  if (!container || !name || !kind || !value || !detail) return null;
+
+  container.classList.remove("is-alarm");
+  if (state !== "ready" || !selected) {
+    const messages = {
+      none: [
+        "選択中のルールはありません",
+        "—",
+        "ルールを開くと判定結果を確認できます。",
+      ],
+      invalid: [
+        "設定内容を確認してください",
+        "—",
+        "入力項目を修正してください。",
+      ],
+      error: [
+        "判定結果を更新できません",
+        "—",
+        "受信値はそのまま確認できます。",
+      ],
+    } as const;
+    const [title, result, hint] = messages[state === "ready" ? "none" : state];
+    setText(name, title);
+    setText(kind, "—");
+    setText(value, result);
+    setText(detail, hint);
+    return null;
+  }
+
+  const outcome = latestRuleOutcome(selected, unit);
+  setText(name, selected.display_name);
+  setText(kind, kindLabel(selected.kind));
+  setText(value, outcome.value);
+  setText(detail, outcome.detail);
+  container.classList.toggle("is-alarm", outcome.alarm);
+  return outcome;
+}
+
 function updateAccessibleSummary(
   summary: HTMLElement | null,
-  payload: PreviewBody,
+  raw: PreviewBody,
+  selected: SemanticRulePreview | null,
+  outcome: RuleOutcome | null,
 ): void {
   if (!summary) return;
-  const points = payload.points ?? [];
+  const points = raw.points ?? [];
   if (!points.length) {
-    setText(summary, "グラフに表示できる受信データはまだありません。");
+    setText(
+      summary,
+      selected
+        ? `${selected.display_name}は受信データを待っています。`
+        : "グラフに表示できる受信データはまだありません。",
+    );
     return;
   }
   const inputs = points.flatMap((point) => [
     Number(point.input_min),
     Number(point.input_max),
   ]);
-  const calibrated = points.flatMap((point) => [
-    Number(point.calibrated_min),
-    Number(point.calibrated_max),
-  ]);
-  const latest = points.at(-1);
-  const count = payload.input_count ?? points.length;
+  const count = raw.input_count ?? points.length;
+  const ruleText = selected && outcome
+    ? `選択中は${selected.display_name}、${kindLabel(selected.kind)}、現在は${outcome.value}です。`
+    : "選択中のルールはありません。";
   setText(
     summary,
     `受信値は${formatNumber(Math.min(...inputs))}から` +
-      `${formatNumber(Math.max(...inputs))}、設定結果は` +
-      `${formatNumber(Math.min(...calibrated))}から` +
-      `${formatNumber(Math.max(...calibrated))}です。` +
-      `最新の設定結果は${formatNumber(latest?.calibrated)}です。` +
+      `${formatNumber(Math.max(...inputs))}です。${ruleText}` +
       `${count}件の受信データを表示しています。`,
   );
 }
@@ -580,6 +695,7 @@ function initializePreview(panel: HTMLElement): void {
     "[data-preview-current-received]",
     panel,
   );
+  const unit = panel.dataset.unit ?? "";
   if (!range || !count || !message || !chart) return;
 
   const sourceSummary = query<HTMLElement>(
@@ -654,12 +770,14 @@ function initializePreview(panel: HTMLElement): void {
           ?.textContent?.trim();
         if (result.status === 404 && !forms[0]) {
           previewUnavailable = true;
+          renderRuleResult(panel, null, "none", unit);
           setFeedState("表示するルールがありません");
           setText(
             message,
             "値の変換が設定されると、ここに設定結果を表示します。",
           );
         } else if (fieldLabel && invalidField) {
+          renderRuleResult(panel, null, "invalid", unit);
           setFeedState("設定内容を確認してください");
           showFieldError(invalidField, fieldLabel);
           setText(message,
@@ -667,6 +785,12 @@ function initializePreview(panel: HTMLElement): void {
             "最後に確認できたグラフを表示しています。",
           );
         } else {
+          renderRuleResult(
+            panel,
+            null,
+            result.status === 400 ? "invalid" : "error",
+            unit,
+          );
           setFeedState("更新を確認できません");
           setText(
             message,
@@ -685,12 +809,34 @@ function initializePreview(panel: HTMLElement): void {
         selectedReady ??
         (selection.raw ? rawOnlyPreview(selection.raw) : null);
       if (!payload) {
+        renderRuleResult(
+          panel,
+          null,
+          activeID ? "error" : "none",
+          unit,
+        );
         setFeedState("表示するルールがありません");
         setText(message, "確認できるルールがありません。");
         return;
       }
       renderPreviewChart(chart, payload);
-      updateAccessibleSummary(accessibleSummary, payload);
+      const resultState: "ready" | "none" | "error" = !activeID
+        ? "none"
+        : selectedReady
+          ? "ready"
+          : "error";
+      const outcome = renderRuleResult(
+        panel,
+        selectedReady,
+        resultState,
+        unit,
+      );
+      updateAccessibleSummary(
+        accessibleSummary,
+        payload,
+        selectedReady,
+        outcome,
+      );
       const points = payload.points ?? [];
       const latest = selection.raw?.points?.at(-1);
       markChecked();
@@ -772,22 +918,32 @@ function initializePreview(panel: HTMLElement): void {
         const previewResult = payload.test_result;
         if (!previewResult) {
           testResult.textContent = "値を入力すると結果を確認できます";
-        } else if (previewResult.number !== undefined) {
-          testResult.textContent = formatNumber(previewResult.number);
-        } else if (previewResult.boolean !== undefined) {
-          testResult.textContent = previewResult.boolean ? "ON" : "OFF";
-        } else if (previewResult.integer !== undefined) {
-          testResult.textContent = `累積 ${formatNumber(previewResult.integer)}`;
-        } else if (payload.kind === "cumulative_counter") {
-          testResult.textContent =
-            "最初の値として確認（累積には加えません）";
         } else {
-          testResult.textContent =
-            `補正後 ${formatNumber(previewResult.calibrated)}`;
+          switch (payload.kind) {
+            case "boolean":
+              testResult.textContent = previewResult.boolean ? "ON" : "OFF";
+              break;
+            case "alarm":
+              testResult.textContent = previewResult.boolean ? "異常" : "正常";
+              break;
+            case "cumulative_counter":
+              testResult.textContent =
+                previewResult.integer !== undefined
+                  ? `累積 ${formatNumber(previewResult.integer)}`
+                  : "最初の値として確認（累積には加えません）";
+              break;
+            default:
+              testResult.textContent =
+                previewResult.number !== undefined
+                  ? formatNumber(previewResult.number)
+                  : `補正後 ${formatNumber(previewResult.calibrated)}`;
+              break;
+          }
         }
       }
     } catch (error: unknown) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
+        renderRuleResult(panel, null, "error", unit);
         setFeedState("更新を確認できません");
         setText(
           message,

@@ -700,9 +700,40 @@ tr.selected-route td { background: var(--teal-soft); }
   border-radius: var(--radius);
   background: var(--canvas);
 }
+.preview-rule-result dl {
+  display: grid;
+  gap: .35rem;
+  margin: 0;
+}
+.preview-rule-result dl > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.preview-rule-result dt {
+  color: var(--muted);
+  font-size: .7rem;
+}
+.preview-rule-result dd {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: .78rem;
+  font-weight: 650;
+  text-align: right;
+}
 .preview-rule-result > strong {
   font-size: clamp(1.5rem, 4vw, 2.25rem);
   overflow-wrap: anywhere;
+}
+.preview-rule-result > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .78rem;
+}
+.preview-rule-result.is-alarm {
+  border-color: #f2b8b2;
+  background: var(--danger-soft);
 }
 .preview-rule-result.is-alarm > strong {
   color: var(--danger);
