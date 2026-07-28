@@ -10,12 +10,17 @@ import {
   query,
   queryAll,
 } from "./dom";
-import { csrfToken } from "./shell";
+import { csrfToken, SETTING_TAB_CHANGE_EVENT } from "./shell";
 import { definitionSpec, ruleSpec } from "./semantic";
 
 type PreviewBody = components["schemas"]["PreviewBody"];
 type PreviewPoint = components["schemas"]["PreviewPoint"];
 type SemanticRulePreview = components["schemas"]["SemanticRulePreview"];
+
+interface PreviewSelection {
+  raw: PreviewBody | null;
+  selected: SemanticRulePreview | null;
+}
 
 const svgNamespace = "http://www.w3.org/2000/svg";
 
@@ -423,21 +428,64 @@ function isMultipleRulePreview(
   return "rules" in response;
 }
 
-function selectedPreview(
+function activePreviewID(scope: HTMLElement): string | undefined {
+  const activePanel = queryAll<HTMLElement>(
+    "[data-setting-panel]",
+    scope,
+  ).find((panel) => !panel.hidden);
+  const form = activePanel?.querySelector<HTMLFormElement>(
+    "details[data-preview-target][open] form.semantic-form[data-preview-id]",
+  );
+  return form?.dataset.previewId;
+}
+
+function selectPreview(
   response: MappingPreviewResponse,
-  selectedRuleID?: string,
-): PreviewBody | null {
-  if (!isMultipleRulePreview(response)) return response;
-  const selected =
-    response.rules.find((rule) => rule.rule_id === selectedRuleID) ??
-    response.rules.find((rule) => !rule.error) ??
-    response.rules[0];
-  if (!selected) return null;
+  activeID?: string,
+): PreviewSelection {
+  if (!isMultipleRulePreview(response)) {
+    return { raw: response, selected: null };
+  }
+  const withWindow = (
+    rule: SemanticRulePreview | undefined,
+  ): SemanticRulePreview | null =>
+    rule
+      ? {
+          ...rule,
+          window_start: response.window_start,
+          window_end: response.window_end,
+          truncated_by: response.truncated_by,
+        }
+      : null;
   return {
-    ...selected,
-    window_start: response.window_start,
-    window_end: response.window_end,
-    truncated_by: response.truncated_by,
+    raw: withWindow(
+      response.rules.find((rule) => !rule.error) ?? response.rules[0],
+    ),
+    selected: withWindow(
+      activeID
+        ? response.rules.find((rule) => rule.rule_id === activeID)
+        : undefined,
+    ),
+  };
+}
+
+function rawOnlyPreview(payload: PreviewBody): PreviewBody {
+  return {
+    ...payload,
+    kind: "numeric",
+    rise_threshold: undefined,
+    fall_threshold: undefined,
+    points: (payload.points ?? []).map((point) => ({
+      ...point,
+      calibrated: point.input,
+      calibrated_min: point.input_min,
+      calibrated_max: point.input_max,
+      active: undefined,
+      active_samples: undefined,
+      transitions: undefined,
+      counter: undefined,
+      increment: undefined,
+    })),
   };
 }
 
@@ -447,28 +495,31 @@ function buildRequest(
   calibrationForm: HTMLFormElement | null,
   multipleRules: boolean,
   testInput: HTMLInputElement | null,
+  activeID?: string,
 ): MappingPreviewRequest {
   const body: MappingPreviewRequest = { signal_ref: signalRef };
   const firstForm = forms[0];
   if (multipleRules) {
     const rules = forms
-      .filter(
-        (candidate) =>
-          !!candidate.dataset.ruleId ||
-          !!formField(candidate, "display_name")?.value.trim(),
-      )
-      .map((candidate, index) => ({
-        rule_id: candidate.dataset.ruleId || `draft-${index + 1}`,
+      .filter((candidate) => {
+        const previewID = candidate.dataset.previewId;
+        const hasName = !!formField(candidate, "display_name")?.value.trim();
+        return !!previewID && (hasName || previewID === activeID);
+      })
+      .map((candidate) => ({
+        rule_id: candidate.dataset.previewId!,
         display_name:
           formField(candidate, "display_name")?.value.trim() ||
-          `ルール ${index + 1}`,
+          (candidate.dataset.previewId === "draft-alarm"
+            ? "新しい異常検知"
+            : "新しい計測ルール"),
         spec: ruleSpec(candidate),
       }));
-    if (!rules.length && firstForm?.action.endsWith("/semantic-rules")) {
+    if (!rules.length) {
       rules.push({
-        rule_id: "draft-1",
-        display_name: "受信値（保存前）",
-        spec: ruleSpec(firstForm),
+        rule_id: "draft-raw",
+        display_name: "受信値",
+        spec: { kind: "numeric" },
       });
     }
     if (rules.length) {
@@ -501,12 +552,6 @@ function initializePreview(panel: HTMLElement): void {
   const calibrationForm = query<HTMLFormElement>(
     `form[action="/console/signals/${signalRef}/calibration"]`,
   );
-  const ruleCards = forms
-    .map((form) => form.closest("details.semantic-rule-card"))
-    .filter(
-      (card): card is HTMLDetailsElement =>
-        card instanceof HTMLDetailsElement,
-    );
   const multipleRules =
     forms.some((form) => !!form.dataset.ruleId) ||
     forms.some((form) => form.action.endsWith("/semantic-rules"));
@@ -577,6 +622,7 @@ function initializePreview(panel: HTMLElement): void {
     controller?.abort();
     controller = new AbortController();
     clearFieldErrors(previewScope);
+    const activeID = activePreviewID(previewScope);
 
     const body = buildRequest(
       signalRef,
@@ -584,6 +630,7 @@ function initializePreview(panel: HTMLElement): void {
       calibrationForm,
       multipleRules,
       testInput,
+      activeID,
     );
     try {
       const result = await createMappingPreview(
@@ -593,9 +640,12 @@ function initializePreview(panel: HTMLElement): void {
       );
       if (!result.ok) {
         const fieldName = result.error?.error.field;
+        const activeForm = forms.find(
+          (candidate) => candidate.dataset.previewId === activeID,
+        );
         const invalidField =
-          fieldName && forms[0]
-            ? formField(forms[0], fieldName)
+          fieldName && activeForm
+            ? formField(activeForm, fieldName)
             : null;
         const fieldLabel = invalidField
           ?.closest("label")
@@ -625,8 +675,14 @@ function initializePreview(panel: HTMLElement): void {
         return;
       }
 
-      const selectedRuleID = ruleCards.find((card) => card.open)?.dataset.ruleId;
-      const payload = selectedPreview(result.value, selectedRuleID);
+      const selection = selectPreview(result.value, activeID);
+      const selectedReady =
+        selection.selected && !selection.selected.error
+          ? selection.selected
+          : null;
+      const payload =
+        selectedReady ??
+        (selection.raw ? rawOnlyPreview(selection.raw) : null);
       if (!payload) {
         setFeedState("表示するルールがありません");
         setText(message, "確認できるルールがありません。");
@@ -635,7 +691,7 @@ function initializePreview(panel: HTMLElement): void {
       renderPreviewChart(chart, payload);
       updateAccessibleSummary(accessibleSummary, payload);
       const points = payload.points ?? [];
-      const latest = points.at(-1);
+      const latest = selection.raw?.points?.at(-1);
       markChecked();
       if (!latest) {
         setFeedState("受信待ち");
@@ -750,10 +806,12 @@ function initializePreview(panel: HTMLElement): void {
   }
   calibrationForm?.addEventListener("input", schedule);
   calibrationForm?.addEventListener("change", schedule);
-  for (const card of ruleCards) {
-    card.addEventListener("toggle", () => {
-      if (card.open) schedule();
-    });
+  previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, schedule);
+  for (const target of queryAll<HTMLDetailsElement>(
+    "details[data-preview-target]",
+    previewScope,
+  )) {
+    target.addEventListener("toggle", schedule);
   }
   testInput?.addEventListener("input", schedule);
   toggle?.addEventListener("click", () => {
