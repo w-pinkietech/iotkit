@@ -204,7 +204,8 @@
         }
         root.dispatchEvent(
           new CustomEvent(SETTING_TAB_CHANGE_EVENT, {
-            detail: { key }
+            detail: { key },
+            bubbles: true
           })
         );
       };

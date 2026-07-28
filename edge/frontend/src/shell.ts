@@ -151,6 +151,7 @@ function initializeSettingTabs(): void {
       root.dispatchEvent(
         new CustomEvent<{ key: string }>(SETTING_TAB_CHANGE_EVENT, {
           detail: { key },
+          bubbles: true,
         }),
       );
     };

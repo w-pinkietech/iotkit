@@ -312,24 +312,28 @@ describe("console shell", () => {
     ).toBe(false);
   });
 
-  it("announces the active settings panel after a tab change", () => {
+  it("bubbles the active settings panel change to the sensor workspace", () => {
     document.body.innerHTML = `
-      <section data-setting-tabs data-default-setting-tab="normal">
-        <div role="tablist">
-          <button type="button" role="tab" data-setting-tab="normal">
-            通常の値
-          </button>
-          <button type="button" role="tab" data-setting-tab="alarm">
-            異常検知
-          </button>
+      <section class="sensor-setting-workspace">
+        <div data-setting-tabs data-default-setting-tab="normal">
+          <div role="tablist">
+            <button type="button" role="tab" data-setting-tab="normal">
+              通常の値
+            </button>
+            <button type="button" role="tab" data-setting-tab="alarm">
+              異常検知
+            </button>
+          </div>
+          <div role="tabpanel" data-setting-panel="normal"></div>
+          <div role="tabpanel" data-setting-panel="alarm"></div>
         </div>
-        <div role="tabpanel" data-setting-panel="normal"></div>
-        <div role="tabpanel" data-setting-panel="alarm"></div>
       </section>
     `;
-    const root = document.querySelector<HTMLElement>("[data-setting-tabs]")!;
+    const workspace = document.querySelector<HTMLElement>(
+      ".sensor-setting-workspace",
+    )!;
     const changes: string[] = [];
-    root.addEventListener(SETTING_TAB_CHANGE_EVENT, (event) => {
+    workspace.addEventListener(SETTING_TAB_CHANGE_EVENT, (event) => {
       changes.push((event as CustomEvent<{ key: string }>).detail.key);
     });
 
