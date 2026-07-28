@@ -147,7 +147,7 @@ git status --short
 
 Expected:
 
-- `check-okf-docs.mjs`: `OKF docs check passed.`
+- `check-okf-docs.mjs`: `IoTKit OKF profile validation passed: 9 bilingual concepts.`
 - `git diff --check`: exit code 0 with no output
 - `git status --short`: only `SECURITY.md` is modified, apart from already committed design and plan history
 
