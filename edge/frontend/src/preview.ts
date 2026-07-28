@@ -226,6 +226,22 @@ function renderRuleResult(
   return outcome;
 }
 
+function clearAuxiliaryOutputs(
+  summary: HTMLElement | null,
+  testResult: HTMLElement | null,
+  state: "none" | "invalid" | "error",
+): void {
+  const messages = {
+    none: "グラフに表示できる受信データはまだありません。",
+    invalid: "設定内容を確認してください。受信値はそのまま確認できます。",
+    error: "判定結果を更新できません。受信値はそのまま確認できます。",
+  } as const;
+  if (summary) setText(summary, messages[state]);
+  if (testResult) {
+    setText(testResult, "値を入力すると結果を確認できます");
+  }
+}
+
 function updateAccessibleSummary(
   summary: HTMLElement | null,
   raw: PreviewBody,
@@ -771,6 +787,7 @@ function initializePreview(panel: HTMLElement): void {
         if (result.status === 404 && !forms[0]) {
           previewUnavailable = true;
           renderRuleResult(panel, null, "none", unit);
+          clearAuxiliaryOutputs(accessibleSummary, testResult, "none");
           setFeedState("表示するルールがありません");
           setText(
             message,
@@ -778,6 +795,7 @@ function initializePreview(panel: HTMLElement): void {
           );
         } else if (fieldLabel && invalidField) {
           renderRuleResult(panel, null, "invalid", unit);
+          clearAuxiliaryOutputs(accessibleSummary, testResult, "invalid");
           setFeedState("設定内容を確認してください");
           showFieldError(invalidField, fieldLabel);
           setText(message,
@@ -790,6 +808,11 @@ function initializePreview(panel: HTMLElement): void {
             null,
             result.status === 400 ? "invalid" : "error",
             unit,
+          );
+          clearAuxiliaryOutputs(
+            accessibleSummary,
+            testResult,
+            result.status === 400 ? "invalid" : "error",
           );
           setFeedState("更新を確認できません");
           setText(
@@ -814,6 +837,11 @@ function initializePreview(panel: HTMLElement): void {
           null,
           activeID ? "error" : "none",
           unit,
+        );
+        clearAuxiliaryOutputs(
+          accessibleSummary,
+          testResult,
+          activeID ? "error" : "none",
         );
         setFeedState("表示するルールがありません");
         setText(message, "確認できるルールがありません。");
@@ -933,10 +961,15 @@ function initializePreview(panel: HTMLElement): void {
                   : "最初の値として確認（累積には加えません）";
               break;
             default:
-              testResult.textContent =
-                previewResult.number !== undefined
-                  ? formatNumber(previewResult.number)
-                  : `補正後 ${formatNumber(previewResult.calibrated)}`;
+              if (previewResult.number !== undefined) {
+                testResult.textContent =
+                  `${formatNumber(previewResult.number)}` +
+                  `${unit ? ` ${unit}` : ""}`;
+              } else {
+                testResult.textContent =
+                  `補正後 ${formatNumber(previewResult.calibrated)}` +
+                  `${unit ? ` ${unit}` : ""}`;
+              }
               break;
           }
         }
@@ -944,6 +977,7 @@ function initializePreview(panel: HTMLElement): void {
     } catch (error: unknown) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         renderRuleResult(panel, null, "error", unit);
+        clearAuxiliaryOutputs(accessibleSummary, testResult, "error");
         setFeedState("更新を確認できません");
         setText(
           message,

@@ -118,6 +118,7 @@ interface PreviewResponseOptions {
   point?: Record<string, unknown>;
   points?: Array<Record<string, unknown>>;
   displayName?: string;
+  testResult?: Record<string, unknown>;
 }
 
 function okPreviewResponse({
@@ -125,6 +126,7 @@ function okPreviewResponse({
   point,
   points,
   displayName = "温度",
+  testResult,
 }: PreviewResponseOptions = {}): Response {
   const receivedAt = Number(point?.received_at ?? 1_000);
   const input = Number(point?.input ?? 24.8);
@@ -156,6 +158,7 @@ function okPreviewResponse({
           kind,
           input_count: resolvedPoints.length,
           plot_count: resolvedPoints.length,
+          test_result: testResult,
           points: resolvedPoints,
         },
       ],
@@ -552,6 +555,99 @@ describe("automatic mapping preview", () => {
     ).toContain(expected);
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
+
+  it.each([
+    ["numeric", { number: 24.5, calibrated: 24.5 }, "24.5 ℃"],
+    ["boolean", { boolean: true, calibrated: 1 }, "ON"],
+    ["cumulative_counter", { integer: 42, calibrated: 42 }, "累積 42"],
+    ["alarm", { boolean: false, calibrated: 0 }, "正常"],
+    ["alarm", { boolean: true, calibrated: 1 }, "異常"],
+  ])("formats the %s test-input outcome", async (kind, testResult, expected) => {
+    installPreviewDOM();
+    document.querySelector<HTMLInputElement>('[name="preview_test_value"]')!.value =
+      "7";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okPreviewResponse({
+          kind: kind as PreviewKind,
+          point:
+            kind === "alarm"
+              ? { active: (testResult as { boolean?: boolean }).boolean }
+              : undefined,
+          testResult,
+        }),
+      ),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-test-result]")?.textContent,
+      ).toContain(expected),
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it.each(["http", "network"] as const)(
+    "neutralizes auxiliary semantic output after a %s failure",
+    async (failure) => {
+      vi.useFakeTimers();
+      installPreviewDOM();
+      const first = okPreviewResponse({
+        kind: "alarm",
+        displayName: "ルールA",
+        point: { active: true },
+        testResult: { emitted: true, boolean: true, calibrated: 1 },
+      });
+      const fetchMock = vi.fn().mockResolvedValueOnce(first);
+      if (failure === "http") {
+        fetchMock.mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "invalid_request",
+                message: "入力内容を確認してください。",
+                request_id: "req_02",
+              },
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      } else {
+        fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+      }
+      vi.stubGlobal("fetch", fetchMock);
+
+      initializePreviews();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector("[data-preview-accessible-summary]")?.textContent,
+        ).toContain("ルールA");
+        expect(
+          document.querySelector("[data-preview-test-result]")?.textContent,
+        ).toBe("異常");
+      });
+
+      document
+        .querySelector<HTMLInputElement>('[name="preview_test_value"]')!
+        .dispatchEvent(new Event("input"));
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector("[data-preview-accessible-summary]")?.textContent,
+        ).not.toContain("ルールA");
+        expect(
+          document.querySelector("[data-preview-accessible-summary]")?.textContent,
+        ).not.toContain("異常");
+        expect(
+          document.querySelector("[data-preview-test-result]")?.textContent,
+        ).toBe("値を入力すると結果を確認できます");
+      });
+      document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    },
+  );
 
   it("renders a no-selection result without borrowing another rule", async () => {
     installPreviewDOM();

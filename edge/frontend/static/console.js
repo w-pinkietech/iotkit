@@ -85,6 +85,7 @@
   }
 
   // src/shell.ts
+  var SETTING_TAB_CHANGE_EVENT = "iotkit:setting-tab-change";
   function csrfToken() {
     const value = document.cookie.split("; ").find((cookie) => cookie.startsWith("iotkit_edge_csrf="));
     return value?.split("=")[1] ?? "";
@@ -201,6 +202,11 @@
           url.searchParams.set("tab", key);
           window.history.replaceState(window.history.state, "", url);
         }
+        root.dispatchEvent(
+          new CustomEvent(SETTING_TAB_CHANGE_EVENT, {
+            detail: { key }
+          })
+        );
       };
       let initial = root.dataset.defaultSettingTab ?? tabs[0].dataset.settingTab;
       const focusedID = document.body.dataset.focusTarget;
@@ -464,19 +470,35 @@
     for (const form of queryAll("form.semantic-form")) {
       initializeSemanticFields(form);
     }
-    const cards = queryAll("details.semantic-rule-card");
-    if (cards[0] && !cards.some((card) => card.open)) cards[0].open = true;
-    for (const card of cards) {
-      card.addEventListener("toggle", () => {
-        if (!card.open) return;
-        for (const other of cards) {
-          if (other !== card) other.open = false;
-        }
-      });
+    for (const panel of queryAll("[data-setting-panel]")) {
+      const targets = queryAll(
+        "details[data-preview-target]",
+        panel
+      );
+      const savedCards = targets.filter(
+        (target) => target.classList.contains("semantic-rule-card")
+      );
+      if (savedCards.length && !targets.some((target) => target.open)) {
+        savedCards[0].open = true;
+      }
+      for (const target of targets) {
+        target.addEventListener("toggle", () => {
+          if (!target.open) return;
+          for (const peer of targets) {
+            if (peer !== target) peer.open = false;
+          }
+        });
+      }
     }
   }
 
   // src/preview.ts
+  var kindLabels = {
+    numeric: "\u6E2C\u5B9A\u5024",
+    boolean: "ON / OFF",
+    cumulative_counter: "\u7D2F\u7A4D\u5024",
+    alarm: "\u7570\u5E38\u691C\u77E5"
+  };
   var svgNamespace = "http://www.w3.org/2000/svg";
   function addSVG(parent, name, attributes = {}) {
     const element = document.createElementNS(svgNamespace, name);
@@ -544,26 +566,116 @@
     describedBy.add(error.id);
     field.setAttribute("aria-describedby", Array.from(describedBy).join(" "));
   }
-  function updateAccessibleSummary(summary, payload) {
+  function kindLabel(kind) {
+    return kindLabels[kind];
+  }
+  function latestRuleOutcome(payload, unit) {
+    const latest = payload.points?.at(-1);
+    if (!latest) {
+      return {
+        value: "\u53D7\u4FE1\u5F85\u3061",
+        detail: "\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u5F85\u3063\u3066\u3044\u307E\u3059\u3002",
+        alarm: false
+      };
+    }
+    switch (payload.kind) {
+      case "boolean":
+        return {
+          value: latest.active ? "ON" : "OFF",
+          detail: "\u73FE\u5728\u306E\u5224\u5B9A",
+          alarm: false
+        };
+      case "cumulative_counter":
+        return {
+          value: `\u7D2F\u7A4D ${formatNumber(latest.counter ?? 0)}`,
+          detail: Number(latest.increment ?? 0) > 0 ? `\u4ECA\u56DE +${formatNumber(latest.increment)}` : "\u4ECA\u56DE\u306E\u5897\u5206\u306A\u3057",
+          alarm: false
+        };
+      case "alarm":
+        return {
+          value: latest.active ? "\u7570\u5E38" : "\u6B63\u5E38",
+          detail: latest.active ? "\u7570\u5E38\u6761\u4EF6\u306B\u8A72\u5F53" : "\u6B63\u5E38\u7BC4\u56F2",
+          alarm: Boolean(latest.active)
+        };
+      default:
+        return {
+          value: `${formatNumber(latest.calibrated)}${unit ? ` ${unit}` : ""}`,
+          detail: "\u88DC\u6B63\u5F8C\u306E\u5024",
+          alarm: false
+        };
+    }
+  }
+  function renderRuleResult(panel, selected, state, unit) {
+    const container = query("[data-preview-rule-result]", panel);
+    const name = query("[data-preview-rule-name]", panel);
+    const kind = query("[data-preview-rule-kind]", panel);
+    const value = query("[data-preview-rule-value]", panel);
+    const detail = query("[data-preview-rule-detail]", panel);
+    if (!container || !name || !kind || !value || !detail) return null;
+    container.classList.remove("is-alarm");
+    if (state !== "ready" || !selected) {
+      const messages = {
+        none: [
+          "\u9078\u629E\u4E2D\u306E\u30EB\u30FC\u30EB\u306F\u3042\u308A\u307E\u305B\u3093",
+          "\u2014",
+          "\u30EB\u30FC\u30EB\u3092\u958B\u304F\u3068\u5224\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+        ],
+        invalid: [
+          "\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044",
+          "\u2014",
+          "\u5165\u529B\u9805\u76EE\u3092\u4FEE\u6B63\u3057\u3066\u304F\u3060\u3055\u3044\u3002"
+        ],
+        error: [
+          "\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093",
+          "\u2014",
+          "\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+        ]
+      };
+      const [title, result, hint] = messages[state === "ready" ? "none" : state];
+      setText(name, title);
+      setText(kind, "\u2014");
+      setText(value, result);
+      setText(detail, hint);
+      return null;
+    }
+    const outcome = latestRuleOutcome(selected, unit);
+    setText(name, selected.display_name);
+    setText(kind, kindLabel(selected.kind));
+    setText(value, outcome.value);
+    setText(detail, outcome.detail);
+    container.classList.toggle("is-alarm", outcome.alarm);
+    return outcome;
+  }
+  function clearAuxiliaryOutputs(summary, testResult, state) {
+    const messages = {
+      none: "\u30B0\u30E9\u30D5\u306B\u8868\u793A\u3067\u304D\u308B\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002",
+      invalid: "\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002",
+      error: "\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+    };
+    if (summary) setText(summary, messages[state]);
+    if (testResult) {
+      setText(testResult, "\u5024\u3092\u5165\u529B\u3059\u308B\u3068\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059");
+    }
+  }
+  function updateAccessibleSummary(summary, raw, selected, outcome) {
     if (!summary) return;
-    const points = payload.points ?? [];
+    const points = raw.points ?? [];
     if (!points.length) {
-      setText(summary, "\u30B0\u30E9\u30D5\u306B\u8868\u793A\u3067\u304D\u308B\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002");
+      setText(
+        summary,
+        selected ? `${selected.display_name}\u306F\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u5F85\u3063\u3066\u3044\u307E\u3059\u3002` : "\u30B0\u30E9\u30D5\u306B\u8868\u793A\u3067\u304D\u308B\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002"
+      );
       return;
     }
     const inputs = points.flatMap((point) => [
       Number(point.input_min),
       Number(point.input_max)
     ]);
-    const calibrated = points.flatMap((point) => [
-      Number(point.calibrated_min),
-      Number(point.calibrated_max)
-    ]);
-    const latest = points.at(-1);
-    const count = payload.input_count ?? points.length;
+    const count = raw.input_count ?? points.length;
+    const ruleText = selected && outcome ? `\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3001\u73FE\u5728\u306F${outcome.value}\u3067\u3059\u3002` : "\u9078\u629E\u4E2D\u306E\u30EB\u30FC\u30EB\u306F\u3042\u308A\u307E\u305B\u3093\u3002";
     setText(
       summary,
-      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3001\u8A2D\u5B9A\u7D50\u679C\u306F${formatNumber(Math.min(...calibrated))}\u304B\u3089${formatNumber(Math.max(...calibrated))}\u3067\u3059\u3002\u6700\u65B0\u306E\u8A2D\u5B9A\u7D50\u679C\u306F${formatNumber(latest?.calibrated)}\u3067\u3059\u3002${count}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3067\u3059\u3002${ruleText}${count}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
     );
   }
   function previewWindow(payload, points) {
@@ -804,33 +916,73 @@
   function isMultipleRulePreview(response) {
     return "rules" in response;
   }
-  function selectedPreview(response, selectedRuleID) {
-    if (!isMultipleRulePreview(response)) return response;
-    const selected = response.rules.find((rule) => rule.rule_id === selectedRuleID) ?? response.rules.find((rule) => !rule.error) ?? response.rules[0];
-    if (!selected) return null;
-    return {
-      ...selected,
+  function activePreviewID(scope) {
+    const activePanel = queryAll(
+      "[data-setting-panel]",
+      scope
+    ).find((panel) => !panel.hidden);
+    const form = activePanel?.querySelector(
+      "details[data-preview-target][open] form.semantic-form[data-preview-id]"
+    );
+    return form?.dataset.previewId;
+  }
+  function selectPreview(response, activeID) {
+    if (!isMultipleRulePreview(response)) {
+      return { raw: response, selected: null };
+    }
+    const withWindow = (rule) => rule ? {
+      ...rule,
       window_start: response.window_start,
       window_end: response.window_end,
       truncated_by: response.truncated_by
+    } : null;
+    return {
+      raw: withWindow(
+        response.rules.find((rule) => !rule.error) ?? response.rules[0]
+      ),
+      selected: withWindow(
+        activeID ? response.rules.find((rule) => rule.rule_id === activeID) : void 0
+      )
     };
   }
-  function buildRequest(signalRef, forms, calibrationForm, multipleRules, testInput) {
+  function rawOnlyPreview(payload) {
+    return {
+      ...payload,
+      kind: "numeric",
+      test_result: void 0,
+      rise_threshold: void 0,
+      fall_threshold: void 0,
+      points: (payload.points ?? []).map((point) => ({
+        ...point,
+        calibrated: point.input,
+        calibrated_min: point.input_min,
+        calibrated_max: point.input_max,
+        active: void 0,
+        active_samples: void 0,
+        transitions: void 0,
+        counter: void 0,
+        increment: void 0
+      }))
+    };
+  }
+  function buildRequest(signalRef, forms, calibrationForm, multipleRules, testInput, activeID) {
     const body = { signal_ref: signalRef };
     const firstForm = forms[0];
     if (multipleRules) {
-      const rules = forms.filter(
-        (candidate) => !!candidate.dataset.ruleId || !!formField(candidate, "display_name")?.value.trim()
-      ).map((candidate, index) => ({
-        rule_id: candidate.dataset.ruleId || `draft-${index + 1}`,
-        display_name: formField(candidate, "display_name")?.value.trim() || `\u30EB\u30FC\u30EB ${index + 1}`,
+      const rules = forms.filter((candidate) => {
+        const previewID = candidate.dataset.previewId;
+        const hasName = !!formField(candidate, "display_name")?.value.trim();
+        return !!previewID && (hasName || previewID === activeID);
+      }).map((candidate) => ({
+        rule_id: candidate.dataset.previewId,
+        display_name: formField(candidate, "display_name")?.value.trim() || (candidate.dataset.previewId === "draft-alarm" ? "\u65B0\u3057\u3044\u7570\u5E38\u691C\u77E5" : "\u65B0\u3057\u3044\u8A08\u6E2C\u30EB\u30FC\u30EB"),
         spec: ruleSpec(candidate)
       }));
-      if (!rules.length && firstForm?.action.endsWith("/semantic-rules")) {
+      if (!rules.length) {
         rules.push({
-          rule_id: "draft-1",
-          display_name: "\u53D7\u4FE1\u5024\uFF08\u4FDD\u5B58\u524D\uFF09",
-          spec: ruleSpec(firstForm)
+          rule_id: "draft-raw",
+          display_name: "\u53D7\u4FE1\u5024",
+          spec: { kind: "numeric" }
         });
       }
       if (rules.length) {
@@ -857,9 +1009,6 @@
     const calibrationForm = query(
       `form[action="/console/signals/${signalRef}/calibration"]`
     );
-    const ruleCards = forms.map((form) => form.closest("details.semantic-rule-card")).filter(
-      (card) => card instanceof HTMLDetailsElement
-    );
     const multipleRules = forms.some((form) => !!form.dataset.ruleId) || forms.some((form) => form.action.endsWith("/semantic-rules"));
     const testInput = query(
       '[name="preview_test_value"]',
@@ -885,6 +1034,7 @@
       "[data-preview-current-received]",
       panel
     );
+    const unit = panel.dataset.unit ?? "";
     if (!range || !count || !message || !chart) return;
     const sourceSummary = query(
       ".sensor-detail-latest[data-source-value]"
@@ -920,12 +1070,14 @@
       controller?.abort();
       controller = new AbortController();
       clearFieldErrors(previewScope);
+      const activeID = activePreviewID(previewScope);
       const body = buildRequest(
         signalRef,
         forms,
         calibrationForm,
         multipleRules,
-        testInput
+        testInput,
+        activeID
       );
       try {
         const result = await createMappingPreview(
@@ -935,16 +1087,23 @@
         );
         if (!result.ok) {
           const fieldName = result.error?.error.field;
-          const invalidField = fieldName && forms[0] ? formField(forms[0], fieldName) : null;
+          const activeForm = forms.find(
+            (candidate) => candidate.dataset.previewId === activeID
+          );
+          const invalidField = fieldName && activeForm ? formField(activeForm, fieldName) : null;
           const fieldLabel = invalidField?.closest("label")?.querySelector(":scope > span")?.textContent?.trim();
           if (result.status === 404 && !forms[0]) {
             previewUnavailable = true;
+            renderRuleResult(panel, null, "none", unit);
+            clearAuxiliaryOutputs(accessibleSummary, testResult, "none");
             setFeedState("\u8868\u793A\u3059\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093");
             setText(
               message,
               "\u5024\u306E\u5909\u63DB\u304C\u8A2D\u5B9A\u3055\u308C\u308B\u3068\u3001\u3053\u3053\u306B\u8A2D\u5B9A\u7D50\u679C\u3092\u8868\u793A\u3057\u307E\u3059\u3002"
             );
           } else if (fieldLabel && invalidField) {
+            renderRuleResult(panel, null, "invalid", unit);
+            clearAuxiliaryOutputs(accessibleSummary, testResult, "invalid");
             setFeedState("\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
             showFieldError(invalidField, fieldLabel);
             setText(
@@ -952,6 +1111,17 @@
               `${fieldLabel}\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u6700\u5F8C\u306B\u78BA\u8A8D\u3067\u304D\u305F\u30B0\u30E9\u30D5\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
             );
           } else {
+            renderRuleResult(
+              panel,
+              null,
+              result.status === 400 ? "invalid" : "error",
+              unit
+            );
+            clearAuxiliaryOutputs(
+              accessibleSummary,
+              testResult,
+              result.status === 400 ? "invalid" : "error"
+            );
             setFeedState("\u66F4\u65B0\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093");
             setText(
               message,
@@ -960,17 +1130,41 @@
           }
           return;
         }
-        const selectedRuleID = ruleCards.find((card) => card.open)?.dataset.ruleId;
-        const payload = selectedPreview(result.value, selectedRuleID);
+        const selection = selectPreview(result.value, activeID);
+        const selectedReady = selection.selected && !selection.selected.error ? selection.selected : null;
+        const payload = selectedReady ?? (selection.raw ? rawOnlyPreview(selection.raw) : null);
         if (!payload) {
+          renderRuleResult(
+            panel,
+            null,
+            activeID ? "error" : "none",
+            unit
+          );
+          clearAuxiliaryOutputs(
+            accessibleSummary,
+            testResult,
+            activeID ? "error" : "none"
+          );
           setFeedState("\u8868\u793A\u3059\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093");
           setText(message, "\u78BA\u8A8D\u3067\u304D\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002");
           return;
         }
         renderPreviewChart(chart, payload);
-        updateAccessibleSummary(accessibleSummary, payload);
+        const resultState = !activeID ? "none" : selectedReady ? "ready" : "error";
+        const outcome = renderRuleResult(
+          panel,
+          selectedReady,
+          resultState,
+          unit
+        );
+        updateAccessibleSummary(
+          accessibleSummary,
+          payload,
+          selectedReady,
+          outcome
+        );
         const points = payload.points ?? [];
-        const latest = points.at(-1);
+        const latest = selection.raw?.points?.at(-1);
         markChecked();
         if (!latest) {
           setFeedState("\u53D7\u4FE1\u5F85\u3061");
@@ -1034,20 +1228,31 @@
           const previewResult = payload.test_result;
           if (!previewResult) {
             testResult.textContent = "\u5024\u3092\u5165\u529B\u3059\u308B\u3068\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059";
-          } else if (previewResult.number !== void 0) {
-            testResult.textContent = formatNumber(previewResult.number);
-          } else if (previewResult.boolean !== void 0) {
-            testResult.textContent = previewResult.boolean ? "ON" : "OFF";
-          } else if (previewResult.integer !== void 0) {
-            testResult.textContent = `\u7D2F\u7A4D ${formatNumber(previewResult.integer)}`;
-          } else if (payload.kind === "cumulative_counter") {
-            testResult.textContent = "\u6700\u521D\u306E\u5024\u3068\u3057\u3066\u78BA\u8A8D\uFF08\u7D2F\u7A4D\u306B\u306F\u52A0\u3048\u307E\u305B\u3093\uFF09";
           } else {
-            testResult.textContent = `\u88DC\u6B63\u5F8C ${formatNumber(previewResult.calibrated)}`;
+            switch (payload.kind) {
+              case "boolean":
+                testResult.textContent = previewResult.boolean ? "ON" : "OFF";
+                break;
+              case "alarm":
+                testResult.textContent = previewResult.boolean ? "\u7570\u5E38" : "\u6B63\u5E38";
+                break;
+              case "cumulative_counter":
+                testResult.textContent = previewResult.integer !== void 0 ? `\u7D2F\u7A4D ${formatNumber(previewResult.integer)}` : "\u6700\u521D\u306E\u5024\u3068\u3057\u3066\u78BA\u8A8D\uFF08\u7D2F\u7A4D\u306B\u306F\u52A0\u3048\u307E\u305B\u3093\uFF09";
+                break;
+              default:
+                if (previewResult.number !== void 0) {
+                  testResult.textContent = `${formatNumber(previewResult.number)}${unit ? ` ${unit}` : ""}`;
+                } else {
+                  testResult.textContent = `\u88DC\u6B63\u5F8C ${formatNumber(previewResult.calibrated)}${unit ? ` ${unit}` : ""}`;
+                }
+                break;
+            }
           }
         }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
+          renderRuleResult(panel, null, "error", unit);
+          clearAuxiliaryOutputs(accessibleSummary, testResult, "error");
           setFeedState("\u66F4\u65B0\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093");
           setText(
             message,
@@ -1066,10 +1271,12 @@
     }
     calibrationForm?.addEventListener("input", schedule);
     calibrationForm?.addEventListener("change", schedule);
-    for (const card of ruleCards) {
-      card.addEventListener("toggle", () => {
-        if (card.open) schedule();
-      });
+    previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, schedule);
+    for (const target of queryAll(
+      "details[data-preview-target]",
+      previewScope
+    )) {
+      target.addEventListener("toggle", schedule);
     }
     testInput?.addEventListener("input", schedule);
     toggle?.addEventListener("click", () => {
