@@ -299,6 +299,7 @@ async fn console_redirects_anonymous_users_and_preserves_shell_hooks() {
 #[tokio::test]
 async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::system_admin()));
+    let expected_product_version = format!("IoTKit Edge {}", env!("CARGO_PKG_VERSION"));
     for (path, hooks) in [
         (
             "/status",
@@ -406,7 +407,7 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
         (
             "/system",
             &[
-                "IoTKit Edge 0.1.0",
+                expected_product_version.as_str(),
                 "保存データの状態",
                 "raw受信データ",
                 "確認が必要なこと",

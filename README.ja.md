@@ -6,7 +6,7 @@
 
 オンプレミスを優先し、データの完全性を重視するIoT収集基盤です。IoTKit Edge Nodeへ対象を絞ったセンサーAdapterを追加すると、IoTKitが耐久収集、再送、IoTKit Edgeへの明示的な保管責任移転を提供します。IoTKit Edgeが耐久保存するまで、データは削除可能になりません。
 
-> **現在の製品バージョン: 0.1.0（pre-1.0）。** IoTKitは早期source releaseとして
+> **現在の製品バージョン: 0.2.0（pre-1.0）。** IoTKitは早期source releaseとして
 > 公開しています。0.xの間はAPI、ディスク上のschema、wire contractが変更される可能性があります。
 > [GitHub Releases](https://github.com/w-pinkietech/iotkit/releases)と
 > [ロードマップ](#ロードマップ)を参照してください。
