@@ -534,7 +534,8 @@ try {
         return alarmTab?.getAttribute("aria-selected") === "true" &&
           alarmPanel && !alarmPanel.hidden && card?.open &&
           previewName === "照度異常" && /^(正常|異常)$/.test(previewValue) &&
-          accessible.includes("照度異常") && /正常|異常/.test(accessible);
+          accessible.includes("照度異常") && /正常|異常/.test(accessible) &&
+          accessible.includes(previewValue);
       })()`),
     "saved illuminance alarm selection and preview",
   );
