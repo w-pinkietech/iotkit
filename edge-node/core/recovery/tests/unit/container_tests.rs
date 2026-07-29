@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
@@ -57,6 +58,36 @@ fn write_database(path: &Path) {
     fs::write(path, DATABASE).unwrap();
 }
 
+fn staging_directory(root: &Path) -> PathBuf {
+    let staging = root.join("staging");
+    fs::create_dir(&staging).unwrap();
+    staging
+}
+
+fn directory_entries(path: &Path) -> BTreeSet<String> {
+    fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+fn publish_new_file(staged: &Path, destination: &Path) -> Result<(), RecoveryError> {
+    fs::hard_link(staged, destination).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            RecoveryError::DestinationExists
+        } else {
+            RecoveryError::Storage
+        }
+    })
+}
+
+fn stage_bytes(mut stage: DecryptedStage) -> Vec<u8> {
+    stage.rewind().unwrap();
+    let mut bytes = Vec::new();
+    stage.read_to_end(&mut bytes).unwrap();
+    bytes
+}
+
 fn deterministic_artifact(root: &Path) -> (std::path::PathBuf, NodeBackupManifest) {
     let snapshot = root.join("snapshot.sqlite");
     write_database(&snapshot);
@@ -83,11 +114,16 @@ fn valid_round_trip_authenticates_and_decrypts_database() {
         expected
     );
 
-    let output = root.path().join("restored.sqlite");
-    let actual =
-        decrypt_container_to_new_file(&artifact, &passphrase(), &output, DATABASE_LENGTH).unwrap();
+    let staging = staging_directory(root.path());
+    let (stage, actual) =
+        decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
+            .unwrap();
     assert_eq!(actual, expected);
-    assert_eq!(fs::read(output).unwrap(), DATABASE);
+    let rendered = format!("{stage:?}");
+    assert!(rendered.contains("REDACTED"));
+    assert!(!rendered.contains(staging.to_string_lossy().as_ref()));
+    assert_eq!(stage_bytes(stage), DATABASE);
+    assert!(directory_entries(&staging).is_empty());
 }
 
 #[test]
@@ -115,12 +151,14 @@ fn public_golden_fixture_matches_json_and_reencodes_byte_for_byte() {
         expected
     );
     let root = tempdir().unwrap();
+    let staging = staging_directory(root.path());
+    let (stage, actual) =
+        decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
+            .unwrap();
+    assert_eq!(actual, expected);
     let snapshot = root.path().join("golden.sqlite");
-    assert_eq!(
-        decrypt_container_to_new_file(&artifact, &passphrase(), &snapshot, DATABASE_LENGTH)
-            .unwrap(),
-        expected
-    );
+    fs::write(&snapshot, stage_bytes(stage)).unwrap();
+    assert_eq!(actual, expected);
     let reencoded = root.path().join("reencoded.iotkit-node-backup");
     encrypt_container_with_entropy(
         &snapshot,
@@ -305,9 +343,11 @@ fn encryption_uses_the_open_snapshot_handle_after_path_replacement() {
         FIXED_NONCE_PREFIX,
     )
     .unwrap();
-    let restored = root.path().join("restored.sqlite");
-    decrypt_container_to_new_file(&output, &passphrase(), &restored, DATABASE_LENGTH).unwrap();
-    assert_eq!(fs::read(restored).unwrap(), DATABASE);
+    let staging = staging_directory(root.path());
+    let (stage, _) =
+        decrypt_container_to_staging_file(&output, &passphrase(), &staging, DATABASE_LENGTH)
+            .unwrap();
+    assert_eq!(stage_bytes(stage), DATABASE);
 }
 
 struct TruncatingReader {
@@ -359,12 +399,12 @@ fn in_place_snapshot_truncation_during_encryption_fails_without_artifact() {
 fn insufficient_plaintext_capacity_is_rejected_before_output_creation() {
     let root = tempdir().unwrap();
     let (artifact, _) = deterministic_artifact(root.path());
-    let output = root.path().join("too-small.sqlite");
+    let staging = staging_directory(root.path());
     let error =
-        decrypt_container_to_new_file(&artifact, &passphrase(), &output, DATABASE_LENGTH - 1)
+        decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH - 1)
             .unwrap_err();
     assert_eq!(error.reason_code(), "storage_full");
-    assert!(!output.exists());
+    assert!(directory_entries(&staging).is_empty());
 }
 
 #[test]
@@ -382,23 +422,6 @@ fn publication_refuses_a_replaced_destination_without_deleting_it() {
     );
     assert_eq!(fs::read(&destination).unwrap(), b"unrelated-replacement");
     assert_eq!(fs::read(&staged).unwrap(), b"staged");
-}
-
-#[test]
-fn staging_cleanup_failure_never_deletes_a_substituted_file() {
-    let root = tempdir().unwrap();
-    let destination = root.path().join("published.sqlite");
-    let mut staged = StagedOutput::new(&destination).unwrap();
-    let stage_path = staged.path.clone();
-    drop(staged.file.take());
-    let original = stage_path.with_extension("original");
-    fs::rename(&stage_path, &original).unwrap();
-    fs::write(&stage_path, b"unrelated-replacement").unwrap();
-
-    let error = staged.cleanup().unwrap_err();
-    assert_eq!(error.reason_code(), "artifact_cleanup_failed");
-    assert_eq!(fs::read(&stage_path).unwrap(), b"unrelated-replacement");
-    assert_eq!(fs::read(&original).unwrap(), b"");
 }
 
 #[test]
@@ -612,38 +635,59 @@ fn modified_manifest_and_database_fail_authentication() {
 }
 
 #[test]
-fn decryption_refuses_preexisting_output_and_removes_created_output_on_failure() {
+fn decryption_failure_leaves_no_named_plaintext_and_preserves_unrelated_stage_files() {
     let root = tempdir().unwrap();
     let (artifact, _) = deterministic_artifact(root.path());
-    let existing = root.path().join("existing.sqlite");
-    fs::write(&existing, b"keep").unwrap();
-    assert_eq!(
-        decrypt_container_to_new_file(&artifact, &passphrase(), &existing, DATABASE_LENGTH)
-            .unwrap_err()
-            .reason_code(),
-        "destination_exists"
-    );
-    assert_eq!(fs::read(&existing).unwrap(), b"keep");
+    let staging = staging_directory(root.path());
+    let unrelated = staging.join("unrelated.marker");
+    fs::write(&unrelated, b"keep").unwrap();
+    let before = directory_entries(&staging);
 
     let mut bytes = fs::read(&artifact).unwrap();
     let terminal = find_terminal_record(&bytes);
     bytes[terminal + 1 + 4 + 1] ^= 1;
     let changed = root.path().join("corrupt");
     fs::write(&changed, bytes).unwrap();
-    let output = root.path().join("created-then-failed.sqlite");
     assert!(
-        decrypt_container_to_new_file(&changed, &passphrase(), &output, DATABASE_LENGTH).is_err()
+        decrypt_container_to_staging_file(&changed, &passphrase(), &staging, DATABASE_LENGTH,)
+            .is_err()
     );
+    assert_eq!(directory_entries(&staging), before);
+    assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+}
+
+#[test]
+fn encrypted_output_initialization_failure_removes_temp_and_retry_succeeds() {
+    let root = tempdir().unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let output = root.path().join("retry.iotkit-node-backup");
+    let before = directory_entries(root.path());
+
+    let error = encrypt_snapshot_reader_with_output_init(
+        File::open(&snapshot).unwrap(),
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+        |_temporary| Err(RecoveryError::ArtifactCleanupFailed),
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "artifact_cleanup_failed");
     assert!(!output.exists());
-    assert!(
-        !fs::read_dir(root.path())
-            .unwrap()
-            .filter_map(Result::ok)
-            .any(|entry| entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".iotkit-node-staging-"))
-    );
+    assert_eq!(directory_entries(root.path()), before);
+
+    encrypt_container_with_entropy(
+        &snapshot,
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+    )
+    .unwrap();
+    assert!(output.exists());
 }
 
 #[test]

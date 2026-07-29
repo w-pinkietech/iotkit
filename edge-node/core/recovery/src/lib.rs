@@ -7,7 +7,9 @@ mod model;
 mod snapshot;
 mod state;
 
-pub use container::{authenticate_container, decrypt_container_to_new_file, encrypt_container};
+pub use container::{
+    DecryptedStage, authenticate_container, decrypt_container_to_staging_file, encrypt_container,
+};
 pub use model::{
     BackupConfig, BackupCounts, BackupPassphrase, BackupReadiness, BackupStatusArtifact,
     MountIdentity, NODE_BACKUP_FORMAT_VERSION, NODE_BACKUP_SUFFIX, NodeBackupManifest,

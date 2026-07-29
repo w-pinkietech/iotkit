@@ -13,10 +13,10 @@ Implemented the Node-specific `IOTKNDB1` authenticated encrypted container in
 
 - `encrypt_container` uses OS randomness for a bounded Argon2id/XChaCha20-Poly1305 container and hashes the exact database bytes as they are consumed for encryption.
 - `authenticate_container` parses and authenticates the complete artifact while discarding plaintext.
-- `decrypt_container_to_new_file` authenticates and streams only database bytes into a private owner-only staging directory/file, then publishes with atomic no-clobber semantics after full verification; callers provide an explicit plaintext capacity bound.
+- `decrypt_container_to_staging_file` authenticates and streams only database bytes into an anonymous OS temporary file created inside a caller-supplied staging directory; it returns the owned `DecryptedStage` handle plus manifest only after full verification, and callers provide an explicit plaintext capacity bound.
 - Header and manifest parsing is closed (`deny_unknown_fields`), bounded before allocation/KDF, and uses the exact header digest, nonce, and associated-data layout from Task 3.
 - Records enforce flags, sequence, plaintext/chunk lengths, authenticated terminal framing, and immediate EOF.
-- Manifest database length and SHA-256 are checked while streaming; capacity is rejected before staging; failed decryptions remove only their owner-identified staging file and never replace an existing or concurrently substituted path.
+- Manifest database length and SHA-256 are checked while streaming; capacity is rejected before staging; failed decryptions drop the anonymous owner so the OS removes plaintext without a named path or cleanup race.
 - In-place snapshot mutation/truncation during encryption is detected by the same-pass length/digest check; pathname replacement cannot switch an already-open snapshot handle.
 - Passphrases, derived keys, and errors are redacted/zeroized; invalid passphrases are rejected before file/KDF work.
 - Checked-in header/manifest schemas, JSON goldens, and a deterministic public binary vector are mutually conformant. Deterministic entropy is test-only in the test module; production calls `getrandom`.
@@ -91,6 +91,46 @@ cargo clippy -p iotkit-core-recovery --all-targets --no-deps -- -D warnings
 exit 0
 ```
 
+### Review-fix round 3/5
+
+The next review found that a named plaintext stage remained vulnerable to a
+rename race under a writable parent and that a post-create encrypted-output
+identity failure could leave a retry-blocking artifact. Tests were changed
+first; the expected compile RED was:
+
+```text
+cargo test -p iotkit-core-recovery container --no-run
+compile failed as expected: missing DecryptedStage,
+decrypt_container_to_staging_file, and the injected
+encrypt_snapshot_reader_with_output_init test hook
+```
+
+Plaintext publication is now removed from Task 3. The new public API accepts
+the caller-supplied staging directory, creates an anonymous
+`tempfile::tempfile_in` owner only after the authenticated manifest passes the
+capacity check, and returns `(DecryptedStage, NodeBackupManifest)`. `File` is
+private; `DecryptedStage` implements only redacted `Debug` plus controlled
+`Read`/`Seek` and `rewind` access for Task 6. On authentication, digest, storage,
+or unwind failure, the owner is dropped and the OS removes the file; no
+plaintext pathname is created, published, unlinked, or left behind. Task 4/6
+must validate the supplied directory as owner-only tmpfs before invoking this
+API.
+
+Encrypted output now uses a `NamedTempFile` cleanup owner and final
+`persist_noclobber`, so a post-create initialization failure is cleaned before
+the final artifact name is considered. The injected regression verifies the
+temporary entry disappears and a retry can create the requested output.
+
+Round-3 focused GREEN evidence:
+
+```text
+cargo test -p iotkit-core-recovery container
+19 passed, 0 failed, 1 ignored
+
+cargo test -p iotkit-core-recovery encrypted_output_initialization_failure_removes_temp_and_retry_succeeds
+1 passed, 0 failed
+```
+
 ### Review-fix round 2/5
 
 The re-review found three remaining Important findings: noncanonical
@@ -149,10 +189,10 @@ cargo test -p iotkit-core-recovery
 - Header/manifest/chunk bounds before allocation; truncated records, malformed lengths, unknown flags, duplicate/early terminal, trailing bytes, and EOF failures.
 - Modified manifest/database authentication failures and authenticated manifest length/digest mismatch.
 - Existing output no-clobber and cleanup of output created before a later failure; Unix mode `0600`.
-- Capacity refusal before plaintext creation; late authentication failure staging cleanup; destination replacement/no-delete regression; and one-open-handle snapshot replacement regression.
+- Capacity refusal before anonymous plaintext creation; late authentication failure leaves no named plaintext and preserves unrelated staging files; success read/seek and redacted stage debug; and one-open-handle snapshot replacement regression.
 - Both checked-in schemas are loaded by tests and compared with Rust parsing/validation at valid and invalid Unicode, control, integer-float, and overflow boundaries.
 - Actual header/manifest fixture conformance and canonical/noncanonical 16-byte Base64 final-symbol boundaries.
-- One-pass in-place snapshot truncation failure with no artifact, private-directory cleanup failure with no unrelated deletion, and identity-guarded encrypted-output cleanup.
+- One-pass in-place snapshot truncation failure with no artifact, anonymous staging cleanup with no named file or unrelated deletion, and post-create encrypted-output initialization cleanup/retry.
 - Redacted error/debug behavior and public JSON/schema/binary conformance.
 
 ## Verification
@@ -178,12 +218,15 @@ The existing unrelated `iotkit-core-ops` warning about an unused `mode` on the
 Windows host remains visible in dependency builds; recovery's strict no-deps
 Clippy is clean.
 
-The round-2 commit is recorded by the final SHA in the handoff message.
+The round-3 commit is recorded by the final SHA in the handoff message.
 
 ## Scope and concerns
 
-Only the recovery container, its direct model/Cargo exports, schemas, fixtures,
-and unit tests were changed. No CLI, orchestration, destination validation,
-restore state transition, release/version, or IoTKit Edge server container work
-was added. The public fixture values are fixed format-vector material over a
-minimal sanitized payload; they contain no deployment credential or passphrase.
+Only the recovery container, its direct model/Cargo exports, dependency lock,
+schemas, fixtures, and unit tests were changed. No CLI, orchestration,
+destination validation, restore state transition, release/version, or IoTKit
+Edge server container work was added. Task 6 must consume the returned
+`DecryptedStage` through its read/seek surface and perform fenced database
+replacement; Task 3 deliberately does not publish plaintext. The public
+fixture values are fixed format-vector material over a minimal sanitized
+payload; they contain no deployment credential or passphrase.
