@@ -49,6 +49,16 @@ fn prepare_config(root: &Path) -> BackupConfig {
 }
 
 #[cfg(target_os = "linux")]
+fn config_parent_entries(root: &Path) -> Vec<std::ffi::OsString> {
+    let mut entries: Vec<_> = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    entries.sort();
+    entries
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() {
     let root = TempDir::new().unwrap();
@@ -141,6 +151,78 @@ fn competing_configure_is_busy_before_creating_any_temporary_name() {
 
     drop(guard);
     configure_backup(&config_path, &input, BackupConfigReplace::Refuse).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn configure_detects_exact_config_cleanup_markers_before_creating_a_temporary_name() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let input = prepare_config(root.path());
+    let exact_file = ".iotkit-cleanup-0123456789abcdef0123456789abcdef";
+    let exact_directory = ".iotkit-cleanup-dir-fedcba9876543210fedcba9876543210";
+    let near_file = ".iotkit-cleanup-user-note";
+    let near_directory = ".iotkit-cleanup-dir-0123456789abcdef0123456789abcde";
+
+    fs::write(root.path().join(exact_file), b"preserve").unwrap();
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        Err(RecoveryError::CleanupRequired)
+    );
+    assert_eq!(fs::read(root.path().join(exact_file)).unwrap(), b"preserve");
+    assert!(root.path().join(".iotkit-recovery.lock").is_file());
+    assert!(!config_path.exists());
+    assert!(
+        config_parent_entries(root.path())
+            .iter()
+            .all(|name| !name.to_string_lossy().ends_with(".iotkit-config"))
+    );
+
+    fs::remove_file(root.path().join(exact_file)).unwrap();
+    fs::create_dir(root.path().join(exact_directory)).unwrap();
+    let entries_before = config_parent_entries(root.path());
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        Err(RecoveryError::CleanupRequired)
+    );
+    assert_eq!(config_parent_entries(root.path()), entries_before);
+    assert!(root.path().join(exact_directory).is_dir());
+    assert!(!config_path.exists());
+
+    fs::remove_dir(root.path().join(exact_directory)).unwrap();
+    fs::write(root.path().join(near_file), b"keep").unwrap();
+    fs::create_dir(root.path().join(near_directory)).unwrap();
+    configure_backup(&config_path, &input, BackupConfigReplace::Refuse).unwrap();
+    assert_eq!(fs::read(root.path().join(near_file)).unwrap(), b"keep");
+    assert!(root.path().join(near_directory).is_dir());
+    assert!(root.path().join(".iotkit-recovery.lock").is_file());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn competing_configure_reports_busy_before_scanning_config_cleanup_markers() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let input = prepare_config(root.path());
+    let marker = ".iotkit-cleanup-0123456789abcdef0123456789abcdef";
+    fs::write(root.path().join(marker), b"preserve").unwrap();
+    let guard = acquire_recovery_operation(&config_path).unwrap();
+    let entries_before = config_parent_entries(root.path());
+
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        Err(RecoveryError::OperationBusy)
+    );
+    assert_eq!(config_parent_entries(root.path()), entries_before);
+
+    drop(guard);
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        Err(RecoveryError::CleanupRequired)
+    );
+    assert_eq!(config_parent_entries(root.path()), entries_before);
+    assert_eq!(fs::read(root.path().join(marker)).unwrap(), b"preserve");
+    assert!(!config_path.exists());
 }
 
 #[cfg(target_os = "linux")]

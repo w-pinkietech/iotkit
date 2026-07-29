@@ -83,6 +83,7 @@ pub fn configure_backup_guarded(
         if metadata.dev() != guard.parent_device || metadata.ino() != guard.parent_inode {
             return Err(RecoveryError::InvalidConfiguration);
         }
+        crate::destination::ensure_no_cleanup_leftovers(&parent)?;
         let mountinfo =
             fs::read_to_string("/proc/self/mountinfo").map_err(|_| RecoveryError::MountMissing)?;
         configure_backup_with(
