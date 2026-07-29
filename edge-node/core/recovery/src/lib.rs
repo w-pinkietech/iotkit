@@ -2,14 +2,24 @@
 
 use iotkit_core_storage::Migration;
 
+mod config;
 mod container;
+mod destination;
 mod model;
 mod snapshot;
 mod state;
 
+pub use config::{
+    BackupConfigReplace, configure_backup, load_owner_only_config, load_owner_only_passphrase,
+};
 pub use container::{
     DecryptedStage, DirectoryCapability, authenticate_container, decrypt_container_to_staging_file,
     encrypt_container,
+};
+pub use destination::{
+    MountInfoEntry, VerifiedBackupDestination, VerifiedStagingDirectory, apply_retention,
+    parse_mountinfo, publish_verified_artifact, required_capacity, verify_destination,
+    verify_staging_directory,
 };
 pub use model::{
     BackupConfig, BackupCounts, BackupPassphrase, BackupReadiness, BackupStatusArtifact,
@@ -51,3 +61,11 @@ pub use snapshot::recovery_descriptors;
 #[cfg(test)]
 #[path = "../tests/support/mod.rs"]
 pub(crate) mod tests_support;
+
+#[cfg(test)]
+#[path = "../tests/unit/config_tests.rs"]
+mod config_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/destination_tests.rs"]
+mod destination_tests;

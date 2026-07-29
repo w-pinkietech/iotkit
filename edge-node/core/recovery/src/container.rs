@@ -88,8 +88,9 @@ pub struct DirectoryCapability {
 }
 
 impl DirectoryCapability {
-    /// Opens and verifies a directory without following a final symlink.
-    pub fn open(path: &Path) -> Result<Self, RecoveryError> {
+    /// Internal pathname opener retained only for in-crate tests and setup.
+    #[allow(dead_code)]
+    pub(crate) fn open(path: &Path) -> Result<Self, RecoveryError> {
         #[cfg(target_os = "linux")]
         {
             let path = CString::new(path.as_os_str().as_bytes())
@@ -104,7 +105,7 @@ impl DirectoryCapability {
                 return Err(RecoveryError::Storage);
             }
             let file = unsafe { File::from_raw_fd(fd) };
-            Self::from_file(file)
+            Self::from_open_file(file)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -117,7 +118,8 @@ impl DirectoryCapability {
     }
 
     /// Takes ownership of an already-open directory handle after validating it.
-    pub fn from_file(file: File) -> Result<Self, RecoveryError> {
+    #[allow(dead_code)]
+    pub(crate) fn from_open_file(file: File) -> Result<Self, RecoveryError> {
         #[cfg(target_os = "linux")]
         {
             let mut stat = MaybeUninit::<libc::stat>::zeroed();
@@ -147,7 +149,7 @@ impl DirectoryCapability {
 
     #[cfg(target_os = "linux")]
     fn duplicate(&self) -> Result<Self, RecoveryError> {
-        Self::from_file(
+        Self::from_open_file(
             self.file
                 .as_ref()
                 .expect("Linux directory capability holds a descriptor")
@@ -157,7 +159,7 @@ impl DirectoryCapability {
     }
 
     #[cfg(target_os = "linux")]
-    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+    pub(crate) fn as_raw_fd(&self) -> std::os::fd::RawFd {
         self.file
             .as_ref()
             .expect("Linux directory capability holds a descriptor")
@@ -563,7 +565,24 @@ pub fn authenticate_container(
     passphrase: &BackupPassphrase,
 ) -> Result<NodeBackupManifest, RecoveryError> {
     validate_passphrase(passphrase)?;
-    let mut file = File::open(input).map_err(|_| RecoveryError::Storage)?;
+    let file = File::open(input).map_err(|_| RecoveryError::Storage)?;
+    authenticate_container_file_unchecked(file, passphrase)
+}
+
+/// Authenticates one already-open artifact without re-resolving a pathname.
+#[cfg(target_os = "linux")]
+pub(crate) fn authenticate_container_file(
+    file: File,
+    passphrase: &BackupPassphrase,
+) -> Result<NodeBackupManifest, RecoveryError> {
+    validate_passphrase(passphrase)?;
+    authenticate_container_file_unchecked(file, passphrase)
+}
+
+fn authenticate_container_file_unchecked(
+    mut file: File,
+    passphrase: &BackupPassphrase,
+) -> Result<NodeBackupManifest, RecoveryError> {
     let parsed = parse_header(&mut file)?;
     let key = derive_key(passphrase, &parsed.salt, &parsed.header)?;
     let cipher =

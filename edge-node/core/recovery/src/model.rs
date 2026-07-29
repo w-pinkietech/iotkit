@@ -291,6 +291,11 @@ pub enum RecoveryError {
     PlatformUnsupported,
     ArtifactPublicationUncertain,
     ArtifactCleanupFailed,
+    InvalidConfiguration,
+    MountMissing,
+    MountIdentityUnavailable,
+    DestinationInvalid,
+    CapacityOverflow,
 }
 
 impl RecoveryError {
@@ -310,6 +315,11 @@ impl RecoveryError {
             Self::PlatformUnsupported => "platform_unsupported",
             Self::ArtifactPublicationUncertain => "artifact_publication_uncertain",
             Self::ArtifactCleanupFailed => "artifact_cleanup_failed",
+            Self::InvalidConfiguration => "invalid_configuration",
+            Self::MountMissing => "mount_missing",
+            Self::MountIdentityUnavailable => "mount_identity_unavailable",
+            Self::DestinationInvalid => "destination_invalid",
+            Self::CapacityOverflow => "capacity_overflow",
         }
     }
 }
@@ -344,6 +354,19 @@ impl fmt::Display for RecoveryError {
             }
             Self::ArtifactCleanupFailed => {
                 formatter.write_str("Edge Node backup cleanup could not be verified")
+            }
+            Self::InvalidConfiguration => {
+                formatter.write_str("Edge Node backup configuration is invalid")
+            }
+            Self::MountMissing => formatter.write_str("Edge Node backup mount is unavailable"),
+            Self::MountIdentityUnavailable => {
+                formatter.write_str("Edge Node backup mount identity is unavailable")
+            }
+            Self::DestinationInvalid => {
+                formatter.write_str("Edge Node backup destination is invalid")
+            }
+            Self::CapacityOverflow => {
+                formatter.write_str("Edge Node backup capacity calculation overflowed")
             }
         }
     }
