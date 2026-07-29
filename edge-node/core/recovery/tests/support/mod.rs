@@ -4,11 +4,16 @@ use std::path::Path;
 use rusqlite::{Connection, params};
 
 pub const SNAPSHOT_SENTINEL: &str = "sentinel-http-bearer-must-not-leave-source";
+pub const OLD_SNAPSHOT_SENTINEL: &str = "rotated-http-bearer-must-not-remain-in-snapshot-freelist";
 pub const TEST_EDGE_NODE_ID: &str = "edge-node-test";
 pub const TEST_LEDGER_EPOCH: &str = "epoch-test";
 
 pub fn snapshot_credential() -> String {
     format!("{SNAPSHOT_SENTINEL}{}", "x".repeat(8 * 1024))
+}
+
+pub fn old_snapshot_credential() -> String {
+    OLD_SNAPSHOT_SENTINEL.repeat(1024)
 }
 
 pub fn complete_database() -> Connection {
@@ -80,6 +85,7 @@ pub fn active_database_with_publications(path: &Path, accepted: i64, allocated: 
         [accepted],
     )
     .unwrap();
+    conn.pragma_update(None, "secure_delete", "OFF").unwrap();
     conn.execute(
         "INSERT INTO target_registry(
              target_id, endpoint_url, credential_token, archive_responsible,
@@ -87,9 +93,18 @@ pub fn active_database_with_publications(path: &Path, accepted: i64, allocated: 
          ) VALUES(
              'edge', 'https://edge.test.invalid', ?1, 1, 1, ?2, ?3, 1
          )",
-        params![snapshot_credential(), TEST_LEDGER_EPOCH, accepted],
+        params![old_snapshot_credential(), TEST_LEDGER_EPOCH, accepted],
     )
     .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    conn.execute(
+        "UPDATE target_registry SET credential_token=?1 WHERE target_id='edge'",
+        [snapshot_credential()],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
     conn.execute(
         "UPDATE edge_node_activation
          SET state='active', edge_id='edge-test',

@@ -13,8 +13,8 @@ use super::*;
 use crate::{
     BackupCounts, RecoveryError, SnapshotMode,
     tests_support::{
-        SNAPSHOT_SENTINEL, TEST_LEDGER_EPOCH, active_database_with_publications,
-        insert_next_publication,
+        OLD_SNAPSHOT_SENTINEL, SNAPSHOT_SENTINEL, TEST_LEDGER_EPOCH,
+        active_database_with_publications, insert_next_publication,
     },
 };
 
@@ -34,6 +34,40 @@ fn clone_valid_snapshot(root: &Path) -> PathBuf {
 
 fn expect_invalid(path: &Path) {
     assert_eq!(validate_snapshot(path), Err(RecoveryError::InvalidSnapshot));
+}
+
+fn bytes_contain(bytes: &[u8], sentinel: &str) -> bool {
+    bytes
+        .windows(sentinel.len())
+        .any(|window| window == sentinel.as_bytes())
+}
+
+#[test]
+fn snapshot_rebuild_removes_rotated_and_current_deployment_credentials() {
+    let temp = tempdir().unwrap();
+    let (source, source_conn) = make_source(temp.path());
+    let snapshot = temp.path().join("snapshot.db");
+
+    let source_before = fs::read(&source).unwrap();
+    assert!(bytes_contain(&source_before, OLD_SNAPSHOT_SENTINEL));
+    assert!(bytes_contain(&source_before, SNAPSHOT_SENTINEL));
+
+    create_consistent_snapshot(&source, &snapshot, "node-backup-test", 1_725_000_000_000).unwrap();
+
+    let snapshot_bytes = fs::read(&snapshot).unwrap();
+    assert!(!bytes_contain(&snapshot_bytes, OLD_SNAPSHOT_SENTINEL));
+    assert!(!bytes_contain(&snapshot_bytes, SNAPSHOT_SENTINEL));
+    assert!(
+        source_conn
+            .query_row("SELECT credential_token FROM target_registry", [], |row| {
+                row.get::<_, String>(0)
+            },)
+            .unwrap()
+            .starts_with(SNAPSHOT_SENTINEL)
+    );
+    let source_after = fs::read(&source).unwrap();
+    assert!(bytes_contain(&source_after, OLD_SNAPSHOT_SENTINEL));
+    assert!(bytes_contain(&source_after, SNAPSHOT_SENTINEL));
 }
 
 #[test]

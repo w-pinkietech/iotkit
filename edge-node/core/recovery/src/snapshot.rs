@@ -229,6 +229,8 @@ fn sanitize_snapshot(path: &Path) -> Result<(), RecoveryError> {
         },
     )
     .map_err(|_| RecoveryError::InvalidSnapshot)?;
+    conn.execute_batch("VACUUM")
+        .map_err(|_| RecoveryError::InvalidSnapshot)?;
     Ok(())
 }
 
