@@ -1,5 +1,32 @@
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use rusqlite::Connection;
+
+fn launch_node(config: &Path) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_iotkit-edge-node"))
+        .args(["--config", config.to_str().unwrap()])
+        .env_remove("IOTKIT_DB_PATH")
+        .env_remove("IOTKIT_CONFIG_PATH")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("iotkit-edge-node exceeded the 10 second test timeout");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn create_gateway_database(path: &std::path::Path) {
     let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -68,12 +95,7 @@ fn daemon_rejects_gateway_database_before_migration_or_other_mutation() {
     .unwrap();
     let bytes_before = std::fs::read(&db_path).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_iotkit-edge-node"))
-        .args(["--config", config_path.to_str().unwrap()])
-        .env_remove("IOTKIT_DB_PATH")
-        .env_remove("IOTKIT_CONFIG_PATH")
-        .output()
-        .unwrap();
+    let output = launch_node(&config_path);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -109,17 +131,19 @@ fn normal_pre_recovery_and_current_databases_keep_migration_startup_behavior() {
         )
         .unwrap();
 
-        let output = Command::new(env!("CARGO_BIN_EXE_iotkit-edge-node"))
-            .args(["--config", config_path.to_str().unwrap()])
-            .env_remove("IOTKIT_DB_PATH")
-            .env_remove("IOTKIT_CONFIG_PATH")
-            .output()
-            .unwrap();
+        let output = launch_node(&config_path);
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         assert_eq!(output.status.code(), Some(1), "stderr={stderr}");
         assert!(
-            !stderr.contains("fenced recovery candidate"),
-            "stderr={stderr}"
+            !stderr.contains("fenced recovery candidate")
+                && !stdout.contains("fenced recovery candidate"),
+            "stdout={stdout}\nstderr={stderr}"
+        );
+        assert!(
+            stdout.contains("failed to start MQTT exit publisher")
+                || stderr.contains("failed to start MQTT exit publisher"),
+            "stdout={stdout}\nstderr={stderr}"
         );
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -132,5 +156,58 @@ fn normal_pre_recovery_and_current_databases_keep_migration_startup_behavior() {
             .unwrap(),
             "{name} database did not reach the recovery migration",
         );
+    }
+}
+
+#[test]
+fn missing_and_empty_databases_reach_normal_post_migration_startup() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing.db");
+    let empty = directory.path().join("empty.db");
+    Connection::open(&empty).unwrap();
+
+    for (name, db_path) in [("missing", missing), ("empty", empty)] {
+        let config_path = directory.path().join(format!("{name}.toml"));
+        std::fs::write(
+            &config_path,
+            format!(
+                "[edge_node]\n db_path = {:?}\n\
+                 [api]\n enabled = false\n\
+                 [exit.mqtt]\n enabled = true\n host = \"127.0.0.1\"\n port = 1883\n\
+                 password_file = {:?}\n allow_insecure = true\n",
+                db_path,
+                directory.path().join(format!("{name}-missing-password")),
+            ),
+        )
+        .unwrap();
+
+        let output = launch_node(&config_path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: stdout={stdout}\nstderr={stderr}"
+        );
+        assert!(
+            stdout.contains("failed to start MQTT exit publisher")
+                || stderr.contains("failed to start MQTT exit publisher"),
+            "{name}: stdout={stdout}\nstderr={stderr}"
+        );
+        assert!(db_path.exists(), "{name} database was not created");
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM _schema_version WHERE version = 23)",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap(),
+            "{name} database did not reach the recovery migration",
+        );
+        assert!(matches!(
+            iotkit_core_recovery::startup_mode(&conn).unwrap(),
+            iotkit_core_recovery::RecoveryStartupMode::Normal
+        ));
     }
 }

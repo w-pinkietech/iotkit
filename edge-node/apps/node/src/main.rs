@@ -50,8 +50,19 @@ fn main() {
     // R20: パニックしたタスクのbacktraceを確実にログへ残す(D1)。
     supervision::install_panic_hook();
 
-    let config = match config::load(&args) {
-        Ok(c) => c,
+    // Parse TOML and environment overrides only.  Adapter catalog validation
+    // and effective-value construction happen after the process-wide recovery
+    // fence, including for a syntactically valid config with an invalid
+    // adapter.
+    let unresolved = match config::load_unresolved(&args) {
+        Ok(config) => config,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load config");
+            std::process::exit(1);
+        }
+    };
+    let db_path = match unresolved.db_path() {
+        Ok(path) => path,
         Err(e) => {
             tracing::error!(error = %e, "failed to load config");
             std::process::exit(1);
@@ -60,7 +71,7 @@ fn main() {
     // Recovery state is the process-wide startup fence.  Probe with a read-only
     // connection before catalog validation, effective-config logging, migration,
     // identity/provenance mutation, runtime construction, or any service setup.
-    match iotkit_core_recovery::probe_startup_path(Path::new(&config.db_path)) {
+    match iotkit_core_recovery::probe_startup_path(Path::new(db_path)) {
         Ok(RecoveryStartupMode::Normal) => {}
         Ok(RecoveryStartupMode::FencedCandidate { .. }) => {
             eprintln!("fenced recovery candidate; normal runtime is disabled");
@@ -71,6 +82,13 @@ fn main() {
             std::process::exit(3);
         }
     }
+    let config = match unresolved.resolve() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load config");
+            std::process::exit(1);
+        }
+    };
     if let Err(error) = iotkit_edge_node::input_adapters::validate_catalog() {
         tracing::error!(%error, "invalid built-in input adapter catalog");
         std::process::exit(1);

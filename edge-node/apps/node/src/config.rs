@@ -608,14 +608,41 @@ pub fn default_health_json_path(db_path: &str) -> PathBuf {
 
 // ── Pipeline: load (public entry point) ────────────────
 
-/// Load Edge Node config from TOML file + ENV overrides.
+/// Parsed TOML and environment overrides before adapter/catalog resolution.
+///
+/// The composition root uses this boundary to obtain `db_path`, probe the
+/// process-wide recovery fence, and only then resolve adapter instances and
+/// effective configuration. Keeping the raw value and source together avoids
+/// reading the config file twice or changing source precedence between phases.
+pub struct UnresolvedConfig {
+    raw: RawConfig,
+    source: ConfigSource,
+}
+
+impl UnresolvedConfig {
+    pub fn db_path(&self) -> Result<&str, ConfigError> {
+        let path = self.raw.edge_node.db_path.as_deref().unwrap_or("iotkit.db");
+        if path.is_empty() {
+            return Err(ConfigError::Validation(
+                "db_path must not be empty".to_string(),
+            ));
+        }
+        Ok(path)
+    }
+
+    pub fn resolve(self) -> Result<EdgeNodeConfig, ConfigError> {
+        resolve(self.raw, self.source)
+    }
+}
+
+/// Load and parse TOML plus ENV overrides without resolving adapters.
 ///
 /// Config source resolution order:
 /// 1. `--config <path>` CLI arg -> must exist
 /// 2. `IOTKIT_CONFIG_PATH` ENV -> must exist
 /// 3. `./iotkit.toml` -> optional (silently skipped if absent)
 /// 4. No file -> all defaults
-pub fn load(args: &[String]) -> Result<EdgeNodeConfig, ConfigError> {
+pub fn load_unresolved(args: &[String]) -> Result<UnresolvedConfig, ConfigError> {
     enum Found {
         CliArg(PathBuf),
         EnvVar(PathBuf),
@@ -649,7 +676,12 @@ pub fn load(args: &[String]) -> Result<EdgeNodeConfig, ConfigError> {
 
     let mut raw = load_raw(path_buf.as_deref(), explicit)?;
     apply_env(&mut raw)?;
-    resolve(raw, source)
+    Ok(UnresolvedConfig { raw, source })
+}
+
+/// Load Edge Node config from TOML + ENV and resolve all adapters/effective values.
+pub fn load(args: &[String]) -> Result<EdgeNodeConfig, ConfigError> {
+    load_unresolved(args)?.resolve()
 }
 
 /// Parse `--config <path>` from CLI args.
