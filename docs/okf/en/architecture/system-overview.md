@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 6
+revision: 7
 ---
 
 # Architecture
@@ -302,7 +302,7 @@ archive gap remain post-v1 hardening work.
 
 ## Crate map
 
-Thirty crates, five layers. `scripts/check-layers` enforces the layer rules
+Thirty-two crates, five layers. `scripts/check-layers` enforces the layer rules
 below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
@@ -318,6 +318,7 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-core-collector` | `edge-node/core/collector` | Ingest actor: dedup, series resolution, quarantine and activation admission, active-record same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
 | `iotkit-core-registry` | `edge-node/core/registry` | D6 measurement registry (standard catalog + deployment overrides); implements `RegistryPolicy`. |
 | `iotkit-core-ops` | `edge-node/core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
+| `iotkit-core-recovery` | `edge-node/core/recovery` | Optional Edge Node backup/recovery durable state, complete migration set, read-only startup fence probe, and recovery-model redaction boundary. |
 | `iotkit-ingest-client` | `edge-node/ingest/client` | The ingest-contract client adapters use (D4). In-process binding for official adapters; network device builders use the separate HTTP binding. MQTT remains future. |
 | `iotkit-input-adapter-host-api` | `edge-node/input/host-api` | Supervision-free official adapter composition API: validated identities, source-bound ingest, delivery receipts/retry, bounded diagnostics/activity, completion, and shutdown. |
 | `iotkit-input-adapter-testkit` | `edge-node/input/testkit` | Dev-only conformance assertions and a non-catalog two-subject/two-measurement reference adapter. |

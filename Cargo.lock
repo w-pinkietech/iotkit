@@ -1381,6 +1381,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-core-recovery"
+version = "0.2.0"
+dependencies = [
+ "iotkit-core-ledger",
+ "iotkit-core-ops",
+ "iotkit-core-publish",
+ "iotkit-core-registry",
+ "iotkit-core-storage",
+ "iotkit-core-timeseries",
+ "rusqlite",
+ "serde",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "iotkit-core-registry"
 version = "0.2.0"
 dependencies = [

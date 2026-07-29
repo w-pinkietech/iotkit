@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 6
+revision: 7
 ---
 
 # Architecture
@@ -111,6 +111,7 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/core/collector` | Dedup、series解決、quarantine、activation admission、same-transaction enqueue |
 | `edge-node/core/registry` | Standard catalogとdeployment overrideのmeasurement registry |
 | `edge-node/core/ops` | Typed operation、permission、auth、dispatch、audit |
+| `edge-node/core/recovery` (`iotkit-core-recovery`) | Optional Edge Node backup/recoveryのdurable state、完全migration set、read-only startup fence probe、recovery modelのredaction境界 |
 | `edge-node/ingest/client` (`iotkit-ingest-client`) | Adapterが使うingest contract client |
 | `edge-node/input/host-api` (`iotkit-input-adapter-host-api`) | Supervision非依存の公式Adapter composition API |
 | `edge-node/input/testkit` (`iotkit-input-adapter-testkit`) | Conformance assertionとreference Adapter |
