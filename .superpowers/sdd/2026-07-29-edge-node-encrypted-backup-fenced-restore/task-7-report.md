@@ -206,3 +206,41 @@ the directory; umask-zero and cleanup tests pass:
 cargo test -p iotkit-edge-nodectl --bin iotkit-edge-nodectl backup
 4 passed
 ```
+
+## Parent review remediation — round 2
+
+Round 2 closes the remaining paired-configuration and create-selection
+failure paths. The marker is now a closed schema-2 state machine with
+owner-only, no-follow bounded reads. It binds the request's canonical config
+and drop-in request hashes plus both target path identities, records exact old
+and published hashes, and rejects unknown fields, phases, txids, hashes, or
+unexpected target/backup combinations without mutation.
+
+Status checks the pending marker while holding the same observation lease as
+the config existence check, so a crash after the old pair was moved cannot be
+reported as `not_configured`. Published is the commit boundary: failures while
+removing old backups or syncing cleanup retain the new pair and marker as
+`cleanup_required`; an identical retry finalizes idempotently. A retry with
+different arguments first finalizes the prior request and then refuses or
+replaces explicitly instead of silently accepting stale arguments.
+
+Create now selects the owner-only config and its configured passphrase under a
+single recovery operation lease before running the backup. The deterministic
+pause seam proves a concurrent configure receives `operation_busy`, while the
+resulting artifact remains decryptable with the selected configuration and not
+with the replacement passphrase.
+
+Focused GREEN evidence (WSL Ubuntu-26.04):
+
+```text
+cargo test -p iotkit-edge-nodectl --test backup_cli -- --nocapture
+16 passed, 0 failed
+
+# Includes:
+# - pending marker with missing config => cleanup_required
+# - configured retry identity and explicit replacement
+# - published cleanup failure / idempotent finalize
+# - forged marker and symlink, hardlink, FIFO backup states
+# - create selection vs configure race
+# - all prior paired rollback and reader safety journeys
+```

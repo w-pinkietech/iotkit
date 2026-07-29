@@ -468,6 +468,24 @@ pub fn create_backup(
     }
 }
 
+/// Creates one encrypted backup after atomically selecting the owner-only
+/// configuration and its configured passphrase under the config operation
+/// lease. Callers must not load either file before invoking this API.
+pub fn create_backup_from_files(
+    config_path: &Path,
+    now_ms: i64,
+) -> Result<NodeBackupManifest, RecoveryError> {
+    #[cfg(target_os = "linux")]
+    {
+        create_backup_from_files_with_hook(config_path, now_ms, &SystemBackupHook)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (config_path, now_ms);
+        Err(RecoveryError::PlatformUnsupported)
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackupHookPoint {
@@ -503,6 +521,44 @@ pub(crate) fn create_backup_with_hook(
     let guard = acquire_recovery_operation(config_path)?;
     let config = load_owner_only_config(config_path)?;
     create_backup_guarded(&guard, &config, passphrase, now_ms, hook)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn create_backup_from_files_with_hook(
+    config_path: &Path,
+    now_ms: i64,
+    hook: &impl BackupHook,
+) -> Result<NodeBackupManifest, RecoveryError> {
+    let guard = acquire_recovery_operation(config_path)?;
+    let config = load_owner_only_config(config_path)?;
+    let passphrase = crate::config::load_owner_only_passphrase(&config.passphrase_file)?;
+    pause_after_create_selection(config_path)?;
+    create_backup_guarded(&guard, &config, &passphrase, now_ms, hook)
+}
+
+#[cfg(target_os = "linux")]
+fn pause_after_create_selection(config_path: &Path) -> Result<(), RecoveryError> {
+    let Some(expected) = std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_PAUSE_PATH") else {
+        return Ok(());
+    };
+    if std::path::Path::new(&expected) != config_path
+        || std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_PAUSE_AFTER_SELECTION").is_none()
+    {
+        return Ok(());
+    }
+    let ready = std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_READY_FILE")
+        .ok_or(RecoveryError::InvalidConfiguration)?;
+    let proceed = std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_CONTINUE_FILE")
+        .ok_or(RecoveryError::InvalidConfiguration)?;
+    std::fs::write(&ready, b"ready").map_err(|_| RecoveryError::Storage)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !std::path::Path::new(&proceed).exists() {
+        if std::time::Instant::now() >= deadline {
+            return Err(RecoveryError::Storage);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -787,16 +843,12 @@ pub fn backup_status(config_path: &Path, now_ms: i64) -> Result<BackupReadiness,
         Err(RecoveryError::OperationBusy) => return Ok(BackupReadiness::OperationBusy),
         Err(error) => return Err(error),
     };
+    #[cfg(target_os = "linux")]
+    if crate::config::pending_pair_marker(config_path)? {
+        return Err(RecoveryError::CleanupRequired);
+    }
     match std::fs::symlink_metadata(config_path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            #[cfg(target_os = "linux")]
-            match acquire_recovery_observation(config_path) {
-                Ok(_) => {}
-                Err(RecoveryError::OperationBusy) => {
-                    return Ok(BackupReadiness::OperationBusy);
-                }
-                Err(error) => return Err(error),
-            }
             return Ok(BackupReadiness::NotConfigured);
         }
         Err(_) => return Err(RecoveryError::InvalidConfiguration),

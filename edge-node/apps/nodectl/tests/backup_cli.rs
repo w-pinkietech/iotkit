@@ -618,7 +618,11 @@ fn configure_pair_rolls_back_each_failure_phase_without_a_mixed_pair() {
             !output.status.success(),
             "phase {phase} unexpectedly succeeded"
         );
-        assert!(!config.exists(), "config survived phase {phase}");
+        assert!(
+            !config.exists(),
+            "config survived phase {phase}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(!drop_in.exists(), "drop-in survived phase {phase}");
         assert!(
             !control
@@ -708,6 +712,627 @@ fn configure_pair_crash_marker_is_recovered_on_retry() {
     assert!(config.exists());
     assert!(drop_in.exists());
     assert!(!marker.exists(), "completed retry must remove its marker");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pending_pair_without_config_is_not_reported_as_not_configured() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let crashed = configure_command(
+        &config,
+        &drop_in,
+        control.path().join("missing.db").as_path(),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .env("IOTKIT_TEST_BACKUP_PAIR_CRASH_PHASE", "after_backup")
+    .output()
+    .unwrap();
+    assert!(!crashed.status.success());
+    assert!(!config.exists());
+    assert!(
+        control
+            .path()
+            .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME)
+            .exists()
+    );
+
+    let status = nodectl()
+        .args(["backup", "status", "--config", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!status.status.success());
+    assert!(
+        String::from_utf8_lossy(&status.stderr).contains("cleanup_required"),
+        "pending marker was projected as not_configured: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn published_pair_binds_retry_identity_before_accepting_new_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let destination_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [
+        control.path(),
+        destination_a.path(),
+        staging_a.path(),
+        destination_b.path(),
+        staging_b.path(),
+    ] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase_a = control.path().join("passphrase-a");
+    let passphrase_b = control.path().join("passphrase-b");
+    for passphrase in [&passphrase_a, &passphrase_b] {
+        std::fs::write(passphrase, b"owner-only-test-passphrase").unwrap();
+        std::fs::set_permissions(passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let db_a = control.path().join("a.db");
+    let db_b = control.path().join("b.db");
+
+    let initial = configure_command(
+        &config,
+        &drop_in,
+        &db_a,
+        destination_a.path(),
+        staging_a.path(),
+        &passphrase_a,
+    )
+    .output()
+    .unwrap();
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    let old_config = std::fs::read(&config).unwrap();
+    let old_drop_in = std::fs::read(&drop_in).unwrap();
+
+    let crashed = configure_command(
+        &config,
+        &drop_in,
+        &db_a,
+        destination_a.path(),
+        staging_a.path(),
+        &passphrase_a,
+    )
+    .env(
+        "IOTKIT_TEST_BACKUP_PAIR_CRASH_PHASE",
+        "after_published_marker",
+    )
+    .arg("--replace-existing")
+    .output()
+    .unwrap();
+    assert!(!crashed.status.success());
+    let marker = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+    assert!(marker.exists());
+
+    let different_without_replace = configure_command(
+        &config,
+        &drop_in,
+        &db_b,
+        destination_b.path(),
+        staging_b.path(),
+        &passphrase_b,
+    )
+    .output()
+    .unwrap();
+    assert!(!different_without_replace.status.success());
+    assert!(
+        String::from_utf8_lossy(&different_without_replace.stderr).contains("destination_exists"),
+        "{}",
+        String::from_utf8_lossy(&different_without_replace.stderr)
+    );
+    assert_eq!(std::fs::read(&config).unwrap(), old_config);
+    assert_eq!(std::fs::read(&drop_in).unwrap(), old_drop_in);
+    assert!(
+        !marker.exists(),
+        "different retry must finalize old marker first"
+    );
+
+    let replacement = configure_command(
+        &config,
+        &drop_in,
+        &db_b,
+        destination_b.path(),
+        staging_b.path(),
+        &passphrase_b,
+    )
+    .arg("--replace-existing")
+    .output()
+    .unwrap();
+    assert!(
+        replacement.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replacement.stderr)
+    );
+    let new_config = String::from_utf8(std::fs::read(&config).unwrap()).unwrap();
+    assert!(new_config.contains(db_b.to_str().unwrap()));
+    assert_eq!(
+        std::fs::read_to_string(&drop_in).unwrap(),
+        "[Unit]\nRequiresMountsFor=/dev/shm\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn published_cleanup_failure_keeps_consistent_pair_for_idempotent_finalize() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let destination_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [
+        control.path(),
+        destination_a.path(),
+        staging_a.path(),
+        destination_b.path(),
+        staging_b.path(),
+    ] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase_a = control.path().join("passphrase-a");
+    let passphrase_b = control.path().join("passphrase-b");
+    for passphrase in [&passphrase_a, &passphrase_b] {
+        std::fs::write(passphrase, b"owner-only-test-passphrase").unwrap();
+        std::fs::set_permissions(passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let db_a = control.path().join("a.db");
+    let db_b = control.path().join("b.db");
+    let initial = configure_command(
+        &config,
+        &drop_in,
+        &db_a,
+        destination_a.path(),
+        staging_a.path(),
+        &passphrase_a,
+    )
+    .output()
+    .unwrap();
+    assert!(initial.status.success());
+
+    let failed_cleanup = configure_command(
+        &config,
+        &drop_in,
+        &db_b,
+        destination_b.path(),
+        staging_b.path(),
+        &passphrase_b,
+    )
+    .arg("--replace-existing")
+    .env(
+        "IOTKIT_TEST_BACKUP_PAIR_FAIL_PHASE",
+        "after_config_backup_unlink",
+    )
+    .output()
+    .unwrap();
+    assert!(!failed_cleanup.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed_cleanup.stderr).contains("cleanup_required"),
+        "{}",
+        String::from_utf8_lossy(&failed_cleanup.stderr)
+    );
+    assert!(
+        control
+            .path()
+            .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME)
+            .exists()
+    );
+    let new_config = String::from_utf8(std::fs::read(&config).unwrap()).unwrap();
+    assert!(new_config.contains(db_b.to_str().unwrap()));
+    assert_eq!(
+        std::fs::read_to_string(&drop_in).unwrap(),
+        "[Unit]\nRequiresMountsFor=/dev/shm\n"
+    );
+
+    let retried = configure_command(
+        &config,
+        &drop_in,
+        &db_b,
+        destination_b.path(),
+        staging_b.path(),
+        &passphrase_b,
+    )
+    .arg("--replace-existing")
+    .output()
+    .unwrap();
+    assert!(
+        retried.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retried.stderr)
+    );
+    assert!(
+        !control
+            .path()
+            .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME)
+            .exists()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn forged_prepared_marker_cannot_delete_an_existing_pair() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let initial = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("old.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(initial.status.success());
+    let original_config = std::fs::read(&config).unwrap();
+    let original_drop_in = std::fs::read(&drop_in).unwrap();
+    let marker = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+    let forged = serde_json::json!({
+        "schema_version": 2,
+        "txid": "forged",
+        "config_path_hash": test_hash(config.as_os_str().as_bytes()),
+        "drop_in_path_hash": test_hash(drop_in.as_os_str().as_bytes()),
+        "phase": "prepared",
+        "request_config_hash": "00".repeat(32),
+        "request_drop_in_hash": "11".repeat(32),
+        "config_hash": null,
+        "drop_in_hash": null,
+        "config_existed": false,
+        "drop_in_existed": false,
+        "old_config_hash": null,
+        "old_drop_in_hash": null
+    });
+    std::fs::write(&marker, serde_json::to_vec(&forged).unwrap()).unwrap();
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let attempt = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("new.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(!attempt.status.success());
+    assert!(
+        String::from_utf8_lossy(&attempt.stderr).contains("cleanup_required"),
+        "{}",
+        String::from_utf8_lossy(&attempt.stderr)
+    );
+    assert_eq!(std::fs::read(&config).unwrap(), original_config);
+    assert_eq!(std::fs::read(&drop_in).unwrap(), original_drop_in);
+    assert!(
+        marker.exists(),
+        "forged marker must remain for operator cleanup"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn backup_pair_symlink_hardlink_and_fifo_fail_closed_without_mutation() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    for kind in ["symlink", "hardlink", "fifo"] {
+        let control = tempfile::tempdir_in("/tmp").unwrap();
+        let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        for path in [control.path(), destination.path(), staging.path()] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = control.path().join("backup.json");
+        let drop_in = control.path().join("backup.mount.conf");
+        let passphrase = control.path().join("passphrase");
+        std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+        std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let initial = configure_command(
+            &config,
+            &drop_in,
+            &control.path().join("old.db"),
+            destination.path(),
+            staging.path(),
+            &passphrase,
+        )
+        .output()
+        .unwrap();
+        assert!(initial.status.success());
+        let original_config = std::fs::read(&config).unwrap();
+        let original_drop_in = std::fs::read(&drop_in).unwrap();
+        let config_old = control.path().join(".iotkit-backup-pair.forged.config.old");
+        let drop_old = control
+            .path()
+            .join(".iotkit-backup-pair.forged.drop-in.old");
+        match kind {
+            "symlink" => {
+                std::os::unix::fs::symlink(&config, &config_old).unwrap();
+                std::os::unix::fs::symlink(&drop_in, &drop_old).unwrap();
+            }
+            "hardlink" => {
+                std::fs::hard_link(&config, &config_old).unwrap();
+                std::fs::hard_link(&drop_in, &drop_old).unwrap();
+            }
+            "fifo" => {
+                for path in [&config_old, &drop_old] {
+                    let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                }
+            }
+            _ => unreachable!(),
+        }
+        let marker = control
+            .path()
+            .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+        let forged = serde_json::json!({
+            "schema_version": 2,
+            "txid": "forged",
+            "config_path_hash": test_hash(config.as_os_str().as_bytes()),
+            "drop_in_path_hash": test_hash(drop_in.as_os_str().as_bytes()),
+            "phase": "prepared",
+            "request_config_hash": "00".repeat(32),
+            "request_drop_in_hash": "11".repeat(32),
+            "config_hash": null,
+            "drop_in_hash": null,
+            "config_existed": true,
+            "drop_in_existed": true,
+            "old_config_hash": test_hash(&original_config),
+            "old_drop_in_hash": test_hash(&original_drop_in)
+        });
+        std::fs::write(&marker, serde_json::to_vec(&forged).unwrap()).unwrap();
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let attempt = configure_command(
+            &config,
+            &drop_in,
+            &control.path().join("new.db"),
+            destination.path(),
+            staging.path(),
+            &passphrase,
+        )
+        .output()
+        .unwrap();
+        assert!(!attempt.status.success(), "{kind} unexpectedly succeeded");
+        assert!(
+            String::from_utf8_lossy(&attempt.stderr).contains("cleanup_required"),
+            "{kind}: {}",
+            String::from_utf8_lossy(&attempt.stderr)
+        );
+        assert_eq!(std::fs::read(&config).unwrap(), original_config);
+        assert_eq!(std::fs::read(&drop_in).unwrap(), original_drop_in);
+        assert!(marker.exists(), "{kind} marker must remain");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn create_holds_one_selection_guard_against_configure_race() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let destination_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [
+        control.path(),
+        destination_a.path(),
+        staging_a.path(),
+        destination_b.path(),
+        staging_b.path(),
+    ] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let database = control.path().join("edge.db");
+    let database_b = control.path().join("edge-b.db");
+    let handle =
+        iotkit_core_storage::init_db(&database, &iotkit_core_recovery::all_edge_node_migrations())
+            .unwrap();
+    handle
+        .with_conn_sync(|conn| {
+            let edge_node_id = iotkit_core_ledger::edge_node_id(conn).unwrap();
+            let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+            conn.execute(
+                "INSERT INTO target_registry(
+                     target_id, endpoint_url, credential_token, archive_responsible,
+                     schema_version, cursor_epoch, cursor_pub_seq, created_at
+                 ) VALUES('edge', 'https://edge.invalid', '', 1, 1, ?1, 0, 1)",
+                [&epoch],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE edge_node_activation
+                 SET state='active', edge_id='edge-cli', activation_id='activation-cli',
+                     ledger_epoch=?1, discard_through_reading_seq=0,
+                     cleanup_through_reading_seq=0, request_json='{}', result_json='{}',
+                     activated_at=1 WHERE singleton=1",
+                [&epoch],
+            )
+            .unwrap();
+            assert!(!edge_node_id.is_empty());
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            Ok::<_, iotkit_core_storage::StorageError>(())
+        })
+        .unwrap();
+    drop(handle);
+
+    let passphrase_a = control.path().join("passphrase-a");
+    let passphrase_b = control.path().join("passphrase-b");
+    std::fs::write(&passphrase_a, b"alpha-passphrase-123").unwrap();
+    std::fs::write(&passphrase_b, b"bravo-passphrase-456").unwrap();
+    for passphrase in [&passphrase_a, &passphrase_b] {
+        std::fs::set_permissions(passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let initial = configure_command(
+        &config,
+        &drop_in,
+        &database,
+        destination_a.path(),
+        staging_a.path(),
+        &passphrase_a,
+    )
+    .output()
+    .unwrap();
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+
+    let ready = control.path().join("create.ready");
+    let proceed = control.path().join("create.continue");
+    let mut create = nodectl();
+    create
+        .args(["backup", "create", "--config", config.to_str().unwrap()])
+        .env("TMPDIR", "/dev/shm")
+        .env("IOTKIT_TEST_BACKUP_CREATE_PAUSE_PATH", &config)
+        .env("IOTKIT_TEST_BACKUP_CREATE_PAUSE_AFTER_SELECTION", "1")
+        .env("IOTKIT_TEST_BACKUP_CREATE_READY_FILE", &ready)
+        .env("IOTKIT_TEST_BACKUP_CREATE_CONTINUE_FILE", &proceed)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let create_child = create.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "create did not pause after selection"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let replacement_while_create = configure_command(
+        &config,
+        &drop_in,
+        &database_b,
+        destination_b.path(),
+        staging_b.path(),
+        &passphrase_b,
+    )
+    .arg("--replace-existing")
+    .output()
+    .unwrap();
+    assert!(!replacement_while_create.status.success());
+    assert!(
+        String::from_utf8_lossy(&replacement_while_create.stderr).contains("operation_busy"),
+        "{}",
+        String::from_utf8_lossy(&replacement_while_create.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&std::fs::read(&config).unwrap())
+            .contains(database.to_str().unwrap())
+    );
+
+    std::fs::write(&proceed, b"continue").unwrap();
+    let created = create_child.wait_with_output().unwrap();
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let created_json = json(&created.stdout);
+    let artifact = destination_a.path().join(format!(
+        "{}{}",
+        created_json["backup_id"].as_str().unwrap(),
+        iotkit_core_recovery::NODE_BACKUP_SUFFIX
+    ));
+    assert!(artifact.exists());
+
+    let inspect_a = nodectl()
+        .args([
+            "backup",
+            "inspect",
+            "--input",
+            artifact.to_str().unwrap(),
+            "--passphrase-file",
+            passphrase_a.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        inspect_a.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect_a.stderr)
+    );
+    let inspect_b = nodectl()
+        .args([
+            "backup",
+            "inspect",
+            "--input",
+            artifact.to_str().unwrap(),
+            "--passphrase-file",
+            passphrase_b.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!inspect_b.status.success());
+
+    let replacement = configure_command(
+        &config,
+        &drop_in,
+        &database_b,
+        destination_b.path(),
+        staging_b.path(),
+        &passphrase_b,
+    )
+    .arg("--replace-existing")
+    .output()
+    .unwrap();
+    assert!(
+        replacement.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replacement.stderr)
+    );
+    let configured = String::from_utf8(std::fs::read(&config).unwrap()).unwrap();
+    assert!(configured.contains(destination_b.path().to_str().unwrap()));
 }
 
 #[cfg(target_os = "linux")]
@@ -851,6 +1476,15 @@ fn assert_closed_error(output: &std::process::Output) {
         "unexpected stderr={stderr:?}; stdout={stdout:?}"
     );
     assert!(!stderr.contains("/tmp/"), "path leaked: {stderr}");
+}
+
+#[cfg(target_os = "linux")]
+fn test_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn json(bytes: &[u8]) -> Value {

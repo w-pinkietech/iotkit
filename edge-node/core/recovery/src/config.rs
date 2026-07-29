@@ -539,7 +539,7 @@ fn open_owner_file(path: &Path, limit: u64) -> Result<File, RecoveryError> {
 }
 
 #[cfg(target_os = "linux")]
-fn pending_pair_marker(path: &Path) -> Result<bool, RecoveryError> {
+pub(crate) fn pending_pair_marker(path: &Path) -> Result<bool, RecoveryError> {
     let parent_path = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
     let parent = open_directory(parent_path)?;
     validate_owner_directory_open(&parent)?;

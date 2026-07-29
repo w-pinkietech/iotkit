@@ -1,9 +1,8 @@
 use clap::Subcommand;
 use iotkit_core_recovery::{
     BackupConfig, BackupConfigReplace, BackupReadiness, RecoveryError, RestoreRequest,
-    acquire_recovery_operation, backup_status, configure_backup_guarded, create_backup,
-    inspect_backup, load_owner_only_config, load_owner_only_handoff, load_owner_only_passphrase,
-    restore_candidate,
+    acquire_recovery_operation, backup_status, configure_backup_guarded, create_backup_from_files,
+    inspect_backup, load_owner_only_handoff, load_owner_only_passphrase, restore_candidate,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -230,19 +229,67 @@ fn configure(args: ConfigureArgs) -> AppResult<()> {
 
 #[cfg(target_os = "linux")]
 const PAIR_MARKER_MAX_BYTES: u64 = 8 * 1024;
+#[cfg(target_os = "linux")]
+const PAIR_TARGET_MAX_BYTES: u64 = 64 * 1024;
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PairPhase {
+    Prepared,
+    ConfigPublished,
+    DropInPublished,
+    Published,
+}
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct PairMarker {
     schema_version: u32,
     txid: String,
     config_path_hash: String,
     drop_in_path_hash: String,
-    phase: String,
+    phase: PairPhase,
+    request_config_hash: String,
+    request_drop_in_hash: String,
     config_hash: Option<String>,
-    drop_in_hash: String,
+    drop_in_hash: Option<String>,
     config_existed: bool,
     drop_in_existed: bool,
+    old_config_hash: Option<String>,
+    old_drop_in_hash: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl PairMarker {
+    fn validate_basic(&self, paths: &PairPaths) -> Result<(), RecoveryError> {
+        if self.schema_version != 2
+            || !valid_txid(&self.txid)
+            || self.config_path_hash != paths.config_path_hash
+            || self.drop_in_path_hash != paths.drop_in_path_hash
+            || !valid_hash(&self.request_config_hash)
+            || !valid_hash(&self.request_drop_in_hash)
+            || self.config_existed != self.old_config_hash.is_some()
+            || self.drop_in_existed != self.old_drop_in_hash.is_some()
+            || !optional_hash_valid(self.old_config_hash.as_deref())
+            || !optional_hash_valid(self.old_drop_in_hash.as_deref())
+            || !optional_hash_valid(self.config_hash.as_deref())
+            || !optional_hash_valid(self.drop_in_hash.as_deref())
+        {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        match self.phase {
+            PairPhase::Prepared if self.config_hash.is_none() && self.drop_in_hash.is_none() => {}
+            PairPhase::ConfigPublished
+                if self.config_hash.is_some() && self.drop_in_hash.is_some() => {}
+            PairPhase::DropInPublished
+                if self.config_hash.is_some() && self.drop_in_hash.is_some() => {}
+            PairPhase::Published if self.config_hash.is_some() && self.drop_in_hash.is_some() => {}
+            _ => return Err(RecoveryError::CleanupRequired),
+        }
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -263,53 +310,72 @@ fn configure_backup_pair(
     drop_in_path: &Path,
     replacement: BackupConfigReplace,
 ) -> Result<(), RecoveryError> {
+    let request_config_hash = canonical_config_hash(config)?;
+    let request_drop_in = systemd_drop_in_bytes(&config.expected_mount.mount_point)?;
+    let request_drop_in_hash = hex_digest(&request_drop_in);
     let guard = acquire_recovery_operation(config_path)?;
     let paths = PairPaths::open(config_path, drop_in_path)?;
-    if paths.marker_exists()? && paths.resume_pending()? {
+    if paths.marker_exists()?
+        && paths.resume_pending(&request_config_hash, &request_drop_in_hash)?
+    {
         return Ok(());
     }
-    let (config_existed, drop_in_existed) = paths.preflight(replacement)?;
+    let (old_config_hash, old_drop_in_hash) = paths.preflight(replacement)?;
     let mut marker = PairMarker {
-        schema_version: 1,
+        schema_version: 2,
         txid: pair_txid()?,
         config_path_hash: paths.config_path_hash.clone(),
         drop_in_path_hash: paths.drop_in_path_hash.clone(),
-        phase: "prepared".into(),
+        phase: PairPhase::Prepared,
+        request_config_hash,
+        request_drop_in_hash,
         config_hash: None,
-        drop_in_hash: String::new(),
-        config_existed,
-        drop_in_existed,
+        drop_in_hash: None,
+        config_existed: old_config_hash.is_some(),
+        drop_in_existed: old_drop_in_hash.is_some(),
+        old_config_hash,
+        old_drop_in_hash,
     };
+    paths.validate_phase_state(&marker)?;
     paths.write_marker(&marker, false)?;
 
+    let mut published = false;
     let result = (|| {
         paths.backup_existing(&marker)?;
         pair_fault("after_backup")?;
 
         configure_backup_guarded(&guard, config_path, config, BackupConfigReplace::Refuse)?;
-        pair_fault("after_config_publish")?;
-        let config_bytes = paths.read_target(&paths.config_name, PAIR_MARKER_MAX_BYTES)?;
+        let config_bytes = paths.read_target(&paths.config_parent, &paths.config_name)?;
         let persisted: BackupConfig = serde_json::from_slice(&config_bytes)
             .map_err(|_| RecoveryError::InvalidConfiguration)?;
         marker.config_hash = Some(hex_digest(&config_bytes));
         let drop_in_bytes = systemd_drop_in_bytes(&persisted.expected_mount.mount_point)?;
-        marker.drop_in_hash = hex_digest(&drop_in_bytes);
-        marker.phase = "config_published".into();
+        marker.drop_in_hash = Some(hex_digest(&drop_in_bytes));
+        marker.phase = PairPhase::ConfigPublished;
+        paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
+        pair_fault("after_config_publish")?;
 
         paths.publish_drop_in(&marker.txid, &drop_in_bytes)?;
         pair_fault("after_drop_in_publish")?;
-        marker.phase = "drop_in_published".into();
+        marker.phase = PairPhase::DropInPublished;
+        paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
         paths.sync_parents()?;
         pair_fault("after_parent_sync")?;
-        marker.phase = "published".into();
+        marker.phase = PairPhase::Published;
+        paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
+        published = true;
+        pair_fault("after_published_marker")?;
         paths.finalize(&marker)
     })();
     match result {
         Ok(()) => Ok(()),
         Err(error) => {
+            if published {
+                return Err(RecoveryError::CleanupRequired);
+            }
             if paths.rollback(&marker).is_ok() {
                 Err(error)
             } else {
@@ -366,13 +432,18 @@ impl PairPaths {
         })
     }
 
-    fn preflight(&self, replacement: BackupConfigReplace) -> Result<(bool, bool), RecoveryError> {
-        let config_existed = self.target_exists(&self.config_parent, &self.config_name)?;
-        let drop_in_existed = self.target_exists(&self.drop_in_parent, &self.drop_in_name)?;
-        if replacement == BackupConfigReplace::Refuse && (config_existed || drop_in_existed) {
+    fn preflight(
+        &self,
+        replacement: BackupConfigReplace,
+    ) -> Result<(Option<String>, Option<String>), RecoveryError> {
+        let config_hash = self.target_hash(&self.config_parent, &self.config_name)?;
+        let drop_in_hash = self.target_hash(&self.drop_in_parent, &self.drop_in_name)?;
+        if replacement == BackupConfigReplace::Refuse
+            && (config_hash.is_some() || drop_in_hash.is_some())
+        {
             return Err(RecoveryError::DestinationExists);
         }
-        Ok((config_existed, drop_in_existed))
+        Ok((config_hash, drop_in_hash))
     }
 
     fn marker_exists(&self) -> Result<bool, RecoveryError> {
@@ -387,6 +458,7 @@ impl PairPaths {
         marker: &PairMarker,
         replace_existing: bool,
     ) -> Result<(), RecoveryError> {
+        marker.validate_basic(self)?;
         let bytes = serde_json::to_vec(marker).map_err(|_| RecoveryError::InvalidConfiguration)?;
         if bytes.len() as u64 > PAIR_MARKER_MAX_BYTES {
             return Err(RecoveryError::InvalidConfiguration);
@@ -433,42 +505,37 @@ impl PairPaths {
         }
         let marker: PairMarker =
             serde_json::from_slice(&bytes).map_err(|_| RecoveryError::CleanupRequired)?;
-        if marker.schema_version != 1
-            || marker.txid.is_empty()
-            || marker.config_path_hash != self.config_path_hash
-            || marker.drop_in_path_hash != self.drop_in_path_hash
-            || marker.phase.is_empty()
-        {
-            return Err(RecoveryError::CleanupRequired);
-        }
+        marker.validate_basic(self)?;
         Ok(marker)
     }
 
-    fn resume_pending(&self) -> Result<bool, RecoveryError> {
+    fn resume_pending(
+        &self,
+        request_config_hash: &str,
+        request_drop_in_hash: &str,
+    ) -> Result<bool, RecoveryError> {
         let marker = self.read_marker()?;
-        if marker.phase == "published"
-            && marker.config_hash.is_some()
-            && !marker.drop_in_hash.is_empty()
-            && self.hash_matches(
-                &self.config_parent,
-                &self.config_name,
-                marker.config_hash.as_deref(),
-            )?
-            && self.hash_matches(
-                &self.drop_in_parent,
-                &self.drop_in_name,
-                Some(&marker.drop_in_hash),
-            )?
-        {
-            self.finalize(&marker)?;
-            return Ok(true);
+        let same_request = marker.request_config_hash == request_config_hash
+            && marker.request_drop_in_hash == request_drop_in_hash;
+        match marker.phase {
+            PairPhase::Published => {
+                self.validate_phase_state(&marker)?;
+                self.finalize(&marker)?;
+                if same_request {
+                    return Ok(true);
+                }
+            }
+            PairPhase::Prepared | PairPhase::ConfigPublished | PairPhase::DropInPublished => {
+                self.validate_phase_state(&marker)?;
+                self.rollback(&marker)?;
+            }
         }
-        self.rollback(&marker)?;
         Ok(false)
     }
 
     fn backup_existing(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
-        if marker.config_existed {
+        self.validate_phase_state(marker)?;
+        if marker.old_config_hash.is_some() {
             let backup = pair_name(&marker.txid, "config.old")?;
             rename_noreplace(
                 self.config_parent.as_raw_fd(),
@@ -478,7 +545,7 @@ impl PairPaths {
             )
             .map_err(|_| RecoveryError::Storage)?;
         }
-        if marker.drop_in_existed {
+        if marker.old_drop_in_hash.is_some() {
             let backup = pair_name(&marker.txid, "drop-in.old")?;
             rename_noreplace(
                 self.drop_in_parent.as_raw_fd(),
@@ -545,11 +612,17 @@ impl PairPaths {
     }
 
     fn finalize(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
+        if marker.phase != PairPhase::Published {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        self.validate_phase_state(marker)?;
         let config_backup = pair_name(&marker.txid, "config.old")?;
         let drop_in_backup = pair_name(&marker.txid, "drop-in.old")?;
         unlink_name(&self.config_parent, &config_backup)?;
+        pair_fault("after_config_backup_unlink")?;
         unlink_name(&self.drop_in_parent, &drop_in_backup)?;
         self.sync_parents()?;
+        pair_fault("after_finalize_parent_sync")?;
         unlink_name(&self.config_parent, &self.marker_name)?;
         self.config_parent
             .sync_all()
@@ -557,19 +630,25 @@ impl PairPaths {
     }
 
     fn rollback(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
+        if marker.phase == PairPhase::Published {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        self.validate_phase_state(marker)?;
         let config_backup = pair_name(&marker.txid, "config.old")?;
         let drop_in_backup = pair_name(&marker.txid, "drop-in.old")?;
         rollback_target(
             &self.config_parent,
             &self.config_name,
             &config_backup,
-            marker.config_existed,
+            marker.old_config_hash.as_deref(),
+            marker.config_hash.as_deref(),
         )?;
         rollback_target(
             &self.drop_in_parent,
             &self.drop_in_name,
             &drop_in_backup,
-            marker.drop_in_existed,
+            marker.old_drop_in_hash.as_deref(),
+            marker.drop_in_hash.as_deref(),
         )?;
         let _ = unlink_name(&self.config_parent, &pair_name(&marker.txid, "config.tmp")?);
         let _ = unlink_name(
@@ -583,8 +662,176 @@ impl PairPaths {
             .map_err(|_| RecoveryError::CleanupRequired)
     }
 
-    fn target_exists(&self, parent: &File, name: &CString) -> Result<bool, RecoveryError> {
-        Ok(self.open_target(parent, name)?.is_some())
+    fn validate_phase_state(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
+        marker.validate_basic(self)?;
+        let config_backup = pair_name(&marker.txid, "config.old")?;
+        let drop_in_backup = pair_name(&marker.txid, "drop-in.old")?;
+        let config_tmp = pair_name(&marker.txid, "config.tmp")?;
+        let drop_in_tmp = pair_name(&marker.txid, "drop-in.tmp")?;
+        if self
+            .target_hash(&self.config_parent, &config_tmp)
+            .map_err(|_| RecoveryError::CleanupRequired)?
+            .is_some()
+            || self
+                .target_hash(&self.drop_in_parent, &drop_in_tmp)
+                .map_err(|_| RecoveryError::CleanupRequired)?
+                .is_some()
+        {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        match marker.phase {
+            PairPhase::Prepared => {
+                self.validate_old_transition(
+                    &self.config_parent,
+                    &self.config_name,
+                    &config_backup,
+                    marker.old_config_hash.as_deref(),
+                )?;
+                self.validate_old_transition(
+                    &self.drop_in_parent,
+                    &self.drop_in_name,
+                    &drop_in_backup,
+                    marker.old_drop_in_hash.as_deref(),
+                )?;
+            }
+            PairPhase::ConfigPublished => {
+                self.expect_exact(
+                    &self.config_parent,
+                    &self.config_name,
+                    marker.config_hash.as_deref(),
+                )?;
+                self.validate_backup_presence(
+                    &self.config_parent,
+                    &config_backup,
+                    marker.old_config_hash.as_deref(),
+                    true,
+                )?;
+                self.validate_backup_presence(
+                    &self.drop_in_parent,
+                    &drop_in_backup,
+                    marker.old_drop_in_hash.as_deref(),
+                    true,
+                )?;
+                let drop_in_target = self
+                    .target_hash(&self.drop_in_parent, &self.drop_in_name)
+                    .map_err(|_| RecoveryError::CleanupRequired)?;
+                if let Some(actual) = drop_in_target
+                    && Some(actual.as_str()) != marker.drop_in_hash.as_deref()
+                {
+                    return Err(RecoveryError::CleanupRequired);
+                }
+            }
+            PairPhase::DropInPublished => {
+                self.expect_exact(
+                    &self.config_parent,
+                    &self.config_name,
+                    marker.config_hash.as_deref(),
+                )?;
+                self.expect_exact(
+                    &self.drop_in_parent,
+                    &self.drop_in_name,
+                    marker.drop_in_hash.as_deref(),
+                )?;
+                self.validate_backup_presence(
+                    &self.config_parent,
+                    &config_backup,
+                    marker.old_config_hash.as_deref(),
+                    true,
+                )?;
+                self.validate_backup_presence(
+                    &self.drop_in_parent,
+                    &drop_in_backup,
+                    marker.old_drop_in_hash.as_deref(),
+                    true,
+                )?;
+            }
+            PairPhase::Published => {
+                self.expect_exact(
+                    &self.config_parent,
+                    &self.config_name,
+                    marker.config_hash.as_deref(),
+                )?;
+                self.expect_exact(
+                    &self.drop_in_parent,
+                    &self.drop_in_name,
+                    marker.drop_in_hash.as_deref(),
+                )?;
+                self.validate_backup_presence(
+                    &self.config_parent,
+                    &config_backup,
+                    marker.old_config_hash.as_deref(),
+                    false,
+                )?;
+                self.validate_backup_presence(
+                    &self.drop_in_parent,
+                    &drop_in_backup,
+                    marker.old_drop_in_hash.as_deref(),
+                    false,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_old_transition(
+        &self,
+        parent: &File,
+        target: &CString,
+        backup: &CString,
+        old_hash: Option<&str>,
+    ) -> Result<(), RecoveryError> {
+        let target_hash = self
+            .target_hash(parent, target)
+            .map_err(|_| RecoveryError::CleanupRequired)?;
+        let backup_hash = self
+            .target_hash(parent, backup)
+            .map_err(|_| RecoveryError::CleanupRequired)?;
+        match old_hash {
+            Some(expected)
+                if (target_hash.as_deref() == Some(expected) && backup_hash.is_none())
+                    || (target_hash.is_none() && backup_hash.as_deref() == Some(expected)) =>
+            {
+                Ok(())
+            }
+            None if target_hash.is_none() && backup_hash.is_none() => Ok(()),
+            _ => Err(RecoveryError::CleanupRequired),
+        }
+    }
+
+    fn validate_backup_presence(
+        &self,
+        parent: &File,
+        backup: &CString,
+        old_hash: Option<&str>,
+        required: bool,
+    ) -> Result<(), RecoveryError> {
+        let actual = self
+            .target_hash(parent, backup)
+            .map_err(|_| RecoveryError::CleanupRequired)?;
+        match (old_hash, actual, required) {
+            (Some(expected), Some(actual), _) if expected == actual => Ok(()),
+            (Some(_), None, false) => Ok(()),
+            (None, None, _) => Ok(()),
+            _ => Err(RecoveryError::CleanupRequired),
+        }
+    }
+
+    fn expect_exact(
+        &self,
+        parent: &File,
+        name: &CString,
+        expected: Option<&str>,
+    ) -> Result<(), RecoveryError> {
+        let Some(expected) = expected else {
+            return Err(RecoveryError::CleanupRequired);
+        };
+        let actual = self
+            .target_hash(parent, name)
+            .map_err(|_| RecoveryError::CleanupRequired)?;
+        if actual.as_deref() != Some(expected) {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        Ok(())
     }
 
     fn open_target(&self, parent: &File, name: &CString) -> Result<Option<File>, RecoveryError> {
@@ -624,37 +871,32 @@ impl PairPaths {
         Ok(Some(file))
     }
 
-    fn read_target(&self, name: &CString, limit: u64) -> Result<Vec<u8>, RecoveryError> {
+    fn read_target(&self, parent: &File, name: &CString) -> Result<Vec<u8>, RecoveryError> {
         let file = self
-            .open_target(&self.config_parent, name)?
+            .open_target(parent, name)?
             .ok_or(RecoveryError::Storage)?;
         let mut bytes = Vec::new();
-        file.take(limit.saturating_add(1))
+        file.take(PAIR_TARGET_MAX_BYTES.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|_| RecoveryError::Storage)?;
-        if bytes.len() as u64 > limit {
+        if bytes.len() as u64 > PAIR_TARGET_MAX_BYTES {
             return Err(RecoveryError::InvalidConfiguration);
         }
         Ok(bytes)
     }
 
-    fn hash_matches(
-        &self,
-        parent: &File,
-        name: &CString,
-        expected: Option<&str>,
-    ) -> Result<bool, RecoveryError> {
-        let Some(expected) = expected else {
-            return Ok(false);
-        };
+    fn target_hash(&self, parent: &File, name: &CString) -> Result<Option<String>, RecoveryError> {
         let Some(file) = self.open_target(parent, name)? else {
-            return Ok(false);
+            return Ok(None);
         };
         let mut bytes = Vec::new();
-        file.take(PAIR_MARKER_MAX_BYTES.saturating_add(1))
+        file.take(PAIR_TARGET_MAX_BYTES.saturating_add(1))
             .read_to_end(&mut bytes)
-            .map_err(|_| RecoveryError::Storage)?;
-        Ok(bytes.len() as u64 <= PAIR_MARKER_MAX_BYTES && hex_digest(&bytes) == expected)
+            .map_err(|_| RecoveryError::InvalidConfiguration)?;
+        if bytes.len() as u64 > PAIR_TARGET_MAX_BYTES {
+            return Err(RecoveryError::InvalidConfiguration);
+        }
+        Ok(Some(hex_digest(&bytes)))
     }
 }
 
@@ -663,27 +905,46 @@ fn rollback_target(
     parent: &File,
     target: &CString,
     backup: &CString,
-    originally_existed: bool,
+    old_hash: Option<&str>,
+    new_hash: Option<&str>,
 ) -> Result<(), RecoveryError> {
-    let backup_exists = target_exists_in(parent, backup)?;
-    if backup_exists {
-        if target_exists_in(parent, target)? {
-            unlink_name(parent, target)?;
+    let backup_hash = file_hash_in(parent, backup)?;
+    let target_hash = file_hash_in(parent, target)?;
+    match old_hash {
+        Some(expected_old) => {
+            if let Some(actual_backup) = backup_hash.as_deref() {
+                if actual_backup != expected_old {
+                    return Err(RecoveryError::CleanupRequired);
+                }
+                if let Some(actual_target) = target_hash.as_deref() {
+                    if Some(actual_target) != new_hash {
+                        return Err(RecoveryError::CleanupRequired);
+                    }
+                    unlink_name(parent, target)?;
+                }
+                rename_noreplace(parent.as_raw_fd(), backup, parent.as_raw_fd(), target)
+                    .map_err(|_| RecoveryError::CleanupRequired)?;
+            } else if target_hash.as_deref() != Some(expected_old) {
+                return Err(RecoveryError::CleanupRequired);
+            }
         }
-        rename_noreplace(parent.as_raw_fd(), backup, parent.as_raw_fd(), target)
-            .map_err(|_| RecoveryError::CleanupRequired)?;
-    } else if originally_existed {
-        if !target_exists_in(parent, target)? {
-            return Err(RecoveryError::CleanupRequired);
+        None => {
+            if backup_hash.is_some() {
+                return Err(RecoveryError::CleanupRequired);
+            }
+            if let Some(actual_target) = target_hash.as_deref() {
+                if Some(actual_target) != new_hash {
+                    return Err(RecoveryError::CleanupRequired);
+                }
+                unlink_name(parent, target)?;
+            }
         }
-    } else if target_exists_in(parent, target)? {
-        unlink_name(parent, target)?;
     }
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn target_exists_in(parent: &File, name: &CString) -> Result<bool, RecoveryError> {
+fn file_hash_in(parent: &File, name: &CString) -> Result<Option<String>, RecoveryError> {
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -693,7 +954,7 @@ fn target_exists_in(parent: &File, name: &CString) -> Result<bool, RecoveryError
     };
     if fd < 0 {
         return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
-            Ok(false)
+            Ok(None)
         } else {
             Err(RecoveryError::CleanupRequired)
         };
@@ -709,7 +970,14 @@ fn target_exists_in(parent: &File, name: &CString) -> Result<bool, RecoveryError
     {
         return Err(RecoveryError::CleanupRequired);
     }
-    Ok(true)
+    let mut bytes = Vec::new();
+    file.take(PAIR_TARGET_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| RecoveryError::CleanupRequired)?;
+    if bytes.len() as u64 > PAIR_TARGET_MAX_BYTES {
+        return Err(RecoveryError::CleanupRequired);
+    }
+    Ok(Some(hex_digest(&bytes)))
 }
 
 #[cfg(target_os = "linux")]
@@ -778,6 +1046,28 @@ fn path_hash(path: &Path) -> String {
 fn hex_digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(target_os = "linux")]
+fn valid_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+#[cfg(target_os = "linux")]
+fn optional_hash_valid(value: Option<&str>) -> bool {
+    value.is_none_or(valid_hash)
+}
+
+#[cfg(target_os = "linux")]
+fn valid_txid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 80
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 #[cfg(target_os = "linux")]
@@ -884,6 +1174,15 @@ fn systemd_drop_in_bytes(mount_point: &Path) -> Result<Vec<u8>, RecoveryError> {
 }
 
 #[cfg(target_os = "linux")]
+fn canonical_config_hash(config: &BackupConfig) -> Result<String, RecoveryError> {
+    let bytes = serde_json::to_vec(config).map_err(|_| RecoveryError::InvalidConfiguration)?;
+    if bytes.len() as u64 > PAIR_TARGET_MAX_BYTES {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    Ok(hex_digest(&bytes))
+}
+
+#[cfg(target_os = "linux")]
 fn systemd_mount_path(path: &Path) -> Result<String, RecoveryError> {
     let bytes = path.as_os_str().as_bytes();
     if !path.is_absolute() || bytes.contains(&0) || std::str::from_utf8(bytes).is_err() {
@@ -904,11 +1203,7 @@ fn systemd_mount_path(path: &Path) -> Result<String, RecoveryError> {
 
 fn create(args: CreateArgs) -> AppResult<()> {
     let config_path = absolute_path(&args.config, "create")?;
-    let config = load_owner_only_config(&config_path)
-        .map_err(|error| CliBackupError::recovery(error, "check_backup_configuration"))?;
-    let passphrase = load_owner_only_passphrase(&config.passphrase_file)
-        .map_err(|error| CliBackupError::recovery(error, "read_owner_only_passphrase"))?;
-    let manifest = create_backup(&config_path, &passphrase, now_ms()?)
+    let manifest = create_backup_from_files(&config_path, now_ms()?)
         .map_err(|error| CliBackupError::recovery(error, "retry_backup"))?;
     write_json(&CreatedOutput {
         status: "created",

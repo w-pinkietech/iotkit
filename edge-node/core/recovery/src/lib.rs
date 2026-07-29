@@ -13,7 +13,7 @@ mod state;
 
 pub use backup::{
     BEGIN_BACKUP_ATTEMPT_OP, COMPLETE_BACKUP_ATTEMPT_OP, RECORD_BACKUP_PREFLIGHT_FAILURE_OP,
-    backup_status, create_backup, inspect_backup,
+    backup_status, create_backup, create_backup_from_files, inspect_backup,
 };
 pub use config::{
     BACKUP_PAIR_MARKER_NAME, BackupConfigReplace, RecoveryObservationGuard, RecoveryOperationGuard,
