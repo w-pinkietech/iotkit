@@ -172,6 +172,97 @@ fn replacement_rolls_back_when_the_validated_inode_is_substituted() {
     }));
 }
 
+#[cfg(target_os = "linux")]
+fn substitute_config_cleanup(parent_fd: RawFd, name: &std::ffi::CStr) -> std::io::Result<()> {
+    use std::os::fd::FromRawFd;
+    if unsafe {
+        libc::renameat(
+            parent_fd,
+            name.as_ptr(),
+            parent_fd,
+            c".preserved-config-owned".as_ptr(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let replacement_fd = unsafe {
+        libc::openat(
+            parent_fd,
+            name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if replacement_fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut replacement = unsafe { fs::File::from_raw_fd(replacement_fd) };
+    use std::io::Write as _;
+    replacement.write_all(b"unrelated-config")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn config_cleanup_substitution_preserves_the_unrelated_file_and_fails() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let input = prepare_config(root.path());
+    let mountinfo = mountinfo_for(&input.destination);
+    crate::config::configure_backup_with(
+        &config_path,
+        &input,
+        BackupConfigReplace::Refuse,
+        &mountinfo,
+        crate::config::ConfigWriteOps::system(),
+    )
+    .unwrap();
+    let mut ops = crate::config::ConfigWriteOps::system();
+    ops.before_cleanup = substitute_config_cleanup;
+
+    assert_eq!(
+        crate::config::configure_backup_with(
+            &config_path,
+            &input,
+            BackupConfigReplace::Refuse,
+            &mountinfo,
+            ops,
+        ),
+        Err(RecoveryError::ArtifactCleanupFailed)
+    );
+    assert_eq!(
+        fs::read(root.path().join(".preserved-config-owned"))
+            .unwrap()
+            .first(),
+        Some(&b'{')
+    );
+    assert!(fs::read_dir(root.path()).unwrap().any(|entry| {
+        fs::read(entry.unwrap().path()).ok().as_deref() == Some(b"unrelated-config")
+    }));
+
+    let mut before: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    before.sort();
+    assert_eq!(
+        crate::config::configure_backup_with(
+            &config_path,
+            &input,
+            BackupConfigReplace::Refuse,
+            &mountinfo,
+            crate::config::ConfigWriteOps::system(),
+        ),
+        Err(RecoveryError::DestinationExists)
+    );
+    let mut after: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    after.sort();
+    assert_eq!(after, before);
+}
+
 #[test]
 fn configuration_rejects_relative_and_overlapping_paths_before_writing() {
     let root = TempDir::new().unwrap();

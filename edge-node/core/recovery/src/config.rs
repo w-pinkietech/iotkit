@@ -30,6 +30,7 @@ pub enum BackupConfigReplace {
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigWriteOps {
     pub(crate) after_existing_open: fn(RawFd, &CStr) -> std::io::Result<()>,
+    pub(crate) before_cleanup: fn(RawFd, &CStr) -> std::io::Result<()>,
 }
 
 #[cfg(target_os = "linux")]
@@ -37,6 +38,7 @@ impl ConfigWriteOps {
     pub(crate) fn system() -> Self {
         Self {
             after_existing_open: |_, _| Ok(()),
+            before_cleanup: |_, _| Ok(()),
         }
     }
 }
@@ -109,7 +111,6 @@ pub(crate) fn configure_backup_with(
             .write_all(&bytes)
             .map_err(|_| RecoveryError::Storage)?;
         output.sync_all().map_err(|_| RecoveryError::Storage)?;
-        let output_identity = file_identity(&output)?;
         match replacement {
             BackupConfigReplace::Refuse => {
                 renameat2(
@@ -128,26 +129,36 @@ pub(crate) fn configure_backup_with(
                 })?;
             }
             BackupConfigReplace::ReplaceExisting => {
-                replace_existing_config(
-                    &parent,
-                    &temporary_name,
-                    &destination_name,
-                    &output_identity,
-                    ops,
-                )?;
+                replace_existing_config(&parent, &temporary_name, &destination_name, &output, ops)?;
             }
         }
         parent.sync_all().map_err(|_| RecoveryError::Storage)
     })();
-    if output_result.is_err() {
-        let _ = unlink_if_identity(
-            parent.as_raw_fd(),
-            &temporary_name,
-            &file_identity(&output).unwrap_or_default(),
-        );
-        let _ = parent.sync_all();
+    if let Err(error) = output_result {
+        if output
+            .metadata()
+            .map_err(|_| RecoveryError::ArtifactCleanupFailed)?
+            .nlink()
+            == 0
+        {
+            return Err(error);
+        }
+        if (ops.before_cleanup)(parent.as_raw_fd(), &temporary_name).is_err()
+            || crate::destination::remove_exact_file_at(
+                parent.as_raw_fd(),
+                &temporary_name,
+                &output,
+            )
+            .is_err()
+        {
+            return Err(RecoveryError::ArtifactCleanupFailed);
+        }
+        parent
+            .sync_all()
+            .map_err(|_| RecoveryError::ArtifactCleanupFailed)?;
+        return Err(error);
     }
-    output_result
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -155,7 +166,7 @@ fn replace_existing_config(
     parent: &File,
     temporary_name: &CStr,
     destination_name: &CStr,
-    output_identity: &FileIdentity,
+    output: &File,
     ops: ConfigWriteOps,
 ) -> Result<(), RecoveryError> {
     let existing_fd = unsafe {
@@ -170,7 +181,6 @@ fn replace_existing_config(
     }
     let existing = unsafe { File::from_raw_fd(existing_fd) };
     validate_owner_file_open(&existing, CONFIG_MAX_BYTES)?;
-    let existing_identity = file_identity(&existing)?;
     (ops.after_existing_open)(parent.as_raw_fd(), destination_name)
         .map_err(|_| RecoveryError::Storage)?;
 
@@ -183,15 +193,18 @@ fn replace_existing_config(
     )
     .map_err(|_| RecoveryError::Storage)?;
 
-    if entry_identity(parent.as_raw_fd(), temporary_name).as_ref() != Ok(&existing_identity) {
-        rollback_exchange(parent, temporary_name, destination_name, output_identity)?;
-        return Err(RecoveryError::InvalidConfiguration);
+    (ops.before_cleanup)(parent.as_raw_fd(), temporary_name)
+        .map_err(|_| RecoveryError::ArtifactCleanupFailed)?;
+    match crate::destination::remove_exact_file_at(parent.as_raw_fd(), temporary_name, &existing) {
+        Ok(()) => Ok(()),
+        Err(crate::destination::ExactCleanupError::MismatchRestored) => {
+            rollback_exchange(parent, temporary_name, destination_name, output)?;
+            Err(RecoveryError::InvalidConfiguration)
+        }
+        Err(crate::destination::ExactCleanupError::Uncertain) => {
+            Err(RecoveryError::ArtifactCleanupFailed)
+        }
     }
-    if unsafe { libc::unlinkat(parent.as_raw_fd(), temporary_name.as_ptr(), 0) } != 0 {
-        rollback_exchange(parent, temporary_name, destination_name, output_identity)?;
-        return Err(RecoveryError::Storage);
-    }
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -199,7 +212,7 @@ fn rollback_exchange(
     parent: &File,
     temporary_name: &CStr,
     destination_name: &CStr,
-    output_identity: &FileIdentity,
+    output: &File,
 ) -> Result<(), RecoveryError> {
     renameat2(
         parent.as_raw_fd(),
@@ -209,7 +222,8 @@ fn rollback_exchange(
         libc::RENAME_EXCHANGE,
     )
     .map_err(|_| RecoveryError::Storage)?;
-    unlink_if_identity(parent.as_raw_fd(), temporary_name, output_identity)?;
+    crate::destination::remove_exact_file_at(parent.as_raw_fd(), temporary_name, output)
+        .map_err(|_| RecoveryError::ArtifactCleanupFailed)?;
     parent.sync_all().map_err(|_| RecoveryError::Storage)
 }
 
@@ -457,56 +471,4 @@ fn renameat2(
     } else {
         Err(std::io::Error::last_os_error())
     }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct FileIdentity {
-    device: u64,
-    inode: u64,
-}
-
-#[cfg(target_os = "linux")]
-fn file_identity(file: &File) -> Result<FileIdentity, RecoveryError> {
-    let metadata = file.metadata().map_err(|_| RecoveryError::Storage)?;
-    Ok(FileIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn entry_identity(directory_fd: RawFd, name: &CStr) -> Result<FileIdentity, RecoveryError> {
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
-    if unsafe {
-        libc::fstatat(
-            directory_fd,
-            name.as_ptr(),
-            stat.as_mut_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    } != 0
-    {
-        return Err(RecoveryError::Storage);
-    }
-    let stat = unsafe { stat.assume_init() };
-    Ok(FileIdentity {
-        device: stat.st_dev,
-        inode: stat.st_ino,
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn unlink_if_identity(
-    directory_fd: RawFd,
-    name: &CStr,
-    expected: &FileIdentity,
-) -> Result<(), RecoveryError> {
-    if entry_identity(directory_fd, name).as_ref() != Ok(expected) {
-        return Ok(());
-    }
-    if unsafe { libc::unlinkat(directory_fd, name.as_ptr(), 0) } != 0 {
-        return Err(RecoveryError::Storage);
-    }
-    Ok(())
 }

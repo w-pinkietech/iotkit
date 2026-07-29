@@ -69,6 +69,7 @@ pub(crate) enum LinuxOperation {
     ProbeCleanupSync,
     PublicationAfterLink,
     RetentionBeforeQuarantine,
+    RetentionBeforeCleanup,
 }
 
 #[cfg(target_os = "linux")]
@@ -427,8 +428,8 @@ pub(crate) fn probe_directory_with_hook(
         }
         Ok(())
     })();
+    let cleanup = cleanup_probe(fd, cleanup_name, &probe, hook);
     drop(probe);
-    let cleanup = cleanup_probe(fd, cleanup_name, hook);
     match (result, cleanup) {
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
@@ -455,29 +456,20 @@ fn validate_probe_file(file: &File) -> Result<(), RecoveryError> {
 fn cleanup_probe(
     directory_fd: RawFd,
     name: &CStr,
+    expected: &File,
     hook: &impl LinuxOperationHook,
 ) -> Result<(), RecoveryError> {
     let mut first_error = None;
     if hook
         .before(LinuxOperation::ProbeCleanupUnlink, directory_fd, name)
-        .and_then(|()| {
-            if unsafe { libc::unlinkat(directory_fd, name.as_ptr(), 0) } == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
-            }
-        })
         .is_err()
     {
         first_error = Some(RecoveryError::Storage);
         hook.before(LinuxOperation::ProbeCleanupUnlink, directory_fd, name)
             .map_err(|_| RecoveryError::Storage)?;
-        if unsafe { libc::unlinkat(directory_fd, name.as_ptr(), 0) } != 0
-            && io::Error::last_os_error().kind() != io::ErrorKind::NotFound
-        {
-            return Err(RecoveryError::Storage);
-        }
     }
+    remove_exact_file_at(directory_fd, name, expected)
+        .map_err(|_| RecoveryError::ArtifactCleanupFailed)?;
     if hook
         .before(LinuxOperation::ProbeCleanupSync, directory_fd, name)
         .and_then(|()| sync_fd_io(directory_fd))
@@ -728,10 +720,7 @@ fn delete_verified_candidate(
         )
     };
     if quarantine_fd < 0 {
-        unsafe {
-            libc::unlinkat(destination_fd, quarantine.as_ptr(), libc::AT_REMOVEDIR);
-        }
-        return Err(RecoveryError::Storage);
+        return Err(RecoveryError::ArtifactCleanupFailed);
     }
     let quarantine_directory = unsafe { File::from_raw_fd(quarantine_fd) };
     let original = CString::new(name).map_err(|_| RecoveryError::Storage)?;
@@ -750,11 +739,13 @@ fn delete_verified_candidate(
     )
     .is_err()
     {
-        drop(quarantine_directory);
-        unsafe {
-            libc::unlinkat(destination_fd, quarantine.as_ptr(), libc::AT_REMOVEDIR);
-        }
-        return Err(RecoveryError::DestinationInvalid);
+        return cleanup_retention_quarantine(
+            destination_fd,
+            &quarantine,
+            &quarantine_directory,
+            hook,
+        )
+        .and(Err(RecoveryError::DestinationInvalid));
     }
     let file_fd = unsafe {
         libc::openat(
@@ -769,6 +760,7 @@ fn delete_verified_candidate(
             &original,
             &quarantine,
             &quarantine_directory,
+            hook,
             RecoveryError::DestinationInvalid,
         );
     }
@@ -781,6 +773,7 @@ fn delete_verified_candidate(
                 &original,
                 &quarantine,
                 &quarantine_directory,
+                hook,
                 RecoveryError::DestinationInvalid,
             );
         }
@@ -793,6 +786,7 @@ fn delete_verified_candidate(
                 &original,
                 &quarantine,
                 &quarantine_directory,
+                hook,
                 RecoveryError::DestinationInvalid,
             );
         }
@@ -803,6 +797,7 @@ fn delete_verified_candidate(
             &original,
             &quarantine,
             &quarantine_directory,
+            hook,
             RecoveryError::DestinationInvalid,
         );
     }
@@ -811,11 +806,7 @@ fn delete_verified_candidate(
     {
         return Err(RecoveryError::ArtifactPublicationUncertain);
     }
-    drop(quarantine_directory);
-    if unsafe { libc::unlinkat(destination_fd, quarantine.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-        return Err(RecoveryError::ArtifactPublicationUncertain);
-    }
-    sync_fd(destination_fd).map_err(|_| RecoveryError::ArtifactPublicationUncertain)?;
+    cleanup_retention_quarantine(destination_fd, &quarantine, &quarantine_directory, hook)?;
     Ok(())
 }
 
@@ -825,6 +816,7 @@ fn preserve_quarantined(
     original: &CStr,
     quarantine_name: &CStr,
     quarantine_directory: &File,
+    hook: &impl LinuxOperationHook,
     reason: RecoveryError,
 ) -> Result<(), RecoveryError> {
     if rename_noreplace(
@@ -840,12 +832,138 @@ fn preserve_quarantined(
     quarantine_directory
         .sync_all()
         .map_err(|_| RecoveryError::ArtifactPublicationUncertain)?;
-    if unsafe { libc::unlinkat(destination_fd, quarantine_name.as_ptr(), libc::AT_REMOVEDIR) } != 0
-    {
-        return Err(RecoveryError::ArtifactPublicationUncertain);
-    }
-    sync_fd(destination_fd).map_err(|_| RecoveryError::ArtifactPublicationUncertain)?;
+    cleanup_retention_quarantine(destination_fd, quarantine_name, quarantine_directory, hook)?;
     Err(reason)
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_retention_quarantine(
+    destination_fd: RawFd,
+    quarantine_name: &CStr,
+    quarantine_directory: &File,
+    hook: &impl LinuxOperationHook,
+) -> Result<(), RecoveryError> {
+    hook.before(
+        LinuxOperation::RetentionBeforeCleanup,
+        destination_fd,
+        quarantine_name,
+    )
+    .map_err(|_| RecoveryError::ArtifactCleanupFailed)?;
+    remove_exact_empty_directory_at(destination_fd, quarantine_name, quarantine_directory)
+        .map_err(|_| RecoveryError::ArtifactCleanupFailed)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExactCleanupError {
+    MismatchRestored,
+    Uncertain,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn remove_exact_file_at(
+    directory_fd: RawFd,
+    name: &CStr,
+    expected: &File,
+) -> Result<(), ExactCleanupError> {
+    let (quarantine_name, quarantine) = create_private_directory(directory_fd, ".iotkit-cleanup-")?;
+    let item = c"entry";
+    if rename_noreplace(directory_fd, name, quarantine.as_raw_fd(), item).is_err() {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    let moved_fd = unsafe {
+        libc::openat(
+            quarantine.as_raw_fd(),
+            item.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if moved_fd < 0 {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    let moved = unsafe { File::from_raw_fd(moved_fd) };
+    let matches = match (file_identity(&moved), file_identity(expected)) {
+        (Ok(moved), Ok(expected)) => moved == expected,
+        _ => return Err(ExactCleanupError::Uncertain),
+    };
+    if !matches {
+        if rename_noreplace(quarantine.as_raw_fd(), item, directory_fd, name).is_err() {
+            return Err(ExactCleanupError::Uncertain);
+        }
+        remove_exact_empty_directory_at(directory_fd, &quarantine_name, &quarantine)?;
+        return Err(ExactCleanupError::MismatchRestored);
+    }
+    if unsafe { libc::unlinkat(quarantine.as_raw_fd(), item.as_ptr(), 0) } != 0 {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    sync_fd(quarantine.as_raw_fd()).map_err(|_| ExactCleanupError::Uncertain)?;
+    remove_exact_empty_directory_at(directory_fd, &quarantine_name, &quarantine)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn remove_exact_empty_directory_at(
+    directory_fd: RawFd,
+    name: &CStr,
+    expected: &File,
+) -> Result<(), ExactCleanupError> {
+    let (placeholder_name, placeholder) =
+        create_private_directory(directory_fd, ".iotkit-cleanup-dir-")?;
+    if rename_exchange(directory_fd, name, directory_fd, &placeholder_name).is_err() {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    let matches = match (
+        entry_identity(directory_fd, &placeholder_name),
+        file_identity(expected),
+        entry_identity(directory_fd, name),
+        file_identity(&placeholder),
+    ) {
+        (Ok(moved), Ok(expected), Ok(replacement), Ok(placeholder)) => {
+            moved == expected && replacement == placeholder
+        }
+        _ => false,
+    };
+    if !matches {
+        if rename_exchange(directory_fd, name, directory_fd, &placeholder_name).is_err() {
+            return Err(ExactCleanupError::Uncertain);
+        }
+        if unsafe { libc::unlinkat(directory_fd, placeholder_name.as_ptr(), libc::AT_REMOVEDIR) }
+            != 0
+        {
+            return Err(ExactCleanupError::Uncertain);
+        }
+        sync_fd(directory_fd).map_err(|_| ExactCleanupError::Uncertain)?;
+        return Err(ExactCleanupError::MismatchRestored);
+    }
+    if unsafe { libc::unlinkat(directory_fd, placeholder_name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    if unsafe { libc::unlinkat(directory_fd, name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    sync_fd(directory_fd).map_err(|_| ExactCleanupError::Uncertain)
+}
+
+#[cfg(target_os = "linux")]
+fn create_private_directory(
+    directory_fd: RawFd,
+    prefix: &str,
+) -> Result<(CString, File), ExactCleanupError> {
+    let name = CString::new(random_name(prefix).map_err(|_| ExactCleanupError::Uncertain)?)
+        .map_err(|_| ExactCleanupError::Uncertain)?;
+    if unsafe { libc::mkdirat(directory_fd, name.as_ptr(), 0o700) } != 0 {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    let fd = unsafe {
+        libc::openat(
+            directory_fd,
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(ExactCleanupError::Uncertain);
+    }
+    Ok((name, unsafe { File::from_raw_fd(fd) }))
 }
 
 #[cfg(target_os = "linux")]
@@ -926,6 +1044,30 @@ fn rename_noreplace(
         } else {
             Err(RecoveryError::Storage)
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_exchange(
+    first_directory: RawFd,
+    first_name: &CStr,
+    second_directory: RawFd,
+    second_name: &CStr,
+) -> Result<(), RecoveryError> {
+    if unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            first_directory,
+            first_name.as_ptr(),
+            second_directory,
+            second_name.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(RecoveryError::Storage)
     }
 }
 

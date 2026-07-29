@@ -371,6 +371,71 @@ fn capability_probe_uses_a_fresh_cryptorandom_name_on_retry() {
 }
 
 #[cfg(target_os = "linux")]
+fn substitute_probe_cleanup(
+    operation: crate::destination::LinuxOperation,
+    directory_fd: RawFd,
+    name: &std::ffi::CStr,
+) -> io::Result<()> {
+    if operation != crate::destination::LinuxOperation::ProbeCleanupUnlink {
+        return Ok(());
+    }
+    if unsafe {
+        libc::renameat(
+            directory_fd,
+            name.as_ptr(),
+            directory_fd,
+            c".preserved-probe-owned".as_ptr(),
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let fd = unsafe {
+        libc::openat(
+            directory_fd,
+            name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut replacement = unsafe { fs::File::from_raw_fd(fd) };
+    use std::io::Write as _;
+    replacement.write_all(b"unrelated-probe")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn probe_cleanup_substitution_preserves_the_unrelated_file_and_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let directory = DirectoryCapability::open(root.path()).unwrap();
+    let hook = TestHook {
+        fail_once: Cell::new(None),
+        mutate: Some(substitute_probe_cleanup),
+    };
+
+    assert_eq!(
+        crate::destination::probe_directory_with_hook(&directory, &hook),
+        Err(RecoveryError::ArtifactCleanupFailed)
+    );
+    assert_eq!(
+        fs::read(root.path().join(".preserved-probe-owned")).unwrap(),
+        b"iotkit-probe-v1"
+    );
+    assert!(fs::read_dir(root.path()).unwrap().any(|entry| {
+        fs::read(entry.unwrap().path()).ok().as_deref() == Some(b"unrelated-probe")
+    }));
+
+    let before = entry_names(root.path());
+    crate::destination::probe_directory_with_hook(&directory, &TestHook::default()).unwrap();
+    assert_eq!(entry_names(root.path()), before);
+}
+
+#[cfg(target_os = "linux")]
 fn swap_published_entry(
     operation: crate::destination::LinuxOperation,
     directory_fd: RawFd,
@@ -561,6 +626,93 @@ fn retention_substitution_preserves_the_replacement_and_authenticated_inode() {
             .iter()
             .all(|name| !name.starts_with(".iotkit-retention-"))
     );
+}
+
+#[cfg(target_os = "linux")]
+fn substitute_retention_cleanup_directory(
+    operation: crate::destination::LinuxOperation,
+    directory_fd: RawFd,
+    name: &std::ffi::CStr,
+) -> io::Result<()> {
+    if operation != crate::destination::LinuxOperation::RetentionBeforeCleanup {
+        return Ok(());
+    }
+    if unsafe {
+        libc::renameat(
+            directory_fd,
+            name.as_ptr(),
+            directory_fd,
+            c".preserved-retention-owned-dir".as_ptr(),
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::mkdirat(directory_fd, name.as_ptr(), 0o700) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn retention_cleanup_substitution_preserves_the_unrelated_directory_and_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    let destination_path = root.path().join("destination");
+    fs::create_dir(&destination_path).unwrap();
+    fs::set_permissions(&destination_path, fs::Permissions::from_mode(0o700)).unwrap();
+    let database = root.path().join("database");
+    fs::write(&database, b"SQLite format 3\0public-db").unwrap();
+    let destination = held_destination(&destination_path);
+    let passphrase = BackupPassphrase::new("public-format-passphrase".into());
+    encrypt_container(
+        &database,
+        &retention_manifest("backup-new", 20),
+        &passphrase,
+        destination.capability(),
+        ".iotkit-new",
+    )
+    .unwrap();
+    encrypt_container(
+        &database,
+        &retention_manifest("backup-old", 10),
+        &passphrase,
+        destination.capability(),
+        ".iotkit-old",
+    )
+    .unwrap();
+    let hook = TestHook {
+        fail_once: Cell::new(None),
+        mutate: Some(substitute_retention_cleanup_directory),
+    };
+
+    assert_eq!(
+        crate::destination::apply_retention_with_hook(
+            &destination,
+            &passphrase,
+            "node-a",
+            &BTreeSet::from(["backup-new".into(), "backup-old".into()]),
+            1,
+            &hook,
+        ),
+        Err(RecoveryError::ArtifactCleanupFailed)
+    );
+    assert!(destination_path.join(".iotkit-new").exists());
+    assert!(!destination_path.join(".iotkit-old").exists());
+    assert!(
+        destination_path
+            .join(".preserved-retention-owned-dir")
+            .is_dir()
+    );
+    assert!(fs::read_dir(&destination_path).unwrap().any(|entry| {
+        let entry = entry.unwrap();
+        entry.file_type().unwrap().is_dir()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".iotkit-retention-")
+    }));
 }
 
 #[cfg(target_os = "linux")]
