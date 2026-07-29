@@ -4,7 +4,7 @@ Date: 2026-07-29
 
 Issue: [#92](https://github.com/w-pinkietech/iotkit/issues/92)
 
-Status: approved in design discussion; written review pending
+Status: approved on 2026-07-29
 
 ## 1. Purpose
 
@@ -29,8 +29,9 @@ for an explicitly loss-bearing replacement.
 
 This design covers:
 
-- optional, default-off encrypted backups of the complete Edge Node SQLite
-  database;
+- optional, default-off encrypted backups of the custody-complete Edge Node
+  SQLite database after removing deployment credentials from the offline
+  snapshot;
 - online consistent snapshot creation without stopping normal collection;
 - operator-selected mounted filesystem destinations;
 - restore into a new candidate path without overwriting a live database;
@@ -72,14 +73,19 @@ pull requests:
 2. IoTKit Edge recovery cases, broker credential fencing evidence, and recovery
    permits;
 3. old-epoch reconciliation, new-epoch activation, and loss/gap audit;
-4. contract/schema/Console parity, bilingual operations documentation, and the
-   end-to-end fault matrix.
+4. recovery wire/OpenAPI/Console parity, integrated bilingual operations
+   documentation, and the end-to-end fault matrix.
 
 All new wire paths and Console mutations remain default-off behind the durable
 recovery capability until all four slices are integrated. An intermediate
 release may create and validate backup artifacts, but it must not claim that
 computer replacement is complete. Closing #92 requires the combined operator
 journey and release-gate evidence.
+
+Slice 1 accepts a versioned recovery handoff for conformance and restore-drill
+validation but does not produce a production handoff. Slice 2 owns recovery
+case creation and the production handoff producer; operators are never told to
+fabricate or bypass one.
 
 ## 4. Roles and authority
 
@@ -166,25 +172,35 @@ and the IoTKit Edge server backup. It has an Edge Node-specific magic value,
 artifact kind, and format version, with a conventional
 `.iotkit-node-backup` suffix.
 
+The exact outer header, encrypted manifest, protected handoff, and restore
+receipt form one versioned recovery contract: paired English/Japanese current
+documentation, machine-readable schemas/exported Rust types, checked-in
+secret-free golden fixtures, and conformance tests must agree.
+
 Creation performs these steps:
 
 1. Open the running Edge Node database read-only through the storage layer.
 2. Create a consistent SQLite online backup into an owner-only, non-backed-up
    tmpfs staging directory. Copying the database and WAL files is forbidden.
-3. Run schema/migration validation, `PRAGMA quick_check`, and foreign-key
+3. On the offline snapshot only, use a typed operation to clear any legacy
+   plaintext deployment credential stored in SQLite, including
+   `target_registry.credential_token`. The live database is unchanged. The
+   artifact is custody-complete, not a credential-transfer mechanism.
+4. Run schema/migration validation, require those credential fields to be
+   empty, run `PRAGMA quick_check`, and run foreign-key
    validation against the snapshot.
-4. Derive the authenticated inner manifest from the snapshot, never from the
-   concurrently changing live database.
-5. Encrypt the snapshot and inner manifest with Argon2id-derived key material
+5. Derive the authenticated inner manifest from the sanitized snapshot, never
+   from the concurrently changing live database.
+6. Encrypt the snapshot and inner manifest with Argon2id-derived key material
    and XChaCha20-Poly1305. The outer header is unencrypted but is authenticated
    as AEAD associated data. It contains the magic, artifact kind, container
    version, bounded KDF salt/parameters, and nonce needed to decrypt. Parameter
    bounds are checked before memory or CPU-intensive allocation.
-6. Create a new mode-`0600` ciphertext temporary file in the destination
+7. Create a new mode-`0600` ciphertext temporary file in the destination
    directory, write and `fsync` it, atomically publish it without replacing an
    existing name, `fsync` the parent directory, then reopen and authenticate
    the published bytes.
-7. Record success only after read-back verification and remove plaintext
+8. Record success only after read-back verification and remove plaintext
    staging. A crash may leave only a non-authoritative
    temporary ciphertext file, never a named successful artifact.
 
@@ -232,7 +248,9 @@ The CLI:
 4. copies the verified database into that unpublished temporary path, opens it
    offline, creates a fresh random `candidate_instance_id` that was not present
    in the backup, and uses `core/ops` to transactionally install the recovery
-   fence/receipt, rotate local authority, and clear stale listener authority;
+   fence/receipt, including exact Edge ID, backup ID, handoff schema version,
+   credential generation, and proposed epoch; rotate local authority; and
+   clear stale listener authority;
 5. forces the closed candidate into a self-contained durable SQLite file using
    offline journal/checkpoint handling, verifies that startup needs no
    unshipped WAL state, reruns integrity and fence validation, and `fsync`s the
@@ -245,6 +263,12 @@ never performs a cross-filesystem rename of the live database. A failed or
 interrupted restore leaves the current database untouched. Incomplete candidate
 files are not auto-promoted or auto-deleted.
 
+Rename success, parent-directory `fsync`, and published read-back are separate
+fault boundaries. After rename, a failure may leave a named candidate, but it
+is already fenced and self-contained. An exact replay verifies the stored
+receipt against the same artifact/handoff, re-syncs the parent, and completes
+read-back; changed content is a conflict and is never overwritten.
+
 Startup requires a valid recovery fence, receipt, and
 `candidate_instance_id` before it interprets any restored activation state. A
 named database that contains restored active state without that fence fails
@@ -252,9 +276,11 @@ closed before any normal task starts.
 
 ### 6.2 Startup gate
 
-The Edge Node composition root reads durable recovery state before binding any
-listener, spawning any adapter, or starting normal background work. Only an
-already published `durably_fenced_candidate` may enter
+After minimal config parsing obtains the database path, the Edge Node
+composition root probes durable recovery state through a read-only,
+no-create/no-migrate connection before effective-config/adapter logging,
+migration, identity mutation, listener binding, adapter spawning, or normal
+background work. Only an already published `durably_fenced_candidate` may enter
 `fenced_waiting_permit`; an unfenced restored database fails startup.
 
 While fenced or reconciling, the following remain disabled:
