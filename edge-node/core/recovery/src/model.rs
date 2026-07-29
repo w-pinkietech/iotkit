@@ -164,6 +164,14 @@ impl BackupPassphrase {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
+    pub(crate) fn char_count(&self) -> usize {
+        self.0.chars().count()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +179,30 @@ pub enum RecoveryError {
     InvalidStartupState,
     InvalidSnapshot,
     Storage,
+    ContainerInvalid,
+    AuthenticationFailed,
+    ManifestInvalid,
+    DestinationExists,
+    Cryptography,
+    Random,
+    InvalidPassphrase,
+}
+
+impl RecoveryError {
+    pub fn reason_code(self) -> &'static str {
+        match self {
+            Self::InvalidStartupState => "invalid_startup_state",
+            Self::InvalidSnapshot => "snapshot_invalid",
+            Self::Storage => "storage",
+            Self::ContainerInvalid => "container_invalid",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::ManifestInvalid => "manifest_invalid",
+            Self::DestinationExists => "destination_exists",
+            Self::Cryptography => "cryptography",
+            Self::Random => "random",
+            Self::InvalidPassphrase => "passphrase_invalid",
+        }
+    }
 }
 
 impl fmt::Display for RecoveryError {
@@ -181,6 +213,17 @@ impl fmt::Display for RecoveryError {
             }
             Self::InvalidSnapshot => formatter.write_str("Edge Node snapshot is invalid"),
             Self::Storage => formatter.write_str("Edge Node recovery storage is unavailable"),
+            Self::ContainerInvalid => formatter.write_str("Edge Node backup container is invalid"),
+            Self::AuthenticationFailed => {
+                formatter.write_str("Edge Node backup authentication failed")
+            }
+            Self::ManifestInvalid => formatter.write_str("Edge Node backup manifest is invalid"),
+            Self::DestinationExists => formatter.write_str("Edge Node backup destination exists"),
+            Self::Cryptography => formatter.write_str("Edge Node backup cryptography failed"),
+            Self::Random => formatter.write_str("Edge Node backup randomness failed"),
+            Self::InvalidPassphrase => {
+                formatter.write_str("Edge Node backup passphrase is invalid")
+            }
         }
     }
 }
