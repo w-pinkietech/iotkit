@@ -25,9 +25,116 @@ const CONFIG_MAX_BYTES: u64 = 64 * 1024;
 /// drop-in are being published as one recovery operation.
 pub const BACKUP_PAIR_MARKER_NAME: &str = ".iotkit-backup-pair.txn";
 
-/// Name of the owner-only receipt left while paired configuration cleanup is
-/// converging after the publication commit boundary.
+/// Name of the durable owner-only receipt for the current configuration pair.
 pub const BACKUP_PAIR_COMPLETION_NAME: &str = ".iotkit-backup-pair.complete";
+
+/// Closed phase vocabulary for one paired backup configuration transaction.
+#[doc(hidden)]
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupPairPhase {
+    Prepared,
+    ConfigPublishing,
+    ConfigPublished,
+    DropInPublishing,
+    DropInPublished,
+    Published,
+}
+
+/// Canonical durable record shared by the pending marker and completion receipt.
+///
+/// This type intentionally omits `Debug`: paths are represented by hashes, but
+/// those hashes are still private operational configuration.
+#[doc(hidden)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackupPairRecord {
+    pub schema_version: u32,
+    pub txid: String,
+    pub config_path_hash: String,
+    pub drop_in_path_hash: String,
+    pub phase: BackupPairPhase,
+    pub request_config_hash: String,
+    pub request_drop_in_hash: String,
+    pub config_hash: Option<String>,
+    pub drop_in_hash: Option<String>,
+    pub config_existed: bool,
+    pub drop_in_existed: bool,
+    pub old_config_hash: Option<String>,
+    pub old_drop_in_hash: Option<String>,
+    #[serde(default)]
+    pub config_temp_name: Option<String>,
+    #[serde(default)]
+    pub drop_in_temp_name: Option<String>,
+}
+
+impl BackupPairRecord {
+    /// Validates the closed record schema and binds the config path identity.
+    ///
+    /// The recovery core does not persist or infer the raw systemd drop-in
+    /// path. The nodectl pair owner supplies its expected path hash here.
+    #[doc(hidden)]
+    pub fn validate_for_paths(
+        &self,
+        config_path: &Path,
+        expected_drop_in_path_hash: Option<&str>,
+    ) -> Result<(), RecoveryError> {
+        if self.schema_version != 3
+            || !valid_pair_txid(&self.txid)
+            || self.config_path_hash != pair_path_hash(config_path)
+            || expected_drop_in_path_hash.is_some_and(|expected| self.drop_in_path_hash != expected)
+            || !valid_pair_hash(&self.drop_in_path_hash)
+            || !valid_pair_hash(&self.request_config_hash)
+            || !valid_pair_hash(&self.request_drop_in_hash)
+            || self.config_existed != self.old_config_hash.is_some()
+            || self.drop_in_existed != self.old_drop_in_hash.is_some()
+            || !self.old_config_hash.as_deref().is_none_or(valid_pair_hash)
+            || !self.old_drop_in_hash.as_deref().is_none_or(valid_pair_hash)
+            || !self.config_hash.as_deref().is_none_or(valid_pair_hash)
+            || !self.drop_in_hash.as_deref().is_none_or(valid_pair_hash)
+            || !self
+                .config_temp_name
+                .as_deref()
+                .is_none_or(|name| valid_pair_config_temp_name(config_path, name))
+            || self.drop_in_temp_name.as_deref().is_some_and(|name| {
+                name != format!(".iotkit-backup-pair.{}.drop-in.tmp", self.txid)
+            })
+        {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        match self.phase {
+            BackupPairPhase::Prepared
+                if self.config_hash.is_none()
+                    && self.drop_in_hash.is_none()
+                    && self.config_temp_name.is_none()
+                    && self.drop_in_temp_name.is_none() => {}
+            BackupPairPhase::ConfigPublishing
+            | BackupPairPhase::ConfigPublished
+            | BackupPairPhase::DropInPublishing
+            | BackupPairPhase::DropInPublished
+            | BackupPairPhase::Published
+                if self.config_hash.is_some()
+                    && self.drop_in_hash.is_some()
+                    && self.config_temp_name.is_some()
+                    && self.drop_in_temp_name.is_some() => {}
+            _ => return Err(RecoveryError::CleanupRequired),
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn validate_completion_for_paths(
+        &self,
+        config_path: &Path,
+        expected_drop_in_path_hash: Option<&str>,
+    ) -> Result<(), RecoveryError> {
+        self.validate_for_paths(config_path, expected_drop_in_path_hash)?;
+        if self.phase != BackupPairPhase::Published {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        Ok(())
+    }
+}
 
 /// Explicit configuration replacement policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -588,8 +695,40 @@ pub(crate) fn pending_pair_marker(path: &Path) -> Result<bool, RecoveryError> {
     let parent_path = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
     let parent = open_directory(parent_path)?;
     validate_owner_directory_open(&parent)?;
-    let name =
-        CString::new(BACKUP_PAIR_MARKER_NAME).map_err(|_| RecoveryError::InvalidConfiguration)?;
+    let marker = read_pair_record_at(&parent, BACKUP_PAIR_MARKER_NAME, path)?;
+    let completion = completion_receipt_is_valid_at(&parent, path)?;
+    match (marker, completion) {
+        (None, _) => Ok(false),
+        (Some(_), None) => Ok(true),
+        (Some(marker), Some(completion))
+            if valid_post_commit_cleanup_state(&marker, &completion) =>
+        {
+            Ok(false)
+        }
+        (Some(_), Some(_)) => Ok(true),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn valid_post_commit_cleanup_state(
+    marker: &BackupPairRecord,
+    completion: &BackupPairRecord,
+) -> bool {
+    marker.phase == BackupPairPhase::Published
+        && completion.phase == BackupPairPhase::Published
+        && marker.config_path_hash == completion.config_path_hash
+        && marker.drop_in_path_hash == completion.drop_in_path_hash
+        && completion.old_config_hash.as_deref() == marker.config_hash.as_deref()
+        && completion.old_drop_in_hash.as_deref() == marker.drop_in_hash.as_deref()
+}
+
+#[cfg(target_os = "linux")]
+fn read_pair_record_at(
+    parent: &File,
+    name: &str,
+    config_path: &Path,
+) -> Result<Option<BackupPairRecord>, RecoveryError> {
+    let name = CString::new(name).map_err(|_| RecoveryError::InvalidConfiguration)?;
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -598,90 +737,99 @@ pub(crate) fn pending_pair_marker(path: &Path) -> Result<bool, RecoveryError> {
         )
     };
     if fd < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(RecoveryError::CleanupRequired);
-        }
-        // A valid completion receipt means the request is already complete, so
-        // it must not be reported as a pending marker.  Invalid receipts still
-        // surface as cleanup-required through the validator.
-        return completion_receipt_is_valid(path).map(|_| false);
+        return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(RecoveryError::CleanupRequired)
+        };
     }
-    let marker = unsafe { File::from_raw_fd(fd) };
-    let metadata = marker
+    let file = unsafe { File::from_raw_fd(fd) };
+    let metadata = file
         .metadata()
         .map_err(|_| RecoveryError::CleanupRequired)?;
     if !metadata.is_file()
+        || metadata.len() > 8 * 1024
         || metadata.nlink() != 1
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.permissions().mode() & 0o077 != 0
     {
         return Err(RecoveryError::CleanupRequired);
     }
-    if completion_receipt_exists(path)? {
+    clear_nonblock(&file).map_err(|_| RecoveryError::CleanupRequired)?;
+    let mut bytes = Vec::new();
+    file.take(8 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| RecoveryError::CleanupRequired)?;
+    if bytes.len() > 8 * 1024 {
         return Err(RecoveryError::CleanupRequired);
     }
-    Ok(true)
-}
-
-#[cfg(target_os = "linux")]
-fn completion_receipt_exists(path: &Path) -> Result<bool, RecoveryError> {
-    let parent = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
-    let receipt_path = parent.join(BACKUP_PAIR_COMPLETION_NAME);
-    match std::fs::symlink_metadata(&receipt_path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(_) => Err(RecoveryError::CleanupRequired),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn completion_receipt_is_valid(path: &Path) -> Result<bool, RecoveryError> {
-    let parent = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
-    let receipt_path = parent.join(BACKUP_PAIR_COMPLETION_NAME);
-    if !completion_receipt_exists(path)? {
-        return Ok(false);
-    }
-    let bytes =
-        read_owner_file(&receipt_path, 8 * 1024).map_err(|_| RecoveryError::CleanupRequired)?;
-    let value: serde_json::Value =
+    let record: BackupPairRecord =
         serde_json::from_slice(&bytes).map_err(|_| RecoveryError::CleanupRequired)?;
-    let object = value.as_object().ok_or(RecoveryError::CleanupRequired)?;
-    if object
-        .get("schema_version")
-        .and_then(|value| value.as_u64())
-        != Some(3)
-        || object.get("phase").and_then(|value| value.as_str()) != Some("published")
-    {
-        return Err(RecoveryError::CleanupRequired);
-    }
-    for field in [
-        "txid",
-        "config_path_hash",
-        "drop_in_path_hash",
-        "request_config_hash",
-        "request_drop_in_hash",
-        "config_hash",
-        "drop_in_hash",
-    ] {
-        let valid = object
-            .get(field)
-            .and_then(|value| value.as_str())
-            .is_some_and(valid_receipt_token);
-        if !valid {
-            return Err(RecoveryError::CleanupRequired);
-        }
-    }
-    Ok(true)
+    record.validate_for_paths(config_path, None)?;
+    Ok(Some(record))
 }
 
 #[cfg(target_os = "linux")]
-fn valid_receipt_token(value: &str) -> bool {
+fn completion_receipt_is_valid_at(
+    parent: &File,
+    path: &Path,
+) -> Result<Option<BackupPairRecord>, RecoveryError> {
+    let Some(record) = read_pair_record_at(parent, BACKUP_PAIR_COMPLETION_NAME, path)? else {
+        return Ok(None);
+    };
+    record.validate_completion_for_paths(path, None)?;
+    let config_bytes =
+        read_owner_file(path, CONFIG_MAX_BYTES).map_err(|_| RecoveryError::CleanupRequired)?;
+    if record.config_hash.as_deref() != Some(pair_digest(&config_bytes).as_str()) {
+        return Err(RecoveryError::CleanupRequired);
+    }
+    Ok(Some(record))
+}
+
+#[cfg(target_os = "linux")]
+fn valid_pair_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+#[cfg(target_os = "linux")]
+fn valid_pair_txid(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 128
+        && value.len() <= 80
         && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+#[cfg(target_os = "linux")]
+fn valid_pair_config_temp_name(config_path: &Path, value: &str) -> bool {
+    let Some(config_name) = config_path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let prefix = format!(".{config_name}.");
+    value.starts_with(&prefix)
+        && value.ends_with(".iotkit-config")
+        && value.len() == prefix.len() + 32 + ".iotkit-config".len()
+        && value[prefix.len()..prefix.len() + 32]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+#[cfg(target_os = "linux")]
+fn pair_path_hash(path: &Path) -> String {
+    pair_digest(path.as_os_str().as_bytes())
+}
+
+#[cfg(target_os = "linux")]
+fn pair_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[cfg(target_os = "linux")]

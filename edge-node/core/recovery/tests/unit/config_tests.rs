@@ -152,6 +152,200 @@ fn owner_reader_environment_lock() -> &'static std::sync::Mutex<()> {
 }
 
 #[cfg(target_os = "linux")]
+fn test_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn completion_record(
+    config_path: &Path,
+    config_hash: &str,
+    drop_in_hash: &str,
+) -> serde_json::Value {
+    use std::os::unix::ffi::OsStrExt;
+
+    serde_json::json!({
+        "schema_version": 3,
+        "txid": "receipt-1",
+        "config_path_hash": test_digest(config_path.as_os_str().as_bytes()),
+        "drop_in_path_hash": "11".repeat(32),
+        "phase": "published",
+        "request_config_hash": "22".repeat(32),
+        "request_drop_in_hash": "33".repeat(32),
+        "config_hash": config_hash,
+        "drop_in_hash": drop_in_hash,
+        "config_existed": false,
+        "drop_in_existed": false,
+        "old_config_hash": null,
+        "old_drop_in_hash": null,
+        "config_temp_name": ".backup.json.0123456789abcdef0123456789abcdef.iotkit-config",
+        "drop_in_temp_name": ".iotkit-backup-pair.receipt-1.drop-in.tmp"
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn write_private_json(path: &Path, value: &serde_json::Value) {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn completion_receipt_is_closed_and_bound_to_the_current_config() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let config_path = root.path().join("backup.json");
+    let config_bytes = serde_json::to_vec(&config(root.path())).unwrap();
+    fs::write(&config_path, &config_bytes).unwrap();
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let receipt_path = root.path().join(BACKUP_PAIR_COMPLETION_NAME);
+    let valid = completion_record(&config_path, &test_digest(&config_bytes), &"44".repeat(32));
+    write_private_json(&receipt_path, &valid);
+    assert!(load_owner_only_config(&config_path).is_ok());
+
+    let mut invalid_rows = Vec::new();
+    let mut invalid = valid.clone();
+    invalid["schema_version"] = serde_json::json!(4);
+    invalid_rows.push(invalid);
+    let mut invalid = valid.clone();
+    invalid["txid"] = serde_json::json!("UPPER");
+    invalid_rows.push(invalid);
+    let mut invalid = valid.clone();
+    invalid["config_path_hash"] = serde_json::json!("55".repeat(32));
+    invalid_rows.push(invalid);
+    let mut invalid = valid.clone();
+    invalid["config_hash"] = serde_json::json!("short");
+    invalid_rows.push(invalid);
+    let mut invalid = valid.clone();
+    invalid["drop_in_hash"] = serde_json::json!("GG".repeat(32));
+    invalid_rows.push(invalid);
+    let mut invalid = valid.clone();
+    invalid["unexpected"] = serde_json::json!(true);
+    invalid_rows.push(invalid);
+    let mut invalid = valid.clone();
+    invalid["config_temp_name"] = serde_json::json!(".wrong.iotkit-config");
+    invalid_rows.push(invalid);
+    let mut invalid = valid.clone();
+    invalid["drop_in_temp_name"] = serde_json::json!(".wrong.tmp");
+    invalid_rows.push(invalid);
+
+    for invalid in invalid_rows {
+        write_private_json(&receipt_path, &invalid);
+        assert_eq!(
+            load_owner_only_config(&config_path),
+            Err(RecoveryError::CleanupRequired)
+        );
+    }
+
+    write_private_json(&receipt_path, &valid);
+    let mut modified = config(root.path());
+    modified.retention_count += 1;
+    fs::write(&config_path, serde_json::to_vec(&modified).unwrap()).unwrap();
+    assert_eq!(
+        load_owner_only_config(&config_path),
+        Err(RecoveryError::CleanupRequired)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn completion_receipt_rejects_special_files_without_hanging_or_mutating_config() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    for kind in ["symlink", "hardlink", "fifo"] {
+        let root = TempDir::new().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let config_path = root.path().join("backup.json");
+        let config_bytes = serde_json::to_vec(&config(root.path())).unwrap();
+        fs::write(&config_path, &config_bytes).unwrap();
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let receipt_path = root.path().join(BACKUP_PAIR_COMPLETION_NAME);
+        let source = root.path().join("receipt-source");
+        let valid = completion_record(&config_path, &test_digest(&config_bytes), &"44".repeat(32));
+        write_private_json(&source, &valid);
+        match kind {
+            "symlink" => symlink(&source, &receipt_path).unwrap(),
+            "hardlink" => fs::hard_link(&source, &receipt_path).unwrap(),
+            "fifo" => {
+                fs::remove_file(&source).unwrap();
+                let name = CString::new(receipt_path.as_os_str().as_bytes()).unwrap();
+                assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(
+            load_owner_only_config(&config_path),
+            Err(RecoveryError::CleanupRequired),
+            "{kind}"
+        );
+        assert_eq!(fs::read(&config_path).unwrap(), config_bytes, "{kind}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn receipt_and_marker_coexist_only_for_a_valid_post_commit_cleanup_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let config_path = root.path().join("backup.json");
+    let config_bytes = serde_json::to_vec(&config(root.path())).unwrap();
+    fs::write(&config_path, &config_bytes).unwrap();
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let receipt_path = root.path().join(BACKUP_PAIR_COMPLETION_NAME);
+    let marker_path = root.path().join(BACKUP_PAIR_MARKER_NAME);
+
+    let old_config_hash = "55".repeat(32);
+    let old_drop_in_hash = "66".repeat(32);
+    let mut old_receipt = completion_record(&config_path, &old_config_hash, &old_drop_in_hash);
+    old_receipt["txid"] = serde_json::json!("receipt-old");
+    old_receipt["drop_in_temp_name"] =
+        serde_json::json!(".iotkit-backup-pair.receipt-old.drop-in.tmp");
+    let mut current_receipt =
+        completion_record(&config_path, &test_digest(&config_bytes), &"44".repeat(32));
+    current_receipt["config_existed"] = serde_json::json!(true);
+    current_receipt["drop_in_existed"] = serde_json::json!(true);
+    current_receipt["old_config_hash"] = serde_json::json!(old_config_hash);
+    current_receipt["old_drop_in_hash"] = serde_json::json!(old_drop_in_hash);
+    write_private_json(&marker_path, &old_receipt);
+    write_private_json(&receipt_path, &current_receipt);
+    assert!(
+        load_owner_only_config(&config_path).is_ok(),
+        "strict post-commit cleanup state should remain readable"
+    );
+
+    let mut pending = current_receipt.clone();
+    pending["phase"] = serde_json::json!("prepared");
+    pending["config_hash"] = serde_json::Value::Null;
+    pending["drop_in_hash"] = serde_json::Value::Null;
+    pending["config_temp_name"] = serde_json::Value::Null;
+    pending["drop_in_temp_name"] = serde_json::Value::Null;
+    write_private_json(&marker_path, &pending);
+    assert_eq!(
+        load_owner_only_config(&config_path),
+        Err(RecoveryError::CleanupRequired)
+    );
+
+    write_private_json(&marker_path, &serde_json::json!({"schema_version": 3}));
+    assert_eq!(
+        load_owner_only_config(&config_path),
+        Err(RecoveryError::CleanupRequired)
+    );
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() {
     let root = TempDir::new().unwrap();

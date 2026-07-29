@@ -775,7 +775,7 @@ fn configure_pair_crash_after_each_target_rename_converges_on_retry() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn completion_receipt_retries_after_final_sync_uncertainty() {
+fn durable_completion_receipt_survives_success_and_final_sync_uncertainty() {
     use std::os::unix::fs::PermissionsExt;
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
@@ -800,6 +800,45 @@ fn completion_receipt_retries_after_final_sync_uncertainty() {
     .output()
     .unwrap();
     assert!(initial.status.success());
+    let marker = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+    let receipt = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_COMPLETION_NAME);
+    assert!(!marker.exists());
+    assert!(
+        receipt.exists(),
+        "ordinary success must retain durable completion evidence"
+    );
+
+    let exact_retry = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("old.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(
+        exact_retry.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exact_retry.stderr)
+    );
+    assert!(receipt.exists(), "exact retry must retain its receipt");
+    for command in ["status", "create"] {
+        let output = nodectl()
+            .args(["backup", command, "--config", config.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("cleanup_required"),
+            "valid receipt blocked {command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     let failed = configure_command(
         &config,
@@ -822,11 +861,10 @@ fn completion_receipt_retries_after_final_sync_uncertainty() {
         "{}",
         String::from_utf8_lossy(&failed.stderr)
     );
-    let marker = control
-        .path()
-        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
-    let receipt = control.path().join(".iotkit-backup-pair.complete");
-    assert!(!marker.exists(), "completion receipt must replace marker");
+    assert!(
+        marker.exists(),
+        "receipt replacement uncertainty must retain a cleanup marker"
+    );
     assert!(receipt.exists());
 
     let status = nodectl()
@@ -855,7 +893,256 @@ fn completion_receipt_retries_after_final_sync_uncertainty() {
         "{}",
         String::from_utf8_lossy(&retried.stderr)
     );
-    assert!(!receipt.exists(), "same request must consume its receipt");
+    assert!(!marker.exists(), "same request must finish marker cleanup");
+    assert!(receipt.exists(), "same request must retain its receipt");
+
+    let different_without_replace = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("third.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(!different_without_replace.status.success());
+    assert!(
+        String::from_utf8_lossy(&different_without_replace.stderr).contains("destination_exists"),
+        "{}",
+        String::from_utf8_lossy(&different_without_replace.stderr)
+    );
+    assert!(receipt.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn configure_receipt_binds_the_exact_current_drop_in() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let configured = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("edge.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(configured.status.success());
+    std::fs::write(&drop_in, b"[Unit]\nRequiresMountsFor=/forged\n").unwrap();
+    std::fs::set_permissions(&drop_in, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let before = std::fs::read(&drop_in).unwrap();
+
+    let retry = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("edge.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(!retry.status.success());
+    assert!(
+        String::from_utf8_lossy(&retry.stderr).contains("cleanup_required"),
+        "{}",
+        String::from_utf8_lossy(&retry.stderr)
+    );
+    assert_eq!(std::fs::read(&drop_in).unwrap(), before);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn old_receipt_with_new_pending_marker_blocks_readers_and_resumes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let initial = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("old.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(initial.status.success());
+    let receipt = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_COMPLETION_NAME);
+    assert!(receipt.exists());
+
+    let crashed = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("new.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .arg("--replace-existing")
+    .env("IOTKIT_TEST_BACKUP_PAIR_CRASH_PHASE", "after_backup")
+    .output()
+    .unwrap();
+    assert!(!crashed.status.success());
+    let marker = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+    assert!(marker.exists());
+    assert!(
+        receipt.exists(),
+        "new transaction must retain the old receipt"
+    );
+
+    for command in ["status", "create"] {
+        let blocked = nodectl()
+            .args(["backup", command, "--config", config.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            !blocked.status.success(),
+            "{command} unexpectedly succeeded"
+        );
+        assert!(
+            String::from_utf8_lossy(&blocked.stderr).contains("cleanup_required"),
+            "{command}: {}",
+            String::from_utf8_lossy(&blocked.stderr)
+        );
+    }
+
+    let retried = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("new.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .arg("--replace-existing")
+    .output()
+    .unwrap();
+    assert!(
+        retried.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retried.stderr)
+    );
+    assert!(!marker.exists());
+    assert!(receipt.exists());
+    assert!(
+        String::from_utf8_lossy(&std::fs::read(&config).unwrap()).contains("new.db"),
+        "retry did not publish the requested pair"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn completion_cleanup_crash_boundaries_keep_same_retry_idempotent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for (kind, phase) in [
+        ("fail", "after_completion_receipt"),
+        ("crash", "after_completion_receipt_sync"),
+        ("fail", "after_completion_marker_unlink"),
+        ("crash", "after_completion_marker_unlink_sync"),
+    ] {
+        let control = tempfile::tempdir_in("/tmp").unwrap();
+        let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        for path in [control.path(), destination.path(), staging.path()] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = control.path().join("backup.json");
+        let drop_in = control.path().join("backup.mount.conf");
+        let passphrase = control.path().join("passphrase");
+        std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+        std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            configure_command(
+                &config,
+                &drop_in,
+                &control.path().join("old.db"),
+                destination.path(),
+                staging.path(),
+                &passphrase,
+            )
+            .output()
+            .unwrap()
+            .status
+            .success()
+        );
+
+        let mut replacement = configure_command(
+            &config,
+            &drop_in,
+            &control.path().join("new.db"),
+            destination.path(),
+            staging.path(),
+            &passphrase,
+        );
+        replacement.arg("--replace-existing");
+        replacement.env(
+            if kind == "fail" {
+                "IOTKIT_TEST_BACKUP_PAIR_FAIL_PHASE"
+            } else {
+                "IOTKIT_TEST_BACKUP_PAIR_CRASH_PHASE"
+            },
+            phase,
+        );
+        let interrupted = replacement.output().unwrap();
+        assert!(
+            !interrupted.status.success(),
+            "{kind}/{phase} unexpectedly succeeded"
+        );
+
+        let retried = configure_command(
+            &config,
+            &drop_in,
+            &control.path().join("new.db"),
+            destination.path(),
+            staging.path(),
+            &passphrase,
+        )
+        .output()
+        .unwrap();
+        assert!(
+            retried.status.success(),
+            "{kind}/{phase}: {}",
+            String::from_utf8_lossy(&retried.stderr)
+        );
+        assert!(
+            control
+                .path()
+                .join(iotkit_core_recovery::BACKUP_PAIR_COMPLETION_NAME)
+                .exists(),
+            "{kind}/{phase} lost the completion receipt"
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -935,6 +1222,7 @@ fn published_pair_binds_retry_identity_before_accepting_new_arguments() {
         std::fs::set_permissions(passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
     let db_a = control.path().join("a.db");
+    let db_a_replacement = control.path().join("a-replacement.db");
     let db_b = control.path().join("b.db");
 
     let initial = configure_command(
@@ -958,7 +1246,7 @@ fn published_pair_binds_retry_identity_before_accepting_new_arguments() {
     let crashed = configure_command(
         &config,
         &drop_in,
-        &db_a,
+        &db_a_replacement,
         destination_a.path(),
         staging_a.path(),
         &passphrase_a,
@@ -975,6 +1263,9 @@ fn published_pair_binds_retry_identity_before_accepting_new_arguments() {
         .path()
         .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
     assert!(marker.exists());
+    let published_config = std::fs::read(&config).unwrap();
+    let published_drop_in = std::fs::read(&drop_in).unwrap();
+    assert_ne!(published_config, old_config);
 
     let different_without_replace = configure_command(
         &config,
@@ -992,8 +1283,9 @@ fn published_pair_binds_retry_identity_before_accepting_new_arguments() {
         "{}",
         String::from_utf8_lossy(&different_without_replace.stderr)
     );
-    assert_eq!(std::fs::read(&config).unwrap(), old_config);
-    assert_eq!(std::fs::read(&drop_in).unwrap(), old_drop_in);
+    assert_eq!(std::fs::read(&config).unwrap(), published_config);
+    assert_eq!(std::fs::read(&drop_in).unwrap(), published_drop_in);
+    assert_eq!(published_drop_in, old_drop_in);
     assert!(
         !marker.exists(),
         "different retry must finalize old marker first"

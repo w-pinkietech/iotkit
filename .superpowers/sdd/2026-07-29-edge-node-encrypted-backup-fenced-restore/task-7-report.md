@@ -324,3 +324,110 @@ e8df756 fix(recovery): make backup configuration recovery convergent
 ```
 
 No push or merge was performed.
+
+## Parent review remediation — round 4
+
+Round 4 retains the completion receipt as durable evidence for the current
+configuration pair. Ordinary success and exact idempotent retries never unlink
+that receipt. A replacement transaction leaves the prior receipt in place while
+its pending marker takes precedence and blocks status/create. At commit, the
+published marker atomically replaces the receipt; only the resulting
+cleanup-only marker is unlinked.
+
+The two possible marker-plus-receipt orientations are closed and recoverable:
+
+- before exchange, the current pair matches the new marker and its old hashes
+  bind the prior receipt;
+- after exchange, the current pair matches the new receipt and its old hashes
+  bind the prior receipt now stored under the marker name.
+
+A parent sync follows receipt replacement before marker cleanup. Failure or
+process crash after replacement, after its sync, after marker unlink, or after
+the cleanup sync leaves either the marker, the durable receipt, or the strictly
+related pair. The same no-replace retry converges without `DestinationExists`.
+Different arguments still require explicit replacement.
+
+The recovery core and nodectl now deserialize one closed `BackupPairRecord`
+schema. It rejects unknown fields; noncanonical schema, phase, txid, hash, and
+temporary-name values; and inconsistent optional fields. The core binds the
+receipt to the actual config path and exact current owner-only, private,
+regular, single-link config bytes. It opens receipt/marker FIFOs nonblocking and
+rejects symlinks and hard links. Nodectl additionally binds the exact configured
+drop-in path and bytes. The core intentionally cannot validate that second path:
+the durable record stores only its hash, not the raw path. No record implements
+`Debug`, and errors/status expose neither paths nor hashes.
+
+### TDD evidence
+
+The first RED cases were:
+
+```text
+cargo test -p iotkit-edge-nodectl --test backup_cli durable_completion_receipt -- --nocapture
+# failed: ordinary success must retain durable completion evidence
+
+cargo test -p iotkit-core-recovery completion_receipt -- --nocapture
+# failed: malformed/stale receipt was accepted
+
+cargo test -p iotkit-core-recovery receipt_and_marker_coexist -- --nocapture
+# failed: strict post-commit cleanup state was rejected
+```
+
+The pending-state test also exposed that a valid crash in `Prepared` after the
+old pair was moved aside did not resume. Recovery now restores the
+receipt-proven old pair, removes and syncs the pending marker, and re-enters
+preflight under the caller's explicit replacement policy.
+
+Focused GREEN coverage includes:
+
+- durable receipt after ordinary success and exact retry;
+- different no-replace refusal and explicit replacement;
+- valid old receipt plus pending marker blocking status/create and resuming;
+- receipt replacement and marker-cleanup failure/crash boundaries;
+- stale other-config path hash, malformed schema/hash/txid, unknown fields,
+  forged temp names, and modified config bytes;
+- receipt symlink, hard link, and FIFO rejection without mutation or hang;
+- strict post-commit marker/receipt coexistence and invalid coexistence;
+- exact nodectl drop-in path/content validation;
+- all prior 20 backup CLI cases and the 12-state forged phase matrix.
+
+### Verification
+
+WSL Ubuntu-26.04:
+
+```text
+cargo test -p iotkit-edge-nodectl -p iotkit-core-recovery
+# recovery: 122 passed, 1 ignored; 4 contract passed
+# nodectl: 15 unit, 23 backup CLI, 69 CLI passed
+
+cargo clippy -p iotkit-edge-nodectl -p iotkit-core-recovery \
+  --all-targets -- -D warnings
+cargo fmt --all -- --check
+node scripts/check-okf-docs.mjs
+scripts/check-layers
+scripts/check-source-layout
+node scripts/battle-tested-review.mjs check
+node --test scripts/tests/battle-tested-review.test.mjs
+```
+
+All commands passed. `scripts/verify.sh` also passed with explicit WSL
+`GIT_DIR`/`GIT_WORK_TREE`, including workspace tests and workspace Clippy with
+`-D warnings`. The unqualified WSL Git path remains unable to resolve this
+worktree's Windows absolute `.git` pointer; Windows `git diff --check` passed.
+
+### Battle-tested and self-review
+
+The selector chose BT-002, BT-003, and BT-004 for power-loss,
+storage-pressure, and Edge Node computer-replacement concerns. Receipt exchange
+precedes its parent sync; marker unlink follows that sync and never removes the
+receipt. Injected sync failures return `cleanup_required`, never success. Tests
+cover process aborts and injected filesystem failures, not physical power cuts,
+SD-card/controller behavior, or every filesystem's deployment guarantees.
+Encrypted computer replacement remains BT-004's explicit coverage gap.
+
+The state orientation is determined only from closed records, exact current
+pair hashes, and the new record's old-pair hashes. Corrupt, stale, other-path,
+or otherwise ambiguous evidence is preserved and returns `cleanup_required`.
+No raw path, credential, or digest is added to status, errors, audit, or
+`Debug`.
+
+No push or merge was performed.
