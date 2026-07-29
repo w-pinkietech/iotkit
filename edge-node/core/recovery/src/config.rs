@@ -10,7 +10,7 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
-use crate::{BackupConfig, BackupPassphrase, RecoveryError};
+use crate::{BackupConfig, BackupPassphrase, RecoveryError, RecoveryHandoff};
 
 #[cfg(target_os = "linux")]
 const CONFIG_MAX_BYTES: u64 = 64 * 1024;
@@ -123,9 +123,50 @@ pub fn load_owner_only_passphrase(path: &Path) -> Result<BackupPassphrase, Recov
     }
 }
 
+/// Loads a bounded, closed recovery handoff from an owner-only regular file.
+pub fn load_owner_only_handoff(path: &Path) -> Result<RecoveryHandoff, RecoveryError> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut file = open_owner_file(path, CONFIG_MAX_BYTES)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|_| RecoveryError::Storage)?;
+        if bytes.len() as u64 > CONFIG_MAX_BYTES {
+            return Err(RecoveryError::InvalidConfiguration);
+        }
+        let handoff: RecoveryHandoff =
+            serde_json::from_slice(&bytes).map_err(|_| RecoveryError::InvalidConfiguration)?;
+        if handoff.schema_version != 1
+            || handoff.credential_generation < 0
+            || [
+                &handoff.recovery_id,
+                &handoff.edge_id,
+                &handoff.edge_node_id,
+                &handoff.old_ledger_epoch,
+                &handoff.proposed_new_epoch,
+            ]
+            .into_iter()
+            .any(|value| value.is_empty() || value.chars().any(char::is_control))
+            || handoff
+                .expected_backup_id
+                .as_deref()
+                .is_some_and(|value| value.is_empty() || value.chars().any(char::is_control))
+        {
+            return Err(RecoveryError::InvalidConfiguration);
+        }
+        Ok(handoff)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Err(RecoveryError::PlatformUnsupported)
+    }
+}
+
 pub(crate) fn validate_config(config: &BackupConfig) -> Result<(), RecoveryError> {
     if config.schema_version != 1
         || config.freshness_seconds == 0
+        || config.retention_count == 0
         || config.expected_mount.mount_point.as_os_str().is_empty()
         || config.expected_mount.source.is_empty()
         || config.expected_mount.filesystem_type.is_empty()

@@ -449,7 +449,7 @@ pub fn apply_retention(
             }
             return Err(RecoveryError::Storage);
         }
-        let mut candidates: Vec<(String, NodeBackupManifest)> = Vec::new();
+        let mut candidates: Vec<(String, NodeBackupManifest, u64, u64)> = Vec::new();
         loop {
             let entry = unsafe { libc::readdir(stream) };
             if entry.is_null() {
@@ -489,7 +489,12 @@ pub fn apply_retention(
             if manifest.edge_node_id == edge_node_id
                 && successful_backup_ids.contains(&manifest.backup_id)
             {
-                candidates.push((name.to_string_lossy().into_owned(), manifest));
+                candidates.push((
+                    name.to_string_lossy().into_owned(),
+                    manifest,
+                    metadata.dev(),
+                    metadata.ino(),
+                ));
             }
         }
         unsafe {
@@ -497,8 +502,31 @@ pub fn apply_retention(
         }
         candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.1.created_at_ms));
         let mut removed = 0_u32;
-        for (name, _) in candidates.into_iter().skip(retention_count as usize) {
+        let keep = usize::try_from(retention_count.max(1)).map_err(|_| RecoveryError::Storage)?;
+        let newest = candidates
+            .first()
+            .map(|candidate| candidate.1.created_at_ms);
+        for (name, manifest, expected_dev, expected_ino) in candidates.into_iter().skip(keep) {
+            if newest.is_none_or(|created_at| manifest.created_at_ms >= created_at) {
+                continue;
+            }
             let name = CString::new(name).map_err(|_| RecoveryError::Storage)?;
+            let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+            if unsafe {
+                libc::fstatat(
+                    directory_fd,
+                    name.as_ptr(),
+                    stat.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } != 0
+            {
+                continue;
+            }
+            let stat = unsafe { stat.assume_init() };
+            if stat.st_dev as u64 != expected_dev || stat.st_ino != expected_ino {
+                continue;
+            }
             if unsafe { libc::unlinkat(directory_fd, name.as_ptr(), 0) } == 0 {
                 removed = removed.checked_add(1).ok_or(RecoveryError::Storage)?;
             }

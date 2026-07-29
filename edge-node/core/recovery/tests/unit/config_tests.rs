@@ -79,6 +79,21 @@ fn configuration_rejects_relative_and_overlapping_paths_before_writing() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn configuration_rejects_zero_retention_before_creating_a_file() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let mut input = config(root.path());
+    input.retention_count = 0;
+
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        Err(RecoveryError::InvalidConfiguration)
+    );
+    assert!(!config_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn owner_only_config_reader_rejects_symlink_hardlink_broad_mode_and_oversize() {
     let root = TempDir::new().unwrap();
     let config_path = root.path().join("backup.json");
@@ -111,6 +126,39 @@ fn owner_only_config_reader_rejects_symlink_hardlink_broad_mode_and_oversize() {
     fs::write(&config_path, vec![b'x'; 64 * 1024 + 1]).unwrap();
     assert_eq!(
         load_owner_only_config(&config_path),
+        Err(RecoveryError::InvalidConfiguration)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn handoff_loader_accepts_only_bounded_owner_only_closed_json() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    let handoff_path = root.path().join("handoff.json");
+    let handoff = RecoveryHandoff {
+        schema_version: 1,
+        recovery_id: "recovery-1".into(),
+        edge_id: "edge-1".into(),
+        edge_node_id: "node-1".into(),
+        old_ledger_epoch: "epoch-1".into(),
+        expected_backup_id: Some("backup-1".into()),
+        proposed_new_epoch: "epoch-2".into(),
+        credential_generation: 1,
+    };
+    fs::write(&handoff_path, serde_json::to_vec(&handoff).unwrap()).unwrap();
+    fs::set_permissions(&handoff_path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(load_owner_only_handoff(&handoff_path).unwrap(), handoff);
+
+    fs::set_permissions(&handoff_path, fs::Permissions::from_mode(0o640)).unwrap();
+    assert_eq!(
+        load_owner_only_handoff(&handoff_path),
+        Err(RecoveryError::InvalidConfiguration)
+    );
+    fs::set_permissions(&handoff_path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&handoff_path, vec![b'x'; 64 * 1024 + 1]).unwrap();
+    assert_eq!(
+        load_owner_only_handoff(&handoff_path),
         Err(RecoveryError::InvalidConfiguration)
     );
 }

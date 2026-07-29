@@ -10,7 +10,8 @@ mod snapshot;
 mod state;
 
 pub use config::{
-    BackupConfigReplace, configure_backup, load_owner_only_config, load_owner_only_passphrase,
+    BackupConfigReplace, configure_backup, load_owner_only_config, load_owner_only_handoff,
+    load_owner_only_passphrase,
 };
 pub use container::{
     DecryptedStage, DirectoryCapability, authenticate_container, decrypt_container_to_staging_file,
