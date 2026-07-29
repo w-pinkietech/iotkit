@@ -986,7 +986,7 @@ fn free_bytes(directory: &DirectoryCapability) -> Result<u64, RecoveryError> {
 fn open_input(path: &Path) -> Result<File, RecoveryError> {
     let file = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .map_err(|_| RecoveryError::Storage)?;
     let metadata = file.metadata().map_err(|_| RecoveryError::Storage)?;
@@ -997,6 +997,7 @@ fn open_input(path: &Path) -> Result<File, RecoveryError> {
     {
         return Err(RecoveryError::InvalidConfiguration);
     }
+    crate::config::clear_nonblock(&file)?;
     Ok(file)
 }
 

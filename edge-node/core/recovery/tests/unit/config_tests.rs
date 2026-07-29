@@ -99,6 +99,60 @@ fn owner_passphrase_parser_accepts_one_terminal_line_ending_only() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn bounded_owner_reader_rejects_growth_after_metadata_observation() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let _environment_lock = owner_reader_environment_lock().lock().unwrap();
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let path = root.path().join("passphrase");
+    fs::write(&path, b"twelve-chars").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let ready = root.path().join("reader.ready");
+    let proceed = root.path().join("reader.continue");
+    unsafe {
+        std::env::set_var("IOTKIT_TEST_OWNER_FILE_PAUSE_AFTER_FSTAT", "1");
+        std::env::set_var("IOTKIT_TEST_OWNER_FILE_PAUSE_PATH", &path);
+        std::env::set_var("IOTKIT_TEST_OWNER_FILE_READY_FILE", &ready);
+        std::env::set_var("IOTKIT_TEST_OWNER_FILE_CONTINUE_FILE", &proceed);
+    }
+    let reader_path = path.clone();
+    let reader = std::thread::spawn(move || load_owner_only_passphrase(&reader_path));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "reader did not pause after fstat"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&vec![b'x'; 8 * 1024])
+        .unwrap();
+    fs::write(&proceed, b"continue").unwrap();
+    let result = reader.join().unwrap();
+    unsafe {
+        std::env::remove_var("IOTKIT_TEST_OWNER_FILE_PAUSE_AFTER_FSTAT");
+        std::env::remove_var("IOTKIT_TEST_OWNER_FILE_PAUSE_PATH");
+        std::env::remove_var("IOTKIT_TEST_OWNER_FILE_READY_FILE");
+        std::env::remove_var("IOTKIT_TEST_OWNER_FILE_CONTINUE_FILE");
+    }
+    assert_eq!(result.unwrap_err(), RecoveryError::InvalidPassphrase);
+}
+
+#[cfg(target_os = "linux")]
+fn owner_reader_environment_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() {
     let root = TempDir::new().unwrap();
     let config_path = root.path().join("backup.json");

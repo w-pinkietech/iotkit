@@ -755,7 +755,7 @@ pub fn inspect_backup(
     {
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(input)
             .map_err(|_| RecoveryError::Storage)?;
         let metadata = file.metadata().map_err(|_| RecoveryError::Storage)?;
@@ -766,6 +766,7 @@ pub fn inspect_backup(
         {
             return Err(RecoveryError::InvalidConfiguration);
         }
+        crate::config::clear_nonblock(&file)?;
         crate::container::authenticate_container_file(file, passphrase)
     }
     #[cfg(not(target_os = "linux"))]

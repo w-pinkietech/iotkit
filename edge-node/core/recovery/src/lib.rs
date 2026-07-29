@@ -16,7 +16,7 @@ pub use backup::{
     backup_status, create_backup, inspect_backup,
 };
 pub use config::{
-    BackupConfigReplace, RecoveryObservationGuard, RecoveryOperationGuard,
+    BACKUP_PAIR_MARKER_NAME, BackupConfigReplace, RecoveryObservationGuard, RecoveryOperationGuard,
     acquire_recovery_observation, acquire_recovery_operation, configure_backup,
     configure_backup_guarded, load_owner_only_config, load_owner_only_handoff,
     load_owner_only_passphrase,

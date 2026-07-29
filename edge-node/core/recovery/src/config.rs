@@ -21,6 +21,10 @@ use crate::{BackupConfig, BackupPassphrase, RecoveryError, RecoveryHandoff};
 #[cfg(target_os = "linux")]
 const CONFIG_MAX_BYTES: u64 = 64 * 1024;
 
+/// Name of the owner-only marker used while configuration and its systemd
+/// drop-in are being published as one recovery operation.
+pub const BACKUP_PAIR_MARKER_NAME: &str = ".iotkit-backup-pair.txn";
+
 /// Explicit configuration replacement policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackupConfigReplace {
@@ -392,13 +396,10 @@ fn rollback_exchange(
 pub fn load_owner_only_config(path: &Path) -> Result<BackupConfig, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
-        let mut file = open_owner_file(path, CONFIG_MAX_BYTES)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|_| RecoveryError::Storage)?;
-        if bytes.len() as u64 > CONFIG_MAX_BYTES {
-            return Err(RecoveryError::InvalidConfiguration);
+        if pending_pair_marker(path)? {
+            return Err(RecoveryError::CleanupRequired);
         }
+        let bytes = read_owner_file(path, CONFIG_MAX_BYTES)?;
         let config =
             serde_json::from_slice(&bytes).map_err(|_| RecoveryError::InvalidConfiguration)?;
         validate_config(&config)?;
@@ -415,14 +416,7 @@ pub fn load_owner_only_config(path: &Path) -> Result<BackupConfig, RecoveryError
 pub fn load_owner_only_passphrase(path: &Path) -> Result<BackupPassphrase, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
-        let mut file =
-            open_owner_file(path, 4_098).map_err(|_| RecoveryError::InvalidPassphrase)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|_| RecoveryError::Storage)?;
-        if bytes.len() > 4_098 {
-            return Err(RecoveryError::InvalidPassphrase);
-        }
+        let bytes = read_owner_file(path, 4_098).map_err(|_| RecoveryError::InvalidPassphrase)?;
         let mut value = String::from_utf8(bytes).map_err(|_| RecoveryError::InvalidPassphrase)?;
         if value.ends_with('\n') {
             value.pop();
@@ -453,13 +447,7 @@ pub fn load_owner_only_passphrase(path: &Path) -> Result<BackupPassphrase, Recov
 pub fn load_owner_only_handoff(path: &Path) -> Result<RecoveryHandoff, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
-        let mut file = open_owner_file(path, CONFIG_MAX_BYTES)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|_| RecoveryError::Storage)?;
-        if bytes.len() as u64 > CONFIG_MAX_BYTES {
-            return Err(RecoveryError::InvalidConfiguration);
-        }
+        let bytes = read_owner_file(path, CONFIG_MAX_BYTES)?;
         let handoff: RecoveryHandoff =
             serde_json::from_slice(&bytes).map_err(|_| RecoveryError::InvalidConfiguration)?;
         if !crate::model::validate_recovery_handoff(&handoff) {
@@ -542,11 +530,92 @@ fn is_absolute_normalized(path: &Path) -> bool {
 fn open_owner_file(path: &Path, limit: u64) -> Result<File, RecoveryError> {
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .map_err(|_| RecoveryError::InvalidConfiguration)?;
     validate_owner_file_open(&file, limit)?;
+    clear_nonblock(&file)?;
     Ok(file)
+}
+
+#[cfg(target_os = "linux")]
+fn pending_pair_marker(path: &Path) -> Result<bool, RecoveryError> {
+    let parent_path = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
+    let parent = open_directory(parent_path)?;
+    validate_owner_directory_open(&parent)?;
+    let name =
+        CString::new(BACKUP_PAIR_MARKER_NAME).map_err(|_| RecoveryError::InvalidConfiguration)?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        return if error.kind() == std::io::ErrorKind::NotFound {
+            Ok(false)
+        } else {
+            Err(RecoveryError::CleanupRequired)
+        };
+    }
+    let marker = unsafe { File::from_raw_fd(fd) };
+    let metadata = marker
+        .metadata()
+        .map_err(|_| RecoveryError::CleanupRequired)?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(RecoveryError::CleanupRequired);
+    }
+    Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+fn read_owner_file(path: &Path, limit: u64) -> Result<Vec<u8>, RecoveryError> {
+    let file = open_owner_file(path, limit)?;
+    let pause_path = std::env::var_os("IOTKIT_TEST_OWNER_FILE_PAUSE_PATH");
+    if std::env::var_os("IOTKIT_TEST_OWNER_FILE_PAUSE_AFTER_FSTAT").is_some()
+        && pause_path
+            .as_deref()
+            .is_some_and(|value| Path::new(value) == path)
+    {
+        let ready = std::env::var_os("IOTKIT_TEST_OWNER_FILE_READY_FILE")
+            .ok_or(RecoveryError::InvalidConfiguration)?;
+        let proceed = std::env::var_os("IOTKIT_TEST_OWNER_FILE_CONTINUE_FILE")
+            .ok_or(RecoveryError::InvalidConfiguration)?;
+        std::fs::write(&ready, b"ready").map_err(|_| RecoveryError::Storage)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !std::path::Path::new(&proceed).exists() {
+            if std::time::Instant::now() >= deadline {
+                return Err(RecoveryError::Storage);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| RecoveryError::Storage)?;
+    if bytes.len() as u64 > limit {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn clear_nonblock(file: &File) -> Result<(), RecoveryError> {
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(RecoveryError::Storage);
+    }
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        return Err(RecoveryError::Storage);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

@@ -255,15 +255,10 @@ fn run() -> AppResult<()> {
         created_target = Some(CreatedDatabaseTarget::new(db_path.clone()));
     }
 
-    // The legacy JSON snapshot is a frozen R22 surface. Keep its migration
-    // set isolated so opening it does not add the recovery tables or change
-    // the established snapshot wire format; all other commands use the
-    // complete Edge Node migration set.
-    let all_migrations = if matches!(&cli.command, Command::Snapshot { .. }) {
-        legacy_migrations()
-    } else {
-        iotkit_core_recovery::all_edge_node_migrations()
-    };
+    // Snapshot keeps its established JSON wire shape, but it operates on the
+    // same current Edge Node schema as every other command. Opening a legacy
+    // database therefore applies the current migrations before dispatch.
+    let all_migrations = iotkit_core_recovery::all_edge_node_migrations();
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
     if !restoring_snapshot {
@@ -288,17 +283,6 @@ fn run() -> AppResult<()> {
         target.committed = true;
     }
     Ok(())
-}
-
-fn legacy_migrations() -> Vec<iotkit_core_storage::Migration> {
-    let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
-    migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
-    migrations.sort_by_key(|migration| migration.version);
-    migrations
 }
 
 fn ensure_edge_node_id(

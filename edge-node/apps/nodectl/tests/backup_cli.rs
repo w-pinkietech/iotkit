@@ -154,6 +154,24 @@ fn create_inspect_and_status_emit_only_nonsecret_summaries() {
     assert!(drop_in_text.starts_with("[Unit]\nRequiresMountsFor="));
     assert!(!drop_in_text.contains("cli-secret-passphrase"));
     assert!(!drop_in_text.contains("passphrase"));
+    let unit = control.path().join("iotkit-backup-test.service");
+    std::fs::write(
+        &unit,
+        format!(
+            "{}\n[Service]\nType=oneshot\nExecStart=/bin/true\n",
+            drop_in_text
+        ),
+    )
+    .unwrap();
+    let systemd_verify = Command::new("systemd-analyze")
+        .args(["verify", unit.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        systemd_verify.status.success(),
+        "generated drop-in failed systemd-analyze verify: {}",
+        String::from_utf8_lossy(&systemd_verify.stderr)
+    );
 
     let create = nodectl()
         .args(["backup", "create", "--config", config.to_str().unwrap()])
@@ -399,6 +417,440 @@ fn broad_passphrase_permissions_are_rejected_without_secret_leakage() {
         assert!(!capture.contains("sensitive-cli-passphrase"));
         assert!(!capture.contains(config.to_str().unwrap()));
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn owner_only_readers_reject_fifo_symlink_and_hardlink_without_hanging() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let regular = root.path().join("regular");
+    std::fs::write(&regular, b"twelve-chars").unwrap();
+    std::fs::set_permissions(&regular, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let config_fifo = root.path().join("config.fifo");
+    let passphrase_fifo = root.path().join("passphrase.fifo");
+    let handoff_fifo = root.path().join("handoff.fifo");
+    let artifact_fifo = root.path().join("artifact.fifo");
+    for fifo in [
+        &config_fifo,
+        &passphrase_fifo,
+        &handoff_fifo,
+        &artifact_fifo,
+    ] {
+        let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    }
+
+    let status_fifo = run_promptly(
+        nodectl().args([
+            "backup",
+            "status",
+            "--config",
+            config_fifo.to_str().unwrap(),
+        ]),
+        "status FIFO",
+    );
+    assert_closed_error(&status_fifo);
+
+    let inspect_fifo_passphrase = run_promptly(
+        nodectl().args([
+            "backup",
+            "inspect",
+            "--input",
+            root.path().join("absent-artifact").to_str().unwrap(),
+            "--passphrase-file",
+            passphrase_fifo.to_str().unwrap(),
+        ]),
+        "passphrase FIFO",
+    );
+    assert_closed_error(&inspect_fifo_passphrase);
+
+    let restore_fifo_handoff = run_promptly(
+        nodectl().args([
+            "backup",
+            "restore",
+            "--input",
+            root.path().join("absent-artifact").to_str().unwrap(),
+            "--candidate-db",
+            root.path().join("candidate.db").to_str().unwrap(),
+            "--live-db",
+            root.path().join("live.db").to_str().unwrap(),
+            "--passphrase-file",
+            regular.to_str().unwrap(),
+            "--recovery-handoff",
+            handoff_fifo.to_str().unwrap(),
+        ]),
+        "handoff FIFO",
+    );
+    assert_closed_error(&restore_fifo_handoff);
+
+    let inspect_fifo_artifact = run_promptly(
+        nodectl().args([
+            "backup",
+            "inspect",
+            "--input",
+            artifact_fifo.to_str().unwrap(),
+            "--passphrase-file",
+            regular.to_str().unwrap(),
+        ]),
+        "artifact FIFO",
+    );
+    assert_closed_error(&inspect_fifo_artifact);
+
+    let config_link = root.path().join("config-link");
+    std::os::unix::fs::symlink(&regular, &config_link).unwrap();
+    let output = run_promptly(
+        nodectl().args([
+            "backup",
+            "status",
+            "--config",
+            config_link.to_str().unwrap(),
+        ]),
+        "config symlink",
+    );
+    assert_closed_error(&output);
+
+    let passphrase_link = root.path().join("passphrase-link");
+    std::os::unix::fs::symlink(&regular, &passphrase_link).unwrap();
+    let output = run_promptly(
+        nodectl().args([
+            "backup",
+            "inspect",
+            "--input",
+            root.path().join("absent-artifact").to_str().unwrap(),
+            "--passphrase-file",
+            passphrase_link.to_str().unwrap(),
+        ]),
+        "passphrase symlink",
+    );
+    assert_closed_error(&output);
+
+    let handoff_link = root.path().join("handoff-link");
+    std::os::unix::fs::symlink(&regular, &handoff_link).unwrap();
+    let output = run_promptly(
+        nodectl().args([
+            "backup",
+            "restore",
+            "--input",
+            root.path().join("absent-artifact").to_str().unwrap(),
+            "--candidate-db",
+            root.path().join("candidate.db").to_str().unwrap(),
+            "--live-db",
+            root.path().join("live.db").to_str().unwrap(),
+            "--passphrase-file",
+            regular.to_str().unwrap(),
+            "--recovery-handoff",
+            handoff_link.to_str().unwrap(),
+        ]),
+        "handoff symlink",
+    );
+    assert_closed_error(&output);
+
+    let artifact_link = root.path().join("artifact-link");
+    std::os::unix::fs::symlink(&regular, &artifact_link).unwrap();
+    let output = run_promptly(
+        nodectl().args([
+            "backup",
+            "inspect",
+            "--input",
+            artifact_link.to_str().unwrap(),
+            "--passphrase-file",
+            regular.to_str().unwrap(),
+        ]),
+        "artifact symlink",
+    );
+    assert_closed_error(&output);
+
+    let hardlink_target = root.path().join("hardlink");
+    std::fs::hard_link(&regular, &hardlink_target).unwrap();
+    let output = run_promptly(
+        nodectl().args([
+            "backup",
+            "inspect",
+            "--input",
+            root.path().join("absent-artifact").to_str().unwrap(),
+            "--passphrase-file",
+            hardlink_target.to_str().unwrap(),
+        ]),
+        "passphrase hardlink",
+    );
+    assert_closed_error(&output);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn configure_pair_rolls_back_each_failure_phase_without_a_mixed_pair() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for phase in [
+        "after_backup",
+        "after_config_publish",
+        "after_drop_in_publish",
+        "after_parent_sync",
+    ] {
+        let control = tempfile::tempdir_in("/tmp").unwrap();
+        let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        for path in [control.path(), destination.path(), staging.path()] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = control.path().join("backup.json");
+        let drop_in = control.path().join("backup.mount.conf");
+        let passphrase = control.path().join("passphrase");
+        std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+        std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let output = configure_command(
+            &config,
+            &drop_in,
+            control.path().join("missing.db").as_path(),
+            destination.path(),
+            staging.path(),
+            &passphrase,
+        )
+        .env("IOTKIT_TEST_BACKUP_PAIR_FAIL_PHASE", phase)
+        .output()
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "phase {phase} unexpectedly succeeded"
+        );
+        assert!(!config.exists(), "config survived phase {phase}");
+        assert!(!drop_in.exists(), "drop-in survived phase {phase}");
+        assert!(
+            !control
+                .path()
+                .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME)
+                .exists(),
+            "transaction marker survived phase {phase}"
+        );
+        let leftovers = std::fs::read_dir(control.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".iotkit-backup-pair."))
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "leftovers for phase {phase}: {leftovers:?}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn configure_pair_crash_marker_is_recovered_on_retry() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let crashed = configure_command(
+        &config,
+        &drop_in,
+        control.path().join("missing.db").as_path(),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .env(
+        "IOTKIT_TEST_BACKUP_PAIR_CRASH_PHASE",
+        "after_drop_in_publish",
+    )
+    .output()
+    .unwrap();
+    assert!(!crashed.status.success());
+    let marker = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+    assert!(
+        marker.exists(),
+        "crash must leave a durable transaction marker"
+    );
+    let status_while_pending = nodectl()
+        .args(["backup", "status", "--config", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!status_while_pending.status.success());
+    assert!(
+        String::from_utf8_lossy(&status_while_pending.stderr).contains("cleanup_required"),
+        "pending pair must not be projected as configured: {}",
+        String::from_utf8_lossy(&status_while_pending.stderr)
+    );
+
+    let retried = configure_command(
+        &config,
+        &drop_in,
+        control.path().join("missing.db").as_path(),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(
+        retried.status.success(),
+        "retry failed: {}",
+        String::from_utf8_lossy(&retried.stderr)
+    );
+    assert!(config.exists());
+    assert!(drop_in.exists());
+    assert!(!marker.exists(), "completed retry must remove its marker");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_configure_is_serialized_by_the_pair_operation_guard() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let ready = control.path().join("pair.ready");
+    let proceed = control.path().join("pair.continue");
+
+    let mut first = configure_command(
+        &config,
+        &drop_in,
+        control.path().join("missing.db").as_path(),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    );
+    first
+        .env("IOTKIT_TEST_BACKUP_PAIR_PAUSE_PHASE", "after_backup")
+        .env("IOTKIT_TEST_BACKUP_PAIR_READY_FILE", &ready)
+        .env("IOTKIT_TEST_BACKUP_PAIR_CONTINUE_FILE", &proceed)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let first_child = first.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "first configure did not enter its guarded phase"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let second = configure_command(
+        &config,
+        &drop_in,
+        control.path().join("missing.db").as_path(),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(!second.status.success());
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("operation_busy"),
+        "second configure was not serialized: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    std::fs::write(&proceed, b"continue").unwrap();
+    let first_output = first_child.wait_with_output().unwrap();
+    assert!(
+        first_output.status.success(),
+        "first configure failed: {}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    assert!(config.exists());
+    assert!(drop_in.exists());
+}
+
+#[cfg(target_os = "linux")]
+fn configure_command(
+    config: &std::path::Path,
+    drop_in: &std::path::Path,
+    db: &std::path::Path,
+    destination: &std::path::Path,
+    staging: &std::path::Path,
+    passphrase: &std::path::Path,
+) -> Command {
+    let mut command = nodectl();
+    command.args([
+        "backup",
+        "configure",
+        "--config",
+        config.to_str().unwrap(),
+        "--db",
+        db.to_str().unwrap(),
+        "--destination",
+        destination.to_str().unwrap(),
+        "--staging-directory",
+        staging.to_str().unwrap(),
+        "--passphrase-file",
+        passphrase.to_str().unwrap(),
+        "--freshness-seconds",
+        "86400",
+        "--retention-count",
+        "7",
+        "--systemd-drop-in",
+        drop_in.to_str().unwrap(),
+    ]);
+    command
+}
+
+#[cfg(target_os = "linux")]
+fn run_promptly(command: &mut Command, label: &str) -> std::process::Output {
+    use std::time::{Duration, Instant};
+
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{label} reader did not fail closed promptly");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn assert_closed_error(output: &std::process::Output) {
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.is_empty(),
+        "unexpected stdout: {stdout:?}; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.starts_with("{\"error\":{"),
+        "unexpected stderr={stderr:?}; stdout={stdout:?}"
+    );
+    assert!(!stderr.contains("/tmp/"), "path leaked: {stderr}");
 }
 
 fn json(bytes: &[u8]) -> Value {

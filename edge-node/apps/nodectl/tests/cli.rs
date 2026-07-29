@@ -65,6 +65,67 @@ fn legacy_snapshot_export_refuses_device_credentials_without_secret_or_hash_leak
 }
 
 #[test]
+fn subprocess_init_v23_snapshot_export_restore_and_status_regression() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.db");
+    let target = dir.path().join("target.db");
+    let snapshot = dir.path().join("snapshot.json");
+
+    let initialized = assert_success(run(&["--db", source.to_str().unwrap(), "init"]));
+    let initialized_json: Value = serde_json::from_str(&initialized).unwrap();
+    assert!(initialized_json["edge_node_id"].as_str().is_some());
+
+    let source_conn = rusqlite::Connection::open(&source).unwrap();
+    let versions: Vec<i64> = source_conn
+        .prepare("SELECT version FROM _schema_version ORDER BY version")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        versions.contains(&23),
+        "init must apply current migration v23"
+    );
+    drop(source_conn);
+
+    assert_success(run(&[
+        "--db",
+        source.to_str().unwrap(),
+        "snapshot",
+        "export",
+        snapshot.to_str().unwrap(),
+    ]));
+    assert!(snapshot.exists());
+
+    assert_success(run(&[
+        "snapshot",
+        "restore",
+        snapshot.to_str().unwrap(),
+        "--db",
+        target.to_str().unwrap(),
+        "--create",
+        "--yes",
+    ]));
+    let status: Value = serde_json::from_str(&assert_success(run(&[
+        "snapshot",
+        "restore-status",
+        "--db",
+        target.to_str().unwrap(),
+    ])))
+    .unwrap();
+    assert!(status["restore_receipt"].is_object());
+
+    let target_conn = rusqlite::Connection::open(&target).unwrap();
+    let target_max: i64 = target_conn
+        .query_row("SELECT MAX(version) FROM _schema_version", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(target_max, 23, "snapshot restore target must remain v23");
+}
+
+#[test]
 fn snapshot_export_failure_leaves_no_output_or_temporary_artifact() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("export-failure.db");
@@ -726,14 +787,9 @@ fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
 }
 
 fn legacy_migrations() -> Vec<iotkit_core_storage::Migration> {
-    let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
-    all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
-    all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
-    all.extend_from_slice(iotkit_core_registry::MIGRATIONS);
-    all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
-    all.extend_from_slice(iotkit_core_ops::MIGRATIONS);
-    all.sort_by_key(|m| m.version);
-    all
+    // Snapshot JSON remains the compatibility surface; its database is not a
+    // frozen schema. Test fixtures use the same current migrations as the CLI.
+    all_migrations()
 }
 
 fn run(args: &[&str]) -> Output {
