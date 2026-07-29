@@ -51,7 +51,7 @@ test('backup timer is opt-in and uses the daily jitter contract', async () => {
 test('nodectl configure pins the exact captured mount point in a temporary drop-in', async (t) => {
   const nodectl = process.env.IOTKIT_NODECTL ?? join(repositoryRoot, 'target', 'debug', 'iotkit-edge-nodectl');
   if (!existsSync(nodectl) || process.platform === 'win32') {
-    t.skip('requires a runnable Linux nodectl binary; Rust backup_cli covers the same contract on other hosts');
+    t.skip('Linux-only product coverage; run with a Linux nodectl binary (WSL CI); Rust backup_cli is not a Windows product substitute');
     return;
   }
 

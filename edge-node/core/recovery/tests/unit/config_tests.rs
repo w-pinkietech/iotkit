@@ -26,6 +26,45 @@ fn config(root: &Path) -> BackupConfig {
     }
 }
 
+#[test]
+fn backup_pair_helpers_are_platform_neutral() {
+    use sha2::{Digest, Sha256};
+
+    let path = Path::new("edge-node-backup.json");
+    let txid = "backup-config-0123";
+    let config_temp_name = format!(
+        ".edge-node-backup.json.{}.iotkit-config",
+        "0123456789abcdef0123456789abcdef"
+    );
+    let path_hash = Sha256::digest(path.as_os_str().as_encoded_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let record = BackupPairRecord {
+        schema_version: 3,
+        txid: txid.into(),
+        config_path_hash: path_hash,
+        drop_in_path_hash: "a".repeat(64),
+        phase: BackupPairPhase::ConfigPublishing,
+        request_config_hash: "b".repeat(64),
+        request_drop_in_hash: "c".repeat(64),
+        config_hash: Some("d".repeat(64)),
+        drop_in_hash: Some("e".repeat(64)),
+        config_existed: true,
+        drop_in_existed: true,
+        old_config_hash: Some("f".repeat(64)),
+        old_drop_in_hash: Some("0".repeat(64)),
+        config_temp_name: Some(config_temp_name),
+        drop_in_temp_name: Some(format!(".iotkit-backup-pair.{txid}.drop-in.tmp")),
+    };
+
+    assert!(
+        record
+            .validate_for_paths(path, Some(&"a".repeat(64)))
+            .is_ok()
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn mountinfo_for(destination: &Path) -> String {
     use std::os::unix::fs::MetadataExt;

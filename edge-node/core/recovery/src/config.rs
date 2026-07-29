@@ -787,7 +787,6 @@ fn completion_receipt_is_valid_at(
     Ok(Some(record))
 }
 
-#[cfg(target_os = "linux")]
 fn valid_pair_hash(value: &str) -> bool {
     value.len() == 64
         && value
@@ -795,7 +794,6 @@ fn valid_pair_hash(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-#[cfg(target_os = "linux")]
 fn valid_pair_txid(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 80
@@ -804,7 +802,6 @@ fn valid_pair_txid(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-#[cfg(target_os = "linux")]
 fn valid_pair_config_temp_name(config_path: &Path, value: &str) -> bool {
     let Some(config_name) = config_path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -818,12 +815,10 @@ fn valid_pair_config_temp_name(config_path: &Path, value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-#[cfg(target_os = "linux")]
 fn pair_path_hash(path: &Path) -> String {
-    pair_digest(path.as_os_str().as_bytes())
+    pair_digest(path.as_os_str().as_encoded_bytes())
 }
 
-#[cfg(target_os = "linux")]
 fn pair_digest(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 

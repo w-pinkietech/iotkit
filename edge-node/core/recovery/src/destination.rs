@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    fs::File,
-    path::{Component, Path, PathBuf},
-};
+use std::{collections::BTreeSet, fs::File, path::PathBuf};
 
 #[cfg(target_os = "linux")]
 use std::{
@@ -20,6 +16,9 @@ use std::os::{
         fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
 };
+
+#[cfg(target_os = "linux")]
+use std::path::{Component, Path};
 
 #[cfg(target_os = "linux")]
 use crate::MountIdentity;
@@ -328,11 +327,6 @@ pub(crate) fn validate_staging_configuration(path: &Path) -> Result<(), Recovery
         validate_staging_leaf(&directory)?;
     }
     Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn validate_staging_configuration(_path: &Path) -> Result<(), RecoveryError> {
-    Err(RecoveryError::PlatformUnsupported)
 }
 
 #[cfg(target_os = "linux")]

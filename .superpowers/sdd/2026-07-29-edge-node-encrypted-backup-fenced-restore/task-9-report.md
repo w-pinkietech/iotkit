@@ -9,8 +9,10 @@ a real temporary-drop-in test, the bilingual Edge Node recovery contract, and
 the operator/ingest wording for the shipped slice-1 boundary. Round 1 also
 enforces the existing-tmpfs-parent/exact-leaf staging contract in recovery and
 nodectl tests, and corrects the architecture/generation/reconciliation/drill
-wording. It does not add a production handoff producer, Broker fence, remote
-permit, activation, or a usable replacement journey.
+wording. Round 2 closes the recovery crate's cross-platform pure-helper compile
+gap and removes the real-artifact restore-drill ambiguity. It does not add a
+production handoff producer, Broker fence, remote permit, activation, or a
+usable replacement journey.
 
 ## RED (before unit templates)
 
@@ -23,7 +25,7 @@ node --test scripts/tests/edge-node-backup-systemd.test.mjs
 ✖ backup timer is opt-in and uses the daily jitter contract
   Error: ENOENT ... deploy/systemd/iotkit-edge-node-backup.timer
 ﹣ nodectl configure pins the exact captured mount point in a temporary drop-in
-  # requires a runnable Linux nodectl binary; Rust backup_cli covers the same contract on other hosts
+  # Linux-only product coverage; Rust backup_cli is not a Windows product substitute
 2 failed, 1 skipped
 ```
 
@@ -119,20 +121,61 @@ local same-request replay remains shipped. Checked-in handoff fixtures are
 conformance-only with their matching test-generated artifact; no real-backup
 operator restore success is claimed without later authority.
 
+## Round 2 RED (before cross-platform helper fix)
+
+The Windows library check reproduced the six-closure regression before the
+minimal helper change:
+
+```text
+cargo check -p iotkit-core-recovery --lib
+error[E0425]: cannot find value `valid_pair_hash` in this scope
+error[E0425]: cannot find function `valid_pair_txid` in this scope
+error[E0425]: cannot find function `pair_path_hash` in this scope
+error[E0425]: cannot find function `valid_pair_config_temp_name` in this scope
+... 10 previous errors; 1 warning
+```
+
+The helpers were Linux-gated even though `BackupPairRecord`'s public validators
+compile on every target. The destination `Component` import was also unused on
+Windows.
+
+## Round 2 GREEN
+
+The pure validators and SHA-256 path helper are now cross-platform; the path
+helper uses `OsStr::as_encoded_bytes()` (identical raw bytes on Linux), and the
+Linux-only `Component` import is scoped accordingly. A platform-neutral helper
+test exercises hashes, txids, temporary names, and path digest binding.
+
+The systemd test skip now states that the product invocation is Linux-only and
+must run with a Linux binary (WSL CI); the Rust CLI suite is not presented as a
+Windows product substitute. The recovery contract now says that a real artifact
+may be inspected and verified off-host in slice 1, while restore conformance is
+limited to the matching test-generated artifact; real-backup RPO restore-drill
+verification waits for a later recovery authority.
+
 ## Verification
 
 - `node --test scripts/tests/edge-node-backup-systemd.test.mjs` (Windows:
-  2 passed, 1 host skip; WSL: 3 passed).
+  2 passed, 1 host skip with the Linux-only-product wording; WSL: 3 passed).
+- Windows `cargo check -p iotkit-core-recovery --lib` passed after Round 2;
+  the pre-fix RED had the ten E0425 helper errors above. The recovery crate is
+  warning-free; only the unrelated `iotkit-core-ops` `mode` warning remains.
+- Windows `cargo check -p iotkit-edge-nodectl` reaches the known pre-existing
+  Unix-only `cmd/passphrase.rs` `std::os::fd`/`libc` blocker (40 errors); no
+  Round 2 recovery E0425 or import warning remains.
+- WSL focused `backup_pair_helpers_are_platform_neutral`: 1 passed; full
+  `cargo test -j1 -p iotkit-core-recovery`: 130 unit tests passed, 4
+  backup-contract tests passed, 1 ignored fixture generator.
+- WSL strict clippy for `iotkit-core-recovery` and `iotkit-edge-nodectl`
+  (`--all-targets -- -D warnings`) passed; Windows `cargo fmt --all -- --check`
+  and `git diff --check` passed.
 - WSL focused staging tests: 6 passed; configure non-tmpfs unit: 1 passed;
   nodectl non-tmpfs configure: 1 passed; nodectl manual configure→absent leaf
   create→artifact happy path: 1 passed.
-- WSL `cargo test -j1 -p iotkit-core-recovery`: 129 unit tests passed, 4
+- WSL `cargo test -j1 -p iotkit-core-recovery`: 130 unit tests passed, 4
   backup-contract tests passed, 1 ignored fixture generator.
 - WSL `cargo test -j1 -p iotkit-edge-nodectl --test backup_cli --test cli`:
   24 backup CLI tests and 69 CLI tests passed.
-- WSL strict clippy for `iotkit-core-recovery` and `iotkit-edge-nodectl`
-  (`--all-targets -- -D warnings`) passed; `cargo fmt --all -- --check`
-  passed.
 - `node scripts/check-okf-docs.mjs` — passed (10 bilingual concepts).
 - `scripts/check-layers` — passed on Windows.
 - `scripts/check-source-layout` — passed on Windows.

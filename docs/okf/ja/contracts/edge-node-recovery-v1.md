@@ -273,8 +273,11 @@ iotkit-edge-nodectl backup status --config /etc/iotkit/edge-node-backup.json
 Create、inspect、statusはbounded nonsecret summaryだけを出します。Passphraseを
 argument、shell history、logへ置きません。Deploymentのapproved owner-only手順で
 encrypted escrow copyを保管します。Passphraseがないartifactは意図的に復元不能
-です。Successful artifactをoff-hostで検証し、RPOを信頼する前にinspect/restore
-drillを行います。
+です。Successful artifactはoff-hostで検証してinspectします。Slice 1でrestore
+conformanceに使えるのはchecked-in handoff fixtureとmatching test-generated artifact
+だけで、real artifactのrestore drillを行ったり、そのrestoreからRPOを信頼したり
+できません。Real-backupのrestore drillによるRPO検証はlater recovery authorityの
+後へ延期します。
 
 次はconformance commandのshapeであり、slice 1の成功するoperator手順ではありません。
 

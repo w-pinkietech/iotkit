@@ -284,8 +284,11 @@ Create, inspect, and status emit only bounded nonsecret summaries. Never put a
 passphrase on an argument, in shell history, or in a log. Keep an encrypted
 escrow copy of the passphrase under the deployment's approved owner-only
 procedure; without it an artifact is intentionally unrecoverable. Verify a
-successful artifact off-host and run an inspect/restore drill before relying
-on its RPO.
+successful artifact off-host and inspect it. Slice 1 permits restore
+conformance only for the checked-in handoff fixture with its matching
+test-generated artifact; it does not permit a real-artifact restore drill or
+reliance on that artifact's RPO from a restore. Real-backup RPO verification
+through a restore drill is deferred until a later recovery authority exists.
 
 The following is the conformance command shape, not a successful operator
 procedure in slice 1:
