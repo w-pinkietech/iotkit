@@ -8,7 +8,7 @@ const RECOVERY_SCHEMA: &[(&str, &str, &str)] = &[
     (
         "table",
         "edge_node_recovery_candidate",
-        "createtableedge_node_recovery_candidate(singletonintegerprimarykeycheck(singleton=1),statetextnotnullcheck(state='durably_fenced_candidate'),recovery_idtextnotnull,candidate_instance_idtextnotnullunique,backup_idtext,edge_idtextnotnull,edge_node_idtextnotnull,old_ledger_epochtextnotnull,proposed_new_epochtextnotnull,credential_generationintegernotnullcheck(credential_generation>=0),handoff_schema_versionintegernotnullcheck(handoff_schema_version=1),installed_at_msintegernotnull)",
+        "createtableedge_node_recovery_candidate(singletonintegerprimarykeycheck(singleton=1),statetextnotnullcheck(state='durably_fenced_candidate'),recovery_idtextnotnull,candidate_instance_idtextnotnullunique,backup_idtext,source_database_lengthinteger,source_database_sha256text,edge_idtextnotnull,edge_node_idtextnotnull,old_ledger_epochtextnotnull,proposed_new_epochtextnotnull,credential_generationintegernotnullcheck(credential_generation>=0),handoff_schema_versionintegernotnullcheck(handoff_schema_version=1),installed_at_msintegernotnull,check((backup_idisnullandsource_database_lengthisnullandsource_database_sha256isnull)or(backup_idisnotnullandsource_database_lengthisnotnullandsource_database_length>=0andsource_database_sha256isnotnullandlength(source_database_sha256)=64andsource_database_sha256notglob'*[^0-9a-f]*')))",
     ),
     (
         "trigger",
@@ -86,7 +86,8 @@ pub fn probe_startup_path(path: &Path) -> Result<RecoveryStartupMode, RecoveryEr
 fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryError> {
     let row = conn
         .query_row(
-            "SELECT state, recovery_id, candidate_instance_id, backup_id, edge_id, edge_node_id,
+            "SELECT state, recovery_id, candidate_instance_id, backup_id,
+                source_database_length, source_database_sha256, edge_id, edge_node_id,
                 old_ledger_epoch, proposed_new_epoch, credential_generation,
                 handoff_schema_version, installed_at_ms
          FROM edge_node_recovery_candidate WHERE singleton = 1",
@@ -97,13 +98,15 @@ fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryErro
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, i64>(9)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
                     row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
                 ))
             },
         )
@@ -113,6 +116,8 @@ fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryErro
         recovery_id,
         candidate_instance_id,
         backup_id,
+        source_database_length,
+        source_database_sha256,
         edge_id,
         edge_node_id,
         old_ledger_epoch,
@@ -121,10 +126,20 @@ fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryErro
         handoff_schema_version,
         installed_at_ms,
     ) = row;
+    let provenance_valid = match (
+        backup_id.as_deref(),
+        source_database_length,
+        source_database_sha256.as_deref(),
+    ) {
+        (None, None, None) => true,
+        (Some(_), Some(length), Some(digest)) => length >= 0 && valid_digest(digest),
+        _ => false,
+    };
     if state != "durably_fenced_candidate"
         || !valid_identity(&recovery_id)
         || !valid_identity(&candidate_instance_id)
         || !backup_id.as_deref().is_none_or(valid_identity)
+        || !provenance_valid
         || !valid_identity(&edge_id)
         || !valid_identity(&edge_node_id)
         || !valid_identity(&old_ledger_epoch)
@@ -294,6 +309,13 @@ fn normalize_sql(sql: &str) -> String {
 
 fn valid_identity(value: &str) -> bool {
     !value.is_empty() && value.len() <= 255 && !value.chars().any(char::is_control)
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[cfg(test)]

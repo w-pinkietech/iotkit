@@ -4,13 +4,24 @@ CREATE TABLE edge_node_recovery_candidate (
   recovery_id TEXT NOT NULL,
   candidate_instance_id TEXT NOT NULL UNIQUE,
   backup_id TEXT,
+  source_database_length INTEGER,
+  source_database_sha256 TEXT,
   edge_id TEXT NOT NULL,
   edge_node_id TEXT NOT NULL,
   old_ledger_epoch TEXT NOT NULL,
   proposed_new_epoch TEXT NOT NULL,
   credential_generation INTEGER NOT NULL CHECK (credential_generation >= 0),
   handoff_schema_version INTEGER NOT NULL CHECK (handoff_schema_version = 1),
-  installed_at_ms INTEGER NOT NULL
+  installed_at_ms INTEGER NOT NULL,
+  CHECK (
+    (backup_id IS NULL AND source_database_length IS NULL AND source_database_sha256 IS NULL)
+    OR
+    (backup_id IS NOT NULL
+      AND source_database_length IS NOT NULL AND source_database_length >= 0
+      AND source_database_sha256 IS NOT NULL
+      AND length(source_database_sha256) = 64
+      AND source_database_sha256 NOT GLOB '*[^0-9a-f]*')
+  )
 );
 
 CREATE TRIGGER edge_node_recovery_candidate_immutable

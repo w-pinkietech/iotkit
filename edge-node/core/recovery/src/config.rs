@@ -14,6 +14,8 @@ use std::os::unix::{
     fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
 };
 
+#[cfg(target_os = "linux")]
+use crate::DirectoryCapability;
 use crate::{BackupConfig, BackupPassphrase, RecoveryError, RecoveryHandoff};
 
 #[cfg(target_os = "linux")]
@@ -163,6 +165,16 @@ pub fn acquire_recovery_operation(
     {
         let _ = config_path;
         Err(RecoveryError::PlatformUnsupported)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl RecoveryOperationGuard {
+    pub(crate) fn ensure_parent(&self, parent: &DirectoryCapability) -> Result<(), RecoveryError> {
+        if parent.identity()? != (self.parent_device, self.parent_inode) {
+            return Err(RecoveryError::InvalidConfiguration);
+        }
+        Ok(())
     }
 }
 

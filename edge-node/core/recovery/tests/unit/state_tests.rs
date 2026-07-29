@@ -9,6 +9,8 @@ const CANDIDATE_COLUMNS: &[&str] = &[
     "recovery_id",
     "candidate_instance_id",
     "backup_id",
+    "source_database_length",
+    "source_database_sha256",
     "edge_id",
     "edge_node_id",
     "old_ledger_epoch",
@@ -21,11 +23,13 @@ const CANDIDATE_COLUMNS: &[&str] = &[
 fn install_candidate(conn: &Connection) {
     conn.execute(
         "INSERT INTO edge_node_recovery_candidate(
-             singleton, state, recovery_id, candidate_instance_id, backup_id, edge_id,
+             singleton, state, recovery_id, candidate_instance_id, backup_id,
+             source_database_length, source_database_sha256, edge_id,
              edge_node_id, old_ledger_epoch, proposed_new_epoch, credential_generation,
              handoff_schema_version, installed_at_ms
          ) VALUES(1, 'durably_fenced_candidate', 'recovery-1', 'candidate-1',
-             'backup-1', 'edge-1', 'node-1', 'epoch-old', 'epoch-new', 0, 1, 1)",
+             'backup-1', 1, '0000000000000000000000000000000000000000000000000000000000000000',
+             'edge-1', 'node-1', 'epoch-old', 'epoch-new', 0, 1, 1)",
         [],
     )
     .unwrap();

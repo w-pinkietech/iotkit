@@ -299,6 +299,11 @@ pub enum RecoveryError {
     CapacityOverflow,
     OperationBusy,
     CleanupRequired,
+    HandoffMismatch,
+    CandidateExists,
+    CandidateFenceInvalid,
+    CandidateConflict,
+    CandidatePublicationUncertain,
 }
 
 impl RecoveryError {
@@ -325,6 +330,11 @@ impl RecoveryError {
             Self::CapacityOverflow => "capacity_overflow",
             Self::OperationBusy => "operation_busy",
             Self::CleanupRequired => "cleanup_required",
+            Self::HandoffMismatch => "handoff_mismatch",
+            Self::CandidateExists => "candidate_exists",
+            Self::CandidateFenceInvalid => "candidate_fence_invalid",
+            Self::CandidateConflict => "candidate_conflict",
+            Self::CandidatePublicationUncertain => "candidate_publication_uncertain",
         }
     }
 }
@@ -378,6 +388,20 @@ impl fmt::Display for RecoveryError {
             }
             Self::CleanupRequired => {
                 formatter.write_str("Edge Node backup cleanup requires operator review")
+            }
+            Self::HandoffMismatch => {
+                formatter.write_str("Edge Node restore handoff does not match the artifact")
+            }
+            Self::CandidateExists => {
+                formatter.write_str("Edge Node restore candidate already exists")
+            }
+            Self::CandidateFenceInvalid => {
+                formatter.write_str("Edge Node restore candidate fence is invalid")
+            }
+            Self::CandidateConflict => formatter
+                .write_str("Edge Node restore candidate conflicts with the requested restore"),
+            Self::CandidatePublicationUncertain => {
+                formatter.write_str("Edge Node restore candidate publication status is uncertain")
             }
         }
     }

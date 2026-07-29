@@ -14,7 +14,7 @@ use std::mem::MaybeUninit;
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(target_os = "linux")]
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
@@ -124,6 +124,17 @@ impl DirectoryCapability {
             .ok_or(RecoveryError::Storage)?
             .sync_all()
             .map_err(|_| RecoveryError::ArtifactPublicationUncertain)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn identity(&self) -> Result<(u64, u64), RecoveryError> {
+        let metadata = self
+            .file
+            .as_ref()
+            .ok_or(RecoveryError::Storage)?
+            .metadata()
+            .map_err(|_| RecoveryError::Storage)?;
+        Ok((metadata.dev(), metadata.ino()))
     }
 
     /// Takes ownership of an already-open directory handle after validating it.
@@ -588,6 +599,33 @@ pub(crate) fn authenticate_container_file(
     authenticate_container_file_unchecked(file, passphrase)
 }
 
+/// Authenticates and decrypts one already-open artifact without re-resolving a
+/// pathname. The restore workflow uses this after comparing the artifact
+/// identity across its authentication and plaintext passes.
+pub(crate) fn decrypt_container_file_to_staging_file(
+    file: File,
+    passphrase: &BackupPassphrase,
+    staging_directory: &DirectoryCapability,
+    plaintext_capacity_bytes: u64,
+) -> Result<(DecryptedStage, NodeBackupManifest), RecoveryError> {
+    validate_passphrase(passphrase)?;
+    let mut file = file;
+    let parsed = parse_header(&mut file)?;
+    let key = derive_key(passphrase, &parsed.salt, &parsed.header)?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| RecoveryError::Cryptography)?;
+    let mut consumer = PlaintextConsumer::new(Some(staging_directory), plaintext_capacity_bytes)?;
+    consume_records(
+        &mut file,
+        &cipher,
+        &parsed.nonce_prefix,
+        &parsed.digest,
+        parsed.header.chunk_size,
+        &mut consumer,
+    )?;
+    consumer.finish_staging()
+}
+
 fn authenticate_container_file_unchecked(
     mut file: File,
     passphrase: &BackupPassphrase,
@@ -711,22 +749,13 @@ pub fn decrypt_container_to_staging_file(
     staging_directory: &DirectoryCapability,
     plaintext_capacity_bytes: u64,
 ) -> Result<(DecryptedStage, NodeBackupManifest), RecoveryError> {
-    validate_passphrase(passphrase)?;
-    let mut file = File::open(input).map_err(|_| RecoveryError::Storage)?;
-    let parsed = parse_header(&mut file)?;
-    let key = derive_key(passphrase, &parsed.salt, &parsed.header)?;
-    let cipher =
-        XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| RecoveryError::Cryptography)?;
-    let mut consumer = PlaintextConsumer::new(Some(staging_directory), plaintext_capacity_bytes)?;
-    consume_records(
-        &mut file,
-        &cipher,
-        &parsed.nonce_prefix,
-        &parsed.digest,
-        parsed.header.chunk_size,
-        &mut consumer,
-    )?;
-    consumer.finish_staging()
+    let file = File::open(input).map_err(|_| RecoveryError::Storage)?;
+    decrypt_container_file_to_staging_file(
+        file,
+        passphrase,
+        staging_directory,
+        plaintext_capacity_bytes,
+    )
 }
 
 fn parse_header(input: &mut File) -> Result<ParsedHeader, RecoveryError> {

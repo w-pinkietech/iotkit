@@ -2,7 +2,7 @@
 use std::path::Path;
 
 use iotkit_core_recovery::{
-    BEGIN_BACKUP_ATTEMPT_OP, BackupReadiness, COMPLETE_BACKUP_ATTEMPT_OP,
+    BEGIN_BACKUP_ATTEMPT_OP, BackupReadiness, COMPLETE_BACKUP_ATTEMPT_OP, INSTALL_CANDIDATE_OP,
     RECORD_BACKUP_PREFLIGHT_FAILURE_OP, RecoveryError, backup_status, inspect_backup,
     recovery_descriptors,
 };
@@ -20,6 +20,7 @@ fn backup_operations_are_typed_construction_operations() {
         BEGIN_BACKUP_ATTEMPT_OP,
         COMPLETE_BACKUP_ATTEMPT_OP,
         RECORD_BACKUP_PREFLIGHT_FAILURE_OP,
+        INSTALL_CANDIDATE_OP,
     ] {
         let descriptor = descriptors
             .iter()

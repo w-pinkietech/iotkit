@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iotkit.invalid/contracts/recovery-handoff-v1.schema.json",
+  "title": "IoTKit Edge Node recovery handoff v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "recovery_id",
+    "edge_id",
+    "edge_node_id",
+    "old_ledger_epoch",
+    "expected_backup_id",
+    "proposed_new_epoch",
+    "credential_generation"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "recovery_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
+    "edge_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
+    "edge_node_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
+    "old_ledger_epoch": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
+    "expected_backup_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
+    "proposed_new_epoch": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
+    "credential_generation": { "type": "integer", "minimum": 0 }
+  }
+}

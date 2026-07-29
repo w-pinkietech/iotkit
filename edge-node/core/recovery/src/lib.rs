@@ -7,6 +7,7 @@ mod config;
 mod container;
 mod destination;
 mod model;
+mod restore;
 mod snapshot;
 mod state;
 
@@ -35,6 +36,9 @@ pub use model::{
     RecoveryError, RecoveryHandoff, RecoveryStartupMode, RestoreReceipt, RestoreRequest,
     RestoreStatus, SnapshotMode,
 };
+pub use restore::{INSTALL_CANDIDATE_OP, restore_candidate};
+#[cfg(target_os = "linux")]
+pub(crate) use snapshot::validate_restored_candidate;
 pub use snapshot::{
     SnapshotArtifact, SnapshotFacts, create_consistent_snapshot, validate_snapshot,
 };
@@ -81,3 +85,7 @@ mod destination_tests;
 #[cfg(test)]
 #[path = "../tests/unit/backup_tests.rs"]
 mod backup_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/restore_tests.rs"]
+mod restore_tests;

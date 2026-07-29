@@ -122,6 +122,22 @@ pub fn create_consistent_snapshot(
 
 /// Validates a self-contained sanitized SQLite snapshot and derives its database-owned facts.
 pub fn validate_snapshot(path: &Path) -> Result<SnapshotFacts, RecoveryError> {
+    validate_snapshot_inner(path, false)
+}
+
+/// Validates a published candidate without treating its durable recovery fence
+/// as a snapshot contamination. The same canonical schema and custody checks
+/// apply; only the singleton candidate row is allowed in addition to a
+/// sanitized snapshot.
+#[cfg(target_os = "linux")]
+pub(crate) fn validate_restored_candidate(path: &Path) -> Result<SnapshotFacts, RecoveryError> {
+    validate_snapshot_inner(path, true)
+}
+
+fn validate_snapshot_inner(
+    path: &Path,
+    allow_candidate: bool,
+) -> Result<SnapshotFacts, RecoveryError> {
     require_self_contained_file(path)?;
     let database = (|| {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -130,7 +146,7 @@ pub fn validate_snapshot(path: &Path) -> Result<SnapshotFacts, RecoveryError> {
             .map_err(|_| RecoveryError::InvalidSnapshot)?;
         require_canonical_schema(&conn)?;
         require_integrity(&conn)?;
-        derive_database_facts(&conn)
+        derive_database_facts(&conn, allow_candidate)
     })()?;
 
     let database_length = fs::metadata(path)
@@ -159,6 +175,7 @@ pub fn recovery_descriptors() -> &'static [OpDescriptor] {
         .get_or_init(|| {
             let mut descriptors = vec![remove_deployment_credentials_descriptor()];
             descriptors.extend(crate::backup::backup_descriptors());
+            descriptors.extend(crate::restore::restore_descriptors());
             descriptors
         })
         .as_slice()
@@ -312,7 +329,10 @@ fn require_self_contained_file(path: &Path) -> Result<(), RecoveryError> {
     Ok(())
 }
 
-fn derive_database_facts(conn: &Connection) -> Result<DatabaseFacts, RecoveryError> {
+fn derive_database_facts(
+    conn: &Connection,
+    allow_candidate: bool,
+) -> Result<DatabaseFacts, RecoveryError> {
     let identity = iotkit_core_ledger::load_edge_node_identity(conn)
         .map_err(|_| RecoveryError::InvalidSnapshot)?;
     if !valid_topic_identity(&identity.edge_node_id) || !valid_identity(&identity.ledger_epoch) {
@@ -337,7 +357,7 @@ fn derive_database_facts(conn: &Connection) -> Result<DatabaseFacts, RecoveryErr
         return Err(RecoveryError::InvalidSnapshot);
     }
     let candidate_rows = count(conn, "edge_node_recovery_candidate")?;
-    if candidate_rows != 0 {
+    if !allow_candidate && candidate_rows != 0 {
         return Err(RecoveryError::InvalidSnapshot);
     }
     let target_rows = count(conn, "target_registry")?;
