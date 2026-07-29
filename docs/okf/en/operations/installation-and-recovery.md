@@ -180,7 +180,85 @@ Git.
   processing, but it is not a promise of forensic physical erasure from SQLite
   pages, backups, or storage media.
 
-## 7. IoTKit Edge encrypted backup
+## 7. Encrypted backup
+
+### 7.1 Optional Edge Node encrypted backup
+
+The Edge Node backup is a separate, local-root operation. It is not configured
+and its timer is not enabled by default. It creates a custody-complete,
+sanitized SQLite backup using the [Edge Node recovery contract](../contracts/edge-node-recovery-v1.md).
+The snapshot sanitizer removes the deployment credential token from
+`target_registry`; MQTT/TLS private material is outside this database and is
+not placed in the artifact. Account, session, and device credential hashes may
+remain as protected database state, so every artifact is encrypted and treated
+as a secret. There is no legacy plaintext snapshot fallback.
+
+Use an owner-only configuration and passphrase file. Do not put a passphrase in
+an argument, shell history, log, or systemd unit. The destination must first
+pass the capability probe: it must be an owner-only writable directory on a
+stable, identified mount, with enough capacity and no-replace/read-back/parent-
+sync behavior. A filesystem label or a mutable device name is not sufficient,
+and the destination must be on a different filesystem from the live database.
+
+`/run` is the staging tmpfs parent. `configure` validates the existing parent
+and records the exact `/run/iotkit-edge-node-backup` leaf. The service's
+`RuntimeDirectory=iotkit-edge-node-backup` creates only that owner-only leaf for
+`create`; do not pre-create or broaden an arbitrary `/run` tree, and do not put
+the destination or a persistent database under `TMPDIR`.
+
+```bash
+sudo install -d -m 0700 /etc/iotkit
+sudo install -m 600 /dev/null /etc/iotkit/edge-node-backup-passphrase
+# Write the passphrase interactively without putting it in shell history.
+sudo install -D -m 0644 deploy/systemd/iotkit-edge-node-backup.service \
+  /etc/systemd/system/iotkit-edge-node-backup.service
+sudo install -D -m 0644 deploy/systemd/iotkit-edge-node-backup.timer \
+  /etc/systemd/system/iotkit-edge-node-backup.timer
+sudo install -d -m 0755 /etc/systemd/system/iotkit-edge-node-backup.service.d
+sudo iotkit-edge-nodectl backup configure \
+  --config /etc/iotkit/edge-node-backup.json \
+  --db /var/lib/iotkit/edge-node/edge.db \
+  --destination /mnt/iotkit-backups/edge-node-01 \
+  --staging-directory /run/iotkit-edge-node-backup \
+  --passphrase-file /etc/iotkit/edge-node-backup-passphrase \
+  --freshness-seconds 86400 --retention-count 7 \
+  --systemd-drop-in \
+  /etc/systemd/system/iotkit-edge-node-backup.service.d/destination.conf
+sudo systemctl daemon-reload
+```
+
+The configure command publishes the owner-only configuration and the exact
+drop-in as one guarded pair. Review the generated mount point; the drop-in is
+only:
+
+```ini
+[Unit]
+RequiresMountsFor=/absolute/captured/mount/point
+```
+
+The timer remains disabled until an operator explicitly opts in:
+
+```bash
+sudo systemctl enable --now iotkit-edge-node-backup.timer
+sudo systemctl status iotkit-edge-node-backup.timer
+```
+
+Before enabling it, use the manual non-secret surfaces and check the artifact
+off host:
+
+```bash
+sudo iotkit-edge-nodectl backup create --config /etc/iotkit/edge-node-backup.json
+sudo iotkit-edge-nodectl backup inspect --input /mnt/iotkit-backups/edge-node-01/SELECTED.iotkit-node-backup \
+  --passphrase-file /etc/iotkit/edge-node-backup-passphrase
+sudo iotkit-edge-nodectl backup status --config /etc/iotkit/edge-node-backup.json
+```
+
+Escrow the passphrase through the deployment's approved encrypted, owner-only
+procedure and retain an off-host copy of each encrypted artifact. A lost
+passphrase makes the artifact intentionally unrecoverable. A create failure is
+not a durable backup and does not authorize deleting or replacing the live DB.
+
+### 7.2 IoTKit Edge encrypted backup
 
 The IoTKit Edge database contains not only sensor history but also account and session hashes,
 configuration, audit, and pending outbox rows. Never use a plaintext database-file copy as the
@@ -231,7 +309,46 @@ supply scheduling. Run it from the OS or existing operations system, copy encryp
 host, alert on failures, and perform regular restore drills. Without this, the RPO after host failure
 for records accepted since the last off-host backup is not guaranteed.
 
-## 8. IoTKit Edge restore
+## 8. Restore
+
+### 8.1 Edge Node fenced-candidate restore drill (slice 1)
+
+The Edge Node `restore` command is shipped only for conformance and a controlled
+restore drill. It requires a valid closed recovery handoff that binds the
+artifact's backup ID, Edge Node ID, and old ledger epoch. Slice 1 has no
+production handoff producer: use a handoff emitted by a later contracted
+recovery authority or the checked-in fixture in the recovery contract. Do not
+invent a handoff, increment an epoch yourself, or claim activation.
+
+Choose an absent candidate path on an owner-only directory. Keep the configured
+live database path exact and never point `--candidate-db` at it or at an
+existing alias:
+
+```bash
+sudo test ! -e /var/lib/iotkit/edge-node/edge.restore-candidate.db
+sudo iotkit-edge-nodectl backup restore \
+  --input /mnt/iotkit-backups/edge-node-01/SELECTED.iotkit-node-backup \
+  --candidate-db /var/lib/iotkit/edge-node/edge.restore-candidate.db \
+  --live-db /var/lib/iotkit/edge-node/edge.db \
+  --passphrase-file /etc/iotkit/edge-node-backup-passphrase \
+  --recovery-handoff /secure/VALID_HANDOFF_FILE
+```
+
+The result is a `durably_fenced_candidate` receipt. The candidate contains
+authenticated readings and dedup claims through the snapshot boundary, but it
+cannot collect, publish, or bind ingest while fenced and does not prove retry
+state after the backup. Do not start it as a replacement, enable Broker
+publishing, or alter its state table. Broker fencing, a remote permit,
+reconciliation, dedup-risk resolution, reactivation, and a same-ID new epoch
+are default-off and not shipped in this slice. An exact post-rename replay
+returns the stored receipt; a different artifact or handoff is a conflict.
+
+No-backup hardware replacement restores neither readings nor dedup claims. A
+legacy snapshot or plaintext DB copy is never a fallback. MQTT/TLS private
+material is outside the candidate artifact boundary and is never supplied to
+this restore operation.
+
+### 8.2 IoTKit Edge restore
 
 Always restore to a new database path. Never overwrite the live database directly.
 
@@ -333,6 +450,9 @@ replace a device. Use `iotkit-edge-nodectl device retire` when use ends and
 compares the candidate observation profile with existing series, preserves `system_id`, and changes
 only hardware. Forced or unconfirmed execution is not a normal procedure. The Console reflects the
 retired state and continuing series after the Edge Node descriptor reaches IoTKit Edge.
+Without an encrypted backup and a later permitted handoff, a replacement does not restore readings
+or dedup claims. An encrypted-backup candidate is still fenced until the separately contracted
+permit and credential-generation checks complete.
 
 ## 10. Offline migration from SQLite to PostgreSQL
 

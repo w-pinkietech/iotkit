@@ -382,14 +382,25 @@ audit stream.
 The current implementation provides the authenticated HTTP binding, bearer credential
 authority, bounded admission, TLS/private-LAN listener construction, freshness
 handling, side-effect-free validation, bounded staging/dedup state, health and
-episode audit hooks, and local recovery authority closure. It is intentionally a
-device-builder HTTP path, not a remotely claimable Edge Node setup path.
+episode audit hooks, local recovery authority closure, an encrypted custody-complete
+sanitized Edge Node database backup, and local fenced-candidate restore. The restore
+boundary requires a valid closed handoff, writes only an absent candidate, and leaves
+that candidate fenced. It is intentionally a device-builder HTTP path, not a remotely
+claimable Edge Node setup path.
 
-Encrypted Edge Node replacement-backup containers and cross-filesystem restore
-staging/fence mechanics remain deferred distribution work. Until that work lands,
-legacy plaintext replacement snapshot export is unavailable once a
-device-token secret exists; the Edge Node must say so without emitting the token or
-its hash. State-only inspection is not a complete replacement backup.
+Broker fencing, a remote permit, post-rename reconciliation, dedup-risk resolution,
+reactivation, and a same-ID new ledger epoch remain deferred and default-off. Slice 1
+does not produce a production recovery handoff; a candidate cannot ingest or publish
+before the later permit and credential-generation checks. Legacy plaintext replacement
+snapshot export remains unavailable once a device-token secret exists; the Edge Node
+must say so without emitting the token or its hash. State-only inspection is not a
+complete replacement backup.
+
+The snapshot sanitizer removes the deployment credential token from
+`target_registry`. Account, session, and device credential hashes may remain as
+protected encrypted database state; MQTT/TLS private material is outside that
+database and is not placed in the artifact. The encrypted artifact and its
+passphrase remain secrets.
 
 MQTT ingest, pairing-window registration, `signed_seq`, `provisioned_key`, batch
 provisioning, shared-image credentials, rich R23 UI, and destructive OS/image
@@ -401,10 +412,13 @@ ways to bypass this HTTP token, TLS, subject, freshness, or custody contract.
 An unowned, locally recovering, restore-fenced, reset-fenced, or TLS-invalid
 Edge Node does not bind the control API or ingest listener. Local root recovery
 must re-establish ownership; restore invalidates prior admin/operator/session
-authority and device auth generations are checked again. A device-token retry
-after a committed restore may be accepted again on the replacement because
-readings and dedup claims are not restored; downstream idempotency and the new
-ledger epoch expose that possible duplicate.
+authority and device auth generations are checked again. An encrypted-backup
+candidate carries readings and dedup claims through its authenticated snapshot
+boundary, but remains unable to ingest while fenced and does not prove anything
+about retry state after that boundary. Restored dedup is not active until the
+later permit and generation checks. A no-backup replacement restores neither
+readings nor dedup claims; downstream idempotency and a later new ledger epoch
+must expose any possible duplicate.
 
 A credential response is one-shot. If it is lost, abandon/revoke the affected
 credential and issue another one; never ask the Edge Node to redisplay it. Human

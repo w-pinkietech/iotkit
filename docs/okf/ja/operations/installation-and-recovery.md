@@ -108,9 +108,83 @@ Recoveryは既存sessionを失効します。Password、MQTT credential、privat
 - 登録はMQTT credentialをcreate/rotate/revokeせずBroker enrollmentを置換しない。
 - 登録時にlocal reading boundaryを固定し、旧prefixをbounded background cleanupする。Normal processingから見えなくしますが、SQLite page、backup、mediaからのforensic eraseは保証しない。
 
-## 7. 暗号化backup
+## 7. 暗号化バックアップ
+
+### 7.1 Optional Edge Node暗号化backup
+
+Edge Node backupはlocal-rootで行う別operationです。既定ではconfigurationせず、
+timerもenableしません。これは[Edge Node復旧契約](../contracts/edge-node-recovery-v1.md)
+に従うcustody-completeなsanitized SQLite backupを作ります。Snapshot sanitizerは
+`target_registry`のdeployment credential tokenを空にします。MQTT/TLS private
+materialはこのDBの外にありartifactへ入れません。Account、session、device
+credential hashはprotected DB stateとして残り得るため、artifactは暗号化しsecret
+として扱います。Legacy plaintext snapshot fallbackもありません。
+
+Owner-only configurationとpassphrase fileを使います。Passphraseをargument、shell
+history、log、systemd unitへ置きません。Destinationはcapability probeを先に通し、
+owner-only writable directory、stableに識別できるmount、必要capacity、no-replace・
+read-back・parent-syncを備えなければなりません。Filesystem labelやmutable device
+nameだけでは不十分で、live DBとは異なるfilesystemでなければなりません。
+
+`/run`はstaging tmpfs parentです。`configure`は既存parentを検証し、正確な
+`/run/iotkit-edge-node-backup` leafを記録します。Serviceの
+`RuntimeDirectory=iotkit-edge-node-backup`が`create`用にそのowner-only leafだけを
+作ります。任意の`/run` treeを先に作ったり拡張したりせず、destinationやpersistent
+databaseを`TMPDIR`へ置きません。
+
+```bash
+sudo install -d -m 0700 /etc/iotkit
+sudo install -m 600 /dev/null /etc/iotkit/edge-node-backup-passphrase
+# Shell historyへ残さない方法でpassphraseを対話的に書き込む。
+sudo install -D -m 0644 deploy/systemd/iotkit-edge-node-backup.service \
+  /etc/systemd/system/iotkit-edge-node-backup.service
+sudo install -D -m 0644 deploy/systemd/iotkit-edge-node-backup.timer \
+  /etc/systemd/system/iotkit-edge-node-backup.timer
+sudo install -d -m 0755 /etc/systemd/system/iotkit-edge-node-backup.service.d
+sudo iotkit-edge-nodectl backup configure \
+  --config /etc/iotkit/edge-node-backup.json \
+  --db /var/lib/iotkit/edge-node/edge.db \
+  --destination /mnt/iotkit-backups/edge-node-01 \
+  --staging-directory /run/iotkit-edge-node-backup \
+  --passphrase-file /etc/iotkit/edge-node-backup-passphrase \
+  --freshness-seconds 86400 --retention-count 7 \
+  --systemd-drop-in \
+  /etc/systemd/system/iotkit-edge-node-backup.service.d/destination.conf
+sudo systemctl daemon-reload
+```
+
+Configure commandはowner-only configurationとexact drop-inを一つのguarded pairとして
+publishします。生成されたmount pointを確認します。Drop-inは次だけです。
+
+```ini
+[Unit]
+RequiresMountsFor=/absolute/captured/mount/point
+```
+
+Timerはoperatorが明示的にopt-inするまでdisabledです。
+
+```bash
+sudo systemctl enable --now iotkit-edge-node-backup.timer
+sudo systemctl status iotkit-edge-node-backup.timer
+```
+
+Enable前にmanualのnon-secret surfaceを使い、artifactをoff-hostで確認します。
+
+```bash
+sudo iotkit-edge-nodectl backup create --config /etc/iotkit/edge-node-backup.json
+sudo iotkit-edge-nodectl backup inspect --input /mnt/iotkit-backups/edge-node-01/SELECTED.iotkit-node-backup \
+  --passphrase-file /etc/iotkit/edge-node-backup-passphrase
+sudo iotkit-edge-nodectl backup status --config /etc/iotkit/edge-node-backup.json
+```
+
+Passphraseはdeploymentのapproved encrypted owner-only procedureでescrowし、各暗号化
+artifactのoff-host copyを保持します。失ったpassphraseではartifactを復元できません。
+Create失敗はdurable backupではなく、live DBの削除・置換を許可しません。
+
+### 7.2 IoTKit Edge暗号化backup
 
 IoTKit Edge DBはsensor historyのほかaccount/session hash、設定、audit、pending outboxを含みます。通常backupにplaintext DB copyを使いません。12文字以上のpassphraseをowner-only fileから渡します。
+
 
 ```bash
 install_root="$HOME/.local/share/iotkit/edge-01"
@@ -131,6 +205,42 @@ docker compose --env-file "$install_root/edge.env" -f deploy/compose.edge.yaml \
 Pre-encryption snapshotは専用tmpfsへ置きます。Host CLIもowner-only、backup対象外、restart時消去領域を`TMPDIR`にします。CLIはscheduleしないためOS/運用基盤から定期実行し、off-host copy、失敗通知、restore drillを用意します。
 
 ## 8. Restore
+
+### 8.1 Edge Node fenced-candidate restore drill (slice 1)
+
+Edge Nodeの`restore` commandはconformanceとcontrolled restore drillだけに出荷します。
+Artifactのbackup ID、Edge Node ID、old ledger epochをbindするclosed valid recovery
+handoffが必要です。Slice 1にはproduction handoff producerがありません。後続contract
+のrecovery authorityが発行したhandoffまたはrecovery contractのchecked-in fixtureを
+使い、handoffをinventしたりepochを自分でincrementしたりactivationをclaimしたり
+しません。
+
+Owner-only directoryにabsent candidate pathを選びます。Configured live DB pathを
+exactに保ち、`--candidate-db`へlive DBや既存aliasを渡しません。
+
+```bash
+sudo test ! -e /var/lib/iotkit/edge-node/edge.restore-candidate.db
+sudo iotkit-edge-nodectl backup restore \
+  --input /mnt/iotkit-backups/edge-node-01/SELECTED.iotkit-node-backup \
+  --candidate-db /var/lib/iotkit/edge-node/edge.restore-candidate.db \
+  --live-db /var/lib/iotkit/edge-node/edge.db \
+  --passphrase-file /etc/iotkit/edge-node-backup-passphrase \
+  --recovery-handoff /secure/VALID_HANDOFF_FILE
+```
+
+結果は`durably_fenced_candidate` receiptです。Candidateはsnapshot boundaryまでの
+authenticated readingとdedup claimを含められますが、fenced中はcollect、publish、
+ingest bindできず、backup後のretry stateを証明しません。Replacementとして起動せず、
+Broker publishをenableせず、state tableを編集しません。Broker fencing、remote permit、
+reconciliation、dedup-risk resolution、reactivation、same-ID new epochはdefault-offで
+未出荷です。Rename後のexact replayはstored receiptを返し、異なるartifactやhandoffは
+conflictです。
+
+Backupなしhardware replacementはreadingもdedup claimもrestoreしません。Legacy
+snapshotやplaintext DB copyはfallbackではありません。MQTT/TLS private materialは
+candidate artifactの外部で、restore operationへ渡しません。
+
+### 8.2 IoTKit Edge restore
 
 必ず新DB pathへrestoreし、live DBを直接上書きしません。
 
@@ -162,7 +272,7 @@ PostgreSQLでは同じcommandへ`--storage-profile postgres --postgres-config FI
 
 ## 9. Device retireとhardware交換
 
-Device正本ledgerはEdge Nodeにあります。Console row編集を交換扱いにしません。終了は`iotkit-edge-nodectl device retire`、個体識別hardware交換は`device replace`を使います。Candidate profileと既存seriesを照合し、`system_id`を維持してhardwareだけを交換します。Forced/unchecked executionを通常手順にしません。
+Device正本ledgerはEdge Nodeにあります。Console row編集を交換扱いにしません。終了は`iotkit-edge-nodectl device retire`、個体識別hardware交換は`device replace`を使います。Candidate profileと既存seriesを照合し、`system_id`を維持してhardwareだけを交換します。Forced/unchecked executionを通常手順にしません。暗号化backupと後続のpermit済みhandoffがなければ、replacementはreadingもdedup claimもrestoreしません。暗号化backup candidateも、別contractのpermitとcredential-generation checkが完了するまでfencedのままです。
 
 ## 10. SQLiteからPostgreSQLへのoffline移行
 
