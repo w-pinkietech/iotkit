@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "linux"))]
 use std::path::Path;
 
 use iotkit_core_recovery::{
@@ -8,7 +9,7 @@ use iotkit_core_recovery::{
 #[cfg(target_os = "linux")]
 use iotkit_core_recovery::{
     BackupConfig, BackupConfigReplace, BackupPassphrase, MountIdentity, NODE_BACKUP_SUFFIX,
-    all_edge_node_migrations, configure_backup, create_backup, load_owner_only_config,
+    all_edge_node_migrations, configure_backup, create_backup,
 };
 use tempfile::tempdir;
 
@@ -39,6 +40,12 @@ fn backup_operations_are_typed_construction_operations() {
 #[test]
 fn status_is_not_configured_when_the_owner_config_is_absent() {
     let root = tempdir().unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let status = backup_status(&root.path().join("backup.json"), 1_725_000_000_000).unwrap();
     assert_eq!(status, BackupReadiness::NotConfigured);
     assert_eq!(format!("{status:?}"), "BackupReadiness::NotConfigured");
@@ -48,8 +55,61 @@ fn status_is_not_configured_when_the_owner_config_is_absent() {
 fn inspection_of_an_absent_artifact_is_a_closed_redacted_error() {
     let passphrase =
         iotkit_core_recovery::BackupPassphrase::new("owner-only-test-passphrase".to_string());
-    let error = inspect_backup(Path::new("absent.iotkit-node-backup"), &passphrase).unwrap_err();
-    assert_eq!(error, RecoveryError::Storage);
+    #[cfg(target_os = "linux")]
+    let error = {
+        use std::fs::{self, OpenOptions};
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let root = tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let config_path = root.path().join("backup.json");
+        let config = BackupConfig {
+            schema_version: 1,
+            database: root.path().join("edge.db"),
+            destination: root.path().join("destination"),
+            staging_directory: root.path().join("staging"),
+            passphrase_file: root.path().join("passphrase"),
+            expected_mount: MountIdentity {
+                mount_point: root.path().to_path_buf(),
+                source: "source".into(),
+                filesystem_type: "test".into(),
+                filesystem_id: "fsid".into(),
+            },
+            freshness_seconds: 60,
+            retention_count: 1,
+        };
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&config_path)
+            .unwrap();
+        file.write_all(&serde_json::to_vec(&config).unwrap())
+            .unwrap();
+        drop(file);
+        inspect_backup(
+            &config_path,
+            &root.path().join("absent.iotkit-node-backup"),
+            &passphrase,
+        )
+        .unwrap_err()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let error = inspect_backup(
+        Path::new("backup.json"),
+        Path::new("absent.iotkit-node-backup"),
+        &passphrase,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        if cfg!(target_os = "linux") {
+            RecoveryError::Storage
+        } else {
+            RecoveryError::PlatformUnsupported
+        }
+    );
     assert!(!format!("{error:?}").contains("absent"));
     assert!(!error.to_string().contains("absent"));
 }
@@ -176,13 +236,15 @@ fn encrypted_backup_round_trips_custody_state_and_redacts_receipt_audit() {
         BackupConfigReplace::Refuse,
     )
     .unwrap();
-    let config = load_owner_only_config(&config_path).unwrap();
     let passphrase = BackupPassphrase::new("backup-passphrase-sensitive".into());
-    let manifest = create_backup(&config, &passphrase, 1_725_000_000_000).unwrap();
+    let manifest = create_backup(&config_path, &passphrase, 1_725_000_000_000).unwrap();
     let artifact = destination
         .path()
         .join(format!("{}{}", manifest.backup_id, NODE_BACKUP_SUFFIX));
-    assert_eq!(inspect_backup(&artifact, &passphrase).unwrap(), manifest);
+    assert_eq!(
+        inspect_backup(&config_path, &artifact, &passphrase).unwrap(),
+        manifest
+    );
     assert_eq!(manifest.accepted_cursor, 1);
     assert_eq!(manifest.allocation_high_water, 3);
     assert_eq!(manifest.counts.quarantine_rows, 1);

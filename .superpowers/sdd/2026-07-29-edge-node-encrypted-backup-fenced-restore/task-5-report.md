@@ -11,9 +11,10 @@ Implemented library-only Edge Node encrypted backup orchestration in
 - `create_backup`, `inspect_backup`, and read-only `backup_status`;
 - typed `recovery.backup.begin`, `recovery.backup.complete`, and
   `recovery.backup.record_preflight_failure` dispatcher operations;
-- one nonblocking recovery-operation guard before source open and through
-  snapshot, receipt, encryption, publication, readback, completion, retention,
-  plaintext cleanup, and return;
+- one stable config-adjacent nonblocking recovery-operation guard acquired
+  before owner-config/source/artifact access and held through snapshot,
+  receipt, encryption, publication, readback, completion, retention, plaintext
+  cleanup, and return;
 - durable `absent -> started -> success|failed` and `absent -> failed`
   transitions with identical replay idempotence and terminal conflict refusal;
 - exact recorded-basename restart reconciliation, with missing, invalid, or
@@ -123,6 +124,35 @@ then records success.
 Final independent review source: `/root/task5_backup/task5_review`. Result:
 no release-blocking correctness or security finding.
 
+### Parent review gap closure
+
+A later independent parent review found three Important and one Moderate gap.
+Each received a focused regression:
+
+- A manually constructed crash state containing both the exact published
+  ciphertext and an exact named plaintext stage initially returned
+  reconciliation success while leaving plaintext. Reconciliation now opens
+  the configured staging directory once, cleans through the held descriptor
+  before committing success, and returns `cleanup_required` while preserving
+  unsafe near-matches and leaving the attempt `started`.
+- A directly inserted failed receipt containing
+  `customer-secret-free-text-must-not-leave-storage` initially surfaced as a
+  `BackupReadiness::Failed` reason. Status now validates the complete recovery
+  schema/state read-only before projection and returns only the closed
+  `InvalidStartupState` error; the stored text is absent from Debug output.
+- The old create/inspect API shape could not name the configuration path and
+  therefore locked beside staging. The compile RED required config-path APIs.
+  Create and inspect now acquire the same Task 4 config-adjacent exclusive lock
+  before owner-config loading; status observes that lock before config
+  existence/loading. Configure-held create/inspect and create-held configure
+  both return `operation_busy` before effects. Restoring the old staging lock
+  made the reverse integration test observe `Ok(())`; restoring the fix made
+  it green.
+- Same-millisecond rows initially selected a random-ID lexical winner. Status
+  now orders both the latest attempt and last success by durable SQLite
+  insertion order (`rowid`) after their timestamp. Reverse-lex fixtures prove
+  the later failure wins and the later inserted success is `last_verified`.
+
 ## Coverage
 
 - Full encrypted custody snapshot and inspect round trip.
@@ -133,8 +163,11 @@ no release-blocking correctness or security finding.
 - Begin/complete/preflight state validation, identical replay, and terminal
   immutability.
 - Lock loser before source open and active-lock `operation_busy` status.
+- Cross-operation config-adjacent exclusion for configure/create/inspect and
+  first-time configure/status.
 - Status not configured, healthy, stale, failed with prior success, and
-  non-Linux fail-closed behavior.
+  non-Linux fail-closed behavior; invalid stored receipts never project free
+  text.
 - Exact-name successful reconciliation, missing-name interruption, and refusal
   to adopt or retain by unreferenced name; reconciliation remains possible
   without fresh capacity or create permission but requires parent durability.
@@ -143,7 +176,8 @@ no release-blocking correctness or security finding.
   preservation.
 - Source path replacement, manifest identity mismatch, closed reason codes,
   first-use lock races, after-begin crashes, publication/readback/receipt
-  uncertainty, and reconciliation parent-sync failure.
+  uncertainty, reconciliation parent-sync failure, crash-plaintext cleanup,
+  and same-timestamp insertion ordering.
 - Existing Task 3 write/link/file-sync/parent-sync uncertainty tests and Task 4
   readback/substitution/retention tests remain part of the full recovery gate.
 
@@ -156,10 +190,10 @@ cargo test -p iotkit-core-recovery --test backup_contract
 4 passed, 0 failed
 
 cargo test -p iotkit-core-recovery backup
-17 passed, 0 failed (plus 2 filtered contract tests)
+22 passed, 0 failed (plus 2 filtered contract tests)
 
 cargo test -p iotkit-core-recovery
-96 passed, 0 failed, 1 ignored; backup contract 4 passed
+101 passed, 0 failed, 1 ignored; backup contract 4 passed
 
 cargo clippy -p iotkit-core-recovery --all-targets --no-deps -- -D warnings
 exit 0

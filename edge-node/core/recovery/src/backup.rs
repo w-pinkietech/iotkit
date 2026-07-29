@@ -19,16 +19,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[cfg(target_os = "linux")]
-use crate::destination::verify_destination_for_reconciliation;
+use crate::destination::{
+    verify_destination_for_reconciliation, verify_staging_directory_for_reconciliation,
+};
 use crate::{
     BackupConfig, BackupPassphrase, BackupReadiness, BackupStatusArtifact, NodeBackupManifest,
-    RecoveryError, acquire_recovery_observation, authenticate_container, load_owner_only_config,
+    RecoveryError, acquire_recovery_observation, load_owner_only_config, startup_mode,
 };
 #[cfg(target_os = "linux")]
 use crate::{
     RecoveryStartupMode, VerifiedBackupDestination, VerifiedStagingDirectory,
-    acquire_recovery_operation, create_consistent_snapshot, encrypt_container, startup_mode,
-    verify_destination, verify_staging_directory,
+    acquire_recovery_operation, authenticate_container, create_consistent_snapshot,
+    encrypt_container, verify_destination, verify_staging_directory,
 };
 
 type CompletionRow = (
@@ -451,17 +453,17 @@ fn preflight_execute(tx: &Transaction<'_>, context: &OpContext<'_>) -> Result<Va
 
 /// Creates one encrypted Edge Node backup.
 pub fn create_backup(
-    config: &BackupConfig,
+    config_path: &Path,
     passphrase: &BackupPassphrase,
     now_ms: i64,
 ) -> Result<NodeBackupManifest, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
-        create_backup_with_hook(config, passphrase, now_ms, &SystemBackupHook)
+        create_backup_with_hook(config_path, passphrase, now_ms, &SystemBackupHook)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (config, passphrase, now_ms);
+        let _ = (config_path, passphrase, now_ms);
         Err(RecoveryError::PlatformUnsupported)
     }
 }
@@ -493,13 +495,24 @@ impl BackupHook for SystemBackupHook {}
 
 #[cfg(target_os = "linux")]
 pub(crate) fn create_backup_with_hook(
+    config_path: &Path,
+    passphrase: &BackupPassphrase,
+    now_ms: i64,
+    hook: &impl BackupHook,
+) -> Result<NodeBackupManifest, RecoveryError> {
+    let guard = acquire_recovery_operation(config_path)?;
+    let config = load_owner_only_config(config_path)?;
+    create_backup_guarded(&guard, &config, passphrase, now_ms, hook)
+}
+
+#[cfg(target_os = "linux")]
+fn create_backup_guarded(
+    guard: &crate::RecoveryOperationGuard,
     config: &BackupConfig,
     passphrase: &BackupPassphrase,
     now_ms: i64,
     hook: &impl BackupHook,
 ) -> Result<NodeBackupManifest, RecoveryError> {
-    let operation_path = config.staging_directory.join(".iotkit-backup-operation");
-    let guard = acquire_recovery_operation(&operation_path)?;
     crate::config::validate_config(config)?;
     if now_ms < 0 || !(12..=1024).contains(&passphrase.char_count()) {
         return Err(if now_ms < 0 {
@@ -550,27 +563,29 @@ pub(crate) fn create_backup_with_hook(
         )
         .map_err(|_| RecoveryError::Storage)?;
     if has_started {
-        let reconciliation_destination = verify_destination_for_reconciliation(&guard, config)?;
+        let reconciliation_staging = verify_staging_directory_for_reconciliation(guard, config)?;
+        cleanup_prior_plaintext(&reconciliation_staging)?;
+        let reconciliation_destination = verify_destination_for_reconciliation(guard, config)?;
         if let Some(manifest) = reconcile_started(
             &source,
             &reconciliation_destination,
             passphrase,
             now_ms,
             config,
-            &guard,
+            guard,
             hook,
         )? {
             return Ok(manifest);
         }
     }
-    let destination = match verify_destination(&guard, config, source_length) {
+    let destination = match verify_destination(guard, config, source_length) {
         Ok(destination) => destination,
         Err(error) => {
             record_preflight(&source, &edge_node_id, now_ms, error)?;
             return Err(error);
         }
     };
-    let staging = match verify_staging_directory(&guard, config, source_length) {
+    let staging = match verify_staging_directory(guard, config, source_length) {
         Ok(staging) => staging,
         Err(error) => {
             record_preflight(&source, &edge_node_id, now_ms, error)?;
@@ -704,7 +719,7 @@ pub(crate) fn create_backup_with_hook(
     };
     let retention = apply_success_retention(
         &source,
-        &guard,
+        guard,
         &destination,
         passphrase,
         &edge_node_id,
@@ -728,10 +743,21 @@ fn source_path_still_identical(original: &std::fs::Metadata, path: &Path) -> boo
 
 /// Authenticates and returns the manifest of one backup without writing plaintext.
 pub fn inspect_backup(
+    config_path: &Path,
     input: &Path,
     passphrase: &BackupPassphrase,
 ) -> Result<NodeBackupManifest, RecoveryError> {
-    authenticate_container(input, passphrase)
+    #[cfg(target_os = "linux")]
+    {
+        let _guard = acquire_recovery_operation(config_path)?;
+        let _config = load_owner_only_config(config_path)?;
+        authenticate_container(input, passphrase)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (config_path, input, passphrase);
+        Err(RecoveryError::PlatformUnsupported)
+    }
 }
 
 /// Reads durable backup readiness without mutating the configured database.
@@ -739,31 +765,46 @@ pub fn backup_status(config_path: &Path, now_ms: i64) -> Result<BackupReadiness,
     if now_ms < 0 {
         return Err(RecoveryError::InvalidConfiguration);
     }
+    #[cfg(target_os = "linux")]
+    let observation = match acquire_recovery_observation(config_path) {
+        Ok(guard) => guard,
+        Err(RecoveryError::OperationBusy) => return Ok(BackupReadiness::OperationBusy),
+        Err(error) => return Err(error),
+    };
     match std::fs::symlink_metadata(config_path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(target_os = "linux")]
+            match acquire_recovery_observation(config_path) {
+                Ok(_) => {}
+                Err(RecoveryError::OperationBusy) => {
+                    return Ok(BackupReadiness::OperationBusy);
+                }
+                Err(error) => return Err(error),
+            }
             return Ok(BackupReadiness::NotConfigured);
         }
         Err(_) => return Err(RecoveryError::InvalidConfiguration),
         Ok(_) => {}
     }
-    let config = load_owner_only_config(config_path)?;
-    let observation_path = config.staging_directory.join(".iotkit-backup-operation");
-    let observation = match acquire_recovery_observation(&observation_path) {
+    #[cfg(not(target_os = "linux"))]
+    let observation = match acquire_recovery_observation(config_path) {
         Ok(guard) => guard,
         Err(RecoveryError::OperationBusy) => return Ok(BackupReadiness::OperationBusy),
         Err(error) => return Err(error),
     };
+    let config = load_owner_only_config(config_path)?;
     if observation.coordinates_existing_lock() {
         return read_backup_status(&config, now_ms);
     }
     let first = read_backup_status(&config, now_ms)?;
-    let second = match acquire_recovery_observation(&observation_path) {
+    let second = match acquire_recovery_observation(config_path) {
         Ok(guard) => guard,
         Err(RecoveryError::OperationBusy) => return Ok(BackupReadiness::OperationBusy),
         Err(error) => return Err(error),
     };
     if second.coordinates_existing_lock() {
-        read_backup_status(&config, now_ms)
+        let current = load_owner_only_config(config_path)?;
+        read_backup_status(&current, now_ms)
     } else {
         Ok(first)
     }
@@ -775,13 +816,14 @@ fn read_backup_status(
 ) -> Result<BackupReadiness, RecoveryError> {
     let conn = Connection::open_with_flags(&config.database, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|_| RecoveryError::Storage)?;
+    let _ = startup_mode(&conn)?;
     let latest: Option<LatestAttemptRow> = conn
         .query_row(
             "SELECT attempt_id, backup_id, state, reason_code, artifact_length, edge_node_id,
                     ledger_epoch, accepted_cursor, allocation_high_water, started_at_ms,
                     artifact_created_at_ms, completed_at_ms
              FROM edge_node_backup_attempts
-             ORDER BY started_at_ms DESC, attempt_id DESC LIMIT 1",
+             ORDER BY started_at_ms DESC, rowid DESC LIMIT 1",
             [],
             |row| {
                 Ok((
@@ -861,7 +903,7 @@ fn last_success(conn: &Connection) -> Result<Option<BackupStatusArtifact>, Recov
                 artifact_length, accepted_cursor, allocation_high_water
          FROM edge_node_backup_attempts
          WHERE state='success'
-         ORDER BY completed_at_ms DESC, attempt_id DESC LIMIT 1",
+         ORDER BY completed_at_ms DESC, rowid DESC LIMIT 1",
         [],
         |row| {
             let length: i64 = row.get(4)?;

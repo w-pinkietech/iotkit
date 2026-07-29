@@ -258,6 +258,21 @@ pub fn verify_staging_directory(
     config: &BackupConfig,
     bytes: u64,
 ) -> Result<VerifiedStagingDirectory, RecoveryError> {
+    verify_staging_directory_inner(config, Some(bytes))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn verify_staging_directory_for_reconciliation(
+    _guard: &RecoveryOperationGuard,
+    config: &BackupConfig,
+) -> Result<VerifiedStagingDirectory, RecoveryError> {
+    verify_staging_directory_inner(config, None)
+}
+
+fn verify_staging_directory_inner(
+    config: &BackupConfig,
+    bytes: Option<u64>,
+) -> Result<VerifiedStagingDirectory, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
         crate::config::validate_config(config)?;
@@ -271,7 +286,9 @@ pub fn verify_staging_directory(
             return Err(RecoveryError::DestinationInvalid);
         }
         ensure_no_cleanup_leftovers(&file)?;
-        if free_bytes(&file)? < required_capacity(bytes)? {
+        if let Some(bytes) = bytes
+            && free_bytes(&file)? < required_capacity(bytes)?
+        {
             return Err(RecoveryError::StorageFull);
         }
         Ok(VerifiedStagingDirectory {
@@ -280,7 +297,7 @@ pub fn verify_staging_directory(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (_guard, config, bytes);
+        let _ = (config, bytes);
         Err(RecoveryError::PlatformUnsupported)
     }
 }

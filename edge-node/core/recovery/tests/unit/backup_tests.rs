@@ -67,12 +67,12 @@ impl crate::backup::BackupHook for TestBackupHook {
 
 #[cfg(target_os = "linux")]
 fn create_backup_with_fault(
-    config: &BackupConfig,
+    config_path: &std::path::Path,
     passphrase: &BackupPassphrase,
     now_ms: i64,
     fault: TestBackupFault,
 ) -> Result<NodeBackupManifest, RecoveryError> {
-    crate::backup::create_backup_with_hook(config, passphrase, now_ms, &TestBackupHook(fault))
+    crate::backup::create_backup_with_hook(config_path, passphrase, now_ms, &TestBackupHook(fault))
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn configured_status_and_creation_fail_closed_without_filesystem_effects() {
     };
     assert_eq!(
         create_backup(
-            &config,
+            &config_path,
             &BackupPassphrase::new("owner-only-passphrase".into()),
             1
         ),
@@ -360,7 +360,7 @@ fn status_reports_healthy_stale_latest_failure_and_active_operation_without_writ
     );
     drop(conn);
 
-    let lock_path = config.staging_directory.join(".iotkit-recovery.lock");
+    let lock_path = config_path.parent().unwrap().join(".iotkit-recovery.lock");
     assert!(!lock_path.exists());
     assert!(matches!(
         backup_status(&config_path, 60_999).unwrap(),
@@ -431,8 +431,7 @@ fn status_reports_healthy_stale_latest_failure_and_active_operation_without_writ
         } if reason_code == "storage_full"
     ));
 
-    let operation_path = config.staging_directory.join(".iotkit-backup-operation");
-    let _guard = acquire_recovery_operation(&operation_path).unwrap();
+    let _guard = acquire_recovery_operation(&config_path).unwrap();
     assert_eq!(
         backup_status(&config_path, 2_002).unwrap(),
         BackupReadiness::OperationBusy
@@ -441,10 +440,113 @@ fn status_reports_healthy_stale_latest_failure_and_active_operation_without_writ
 
 #[cfg(target_os = "linux")]
 #[test]
+fn status_rejects_a_persisted_free_text_failure_reason_without_projecting_it() {
+    let secret = "customer-secret-free-text-must-not-leave-storage";
+    let root = tempfile::tempdir().unwrap();
+    let (config_path, _config, conn) = status_fixture(root.path());
+    conn.execute(
+        "INSERT INTO edge_node_backup_attempts(
+             attempt_id, backup_id, state, reason_code, artifact_name, edge_node_id,
+             started_at_ms, completed_at_ms
+         ) VALUES('attempt-corrupt', 'backup-corrupt', 'failed', ?1,
+                  'backup-corrupt.iotkit-node-backup', 'edge-node-test', 10, 11)",
+        [secret],
+    )
+    .unwrap();
+    drop(conn);
+
+    let result = backup_status(&config_path, 12);
+    assert_eq!(result, Err(RecoveryError::InvalidStartupState));
+    let rendered = format!("{result:?}");
+    assert!(!rendered.contains(secret));
+    assert_eq!(rendered, "Err(InvalidStartupState)");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn status_uses_insertion_order_when_attempt_timestamps_tie() {
+    let root = tempfile::tempdir().unwrap();
+    let (config_path, _config, conn) = status_fixture(root.path());
+    for (attempt_id, backup_id) in [
+        ("attempt-z-old", "backup-old"),
+        ("attempt-a-new", "backup-new"),
+    ] {
+        dispatch_private(
+            &conn,
+            BEGIN_BACKUP_ATTEMPT_OP,
+            json!({
+                "attempt_id": attempt_id,
+                "backup_id": backup_id,
+                "artifact_name": format!("{backup_id}.iotkit-node-backup"),
+                "edge_node_id": "edge-node-test",
+                "started_at_ms": 100
+            }),
+        );
+        dispatch_private(
+            &conn,
+            COMPLETE_BACKUP_ATTEMPT_OP,
+            json!({
+                "attempt_id": attempt_id,
+                "outcome": "success",
+                "reason_code": "ok",
+                "artifact_length": 42,
+                "ledger_epoch": "epoch-test",
+                "accepted_cursor": 1,
+                "allocation_high_water": 2,
+                "artifact_created_at_ms": 100,
+                "completed_at_ms": 101
+            }),
+        );
+    }
+    dispatch_private(
+        &conn,
+        RECORD_BACKUP_PREFLIGHT_FAILURE_OP,
+        json!({
+            "attempt_id": "attempt-0-latest",
+            "backup_id": "backup-failed",
+            "artifact_name": "backup-failed.iotkit-node-backup",
+            "edge_node_id": "edge-node-test",
+            "reason_code": "storage",
+            "started_at_ms": 100,
+            "completed_at_ms": 101
+        }),
+    );
+    drop(conn);
+
+    assert!(matches!(
+        backup_status(&config_path, 102).unwrap(),
+        BackupReadiness::Failed {
+            ref reason_code,
+            last_verified: Some(ref artifact),
+            ..
+        } if reason_code == "storage" && artifact.backup_id == "backup-new"
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn status_observes_initial_configure_lock_before_reporting_not_configured() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let config_path = root.path().join("backup.json");
+    let _configure_guard = acquire_recovery_operation(&config_path).unwrap();
+
+    assert_eq!(
+        backup_status(&config_path, 1),
+        Ok(BackupReadiness::OperationBusy)
+    );
+    assert!(!config_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn competing_create_returns_busy_before_opening_the_source_database() {
     let root = tempfile::tempdir().unwrap();
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let staging = root.path().join("staging");
     fs::create_dir(&staging).unwrap();
@@ -464,12 +566,22 @@ fn competing_create_returns_busy_before_opening_the_source_database() {
         freshness_seconds: 60,
         retention_count: 1,
     };
-    let _guard =
-        acquire_recovery_operation(&config.staging_directory.join(".iotkit-backup-operation"))
-            .unwrap();
+    let config_path = root.path().join("backup.json");
+    let mut config_file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&config_path)
+        .unwrap();
+    use std::io::Write as _;
+    config_file
+        .write_all(&serde_json::to_vec(&config).unwrap())
+        .unwrap();
+    drop(config_file);
+    let _guard = acquire_recovery_operation(&config_path).unwrap();
     assert_eq!(
         create_backup(
-            &config,
+            &config_path,
             &BackupPassphrase::new("owner-only-passphrase".into()),
             1
         ),
@@ -573,6 +685,7 @@ struct CreateFixture {
     destination: tempfile::TempDir,
     _database_root: tempfile::TempDir,
     staging: tempfile::TempDir,
+    config_path: std::path::PathBuf,
     config: BackupConfig,
     passphrase: BackupPassphrase,
 }
@@ -619,29 +732,119 @@ fn create_fixture() -> CreateFixture {
         BackupConfigReplace::Refuse,
     )
     .unwrap();
+    let config = load_owner_only_config(&config_path).unwrap();
     CreateFixture {
         _control: control,
         destination,
         _database_root: database_root,
         staging,
-        config: load_owner_only_config(&config_path).unwrap(),
+        config_path,
+        config,
         passphrase: BackupPassphrase::new("owner-only-reconcile-passphrase".into()),
     }
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn next_create_reconciles_only_the_exact_recorded_authenticated_artifact() {
-    use std::fs;
+fn config_adjacent_configure_lock_blocks_create_and_inspect_before_effects() {
+    let fixture = create_fixture();
+    let _configure_guard = acquire_recovery_operation(&fixture.config_path).unwrap();
+
+    assert_eq!(
+        create_backup(&fixture.config_path, &fixture.passphrase, 9),
+        Err(RecoveryError::OperationBusy)
+    );
+    assert_eq!(
+        inspect_backup(
+            &fixture.config_path,
+            std::path::Path::new("must-not-be-opened.iotkit-node-backup"),
+            &fixture.passphrase,
+        ),
+        Err(RecoveryError::OperationBusy)
+    );
+    let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM edge_node_backup_attempts",
+            [],
+            |row| { row.get::<_, i64>(0) }
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        std::fs::read_dir(fixture.destination.path())
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[cfg(target_os = "linux")]
+struct ConfigureDuringCreate<'a> {
+    config_path: &'a std::path::Path,
+    observed: std::cell::RefCell<Option<Result<(), RecoveryError>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::backup::BackupHook for ConfigureDuringCreate<'_> {
+    fn at(
+        &self,
+        point: crate::backup::BackupHookPoint,
+        config: &BackupConfig,
+    ) -> Result<(), RecoveryError> {
+        if point == crate::backup::BackupHookPoint::BeforeSnapshot {
+            self.observed.replace(Some(configure_backup(
+                self.config_path,
+                config,
+                BackupConfigReplace::ReplaceExisting,
+            )));
+            return Err(RecoveryError::Storage);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn active_create_blocks_configure_before_config_replacement() {
+    let fixture = create_fixture();
+    let config_before = std::fs::read(&fixture.config_path).unwrap();
+    let hook = ConfigureDuringCreate {
+        config_path: &fixture.config_path,
+        observed: std::cell::RefCell::new(None),
+    };
+
+    assert_eq!(
+        crate::backup::create_backup_with_hook(&fixture.config_path, &fixture.passphrase, 9, &hook,),
+        Err(RecoveryError::Storage)
+    );
+    assert_eq!(
+        hook.observed.into_inner(),
+        Some(Err(RecoveryError::OperationBusy))
+    );
+    assert_eq!(std::fs::read(&fixture.config_path).unwrap(), config_before);
+    let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM edge_node_backup_attempts",
+            [],
+            |row| { row.get::<_, i64>(0) }
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn next_create_cleans_named_crash_plaintext_before_reconciling_the_exact_artifact() {
+    use std::fs::{self, OpenOptions};
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
 
     let fixture = create_fixture();
-    let guard = acquire_recovery_operation(
-        &fixture
-            .config
-            .staging_directory
-            .join(".iotkit-backup-operation"),
-    )
-    .unwrap();
+    let guard = acquire_recovery_operation(&fixture.config_path).unwrap();
     let reconciliation_destination =
         crate::destination::verify_destination_for_reconciliation(&guard, &fixture.config).unwrap();
     drop(reconciliation_destination);
@@ -685,6 +888,25 @@ fn next_create_reconciles_only_the_exact_recorded_authenticated_artifact() {
         }),
     );
     drop(conn);
+    let crash_stage = fixture
+        .staging
+        .path()
+        .join(".iotkit-backup-stage-0123456789abcdef0123456789abcdef.sqlite");
+    let mut crash_plaintext = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&crash_stage)
+        .unwrap();
+    crash_plaintext
+        .write_all(b"named-plaintext-left-by-a-dead-process")
+        .unwrap();
+    drop(crash_plaintext);
+    let unsafe_near_stage = fixture
+        .staging
+        .path()
+        .join(".iotkit-backup-stage-secret.sqlite");
+    fs::write(&unsafe_near_stage, b"not-safe-to-classify").unwrap();
     let original_permissions = fs::metadata(fixture.destination.path())
         .unwrap()
         .permissions();
@@ -692,7 +914,25 @@ fn next_create_reconciles_only_the_exact_recorded_authenticated_artifact() {
     use std::os::unix::fs::PermissionsExt;
     read_only_permissions.set_mode(0o500);
     fs::set_permissions(fixture.destination.path(), read_only_permissions).unwrap();
-    let reconciled = create_backup(&fixture.config, &fixture.passphrase, 11).unwrap();
+    assert_eq!(
+        create_backup(&fixture.config_path, &fixture.passphrase, 11),
+        Err(RecoveryError::CleanupRequired)
+    );
+    assert!(!crash_stage.exists());
+    assert!(unsafe_near_stage.exists());
+    let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM edge_node_backup_attempts WHERE attempt_id='attempt-reconcile'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "started"
+    );
+    drop(conn);
+    fs::remove_file(&unsafe_near_stage).unwrap();
+    let reconciled = create_backup(&fixture.config_path, &fixture.passphrase, 11).unwrap();
     fs::set_permissions(fixture.destination.path(), original_permissions).unwrap();
     assert_eq!(reconciled, snapshot.manifest);
 
@@ -720,7 +960,7 @@ fn next_create_reconciles_only_the_exact_recorded_authenticated_artifact() {
         }),
     );
     drop(conn);
-    let created = create_backup(&fixture.config, &fixture.passphrase, 13).unwrap();
+    let created = create_backup(&fixture.config_path, &fixture.passphrase, 13).unwrap();
     assert_ne!(created.backup_id, "backup-reconcile");
     assert!(unrelated.exists());
     assert!(mismatched_exact.exists());
@@ -748,7 +988,7 @@ fn crash_after_begin_leaves_started_then_next_create_cleans_and_closes_it() {
     let fixture = create_fixture();
     assert_eq!(
         create_backup_with_fault(
-            &fixture.config,
+            &fixture.config_path,
             &fixture.passphrase,
             20,
             TestBackupFault::AfterBegin,
@@ -776,7 +1016,7 @@ fn crash_after_begin_leaves_started_then_next_create_cleans_and_closes_it() {
                 .starts_with(".iotkit-backup-stage-"))
     );
 
-    create_backup(&fixture.config, &fixture.passphrase, 21).unwrap();
+    create_backup(&fixture.config_path, &fixture.passphrase, 21).unwrap();
     let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
     assert_eq!(
         conn.query_row(
@@ -809,7 +1049,7 @@ fn post_publication_faults_keep_started_until_exact_next_create_reconciliation()
     ] {
         let fixture = create_fixture();
         assert_eq!(
-            create_backup_with_fault(&fixture.config, &fixture.passphrase, 30, fault,),
+            create_backup_with_fault(&fixture.config_path, &fixture.passphrase, 30, fault),
             Err(RecoveryError::ArtifactPublicationUncertain)
         );
         let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
@@ -821,7 +1061,7 @@ fn post_publication_faults_keep_started_until_exact_next_create_reconciliation()
             )
             .unwrap();
         drop(conn);
-        let reconciled = create_backup(&fixture.config, &fixture.passphrase, 31).unwrap();
+        let reconciled = create_backup(&fixture.config_path, &fixture.passphrase, 31).unwrap();
         assert_eq!(reconciled.backup_id, backup_id);
         assert!(
             !std::fs::read_dir(fixture.staging.path())
@@ -841,7 +1081,7 @@ fn reconciliation_parent_sync_failure_keeps_started_until_durability_is_proven()
     let fixture = create_fixture();
     assert_eq!(
         create_backup_with_fault(
-            &fixture.config,
+            &fixture.config_path,
             &fixture.passphrase,
             35,
             TestBackupFault::AfterPublication,
@@ -850,7 +1090,7 @@ fn reconciliation_parent_sync_failure_keeps_started_until_durability_is_proven()
     );
     assert_eq!(
         create_backup_with_fault(
-            &fixture.config,
+            &fixture.config_path,
             &fixture.passphrase,
             36,
             TestBackupFault::ReconciliationParentSync,
@@ -869,7 +1109,7 @@ fn reconciliation_parent_sync_failure_keeps_started_until_durability_is_proven()
     );
     drop(conn);
 
-    create_backup(&fixture.config, &fixture.passphrase, 37).unwrap();
+    create_backup(&fixture.config_path, &fixture.passphrase, 37).unwrap();
     let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
     assert_eq!(
         conn.query_row(
@@ -888,7 +1128,7 @@ fn receipt_commit_precedes_retention_and_success_reporting() {
     let fixture = create_fixture();
     assert_eq!(
         create_backup_with_fault(
-            &fixture.config,
+            &fixture.config_path,
             &fixture.passphrase,
             40,
             TestBackupFault::AfterReceipt,
@@ -939,7 +1179,7 @@ fn source_path_replacement_cannot_complete_a_receipt_for_another_node() {
 
     assert_eq!(
         create_backup_with_fault(
-            &fixture.config,
+            &fixture.config_path,
             &fixture.passphrase,
             50,
             TestBackupFault::ReplaceSourceBeforeSnapshot,
