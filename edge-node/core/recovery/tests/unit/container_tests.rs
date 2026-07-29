@@ -33,7 +33,20 @@ fn encrypt_container_with_entropy(
     salt: [u8; 16],
     nonce_prefix: [u8; 16],
 ) -> Result<(), RecoveryError> {
-    super::encrypt_with_entropy(snapshot, manifest, passphrase, output, salt, nonce_prefix)
+    let directory = directory_capability(output.parent().unwrap_or_else(|| Path::new(".")));
+    let name = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(RecoveryError::ContainerInvalid)?;
+    super::encrypt_with_entropy(
+        snapshot,
+        manifest,
+        passphrase,
+        &directory,
+        name,
+        salt,
+        nonce_prefix,
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -91,6 +104,10 @@ fn staging_directory(root: &Path) -> PathBuf {
     staging
 }
 
+fn directory_capability(path: &Path) -> DirectoryCapability {
+    DirectoryCapability::open(path).unwrap()
+}
+
 fn directory_entries(path: &Path) -> BTreeSet<String> {
     fs::read_dir(path)
         .unwrap()
@@ -113,13 +130,13 @@ fn encrypt_snapshot_reader_with_output_init(
     snapshot_reader: impl Read,
     manifest: &NodeBackupManifest,
     passphrase: &BackupPassphrase,
-    output: &Path,
+    output: (&DirectoryCapability, &str),
     salt: [u8; 16],
     nonce_prefix: [u8; 16],
     initialize_output: impl FnOnce(&mut LinuxEncryptedOutput) -> Result<(), RecoveryError>,
 ) -> Result<(), RecoveryError> {
     validate_manifest(manifest)?;
-    let mut output_file = LinuxEncryptedOutput::new(output)?;
+    let mut output_file = LinuxEncryptedOutput::new(output.0, output.1)?;
     initialize_output(&mut output_file)?;
     encrypt_snapshot_contents(
         snapshot_reader,
@@ -200,11 +217,16 @@ fn valid_round_trip_authenticates_and_decrypts_database() {
     );
 
     let staging = staging_directory(root.path());
+    let staging_capability = directory_capability(&staging);
     #[cfg(target_os = "linux")]
     {
-        let (stage, actual) =
-            decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
-                .unwrap();
+        let (stage, actual) = decrypt_container_to_staging_file(
+            &artifact,
+            &passphrase(),
+            &staging_capability,
+            DATABASE_LENGTH,
+        )
+        .unwrap();
         assert_eq!(actual, expected);
         let rendered = format!("{stage:?}");
         assert!(rendered.contains("REDACTED"));
@@ -214,9 +236,13 @@ fn valid_round_trip_authenticates_and_decrypts_database() {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let error =
-            decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
-                .unwrap_err();
+        let error = decrypt_container_to_staging_file(
+            &artifact,
+            &passphrase(),
+            &staging_capability,
+            DATABASE_LENGTH,
+        )
+        .unwrap_err();
         assert_eq!(error.reason_code(), "platform_unsupported");
         assert!(directory_entries(&staging).is_empty());
     }
@@ -250,9 +276,14 @@ fn public_golden_fixture_matches_json_and_reencodes_byte_for_byte() {
     {
         let root = tempdir().unwrap();
         let staging = staging_directory(root.path());
-        let (stage, actual) =
-            decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
-                .unwrap();
+        let staging_capability = directory_capability(&staging);
+        let (stage, actual) = decrypt_container_to_staging_file(
+            &artifact,
+            &passphrase(),
+            &staging_capability,
+            DATABASE_LENGTH,
+        )
+        .unwrap();
         assert_eq!(actual, expected);
         let snapshot = root.path().join("golden.sqlite");
         fs::write(&snapshot, stage_bytes(stage)).unwrap();
@@ -433,19 +464,26 @@ fn encryption_uses_the_open_snapshot_handle_after_path_replacement() {
     fs::rename(&snapshot, &moved).unwrap();
     fs::write(&snapshot, b"replacement-with-different-bytes").unwrap();
     let output = root.path().join("container.iotkit-node-backup");
+    let output_directory = directory_capability(root.path());
     encrypt_open_snapshot(
         opened,
         &manifest(),
         &passphrase(),
-        &output,
+        &output_directory,
+        "container.iotkit-node-backup",
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
     )
     .unwrap();
     let staging = staging_directory(root.path());
-    let (stage, _) =
-        decrypt_container_to_staging_file(&output, &passphrase(), &staging, DATABASE_LENGTH)
-            .unwrap();
+    let staging_capability = directory_capability(&staging);
+    let (stage, _) = decrypt_container_to_staging_file(
+        &output,
+        &passphrase(),
+        &staging_capability,
+        DATABASE_LENGTH,
+    )
+    .unwrap();
     assert_eq!(stage_bytes(stage), DATABASE);
 }
 
@@ -484,11 +522,13 @@ fn in_place_snapshot_truncation_during_encryption_fails_without_artifact() {
         path: snapshot,
         truncated: false,
     };
+    let output_directory = directory_capability(root.path());
     let error = encrypt_snapshot_reader(
         reader,
         &manifest(),
         &passphrase(),
-        &output,
+        &output_directory,
+        "truncated.iotkit-node-backup",
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
     )
@@ -502,9 +542,14 @@ fn insufficient_plaintext_capacity_is_rejected_before_output_creation() {
     let root = tempdir().unwrap();
     let (artifact, _) = deterministic_artifact(root.path());
     let staging = staging_directory(root.path());
-    let error =
-        decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH - 1)
-            .unwrap_err();
+    let staging_capability = directory_capability(&staging);
+    let error = decrypt_container_to_staging_file(
+        &artifact,
+        &passphrase(),
+        &staging_capability,
+        DATABASE_LENGTH - 1,
+    )
+    .unwrap_err();
     assert_eq!(error.reason_code(), "storage_full");
     assert!(directory_entries(&staging).is_empty());
 }
@@ -563,6 +608,7 @@ fn wrong_passphrase_is_authentication_failure() {
 fn invalid_passphrase_is_rejected_before_container_or_snapshot_work() {
     let root = tempdir().unwrap();
     let short = BackupPassphrase::new("short".into());
+    let output_directory = directory_capability(root.path());
     assert_eq!(
         authenticate_container(&root.path().join("missing"), &short)
             .unwrap_err()
@@ -574,7 +620,8 @@ fn invalid_passphrase_is_rejected_before_container_or_snapshot_work() {
             &root.path().join("missing"),
             &manifest(),
             &short,
-            &root.path().join("output"),
+            &output_directory,
+            "output",
         )
         .unwrap_err()
         .reason_code(),
@@ -741,6 +788,7 @@ fn decryption_failure_leaves_no_named_plaintext_and_preserves_unrelated_stage_fi
     let root = tempdir().unwrap();
     let (artifact, _) = deterministic_artifact(root.path());
     let staging = staging_directory(root.path());
+    let staging_capability = directory_capability(&staging);
     let unrelated = staging.join("unrelated.marker");
     fs::write(&unrelated, b"keep").unwrap();
     let before = directory_entries(&staging);
@@ -751,8 +799,13 @@ fn decryption_failure_leaves_no_named_plaintext_and_preserves_unrelated_stage_fi
     let changed = root.path().join("corrupt");
     fs::write(&changed, bytes).unwrap();
     assert!(
-        decrypt_container_to_staging_file(&changed, &passphrase(), &staging, DATABASE_LENGTH,)
-            .is_err()
+        decrypt_container_to_staging_file(
+            &changed,
+            &passphrase(),
+            &staging_capability,
+            DATABASE_LENGTH,
+        )
+        .is_err()
     );
     assert_eq!(directory_entries(&staging), before);
     assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
@@ -765,13 +818,14 @@ fn encrypted_output_initialization_failure_removes_temp_and_retry_succeeds() {
     let snapshot = root.path().join("snapshot.sqlite");
     write_database(&snapshot);
     let output = root.path().join("retry.iotkit-node-backup");
+    let output_directory = directory_capability(root.path());
     let before = directory_entries(root.path());
 
     let error = encrypt_snapshot_reader_with_output_init(
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
-        &output,
+        (&output_directory, "retry.iotkit-node-backup"),
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
         |_temporary| Err(RecoveryError::ArtifactCleanupFailed),
@@ -798,8 +852,8 @@ fn encrypted_output_initialization_failure_removes_temp_and_retry_succeeds() {
 fn anonymous_stage_rejects_injected_otmpfile_failure_without_a_directory_entry() {
     let root = tempdir().unwrap();
     let staging = staging_directory(root.path());
-    let directory = File::open(&staging).unwrap();
-    let error = create_anonymous_plaintext_file_with(directory, |_| {
+    let directory = directory_capability(&staging);
+    let error = create_anonymous_plaintext_file_with(&directory, |_| {
         Err(io::Error::from_raw_os_error(libc::EOPNOTSUPP))
     })
     .unwrap_err();
@@ -812,7 +866,8 @@ fn anonymous_stage_rejects_injected_otmpfile_failure_without_a_directory_entry()
 fn anonymous_stage_fails_closed_on_unsupported_platform() {
     let root = tempdir().unwrap();
     let staging = staging_directory(root.path());
-    let error = DecryptedStage::new(&staging).unwrap_err();
+    let staging_capability = directory_capability(&staging);
+    let error = DecryptedStage::new(&staging_capability).unwrap_err();
     assert_eq!(error.reason_code(), "platform_unsupported");
     assert!(directory_entries(&staging).is_empty());
 }
@@ -824,9 +879,96 @@ fn encrypted_publication_fails_closed_on_unsupported_platform() {
     let snapshot = root.path().join("snapshot.sqlite");
     write_database(&snapshot);
     let output = root.path().join("artifact.iotkit-node-backup");
-    let error = encrypt_container(&snapshot, &manifest(), &passphrase(), &output).unwrap_err();
+    let output_directory = directory_capability(root.path());
+    let error = encrypt_container(
+        &snapshot,
+        &manifest(),
+        &passphrase(),
+        &output_directory,
+        "artifact.iotkit-node-backup",
+    )
+    .unwrap_err();
     assert_eq!(error.reason_code(), "platform_unsupported");
     assert!(!output.exists());
+}
+
+#[test]
+fn invalid_output_names_are_rejected_before_any_write() {
+    let root = tempdir().unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let output_directory = directory_capability(root.path());
+    let before = directory_entries(root.path());
+
+    for name in ["", ".", "..", "nested/name", "nested\\name", "nul\0name"] {
+        let error = encrypt_container(
+            &snapshot,
+            &manifest(),
+            &passphrase(),
+            &output_directory,
+            name,
+        )
+        .unwrap_err();
+        assert_eq!(error.reason_code(), "container_invalid", "{name:?}");
+        assert_eq!(directory_entries(root.path()), before, "{name:?}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn encryption_uses_a_held_directory_capability_after_path_replacement() {
+    let root = tempdir().unwrap();
+    let original = root.path().join("original-output");
+    fs::create_dir(&original).unwrap();
+    let output_directory = directory_capability(&original);
+    let moved = root.path().join("moved-output");
+    fs::rename(&original, &moved).unwrap();
+    fs::create_dir(&original).unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+
+    encrypt_container(
+        &snapshot,
+        &manifest(),
+        &passphrase(),
+        &output_directory,
+        "artifact.iotkit-node-backup",
+    )
+    .unwrap();
+
+    let artifact = moved.join("artifact.iotkit-node-backup");
+    assert!(artifact.exists());
+    assert!(directory_entries(&original).is_empty());
+    assert_eq!(
+        authenticate_container(&artifact, &passphrase()).unwrap(),
+        manifest()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn decryption_stages_through_a_held_directory_capability_after_path_replacement() {
+    let root = tempdir().unwrap();
+    let (artifact, _) = deterministic_artifact(root.path());
+    let original = root.path().join("original-staging");
+    fs::create_dir(&original).unwrap();
+    let staging_directory = directory_capability(&original);
+    let moved = root.path().join("moved-staging");
+    fs::rename(&original, &moved).unwrap();
+    fs::create_dir(&original).unwrap();
+
+    let (stage, actual) = decrypt_container_to_staging_file(
+        &artifact,
+        &passphrase(),
+        &staging_directory,
+        DATABASE_LENGTH,
+    )
+    .unwrap();
+
+    assert_eq!(actual, manifest());
+    assert_eq!(stage_bytes(stage), DATABASE);
+    assert!(directory_entries(&moved).is_empty());
+    assert!(directory_entries(&original).is_empty());
 }
 
 #[cfg(target_os = "linux")]
@@ -837,15 +979,15 @@ fn encrypted_publication_uses_held_parent_after_path_substitution() {
     fs::create_dir(&parent).unwrap();
     let snapshot = root.path().join("snapshot.sqlite");
     write_database(&snapshot);
-    let output = parent.join("artifact.iotkit-node-backup");
     let moved = root.path().join("moved-destination");
     let replacement = root.path().join("replacement-destination");
+    let output_directory = directory_capability(&parent);
 
     encrypt_snapshot_reader_with_output_init(
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
-        &output,
+        (&output_directory, "artifact.iotkit-node-backup"),
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
         |_| {
@@ -897,12 +1039,13 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
     let snapshot = root.path().join("snapshot.sqlite");
     write_database(&snapshot);
     let output = root.path().join("artifact.iotkit-node-backup");
+    let output_directory = directory_capability(root.path());
 
     let error = encrypt_snapshot_reader_with_output_init(
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
-        &output,
+        (&output_directory, "artifact.iotkit-node-backup"),
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
         |owner| {
@@ -918,7 +1061,7 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
-        &output,
+        (&output_directory, "artifact.iotkit-node-backup"),
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
         |owner| {
@@ -934,7 +1077,7 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
-        &output,
+        (&output_directory, "artifact.iotkit-node-backup"),
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
         |owner| {
@@ -950,7 +1093,7 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
-        &output,
+        (&output_directory, "artifact.iotkit-node-backup"),
         FIXED_SALT,
         FIXED_NONCE_PREFIX,
         |owner| {

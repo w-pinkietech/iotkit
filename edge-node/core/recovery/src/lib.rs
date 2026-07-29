@@ -8,7 +8,8 @@ mod snapshot;
 mod state;
 
 pub use container::{
-    DecryptedStage, authenticate_container, decrypt_container_to_staging_file, encrypt_container,
+    DecryptedStage, DirectoryCapability, authenticate_container, decrypt_container_to_staging_file,
+    encrypt_container,
 };
 pub use model::{
     BackupConfig, BackupCounts, BackupPassphrase, BackupReadiness, BackupStatusArtifact,

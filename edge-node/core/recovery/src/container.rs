@@ -7,6 +7,10 @@ use std::{
 
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
+#[cfg(not(target_os = "linux"))]
+use std::fs;
+#[cfg(target_os = "linux")]
+use std::mem::MaybeUninit;
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(target_os = "linux")]
@@ -72,26 +76,145 @@ struct ParsedHeader {
     digest: [u8; 32],
 }
 
+/// A held directory capability used for all recovery writes.
+///
+/// The capability owns a directory file descriptor rather than retaining a
+/// pathname.  Callers should obtain it only after their verification checks;
+/// subsequent staging and publication operations use this exact directory,
+/// even if the pathname is renamed or replaced.
+#[allow(dead_code)]
+pub struct DirectoryCapability {
+    file: Option<File>,
+}
+
+impl DirectoryCapability {
+    /// Opens and verifies a directory without following a final symlink.
+    pub fn open(path: &Path) -> Result<Self, RecoveryError> {
+        #[cfg(target_os = "linux")]
+        {
+            let path = CString::new(path.as_os_str().as_bytes())
+                .map_err(|_| RecoveryError::PlatformUnsupported)?;
+            let fd = unsafe {
+                libc::open(
+                    path.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                )
+            };
+            if fd < 0 {
+                return Err(RecoveryError::Storage);
+            }
+            let file = unsafe { File::from_raw_fd(fd) };
+            Self::from_file(file)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let metadata = fs::metadata(path).map_err(|_| RecoveryError::Storage)?;
+            if !metadata.file_type().is_dir() {
+                return Err(RecoveryError::Storage);
+            }
+            Ok(Self { file: None })
+        }
+    }
+
+    /// Takes ownership of an already-open directory handle after validating it.
+    pub fn from_file(file: File) -> Result<Self, RecoveryError> {
+        #[cfg(target_os = "linux")]
+        {
+            let mut stat = MaybeUninit::<libc::stat>::zeroed();
+            let result = unsafe { libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) };
+            if result < 0 {
+                return Err(RecoveryError::Storage);
+            }
+            let stat = unsafe { stat.assume_init() };
+            if (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR {
+                return Err(RecoveryError::Storage);
+            }
+            Ok(Self { file: Some(file) })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let is_directory = file
+                .metadata()
+                .map_err(|_| RecoveryError::Storage)?
+                .file_type()
+                .is_dir();
+            if !is_directory {
+                return Err(RecoveryError::Storage);
+            }
+            Ok(Self { file: Some(file) })
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn duplicate(&self) -> Result<Self, RecoveryError> {
+        Self::from_file(
+            self.file
+                .as_ref()
+                .expect("Linux directory capability holds a descriptor")
+                .try_clone()
+                .map_err(|_| RecoveryError::Storage)?,
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.file
+            .as_ref()
+            .expect("Linux directory capability holds a descriptor")
+            .as_raw_fd()
+    }
+}
+
+impl fmt::Debug for DirectoryCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DirectoryCapability([REDACTED])")
+    }
+}
+
+fn validate_output_name(name: &str) -> Result<(), RecoveryError> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.bytes().any(|byte| byte == 0)
+    {
+        return Err(RecoveryError::ContainerInvalid);
+    }
+    Ok(())
+}
+
 /// Encrypts a sanitized snapshot into a new Node backup container.
 pub fn encrypt_container(
     snapshot: &Path,
     manifest: &NodeBackupManifest,
     passphrase: &BackupPassphrase,
-    output: &Path,
+    output_directory: &DirectoryCapability,
+    output_name: &str,
 ) -> Result<(), RecoveryError> {
+    validate_output_name(output_name)?;
     validate_passphrase(passphrase)?;
     let mut salt = [0_u8; SALT_BYTES];
     let mut nonce_prefix = [0_u8; NONCE_PREFIX_BYTES];
     getrandom::fill(&mut salt).map_err(|_| RecoveryError::Random)?;
     getrandom::fill(&mut nonce_prefix).map_err(|_| RecoveryError::Random)?;
-    encrypt_with_entropy(snapshot, manifest, passphrase, output, salt, nonce_prefix)
+    encrypt_with_entropy(
+        snapshot,
+        manifest,
+        passphrase,
+        output_directory,
+        output_name,
+        salt,
+        nonce_prefix,
+    )
 }
 
 fn encrypt_with_entropy(
     snapshot: &Path,
     manifest: &NodeBackupManifest,
     passphrase: &BackupPassphrase,
-    output: &Path,
+    output_directory: &DirectoryCapability,
+    output_name: &str,
     salt: [u8; SALT_BYTES],
     nonce_prefix: [u8; NONCE_PREFIX_BYTES],
 ) -> Result<(), RecoveryError> {
@@ -100,7 +223,8 @@ fn encrypt_with_entropy(
         snapshot_file,
         manifest,
         passphrase,
-        output,
+        output_directory,
+        output_name,
         salt,
         nonce_prefix,
     )
@@ -110,7 +234,8 @@ fn encrypt_open_snapshot(
     snapshot_file: File,
     manifest: &NodeBackupManifest,
     passphrase: &BackupPassphrase,
-    output: &Path,
+    output_directory: &DirectoryCapability,
+    output_name: &str,
     salt: [u8; SALT_BYTES],
     nonce_prefix: [u8; NONCE_PREFIX_BYTES],
 ) -> Result<(), RecoveryError> {
@@ -118,7 +243,8 @@ fn encrypt_open_snapshot(
         snapshot_file,
         manifest,
         passphrase,
-        output,
+        output_directory,
+        output_name,
         salt,
         nonce_prefix,
     )
@@ -128,14 +254,15 @@ fn encrypt_snapshot_reader(
     snapshot_reader: impl Read,
     manifest: &NodeBackupManifest,
     passphrase: &BackupPassphrase,
-    output: &Path,
+    output_directory: &DirectoryCapability,
+    output_name: &str,
     salt: [u8; SALT_BYTES],
     nonce_prefix: [u8; NONCE_PREFIX_BYTES],
 ) -> Result<(), RecoveryError> {
     validate_manifest(manifest)?;
     #[cfg(target_os = "linux")]
     {
-        let mut output_file = LinuxEncryptedOutput::new(output)?;
+        let mut output_file = LinuxEncryptedOutput::new(output_directory, output_name)?;
         encrypt_snapshot_contents(
             snapshot_reader,
             manifest,
@@ -152,7 +279,8 @@ fn encrypt_snapshot_reader(
             snapshot_reader,
             manifest,
             passphrase,
-            output,
+            output_directory,
+            output_name,
             salt,
             nonce_prefix,
         );
@@ -340,29 +468,22 @@ fn system_sync_directory(parent: &File) -> io::Result<()> {
 
 #[cfg(target_os = "linux")]
 impl LinuxEncryptedOutput {
-    fn new(output: &Path) -> Result<Self, RecoveryError> {
-        Self::new_with_ops(output, LinuxOutputOps::system())
+    fn new(directory: &DirectoryCapability, output_name: &str) -> Result<Self, RecoveryError> {
+        Self::new_with_ops(directory, output_name, LinuxOutputOps::system())
     }
 
-    fn new_with_ops(output: &Path, ops: LinuxOutputOps) -> Result<Self, RecoveryError> {
-        let parent_path = output.parent().unwrap_or_else(|| Path::new("."));
-        let name = output
-            .file_name()
-            .filter(|name| !name.is_empty() && *name != "." && *name != "..")
-            .ok_or(RecoveryError::ContainerInvalid)?;
-        let name = CString::new(name.as_bytes()).map_err(|_| RecoveryError::ContainerInvalid)?;
-        let parent_name = CString::new(parent_path.as_os_str().as_bytes())
-            .map_err(|_| RecoveryError::PlatformUnsupported)?;
-        let parent_fd = unsafe {
-            libc::open(
-                parent_name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            )
-        };
-        if parent_fd < 0 {
-            return Err(RecoveryError::Storage);
-        }
-        let parent = unsafe { File::from_raw_fd(parent_fd) };
+    fn new_with_ops(
+        directory: &DirectoryCapability,
+        output_name: &str,
+        ops: LinuxOutputOps,
+    ) -> Result<Self, RecoveryError> {
+        validate_output_name(output_name)?;
+        let name =
+            CString::new(output_name.as_bytes()).map_err(|_| RecoveryError::ContainerInvalid)?;
+        let parent = directory
+            .duplicate()?
+            .file
+            .expect("Linux directory capability holds a descriptor");
         let dot = c".";
         let file_fd = unsafe {
             libc::openat(
@@ -469,7 +590,7 @@ pub struct DecryptedStage {
 }
 
 impl DecryptedStage {
-    fn new(staging_directory: &Path) -> Result<Self, RecoveryError> {
+    fn new(staging_directory: &DirectoryCapability) -> Result<Self, RecoveryError> {
         create_anonymous_plaintext_file(staging_directory).map(|file| Self { file })
     }
 
@@ -488,25 +609,15 @@ impl DecryptedStage {
 }
 
 #[cfg(target_os = "linux")]
-fn create_anonymous_plaintext_file(staging_directory: &Path) -> Result<File, RecoveryError> {
-    let directory = CString::new(staging_directory.as_os_str().as_bytes())
-        .map_err(|_| RecoveryError::PlatformUnsupported)?;
-    let directory_fd = unsafe {
-        libc::open(
-            directory.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        )
-    };
-    if directory_fd < 0 {
-        return Err(RecoveryError::Storage);
-    }
-    let directory = unsafe { File::from_raw_fd(directory_fd) };
-    create_anonymous_plaintext_file_with(directory, linux_open_tmpfile)
+fn create_anonymous_plaintext_file(
+    staging_directory: &DirectoryCapability,
+) -> Result<File, RecoveryError> {
+    create_anonymous_plaintext_file_with(staging_directory, linux_open_tmpfile)
 }
 
 #[cfg(target_os = "linux")]
 fn create_anonymous_plaintext_file_with(
-    directory: File,
+    directory: &DirectoryCapability,
     open_tmpfile: impl FnOnce(i32) -> io::Result<i32>,
 ) -> Result<File, RecoveryError> {
     let plaintext_fd = open_tmpfile(directory.as_raw_fd()).map_err(|error| {
@@ -541,7 +652,9 @@ fn linux_open_tmpfile(directory_fd: i32) -> io::Result<i32> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn create_anonymous_plaintext_file(_staging_directory: &Path) -> Result<File, RecoveryError> {
+fn create_anonymous_plaintext_file(
+    _staging_directory: &DirectoryCapability,
+) -> Result<File, RecoveryError> {
     Err(RecoveryError::PlatformUnsupported)
 }
 
@@ -567,7 +680,7 @@ impl Seek for DecryptedStage {
 pub fn decrypt_container_to_staging_file(
     input: &Path,
     passphrase: &BackupPassphrase,
-    staging_directory: &Path,
+    staging_directory: &DirectoryCapability,
     plaintext_capacity_bytes: u64,
 ) -> Result<(DecryptedStage, NodeBackupManifest), RecoveryError> {
     validate_passphrase(passphrase)?;
@@ -727,7 +840,7 @@ fn consume_records(
 }
 
 struct PlaintextConsumer<'a> {
-    staging_directory: Option<&'a Path>,
+    staging_directory: Option<&'a DirectoryCapability>,
     output_capacity: u64,
     staged: Option<DecryptedStage>,
     prefix: [u8; 4],
@@ -741,7 +854,7 @@ struct PlaintextConsumer<'a> {
 
 impl<'a> PlaintextConsumer<'a> {
     fn new(
-        staging_directory: Option<&'a Path>,
+        staging_directory: Option<&'a DirectoryCapability>,
         output_capacity: u64,
     ) -> Result<Self, RecoveryError> {
         Ok(Self {

@@ -260,6 +260,65 @@ Linux WSL runs prove the cfg-gated syscall implementation on an O_TMPFILE-capabl
 filesystem; Task 10 remains responsible for deployment-kernel/filesystem gate
 evidence and owner-only tmpfs validation.
 
+### Review-fix round 5/5
+
+The final review found that the Linux output and staging paths still accepted
+directory pathnames internally after the caller's verification point. The API
+now requires an owned `DirectoryCapability` plus one validated output basename.
+The capability fstats an already-open Linux directory descriptor; all `openat`,
+`linkat(AT_EMPTY_PATH)`, and directory `fsync` calls operate on that held
+descriptor. Empty names, dot names, separators, NUL, and multi-component names
+are rejected before any output inode is created. Non-Linux encryption and
+staging continue to fail closed with `platform_unsupported` after directory
+metadata validation.
+
+Initial RED evidence after the production signature change:
+
+```text
+cargo test -p iotkit-core-recovery container --no-run
+failed with exactly six stale test call sites: four passed PathBuf where
+DirectoryCapability was required and two still used the four-argument
+encrypt_container API.
+```
+
+The Linux regression tests open a capability, rename and replace its original
+directory pathname before encryption/decryption, then verify ciphertext is
+published through the original held directory and the substitute remains
+untouched. They also cover a bare basename and all invalid-name forms without a
+write. A Windows-specific follow-up found that `File::open` cannot obtain a
+directory handle there; the non-Linux capability therefore validates directory
+metadata without a descriptor so the public methods reach their required
+`platform_unsupported` boundary.
+
+Round-5 GREEN evidence:
+
+```text
+Windows:
+cargo test -p iotkit-core-recovery container
+19 passed, 0 failed, 1 ignored
+cargo test -p iotkit-core-recovery
+45 passed, 0 failed, 1 ignored
+cargo clippy -p iotkit-core-recovery --all-targets --no-deps -- -D warnings
+exit 0
+
+WSL Ubuntu-26.04:
+cargo test -p iotkit-core-recovery container
+27 passed, 0 failed, 1 ignored
+cargo test -p iotkit-core-recovery
+53 passed, 0 failed, 1 ignored
+cargo clippy -p iotkit-core-recovery --all-targets --no-deps -- -D warnings
+exit 0
+```
+
+### Task 4/6 handoff
+
+Task 4 and Task 6 must open and verify every destination or staging directory
+before calling this Task 3 API, retain the returned `DirectoryCapability` for
+the entire operation, and pass only the selected final basename. They must not
+derive a parent path, reopen the directory, or construct an output path for
+Task 3. Task 6 continues to consume `DecryptedStage` only through its
+read/seek surface; it must not publish or name the anonymous plaintext stage.
+
 ## Scope and concerns
 
 Only the recovery container, its direct model/Cargo exports, dependency lock,
