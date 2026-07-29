@@ -262,6 +262,12 @@ impl fmt::Debug for BackupStatusArtifact {
     }
 }
 
+impl fmt::Debug for RestoreRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RestoreRequest")
+    }
+}
+
 impl fmt::Debug for RestoreReceipt {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

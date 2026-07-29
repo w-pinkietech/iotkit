@@ -4,34 +4,37 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::{RecoveryError, RecoveryStartupMode};
 
-const CANDIDATE_COLUMNS: &[&str] = &[
-    "singleton",
-    "state",
-    "recovery_id",
-    "candidate_instance_id",
-    "backup_id",
-    "edge_id",
-    "edge_node_id",
-    "old_ledger_epoch",
-    "proposed_new_epoch",
-    "credential_generation",
-    "handoff_schema_version",
-    "installed_at_ms",
-];
-const ATTEMPT_COLUMNS: &[&str] = &[
-    "attempt_id",
-    "backup_id",
-    "state",
-    "reason_code",
-    "artifact_name",
-    "artifact_length",
-    "edge_node_id",
-    "ledger_epoch",
-    "accepted_cursor",
-    "allocation_high_water",
-    "started_at_ms",
-    "artifact_created_at_ms",
-    "completed_at_ms",
+const RECOVERY_SCHEMA: &[(&str, &str, &str)] = &[
+    (
+        "table",
+        "edge_node_recovery_candidate",
+        "createtableedge_node_recovery_candidate(singletonintegerprimarykeycheck(singleton=1),statetextnotnullcheck(state='durably_fenced_candidate'),recovery_idtextnotnull,candidate_instance_idtextnotnullunique,backup_idtext,edge_idtextnotnull,edge_node_idtextnotnull,old_ledger_epochtextnotnull,proposed_new_epochtextnotnull,credential_generationintegernotnullcheck(credential_generation>=0),handoff_schema_versionintegernotnullcheck(handoff_schema_version=1),installed_at_msintegernotnull)",
+    ),
+    (
+        "trigger",
+        "edge_node_recovery_candidate_immutable",
+        "createtriggeredge_node_recovery_candidate_immutablebeforeupdateonedge_node_recovery_candidatebeginselectraise(abort,'recoverycandidateisimmutable');end",
+    ),
+    (
+        "table",
+        "edge_node_backup_attempts",
+        "createtableedge_node_backup_attempts(attempt_idtextprimarykey,backup_idtextnotnullunique,statetextnotnullcheck(statein('started','success','failed')),reason_codetext,artifact_nametextnotnullunique,artifact_lengthinteger,edge_node_idtextnotnull,ledger_epochtext,accepted_cursorinteger,allocation_high_waterinteger,started_at_msintegernotnull,artifact_created_at_msinteger,completed_at_msinteger,check((state='started'andreason_codeisnullandcompleted_at_msisnull)or(state='success'andreason_code='ok'andartifact_lengthisnotnullandledger_epochisnotnullandaccepted_cursorisnotnullandallocation_high_waterisnotnullandartifact_created_at_msisnotnullandcompleted_at_msisnotnull)or(state='failed'andreason_codeisnotnullandreason_code<>'ok'andcompleted_at_msisnotnull)))",
+    ),
+    (
+        "trigger",
+        "edge_node_backup_attempts_forward_only",
+        "createtriggeredge_node_backup_attempts_forward_onlybeforeupdateonedge_node_backup_attemptswhenold.state<>'started'ornew.statenotin('success','failed')ornew.attempt_id<>old.attempt_idornew.backup_id<>old.backup_idornew.artifact_name<>old.artifact_nameornew.edge_node_id<>old.edge_node_idornew.started_at_ms<>old.started_at_msor(new.state='failed'and(new.artifact_lengthisnotnullornew.ledger_epochisnotnullornew.accepted_cursorisnotnullornew.allocation_high_waterisnotnullornew.artifact_created_at_msisnotnull))beginselectraise(abort,'backupattempttransitionisnotallowed');end",
+    ),
+    (
+        "trigger",
+        "edge_node_backup_attempts_insert_state",
+        "createtriggeredge_node_backup_attempts_insert_statebeforeinsertonedge_node_backup_attemptswhennew.statenotin('started','failed')or(new.state='started'and(new.artifact_lengthisnotnullornew.ledger_epochisnotnullornew.accepted_cursorisnotnullornew.allocation_high_waterisnotnullornew.artifact_created_at_msisnotnull))or(new.state='failed'and(new.artifact_lengthisnotnullornew.ledger_epochisnotnullornew.accepted_cursorisnotnullornew.allocation_high_waterisnotnullornew.artifact_created_at_msisnotnull))beginselectraise(abort,'backupattemptcreationisnotallowed');end",
+    ),
+    (
+        "trigger",
+        "edge_node_backup_attempts_immutable",
+        "createtriggeredge_node_backup_attempts_immutablebeforedeleteonedge_node_backup_attemptsbeginselectraise(abort,'backupattemptisimmutable');end",
+    ),
 ];
 
 /// Reads the recovery fence from an initialized database.
@@ -45,13 +48,7 @@ pub fn startup_mode(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryEr
     if !candidate_table || !attempt_table || !migration_23 {
         return Err(RecoveryError::InvalidStartupState);
     }
-    if table_columns(conn, "edge_node_recovery_candidate")? != CANDIDATE_COLUMNS
-        || table_columns(conn, "edge_node_backup_attempts")? != ATTEMPT_COLUMNS
-        || !candidate_table_is_exact(conn)?
-        || !backup_attempt_table_is_exact(conn)?
-        || !candidate_trigger_is_exact(conn)?
-        || !backup_attempt_trigger_is_exact(conn)?
-    {
+    if !recovery_schema_is_exact(conn)? || !backup_attempts_are_valid(conn)? {
         return Err(RecoveryError::InvalidStartupState);
     }
 
@@ -171,99 +168,128 @@ fn migration_23_applied(conn: &Connection) -> Result<bool, RecoveryError> {
     .map_err(RecoveryError::from)
 }
 
-fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, RecoveryError> {
-    let mut statement = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(RecoveryError::from)?;
-    statement
-        .query_map([], |row| row.get(1))
-        .map_err(RecoveryError::from)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(RecoveryError::from)
-}
-
-fn candidate_table_is_exact(conn: &Connection) -> Result<bool, RecoveryError> {
-    object_contains_all(
-        conn,
-        "table",
-        "edge_node_recovery_candidate",
-        &[
-            "singletonintegerprimarykeycheck(singleton=1)",
-            "statetextnotnullcheck(state='durably_fenced_candidate')",
-            "candidate_instance_idtextnotnullunique",
-            "credential_generationintegernotnullcheck(credential_generation>=0)",
-            "handoff_schema_versionintegernotnullcheck(handoff_schema_version=1)",
-        ],
-    )
-}
-
-fn backup_attempt_table_is_exact(conn: &Connection) -> Result<bool, RecoveryError> {
-    object_contains_all(
-        conn,
-        "table",
-        "edge_node_backup_attempts",
-        &[
-            "attempt_idtextprimarykey",
-            "backup_idtextnotnullunique",
-            "statetextnotnullcheck(statein('started','success','failed'))",
-            "artifact_nametextnotnullunique",
-            "state='started'andreason_codeisnullandcompleted_at_msisnull",
-            "state='success'andreason_code='ok'",
-            "state='failed'andreason_codeisnotnullandreason_code<>'ok'",
-        ],
-    )
-}
-
-fn candidate_trigger_is_exact(conn: &Connection) -> Result<bool, RecoveryError> {
-    object_contains_all(
-        conn,
-        "trigger",
-        "edge_node_recovery_candidate_immutable",
-        &[
-            "beforeupdateonedge_node_recovery_candidate",
-            "selectraise(abort,'recoverycandidateisimmutable')",
-        ],
-    )
-}
-
-fn backup_attempt_trigger_is_exact(conn: &Connection) -> Result<bool, RecoveryError> {
-    object_contains_all(
-        conn,
-        "trigger",
-        "edge_node_backup_attempts_forward_only",
-        &[
-            "beforeupdateonedge_node_backup_attempts",
-            "old.state='started'andnew.statein('success','failed')",
-            "selectraise(abort,'backupattempttransitionisnotallowed')",
-        ],
-    )
-}
-
-fn object_contains_all(
-    conn: &Connection,
-    object_type: &str,
-    name: &str,
-    required: &[&str],
-) -> Result<bool, RecoveryError> {
-    let sql: Option<String> = conn
+fn recovery_schema_is_exact(conn: &Connection) -> Result<bool, RecoveryError> {
+    let object_count: usize = conn
         .query_row(
-            "SELECT sql FROM sqlite_schema WHERE type = ?1 AND name = ?2",
-            [object_type, name],
+            "SELECT count(*) FROM sqlite_schema
+             WHERE type IN ('table', 'trigger')
+               AND (name LIKE 'edge_node_recovery_%' OR name LIKE 'edge_node_backup_attempts%')",
+            [],
             |row| row.get(0),
         )
-        .optional()
         .map_err(RecoveryError::from)?;
-    let Some(sql) = sql else {
+    if object_count != RECOVERY_SCHEMA.len() {
         return Ok(false);
-    };
-    let normalized: String = sql
-        .chars()
+    }
+    RECOVERY_SCHEMA
+        .iter()
+        .try_fold(true, |matches, (object_type, name, expected)| {
+            if !matches {
+                return Ok(false);
+            }
+            let actual: Option<String> = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_schema WHERE type = ?1 AND name = ?2",
+                    [object_type, name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(RecoveryError::from)?;
+            Ok(actual.is_some_and(|sql| normalize_sql(&sql) == *expected))
+        })
+}
+
+fn backup_attempts_are_valid(conn: &Connection) -> Result<bool, RecoveryError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT attempt_id, backup_id, state, reason_code, artifact_name, artifact_length,
+                    edge_node_id, ledger_epoch, accepted_cursor, allocation_high_water,
+                    started_at_ms, artifact_created_at_ms, completed_at_ms
+             FROM edge_node_backup_attempts",
+        )
+        .map_err(RecoveryError::from)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, Option<i64>>(11)?,
+                row.get::<_, Option<i64>>(12)?,
+            ))
+        })
+        .map_err(RecoveryError::from)?;
+    for row in rows {
+        let (
+            attempt_id,
+            backup_id,
+            state,
+            reason_code,
+            artifact_name,
+            artifact_length,
+            edge_node_id,
+            ledger_epoch,
+            accepted_cursor,
+            allocation_high_water,
+            started_at_ms,
+            artifact_created_at_ms,
+            completed_at_ms,
+        ) = row.map_err(RecoveryError::from)?;
+        if !valid_identity(&attempt_id)
+            || !valid_identity(&backup_id)
+            || !valid_identity(&artifact_name)
+            || !valid_identity(&edge_node_id)
+            || started_at_ms < 0
+        {
+            return Ok(false);
+        }
+        let terminal_fields_are_empty = artifact_length.is_none()
+            && ledger_epoch.is_none()
+            && accepted_cursor.is_none()
+            && allocation_high_water.is_none()
+            && artifact_created_at_ms.is_none();
+        let valid = match state.as_str() {
+            "started" => {
+                reason_code.is_none() && completed_at_ms.is_none() && terminal_fields_are_empty
+            }
+            "success" => {
+                reason_code.as_deref() == Some("ok")
+                    && artifact_length.is_some_and(|value| value >= 0)
+                    && ledger_epoch.as_deref().is_some_and(valid_identity)
+                    && accepted_cursor.is_some_and(|value| value >= 0)
+                    && allocation_high_water.is_some_and(|value| value >= 0)
+                    && artifact_created_at_ms.is_some_and(|value| value >= started_at_ms)
+                    && completed_at_ms.is_some_and(|value| value >= started_at_ms)
+            }
+            "failed" => {
+                reason_code
+                    .as_deref()
+                    .is_some_and(|reason| reason != "ok" && valid_identity(reason))
+                    && terminal_fields_are_empty
+                    && completed_at_ms.is_some_and(|value| value >= started_at_ms)
+            }
+            _ => false,
+        };
+        if !valid {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn normalize_sql(sql: &str) -> String {
+    sql.chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>()
-        .to_ascii_lowercase();
-    Ok(required
-        .iter()
-        .all(|fragment| normalized.contains(fragment)))
+        .to_ascii_lowercase()
 }
 
 fn valid_identity(value: &str) -> bool {

@@ -48,10 +48,56 @@ CREATE TABLE edge_node_backup_attempts (
 
 CREATE TRIGGER edge_node_backup_attempts_forward_only
 BEFORE UPDATE ON edge_node_backup_attempts
-WHEN NOT (
-  OLD.state = 'started'
-  AND NEW.state IN ('success', 'failed')
-)
+WHEN OLD.state <> 'started'
+  OR NEW.state NOT IN ('success', 'failed')
+  OR NEW.attempt_id <> OLD.attempt_id
+  OR NEW.backup_id <> OLD.backup_id
+  OR NEW.artifact_name <> OLD.artifact_name
+  OR NEW.edge_node_id <> OLD.edge_node_id
+  OR NEW.started_at_ms <> OLD.started_at_ms
+  OR (
+    NEW.state = 'failed'
+    AND (
+      NEW.artifact_length IS NOT NULL
+      OR NEW.ledger_epoch IS NOT NULL
+      OR NEW.accepted_cursor IS NOT NULL
+      OR NEW.allocation_high_water IS NOT NULL
+      OR NEW.artifact_created_at_ms IS NOT NULL
+    )
+  )
 BEGIN
   SELECT RAISE(ABORT, 'backup attempt transition is not allowed');
+END;
+
+CREATE TRIGGER edge_node_backup_attempts_insert_state
+BEFORE INSERT ON edge_node_backup_attempts
+WHEN NEW.state NOT IN ('started', 'failed')
+  OR (
+    NEW.state = 'started'
+    AND (
+      NEW.artifact_length IS NOT NULL
+      OR NEW.ledger_epoch IS NOT NULL
+      OR NEW.accepted_cursor IS NOT NULL
+      OR NEW.allocation_high_water IS NOT NULL
+      OR NEW.artifact_created_at_ms IS NOT NULL
+    )
+  )
+  OR (
+    NEW.state = 'failed'
+    AND (
+      NEW.artifact_length IS NOT NULL
+      OR NEW.ledger_epoch IS NOT NULL
+      OR NEW.accepted_cursor IS NOT NULL
+      OR NEW.allocation_high_water IS NOT NULL
+      OR NEW.artifact_created_at_ms IS NOT NULL
+    )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'backup attempt creation is not allowed');
+END;
+
+CREATE TRIGGER edge_node_backup_attempts_immutable
+BEFORE DELETE ON edge_node_backup_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'backup attempt is immutable');
 END;

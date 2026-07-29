@@ -137,3 +137,38 @@ fn remaining_recovery_debug_implementations_expose_only_safe_labels() {
     assert!(output.contains("Failed"));
     assert!(output.contains("DurablyFencedCandidate"));
 }
+
+#[test]
+fn restore_request_debug_redacts_every_path_and_handoff_field() {
+    let request = RestoreRequest {
+        input: "C:/secret/input.iotkit-node-backup".into(),
+        live_database: "C:/secret/live.db".into(),
+        candidate_database: "C:/secret/candidate.db".into(),
+        staging_directory: "C:/secret/staging".into(),
+        handoff: RecoveryHandoff {
+            schema_version: 1,
+            recovery_id: "recovery-secret".into(),
+            edge_id: "edge-secret".into(),
+            edge_node_id: "node-secret".into(),
+            old_ledger_epoch: "old-epoch-secret".into(),
+            expected_backup_id: Some("backup-secret".into()),
+            proposed_new_epoch: "new-epoch-secret".into(),
+            credential_generation: 9,
+        },
+    };
+
+    let output = format!("{request:?}");
+    for secret in [
+        "C:/secret",
+        "recovery-secret",
+        "edge-secret",
+        "node-secret",
+        "old-epoch-secret",
+        "backup-secret",
+        "new-epoch-secret",
+        "9",
+    ] {
+        assert!(!output.contains(secret), "debug leaked {secret}: {output}");
+    }
+    assert_eq!(output, "RestoreRequest");
+}
