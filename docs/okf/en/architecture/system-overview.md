@@ -475,10 +475,11 @@ Getting these right is most of the design (see D5, D7).
     gets a `seq` immediately but no `pub_seq` until (if ever) released. The exit
     id is always `pub_seq`.
 - **`(epoch, pub_seq)` record identity** — `epoch` is a restore-generation fence.
-  A snapshot restore (box swap) mints a *new* epoch, so a stale consumer cursor
-  from before the restore is detected (epoch mismatch → treat everything as
-  unacked, re-baseline) rather than silently trusted. The custody contract never
-  promises anything it can't keep across a box swap.
+  Slice-1 fenced-candidate restore does not mint or activate a new epoch: the
+  candidate cannot collect or publish. A production same-ID box swap and its
+  new-epoch/stale-cursor handling are later permit and reconciliation contract
+  behavior, not a shipped restore operation. The custody contract never promises
+  anything it cannot keep across that future cutover.
 
 ## Concurrency model
 

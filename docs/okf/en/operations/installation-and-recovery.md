@@ -200,15 +200,24 @@ stable, identified mount, with enough capacity and no-replace/read-back/parent-
 sync behavior. A filesystem label or a mutable device name is not sufficient,
 and the destination must be on a different filesystem from the live database.
 
-`/run` is the staging tmpfs parent. `configure` validates the existing parent
-and records the exact `/run/iotkit-edge-node-backup` leaf. The service's
-`RuntimeDirectory=iotkit-edge-node-backup` creates only that owner-only leaf for
-`create`; do not pre-create or broaden an arbitrary `/run` tree, and do not put
-the destination or a persistent database under `TMPDIR`.
+`/run` is the staging tmpfs parent. `configure` opens that existing parent
+without following its final path component and requires an euid-owned, non-
+group/other-writable tmpfs directory (the usual `/run` mode `0755` is valid;
+the world-writable `/dev/shm` root is not). It records the exact
+`/run/iotkit-edge-node-backup` leaf and never creates a missing parent tree. At
+`create` time the held parent descriptor is used to create only an absent exact
+leaf with mode `0700`; an existing leaf must be the owner-only directory on the
+same tmpfs and is checked for its link count and type. The service's
+`RuntimeDirectory=iotkit-edge-node-backup` therefore supplies the accepted leaf;
+do not pre-create or broaden an arbitrary `/run` tree, and do not put the
+destination or a persistent database under `TMPDIR`.
 
 ```bash
 sudo install -d -m 0700 /etc/iotkit
-sudo install -m 600 /dev/null /etc/iotkit/edge-node-backup-passphrase
+if ! sudo test -e /etc/iotkit/edge-node-backup-passphrase; then
+  sudo install -m 600 /dev/null /etc/iotkit/edge-node-backup-passphrase
+fi
+sudo chmod 600 /etc/iotkit/edge-node-backup-passphrase
 # Write the passphrase interactively without putting it in shell history.
 sudo install -D -m 0644 deploy/systemd/iotkit-edge-node-backup.service \
   /etc/systemd/system/iotkit-edge-node-backup.service
@@ -270,7 +279,10 @@ A consistent snapshot can be created from a running IoTKit Edge. This is an `emb
 install_root="$HOME/.local/share/iotkit/edge-01"
 backup_root="$HOME/.local/share/iotkit/backups/edge-01"
 mkdir -p "$backup_root"
-install -m 600 /dev/null "$install_root/secrets/backup-passphrase"
+if [ ! -e "$install_root/secrets/backup-passphrase" ]; then
+  install -m 600 /dev/null "$install_root/secrets/backup-passphrase"
+fi
+chmod 600 "$install_root/secrets/backup-passphrase"
 # Write the passphrase with an interactive editor without placing it in shell history.
 docker compose --env-file "$install_root/edge.env" -f deploy/compose.edge.yaml \
   run --rm \
@@ -313,28 +325,29 @@ for records accepted since the last off-host backup is not guaranteed.
 
 ### 8.1 Edge Node fenced-candidate restore drill (slice 1)
 
-The Edge Node `restore` command is shipped only for conformance and a controlled
-restore drill. It requires a valid closed recovery handoff that binds the
-artifact's backup ID, Edge Node ID, and old ledger epoch. Slice 1 has no
-production handoff producer: use a handoff emitted by a later contracted
-recovery authority or the checked-in fixture in the recovery contract. Do not
-invent a handoff, increment an epoch yourself, or claim activation.
+The Edge Node `restore` command is shipped only as a conformance interface and
+for a controlled drill after a later authority exists. It requires a valid
+closed recovery handoff that binds the artifact's backup ID, Edge Node ID, and
+old ledger epoch. Slice 1 has no production handoff producer. The checked-in
+handoff fixture is conformance-only and matches only its test-generated
+artifact; it must not be paired with `SELECTED` real backup. Without a later
+authority (and with no matching complete drill fixture shipped), a real-backup
+restore cannot succeed and must fail closed. Do not invent a handoff, increment
+an epoch yourself, or claim activation.
 
-Choose an absent candidate path on an owner-only directory. Keep the configured
-live database path exact and never point `--candidate-db` at it or at an
-existing alias:
+No real-backup restore command can succeed in slice 1, so do not execute an
+operator restore against `SELECTED` or an invented handoff. The non-executable
+interface shape for a later-authority or matching conformance request is:
 
-```bash
-sudo test ! -e /var/lib/iotkit/edge-node/edge.restore-candidate.db
-sudo iotkit-edge-nodectl backup restore \
-  --input /mnt/iotkit-backups/edge-node-01/SELECTED.iotkit-node-backup \
-  --candidate-db /var/lib/iotkit/edge-node/edge.restore-candidate.db \
-  --live-db /var/lib/iotkit/edge-node/edge.db \
-  --passphrase-file /etc/iotkit/edge-node-backup-passphrase \
-  --recovery-handoff /secure/VALID_HANDOFF_FILE
+```text
+iotkit-edge-nodectl backup restore --input ARTIFACT \
+  --candidate-db ABSENT_OWNER_ONLY_CANDIDATE \
+  --live-db CONFIGURED_LIVE_DB --passphrase-file PASSPHRASE_FILE \
+  --recovery-handoff LATER_AUTHORITY_HANDOFF
 ```
 
-The result is a `durably_fenced_candidate` receipt. The candidate contains
+Only a matching conformance request or a later-authority request can return a
+`durably_fenced_candidate` receipt. Such a candidate contains
 authenticated readings and dedup claims through the snapshot boundary, but it
 cannot collect, publish, or bind ingest while fenced and does not prove retry
 state after the backup. Do not start it as a replacement, enable Broker

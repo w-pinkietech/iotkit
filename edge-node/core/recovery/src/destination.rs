@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, fs::File, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    fs::File,
+    path::{Component, Path, PathBuf},
+};
 
 #[cfg(target_os = "linux")]
 use std::{
@@ -6,7 +10,6 @@ use std::{
     ffi::{CStr, CString},
     fs::OpenOptions,
     io::{self, Read, Write},
-    path::Path,
 };
 
 #[cfg(target_os = "linux")]
@@ -26,6 +29,9 @@ use crate::{
 };
 
 const MIB: u64 = 1024 * 1024;
+
+#[cfg(target_os = "linux")]
+const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
 
 /// A decoded Linux mountinfo record, intentionally without a Debug implementation.
 #[derive(Clone, PartialEq, Eq)]
@@ -276,30 +282,208 @@ fn verify_staging_directory_inner(
     #[cfg(target_os = "linux")]
     {
         crate::config::validate_config(config)?;
-        let file = open_directory(&config.staging_directory)?;
-        verify_owned_directory(&file)?;
-        let mut statfs = std::mem::MaybeUninit::<libc::statfs>::zeroed();
-        if unsafe { libc::fstatfs(file.as_raw_fd(), statfs.as_mut_ptr()) } != 0 {
-            return Err(RecoveryError::Storage);
+        let staging = open_or_create_staging_directory(&config.staging_directory)?;
+        let result = (|| {
+            validate_staging_leaf(&staging.directory)?;
+            ensure_no_cleanup_leftovers(&staging.directory)?;
+            if let Some(bytes) = bytes
+                && free_bytes(&staging.directory)? < required_capacity(bytes)?
+            {
+                return Err(RecoveryError::StorageFull);
+            }
+            Ok(VerifiedStagingDirectory {
+                directory: DirectoryCapability::from_open_file(staging.directory.try_clone()?)?,
+            })
+        })();
+        match result {
+            Ok(verified) => Ok(verified),
+            Err(error) if staging.created => {
+                match remove_exact_empty_directory_at(
+                    staging.parent.as_raw_fd(),
+                    &staging.leaf,
+                    &staging.directory,
+                ) {
+                    Ok(()) => Err(error),
+                    Err(_) => Err(RecoveryError::ArtifactCleanupFailed),
+                }
+            }
+            Err(error) => Err(error),
         }
-        if unsafe { statfs.assume_init().f_type } != 0x0102_1994 {
-            return Err(RecoveryError::DestinationInvalid);
-        }
-        ensure_no_cleanup_leftovers(&file)?;
-        if let Some(bytes) = bytes
-            && free_bytes(&file)? < required_capacity(bytes)?
-        {
-            return Err(RecoveryError::StorageFull);
-        }
-        Ok(VerifiedStagingDirectory {
-            directory: DirectoryCapability::from_open_file(file)?,
-        })
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (config, bytes);
         Err(RecoveryError::PlatformUnsupported)
     }
+}
+
+/// Validates the existing parent for a configured staging leaf without creating
+/// the leaf. The parent is held by descriptor for the duration of this check;
+/// callers persist only the exact leaf path and may let systemd create it later.
+#[cfg(target_os = "linux")]
+pub(crate) fn validate_staging_configuration(path: &Path) -> Result<(), RecoveryError> {
+    let (parent, leaf) = open_staging_parent(path)?;
+    validate_staging_parent(&parent)?;
+    if let Some(directory) = open_staging_leaf(&parent, &leaf)? {
+        validate_staging_leaf(&directory)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn validate_staging_configuration(_path: &Path) -> Result<(), RecoveryError> {
+    Err(RecoveryError::PlatformUnsupported)
+}
+
+#[cfg(target_os = "linux")]
+struct OpenStagingDirectory {
+    parent: File,
+    leaf: CString,
+    directory: File,
+    created: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn open_or_create_staging_directory(path: &Path) -> Result<OpenStagingDirectory, RecoveryError> {
+    let (parent, leaf) = open_staging_parent(path)?;
+    validate_staging_parent(&parent)?;
+    for _ in 0..3 {
+        if let Some(directory) = open_staging_leaf(&parent, &leaf)? {
+            return Ok(OpenStagingDirectory {
+                parent,
+                leaf,
+                directory,
+                created: false,
+            });
+        }
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), leaf.as_ptr(), 0o700) } == 0 {
+            let directory =
+                open_staging_leaf(&parent, &leaf)?.ok_or(RecoveryError::DestinationInvalid)?;
+            return Ok(OpenStagingDirectory {
+                parent,
+                leaf,
+                directory,
+                created: true,
+            });
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EEXIST) {
+            return Err(RecoveryError::DestinationInvalid);
+        }
+    }
+    Err(RecoveryError::DestinationInvalid)
+}
+
+#[cfg(target_os = "linux")]
+fn open_staging_parent(path: &Path) -> Result<(File, CString), RecoveryError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or(RecoveryError::InvalidConfiguration)?;
+    let leaf = path
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or(RecoveryError::InvalidConfiguration)?;
+    let leaf = CString::new(leaf.as_bytes()).map_err(|_| RecoveryError::InvalidConfiguration)?;
+    Ok((open_directory_without_symlinks(parent)?, leaf))
+}
+
+#[cfg(target_os = "linux")]
+fn open_directory_without_symlinks(path: &Path) -> Result<File, RecoveryError> {
+    let root_fd = unsafe {
+        libc::open(
+            c"/".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if root_fd < 0 {
+        return Err(RecoveryError::DestinationInvalid);
+    }
+    let mut directory = unsafe { File::from_raw_fd(root_fd) };
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            if matches!(component, Component::RootDir) {
+                continue;
+            }
+            return Err(RecoveryError::InvalidConfiguration);
+        };
+        let name =
+            CString::new(name.as_bytes()).map_err(|_| RecoveryError::InvalidConfiguration)?;
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(RecoveryError::DestinationInvalid);
+        }
+        directory = unsafe { File::from_raw_fd(fd) };
+    }
+    Ok(directory)
+}
+
+#[cfg(target_os = "linux")]
+fn open_staging_leaf(parent: &File, leaf: &CStr) -> Result<Option<File>, RecoveryError> {
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return if io::Error::last_os_error().kind() == io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(RecoveryError::DestinationInvalid)
+        };
+    }
+    Ok(Some(unsafe { File::from_raw_fd(fd) }))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_staging_parent(parent: &File) -> Result<(), RecoveryError> {
+    let metadata = parent
+        .metadata()
+        .map_err(|_| RecoveryError::DestinationInvalid)?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o022 != 0
+        || metadata.nlink() < 2
+    {
+        return Err(RecoveryError::DestinationInvalid);
+    }
+    validate_tmpfs(parent)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_staging_leaf(leaf: &File) -> Result<(), RecoveryError> {
+    let metadata = leaf
+        .metadata()
+        .map_err(|_| RecoveryError::DestinationInvalid)?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.permissions().mode() & 0o700 != 0o700
+        || metadata.nlink() < 2
+    {
+        return Err(RecoveryError::DestinationInvalid);
+    }
+    validate_tmpfs(leaf)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_tmpfs(file: &File) -> Result<(), RecoveryError> {
+    let mut statfs = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+    if unsafe { libc::fstatfs(file.as_raw_fd(), statfs.as_mut_ptr()) } != 0 {
+        return Err(RecoveryError::Storage);
+    }
+    if unsafe { statfs.assume_init().f_type } != TMPFS_MAGIC {
+        return Err(RecoveryError::DestinationInvalid);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

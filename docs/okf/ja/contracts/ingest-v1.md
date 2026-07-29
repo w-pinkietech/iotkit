@@ -231,7 +231,7 @@ Stagingは最大Envelope一件分のevictable reserveを持ち、rowとbyteを�
 
 現行実装は、認証付きHTTP binding、bearer authority、bounded admission、TLS/private-LAN listener、freshness、副作用なしvalidation、bounded staging/dedup、health/audit hook、local recovery authority closure、custody-completeなsanitized Edge Node DBの暗号化backup、local fenced-candidate restoreを提供します。Restore境界はclosedなvalid handoffを要求し、absent candidateだけへ書き、candidateをfencedのまま残します。RemoteからclaimできるEdge Node setup pathではありません。
 
-Broker fencing、remote permit、rename後のreconciliation、dedup-risk resolution、reactivation、same-ID new ledger epochは延期かつdefault-offです。Slice 1にはproduction recovery handoffのproducerがなく、後続のpermitとcredential-generation checkまでcandidateはingestもpublishもできません。Device-token secretが存在する場合、legacy plaintext replacement snapshotは利用できません。Tokenやhashを出力せず、その理由を示します。State-only inspectionはcompleteなreplacement backupではありません。
+Broker fencing、remote permit、production/remoteでのrename後reconciliation、dedup-risk resolution、reactivation、same-ID new ledger epochは延期かつdefault-offです。Completed candidate rename後のexact local same-request replayは出荷済みで、保存済みreceiptをbyte-for-byte返しますが、production/remote reconciliationではありません。Slice 1にはproduction recovery handoffのproducerがなく、後続のpermitとcredential-generation checkまでcandidateはingestもpublishもできません。Device-token secretが存在する場合、legacy plaintext replacement snapshotは利用できません。Tokenやhashを出力せず、その理由を示します。State-only inspectionはcompleteなreplacement backupではありません。
 
 Snapshot sanitizerは`target_registry`のdeployment credential tokenを空にします。Account、session、device credential hashはprotectedな暗号化DB stateとして残り得ます。MQTT/TLS private materialはそのDBの外にありartifactへ入れません。暗号化artifactとpassphraseはsecretです。
 

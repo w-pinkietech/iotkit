@@ -396,6 +396,7 @@ where
     if !is_absolute_normalized(path) {
         return Err(RecoveryError::InvalidConfiguration);
     }
+    crate::destination::validate_staging_configuration(&config.staging_directory)?;
     let mut persisted = config.clone();
     persisted.expected_mount =
         crate::destination::derive_mount_identity(&config.destination, mountinfo)?;

@@ -82,12 +82,14 @@ descriptor-relative read-backを検査し、databaseとdestinationのfilesystem�
 （`fsid:<value>|<source>`）で、stable identityがなければfail closedです。
 Destinationはlive databaseと異なるfilesystemでなければなりません。
 
-Staging directoryはheldされたowner-only `tmpfs` capabilityです。Systemd pathでは
-`/run`が既存のtmpfs parentです。`configure`はそのparentを検証し、正確なstaging
-path `/run/iotkit-edge-node-backup` を記録します。`create`はsystemdの
-`RuntimeDirectory=`が供給する同じowner-only leafだけを受け入れるか作成します。
-任意の`/run` treeを作成・拡張せず、置換pathをfollowせず、destinationをstagingに
-使いません。Restart時にはtmpfs staging内容が消えます。
+Staging capabilityにはeuid所有でgroup/other writableでない既存`tmpfs` parentと
+owner-only leafがあります。Systemd pathでは`/run`が既存tmpfs parentです（通常の
+mode `0755`は可）。`configure`はfinal componentをfollowせずparentをopenし、typeと
+link countを検証して正確なstaging path `/run/iotkit-edge-node-backup`を記録します。
+`/dev/shm` rootのようなworld-writable tmpfsはparentとして受け付けません。`create`は
+held parent descriptorからabsent exact leafをmode `0700`で作るか、既存leafのowner-only
+type、link count、tmpfsを検証します。任意の`/run` treeを作成・拡張せず、置換pathを
+followせず、destinationをstagingに使いません。Restart時にはtmpfs staging内容が消えます。
 
 Configured pathを確認してから任意templateをinstallします。
 
@@ -145,6 +147,18 @@ Header fieldとboundは次のとおりです。
 | `cipher` | `xchacha20-poly1305` |
 | `nonce_prefix_b64` | exactly 16 bytesのcanonical unpadded Base64（22文字） |
 | `chunk_size` | integer `4,096..=4,194,304` bytes |
+
+新規artifactを作るv1 writerの既定値は固定です。
+
+| Writer field | v1 default |
+| --- | ---: |
+| `kdf_time` | `3` |
+| `kdf_memory_kib` | `65,536` KiB |
+| `kdf_parallelism` | `4` |
+| `chunk_size` | `262,144` bytes |
+
+Readerは上記bound内の任意の値を受け付けなければなりません。Writer defaultは
+readerの追加制限ではありません。
 
 Keyはowner-supplied passphrase、authenticated salt/parameterからArgon2id
 (version 1.3)で32 byte導出します。Saltとnonce prefixはOS randomnessです。
@@ -218,8 +232,9 @@ credential hashはprotected DB stateとして残り得ます。MQTT/TLS private 
 1..=255 byteです。`old_ledger_epoch`と`proposed_new_epoch`は異ならなければ
 なりません。Generationはinteger
 `0..=9,223,372,036,854,775,807`です。Handoffはmanifestのbackup ID、Node ID、
-old epochへbindし、edgeまたはgeneration mismatchはcandidate publication前に
-rejectします。
+old epochへbindします。Slice 1はnonnegative generationをcandidate provenanceと
+receiptへ記録するだけで、live authorityとの比較やgeneration mismatchのrejectは
+しません。Authority比較とactivationは後続のpermit/generation contractへ延期します。
 
 Public receiptはclosed schema v1で、statusは`durably_fenced_candidate`、
 fieldは`recovery_id`、`candidate_instance_id`、`backup_id`、`edge_id`、
@@ -261,7 +276,7 @@ encrypted escrow copyを保管します。Passphraseがないartifactは意図�
 です。Successful artifactをoff-hostで検証し、RPOを信頼する前にinspect/restore
 drillを行います。
 
-Slice 1のrestore commandはconformanceとcontrolled restore drillだけに使えます。
+次はconformance commandのshapeであり、slice 1の成功するoperator手順ではありません。
 
 ```text
 iotkit-edge-nodectl backup restore --input ARTIFACT \
@@ -270,13 +285,14 @@ iotkit-edge-nodectl backup restore --input ARTIFACT \
   --recovery-handoff VALID_HANDOFF_FILE
 ```
 
-Drillのcandidate pathはcommand前にabsentで、command後もfencedでなければなりません。
-`VALID_HANDOFF_FILE`は後続contractのrecovery authorityが発行したhandoffまたは
-checked-in conformance fixtureを意味し、handoffをinventしたりepochをincrement
-したりactivationをclaimする指示ではありません。Production handoff creation、
-Broker fencing、remote permit、reactivationは未出荷です。No-backup hardware
-replacementはreadingもdedup claimもrestoreせず、encrypted-backup candidateも
-authenticated snapshot boundaryまでのclaimだけを持ちfencedのままです。
+Conformance runのcandidate pathはcommand前にabsentで、command後もfencedでなければ
+なりません。Checked-in handoff fixtureはmatching test-generated artifactとだけ使う
+conformance専用で、selected real backupと組み合わせてはいけません。Slice 1には
+later authorityもmatching complete drill fixtureもないため、real-backup restoreは
+成功せずfail closedしなければなりません。Production handoff creation、Broker
+fencing、remote permit、reactivationは未出荷です。No-backup hardware replacementは
+readingもdedup claimもrestoreせず、encrypted-backup candidateもauthenticated
+snapshot boundaryまでのclaimだけを持ちfencedのままです。
 
 Legacy plaintext snapshot fallbackはありません。Former implementation artifact、
 renameしたEdge server backup、unauthenticated DB copy、private MQTT/TLS materialを

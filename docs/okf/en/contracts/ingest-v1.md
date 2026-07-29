@@ -388,10 +388,13 @@ boundary requires a valid closed handoff, writes only an absent candidate, and l
 that candidate fenced. It is intentionally a device-builder HTTP path, not a remotely
 claimable Edge Node setup path.
 
-Broker fencing, a remote permit, post-rename reconciliation, dedup-risk resolution,
-reactivation, and a same-ID new ledger epoch remain deferred and default-off. Slice 1
-does not produce a production recovery handoff; a candidate cannot ingest or publish
-before the later permit and credential-generation checks. Legacy plaintext replacement
+Broker fencing, a remote permit, production or remote post-rename reconciliation,
+dedup-risk resolution, reactivation, and a same-ID new ledger epoch remain deferred
+and default-off. The exact local same-request replay after a completed candidate
+rename is shipped and returns the stored receipt byte-for-byte; this does not provide
+production or remote reconciliation. Slice 1 does not produce a production recovery
+handoff; a candidate cannot ingest or publish before the later permit and
+credential-generation checks. Legacy plaintext replacement
 snapshot export remains unavailable once a device-token secret exists; the Edge Node
 must say so without emitting the token or its hash. State-only inspection is not a
 complete replacement backup.

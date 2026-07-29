@@ -407,6 +407,29 @@ fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() 
 
 #[cfg(target_os = "linux")]
 #[test]
+fn configure_rejects_a_staging_parent_that_is_not_tmpfs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = TempDir::new_in("/dev/shm").unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let destination = root.path().join("destination");
+    fs::create_dir(&destination).unwrap();
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o700)).unwrap();
+    let config_path = root.path().join("backup.json");
+    let mut input = config(root.path());
+    input.destination = destination.clone();
+    input.staging_directory = "/proc/self/iotkit-staging-test".into();
+    input.expected_mount.mount_point = destination;
+
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        Err(RecoveryError::DestinationInvalid)
+    );
+    assert!(!config_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn competing_configure_is_busy_before_creating_any_temporary_name() {
     let root = TempDir::new().unwrap();
     let config_path = root.path().join("backup.json");

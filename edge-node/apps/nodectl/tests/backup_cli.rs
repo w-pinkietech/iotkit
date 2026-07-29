@@ -74,13 +74,60 @@ fn backup_paths_take_an_early_route_without_creating_a_live_database() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn backup_configure_rejects_non_tmpfs_staging_without_publishing_a_pair() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/dev/shm").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("destination.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = nodectl()
+        .args([
+            "backup",
+            "configure",
+            "--config",
+            config.to_str().unwrap(),
+            "--db",
+            control.path().join("edge.db").to_str().unwrap(),
+            "--destination",
+            destination.path().to_str().unwrap(),
+            "--staging-directory",
+            "/proc/self/iotkit-staging-test",
+            "--passphrase-file",
+            passphrase.to_str().unwrap(),
+            "--freshness-seconds",
+            "86400",
+            "--retention-count",
+            "7",
+            "--systemd-drop-in",
+            drop_in.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("destination_invalid"));
+    assert!(!config.exists());
+    assert!(!drop_in.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn create_inspect_and_status_emit_only_nonsecret_summaries() {
     use std::os::unix::fs::PermissionsExt;
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
-    for path in [control.path(), destination.path(), staging.path()] {
+    let staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = staging_parent.path().join("staging-leaf");
+    for path in [control.path(), destination.path(), staging_parent.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
     let db = control.path().join("edge.db");
@@ -132,7 +179,7 @@ fn create_inspect_and_status_emit_only_nonsecret_summaries() {
             "--destination",
             destination.path().to_str().unwrap(),
             "--staging-directory",
-            staging.path().to_str().unwrap(),
+            staging.to_str().unwrap(),
             "--passphrase-file",
             passphrase.to_str().unwrap(),
             "--freshness-seconds",
@@ -150,6 +197,10 @@ fn create_inspect_and_status_emit_only_nonsecret_summaries() {
         String::from_utf8_lossy(&configure.stderr)
     );
     assert_eq!(json(&configure.stdout)["status"], "configured");
+    assert!(
+        !staging.exists(),
+        "configure must not create the RuntimeDirectory leaf"
+    );
     let drop_in_text = std::fs::read_to_string(&drop_in).unwrap();
     assert!(drop_in_text.starts_with("[Unit]\nRequiresMountsFor="));
     assert!(!drop_in_text.contains("cli-secret-passphrase"));
@@ -182,6 +233,13 @@ fn create_inspect_and_status_emit_only_nonsecret_summaries() {
         create.status.success(),
         "{}",
         String::from_utf8_lossy(&create.stderr)
+    );
+    let staging_metadata = std::fs::metadata(&staging).unwrap();
+    assert!(staging_metadata.is_dir());
+    assert_eq!(
+        staging_metadata.permissions().mode() & 0o077,
+        0,
+        "create must provision an owner-only exact leaf"
     );
     let created = json(&create.stdout);
     assert_eq!(created["status"], "created");
@@ -344,7 +402,8 @@ fn existing_backup_configuration_requires_explicit_replace() {
 
     let control = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -594,7 +653,8 @@ fn configure_pair_rolls_back_each_failure_phase_without_a_mixed_pair() {
     ] {
         let control = tempfile::tempdir_in("/tmp").unwrap();
         let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
         for path in [control.path(), destination.path(), staging.path()] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -651,7 +711,8 @@ fn configure_pair_crash_marker_is_recovered_on_retry() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -725,7 +786,8 @@ fn configure_pair_crash_after_each_target_rename_converges_on_retry() {
     ] {
         let control = tempfile::tempdir_in("/tmp").unwrap();
         let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
         for path in [control.path(), destination.path(), staging.path()] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -780,7 +842,8 @@ fn durable_completion_receipt_survives_success_and_final_sync_uncertainty() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -922,7 +985,8 @@ fn configure_receipt_binds_the_exact_current_drop_in() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -972,7 +1036,8 @@ fn old_receipt_with_new_pending_marker_blocks_readers_and_resumes() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -1073,7 +1138,8 @@ fn completion_cleanup_crash_boundaries_keep_same_retry_idempotent() {
     ] {
         let control = tempfile::tempdir_in("/tmp").unwrap();
         let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
         for path in [control.path(), destination.path(), staging.path()] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -1152,7 +1218,8 @@ fn pending_pair_without_config_is_not_reported_as_not_configured() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -1201,9 +1268,11 @@ fn published_pair_binds_retry_identity_before_accepting_new_arguments() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination_a = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_a_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_a = tempfile::TempDir::new_in(_staging_a_parent.path()).unwrap();
     let destination_b = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_b_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_b = tempfile::TempDir::new_in(_staging_b_parent.path()).unwrap();
     for path in [
         control.path(),
         destination_a.path(),
@@ -1322,9 +1391,11 @@ fn published_cleanup_failure_keeps_consistent_pair_for_idempotent_finalize() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination_a = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_a_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_a = tempfile::TempDir::new_in(_staging_a_parent.path()).unwrap();
     let destination_b = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_b_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_b = tempfile::TempDir::new_in(_staging_b_parent.path()).unwrap();
     for path in [
         control.path(),
         destination_a.path(),
@@ -1422,7 +1493,8 @@ fn forged_prepared_marker_cannot_delete_an_existing_pair() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -1497,7 +1569,8 @@ fn forged_config_published_marker_without_old_backup_cannot_delete_targets() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -1599,7 +1672,8 @@ fn forged_pair_phase_matrix_rejects_unexpected_states_without_mutation() {
         for originally_present in [false, true] {
             let control = tempfile::tempdir_in("/tmp").unwrap();
             let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-            let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+            let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+            let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
             for path in [control.path(), destination.path(), staging.path()] {
                 std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
             }
@@ -1778,7 +1852,8 @@ fn backup_pair_symlink_hardlink_and_fifo_fail_closed_without_mutation() {
     for kind in ["symlink", "hardlink", "fifo"] {
         let control = tempfile::tempdir_in("/tmp").unwrap();
         let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
         for path in [control.path(), destination.path(), staging.path()] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -1871,9 +1946,11 @@ fn create_holds_one_selection_guard_against_configure_race() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination_a = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging_a = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_a_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_a = tempfile::TempDir::new_in(_staging_a_parent.path()).unwrap();
     let destination_b = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging_b = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_b_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging_b = tempfile::TempDir::new_in(_staging_b_parent.path()).unwrap();
     for path in [
         control.path(),
         destination_a.path(),
@@ -2058,7 +2135,8 @@ fn concurrent_configure_is_serialized_by_the_pair_operation_guard() {
 
     let control = tempfile::tempdir_in("/tmp").unwrap();
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    let _staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(_staging_parent.path()).unwrap();
     for path in [control.path(), destination.path(), staging.path()] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }

@@ -684,6 +684,7 @@ struct CreateFixture {
     _control: tempfile::TempDir,
     destination: tempfile::TempDir,
     _database_root: tempfile::TempDir,
+    _staging_parent: tempfile::TempDir,
     staging: tempfile::TempDir,
     config_path: std::path::PathBuf,
     config: BackupConfig,
@@ -698,7 +699,8 @@ fn create_fixture() -> CreateFixture {
     let control = tempfile::TempDir::new().unwrap();
     let destination = tempfile::TempDir::new().unwrap();
     let database_root = tempfile::TempDir::new_in("/dev/shm").unwrap();
-    let staging = tempfile::TempDir::new_in("/dev/shm").unwrap();
+    let staging_parent = tempfile::TempDir::new_in("/dev/shm").unwrap();
+    let staging = tempfile::TempDir::new_in(staging_parent.path()).unwrap();
     for directory in [
         control.path(),
         destination.path(),
@@ -737,6 +739,7 @@ fn create_fixture() -> CreateFixture {
         _control: control,
         destination,
         _database_root: database_root,
+        _staging_parent: staging_parent,
         staging,
         config_path,
         config,

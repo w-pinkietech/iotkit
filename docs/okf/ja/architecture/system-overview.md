@@ -191,7 +191,11 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 
 - Seriesは`UNIQUE(system_id, measurement_key, channel_index, variant)`。`system_id`はledgerだけが発行する不変UUIDv7、`hardware_id`は交換可能な物理address、`user_label`は表示だけです。Hardware交換後も同じ`system_id`で履歴を継続します。
 - `readings.seq`はbox内部の挿入順、`publication_log.pub_seq`は外部配送順です。Quarantine readingは`seq`を持ちますが、解除まで`pub_seq`を持ちません。
-- 外部record identityは`(epoch, pub_seq)`です。Snapshot restoreは新epochを発行し、古いconsumer cursorを黙って信用しません。
+- 外部record identityは`(epoch, pub_seq)`です。Slice-1のfenced-candidate
+  restoreはcandidateをcollect/publishできないため、epochをmintもactivateもしません。
+  productionでのsame-ID box swap、新epochの発行、古いconsumer cursorの扱いは、
+  後続のpermit/reconciliation contractで定義するfuture behaviorであり、出荷済みrestore
+  operationではありません。
 
 ## Concurrency
 

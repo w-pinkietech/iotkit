@@ -148,6 +148,173 @@ fn capacity_reserves_five_percent_or_sixty_four_mib_with_checked_arithmetic() {
 }
 
 #[cfg(target_os = "linux")]
+fn staging_config(root: &std::path::Path, staging: std::path::PathBuf) -> BackupConfig {
+    BackupConfig {
+        schema_version: 1,
+        database: root.join("database.db"),
+        destination: root.join("destination"),
+        staging_directory: staging,
+        passphrase_file: root.join("passphrase"),
+        expected_mount: MountIdentity {
+            mount_point: root.join("destination"),
+            source: "tmpfs".into(),
+            filesystem_type: "tmpfs".into(),
+            filesystem_id: "fsid:staging-test".into(),
+        },
+        freshness_seconds: 60,
+        retention_count: 1,
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn staging_verification_creates_only_the_exact_absent_leaf_from_a_tmpfs_parent() {
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let root = TempDir::new_in("/dev/shm").unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let staging = root.path().join("staging-leaf");
+    let guard = operation_guard(root.path());
+
+    let verified =
+        verify_staging_directory(&guard, &staging_config(root.path(), staging.clone()), 0)
+            .expect("an absent leaf under an existing tmpfs parent is created");
+    let metadata = fs::metadata(&staging).unwrap();
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+    assert_eq!(metadata.permissions().mode() & 0o077, 0);
+    assert!(metadata.nlink() >= 2);
+    drop(verified);
+    assert!(staging.is_dir());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn staging_verification_removes_a_leaf_it_created_when_preflight_fails() {
+    let root = TempDir::new_in("/dev/shm").unwrap();
+    std::fs::set_permissions(
+        root.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let staging = root.path().join("staging-leaf");
+    let guard = operation_guard(root.path());
+
+    assert!(matches!(
+        verify_staging_directory(
+            &guard,
+            &staging_config(root.path(), staging.clone()),
+            u64::MAX
+        ),
+        Err(RecoveryError::CapacityOverflow)
+    ));
+    assert!(
+        !staging.exists(),
+        "a failed preflight must remove only the exact leaf created for this request"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn staging_verification_rejects_non_tmpfs_parent_without_creating_a_leaf() {
+    let root = TempDir::new_in("/dev/shm").unwrap();
+    let staging = std::path::Path::new("/proc/self/iotkit-staging-test").to_path_buf();
+    let guard = operation_guard(root.path());
+
+    assert!(matches!(
+        verify_staging_directory(&guard, &staging_config(root.path(), staging.clone()), 0),
+        Err(RecoveryError::DestinationInvalid)
+    ));
+    assert!(!staging.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn staging_verification_accepts_the_real_run_tmpfs_parent() {
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if unsafe { libc::geteuid() } != 0 {
+        // Production systemd runs this operation as root; an unprivileged
+        // test account cannot create the owner-bound RuntimeDirectory leaf.
+        return;
+    }
+    let root = TempDir::new_in("/dev/shm").unwrap();
+    let leaf = std::path::PathBuf::from(format!("/run/iotkit-staging-test-{}", std::process::id()));
+    if leaf.exists() {
+        return;
+    }
+    let guard = operation_guard(root.path());
+    let verified = verify_staging_directory(&guard, &staging_config(root.path(), leaf.clone()), 0)
+        .expect("/run is an existing non-writable tmpfs parent");
+    let metadata = fs::metadata(&leaf).unwrap();
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+    assert_eq!(metadata.permissions().mode() & 0o077, 0);
+    drop(verified);
+    fs::remove_dir(&leaf).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn staging_verification_rejects_a_world_writable_tmpfs_parent() {
+    let root = TempDir::new_in("/dev/shm").unwrap();
+    let guard = operation_guard(root.path());
+    let leaf = std::path::PathBuf::from(format!(
+        "/dev/shm/iotkit-staging-test-{}",
+        std::process::id()
+    ));
+    assert!(matches!(
+        verify_staging_directory(&guard, &staging_config(root.path(), leaf.clone()), 0),
+        Err(RecoveryError::DestinationInvalid)
+    ));
+    assert!(!leaf.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn staging_verification_rejects_symlink_parent_and_insecure_existing_leaf() {
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = TempDir::new_in("/dev/shm").unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let actual_parent = root.path().join("actual");
+    fs::create_dir(&actual_parent).unwrap();
+    fs::set_permissions(&actual_parent, fs::Permissions::from_mode(0o700)).unwrap();
+    let linked_parent = root.path().join("linked");
+    symlink(&actual_parent, &linked_parent).unwrap();
+    let guard = operation_guard(root.path());
+
+    assert!(matches!(
+        verify_staging_directory(
+            &guard,
+            &staging_config(root.path(), linked_parent.join("leaf")),
+            0,
+        ),
+        Err(RecoveryError::DestinationInvalid)
+    ));
+
+    let existing = root.path().join("existing");
+    fs::create_dir(&existing).unwrap();
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        verify_staging_directory(&guard, &staging_config(root.path(), existing.clone()), 0),
+        Err(RecoveryError::DestinationInvalid)
+    ));
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        verify_staging_directory(&guard, &staging_config(root.path(), existing.clone()), 0),
+        Err(RecoveryError::DestinationInvalid)
+    ));
+    assert!(
+        existing.is_dir(),
+        "an unsafe pre-existing leaf is never removed"
+    );
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn verification_rejects_missing_expected_mount_before_touching_fallback_directory() {
     let root = TempDir::new().unwrap();

@@ -6,9 +6,11 @@ Issue: #113
 
 This task adds the optional systemd service/timer and their template contract,
 a real temporary-drop-in test, the bilingual Edge Node recovery contract, and
-the operator/ingest wording for the shipped slice-1 boundary. It does not add a
-production handoff producer, Broker fence, remote permit, activation, or a
-usable replacement journey.
+the operator/ingest wording for the shipped slice-1 boundary. Round 1 also
+enforces the existing-tmpfs-parent/exact-leaf staging contract in recovery and
+nodectl tests, and corrects the architecture/generation/reconciliation/drill
+wording. It does not add a production handoff producer, Broker fence, remote
+permit, activation, or a usable replacement journey.
 
 ## RED (before unit templates)
 
@@ -30,6 +32,24 @@ The third case is not a self-authored fixture: on a Linux host with a runnable
 directories, reads the persisted captured mount point, and asserts the generated
 drop-in is exactly `RequiresMountsFor=<captured mount point>`. The Windows RED
 run skipped only that Linux executable path.
+
+## Round 1 RED (before staging implementation)
+
+The focused Linux staging tests were written before the staging implementation:
+
+```text
+cargo test -j1 -p iotkit-core-recovery staging_verification -- --nocapture
+running 3 tests
+2 negative cases ... ok
+staging_verification_creates_only_the_exact_absent_leaf_from_a_tmpfs_parent ... FAILED
+  panicked ... DestinationInvalid
+test result: FAILED. 2 passed; 1 failed
+```
+
+The failure was the intended missing behavior: an absent exact leaf under an
+existing tmpfs parent was rejected instead of being created descriptor-
+relatively. The additional configure and nodectl cases cover non-tmpfs,
+symlink, broad-mode, and pair-publication rejection boundaries.
 
 ## GREEN
 
@@ -79,17 +99,47 @@ resolution, reactivation, and same-ID new epoch remain deferred/default-off.
 It also states that backup candidates carry claims only through the authenticated
 snapshot boundary and that no-backup replacement restores neither.
 
+Round 1 staging behavior is now:
+
+- `configure` opens every existing parent component without following symlinks,
+  requires an euid-owned, non-group/other-writable tmpfs parent (0755 `/run`
+  accepted; world-writable `/dev/shm` root rejected), records the exact leaf,
+  and creates no parent tree;
+- `create` uses that parent descriptor to `mkdirat` an absent exact leaf as
+  owner-only `0700`, accepts an existing owner-only tmpfs directory only after
+  type/link-count checks, and removes only a leaf it created when preflight
+  fails;
+- the persistent passphrase setup is guarded with `test -e` before creating an
+  empty file, so rerunning the runbook cannot truncate an existing secret.
+
+The generation field is recorded and bound to candidate provenance/receipt but
+is not compared with live authority in slice 1. Architecture and ingest wording
+now keeps same-ID new-epoch/production reconciliation deferred, while exact
+local same-request replay remains shipped. Checked-in handoff fixtures are
+conformance-only with their matching test-generated artifact; no real-backup
+operator restore success is claimed without later authority.
+
 ## Verification
 
 - `node --test scripts/tests/edge-node-backup-systemd.test.mjs` (Windows:
   2 passed, 1 host skip; WSL: 3 passed).
+- WSL focused staging tests: 6 passed; configure non-tmpfs unit: 1 passed;
+  nodectl non-tmpfs configure: 1 passed; nodectl manual configure→absent leaf
+  create→artifact happy path: 1 passed.
+- WSL `cargo test -j1 -p iotkit-core-recovery`: 129 unit tests passed, 4
+  backup-contract tests passed, 1 ignored fixture generator.
+- WSL `cargo test -j1 -p iotkit-edge-nodectl --test backup_cli --test cli`:
+  24 backup CLI tests and 69 CLI tests passed.
+- WSL strict clippy for `iotkit-core-recovery` and `iotkit-edge-nodectl`
+  (`--all-targets -- -D warnings`) passed; `cargo fmt --all -- --check`
+  passed.
 - `node scripts/check-okf-docs.mjs` — passed (10 bilingual concepts).
 - `scripts/check-layers` — passed on Windows.
 - `scripts/check-source-layout` — passed on Windows.
 - `node scripts/battle-tested-review.mjs check` — passed (5 entries).
 - `node scripts/battle-tested-review.mjs select --base origin/master` selected
-  BT-002 (physical power-loss durability) and BT-004 (computer replacement
-  loss boundary), in addition to the broader branch's BT-001/003 routes.
+  BT-001, BT-002, BT-003, and BT-004 because the broad branch paths route to
+  all four entries; unmatched paths remain explicitly listed for review.
 - `git diff --check` — passed.
 - `systemd-analyze verify` was attempted in WSL; it cannot validate this
   repository copy because Windows checkout permissions mark units executable/
@@ -99,8 +149,10 @@ snapshot boundary and that no-backup replacement restores neither.
 
 ## Residual / deferred
 
-Physical power-cut, SD-card/filesystem-controller durability and deployment
-mount capability remain release/field gates. Slice 1 intentionally has no
+Physical power-cut, SD-card/filesystem-controller durability, target-host
+systemd/mount capability, and a root-run `/run` RuntimeDirectory exercise
+remain release/field gates (the WSL `/run` staging test is guarded for its
+non-root test account). Slice 1 intentionally has no
 production handoff creator, Broker fencing, permit, reconciliation, dedup
 activation, reactivation, same-ID new epoch, or usable replacement procedure.
 The candidate stays fenced and cannot collect or publish. No push or merge was

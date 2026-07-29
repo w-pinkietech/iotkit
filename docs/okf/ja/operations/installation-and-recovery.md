@@ -126,15 +126,22 @@ owner-only writable directory、stableに識別できるmount、必要capacity�
 read-back・parent-syncを備えなければなりません。Filesystem labelやmutable device
 nameだけでは不十分で、live DBとは異なるfilesystemでなければなりません。
 
-`/run`はstaging tmpfs parentです。`configure`は既存parentを検証し、正確な
-`/run/iotkit-edge-node-backup` leafを記録します。Serviceの
-`RuntimeDirectory=iotkit-edge-node-backup`が`create`用にそのowner-only leafだけを
-作ります。任意の`/run` treeを先に作ったり拡張したりせず、destinationやpersistent
-databaseを`TMPDIR`へ置きません。
+`/run`はstaging tmpfs parentです。`configure`はfinal path componentをfollowせず既存
+parentをopenし、euid所有でgroup/other writableでないtmpfs directory（通常の`/run`
+mode `0755`は可、world-writableな`/dev/shm` rootは不可）であることを検証します。
+正確な`/run/iotkit-edge-node-backup` leafを記録し、missing parent treeは作りません。
+`create`はheld parent descriptorからabsentなexact leafだけをmode `0700`で作ります。
+既存leafは同じtmpfs上のowner-only directoryで、link countとtypeを検証して受け入れます。
+従ってServiceの`RuntimeDirectory=iotkit-edge-node-backup`が受け入れ可能なleafを供給します。
+任意の`/run` treeを先に作ったり拡張したりせず、destinationやpersistent databaseを
+`TMPDIR`へ置きません。
 
 ```bash
 sudo install -d -m 0700 /etc/iotkit
-sudo install -m 600 /dev/null /etc/iotkit/edge-node-backup-passphrase
+if ! sudo test -e /etc/iotkit/edge-node-backup-passphrase; then
+  sudo install -m 600 /dev/null /etc/iotkit/edge-node-backup-passphrase
+fi
+sudo chmod 600 /etc/iotkit/edge-node-backup-passphrase
 # Shell historyへ残さない方法でpassphraseを対話的に書き込む。
 sudo install -D -m 0644 deploy/systemd/iotkit-edge-node-backup.service \
   /etc/systemd/system/iotkit-edge-node-backup.service
@@ -190,7 +197,10 @@ IoTKit Edge DBはsensor historyのほかaccount/session hash、設定、audit、
 install_root="$HOME/.local/share/iotkit/edge-01"
 backup_root="$HOME/.local/share/iotkit/backups/edge-01"
 mkdir -p "$backup_root"
-install -m 600 /dev/null "$install_root/secrets/backup-passphrase"
+if [ ! -e "$install_root/secrets/backup-passphrase" ]; then
+  install -m 600 /dev/null "$install_root/secrets/backup-passphrase"
+fi
+chmod 600 "$install_root/secrets/backup-passphrase"
 # Shell historyへ残さない方法でpassphraseを書き込む。
 docker compose --env-file "$install_root/edge.env" -f deploy/compose.edge.yaml \
   run --rm -v "$backup_root:/backup" \
@@ -208,27 +218,28 @@ Pre-encryption snapshotは専用tmpfsへ置きます。Host CLIもowner-only、b
 
 ### 8.1 Edge Node fenced-candidate restore drill (slice 1)
 
-Edge Nodeの`restore` commandはconformanceとcontrolled restore drillだけに出荷します。
-Artifactのbackup ID、Edge Node ID、old ledger epochをbindするclosed valid recovery
-handoffが必要です。Slice 1にはproduction handoff producerがありません。後続contract
-のrecovery authorityが発行したhandoffまたはrecovery contractのchecked-in fixtureを
-使い、handoffをinventしたりepochを自分でincrementしたりactivationをclaimしたり
-しません。
+Edge Nodeの`restore` commandはconformance interfaceとして、later authorityが存在する
+場合のcontrolled drillだけに出荷します。Artifactのbackup ID、Edge Node ID、old ledger
+epochをbindするclosed valid recovery handoffが必要です。Slice 1にはproduction handoff
+producerがありません。Checked-in handoff fixtureはmatching test-generated artifactと
+だけ使うconformance専用で、`SELECTED` real backupと組み合わせてはいけません。Later
+authorityもmatching complete drill fixtureもないためreal-backup restoreは成功せずfail
+closedしなければなりません。Handoffをinventしたりepochを自分でincrementしたりactivation
+をclaimしたりしません。
 
-Owner-only directoryにabsent candidate pathを選びます。Configured live DB pathを
-exactに保ち、`--candidate-db`へlive DBや既存aliasを渡しません。
+Slice 1ではreal-backup restoreを成功させるcommandがないため、`SELECTED` artifactや
+inventしたhandoffでoperator restoreを実行しません。Later authorityまたはmatching
+conformance requestのための非実行interface shapeは次です。
 
-```bash
-sudo test ! -e /var/lib/iotkit/edge-node/edge.restore-candidate.db
-sudo iotkit-edge-nodectl backup restore \
-  --input /mnt/iotkit-backups/edge-node-01/SELECTED.iotkit-node-backup \
-  --candidate-db /var/lib/iotkit/edge-node/edge.restore-candidate.db \
-  --live-db /var/lib/iotkit/edge-node/edge.db \
-  --passphrase-file /etc/iotkit/edge-node-backup-passphrase \
-  --recovery-handoff /secure/VALID_HANDOFF_FILE
+```text
+iotkit-edge-nodectl backup restore --input ARTIFACT \
+  --candidate-db ABSENT_OWNER_ONLY_CANDIDATE \
+  --live-db CONFIGURED_LIVE_DB --passphrase-file PASSPHRASE_FILE \
+  --recovery-handoff LATER_AUTHORITY_HANDOFF
 ```
 
-結果は`durably_fenced_candidate` receiptです。Candidateはsnapshot boundaryまでの
+Matching conformance requestまたはlater-authority requestだけが
+`durably_fenced_candidate` receiptを返せます。Candidateはsnapshot boundaryまでの
 authenticated readingとdedup claimを含められますが、fenced中はcollect、publish、
 ingest bindできず、backup後のretry stateを証明しません。Replacementとして起動せず、
 Broker publishをenableせず、state tableを編集しません。Broker fencing、remote permit、

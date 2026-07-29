@@ -82,13 +82,16 @@ mount identity is a stable block UUID (`uuid:<value>`) or a filesystem ID plus
 decoded source (`fsid:<value>|<source>`); a missing stable identity fails
 closed. The destination MUST be a different filesystem from the live database.
 
-The staging directory is a held, owner-only `tmpfs` capability. For the
-systemd path, `/run` is the existing tmpfs parent: `configure` validates that
-parent and records the exact staging path
-`/run/iotkit-edge-node-backup`. `create` accepts or creates only that exact
-owner-only leaf supplied by systemd's `RuntimeDirectory=`. It MUST NOT create
-or broaden an arbitrary `/run` tree, follow a substituted path, or use the
-destination as staging. On restart the tmpfs staging contents disappear.
+The staging capability has an existing, euid-owned, non-group/other-writable
+`tmpfs` parent and an owner-only leaf. For the systemd path, `/run` is the
+existing tmpfs parent (its usual `0755` mode is valid): `configure` opens it
+without following the final component, validates its type and link count, and
+records the exact staging path `/run/iotkit-edge-node-backup`. A world-writable
+tmpfs root such as `/dev/shm` is not an accepted parent. `create` uses the held
+parent descriptor to create an absent exact leaf with mode `0700`, or validates
+an existing owner-only leaf's type, link count, and tmpfs filesystem. It MUST
+NOT create or broaden an arbitrary `/run` tree, follow a substituted path, or
+use the destination as staging. On restart the tmpfs staging contents disappear.
 
 Install the optional templates only after reviewing the configured paths:
 
@@ -146,6 +149,18 @@ The header fields and bounds are:
 | `cipher` | `xchacha20-poly1305` |
 | `nonce_prefix_b64` | canonical unpadded Base64 of exactly 16 bytes (22 characters) |
 | `chunk_size` | integer `4,096..=4,194,304` bytes |
+
+The v1 writer defaults are fixed for newly created artifacts:
+
+| Writer field | v1 default |
+| --- | ---: |
+| `kdf_time` | `3` |
+| `kdf_memory_kib` | `65,536` KiB |
+| `kdf_parallelism` | `4` |
+| `chunk_size` | `262,144` bytes |
+
+Readers MUST accept any value in the bounds above; the writer defaults are not
+an additional reader restriction.
 
 The key is 32 bytes derived with Argon2id (version 1.3) from the owner-supplied
 passphrase and the authenticated salt/parameters. Salt and nonce prefix come
@@ -222,8 +237,10 @@ are `recovery_id`, `edge_id`, `edge_node_id`, `old_ledger_epoch`,
 1..=255 bytes, and `old_ledger_epoch` MUST differ from
 `proposed_new_epoch`. The generation is an integer
 `0..=9,223,372,036,854,775,807`. The handoff MUST bind to the manifest's backup
-ID, Node ID, and old epoch; an edge or generation mismatch is rejected before
-candidate publication.
+ID, Node ID, and old epoch. Slice 1 records the nonnegative generation in the
+candidate provenance and receipt; it does not compare that value with a live
+authority or reject a generation mismatch. Authority comparison and activation
+are deferred to the later permit/generation contract.
 
 The public receipt is closed schema v1 with status
 `durably_fenced_candidate` and fields `recovery_id`, `candidate_instance_id`,
@@ -270,8 +287,8 @@ procedure; without it an artifact is intentionally unrecoverable. Verify a
 successful artifact off-host and run an inspect/restore drill before relying
 on its RPO.
 
-Slice 1's restore command is available for conformance and controlled restore
-drills only:
+The following is the conformance command shape, not a successful operator
+procedure in slice 1:
 
 ```text
 iotkit-edge-nodectl backup restore --input ARTIFACT \
@@ -280,14 +297,15 @@ iotkit-edge-nodectl backup restore --input ARTIFACT \
   --recovery-handoff VALID_HANDOFF_FILE
 ```
 
-The candidate path in a drill MUST be absent before the command and MUST remain
-fenced afterward. `VALID_HANDOFF_FILE` means a handoff emitted by a later
-contracted recovery authority or the checked-in conformance fixture; it is not
-an invitation to invent a handoff, increment an epoch, or claim activation.
-Production handoff creation, Broker fencing, remote permit, and reactivation
-are not shipped. A no-backup hardware replacement still restores neither
-readings nor dedup claims; an encrypted-backup candidate contains claims only
-through its authenticated snapshot boundary and remains fenced.
+The candidate path in a conformance run MUST be absent before the command and
+MUST remain fenced afterward. A checked-in handoff fixture is conformance-only
+and is valid only with the matching test-generated artifact; it MUST NOT be
+paired with a selected real backup. Slice 1 has no later authority or matching
+complete drill fixture, so a real-backup restore cannot succeed here and must
+fail closed. Production handoff creation, Broker fencing, remote permit, and
+reactivation are not shipped. A no-backup hardware replacement still restores
+neither readings nor dedup claims; an encrypted-backup candidate contains
+claims only through its authenticated snapshot boundary and remains fenced.
 
 There is no legacy plaintext snapshot fallback. A former implementation's
 artifact, a renamed Edge server backup, an unauthenticated database copy, or a
