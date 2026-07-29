@@ -244,3 +244,83 @@ cargo test -p iotkit-edge-nodectl --test backup_cli -- --nocapture
 # - create selection vs configure race
 # - all prior paired rollback and reader safety journeys
 ```
+
+## Parent review remediation — round 3
+
+Round 3 makes paired backup configuration recovery convergent across the
+remaining publication and cleanup seams:
+
+- durable `config_publishing` and `drop_in_publishing` phases retain exact
+  transaction-bound temporary names and hashes;
+- the exact systemd drop-in is prepared and parent-synced before the config
+  rename, so a crash after either target rename can retry without synthesizing
+  an unproven artifact;
+- recovery permits only an exact retained temp or an already-exact target, and
+  fails closed with `cleanup_required` for unexpected target/backup/temp
+  combinations;
+- finalization atomically renames the marker to an owner-only completion
+  receipt and syncs it. Status ignores a valid receipt, while configure
+  consumes it idempotently for the same request and rejects corrupt,
+  mismatched, or marker-plus-receipt states;
+- cleanup and rollback remain bound to exact old-backup provenance and the
+  persisted transaction identity. No debug or error output exposes paths,
+  credentials, or hashes.
+
+### TDD evidence
+
+The new RED cases covered crash after config rename, crash after drop-in rename,
+completion-receipt final-sync uncertainty, and forged/stale phase states. The
+focused GREEN command was:
+
+```text
+cargo test -p iotkit-edge-nodectl --test backup_cli -- --nocapture
+20 passed, 0 failed
+```
+
+This includes a table-driven schema-3 matrix for `Prepared`,
+`ConfigPublishing`, `ConfigPublished`, `DropInPublishing`, `DropInPublished`,
+and `Published`, each with originally absent and present targets. Every
+malformed row asserted `cleanup_required` and byte-for-byte preservation of all
+tracked artifacts. Rename-crash retries and the completion receipt retry also
+passed.
+
+### Verification
+
+Focused and broad Linux/WSL checks passed:
+
+```text
+cargo check -p iotkit-edge-nodectl -p iotkit-core-recovery
+cargo clippy -p iotkit-edge-nodectl -p iotkit-core-recovery --all-targets -- -D warnings
+cargo test -p iotkit-edge-nodectl -p iotkit-core-recovery
+scripts/check-layers
+scripts/check-source-layout
+scripts/verify.sh
+```
+
+Package coverage was recovery 119 unit tests plus 4 contract tests and nodectl
+15 unit, 20 backup CLI, and 69 CLI tests. The workspace gate also passed
+`cargo test --workspace` and workspace Clippy with `-D warnings`. The WSL
+worktree has a Windows absolute `.git` path, so `scripts/verify.sh` was run
+with explicit `GIT_DIR`/`GIT_WORK_TREE`; the unqualified WSL invocation fails
+before running checks because Git cannot resolve that host path.
+
+### Battle-tested review and self-review
+
+The selector chose BT-004 (Edge Node computer replacement loss boundary). This
+round only hardens the config/drop-in publication transaction; encrypted
+computer replacement backup/restore remains the catalog's explicit coverage
+gap and is not claimed as solved here. Every recovery phase validates its
+target parent before any rename or cleanup. `ConfigPublishing` validates both
+exact temp transitions before it can rename the config, and
+`DropInPublishing` additionally requires exact config old-backup provenance so
+a forged marker cannot publish a half-pair.
+
+### Integration
+
+Round 3 was committed as:
+
+```text
+e8df756 fix(recovery): make backup configuration recovery convergent
+```
+
+No push or merge was performed.
