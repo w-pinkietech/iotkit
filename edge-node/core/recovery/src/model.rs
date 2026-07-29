@@ -169,6 +169,7 @@ impl BackupPassphrase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecoveryError {
     InvalidStartupState,
+    InvalidSnapshot,
     Storage,
 }
 
@@ -178,6 +179,7 @@ impl fmt::Display for RecoveryError {
             Self::InvalidStartupState => {
                 formatter.write_str("Edge Node recovery startup state is invalid")
             }
+            Self::InvalidSnapshot => formatter.write_str("Edge Node snapshot is invalid"),
             Self::Storage => formatter.write_str("Edge Node recovery storage is unavailable"),
         }
     }

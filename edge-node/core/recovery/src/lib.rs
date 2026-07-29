@@ -3,6 +3,7 @@
 use iotkit_core_storage::Migration;
 
 mod model;
+mod snapshot;
 mod state;
 
 pub use model::{
@@ -10,6 +11,9 @@ pub use model::{
     MountIdentity, NODE_BACKUP_FORMAT_VERSION, NODE_BACKUP_SUFFIX, NodeBackupManifest,
     RecoveryError, RecoveryHandoff, RecoveryStartupMode, RestoreReceipt, RestoreRequest,
     RestoreStatus, SnapshotMode,
+};
+pub use snapshot::{
+    SnapshotArtifact, SnapshotFacts, create_consistent_snapshot, validate_snapshot,
 };
 pub use state::{probe_startup_path, startup_mode};
 
@@ -37,10 +41,7 @@ pub fn all_edge_node_migrations() -> Vec<Migration> {
     migrations
 }
 
-/// Task 1 has no recovery mutation descriptor. Later slices add descriptors as they add writes.
-pub fn recovery_descriptors() -> &'static [iotkit_core_ops::OpDescriptor] {
-    &[]
-}
+pub use snapshot::recovery_descriptors;
 
 #[cfg(test)]
 #[path = "../tests/support/mod.rs"]
