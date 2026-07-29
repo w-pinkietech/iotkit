@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
+use iotkit_core_recovery::RecoveryStartupMode;
 use iotkit_core_supervision::AdapterEvent;
 use iotkit_core_types::AdapterId;
 use iotkit_edge_node::api::{ApiHandle, spawn_api_task};
@@ -56,6 +57,20 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Recovery state is the process-wide startup fence.  Probe with a read-only
+    // connection before catalog validation, effective-config logging, migration,
+    // identity/provenance mutation, runtime construction, or any service setup.
+    match iotkit_core_recovery::probe_startup_path(Path::new(&config.db_path)) {
+        Ok(RecoveryStartupMode::Normal) => {}
+        Ok(RecoveryStartupMode::FencedCandidate { .. }) => {
+            eprintln!("fenced recovery candidate; normal runtime is disabled");
+            std::process::exit(3);
+        }
+        Err(_) => {
+            eprintln!("Edge Node recovery startup state is invalid");
+            std::process::exit(3);
+        }
+    }
     if let Err(error) = iotkit_edge_node::input_adapters::validate_catalog() {
         tracing::error!(%error, "invalid built-in input adapter catalog");
         std::process::exit(1);
@@ -99,13 +114,7 @@ fn main() {
         );
     }
 
-    let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
-    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5, v9, v11
-    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8, v17
-    all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
-    all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
-    all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
-    all_migrations.sort_by_key(|m| m.version);
+    let all_migrations = iotkit_core_recovery::all_edge_node_migrations();
     let db_path_for_init = std::path::Path::new(&config.db_path);
     let database_existed_before_open = db_path_for_init.exists();
     if let Err(error) = iotkit_core_storage::preflight_edge_node_database(db_path_for_init) {
@@ -119,6 +128,18 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Defense in depth: a concurrent or otherwise unexpected state change must
+    // still be observed before identity/provenance writes begin.
+    let startup_is_normal = db.with_conn_sync(|conn| {
+        Ok(matches!(
+            iotkit_core_recovery::startup_mode(conn),
+            Ok(RecoveryStartupMode::Normal)
+        ))
+    });
+    if !matches!(startup_is_normal, Ok(true)) {
+        eprintln!("Edge Node recovery startup state is invalid");
+        std::process::exit(3);
+    }
     if let Err(error) = db.with_conn_sync(|conn| {
         iotkit_core_ledger::edge_node_id(conn)
             .map(|_| ())
