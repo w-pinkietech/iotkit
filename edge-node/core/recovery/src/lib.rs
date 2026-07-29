@@ -10,7 +10,8 @@ mod snapshot;
 mod state;
 
 pub use config::{
-    BackupConfigReplace, configure_backup, load_owner_only_config, load_owner_only_handoff,
+    BackupConfigReplace, RecoveryOperationGuard, acquire_recovery_operation, configure_backup,
+    configure_backup_guarded, load_owner_only_config, load_owner_only_handoff,
     load_owner_only_passphrase,
 };
 pub use container::{

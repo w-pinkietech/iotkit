@@ -26,6 +26,16 @@ pub enum BackupConfigReplace {
     ReplaceExisting,
 }
 
+/// Held nonblocking lease for one supported recovery operation.
+pub struct RecoveryOperationGuard {
+    #[cfg(target_os = "linux")]
+    _lock: File,
+    #[cfg(target_os = "linux")]
+    parent_device: u64,
+    #[cfg(target_os = "linux")]
+    parent_inode: u64,
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigWriteOps {
@@ -50,8 +60,29 @@ pub fn configure_backup(
     replacement: BackupConfigReplace,
 ) -> Result<(), RecoveryError> {
     validate_config_request(config)?;
+    let guard = acquire_recovery_operation(path)?;
+    configure_backup_guarded(&guard, path, config, replacement)
+}
+
+/// Writes configuration while the caller holds the stable recovery operation lease.
+pub fn configure_backup_guarded(
+    guard: &RecoveryOperationGuard,
+    path: &Path,
+    config: &BackupConfig,
+    replacement: BackupConfigReplace,
+) -> Result<(), RecoveryError> {
+    validate_config_request(config)?;
     #[cfg(target_os = "linux")]
     {
+        let parent_path = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
+        let parent = open_directory(parent_path)?;
+        validate_owner_directory_open(&parent)?;
+        let metadata = parent
+            .metadata()
+            .map_err(|_| RecoveryError::InvalidConfiguration)?;
+        if metadata.dev() != guard.parent_device || metadata.ino() != guard.parent_inode {
+            return Err(RecoveryError::InvalidConfiguration);
+        }
         let mountinfo =
             fs::read_to_string("/proc/self/mountinfo").map_err(|_| RecoveryError::MountMissing)?;
         configure_backup_with(
@@ -64,7 +95,53 @@ pub fn configure_backup(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (path, replacement);
+        let _ = (guard, path, replacement);
+        Err(RecoveryError::PlatformUnsupported)
+    }
+}
+
+/// Acquires the stable owner-only config-adjacent recovery operation lock.
+pub fn acquire_recovery_operation(
+    config_path: &Path,
+) -> Result<RecoveryOperationGuard, RecoveryError> {
+    if !is_absolute_normalized(config_path) {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent_path = config_path
+            .parent()
+            .ok_or(RecoveryError::InvalidConfiguration)?;
+        let parent = open_directory(parent_path)?;
+        validate_owner_directory_open(&parent)?;
+        let (lock, created) = open_lock_file(parent.as_raw_fd(), c".iotkit-recovery.lock")?;
+        validate_lock_file(&lock)?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            return if matches!(
+                error.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            ) {
+                Err(RecoveryError::OperationBusy)
+            } else {
+                Err(RecoveryError::Storage)
+            };
+        }
+        if created {
+            parent.sync_all().map_err(|_| RecoveryError::Storage)?;
+        }
+        let metadata = parent
+            .metadata()
+            .map_err(|_| RecoveryError::InvalidConfiguration)?;
+        Ok(RecoveryOperationGuard {
+            _lock: lock,
+            parent_device: metadata.dev(),
+            parent_inode: metadata.ino(),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = config_path;
         Err(RecoveryError::PlatformUnsupported)
     }
 }
@@ -93,6 +170,7 @@ pub(crate) fn configure_backup_with(
     let parent_path = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
     let destination_name = c_name(file_name(path)?)?;
     let parent = open_directory(parent_path)?;
+    validate_owner_directory_open(&parent)?;
     let temporary_name = random_sibling_name(&destination_name)?;
     let temporary_fd = unsafe {
         libc::openat(
@@ -407,6 +485,20 @@ fn validate_owner_file_open(file: &File, limit: u64) -> Result<(), RecoveryError
 }
 
 #[cfg(target_os = "linux")]
+fn validate_owner_directory_open(directory: &File) -> Result<(), RecoveryError> {
+    let metadata = directory
+        .metadata()
+        .map_err(|_| RecoveryError::InvalidConfiguration)?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn file_name(path: &Path) -> Result<&std::ffi::OsStr, RecoveryError> {
     path.file_name()
         .filter(|name| !name.is_empty())
@@ -416,6 +508,45 @@ fn file_name(path: &Path) -> Result<&std::ffi::OsStr, RecoveryError> {
 #[cfg(target_os = "linux")]
 fn c_name(name: &std::ffi::OsStr) -> Result<CString, RecoveryError> {
     CString::new(name.as_bytes()).map_err(|_| RecoveryError::InvalidConfiguration)
+}
+
+#[cfg(target_os = "linux")]
+fn open_lock_file(directory_fd: RawFd, name: &CStr) -> Result<(File, bool), RecoveryError> {
+    let create_flags =
+        libc::O_CREAT | libc::O_EXCL | libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    let created_fd = unsafe { libc::openat(directory_fd, name.as_ptr(), create_flags, 0o600) };
+    if created_fd >= 0 {
+        return Ok((unsafe { File::from_raw_fd(created_fd) }, true));
+    }
+    if std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists {
+        return Err(RecoveryError::Storage);
+    }
+    let existing_fd = unsafe {
+        libc::openat(
+            directory_fd,
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if existing_fd < 0 {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    Ok((unsafe { File::from_raw_fd(existing_fd) }, false))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_lock_file(file: &File) -> Result<(), RecoveryError> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| RecoveryError::InvalidConfiguration)?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

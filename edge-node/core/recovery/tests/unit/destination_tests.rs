@@ -45,6 +45,34 @@ impl crate::destination::LinuxOperationHook for TestHook {
 }
 
 #[cfg(target_os = "linux")]
+struct CombinedProbeFaultHook {
+    readback_pending: Cell<bool>,
+    cleanup_pending: Cell<bool>,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::destination::LinuxOperationHook for CombinedProbeFaultHook {
+    fn before(
+        &self,
+        operation: crate::destination::LinuxOperation,
+        _directory_fd: RawFd,
+        _name: &std::ffi::CStr,
+    ) -> io::Result<()> {
+        if operation == crate::destination::LinuxOperation::ProbeReadback
+            && self.readback_pending.replace(false)
+        {
+            return Err(io::Error::from_raw_os_error(libc::EIO));
+        }
+        if operation == crate::destination::LinuxOperation::ProbeCleanupUnlink
+            && self.cleanup_pending.replace(false)
+        {
+            return Err(io::Error::from_raw_os_error(libc::EIO));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn held_destination(path: &std::path::Path) -> VerifiedBackupDestination {
     VerifiedBackupDestination {
         directory: DirectoryCapability::open(path).unwrap(),
@@ -52,10 +80,20 @@ fn held_destination(path: &std::path::Path) -> VerifiedBackupDestination {
 }
 
 #[cfg(target_os = "linux")]
+fn operation_guard(root: &std::path::Path) -> RecoveryOperationGuard {
+    use std::os::unix::fs::PermissionsExt;
+    let control = root.join("control");
+    fs::create_dir(&control).unwrap();
+    fs::set_permissions(&control, fs::Permissions::from_mode(0o700)).unwrap();
+    acquire_recovery_operation(&control.join("backup.json")).unwrap()
+}
+
+#[cfg(target_os = "linux")]
 fn entry_names(path: &std::path::Path) -> BTreeSet<String> {
     fs::read_dir(path)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "control")
         .collect()
 }
 
@@ -132,9 +170,10 @@ fn verification_rejects_missing_expected_mount_before_touching_fallback_director
         freshness_seconds: 60,
         retention_count: 1,
     };
+    let guard = operation_guard(root.path());
 
     assert!(matches!(
-        verify_destination(&config, 1),
+        verify_destination(&guard, &config, 1),
         Err(RecoveryError::MountMissing)
     ));
 }
@@ -158,9 +197,11 @@ fn publication_after_path_replacement_uses_the_held_destination_descriptor() {
     fs::rename(&replacement, &destination).unwrap();
     let source = root.path().join("ciphertext");
     fs::write(&source, b"not a container").unwrap();
+    let guard = operation_guard(root.path());
 
     assert_eq!(
         publish_verified_artifact(
+            &guard,
             &held,
             &mut fs::File::open(&source).unwrap(),
             ".iotkit-artifact",
@@ -182,9 +223,11 @@ fn retention_never_removes_unknown_unverified_files() {
     fs::set_permissions(&destination, fs::Permissions::from_mode(0o700)).unwrap();
     let unknown = destination.join(".iotkit-unknown");
     fs::write(&unknown, b"not a container").unwrap();
+    let guard = operation_guard(root.path());
 
     assert_eq!(
         apply_retention(
+            &guard,
             &VerifiedBackupDestination {
                 directory: DirectoryCapability::open(&destination).unwrap(),
             },
@@ -230,6 +273,7 @@ fn capability_probe_faults_leave_no_entries_and_a_retry_succeeds() {
     let root = TempDir::new().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let directory = DirectoryCapability::open(root.path()).unwrap();
+    let guard = operation_guard(root.path());
 
     for operation in [
         ProbeFileSync,
@@ -243,13 +287,70 @@ fn capability_probe_faults_leave_no_entries_and_a_retry_succeeds() {
             fail_once: Cell::new(Some(operation)),
             mutate: None,
         };
-        assert!(crate::destination::probe_directory_with_hook(&directory, &hook).is_err());
+        assert!(crate::destination::probe_directory_with_hook(&guard, &directory, &hook).is_err());
         assert_eq!(entry_names(root.path()), BTreeSet::new(), "{operation:?}");
-        crate::destination::probe_directory_with_hook(&directory, &TestHook::default()).unwrap();
+        crate::destination::probe_directory_with_hook(&guard, &directory, &TestHook::default())
+            .unwrap();
         assert_eq!(entry_names(root.path()), BTreeSet::new(), "{operation:?}");
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn cleanup_uncertainty_wins_over_the_original_probe_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let directory = DirectoryCapability::open(root.path()).unwrap();
+    let guard = operation_guard(root.path());
+    let hook = CombinedProbeFaultHook {
+        readback_pending: Cell::new(true),
+        cleanup_pending: Cell::new(true),
+    };
+
+    assert_eq!(
+        crate::destination::probe_directory_with_hook(&guard, &directory, &hook),
+        Err(RecoveryError::ArtifactCleanupFailed)
+    );
+    assert_eq!(entry_names(root.path()), BTreeSet::new());
+    crate::destination::probe_directory_with_hook(&guard, &directory, &TestHook::default())
+        .unwrap();
+    assert_eq!(entry_names(root.path()), BTreeSet::new());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn next_run_fails_closed_on_exact_cleanup_leftovers_without_deleting_them() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let directory = fs::File::open(root.path()).unwrap();
+    let cleanup = ".iotkit-cleanup-0123456789abcdef0123456789abcdef";
+    let retention = ".iotkit-retention-fedcba9876543210fedcba9876543210";
+    let unrelated = ".iotkit-cleanup-user-note";
+    fs::create_dir(root.path().join(cleanup)).unwrap();
+    fs::write(root.path().join(retention), b"unknown").unwrap();
+    fs::write(root.path().join(unrelated), b"keep").unwrap();
+
+    assert_eq!(
+        crate::destination::ensure_no_cleanup_leftovers(&directory),
+        Err(RecoveryError::CleanupRequired)
+    );
+    assert!(root.path().join(cleanup).is_dir());
+    assert_eq!(fs::read(root.path().join(retention)).unwrap(), b"unknown");
+    assert_eq!(fs::read(root.path().join(unrelated)).unwrap(), b"keep");
+    fs::remove_dir(root.path().join(cleanup)).unwrap();
+    fs::remove_file(root.path().join(retention)).unwrap();
+    assert_eq!(
+        crate::destination::ensure_no_cleanup_leftovers(&directory),
+        Ok(())
+    );
+    assert_eq!(fs::read(root.path().join(unrelated)).unwrap(), b"keep");
+    assert_eq!(
+        RecoveryError::CleanupRequired.reason_code(),
+        "cleanup_required"
+    );
+}
 #[cfg(target_os = "linux")]
 fn broaden_probe_mode(
     operation: crate::destination::LinuxOperation,
@@ -271,13 +372,14 @@ fn capability_probe_rejects_a_file_with_permissions_broader_than_0600() {
     let root = TempDir::new().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let directory = DirectoryCapability::open(root.path()).unwrap();
+    let guard = operation_guard(root.path());
     let hook = TestHook {
         fail_once: Cell::new(None),
         mutate: Some(broaden_probe_mode),
     };
 
     assert_eq!(
-        crate::destination::probe_directory_with_hook(&directory, &hook),
+        crate::destination::probe_directory_with_hook(&guard, &directory, &hook),
         Err(RecoveryError::DestinationInvalid)
     );
     assert_eq!(entry_names(root.path()), BTreeSet::new());
@@ -312,13 +414,14 @@ fn capability_probe_rejects_a_multiple_link_file() {
     let root = TempDir::new().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let directory = DirectoryCapability::open(root.path()).unwrap();
+    let guard = operation_guard(root.path());
     let hook = TestHook {
         fail_once: Cell::new(None),
         mutate: Some(add_probe_hardlink),
     };
 
     assert_eq!(
-        crate::destination::probe_directory_with_hook(&directory, &hook),
+        crate::destination::probe_directory_with_hook(&guard, &directory, &hook),
         Err(RecoveryError::DestinationInvalid)
     );
     fs::remove_file(root.path().join(".probe-extra-link")).unwrap();
@@ -355,10 +458,11 @@ fn capability_probe_uses_a_fresh_cryptorandom_name_on_retry() {
     let root = TempDir::new().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let directory = DirectoryCapability::open(root.path()).unwrap();
+    let guard = operation_guard(root.path());
     let hook = NameRecordingHook::default();
 
-    crate::destination::probe_directory_with_hook(&directory, &hook).unwrap();
-    crate::destination::probe_directory_with_hook(&directory, &hook).unwrap();
+    crate::destination::probe_directory_with_hook(&guard, &directory, &hook).unwrap();
+    crate::destination::probe_directory_with_hook(&guard, &directory, &hook).unwrap();
 
     let names = hook.created_names.borrow();
     assert_eq!(names.len(), 2);
@@ -413,13 +517,14 @@ fn probe_cleanup_substitution_preserves_the_unrelated_file_and_fails() {
     let root = TempDir::new().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let directory = DirectoryCapability::open(root.path()).unwrap();
+    let guard = operation_guard(root.path());
     let hook = TestHook {
         fail_once: Cell::new(None),
         mutate: Some(substitute_probe_cleanup),
     };
 
     assert_eq!(
-        crate::destination::probe_directory_with_hook(&directory, &hook),
+        crate::destination::probe_directory_with_hook(&guard, &directory, &hook),
         Err(RecoveryError::ArtifactCleanupFailed)
     );
     assert_eq!(
@@ -431,7 +536,8 @@ fn probe_cleanup_substitution_preserves_the_unrelated_file_and_fails() {
     }));
 
     let before = entry_names(root.path());
-    crate::destination::probe_directory_with_hook(&directory, &TestHook::default()).unwrap();
+    crate::destination::probe_directory_with_hook(&guard, &directory, &TestHook::default())
+        .unwrap();
     assert_eq!(entry_names(root.path()), before);
 }
 
@@ -484,6 +590,7 @@ fn publication_swap_after_link_never_authenticates_or_deletes_the_replacement() 
     let mut artifact = fs::File::open(&fixture).unwrap();
     let destination = held_destination(&destination_path);
     let passphrase = BackupPassphrase::new("public-format-passphrase".into());
+    let guard = operation_guard(root.path());
     let hook = TestHook {
         fail_once: Cell::new(None),
         mutate: Some(swap_published_entry),
@@ -491,6 +598,7 @@ fn publication_swap_after_link_never_authenticates_or_deletes_the_replacement() 
 
     assert_eq!(
         crate::destination::publish_verified_artifact_with_hook(
+            &guard,
             &destination,
             &mut artifact,
             ".iotkit-final",
@@ -577,6 +685,7 @@ fn retention_substitution_preserves_the_replacement_and_authenticated_inode() {
     fs::write(&database, b"SQLite format 3\0public-db").unwrap();
     let destination = held_destination(&destination_path);
     let passphrase = BackupPassphrase::new("public-format-passphrase".into());
+    let guard = operation_guard(root.path());
     encrypt_container(
         &database,
         &retention_manifest("backup-new", 20),
@@ -601,6 +710,7 @@ fn retention_substitution_preserves_the_replacement_and_authenticated_inode() {
 
     assert_eq!(
         crate::destination::apply_retention_with_hook(
+            &guard,
             &destination,
             &passphrase,
             "node-a",
@@ -666,6 +776,7 @@ fn retention_cleanup_substitution_preserves_the_unrelated_directory_and_fails() 
     fs::write(&database, b"SQLite format 3\0public-db").unwrap();
     let destination = held_destination(&destination_path);
     let passphrase = BackupPassphrase::new("public-format-passphrase".into());
+    let guard = operation_guard(root.path());
     encrypt_container(
         &database,
         &retention_manifest("backup-new", 20),
@@ -689,6 +800,7 @@ fn retention_cleanup_substitution_preserves_the_unrelated_directory_and_fails() 
 
     assert_eq!(
         crate::destination::apply_retention_with_hook(
+            &guard,
             &destination,
             &passphrase,
             "node-a",
@@ -727,6 +839,7 @@ fn retention_removes_authenticated_normal_backup_names() {
     fs::write(&database, b"SQLite format 3\0public-db").unwrap();
     let destination = held_destination(&destination_path);
     let passphrase = BackupPassphrase::new("public-format-passphrase".into());
+    let guard = operation_guard(root.path());
     encrypt_container(
         &database,
         &retention_manifest("backup-new", 20),
@@ -746,6 +859,7 @@ fn retention_removes_authenticated_normal_backup_names() {
 
     assert_eq!(
         apply_retention(
+            &guard,
             &destination,
             &passphrase,
             "node-a",

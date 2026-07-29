@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 7
+revision: 8
 ---
 
 # Architecture
@@ -89,6 +89,15 @@ Edge Nodeはprivate address client向けHTTPS APIを持ちます。State変更�
 初期ownershipとadmin recoveryはlocal-root maintenanceです。Unownedまたはrecovery中のboxはcontrol API/UIをbindしません。Passphrase resetはcredentialを置換し、operator tokenとsessionをすべて失効します。未認証network setup routeはありません。
 
 IoTKit Edge側の変更も`edge/src/application/`のtyped operationを通します。HTTP、HTML、CLIはthin adapterであり、SQLへ直接writeしません。
+
+任意機能のEdge Node recovery filesystem operationでは、local rootとeffective
+ownerを一つのtrusted principalとして扱います。Config parentと保護対象の
+file/directoryはgroup/otherの全accessを拒否します。Supported configure、
+destination verification/probe、publication、retentionは、config隣接のstableな
+owner-only nonblocking lockをoperation全体で一つ保持し、二つ目のsupported callは
+`operation_busy`で失敗します。このlockはproduct code間の調整であり、同じ
+effective UIDですでに動くhostile codeから保護するsecurity boundaryではありません。
+そのcodeはfilesystem namespace保護の対象外であり、host containmentが必要です。
 
 ## 現行実装
 

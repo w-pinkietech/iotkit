@@ -296,6 +296,8 @@ pub enum RecoveryError {
     MountIdentityUnavailable,
     DestinationInvalid,
     CapacityOverflow,
+    OperationBusy,
+    CleanupRequired,
 }
 
 impl RecoveryError {
@@ -320,6 +322,8 @@ impl RecoveryError {
             Self::MountIdentityUnavailable => "mount_identity_unavailable",
             Self::DestinationInvalid => "destination_invalid",
             Self::CapacityOverflow => "capacity_overflow",
+            Self::OperationBusy => "operation_busy",
+            Self::CleanupRequired => "cleanup_required",
         }
     }
 }
@@ -367,6 +371,12 @@ impl fmt::Display for RecoveryError {
             }
             Self::CapacityOverflow => {
                 formatter.write_str("Edge Node backup capacity calculation overflowed")
+            }
+            Self::OperationBusy => {
+                formatter.write_str("Another Edge Node recovery operation is active")
+            }
+            Self::CleanupRequired => {
+                formatter.write_str("Edge Node backup cleanup requires operator review")
             }
         }
     }

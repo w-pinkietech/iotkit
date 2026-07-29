@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 7
+revision: 8
 ---
 
 # Architecture
@@ -274,6 +274,16 @@ network setup route or unauthenticated setup allowlist. The prescriptive rule:
 **a new mutation surface is an R14 descriptor — never a fresh SQL mutation
 path.** Local-root ownership/recovery (and the separately specified factory-reset
 maintenance family) are explicit non-network exceptions, never API/UI/AI operations.
+
+Optional Edge Node recovery filesystem operations trust local root and the
+effective owner as one principal. Their configuration parent and protected
+files/directories deny all group/other access. Supported configure,
+destination verification/probe, publication, and retention calls hold one
+stable owner-only config-adjacent nonblocking lock across the operation; a
+second supported call fails as `operation_busy`. This lock coordinates product
+code, not hostile code already running with the same effective UID. Such code
+is outside the filesystem namespace protection boundary and requires host
+containment.
 
 ## Current implementation state
 

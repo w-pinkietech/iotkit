@@ -21,6 +21,7 @@ use std::os::{
 use crate::MountIdentity;
 use crate::{
     BackupConfig, BackupPassphrase, DirectoryCapability, NodeBackupManifest, RecoveryError,
+    RecoveryOperationGuard,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -154,6 +155,7 @@ pub fn required_capacity(bytes: u64) -> Result<u64, RecoveryError> {
 
 /// Opens the configured destination once, verifies the held descriptor, then probes it.
 pub fn verify_destination(
+    guard: &RecoveryOperationGuard,
     config: &BackupConfig,
     bytes: u64,
 ) -> Result<VerifiedBackupDestination, RecoveryError> {
@@ -187,16 +189,17 @@ pub fn verify_destination(
         if same_filesystem(&file, &database)? {
             return Err(RecoveryError::DestinationInvalid);
         }
+        ensure_no_cleanup_leftovers(&file)?;
         if free_bytes(&file)? < required_capacity(bytes)? {
             return Err(RecoveryError::StorageFull);
         }
         let directory = DirectoryCapability::from_open_file(file)?;
-        probe_directory(&directory)?;
+        probe_directory(guard, &directory)?;
         Ok(VerifiedBackupDestination { directory })
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (config, bytes);
+        let _ = (guard, config, bytes);
         Err(RecoveryError::PlatformUnsupported)
     }
 }
@@ -228,6 +231,7 @@ pub(crate) fn derive_mount_identity(
 
 /// Opens the configured staging directory once and requires a private tmpfs descriptor.
 pub fn verify_staging_directory(
+    _guard: &RecoveryOperationGuard,
     config: &BackupConfig,
     bytes: u64,
 ) -> Result<VerifiedStagingDirectory, RecoveryError> {
@@ -252,7 +256,7 @@ pub fn verify_staging_directory(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (config, bytes);
+        let _ = (_guard, config, bytes);
         Err(RecoveryError::PlatformUnsupported)
     }
 }
@@ -360,12 +364,16 @@ pub(crate) fn filesystem_identity(file: &File, source: &str) -> Result<String, R
 }
 
 #[cfg(target_os = "linux")]
-fn probe_directory(directory: &DirectoryCapability) -> Result<(), RecoveryError> {
-    probe_directory_with_hook(directory, &SystemHook)
+fn probe_directory(
+    guard: &RecoveryOperationGuard,
+    directory: &DirectoryCapability,
+) -> Result<(), RecoveryError> {
+    probe_directory_with_hook(guard, directory, &SystemHook)
 }
 
 #[cfg(target_os = "linux")]
 pub(crate) fn probe_directory_with_hook(
+    _guard: &RecoveryOperationGuard,
     directory: &DirectoryCapability,
     hook: &impl LinuxOperationHook,
 ) -> Result<(), RecoveryError> {
@@ -431,7 +439,8 @@ pub(crate) fn probe_directory_with_hook(
     let cleanup = cleanup_probe(fd, cleanup_name, &probe, hook);
     drop(probe);
     match (result, cleanup) {
-        (Err(error), _) => Err(error),
+        (Err(_), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
     }
@@ -464,7 +473,7 @@ fn cleanup_probe(
         .before(LinuxOperation::ProbeCleanupUnlink, directory_fd, name)
         .is_err()
     {
-        first_error = Some(RecoveryError::Storage);
+        first_error = Some(RecoveryError::ArtifactCleanupFailed);
         hook.before(LinuxOperation::ProbeCleanupUnlink, directory_fd, name)
             .map_err(|_| RecoveryError::Storage)?;
     }
@@ -475,7 +484,7 @@ fn cleanup_probe(
         .and_then(|()| sync_fd_io(directory_fd))
         .is_err()
     {
-        first_error = Some(RecoveryError::Storage);
+        first_error = Some(RecoveryError::ArtifactCleanupFailed);
         hook.before(LinuxOperation::ProbeCleanupSync, directory_fd, name)
             .map_err(|_| RecoveryError::Storage)?;
         sync_fd(directory_fd)?;
@@ -485,6 +494,7 @@ fn cleanup_probe(
 
 /// Publishes an already-open encrypted artifact through the held destination descriptor.
 pub fn publish_verified_artifact(
+    guard: &RecoveryOperationGuard,
     destination: &VerifiedBackupDestination,
     artifact: &mut File,
     output_name: &str,
@@ -493,6 +503,7 @@ pub fn publish_verified_artifact(
     #[cfg(target_os = "linux")]
     {
         publish_verified_artifact_with_hook(
+            guard,
             destination,
             artifact,
             output_name,
@@ -502,13 +513,14 @@ pub fn publish_verified_artifact(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (destination, artifact, output_name, passphrase);
+        let _ = (guard, destination, artifact, output_name, passphrase);
         Err(RecoveryError::PlatformUnsupported)
     }
 }
 
 #[cfg(target_os = "linux")]
 pub(crate) fn publish_verified_artifact_with_hook(
+    _guard: &RecoveryOperationGuard,
     destination: &VerifiedBackupDestination,
     artifact: &mut File,
     output_name: &str,
@@ -577,6 +589,7 @@ pub(crate) fn publish_verified_artifact_with_hook(
 
 /// Removes only authenticated, recorded artifacts older than the retained newer successes.
 pub fn apply_retention(
+    guard: &RecoveryOperationGuard,
     destination: &VerifiedBackupDestination,
     passphrase: &BackupPassphrase,
     edge_node_id: &str,
@@ -586,6 +599,7 @@ pub fn apply_retention(
     #[cfg(target_os = "linux")]
     {
         apply_retention_with_hook(
+            guard,
             destination,
             passphrase,
             edge_node_id,
@@ -597,6 +611,7 @@ pub fn apply_retention(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (
+            guard,
             destination,
             passphrase,
             edge_node_id,
@@ -609,6 +624,7 @@ pub fn apply_retention(
 
 #[cfg(target_os = "linux")]
 pub(crate) fn apply_retention_with_hook(
+    _guard: &RecoveryOperationGuard,
     destination: &VerifiedBackupDestination,
     passphrase: &BackupPassphrase,
     edge_node_id: &str,
@@ -851,6 +867,57 @@ fn cleanup_retention_quarantine(
     .map_err(|_| RecoveryError::ArtifactCleanupFailed)?;
     remove_exact_empty_directory_at(destination_fd, quarantine_name, quarantine_directory)
         .map_err(|_| RecoveryError::ArtifactCleanupFailed)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn ensure_no_cleanup_leftovers(directory: &File) -> Result<(), RecoveryError> {
+    let directory_fd = directory.as_raw_fd();
+    let duplicated = unsafe { libc::dup(directory_fd) };
+    if duplicated < 0 {
+        return Err(RecoveryError::Storage);
+    }
+    let stream = unsafe { libc::fdopendir(duplicated) };
+    if stream.is_null() {
+        unsafe {
+            libc::close(duplicated);
+        }
+        return Err(RecoveryError::Storage);
+    }
+    let result = loop {
+        unsafe {
+            *libc::__errno_location() = 0;
+        }
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break if unsafe { *libc::__errno_location() } == 0 {
+                Ok(())
+            } else {
+                Err(RecoveryError::Storage)
+            };
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if is_cleanup_leftover_name(name) {
+            break Err(RecoveryError::CleanupRequired);
+        }
+    };
+    unsafe {
+        libc::closedir(stream);
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn is_cleanup_leftover_name(name: &[u8]) -> bool {
+    [
+        b".iotkit-cleanup-".as_slice(),
+        b".iotkit-cleanup-dir-".as_slice(),
+        b".iotkit-retention-".as_slice(),
+    ]
+    .into_iter()
+    .any(|prefix| {
+        name.strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.len() == 32 && suffix.iter().all(u8::is_ascii_hexdigit))
+    })
 }
 
 #[cfg(target_os = "linux")]

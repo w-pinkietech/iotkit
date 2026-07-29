@@ -42,6 +42,7 @@ fn mountinfo_for(destination: &Path) -> String {
 fn prepare_config(root: &Path) -> BackupConfig {
     use std::os::unix::fs::PermissionsExt;
     let input = config(root);
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
     fs::create_dir(&input.destination).unwrap();
     fs::set_permissions(&input.destination, fs::Permissions::from_mode(0o700)).unwrap();
     input
@@ -104,6 +105,67 @@ fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() 
             fs::metadata(config_path).unwrap().permissions().mode() & 0o077,
             0
         );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn competing_configure_is_busy_before_creating_any_temporary_name() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let input = prepare_config(root.path());
+    let guard = acquire_recovery_operation(&config_path).unwrap();
+    let lock_path = root.path().join(".iotkit-recovery.lock");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let mut before: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    before.sort();
+
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        Err(RecoveryError::OperationBusy)
+    );
+    let mut after: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    after.sort();
+    assert_eq!(after, before);
+    assert_eq!(RecoveryError::OperationBusy.reason_code(), "operation_busy");
+
+    drop(guard);
+    configure_backup(&config_path, &input, BackupConfigReplace::Refuse).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn configuration_rejects_non_owner_only_parent_before_lock_or_temporary_creation() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let input = prepare_config(root.path());
+    let original_entries: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+
+    for mode in [0o777, 0o720] {
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(
+            configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+            Err(RecoveryError::InvalidConfiguration)
+        );
+        let entries: Vec<_> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, original_entries);
     }
 }
 
