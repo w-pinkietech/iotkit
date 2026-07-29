@@ -289,6 +289,7 @@ pub enum RecoveryError {
     InvalidPassphrase,
     StorageFull,
     ArtifactPublicationUncertain,
+    ArtifactCleanupFailed,
 }
 
 impl RecoveryError {
@@ -306,6 +307,7 @@ impl RecoveryError {
             Self::InvalidPassphrase => "passphrase_invalid",
             Self::StorageFull => "storage_full",
             Self::ArtifactPublicationUncertain => "artifact_publication_uncertain",
+            Self::ArtifactCleanupFailed => "artifact_cleanup_failed",
         }
     }
 }
@@ -334,6 +336,9 @@ impl fmt::Display for RecoveryError {
             }
             Self::ArtifactPublicationUncertain => {
                 formatter.write_str("Edge Node backup publication status is uncertain")
+            }
+            Self::ArtifactCleanupFailed => {
+                formatter.write_str("Edge Node backup cleanup could not be verified")
             }
         }
     }

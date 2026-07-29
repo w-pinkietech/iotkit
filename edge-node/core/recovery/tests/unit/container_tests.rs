@@ -1,4 +1,8 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::{self, Read},
+    path::{Path, PathBuf},
+};
 
 use std::fs::File;
 
@@ -185,6 +189,19 @@ fn schema_and_rust_validation_agree_on_boundaries() {
         assert!(rust_result.is_err(), "Rust accepted {name}");
     }
 
+    let manifest_json: Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/node-backup-manifest-v1.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(manifest_validator.is_valid(&manifest_json));
+    let manifest_fixture: NodeBackupManifest =
+        serde_json::from_value(manifest_json.clone()).unwrap();
+    validate_manifest(&manifest_fixture).unwrap();
+
     let valid = serde_json::to_value(manifest()).unwrap();
     assert!(manifest_validator.is_valid(&valid));
     let parsed: NodeBackupManifest = serde_json::from_value(valid).unwrap();
@@ -236,6 +253,37 @@ fn schema_and_rust_validation_agree_on_boundaries() {
         };
         assert!(rust_result.is_err(), "Rust accepted {name}");
     }
+
+    for field in ["salt_b64", "nonce_prefix_b64"] {
+        let mut value: Value = serde_json::from_slice(
+            &fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/node-backup-header-v1.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let encoded = value[field].as_str().unwrap();
+        let mut noncanonical = encoded.to_owned();
+        noncanonical.replace_range(21.., "R");
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), json!(noncanonical));
+        assert!(
+            !header_validator.is_valid(&value),
+            "schema accepted noncanonical {field}"
+        );
+        let rust_result = match serde_json::from_value::<ContainerHeader>(value) {
+            Ok(header) => validate_header(&header).and(decode_16(if field == "salt_b64" {
+                &header.salt_b64
+            } else {
+                &header.nonce_prefix_b64
+            })),
+            Err(_) => Err(RecoveryError::ContainerInvalid),
+        };
+        assert!(rust_result.is_err(), "Rust accepted noncanonical {field}");
+    }
 }
 
 #[test]
@@ -260,6 +308,51 @@ fn encryption_uses_the_open_snapshot_handle_after_path_replacement() {
     let restored = root.path().join("restored.sqlite");
     decrypt_container_to_new_file(&output, &passphrase(), &restored, DATABASE_LENGTH).unwrap();
     assert_eq!(fs::read(restored).unwrap(), DATABASE);
+}
+
+struct TruncatingReader {
+    file: File,
+    path: PathBuf,
+    truncated: bool,
+}
+
+impl Read for TruncatingReader {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let limit = bytes.len().min(1);
+        let count = self.file.read(&mut bytes[..limit])?;
+        if !self.truncated {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&self.path)?
+                .set_len(1)?;
+            self.truncated = true;
+        }
+        Ok(count)
+    }
+}
+
+#[test]
+fn in_place_snapshot_truncation_during_encryption_fails_without_artifact() {
+    let root = tempdir().unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let output = root.path().join("truncated.iotkit-node-backup");
+    let reader = TruncatingReader {
+        file: File::open(&snapshot).unwrap(),
+        path: snapshot,
+        truncated: false,
+    };
+    let error = encrypt_snapshot_reader(
+        reader,
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "manifest_invalid");
+    assert!(!output.exists());
 }
 
 #[test]
@@ -289,6 +382,23 @@ fn publication_refuses_a_replaced_destination_without_deleting_it() {
     );
     assert_eq!(fs::read(&destination).unwrap(), b"unrelated-replacement");
     assert_eq!(fs::read(&staged).unwrap(), b"staged");
+}
+
+#[test]
+fn staging_cleanup_failure_never_deletes_a_substituted_file() {
+    let root = tempdir().unwrap();
+    let destination = root.path().join("published.sqlite");
+    let mut staged = StagedOutput::new(&destination).unwrap();
+    let stage_path = staged.path.clone();
+    drop(staged.file.take());
+    let original = stage_path.with_extension("original");
+    fs::rename(&stage_path, &original).unwrap();
+    fs::write(&stage_path, b"unrelated-replacement").unwrap();
+
+    let error = staged.cleanup().unwrap_err();
+    assert_eq!(error.reason_code(), "artifact_cleanup_failed");
+    assert_eq!(fs::read(&stage_path).unwrap(), b"unrelated-replacement");
+    assert_eq!(fs::read(&original).unwrap(), b"");
 }
 
 #[test]

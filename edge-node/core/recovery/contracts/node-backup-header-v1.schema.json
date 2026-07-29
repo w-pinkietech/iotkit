@@ -20,12 +20,12 @@
     "artifact_kind": { "const": "iotkit_edge_node_database" },
     "format_version": { "const": 1 },
     "kdf": { "const": "argon2id" },
-    "salt_b64": { "type": "string", "pattern": "^[A-Za-z0-9+/]{22}$" },
+    "salt_b64": { "type": "string", "pattern": "^[A-Za-z0-9+/]{21}[AQgw]$" },
     "kdf_time": { "type": "integer", "minimum": 1, "maximum": 10 },
     "kdf_memory_kib": { "type": "integer", "minimum": 16384, "maximum": 262144 },
     "kdf_parallelism": { "type": "integer", "minimum": 1, "maximum": 16 },
     "cipher": { "const": "xchacha20-poly1305" },
-    "nonce_prefix_b64": { "type": "string", "pattern": "^[A-Za-z0-9+/]{22}$" },
+    "nonce_prefix_b64": { "type": "string", "pattern": "^[A-Za-z0-9+/]{21}[AQgw]$" },
     "chunk_size": { "type": "integer", "minimum": 4096, "maximum": 4194304 }
   }
 }

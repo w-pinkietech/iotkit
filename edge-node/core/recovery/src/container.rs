@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -95,7 +95,25 @@ fn encrypt_with_entropy(
 }
 
 fn encrypt_open_snapshot(
-    mut snapshot_file: File,
+    snapshot_file: File,
+    manifest: &NodeBackupManifest,
+    passphrase: &BackupPassphrase,
+    output: &Path,
+    salt: [u8; SALT_BYTES],
+    nonce_prefix: [u8; NONCE_PREFIX_BYTES],
+) -> Result<(), RecoveryError> {
+    encrypt_snapshot_reader(
+        snapshot_file,
+        manifest,
+        passphrase,
+        output,
+        salt,
+        nonce_prefix,
+    )
+}
+
+fn encrypt_snapshot_reader(
+    snapshot_reader: impl Read,
     manifest: &NodeBackupManifest,
     passphrase: &BackupPassphrase,
     output: &Path,
@@ -103,7 +121,6 @@ fn encrypt_open_snapshot(
     nonce_prefix: [u8; NONCE_PREFIX_BYTES],
 ) -> Result<(), RecoveryError> {
     validate_manifest(manifest)?;
-    verify_snapshot_digest(&mut snapshot_file, manifest)?;
     ensure_absent(output)?;
 
     let header = ContainerHeader {
@@ -133,11 +150,28 @@ fn encrypt_open_snapshot(
     }
     let manifest_len =
         u32::try_from(manifest_json.len()).map_err(|_| RecoveryError::ManifestInvalid)?;
-    let mut input = io::Cursor::new(manifest_len.to_be_bytes().to_vec())
-        .chain(io::Cursor::new(manifest_json))
-        .chain(snapshot_file);
+    let manifest_prefix = manifest_len
+        .to_be_bytes()
+        .into_iter()
+        .chain(manifest_json.iter().copied())
+        .collect::<Vec<_>>();
+    let mut input = io::Cursor::new(manifest_prefix.clone()).chain(snapshot_reader);
+    let mut prefix_remaining = manifest_prefix.len();
+    let mut database_length = 0_u64;
+    let mut database_digest = Sha256::new();
 
     let mut output_file = private_new_file(output)?;
+    let output_identity = match output_file
+        .try_clone()
+        .ok()
+        .and_then(|clone| same_file::Handle::from_file(clone).ok())
+    {
+        Some(identity) => identity,
+        None => {
+            drop(output_file);
+            return Err(RecoveryError::ArtifactCleanupFailed);
+        }
+    };
     let result = (|| {
         output_file
             .write_all(MAGIC)
@@ -154,6 +188,12 @@ fn encrypt_open_snapshot(
         loop {
             let count = read_chunk(&mut input, &mut buffer).map_err(|_| RecoveryError::Storage)?;
             if count == 0 {
+                if prefix_remaining != 0
+                    || database_length != manifest.database_length
+                    || hex_digest(database_digest.clone().finalize()) != manifest.database_sha256
+                {
+                    return Err(RecoveryError::ManifestInvalid);
+                }
                 write_record(
                     &mut output_file,
                     &cipher,
@@ -165,6 +205,18 @@ fn encrypt_open_snapshot(
                 )?;
                 break;
             }
+            let prefix_count = prefix_remaining.min(count);
+            prefix_remaining -= prefix_count;
+            let database = &buffer[prefix_count..count];
+            let database_count =
+                u64::try_from(database.len()).map_err(|_| RecoveryError::ManifestInvalid)?;
+            database_length = database_length
+                .checked_add(database_count)
+                .ok_or(RecoveryError::ManifestInvalid)?;
+            if database_length > manifest.database_length {
+                return Err(RecoveryError::ManifestInvalid);
+            }
+            database_digest.update(database);
             write_record(
                 &mut output_file,
                 &cipher,
@@ -181,8 +233,10 @@ fn encrypt_open_snapshot(
         output_file.sync_all().map_err(|_| RecoveryError::Storage)
     })();
     drop(output_file);
-    if result.is_err() {
-        let _ = fs::remove_file(output);
+    if result.is_err()
+        && let Err(cleanup_error) = remove_owned_file(output, &output_identity)
+    {
+        return Err(cleanup_error);
     }
     result
 }
@@ -240,8 +294,10 @@ pub fn decrypt_container_to_new_file(
         }),
         Err(error) => Err(error),
     };
-    if result.is_err() {
-        consumer.cleanup();
+    if result.is_err()
+        && let Err(cleanup_error) = consumer.cleanup()
+    {
+        return Err(cleanup_error);
     }
     result
 }
@@ -289,6 +345,10 @@ fn validate_header(header: &ContainerHeader) -> Result<(), RecoveryError> {
 }
 
 fn decode_16(encoded: &str) -> Result<[u8; 16], RecoveryError> {
+    if encoded.len() != 22 || !matches!(encoded.as_bytes().last(), Some(b'A' | b'Q' | b'g' | b'w'))
+    {
+        return Err(RecoveryError::ContainerInvalid);
+    }
     let decoded = STANDARD_NO_PAD
         .decode(encoded)
         .map_err(|_| RecoveryError::ContainerInvalid)?;
@@ -382,19 +442,32 @@ fn consume_records(
 
 struct StagedOutput {
     destination: PathBuf,
+    directory: PathBuf,
     path: PathBuf,
     file: Option<File>,
     identity: same_file::Handle,
-    published: bool,
+    directory_identity: same_file::Handle,
 }
 
 impl StagedOutput {
     fn new(destination: &Path) -> Result<Self, RecoveryError> {
         let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-        let mut random = [0_u8; 16];
-        getrandom::fill(&mut random).map_err(|_| RecoveryError::Random)?;
-        let path = parent.join(format!(".iotkit-node-staging-{}.tmp", hex_digest(random)));
-        let file = private_new_file(&path)?;
+        let directory = private_new_directory(parent)?;
+        let directory_identity = match same_file::Handle::from_path(&directory) {
+            Ok(identity) => identity,
+            Err(_) => {
+                remove_private_directory(&directory)?;
+                return Err(RecoveryError::Storage);
+            }
+        };
+        let path = directory.join("plaintext.sqlite");
+        let file = match private_new_file(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                remove_private_directory(&directory)?;
+                return Err(error);
+            }
+        };
         let identity = match file
             .try_clone()
             .ok()
@@ -404,15 +477,17 @@ impl StagedOutput {
             None => {
                 drop(file);
                 let _ = fs::remove_file(&path);
+                remove_private_directory(&directory)?;
                 return Err(RecoveryError::Storage);
             }
         };
         Ok(Self {
             destination: destination.to_owned(),
+            directory,
             path,
             file: Some(file),
             identity,
-            published: false,
+            directory_identity,
         })
     }
 
@@ -428,35 +503,72 @@ impl StagedOutput {
             .map_err(|_| RecoveryError::Storage)
     }
 
-    fn publish(mut self) -> Result<(), RecoveryError> {
+    fn publish(&mut self) -> Result<(), RecoveryError> {
         drop(self.file.take());
-        if !file_identity_matches(&self.path, &self.identity) {
+        if !self.owned_paths_match() {
             return Err(RecoveryError::ArtifactPublicationUncertain);
         }
         match publish_new_file(&self.path, &self.destination) {
-            Ok(()) => {
-                self.published = true;
-                if !file_identity_matches(&self.path, &self.identity) {
-                    return Err(RecoveryError::ArtifactPublicationUncertain);
-                }
-                fs::remove_file(&self.path).map_err(|_| RecoveryError::ArtifactPublicationUncertain)
-            }
+            Ok(()) => self.cleanup(),
             Err(error) => Err(error),
+        }
+    }
+
+    fn owned_paths_match(&self) -> bool {
+        file_identity_matches(&self.path, &self.identity)
+            && file_identity_matches(&self.directory, &self.directory_identity)
+    }
+
+    fn cleanup(&mut self) -> Result<(), RecoveryError> {
+        drop(self.file.take());
+        let mut failed = false;
+        match fs::symlink_metadata(&self.path) {
+            Ok(_) if file_identity_matches(&self.path, &self.identity) => {
+                if fs::remove_file(&self.path).is_err() {
+                    failed = true;
+                }
+            }
+            Ok(_) => failed = true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => failed = true,
+        }
+        match fs::symlink_metadata(&self.directory) {
+            Ok(_) if file_identity_matches(&self.directory, &self.directory_identity) => {
+                if fs::remove_dir(&self.directory).is_err() {
+                    failed = true;
+                }
+            }
+            Ok(_) => failed = true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => failed = true,
+        }
+        if failed {
+            Err(RecoveryError::ArtifactCleanupFailed)
+        } else {
+            Ok(())
         }
     }
 }
 
 impl Drop for StagedOutput {
     fn drop(&mut self) {
-        drop(self.file.take());
-        if !self.published && file_identity_matches(&self.path, &self.identity) {
-            let _ = fs::remove_file(&self.path);
-        }
+        let _ = self.cleanup();
     }
 }
 
 fn file_identity_matches(path: &Path, expected: &same_file::Handle) -> bool {
     same_file::Handle::from_path(path).is_ok_and(|actual| actual == *expected)
+}
+
+fn remove_owned_file(path: &Path, expected: &same_file::Handle) -> Result<(), RecoveryError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) if file_identity_matches(path, expected) => {
+            fs::remove_file(path).map_err(|_| RecoveryError::ArtifactCleanupFailed)
+        }
+        Ok(_) => Err(RecoveryError::ArtifactCleanupFailed),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(RecoveryError::ArtifactCleanupFailed),
+    }
 }
 
 struct PlaintextConsumer<'a> {
@@ -577,15 +689,19 @@ impl<'a> PlaintextConsumer<'a> {
     }
 
     fn publish(&mut self) -> Result<(), RecoveryError> {
-        if let Some(staged) = self.staged.take() {
+        if let Some(staged) = self.staged.as_mut() {
             staged.publish()
         } else {
             Ok(())
         }
     }
 
-    fn cleanup(&mut self) {
-        drop(self.staged.take());
+    fn cleanup(&mut self) -> Result<(), RecoveryError> {
+        if let Some(staged) = self.staged.as_mut() {
+            staged.cleanup()
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -634,39 +750,6 @@ fn valid_identity(value: &str) -> bool {
         && value.chars().count() <= 255
         && !value.contains(':')
         && !value.chars().any(char::is_control)
-}
-
-fn verify_snapshot_digest(
-    reader: &mut File,
-    manifest: &NodeBackupManifest,
-) -> Result<(), RecoveryError> {
-    reader
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| RecoveryError::Storage)?;
-    let mut digest = Sha256::new();
-    let mut length = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|_| RecoveryError::Storage)?;
-        if count == 0 {
-            break;
-        }
-        length = length
-            .checked_add(u64::try_from(count).map_err(|_| RecoveryError::ManifestInvalid)?)
-            .ok_or(RecoveryError::ManifestInvalid)?;
-        digest.update(&buffer[..count]);
-    }
-    if length != manifest.database_length
-        || hex_digest(digest.finalize()) != manifest.database_sha256
-    {
-        return Err(RecoveryError::ManifestInvalid);
-    }
-    reader
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| RecoveryError::Storage)?;
-    Ok(())
 }
 
 fn write_record(
@@ -760,6 +843,39 @@ fn ensure_absent(path: &Path) -> Result<(), RecoveryError> {
         Ok(_) => Err(RecoveryError::DestinationExists),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(RecoveryError::Storage),
+    }
+}
+
+fn private_new_directory(parent: &Path) -> Result<PathBuf, RecoveryError> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|_| RecoveryError::Random)?;
+    let path = parent.join(format!(".iotkit-node-staging-{}", hex_digest(random)));
+    let builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
+        builder.mode(0o700);
+        builder
+    };
+    // Windows relies on inherited ACLs for this private directory; Task 4 must
+    // validate that the configured destination parent preserves the owner-only
+    // trust boundary before this path is used in production.
+    builder.create(&path).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            RecoveryError::DestinationExists
+        } else {
+            RecoveryError::Storage
+        }
+    })?;
+    Ok(path)
+}
+
+fn remove_private_directory(path: &Path) -> Result<(), RecoveryError> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(RecoveryError::ArtifactCleanupFailed),
     }
 }
 
