@@ -16,9 +16,10 @@ pub use backup::{
     backup_status, create_backup, create_backup_from_files, inspect_backup,
 };
 pub use config::{
-    BACKUP_PAIR_MARKER_NAME, BackupConfigReplace, RecoveryObservationGuard, RecoveryOperationGuard,
-    acquire_recovery_observation, acquire_recovery_operation, configure_backup,
-    configure_backup_guarded, load_owner_only_config, load_owner_only_handoff,
+    BACKUP_PAIR_COMPLETION_NAME, BACKUP_PAIR_MARKER_NAME, BackupConfigReplace,
+    RecoveryObservationGuard, RecoveryOperationGuard, acquire_recovery_observation,
+    acquire_recovery_operation, configure_backup, configure_backup_guarded,
+    configure_backup_guarded_with_pre_publish, load_owner_only_config, load_owner_only_handoff,
     load_owner_only_passphrase,
 };
 pub use container::{

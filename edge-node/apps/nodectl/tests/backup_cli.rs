@@ -716,6 +716,150 @@ fn configure_pair_crash_marker_is_recovered_on_retry() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn configure_pair_crash_after_each_target_rename_converges_on_retry() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for phase in [
+        "after_config_rename_before_marker",
+        "after_drop_in_rename_before_marker",
+    ] {
+        let control = tempfile::tempdir_in("/tmp").unwrap();
+        let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+        for path in [control.path(), destination.path(), staging.path()] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = control.path().join("backup.json");
+        let drop_in = control.path().join("backup.mount.conf");
+        let passphrase = control.path().join("passphrase");
+        std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+        std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let crashed = configure_command(
+            &config,
+            &drop_in,
+            &control.path().join("missing.db"),
+            destination.path(),
+            staging.path(),
+            &passphrase,
+        )
+        .env("IOTKIT_TEST_BACKUP_PAIR_CRASH_PHASE", phase)
+        .output()
+        .unwrap();
+        assert!(!crashed.status.success(), "{phase} unexpectedly succeeded");
+        let marker = control
+            .path()
+            .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+        assert!(marker.exists(), "{phase} must leave a pending marker");
+
+        let retried = configure_command(
+            &config,
+            &drop_in,
+            &control.path().join("missing.db"),
+            destination.path(),
+            staging.path(),
+            &passphrase,
+        )
+        .output()
+        .unwrap();
+        assert!(
+            retried.status.success(),
+            "{phase}: {}",
+            String::from_utf8_lossy(&retried.stderr)
+        );
+        assert!(config.exists());
+        assert!(drop_in.exists());
+        assert!(!marker.exists(), "{phase} retry must remove the marker");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn completion_receipt_retries_after_final_sync_uncertainty() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let initial = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("old.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(initial.status.success());
+
+    let failed = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("new.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .arg("--replace-existing")
+    .env(
+        "IOTKIT_TEST_BACKUP_PAIR_FAIL_PHASE",
+        "after_completion_receipt",
+    )
+    .output()
+    .unwrap();
+    assert!(!failed.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("cleanup_required"),
+        "{}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
+    let marker = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+    let receipt = control.path().join(".iotkit-backup-pair.complete");
+    assert!(!marker.exists(), "completion receipt must replace marker");
+    assert!(receipt.exists());
+
+    let status = nodectl()
+        .args(["backup", "status", "--config", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&status.stderr).contains("cleanup_required"),
+        "valid completion receipt should not block status: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let retried = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("new.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .arg("--replace-existing")
+    .output()
+    .unwrap();
+    assert!(
+        retried.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retried.stderr)
+    );
+    assert!(!receipt.exists(), "same request must consume its receipt");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn pending_pair_without_config_is_not_reported_as_not_configured() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -1051,6 +1195,285 @@ fn forged_prepared_marker_cannot_delete_an_existing_pair() {
         marker.exists(),
         "forged marker must remain for operator cleanup"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn forged_config_published_marker_without_old_backup_cannot_delete_targets() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let control = tempfile::tempdir_in("/tmp").unwrap();
+    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    for path in [control.path(), destination.path(), staging.path()] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let config = control.path().join("backup.json");
+    let drop_in = control.path().join("backup.mount.conf");
+    let passphrase = control.path().join("passphrase");
+    std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+    std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let initial = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("old.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(initial.status.success());
+    let original_config = std::fs::read(&config).unwrap();
+    let original_drop_in = std::fs::read(&drop_in).unwrap();
+    let marker = control
+        .path()
+        .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+    let txid = "a".repeat(32);
+    let config_temp = control
+        .path()
+        .join(format!(".backup.json.{txid}.iotkit-config"));
+    let drop_temp = control
+        .path()
+        .join(format!(".iotkit-backup-pair.{txid}.drop-in.tmp"));
+    std::fs::write(&config_temp, b"stale-config-temp").unwrap();
+    std::fs::write(&drop_temp, b"stale-drop-temp").unwrap();
+    std::fs::set_permissions(&config_temp, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(&drop_temp, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let forged = serde_json::json!({
+        "schema_version": 3,
+        "txid": txid,
+        "config_path_hash": test_hash(config.as_os_str().as_bytes()),
+        "drop_in_path_hash": test_hash(drop_in.as_os_str().as_bytes()),
+        "phase": "config_published",
+        "request_config_hash": "00".repeat(32),
+        "request_drop_in_hash": "11".repeat(32),
+        "config_hash": test_hash(&original_config),
+        "drop_in_hash": test_hash(&original_drop_in),
+        "config_existed": false,
+        "drop_in_existed": false,
+        "old_config_hash": null,
+        "old_drop_in_hash": null,
+        "config_temp_name": config_temp.file_name().unwrap(),
+        "drop_in_temp_name": drop_temp.file_name().unwrap()
+    });
+    std::fs::write(&marker, serde_json::to_vec(&forged).unwrap()).unwrap();
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let attempt = configure_command(
+        &config,
+        &drop_in,
+        &control.path().join("new.db"),
+        destination.path(),
+        staging.path(),
+        &passphrase,
+    )
+    .output()
+    .unwrap();
+    assert!(!attempt.status.success());
+    assert!(
+        String::from_utf8_lossy(&attempt.stderr).contains("cleanup_required"),
+        "{}",
+        String::from_utf8_lossy(&attempt.stderr)
+    );
+    assert_eq!(std::fs::read(&config).unwrap(), original_config);
+    assert_eq!(std::fs::read(&drop_in).unwrap(), original_drop_in);
+    assert!(
+        marker.exists(),
+        "forged marker must remain for operator cleanup"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn forged_pair_phase_matrix_rejects_unexpected_states_without_mutation() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    // Each row deliberately contains one impossible target/backup/temp
+    // combination.  Recovery must reject it before publishing, rolling back,
+    // or deleting any of the artifacts, for both originally-absent and
+    // originally-present targets.
+    let phases = [
+        "prepared",
+        "config_publishing",
+        "config_published",
+        "drop_in_publishing",
+        "drop_in_published",
+        "published",
+    ];
+    for phase in phases {
+        for originally_present in [false, true] {
+            let control = tempfile::tempdir_in("/tmp").unwrap();
+            let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+            let staging = tempfile::tempdir_in("/dev/shm").unwrap();
+            for path in [control.path(), destination.path(), staging.path()] {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let config = control.path().join("backup.json");
+            let drop_in = control.path().join("backup.mount.conf");
+            let passphrase = control.path().join("passphrase");
+            std::fs::write(&passphrase, b"owner-only-test-passphrase").unwrap();
+            std::fs::set_permissions(&passphrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+            let txid = "a".repeat(32);
+            let config_temp = control
+                .path()
+                .join(format!(".backup.json.{txid}.iotkit-config"));
+            let drop_temp = control
+                .path()
+                .join(format!(".iotkit-backup-pair.{txid}.drop-in.tmp"));
+            let config_backup = control
+                .path()
+                .join(format!(".iotkit-backup-pair.{txid}.config.old"));
+            let drop_backup = control
+                .path()
+                .join(format!(".iotkit-backup-pair.{txid}.drop-in.old"));
+            let marker = control
+                .path()
+                .join(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME);
+            let old_config = b"old-config";
+            let old_drop = b"old-drop-in";
+            let new_config = b"new-config";
+            let new_drop = b"new-drop-in";
+            let old_config_hash = test_hash(old_config);
+            let old_drop_hash = test_hash(old_drop);
+            let new_config_hash = test_hash(new_config);
+            let new_drop_hash = test_hash(new_drop);
+
+            let write_private = |path: &std::path::Path, bytes: &[u8]| {
+                std::fs::write(path, bytes).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            };
+
+            // Build a state which is intentionally outside the phase matrix.
+            // The exact malformed edge differs per phase so that every phase
+            // checks its own target/backup/temp provenance.
+            match (phase, originally_present) {
+                ("prepared", false) => write_private(&config, new_config),
+                ("prepared", true) => {
+                    write_private(&config, old_config);
+                    write_private(&config_backup, old_config);
+                }
+                ("config_publishing", false) => {
+                    write_private(&config, new_config);
+                    write_private(&config_temp, new_config);
+                    write_private(&drop_temp, new_drop);
+                }
+                ("config_publishing", true) => {
+                    write_private(&config, new_config);
+                    write_private(&config_backup, old_config);
+                    write_private(&config_temp, new_config);
+                    write_private(&drop_backup, old_drop);
+                    write_private(&drop_temp, new_drop);
+                }
+                ("config_published", false) => write_private(&config, new_config),
+                ("config_published", true) => {
+                    write_private(&config, new_config);
+                    write_private(&config_backup, old_config);
+                    write_private(&drop_in, old_drop);
+                    write_private(&drop_backup, old_drop);
+                }
+                ("drop_in_publishing", false) => {
+                    write_private(&config, new_config);
+                    write_private(&drop_in, new_drop);
+                    write_private(&drop_temp, new_drop);
+                }
+                ("drop_in_publishing", true) => {
+                    write_private(&config, new_config);
+                    write_private(&config_backup, old_config);
+                    write_private(&drop_in, new_drop);
+                    write_private(&drop_backup, old_drop);
+                    write_private(&drop_temp, new_drop);
+                }
+                ("drop_in_published", false) => {
+                    write_private(&config, new_config);
+                    write_private(&drop_in, new_drop);
+                    write_private(&drop_temp, new_drop);
+                }
+                ("drop_in_published", true) => {
+                    write_private(&config, new_config);
+                    write_private(&drop_in, new_drop);
+                    write_private(&drop_backup, old_drop);
+                }
+                ("published", false) => {
+                    write_private(&config, new_config);
+                    write_private(&drop_in, new_drop);
+                    write_private(&config_temp, new_config);
+                }
+                ("published", true) => {
+                    write_private(&config, new_config);
+                    write_private(&drop_in, new_drop);
+                    write_private(&config_backup, b"wrong-old-config");
+                    write_private(&drop_backup, old_drop);
+                }
+                _ => unreachable!(),
+            }
+
+            let config_temp_name = config_temp.file_name().unwrap().to_str().unwrap();
+            let drop_temp_name = drop_temp.file_name().unwrap().to_str().unwrap();
+            let forged = serde_json::json!({
+                "schema_version": 3,
+                "txid": txid,
+                "config_path_hash": test_hash(config.as_os_str().as_bytes()),
+                "drop_in_path_hash": test_hash(drop_in.as_os_str().as_bytes()),
+                "phase": phase,
+                "request_config_hash": "00".repeat(32),
+                "request_drop_in_hash": "11".repeat(32),
+                "config_hash": if phase == "prepared" { None } else { Some(new_config_hash.clone()) },
+                "drop_in_hash": if phase == "prepared" { None } else { Some(new_drop_hash.clone()) },
+                "config_existed": originally_present,
+                "drop_in_existed": originally_present,
+                "old_config_hash": originally_present.then(|| old_config_hash.clone()),
+                "old_drop_in_hash": originally_present.then(|| old_drop_hash.clone()),
+                "config_temp_name": if phase == "prepared" { None } else { Some(config_temp_name) },
+                "drop_in_temp_name": if phase == "prepared" { None } else { Some(drop_temp_name) },
+            });
+            write_private(&marker, &serde_json::to_vec(&forged).unwrap());
+
+            let tracked = [
+                &config,
+                &drop_in,
+                &marker,
+                &config_backup,
+                &drop_backup,
+                &config_temp,
+                &drop_temp,
+            ];
+            let before: Vec<_> = tracked
+                .iter()
+                .map(|path| std::fs::read(path).ok())
+                .collect();
+            let attempt = configure_command(
+                &config,
+                &drop_in,
+                &control.path().join("new.db"),
+                destination.path(),
+                staging.path(),
+                &passphrase,
+            )
+            .output()
+            .unwrap();
+            assert!(
+                !attempt.status.success(),
+                "{phase}/{originally_present} unexpectedly succeeded"
+            );
+            assert!(
+                String::from_utf8_lossy(&attempt.stderr).contains("cleanup_required"),
+                "{phase}/{originally_present}: {}",
+                String::from_utf8_lossy(&attempt.stderr)
+            );
+            let after: Vec<_> = tracked
+                .iter()
+                .map(|path| std::fs::read(path).ok())
+                .collect();
+            assert_eq!(
+                after, before,
+                "{phase}/{originally_present} mutated artifacts"
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -25,6 +25,10 @@ const CONFIG_MAX_BYTES: u64 = 64 * 1024;
 /// drop-in are being published as one recovery operation.
 pub const BACKUP_PAIR_MARKER_NAME: &str = ".iotkit-backup-pair.txn";
 
+/// Name of the owner-only receipt left while paired configuration cleanup is
+/// converging after the publication commit boundary.
+pub const BACKUP_PAIR_COMPLETION_NAME: &str = ".iotkit-backup-pair.complete";
+
 /// Explicit configuration replacement policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackupConfigReplace {
@@ -96,6 +100,22 @@ pub fn configure_backup_guarded(
     config: &BackupConfig,
     replacement: BackupConfigReplace,
 ) -> Result<(), RecoveryError> {
+    configure_backup_guarded_with_pre_publish(guard, path, config, replacement, |_, _| Ok(()))
+}
+
+/// Writes configuration while allowing a paired publisher to durably record
+/// the exact target bytes before the final rename.
+#[allow(unused_mut, unused_variables)]
+pub fn configure_backup_guarded_with_pre_publish<F>(
+    guard: &RecoveryOperationGuard,
+    path: &Path,
+    config: &BackupConfig,
+    replacement: BackupConfigReplace,
+    mut before_publish: F,
+) -> Result<(), RecoveryError>
+where
+    F: FnMut(&std::ffi::CStr, &[u8]) -> Result<(), RecoveryError>,
+{
     validate_config_request(config)?;
     #[cfg(target_os = "linux")]
     {
@@ -111,12 +131,13 @@ pub fn configure_backup_guarded(
         crate::destination::ensure_no_cleanup_leftovers(&parent)?;
         let mountinfo =
             fs::read_to_string("/proc/self/mountinfo").map_err(|_| RecoveryError::MountMissing)?;
-        configure_backup_with(
+        configure_backup_with_pre_publish(
             path,
             config,
             replacement,
             &mountinfo,
             ConfigWriteOps::system(),
+            &mut before_publish,
         )
     }
     #[cfg(not(target_os = "linux"))]
@@ -234,6 +255,7 @@ pub fn acquire_recovery_observation(
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 pub(crate) fn configure_backup_with(
     path: &Path,
     config: &BackupConfig,
@@ -241,6 +263,28 @@ pub(crate) fn configure_backup_with(
     mountinfo: &str,
     ops: ConfigWriteOps,
 ) -> Result<(), RecoveryError> {
+    configure_backup_with_pre_publish(
+        path,
+        config,
+        replacement,
+        mountinfo,
+        ops,
+        &mut |_, _| Ok(()),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn configure_backup_with_pre_publish<F>(
+    path: &Path,
+    config: &BackupConfig,
+    replacement: BackupConfigReplace,
+    mountinfo: &str,
+    ops: ConfigWriteOps,
+    before_publish: &mut F,
+) -> Result<(), RecoveryError>
+where
+    F: FnMut(&CStr, &[u8]) -> Result<(), RecoveryError>,
+{
     validate_config_request(config)?;
     if !is_absolute_normalized(path) {
         return Err(RecoveryError::InvalidConfiguration);
@@ -276,6 +320,7 @@ pub(crate) fn configure_backup_with(
             .write_all(&bytes)
             .map_err(|_| RecoveryError::Storage)?;
         output.sync_all().map_err(|_| RecoveryError::Storage)?;
+        before_publish(&temporary_name, &bytes)?;
         match replacement {
             BackupConfigReplace::Refuse => {
                 renameat2(
@@ -554,11 +599,13 @@ pub(crate) fn pending_pair_marker(path: &Path) -> Result<bool, RecoveryError> {
     };
     if fd < 0 {
         let error = std::io::Error::last_os_error();
-        return if error.kind() == std::io::ErrorKind::NotFound {
-            Ok(false)
-        } else {
-            Err(RecoveryError::CleanupRequired)
-        };
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        // A valid completion receipt means the request is already complete, so
+        // it must not be reported as a pending marker.  Invalid receipts still
+        // surface as cleanup-required through the validator.
+        return completion_receipt_is_valid(path).map(|_| false);
     }
     let marker = unsafe { File::from_raw_fd(fd) };
     let metadata = marker
@@ -571,7 +618,70 @@ pub(crate) fn pending_pair_marker(path: &Path) -> Result<bool, RecoveryError> {
     {
         return Err(RecoveryError::CleanupRequired);
     }
+    if completion_receipt_exists(path)? {
+        return Err(RecoveryError::CleanupRequired);
+    }
     Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+fn completion_receipt_exists(path: &Path) -> Result<bool, RecoveryError> {
+    let parent = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
+    let receipt_path = parent.join(BACKUP_PAIR_COMPLETION_NAME);
+    match std::fs::symlink_metadata(&receipt_path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(RecoveryError::CleanupRequired),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn completion_receipt_is_valid(path: &Path) -> Result<bool, RecoveryError> {
+    let parent = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
+    let receipt_path = parent.join(BACKUP_PAIR_COMPLETION_NAME);
+    if !completion_receipt_exists(path)? {
+        return Ok(false);
+    }
+    let bytes =
+        read_owner_file(&receipt_path, 8 * 1024).map_err(|_| RecoveryError::CleanupRequired)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| RecoveryError::CleanupRequired)?;
+    let object = value.as_object().ok_or(RecoveryError::CleanupRequired)?;
+    if object
+        .get("schema_version")
+        .and_then(|value| value.as_u64())
+        != Some(3)
+        || object.get("phase").and_then(|value| value.as_str()) != Some("published")
+    {
+        return Err(RecoveryError::CleanupRequired);
+    }
+    for field in [
+        "txid",
+        "config_path_hash",
+        "drop_in_path_hash",
+        "request_config_hash",
+        "request_drop_in_hash",
+        "config_hash",
+        "drop_in_hash",
+    ] {
+        let valid = object
+            .get(field)
+            .and_then(|value| value.as_str())
+            .is_some_and(valid_receipt_token);
+        if !valid {
+            return Err(RecoveryError::CleanupRequired);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+fn valid_receipt_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 #[cfg(target_os = "linux")]

@@ -1,8 +1,9 @@
 use clap::Subcommand;
 use iotkit_core_recovery::{
     BackupConfig, BackupConfigReplace, BackupReadiness, RecoveryError, RestoreRequest,
-    acquire_recovery_operation, backup_status, configure_backup_guarded, create_backup_from_files,
-    inspect_backup, load_owner_only_handoff, load_owner_only_passphrase, restore_candidate,
+    acquire_recovery_operation, backup_status, configure_backup_guarded_with_pre_publish,
+    create_backup_from_files, inspect_backup, load_owner_only_handoff, load_owner_only_passphrase,
+    restore_candidate,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -237,7 +238,9 @@ const PAIR_TARGET_MAX_BYTES: u64 = 64 * 1024;
 #[serde(rename_all = "snake_case")]
 enum PairPhase {
     Prepared,
+    ConfigPublishing,
     ConfigPublished,
+    DropInPublishing,
     DropInPublished,
     Published,
 }
@@ -259,12 +262,16 @@ struct PairMarker {
     drop_in_existed: bool,
     old_config_hash: Option<String>,
     old_drop_in_hash: Option<String>,
+    #[serde(default)]
+    config_temp_name: Option<String>,
+    #[serde(default)]
+    drop_in_temp_name: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
 impl PairMarker {
     fn validate_basic(&self, paths: &PairPaths) -> Result<(), RecoveryError> {
-        if self.schema_version != 2
+        if self.schema_version != 3
             || !valid_txid(&self.txid)
             || self.config_path_hash != paths.config_path_hash
             || self.drop_in_path_hash != paths.drop_in_path_hash
@@ -276,16 +283,45 @@ impl PairMarker {
             || !optional_hash_valid(self.old_drop_in_hash.as_deref())
             || !optional_hash_valid(self.config_hash.as_deref())
             || !optional_hash_valid(self.drop_in_hash.as_deref())
+            || !self
+                .config_temp_name
+                .as_deref()
+                .is_none_or(|name| paths.valid_config_temp_name(name))
+            || !self.drop_in_temp_name.as_deref().is_none_or(|name| {
+                name == paths
+                    .drop_in_temp_name(&self.txid)
+                    .to_string_lossy()
+                    .as_ref()
+            })
         {
             return Err(RecoveryError::CleanupRequired);
         }
         match self.phase {
-            PairPhase::Prepared if self.config_hash.is_none() && self.drop_in_hash.is_none() => {}
+            PairPhase::Prepared
+                if self.config_hash.is_none()
+                    && self.drop_in_hash.is_none()
+                    && self.config_temp_name.is_none()
+                    && self.drop_in_temp_name.is_none() => {}
+            PairPhase::ConfigPublishing
+                if self.config_hash.is_some()
+                    && self.drop_in_hash.is_some()
+                    && self.config_temp_name.is_some()
+                    && self.drop_in_temp_name.is_some() => {}
             PairPhase::ConfigPublished
-                if self.config_hash.is_some() && self.drop_in_hash.is_some() => {}
-            PairPhase::DropInPublished
-                if self.config_hash.is_some() && self.drop_in_hash.is_some() => {}
-            PairPhase::Published if self.config_hash.is_some() && self.drop_in_hash.is_some() => {}
+                if self.config_hash.is_some()
+                    && self.drop_in_hash.is_some()
+                    && self.config_temp_name.is_some()
+                    && self.drop_in_temp_name.is_some() => {}
+            PairPhase::DropInPublishing
+                if self.config_hash.is_some()
+                    && self.drop_in_hash.is_some()
+                    && self.config_temp_name.is_some()
+                    && self.drop_in_temp_name.is_some() => {}
+            PairPhase::DropInPublished | PairPhase::Published
+                if self.config_hash.is_some()
+                    && self.drop_in_hash.is_some()
+                    && self.config_temp_name.is_some()
+                    && self.drop_in_temp_name.is_some() => {}
             _ => return Err(RecoveryError::CleanupRequired),
         }
         Ok(())
@@ -299,6 +335,7 @@ struct PairPaths {
     config_name: CString,
     drop_in_name: CString,
     marker_name: CString,
+    completion_name: CString,
     config_path_hash: String,
     drop_in_path_hash: String,
 }
@@ -315,14 +352,20 @@ fn configure_backup_pair(
     let request_drop_in_hash = hex_digest(&request_drop_in);
     let guard = acquire_recovery_operation(config_path)?;
     let paths = PairPaths::open(config_path, drop_in_path)?;
-    if paths.marker_exists()?
-        && paths.resume_pending(&request_config_hash, &request_drop_in_hash)?
-    {
+    let marker_exists = paths.marker_exists()?;
+    let completion_exists = paths.completion_exists()?;
+    if marker_exists && completion_exists {
+        return Err(RecoveryError::CleanupRequired);
+    }
+    if marker_exists && paths.resume_pending(&request_config_hash, &request_drop_in_hash)? {
+        return Ok(());
+    }
+    if completion_exists && paths.resume_completion(&request_config_hash, &request_drop_in_hash)? {
         return Ok(());
     }
     let (old_config_hash, old_drop_in_hash) = paths.preflight(replacement)?;
     let mut marker = PairMarker {
-        schema_version: 2,
+        schema_version: 3,
         txid: pair_txid()?,
         config_path_hash: paths.config_path_hash.clone(),
         drop_in_path_hash: paths.drop_in_path_hash.clone(),
@@ -335,6 +378,8 @@ fn configure_backup_pair(
         drop_in_existed: old_drop_in_hash.is_some(),
         old_config_hash,
         old_drop_in_hash,
+        config_temp_name: None,
+        drop_in_temp_name: None,
     };
     paths.validate_phase_state(&marker)?;
     paths.write_marker(&marker, false)?;
@@ -344,19 +389,71 @@ fn configure_backup_pair(
         paths.backup_existing(&marker)?;
         pair_fault("after_backup")?;
 
-        configure_backup_guarded(&guard, config_path, config, BackupConfigReplace::Refuse)?;
+        configure_backup_guarded_with_pre_publish(
+            &guard,
+            config_path,
+            config,
+            BackupConfigReplace::Refuse,
+            |temp_name, config_bytes| {
+                let persisted: BackupConfig = serde_json::from_slice(config_bytes)
+                    .map_err(|_| RecoveryError::InvalidConfiguration)?;
+                let drop_in_bytes = systemd_drop_in_bytes(&persisted.expected_mount.mount_point)?;
+                marker.config_hash = Some(hex_digest(config_bytes));
+                marker.drop_in_hash = Some(hex_digest(&drop_in_bytes));
+                marker.config_temp_name = Some(
+                    temp_name
+                        .to_str()
+                        .map_err(|_| RecoveryError::CleanupRequired)?
+                        .to_owned(),
+                );
+                // Retain the exact drop-in bytes before publishing the config.
+                // If the process dies after the config rename, recovery can
+                // finish using this descriptor-bound temp file without
+                // inventing a new artifact or deleting an unproven target.
+                let drop_in_temp = paths.prepare_drop_in(&marker.txid, &drop_in_bytes)?;
+                marker.drop_in_temp_name = Some(
+                    drop_in_temp
+                        .to_str()
+                        .map_err(|_| RecoveryError::CleanupRequired)?
+                        .to_owned(),
+                );
+                marker.phase = PairPhase::ConfigPublishing;
+                paths.validate_phase_state(&marker)?;
+                paths.write_marker(&marker, true)?;
+                paths.sync_parents()?;
+                pair_fault("before_config_rename")
+            },
+        )?;
+        pair_fault("after_config_rename_before_marker")?;
         let config_bytes = paths.read_target(&paths.config_parent, &paths.config_name)?;
         let persisted: BackupConfig = serde_json::from_slice(&config_bytes)
             .map_err(|_| RecoveryError::InvalidConfiguration)?;
-        marker.config_hash = Some(hex_digest(&config_bytes));
         let drop_in_bytes = systemd_drop_in_bytes(&persisted.expected_mount.mount_point)?;
-        marker.drop_in_hash = Some(hex_digest(&drop_in_bytes));
+        if marker.config_hash.as_deref() != Some(hex_digest(&config_bytes).as_str())
+            || marker.drop_in_hash.as_deref() != Some(hex_digest(&drop_in_bytes).as_str())
+        {
+            return Err(RecoveryError::CleanupRequired);
+        }
         marker.phase = PairPhase::ConfigPublished;
         paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
         pair_fault("after_config_publish")?;
 
-        paths.publish_drop_in(&marker.txid, &drop_in_bytes)?;
+        let drop_in_temp = paths.drop_in_temp_name(&marker.txid);
+        if paths
+            .target_hash(&paths.drop_in_parent, &drop_in_temp)?
+            .as_deref()
+            != marker.drop_in_hash.as_deref()
+        {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        marker.phase = PairPhase::DropInPublishing;
+        paths.validate_phase_state(&marker)?;
+        paths.write_marker(&marker, true)?;
+        paths.sync_parents()?;
+        pair_fault("before_drop_in_rename")?;
+        paths.publish_drop_in_temp(&drop_in_temp)?;
+        pair_fault("after_drop_in_rename_before_marker")?;
         pair_fault("after_drop_in_publish")?;
         marker.phase = PairPhase::DropInPublished;
         paths.validate_phase_state(&marker)?;
@@ -421,12 +518,15 @@ impl PairPaths {
         )?;
         let marker_name = CString::new(iotkit_core_recovery::BACKUP_PAIR_MARKER_NAME)
             .map_err(|_| RecoveryError::InvalidConfiguration)?;
+        let completion_name = CString::new(iotkit_core_recovery::BACKUP_PAIR_COMPLETION_NAME)
+            .map_err(|_| RecoveryError::InvalidConfiguration)?;
         Ok(Self {
             config_parent,
             drop_in_parent,
             config_name,
             drop_in_name,
             marker_name,
+            completion_name,
             config_path_hash: path_hash(config_path),
             drop_in_path_hash: path_hash(drop_in_path),
         })
@@ -448,6 +548,13 @@ impl PairPaths {
 
     fn marker_exists(&self) -> Result<bool, RecoveryError> {
         match self.open_target(&self.config_parent, &self.marker_name)? {
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
+    }
+
+    fn completion_exists(&self) -> Result<bool, RecoveryError> {
+        match self.open_target(&self.config_parent, &self.completion_name)? {
             Some(_) => Ok(true),
             None => Ok(false),
         }
@@ -509,6 +616,26 @@ impl PairPaths {
         Ok(marker)
     }
 
+    fn read_completion(&self) -> Result<PairMarker, RecoveryError> {
+        let file = self
+            .open_target(&self.config_parent, &self.completion_name)?
+            .ok_or(RecoveryError::CleanupRequired)?;
+        let mut bytes = Vec::new();
+        file.take(PAIR_MARKER_MAX_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|_| RecoveryError::CleanupRequired)?;
+        if bytes.len() as u64 > PAIR_MARKER_MAX_BYTES {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        let marker: PairMarker =
+            serde_json::from_slice(&bytes).map_err(|_| RecoveryError::CleanupRequired)?;
+        marker.validate_basic(self)?;
+        if marker.phase != PairPhase::Published {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        Ok(marker)
+    }
+
     fn resume_pending(
         &self,
         request_config_hash: &str,
@@ -525,12 +652,166 @@ impl PairPaths {
                     return Ok(true);
                 }
             }
-            PairPhase::Prepared | PairPhase::ConfigPublished | PairPhase::DropInPublished => {
-                self.validate_phase_state(&marker)?;
-                self.rollback(&marker)?;
-            }
+            _ => return self.recover_pending(marker, same_request),
         }
         Ok(false)
+    }
+
+    fn resume_completion(
+        &self,
+        request_config_hash: &str,
+        request_drop_in_hash: &str,
+    ) -> Result<bool, RecoveryError> {
+        let receipt = self.read_completion()?;
+        let same_request = receipt.request_config_hash == request_config_hash
+            && receipt.request_drop_in_hash == request_drop_in_hash;
+        self.validate_phase_state(&receipt)?;
+        unlink_name(&self.config_parent, &self.completion_name)?;
+        self.config_parent
+            .sync_all()
+            .map_err(|_| RecoveryError::CleanupRequired)?;
+        Ok(same_request)
+    }
+
+    fn recover_pending(
+        &self,
+        marker: PairMarker,
+        same_request: bool,
+    ) -> Result<bool, RecoveryError> {
+        self.validate_phase_state(&marker)?;
+        match marker.phase {
+            PairPhase::ConfigPublishing => {
+                self.recover_config_publishing(&marker)?;
+                self.advance_after_config(&marker)?;
+            }
+            PairPhase::ConfigPublished => self.advance_after_config(&marker)?,
+            PairPhase::DropInPublishing => {
+                self.recover_drop_in_publishing(&marker)?;
+                self.advance_after_drop_in(&marker)?;
+            }
+            PairPhase::DropInPublished => self.advance_after_drop_in(&marker)?,
+            PairPhase::Prepared => {
+                return Err(RecoveryError::CleanupRequired);
+            }
+            PairPhase::Published => unreachable!(),
+        }
+        let updated = self.read_marker()?;
+        if updated.phase != PairPhase::Published {
+            return Err(RecoveryError::CleanupRequired);
+        }
+        self.finalize(&updated)?;
+        Ok(same_request)
+    }
+
+    fn recover_config_publishing(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
+        let temp_name = c_name(std::ffi::OsStr::new(
+            marker
+                .config_temp_name
+                .as_deref()
+                .ok_or(RecoveryError::CleanupRequired)?,
+        ))?;
+        let target_hash = self.target_hash(&self.config_parent, &self.config_name)?;
+        let temp_hash = self.target_hash(&self.config_parent, &temp_name)?;
+        match (
+            target_hash.as_deref(),
+            temp_hash.as_deref(),
+            marker.config_hash.as_deref(),
+        ) {
+            (Some(actual), None, Some(expected)) if actual == expected => Ok(()),
+            (None, Some(actual), Some(expected)) if actual == expected => {
+                rename_noreplace(
+                    self.config_parent.as_raw_fd(),
+                    &temp_name,
+                    self.config_parent.as_raw_fd(),
+                    &self.config_name,
+                )
+                .map_err(|_| RecoveryError::CleanupRequired)?;
+                self.config_parent
+                    .sync_all()
+                    .map_err(|_| RecoveryError::CleanupRequired)
+            }
+            _ => Err(RecoveryError::CleanupRequired),
+        }
+    }
+
+    fn recover_drop_in_publishing(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
+        let temp_name = c_name(std::ffi::OsStr::new(
+            marker
+                .drop_in_temp_name
+                .as_deref()
+                .ok_or(RecoveryError::CleanupRequired)?,
+        ))?;
+        let target_hash = self.target_hash(&self.drop_in_parent, &self.drop_in_name)?;
+        let temp_hash = self.target_hash(&self.drop_in_parent, &temp_name)?;
+        match (
+            target_hash.as_deref(),
+            temp_hash.as_deref(),
+            marker.drop_in_hash.as_deref(),
+        ) {
+            (Some(actual), None, Some(expected)) if actual == expected => Ok(()),
+            (None, Some(actual), Some(expected)) if actual == expected => {
+                rename_noreplace(
+                    self.drop_in_parent.as_raw_fd(),
+                    &temp_name,
+                    self.drop_in_parent.as_raw_fd(),
+                    &self.drop_in_name,
+                )
+                .map_err(|_| RecoveryError::CleanupRequired)?;
+                self.drop_in_parent
+                    .sync_all()
+                    .map_err(|_| RecoveryError::CleanupRequired)
+            }
+            _ => Err(RecoveryError::CleanupRequired),
+        }
+    }
+
+    fn advance_after_config(&self, _marker: &PairMarker) -> Result<(), RecoveryError> {
+        let mut current = self.read_marker()?;
+        if current.phase == PairPhase::ConfigPublishing {
+            self.validate_phase_state(&current)?;
+            current.phase = PairPhase::ConfigPublished;
+            self.validate_phase_state(&current)?;
+            self.write_marker(&current, true)?;
+            self.sync_parents()?;
+        }
+        if current.phase != PairPhase::ConfigPublished {
+            return Ok(());
+        }
+        // The drop-in temp was prepared before the config rename.  Recovery
+        // may only publish that exact retained artifact (or accept an already
+        // exact target); it must not synthesize a fresh file from marker data.
+        current.phase = PairPhase::DropInPublishing;
+        self.validate_phase_state(&current)?;
+        self.write_marker(&current, true)?;
+        self.sync_parents()?;
+        self.recover_drop_in_publishing(&current)?;
+        current.phase = PairPhase::DropInPublished;
+        self.validate_phase_state(&current)?;
+        self.write_marker(&current, true)?;
+        self.sync_parents()?;
+        current.phase = PairPhase::Published;
+        self.validate_phase_state(&current)?;
+        self.write_marker(&current, true)?;
+        self.sync_parents()
+    }
+
+    fn advance_after_drop_in(&self, _marker: &PairMarker) -> Result<(), RecoveryError> {
+        let mut current = self.read_marker()?;
+        if current.phase == PairPhase::DropInPublishing {
+            self.validate_phase_state(&current)?;
+            current.phase = PairPhase::DropInPublished;
+            self.validate_phase_state(&current)?;
+            self.write_marker(&current, true)?;
+            self.sync_parents()?;
+        }
+        if current.phase == PairPhase::DropInPublished {
+            self.validate_phase_state(&current)?;
+            current.phase = PairPhase::Published;
+            self.validate_phase_state(&current)?;
+            self.write_marker(&current, true)?;
+            self.sync_parents()?;
+        }
+        Ok(())
     }
 
     fn backup_existing(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
@@ -558,22 +839,40 @@ impl PairPaths {
         self.sync_parents()
     }
 
-    fn publish_drop_in(&self, txid: &str, bytes: &[u8]) -> Result<(), RecoveryError> {
+    fn prepare_drop_in(&self, txid: &str, bytes: &[u8]) -> Result<CString, RecoveryError> {
         let temp_name = pair_name(txid, "drop-in.tmp")?;
         self.write_temp(&self.drop_in_parent, &temp_name, bytes)?;
+        Ok(temp_name)
+    }
+
+    fn publish_drop_in_temp(&self, temp_name: &CString) -> Result<(), RecoveryError> {
         rename_noreplace(
             self.drop_in_parent.as_raw_fd(),
-            &temp_name,
+            temp_name,
             self.drop_in_parent.as_raw_fd(),
             &self.drop_in_name,
         )
         .map_err(|_| {
-            let _ = unlink_name(&self.drop_in_parent, &temp_name);
+            let _ = unlink_name(&self.drop_in_parent, temp_name);
             RecoveryError::Storage
         })?;
         self.drop_in_parent
             .sync_all()
             .map_err(|_| RecoveryError::Storage)
+    }
+
+    fn drop_in_temp_name(&self, txid: &str) -> CString {
+        pair_name(txid, "drop-in.tmp").expect("static pair suffix cannot contain NUL")
+    }
+
+    fn valid_config_temp_name(&self, value: &str) -> bool {
+        let prefix = format!(".{}.", self.config_name.to_string_lossy());
+        value.starts_with(&prefix)
+            && value.ends_with(".iotkit-config")
+            && value.len() == prefix.len() + 32 + ".iotkit-config".len()
+            && value[prefix.len()..prefix.len() + 32]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     }
 
     fn write_temp(&self, parent: &File, name: &CString, bytes: &[u8]) -> Result<(), RecoveryError> {
@@ -623,7 +922,19 @@ impl PairPaths {
         unlink_name(&self.drop_in_parent, &drop_in_backup)?;
         self.sync_parents()?;
         pair_fault("after_finalize_parent_sync")?;
-        unlink_name(&self.config_parent, &self.marker_name)?;
+        rename_noreplace(
+            self.config_parent.as_raw_fd(),
+            &self.marker_name,
+            self.config_parent.as_raw_fd(),
+            &self.completion_name,
+        )
+        .map_err(|_| RecoveryError::CleanupRequired)?;
+        pair_fault("after_completion_receipt")?;
+        self.config_parent
+            .sync_all()
+            .map_err(|_| RecoveryError::CleanupRequired)?;
+        pair_fault("after_completion_receipt_sync")?;
+        unlink_name(&self.config_parent, &self.completion_name)?;
         self.config_parent
             .sync_all()
             .map_err(|_| RecoveryError::Storage)
@@ -650,11 +961,14 @@ impl PairPaths {
             marker.old_drop_in_hash.as_deref(),
             marker.drop_in_hash.as_deref(),
         )?;
-        let _ = unlink_name(&self.config_parent, &pair_name(&marker.txid, "config.tmp")?);
-        let _ = unlink_name(
-            &self.drop_in_parent,
-            &pair_name(&marker.txid, "drop-in.tmp")?,
-        );
+        if let Some(temp_name) = marker.config_temp_name.as_deref() {
+            let temp_name = c_name(Path::new(temp_name).as_os_str())?;
+            let _ = unlink_name(&self.config_parent, &temp_name);
+        }
+        if let Some(temp_name) = marker.drop_in_temp_name.as_deref() {
+            let temp_name = c_name(Path::new(temp_name).as_os_str())?;
+            let _ = unlink_name(&self.drop_in_parent, &temp_name);
+        }
         self.sync_parents()?;
         unlink_name(&self.config_parent, &self.marker_name)?;
         self.config_parent
@@ -666,19 +980,6 @@ impl PairPaths {
         marker.validate_basic(self)?;
         let config_backup = pair_name(&marker.txid, "config.old")?;
         let drop_in_backup = pair_name(&marker.txid, "drop-in.old")?;
-        let config_tmp = pair_name(&marker.txid, "config.tmp")?;
-        let drop_in_tmp = pair_name(&marker.txid, "drop-in.tmp")?;
-        if self
-            .target_hash(&self.config_parent, &config_tmp)
-            .map_err(|_| RecoveryError::CleanupRequired)?
-            .is_some()
-            || self
-                .target_hash(&self.drop_in_parent, &drop_in_tmp)
-                .map_err(|_| RecoveryError::CleanupRequired)?
-                .is_some()
-        {
-            return Err(RecoveryError::CleanupRequired);
-        }
         match marker.phase {
             PairPhase::Prepared => {
                 self.validate_old_transition(
@@ -694,32 +995,67 @@ impl PairPaths {
                     marker.old_drop_in_hash.as_deref(),
                 )?;
             }
+            PairPhase::ConfigPublishing => {
+                self.validate_publishing_transition(
+                    &self.config_parent,
+                    &self.config_name,
+                    &config_backup,
+                    marker.config_temp_name.as_deref(),
+                    marker.old_config_hash.as_deref(),
+                    marker.config_hash.as_deref(),
+                )?;
+                self.validate_publishing_transition(
+                    &self.drop_in_parent,
+                    &self.drop_in_name,
+                    &drop_in_backup,
+                    marker.drop_in_temp_name.as_deref(),
+                    marker.old_drop_in_hash.as_deref(),
+                    marker.drop_in_hash.as_deref(),
+                )?;
+            }
             PairPhase::ConfigPublished => {
                 self.expect_exact(
                     &self.config_parent,
                     &self.config_name,
                     marker.config_hash.as_deref(),
                 )?;
+                self.expect_temp_absent(&self.config_parent, marker.config_temp_name.as_deref())?;
                 self.validate_backup_presence(
                     &self.config_parent,
                     &config_backup,
                     marker.old_config_hash.as_deref(),
                     true,
                 )?;
-                self.validate_backup_presence(
+                self.validate_publishing_transition(
                     &self.drop_in_parent,
+                    &self.drop_in_name,
                     &drop_in_backup,
+                    marker.drop_in_temp_name.as_deref(),
                     marker.old_drop_in_hash.as_deref(),
+                    marker.drop_in_hash.as_deref(),
+                )?;
+            }
+            PairPhase::DropInPublishing => {
+                self.expect_exact(
+                    &self.config_parent,
+                    &self.config_name,
+                    marker.config_hash.as_deref(),
+                )?;
+                self.expect_temp_absent(&self.config_parent, marker.config_temp_name.as_deref())?;
+                self.validate_backup_presence(
+                    &self.config_parent,
+                    &config_backup,
+                    marker.old_config_hash.as_deref(),
                     true,
                 )?;
-                let drop_in_target = self
-                    .target_hash(&self.drop_in_parent, &self.drop_in_name)
-                    .map_err(|_| RecoveryError::CleanupRequired)?;
-                if let Some(actual) = drop_in_target
-                    && Some(actual.as_str()) != marker.drop_in_hash.as_deref()
-                {
-                    return Err(RecoveryError::CleanupRequired);
-                }
+                self.validate_publishing_transition(
+                    &self.drop_in_parent,
+                    &self.drop_in_name,
+                    &drop_in_backup,
+                    marker.drop_in_temp_name.as_deref(),
+                    marker.old_drop_in_hash.as_deref(),
+                    marker.drop_in_hash.as_deref(),
+                )?;
             }
             PairPhase::DropInPublished => {
                 self.expect_exact(
@@ -732,6 +1068,8 @@ impl PairPaths {
                     &self.drop_in_name,
                     marker.drop_in_hash.as_deref(),
                 )?;
+                self.expect_temp_absent(&self.config_parent, marker.config_temp_name.as_deref())?;
+                self.expect_temp_absent(&self.drop_in_parent, marker.drop_in_temp_name.as_deref())?;
                 self.validate_backup_presence(
                     &self.config_parent,
                     &config_backup,
@@ -756,6 +1094,8 @@ impl PairPaths {
                     &self.drop_in_name,
                     marker.drop_in_hash.as_deref(),
                 )?;
+                self.expect_temp_absent(&self.config_parent, marker.config_temp_name.as_deref())?;
+                self.expect_temp_absent(&self.drop_in_parent, marker.drop_in_temp_name.as_deref())?;
                 self.validate_backup_presence(
                     &self.config_parent,
                     &config_backup,
@@ -769,6 +1109,62 @@ impl PairPaths {
                     false,
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    fn validate_publishing_transition(
+        &self,
+        parent: &File,
+        target: &CString,
+        backup: &CString,
+        temp_name: Option<&str>,
+        old_hash: Option<&str>,
+        desired_hash: Option<&str>,
+    ) -> Result<(), RecoveryError> {
+        let Some(desired_hash) = desired_hash else {
+            return Err(RecoveryError::CleanupRequired);
+        };
+        let Some(temp_name) = temp_name else {
+            return Err(RecoveryError::CleanupRequired);
+        };
+        let temp_name = c_name(Path::new(temp_name).as_os_str())?;
+        let target_hash = self.target_hash(parent, target)?;
+        let backup_hash = self.target_hash(parent, backup)?;
+        let temp_hash = self.target_hash(parent, &temp_name)?;
+        match (
+            old_hash,
+            target_hash.as_deref(),
+            backup_hash.as_deref(),
+            temp_hash.as_deref(),
+        ) {
+            (Some(old), None, Some(actual_old), Some(actual_new))
+                if actual_old == old && actual_new == desired_hash =>
+            {
+                Ok(())
+            }
+            (Some(old), Some(actual_new), Some(actual_old), None)
+                if actual_old == old && actual_new == desired_hash =>
+            {
+                Ok(())
+            }
+            (None, None, None, Some(actual_new)) if actual_new == desired_hash => Ok(()),
+            (None, Some(actual_new), None, None) if actual_new == desired_hash => Ok(()),
+            _ => Err(RecoveryError::CleanupRequired),
+        }
+    }
+
+    fn expect_temp_absent(
+        &self,
+        parent: &File,
+        temp_name: Option<&str>,
+    ) -> Result<(), RecoveryError> {
+        let Some(temp_name) = temp_name else {
+            return Err(RecoveryError::CleanupRequired);
+        };
+        let temp_name = c_name(Path::new(temp_name).as_os_str())?;
+        if self.target_hash(parent, &temp_name)?.is_some() {
+            return Err(RecoveryError::CleanupRequired);
         }
         Ok(())
     }
