@@ -3,6 +3,89 @@ use std::{fmt, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+pub(crate) mod integer {
+    use serde::{Deserialize, de::Deserializer};
+    use serde_json::{Number, Value};
+
+    fn number<'de, D>(deserializer: D) -> Result<Number, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match Value::deserialize(deserializer)? {
+            Value::Number(number) => Ok(number),
+            _ => Err(serde::de::Error::custom("expected integer")),
+        }
+    }
+
+    fn integral_float(number: &Number) -> Option<f64> {
+        let value = number.as_f64()?;
+        (value.is_finite() && value.fract() == 0.0).then_some(value)
+    }
+
+    pub(crate) fn u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let number = number(deserializer)?;
+        if let Some(value) = number.as_u64()
+            && let Ok(value) = u32::try_from(value)
+        {
+            return Ok(value);
+        }
+        if let Some(value) = integral_float(&number)
+            && (0.0..4_294_967_296.0).contains(&value)
+        {
+            return Ok(value as u32);
+        }
+        Err(serde::de::Error::custom("expected u32 integer"))
+    }
+
+    pub(crate) fn i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let number = number(deserializer)?;
+        if let Some(value) = number.as_i64() {
+            return Ok(value);
+        }
+        if let Some(value) = number.as_u64()
+            && let Ok(value) = i64::try_from(value)
+        {
+            return Ok(value);
+        }
+        if let Some(value) = integral_float(&number)
+            && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value)
+        {
+            return Ok(value as i64);
+        }
+        Err(serde::de::Error::custom("expected i64 integer"))
+    }
+
+    pub(crate) fn u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let number = number(deserializer)?;
+        if let Some(value) = number.as_u64() {
+            return Ok(value);
+        }
+        if let Some(value) = integral_float(&number)
+            && (0.0..18_446_744_073_709_551_616.0).contains(&value)
+        {
+            return Ok(value as u64);
+        }
+        Err(serde::de::Error::custom("expected u64 integer"))
+    }
+
+    pub(crate) fn usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u64(deserializer)?;
+        usize::try_from(value).map_err(|_| serde::de::Error::custom("expected usize integer"))
+    }
+}
+
 pub const NODE_BACKUP_SUFFIX: &str = ".iotkit-node-backup";
 pub const NODE_BACKUP_FORMAT_VERSION: u32 = 1;
 
@@ -45,16 +128,22 @@ pub struct MountIdentity {
 #[serde(deny_unknown_fields)]
 pub struct NodeBackupManifest {
     pub artifact_kind: String,
+    #[serde(deserialize_with = "integer::u32")]
     pub format_version: u32,
     pub backup_id: String,
     pub edge_node_id: String,
     pub ledger_epoch: String,
+    #[serde(deserialize_with = "integer::i64")]
     pub created_at_ms: i64,
+    #[serde(deserialize_with = "integer::i64")]
     pub accepted_cursor: i64,
+    #[serde(deserialize_with = "integer::i64")]
     pub allocation_high_water: i64,
     pub snapshot_mode: SnapshotMode,
     pub shutdown_seal_id: Option<String>,
+    #[serde(deserialize_with = "integer::u32")]
     pub schema_version: u32,
+    #[serde(deserialize_with = "integer::u64")]
     pub database_length: u64,
     pub database_sha256: String,
     pub counts: BackupCounts,
@@ -69,17 +158,29 @@ pub enum SnapshotMode {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackupCounts {
+    #[serde(deserialize_with = "integer::u64")]
     pub devices: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub series: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub readings: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub publication_rows: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub ingest_dedup_rows: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub staged_readings: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub quarantine_rows: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub device_principals: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub device_credentials: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub activation_rows: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub ledger_events: u64,
+    #[serde(deserialize_with = "integer::u64")]
     pub audit_events: u64,
 }
 
@@ -186,6 +287,8 @@ pub enum RecoveryError {
     Cryptography,
     Random,
     InvalidPassphrase,
+    StorageFull,
+    ArtifactPublicationUncertain,
 }
 
 impl RecoveryError {
@@ -201,6 +304,8 @@ impl RecoveryError {
             Self::Cryptography => "cryptography",
             Self::Random => "random",
             Self::InvalidPassphrase => "passphrase_invalid",
+            Self::StorageFull => "storage_full",
+            Self::ArtifactPublicationUncertain => "artifact_publication_uncertain",
         }
     }
 }
@@ -223,6 +328,12 @@ impl fmt::Display for RecoveryError {
             Self::Random => formatter.write_str("Edge Node backup randomness failed"),
             Self::InvalidPassphrase => {
                 formatter.write_str("Edge Node backup passphrase is invalid")
+            }
+            Self::StorageFull => {
+                formatter.write_str("Edge Node backup storage capacity is insufficient")
+            }
+            Self::ArtifactPublicationUncertain => {
+                formatter.write_str("Edge Node backup publication status is uncertain")
             }
         }
     }

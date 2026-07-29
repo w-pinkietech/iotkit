@@ -1,5 +1,8 @@
 use std::{fs, path::Path};
 
+use std::fs::File;
+
+use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use super::*;
@@ -77,7 +80,8 @@ fn valid_round_trip_authenticates_and_decrypts_database() {
     );
 
     let output = root.path().join("restored.sqlite");
-    let actual = decrypt_container_to_new_file(&artifact, &passphrase(), &output).unwrap();
+    let actual =
+        decrypt_container_to_new_file(&artifact, &passphrase(), &output, DATABASE_LENGTH).unwrap();
     assert_eq!(actual, expected);
     assert_eq!(fs::read(output).unwrap(), DATABASE);
 }
@@ -109,7 +113,8 @@ fn public_golden_fixture_matches_json_and_reencodes_byte_for_byte() {
     let root = tempdir().unwrap();
     let snapshot = root.path().join("golden.sqlite");
     assert_eq!(
-        decrypt_container_to_new_file(&artifact, &passphrase(), &snapshot).unwrap(),
+        decrypt_container_to_new_file(&artifact, &passphrase(), &snapshot, DATABASE_LENGTH)
+            .unwrap(),
         expected
     );
     let reencoded = root.path().join("reencoded.iotkit-node-backup");
@@ -123,6 +128,167 @@ fn public_golden_fixture_matches_json_and_reencodes_byte_for_byte() {
     )
     .unwrap();
     assert_eq!(fs::read(reencoded).unwrap(), fs::read(artifact).unwrap());
+}
+
+#[test]
+fn schema_and_rust_validation_agree_on_boundaries() {
+    let contracts = Path::new(env!("CARGO_MANIFEST_DIR")).join("contracts");
+    let header_schema: Value = serde_json::from_slice(
+        &fs::read(contracts.join("node-backup-header-v1.schema.json")).unwrap(),
+    )
+    .unwrap();
+    let manifest_schema: Value = serde_json::from_slice(
+        &fs::read(contracts.join("node-backup-manifest-v1.schema.json")).unwrap(),
+    )
+    .unwrap();
+    let header_validator = jsonschema::validator_for(&header_schema).unwrap();
+    let manifest_validator = jsonschema::validator_for(&manifest_schema).unwrap();
+
+    let header_json: Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/node-backup-header-v1.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(header_validator.is_valid(&header_json));
+    let header: ContainerHeader = serde_json::from_value(header_json).unwrap();
+    validate_header(&header).unwrap();
+
+    let header_cases = [
+        (
+            "header fractional chunk size",
+            json!({"chunk_size": 4096.5}),
+        ),
+        ("header kdf time out of range", json!({"kdf_time": 11})),
+    ];
+    for (name, patch) in header_cases {
+        let mut value: Value = serde_json::from_slice(
+            &fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/node-backup-header-v1.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for (key, replacement) in patch.as_object().unwrap() {
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(key.clone(), replacement.clone());
+        }
+        assert!(!header_validator.is_valid(&value), "schema accepted {name}");
+        let rust_result = match serde_json::from_value::<ContainerHeader>(value) {
+            Ok(header) => validate_header(&header).map(|_| header).map_err(|_| ()),
+            Err(_) => Err(()),
+        };
+        assert!(rust_result.is_err(), "Rust accepted {name}");
+    }
+
+    let valid = serde_json::to_value(manifest()).unwrap();
+    assert!(manifest_validator.is_valid(&valid));
+    let parsed: NodeBackupManifest = serde_json::from_value(valid).unwrap();
+    validate_manifest(&parsed).unwrap();
+
+    let mut unicode_boundary = serde_json::to_value(manifest()).unwrap();
+    unicode_boundary
+        .as_object_mut()
+        .unwrap()
+        .insert("backup_id".into(), json!("é".repeat(255)));
+    assert!(manifest_validator.is_valid(&unicode_boundary));
+    let parsed: NodeBackupManifest = serde_json::from_value(unicode_boundary).unwrap();
+    validate_manifest(&parsed).unwrap();
+
+    let mut integral_float = serde_json::to_value(manifest()).unwrap();
+    integral_float
+        .as_object_mut()
+        .unwrap()
+        .insert("created_at_ms".into(), json!(1.0));
+    assert!(manifest_validator.is_valid(&integral_float));
+    let parsed: NodeBackupManifest = serde_json::from_value(integral_float).unwrap();
+    validate_manifest(&parsed).unwrap();
+
+    let cases = [
+        ("control character", json!({"backup_id": "bad\u{0001}"})),
+        ("c1 control character", json!({"backup_id": "bad\u{0085}"})),
+        (
+            "256 multibyte characters",
+            json!({"backup_id": "é".repeat(256)}),
+        ),
+        (
+            "u64 overflow",
+            serde_json::from_str::<Value>("{\"database_length\":18446744073709551616}").unwrap(),
+        ),
+    ];
+    for (name, patch) in cases {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        for (key, replacement) in patch.as_object().unwrap() {
+            object.insert(key.clone(), replacement.clone());
+        }
+        assert!(
+            !manifest_validator.is_valid(&value),
+            "schema accepted {name}"
+        );
+        let rust_result = match serde_json::from_value::<NodeBackupManifest>(value) {
+            Ok(value) => validate_manifest(&value).map(|_| value).map_err(|_| ()),
+            Err(_) => Err(()),
+        };
+        assert!(rust_result.is_err(), "Rust accepted {name}");
+    }
+}
+
+#[test]
+fn encryption_uses_the_open_snapshot_handle_after_path_replacement() {
+    let root = tempdir().unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let opened = File::open(&snapshot).unwrap();
+    let moved = root.path().join("original.sqlite");
+    fs::rename(&snapshot, &moved).unwrap();
+    fs::write(&snapshot, b"replacement-with-different-bytes").unwrap();
+    let output = root.path().join("container.iotkit-node-backup");
+    encrypt_open_snapshot(
+        opened,
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+    )
+    .unwrap();
+    let restored = root.path().join("restored.sqlite");
+    decrypt_container_to_new_file(&output, &passphrase(), &restored, DATABASE_LENGTH).unwrap();
+    assert_eq!(fs::read(restored).unwrap(), DATABASE);
+}
+
+#[test]
+fn insufficient_plaintext_capacity_is_rejected_before_output_creation() {
+    let root = tempdir().unwrap();
+    let (artifact, _) = deterministic_artifact(root.path());
+    let output = root.path().join("too-small.sqlite");
+    let error =
+        decrypt_container_to_new_file(&artifact, &passphrase(), &output, DATABASE_LENGTH - 1)
+            .unwrap_err();
+    assert_eq!(error.reason_code(), "storage_full");
+    assert!(!output.exists());
+}
+
+#[test]
+fn publication_refuses_a_replaced_destination_without_deleting_it() {
+    let root = tempdir().unwrap();
+    let staged = root.path().join(".iotkit-node-staging-test");
+    let destination = root.path().join("published.sqlite");
+    fs::write(&staged, b"staged").unwrap();
+    fs::write(&destination, b"unrelated-replacement").unwrap();
+    assert_eq!(
+        publish_new_file(&staged, &destination)
+            .unwrap_err()
+            .reason_code(),
+        "destination_exists"
+    );
+    assert_eq!(fs::read(&destination).unwrap(), b"unrelated-replacement");
+    assert_eq!(fs::read(&staged).unwrap(), b"staged");
 }
 
 #[test]
@@ -342,7 +508,7 @@ fn decryption_refuses_preexisting_output_and_removes_created_output_on_failure()
     let existing = root.path().join("existing.sqlite");
     fs::write(&existing, b"keep").unwrap();
     assert_eq!(
-        decrypt_container_to_new_file(&artifact, &passphrase(), &existing)
+        decrypt_container_to_new_file(&artifact, &passphrase(), &existing, DATABASE_LENGTH)
             .unwrap_err()
             .reason_code(),
         "destination_exists"
@@ -355,8 +521,19 @@ fn decryption_refuses_preexisting_output_and_removes_created_output_on_failure()
     let changed = root.path().join("corrupt");
     fs::write(&changed, bytes).unwrap();
     let output = root.path().join("created-then-failed.sqlite");
-    assert!(decrypt_container_to_new_file(&changed, &passphrase(), &output).is_err());
+    assert!(
+        decrypt_container_to_new_file(&changed, &passphrase(), &output, DATABASE_LENGTH).is_err()
+    );
     assert!(!output.exists());
+    assert!(
+        !fs::read_dir(root.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".iotkit-node-staging-"))
+    );
 }
 
 #[test]

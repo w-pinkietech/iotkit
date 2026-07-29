@@ -13,10 +13,11 @@ Implemented the Node-specific `IOTKNDB1` authenticated encrypted container in
 
 - `encrypt_container` uses OS randomness for a bounded Argon2id/XChaCha20-Poly1305 container.
 - `authenticate_container` parses and authenticates the complete artifact while discarding plaintext.
-- `decrypt_container_to_new_file` authenticates and streams only database bytes into a new owner-only file.
+- `decrypt_container_to_new_file` authenticates and streams only database bytes into a private staging file, then publishes with atomic no-clobber semantics after full verification; callers provide an explicit plaintext capacity bound.
 - Header and manifest parsing is closed (`deny_unknown_fields`), bounded before allocation/KDF, and uses the exact header digest, nonce, and associated-data layout from Task 3.
 - Records enforce flags, sequence, plaintext/chunk lengths, authenticated terminal framing, and immediate EOF.
-- Manifest database length and SHA-256 are checked while streaming; failed decryptions remove only the output created by that call and never replace an existing path.
+- Manifest database length and SHA-256 are checked while streaming; capacity is rejected before staging; failed decryptions remove only their owner-identified staging file and never replace an existing or concurrently substituted path.
+- Encryption verifies and rewinds one open snapshot handle, so pathname replacement cannot switch the bytes being encrypted.
 - Passphrases, derived keys, and errors are redacted/zeroized; invalid passphrases are rejected before file/KDF work.
 - Checked-in header/manifest schemas, JSON goldens, and a deterministic public binary vector are mutually conformant. Deterministic entropy is test-only in the test module; production calls `getrandom`.
 
@@ -43,8 +44,8 @@ Focused final run:
 
 ```text
 cargo test -p iotkit-core-recovery container
-running 14 tests
-13 passed, 0 failed, 1 ignored
+running 18 tests
+17 passed, 0 failed, 1 ignored
 ```
 
 The ignored test is an explicitly marked one-time public fixture generator;
@@ -54,7 +55,40 @@ Full recovery crate:
 
 ```text
 cargo test -p iotkit-core-recovery
-39 passed, 0 failed, 1 ignored
+43 passed, 0 failed, 1 ignored
+```
+
+## Review-fix round
+
+The independent review identified four Important findings: schema/Rust numeric
+and identity-boundary drift, a snapshot pathname TOCTOU, missing plaintext
+capacity admission, and direct plaintext publication/cleanup races. A second
+test-first pass recorded the following RED evidence before implementation:
+
+```text
+cargo test -p iotkit-core-recovery container --no-run
+compile failed as expected: decrypt calls lacked the new capacity argument,
+publish_new_file was absent, and the schema test harness had a type mismatch
+```
+
+The fixes add checked-in JSON Schema validation of both header and manifest,
+Unicode/control and integer boundary cases, integral-number deserialization
+consistent with draft 2020-12 integer semantics, same-handle snapshot
+encryption, a capacity check before staging, and an owner-identified RAII stage
+with atomic hard-link publication. The portable replacement regression passes on
+the Windows host as well as Unix targets.
+
+Review-fix GREEN evidence:
+
+```text
+cargo test -p iotkit-core-recovery schema_and_rust_validation_agree_on_boundaries
+1 passed, 0 failed
+
+cargo test -p iotkit-core-recovery encryption_uses_the_open_snapshot_handle_after_path_replacement
+1 passed, 0 failed
+
+cargo clippy -p iotkit-core-recovery --all-targets --no-deps -- -D warnings
+exit 0
 ```
 
 ## Coverage
@@ -66,6 +100,8 @@ cargo test -p iotkit-core-recovery
 - Header/manifest/chunk bounds before allocation; truncated records, malformed lengths, unknown flags, duplicate/early terminal, trailing bytes, and EOF failures.
 - Modified manifest/database authentication failures and authenticated manifest length/digest mismatch.
 - Existing output no-clobber and cleanup of output created before a later failure; Unix mode `0600`.
+- Capacity refusal before plaintext creation; late authentication failure staging cleanup; destination replacement/no-delete regression; and one-open-handle snapshot replacement regression.
+- Both checked-in schemas are loaded by tests and compared with Rust parsing/validation at valid and invalid Unicode, control, integer-float, and overflow boundaries.
 - Redacted error/debug behavior and public JSON/schema/binary conformance.
 
 ## Verification
@@ -77,12 +113,10 @@ python scripts/check-layers                                         # OK
 python scripts/check-source-layout                                   # OK
 git diff --check                                                     # exit 0
 node scripts/battle-tested-review.mjs check                          # OK (5 entries)
-node scripts/battle-tested-review.mjs select --base origin/master \
-  --concern edge-node-replacement --concern custody --concern restore \
-  --concern power-loss --concern storage --concern storage-pressure
+node scripts/battle-tested-review.mjs select --base origin/master
 ```
 
-The battle-tested selector routed BT-001 through BT-004. It also reported
+The battle-tested selector routed BT-001 through BT-003. It also reported
 unmatched recovery/schema/fixture paths; those were reviewed against the Task 3
 brief and are deliberately limited to the container boundary. BT-002's
 physical power-cut/storage-controller evidence remains an integrated release

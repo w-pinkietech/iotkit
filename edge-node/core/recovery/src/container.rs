@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
-    path::Path,
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
 };
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -37,14 +37,19 @@ const TERMINAL_FLAGS: u8 = 1;
 #[serde(deny_unknown_fields)]
 struct ContainerHeader {
     artifact_kind: String,
+    #[serde(deserialize_with = "crate::model::integer::u32")]
     format_version: u32,
     kdf: String,
     salt_b64: String,
+    #[serde(deserialize_with = "crate::model::integer::u32")]
     kdf_time: u32,
+    #[serde(deserialize_with = "crate::model::integer::u32")]
     kdf_memory_kib: u32,
+    #[serde(deserialize_with = "crate::model::integer::u32")]
     kdf_parallelism: u32,
     cipher: String,
     nonce_prefix_b64: String,
+    #[serde(deserialize_with = "crate::model::integer::usize")]
     chunk_size: usize,
 }
 
@@ -78,8 +83,27 @@ fn encrypt_with_entropy(
     salt: [u8; SALT_BYTES],
     nonce_prefix: [u8; NONCE_PREFIX_BYTES],
 ) -> Result<(), RecoveryError> {
+    let snapshot_file = File::open(snapshot).map_err(|_| RecoveryError::Storage)?;
+    encrypt_open_snapshot(
+        snapshot_file,
+        manifest,
+        passphrase,
+        output,
+        salt,
+        nonce_prefix,
+    )
+}
+
+fn encrypt_open_snapshot(
+    mut snapshot_file: File,
+    manifest: &NodeBackupManifest,
+    passphrase: &BackupPassphrase,
+    output: &Path,
+    salt: [u8; SALT_BYTES],
+    nonce_prefix: [u8; NONCE_PREFIX_BYTES],
+) -> Result<(), RecoveryError> {
     validate_manifest(manifest)?;
-    verify_snapshot_digest(snapshot, manifest)?;
+    verify_snapshot_digest(&mut snapshot_file, manifest)?;
     ensure_absent(output)?;
 
     let header = ContainerHeader {
@@ -109,7 +133,6 @@ fn encrypt_with_entropy(
     }
     let manifest_len =
         u32::try_from(manifest_json.len()).map_err(|_| RecoveryError::ManifestInvalid)?;
-    let snapshot_file = File::open(snapshot).map_err(|_| RecoveryError::Storage)?;
     let mut input = io::Cursor::new(manifest_len.to_be_bytes().to_vec())
         .chain(io::Cursor::new(manifest_json))
         .chain(snapshot_file);
@@ -175,7 +198,7 @@ pub fn authenticate_container(
     let key = derive_key(passphrase, &parsed.salt, &parsed.header)?;
     let cipher =
         XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| RecoveryError::Cryptography)?;
-    let mut consumer = PlaintextConsumer::new(None)?;
+    let mut consumer = PlaintextConsumer::new(None, u64::MAX)?;
     consume_records(
         &mut file,
         &cipher,
@@ -192,6 +215,7 @@ pub fn decrypt_container_to_new_file(
     input: &Path,
     passphrase: &BackupPassphrase,
     output: &Path,
+    plaintext_capacity_bytes: u64,
 ) -> Result<NodeBackupManifest, RecoveryError> {
     validate_passphrase(passphrase)?;
     ensure_absent(output)?;
@@ -200,7 +224,7 @@ pub fn decrypt_container_to_new_file(
     let key = derive_key(passphrase, &parsed.salt, &parsed.header)?;
     let cipher =
         XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| RecoveryError::Cryptography)?;
-    let mut consumer = PlaintextConsumer::new(Some(output))?;
+    let mut consumer = PlaintextConsumer::new(Some(output), plaintext_capacity_bytes)?;
     let records_result = consume_records(
         &mut file,
         &cipher,
@@ -210,7 +234,10 @@ pub fn decrypt_container_to_new_file(
         &mut consumer,
     );
     let result = match records_result {
-        Ok(()) => consumer.finish(),
+        Ok(()) => consumer.finish().and_then(|manifest| {
+            consumer.publish()?;
+            Ok(manifest)
+        }),
         Err(error) => Err(error),
     };
     if result.is_err() {
@@ -353,10 +380,89 @@ fn consume_records(
     }
 }
 
+struct StagedOutput {
+    destination: PathBuf,
+    path: PathBuf,
+    file: Option<File>,
+    identity: same_file::Handle,
+    published: bool,
+}
+
+impl StagedOutput {
+    fn new(destination: &Path) -> Result<Self, RecoveryError> {
+        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).map_err(|_| RecoveryError::Random)?;
+        let path = parent.join(format!(".iotkit-node-staging-{}.tmp", hex_digest(random)));
+        let file = private_new_file(&path)?;
+        let identity = match file
+            .try_clone()
+            .ok()
+            .and_then(|clone| same_file::Handle::from_file(clone).ok())
+        {
+            Some(identity) => identity,
+            None => {
+                drop(file);
+                let _ = fs::remove_file(&path);
+                return Err(RecoveryError::Storage);
+            }
+        };
+        Ok(Self {
+            destination: destination.to_owned(),
+            path,
+            file: Some(file),
+            identity,
+            published: false,
+        })
+    }
+
+    fn file_mut(&mut self) -> &mut File {
+        self.file.as_mut().expect("staging file remains open")
+    }
+
+    fn sync_all(&self) -> Result<(), RecoveryError> {
+        self.file
+            .as_ref()
+            .expect("staging file remains open")
+            .sync_all()
+            .map_err(|_| RecoveryError::Storage)
+    }
+
+    fn publish(mut self) -> Result<(), RecoveryError> {
+        drop(self.file.take());
+        if !file_identity_matches(&self.path, &self.identity) {
+            return Err(RecoveryError::ArtifactPublicationUncertain);
+        }
+        match publish_new_file(&self.path, &self.destination) {
+            Ok(()) => {
+                self.published = true;
+                if !file_identity_matches(&self.path, &self.identity) {
+                    return Err(RecoveryError::ArtifactPublicationUncertain);
+                }
+                fs::remove_file(&self.path).map_err(|_| RecoveryError::ArtifactPublicationUncertain)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for StagedOutput {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        if !self.published && file_identity_matches(&self.path, &self.identity) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn file_identity_matches(path: &Path, expected: &same_file::Handle) -> bool {
+    same_file::Handle::from_path(path).is_ok_and(|actual| actual == *expected)
+}
+
 struct PlaintextConsumer<'a> {
     output_path: Option<&'a Path>,
-    output: Option<File>,
-    output_created: bool,
+    output_capacity: u64,
+    staged: Option<StagedOutput>,
     prefix: [u8; 4],
     prefix_len: usize,
     manifest_length: Option<usize>,
@@ -367,11 +473,11 @@ struct PlaintextConsumer<'a> {
 }
 
 impl<'a> PlaintextConsumer<'a> {
-    fn new(output_path: Option<&'a Path>) -> Result<Self, RecoveryError> {
+    fn new(output_path: Option<&'a Path>, output_capacity: u64) -> Result<Self, RecoveryError> {
         Ok(Self {
             output_path,
-            output: None,
-            output_created: false,
+            output_capacity,
+            staged: None,
             prefix: [0; 4],
             prefix_len: 0,
             manifest_length: None,
@@ -410,10 +516,12 @@ impl<'a> PlaintextConsumer<'a> {
                     let manifest: NodeBackupManifest = serde_json::from_slice(&self.manifest_bytes)
                         .map_err(|_| RecoveryError::ManifestInvalid)?;
                     validate_manifest(&manifest)?;
+                    if manifest.database_length > self.output_capacity {
+                        return Err(RecoveryError::StorageFull);
+                    }
                     self.manifest = Some(manifest);
                     if let Some(path) = self.output_path {
-                        self.output = Some(private_new_file(path)?);
-                        self.output_created = true;
+                        self.staged = Some(StagedOutput::new(path)?);
                     }
                 }
                 continue;
@@ -431,8 +539,9 @@ impl<'a> PlaintextConsumer<'a> {
                 return Err(RecoveryError::ManifestInvalid);
             }
             self.database_digest.update(bytes);
-            if let Some(output) = self.output.as_mut() {
-                output
+            if let Some(staged) = self.staged.as_mut() {
+                staged
+                    .file_mut()
                     .write_all(bytes)
                     .map_err(|_| RecoveryError::Storage)?;
             }
@@ -461,21 +570,22 @@ impl<'a> PlaintextConsumer<'a> {
 
     fn finish(&mut self) -> Result<NodeBackupManifest, RecoveryError> {
         self.ensure_terminal()?;
-        if let Some(output) = self.output.take() {
-            output.sync_all().map_err(|_| RecoveryError::Storage)?;
+        if let Some(staged) = self.staged.as_mut() {
+            staged.sync_all()?;
         }
         self.manifest.take().ok_or(RecoveryError::ManifestInvalid)
     }
 
+    fn publish(&mut self) -> Result<(), RecoveryError> {
+        if let Some(staged) = self.staged.take() {
+            staged.publish()
+        } else {
+            Ok(())
+        }
+    }
+
     fn cleanup(&mut self) {
-        if let Some(output) = self.output.take() {
-            drop(output);
-        }
-        if self.output_created
-            && let Some(path) = self.output_path
-        {
-            let _ = fs::remove_file(path);
-        }
+        drop(self.staged.take());
     }
 }
 
@@ -521,14 +631,18 @@ fn validate_passphrase(passphrase: &BackupPassphrase) -> Result<(), RecoveryErro
 
 fn valid_identity(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 255
+        && value.chars().count() <= 255
         && !value.contains(':')
         && !value.chars().any(char::is_control)
 }
 
-fn verify_snapshot_digest(path: &Path, manifest: &NodeBackupManifest) -> Result<(), RecoveryError> {
-    let file = File::open(path).map_err(|_| RecoveryError::Storage)?;
-    let mut reader = io::BufReader::new(file);
+fn verify_snapshot_digest(
+    reader: &mut File,
+    manifest: &NodeBackupManifest,
+) -> Result<(), RecoveryError> {
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| RecoveryError::Storage)?;
     let mut digest = Sha256::new();
     let mut length = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -549,6 +663,9 @@ fn verify_snapshot_digest(path: &Path, manifest: &NodeBackupManifest) -> Result<
     {
         return Err(RecoveryError::ManifestInvalid);
     }
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| RecoveryError::Storage)?;
     Ok(())
 }
 
@@ -655,6 +772,16 @@ fn private_new_file(path: &Path) -> Result<File, RecoveryError> {
         options.mode(0o600);
     }
     options.open(path).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            RecoveryError::DestinationExists
+        } else {
+            RecoveryError::Storage
+        }
+    })
+}
+
+fn publish_new_file(staged: &Path, destination: &Path) -> Result<(), RecoveryError> {
+    fs::hard_link(staged, destination).map_err(|error| {
         if error.kind() == io::ErrorKind::AlreadyExists {
             RecoveryError::DestinationExists
         } else {
