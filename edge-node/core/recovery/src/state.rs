@@ -8,7 +8,7 @@ const RECOVERY_SCHEMA: &[(&str, &str, &str)] = &[
     (
         "table",
         "edge_node_recovery_candidate",
-        "createtableedge_node_recovery_candidate(singletonintegerprimarykeycheck(singleton=1),statetextnotnullcheck(state='durably_fenced_candidate'),recovery_idtextnotnull,candidate_instance_idtextnotnullunique,backup_idtext,source_database_lengthinteger,source_database_sha256text,edge_idtextnotnull,edge_node_idtextnotnull,old_ledger_epochtextnotnull,proposed_new_epochtextnotnull,credential_generationintegernotnullcheck(credential_generation>=0),handoff_schema_versionintegernotnullcheck(handoff_schema_version=1),installed_at_msintegernotnull,check((backup_idisnullandsource_database_lengthisnullandsource_database_sha256isnull)or(backup_idisnotnullandsource_database_lengthisnotnullandsource_database_length>=0andsource_database_sha256isnotnullandlength(source_database_sha256)=64andsource_database_sha256notglob'*[^0-9a-f]*')))",
+        "createtableedge_node_recovery_candidate(singletonintegerprimarykeycheck(singleton=1),statetextnotnullcheck(state='durably_fenced_candidate'),recovery_idtextnotnull,candidate_instance_idtextnotnullunique,backup_idtext,source_database_lengthinteger,source_database_sha256text,artifact_lengthinteger,artifact_sha256text,edge_idtextnotnull,edge_node_idtextnotnull,old_ledger_epochtextnotnull,proposed_new_epochtextnotnull,credential_generationintegernotnullcheck(credential_generation>=0),handoff_schema_versionintegernotnullcheck(handoff_schema_version=1),installed_at_msintegernotnull,check((backup_idisnullandsource_database_lengthisnullandsource_database_sha256isnullandartifact_lengthisnullandartifact_sha256isnull)or(backup_idisnotnullandsource_database_lengthisnotnullandsource_database_length>=0andsource_database_sha256isnotnullandlength(source_database_sha256)=64andsource_database_sha256notglob'*[^0-9a-f]*'andartifact_lengthisnotnullandartifact_length>=0andartifact_sha256isnotnullandlength(artifact_sha256)=64andartifact_sha256notglob'*[^0-9a-f]*')))",
     ),
     (
         "trigger",
@@ -87,7 +87,8 @@ fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryErro
     let row = conn
         .query_row(
             "SELECT state, recovery_id, candidate_instance_id, backup_id,
-                source_database_length, source_database_sha256, edge_id, edge_node_id,
+                source_database_length, source_database_sha256, artifact_length, artifact_sha256,
+                edge_id, edge_node_id,
                 old_ledger_epoch, proposed_new_epoch, credential_generation,
                 handoff_schema_version, installed_at_ms
          FROM edge_node_recovery_candidate WHERE singleton = 1",
@@ -100,13 +101,15 @@ fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryErro
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<i64>>(4)?,
                     row.get::<_, Option<String>>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                     row.get::<_, String>(8)?,
                     row.get::<_, String>(9)?,
-                    row.get::<_, i64>(10)?,
-                    row.get::<_, i64>(11)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
                     row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?,
                 ))
             },
         )
@@ -118,6 +121,8 @@ fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryErro
         backup_id,
         source_database_length,
         source_database_sha256,
+        artifact_length,
+        artifact_sha256,
         edge_id,
         edge_node_id,
         old_ledger_epoch,
@@ -130,9 +135,22 @@ fn load_candidate(conn: &Connection) -> Result<RecoveryStartupMode, RecoveryErro
         backup_id.as_deref(),
         source_database_length,
         source_database_sha256.as_deref(),
+        artifact_length,
+        artifact_sha256.as_deref(),
     ) {
-        (None, None, None) => true,
-        (Some(_), Some(length), Some(digest)) => length >= 0 && valid_digest(digest),
+        (None, None, None, None, None) => true,
+        (
+            Some(_),
+            Some(source_length),
+            Some(source_digest),
+            Some(artifact_length),
+            Some(artifact_digest),
+        ) => {
+            source_length >= 0
+                && valid_digest(source_digest)
+                && artifact_length >= 0
+                && valid_digest(artifact_digest)
+        }
         _ => false,
     };
     if state != "durably_fenced_candidate"
@@ -308,7 +326,7 @@ fn normalize_sql(sql: &str) -> String {
 }
 
 fn valid_identity(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 255 && !value.chars().any(char::is_control)
+    crate::model::valid_recovery_id(value)
 }
 
 fn valid_digest(value: &str) -> bool {

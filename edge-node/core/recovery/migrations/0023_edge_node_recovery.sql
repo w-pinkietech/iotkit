@@ -6,6 +6,8 @@ CREATE TABLE edge_node_recovery_candidate (
   backup_id TEXT,
   source_database_length INTEGER,
   source_database_sha256 TEXT,
+  artifact_length INTEGER,
+  artifact_sha256 TEXT,
   edge_id TEXT NOT NULL,
   edge_node_id TEXT NOT NULL,
   old_ledger_epoch TEXT NOT NULL,
@@ -14,13 +16,19 @@ CREATE TABLE edge_node_recovery_candidate (
   handoff_schema_version INTEGER NOT NULL CHECK (handoff_schema_version = 1),
   installed_at_ms INTEGER NOT NULL,
   CHECK (
-    (backup_id IS NULL AND source_database_length IS NULL AND source_database_sha256 IS NULL)
+    (backup_id IS NULL
+      AND source_database_length IS NULL AND source_database_sha256 IS NULL
+      AND artifact_length IS NULL AND artifact_sha256 IS NULL)
     OR
     (backup_id IS NOT NULL
       AND source_database_length IS NOT NULL AND source_database_length >= 0
       AND source_database_sha256 IS NOT NULL
       AND length(source_database_sha256) = 64
-      AND source_database_sha256 NOT GLOB '*[^0-9a-f]*')
+      AND source_database_sha256 NOT GLOB '*[^0-9a-f]*'
+      AND artifact_length IS NOT NULL AND artifact_length >= 0
+      AND artifact_sha256 IS NOT NULL
+      AND length(artifact_sha256) = 64
+      AND artifact_sha256 NOT GLOB '*[^0-9a-f]*')
   )
 );
 

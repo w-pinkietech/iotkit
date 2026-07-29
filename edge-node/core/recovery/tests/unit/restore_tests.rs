@@ -97,6 +97,109 @@ fn checked_in_restore_contracts_are_canonical_and_closed() {
     assert!(serde_json::from_slice::<RecoveryHandoff>(unknown).is_err());
 }
 
+#[test]
+fn restore_wire_schemas_and_rust_deserializers_share_closed_validation_boundaries() {
+    let handoff_schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/recovery-handoff-v1.schema.json"
+    ))
+    .unwrap();
+    let receipt_schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/restore-receipt-v1.schema.json"
+    ))
+    .unwrap();
+    let handoff_validator = jsonschema::validator_for(&handoff_schema).unwrap();
+    let receipt_validator = jsonschema::validator_for(&receipt_schema).unwrap();
+    let valid_handoff = serde_json::json!({
+        "schema_version": 1,
+        "recovery_id": "recovery-fixture",
+        "edge_id": "edge-fixture",
+        "edge_node_id": "node-fixture",
+        "old_ledger_epoch": "epoch-old-fixture",
+        "expected_backup_id": "backup-fixture",
+        "proposed_new_epoch": "epoch-new-fixture",
+        "credential_generation": 9223372036854775807_i64
+    });
+    let valid_receipt = serde_json::json!({
+        "schema_version": 1,
+        "status": "durably_fenced_candidate",
+        "recovery_id": "recovery-fixture",
+        "candidate_instance_id": "candidate-fixture",
+        "backup_id": "backup-fixture",
+        "edge_id": "edge-fixture",
+        "edge_node_id": "node-fixture",
+        "old_ledger_epoch": "epoch-old-fixture",
+        "proposed_new_epoch": "epoch-new-fixture",
+        "credential_generation": 9223372036854775807_i64
+    });
+    assert!(handoff_validator.is_valid(&valid_handoff));
+    assert!(receipt_validator.is_valid(&valid_receipt));
+    assert!(serde_json::from_value::<RecoveryHandoff>(valid_handoff.clone()).is_ok());
+    assert!(serde_json::from_value::<RestoreReceipt>(valid_receipt.clone()).is_ok());
+
+    let invalid_handoffs = [
+        ("unicode id", serde_json::json!({"recovery_id": "復旧"})),
+        ("schema overflow", serde_json::json!({"schema_version": 2})),
+        (
+            "credential overflow",
+            serde_json::json!({"credential_generation": 9223372036854775808_u128}),
+        ),
+        (
+            "missing backup",
+            serde_json::json!({"expected_backup_id": null}),
+        ),
+        (
+            "equal epochs",
+            serde_json::json!({
+                "old_ledger_epoch": "same-epoch",
+                "proposed_new_epoch": "same-epoch"
+            }),
+        ),
+    ];
+    for (name, patch) in invalid_handoffs {
+        let mut value = valid_handoff.clone();
+        if let (Some(object), Some(patch)) = (value.as_object_mut(), patch.as_object()) {
+            object.extend(patch.clone());
+        }
+        let schema_valid = handoff_validator.is_valid(&value)
+            && value["old_ledger_epoch"] != value["proposed_new_epoch"];
+        assert!(!schema_valid, "schema accepted {name}");
+        assert!(
+            serde_json::from_value::<RecoveryHandoff>(value).is_err(),
+            "Rust accepted {name}"
+        );
+    }
+
+    let invalid_receipts = [
+        ("unicode id", serde_json::json!({"edge_id": "復旧"})),
+        ("bad status", serde_json::json!({"status": "normal"})),
+        ("bad version", serde_json::json!({"schema_version": 2})),
+        (
+            "credential overflow",
+            serde_json::json!({"credential_generation": 9223372036854775808_u128}),
+        ),
+        (
+            "equal epochs",
+            serde_json::json!({
+                "old_ledger_epoch": "same-epoch",
+                "proposed_new_epoch": "same-epoch"
+            }),
+        ),
+    ];
+    for (name, patch) in invalid_receipts {
+        let mut value = valid_receipt.clone();
+        if let (Some(object), Some(patch)) = (value.as_object_mut(), patch.as_object()) {
+            object.extend(patch.clone());
+        }
+        let schema_valid = receipt_validator.is_valid(&value)
+            && value["old_ledger_epoch"] != value["proposed_new_epoch"];
+        assert!(!schema_valid, "schema accepted {name}");
+        assert!(
+            serde_json::from_value::<RestoreReceipt>(value).is_err(),
+            "Rust accepted {name}"
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn handoff_rejects_negative_generation_equal_epochs_and_missing_backup() {
@@ -641,7 +744,7 @@ fn replay_revalidates_configured_live_identity_and_published_authority() {
     .unwrap();
     assert_eq!(
         restore_candidate(&sidecar.request, &passphrase),
-        Err(RecoveryError::CandidateFenceInvalid)
+        Err(RecoveryError::CandidateConflict)
     );
 }
 
@@ -724,20 +827,146 @@ fn replay_rejects_same_ids_with_different_authenticated_database_content() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn replay_rejects_same_snapshot_manifest_with_different_encrypted_bytes() {
+    use std::fs;
+
+    let fixture = restore_fixture();
+    let passphrase = restore_passphrase();
+    restore_candidate(&fixture.request, &passphrase).unwrap();
+    let before = fs::read(&fixture.request.candidate_database).unwrap();
+
+    let manifest = authenticate_container(&fixture.request.input, &passphrase).unwrap();
+    let second_name = "second-encrypted.iotkit-node-backup";
+    let parent = fixture.request.input.parent().unwrap();
+    let output = DirectoryCapability::open(parent).unwrap();
+    encrypt_container(
+        &parent.join("snapshot.db"),
+        &manifest,
+        &passphrase,
+        &output,
+        second_name,
+    )
+    .unwrap();
+    fs::copy(parent.join(second_name), &fixture.request.input).unwrap();
+
+    assert_eq!(
+        restore_candidate(&fixture.request, &passphrase),
+        Err(RecoveryError::CandidateConflict)
+    );
+    assert_eq!(
+        fs::read(&fixture.request.candidate_database).unwrap(),
+        before
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_rejects_stale_candidate_sidecars_before_publish_and_after_rename_is_uncertain() {
+    use std::{fs, path::PathBuf};
+
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let fixture = restore_fixture();
+        let sidecar = PathBuf::from(format!(
+            "{}{}",
+            fixture.request.candidate_database.display(),
+            suffix
+        ));
+        fs::write(&sidecar, b"stale").unwrap();
+        assert_eq!(
+            restore_candidate(&fixture.request, &restore_passphrase()),
+            Err(RecoveryError::CandidateConflict),
+            "stale candidate sidecar {suffix}"
+        );
+        assert!(!fixture.request.candidate_database.exists());
+    }
+
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let fixture = restore_fixture();
+        let sidecar = PathBuf::from(format!(
+            "{}{}",
+            fixture.request.candidate_database.display(),
+            suffix
+        ));
+        let hook = |phase: crate::restore::RestorePhase, _published: bool| {
+            if phase == crate::restore::RestorePhase::RenameSucceeded {
+                fs::write(&sidecar, b"stale-after-rename").unwrap();
+            }
+            Ok(())
+        };
+        assert_eq!(
+            crate::restore::restore_candidate_inner(
+                &fixture.request,
+                &restore_passphrase(),
+                Some(&hook),
+            ),
+            Err(RecoveryError::CandidatePublicationUncertain),
+            "post-rename candidate sidecar {suffix}"
+        );
+        assert!(fixture.request.candidate_database.exists());
+        fs::remove_file(&sidecar).unwrap();
+        assert!(restore_candidate(&fixture.request, &restore_passphrase()).is_ok());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_keeps_unpublished_temp_bound_to_the_held_candidate_parent() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let fixture = restore_fixture();
+    let parent = fixture
+        .request
+        .candidate_database
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let moved_parent = parent.with_file_name(format!(
+        "{}-moved",
+        parent.file_name().unwrap().to_string_lossy()
+    ));
+    let replacement_parent = parent.clone();
+    let hook = |phase: crate::restore::RestorePhase, _published: bool| {
+        if phase == crate::restore::RestorePhase::Copied {
+            fs::rename(&replacement_parent, &moved_parent).unwrap();
+            fs::create_dir(&replacement_parent).unwrap();
+            fs::set_permissions(&replacement_parent, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        Ok(())
+    };
+
+    let result = crate::restore::restore_candidate_inner(
+        &fixture.request,
+        &restore_passphrase(),
+        Some(&hook),
+    );
+    assert!(result.is_ok(), "held parent restore failed: {result:?}");
+    assert!(moved_parent.join("candidate.db").exists());
+    assert!(!replacement_parent.join("candidate.db").exists());
+    fs::remove_dir_all(moved_parent).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn replay_rejects_direct_candidate_provenance_row_mismatch_without_replacement() {
     use std::fs;
 
-    for mismatch in ["source_database_length", "source_database_sha256"] {
+    for mismatch in [
+        "source_database_length",
+        "source_database_sha256",
+        "artifact_length",
+        "artifact_sha256",
+    ] {
         let fixture = restore_fixture();
         let passphrase = restore_passphrase();
         restore_candidate(&fixture.request, &passphrase).unwrap();
         let conn = rusqlite::Connection::open(&fixture.request.candidate_database).unwrap();
-        let before: (i64, String) = conn
+        let before: (i64, String, i64, String) = conn
             .query_row(
-                "SELECT source_database_length, source_database_sha256
+                "SELECT source_database_length, source_database_sha256,
+                        artifact_length, artifact_sha256
                  FROM edge_node_recovery_candidate WHERE singleton=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
         let immutable_trigger: String = conn
@@ -750,14 +979,28 @@ fn replay_rejects_direct_candidate_provenance_row_mismatch_without_replacement()
             .unwrap();
         conn.execute_batch("DROP TRIGGER edge_node_recovery_candidate_immutable")
             .unwrap();
-        let update = if mismatch == "source_database_length" {
-            "UPDATE edge_node_recovery_candidate
-             SET source_database_length = source_database_length + 1
-             WHERE singleton=1"
-        } else {
-            "UPDATE edge_node_recovery_candidate
-             SET source_database_sha256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-             WHERE singleton=1"
+        let update = match mismatch {
+            "source_database_length" => {
+                "UPDATE edge_node_recovery_candidate
+                 SET source_database_length = source_database_length + 1
+                 WHERE singleton=1"
+            }
+            "source_database_sha256" => {
+                "UPDATE edge_node_recovery_candidate
+                 SET source_database_sha256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+                 WHERE singleton=1"
+            }
+            "artifact_length" => {
+                "UPDATE edge_node_recovery_candidate
+                 SET artifact_length = artifact_length + 1
+                 WHERE singleton=1"
+            }
+            "artifact_sha256" => {
+                "UPDATE edge_node_recovery_candidate
+                 SET artifact_sha256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+                 WHERE singleton=1"
+            }
+            _ => unreachable!(),
         };
         conn.execute(update, []).unwrap();
         conn.execute_batch(&immutable_trigger).unwrap();
@@ -773,12 +1016,13 @@ fn replay_rejects_direct_candidate_provenance_row_mismatch_without_replacement()
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .unwrap();
-        let after: (i64, String) = conn
+        let after: (i64, String, i64, String) = conn
             .query_row(
-                "SELECT source_database_length, source_database_sha256
+                "SELECT source_database_length, source_database_sha256,
+                        artifact_length, artifact_sha256
                  FROM edge_node_recovery_candidate WHERE singleton=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
         assert_ne!(after, before);

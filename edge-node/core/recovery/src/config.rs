@@ -449,22 +449,7 @@ pub fn load_owner_only_handoff(path: &Path) -> Result<RecoveryHandoff, RecoveryE
         }
         let handoff: RecoveryHandoff =
             serde_json::from_slice(&bytes).map_err(|_| RecoveryError::InvalidConfiguration)?;
-        if handoff.schema_version != 1
-            || handoff.credential_generation < 0
-            || [
-                &handoff.recovery_id,
-                &handoff.edge_id,
-                &handoff.edge_node_id,
-                &handoff.old_ledger_epoch,
-                &handoff.proposed_new_epoch,
-            ]
-            .into_iter()
-            .any(|value| value.is_empty() || value.chars().any(char::is_control))
-            || handoff
-                .expected_backup_id
-                .as_deref()
-                .is_some_and(|value| value.is_empty() || value.chars().any(char::is_control))
-        {
+        if !crate::model::validate_recovery_handoff(&handoff) {
             return Err(RecoveryError::InvalidConfiguration);
         }
         Ok(handoff)

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::{
     ffi::CString,
     fs::File,
+    io::{Read, Seek},
     os::fd::{AsRawFd, FromRawFd},
     os::unix::{ffi::OsStrExt, fs::OpenOptionsExt},
 };
@@ -23,6 +24,8 @@ use rusqlite::{Connection, OpenFlags};
 use rusqlite::{Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[cfg(target_os = "linux")]
+use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
 use crate::container::{authenticate_container_file, decrypt_container_file_to_staging_file};
@@ -43,6 +46,8 @@ struct InstallCandidateState {
     backup_id: String,
     source_database_length: u64,
     source_database_sha256: String,
+    artifact_length: u64,
+    artifact_sha256: String,
     edge_id: String,
     edge_node_id: String,
     old_ledger_epoch: String,
@@ -88,6 +93,8 @@ fn install_preconditions(tx: &Transaction<'_>, context: &OpContext<'_>) -> Resul
         || !valid_identity(&state.backup_id)
         || i64::try_from(state.source_database_length).is_err()
         || !valid_digest(&state.source_database_sha256)
+        || i64::try_from(state.artifact_length).is_err()
+        || !valid_digest(&state.artifact_sha256)
         || !valid_identity(&state.edge_id)
         || !valid_identity(&state.edge_node_id)
         || !valid_identity(&state.old_ledger_epoch)
@@ -135,21 +142,26 @@ fn install_execute(tx: &Transaction<'_>, context: &OpContext<'_>) -> Result<Valu
     let state: InstallCandidateState = private_state(context)?;
     let source_database_length = i64::try_from(state.source_database_length)
         .map_err(|_| OpError::Validation("restore_candidate".into()))?;
+    let artifact_length = i64::try_from(state.artifact_length)
+        .map_err(|_| OpError::Validation("restore_candidate".into()))?;
     let new_auth_epoch = iotkit_core_ops::new_auth_epoch()?;
     iotkit_core_ops::enter_restored_local_recovery(tx, &new_auth_epoch)?;
     tx.execute(
         "INSERT INTO edge_node_recovery_candidate(
              singleton, state, recovery_id, candidate_instance_id, backup_id,
              source_database_length, source_database_sha256,
+             artifact_length, artifact_sha256,
              edge_id, edge_node_id, old_ledger_epoch, proposed_new_epoch,
              credential_generation, handoff_schema_version, installed_at_ms
-         ) VALUES(1, 'durably_fenced_candidate', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11)",
+         ) VALUES(1, 'durably_fenced_candidate', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13)",
         params![
             state.recovery_id,
             state.candidate_instance_id,
             state.backup_id,
             source_database_length,
             state.source_database_sha256,
+            artifact_length,
+            state.artifact_sha256,
             state.edge_id,
             state.edge_node_id,
             state.old_ledger_epoch,
@@ -162,10 +174,7 @@ fn install_execute(tx: &Transaction<'_>, context: &OpContext<'_>) -> Result<Valu
 }
 
 fn valid_identity(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && !value.contains(':')
-        && !value.chars().any(char::is_control)
+    crate::model::valid_recovery_id(value)
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -180,26 +189,12 @@ pub(crate) fn validate_handoff(
     handoff: &RecoveryHandoff,
     manifest: &NodeBackupManifest,
 ) -> Result<(), RecoveryError> {
-    validate_handoff_shape(handoff)?;
+    if !crate::model::validate_recovery_handoff(handoff) {
+        return Err(RecoveryError::HandoffMismatch);
+    }
     if handoff.expected_backup_id.as_deref() != Some(manifest.backup_id.as_str())
         || handoff.edge_node_id != manifest.edge_node_id
         || handoff.old_ledger_epoch != manifest.ledger_epoch
-    {
-        return Err(RecoveryError::HandoffMismatch);
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn validate_handoff_shape(handoff: &RecoveryHandoff) -> Result<(), RecoveryError> {
-    if handoff.schema_version != 1
-        || !valid_identity(&handoff.recovery_id)
-        || !valid_identity(&handoff.edge_id)
-        || !valid_identity(&handoff.edge_node_id)
-        || !valid_identity(&handoff.old_ledger_epoch)
-        || !valid_identity(&handoff.proposed_new_epoch)
-        || handoff.old_ledger_epoch == handoff.proposed_new_epoch
-        || handoff.credential_generation < 0
     {
         return Err(RecoveryError::HandoffMismatch);
     }
@@ -269,8 +264,14 @@ pub(crate) fn restore_candidate_inner(
     let live_name = file_name_cstring(&live)?;
     let candidate_name = file_name_cstring(&candidate)?;
     let _candidate_lock = acquire_candidate_lock(&candidate_parent, &candidate_name)?;
+    ensure_no_sidecars_at(&candidate_parent, &candidate_name)?;
     let live_identity = capture_optional_identity(&live_parent, &live_name)?;
     let (artifact_identity, manifest) = authenticate_input(&request.input, passphrase)?;
+    let mut decrypt_file = open_input(&request.input)?;
+    if file_identity(&decrypt_file)? != artifact_identity {
+        return Err(RecoveryError::CandidateConflict);
+    }
+    let artifact = artifact_provenance(&mut decrypt_file)?;
     if let Some(existing) = open_existing_candidate(&candidate_parent, &candidate_name)? {
         let receipt = replay_existing_candidate(
             existing,
@@ -278,6 +279,7 @@ pub(crate) fn restore_candidate_inner(
             &candidate_name,
             &request.handoff,
             &manifest,
+            &artifact,
         )?;
         validate_live_identity(
             &live_parent,
@@ -306,10 +308,6 @@ pub(crate) fn restore_candidate_inner(
         return Err(RecoveryError::StorageFull);
     }
 
-    let decrypt_file = open_input(&request.input)?;
-    if file_identity(&decrypt_file)? != artifact_identity {
-        return Err(RecoveryError::CandidateConflict);
-    }
     let (mut plaintext, decrypted_manifest) = decrypt_container_file_to_staging_file(
         decrypt_file,
         passphrase,
@@ -336,7 +334,7 @@ pub(crate) fn restore_candidate_inner(
         return Err(RecoveryError::Storage);
     }
     let mut temporary = unsafe { File::from_raw_fd(temporary_fd) };
-    let temporary_path = candidate_parent_path.join(&temporary_name);
+    let temporary_fd_path = file_path_from_fd(&temporary)?;
     let mut published = false;
     let result = (|| {
         plaintext.rewind().map_err(|_| RecoveryError::Storage)?;
@@ -344,7 +342,7 @@ pub(crate) fn restore_candidate_inner(
         temporary.sync_all().map_err(|_| RecoveryError::Storage)?;
         invoke_hook(hook, RestorePhase::Copied, false)?;
 
-        let facts = validate_snapshot(&temporary_path)?;
+        let facts = validate_snapshot(&temporary_fd_path)?;
         if facts.edge_node_id != manifest.edge_node_id
             || facts.ledger_epoch != manifest.ledger_epoch
             || facts.database_length != manifest.database_length
@@ -352,18 +350,20 @@ pub(crate) fn restore_candidate_inner(
         {
             return Err(RecoveryError::ManifestInvalid);
         }
-        let edge_id = load_activation_edge_id(&temporary_path)?;
+        let edge_id = load_activation_edge_id(&temporary_fd_path)?;
         if edge_id != request.handoff.edge_id {
             return Err(RecoveryError::HandoffMismatch);
         }
         dispatch_install_candidate(
-            &temporary_path,
+            &temporary_fd_path,
             InstallCandidateState {
                 recovery_id: request.handoff.recovery_id.clone(),
                 candidate_instance_id: random_id("candidate")?,
                 backup_id: manifest.backup_id.clone(),
                 source_database_length: manifest.database_length,
                 source_database_sha256: manifest.database_sha256.clone(),
+                artifact_length: artifact.length,
+                artifact_sha256: artifact.sha256.clone(),
                 edge_id,
                 edge_node_id: manifest.edge_node_id.clone(),
                 old_ledger_epoch: manifest.ledger_epoch.clone(),
@@ -374,17 +374,18 @@ pub(crate) fn restore_candidate_inner(
         )?;
         invoke_hook(hook, RestorePhase::FenceCommitted, false)?;
 
-        checkpoint_without_wal(&temporary_path)?;
+        checkpoint_without_wal(&temporary_fd_path)?;
         invoke_hook(hook, RestorePhase::Checkpointed, false)?;
-        ensure_no_sidecars(&temporary_path)?;
+        ensure_no_sidecars_at(&candidate_parent, &temporary_c)?;
         temporary.sync_all().map_err(|_| RecoveryError::Storage)?;
         invoke_hook(hook, RestorePhase::CandidateFileSynced, false)?;
+        ensure_no_sidecars_at(&candidate_parent, &candidate_name)?;
         publish_noreplace(&candidate_parent, &temporary_c, &candidate_name)?;
+        published = true;
         invoke_hook(hook, RestorePhase::RenameSucceeded, true)?;
         candidate_parent
             .sync_directory()
             .map_err(|_| RecoveryError::CandidatePublicationUncertain)?;
-        published = true;
         invoke_hook(hook, RestorePhase::ParentSynced, true)?;
         let published = open_existing_candidate(&candidate_parent, &candidate_name)?
             .ok_or(RecoveryError::CandidatePublicationUncertain)?;
@@ -394,12 +395,20 @@ pub(crate) fn restore_candidate_inner(
             &candidate_name,
             &request.handoff,
             &manifest,
+            &artifact,
         )?;
         invoke_hook(hook, RestorePhase::PublishedReadbackVerified, true)?;
         ensure_live_unchanged(&live_parent, &live_name, live_identity)?;
         Ok(receipt)
     })();
 
+    let result = result.map_err(|error| {
+        if published {
+            RecoveryError::CandidatePublicationUncertain
+        } else {
+            error
+        }
+    });
     if result.is_err() {
         // Once rename succeeds the candidate is deliberately retained so the
         // next invocation can perform exact, non-mutating reconciliation.
@@ -461,8 +470,7 @@ fn checkpoint_without_wal(path: &Path) -> Result<(), RecoveryError> {
     }
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
         .map_err(|_| RecoveryError::CandidateFenceInvalid)?;
-    drop(conn);
-    ensure_no_sidecars(path)
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -485,6 +493,7 @@ fn read_and_verify_candidate(
     name: &CString,
     handoff: &RecoveryHandoff,
     manifest: &NodeBackupManifest,
+    artifact: &ArtifactProvenance,
 ) -> Result<RestoreReceipt, RecoveryError> {
     let path = file_path_from_fd(&file)?;
     ensure_no_sidecars_at(parent, name)?;
@@ -531,12 +540,15 @@ fn read_and_verify_candidate(
         || receipt.credential_generation != handoff.credential_generation
         || i64::try_from(manifest.database_length).ok() != Some(provenance.database_length)
         || provenance.database_sha256 != manifest.database_sha256
+        || i64::try_from(artifact.length).ok() != Some(provenance.artifact_length)
+        || artifact.sha256 != provenance.artifact_sha256
     {
         return Err(RecoveryError::CandidateConflict);
     }
     // The descriptor-backed checks above prove the contents of `file`.  Recheck
     // the configured candidate name immediately before returning so a concurrent
     // rename or hard-link cannot make the published name point at another inode.
+    ensure_no_sidecars_at(parent, name)?;
     ensure_candidate_name_identity(parent, name, &file)?;
     Ok(receipt)
 }
@@ -585,23 +597,21 @@ fn ensure_no_sidecars_at(
         let mut sidecar = name.as_bytes().to_vec();
         sidecar.extend_from_slice(suffix);
         let sidecar = CString::new(sidecar).map_err(|_| RecoveryError::CandidateFenceInvalid)?;
-        let fd = unsafe {
-            libc::openat(
+        let mut metadata = std::mem::MaybeUninit::<libc::stat>::zeroed();
+        if unsafe {
+            libc::fstatat(
                 parent.as_raw_fd(),
                 sidecar.as_ptr(),
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                metadata.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
             )
-        };
-        if fd >= 0 {
-            drop(unsafe { File::from_raw_fd(fd) });
-            return Err(RecoveryError::CandidateFenceInvalid);
+        } == 0
+        {
+            return Err(RecoveryError::CandidateConflict);
         }
         let error = std::io::Error::last_os_error();
         if error.kind() == std::io::ErrorKind::NotFound {
             continue;
-        }
-        if error.raw_os_error() == Some(libc::ELOOP) {
-            return Err(RecoveryError::CandidateConflict);
         }
         return Err(RecoveryError::Storage);
     }
@@ -612,53 +622,110 @@ fn ensure_no_sidecars_at(
 struct CandidateProvenance {
     database_length: i64,
     database_sha256: String,
+    artifact_length: i64,
+    artifact_sha256: String,
+}
+
+#[cfg(target_os = "linux")]
+struct ArtifactProvenance {
+    length: u64,
+    sha256: String,
+}
+
+#[cfg(target_os = "linux")]
+fn artifact_provenance(file: &mut File) -> Result<ArtifactProvenance, RecoveryError> {
+    let length = file.metadata().map_err(|_| RecoveryError::Storage)?.len();
+    file.rewind().map_err(|_| RecoveryError::Storage)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|_| RecoveryError::Storage)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    file.rewind().map_err(|_| RecoveryError::Storage)?;
+    let digest = digest.finalize();
+    Ok(ArtifactProvenance {
+        length,
+        sha256: hex(&digest),
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn read_candidate_provenance(conn: &Connection) -> Result<CandidateProvenance, RecoveryError> {
-    let (database_length, database_sha256): (Option<i64>, Option<String>) = conn
+    let (database_length, database_sha256, artifact_length, artifact_sha256): (
+        Option<i64>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+    ) = conn
         .query_row(
-            "SELECT source_database_length, source_database_sha256
+            "SELECT source_database_length, source_database_sha256,
+                    artifact_length, artifact_sha256
              FROM edge_node_recovery_candidate WHERE singleton=1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|_| RecoveryError::CandidateFenceInvalid)?;
-    let (Some(database_length), Some(database_sha256)) = (database_length, database_sha256) else {
+    let (
+        Some(database_length),
+        Some(database_sha256),
+        Some(artifact_length),
+        Some(artifact_sha256),
+    ) = (
+        database_length,
+        database_sha256,
+        artifact_length,
+        artifact_sha256,
+    )
+    else {
         return Err(RecoveryError::CandidateFenceInvalid);
     };
-    if database_length < 0 || !valid_digest(&database_sha256) {
+    if database_length < 0
+        || !valid_digest(&database_sha256)
+        || artifact_length < 0
+        || !valid_digest(&artifact_sha256)
+    {
         return Err(RecoveryError::CandidateFenceInvalid);
     }
     Ok(CandidateProvenance {
         database_length,
         database_sha256,
+        artifact_length,
+        artifact_sha256,
     })
 }
 
 #[cfg(target_os = "linux")]
 fn read_candidate_receipt(conn: &Connection) -> Result<RestoreReceipt, RecoveryError> {
-    conn.query_row(
-        "SELECT recovery_id, candidate_instance_id, backup_id, edge_id, edge_node_id,
+    let receipt = conn
+        .query_row(
+            "SELECT recovery_id, candidate_instance_id, backup_id, edge_id, edge_node_id,
                 old_ledger_epoch, proposed_new_epoch, credential_generation
          FROM edge_node_recovery_candidate WHERE singleton=1",
-        [],
-        |row| {
-            Ok(RestoreReceipt {
-                schema_version: 1,
-                status: RestoreStatus::DurablyFencedCandidate,
-                recovery_id: row.get(0)?,
-                candidate_instance_id: row.get(1)?,
-                backup_id: row.get(2)?,
-                edge_id: row.get(3)?,
-                edge_node_id: row.get(4)?,
-                old_ledger_epoch: row.get(5)?,
-                proposed_new_epoch: row.get(6)?,
-                credential_generation: row.get(7)?,
-            })
-        },
-    )
-    .map_err(|_| RecoveryError::CandidateFenceInvalid)
+            [],
+            |row| {
+                Ok(RestoreReceipt {
+                    schema_version: 1,
+                    status: RestoreStatus::DurablyFencedCandidate,
+                    recovery_id: row.get(0)?,
+                    candidate_instance_id: row.get(1)?,
+                    backup_id: row.get(2)?,
+                    edge_id: row.get(3)?,
+                    edge_node_id: row.get(4)?,
+                    old_ledger_epoch: row.get(5)?,
+                    proposed_new_epoch: row.get(6)?,
+                    credential_generation: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|_| RecoveryError::CandidateFenceInvalid)?;
+    if !crate::model::validate_restore_receipt(&receipt) {
+        return Err(RecoveryError::CandidateFenceInvalid);
+    }
+    Ok(receipt)
 }
 
 #[cfg(target_os = "linux")]
@@ -668,6 +735,7 @@ fn replay_existing_candidate(
     name: &CString,
     handoff: &RecoveryHandoff,
     manifest: &NodeBackupManifest,
+    artifact: &ArtifactProvenance,
 ) -> Result<RestoreReceipt, RecoveryError> {
     // Re-sync before readback.  The final descriptor-relative name check in
     // `read_and_verify_candidate` must be the last filesystem observation
@@ -675,7 +743,7 @@ fn replay_existing_candidate(
     parent
         .sync_directory()
         .map_err(|_| RecoveryError::CandidatePublicationUncertain)?;
-    let receipt = read_and_verify_candidate(file, parent, name, handoff, manifest)?;
+    let receipt = read_and_verify_candidate(file, parent, name, handoff, manifest, artifact)?;
     Ok(receipt)
 }
 
@@ -1055,18 +1123,6 @@ fn ensure_live_unchanged(
 ) -> Result<(), RecoveryError> {
     if capture_optional_identity(parent, name)? != expected {
         return Err(RecoveryError::CandidatePublicationUncertain);
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn ensure_no_sidecars(path: &Path) -> Result<(), RecoveryError> {
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let mut sidecar = path.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        if PathBuf::from(sidecar).exists() {
-            return Err(RecoveryError::CandidateFenceInvalid);
-        }
     }
     Ok(())
 }

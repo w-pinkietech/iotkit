@@ -1,5 +1,6 @@
 use std::{fmt, path::PathBuf};
 
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -89,8 +90,7 @@ pub(crate) mod integer {
 pub const NODE_BACKUP_SUFFIX: &str = ".iotkit-node-backup";
 pub const NODE_BACKUP_FORMAT_VERSION: u32 = 1;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct RecoveryHandoff {
     pub schema_version: u32,
     pub recovery_id: String,
@@ -100,6 +100,64 @@ pub struct RecoveryHandoff {
     pub expected_backup_id: Option<String>,
     pub proposed_new_epoch: String,
     pub credential_generation: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryHandoffWire {
+    schema_version: u32,
+    recovery_id: String,
+    edge_id: String,
+    edge_node_id: String,
+    old_ledger_epoch: String,
+    expected_backup_id: Option<String>,
+    proposed_new_epoch: String,
+    credential_generation: i64,
+}
+
+impl<'de> Deserialize<'de> for RecoveryHandoff {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = RecoveryHandoffWire::deserialize(deserializer)?;
+        let handoff = Self {
+            schema_version: wire.schema_version,
+            recovery_id: wire.recovery_id,
+            edge_id: wire.edge_id,
+            edge_node_id: wire.edge_node_id,
+            old_ledger_epoch: wire.old_ledger_epoch,
+            expected_backup_id: wire.expected_backup_id,
+            proposed_new_epoch: wire.proposed_new_epoch,
+            credential_generation: wire.credential_generation,
+        };
+        validate_recovery_handoff(&handoff)
+            .then_some(handoff)
+            .ok_or_else(|| D::Error::custom("invalid recovery handoff"))
+    }
+}
+
+pub(crate) fn valid_recovery_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+pub(crate) fn validate_recovery_handoff(handoff: &RecoveryHandoff) -> bool {
+    handoff.schema_version == 1
+        && valid_recovery_id(&handoff.recovery_id)
+        && valid_recovery_id(&handoff.edge_id)
+        && valid_recovery_id(&handoff.edge_node_id)
+        && valid_recovery_id(&handoff.old_ledger_epoch)
+        && handoff
+            .expected_backup_id
+            .as_deref()
+            .is_some_and(valid_recovery_id)
+        && valid_recovery_id(&handoff.proposed_new_epoch)
+        && handoff.old_ledger_epoch != handoff.proposed_new_epoch
+        && handoff.credential_generation >= 0
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,8 +293,7 @@ pub struct RestoreRequest {
     pub handoff: RecoveryHandoff,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct RestoreReceipt {
     pub schema_version: u32,
     pub status: RestoreStatus,
@@ -248,6 +305,59 @@ pub struct RestoreReceipt {
     pub old_ledger_epoch: String,
     pub proposed_new_epoch: String,
     pub credential_generation: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreReceiptWire {
+    schema_version: u32,
+    status: RestoreStatus,
+    recovery_id: String,
+    candidate_instance_id: String,
+    backup_id: String,
+    edge_id: String,
+    edge_node_id: String,
+    old_ledger_epoch: String,
+    proposed_new_epoch: String,
+    credential_generation: i64,
+}
+
+impl<'de> Deserialize<'de> for RestoreReceipt {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = RestoreReceiptWire::deserialize(deserializer)?;
+        let receipt = Self {
+            schema_version: wire.schema_version,
+            status: wire.status,
+            recovery_id: wire.recovery_id,
+            candidate_instance_id: wire.candidate_instance_id,
+            backup_id: wire.backup_id,
+            edge_id: wire.edge_id,
+            edge_node_id: wire.edge_node_id,
+            old_ledger_epoch: wire.old_ledger_epoch,
+            proposed_new_epoch: wire.proposed_new_epoch,
+            credential_generation: wire.credential_generation,
+        };
+        validate_restore_receipt(&receipt)
+            .then_some(receipt)
+            .ok_or_else(|| D::Error::custom("invalid restore receipt"))
+    }
+}
+
+pub(crate) fn validate_restore_receipt(receipt: &RestoreReceipt) -> bool {
+    receipt.schema_version == 1
+        && matches!(receipt.status, RestoreStatus::DurablyFencedCandidate)
+        && valid_recovery_id(&receipt.recovery_id)
+        && valid_recovery_id(&receipt.candidate_instance_id)
+        && valid_recovery_id(&receipt.backup_id)
+        && valid_recovery_id(&receipt.edge_id)
+        && valid_recovery_id(&receipt.edge_node_id)
+        && valid_recovery_id(&receipt.old_ledger_epoch)
+        && valid_recovery_id(&receipt.proposed_new_epoch)
+        && receipt.old_ledger_epoch != receipt.proposed_new_epoch
+        && receipt.credential_generation >= 0
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

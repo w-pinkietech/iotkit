@@ -11,6 +11,8 @@ const CANDIDATE_COLUMNS: &[&str] = &[
     "backup_id",
     "source_database_length",
     "source_database_sha256",
+    "artifact_length",
+    "artifact_sha256",
     "edge_id",
     "edge_node_id",
     "old_ledger_epoch",
@@ -24,11 +26,12 @@ fn install_candidate(conn: &Connection) {
     conn.execute(
         "INSERT INTO edge_node_recovery_candidate(
              singleton, state, recovery_id, candidate_instance_id, backup_id,
-             source_database_length, source_database_sha256, edge_id,
+             source_database_length, source_database_sha256, artifact_length, artifact_sha256, edge_id,
              edge_node_id, old_ledger_epoch, proposed_new_epoch, credential_generation,
              handoff_schema_version, installed_at_ms
          ) VALUES(1, 'durably_fenced_candidate', 'recovery-1', 'candidate-1',
              'backup-1', 1, '0000000000000000000000000000000000000000000000000000000000000000',
+             1, '1111111111111111111111111111111111111111111111111111111111111111',
              'edge-1', 'node-1', 'epoch-old', 'epoch-new', 0, 1, 1)",
         [],
     )
@@ -145,6 +148,46 @@ fn valid_candidate_is_reported_as_fenced_without_exposing_node_identity() {
             credential_generation: 0,
         }
     );
+}
+
+#[test]
+fn candidate_provenance_requires_all_fields_or_all_null() {
+    let conn = crate::tests_support::complete_database();
+    assert!(conn
+        .execute(
+            "INSERT INTO edge_node_recovery_candidate(
+                 singleton, state, recovery_id, candidate_instance_id, backup_id,
+                 source_database_length, source_database_sha256, edge_id, edge_node_id,
+                 old_ledger_epoch, proposed_new_epoch, credential_generation,
+                 handoff_schema_version, installed_at_ms
+             ) VALUES(1, 'durably_fenced_candidate', 'recovery-mixed', 'candidate-mixed',
+                 'backup-mixed', 1, '0000000000000000000000000000000000000000000000000000000000000000',
+                 'edge-1', 'node-1', 'epoch-old', 'epoch-new', 0, 1, 1)",
+            [],
+        )
+        .is_err());
+
+    let conn = crate::tests_support::complete_database();
+    conn.execute(
+        "INSERT INTO edge_node_recovery_candidate(
+             singleton, state, recovery_id, candidate_instance_id, backup_id,
+             source_database_length, source_database_sha256, artifact_length,
+             artifact_sha256, edge_id, edge_node_id, old_ledger_epoch,
+             proposed_new_epoch, credential_generation, handoff_schema_version,
+             installed_at_ms
+         ) VALUES(1, 'durably_fenced_candidate', 'recovery-empty', 'candidate-empty',
+             NULL, NULL, NULL, NULL, NULL, 'edge-1', 'node-1', 'epoch-old',
+             'epoch-new', 0, 1, 1)",
+        [],
+    )
+    .unwrap();
+    assert!(matches!(
+        startup_mode(&conn).unwrap(),
+        RecoveryStartupMode::FencedCandidate {
+            backup_id: None,
+            ..
+        }
+    ));
 }
 
 #[test]

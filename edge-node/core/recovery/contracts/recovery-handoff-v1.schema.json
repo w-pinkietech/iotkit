@@ -4,6 +4,9 @@
   "title": "IoTKit Edge Node recovery handoff v1",
   "type": "object",
   "additionalProperties": false,
+  "x-iotkit-constraints": [
+    { "type": "not_equal", "left": "old_ledger_epoch", "right": "proposed_new_epoch" }
+  ],
   "required": [
     "schema_version",
     "recovery_id",
@@ -16,12 +19,12 @@
   ],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
-    "recovery_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
-    "edge_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
-    "edge_node_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
-    "old_ledger_epoch": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
-    "expected_backup_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
-    "proposed_new_epoch": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\u0000-\\u001f\\u007f-\\u009f]+$" },
-    "credential_generation": { "type": "integer", "minimum": 0 }
+    "recovery_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9._-]+$" },
+    "edge_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9._-]+$" },
+    "edge_node_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9._-]+$" },
+    "old_ledger_epoch": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9._-]+$" },
+    "expected_backup_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9._-]+$" },
+    "proposed_new_epoch": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[A-Za-z0-9._-]+$" },
+    "credential_generation": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
   }
 }
