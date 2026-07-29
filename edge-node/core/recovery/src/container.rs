@@ -1,9 +1,16 @@
 use std::{
     fmt,
-    fs::{self, File},
+    fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
     path::Path,
 };
+
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
@@ -13,7 +20,6 @@ use chacha20poly1305::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tempfile::NamedTempFile;
 use zeroize::Zeroizing;
 
 use crate::{BackupPassphrase, NodeBackupManifest, RecoveryError, SnapshotMode};
@@ -26,9 +32,13 @@ const SALT_BYTES: usize = 16;
 const NONCE_PREFIX_BYTES: usize = 16;
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
+#[allow(dead_code)]
 const DEFAULT_KDF_TIME: u32 = 3;
+#[allow(dead_code)]
 const DEFAULT_KDF_MEMORY_KIB: u32 = 65_536;
+#[allow(dead_code)]
 const DEFAULT_KDF_PARALLELISM: u32 = 4;
+#[allow(dead_code)]
 const DEFAULT_CHUNK_SIZE: usize = 256 * 1024;
 const MIN_CHUNK_SIZE: usize = 4 * 1024;
 const MAX_CHUNK_SIZE: usize = 4 * 1024 * 1024;
@@ -122,29 +132,48 @@ fn encrypt_snapshot_reader(
     salt: [u8; SALT_BYTES],
     nonce_prefix: [u8; NONCE_PREFIX_BYTES],
 ) -> Result<(), RecoveryError> {
-    encrypt_snapshot_reader_with_output_init(
-        snapshot_reader,
-        manifest,
-        passphrase,
-        output,
-        salt,
-        nonce_prefix,
-        |_| Ok(()),
-    )
+    validate_manifest(manifest)?;
+    #[cfg(target_os = "linux")]
+    {
+        let mut output_file = LinuxEncryptedOutput::new(output)?;
+        encrypt_snapshot_contents(
+            snapshot_reader,
+            manifest,
+            passphrase,
+            salt,
+            nonce_prefix,
+            &mut output_file,
+        )?;
+        output_file.publish()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (
+            snapshot_reader,
+            manifest,
+            passphrase,
+            output,
+            salt,
+            nonce_prefix,
+        );
+        Err(RecoveryError::PlatformUnsupported)
+    }
 }
 
-fn encrypt_snapshot_reader_with_output_init(
+#[allow(dead_code)]
+trait EncryptionOutput: Write {
+    fn sync_file(&mut self) -> io::Result<()>;
+}
+
+#[allow(dead_code)]
+fn encrypt_snapshot_contents(
     snapshot_reader: impl Read,
     manifest: &NodeBackupManifest,
     passphrase: &BackupPassphrase,
-    output: &Path,
     salt: [u8; SALT_BYTES],
     nonce_prefix: [u8; NONCE_PREFIX_BYTES],
-    initialize_output: impl FnOnce(&mut NamedTempFile) -> Result<(), RecoveryError>,
+    output_file: &mut impl EncryptionOutput,
 ) -> Result<(), RecoveryError> {
-    validate_manifest(manifest)?;
-    ensure_absent(output)?;
-
     let header = ContainerHeader {
         artifact_kind: "iotkit_edge_node_database".into(),
         format_version: 1,
@@ -182,87 +211,228 @@ fn encrypt_snapshot_reader_with_output_init(
     let mut database_length = 0_u64;
     let mut database_digest = Sha256::new();
 
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let mut output_file = NamedTempFile::new_in(parent).map_err(|_| RecoveryError::Storage)?;
-    initialize_output(&mut output_file)?;
-    let output_file_handle = output_file.as_file_mut();
-    let result = (|| {
-        output_file_handle
-            .write_all(MAGIC)
-            .map_err(|_| RecoveryError::Storage)?;
-        output_file_handle
-            .write_all(&(header_json.len() as u32).to_be_bytes())
-            .map_err(|_| RecoveryError::Storage)?;
-        output_file_handle
-            .write_all(&header_json)
-            .map_err(|_| RecoveryError::Storage)?;
+    output_file
+        .write_all(MAGIC)
+        .map_err(|_| RecoveryError::Storage)?;
+    output_file
+        .write_all(&(header_json.len() as u32).to_be_bytes())
+        .map_err(|_| RecoveryError::Storage)?;
+    output_file
+        .write_all(&header_json)
+        .map_err(|_| RecoveryError::Storage)?;
 
-        let mut buffer = vec![0_u8; header.chunk_size];
-        let mut sequence = 0_u64;
-        loop {
-            let count = read_chunk(&mut input, &mut buffer).map_err(|_| RecoveryError::Storage)?;
-            if count == 0 {
-                if prefix_remaining != 0
-                    || database_length != manifest.database_length
-                    || hex_digest(database_digest.clone().finalize()) != manifest.database_sha256
-                {
-                    return Err(RecoveryError::ManifestInvalid);
-                }
-                write_record(
-                    output_file_handle,
-                    &cipher,
-                    &nonce_prefix,
-                    &digest,
-                    sequence,
-                    TERMINAL_FLAGS,
-                    &[],
-                )?;
-                break;
-            }
-            let prefix_count = prefix_remaining.min(count);
-            prefix_remaining -= prefix_count;
-            let database = &buffer[prefix_count..count];
-            let database_count =
-                u64::try_from(database.len()).map_err(|_| RecoveryError::ManifestInvalid)?;
-            database_length = database_length
-                .checked_add(database_count)
-                .ok_or(RecoveryError::ManifestInvalid)?;
-            if database_length > manifest.database_length {
+    let mut buffer = vec![0_u8; header.chunk_size];
+    let mut sequence = 0_u64;
+    loop {
+        let count = read_chunk(&mut input, &mut buffer).map_err(|_| RecoveryError::Storage)?;
+        if count == 0 {
+            if prefix_remaining != 0
+                || database_length != manifest.database_length
+                || hex_digest(database_digest.clone().finalize()) != manifest.database_sha256
+            {
                 return Err(RecoveryError::ManifestInvalid);
             }
-            database_digest.update(database);
             write_record(
-                output_file_handle,
+                output_file,
                 &cipher,
                 &nonce_prefix,
                 &digest,
                 sequence,
-                DATA_FLAGS,
-                &buffer[..count],
+                TERMINAL_FLAGS,
+                &[],
             )?;
-            sequence = sequence
-                .checked_add(1)
-                .ok_or(RecoveryError::ContainerInvalid)?;
+            break;
         }
-        output_file_handle
-            .sync_all()
-            .map_err(|_| RecoveryError::Storage)
-    })();
-    if let Err(error) = result {
-        drop(output_file);
-        return Err(error);
+        let prefix_count = prefix_remaining.min(count);
+        prefix_remaining -= prefix_count;
+        let database = &buffer[prefix_count..count];
+        let database_count =
+            u64::try_from(database.len()).map_err(|_| RecoveryError::ManifestInvalid)?;
+        database_length = database_length
+            .checked_add(database_count)
+            .ok_or(RecoveryError::ManifestInvalid)?;
+        if database_length > manifest.database_length {
+            return Err(RecoveryError::ManifestInvalid);
+        }
+        database_digest.update(database);
+        write_record(
+            output_file,
+            &cipher,
+            &nonce_prefix,
+            &digest,
+            sequence,
+            DATA_FLAGS,
+            &buffer[..count],
+        )?;
+        sequence = sequence
+            .checked_add(1)
+            .ok_or(RecoveryError::ContainerInvalid)?;
     }
-    match output_file.persist_noclobber(output) {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            let reason = if error.error.kind() == io::ErrorKind::AlreadyExists {
-                RecoveryError::DestinationExists
-            } else {
-                RecoveryError::Storage
-            };
-            drop(error.file);
-            Err(reason)
+    output_file.sync_file().map_err(|_| RecoveryError::Storage)
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxEncryptedOutput {
+    parent: File,
+    file: File,
+    name: CString,
+    ops: LinuxOutputOps,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct LinuxOutputOps {
+    write: fn(&mut File, &[u8]) -> io::Result<usize>,
+    sync_file: fn(&File) -> io::Result<()>,
+    link: fn(&File, &File, &CString) -> io::Result<()>,
+    sync_directory: fn(&File) -> io::Result<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxOutputOps {
+    fn system() -> Self {
+        Self {
+            write: system_write,
+            sync_file: system_sync_file,
+            link: system_link,
+            sync_directory: system_sync_directory,
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn system_write(file: &mut File, bytes: &[u8]) -> io::Result<usize> {
+    file.write(bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn system_sync_file(file: &File) -> io::Result<()> {
+    file.sync_all()
+}
+
+#[cfg(target_os = "linux")]
+fn system_link(file: &File, parent: &File, name: &CString) -> io::Result<()> {
+    let result = unsafe {
+        libc::linkat(
+            file.as_raw_fd(),
+            c"".as_ptr(),
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::AT_EMPTY_PATH,
+        )
+    };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn system_sync_directory(parent: &File) -> io::Result<()> {
+    let result = unsafe { libc::fsync(parent.as_raw_fd()) };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxEncryptedOutput {
+    fn new(output: &Path) -> Result<Self, RecoveryError> {
+        Self::new_with_ops(output, LinuxOutputOps::system())
+    }
+
+    fn new_with_ops(output: &Path, ops: LinuxOutputOps) -> Result<Self, RecoveryError> {
+        let parent_path = output.parent().unwrap_or_else(|| Path::new("."));
+        let name = output
+            .file_name()
+            .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+            .ok_or(RecoveryError::ContainerInvalid)?;
+        let name = CString::new(name.as_bytes()).map_err(|_| RecoveryError::ContainerInvalid)?;
+        let parent_name = CString::new(parent_path.as_os_str().as_bytes())
+            .map_err(|_| RecoveryError::PlatformUnsupported)?;
+        let parent_fd = unsafe {
+            libc::open(
+                parent_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if parent_fd < 0 {
+            return Err(RecoveryError::Storage);
+        }
+        let parent = unsafe { File::from_raw_fd(parent_fd) };
+        let dot = c".";
+        let file_fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                dot.as_ptr(),
+                libc::O_TMPFILE | libc::O_RDWR | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if file_fd < 0 {
+            let error = io::Error::last_os_error();
+            return if matches!(error.raw_os_error(), Some(code) if code == libc::EOPNOTSUPP
+                || code == libc::ENOTSUP
+                || code == libc::EINVAL)
+            {
+                Err(RecoveryError::PlatformUnsupported)
+            } else {
+                Err(RecoveryError::Storage)
+            };
+        }
+        Ok(Self {
+            parent,
+            file: unsafe { File::from_raw_fd(file_fd) },
+            name,
+            ops,
+        })
+    }
+
+    fn publish(self) -> Result<(), RecoveryError> {
+        if let Err(error) = (self.ops.link)(&self.file, &self.parent, &self.name) {
+            return if error.kind() == io::ErrorKind::AlreadyExists {
+                Err(RecoveryError::DestinationExists)
+            } else if matches!(error.raw_os_error(), Some(code) if code == libc::EOPNOTSUPP
+                || code == libc::ENOTSUP
+                || code == libc::EINVAL)
+            {
+                Err(RecoveryError::PlatformUnsupported)
+            } else {
+                Err(RecoveryError::Storage)
+            };
+        }
+        if (self.ops.sync_directory)(&self.parent).is_err() {
+            return Err(RecoveryError::ArtifactPublicationUncertain);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Write for LinuxEncryptedOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        (self.ops.write)(&mut self.file, bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl EncryptionOutput for LinuxEncryptedOutput {
+    fn sync_file(&mut self) -> io::Result<()> {
+        (self.ops.sync_file)(&self.file)
+    }
+}
+
+#[allow(dead_code)]
+impl EncryptionOutput for File {
+    fn sync_file(&mut self) -> io::Result<()> {
+        self.sync_all()
     }
 }
 
@@ -300,9 +470,7 @@ pub struct DecryptedStage {
 
 impl DecryptedStage {
     fn new(staging_directory: &Path) -> Result<Self, RecoveryError> {
-        tempfile::tempfile_in(staging_directory)
-            .map(|file| Self { file })
-            .map_err(|_| RecoveryError::Storage)
+        create_anonymous_plaintext_file(staging_directory).map(|file| Self { file })
     }
 
     fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -317,6 +485,64 @@ impl DecryptedStage {
     pub fn rewind(&mut self) -> io::Result<()> {
         self.file.seek(SeekFrom::Start(0)).map(|_| ())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn create_anonymous_plaintext_file(staging_directory: &Path) -> Result<File, RecoveryError> {
+    let directory = CString::new(staging_directory.as_os_str().as_bytes())
+        .map_err(|_| RecoveryError::PlatformUnsupported)?;
+    let directory_fd = unsafe {
+        libc::open(
+            directory.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if directory_fd < 0 {
+        return Err(RecoveryError::Storage);
+    }
+    let directory = unsafe { File::from_raw_fd(directory_fd) };
+    create_anonymous_plaintext_file_with(directory, linux_open_tmpfile)
+}
+
+#[cfg(target_os = "linux")]
+fn create_anonymous_plaintext_file_with(
+    directory: File,
+    open_tmpfile: impl FnOnce(i32) -> io::Result<i32>,
+) -> Result<File, RecoveryError> {
+    let plaintext_fd = open_tmpfile(directory.as_raw_fd()).map_err(|error| {
+        if matches!(error.raw_os_error(), Some(code) if code == libc::EOPNOTSUPP
+            || code == libc::ENOTSUP
+            || code == libc::EINVAL)
+        {
+            RecoveryError::PlatformUnsupported
+        } else {
+            RecoveryError::Storage
+        }
+    })?;
+    Ok(unsafe { File::from_raw_fd(plaintext_fd) })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_open_tmpfile(directory_fd: i32) -> io::Result<i32> {
+    let dot = c".";
+    let plaintext_fd = unsafe {
+        libc::openat(
+            directory_fd,
+            dot.as_ptr(),
+            libc::O_TMPFILE | libc::O_RDWR | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if plaintext_fd < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(plaintext_fd)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn create_anonymous_plaintext_file(_staging_directory: &Path) -> Result<File, RecoveryError> {
+    Err(RecoveryError::PlatformUnsupported)
 }
 
 impl fmt::Debug for DecryptedStage {
@@ -672,8 +898,9 @@ fn valid_identity(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+#[allow(dead_code)]
 fn write_record(
-    output: &mut File,
+    output: &mut impl Write,
     cipher: &XChaCha20Poly1305,
     nonce_prefix: &[u8; NONCE_PREFIX_BYTES],
     digest: &[u8; 32],
@@ -725,6 +952,7 @@ fn make_aad(digest: &[u8; 32], sequence: u64, flags: u8, plaintext_length: &[u8;
     aad
 }
 
+#[allow(dead_code)]
 fn header_digest(header_json: &[u8]) -> [u8; 32] {
     header_digest_with_length(header_json)
 }
@@ -747,6 +975,7 @@ fn read_exact(input: &mut File, bytes: &mut [u8]) -> Result<(), RecoveryError> {
     })
 }
 
+#[allow(dead_code)]
 fn read_chunk(input: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut count = 0;
     while count < buffer.len() {
@@ -756,14 +985,6 @@ fn read_chunk(input: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
         }
     }
     Ok(count)
-}
-
-fn ensure_absent(path: &Path) -> Result<(), RecoveryError> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Err(RecoveryError::DestinationExists),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(RecoveryError::Storage),
-    }
 }
 
 fn hex_digest(digest: impl AsRef<[u8]>) -> String {

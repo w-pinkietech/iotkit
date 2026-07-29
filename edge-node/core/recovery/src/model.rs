@@ -288,6 +288,7 @@ pub enum RecoveryError {
     Random,
     InvalidPassphrase,
     StorageFull,
+    PlatformUnsupported,
     ArtifactPublicationUncertain,
     ArtifactCleanupFailed,
 }
@@ -306,6 +307,7 @@ impl RecoveryError {
             Self::Random => "random",
             Self::InvalidPassphrase => "passphrase_invalid",
             Self::StorageFull => "storage_full",
+            Self::PlatformUnsupported => "platform_unsupported",
             Self::ArtifactPublicationUncertain => "artifact_publication_uncertain",
             Self::ArtifactCleanupFailed => "artifact_cleanup_failed",
         }
@@ -333,6 +335,9 @@ impl fmt::Display for RecoveryError {
             }
             Self::StorageFull => {
                 formatter.write_str("Edge Node backup storage capacity is insufficient")
+            }
+            Self::PlatformUnsupported => {
+                formatter.write_str("Edge Node recovery platform capabilities are unavailable")
             }
             Self::ArtifactPublicationUncertain => {
                 formatter.write_str("Edge Node backup publication status is uncertain")

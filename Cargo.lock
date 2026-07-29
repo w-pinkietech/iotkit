@@ -1477,6 +1477,7 @@ dependencies = [
  "iotkit-core-storage",
  "iotkit-core-timeseries",
  "jsonschema",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

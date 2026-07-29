@@ -1,13 +1,17 @@
 use std::{
     collections::BTreeSet,
-    fs,
-    io::{self, Read},
+    fs, io,
     path::{Path, PathBuf},
 };
 
 use std::fs::File;
 
+#[cfg(target_os = "linux")]
+use std::io::Read;
+
 use serde_json::{Value, json};
+#[cfg(not(target_os = "linux"))]
+use tempfile::NamedTempFile;
 use tempfile::tempdir;
 
 use super::*;
@@ -20,6 +24,7 @@ const DATABASE_SHA256: &str = "958ec6fc5da916b2f0008194cf46f2e9342ceae562e04e4b0
 const FIXED_SALT: [u8; 16] = *b"public-salt-v1!!";
 const FIXED_NONCE_PREFIX: [u8; 16] = *b"public-nonce-v1!";
 
+#[cfg(target_os = "linux")]
 fn encrypt_container_with_entropy(
     snapshot: &Path,
     manifest: &NodeBackupManifest,
@@ -29,6 +34,28 @@ fn encrypt_container_with_entropy(
     nonce_prefix: [u8; 16],
 ) -> Result<(), RecoveryError> {
     super::encrypt_with_entropy(snapshot, manifest, passphrase, output, salt, nonce_prefix)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn encrypt_container_with_entropy(
+    snapshot: &Path,
+    manifest: &NodeBackupManifest,
+    passphrase: &BackupPassphrase,
+    output: &Path,
+    salt: [u8; 16],
+    nonce_prefix: [u8; 16],
+) -> Result<(), RecoveryError> {
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = NamedTempFile::new_in(parent).map_err(|_| RecoveryError::Storage)?;
+    super::encrypt_snapshot_contents(
+        File::open(snapshot).map_err(|_| RecoveryError::Storage)?,
+        manifest,
+        passphrase,
+        salt,
+        nonce_prefix,
+        temporary.as_file_mut(),
+    )?;
+    publish_new_file(temporary.path(), output)
 }
 
 fn passphrase() -> BackupPassphrase {
@@ -81,6 +108,64 @@ fn publish_new_file(staged: &Path, destination: &Path) -> Result<(), RecoveryErr
     })
 }
 
+#[cfg(target_os = "linux")]
+fn encrypt_snapshot_reader_with_output_init(
+    snapshot_reader: impl Read,
+    manifest: &NodeBackupManifest,
+    passphrase: &BackupPassphrase,
+    output: &Path,
+    salt: [u8; 16],
+    nonce_prefix: [u8; 16],
+    initialize_output: impl FnOnce(&mut LinuxEncryptedOutput) -> Result<(), RecoveryError>,
+) -> Result<(), RecoveryError> {
+    validate_manifest(manifest)?;
+    let mut output_file = LinuxEncryptedOutput::new(output)?;
+    initialize_output(&mut output_file)?;
+    encrypt_snapshot_contents(
+        snapshot_reader,
+        manifest,
+        passphrase,
+        salt,
+        nonce_prefix,
+        &mut output_file,
+    )?;
+    output_file.publish()
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum OutputFault {
+    Write,
+    Link,
+    FileSync,
+    DirectorySync,
+}
+
+#[cfg(target_os = "linux")]
+fn output_ops_with_fault(fault: OutputFault) -> LinuxOutputOps {
+    fn fail_write(_: &mut File, _: &[u8]) -> io::Result<usize> {
+        Err(io::Error::from_raw_os_error(libc::EIO))
+    }
+    fn fail_file_sync(_: &File) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::EIO))
+    }
+    fn fail_link(_: &File, _: &File, _: &std::ffi::CString) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::EIO))
+    }
+    fn fail_directory_sync(_: &File) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::EIO))
+    }
+    let mut ops = LinuxOutputOps::system();
+    match fault {
+        OutputFault::Write => ops.write = fail_write,
+        OutputFault::Link => ops.link = fail_link,
+        OutputFault::FileSync => ops.sync_file = fail_file_sync,
+        OutputFault::DirectorySync => ops.sync_directory = fail_directory_sync,
+    }
+    ops
+}
+
+#[cfg(target_os = "linux")]
 fn stage_bytes(mut stage: DecryptedStage) -> Vec<u8> {
     stage.rewind().unwrap();
     let mut bytes = Vec::new();
@@ -115,15 +200,26 @@ fn valid_round_trip_authenticates_and_decrypts_database() {
     );
 
     let staging = staging_directory(root.path());
-    let (stage, actual) =
-        decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
-            .unwrap();
-    assert_eq!(actual, expected);
-    let rendered = format!("{stage:?}");
-    assert!(rendered.contains("REDACTED"));
-    assert!(!rendered.contains(staging.to_string_lossy().as_ref()));
-    assert_eq!(stage_bytes(stage), DATABASE);
-    assert!(directory_entries(&staging).is_empty());
+    #[cfg(target_os = "linux")]
+    {
+        let (stage, actual) =
+            decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
+                .unwrap();
+        assert_eq!(actual, expected);
+        let rendered = format!("{stage:?}");
+        assert!(rendered.contains("REDACTED"));
+        assert!(!rendered.contains(staging.to_string_lossy().as_ref()));
+        assert_eq!(stage_bytes(stage), DATABASE);
+        assert!(directory_entries(&staging).is_empty());
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let error =
+            decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
+                .unwrap_err();
+        assert_eq!(error.reason_code(), "platform_unsupported");
+        assert!(directory_entries(&staging).is_empty());
+    }
 }
 
 #[test]
@@ -150,26 +246,28 @@ fn public_golden_fixture_matches_json_and_reencodes_byte_for_byte() {
         authenticate_container(&artifact, &passphrase()).unwrap(),
         expected
     );
-    let root = tempdir().unwrap();
-    let staging = staging_directory(root.path());
-    let (stage, actual) =
-        decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
-            .unwrap();
-    assert_eq!(actual, expected);
-    let snapshot = root.path().join("golden.sqlite");
-    fs::write(&snapshot, stage_bytes(stage)).unwrap();
-    assert_eq!(actual, expected);
-    let reencoded = root.path().join("reencoded.iotkit-node-backup");
-    encrypt_container_with_entropy(
-        &snapshot,
-        &expected,
-        &passphrase(),
-        &reencoded,
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
-    )
-    .unwrap();
-    assert_eq!(fs::read(reencoded).unwrap(), fs::read(artifact).unwrap());
+    #[cfg(target_os = "linux")]
+    {
+        let root = tempdir().unwrap();
+        let staging = staging_directory(root.path());
+        let (stage, actual) =
+            decrypt_container_to_staging_file(&artifact, &passphrase(), &staging, DATABASE_LENGTH)
+                .unwrap();
+        assert_eq!(actual, expected);
+        let snapshot = root.path().join("golden.sqlite");
+        fs::write(&snapshot, stage_bytes(stage)).unwrap();
+        let reencoded = root.path().join("reencoded.iotkit-node-backup");
+        encrypt_container_with_entropy(
+            &snapshot,
+            &expected,
+            &passphrase(),
+            &reencoded,
+            FIXED_SALT,
+            FIXED_NONCE_PREFIX,
+        )
+        .unwrap();
+        assert_eq!(fs::read(reencoded).unwrap(), fs::read(artifact).unwrap());
+    }
 }
 
 #[test]
@@ -324,6 +422,7 @@ fn schema_and_rust_validation_agree_on_boundaries() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn encryption_uses_the_open_snapshot_handle_after_path_replacement() {
     let root = tempdir().unwrap();
@@ -350,12 +449,14 @@ fn encryption_uses_the_open_snapshot_handle_after_path_replacement() {
     assert_eq!(stage_bytes(stage), DATABASE);
 }
 
+#[cfg(target_os = "linux")]
 struct TruncatingReader {
     file: File,
     path: PathBuf,
     truncated: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl Read for TruncatingReader {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         let limit = bytes.len().min(1);
@@ -371,6 +472,7 @@ impl Read for TruncatingReader {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn in_place_snapshot_truncation_during_encryption_fails_without_artifact() {
     let root = tempdir().unwrap();
@@ -656,6 +758,7 @@ fn decryption_failure_leaves_no_named_plaintext_and_preserves_unrelated_stage_fi
     assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn encrypted_output_initialization_failure_removes_temp_and_retry_succeeds() {
     let root = tempdir().unwrap();
@@ -688,6 +791,187 @@ fn encrypted_output_initialization_failure_removes_temp_and_retry_succeeds() {
     )
     .unwrap();
     assert!(output.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn anonymous_stage_rejects_injected_otmpfile_failure_without_a_directory_entry() {
+    let root = tempdir().unwrap();
+    let staging = staging_directory(root.path());
+    let directory = File::open(&staging).unwrap();
+    let error = create_anonymous_plaintext_file_with(directory, |_| {
+        Err(io::Error::from_raw_os_error(libc::EOPNOTSUPP))
+    })
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "platform_unsupported");
+    assert!(directory_entries(&staging).is_empty());
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn anonymous_stage_fails_closed_on_unsupported_platform() {
+    let root = tempdir().unwrap();
+    let staging = staging_directory(root.path());
+    let error = DecryptedStage::new(&staging).unwrap_err();
+    assert_eq!(error.reason_code(), "platform_unsupported");
+    assert!(directory_entries(&staging).is_empty());
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn encrypted_publication_fails_closed_on_unsupported_platform() {
+    let root = tempdir().unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let output = root.path().join("artifact.iotkit-node-backup");
+    let error = encrypt_container(&snapshot, &manifest(), &passphrase(), &output).unwrap_err();
+    assert_eq!(error.reason_code(), "platform_unsupported");
+    assert!(!output.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn encrypted_publication_uses_held_parent_after_path_substitution() {
+    let root = tempdir().unwrap();
+    let parent = root.path().join("destination");
+    fs::create_dir(&parent).unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let output = parent.join("artifact.iotkit-node-backup");
+    let moved = root.path().join("moved-destination");
+    let replacement = root.path().join("replacement-destination");
+
+    encrypt_snapshot_reader_with_output_init(
+        File::open(&snapshot).unwrap(),
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+        |_| {
+            fs::rename(&parent, &moved).unwrap();
+            fs::create_dir(&replacement).unwrap();
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(moved.join("artifact.iotkit-node-backup").exists());
+    assert!(!replacement.join("artifact.iotkit-node-backup").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn encrypted_publication_eexist_preserves_existing_and_retry_succeeds() {
+    let root = tempdir().unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let output = root.path().join("artifact.iotkit-node-backup");
+    fs::write(&output, b"keep").unwrap();
+    let error = encrypt_container_with_entropy(
+        &snapshot,
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "destination_exists");
+    assert_eq!(fs::read(&output).unwrap(), b"keep");
+    fs::remove_file(&output).unwrap();
+    encrypt_container_with_entropy(
+        &snapshot,
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+    )
+    .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
+    let root = tempdir().unwrap();
+    let snapshot = root.path().join("snapshot.sqlite");
+    write_database(&snapshot);
+    let output = root.path().join("artifact.iotkit-node-backup");
+
+    let error = encrypt_snapshot_reader_with_output_init(
+        File::open(&snapshot).unwrap(),
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+        |owner| {
+            owner.ops = output_ops_with_fault(OutputFault::FileSync);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "storage");
+    assert!(!output.exists());
+
+    let error = encrypt_snapshot_reader_with_output_init(
+        File::open(&snapshot).unwrap(),
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+        |owner| {
+            owner.ops = output_ops_with_fault(OutputFault::Write);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "storage");
+    assert!(!output.exists());
+
+    let error = encrypt_snapshot_reader_with_output_init(
+        File::open(&snapshot).unwrap(),
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+        |owner| {
+            owner.ops = output_ops_with_fault(OutputFault::Link);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "storage");
+    assert!(!output.exists());
+
+    let error = encrypt_snapshot_reader_with_output_init(
+        File::open(&snapshot).unwrap(),
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+        |owner| {
+            owner.ops = output_ops_with_fault(OutputFault::DirectorySync);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), "artifact_publication_uncertain");
+    assert!(output.exists());
+    fs::remove_file(&output).unwrap();
+
+    encrypt_container_with_entropy(
+        &snapshot,
+        &manifest(),
+        &passphrase(),
+        &output,
+        FIXED_SALT,
+        FIXED_NONCE_PREFIX,
+    )
+    .unwrap();
 }
 
 #[test]
