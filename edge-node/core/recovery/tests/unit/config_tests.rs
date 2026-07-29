@@ -60,6 +60,45 @@ fn config_parent_entries(root: &Path) -> Vec<std::ffi::OsString> {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn owner_passphrase_parser_accepts_one_terminal_line_ending_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let path = root.path().join("passphrase");
+    fs::write(&path, b"twelve-chars\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let parsed = load_owner_only_passphrase(&path).unwrap();
+    assert_eq!(parsed.char_count(), 12);
+
+    fs::write(&path, b"twelve-chars\r\n").unwrap();
+    assert_eq!(load_owner_only_passphrase(&path).unwrap().char_count(), 12);
+
+    let reject = |bytes: &[u8]| {
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            load_owner_only_passphrase(&path).unwrap_err(),
+            RecoveryError::InvalidPassphrase,
+        );
+    };
+    reject(b"twelve\nchars");
+    reject(b"twelve\rchars");
+    reject(b"twelve\0chars");
+    reject(&[0xff, 0xfe]);
+    reject(b"12345678901");
+    let too_long = format!("{}x", "a".repeat(1024));
+    reject(too_long.as_bytes());
+
+    let unicode = "あ".repeat(1024);
+    fs::write(&path, unicode.as_bytes()).unwrap();
+    assert_eq!(
+        load_owner_only_passphrase(&path).unwrap().char_count(),
+        1024
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() {
     let root = TempDir::new().unwrap();
     let config_path = root.path().join("backup.json");

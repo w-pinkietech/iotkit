@@ -756,11 +756,10 @@ fn config_adjacent_configure_lock_blocks_create_and_inspect_before_effects() {
     );
     assert_eq!(
         inspect_backup(
-            &fixture.config_path,
             std::path::Path::new("must-not-be-opened.iotkit-node-backup"),
             &fixture.passphrase,
         ),
-        Err(RecoveryError::OperationBusy)
+        Err(RecoveryError::Storage)
     );
     let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
     assert_eq!(

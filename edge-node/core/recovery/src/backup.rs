@@ -4,10 +4,10 @@ use std::path::Path;
 use std::{
     collections::BTreeMap,
     ffi::{CStr, CString},
-    fs::File,
+    fs::{File, OpenOptions},
     os::{
         fd::FromRawFd,
-        unix::fs::{MetadataExt, PermissionsExt},
+        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
 };
 
@@ -29,8 +29,8 @@ use crate::{
 #[cfg(target_os = "linux")]
 use crate::{
     RecoveryStartupMode, VerifiedBackupDestination, VerifiedStagingDirectory,
-    acquire_recovery_operation, authenticate_container, create_consistent_snapshot,
-    encrypt_container, verify_destination, verify_staging_directory,
+    acquire_recovery_operation, create_consistent_snapshot, encrypt_container, verify_destination,
+    verify_staging_directory,
 };
 
 type CompletionRow = (
@@ -742,20 +742,35 @@ fn source_path_still_identical(original: &std::fs::Metadata, path: &Path) -> boo
 }
 
 /// Authenticates and returns the manifest of one backup without writing plaintext.
+///
+/// Inspection is deliberately configuration-free: unlike create/status/restore,
+/// it does not acquire the config-adjacent operation lease or open the live
+/// database. The artifact is authenticated through one held descriptor by the
+/// container layer.
 pub fn inspect_backup(
-    config_path: &Path,
     input: &Path,
     passphrase: &BackupPassphrase,
 ) -> Result<NodeBackupManifest, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
-        let _guard = acquire_recovery_operation(config_path)?;
-        let _config = load_owner_only_config(config_path)?;
-        authenticate_container(input, passphrase)
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(input)
+            .map_err(|_| RecoveryError::Storage)?;
+        let metadata = file.metadata().map_err(|_| RecoveryError::Storage)?;
+        if !metadata.file_type().is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(RecoveryError::InvalidConfiguration);
+        }
+        crate::container::authenticate_container_file(file, passphrase)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (config_path, input, passphrase);
+        let _ = (input, passphrase);
         Err(RecoveryError::PlatformUnsupported)
     }
 }

@@ -89,20 +89,10 @@ fn inspection_of_an_absent_artifact_is_a_closed_redacted_error() {
         file.write_all(&serde_json::to_vec(&config).unwrap())
             .unwrap();
         drop(file);
-        inspect_backup(
-            &config_path,
-            &root.path().join("absent.iotkit-node-backup"),
-            &passphrase,
-        )
-        .unwrap_err()
+        inspect_backup(&root.path().join("absent.iotkit-node-backup"), &passphrase).unwrap_err()
     };
     #[cfg(not(target_os = "linux"))]
-    let error = inspect_backup(
-        Path::new("backup.json"),
-        Path::new("absent.iotkit-node-backup"),
-        &passphrase,
-    )
-    .unwrap_err();
+    let error = inspect_backup(Path::new("absent.iotkit-node-backup"), &passphrase).unwrap_err();
     assert_eq!(
         error,
         if cfg!(target_os = "linux") {
@@ -242,10 +232,7 @@ fn encrypted_backup_round_trips_custody_state_and_redacts_receipt_audit() {
     let artifact = destination
         .path()
         .join(format!("{}{}", manifest.backup_id, NODE_BACKUP_SUFFIX));
-    assert_eq!(
-        inspect_backup(&config_path, &artifact, &passphrase).unwrap(),
-        manifest
-    );
+    assert_eq!(inspect_backup(&artifact, &passphrase).unwrap(), manifest);
     assert_eq!(manifest.accepted_cursor, 1);
     assert_eq!(manifest.allocation_high_water, 3);
     assert_eq!(manifest.counts.quarantine_rows, 1);

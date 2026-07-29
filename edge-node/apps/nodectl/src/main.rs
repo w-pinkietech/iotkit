@@ -1,4 +1,5 @@
 mod cmd {
+    pub mod backup;
     pub mod device_credential;
     pub mod devices;
     pub mod fingerprint;
@@ -67,6 +68,10 @@ enum Command {
     Snapshot {
         #[command(subcommand)]
         command: cmd::snapshot::SnapshotCommand,
+    },
+    Backup {
+        #[command(subcommand)]
+        command: cmd::backup::BackupCommand,
     },
     Target {
         #[command(subcommand)]
@@ -137,6 +142,9 @@ fn main() {
 
 fn run() -> AppResult<()> {
     let cli = Cli::parse();
+    if let Command::Backup { command } = cli.command {
+        return cmd::backup::run(command).map_err(|error| error.into());
+    }
     let initializing = matches!(&cli.command, Command::Init);
     let reading_identity = matches!(&cli.command, Command::Identity | Command::MqttBinding);
     let reading_smoke_status = matches!(
@@ -247,13 +255,15 @@ fn run() -> AppResult<()> {
         created_target = Some(CreatedDatabaseTarget::new(db_path.clone()));
     }
 
-    let mut all_migrations = iotkit_core_storage::MIGRATIONS.to_vec();
-    all_migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS); // v3, v5, v9, v11
-    all_migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS); // v4, v7, v8, v17
-    all_migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS); // v6
-    all_migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS); // v10
-    all_migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS); // v12
-    all_migrations.sort_by_key(|m| m.version); // 1,3,4,5,6,7,8,9,10,11,12
+    // The legacy JSON snapshot is a frozen R22 surface. Keep its migration
+    // set isolated so opening it does not add the recovery tables or change
+    // the established snapshot wire format; all other commands use the
+    // complete Edge Node migration set.
+    let all_migrations = if matches!(&cli.command, Command::Snapshot { .. }) {
+        legacy_migrations()
+    } else {
+        iotkit_core_recovery::all_edge_node_migrations()
+    };
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
     if !restoring_snapshot {
@@ -278,6 +288,17 @@ fn run() -> AppResult<()> {
         target.committed = true;
     }
     Ok(())
+}
+
+fn legacy_migrations() -> Vec<iotkit_core_storage::Migration> {
+    let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
+    migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
+    migrations.sort_by_key(|migration| migration.version);
+    migrations
 }
 
 fn ensure_edge_node_id(
@@ -524,5 +545,6 @@ fn dispatch(
         },
         Command::Fingerprint => cmd::fingerprint::run_fingerprint(conn, db_path),
         Command::Health(args) => cmd::query::run_health(db_path, args),
+        Command::Backup { .. } => unreachable!("backup commands take the early route"),
     }
 }

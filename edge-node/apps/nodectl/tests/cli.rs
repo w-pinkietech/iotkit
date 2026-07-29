@@ -26,7 +26,7 @@ fn legacy_snapshot_export_refuses_device_credentials_without_secret_or_hash_leak
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("credential-export.db");
     let out_path = dir.path().join("replacement.json");
-    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db = iotkit_core_storage::init_db(&db_path, &legacy_migrations()).unwrap();
     let (plaintext, hash_hex) = db
         .with_conn_sync(|conn| {
             let (_credential_id, plaintext) = seed_device_credential(conn, "export");
@@ -69,7 +69,7 @@ fn snapshot_export_failure_leaves_no_output_or_temporary_artifact() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("export-failure.db");
     let out_path = dir.path().join("replacement.json");
-    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db = iotkit_core_storage::init_db(&db_path, &legacy_migrations()).unwrap();
     db.with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
         .unwrap();
     drop(db);
@@ -106,7 +106,7 @@ fn snapshot_export_holds_immediate_transaction_against_concurrent_credential_cre
     let out_path = dir.path().join("replacement.json");
     let ready = dir.path().join("export.ready");
     let proceed = dir.path().join("export.continue");
-    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db = iotkit_core_storage::init_db(&db_path, &legacy_migrations()).unwrap();
     db.with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
         .unwrap();
     drop(db);
@@ -161,7 +161,7 @@ fn confirmation_review_snapshot_publish_never_clobbers_concurrent_destination() 
     let out_path = dir.path().join("replacement.json");
     let ready = dir.path().join("publish.ready");
     let proceed = dir.path().join("publish.continue");
-    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    let db = iotkit_core_storage::init_db(&db_path, &legacy_migrations()).unwrap();
     db.with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
         .unwrap();
     drop(db);
@@ -211,7 +211,7 @@ fn restore_rejects_target_containing_only_device_authority_without_changing_epoc
     let source_path = dir.path().join("source.db");
     let snapshot_path = dir.path().join("state.json");
     let target_path = dir.path().join("target.db");
-    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    let source = iotkit_core_storage::init_db(&source_path, &legacy_migrations()).unwrap();
     source
         .with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
         .unwrap();
@@ -224,7 +224,7 @@ fn restore_rejects_target_containing_only_device_authority_without_changing_epoc
         snapshot_path.to_str().unwrap(),
     ]));
 
-    let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    let target = iotkit_core_storage::init_db(&target_path, &legacy_migrations()).unwrap();
     let (old_epoch, plaintext) = target.with_conn_sync(|conn| {
         let epoch = iotkit_core_ops::auth_epoch(conn).unwrap();
         let (_id, plaintext) = seed_device_credential(conn, "restore-target");
@@ -272,7 +272,7 @@ fn restore_pristine_check_includes_principal_material_generation_and_runtime_con
     let dir = tempfile::tempdir().unwrap();
     let source_path = dir.path().join("pristine-source.db");
     let snapshot_path = dir.path().join("pristine.json");
-    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    let source = iotkit_core_storage::init_db(&source_path, &legacy_migrations()).unwrap();
     source
         .with_conn_sync(|conn| Ok(iotkit_core_ledger::ledger_epoch(conn).unwrap()))
         .unwrap();
@@ -298,7 +298,7 @@ fn restore_pristine_check_includes_principal_material_generation_and_runtime_con
     .enumerate()
     {
         let target_path = dir.path().join(format!("pristine-target-{index}.db"));
-        let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+        let target = iotkit_core_storage::init_db(&target_path, &legacy_migrations()).unwrap();
         target
             .with_conn_sync(|conn| {
                 conn.execute(mutation, [])?;
@@ -722,6 +722,10 @@ fn capacity_debt_flow_atomic_preview_rejects_equal_total_authority_race() {
 }
 
 fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
+    iotkit_core_recovery::all_edge_node_migrations()
+}
+
+fn legacy_migrations() -> Vec<iotkit_core_storage::Migration> {
     let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
     all.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
     all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
@@ -1788,7 +1792,7 @@ fn existing_empty_db_gets_edge_migration_version_set() {
     assert_eq!(
         versions,
         vec![
-            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
         ]
     );
     let edge_node_id: String = conn
@@ -2976,7 +2980,7 @@ fn snapshot_export_restore_round_trips_full_columns_and_renews_epoch() {
     let source_db_path = dir.path().join("source.db");
     let restore_db_path = dir.path().join("restore.db");
     let snapshot_path = dir.path().join("snapshot.json");
-    let db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    let db = iotkit_core_storage::init_db(&source_db_path, &legacy_migrations()).unwrap();
     let source_epoch = db
         .with_conn_sync(|conn| {
             let parent = iotkit_core_ledger::insert_device(
@@ -3129,7 +3133,7 @@ fn snapshot_export_restore_round_trips_full_columns_and_renews_epoch() {
         "--yes",
     ]));
 
-    let restored_db = iotkit_core_storage::init_db(&restore_db_path, &all_migrations()).unwrap();
+    let restored_db = iotkit_core_storage::init_db(&restore_db_path, &legacy_migrations()).unwrap();
     restored_db
         .with_conn_sync(|conn| {
             assert_eq!(snapshot_sections(conn), source_sections);
@@ -3230,7 +3234,7 @@ fn snapshot_restore_rejects_non_empty_device_table() {
     let source_db_path = dir.path().join("source.db");
     let target_db_path = dir.path().join("target.db");
     let snapshot_path = dir.path().join("snapshot.json");
-    let source_db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    let source_db = iotkit_core_storage::init_db(&source_db_path, &legacy_migrations()).unwrap();
     source_db
         .with_conn_sync(|conn| {
             iotkit_core_ledger::insert_device(
@@ -3256,7 +3260,7 @@ fn snapshot_restore_rejects_non_empty_device_table() {
         snapshot_path.to_str().unwrap(),
     ]));
 
-    let target_db = iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+    let target_db = iotkit_core_storage::init_db(&target_db_path, &legacy_migrations()).unwrap();
     target_db
         .with_conn_sync(|conn| {
             iotkit_core_ledger::insert_device(
@@ -3303,7 +3307,7 @@ fn snapshot_restore_rejects_non_empty_registry_entries_table() {
     let source_db_path = dir.path().join("source.db");
     let target_db_path = dir.path().join("target.db");
     let snapshot_path = dir.path().join("snapshot.json");
-    let source_db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    let source_db = iotkit_core_storage::init_db(&source_db_path, &legacy_migrations()).unwrap();
     source_db
         .with_conn_sync(|conn| {
             iotkit_core_ledger::insert_device(
@@ -3329,7 +3333,7 @@ fn snapshot_restore_rejects_non_empty_registry_entries_table() {
         snapshot_path.to_str().unwrap(),
     ]));
 
-    let target_db = iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+    let target_db = iotkit_core_storage::init_db(&target_db_path, &legacy_migrations()).unwrap();
     target_db
         .with_conn_sync(|conn| {
             let catalog = iotkit_core_registry::standard_catalog();
@@ -3380,14 +3384,14 @@ fn snapshot_restore_rejects_auth_only_target() {
     let source_path = dir.path().join("source.db");
     let target_path = dir.path().join("target.db");
     let snapshot_path = dir.path().join("snapshot.json");
-    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    let source = iotkit_core_storage::init_db(&source_path, &legacy_migrations()).unwrap();
     source
         .with_conn_sync(|conn| {
             iotkit_core_ledger::ledger_epoch(conn).unwrap();
             Ok(())
         })
         .unwrap();
-    let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    let target = iotkit_core_storage::init_db(&target_path, &legacy_migrations()).unwrap();
     let original_auth_epoch = target
         .with_conn_sync(|conn| {
             let hash = iotkit_core_ops::hash_passphrase("target-only authority").unwrap();
@@ -3449,14 +3453,14 @@ fn snapshot_restore_create_refuses_even_a_pristine_existing_target() {
     let source_path = dir.path().join("source.db");
     let target_path = dir.path().join("target.db");
     let snapshot_path = dir.path().join("snapshot.json");
-    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    let source = iotkit_core_storage::init_db(&source_path, &legacy_migrations()).unwrap();
     source
         .with_conn_sync(|conn| {
             iotkit_core_ledger::ledger_epoch(conn).unwrap();
             Ok(())
         })
         .unwrap();
-    iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    iotkit_core_storage::init_db(&target_path, &legacy_migrations()).unwrap();
     assert_success(run(&[
         "--db",
         source_path.to_str().unwrap(),
@@ -3486,7 +3490,7 @@ fn snapshot_restore_authority_failure_rolls_back_restored_state_and_epochs() {
     let source_path = dir.path().join("source.db");
     let target_path = dir.path().join("target.db");
     let snapshot_path = dir.path().join("snapshot.json");
-    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    let source = iotkit_core_storage::init_db(&source_path, &legacy_migrations()).unwrap();
     source
         .with_conn_sync(|conn| {
             iotkit_core_ledger::insert_device(
@@ -3504,7 +3508,7 @@ fn snapshot_restore_authority_failure_rolls_back_restored_state_and_epochs() {
             Ok(())
         })
         .unwrap();
-    let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+    let target = iotkit_core_storage::init_db(&target_path, &legacy_migrations()).unwrap();
     assert_success(run(&[
         "--db",
         source_path.to_str().unwrap(),
@@ -3549,7 +3553,7 @@ fn snapshot_restore_rejects_every_noncanonical_schema_object_kind() {
     let dir = tempfile::tempdir().unwrap();
     let source_path = dir.path().join("source-schema.db");
     let snapshot_path = dir.path().join("schema-snapshot.json");
-    let source = iotkit_core_storage::init_db(&source_path, &all_migrations()).unwrap();
+    let source = iotkit_core_storage::init_db(&source_path, &legacy_migrations()).unwrap();
     source
         .with_conn_sync(|conn| {
             iotkit_core_ledger::ledger_epoch(conn).unwrap();
@@ -3573,7 +3577,7 @@ fn snapshot_restore_rejects_every_noncanonical_schema_object_kind() {
     ];
     for (index, mutation) in mutations.iter().enumerate() {
         let target_path = dir.path().join(format!("noncanonical-{index}.db"));
-        let target = iotkit_core_storage::init_db(&target_path, &all_migrations()).unwrap();
+        let target = iotkit_core_storage::init_db(&target_path, &legacy_migrations()).unwrap();
         target
             .with_conn_sync(|conn| {
                 conn.execute_batch(mutation)?;
@@ -3623,7 +3627,7 @@ fn snapshot_restore_create_cleans_every_precommit_failure_artifact() {
 
     let source = dir.path().join("abort-source.db");
     let valid_snapshot = dir.path().join("abort-snapshot.json");
-    let source_db = iotkit_core_storage::init_db(&source, &all_migrations()).unwrap();
+    let source_db = iotkit_core_storage::init_db(&source, &legacy_migrations()).unwrap();
     source_db
         .with_conn_sync(|conn| {
             iotkit_core_ledger::ledger_epoch(conn).unwrap();
@@ -3682,7 +3686,7 @@ fn snapshot_restore_create_succeeds_with_preexisting_loss_marker() {
     let source = dir.path().join("loss-source.db");
     let target = dir.path().join("lost.db");
     let snapshot = dir.path().join("loss-snapshot.json");
-    let source_db = iotkit_core_storage::init_db(&source, &all_migrations()).unwrap();
+    let source_db = iotkit_core_storage::init_db(&source, &legacy_migrations()).unwrap();
     source_db
         .with_conn_sync(|conn| {
             iotkit_core_ledger::insert_device(
@@ -3724,7 +3728,7 @@ fn snapshot_restore_create_succeeds_with_preexisting_loss_marker() {
         std::fs::read(&marker).unwrap(),
         b"preexisting-external-loss-marker\n"
     );
-    let restored = iotkit_core_storage::init_db(&target, &all_migrations()).unwrap();
+    let restored = iotkit_core_storage::init_db(&target, &legacy_migrations()).unwrap();
     restored
         .with_conn_sync(|conn| {
             assert_eq!(
@@ -3747,7 +3751,7 @@ fn restore_receipt_status_identifies_the_committed_snapshot() {
     let source = dir.path().join("receipt-source.db");
     let target = dir.path().join("receipt-target.db");
     let snapshot = dir.path().join("receipt.json");
-    let source_db = iotkit_core_storage::init_db(&source, &all_migrations()).unwrap();
+    let source_db = iotkit_core_storage::init_db(&source, &legacy_migrations()).unwrap();
     source_db
         .with_conn_sync(|conn| {
             iotkit_core_ledger::ledger_epoch(conn).unwrap();
@@ -3812,7 +3816,7 @@ fn snapshot_restore_rejects_unknown_columns_before_insert() {
     let source_db_path = dir.path().join("source.db");
     let target_db_path = dir.path().join("target.db");
     let snapshot_path = dir.path().join("snapshot.json");
-    let source_db = iotkit_core_storage::init_db(&source_db_path, &all_migrations()).unwrap();
+    let source_db = iotkit_core_storage::init_db(&source_db_path, &legacy_migrations()).unwrap();
     source_db
         .with_conn_sync(|conn| {
             iotkit_core_ledger::insert_device(
@@ -3846,7 +3850,7 @@ fn snapshot_restore_rejects_unknown_columns_before_insert() {
         serde_json::to_vec_pretty(&snapshot).unwrap(),
     )
     .unwrap();
-    iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+    iotkit_core_storage::init_db(&target_db_path, &legacy_migrations()).unwrap();
 
     let stderr = assert_failure(run(&[
         "snapshot",
@@ -3861,7 +3865,7 @@ fn snapshot_restore_rejects_unknown_columns_before_insert() {
         "stderr did not explain unknown column:\n{stderr}"
     );
 
-    let target_db = iotkit_core_storage::init_db(&target_db_path, &all_migrations()).unwrap();
+    let target_db = iotkit_core_storage::init_db(&target_db_path, &legacy_migrations()).unwrap();
     target_db
         .with_conn_sync(|conn| {
             let devices: i64 = conn

@@ -423,8 +423,21 @@ pub fn load_owner_only_passphrase(path: &Path) -> Result<BackupPassphrase, Recov
         if bytes.len() > 4_098 {
             return Err(RecoveryError::InvalidPassphrase);
         }
-        let value = String::from_utf8(bytes).map_err(|_| RecoveryError::InvalidPassphrase)?;
-        if value.chars().any(char::is_control) {
+        let mut value = String::from_utf8(bytes).map_err(|_| RecoveryError::InvalidPassphrase)?;
+        if value.ends_with('\n') {
+            value.pop();
+            if value.ends_with('\r') {
+                value.pop();
+            }
+        }
+        if value
+            .chars()
+            .any(|character| character == '\r' || character == '\n' || character == '\0')
+        {
+            return Err(RecoveryError::InvalidPassphrase);
+        }
+        let count = value.chars().count();
+        if !(12..=1024).contains(&count) {
             return Err(RecoveryError::InvalidPassphrase);
         }
         Ok(BackupPassphrase::new(value))
