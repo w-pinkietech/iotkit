@@ -272,7 +272,7 @@ fn backup_attempts_are_valid(conn: &Connection) -> Result<bool, RecoveryError> {
             "failed" => {
                 reason_code
                     .as_deref()
-                    .is_some_and(|reason| reason != "ok" && valid_identity(reason))
+                    .is_some_and(crate::backup::valid_backup_failure_reason)
                     && terminal_fields_are_empty
                     && completed_at_ms.is_some_and(|value| value >= started_at_ms)
             }

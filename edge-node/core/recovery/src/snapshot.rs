@@ -9,6 +9,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 use iotkit_core_ledger::{SystemId, series_key_of};
 use iotkit_core_ops::{
     Actor, ActorKind, DispatchRequest, OpContext, OpDescriptor, OpError, Tier, dispatch,
@@ -153,17 +156,20 @@ pub fn validate_snapshot(path: &Path) -> Result<SnapshotFacts, RecoveryError> {
 pub fn recovery_descriptors() -> &'static [OpDescriptor] {
     static DESCRIPTORS: OnceLock<Vec<OpDescriptor>> = OnceLock::new();
     DESCRIPTORS
-        .get_or_init(|| vec![remove_deployment_credentials_descriptor()])
+        .get_or_init(|| {
+            let mut descriptors = vec![remove_deployment_credentials_descriptor()];
+            descriptors.extend(crate::backup::backup_descriptors());
+            descriptors
+        })
         .as_slice()
 }
 
 fn create_new_empty(path: &Path) -> Result<(), RecoveryError> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map(|_| ())
-        .map_err(RecoveryError::from)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path).map(|_| ()).map_err(RecoveryError::from)
 }
 
 fn online_backup(source: &Path, staging: &Path) -> Result<(), RecoveryError> {

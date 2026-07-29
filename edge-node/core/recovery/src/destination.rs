@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, fs::File, path::PathBuf};
 
 #[cfg(target_os = "linux")]
 use std::{
+    collections::BTreeMap,
     ffi::{CStr, CString},
     fs::OpenOptions,
     io::{self, Read, Write},
@@ -43,7 +44,7 @@ pub struct VerifiedBackupDestination {
 
 /// A tmpfs staging directory verified once and held for anonymous plaintext work.
 pub struct VerifiedStagingDirectory {
-    directory: DirectoryCapability,
+    pub(crate) directory: DirectoryCapability,
 }
 
 impl VerifiedBackupDestination {
@@ -159,6 +160,24 @@ pub fn verify_destination(
     config: &BackupConfig,
     bytes: u64,
 ) -> Result<VerifiedBackupDestination, RecoveryError> {
+    verify_destination_inner(guard, config, Some(bytes))
+}
+
+/// Reopens only the already-intended destination capability needed to settle a
+/// lingering publication, without requiring capacity for a second backup.
+#[cfg(target_os = "linux")]
+pub(crate) fn verify_destination_for_reconciliation(
+    guard: &RecoveryOperationGuard,
+    config: &BackupConfig,
+) -> Result<VerifiedBackupDestination, RecoveryError> {
+    verify_destination_inner(guard, config, None)
+}
+
+fn verify_destination_inner(
+    guard: &RecoveryOperationGuard,
+    config: &BackupConfig,
+    bytes: Option<u64>,
+) -> Result<VerifiedBackupDestination, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
         crate::config::validate_config(config)?;
@@ -185,16 +204,20 @@ pub fn verify_destination(
         if filesystem_identity(&file, &mount.source)? != config.expected_mount.filesystem_id {
             return Err(RecoveryError::MountIdentityUnavailable);
         }
-        let database = open_regular_file(&config.database)?;
-        if same_filesystem(&file, &database)? {
-            return Err(RecoveryError::DestinationInvalid);
+        if let Some(bytes) = bytes {
+            let database = open_regular_file(&config.database)?;
+            if same_filesystem(&file, &database)? {
+                return Err(RecoveryError::DestinationInvalid);
+            }
+            if free_bytes(&file)? < required_capacity(bytes)? {
+                return Err(RecoveryError::StorageFull);
+            }
         }
         ensure_no_cleanup_leftovers(&file)?;
-        if free_bytes(&file)? < required_capacity(bytes)? {
-            return Err(RecoveryError::StorageFull);
-        }
         let directory = DirectoryCapability::from_open_file(file)?;
-        probe_directory(guard, &directory)?;
+        if bytes.is_some() {
+            probe_directory(guard, &directory)?;
+        }
         Ok(VerifiedBackupDestination { directory })
     }
     #[cfg(not(target_os = "linux"))]
@@ -247,6 +270,7 @@ pub fn verify_staging_directory(
         if unsafe { statfs.assume_init().f_type } != 0x0102_1994 {
             return Err(RecoveryError::DestinationInvalid);
         }
+        ensure_no_cleanup_leftovers(&file)?;
         if free_bytes(&file)? < required_capacity(bytes)? {
             return Err(RecoveryError::StorageFull);
         }
@@ -622,6 +646,28 @@ pub fn apply_retention(
     }
 }
 
+/// Applies retention only to exact artifact basenames recorded by successful receipts.
+#[cfg(target_os = "linux")]
+pub(crate) fn apply_recorded_retention(
+    _guard: &RecoveryOperationGuard,
+    destination: &VerifiedBackupDestination,
+    passphrase: &BackupPassphrase,
+    edge_node_id: &str,
+    successful_artifacts: &BTreeMap<String, String>,
+    retention_count: u32,
+) -> Result<u32, RecoveryError> {
+    let successful_backup_ids = successful_artifacts.keys().cloned().collect();
+    apply_retention_core(
+        destination,
+        passphrase,
+        edge_node_id,
+        &successful_backup_ids,
+        retention_count,
+        &SystemHook,
+        Some(successful_artifacts),
+    )
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn apply_retention_with_hook(
     _guard: &RecoveryOperationGuard,
@@ -632,8 +678,36 @@ pub(crate) fn apply_retention_with_hook(
     retention_count: u32,
     hook: &impl LinuxOperationHook,
 ) -> Result<u32, RecoveryError> {
+    let _ = _guard;
+    apply_retention_core(
+        destination,
+        passphrase,
+        edge_node_id,
+        successful_backup_ids,
+        retention_count,
+        hook,
+        None,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn apply_retention_core(
+    destination: &VerifiedBackupDestination,
+    passphrase: &BackupPassphrase,
+    edge_node_id: &str,
+    successful_backup_ids: &BTreeSet<String>,
+    retention_count: u32,
+    hook: &impl LinuxOperationHook,
+    recorded_names: Option<&BTreeMap<String, String>>,
+) -> Result<u32, RecoveryError> {
     let directory_fd = destination.directory.as_raw_fd();
-    let duplicated = unsafe { libc::dup(directory_fd) };
+    let duplicated = unsafe {
+        libc::openat(
+            directory_fd,
+            c".".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
     if duplicated < 0 {
         return Err(RecoveryError::Storage);
     }
@@ -684,14 +758,14 @@ pub(crate) fn apply_retention_with_hook(
             Ok(manifest) => manifest,
             Err(_) => continue,
         };
+        let name = name.to_string_lossy().into_owned();
+        let exact_recorded_name =
+            recorded_names.is_none_or(|recorded| recorded.get(&manifest.backup_id) == Some(&name));
         if manifest.edge_node_id == edge_node_id
             && successful_backup_ids.contains(&manifest.backup_id)
+            && exact_recorded_name
         {
-            candidates.push((
-                name.to_string_lossy().into_owned(),
-                manifest,
-                authenticated_file,
-            ));
+            candidates.push((name, manifest, authenticated_file));
         }
     }
     unsafe {
@@ -872,7 +946,13 @@ fn cleanup_retention_quarantine(
 #[cfg(target_os = "linux")]
 pub(crate) fn ensure_no_cleanup_leftovers(directory: &File) -> Result<(), RecoveryError> {
     let directory_fd = directory.as_raw_fd();
-    let duplicated = unsafe { libc::dup(directory_fd) };
+    let duplicated = unsafe {
+        libc::openat(
+            directory_fd,
+            c".".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
     if duplicated < 0 {
         return Err(RecoveryError::Storage);
     }

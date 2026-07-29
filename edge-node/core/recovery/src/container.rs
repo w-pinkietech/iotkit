@@ -117,6 +117,15 @@ impl DirectoryCapability {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn sync_directory(&self) -> Result<(), RecoveryError> {
+        self.file
+            .as_ref()
+            .ok_or(RecoveryError::Storage)?
+            .sync_all()
+            .map_err(|_| RecoveryError::ArtifactPublicationUncertain)
+    }
+
     /// Takes ownership of an already-open directory handle after validating it.
     #[allow(dead_code)]
     pub(crate) fn from_open_file(file: File) -> Result<Self, RecoveryError> {

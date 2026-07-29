@@ -36,6 +36,25 @@ pub struct RecoveryOperationGuard {
     parent_inode: u64,
 }
 
+/// Held nonblocking shared observation lease for read-only recovery status.
+pub struct RecoveryObservationGuard {
+    #[cfg(target_os = "linux")]
+    _lock: Option<File>,
+}
+
+impl RecoveryObservationGuard {
+    pub(crate) fn coordinates_existing_lock(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self._lock.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigWriteOps {
@@ -139,6 +158,57 @@ pub fn acquire_recovery_operation(
             parent_device: metadata.dev(),
             parent_inode: metadata.ino(),
         })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = config_path;
+        Err(RecoveryError::PlatformUnsupported)
+    }
+}
+
+/// Observes the stable recovery lease without creating any filesystem entry.
+pub fn acquire_recovery_observation(
+    config_path: &Path,
+) -> Result<RecoveryObservationGuard, RecoveryError> {
+    if !is_absolute_normalized(config_path) {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent_path = config_path
+            .parent()
+            .ok_or(RecoveryError::InvalidConfiguration)?;
+        let parent = open_directory(parent_path)?;
+        validate_owner_directory_open(&parent)?;
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                c".iotkit-recovery.lock".as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            return if error.kind() == std::io::ErrorKind::NotFound {
+                Ok(RecoveryObservationGuard { _lock: None })
+            } else {
+                Err(RecoveryError::Storage)
+            };
+        }
+        let lock = unsafe { File::from_raw_fd(fd) };
+        validate_lock_file(&lock)?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            return if matches!(
+                error.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            ) {
+                Err(RecoveryError::OperationBusy)
+            } else {
+                Err(RecoveryError::Storage)
+            };
+        }
+        Ok(RecoveryObservationGuard { _lock: Some(lock) })
     }
     #[cfg(not(target_os = "linux"))]
     {

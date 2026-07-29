@@ -2,6 +2,7 @@
 
 use iotkit_core_storage::Migration;
 
+mod backup;
 mod config;
 mod container;
 mod destination;
@@ -9,8 +10,13 @@ mod model;
 mod snapshot;
 mod state;
 
+pub use backup::{
+    BEGIN_BACKUP_ATTEMPT_OP, COMPLETE_BACKUP_ATTEMPT_OP, RECORD_BACKUP_PREFLIGHT_FAILURE_OP,
+    backup_status, create_backup, inspect_backup,
+};
 pub use config::{
-    BackupConfigReplace, RecoveryOperationGuard, acquire_recovery_operation, configure_backup,
+    BackupConfigReplace, RecoveryObservationGuard, RecoveryOperationGuard,
+    acquire_recovery_observation, acquire_recovery_operation, configure_backup,
     configure_backup_guarded, load_owner_only_config, load_owner_only_handoff,
     load_owner_only_passphrase,
 };
@@ -71,3 +77,7 @@ mod config_tests;
 #[cfg(test)]
 #[path = "../tests/unit/destination_tests.rs"]
 mod destination_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/backup_tests.rs"]
+mod backup_tests;

@@ -201,6 +201,7 @@ pub enum RecoveryStartupMode {
 #[derive(Clone, PartialEq, Eq)]
 pub enum BackupReadiness {
     NotConfigured,
+    OperationBusy,
     Healthy {
         artifact: BackupStatusArtifact,
     },
@@ -448,6 +449,7 @@ impl fmt::Debug for BackupReadiness {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotConfigured => formatter.write_str("BackupReadiness::NotConfigured"),
+            Self::OperationBusy => formatter.write_str("BackupReadiness::OperationBusy"),
             Self::Healthy { .. } => formatter.write_str("BackupReadiness::Healthy"),
             Self::Stale { .. } => formatter.write_str("BackupReadiness::Stale"),
             Self::Failed { .. } => formatter.write_str("BackupReadiness::Failed"),
