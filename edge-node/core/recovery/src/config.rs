@@ -2,13 +2,17 @@ use std::path::{Component, Path};
 
 #[cfg(target_os = "linux")]
 use std::{
+    ffi::{CStr, CString},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    path::PathBuf,
+    os::fd::{AsRawFd, FromRawFd, RawFd},
 };
 
 #[cfg(target_os = "linux")]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::{
+    ffi::OsStrExt,
+    fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+};
 
 use crate::{BackupConfig, BackupPassphrase, RecoveryError, RecoveryHandoff};
 
@@ -22,57 +26,191 @@ pub enum BackupConfigReplace {
     ReplaceExisting,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+pub(crate) struct ConfigWriteOps {
+    pub(crate) after_existing_open: fn(RawFd, &CStr) -> std::io::Result<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl ConfigWriteOps {
+    pub(crate) fn system() -> Self {
+        Self {
+            after_existing_open: |_, _| Ok(()),
+        }
+    }
+}
+
 /// Writes schema-1 owner-only backup configuration without following its final path component.
 pub fn configure_backup(
     path: &Path,
     config: &BackupConfig,
     replacement: BackupConfigReplace,
 ) -> Result<(), RecoveryError> {
-    validate_config(config)?;
+    validate_config_request(config)?;
     #[cfg(target_os = "linux")]
     {
-        let parent = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
-        let name = file_name(path)?;
-        let bytes = serde_json::to_vec(config).map_err(|_| RecoveryError::InvalidConfiguration)?;
-        if bytes.len() as u64 > CONFIG_MAX_BYTES {
-            return Err(RecoveryError::InvalidConfiguration);
-        }
-        let temporary = temporary_path(path)?;
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&temporary)
-            .map_err(|_| RecoveryError::Storage)?;
-        let write_result = (|| {
-            output
-                .write_all(&bytes)
-                .map_err(|_| RecoveryError::Storage)?;
-            output.sync_all().map_err(|_| RecoveryError::Storage)?;
-            drop(output);
-            if path.exists() {
-                if replacement != BackupConfigReplace::ReplaceExisting {
-                    return Err(RecoveryError::DestinationExists);
-                }
-                validate_owner_file(path, CONFIG_MAX_BYTES)?;
-            }
-            rename_no_replace_or_replace(&temporary, path, replacement)?;
-            File::open(parent)
-                .and_then(|parent| parent.sync_all())
-                .map_err(|_| RecoveryError::Storage)
-        })();
-        if write_result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        let _ = name;
-        write_result
+        let mountinfo =
+            fs::read_to_string("/proc/self/mountinfo").map_err(|_| RecoveryError::MountMissing)?;
+        configure_backup_with(
+            path,
+            config,
+            replacement,
+            &mountinfo,
+            ConfigWriteOps::system(),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (path, replacement);
         Err(RecoveryError::PlatformUnsupported)
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn configure_backup_with(
+    path: &Path,
+    config: &BackupConfig,
+    replacement: BackupConfigReplace,
+    mountinfo: &str,
+    ops: ConfigWriteOps,
+) -> Result<(), RecoveryError> {
+    validate_config_request(config)?;
+    if !is_absolute_normalized(path) {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    let mut persisted = config.clone();
+    persisted.expected_mount =
+        crate::destination::derive_mount_identity(&config.destination, mountinfo)?;
+    validate_config(&persisted)?;
+    let bytes = serde_json::to_vec(&persisted).map_err(|_| RecoveryError::InvalidConfiguration)?;
+    if bytes.len() as u64 > CONFIG_MAX_BYTES {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+
+    let parent_path = path.parent().ok_or(RecoveryError::InvalidConfiguration)?;
+    let destination_name = c_name(file_name(path)?)?;
+    let parent = open_directory(parent_path)?;
+    let temporary_name = random_sibling_name(&destination_name)?;
+    let temporary_fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            temporary_name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if temporary_fd < 0 {
+        return Err(RecoveryError::Storage);
+    }
+    let mut output = unsafe { File::from_raw_fd(temporary_fd) };
+    let output_result = (|| {
+        output
+            .write_all(&bytes)
+            .map_err(|_| RecoveryError::Storage)?;
+        output.sync_all().map_err(|_| RecoveryError::Storage)?;
+        let output_identity = file_identity(&output)?;
+        match replacement {
+            BackupConfigReplace::Refuse => {
+                renameat2(
+                    parent.as_raw_fd(),
+                    &temporary_name,
+                    parent.as_raw_fd(),
+                    &destination_name,
+                    libc::RENAME_NOREPLACE,
+                )
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        RecoveryError::DestinationExists
+                    } else {
+                        RecoveryError::Storage
+                    }
+                })?;
+            }
+            BackupConfigReplace::ReplaceExisting => {
+                replace_existing_config(
+                    &parent,
+                    &temporary_name,
+                    &destination_name,
+                    &output_identity,
+                    ops,
+                )?;
+            }
+        }
+        parent.sync_all().map_err(|_| RecoveryError::Storage)
+    })();
+    if output_result.is_err() {
+        let _ = unlink_if_identity(
+            parent.as_raw_fd(),
+            &temporary_name,
+            &file_identity(&output).unwrap_or_default(),
+        );
+        let _ = parent.sync_all();
+    }
+    output_result
+}
+
+#[cfg(target_os = "linux")]
+fn replace_existing_config(
+    parent: &File,
+    temporary_name: &CStr,
+    destination_name: &CStr,
+    output_identity: &FileIdentity,
+    ops: ConfigWriteOps,
+) -> Result<(), RecoveryError> {
+    let existing_fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if existing_fd < 0 {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    let existing = unsafe { File::from_raw_fd(existing_fd) };
+    validate_owner_file_open(&existing, CONFIG_MAX_BYTES)?;
+    let existing_identity = file_identity(&existing)?;
+    (ops.after_existing_open)(parent.as_raw_fd(), destination_name)
+        .map_err(|_| RecoveryError::Storage)?;
+
+    renameat2(
+        parent.as_raw_fd(),
+        temporary_name,
+        parent.as_raw_fd(),
+        destination_name,
+        libc::RENAME_EXCHANGE,
+    )
+    .map_err(|_| RecoveryError::Storage)?;
+
+    if entry_identity(parent.as_raw_fd(), temporary_name).as_ref() != Ok(&existing_identity) {
+        rollback_exchange(parent, temporary_name, destination_name, output_identity)?;
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), temporary_name.as_ptr(), 0) } != 0 {
+        rollback_exchange(parent, temporary_name, destination_name, output_identity)?;
+        return Err(RecoveryError::Storage);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn rollback_exchange(
+    parent: &File,
+    temporary_name: &CStr,
+    destination_name: &CStr,
+    output_identity: &FileIdentity,
+) -> Result<(), RecoveryError> {
+    renameat2(
+        parent.as_raw_fd(),
+        temporary_name,
+        parent.as_raw_fd(),
+        destination_name,
+        libc::RENAME_EXCHANGE,
+    )
+    .map_err(|_| RecoveryError::Storage)?;
+    unlink_if_identity(parent.as_raw_fd(), temporary_name, output_identity)?;
+    parent.sync_all().map_err(|_| RecoveryError::Storage)
 }
 
 /// Loads a bounded schema-1 configuration from an owner-only regular file.
@@ -163,11 +301,10 @@ pub fn load_owner_only_handoff(path: &Path) -> Result<RecoveryHandoff, RecoveryE
     }
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn validate_config(config: &BackupConfig) -> Result<(), RecoveryError> {
-    if config.schema_version != 1
-        || config.freshness_seconds == 0
-        || config.retention_count == 0
-        || config.expected_mount.mount_point.as_os_str().is_empty()
+    validate_config_request(config)?;
+    if config.expected_mount.mount_point.as_os_str().is_empty()
         || config.expected_mount.source.is_empty()
         || config.expected_mount.filesystem_type.is_empty()
         || config.expected_mount.filesystem_id.is_empty()
@@ -180,6 +317,29 @@ pub(crate) fn validate_config(config: &BackupConfig) -> Result<(), RecoveryError
         &config.staging_directory,
         &config.passphrase_file,
         &config.expected_mount.mount_point,
+    ] {
+        if !is_absolute_normalized(path) {
+            return Err(RecoveryError::InvalidConfiguration);
+        }
+    }
+    if overlaps(&config.destination, &config.staging_directory)
+        || overlaps(&config.destination, &config.database)
+        || overlaps(&config.staging_directory, &config.database)
+    {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    Ok(())
+}
+
+fn validate_config_request(config: &BackupConfig) -> Result<(), RecoveryError> {
+    if config.schema_version != 1 || config.freshness_seconds == 0 || config.retention_count == 0 {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    for path in [
+        &config.database,
+        &config.destination,
+        &config.staging_directory,
+        &config.passphrase_file,
     ] {
         if !is_absolute_normalized(path) {
             return Err(RecoveryError::InvalidConfiguration);
@@ -217,21 +377,6 @@ fn open_owner_file(path: &Path, limit: u64) -> Result<File, RecoveryError> {
 }
 
 #[cfg(target_os = "linux")]
-fn validate_owner_file(path: &Path, limit: u64) -> Result<(), RecoveryError> {
-    let file = open_owner_file_unchecked(path)?;
-    validate_owner_file_open(&file, limit)
-}
-
-#[cfg(target_os = "linux")]
-fn open_owner_file_unchecked(path: &Path) -> Result<File, RecoveryError> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|_| RecoveryError::InvalidConfiguration)
-}
-
-#[cfg(target_os = "linux")]
 fn validate_owner_file_open(file: &File, limit: u64) -> Result<(), RecoveryError> {
     let metadata = file
         .metadata()
@@ -255,46 +400,113 @@ fn file_name(path: &Path) -> Result<&std::ffi::OsStr, RecoveryError> {
 }
 
 #[cfg(target_os = "linux")]
-fn temporary_path(path: &Path) -> Result<PathBuf, RecoveryError> {
-    let name = file_name(path)?;
-    let mut temporary = path.to_path_buf();
-    let mut random = [0_u8; 8];
-    getrandom::fill(&mut random).map_err(|_| RecoveryError::Random)?;
-    let suffix = format!(".iotkit-config-{}", u64::from_le_bytes(random));
-    temporary.set_file_name(format!("{}{}", name.to_string_lossy(), suffix));
-    Ok(temporary)
+fn c_name(name: &std::ffi::OsStr) -> Result<CString, RecoveryError> {
+    CString::new(name.as_bytes()).map_err(|_| RecoveryError::InvalidConfiguration)
 }
 
 #[cfg(target_os = "linux")]
-fn rename_no_replace_or_replace(
-    temporary: &Path,
-    destination: &Path,
-    replacement: BackupConfigReplace,
-) -> Result<(), RecoveryError> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let temporary = CString::new(temporary.as_os_str().as_bytes())
+fn random_sibling_name(destination: &CStr) -> Result<CString, RecoveryError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| RecoveryError::Random)?;
+    let mut name = format!(".{}.", destination.to_string_lossy());
+    use std::fmt::Write as _;
+    for byte in bytes {
+        write!(&mut name, "{byte:02x}").map_err(|_| RecoveryError::Storage)?;
+    }
+    name.push_str(".iotkit-config");
+    CString::new(name).map_err(|_| RecoveryError::InvalidConfiguration)
+}
+
+#[cfg(target_os = "linux")]
+fn open_directory(path: &Path) -> Result<File, RecoveryError> {
+    let path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| RecoveryError::InvalidConfiguration)?;
-    let destination = CString::new(destination.as_os_str().as_bytes())
-        .map_err(|_| RecoveryError::InvalidConfiguration)?;
-    let flags = match replacement {
-        BackupConfigReplace::Refuse => libc::RENAME_NOREPLACE,
-        BackupConfigReplace::ReplaceExisting => 0,
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
     };
+    if fd < 0 {
+        Err(RecoveryError::InvalidConfiguration)
+    } else {
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn renameat2(
+    old_directory: RawFd,
+    old_name: &CStr,
+    new_directory: RawFd,
+    new_name: &CStr,
+    flags: u32,
+) -> std::io::Result<()> {
     let result = unsafe {
         libc::syscall(
             libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            temporary.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
+            old_directory,
+            old_name.as_ptr(),
+            new_directory,
+            new_name.as_ptr(),
             flags,
         )
     };
     if result == 0 {
         Ok(())
-    } else if unsafe { *libc::__errno_location() } == libc::EEXIST {
-        Err(RecoveryError::DestinationExists)
     } else {
-        Err(RecoveryError::Storage)
+        Err(std::io::Error::last_os_error())
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn file_identity(file: &File) -> Result<FileIdentity, RecoveryError> {
+    let metadata = file.metadata().map_err(|_| RecoveryError::Storage)?;
+    Ok(FileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn entry_identity(directory_fd: RawFd, name: &CStr) -> Result<FileIdentity, RecoveryError> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe {
+        libc::fstatat(
+            directory_fd,
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(RecoveryError::Storage);
+    }
+    let stat = unsafe { stat.assume_init() };
+    Ok(FileIdentity {
+        device: stat.st_dev,
+        inode: stat.st_ino,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn unlink_if_identity(
+    directory_fd: RawFd,
+    name: &CStr,
+    expected: &FileIdentity,
+) -> Result<(), RecoveryError> {
+    if entry_identity(directory_fd, name).as_ref() != Ok(expected) {
+        return Ok(());
+    }
+    if unsafe { libc::unlinkat(directory_fd, name.as_ptr(), 0) } != 0 {
+        return Err(RecoveryError::Storage);
+    }
+    Ok(())
 }

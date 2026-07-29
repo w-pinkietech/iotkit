@@ -2,6 +2,8 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::os::fd::RawFd;
 
 use super::*;
 use tempfile::TempDir;
@@ -25,27 +27,76 @@ fn config(root: &Path) -> BackupConfig {
 }
 
 #[cfg(target_os = "linux")]
+fn mountinfo_for(destination: &Path) -> String {
+    use std::os::unix::fs::MetadataExt;
+    let device = fs::metadata(destination).unwrap().dev();
+    format!(
+        "41 24 {}:{} / {} rw - nfs4 server:/derived-live rw\n",
+        libc::major(device),
+        libc::minor(device),
+        destination.display()
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_config(root: &Path) -> BackupConfig {
+    use std::os::unix::fs::PermissionsExt;
+    let input = config(root);
+    fs::create_dir(&input.destination).unwrap();
+    fs::set_permissions(&input.destination, fs::Permissions::from_mode(0o700)).unwrap();
+    input
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() {
     let root = TempDir::new().unwrap();
     let config_path = root.path().join("backup.json");
-    let input = config(root.path());
+    let input = prepare_config(root.path());
+    let mountinfo = mountinfo_for(&input.destination);
 
-    configure_backup(&config_path, &input, BackupConfigReplace::Refuse).unwrap();
-    assert_eq!(load_owner_only_config(&config_path).unwrap(), input);
+    crate::config::configure_backup_with(
+        &config_path,
+        &input,
+        BackupConfigReplace::Refuse,
+        &mountinfo,
+        crate::config::ConfigWriteOps::system(),
+    )
+    .unwrap();
+    let configured = load_owner_only_config(&config_path).unwrap();
+    assert_eq!(configured.expected_mount.mount_point, input.destination);
+    assert_eq!(configured.expected_mount.source, "server:/derived-live");
+    assert_eq!(configured.expected_mount.filesystem_type, "nfs4");
+    assert!(
+        configured
+            .expected_mount
+            .filesystem_id
+            .ends_with("|server:/derived-live")
+    );
+    assert_ne!(configured.expected_mount, input.expected_mount);
     assert_eq!(
-        configure_backup(&config_path, &input, BackupConfigReplace::Refuse),
+        crate::config::configure_backup_with(
+            &config_path,
+            &input,
+            BackupConfigReplace::Refuse,
+            &mountinfo,
+            crate::config::ConfigWriteOps::system(),
+        ),
         Err(RecoveryError::DestinationExists)
     );
     let mut replacement = input.clone();
     replacement.retention_count = 7;
-    configure_backup(
+    crate::config::configure_backup_with(
         &config_path,
         &replacement,
         BackupConfigReplace::ReplaceExisting,
+        &mountinfo,
+        crate::config::ConfigWriteOps::system(),
     )
     .unwrap();
-    assert_eq!(load_owner_only_config(&config_path).unwrap(), replacement);
+    let loaded = load_owner_only_config(&config_path).unwrap();
+    assert_eq!(loaded.retention_count, 7);
+    assert_eq!(loaded.expected_mount, configured.expected_mount);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -54,6 +105,71 @@ fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() 
             0
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+fn substitute_validated_config(parent_fd: RawFd, name: &std::ffi::CStr) -> std::io::Result<()> {
+    use std::os::fd::FromRawFd;
+    let preserved = c"validated-old";
+    if unsafe { libc::renameat(parent_fd, name.as_ptr(), parent_fd, preserved.as_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let replacement_fd = unsafe {
+        libc::openat(
+            parent_fd,
+            name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if replacement_fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut replacement = unsafe { fs::File::from_raw_fd(replacement_fd) };
+    use std::io::Write as _;
+    replacement.write_all(b"attacker replacement")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn replacement_rolls_back_when_the_validated_inode_is_substituted() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let input = prepare_config(root.path());
+    let mountinfo = mountinfo_for(&input.destination);
+    crate::config::configure_backup_with(
+        &config_path,
+        &input,
+        BackupConfigReplace::Refuse,
+        &mountinfo,
+        crate::config::ConfigWriteOps::system(),
+    )
+    .unwrap();
+    let old = fs::read(&config_path).unwrap();
+    let mut changed = input.clone();
+    changed.retention_count = 9;
+    let mut ops = crate::config::ConfigWriteOps::system();
+    ops.after_existing_open = substitute_validated_config;
+
+    assert_eq!(
+        crate::config::configure_backup_with(
+            &config_path,
+            &changed,
+            BackupConfigReplace::ReplaceExisting,
+            &mountinfo,
+            ops,
+        ),
+        Err(RecoveryError::InvalidConfiguration)
+    );
+    assert_eq!(fs::read(&config_path).unwrap(), b"attacker replacement");
+    assert_eq!(fs::read(root.path().join("validated-old")).unwrap(), old);
+    assert!(fs::read_dir(root.path()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".iotkit-config-")
+    }));
 }
 
 #[test]
@@ -160,6 +276,27 @@ fn handoff_loader_accepts_only_bounded_owner_only_closed_json() {
     assert_eq!(
         load_owner_only_handoff(&handoff_path),
         Err(RecoveryError::InvalidConfiguration)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn replacement_refuses_a_dangling_symlink_without_publishing_configuration() {
+    use std::os::unix::fs::symlink;
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("backup.json");
+    let input = prepare_config(root.path());
+    symlink(root.path().join("missing"), &config_path).unwrap();
+
+    assert_eq!(
+        configure_backup(&config_path, &input, BackupConfigReplace::ReplaceExisting,),
+        Err(RecoveryError::InvalidConfiguration)
+    );
+    assert!(
+        fs::symlink_metadata(&config_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
     );
 }
 
