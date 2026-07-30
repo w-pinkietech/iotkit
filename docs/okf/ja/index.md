@@ -18,5 +18,6 @@
 
 ## 運用
 
+* [Edge Node hardware復旧クイックガイド](operations/edge-node-hardware-recovery.md) - Backup有無を判断し、印刷用の現場checklistを使います。
 * [導入と復旧](operations/installation-and-recovery.md) - 導入、日常確認、証明書、バックアップ、復旧の手順です。
 * [Storage容量](operations/storage-capacity.md) - SQLiteとPostgreSQLの再現可能な容量回帰smokeです。
