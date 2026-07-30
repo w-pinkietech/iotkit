@@ -39,6 +39,8 @@ pub use model::{
 };
 pub use restore::{INSTALL_CANDIDATE_OP, restore_candidate};
 #[cfg(target_os = "linux")]
+pub(crate) use snapshot::create_consistent_snapshot_with_hook;
+#[cfg(target_os = "linux")]
 pub(crate) use snapshot::validate_restored_candidate;
 pub use snapshot::{
     SnapshotArtifact, SnapshotFacts, create_consistent_snapshot, validate_snapshot,

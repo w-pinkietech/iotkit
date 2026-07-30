@@ -56,6 +56,16 @@ impl VerifiedBackupDestination {
     pub fn capability(&self) -> &DirectoryCapability {
         &self.directory
     }
+
+    /// Rechecks capacity on the already verified destination descriptor.
+    ///
+    /// This deliberately does not reopen the configured path or rerun the
+    /// mount/probe checks.  Callers use it after the online snapshot manifest
+    /// is known so the snapshot length, rather than a stale preflight length,
+    /// controls the final capacity guard.
+    pub(crate) fn ensure_capacity(&self, bytes: u64) -> Result<(), RecoveryError> {
+        ensure_capacity_with_probe(self, bytes, free_bytes)
+    }
 }
 
 impl VerifiedStagingDirectory {
@@ -214,7 +224,7 @@ fn verify_destination_inner(
             if same_filesystem(&file, &database)? {
                 return Err(RecoveryError::DestinationInvalid);
             }
-            if free_bytes(&file)? < required_capacity(bytes)? {
+            if free_bytes_file(&file)? < required_capacity(bytes)? {
                 return Err(RecoveryError::StorageFull);
             }
         }
@@ -286,7 +296,7 @@ fn verify_staging_directory_inner(
             validate_staging_leaf(&staging.directory)?;
             ensure_no_cleanup_leftovers(&staging.directory)?;
             if let Some(bytes) = bytes
-                && free_bytes(&staging.directory)? < required_capacity(bytes)?
+                && free_bytes_file(&staging.directory)? < required_capacity(bytes)?
             {
                 return Err(RecoveryError::StorageFull);
             }
@@ -535,9 +545,19 @@ fn same_filesystem(left: &File, right: &File) -> Result<bool, RecoveryError> {
 }
 
 #[cfg(target_os = "linux")]
-fn free_bytes(file: &File) -> Result<u64, RecoveryError> {
+fn free_bytes(directory: &DirectoryCapability) -> Result<u64, RecoveryError> {
+    free_bytes_fd(directory.as_raw_fd())
+}
+
+#[cfg(target_os = "linux")]
+fn free_bytes_file(file: &File) -> Result<u64, RecoveryError> {
+    free_bytes_fd(file.as_raw_fd())
+}
+
+#[cfg(target_os = "linux")]
+fn free_bytes_fd(fd: RawFd) -> Result<u64, RecoveryError> {
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
-    if unsafe { libc::fstatvfs(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+    if unsafe { libc::fstatvfs(fd, stat.as_mut_ptr()) } != 0 {
         return Err(RecoveryError::Storage);
     }
     let stat = unsafe { stat.assume_init() };
@@ -547,6 +567,25 @@ fn free_bytes(file: &File) -> Result<u64, RecoveryError> {
     stat.f_bavail
         .checked_mul(stat.f_frsize)
         .ok_or(RecoveryError::CapacityOverflow)
+}
+
+/// Applies the final capacity guard to a held destination capability.
+///
+/// The probe is injected as a closure so unit tests can exercise the
+/// snapshot-length decision without relying on allocator or filesystem-space
+/// manipulation.  Production passes the held descriptor directly.
+pub(crate) fn ensure_capacity_with_probe<F>(
+    destination: &VerifiedBackupDestination,
+    bytes: u64,
+    probe: F,
+) -> Result<(), RecoveryError>
+where
+    F: FnOnce(&DirectoryCapability) -> Result<u64, RecoveryError>,
+{
+    if probe(&destination.directory)? < required_capacity(bytes)? {
+        return Err(RecoveryError::StorageFull);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

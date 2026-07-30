@@ -456,6 +456,141 @@ fn restore_fault_matrix_never_publishes_an_unfenced_name() {
 }
 
 #[cfg(target_os = "linux")]
+#[test]
+fn restore_process_abort_matrix_retries_to_one_fenced_candidate_without_live_change() {
+    use std::{os::unix::process::ExitStatusExt, process::Command};
+
+    for phase in [
+        "decrypted",
+        "copied",
+        "fence_committed",
+        "checkpointed",
+        "candidate_file_synced",
+        "rename_succeeded",
+        "parent_synced",
+        "published_readback_verified",
+    ] {
+        let fixture = restore_fixture();
+        let live_before = std::fs::read(&fixture.request.live_database).unwrap();
+        let root = fixture.request.input.parent().unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "restore_tests::restore_abort_child",
+                "--nocapture",
+            ])
+            .env("IOTKIT_RECOVERY_TEST_RESTORE_ROOT", root)
+            .env(
+                "IOTKIT_RECOVERY_TEST_RESTORE_STAGING",
+                &fixture.request.staging_directory,
+            )
+            .env("IOTKIT_RECOVERY_TEST_RESTORE_PHASE", phase)
+            .status()
+            .unwrap();
+        assert_eq!(
+            child.signal(),
+            Some(libc::SIGABRT),
+            "{phase} child did not abort at its requested hook"
+        );
+
+        let published = fixture.request.candidate_database.exists();
+        if [
+            "rename_succeeded",
+            "parent_synced",
+            "published_readback_verified",
+        ]
+        .contains(&phase)
+        {
+            assert!(published, "{phase} must retain its published candidate");
+            let conn = rusqlite::Connection::open_with_flags(
+                &fixture.request.candidate_database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            assert!(matches!(
+                startup_mode(&conn).unwrap(),
+                RecoveryStartupMode::FencedCandidate { .. }
+            ));
+        } else {
+            assert!(!published, "{phase} published before its rename boundary");
+        }
+
+        let receipt = restore_candidate(&fixture.request, &restore_passphrase())
+            .unwrap_or_else(|error| panic!("{phase} retry failed: {error:?}"));
+        assert_eq!(receipt.status, RestoreStatus::DurablyFencedCandidate);
+        assert!(fixture.request.candidate_database.exists());
+        assert!(
+            !fixture
+                .request
+                .candidate_database
+                .with_extension("db-wal")
+                .exists()
+        );
+        assert!(
+            !fixture
+                .request
+                .candidate_database
+                .with_extension("db-shm")
+                .exists()
+        );
+        assert_eq!(
+            std::fs::read(&fixture.request.live_database).unwrap(),
+            live_before,
+            "{phase} changed the live database"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_abort_child() {
+    let (Some(root), Some(staging), Some(phase)) = (
+        std::env::var_os("IOTKIT_RECOVERY_TEST_RESTORE_ROOT"),
+        std::env::var_os("IOTKIT_RECOVERY_TEST_RESTORE_STAGING"),
+        std::env::var_os("IOTKIT_RECOVERY_TEST_RESTORE_PHASE"),
+    ) else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let request = RestoreRequest {
+        input: root.join("backup.iotkit-node-backup"),
+        live_database: root.join("live.db"),
+        candidate_database: root.join("candidate.db"),
+        staging_directory: std::path::PathBuf::from(staging),
+        handoff: RecoveryHandoff {
+            schema_version: 1,
+            recovery_id: "recovery-negative".into(),
+            edge_id: "edge-test".into(),
+            edge_node_id: tests_support::TEST_EDGE_NODE_ID.into(),
+            old_ledger_epoch: tests_support::TEST_LEDGER_EPOCH.into(),
+            expected_backup_id: Some("backup-restore-negative".into()),
+            proposed_new_epoch: "epoch-restored".into(),
+            credential_generation: 2,
+        },
+    };
+    let phase = phase.to_string_lossy().to_string();
+    let hook = |current: crate::restore::RestorePhase, _published: bool| {
+        let current = match current {
+            crate::restore::RestorePhase::Decrypted => "decrypted",
+            crate::restore::RestorePhase::Copied => "copied",
+            crate::restore::RestorePhase::FenceCommitted => "fence_committed",
+            crate::restore::RestorePhase::Checkpointed => "checkpointed",
+            crate::restore::RestorePhase::CandidateFileSynced => "candidate_file_synced",
+            crate::restore::RestorePhase::RenameSucceeded => "rename_succeeded",
+            crate::restore::RestorePhase::ParentSynced => "parent_synced",
+            crate::restore::RestorePhase::PublishedReadbackVerified => {
+                "published_readback_verified"
+            }
+        };
+        if current == phase {
+            std::process::abort();
+        }
+        Ok(())
+    };
+    let _ = crate::restore::restore_candidate_inner(&request, &restore_passphrase(), Some(&hook));
+}
+
+#[cfg(target_os = "linux")]
 struct RestoreFixture {
     _root: tempfile::TempDir,
     _staging: tempfile::TempDir,

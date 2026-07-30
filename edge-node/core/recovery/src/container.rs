@@ -371,7 +371,7 @@ fn encrypt_snapshot_contents(
         .write_all(&header_json)
         .map_err(|_| RecoveryError::Storage)?;
 
-    let mut buffer = vec![0_u8; header.chunk_size];
+    let mut buffer = Zeroizing::new(vec![0_u8; header.chunk_size]);
     let mut sequence = 0_u64;
     loop {
         let count = read_chunk(&mut input, &mut buffer).map_err(|_| RecoveryError::Storage)?;
@@ -865,15 +865,17 @@ fn consume_records(
         read_exact(input, &mut ciphertext)?;
         let nonce = make_nonce(nonce_prefix, sequence);
         let aad = make_aad(digest, sequence, flags[0], &length_bytes);
-        let plaintext = cipher
-            .decrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &ciphertext,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| RecoveryError::AuthenticationFailed)?;
+        let plaintext = Zeroizing::new(
+            cipher
+                .decrypt(
+                    XNonce::from_slice(&nonce),
+                    Payload {
+                        msg: &ciphertext,
+                        aad: &aad,
+                    },
+                )
+                .map_err(|_| RecoveryError::AuthenticationFailed)?,
+        );
         if plaintext.len() != plaintext_length {
             return Err(RecoveryError::ContainerInvalid);
         }

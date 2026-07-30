@@ -29,8 +29,8 @@ use crate::{
 #[cfg(target_os = "linux")]
 use crate::{
     RecoveryStartupMode, VerifiedBackupDestination, VerifiedStagingDirectory,
-    acquire_recovery_operation, create_consistent_snapshot, encrypt_container, verify_destination,
-    verify_staging_directory,
+    acquire_recovery_operation, create_consistent_snapshot_with_hook, encrypt_container,
+    verify_destination, verify_staging_directory,
 };
 
 type CompletionRow = (
@@ -490,6 +490,7 @@ pub fn create_backup_from_files(
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackupHookPoint {
     BeforeSnapshot,
+    AfterSnapshot,
     AfterBegin,
     AfterPublication,
     AfterReadback,
@@ -502,6 +503,35 @@ pub(crate) enum BackupHookPoint {
 pub(crate) trait BackupHook {
     fn at(&self, _point: BackupHookPoint, _config: &BackupConfig) -> Result<(), RecoveryError> {
         Ok(())
+    }
+
+    fn snapshot_at(
+        &self,
+        _point: crate::snapshot::SnapshotHookPoint,
+        _config: &BackupConfig,
+    ) -> Result<(), RecoveryError> {
+        Ok(())
+    }
+
+    fn check_destination_capacity(
+        &self,
+        destination: &VerifiedBackupDestination,
+        bytes: u64,
+    ) -> Result<(), RecoveryError> {
+        destination.ensure_capacity(bytes)
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct BackupSnapshotHook<'a, H: BackupHook + ?Sized> {
+    hook: &'a H,
+    config: &'a BackupConfig,
+}
+
+#[cfg(target_os = "linux")]
+impl<H: BackupHook + ?Sized> crate::snapshot::SnapshotHook for BackupSnapshotHook<'_, H> {
+    fn at(&self, point: crate::snapshot::SnapshotHookPoint) -> Result<(), RecoveryError> {
+        self.hook.snapshot_at(point, self.config)
     }
 }
 
@@ -532,33 +562,7 @@ pub(crate) fn create_backup_from_files_with_hook(
     let guard = acquire_recovery_operation(config_path)?;
     let config = load_owner_only_config(config_path)?;
     let passphrase = crate::config::load_owner_only_passphrase(&config.passphrase_file)?;
-    pause_after_create_selection(config_path)?;
     create_backup_guarded(&guard, &config, &passphrase, now_ms, hook)
-}
-
-#[cfg(target_os = "linux")]
-fn pause_after_create_selection(config_path: &Path) -> Result<(), RecoveryError> {
-    let Some(expected) = std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_PAUSE_PATH") else {
-        return Ok(());
-    };
-    if std::path::Path::new(&expected) != config_path
-        || std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_PAUSE_AFTER_SELECTION").is_none()
-    {
-        return Ok(());
-    }
-    let ready = std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_READY_FILE")
-        .ok_or(RecoveryError::InvalidConfiguration)?;
-    let proceed = std::env::var_os("IOTKIT_TEST_BACKUP_CREATE_CONTINUE_FILE")
-        .ok_or(RecoveryError::InvalidConfiguration)?;
-    std::fs::write(&ready, b"ready").map_err(|_| RecoveryError::Storage)?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !std::path::Path::new(&proceed).exists() {
-        if std::time::Instant::now() >= deadline {
-            return Err(RecoveryError::Storage);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -658,28 +662,34 @@ fn create_backup_guarded(
     if let Err(error) = hook.at(BackupHookPoint::BeforeSnapshot, config) {
         return cleanup_stage(&staging, &stage_name).and(Err(error));
     }
-    let snapshot =
-        match create_consistent_snapshot(&config.database, &stage_path, &backup_id, now_ms) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                let cleanup = cleanup_stage(&staging, &stage_name);
-                let receipt = dispatch_state(
-                    &source,
-                    RECORD_BACKUP_PREFLIGHT_FAILURE_OP,
-                    &PreflightState {
-                        attempt_id,
-                        backup_id,
-                        artifact_name,
-                        edge_node_id,
-                        reason_code: error.reason_code().into(),
-                        started_at_ms: now_ms,
-                        completed_at_ms: now_ms,
-                    },
-                );
-                receipt?;
-                return cleanup.and(Err(error));
-            }
-        };
+    let snapshot_hook = BackupSnapshotHook { hook, config };
+    let snapshot = match create_consistent_snapshot_with_hook(
+        &config.database,
+        &stage_path,
+        &backup_id,
+        now_ms,
+        &snapshot_hook,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let cleanup = cleanup_stage(&staging, &stage_name);
+            let receipt = dispatch_state(
+                &source,
+                RECORD_BACKUP_PREFLIGHT_FAILURE_OP,
+                &PreflightState {
+                    attempt_id,
+                    backup_id,
+                    artifact_name,
+                    edge_node_id,
+                    reason_code: error.reason_code().into(),
+                    started_at_ms: now_ms,
+                    completed_at_ms: now_ms,
+                },
+            );
+            receipt?;
+            return cleanup.and(Err(error));
+        }
+    };
     if !source_path_still_identical(&source_metadata, &config.database) {
         return cleanup_stage(&staging, &stage_name).and(Err(RecoveryError::InvalidSnapshot));
     }
@@ -701,6 +711,16 @@ fn create_backup_guarded(
             },
         )?;
         return cleanup.and(Err(RecoveryError::InvalidSnapshot));
+    }
+    if let Err(error) = hook.at(BackupHookPoint::AfterSnapshot, config) {
+        return cleanup_stage(&staging, &stage_name).and(Err(error));
+    }
+    if let Err(error) =
+        hook.check_destination_capacity(&destination, snapshot.manifest.database_length)
+    {
+        let cleanup = cleanup_stage(&staging, &stage_name);
+        record_preflight(&source, &edge_node_id, now_ms, error)?;
+        return cleanup.and(Err(error));
     }
     if let Err(error) = dispatch_state(
         &source,
@@ -1083,6 +1103,18 @@ fn is_stage_name(name: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+fn is_stage_sidecar_name(name: &str) -> bool {
+    ["-journal", "-wal", "-shm"]
+        .iter()
+        .any(|suffix| name.strip_suffix(suffix).is_some_and(is_stage_name))
+}
+
+#[cfg(target_os = "linux")]
+fn is_stage_artifact_name(name: &str) -> bool {
+    is_stage_name(name) || is_stage_sidecar_name(name)
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn cleanup_prior_plaintext(
     staging: &VerifiedStagingDirectory,
 ) -> Result<(), RecoveryError> {
@@ -1124,7 +1156,7 @@ pub(crate) fn cleanup_prior_plaintext(
         let bytes = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
         if bytes.starts_with(b".iotkit-backup-stage-") {
             match std::str::from_utf8(bytes) {
-                Ok(name) if is_stage_name(name) => names.push(name.to_string()),
+                Ok(name) if is_stage_artifact_name(name) => names.push(name.to_string()),
                 _ => actionable_unknown = true,
             }
         }
@@ -1141,7 +1173,7 @@ pub(crate) fn cleanup_prior_plaintext(
 
 #[cfg(target_os = "linux")]
 fn cleanup_stage(staging: &VerifiedStagingDirectory, name: &str) -> Result<(), RecoveryError> {
-    if !is_stage_name(name) {
+    if !is_stage_artifact_name(name) {
         return Err(RecoveryError::CleanupRequired);
     }
     let name = CString::new(name).map_err(|_| RecoveryError::CleanupRequired)?;

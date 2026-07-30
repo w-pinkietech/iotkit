@@ -56,6 +56,22 @@ pub struct SnapshotFacts {
     pub counts: BackupCounts,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SnapshotHookPoint {
+    AfterCredentialUpdate,
+    BeforeVacuum,
+}
+
+pub(crate) trait SnapshotHook {
+    fn at(&self, _point: SnapshotHookPoint) -> Result<(), RecoveryError> {
+        Ok(())
+    }
+}
+
+struct SystemSnapshotHook;
+
+impl SnapshotHook for SystemSnapshotHook {}
+
 impl fmt::Debug for SnapshotArtifact {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -82,6 +98,16 @@ pub fn create_consistent_snapshot(
     backup_id: &str,
     now_ms: i64,
 ) -> Result<SnapshotArtifact, RecoveryError> {
+    create_consistent_snapshot_with_hook(source, staging, backup_id, now_ms, &SystemSnapshotHook)
+}
+
+pub(crate) fn create_consistent_snapshot_with_hook(
+    source: &Path,
+    staging: &Path,
+    backup_id: &str,
+    now_ms: i64,
+    hook: &impl SnapshotHook,
+) -> Result<SnapshotArtifact, RecoveryError> {
     if backup_id.is_empty() || now_ms < 0 {
         return Err(RecoveryError::InvalidSnapshot);
     }
@@ -91,7 +117,7 @@ pub fn create_consistent_snapshot(
         create_new_empty(staging)?;
         created = true;
         online_backup(source, staging)?;
-        sanitize_snapshot(staging)?;
+        sanitize_snapshot(staging, hook)?;
         let facts = validate_snapshot(staging)?;
         let manifest = NodeBackupManifest {
             artifact_kind: ARTIFACT_KIND.into(),
@@ -222,7 +248,7 @@ fn online_backup(source: &Path, staging: &Path) -> Result<(), RecoveryError> {
     }
 }
 
-fn sanitize_snapshot(path: &Path) -> Result<(), RecoveryError> {
+fn sanitize_snapshot(path: &Path, hook: &impl SnapshotHook) -> Result<(), RecoveryError> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|_| RecoveryError::InvalidSnapshot)?;
     require_canonical_schema(&conn)?;
@@ -252,6 +278,8 @@ fn sanitize_snapshot(path: &Path) -> Result<(), RecoveryError> {
         },
     )
     .map_err(|_| RecoveryError::InvalidSnapshot)?;
+    hook.at(SnapshotHookPoint::AfterCredentialUpdate)?;
+    hook.at(SnapshotHookPoint::BeforeVacuum)?;
     conn.execute_batch("VACUUM")
         .map_err(|_| RecoveryError::InvalidSnapshot)?;
     Ok(())

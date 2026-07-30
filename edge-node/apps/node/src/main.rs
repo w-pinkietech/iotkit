@@ -54,14 +54,14 @@ fn main() {
     // and effective-value construction happen after the process-wide recovery
     // fence, including for a syntactically valid config with an invalid
     // adapter.
-    let unresolved = match config::load_unresolved(&args) {
+    let bootstrap = match config::load_bootstrap(&args) {
         Ok(config) => config,
         Err(e) => {
             tracing::error!(error = %e, "failed to load config");
             std::process::exit(1);
         }
     };
-    let db_path = match unresolved.db_path() {
+    let db_path = match bootstrap.db_path() {
         Ok(path) => path,
         Err(e) => {
             tracing::error!(error = %e, "failed to load config");
@@ -82,6 +82,13 @@ fn main() {
             std::process::exit(3);
         }
     }
+    let unresolved = match bootstrap.load_full() {
+        Ok(config) => config,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load config");
+            std::process::exit(1);
+        }
+    };
     let config = match unresolved.resolve() {
         Ok(c) => c,
         Err(e) => {

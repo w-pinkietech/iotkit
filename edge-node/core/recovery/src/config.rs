@@ -17,6 +17,8 @@ use std::os::unix::{
 #[cfg(target_os = "linux")]
 use crate::DirectoryCapability;
 use crate::{BackupConfig, BackupPassphrase, RecoveryError, RecoveryHandoff};
+#[cfg(target_os = "linux")]
+use zeroize::Zeroizing;
 
 #[cfg(target_os = "linux")]
 const CONFIG_MAX_BYTES: u64 = 64 * 1024;
@@ -569,31 +571,43 @@ pub fn load_owner_only_config(path: &Path) -> Result<BackupConfig, RecoveryError
 pub fn load_owner_only_passphrase(path: &Path) -> Result<BackupPassphrase, RecoveryError> {
     #[cfg(target_os = "linux")]
     {
-        let bytes = read_owner_file(path, 4_098).map_err(|_| RecoveryError::InvalidPassphrase)?;
-        let mut value = String::from_utf8(bytes).map_err(|_| RecoveryError::InvalidPassphrase)?;
-        if value.ends_with('\n') {
-            value.pop();
-            if value.ends_with('\r') {
-                value.pop();
-            }
-        }
-        if value
-            .chars()
-            .any(|character| character == '\r' || character == '\n' || character == '\0')
-        {
-            return Err(RecoveryError::InvalidPassphrase);
-        }
-        let count = value.chars().count();
-        if !(12..=1024).contains(&count) {
-            return Err(RecoveryError::InvalidPassphrase);
-        }
-        Ok(BackupPassphrase::new(value))
+        parse_owner_only_passphrase(
+            read_owner_file(path, 4_098).map_err(|_| RecoveryError::InvalidPassphrase)?,
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = path;
         Err(RecoveryError::PlatformUnsupported)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_owner_only_passphrase(
+    bytes: Zeroizing<Vec<u8>>,
+) -> Result<BackupPassphrase, RecoveryError> {
+    let mut value = Zeroizing::new(
+        std::str::from_utf8(bytes.as_slice())
+            .map_err(|_| RecoveryError::InvalidPassphrase)?
+            .to_owned(),
+    );
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+    if value
+        .chars()
+        .any(|character| character == '\r' || character == '\n' || character == '\0')
+    {
+        return Err(RecoveryError::InvalidPassphrase);
+    }
+    let count = value.chars().count();
+    if !(12..=1024).contains(&count) {
+        return Err(RecoveryError::InvalidPassphrase);
+    }
+    Ok(BackupPassphrase::new(value.to_string()))
 }
 
 /// Loads a bounded, closed recovery handoff from an owner-only regular file.
@@ -829,32 +843,36 @@ fn pair_digest(bytes: &[u8]) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn read_owner_file(path: &Path, limit: u64) -> Result<Vec<u8>, RecoveryError> {
+fn read_owner_file(path: &Path, limit: u64) -> Result<Zeroizing<Vec<u8>>, RecoveryError> {
     let file = open_owner_file(path, limit)?;
-    let pause_path = std::env::var_os("IOTKIT_TEST_OWNER_FILE_PAUSE_PATH");
-    if std::env::var_os("IOTKIT_TEST_OWNER_FILE_PAUSE_AFTER_FSTAT").is_some()
-        && pause_path
-            .as_deref()
-            .is_some_and(|value| Path::new(value) == path)
+    read_owner_file_from_open_file(file, limit)
+}
+
+#[cfg(target_os = "linux")]
+fn read_owner_file_from_open_file(
+    mut file: File,
+    limit: u64,
+) -> Result<Zeroizing<Vec<u8>>, RecoveryError> {
+    let observed_len = file.metadata().map_err(|_| RecoveryError::Storage)?.len();
+    read_bounded_owner_file(&mut file, observed_len, limit)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn read_bounded_owner_file(
+    file: &mut File,
+    observed_len: u64,
+    limit: u64,
+) -> Result<Zeroizing<Vec<u8>>, RecoveryError> {
+    if observed_len > limit
+        || file.metadata().map_err(|_| RecoveryError::Storage)?.len() != observed_len
     {
-        let ready = std::env::var_os("IOTKIT_TEST_OWNER_FILE_READY_FILE")
-            .ok_or(RecoveryError::InvalidConfiguration)?;
-        let proceed = std::env::var_os("IOTKIT_TEST_OWNER_FILE_CONTINUE_FILE")
-            .ok_or(RecoveryError::InvalidConfiguration)?;
-        std::fs::write(&ready, b"ready").map_err(|_| RecoveryError::Storage)?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !std::path::Path::new(&proceed).exists() {
-            if std::time::Instant::now() >= deadline {
-                return Err(RecoveryError::Storage);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        return Err(RecoveryError::InvalidConfiguration);
     }
-    let mut bytes = Vec::new();
+    let mut bytes = Zeroizing::new(Vec::new());
     file.take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|_| RecoveryError::Storage)?;
-    if bytes.len() as u64 > limit {
+    if bytes.len() as u64 != observed_len {
         return Err(RecoveryError::InvalidConfiguration);
     }
     Ok(bytes)

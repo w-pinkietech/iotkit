@@ -252,6 +252,19 @@ impl PairMarkerValidation for PairMarker {
 }
 
 #[cfg(target_os = "linux")]
+trait PairFault {
+    fn at(&self, _phase: &str) -> Result<(), RecoveryError> {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct NoPairFault;
+
+#[cfg(target_os = "linux")]
+impl PairFault for NoPairFault {}
+
+#[cfg(target_os = "linux")]
 struct PairPaths {
     config_parent: File,
     drop_in_parent: File,
@@ -271,6 +284,17 @@ fn configure_backup_pair(
     drop_in_path: &Path,
     replacement: BackupConfigReplace,
 ) -> Result<(), RecoveryError> {
+    configure_backup_pair_with_fault(config_path, config, drop_in_path, replacement, &NoPairFault)
+}
+
+#[cfg(target_os = "linux")]
+fn configure_backup_pair_with_fault(
+    config_path: &Path,
+    config: &BackupConfig,
+    drop_in_path: &Path,
+    replacement: BackupConfigReplace,
+    fault: &impl PairFault,
+) -> Result<(), RecoveryError> {
     let request_config_hash = canonical_config_hash(config)?;
     let request_drop_in = systemd_drop_in_bytes(&config.expected_mount.mount_point)?;
     let request_drop_in_hash = hex_digest(&request_drop_in);
@@ -278,7 +302,7 @@ fn configure_backup_pair(
     let paths = PairPaths::open(config_path, drop_in_path)?;
     let marker_exists = paths.marker_exists()?;
     let completion_exists = paths.completion_exists()?;
-    if marker_exists && paths.resume_pending(&request_config_hash, &request_drop_in_hash)? {
+    if marker_exists && paths.resume_pending(&request_config_hash, &request_drop_in_hash, fault)? {
         return Ok(());
     }
     if completion_exists && paths.resume_completion(&request_config_hash, &request_drop_in_hash)? {
@@ -308,7 +332,7 @@ fn configure_backup_pair(
     let mut published = false;
     let result = (|| {
         paths.backup_existing(&marker)?;
-        pair_fault("after_backup")?;
+        fault.at("after_backup")?;
 
         configure_backup_guarded_with_pre_publish(
             &guard,
@@ -342,10 +366,10 @@ fn configure_backup_pair(
                 paths.validate_phase_state(&marker)?;
                 paths.write_marker(&marker, true)?;
                 paths.sync_parents()?;
-                pair_fault("before_config_rename")
+                fault.at("before_config_rename")
             },
         )?;
-        pair_fault("after_config_rename_before_marker")?;
+        fault.at("after_config_rename_before_marker")?;
         let config_bytes = paths.read_target(&paths.config_parent, &paths.config_name)?;
         let persisted: BackupConfig = serde_json::from_slice(&config_bytes)
             .map_err(|_| RecoveryError::InvalidConfiguration)?;
@@ -358,7 +382,7 @@ fn configure_backup_pair(
         marker.phase = PairPhase::ConfigPublished;
         paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
-        pair_fault("after_config_publish")?;
+        fault.at("after_config_publish")?;
 
         let drop_in_temp = paths.drop_in_temp_name(&marker.txid);
         if paths
@@ -372,21 +396,21 @@ fn configure_backup_pair(
         paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
         paths.sync_parents()?;
-        pair_fault("before_drop_in_rename")?;
+        fault.at("before_drop_in_rename")?;
         paths.publish_drop_in_temp(&drop_in_temp)?;
-        pair_fault("after_drop_in_rename_before_marker")?;
-        pair_fault("after_drop_in_publish")?;
+        fault.at("after_drop_in_rename_before_marker")?;
+        fault.at("after_drop_in_publish")?;
         marker.phase = PairPhase::DropInPublished;
         paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
         paths.sync_parents()?;
-        pair_fault("after_parent_sync")?;
+        fault.at("after_parent_sync")?;
         marker.phase = PairPhase::Published;
         paths.validate_phase_state(&marker)?;
         paths.write_marker(&marker, true)?;
         published = true;
-        pair_fault("after_published_marker")?;
-        paths.finalize(&marker)
+        fault.at("after_published_marker")?;
+        paths.finalize(&marker, fault)
     })();
     match result {
         Ok(()) => Ok(()),
@@ -562,6 +586,7 @@ impl PairPaths {
         &self,
         request_config_hash: &str,
         request_drop_in_hash: &str,
+        fault: &impl PairFault,
     ) -> Result<bool, RecoveryError> {
         let marker = self.read_marker()?;
         let completion = if self.completion_exists()? {
@@ -587,12 +612,12 @@ impl PairPaths {
         match marker.phase {
             PairPhase::Published => {
                 self.validate_phase_state(&marker)?;
-                self.finalize(&marker)?;
+                self.finalize(&marker, fault)?;
                 if same_request {
                     return Ok(true);
                 }
             }
-            _ => return self.recover_pending(marker, same_request),
+            _ => return self.recover_pending(marker, same_request, fault),
         }
         Ok(false)
     }
@@ -628,6 +653,7 @@ impl PairPaths {
         &self,
         marker: PairMarker,
         same_request: bool,
+        fault: &impl PairFault,
     ) -> Result<bool, RecoveryError> {
         self.validate_phase_state(&marker)?;
         match marker.phase {
@@ -655,7 +681,7 @@ impl PairPaths {
         if updated.phase != PairPhase::Published {
             return Err(RecoveryError::CleanupRequired);
         }
-        self.finalize(&updated)?;
+        self.finalize(&updated, fault)?;
         Ok(same_request)
     }
 
@@ -856,7 +882,7 @@ impl PairPaths {
         Ok(())
     }
 
-    fn finalize(&self, marker: &PairMarker) -> Result<(), RecoveryError> {
+    fn finalize(&self, marker: &PairMarker, fault: &impl PairFault) -> Result<(), RecoveryError> {
         if marker.phase != PairPhase::Published {
             return Err(RecoveryError::CleanupRequired);
         }
@@ -864,10 +890,10 @@ impl PairPaths {
         let config_backup = pair_name(&marker.txid, "config.old")?;
         let drop_in_backup = pair_name(&marker.txid, "drop-in.old")?;
         unlink_name(&self.config_parent, &config_backup)?;
-        pair_fault("after_config_backup_unlink")?;
+        fault.at("after_config_backup_unlink")?;
         unlink_name(&self.drop_in_parent, &drop_in_backup)?;
         self.sync_parents()?;
-        pair_fault("after_finalize_parent_sync")?;
+        fault.at("after_finalize_parent_sync")?;
         if self.completion_exists()? {
             let previous = self.read_completion()?;
             if !prior_completion_matches_marker(&previous, marker) {
@@ -889,18 +915,18 @@ impl PairPaths {
             )
             .map_err(|_| RecoveryError::CleanupRequired)?;
         }
-        pair_fault("after_completion_receipt")?;
+        fault.at("after_completion_receipt")?;
         self.config_parent
             .sync_all()
             .map_err(|_| RecoveryError::CleanupRequired)?;
-        pair_fault("after_completion_receipt_sync")?;
+        fault.at("after_completion_receipt_sync")?;
         if self.marker_exists()? {
             unlink_name(&self.config_parent, &self.marker_name)?;
-            pair_fault("after_completion_marker_unlink")?;
+            fault.at("after_completion_marker_unlink")?;
             self.config_parent
                 .sync_all()
                 .map_err(|_| RecoveryError::CleanupRequired)?;
-            pair_fault("after_completion_marker_unlink_sync")?;
+            fault.at("after_completion_marker_unlink_sync")?;
         }
         Ok(())
     }
@@ -1479,43 +1505,6 @@ fn rename_exchange(
 }
 
 #[cfg(target_os = "linux")]
-fn pair_fault(phase: &str) -> Result<(), RecoveryError> {
-    if std::env::var_os("IOTKIT_TEST_BACKUP_PAIR_PAUSE_PHASE")
-        .and_then(|value| value.into_string().ok())
-        .as_deref()
-        == Some(phase)
-    {
-        let ready = std::env::var_os("IOTKIT_TEST_BACKUP_PAIR_READY_FILE")
-            .ok_or(RecoveryError::InvalidConfiguration)?;
-        let continue_path = std::env::var_os("IOTKIT_TEST_BACKUP_PAIR_CONTINUE_FILE")
-            .ok_or(RecoveryError::InvalidConfiguration)?;
-        std::fs::write(&ready, b"ready").map_err(|_| RecoveryError::Storage)?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !std::path::Path::new(&continue_path).exists() {
-            if std::time::Instant::now() >= deadline {
-                return Err(RecoveryError::Storage);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-    if std::env::var_os("IOTKIT_TEST_BACKUP_PAIR_FAIL_PHASE")
-        .and_then(|value| value.into_string().ok())
-        .as_deref()
-        == Some(phase)
-    {
-        return Err(RecoveryError::Storage);
-    }
-    if std::env::var_os("IOTKIT_TEST_BACKUP_PAIR_CRASH_PHASE")
-        .and_then(|value| value.into_string().ok())
-        .as_deref()
-        == Some(phase)
-    {
-        std::process::abort();
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
 fn systemd_drop_in_bytes(mount_point: &Path) -> Result<Vec<u8>, RecoveryError> {
     let encoded = systemd_mount_path(mount_point)?;
     Ok(format!("[Unit]\nRequiresMountsFor={encoded}\n").into_bytes())
@@ -1670,6 +1659,14 @@ fn restore(args: RestoreArgs) -> AppResult<()> {
 
 #[cfg(target_os = "linux")]
 fn create_restore_staging() -> Result<PathBuf, RecoveryError> {
+    create_restore_staging_with(|_| Ok(()))
+}
+
+#[cfg(target_os = "linux")]
+fn create_restore_staging_with<F>(after_create: F) -> Result<PathBuf, RecoveryError>
+where
+    F: FnOnce(&Path) -> Result<(), RecoveryError>,
+{
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 
     let base = std::env::temp_dir();
@@ -1698,9 +1695,9 @@ fn create_restore_staging() -> Result<PathBuf, RecoveryError> {
         let _ = std::fs::remove_dir(&path);
         return Err(RecoveryError::InvalidConfiguration);
     }
-    if std::env::var_os("IOTKIT_TEST_RESTORE_STAGING_FAIL_AFTER_CREATE").is_some() {
+    if let Err(error) = after_create(&path) {
         return match std::fs::remove_dir(&path) {
-            Ok(()) => Err(RecoveryError::Storage),
+            Ok(()) => Err(error),
             Err(_) => Err(RecoveryError::ArtifactCleanupFailed),
         };
     }

@@ -18,15 +18,19 @@ fn create_fenced_candidate(path: &Path) {
     let config_path = root.join("restore-backup.json");
     let passphrase_path = root.join("restore-passphrase");
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let backup_staging = tempfile::tempdir_in("/dev/shm").unwrap();
-    let staging = tempfile::tempdir_in("/tmp").unwrap();
+    let backup_staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let backup_staging = tempfile::tempdir_in(backup_staging_parent.path()).unwrap();
+    let staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let staging = tempfile::tempdir_in(staging_parent.path()).unwrap();
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::PermissionsExt;
         for directory in [
             root,
             destination.path(),
+            backup_staging_parent.path(),
             backup_staging.path(),
+            staging_parent.path(),
             staging.path(),
         ] {
             std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -251,14 +255,21 @@ fn add_invalid_second_candidate_row(path: &Path) {
 }
 
 fn launch_node(config: &Path) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_iotkit-edge-node"))
+    launch_node_with_env(config, &[])
+}
+
+fn launch_node_with_env(config: &Path, env: &[(&str, &str)]) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_iotkit-edge-node"));
+    command
         .args(["--config", config.to_str().unwrap()])
         .env_remove("IOTKIT_DB_PATH")
         .env_remove("IOTKIT_CONFIG_PATH")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if child.try_wait().unwrap().is_some() {
@@ -505,5 +516,168 @@ fn fenced_candidate_precedes_invalid_adapter_catalog_validation() {
     );
     assert!(!stderr.contains(SENTINEL) && !stdout.contains(SENTINEL));
     assert_eq!(probe_listener_connections(address), 0);
+    assert_database_state_unchanged(&database, &before);
+}
+
+#[test]
+fn fenced_candidate_precedes_unrelated_toml_and_environment_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("invalid-unrelated.db");
+    let config = directory.path().join("iotkit.toml");
+    create_fenced_candidate(&database);
+    let before = database_state(&database);
+    std::fs::write(
+        &config,
+        format!(
+            "[edge_node]\n db_path = {:?}\n\n[unknown]\n secret = {:?}\n",
+            database, SENTINEL
+        ),
+    )
+    .unwrap();
+
+    let output = launch_node_with_env(&config, &[("IOTKIT_API_ENABLED", "not-a-bool")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stderr.contains("fenced recovery candidate"),
+        "stderr={stderr}"
+    );
+    assert!(!stderr.contains(SENTINEL) && !stdout.contains(SENTINEL));
+    assert_database_state_unchanged(&database, &before);
+}
+
+#[test]
+fn fenced_candidate_uses_canonical_path_before_unrelated_malformed_multiline() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("malformed-multiline.db");
+    let config = directory.path().join("iotkit.toml");
+    create_fenced_candidate(&database);
+    std::fs::write(
+        &config,
+        format!(
+            "[edge_node]\ndb_path = {:?}\n[unrelated]\nbroken = \"\"\"\ndb_path = {:?}\n",
+            database, SENTINEL
+        ),
+    )
+    .unwrap();
+
+    let output = launch_node(&config);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stderr.contains("fenced recovery candidate"),
+        "stderr={stderr}"
+    );
+    assert!(!stderr.contains(SENTINEL) && !stdout.contains(SENTINEL));
+}
+
+#[test]
+fn fenced_candidate_path_probe_supports_inline_quoted_and_dotted_forms() {
+    fn inline_document(database: &Path) -> String {
+        format!("edge_node = {{ db_path = {:?} }}\n", database)
+    }
+    fn dotted_document(database: &Path) -> String {
+        format!("edge_node.db_path = {:?}\n", database)
+    }
+    fn quoted_document(database: &Path) -> String {
+        format!("[edge_node]\ndb_path = {:?}\n", database)
+    }
+    let forms = [
+        ("inline", inline_document as fn(&Path) -> String),
+        ("dotted", dotted_document as fn(&Path) -> String),
+        ("quoted", quoted_document as fn(&Path) -> String),
+    ];
+    for (name, document) in forms {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join(format!("{name}-candidate.db"));
+        let config = directory.path().join("iotkit.toml");
+        create_fenced_candidate(&database);
+        std::fs::write(&config, document(&database)).unwrap();
+        let output = launch_node(&config);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            output.status.code(),
+            Some(3),
+            "{name}: stdout={stdout}\nstderr={stderr}"
+        );
+        assert!(
+            stderr.contains("fenced recovery candidate"),
+            "{name}: stderr={stderr}"
+        );
+        assert!(!stderr.contains(SENTINEL) && !stdout.contains(SENTINEL));
+    }
+}
+
+#[test]
+fn malformed_recovery_precedes_unrelated_toml_and_environment_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("malformed-unrelated.db");
+    let config = directory.path().join("iotkit.toml");
+    let conn = Connection::open(&database).unwrap();
+    conn.execute_batch("CREATE TABLE edge_node_recovery_candidate (singleton INTEGER)")
+        .unwrap();
+    drop(conn);
+    let before = database_state(&database);
+    std::fs::write(
+        &config,
+        format!(
+            "[edge_node]\n db_path = {:?}\n\n[unknown]\n secret = {:?}\n",
+            database, SENTINEL
+        ),
+    )
+    .unwrap();
+
+    let output = launch_node_with_env(&config, &[("IOTKIT_API_ENABLED", "not-a-bool")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Edge Node recovery startup state is invalid"),
+        "stderr={stderr}"
+    );
+    assert!(!stderr.contains(SENTINEL) && !stdout.contains(SENTINEL));
+    assert_database_state_unchanged(&database, &before);
+}
+
+#[test]
+fn candidate_delete_attempt_cannot_clear_startup_fence() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("delete-fenced.db");
+    let config = directory.path().join("iotkit.toml");
+    create_fenced_candidate(&database);
+    let before = database_state(&database);
+    let conn = Connection::open(&database).unwrap();
+    assert!(
+        conn.execute(
+            "DELETE FROM edge_node_recovery_candidate WHERE singleton = 1",
+            [],
+        )
+        .is_err()
+    );
+    drop(conn);
+    std::fs::write(&config, format!("[edge_node]\n db_path = {:?}\n", database)).unwrap();
+
+    let output = launch_node(&config);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "stderr={stderr}");
+    assert!(
+        stderr.contains("fenced recovery candidate"),
+        "stderr={stderr}"
+    );
     assert_database_state_unchanged(&database, &before);
 }

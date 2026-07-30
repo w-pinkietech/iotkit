@@ -16,6 +16,11 @@ const RECOVERY_SCHEMA: &[(&str, &str, &str)] = &[
         "createtriggeredge_node_recovery_candidate_immutablebeforeupdateonedge_node_recovery_candidatebeginselectraise(abort,'recoverycandidateisimmutable');end",
     ),
     (
+        "trigger",
+        "edge_node_recovery_candidate_immutable_delete",
+        "createtriggeredge_node_recovery_candidate_immutable_deletebeforedeleteonedge_node_recovery_candidatebeginselectraise(abort,'recoverycandidateisimmutable');end",
+    ),
+    (
         "table",
         "edge_node_backup_attempts",
         "createtableedge_node_backup_attempts(attempt_idtextprimarykey,backup_idtextnotnullunique,statetextnotnullcheck(statein('started','success','failed')),reason_codetext,artifact_nametextnotnullunique,artifact_lengthinteger,edge_node_idtextnotnull,ledger_epochtext,accepted_cursorinteger,allocation_high_waterinteger,started_at_msintegernotnull,artifact_created_at_msinteger,completed_at_msinteger,check((state='started'andreason_codeisnullandcompleted_at_msisnull)or(state='success'andreason_code='ok'andartifact_lengthisnotnullandledger_epochisnotnullandaccepted_cursorisnotnullandallocation_high_waterisnotnullandartifact_created_at_msisnotnullandcompleted_at_msisnotnull)or(state='failed'andreason_codeisnotnullandreason_code<>'ok'andcompleted_at_msisnotnull)))",

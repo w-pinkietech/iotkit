@@ -66,6 +66,23 @@ impl crate::backup::BackupHook for TestBackupHook {
 }
 
 #[cfg(target_os = "linux")]
+struct SnapshotCapacityFailureHook {
+    requested: std::cell::Cell<Option<u64>>,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::backup::BackupHook for SnapshotCapacityFailureHook {
+    fn check_destination_capacity(
+        &self,
+        _destination: &VerifiedBackupDestination,
+        bytes: u64,
+    ) -> Result<(), RecoveryError> {
+        self.requested.set(Some(bytes));
+        Err(RecoveryError::StorageFull)
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn create_backup_with_fault(
     config_path: &std::path::Path,
     passphrase: &BackupPassphrase,
@@ -619,6 +636,20 @@ fn restart_cleanup_removes_only_exact_private_single_link_plaintext_stages() {
         .open(&exact)
         .unwrap();
     file.write_all(b"plaintext-sensitive").unwrap();
+    drop(file);
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let sidecar = exact.with_file_name(format!(
+            "{}{}",
+            exact.file_name().unwrap().to_string_lossy(),
+            suffix
+        ));
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(sidecar)
+            .unwrap();
+    }
     fs::write(&near, b"unrelated").unwrap();
 
     assert_eq!(
@@ -626,6 +657,17 @@ fn restart_cleanup_removes_only_exact_private_single_link_plaintext_stages() {
         Err(RecoveryError::CleanupRequired)
     );
     assert!(!exact.exists());
+    for suffix in ["-journal", "-wal", "-shm"] {
+        assert!(
+            !exact
+                .with_file_name(format!(
+                    "{}{}",
+                    exact.file_name().unwrap().to_string_lossy(),
+                    suffix
+                ))
+                .exists()
+        );
+    }
     assert_eq!(fs::read(&near).unwrap(), b"unrelated");
 }
 
@@ -677,6 +719,100 @@ fn restart_cleanup_preserves_unsafe_plaintext_stage_classifications() {
             "{classification} was removed"
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restart_cleanup_converges_after_a_child_process_abort_with_sqlite_sidecars() {
+    use std::{os::unix::process::ExitStatusExt, process::Command};
+
+    let fixture = create_fixture();
+    let stage = fixture
+        .staging
+        .path()
+        .join(".iotkit-backup-stage-0123456789abcdef0123456789abcdef.sqlite");
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "backup_tests::snapshot_stage_abort_child",
+            "--nocapture",
+        ])
+        .env(
+            "IOTKIT_RECOVERY_TEST_CRASH_SOURCE",
+            &fixture.config.database,
+        )
+        .env("IOTKIT_RECOVERY_TEST_CRASH_STAGE", &stage)
+        .status()
+        .unwrap();
+    assert_eq!(
+        child.signal(),
+        Some(libc::SIGABRT),
+        "crash child did not abort at the sidecar hook"
+    );
+
+    assert!(stage.exists(), "crash must leave the SQLite stage behind");
+    assert!(
+        stage
+            .with_file_name(format!(
+                "{}-journal",
+                stage.file_name().unwrap().to_string_lossy()
+            ))
+            .exists(),
+        "crash must leave the SQLite journal sidecar behind"
+    );
+    let staging = held_staging(fixture.staging.path());
+    assert_eq!(crate::backup::cleanup_prior_plaintext(&staging), Ok(()));
+    assert_eq!(
+        std::fs::read_dir(fixture.staging.path()).unwrap().count(),
+        0
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn snapshot_stage_abort_child() {
+    let (Some(source), Some(stage)) = (
+        std::env::var_os("IOTKIT_RECOVERY_TEST_CRASH_SOURCE"),
+        std::env::var_os("IOTKIT_RECOVERY_TEST_CRASH_STAGE"),
+    ) else {
+        return;
+    };
+    struct AbortAfterCredentialUpdate {
+        stage: std::path::PathBuf,
+    }
+    impl crate::snapshot::SnapshotHook for AbortAfterCredentialUpdate {
+        fn at(&self, point: crate::snapshot::SnapshotHookPoint) -> Result<(), RecoveryError> {
+            if point == crate::snapshot::SnapshotHookPoint::AfterCredentialUpdate {
+                let conn = rusqlite::Connection::open(&self.stage).unwrap();
+                conn.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     UPDATE ledger_meta SET value='journal-crash-marker'
+                     WHERE key='edge_node_id';",
+                )
+                .unwrap();
+                let journal = self.stage.with_file_name(format!(
+                    "{}-journal",
+                    self.stage.file_name().unwrap().to_string_lossy()
+                ));
+                assert!(journal.exists(), "SQLite transaction must create journal");
+                std::fs::File::open(journal).unwrap().sync_all().unwrap();
+                std::process::abort();
+            }
+            Ok(())
+        }
+    }
+    let source = std::path::PathBuf::from(source);
+    let stage = std::path::PathBuf::from(stage);
+    let hook = AbortAfterCredentialUpdate {
+        stage: stage.clone(),
+    };
+    let _ = crate::snapshot::create_consistent_snapshot_with_hook(
+        &source,
+        &stage,
+        "crash-child",
+        1,
+        &hook,
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -749,6 +885,58 @@ fn create_fixture() -> CreateFixture {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn snapshot_capacity_failure_is_recorded_before_begin_and_uses_manifest_length() {
+    let fixture = create_fixture();
+    let expected_snapshot_path = fixture.staging.path().join("expected-snapshot.sqlite");
+    let expected_snapshot = create_consistent_snapshot(
+        &fixture.config.database,
+        &expected_snapshot_path,
+        "expected-snapshot",
+        9,
+    )
+    .unwrap();
+    let expected_snapshot_length = expected_snapshot.manifest.database_length;
+    std::fs::remove_file(&expected_snapshot_path).unwrap();
+    let hook = SnapshotCapacityFailureHook {
+        requested: std::cell::Cell::new(None),
+    };
+
+    assert_eq!(
+        crate::backup::create_backup_with_hook(&fixture.config_path, &fixture.passphrase, 9, &hook,),
+        Err(RecoveryError::StorageFull)
+    );
+    let requested = hook.requested.get().expect("snapshot capacity check");
+    assert_eq!(requested, expected_snapshot_length);
+
+    let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
+    let receipt: (String, String) = conn
+        .query_row(
+            "SELECT state, reason_code FROM edge_node_backup_attempts",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(receipt, ("failed".into(), "storage_full".into()));
+    assert!(!fixture.staging.path().read_dir().unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".iotkit-backup-stage-")
+    }));
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM edge_node_backup_attempts WHERE state='started'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn config_adjacent_configure_lock_blocks_create_and_inspect_before_effects() {
     let fixture = create_fixture();
     let _configure_guard = acquire_recovery_operation(&fixture.config_path).unwrap();
@@ -786,6 +974,31 @@ fn config_adjacent_configure_lock_blocks_create_and_inspect_before_effects() {
 struct ConfigureDuringCreate<'a> {
     config_path: &'a std::path::Path,
     observed: std::cell::RefCell<Option<Result<(), RecoveryError>>>,
+}
+
+#[cfg(target_os = "linux")]
+struct ConfigureReplacementDuringSelectedCreate<'a> {
+    config_path: &'a std::path::Path,
+    replacement: &'a BackupConfig,
+    observed: std::cell::RefCell<Option<Result<(), RecoveryError>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::backup::BackupHook for ConfigureReplacementDuringSelectedCreate<'_> {
+    fn at(
+        &self,
+        point: crate::backup::BackupHookPoint,
+        _config: &BackupConfig,
+    ) -> Result<(), RecoveryError> {
+        if point == crate::backup::BackupHookPoint::BeforeSnapshot {
+            self.observed.replace(Some(configure_backup(
+                self.config_path,
+                self.replacement,
+                BackupConfigReplace::ReplaceExisting,
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -836,6 +1049,56 @@ fn active_create_blocks_configure_before_config_replacement() {
         .unwrap(),
         0
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn create_from_files_holds_config_and_passphrase_selection_until_artifact_completion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = create_fixture();
+    let passphrase_a = "owner-only-selection-passphrase-a";
+    let passphrase_b = "owner-only-selection-passphrase-b";
+    std::fs::write(&fixture.config.passphrase_file, passphrase_a).unwrap();
+    std::fs::set_permissions(
+        &fixture.config.passphrase_file,
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let passphrase_b_path = fixture
+        .config
+        .passphrase_file
+        .parent()
+        .unwrap()
+        .join("passphrase-b");
+    std::fs::write(&passphrase_b_path, passphrase_b).unwrap();
+    std::fs::set_permissions(&passphrase_b_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut replacement = fixture.config.clone();
+    replacement.passphrase_file = passphrase_b_path;
+    let config_before = std::fs::read(&fixture.config_path).unwrap();
+    let hook = ConfigureReplacementDuringSelectedCreate {
+        config_path: &fixture.config_path,
+        replacement: &replacement,
+        observed: std::cell::RefCell::new(None),
+    };
+    let manifest =
+        crate::backup::create_backup_from_files_with_hook(&fixture.config_path, 9, &hook).unwrap();
+
+    assert_eq!(
+        hook.observed.into_inner(),
+        Some(Err(RecoveryError::OperationBusy))
+    );
+    assert_eq!(std::fs::read(&fixture.config_path).unwrap(), config_before);
+    let artifact = fixture
+        .destination
+        .path()
+        .join(format!("{}{}", manifest.backup_id, NODE_BACKUP_SUFFIX));
+    assert_eq!(
+        inspect_backup(&artifact, &BackupPassphrase::new(passphrase_a.into())).unwrap(),
+        manifest
+    );
+    assert!(inspect_backup(&artifact, &BackupPassphrase::new(passphrase_b.into())).is_err());
 }
 
 #[cfg(target_os = "linux")]
@@ -1075,6 +1338,131 @@ fn post_publication_faults_keep_started_until_exact_next_create_reconciliation()
                     .starts_with(".iotkit-backup-stage-"))
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+struct AbortBackupHook(&'static str);
+
+#[cfg(target_os = "linux")]
+impl crate::backup::BackupHook for AbortBackupHook {
+    fn at(
+        &self,
+        point: crate::backup::BackupHookPoint,
+        _config: &BackupConfig,
+    ) -> Result<(), RecoveryError> {
+        let phase = match point {
+            crate::backup::BackupHookPoint::AfterSnapshot => "after_snapshot",
+            crate::backup::BackupHookPoint::AfterBegin => "after_begin",
+            crate::backup::BackupHookPoint::AfterPublication => "after_publication",
+            crate::backup::BackupHookPoint::BeforeReceipt => "before_receipt",
+            crate::backup::BackupHookPoint::AfterReceipt => "after_receipt",
+            _ => return Ok(()),
+        };
+        if phase == self.0 {
+            std::process::abort();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn backup_process_abort_windows_reconcile_without_started_or_plaintext_stage() {
+    use std::{
+        os::unix::{fs::PermissionsExt, process::ExitStatusExt},
+        process::Command,
+    };
+
+    for phase in [
+        "after_snapshot",
+        "after_begin",
+        "after_publication",
+        "before_receipt",
+        "after_receipt",
+    ] {
+        let fixture = create_fixture();
+        std::fs::write(
+            &fixture.config.passphrase_file,
+            b"owner-only-reconcile-passphrase",
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &fixture.config.passphrase_file,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "backup_tests::backup_abort_child", "--nocapture"])
+            .env("IOTKIT_RECOVERY_TEST_BACKUP_CONFIG", &fixture.config_path)
+            .env("IOTKIT_RECOVERY_TEST_BACKUP_PHASE", phase)
+            .status()
+            .unwrap();
+        assert_eq!(
+            child.signal(),
+            Some(libc::SIGABRT),
+            "{phase} child did not abort at its requested hook"
+        );
+
+        let reconciled = create_backup(&fixture.config_path, &fixture.passphrase, 101)
+            .unwrap_or_else(|error| panic!("{phase} retry failed: {error:?}"));
+        assert!(!reconciled.backup_id.is_empty());
+        assert!(
+            !std::fs::read_dir(fixture.staging.path())
+                .unwrap()
+                .any(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".iotkit-backup-stage-")
+                })
+        );
+        let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM edge_node_backup_attempts WHERE state='started'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        assert!(
+            conn.query_row(
+                "SELECT count(*) FROM edge_node_backup_attempts WHERE state='success'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+                > 0,
+            "{phase} has no durable success receipt"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn backup_abort_child() {
+    let (Some(config), Some(phase)) = (
+        std::env::var_os("IOTKIT_RECOVERY_TEST_BACKUP_CONFIG"),
+        std::env::var_os("IOTKIT_RECOVERY_TEST_BACKUP_PHASE"),
+    ) else {
+        return;
+    };
+    let config_path = std::path::PathBuf::from(config);
+    let phase = phase.to_string_lossy().to_string();
+    let passphrase = crate::config::load_owner_only_passphrase(
+        &crate::config::load_owner_only_config(&config_path)
+            .unwrap()
+            .passphrase_file,
+    )
+    .unwrap();
+    let _ = crate::backup::create_backup_with_hook(
+        &config_path,
+        &passphrase,
+        100,
+        &AbortBackupHook(Box::leak(phase.into_boxed_str())),
+    );
 }
 
 #[cfg(target_os = "linux")]

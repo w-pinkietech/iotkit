@@ -16,6 +16,10 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("failed to parse TOML: {0}")]
     Toml(#[from] toml::de::Error),
+    #[error("invalid edge_node.db_path")]
+    BootstrapDbPath,
+    #[error("bootstrap database path changed before full configuration")]
+    BootstrapDbPathMismatch,
     #[error("invalid config: {0}")]
     Validation(String),
 }
@@ -635,6 +639,55 @@ impl UnresolvedConfig {
     }
 }
 
+/// The config source and bytes selected before the process-wide recovery fence.
+///
+/// Only the selected file and `IOTKIT_DB_PATH` are touched in this phase.  The
+/// full, strict `RawConfig` deserialization and all other environment parsing
+/// happen after the fence has been observed.  Keeping the bytes here also
+/// prevents a path replacement between the read-only probe and post-fence
+/// effective config construction from changing the selected source.
+pub struct BootstrapConfig {
+    source: ConfigSource,
+    contents: Option<String>,
+    db_path: String,
+}
+
+impl BootstrapConfig {
+    pub fn db_path(&self) -> Result<&str, ConfigError> {
+        if self.db_path.is_empty() {
+            return Err(ConfigError::Validation(
+                "db_path must not be empty".to_string(),
+            ));
+        }
+        Ok(&self.db_path)
+    }
+
+    /// Complete strict parsing and environment application after the recovery
+    /// fence.  This consumes the bootstrap so the selected source bytes cannot
+    /// be silently reread from a mutable path.
+    pub fn load_full(self) -> Result<UnresolvedConfig, ConfigError> {
+        let bootstrap_db_path = self.db_path;
+        let mut raw = match self.contents.as_deref() {
+            Some(contents) => toml::from_str(contents)?,
+            None => RawConfig::default(),
+        };
+        apply_env(&mut raw)?;
+        let effective_db_path = raw.edge_node.db_path.as_deref().unwrap_or("iotkit.db");
+        if effective_db_path.is_empty() {
+            return Err(ConfigError::Validation(
+                "db_path must not be empty".to_string(),
+            ));
+        }
+        if effective_db_path != bootstrap_db_path {
+            return Err(ConfigError::BootstrapDbPathMismatch);
+        }
+        Ok(UnresolvedConfig {
+            raw,
+            source: self.source,
+        })
+    }
+}
+
 /// Load and parse TOML plus ENV overrides without resolving adapters.
 ///
 /// Config source resolution order:
@@ -642,7 +695,9 @@ impl UnresolvedConfig {
 /// 2. `IOTKIT_CONFIG_PATH` ENV -> must exist
 /// 3. `./iotkit.toml` -> optional (silently skipped if absent)
 /// 4. No file -> all defaults
-pub fn load_unresolved(args: &[String]) -> Result<UnresolvedConfig, ConfigError> {
+fn select_config_source(
+    args: &[String],
+) -> Result<(Option<PathBuf>, bool, ConfigSource), ConfigError> {
     enum Found {
         CliArg(PathBuf),
         EnvVar(PathBuf),
@@ -663,7 +718,7 @@ pub fn load_unresolved(args: &[String]) -> Result<UnresolvedConfig, ConfigError>
         }
     };
 
-    let (path_buf, explicit, source) = match &found {
+    Ok(match &found {
         Found::CliArg(p) => (Some(p.clone()), true, ConfigSource::CliArg(p.clone())),
         Found::EnvVar(p) => (Some(p.clone()), true, ConfigSource::EnvVar(p.clone())),
         Found::ImplicitFile(p) => (
@@ -672,11 +727,186 @@ pub fn load_unresolved(args: &[String]) -> Result<UnresolvedConfig, ConfigError>
             ConfigSource::ImplicitFile(p.clone()),
         ),
         Found::DefaultsOnly => (None, false, ConfigSource::DefaultsOnly),
-    };
+    })
+}
 
-    let mut raw = load_raw(path_buf.as_deref(), explicit)?;
-    apply_env(&mut raw)?;
-    Ok(UnresolvedConfig { raw, source })
+/// Selects the config source and extracts only the database path needed by the
+/// process-wide recovery fence.  Unrelated TOML fields are deliberately kept
+/// out of this phase; strict unknown-field and adapter validation waits until
+/// `BootstrapConfig::load_full` after the fence.
+pub fn load_bootstrap(args: &[String]) -> Result<BootstrapConfig, ConfigError> {
+    let (path_buf, explicit, source) = select_config_source(args)?;
+    let contents = match path_buf.as_deref() {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(contents) => Some(contents),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => None,
+            Err(e) => return Err(ConfigError::Io(e)),
+        },
+        None => None,
+    };
+    let db_path = if let Ok(value) = std::env::var("IOTKIT_DB_PATH") {
+        value
+    } else {
+        extract_db_path(contents.as_deref())?.unwrap_or_else(|| "iotkit.db".to_string())
+    };
+    if db_path.is_empty() {
+        return Err(ConfigError::Validation(
+            "db_path must not be empty".to_string(),
+        ));
+    }
+    Ok(BootstrapConfig {
+        source,
+        contents,
+        db_path,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum MultilineString {
+    Basic,
+    Literal,
+}
+
+fn update_multiline_state(line: &str, state: &mut Option<MultilineString>) {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match state {
+            Some(MultilineString::Basic) => {
+                if bytes[index..].starts_with(b"\"\"\"") && !is_escaped(bytes, index) {
+                    *state = None;
+                    index += 3;
+                } else {
+                    index += 1;
+                }
+            }
+            Some(MultilineString::Literal) => {
+                if bytes[index..].starts_with(b"'''") {
+                    *state = None;
+                    index += 3;
+                } else {
+                    index += 1;
+                }
+            }
+            None => {
+                if bytes[index..].starts_with(b"\"\"\"") {
+                    *state = Some(MultilineString::Basic);
+                    index += 3;
+                } else if bytes[index..].starts_with(b"'''") {
+                    *state = Some(MultilineString::Literal);
+                    index += 3;
+                } else if bytes[index] == b'#' {
+                    break;
+                } else if bytes[index] == b'\"' {
+                    index += 1;
+                    while index < bytes.len() {
+                        if bytes[index] == b'\\' {
+                            index = index.saturating_add(2);
+                        } else if bytes[index] == b'\"' {
+                            index += 1;
+                            break;
+                        } else {
+                            index += 1;
+                        }
+                    }
+                } else if bytes[index] == b'\'' {
+                    index += 1;
+                    while index < bytes.len() {
+                        if bytes[index] == b'\'' {
+                            index += 1;
+                            break;
+                        }
+                        index += 1;
+                    }
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    }
+}
+
+fn is_escaped(bytes: &[u8], index: usize) -> bool {
+    let mut backslashes = 0;
+    let mut cursor = index;
+    while cursor > 0 && bytes[cursor - 1] == b'\\' {
+        backslashes += 1;
+        cursor -= 1;
+    }
+    backslashes % 2 == 1
+}
+
+fn extract_db_path(contents: Option<&str>) -> Result<Option<String>, ConfigError> {
+    let Some(contents) = contents else {
+        return Ok(None);
+    };
+    if let Ok(value) = toml::from_str::<toml::Value>(contents) {
+        let Some(edge_node) = value.get("edge_node") else {
+            return Ok(None);
+        };
+        let Some(edge_node) = edge_node.as_table() else {
+            return Err(ConfigError::BootstrapDbPath);
+        };
+        return match edge_node.get("db_path") {
+            None => Ok(None),
+            Some(value) => value
+                .as_str()
+                .map(|value| Some(value.to_owned()))
+                .ok_or(ConfigError::BootstrapDbPath),
+        };
+    }
+
+    // The full document is intentionally allowed to be malformed here: the
+    // recovery fence must still use a canonical database path when an
+    // unrelated table is broken.  Only exact root dotted keys and exact
+    // `[edge_node]` assignments are recognized in this fallback.
+    let mut in_edge_node = false;
+    let mut in_root = true;
+    let mut multiline = None;
+    let mut found = None;
+    for line in contents.lines() {
+        if multiline.is_some() {
+            update_multiline_state(line, &mut multiline);
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_edge_node = trimmed == "[edge_node]";
+            in_root = false;
+            update_multiline_state(line, &mut multiline);
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            update_multiline_state(line, &mut multiline);
+            continue;
+        };
+        let key = key.trim();
+        let is_db_path =
+            (in_edge_node && key == "db_path") || (in_root && key == "edge_node.db_path");
+        if !is_db_path {
+            update_multiline_state(line, &mut multiline);
+            continue;
+        }
+        if found.is_some() {
+            return Err(ConfigError::BootstrapDbPath);
+        }
+        let snippet = format!("db_path = {}", value.trim());
+        let parsed: RawEdgeNodeConfig =
+            toml::from_str(&snippet).map_err(|_| ConfigError::BootstrapDbPath)?;
+        found = parsed.db_path;
+        if found.is_some() {
+            return Ok(found);
+        }
+        update_multiline_state(line, &mut multiline);
+    }
+    if multiline.is_some() {
+        return Err(ConfigError::BootstrapDbPath);
+    }
+    Ok(found)
+}
+
+pub fn load_unresolved(args: &[String]) -> Result<UnresolvedConfig, ConfigError> {
+    load_bootstrap(args)?.load_full()
 }
 
 /// Load Edge Node config from TOML + ENV and resolve all adapters/effective values.

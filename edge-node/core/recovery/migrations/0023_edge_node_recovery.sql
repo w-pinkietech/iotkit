@@ -38,6 +38,12 @@ BEGIN
   SELECT RAISE(ABORT, 'recovery candidate is immutable');
 END;
 
+CREATE TRIGGER edge_node_recovery_candidate_immutable_delete
+BEFORE DELETE ON edge_node_recovery_candidate
+BEGIN
+  SELECT RAISE(ABORT, 'recovery candidate is immutable');
+END;
+
 CREATE TABLE edge_node_backup_attempts (
   attempt_id TEXT PRIMARY KEY,
   backup_id TEXT NOT NULL UNIQUE,

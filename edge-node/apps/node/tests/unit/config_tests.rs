@@ -1075,6 +1075,144 @@ port = "/dev/ttyUSB0"
 
 #[test]
 #[serial]
+fn bootstrap_extracts_db_path_without_validating_unrelated_fields_and_reuses_file_bytes() {
+    let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        tmpfile,
+        "[edge_node]\ndb_path = \"bootstrap.db\"\n[api]\nenabled = false\n"
+    )
+    .unwrap();
+    with_env_vars(&[], || {
+        let args = vec![
+            "edge_node".to_string(),
+            "--config".to_string(),
+            tmpfile.path().to_str().unwrap().to_string(),
+        ];
+        let bootstrap = load_bootstrap(&args).unwrap();
+        assert_eq!(bootstrap.db_path().unwrap(), "bootstrap.db");
+        // The bootstrap owns the original bytes.  A post-fence full load must
+        // not re-read a potentially replaced config path.
+        std::fs::write(
+            tmpfile.path(),
+            "[edge_node]\ndb_path = \"replaced.db\"\n[adapters.instances.bad]\nsource = \"bad\"\n",
+        )
+        .unwrap();
+        let unresolved = bootstrap.load_full().unwrap();
+        assert_eq!(unresolved.db_path().unwrap(), "bootstrap.db");
+    });
+}
+
+#[test]
+#[serial]
+fn bootstrap_extracts_db_path_when_unrelated_toml_is_syntactically_broken() {
+    let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        tmpfile,
+        "[edge_node]\ndb_path = \"bootstrap.db\"\n[unrelated]\nbroken = {{\n"
+    )
+    .unwrap();
+    with_env_vars(&[], || {
+        let args = vec![
+            "edge_node".to_string(),
+            "--config".to_string(),
+            tmpfile.path().to_str().unwrap().to_string(),
+        ];
+        let bootstrap = load_bootstrap(&args).unwrap();
+        assert_eq!(bootstrap.db_path().unwrap(), "bootstrap.db");
+        assert!(matches!(bootstrap.load_full(), Err(ConfigError::Toml(_))));
+    });
+}
+
+#[test]
+#[serial]
+fn bootstrap_fallback_ignores_multiline_string_content() {
+    let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        tmpfile,
+        "[edge_node]\ndb_path = \"canonical.db\"\n[unrelated]\nbroken = \"\"\"\ndb_path = \"sentinel.db\"\n"
+    )
+    .unwrap();
+    with_env_vars(&[], || {
+        let args = vec![
+            "edge_node".to_string(),
+            "--config".to_string(),
+            tmpfile.path().to_str().unwrap().to_string(),
+        ];
+        assert_eq!(
+            load_bootstrap(&args).unwrap().db_path().unwrap(),
+            "canonical.db"
+        );
+    });
+}
+
+#[test]
+#[serial]
+fn bootstrap_fallback_fails_closed_for_unterminated_multiline_before_candidate() {
+    let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+    write!(
+        tmpfile,
+        "[unrelated]\nbroken = \"\"\"\ndb_path = \"sentinel.db\"\n"
+    )
+    .unwrap();
+    with_env_vars(&[], || {
+        let args = vec![
+            "edge_node".to_string(),
+            "--config".to_string(),
+            tmpfile.path().to_str().unwrap().to_string(),
+        ];
+        assert!(matches!(
+            load_bootstrap(&args),
+            Err(ConfigError::BootstrapDbPath)
+        ));
+    });
+}
+
+#[test]
+#[serial]
+fn bootstrap_extracts_all_valid_db_path_forms() {
+    for (contents, expected) in [
+        ("edge_node = { db_path = \"inline.db\" }\n", "inline.db"),
+        ("edge_node.db_path = 'dotted.db'\n", "dotted.db"),
+        (
+            "[edge_node]\ndb_path = 'single-quoted.db'\n",
+            "single-quoted.db",
+        ),
+    ] {
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        write!(tmpfile, "{contents}").unwrap();
+        with_env_vars(&[], || {
+            let args = vec![
+                "edge_node".to_string(),
+                "--config".to_string(),
+                tmpfile.path().to_str().unwrap().to_string(),
+            ];
+            assert_eq!(load_bootstrap(&args).unwrap().db_path().unwrap(), expected);
+        });
+    }
+}
+
+#[test]
+#[serial]
+fn bootstrap_rejects_effective_db_path_change_before_full_load() {
+    let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+    write!(tmpfile, "[edge_node]\ndb_path = \"bootstrap.db\"\n").unwrap();
+    with_env_vars(&[], || {
+        let args = vec![
+            "edge_node".to_string(),
+            "--config".to_string(),
+            tmpfile.path().to_str().unwrap().to_string(),
+        ];
+        let bootstrap = load_bootstrap(&args).unwrap();
+        unsafe { std::env::set_var("IOTKIT_DB_PATH", "changed-after-fence.db") };
+        assert!(matches!(
+            bootstrap.load_full(),
+            Err(ConfigError::BootstrapDbPathMismatch)
+        ));
+    });
+}
+
+#[test]
+#[serial]
 fn load_integration_full_toml() {
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
     write!(

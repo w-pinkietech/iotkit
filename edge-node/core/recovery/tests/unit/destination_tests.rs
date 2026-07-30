@@ -148,6 +148,36 @@ fn capacity_reserves_five_percent_or_sixty_four_mib_with_checked_arithmetic() {
 }
 
 #[cfg(target_os = "linux")]
+#[test]
+fn held_destination_capacity_check_uses_snapshot_length_without_reopening_path() {
+    use std::cell::Cell;
+    use std::os::unix::fs::PermissionsExt;
+    const MIB: u64 = 1024 * 1024;
+
+    let root = TempDir::new().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let destination_path = root.path().join("destination");
+    std::fs::create_dir(&destination_path).unwrap();
+    std::fs::set_permissions(&destination_path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let destination = held_destination(&destination_path);
+    let requested = Cell::new(0_u64);
+    let snapshot_length = 128_u64 * MIB;
+    let preflight_length = 1_u64;
+
+    let result = crate::destination::ensure_capacity_with_probe(
+        &destination,
+        snapshot_length,
+        |_directory| {
+            requested.set(preflight_length);
+            Ok(required_capacity(preflight_length).unwrap())
+        },
+    );
+
+    assert_eq!(requested.get(), preflight_length);
+    assert_eq!(result, Err(RecoveryError::StorageFull));
+}
+
+#[cfg(target_os = "linux")]
 fn staging_config(root: &std::path::Path, staging: std::path::PathBuf) -> BackupConfig {
     BackupConfig {
         schema_version: 1,

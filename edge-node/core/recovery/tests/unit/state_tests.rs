@@ -151,6 +151,32 @@ fn valid_candidate_is_reported_as_fenced_without_exposing_node_identity() {
 }
 
 #[test]
+fn candidate_delete_is_rejected_and_fence_remains_durable() {
+    let conn = crate::tests_support::complete_database();
+    install_candidate(&conn);
+    assert!(
+        conn.execute(
+            "DELETE FROM edge_node_recovery_candidate WHERE singleton = 1",
+            [],
+        )
+        .is_err()
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM edge_node_recovery_candidate",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
+    assert!(matches!(
+        startup_mode(&conn).unwrap(),
+        RecoveryStartupMode::FencedCandidate { .. }
+    ));
+}
+
+#[test]
 fn candidate_provenance_requires_all_fields_or_all_null() {
     let conn = crate::tests_support::complete_database();
     assert!(conn
