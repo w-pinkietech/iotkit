@@ -5,6 +5,12 @@ Choose the complete current product documentation for your language:
 - [English](okf/en/index.md)
 - [Japanese](okf/ja/index.md)
 
+For an Edge Node host failure or hardware replacement, start with the field
+decision guide:
+
+- [English recovery quick guide](okf/en/operations/edge-node-hardware-recovery.md)
+- [Japanese recovery quick guide](okf/ja/operations/edge-node-hardware-recovery.md)
+
 To change the product, start with the contributor guide:
 
 - [English](../CONTRIBUTING.md)
