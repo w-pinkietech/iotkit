@@ -12,6 +12,10 @@ pub struct MqttBinding {
     pub descriptor_topic: String,
     pub activation_request_topic: String,
     pub activation_result_topic: String,
+    pub recovery_request_topic: String,
+    pub recovery_result_topic: String,
+    pub recovery_completion_topic: String,
+    pub recovery_completion_ack_topic: String,
     pub qos: u8,
     pub retain: bool,
     pub descriptor_retain: bool,
@@ -32,6 +36,14 @@ impl MqttBinding {
             ),
             activation_result_topic: format!(
                 "iotkit/v1/edge-nodes/{edge_node_id}/activation/result"
+            ),
+            recovery_request_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/recovery/request"),
+            recovery_result_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/recovery/result"),
+            recovery_completion_topic: format!(
+                "iotkit/v1/edge-nodes/{edge_node_id}/recovery/completion"
+            ),
+            recovery_completion_ack_topic: format!(
+                "iotkit/v1/edge-nodes/{edge_node_id}/recovery/completion-ack"
             ),
             qos: 1,
             retain: false,

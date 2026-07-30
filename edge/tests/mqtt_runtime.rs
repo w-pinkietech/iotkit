@@ -6,6 +6,7 @@ use iotkit_edge::{
     storage::{Storage, StorageError, StorageProfile},
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
+use iotkit_edge_custody_contract::RecoveryActivationResult;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -45,6 +46,42 @@ fn only_durable_storage_ingest_errors_are_fatal_to_the_runtime() {
         "pre-activation input rejection is not a persistence outage"
     );
     assert!(!IngestError::Topic("malformed input".into()).is_fatal_runtime());
+}
+
+#[tokio::test]
+async fn unknown_recovery_result_is_a_nonfatal_conflict() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("target")
+        .join("test-tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    let directory = TempDir::new_in(root).unwrap();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: directory.path().join("unknown-recovery.db"),
+    })
+    .await
+    .unwrap();
+    let processor = IngestProcessor::new(storage);
+    let result = RecoveryActivationResult::decode(include_bytes!(
+        "../../testdata/egress/v1/recovery-activation-result.json"
+    ))
+    .unwrap();
+    let error = processor
+        .handle(
+            &format!(
+                "iotkit/v1/edge-nodes/{}/recovery/result",
+                result.edge_node_id
+            ),
+            &serde_json::to_vec(&result).unwrap(),
+            1,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        IngestError::Storage(StorageError::RecoveryConflict)
+    ));
+    assert!(!error.is_fatal_runtime());
 }
 
 #[tokio::test]

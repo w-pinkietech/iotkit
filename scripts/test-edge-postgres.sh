@@ -19,11 +19,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+network_args=(--publish 127.0.0.1::5432)
+if [[ -n "${IOTKIT_TEST_POSTGRES_NETWORK_CONTAINER:-}" ]]; then
+  network_args=(--network "container:${IOTKIT_TEST_POSTGRES_NETWORK_CONTAINER}")
+fi
 docker run --rm --detach --name "$container" \
   --env POSTGRES_DB=iotkit \
   --env POSTGRES_USER=iotkit \
   --env POSTGRES_PASSWORD=iotkit-test-only \
-  --publish 127.0.0.1::5432 \
+  "${network_args[@]}" \
   postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193 >/dev/null
 
 ready=false
@@ -43,7 +47,11 @@ done
   exit 1
 }
 
-port=$(docker port "$container" 5432/tcp | head -1 | awk -F: '{print $NF}')
+if [[ -n "${IOTKIT_TEST_POSTGRES_NETWORK_CONTAINER:-}" ]]; then
+  port=5432
+else
+  port=$(docker port "$container" 5432/tcp | head -1 | awk -F: '{print $NF}')
+fi
 [[ "$port" =~ ^[0-9]+$ ]]
 export IOTKIT_TEST_POSTGRES_DSN="postgres://iotkit:iotkit-test-only@127.0.0.1:${port}/iotkit?sslmode=disable"
 mkdir -p "$repo_root/target/tmp"
@@ -87,6 +95,12 @@ reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test schema_upgrade_contract \
     postgres_startup_upgrades_a_v6_database_without_losing_identity \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test recovery_activation \
+    postgres_recovery_freezes_old_admission_and_replays_exactly \
     -- --ignored --exact --nocapture
 
 reset_database

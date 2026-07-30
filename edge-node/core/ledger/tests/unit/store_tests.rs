@@ -1249,3 +1249,41 @@ fn invalid_system_id_blob_returns_error_instead_of_panicking() {
     })
     .unwrap();
 }
+
+#[test]
+fn install_recovery_epoch_requires_the_exact_old_epoch_and_records_transition() {
+    let db = test_db();
+    db.with_conn_sync(|conn| {
+        let old_epoch = ledger_epoch(conn).unwrap();
+        let new_epoch = "01JRECOVERYNEW";
+
+        let tx =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+        install_recovery_epoch(&tx, &old_epoch, new_epoch).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(ledger_epoch(conn).unwrap(), new_epoch);
+
+        let detail: String = conn
+            .query_row(
+                "SELECT detail FROM ledger_events
+                 WHERE kind='epoch_recovered'
+                 ORDER BY event_id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&detail).unwrap(),
+            serde_json::json!({"old_epoch": old_epoch, "new_epoch": new_epoch})
+        );
+        let tx =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+        assert!(install_recovery_epoch(&tx, "wrong-old", "another-new").is_err());
+        tx.rollback().unwrap();
+        assert_eq!(ledger_epoch(conn).unwrap(), new_epoch);
+        Ok(())
+    })
+    .unwrap();
+}

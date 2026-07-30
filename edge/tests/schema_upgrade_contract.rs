@@ -80,7 +80,7 @@ async fn sqlite_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect output route schema");
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     assert_eq!(column_count, 1);
 }
 
@@ -129,7 +129,7 @@ async fn postgres_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect output route schema");
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     assert_eq!(column_count, 1);
     inspection.close().await;
 }

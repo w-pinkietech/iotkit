@@ -268,6 +268,8 @@ fn create_inspect_and_status_emit_only_nonsecret_summaries() {
             artifact.to_str().unwrap(),
             "--passphrase-file",
             passphrase.to_str().unwrap(),
+            "--staging-directory",
+            staging.to_str().unwrap(),
         ])
         .output()
         .unwrap();

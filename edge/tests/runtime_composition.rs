@@ -48,6 +48,7 @@ fn serve_args(directory: &TempDir) -> ServeArgs {
         development_http: false,
         broker_certificate_file: None,
         storage_warning_percent: 90,
+        recovery_control_socket: directory.path().join("recovery-control.sock"),
         output_broker_url: None,
         output_client_id: "edge-output".into(),
         output_username: None,

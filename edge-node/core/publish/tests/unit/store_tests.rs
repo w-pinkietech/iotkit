@@ -361,3 +361,92 @@ fn outbox_backlog_count_uses_effective_cursor_for_current_epoch() {
         2
     );
 }
+
+#[test]
+fn recovery_rebuild_keeps_only_unaccepted_rows_under_a_fresh_contiguous_epoch() {
+    let conn = crate::tests_support::open();
+    target_insert(
+        &conn,
+        &TargetRow {
+            target_id: "edge".into(),
+            endpoint_url: "mqtts://broker.example.test:8883".into(),
+            credential_token: String::new(),
+            archive_responsible: true,
+            schema_version: 1,
+            cursor_epoch: Some("OLD".into()),
+            cursor_pub_seq: 40,
+        },
+        1,
+    )
+    .unwrap();
+    for old_pub_seq in 41..=50 {
+        conn.execute(
+            "INSERT INTO publication_log(
+                 pub_seq,epoch,kind,reading_seq,created_at
+             ) VALUES(?1,'OLD','measurement',?1,1)",
+            [old_pub_seq],
+        )
+        .unwrap();
+    }
+
+    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let outcome = rebuild_recovery_outbox(&tx, "OLD", "NEW", 45, 2).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(outcome.replayed_records, 5);
+    assert_eq!(outcome.last_new_publication_seq, 6);
+    let rows = select_batch(&conn, "NEW", 0, 20).unwrap();
+    assert_eq!(rows.len(), 6);
+    assert_eq!(rows[0].pub_seq, 1);
+    assert_eq!(rows[0].kind, "annotation");
+    assert_eq!(rows[0].subtype.as_deref(), Some("epoch_start"));
+    assert_eq!(
+        rows[0].annotation_json.as_deref(),
+        Some(r#"{"prior_epoch":"OLD"}"#)
+    );
+    assert_eq!(
+        rows[1..]
+            .iter()
+            .map(|row| (row.pub_seq, row.reading_seq))
+            .collect::<Vec<_>>(),
+        vec![
+            (2, Some(46)),
+            (3, Some(47)),
+            (4, Some(48)),
+            (5, Some(49)),
+            (6, Some(50)),
+        ]
+    );
+    assert!(select_batch(&conn, "OLD", 0, 20).unwrap().is_empty());
+    let target = target_get(&conn).unwrap().unwrap();
+    assert_eq!(target.cursor_epoch.as_deref(), Some("NEW"));
+    assert_eq!(target.cursor_pub_seq, 0);
+}
+
+#[test]
+fn recovery_rebuild_rejects_an_edge_cursor_behind_the_snapshot_cursor() {
+    let conn = crate::tests_support::open();
+    target_insert(
+        &conn,
+        &TargetRow {
+            target_id: "edge".into(),
+            endpoint_url: "mqtts://broker.example.test:8883".into(),
+            credential_token: String::new(),
+            archive_responsible: true,
+            schema_version: 1,
+            cursor_epoch: Some("OLD".into()),
+            cursor_pub_seq: 40,
+        },
+        1,
+    )
+    .unwrap();
+
+    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    assert!(rebuild_recovery_outbox(&tx, "OLD", "NEW", 39, 2).is_err());
+    tx.rollback().unwrap();
+    let target = target_get(&conn).unwrap().unwrap();
+    assert_eq!(target.cursor_epoch.as_deref(), Some("OLD"));
+    assert_eq!(target.cursor_pub_seq, 40);
+}

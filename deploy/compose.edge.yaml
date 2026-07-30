@@ -34,6 +34,8 @@ services:
     network_mode: host
     environment:
       IOTKIT_EXPECTED_STORAGE_PROFILE: ${IOTKIT_STORAGE_PROFILE:?}
+      IOTKIT_STORAGE_PROFILE: ${IOTKIT_STORAGE_PROFILE:?}
+      IOTKIT_POSTGRES_CONFIG: ${IOTKIT_POSTGRES_CONFIG:-}
       TMPDIR: /run/iotkit-tmp
     tmpfs:
       - /run/iotkit-tmp:mode=0700,uid=${IOTKIT_RUNTIME_UID:?},gid=${IOTKIT_RUNTIME_GID:?},noexec,nosuid,nodev
@@ -45,8 +47,6 @@ services:
       - ${IOTKIT_STORAGE_PROFILE:?}
       - --db
       - /data/edge.db
-      - --postgres-config
-      - ${IOTKIT_POSTGRES_CONFIG:-}
       - --storage-metadata
       - /run/iotkit/storage-profile.json
       - --edge-id
@@ -71,6 +71,8 @@ services:
       - /run/iotkit/broker-tls/server.pem
       - --storage-warning-percent
       - ${IOTKIT_EDGE_STORAGE_WARNING_PERCENT:-90}
+      - --recovery-control-socket
+      - /data/recovery-control.sock
       - --output-broker-url
       - ${IOTKIT_OUTPUT_BROKER_URL:?}
       - --output-client-id
@@ -87,6 +89,9 @@ services:
       - type: bind
         source: ${IOTKIT_EDGE_DATA_DIR:?}
         target: /data
+      - type: bind
+        source: ${IOTKIT_RECOVERY_DIR:?}
+        target: /recovery
       - type: bind
         source: ${IOTKIT_STORAGE_METADATA_FILE:?}
         target: /run/iotkit/storage-profile.json

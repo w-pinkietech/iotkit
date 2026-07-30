@@ -11,12 +11,14 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    application::recovery::RecoveryService,
     application::semantics::Semantics,
     lifecycle::{CriticalTaskError, ExitReason, Supervisor},
     mqtt::{
         ingest::{IngestProcessor, IngestRuntime, IngestRuntimeConfig, IngestTransport},
         output::{OutputRuntime, OutputRuntimeConfig},
     },
+    recovery_control::run_recovery_control,
     storage::{Storage, StorageError},
     web::{WebApplication, WebConfig, router},
 };
@@ -90,6 +92,20 @@ where
     );
     let cancellation = CancellationToken::new();
     let mut supervisor = Supervisor::with_token(cancellation.clone(), Duration::from_secs(10));
+
+    supervisor.spawn("recovery-control", {
+        let cancellation = cancellation.clone();
+        let socket_path = config.recovery_control_socket;
+        let service = RecoveryService::new(storage.clone());
+        async move {
+            run_recovery_control(socket_path, service, cancellation)
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "critical recovery control task failed");
+                    CriticalTaskError::new("recovery-control")
+                })
+        }
+    });
 
     supervisor.spawn("mqtt-ingest", {
         let cancellation = cancellation.clone();

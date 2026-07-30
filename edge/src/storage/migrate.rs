@@ -21,6 +21,8 @@ const TABLES: &[&str] = &[
     "signal_profiles",
     "edge_node_activations",
     "activation_command_outbox",
+    "edge_node_recovery_cases",
+    "recovery_command_outbox",
     "raw_records",
     "accepted_cursors",
     "edge_backup_events",
@@ -102,9 +104,9 @@ pub async fn migrate_sqlite_to_postgres(
         sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM _sqlx_migrations")
             .fetch_one(&source)
             .await?;
-    if schema_version != 7 {
+    if schema_version != 8 {
         return Err(StorageError::ProfileMigration(format!(
-            "SQLite migration source schema is {schema_version}, want 7"
+            "SQLite migration source schema is {schema_version}, want 8"
         )));
     }
     let edge_id: String = sqlx::query_scalar("SELECT edge_id FROM edge_meta WHERE singleton=1")

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "recovery_id": "recovery-0123456789abcdef0123456789abcdef",
+  "edge_id": "edge-0123456789abcdef0123456789abcdef",
+  "edge_node_id": "edge-node-01",
+  "candidate_instance_id": "candidate-0123456789abcdef0123456789abcdef",
+  "new_ledger_epoch": "01JNEWLEDGEREPOCH",
+  "status": "committed",
+  "accepted_through": 0,
+  "committed_at": 1720000002000
+}

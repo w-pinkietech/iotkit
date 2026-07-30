@@ -1,16 +1,16 @@
 ---
 type: Contract
 title: "IoTKit Edge Node復旧契約 v1"
-description: "Sanitized暗号化Edge Node backup container、local fenced-candidate restore、operator境界、無効化されたreplacement機能を定義します。"
+description: "Sanitized暗号化Edge Node backup container、fenced-candidate restore、許可されたproduction reactivationを定義します。"
 language: ja
 translation_key: contracts.edge-node-recovery-v1
 status: stable
-revision: 1
+revision: 2
 ---
 
 # IoTKit Edge Node復旧契約 v1
 
-Status: **任意のlocal Edge Node backupとslice-1 fenced-candidate restore境界に
+Status: **任意のlocal Edge Node backup、fenced-candidate restore、permit済み本番復帰に
 対する規範契約**。
 
 この契約は暗号化Node artifactの正確な形式とlocal restore境界のauthorityです。
@@ -34,13 +34,10 @@ timerは
 `deploy/systemd/iotkit-edge-node-backup.timer`
 にあるexact CLIを実行します。
 
-Slice 1にはproduction recovery-handoff作成、Broker fencing、remote permit、
-reconciliation、dedup-risk resolution、reactivation、same-ID new ledger epoch
-はありません。Conformance testまたはrestore drillで使うvalid handoffは
-operatorが作成する認可ではありません。Installまたはrestoreしたcandidateは
-後続の別contractでpermitとgeneration checkが出荷されるまでcollect、publish、
-ingest listener bindをできません。Usable production replacement journeyを
-主張しません。
+Revision 2はproduction recovery-handoff作成、同梱Broker credential fencing、
+candidate-bound permit、accepted-through reconciliation、same-ID new ledger epochでの
+reactivationを追加します。Candidateはmatching completionをdurably保存するまで
+collect、publish、ingest listener bindをできません。
 
 ## 2. Machine authorityとconformance material
 
@@ -51,11 +48,14 @@ ingest listener bindをできません。Usable production replacement journey�
 | Container header schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/node-backup-header-v1.schema.json) (`edge-node/core/recovery/contracts/node-backup-header-v1.schema.json`) |
 | Sanitized manifest schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/node-backup-manifest-v1.schema.json) (`edge-node/core/recovery/contracts/node-backup-manifest-v1.schema.json`) |
 | Recovery handoff schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/recovery-handoff-v1.schema.json) (`edge-node/core/recovery/contracts/recovery-handoff-v1.schema.json`) |
-| Fenced restore receipt schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/restore-receipt-v1.schema.json) (`edge-node/core/recovery/contracts/restore-receipt-v1.schema.json`) |
+| Broker fence receipt schema | `edge-node/core/recovery/contracts/broker-fence-receipt-v1.schema.json` |
+| Fenced restore receipt schema | `edge-node/core/recovery/contracts/restore-receipt-v2.schema.json` |
 | Header golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-header-v1.json) (`edge-node/core/recovery/tests/fixtures/node-backup-header-v1.json`) |
 | Manifest golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-manifest-v1.json) (`edge-node/core/recovery/tests/fixtures/node-backup-manifest-v1.json`) |
 | Handoff golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/recovery-handoff-v1.json) (`edge-node/core/recovery/tests/fixtures/recovery-handoff-v1.json`) |
-| Receipt golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/restore-receipt-v1.json) (`edge-node/core/recovery/tests/fixtures/restore-receipt-v1.json`) |
+| Broker fence receipt golden | `edge-node/core/recovery/tests/fixtures/broker-fence-receipt-v1.json` |
+| Receipt golden | `edge-node/core/recovery/tests/fixtures/restore-receipt-v2.json` |
+| Recovery MQTT control golden | `testdata/egress/v1/recovery-activation-{request,result}.json`、`testdata/egress/v1/recovery-completion{,-ack}.json` |
 | Binary conformance vector | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-v1.bin) (`edge-node/core/recovery/tests/fixtures/node-backup-v1.bin`) |
 | Container conformance tests | [backup_contract.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/backup_contract.rs) と [container_tests.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/unit/container_tests.rs) |
 | Restore conformance tests | [restore_tests.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/unit/restore_tests.rs) と [recovery_startup.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/apps/node/tests/recovery_startup.rs) |
@@ -200,8 +200,11 @@ existing pathをoverwriteしません。
 ## 5. Sanitized manifestとdatabase invariant
 
 Manifestは`artifact_kind=iotkit-node-backup`、`format_version=1`、
-`snapshot_mode=online`、`shutdown_seal_id=null`、current Edge Node schema
-version（checked-in vectorでは`23`）です。`backup_id`、`edge_node_id`、
+`snapshot_mode=online`、`shutdown_seal_id=null`、backup作成時のEdge Node schema
+versionです。Revision 2はchecked-in version `23` vectorとcurrent version `24`を
+受け付け、version `23` databaseをcanonicalに検証してから、activation前にfenced
+candidate内でversion `24`へmigrateします。新しいbackupはcurrent schemaを使います。
+`backup_id`、`edge_node_id`、
 `ledger_epoch`はnonempty、最大255 Unicode scalar、colon/control characterなし、
 pathnameから推測しません。Timestamp、cursor、allocation high-waterは
 nonnegative signed 64-bit integerで、`accepted_cursor`は
@@ -211,6 +214,11 @@ characterです。Closed count fieldは`devices`、`series`、`readings`、
 `publication_rows`、`ingest_dedup_rows`、`staged_readings`、
 `quarantine_rows`、`device_principals`、`device_credentials`、
 `activation_rows`、`ledger_events`、`audit_events`の12個です。
+新writerは存在する場合にoptional `epoch_start_publication_seq`も出力します。値は
+`allocation_high_water`以下の正確なpositive sequenceです。Format v1互換性のため
+optionalのままです。Fieldが欠落していれば、production inspectはauthenticated DBを
+anonymous owner-only tmpfs fileへだけdecryptし、recovery authorityのprepare前にDBから
+値を導出します。
 
 Sourceはrecovery snapshot operationでcopyし、そのcopyをsanitizeします。
 `target_registry.credential_token`を空にし、journal modeをDELETE、secure deletionを
@@ -232,14 +240,16 @@ credential hashはprotected DB stateとして残り得ます。MQTT/TLS private 
 1..=255 byteです。`old_ledger_epoch`と`proposed_new_epoch`は異ならなければ
 なりません。Generationはinteger
 `0..=9,223,372,036,854,775,807`です。Handoffはmanifestのbackup ID、Node ID、
-old epochへbindします。Slice 1はnonnegative generationをcandidate provenanceと
-receiptへ記録するだけで、live authorityとの比較やgeneration mismatchのrejectは
-しません。Authority比較とactivationは後続のpermit/generation contractへ延期します。
+old epochへbindします。Restoreはnonnegative Broker credential generationと、
+復元DBから読んだdevice-auth generationを記録します。IoTKit Edgeはclosed receiptを
+durable recovery caseと照合してからcandidate-bound recovery requestを発行します。
+Candidateは両generation、backup、candidate、old/new epoch、Edge cursorを検証して
+atomic activation transitionを実行し、不一致はfail closedにします。
 
-Public receiptはclosed schema v1で、statusは`durably_fenced_candidate`、
+Public receiptはclosed schema v2で、statusは`durably_fenced_candidate`、
 fieldは`recovery_id`、`candidate_instance_id`、`backup_id`、`edge_id`、
 `edge_node_id`、`old_ledger_epoch`、`proposed_new_epoch`、
-`credential_generation`です。Candidate-row provenance（source database
+`credential_generation`、`device_auth_generation`です。Candidate-row provenance（source database
 length/digestとencrypted artifact length/digest）はreplay用にprivateにbindし、
 receipt、status、audit、errorへ返しません。
 
@@ -256,7 +266,7 @@ Renameまたは後続sync/read-backの不確実性はfenced candidateを残し�
 `candidate_publication_uncertain`を返します。Exact requestのretryだけが許可された
 reconciliationです。Retryのためcandidateを黙って削除しません。
 
-## 7. Operator commandとrestore drill境界
+## 7. Operator commandとrestore境界
 
 Local-root command shapeは次です。
 
@@ -273,30 +283,50 @@ iotkit-edge-nodectl backup status --config /etc/iotkit/edge-node-backup.json
 Create、inspect、statusはbounded nonsecret summaryだけを出します。Passphraseを
 argument、shell history、logへ置きません。Deploymentのapproved owner-only手順で
 encrypted escrow copyを保管します。Passphraseがないartifactは意図的に復元不能
-です。Successful artifactはoff-hostで検証してinspectします。Slice 1でrestore
-conformanceに使えるのはchecked-in handoff fixtureとmatching test-generated artifact
-だけで、real artifactのrestore drillを行ったり、そのrestoreからRPOを信頼したり
-できません。Real-backupのrestore drillによるRPO検証はlater recovery authorityの
-後へ延期します。
-
-次はconformance commandのshapeであり、slice 1の成功するoperator手順ではありません。
+です。Successful artifactはoff-hostで検証してinspectします。Production restore
+drillで実artifactを選ぶのは、§8のとおりIoTKit Edgeがauthenticated inspectionと
+Broker fence receiptからmatching handoffを作った後だけです。
 
 ```text
 iotkit-edge-nodectl backup restore --input ARTIFACT \
   --candidate-db /secure/new/absent-candidate.db \
-  --live-db CONFIGURED_LIVE_DB --passphrase-file PASSPHRASE_FILE \
+  --live-db CONFIGURED_LIVE_DB --staging-directory OWNER_ONLY_TMPFS_PARENT \
+  --passphrase-file PASSPHRASE_FILE \
   --recovery-handoff VALID_HANDOFF_FILE
 ```
 
-Conformance runのcandidate pathはcommand前にabsentで、command後もfencedでなければ
-なりません。Checked-in handoff fixtureはmatching test-generated artifactとだけ使う
-conformance専用で、selected real backupと組み合わせてはいけません。Slice 1には
-later authorityもmatching complete drill fixtureもないため、real-backup restoreは
-成功せずfail closedしなければなりません。Production handoff creation、Broker
-fencing、remote permit、reactivationは未出荷です。No-backup hardware replacementは
-readingもdedup claimもrestoreせず、encrypted-backup candidateもauthenticated
-snapshot boundaryまでのclaimだけを持ちfencedのままです。
+Candidate pathはcommand前にabsentで、restore後もfencedでなければなりません。
+続けて§8のcandidate-bound authorizeとactivateを行います。Restore receiptだけを
+通常Node runtimeの起動許可として扱いません。Checked-in handoff/artifact fixtureは
+conformance専用で、selected real backupと組み合わせてはいけません。No-backup
+hardware replacementはreadingもdedup claimもrestoreしません。
 
 Legacy plaintext snapshot fallbackはありません。Former implementation artifact、
 renameしたEdge server backup、unauthenticated DB copy、private MQTT/TLS materialを
 持つcandidateはこのcontractで受け付けません。
+
+## 8. Production recovery authorityと新epoch activation
+
+Revision 2のproduction journeyではIoTKit Edgeがbackup inspectionとBroker fence
+receiptを照合してhandoffを作ります。Broker
+receiptはclosed v1で`status=fenced`、`fence_id`、`edge_node_id`、positive
+`credential_generation`、`fenced_at`を持ち、password、hash、tokenを含みません。
+Fencingはpassword generationを更新してBrokerをrestartするため、旧sessionと旧credentialは
+new requestより先に無効です。
+
+IoTKit Edge recovery caseはrecovery/Node/backup/old-new epoch/Broker generation/
+snapshot cursor/high-water、authenticated snapshotの正確な`epoch_start` publication
+sequence、Edge accepted-throughをdurably bindします。Restore receipt
+v2はさらにcandidate instanceとNode device-auth generationをbindします。MQTT request、
+result、completion、completion ACKはclosed schema v1、QoS 1、non-retainedです。Edgeは
+requestとcompletionをdurable outboxからretryします。Exact replayだけがidempotentで、
+field不一致は自動解決せず`recovery_hold`です。
+
+Node applyは一つのImmediate transactionです。Edge accepted-through以下を再送対象から外し、
+authenticated old `epoch_start`を除外し、残るold-epoch publicationをnew epochへ連続再採番して
+新しい`epoch_start`を一つだけseq 1に置き、ledger
+epoch、target cursor 0、resultを同時commitします。失敗時は全rollbackします。Edgeは
+matching resultだけでnew epochをactiveにしcursor 0を作成してcompletionをoutboxへ置きます。
+Nodeはcompletionをdurably保存した後にmatching completion ACKをpublishします。Edgeはその
+ACKを受けるまでcompletion outboxを閉じません。Nodeがcompletionを保存しQoS 1でACKを
+publishするまでは通常runtimeを起動しません。

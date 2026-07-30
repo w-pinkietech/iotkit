@@ -85,6 +85,7 @@ fn manifest() -> NodeBackupManifest {
         created_at_ms: 1_725_000_000_000,
         accepted_cursor: 3,
         allocation_high_water: 5,
+        epoch_start_publication_seq: Some(1),
         snapshot_mode: SnapshotMode::Online,
         shutdown_seal_id: None,
         schema_version: 23,

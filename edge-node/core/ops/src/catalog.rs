@@ -168,7 +168,8 @@ impl From<iotkit_core_ledger::LedgerError> for OpError {
                 Self::Validation(value.to_string())
             }
             iotkit_core_ledger::LedgerError::HardwareIdInUse(_)
-            | iotkit_core_ledger::LedgerError::InvalidReplace(_) => {
+            | iotkit_core_ledger::LedgerError::InvalidReplace(_)
+            | iotkit_core_ledger::LedgerError::InvalidRecovery => {
                 Self::PreconditionFailed(value.to_string())
             }
             iotkit_core_ledger::LedgerError::Storage(_)

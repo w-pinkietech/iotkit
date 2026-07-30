@@ -1,5 +1,6 @@
 use iotkit_edge_custody_contract::{
     AcceptedThrough, ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
+    RecoveryActivationRequest, RecoveryActivationResult, RecoveryCompletion, RecoveryCompletionAck,
 };
 
 fn fixture(path: &str) -> Vec<u8> {
@@ -64,6 +65,59 @@ fn rejects_unknown_fields_and_invalid_activation_boundaries() {
 }
 
 #[test]
+fn decodes_the_shared_recovery_control_fixtures_strictly() {
+    let request = RecoveryActivationRequest::decode(&fixture(
+        "testdata/egress/v1/recovery-activation-request.json",
+    ))
+    .expect("decode recovery activation request");
+    assert_eq!(request.edge_accepted_through, 45);
+
+    let result = RecoveryActivationResult::decode(&fixture(
+        "testdata/egress/v1/recovery-activation-result.json",
+    ))
+    .expect("decode recovery activation result");
+    result
+        .validate_for(&request)
+        .expect("result matches recovery request");
+
+    let completion =
+        RecoveryCompletion::decode(&fixture("testdata/egress/v1/recovery-completion.json"))
+            .expect("decode recovery completion");
+    completion
+        .validate_for(&request)
+        .expect("completion matches recovery request");
+    let acknowledgement =
+        RecoveryCompletionAck::decode(&fixture("testdata/egress/v1/recovery-completion-ack.json"))
+            .expect("decode recovery completion acknowledgement");
+    assert_eq!(acknowledgement.recovery_id, request.recovery_id);
+}
+
+#[test]
+fn rejects_unknown_recovery_fields_and_inconsistent_boundaries() {
+    assert!(
+        RecoveryActivationRequest::decode(&fixture(
+            "testdata/egress/v1/recovery-activation-request-unknown-field.json",
+        ))
+        .is_err()
+    );
+
+    let bytes = fixture("testdata/egress/v1/recovery-activation-request.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    value["edge_accepted_through"] = 39.into();
+    assert!(RecoveryActivationRequest::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+
+    let bytes = fixture("testdata/egress/v1/recovery-activation-result.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    value["last_new_publication_seq"] = 5.into();
+    assert!(RecoveryActivationResult::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+
+    let mut overflow: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    overflow["replayed_records"] = i64::MAX.into();
+    overflow["last_new_publication_seq"] = i64::MAX.into();
+    assert!(RecoveryActivationResult::decode(&serde_json::to_vec(&overflow).unwrap()).is_err());
+}
+
+#[test]
 fn rejects_topic_body_identity_mismatches() {
     let batch = RecordBatch::decode(&fixture("testdata/egress/v1/record-batch.json"))
         .expect("decode record batch");
@@ -72,6 +126,16 @@ fn rejects_topic_body_identity_mismatches() {
     let result = ActivationResult::decode(&fixture("testdata/egress/v1/activation-result.json"))
         .expect("decode result");
     assert!(result.validate_topic_edge_node("edge-node-other").is_err());
+
+    let recovery_result = RecoveryActivationResult::decode(&fixture(
+        "testdata/egress/v1/recovery-activation-result.json",
+    ))
+    .expect("decode recovery result");
+    assert!(
+        recovery_result
+            .validate_topic_edge_node("edge-node-other")
+            .is_err()
+    );
 }
 
 #[test]

@@ -197,6 +197,8 @@ pub struct NodeBackupManifest {
     pub accepted_cursor: i64,
     #[serde(deserialize_with = "integer::i64")]
     pub allocation_high_water: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch_start_publication_seq: Option<i64>,
     pub snapshot_mode: SnapshotMode,
     pub shutdown_seal_id: Option<String>,
     #[serde(deserialize_with = "integer::u32")]
@@ -254,6 +256,16 @@ pub enum RecoveryStartupMode {
         proposed_new_epoch: String,
         credential_generation: i64,
     },
+    AwaitingCompletion {
+        recovery_id: String,
+        candidate_instance_id: String,
+        new_ledger_epoch: String,
+    },
+    Recovered {
+        recovery_id: String,
+        candidate_instance_id: String,
+        new_ledger_epoch: String,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -305,6 +317,7 @@ pub struct RestoreReceipt {
     pub old_ledger_epoch: String,
     pub proposed_new_epoch: String,
     pub credential_generation: i64,
+    pub device_auth_generation: i64,
 }
 
 #[derive(Deserialize)]
@@ -320,6 +333,7 @@ struct RestoreReceiptWire {
     old_ledger_epoch: String,
     proposed_new_epoch: String,
     credential_generation: i64,
+    device_auth_generation: i64,
 }
 
 impl<'de> Deserialize<'de> for RestoreReceipt {
@@ -339,6 +353,7 @@ impl<'de> Deserialize<'de> for RestoreReceipt {
             old_ledger_epoch: wire.old_ledger_epoch,
             proposed_new_epoch: wire.proposed_new_epoch,
             credential_generation: wire.credential_generation,
+            device_auth_generation: wire.device_auth_generation,
         };
         validate_restore_receipt(&receipt)
             .then_some(receipt)
@@ -347,7 +362,7 @@ impl<'de> Deserialize<'de> for RestoreReceipt {
 }
 
 pub(crate) fn validate_restore_receipt(receipt: &RestoreReceipt) -> bool {
-    receipt.schema_version == 1
+    receipt.schema_version == 2
         && matches!(receipt.status, RestoreStatus::DurablyFencedCandidate)
         && valid_recovery_id(&receipt.recovery_id)
         && valid_recovery_id(&receipt.candidate_instance_id)
@@ -358,6 +373,7 @@ pub(crate) fn validate_restore_receipt(receipt: &RestoreReceipt) -> bool {
         && valid_recovery_id(&receipt.proposed_new_epoch)
         && receipt.old_ledger_epoch != receipt.proposed_new_epoch
         && receipt.credential_generation >= 0
+        && receipt.device_auth_generation >= 0
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -414,6 +430,8 @@ pub enum RecoveryError {
     CandidateFenceInvalid,
     CandidateConflict,
     CandidatePublicationUncertain,
+    RecoveryControlInvalid,
+    RecoveryConflict,
 }
 
 impl RecoveryError {
@@ -445,6 +463,8 @@ impl RecoveryError {
             Self::CandidateFenceInvalid => "candidate_fence_invalid",
             Self::CandidateConflict => "candidate_conflict",
             Self::CandidatePublicationUncertain => "candidate_publication_uncertain",
+            Self::RecoveryControlInvalid => "recovery_control_invalid",
+            Self::RecoveryConflict => "recovery_conflict",
         }
     }
 }
@@ -513,6 +533,12 @@ impl fmt::Display for RecoveryError {
             Self::CandidatePublicationUncertain => {
                 formatter.write_str("Edge Node restore candidate publication status is uncertain")
             }
+            Self::RecoveryControlInvalid => {
+                formatter.write_str("Edge Node recovery control message is invalid")
+            }
+            Self::RecoveryConflict => {
+                formatter.write_str("Edge Node recovery state conflicts with the request")
+            }
         }
     }
 }
@@ -575,6 +601,10 @@ impl fmt::Debug for RecoveryStartupMode {
             Self::FencedCandidate { .. } => {
                 formatter.write_str("RecoveryStartupMode::FencedCandidate")
             }
+            Self::AwaitingCompletion { .. } => {
+                formatter.write_str("RecoveryStartupMode::AwaitingCompletion")
+            }
+            Self::Recovered { .. } => formatter.write_str("RecoveryStartupMode::Recovered"),
         }
     }
 }

@@ -11,8 +11,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home iotkit-edge
 COPY --from=build /out/iotkit-edge /usr/local/bin/iotkit-edge
+COPY --chmod=0755 edge/docker-entrypoint.sh /usr/local/bin/iotkit-edge-entrypoint
 USER iotkit-edge
-ENTRYPOINT ["/usr/local/bin/iotkit-edge"]
+ENTRYPOINT ["/usr/local/bin/iotkit-edge-entrypoint"]
 
 FROM runtime-base AS runtime
 

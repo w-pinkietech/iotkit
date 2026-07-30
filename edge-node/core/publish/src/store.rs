@@ -22,6 +22,12 @@ pub struct TargetRow {
     pub cursor_pub_seq: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryOutboxRebuild {
+    pub replayed_records: i64,
+    pub last_new_publication_seq: i64,
+}
+
 impl std::fmt::Debug for TargetRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TargetRow")
@@ -361,6 +367,138 @@ pub fn outbox_backlog_count(
         |row| row.get(0),
     )
     .map_err(PublishError::from)
+}
+
+/// Rebuilds the remaining old-epoch outbox as a fresh contiguous recovery stream.
+///
+/// The caller owns the surrounding Immediate transaction together with the ledger
+/// epoch and durable recovery receipt changes.
+pub fn rebuild_recovery_outbox(
+    tx: &rusqlite::Transaction<'_>,
+    old_epoch: &str,
+    new_epoch: &str,
+    edge_accepted_through: i64,
+    now_ms: i64,
+) -> Result<RecoveryOutboxRebuild, PublishError> {
+    if old_epoch.is_empty()
+        || new_epoch.is_empty()
+        || old_epoch == new_epoch
+        || old_epoch.contains(':')
+        || new_epoch.contains(':')
+        || old_epoch.chars().any(char::is_control)
+        || new_epoch.chars().any(char::is_control)
+        || edge_accepted_through < 0
+        || now_ms < 0
+    {
+        return Err(PublishError::Invalid(
+            "invalid recovery outbox boundary".into(),
+        ));
+    }
+    let target: TargetRow = tx
+        .query_row(
+            "SELECT target_id, endpoint_url, credential_token, archive_responsible,
+                    schema_version, cursor_epoch, cursor_pub_seq
+             FROM target_registry",
+            [],
+            target_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| PublishError::Invalid("recovery target is missing".into()))?;
+    let target_count: i64 =
+        tx.query_row("SELECT count(*) FROM target_registry", [], |row| row.get(0))?;
+    if target_count != 1
+        || target.cursor_epoch.as_deref() != Some(old_epoch)
+        || target.cursor_pub_seq < 0
+        || edge_accepted_through < target.cursor_pub_seq
+    {
+        return Err(PublishError::Invalid(
+            "recovery target cursor does not match".into(),
+        ));
+    }
+    let foreign_epoch_rows: i64 = tx.query_row(
+        "SELECT count(*) FROM publication_log WHERE epoch<>?1",
+        [old_epoch],
+        |row| row.get(0),
+    )?;
+    if foreign_epoch_rows != 0 {
+        return Err(PublishError::Invalid(
+            "recovery outbox contains another epoch".into(),
+        ));
+    }
+
+    let carried = {
+        let mut statement = tx.prepare(
+            "SELECT kind,subtype,reading_seq,annotation_json,created_at
+             FROM publication_log
+             WHERE epoch=?1 AND pub_seq>?2
+               AND NOT (kind='annotation' AND subtype='epoch_start')
+             ORDER BY pub_seq",
+        )?;
+        statement
+            .query_map(params![old_epoch, edge_accepted_through], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    tx.execute("DELETE FROM publication_log", [])?;
+    tx.execute(
+        "DELETE FROM sqlite_sequence WHERE name='publication_log'",
+        [],
+    )?;
+    tx.execute(
+        "INSERT INTO publication_log(
+             epoch,kind,subtype,annotation_json,created_at
+         ) VALUES(?1,'annotation','epoch_start',?2,?3)",
+        params![
+            new_epoch,
+            serde_json::json!({"prior_epoch": old_epoch}).to_string(),
+            now_ms
+        ],
+    )?;
+    for (kind, subtype, reading_seq, annotation_json, created_at) in &carried {
+        tx.execute(
+            "INSERT INTO publication_log(
+                 epoch,kind,subtype,reading_seq,annotation_json,created_at
+             ) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                new_epoch,
+                kind,
+                subtype,
+                reading_seq,
+                annotation_json,
+                created_at
+            ],
+        )?;
+    }
+    let changed = tx.execute(
+        "UPDATE target_registry
+         SET cursor_epoch=?1,cursor_pub_seq=0
+         WHERE target_id=?2 AND cursor_epoch=?3 AND cursor_pub_seq=?4",
+        params![
+            new_epoch,
+            target.target_id,
+            old_epoch,
+            target.cursor_pub_seq
+        ],
+    )?;
+    if changed != 1 {
+        return Err(PublishError::Invalid(
+            "recovery target cursor changed".into(),
+        ));
+    }
+    let replayed_records = i64::try_from(carried.len())
+        .map_err(|_| PublishError::Invalid("recovery outbox is too large".into()))?;
+    Ok(RecoveryOutboxRebuild {
+        replayed_records,
+        last_new_publication_seq: replayed_records + 1,
+    })
 }
 
 fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TargetRow> {

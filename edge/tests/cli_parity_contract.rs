@@ -438,7 +438,7 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
     let report = migrate_sqlite_to_postgres(&path, &dsn).await.unwrap();
     assert!(report.completed);
     assert_eq!(report.edge_id, edge_id);
-    assert_eq!(report.schema_version, 7);
+    assert_eq!(report.schema_version, 8);
     assert_eq!(report.table_counts["raw_records"], 1);
     assert_eq!(report.cursors[0].accepted_through, 1);
     assert_eq!(report.content_digest.len(), 64);

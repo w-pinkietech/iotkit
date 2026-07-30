@@ -351,6 +351,258 @@ impl ActivationResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryActivationRequest {
+    pub schema_version: u32,
+    pub recovery_id: String,
+    pub edge_id: String,
+    pub edge_node_id: String,
+    pub candidate_instance_id: String,
+    pub backup_id: String,
+    pub old_ledger_epoch: String,
+    pub new_ledger_epoch: String,
+    pub broker_credential_generation: i64,
+    pub device_auth_generation: i64,
+    pub snapshot_accepted_through: i64,
+    pub snapshot_allocation_high_water: i64,
+    pub snapshot_epoch_start_publication_seq: Option<i64>,
+    pub edge_accepted_through: i64,
+    pub grant_revision: u64,
+    pub issued_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryActivationResult {
+    pub schema_version: u32,
+    pub recovery_id: String,
+    pub edge_id: String,
+    pub edge_node_id: String,
+    pub candidate_instance_id: String,
+    pub backup_id: String,
+    pub old_ledger_epoch: String,
+    pub new_ledger_epoch: String,
+    pub broker_credential_generation: i64,
+    pub device_auth_generation: i64,
+    pub status: String,
+    pub edge_accepted_through: i64,
+    pub replayed_records: i64,
+    pub first_new_publication_seq: i64,
+    pub last_new_publication_seq: i64,
+    pub applied_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryCompletion {
+    pub schema_version: u32,
+    pub recovery_id: String,
+    pub edge_id: String,
+    pub edge_node_id: String,
+    pub candidate_instance_id: String,
+    pub new_ledger_epoch: String,
+    pub status: String,
+    pub accepted_through: i64,
+    pub committed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryCompletionAck {
+    pub schema_version: u32,
+    pub recovery_id: String,
+    pub edge_id: String,
+    pub edge_node_id: String,
+    pub candidate_instance_id: String,
+    pub new_ledger_epoch: String,
+    pub status: String,
+    pub acknowledged_at: i64,
+}
+
+impl RecoveryActivationRequest {
+    pub fn decode(payload: &[u8]) -> Result<Self, ContractError> {
+        let request: Self = serde_json::from_slice(payload)?;
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        validate_recovery_common(
+            self.schema_version,
+            &self.recovery_id,
+            &self.edge_id,
+            &self.edge_node_id,
+            &self.candidate_instance_id,
+        )?;
+        validate_prefixed_hex("backup_id", &self.backup_id, "backup-")?;
+        validate_identity("old_ledger_epoch", &self.old_ledger_epoch)?;
+        validate_identity("new_ledger_epoch", &self.new_ledger_epoch)?;
+        if self.old_ledger_epoch == self.new_ledger_epoch
+            || self.broker_credential_generation < 1
+            || self.device_auth_generation < 0
+            || self.snapshot_accepted_through < 0
+            || self.snapshot_allocation_high_water < self.snapshot_accepted_through
+            || self
+                .snapshot_epoch_start_publication_seq
+                .is_some_and(|sequence| {
+                    sequence < 1 || sequence > self.snapshot_allocation_high_water
+                })
+            || self.edge_accepted_through < self.snapshot_accepted_through
+            || self.grant_revision != 1
+            || self.issued_at < 0
+        {
+            return Err(invalid("invalid recovery activation request boundary"));
+        }
+        Ok(())
+    }
+}
+
+impl RecoveryActivationResult {
+    pub fn decode(payload: &[u8]) -> Result<Self, ContractError> {
+        let result: Self = serde_json::from_slice(payload)?;
+        result.validate()?;
+        Ok(result)
+    }
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        validate_recovery_common(
+            self.schema_version,
+            &self.recovery_id,
+            &self.edge_id,
+            &self.edge_node_id,
+            &self.candidate_instance_id,
+        )?;
+        validate_prefixed_hex("backup_id", &self.backup_id, "backup-")?;
+        validate_identity("old_ledger_epoch", &self.old_ledger_epoch)?;
+        validate_identity("new_ledger_epoch", &self.new_ledger_epoch)?;
+        if self.old_ledger_epoch == self.new_ledger_epoch
+            || self.broker_credential_generation < 1
+            || self.device_auth_generation < 0
+            || self.status != "applied"
+            || self.edge_accepted_through < 0
+            || self.replayed_records < 0
+            || self.first_new_publication_seq != 1
+            || self.replayed_records.checked_add(1) != Some(self.last_new_publication_seq)
+            || self.applied_at < 0
+        {
+            return Err(invalid("invalid recovery activation result boundary"));
+        }
+        Ok(())
+    }
+
+    pub fn validate_topic_edge_node(&self, edge_node_id: &str) -> Result<(), ContractError> {
+        if self.edge_node_id != edge_node_id {
+            return Err(invalid(
+                "recovery activation result topic/body edge_node_id mismatch",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_for(&self, request: &RecoveryActivationRequest) -> Result<(), ContractError> {
+        self.validate()?;
+        if self.recovery_id != request.recovery_id
+            || self.edge_id != request.edge_id
+            || self.edge_node_id != request.edge_node_id
+            || self.candidate_instance_id != request.candidate_instance_id
+            || self.backup_id != request.backup_id
+            || self.old_ledger_epoch != request.old_ledger_epoch
+            || self.new_ledger_epoch != request.new_ledger_epoch
+            || self.broker_credential_generation != request.broker_credential_generation
+            || self.device_auth_generation != request.device_auth_generation
+            || self.edge_accepted_through != request.edge_accepted_through
+        {
+            return Err(invalid("recovery activation result does not match request"));
+        }
+        Ok(())
+    }
+}
+
+impl RecoveryCompletion {
+    pub fn decode(payload: &[u8]) -> Result<Self, ContractError> {
+        let completion: Self = serde_json::from_slice(payload)?;
+        completion.validate()?;
+        Ok(completion)
+    }
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        validate_recovery_common(
+            self.schema_version,
+            &self.recovery_id,
+            &self.edge_id,
+            &self.edge_node_id,
+            &self.candidate_instance_id,
+        )?;
+        validate_identity("new_ledger_epoch", &self.new_ledger_epoch)?;
+        if self.status != "committed" || self.accepted_through != 0 || self.committed_at < 0 {
+            return Err(invalid("invalid recovery completion boundary"));
+        }
+        Ok(())
+    }
+
+    pub fn validate_for(&self, request: &RecoveryActivationRequest) -> Result<(), ContractError> {
+        self.validate()?;
+        if self.recovery_id != request.recovery_id
+            || self.edge_id != request.edge_id
+            || self.edge_node_id != request.edge_node_id
+            || self.candidate_instance_id != request.candidate_instance_id
+            || self.new_ledger_epoch != request.new_ledger_epoch
+        {
+            return Err(invalid("recovery completion does not match request"));
+        }
+        Ok(())
+    }
+}
+
+impl RecoveryCompletionAck {
+    pub fn decode(payload: &[u8]) -> Result<Self, ContractError> {
+        let acknowledgement: Self = serde_json::from_slice(payload)?;
+        acknowledgement.validate()?;
+        Ok(acknowledgement)
+    }
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        validate_recovery_common(
+            self.schema_version,
+            &self.recovery_id,
+            &self.edge_id,
+            &self.edge_node_id,
+            &self.candidate_instance_id,
+        )?;
+        validate_identity("new_ledger_epoch", &self.new_ledger_epoch)?;
+        if self.status != "completion_stored" || self.acknowledged_at < 0 {
+            return Err(invalid("invalid recovery completion acknowledgement"));
+        }
+        Ok(())
+    }
+
+    pub fn validate_topic_edge_node(&self, edge_node_id: &str) -> Result<(), ContractError> {
+        if self.edge_node_id != edge_node_id {
+            return Err(invalid(
+                "recovery completion acknowledgement topic/body edge_node_id mismatch",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_recovery_common(
+    schema_version: u32,
+    recovery_id: &str,
+    edge_id: &str,
+    edge_node_id: &str,
+    candidate_instance_id: &str,
+) -> Result<(), ContractError> {
+    if schema_version != SCHEMA_VERSION {
+        return Err(invalid("recovery schema_version must be 1"));
+    }
+    validate_prefixed_hex("recovery_id", recovery_id, "recovery-")?;
+    validate_prefixed_hex("edge_id", edge_id, "edge-")?;
+    validate_topic_segment("edge_node_id", edge_node_id)?;
+    validate_prefixed_hex("candidate_instance_id", candidate_instance_id, "candidate-")
+}
+
 fn validate_activation_common(
     schema_version: u32,
     activation_id: &str,

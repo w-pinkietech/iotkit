@@ -68,7 +68,7 @@ fn restore_with_fault(
 #[test]
 fn checked_in_restore_contracts_are_canonical_and_closed() {
     let handoff_bytes = include_bytes!("../fixtures/recovery-handoff-v1.json");
-    let receipt_bytes = include_bytes!("../fixtures/restore-receipt-v1.json");
+    let receipt_bytes = include_bytes!("../fixtures/restore-receipt-v2.json");
     let handoff: RecoveryHandoff = serde_json::from_slice(handoff_bytes).unwrap();
     let receipt: RestoreReceipt = serde_json::from_slice(receipt_bytes).unwrap();
     assert_eq!(
@@ -85,7 +85,7 @@ fn checked_in_restore_contracts_are_canonical_and_closed() {
     ))
     .unwrap();
     let receipt_schema: serde_json::Value = serde_json::from_str(include_str!(
-        "../../contracts/restore-receipt-v1.schema.json"
+        "../../contracts/restore-receipt-v2.schema.json"
     ))
     .unwrap();
     let handoff_validator = jsonschema::validator_for(&handoff_schema).unwrap();
@@ -104,7 +104,7 @@ fn restore_wire_schemas_and_rust_deserializers_share_closed_validation_boundarie
     ))
     .unwrap();
     let receipt_schema: serde_json::Value = serde_json::from_str(include_str!(
-        "../../contracts/restore-receipt-v1.schema.json"
+        "../../contracts/restore-receipt-v2.schema.json"
     ))
     .unwrap();
     let handoff_validator = jsonschema::validator_for(&handoff_schema).unwrap();
@@ -120,7 +120,7 @@ fn restore_wire_schemas_and_rust_deserializers_share_closed_validation_boundarie
         "credential_generation": 9223372036854775807_i64
     });
     let valid_receipt = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "durably_fenced_candidate",
         "recovery_id": "recovery-fixture",
         "candidate_instance_id": "candidate-fixture",
@@ -129,7 +129,8 @@ fn restore_wire_schemas_and_rust_deserializers_share_closed_validation_boundarie
         "edge_node_id": "node-fixture",
         "old_ledger_epoch": "epoch-old-fixture",
         "proposed_new_epoch": "epoch-new-fixture",
-        "credential_generation": 9223372036854775807_i64
+        "credential_generation": 9223372036854775807_i64,
+        "device_auth_generation": 9223372036854775807_i64
     });
     assert!(handoff_validator.is_valid(&valid_handoff));
     assert!(receipt_validator.is_valid(&valid_receipt));
@@ -172,10 +173,14 @@ fn restore_wire_schemas_and_rust_deserializers_share_closed_validation_boundarie
     let invalid_receipts = [
         ("unicode id", serde_json::json!({"edge_id": "復旧"})),
         ("bad status", serde_json::json!({"status": "normal"})),
-        ("bad version", serde_json::json!({"schema_version": 2})),
+        ("bad version", serde_json::json!({"schema_version": 1})),
         (
             "credential overflow",
             serde_json::json!({"credential_generation": 9223372036854775808_u128}),
+        ),
+        (
+            "device generation overflow",
+            serde_json::json!({"device_auth_generation": 9223372036854775808_u128}),
         ),
         (
             "equal epochs",
@@ -214,6 +219,7 @@ fn handoff_rejects_negative_generation_equal_epochs_and_missing_backup() {
         created_at_ms: 1,
         accepted_cursor: 0,
         allocation_high_water: 0,
+        epoch_start_publication_seq: None,
         snapshot_mode: SnapshotMode::Online,
         shutdown_seal_id: None,
         schema_version: 23,
@@ -599,6 +605,11 @@ struct RestoreFixture {
 
 #[cfg(target_os = "linux")]
 fn restore_fixture() -> RestoreFixture {
+    restore_fixture_with_schema(24)
+}
+
+#[cfg(target_os = "linux")]
+fn restore_fixture_with_schema(schema_version: u32) -> RestoreFixture {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -613,6 +624,19 @@ fn restore_fixture() -> RestoreFixture {
     let staging_path = staging.path().to_path_buf();
 
     let source = tests_support::active_database_with_publications(&live, 0, 1);
+    if schema_version == 23 {
+        source
+            .execute_batch(
+                "DROP TRIGGER edge_node_recovery_activation_immutable_delete;
+                 DROP TRIGGER edge_node_recovery_activation_insert_state;
+                 DROP TRIGGER edge_node_recovery_activation_forward_only;
+                 DROP TABLE edge_node_recovery_activation;
+                 DELETE FROM _schema_version WHERE version=24;",
+            )
+            .unwrap();
+    } else {
+        assert_eq!(schema_version, 24);
+    }
     drop(source);
     let backup_id = "backup-restore-negative";
     let snapshot_artifact =
@@ -648,6 +672,30 @@ fn restore_fixture() -> RestoreFixture {
             },
         },
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn v23_encrypted_backup_restores_and_migrates_the_fenced_candidate_to_v24() {
+    let fixture = restore_fixture_with_schema(23);
+    let receipt = restore_candidate(&fixture.request, &restore_passphrase()).unwrap();
+    assert_eq!(receipt.schema_version, 2);
+
+    let candidate = rusqlite::Connection::open(&fixture.request.candidate_database).unwrap();
+    assert_eq!(
+        candidate
+            .query_row(
+                "SELECT count(*) FROM _schema_version WHERE version=24",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert!(matches!(
+        startup_mode(&candidate).unwrap(),
+        RecoveryStartupMode::FencedCandidate { .. }
+    ));
 }
 
 #[cfg(target_os = "linux")]

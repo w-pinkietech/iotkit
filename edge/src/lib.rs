@@ -7,6 +7,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod lifecycle;
 pub mod mqtt;
+pub mod recovery_control;
 pub mod semantics;
 pub mod storage;
 pub mod web;

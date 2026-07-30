@@ -1,6 +1,8 @@
 .git
 .github
 .worktrees
+.bootstrap-repo-test.*
+scripts/test-edge-bootstrap.sh
 target
 **/target
 **/.DS_Store

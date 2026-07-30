@@ -9,6 +9,7 @@ pub enum LedgerError {
     InvalidId(String),
     InvalidModelId(String),
     InvalidReplace(String),
+    InvalidRecovery,
     UnsupportedPreReleaseSchema,
     Storage(StorageError),
     Sqlite(rusqlite::Error),
@@ -23,6 +24,7 @@ impl std::fmt::Display for LedgerError {
             Self::InvalidId(s) => write!(f, "invalid system_id text: {s}"),
             Self::InvalidModelId(s) => write!(f, "invalid model_id: {s}"),
             Self::InvalidReplace(s) => write!(f, "invalid replace: {s}"),
+            Self::InvalidRecovery => write!(f, "invalid recovery epoch transition"),
             Self::UnsupportedPreReleaseSchema => write!(
                 f,
                 "unsupported pre-release Edge Node database; recreate the Edge Node database"
@@ -1038,6 +1040,37 @@ pub fn renew_epoch(conn: &Connection) -> Result<String, LedgerError> {
     let detail = serde_json::json!({ "old_epoch": old_epoch });
     record_event(conn, "epoch_renewed", None, &detail.to_string())?;
     Ok(new_epoch)
+}
+
+/// Installs the exact epoch granted by a durable replacement recovery case.
+///
+/// The caller owns the surrounding Immediate transaction so the epoch switch,
+/// publication rekey, and recovery receipt either commit together or not at all.
+pub fn install_recovery_epoch(
+    tx: &rusqlite::Transaction<'_>,
+    expected_old_epoch: &str,
+    new_epoch: &str,
+) -> Result<(), LedgerError> {
+    if expected_old_epoch.is_empty()
+        || new_epoch.is_empty()
+        || expected_old_epoch == new_epoch
+        || expected_old_epoch.contains(':')
+        || new_epoch.contains(':')
+        || expected_old_epoch.chars().any(char::is_control)
+        || new_epoch.chars().any(char::is_control)
+    {
+        return Err(LedgerError::InvalidRecovery);
+    }
+    let changed = tx.execute(
+        "UPDATE ledger_meta SET value=?1 WHERE key='epoch' AND value=?2",
+        params![new_epoch, expected_old_epoch],
+    )?;
+    if changed != 1 {
+        return Err(LedgerError::InvalidRecovery);
+    }
+    let detail = serde_json::json!({"old_epoch": expected_old_epoch, "new_epoch": new_epoch});
+    record_event(tx, "epoch_recovered", None, &detail.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]

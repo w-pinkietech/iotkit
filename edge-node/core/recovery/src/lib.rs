@@ -5,6 +5,7 @@ use iotkit_core_storage::Migration;
 mod backup;
 mod config;
 mod container;
+mod control;
 mod destination;
 mod model;
 mod restore;
@@ -14,6 +15,7 @@ mod state;
 pub use backup::{
     BEGIN_BACKUP_ATTEMPT_OP, COMPLETE_BACKUP_ATTEMPT_OP, RECORD_BACKUP_PREFLIGHT_FAILURE_OP,
     backup_status, create_backup, create_backup_from_files, inspect_backup,
+    inspect_backup_with_staging,
 };
 pub use config::{
     BACKUP_PAIR_COMPLETION_NAME, BACKUP_PAIR_MARKER_NAME, BackupConfigReplace, BackupPairPhase,
@@ -25,6 +27,11 @@ pub use config::{
 pub use container::{
     DecryptedStage, DirectoryCapability, authenticate_container, decrypt_container_to_staging_file,
     encrypt_container,
+};
+pub use control::{
+    APPLY_RECOVERY_ACTIVATION_OP, COMPLETE_RECOVERY_ACTIVATION_OP, RecoveryActivationRequest,
+    RecoveryActivationResult, RecoveryCompletion, RecoveryCompletionAck, RecoveryControlError,
+    apply_recovery_activation, complete_recovery_activation, recovery_activation_result,
 };
 pub use destination::{
     MountInfoEntry, VerifiedBackupDestination, VerifiedStagingDirectory, apply_retention,
@@ -47,11 +54,20 @@ pub use snapshot::{
 };
 pub use state::{probe_startup_path, startup_mode};
 
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 23,
-    label: "edge_node_recovery",
-    sql: include_str!("../migrations/0023_edge_node_recovery.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 23,
+        label: "edge_node_recovery",
+        sql: include_str!("../migrations/0023_edge_node_recovery.sql"),
+    },
+    Migration {
+        version: 24,
+        label: "edge_node_recovery_activation",
+        sql: include_str!("../migrations/0024_edge_node_recovery_activation.sql"),
+    },
+];
+
+pub(crate) const MIN_RESTORABLE_SCHEMA_VERSION: u32 = 23;
 
 /// Returns the complete Edge Node migration set in version order.
 pub fn all_edge_node_migrations() -> Vec<Migration> {

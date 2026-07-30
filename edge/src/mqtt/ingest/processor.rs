@@ -1,5 +1,6 @@
 use iotkit_edge_custody_contract::{
-    AcceptedThrough, ActivationResult, DescriptorSnapshot, RecordBatch, SCHEMA_VERSION,
+    AcceptedThrough, ActivationResult, DescriptorSnapshot, RecordBatch, RecoveryActivationResult,
+    RecoveryCompletionAck, SCHEMA_VERSION,
 };
 
 use crate::storage::{AcceptBatch, RawRecord, Storage, StorageError};
@@ -48,6 +49,22 @@ impl IngestProcessor {
                 result.validate_topic_edge_node(&parsed.edge_node_id)?;
                 self.storage
                     .apply_activation_result(&result, received_at)
+                    .await?;
+                Ok(None)
+            }
+            TopicKind::RecoveryResult => {
+                let result = RecoveryActivationResult::decode(payload)?;
+                result.validate_topic_edge_node(&parsed.edge_node_id)?;
+                self.storage
+                    .apply_edge_node_recovery_result(&result, received_at)
+                    .await?;
+                Ok(None)
+            }
+            TopicKind::RecoveryCompletionAck => {
+                let acknowledgement = RecoveryCompletionAck::decode(payload)?;
+                acknowledgement.validate_topic_edge_node(&parsed.edge_node_id)?;
+                self.storage
+                    .acknowledge_edge_node_recovery_completion(&acknowledgement, received_at)
                     .await?;
                 Ok(None)
             }
@@ -114,6 +131,8 @@ impl IngestError {
 enum TopicKind {
     Descriptor,
     ActivationResult,
+    RecoveryResult,
+    RecoveryCompletionAck,
     Records,
 }
 
@@ -140,6 +159,22 @@ impl Topic {
                 "activation",
                 "result",
             ] => (*edge_node_id, TopicKind::ActivationResult),
+            [
+                "iotkit",
+                "v1",
+                "edge-nodes",
+                edge_node_id,
+                "recovery",
+                "result",
+            ] => (*edge_node_id, TopicKind::RecoveryResult),
+            [
+                "iotkit",
+                "v1",
+                "edge-nodes",
+                edge_node_id,
+                "recovery",
+                "completion-ack",
+            ] => (*edge_node_id, TopicKind::RecoveryCompletionAck),
             _ => return Err(IngestError::Topic("unexpected topic shape".into())),
         };
         if edge_node_id.is_empty() || edge_node_id.contains(['+', '#', ':']) {

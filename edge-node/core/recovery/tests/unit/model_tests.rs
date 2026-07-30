@@ -21,6 +21,7 @@ fn recovery_debug_output_redacts_every_identifier_and_path() {
         created_at_ms: 99,
         accepted_cursor: 11,
         allocation_high_water: 12,
+        epoch_start_publication_seq: Some(1),
         snapshot_mode: SnapshotMode::Online,
         shutdown_seal_id: Some("seal-secret".into()),
         schema_version: 1,
@@ -97,7 +98,7 @@ fn remaining_recovery_debug_implementations_expose_only_safe_labels() {
         last_verified: Some(artifact.clone()),
     };
     let receipt = RestoreReceipt {
-        schema_version: 1,
+        schema_version: 2,
         status: RestoreStatus::DurablyFencedCandidate,
         recovery_id: "recovery-secret".into(),
         candidate_instance_id: "candidate-secret".into(),
@@ -107,6 +108,7 @@ fn remaining_recovery_debug_implementations_expose_only_safe_labels() {
         old_ledger_epoch: "epoch-secret".into(),
         proposed_new_epoch: "new-epoch-secret".into(),
         credential_generation: 5,
+        device_auth_generation: 6,
     };
     let mount = MountIdentity {
         mount_point: "C:/secret/mount".into(),

@@ -5,6 +5,7 @@ mod cmd {
     pub mod fingerprint;
     pub mod passphrase;
     pub mod query;
+    pub mod recovery_activate;
     pub mod registry;
     pub mod replace;
     pub mod smoke;
