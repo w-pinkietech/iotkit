@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the optional IoTKit Edge Node backup daily
+
+[Timer]
+Unit=iotkit-edge-node-backup.service
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

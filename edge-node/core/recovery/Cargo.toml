@@ -1,0 +1,28 @@
+[package]
+name = "iotkit-core-recovery"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iotkit-core-storage = { path = "../storage" }
+iotkit-core-ledger = { path = "../ledger" }
+iotkit-core-timeseries = { path = "../timeseries" }
+iotkit-core-registry = { path = "../registry" }
+iotkit-core-publish = { path = "../publish" }
+iotkit-core-ops = { path = "../ops" }
+rusqlite = { version = "0.32", features = ["backup", "bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+zeroize = "1"
+argon2 = "0.5"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+getrandom = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+jsonschema = "0.29"

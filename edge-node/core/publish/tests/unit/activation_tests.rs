@@ -1,8 +1,8 @@
 use super::{
     ActivationRequest, ActivationResult, ActivationState, activation_state, apply_activation,
-    cleanup_pre_activation_batch, install_edge_target,
+    cleanup_pre_activation_batch, install_edge_target, publication_allocation_high_water,
 };
-use crate::store::TargetRow;
+use crate::store::{TargetRow, enqueue_measurement, prune_acked_outbox};
 use rusqlite::{Connection, params};
 
 const EDGE_ID: &str = "edge-node-01";
@@ -312,4 +312,17 @@ fn target_install_rejects_a_used_standalone_outbox() {
         activation_state(&conn).unwrap(),
         ActivationState::Standalone
     );
+}
+
+#[test]
+fn allocation_high_water_survives_pruning() {
+    let conn = discovery_only();
+    apply_activation(&conn, &request("act-0123456789abcdef0123456789abcdef"), 1).unwrap();
+    for reading in 1..=5 {
+        enqueue_measurement(&conn, EPOCH, reading, reading).unwrap();
+    }
+
+    prune_acked_outbox(&conn, EPOCH, 5).unwrap();
+
+    assert_eq!(publication_allocation_high_water(&conn).unwrap(), 5);
 }

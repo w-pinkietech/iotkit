@@ -33,7 +33,7 @@ from pathlib import Path
 DATA_PLANE = {
     "iotkit-core-storage", "iotkit-core-ledger", "iotkit-core-timeseries",
     "iotkit-core-publish", "iotkit-core-collector", "iotkit-core-registry",
-    "iotkit-core-ops",
+    "iotkit-core-ops", "iotkit-core-recovery",
 }
 ADAPTERS = {
     "bravepi-mainboard-adapter", "bravepi-codec", "iotkit-sensor-drivers", "bravepi-poc",

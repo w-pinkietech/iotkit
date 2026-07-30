@@ -24,3 +24,9 @@ overrides the others; disagreement is a contract defect.
 The short top-level compatibility documents under `docs/` are pointers only and are
 not authorities. `docs/redesign/` and `docs/superpowers/` preserve rationale and
 historical process records. They do not override the current corpus.
+
+The Edge Node encrypted backup and fenced-candidate recovery contract is paired
+across both language trees:
+
+- [English recovery contract](okf/en/contracts/edge-node-recovery-v1.md)
+- [Japanese recovery contract](okf/ja/contracts/edge-node-recovery-v1.md)

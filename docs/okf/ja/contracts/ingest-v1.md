@@ -5,7 +5,7 @@ description: "認証付きHTTP ingestのwire schema、権限、retry、validatio
 language: ja
 translation_key: contracts.ingest-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit認証付きingest契約 v1
@@ -229,12 +229,14 @@ Stagingは最大Envelope一件分のevictable reserveを持ち、rowとbyteを�
 
 ## 現行実装・延期項目・復旧
 
-現行実装は、認証付きHTTP binding、bearer authority、bounded admission、TLS/private-LAN listener、freshness、副作用なしvalidation、bounded staging/dedup、health/audit hook、local recovery authority closureを提供します。RemoteからclaimできるEdge Node setup pathではありません。
+現行実装は、認証付きHTTP binding、bearer authority、bounded admission、TLS/private-LAN listener、freshness、副作用なしvalidation、bounded staging/dedup、health/audit hook、local recovery authority closure、custody-completeなsanitized Edge Node DBの暗号化backup、local fenced-candidate restoreを提供します。Restore境界はclosedなvalid handoffを要求し、absent candidateだけへ書き、candidateをfencedのまま残します。RemoteからclaimできるEdge Node setup pathではありません。
 
-暗号化Edge Node replacement backupとcross-filesystem restore fenceは延期中です。Device-token secretが存在する場合、legacy plaintext replacement snapshotは利用できません。Tokenやhashを出力せず、その理由を示します。
+Broker fencing、remote permit、production/remoteでのrename後reconciliation、dedup-risk resolution、reactivation、same-ID new ledger epochは延期かつdefault-offです。Completed candidate rename後のexact local same-request replayは出荷済みで、保存済みreceiptをbyte-for-byte返しますが、production/remote reconciliationではありません。Slice 1にはproduction recovery handoffのproducerがなく、後続のpermitとcredential-generation checkまでcandidateはingestもpublishもできません。Device-token secretが存在する場合、legacy plaintext replacement snapshotは利用できません。Tokenやhashを出力せず、その理由を示します。State-only inspectionはcompleteなreplacement backupではありません。
+
+Snapshot sanitizerは`target_registry`のdeployment credential tokenを空にします。Account、session、device credential hashはprotectedな暗号化DB stateとして残り得ます。MQTT/TLS private materialはそのDBの外にありartifactへ入れません。暗号化artifactとpassphraseはsecretです。
 
 MQTT ingest、pairing-window登録、`signed_seq`、`provisioned_key`、batch provisioning、shared-image credential、rich UI、destructive factory resetは将来または別承認の範囲で、このHTTP token/TLS/subject/freshness/custody契約を迂回しません。
 
-Unowned、local recovery中、restore/reset fence中、TLS invalidなEdge Nodeはcontrol APIもingest listenerもbindしません。Local root recoveryでownershipを再確立し、restore後はadmin/operator/session権限を失効し、device auth generationを再検査します。Replacementではreadingとdedup claimをrestoreしないため、commit済みretryが再受理される場合があります。Downstream idempotencyと新ledger epochが重複可能性を表します。
+Unowned、local recovery中、restore/reset fence中、TLS invalidなEdge Nodeはcontrol APIもingest listenerもbindしません。Local root recoveryでownershipを再確立し、restore後はadmin/operator/session権限を失効し、device auth generationを再検査します。暗号化backup candidateはauthenticated snapshot boundaryまでのreadingとdedup claimを持ちますが、fenced中はingestできず、その後のretry stateを証明しません。後続のpermitとgeneration checkまでrestore済みdedupをactiveにしません。Backupなしのreplacementはreadingもdedup claimもrestoreしません。Downstream idempotencyと後続の新ledger epochが重複可能性を表します。
 
 Credential responseはone-shotです。失った場合は対象credentialをabandon/revokeして新しくissueし、再表示を要求しません。Deviceを沈黙させ得るissue、reissue、promotion、abandonment、revokeには人間承認が必要です。

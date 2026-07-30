@@ -509,14 +509,7 @@ fn require_exhaustively_pristine_target(conn: &Connection) -> AppResult<()> {
 }
 
 fn all_migrations() -> Vec<iotkit_core_storage::Migration> {
-    let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
-    migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
-    migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
-    migrations.sort_by_key(|migration| migration.version);
-    migrations
+    iotkit_core_recovery::all_edge_node_migrations()
 }
 
 fn canonical_schema_rows(conn: &Connection) -> AppResult<Vec<SchemaRow>> {

@@ -349,6 +349,11 @@ fn publication_allocation_sequence(conn: &Connection) -> Result<i64, PublishErro
     .map_err(PublishError::from)
 }
 
+/// Returns the durable publication sequence allocation high-water mark.
+pub fn publication_allocation_high_water(conn: &Connection) -> Result<i64, PublishError> {
+    publication_allocation_sequence(conn)
+}
+
 fn validate_prefixed_hex(field: &str, value: &str, prefix: &str) -> Result<(), PublishError> {
     let Some(random) = value.strip_prefix(prefix) else {
         return invalid(&format!("{field} must start with {prefix}"));

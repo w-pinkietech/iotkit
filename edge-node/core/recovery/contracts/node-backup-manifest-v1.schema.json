@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iotkit.example/contracts/node-backup-manifest-v1.schema.json",
+  "title": "IoTKit Edge Node backup manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_kind",
+    "format_version",
+    "backup_id",
+    "edge_node_id",
+    "ledger_epoch",
+    "created_at_ms",
+    "accepted_cursor",
+    "allocation_high_water",
+    "snapshot_mode",
+    "shutdown_seal_id",
+    "schema_version",
+    "database_length",
+    "database_sha256",
+    "counts"
+  ],
+  "properties": {
+    "artifact_kind": { "const": "iotkit-node-backup" },
+    "format_version": { "const": 1 },
+    "backup_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\x00-\\x1F\\x7F\\x80-\\x9F]+$" },
+    "edge_node_id": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\x00-\\x1F\\x7F\\x80-\\x9F]+$" },
+    "ledger_epoch": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:\\x00-\\x1F\\x7F\\x80-\\x9F]+$" },
+    "created_at_ms": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+    "accepted_cursor": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+    "allocation_high_water": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+    "snapshot_mode": { "const": "online" },
+    "shutdown_seal_id": { "const": null },
+    "schema_version": { "const": 23 },
+    "database_length": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "database_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "devices",
+        "series",
+        "readings",
+        "publication_rows",
+        "ingest_dedup_rows",
+        "staged_readings",
+        "quarantine_rows",
+        "device_principals",
+        "device_credentials",
+        "activation_rows",
+        "ledger_events",
+        "audit_events"
+      ],
+      "properties": {
+        "devices": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "series": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "readings": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "publication_rows": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "ingest_dedup_rows": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "staged_readings": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "quarantine_rows": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "device_principals": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "device_credentials": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "activation_rows": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "ledger_events": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "audit_events": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
+      }
+    }
+  }
+}

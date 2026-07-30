@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 6
+revision: 8
 ---
 
 # Architecture
@@ -275,6 +275,16 @@ network setup route or unauthenticated setup allowlist. The prescriptive rule:
 path.** Local-root ownership/recovery (and the separately specified factory-reset
 maintenance family) are explicit non-network exceptions, never API/UI/AI operations.
 
+Optional Edge Node recovery filesystem operations trust local root and the
+effective owner as one principal. Their configuration parent and protected
+files/directories deny all group/other access. Supported configure,
+destination verification/probe, publication, and retention calls hold one
+stable owner-only config-adjacent nonblocking lock across the operation; a
+second supported call fails as `operation_busy`. This lock coordinates product
+code, not hostile code already running with the same effective UID. Such code
+is outside the filesystem namespace protection boundary and requires host
+containment.
+
 ## Current implementation state
 
 The repository currently ships the first network measurement path as a separate,
@@ -302,7 +312,7 @@ archive gap remain post-v1 hardening work.
 
 ## Crate map
 
-Thirty crates, five layers. `scripts/check-layers` enforces the layer rules
+Thirty-two crates, five layers. `scripts/check-layers` enforces the layer rules
 below mechanically (in `verify.sh` and CI).
 
 | Crate | Path | Responsibility (one line) |
@@ -318,6 +328,7 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-core-collector` | `edge-node/core/collector` | Ingest actor: dedup, series resolution, quarantine and activation admission, active-record same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
 | `iotkit-core-registry` | `edge-node/core/registry` | D6 measurement registry (standard catalog + deployment overrides); implements `RegistryPolicy`. |
 | `iotkit-core-ops` | `edge-node/core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
+| `iotkit-core-recovery` | `edge-node/core/recovery` | Optional Edge Node backup/recovery durable state, complete migration set, read-only startup fence probe, and recovery-model redaction boundary. |
 | `iotkit-ingest-client` | `edge-node/ingest/client` | The ingest-contract client adapters use (D4). In-process binding for official adapters; network device builders use the separate HTTP binding. MQTT remains future. |
 | `iotkit-input-adapter-host-api` | `edge-node/input/host-api` | Supervision-free official adapter composition API: validated identities, source-bound ingest, delivery receipts/retry, bounded diagnostics/activity, completion, and shutdown. |
 | `iotkit-input-adapter-testkit` | `edge-node/input/testkit` | Dev-only conformance assertions and a non-catalog two-subject/two-measurement reference adapter. |
@@ -464,10 +475,11 @@ Getting these right is most of the design (see D5, D7).
     gets a `seq` immediately but no `pub_seq` until (if ever) released. The exit
     id is always `pub_seq`.
 - **`(epoch, pub_seq)` record identity** — `epoch` is a restore-generation fence.
-  A snapshot restore (box swap) mints a *new* epoch, so a stale consumer cursor
-  from before the restore is detected (epoch mismatch → treat everything as
-  unacked, re-baseline) rather than silently trusted. The custody contract never
-  promises anything it can't keep across a box swap.
+  Slice-1 fenced-candidate restore does not mint or activate a new epoch: the
+  candidate cannot collect or publish. A production same-ID box swap and its
+  new-epoch/stale-cursor handling are later permit and reconciliation contract
+  behavior, not a shipped restore operation. The custody contract never promises
+  anything it cannot keep across that future cutover.
 
 ## Concurrency model
 

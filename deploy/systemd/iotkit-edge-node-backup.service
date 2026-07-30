@@ -1,0 +1,11 @@
+[Unit]
+Description=Create an optional encrypted IoTKit Edge Node backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+UMask=0077
+RuntimeDirectory=iotkit-edge-node-backup
+RuntimeDirectoryMode=0700
+Environment=TMPDIR=/run/iotkit-edge-node-backup
+ExecStart=/usr/local/bin/iotkit-edge-nodectl backup create --config /etc/iotkit/edge-node-backup.json
