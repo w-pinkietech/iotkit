@@ -45,6 +45,9 @@ IoTKit Edgeは保存済みsignalを汎用的な`numeric`、`boolean`、`cumulati
 - device ledger、measurement registry、snapshot/restore、IoTKit Edge targetを操作する**operator CLI**（`iotkit-edge-nodectl`）。
 - 範囲指定history/CSV、storage診断、暗号化backup、新規pathへのrestoreを提供する**IoTKit Edge運用機能**。
 - 新規または復元済み状態はlocal ownership/recoveryを必要とし、network setup routeは公開しません。復旧後はdevice tokenとoperator権限を再検査します。
+
+Edge Node host故障またはhardware交換では、
+[Edge Node hardware復旧クイックガイド](docs/okf/ja/operations/edge-node-hardware-recovery.md)から開始してください。
 - control-plane APIはprivate LANからの到達を前提とします。private routed pathがない環境ではSSH port forwardingを使用します。
 
 ### Edge Nodeの初期化

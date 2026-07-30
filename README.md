@@ -60,6 +60,9 @@ such as Pinikiet own products, processes, OEE, alarms, business UI, and notifica
 - **Operator CLI** (`iotkit-edge-nodectl`) for the device ledger, measurement registry, snapshots/restore, and the IoTKit Edge target.
 - **IoTKit Edge operations** for bounded history/CSV, storage diagnostics, and encrypted backup/new-path restore.
 - Fresh or restored state requires local ownership/recovery; it does not expose a network setup route. Device tokens and operator authority are rechecked after recovery.
+
+For a failed Edge Node host or hardware replacement, start with the
+[Edge Node hardware recovery quick guide](docs/okf/en/operations/edge-node-hardware-recovery.md).
 - The control-plane API is intended for private LAN reachability only. Use SSH port forwarding when the deployment's private routed path does not provide direct client reachability.
 
 ### Edge Node initialization
