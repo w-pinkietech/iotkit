@@ -26,6 +26,8 @@ echo "== cargo clippy --workspace --all-targets -- -D warnings =="
 cargo clippy --workspace --all-targets -- -D warnings
 
 if [[ "$full" == true ]]; then
+  echo "== scripts/test-certificate-hostname.sh =="
+  scripts/test-certificate-hostname.sh
   echo "== scripts/test-edge-node-recovery-acl.sh =="
   scripts/test-edge-node-recovery-acl.sh
   echo "== scripts/test-edge-node-fence.sh =="

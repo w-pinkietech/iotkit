@@ -6,6 +6,8 @@ umask 077
 script_path=$(realpath "${BASH_SOURCE[0]}")
 repo_root=$(cd "$(dirname "$script_path")/.." && pwd -P)
 # shellcheck disable=SC1091
+source "$repo_root/scripts/lib/certificate-hostname.sh"
+# shellcheck disable=SC1091
 source "$repo_root/deploy/mosquitto-image.env"
 binding=""
 output_dir=""
@@ -185,7 +187,7 @@ openssl x509 -in "$tls_ca" -noout >/dev/null 2>&1 \
   || fail "TLS CA file contains no leading PEM X.509 certificate"
 openssl verify -CAfile "$tls_ca" "$tls_cert" >/dev/null 2>&1 \
   || fail "TLS certificate does not verify against the supplied CA file"
-openssl x509 -in "$tls_cert" -noout -checkhost "$broker_host" >/dev/null 2>&1 \
+certificate_covers_hostname "$tls_cert" "$broker_host" \
   || fail "TLS certificate does not cover broker host $broker_host"
 openssl x509 -in "$tls_cert" -noout -checkend 86400 >/dev/null 2>&1 \
   || fail "TLS certificate expires within 24 hours"

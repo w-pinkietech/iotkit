@@ -2,6 +2,10 @@
 set -euo pipefail
 umask 077
 
+script_dir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd -P)
+# shellcheck disable=SC1091
+source "$script_dir/lib/certificate-hostname.sh"
+
 usage() {
   echo "usage: iotkit-broker-cert <status|install|renew> --config FILE [--cert FILE --key FILE --ca FILE]" >&2
 }
@@ -50,7 +54,7 @@ validate_bundle() {
   openssl x509 -in "$input_ca" -noout >/dev/null 2>&1 || fail "CA bundle is not valid PEM X.509"
   openssl verify -CAfile "$input_ca" -untrusted "$input_cert" "$input_cert" >/dev/null 2>&1 \
     || fail "certificate does not verify with CA bundle"
-  openssl x509 -in "$input_cert" -noout -checkhost "$IOTKIT_CERT_DOMAIN" >/dev/null 2>&1 \
+  certificate_covers_hostname "$input_cert" "$IOTKIT_CERT_DOMAIN" \
     || fail "certificate does not cover configured broker hostname"
   openssl x509 -in "$input_cert" -noout -checkend 86400 >/dev/null 2>&1 \
     || fail "certificate expires within 24 hours"

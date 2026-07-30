@@ -6,6 +6,9 @@ configuration, or OKF format identifiers.
 
 ## [Unreleased]
 
+- 証明書のhostname検証は、OpenSSLが不一致を表示しながら成功statusを返すhostでも不一致を拒否します。
+- Certificate hostname validation now rejects mismatches even on hosts where OpenSSL reports a mismatch with a successful exit status.
+
 ## [0.2.0] - 2026-07-29
 
 - センサー設定の実信号プレビューは、開いている通常ルールまたは異常検知ルールだけを追跡し、受信値と選択ルールの判定結果を分けて表示します。エラー時には別ルールの古い判定結果を残しません。

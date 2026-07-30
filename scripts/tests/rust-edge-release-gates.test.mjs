@@ -65,6 +65,10 @@ test("Pebble gate uses the pinned official lego image", () => {
 
 test("certificate renewal exercises the production renew command", () => {
   assert.match(
+    sources["test-edge-host-release-gate.sh"],
+    /test-certificate-hostname\.sh/,
+  );
+  assert.match(
     sources["test-broker-cert-pebble.sh"],
     /iotkit-broker-cert"\s+renew/,
   );

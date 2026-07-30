@@ -38,6 +38,7 @@ echo "== MQTT authentication, ACL, and TLS negative matrix =="
 "$repo_root/scripts/test-mqtt-security.sh"
 
 echo "== Broker certificate install/rollback and ACME renewal =="
+"$repo_root/scripts/test-certificate-hostname.sh"
 "$repo_root/scripts/test-broker-cert.sh"
 "$repo_root/scripts/test-broker-cert-pebble.sh"
 
