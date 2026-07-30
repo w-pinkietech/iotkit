@@ -116,8 +116,8 @@ fn encrypted_backup_round_trips_custody_state_and_redacts_receipt_audit() {
     use tempfile::TempDir;
 
     let control = TempDir::new().unwrap();
-    let destination = TempDir::new().unwrap();
-    let database_root = TempDir::new_in("/dev/shm").unwrap();
+    let destination = TempDir::new_in("/dev/shm").unwrap();
+    let database_root = TempDir::new().unwrap();
     let staging_parent = TempDir::new_in("/dev/shm").unwrap();
     let staging = TempDir::new_in(staging_parent.path()).unwrap();
     for directory in [
