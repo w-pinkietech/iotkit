@@ -6,8 +6,14 @@ configuration, or OKF format identifiers.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-31
+
+- Edge Nodeの暗号化backup、fail-closedなfenced restoreとhardware replacement、復旧権限による安全な再稼働、現場向け復旧手順を追加しました。backupの設定と保存先は現場要件に応じて任意に選べます。
+- Added encrypted Edge Node backups, fail-closed fenced restore and hardware replacement, safe reactivation with recovery authority, and a field recovery guide. Backup configuration and storage location remain optional to suit each site.
 - 証明書のhostname検証は、OpenSSLが不一致を表示しながら成功statusを返すhostでも不一致を拒否します。
 - Certificate hostname validation now rejects mismatches even on hosts where OpenSSL reports a mismatch with a successful exit status.
+- 公開repositoryで脆弱性の詳細を公開Issueへ書かずに報告できるprivate vulnerability reporting導線を追加しました。
+- Added a private vulnerability reporting path so security details do not need to be disclosed in public issues.
 
 ## [0.2.0] - 2026-07-29
 

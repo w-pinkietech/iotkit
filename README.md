@@ -9,7 +9,7 @@ sensor adapter to IoTKit Edge Node and IoTKit supplies durable collection, retry
 explicit transfer of storage responsibility to IoTKit Edge: data is not purge-eligible
 until IoTKit Edge has durably stored it.
 
-> **Current product version: 0.2.0 (pre-1.0).** IoTKit is available as an
+> **Current product version: 0.3.0 (pre-1.0).** IoTKit is available as an
 > early source release. APIs, the on-disk schema, and wire contracts may change
 > during the 0.x series. See [GitHub Releases](https://github.com/w-pinkietech/iotkit/releases)
 > and the [Roadmap](#roadmap).
