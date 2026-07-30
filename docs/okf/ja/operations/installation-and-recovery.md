@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 5
+revision: 6
 ---
 
 # IoTKit Edgeの導入と復旧
