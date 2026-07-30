@@ -34,7 +34,7 @@ fn restore_staging_is_created_owner_only_even_with_umask_zero() {
     let _environment_lock = environment_lock().lock().unwrap();
 
     let old_umask = unsafe { libc::umask(0) };
-    let path = super::create_restore_staging().unwrap();
+    let path = super::create_restore_staging(None).unwrap();
     unsafe { libc::umask(old_umask) };
     let metadata = std::fs::metadata(&path).unwrap();
     assert!(metadata.is_dir());
@@ -50,8 +50,9 @@ fn restore_staging_post_create_failure_removes_private_directory() {
     let base = tempfile::tempdir_in("/tmp").unwrap();
     let previous_tmpdir = std::env::var_os("TMPDIR");
     unsafe { std::env::set_var("TMPDIR", base.path()) };
-    let result =
-        super::create_restore_staging_with(|_| Err(iotkit_core_recovery::RecoveryError::Storage));
+    let result = super::create_restore_staging_with(None, |_| {
+        Err(iotkit_core_recovery::RecoveryError::Storage)
+    });
     match previous_tmpdir {
         Some(value) => unsafe { std::env::set_var("TMPDIR", value) },
         None => unsafe { std::env::remove_var("TMPDIR") },

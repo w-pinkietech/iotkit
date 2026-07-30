@@ -21,6 +21,9 @@ use crate::{
             CliCompatibilityError, CliQueries, LegacyMappingSpec, LegacyMappings, LegacyRoutes,
             LegacyTriggerMode,
         },
+        recovery::{
+            BackupInspection, BrokerFenceReceipt, RecoveryApplicationError, RestoreReceipt,
+        },
     },
     auth::{password::Password, principal::AccountRole},
     backup::{
@@ -33,6 +36,10 @@ use crate::{
     },
     diagnostics::{diagnostics_with_certificate, storage_status},
     lifecycle::ExitReason,
+    recovery_control::{
+        DEFAULT_RECOVERY_CONTROL_SOCKET, RecoveryControlRequest, RecoveryControlResponse,
+        call_recovery_control,
+    },
     storage::{Storage, StorageProfile, migrate_sqlite_to_postgres},
 };
 
@@ -51,6 +58,11 @@ pub enum Command {
     Backup {
         #[command(subcommand)]
         command: BackupCommand,
+    },
+    /// Prepare, authorize, or report a fenced Edge Node recovery.
+    Recovery {
+        #[command(subcommand)]
+        command: RecoveryCommand,
     },
     /// Report storage, custody, and recovery diagnostics as JSON.
     Diagnose(DiagnoseArgs),
@@ -148,6 +160,41 @@ pub enum BackupCommand {
     AcceptArchiveLoss(AcceptArchiveLossArgs),
 }
 
+#[derive(Debug, Subcommand)]
+pub enum RecoveryCommand {
+    Prepare(RecoveryPrepareArgs),
+    Authorize(RecoveryAuthorizeArgs),
+    Report(RecoveryReportArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RecoveryPrepareArgs {
+    #[arg(long, default_value = DEFAULT_RECOVERY_CONTROL_SOCKET)]
+    pub control_socket: PathBuf,
+    #[arg(long)]
+    pub backup_inspection: PathBuf,
+    #[arg(long)]
+    pub broker_fence_receipt: PathBuf,
+    #[arg(long)]
+    pub handoff_output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct RecoveryAuthorizeArgs {
+    #[arg(long, default_value = DEFAULT_RECOVERY_CONTROL_SOCKET)]
+    pub control_socket: PathBuf,
+    #[arg(long)]
+    pub restore_receipt: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct RecoveryReportArgs {
+    #[arg(long, default_value = DEFAULT_RECOVERY_CONTROL_SOCKET)]
+    pub control_socket: PathBuf,
+    #[arg(long)]
+    pub recovery_id: String,
+}
+
 #[derive(Debug, Args)]
 pub struct ServeArgs {
     #[command(flatten)]
@@ -178,6 +225,8 @@ pub struct ServeArgs {
     pub broker_certificate_file: Option<PathBuf>,
     #[arg(long, default_value_t = 90)]
     pub storage_warning_percent: i32,
+    #[arg(long, default_value = DEFAULT_RECOVERY_CONTROL_SOCKET)]
+    pub recovery_control_socket: PathBuf,
     #[arg(long)]
     pub output_broker_url: Option<String>,
     #[arg(long, default_value = "iotkit-edge-output")]
@@ -330,6 +379,10 @@ pub enum CliError {
     Runtime(#[from] crate::composition::runtime::RuntimeError),
     #[error(transparent)]
     CliCompatibility(#[from] CliCompatibilityError),
+    #[error(transparent)]
+    Recovery(#[from] RecoveryApplicationError),
+    #[error("recovery control request failed: {0}")]
+    RecoveryControl(String),
 }
 
 pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
@@ -387,6 +440,83 @@ pub async fn run(cli: Cli) -> Result<ExitReason, CliError> {
                         "edge_node_id": args.edge_node_id,
                         "ledger_epoch": args.ledger_epoch,
                     }))?;
+                }
+            }
+            Ok(ExitReason::Requested)
+        }
+        Command::Recovery { command } => {
+            match command {
+                RecoveryCommand::Prepare(args) => {
+                    let inspection: BackupInspection =
+                        serde_json::from_str(&read_owner_only_secret(&args.backup_inspection)?)?;
+                    let fence: BrokerFenceReceipt =
+                        serde_json::from_str(&read_owner_only_secret(&args.broker_fence_receipt)?)?;
+                    let handoff = match call_recovery_control(
+                        &args.control_socket,
+                        &RecoveryControlRequest::Prepare { inspection, fence },
+                    )
+                    .await
+                    .map_err(|error| CliError::RecoveryControl(error.to_string()))?
+                    {
+                        RecoveryControlResponse::Prepared { handoff } => handoff,
+                        RecoveryControlResponse::Rejected { code } => {
+                            return Err(CliError::RecoveryControl(code));
+                        }
+                        _ => return Err(CliError::RecoveryControl("unexpected_response".into())),
+                    };
+                    write_owner_only_json_atomic(&args.handoff_output, &handoff)?;
+                    write_json(&json!({
+                        "status": "prepared",
+                        "recovery_id": handoff.recovery_id,
+                        "edge_node_id": handoff.edge_node_id,
+                        "old_ledger_epoch": handoff.old_ledger_epoch,
+                        "new_ledger_epoch": handoff.proposed_new_epoch,
+                        "credential_generation": handoff.credential_generation,
+                    }))?;
+                }
+                RecoveryCommand::Authorize(args) => {
+                    let receipt: RestoreReceipt =
+                        serde_json::from_str(&read_owner_only_secret(&args.restore_receipt)?)?;
+                    let request = match call_recovery_control(
+                        &args.control_socket,
+                        &RecoveryControlRequest::Authorize { receipt },
+                    )
+                    .await
+                    .map_err(|error| CliError::RecoveryControl(error.to_string()))?
+                    {
+                        RecoveryControlResponse::Authorized { request } => request,
+                        RecoveryControlResponse::Rejected { code } => {
+                            return Err(CliError::RecoveryControl(code));
+                        }
+                        _ => return Err(CliError::RecoveryControl("unexpected_response".into())),
+                    };
+                    write_json(&json!({
+                        "status": "authorized",
+                        "recovery_id": request.recovery_id,
+                        "edge_node_id": request.edge_node_id,
+                        "candidate_instance_id": request.candidate_instance_id,
+                        "new_ledger_epoch": request.new_ledger_epoch,
+                        "broker_credential_generation": request.broker_credential_generation,
+                        "device_auth_generation": request.device_auth_generation,
+                    }))?;
+                }
+                RecoveryCommand::Report(args) => {
+                    let report = match call_recovery_control(
+                        &args.control_socket,
+                        &RecoveryControlRequest::Report {
+                            recovery_id: args.recovery_id,
+                        },
+                    )
+                    .await
+                    .map_err(|error| CliError::RecoveryControl(error.to_string()))?
+                    {
+                        RecoveryControlResponse::Report { report } => report,
+                        RecoveryControlResponse::Rejected { code } => {
+                            return Err(CliError::RecoveryControl(code));
+                        }
+                        _ => return Err(CliError::RecoveryControl("unexpected_response".into())),
+                    };
+                    write_json(&report)?;
                 }
             }
             Ok(ExitReason::Requested)

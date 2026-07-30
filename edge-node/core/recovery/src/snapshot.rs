@@ -11,6 +11,11 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(target_os = "linux")]
+use std::{
+    ffi::CString,
+    os::{fd::AsRawFd, unix::fs::FileExt},
+};
 
 use iotkit_core_ledger::{SystemId, series_key_of};
 use iotkit_core_ops::{
@@ -21,7 +26,7 @@ use iotkit_core_publish::{
     store::{OutboxRow, select_batch},
     wire::{RecordBatch, publication_id},
 };
-use rusqlite::{Connection, OpenFlags, Transaction, backup::Backup, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, backup::Backup, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -33,6 +38,21 @@ use crate::{
 const ARTIFACT_KIND: &str = "iotkit-node-backup";
 const REMOVE_SNAPSHOT_DEPLOYMENT_CREDENTIALS_OP: &str =
     "recovery.snapshot.remove_deployment_credentials";
+const REMOVE_SNAPSHOT_RECOVERY_PROVENANCE_OP: &str = "recovery.snapshot.remove_recovery_provenance";
+const CANDIDATE_IMMUTABLE_DELETE_TRIGGER: &str = concat!(
+    "CREATE TRIGGER edge_node_recovery_candidate_immutable_delete\n",
+    "BEFORE DELETE ON edge_node_recovery_candidate\n",
+    "BEGIN\n",
+    "  SELECT RAISE(ABORT, 'recovery candidate is immutable');\n",
+    "END;"
+);
+const ACTIVATION_IMMUTABLE_DELETE_TRIGGER: &str = concat!(
+    "CREATE TRIGGER edge_node_recovery_activation_immutable_delete\n",
+    "BEFORE DELETE ON edge_node_recovery_activation\n",
+    "BEGIN\n",
+    "  SELECT RAISE(ABORT, 'recovery activation is immutable');\n",
+    "END;"
+);
 type SchemaObjectKey = (String, String, String);
 type SchemaObjects = BTreeMap<SchemaObjectKey, Option<String>>;
 
@@ -50,6 +70,7 @@ pub struct SnapshotFacts {
     pub ledger_epoch: String,
     pub accepted_cursor: i64,
     pub allocation_high_water: i64,
+    pub epoch_start_publication_seq: Option<i64>,
     pub schema_version: u32,
     pub database_length: u64,
     pub database_sha256: String,
@@ -128,6 +149,7 @@ pub(crate) fn create_consistent_snapshot_with_hook(
             created_at_ms: now_ms,
             accepted_cursor: facts.accepted_cursor,
             allocation_high_water: facts.allocation_high_water,
+            epoch_start_publication_seq: facts.epoch_start_publication_seq,
             snapshot_mode: SnapshotMode::Online,
             shutdown_seal_id: None,
             schema_version: facts.schema_version,
@@ -160,6 +182,93 @@ pub(crate) fn validate_restored_candidate(path: &Path) -> Result<SnapshotFacts, 
     validate_snapshot_inner(path, true)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn validate_anonymous_snapshot(
+    file: &File,
+    staging: &crate::DirectoryCapability,
+) -> Result<SnapshotFacts, RecoveryError> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|_| RecoveryError::Random)?;
+    let name = CString::new(format!(
+        ".iotkit-inspect-{}",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+    .map_err(|_| RecoveryError::Storage)?;
+    if unsafe {
+        libc::linkat(
+            file.as_raw_fd(),
+            c"".as_ptr(),
+            staging.as_raw_fd(),
+            name.as_ptr(),
+            libc::AT_EMPTY_PATH,
+        )
+    } != 0
+    {
+        return Err(RecoveryError::Storage);
+    }
+    let path = PathBuf::from(format!(
+        "/proc/self/fd/{}/{}",
+        staging.as_raw_fd(),
+        name.to_string_lossy()
+    ));
+    let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY);
+    let unlinked = unsafe { libc::unlinkat(staging.as_raw_fd(), name.as_ptr(), 0) } == 0;
+    if !unlinked {
+        return Err(RecoveryError::ArtifactCleanupFailed);
+    }
+    let database = {
+        let conn = connection.map_err(|_| RecoveryError::InvalidSnapshot)?;
+        conn.pragma_update(None, "query_only", "ON")
+            .map_err(|_| RecoveryError::InvalidSnapshot)?;
+        require_canonical_schema(&conn)?;
+        require_integrity(&conn)?;
+        derive_database_facts(&conn, false)?
+    };
+    let database_length = file.metadata().map_err(|_| RecoveryError::Storage)?.len();
+    if database_length == 0 {
+        return Err(RecoveryError::InvalidSnapshot);
+    }
+    Ok(SnapshotFacts {
+        edge_node_id: database.edge_node_id,
+        ledger_epoch: database.ledger_epoch,
+        accepted_cursor: database.accepted_cursor,
+        allocation_high_water: database.allocation_high_water,
+        epoch_start_publication_seq: database.epoch_start_publication_seq,
+        schema_version: database.schema_version,
+        database_length,
+        database_sha256: sha256_open_file(file)?,
+        counts: database.counts,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn sha256_open_file(file: &File) -> Result<String, RecoveryError> {
+    let length = file.metadata().map_err(|_| RecoveryError::Storage)?.len();
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut offset = 0_u64;
+    while offset < length {
+        let read = file
+            .read_at(&mut buffer, offset)
+            .map_err(|_| RecoveryError::Storage)?;
+        if read == 0 {
+            return Err(RecoveryError::Storage);
+        }
+        digest.update(&buffer[..read]);
+        offset = offset
+            .checked_add(u64::try_from(read).map_err(|_| RecoveryError::Storage)?)
+            .ok_or(RecoveryError::Storage)?;
+    }
+    let mut encoded = String::with_capacity(64);
+    for byte in digest.finalize() {
+        write!(&mut encoded, "{byte:02x}").map_err(|_| RecoveryError::Storage)?;
+    }
+    Ok(encoded)
+}
+
 fn validate_snapshot_inner(
     path: &Path,
     allow_candidate: bool,
@@ -188,6 +297,7 @@ fn validate_snapshot_inner(
         ledger_epoch: database.ledger_epoch,
         accepted_cursor: database.accepted_cursor,
         allocation_high_water: database.allocation_high_water,
+        epoch_start_publication_seq: database.epoch_start_publication_seq,
         schema_version: database.schema_version,
         database_length,
         database_sha256,
@@ -202,6 +312,7 @@ pub fn recovery_descriptors() -> &'static [OpDescriptor] {
             let mut descriptors = vec![remove_deployment_credentials_descriptor()];
             descriptors.extend(crate::backup::backup_descriptors());
             descriptors.extend(crate::restore::restore_descriptors());
+            descriptors.extend(crate::control::control_descriptors());
             descriptors
         })
         .as_slice()
@@ -278,6 +389,43 @@ fn sanitize_snapshot(path: &Path, hook: &impl SnapshotHook) -> Result<(), Recove
         },
     )
     .map_err(|_| RecoveryError::InvalidSnapshot)?;
+    let recovery_activation_rows = if conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema
+             WHERE type='table' AND name='edge_node_recovery_activation'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| RecoveryError::InvalidSnapshot)?
+        == 1
+    {
+        count(&conn, "edge_node_recovery_activation")?
+    } else {
+        0
+    };
+    let recovery_rows = count(&conn, "edge_node_recovery_candidate")?
+        .checked_add(recovery_activation_rows)
+        .ok_or(RecoveryError::InvalidSnapshot)?;
+    if recovery_rows > 0 {
+        dispatch(
+            &conn,
+            &[remove_recovery_provenance_descriptor()],
+            DispatchRequest {
+                op: REMOVE_SNAPSHOT_RECOVERY_PROVENANCE_OP.into(),
+                params: json!({"recovery_provenance": "[REDACTED]"}),
+                dry_run: false,
+                actor: Actor {
+                    actor_id: "recovery-snapshot".into(),
+                    actor_kind: ActorKind::LocalCli,
+                    tier_ceiling: Tier::Construction,
+                },
+                source: None,
+                step_up_verified: true,
+                clock_trust: None,
+            },
+        )
+        .map_err(|_| RecoveryError::InvalidSnapshot)?;
+    }
     hook.at(SnapshotHookPoint::AfterCredentialUpdate)?;
     hook.at(SnapshotHookPoint::BeforeVacuum)?;
     conn.execute_batch("VACUUM")
@@ -296,6 +444,21 @@ fn remove_deployment_credentials_descriptor() -> OpDescriptor {
         preconditions: remove_credentials_preconditions,
         dry_run: remove_credentials_dry_run,
         execute: remove_credentials_execute,
+        secret_execute: None,
+    }
+}
+
+fn remove_recovery_provenance_descriptor() -> OpDescriptor {
+    OpDescriptor {
+        name: REMOVE_SNAPSHOT_RECOVERY_PROVENANCE_OP,
+        tier: Tier::Construction,
+        bulk_escalates: false,
+        changes_state: true,
+        params_schema: || json!({"required": ["recovery_provenance"]}),
+        targets: |_| Vec::new(),
+        preconditions: remove_recovery_provenance_preconditions,
+        dry_run: remove_recovery_provenance_dry_run,
+        execute: remove_recovery_provenance_execute,
         secret_execute: None,
     }
 }
@@ -335,11 +498,54 @@ fn remove_credentials_execute(
     Ok(json!({"sanitized": "deployment_credentials"}))
 }
 
+fn remove_recovery_provenance_preconditions(
+    _tx: &Transaction<'_>,
+    context: &OpContext<'_>,
+) -> Result<(), OpError> {
+    if context.actor_id != "recovery-snapshot"
+        || context
+            .params
+            .get("recovery_provenance")
+            .and_then(Value::as_str)
+            != Some("[REDACTED]")
+    {
+        return Err(OpError::Validation(
+            "snapshot recovery provenance parameter must be redacted".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn remove_recovery_provenance_dry_run(
+    _tx: &Transaction<'_>,
+    _context: &OpContext<'_>,
+) -> Result<Value, OpError> {
+    Ok(json!({"would": "remove_recovery_provenance"}))
+}
+
+fn remove_recovery_provenance_execute(
+    tx: &Transaction<'_>,
+    _context: &OpContext<'_>,
+) -> Result<Value, OpError> {
+    tx.execute_batch(
+        "DROP TRIGGER edge_node_recovery_candidate_immutable_delete;
+         DELETE FROM edge_node_recovery_candidate;",
+    )?;
+    tx.execute_batch(CANDIDATE_IMMUTABLE_DELETE_TRIGGER)?;
+    tx.execute_batch(
+        "DROP TRIGGER edge_node_recovery_activation_immutable_delete;
+         DELETE FROM edge_node_recovery_activation;",
+    )?;
+    tx.execute_batch(ACTIVATION_IMMUTABLE_DELETE_TRIGGER)?;
+    Ok(json!({"sanitized": "recovery_provenance"}))
+}
+
 struct DatabaseFacts {
     edge_node_id: String,
     ledger_epoch: String,
     accepted_cursor: i64,
     allocation_high_water: i64,
+    epoch_start_publication_seq: Option<i64>,
     schema_version: u32,
     counts: BackupCounts,
 }
@@ -434,9 +640,18 @@ fn derive_database_facts(
         accepted_cursor,
         allocation_high_water,
     )?;
-    let schema_version = all_edge_node_migrations()
+    let epoch_start_publication_seq: Option<i64> = conn
+        .query_row(
+            "SELECT pub_seq FROM publication_log
+             WHERE epoch=?1 AND kind='annotation' AND subtype='epoch_start'",
+            [&identity.ledger_epoch],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| RecoveryError::InvalidSnapshot)?;
+    let schema_version = migration_rows(conn)?
         .last()
-        .map(|migration| migration.version)
+        .map(|(version, _)| *version)
         .ok_or(RecoveryError::InvalidSnapshot)?;
     let counts = derive_counts(conn, activation_rows)?;
     Ok(DatabaseFacts {
@@ -444,6 +659,7 @@ fn derive_database_facts(
         ledger_epoch: identity.ledger_epoch,
         accepted_cursor,
         allocation_high_water,
+        epoch_start_publication_seq,
         schema_version,
         counts,
     })
@@ -739,10 +955,27 @@ fn require_integrity(conn: &Connection) -> Result<(), RecoveryError> {
 }
 
 fn require_canonical_schema(conn: &Connection) -> Result<(), RecoveryError> {
+    let observed = migration_rows(conn)?;
+    let observed_version = observed
+        .last()
+        .map(|(version, _)| *version)
+        .ok_or(RecoveryError::InvalidSnapshot)?;
+    let all_migrations = all_edge_node_migrations();
+    let current_version = all_migrations
+        .last()
+        .map(|migration| migration.version)
+        .ok_or(RecoveryError::InvalidSnapshot)?;
+    if !(crate::MIN_RESTORABLE_SCHEMA_VERSION..=current_version).contains(&observed_version) {
+        return Err(RecoveryError::InvalidSnapshot);
+    }
+    let supported_migrations = all_migrations
+        .into_iter()
+        .take_while(|migration| migration.version <= observed_version)
+        .collect::<Vec<_>>();
     let canonical = Connection::open_in_memory().map_err(|_| RecoveryError::InvalidSnapshot)?;
-    iotkit_core_storage::run_migrations(&canonical, &all_edge_node_migrations())
+    iotkit_core_storage::run_migrations(&canonical, &supported_migrations)
         .map_err(|_| RecoveryError::InvalidSnapshot)?;
-    if migration_rows(conn)? != migration_rows(&canonical)?
+    if observed != migration_rows(&canonical)?
         || schema_objects(conn)? != schema_objects(&canonical)?
     {
         return Err(RecoveryError::InvalidSnapshot);

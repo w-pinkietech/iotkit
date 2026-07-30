@@ -6,10 +6,12 @@ use tokio_util::sync::CancellationToken;
 use super::IngestProcessor;
 use iotkit_edge_custody_contract::{MAX_BATCH_BYTES, MAX_DESCRIPTOR_BYTES};
 
-const SUBSCRIPTIONS: [&str; 3] = [
+const SUBSCRIPTIONS: [&str; 5] = [
     "iotkit/v1/edge-nodes/+/records",
     "iotkit/v1/edge-nodes/+/descriptors",
     "iotkit/v1/edge-nodes/+/activation/result",
+    "iotkit/v1/edge-nodes/+/recovery/result",
+    "iotkit/v1/edge-nodes/+/recovery/completion-ack",
 ];
 const MAX_MQTT_TOPIC_BYTES: usize = u16::MAX as usize;
 const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
@@ -180,6 +182,36 @@ impl IngestRuntime {
                                     activation_id = %command.activation_id,
                                     %error,
                                     "MQTT activation request queue is not currently writable"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    for command in storage
+                        .pending_recovery_commands_due(256, unix_millis())
+                        .await?
+                    {
+                        match client.try_publish(
+                            &command.topic,
+                            QoS::AtLeastOnce,
+                            false,
+                            command.payload_json,
+                        ) {
+                            Ok(()) => {
+                                storage
+                                    .mark_recovery_attempt(
+                                        &command.recovery_id,
+                                        &command.kind,
+                                        unix_millis(),
+                                    )
+                                    .await?;
+                            }
+                            Err(error) => {
+                                tracing::debug!(
+                                    recovery_id = %command.recovery_id,
+                                    kind = %command.kind,
+                                    %error,
+                                    "MQTT recovery command queue is not currently writable"
                                 );
                                 break;
                             }

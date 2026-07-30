@@ -17,7 +17,10 @@ export TMPDIR="${TMPDIR:-$repo_root/../.tmp/runtime}"
 mkdir -p "$TMPDIR"
 
 echo "== PostgreSQL clean install, HTTPS login, two Edge Nodes, activation, raw custody =="
-IOTKIT_TEST_STORAGE_PROFILE=postgres "$repo_root/scripts/test-edge-bootstrap.sh"
+IOTKIT_TEST_STORAGE_PROFILE=postgres \
+  IOTKIT_TEST_RECOVERY_DRILL=1 \
+  IOTKIT_RECOVERY_EVIDENCE_DIR="$report_dir/edge-node-recovery" \
+  "$repo_root/scripts/test-edge-bootstrap.sh"
 
 echo "== PostgreSQL Console operator journey =="
 IOTKIT_TEST_STORAGE_PROFILE=postgres "$repo_root/scripts/test-edge-console-e2e.sh"

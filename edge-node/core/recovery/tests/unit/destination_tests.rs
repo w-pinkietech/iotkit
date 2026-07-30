@@ -262,12 +262,22 @@ fn staging_verification_rejects_non_tmpfs_parent_without_creating_a_leaf() {
 #[cfg(target_os = "linux")]
 #[test]
 fn staging_verification_accepts_the_real_run_tmpfs_parent() {
+    use std::ffi::CString;
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     if unsafe { libc::geteuid() } != 0 {
         // Production systemd runs this operation as root; an unprivileged
         // test account cannot create the owner-bound RuntimeDirectory leaf.
+        return;
+    }
+    let run = CString::new("/run").unwrap();
+    let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    if unsafe { libc::statfs(run.as_ptr(), filesystem.as_mut_ptr()) } != 0
+        || unsafe { filesystem.assume_init() }.f_type as libc::c_long != libc::TMPFS_MAGIC
+    {
+        // Minimal containers do not necessarily mount the host-style /run
+        // tmpfs. The rejection path remains covered by the focused tests.
         return;
     }
     let root = TempDir::new_in("/dev/shm").unwrap();
@@ -861,6 +871,7 @@ fn retention_manifest(backup_id: &str, created_at_ms: i64) -> NodeBackupManifest
         created_at_ms,
         accepted_cursor: 0,
         allocation_high_water: 0,
+        epoch_start_publication_seq: None,
         snapshot_mode: SnapshotMode::Online,
         shutdown_seal_id: None,
         schema_version: 23,

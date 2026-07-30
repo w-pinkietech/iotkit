@@ -1642,12 +1642,15 @@ dependencies = [
  "iotkit-ingest-contract",
  "libc",
  "reqwest",
+ "rumqttc",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "time",
+ "tokio",
 ]
 
 [[package]]

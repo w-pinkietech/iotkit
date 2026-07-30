@@ -189,6 +189,7 @@ origin="http://127.0.0.1:$port"
   --http-listen "127.0.0.1:$port" \
   --public-origin "$origin" \
   --development-http \
+  --recovery-control-socket "$e2e_dir/recovery-control.sock" \
   >"$e2e_dir/edge.log" 2>&1 &
 edge_pid=$!
 

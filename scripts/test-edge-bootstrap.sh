@@ -8,6 +8,7 @@ export TMPDIR="${TMPDIR:-$repo_root/../.tmp/runtime}"
 mkdir -p "$TMPDIR"
 cargo_target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
 scratch=$(mktemp -d)
+scratch=$(realpath "$scratch")
 output="$scratch/edge-install"
 project="iotkit-edge-bootstrap-test-$$"
 port=$((20000 + $$ % 20000))
@@ -22,6 +23,8 @@ edge_pid=""
 edge2_pid=""
 compose_started=false
 compose=()
+backup_destination=""
+backup_staging_parent=""
 repo_test_parent=$(mktemp -d "$repo_root/.bootstrap-repo-test.XXXXXX")
 repo_symlink_output="$repo_test_parent/symlink-output"
 
@@ -38,6 +41,8 @@ cleanup() {
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
   rm -rf "$repo_test_parent"
+  [[ -z "$backup_destination" ]] || rm -rf "$backup_destination"
+  [[ -z "$backup_staging_parent" ]] || rm -rf "$backup_staging_parent"
   rm -rf "$scratch"
 }
 trap cleanup EXIT
@@ -152,6 +157,9 @@ docker compose --env-file "$postgres_output/edge.env" \
   -f "$repo_root/deploy/compose.edge-postgres.yaml" \
   config >"$scratch/postgres-compose.rendered"
 grep -Fq 'IOTKIT_EXPECTED_STORAGE_PROFILE: postgres' "$scratch/postgres-compose.rendered"
+grep -Fq 'IOTKIT_STORAGE_PROFILE: postgres' "$scratch/postgres-compose.rendered"
+grep -Fq 'IOTKIT_POSTGRES_CONFIG: /run/iotkit/postgres.json' \
+  "$scratch/postgres-compose.rendered"
 grep -Fq 'shm_size:' "$scratch/postgres-compose.rendered"
 
 repo_output="$repo_test_parent/direct-output"
@@ -255,10 +263,18 @@ grep -Fxq "user $edge_node_id" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/records" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result" "$output/mosquitto/acl"
+grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result" "$output/mosquitto/acl"
 grep -Fxq "topic read iotkit/v1/edge-nodes/$edge_node_id/activation/request" "$output/mosquitto/acl"
+grep -Fxq "topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/request" "$output/mosquitto/acl"
+grep -Fxq "topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion" "$output/mosquitto/acl"
+grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/completion-ack" "$output/mosquitto/acl"
 grep -Fxq "topic read iotkit/v1/edge-nodes/+/descriptors" "$output/mosquitto/acl"
 grep -Fxq "topic read iotkit/v1/edge-nodes/+/activation/result" "$output/mosquitto/acl"
+grep -Fxq "topic read iotkit/v1/edge-nodes/+/recovery/result" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/+/activation/request" "$output/mosquitto/acl"
+grep -Fxq "topic write iotkit/v1/edge-nodes/+/recovery/request" "$output/mosquitto/acl"
+grep -Fxq "topic write iotkit/v1/edge-nodes/+/recovery/completion" "$output/mosquitto/acl"
+grep -Fxq "topic read iotkit/v1/edge-nodes/+/recovery/completion-ack" "$output/mosquitto/acl"
 grep -Fxq 'topic write iotkit/v1/application/production-pulses' "$output/mosquitto/acl"
 grep -Fq 'allow_anonymous false' "$output/mosquitto/mosquitto.conf"
 grep -Fq 'listener 8883 0.0.0.0' "$output/mosquitto/mosquitto.conf"
@@ -321,6 +337,10 @@ fi
 grep -Fq 'image: eclipse-mosquitto:2.0.22' "$scratch/compose.rendered"
 grep -Fq 'no-new-privileges:true' "$scratch/compose.rendered"
 grep -Fq '/run/iotkit-tmp:mode=0700' "$scratch/compose.rendered"
+if grep -Fq -- '--postgres-config' "$scratch/compose.rendered"; then
+  echo "embedded Compose command unexpectedly includes PostgreSQL configuration" >&2
+  exit 1
+fi
 grep -Fq 'pids_limit: 128' "$scratch/compose.rendered"
 grep -Eq 'mem_limit: ("?268435456"?|256m)' "$scratch/compose.rendered"
 grep -A2 -F 'cap_drop:' "$scratch/compose.rendered" | grep -Fq 'ALL'
@@ -357,6 +377,18 @@ for _ in $(seq 1 60); do
     stored_edge_id=$("${compose[@]}" exec -T postgres \
       psql --username iotkit --dbname iotkit --tuples-only --no-align \
       --command 'SELECT edge_id FROM edge_meta WHERE singleton=1' 2>/dev/null || true)
+  elif [[ "${IOTKIT_TEST_EDGE_IDENTITY_VIA_RUNTIME:-0}" == 1 ]]; then
+    edge_container=$("${compose[@]}" ps -q edge)
+    configured_edge_id=$(docker inspect --format '{{json .Config.Cmd}}' "$edge_container" \
+      | jq -r 'index("--edge-id") as $index
+        | if $index == null then empty else .[$index + 1] end')
+    if [[ "$configured_edge_id" == "$edge_id" ]] \
+      && [[ "$(docker inspect --format '{{.State.Running}}' "$edge_container")" == true ]]; then
+      sleep 1
+      if [[ "$(docker inspect --format '{{.State.Running}}' "$edge_container")" == true ]]; then
+        stored_edge_id=$configured_edge_id
+      fi
+    fi
   else
     stored_edge_id=$(sqlite3 "$output/data/edge/edge.db" \
       "SELECT edge_id FROM edge_meta WHERE singleton=1" 2>/dev/null || true)
@@ -383,17 +415,21 @@ for _ in $(seq 1 60); do
 done
 [[ "${login_code:-}" == 201 ]] || {
   "${compose[@]}" ps --all || true
-  "${compose[@]}" logs caddy edge broker postgres || true
+  "${compose[@]}" logs caddy edge broker || true
+  if [[ "$storage_profile" == "postgres" ]]; then
+    "${compose[@]}" logs postgres || true
+  fi
   echo "Caddy HTTPS Edge login failed: ${login_code:-no response}" >&2
   exit 1
 }
 csrf_token=$(jq -er '.csrf_token | select(type == "string" and length > 0)' \
   "$scratch/login-response.json")
 curl -sS --cacert "$scratch/ca.pem" -b "$scratch/cookies" \
-  "https://localhost:$edge_port/status" |
-  grep -Fq 'システム概要'
-if curl -sS "http://localhost:$edge_port/status" 2>/dev/null |
-  grep -Fq 'システム概要'; then
+  "https://localhost:$edge_port/status" >"$scratch/status-response.html"
+grep -Fq 'システム概要' "$scratch/status-response.html"
+if curl -sS "http://localhost:$edge_port/status" \
+  >"$scratch/plaintext-status-response.html" 2>/dev/null &&
+  grep -Fq 'システム概要' "$scratch/plaintext-status-response.html"; then
   echo "IoTKit Console was served as plaintext HTTP" >&2
   exit 1
 fi
@@ -608,9 +644,328 @@ done
   exit 1
 }
 
-kill -INT "$edge_pid"
-wait "$edge_pid"
-edge_pid=""
+if [[ "${IOTKIT_TEST_RECOVERY_DRILL:-0}" == 1 ]]; then
+  kill -INT "$edge_pid"
+  wait "$edge_pid"
+  edge_pid=""
+
+  tail_output=$("$cargo_target_dir/debug/iotkit-edge-nodectl" \
+    --db "$scratch/edge.db" smoke enqueue)
+  tail_epoch=$(jq -er '.ledger_epoch' <<<"$tail_output")
+  tail_pub_seq=$(jq -er '.pub_seq' <<<"$tail_output")
+
+  backup_destination=$(mktemp -d /dev/shm/iotkit-recovery-destination.XXXXXX)
+  backup_staging_parent=$(mktemp -d /dev/shm/iotkit-recovery-staging-parent.XXXXXX)
+  backup_staging="$backup_staging_parent/staging"
+  chmod 700 "$backup_destination" "$backup_staging_parent"
+  printf 'recovery-drill-owner-only-passphrase\n' >"$scratch/node-backup-passphrase"
+  chmod 600 "$scratch/node-backup-passphrase"
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" backup configure \
+    --config "$scratch/node-backup.json" \
+    --db "$scratch/edge.db" \
+    --destination "$backup_destination" \
+    --staging-directory "$backup_staging" \
+    --passphrase-file "$scratch/node-backup-passphrase" \
+    --freshness-seconds 86400 --retention-count 2 \
+    --systemd-drop-in "$scratch/node-backup.mount.conf" >/dev/null
+  backup_created=$(TMPDIR=/dev/shm "$cargo_target_dir/debug/iotkit-edge-nodectl" \
+    backup create --config "$scratch/node-backup.json")
+  backup_id=$(jq -er '.backup_id' <<<"$backup_created")
+  selected_backup="$backup_destination/$backup_id.iotkit-node-backup"
+  [[ -f "$selected_backup" ]]
+
+  awk '!/\/recovery\//' "$output/mosquitto/acl" >"$scratch/legacy.acl"
+  chown --reference="$output/mosquitto/acl" "$scratch/legacy.acl"
+  chmod --reference="$output/mosquitto/acl" "$scratch/legacy.acl"
+  mv "$scratch/legacy.acl" "$output/mosquitto/acl"
+  "${compose[@]}" restart broker >/dev/null
+  if "$repo_root/scripts/fence-edge-node.sh" \
+    --edge-dir "$output" --edge-node-id "$edge_node_id" \
+    --output-directory "$output/recovery/preflight-must-fail" \
+    >"$scratch/fence-preflight.stdout" 2>"$scratch/fence-preflight.stderr"; then
+    echo "credential fence accepted a legacy ACL" >&2
+    exit 1
+  fi
+  grep -Fq 'Recovery ACL is not current' "$scratch/fence-preflight.stderr"
+  [[ ! -e "$output/recovery/preflight-must-fail" ]]
+
+  "$repo_root/scripts/upgrade-edge-node-recovery-acl.sh" \
+    --edge-dir "$output" --edge-node-id "$edge_node_id" >/dev/null
+  case_name="recovery-drill"
+  "$repo_root/scripts/fence-edge-node.sh" \
+    --edge-dir "$output" --edge-node-id "$edge_node_id" \
+    --output-directory "$output/recovery/$case_name" >/dev/null
+
+  "$cargo_target_dir/debug/iotkit-edge-node" --config "$scratch/edge.toml" \
+    >"$scratch/fenced-old-host.log" 2>&1 &
+  fenced_old_host_pid=$!
+  sleep 3
+  kill -INT "$fenced_old_host_pid" 2>/dev/null || true
+  wait "$fenced_old_host_pid" 2>/dev/null || true
+  "${compose[@]}" logs broker >"$scratch/fenced-old-host-broker.log" 2>&1
+  if ! grep -Eqi 'not authori[sz]ed|bad user name or password' \
+    "$scratch/fenced-old-host.log" "$scratch/fenced-old-host-broker.log"; then
+    echo "fenced old host did not receive an explicit authentication rejection" >&2
+    exit 1
+  fi
+
+  inspect_staging=$(mktemp -d /dev/shm/iotkit-recovery-inspect.XXXXXX)
+  chmod 700 "$inspect_staging"
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" backup inspect \
+    --input "$selected_backup" \
+    --passphrase-file "$scratch/node-backup-passphrase" \
+    --staging-directory "$inspect_staging" \
+    >"$output/recovery/$case_name/backup-inspection.json"
+  rm -rf "$inspect_staging"
+  chmod 600 "$output/recovery/$case_name/backup-inspection.json"
+
+  "${compose[@]}" exec --user 0 -T edge iotkit-edge recovery prepare \
+    --control-socket /data/recovery-control.sock \
+    --backup-inspection "/recovery/$case_name/backup-inspection.json" \
+    --broker-fence-receipt "/recovery/$case_name/broker-fence-receipt.json" \
+    --handoff-output "/recovery/$case_name/recovery-handoff.json" \
+    >"$scratch/recovery-prepare.json"
+  if [[ -n "${IOTKIT_TEST_ROOT_EXEC_CONTAINER:-}" ]]; then
+    recovery_id=$(docker exec --user root "$IOTKIT_TEST_ROOT_EXEC_CONTAINER" \
+      jq -er '.recovery_id' \
+      "$output/recovery/$case_name/recovery-handoff.json")
+  else
+    "${compose[@]}" exec --user 0 -T edge \
+      chown "$(id -u):$(id -g)" "/recovery/$case_name/recovery-handoff.json"
+    recovery_id=$(jq -er '.recovery_id' \
+      "$output/recovery/$case_name/recovery-handoff.json")
+  fi
+
+  candidate_parent="$scratch/recovered-node"
+  candidate_db="$candidate_parent/edge.db"
+  runtime_uid=$(id -u)
+  runtime_gid=$(id -g)
+  candidate_service_account_handoff_verified=false
+  restore_passphrase="$scratch/node-backup-passphrase"
+  restore_handoff="$output/recovery/$case_name/recovery-handoff.json"
+  if [[ -n "${IOTKIT_TEST_ROOT_EXEC_CONTAINER:-}" ]]; then
+    ((runtime_uid != 0)) || {
+      echo "root-to-service-account evidence requires a non-root runtime UID" >&2
+      exit 1
+    }
+    restore_passphrase="$scratch/runtime-node-backup-passphrase"
+    docker exec --user root "$IOTKIT_TEST_ROOT_EXEC_CONTAINER" \
+      install -d -m 700 "$candidate_parent"
+    [[ "$(stat -c %u "$candidate_parent")" == 0 ]]
+    docker exec --user root "$IOTKIT_TEST_ROOT_EXEC_CONTAINER" \
+      chown "$runtime_uid:$runtime_gid" "$candidate_parent" "$restore_handoff"
+    docker exec --user root "$IOTKIT_TEST_ROOT_EXEC_CONTAINER" \
+      install -o "$runtime_uid" -g "$runtime_gid" -m 600 \
+      "$scratch/node-backup-passphrase" "$restore_passphrase"
+    candidate_service_account_handoff_verified=true
+  else
+    mkdir -m 700 "$candidate_parent"
+  fi
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" backup restore \
+    --input "$selected_backup" \
+    --candidate-db "$candidate_db" --live-db "$scratch/edge.db" \
+    --staging-directory /dev/shm \
+    --passphrase-file "$restore_passphrase" \
+    --recovery-handoff "$restore_handoff" \
+    >"$output/recovery/$case_name/restore-receipt.json"
+  chmod 600 "$output/recovery/$case_name/restore-receipt.json"
+  [[ "$(stat -c %u "$candidate_parent")" == "$runtime_uid" ]]
+  [[ "$(stat -c %g "$candidate_parent")" == "$runtime_gid" ]]
+  [[ "$(stat -c %u "$candidate_db")" == "$runtime_uid" ]]
+  [[ "$(stat -c %g "$candidate_db")" == "$runtime_gid" ]]
+  "${compose[@]}" exec --user 0 -T edge iotkit-edge recovery authorize \
+    --control-socket /data/recovery-control.sock \
+    --restore-receipt "/recovery/$case_name/restore-receipt.json" \
+    >"$scratch/recovery-authorize.json"
+
+  "${compose[@]}" stop broker >/dev/null
+  if "$cargo_target_dir/debug/iotkit-edge-nodectl" backup activate \
+    --candidate-db "$candidate_db" \
+    --broker-host localhost --broker-port "$port" \
+    --password-file "$output/recovery/$case_name/mqtt-password" \
+    --ca-file "$output/tls/ca.pem" --timeout-seconds 3 \
+    >"$scratch/recovery-broker-outage.stdout" \
+    2>"$scratch/recovery-broker-outage.stderr"; then
+    echo "recovery unexpectedly completed while the Broker was stopped" >&2
+    exit 1
+  fi
+  "${compose[@]}" start broker >/dev/null
+
+  "${compose[@]}" stop edge >/dev/null
+  if "$cargo_target_dir/debug/iotkit-edge-nodectl" backup activate \
+    --candidate-db "$candidate_db" \
+    --broker-host localhost --broker-port "$port" \
+    --password-file "$output/recovery/$case_name/mqtt-password" \
+    --ca-file "$output/tls/ca.pem" --timeout-seconds 3 \
+    >"$scratch/recovery-first-activate.stdout" \
+    2>"$scratch/recovery-first-activate.stderr"; then
+    echo "recovery unexpectedly completed while IoTKit Edge was stopped" >&2
+    exit 1
+  fi
+  "${compose[@]}" start edge >/dev/null
+  for _ in $(seq 1 60); do
+    [[ -S "$output/data/edge/recovery-control.sock" ]] && break
+    sleep 1
+  done
+  [[ -S "$output/data/edge/recovery-control.sock" ]]
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" backup activate \
+    --candidate-db "$candidate_db" \
+    --broker-host localhost --broker-port "$port" \
+    --password-file "$output/recovery/$case_name/mqtt-password" \
+    --ca-file "$output/tls/ca.pem" --timeout-seconds 60 \
+    >"$scratch/recovery-second-activate.json"
+
+  "${compose[@]}" exec --user 0 -T edge iotkit-edge recovery report \
+    --control-socket /data/recovery-control.sock --recovery-id "$recovery_id" \
+    >"$output/recovery/$case_name/final-report.json"
+  jq -e '.state == "completed" and .completion_acknowledged == true' \
+    "$output/recovery/$case_name/final-report.json" >/dev/null
+
+  recovery_owner_input="$scratch/recovery-owner-input"
+  (umask 077; printf '%s\n%s\n' \
+    'recovery-drill-new-owner-passphrase' \
+    'recovery-drill-new-owner-passphrase' >"$recovery_owner_input")
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" --db "$candidate_db" \
+    passphrase reset <"$recovery_owner_input" \
+    >"$scratch/recovery-owner-reset.stdout"
+  rm -f "$recovery_owner_input"
+  grep -Fx 'passphrase reset' "$scratch/recovery-owner-reset.stdout" >/dev/null
+
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" backup configure \
+    --config "$scratch/node-backup.json" \
+    --db "$candidate_db" \
+    --destination "$backup_destination" \
+    --staging-directory "$backup_staging" \
+    --passphrase-file "$scratch/node-backup-passphrase" \
+    --freshness-seconds 86400 --retention-count 2 \
+    --systemd-drop-in "$scratch/node-backup.mount.conf" \
+    --replace-existing >/dev/null
+  post_recovery_backup_created=$(
+    TMPDIR=/dev/shm "$cargo_target_dir/debug/iotkit-edge-nodectl" \
+      backup create --config "$scratch/node-backup.json"
+  )
+  post_recovery_backup_id=$(jq -er '.backup_id' <<<"$post_recovery_backup_created")
+  post_recovery_artifact="$backup_destination/$post_recovery_backup_id.iotkit-node-backup"
+  [[ -f "$post_recovery_artifact" ]]
+  post_recovery_inspect_staging=$(
+    mktemp -d /dev/shm/iotkit-recovery-post-inspect.XXXXXX
+  )
+  chmod 700 "$post_recovery_inspect_staging"
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" backup inspect \
+    --input "$post_recovery_artifact" \
+    --passphrase-file "$scratch/node-backup-passphrase" \
+    --staging-directory "$post_recovery_inspect_staging" \
+    >"$output/recovery/$case_name/post-recovery-backup-inspection.json"
+  rm -rf "$post_recovery_inspect_staging"
+  "$cargo_target_dir/debug/iotkit-edge-nodectl" backup status \
+    --config "$scratch/node-backup.json" \
+    >"$output/recovery/$case_name/post-recovery-backup-status.json"
+  jq -e --arg backup_id "$post_recovery_backup_id" \
+    '.status == "authenticated" and .backup_id == $backup_id' \
+    "$output/recovery/$case_name/post-recovery-backup-inspection.json" >/dev/null
+  jq -e --arg backup_id "$post_recovery_backup_id" \
+    '.status == "healthy" and .backup_id == $backup_id' \
+    "$output/recovery/$case_name/post-recovery-backup-status.json" >/dev/null
+
+  cat >"$scratch/recovered-edge.toml" <<EOF
+[edge_node]
+db_path = "$candidate_db"
+health_json_path = "$scratch/recovered-health.json"
+
+[adapters.bravepi]
+enabled = false
+
+[adapters.rpi_local]
+enabled = false
+
+[api]
+enabled = false
+
+[exit.mqtt]
+enabled = true
+host = "localhost"
+port = $port
+password_file = "$output/recovery/$case_name/mqtt-password"
+trust_mode = "bundle_only"
+ca_file = "$output/tls/ca.pem"
+EOF
+  "$cargo_target_dir/debug/iotkit-edge-node" --config "$scratch/recovered-edge.toml" \
+    >"$scratch/recovered-edge.log" 2>&1 &
+  edge_pid=$!
+  recovered_runtime_uid=$(awk '/^Uid:/ { print $2 }' "/proc/$edge_pid/status")
+  [[ "$recovered_runtime_uid" == "$runtime_uid" ]]
+  converged=false
+  for _ in $(seq 1 60); do
+    "${compose[@]}" exec --user 0 -T edge iotkit-edge recovery report \
+      --control-socket /data/recovery-control.sock --recovery-id "$recovery_id" \
+      >"$output/recovery/$case_name/final-report.json"
+    if jq -e \
+      '.state == "completed"
+       and .completion_acknowledged == true
+       and .cursor_converged == true' \
+      "$output/recovery/$case_name/final-report.json" >/dev/null; then
+      converged=true
+      break
+    fi
+    sleep 1
+  done
+  [[ "$converged" == true ]] || {
+    "${compose[@]}" logs broker edge
+    sed -n '1,200p' "$scratch/recovered-edge.log"
+    cat "$output/recovery/$case_name/final-report.json"
+    echo "recovered Edge Node cursor did not converge" >&2
+    exit 1
+  }
+  jq -e --arg epoch "$tail_epoch" --argjson sequence "$tail_pub_seq" \
+    '.old_ledger_epoch == $epoch
+     and .snapshot_allocation_high_water >= $sequence
+     and .replayed_records >= 1' \
+    "$output/recovery/$case_name/final-report.json" >/dev/null
+
+  evidence_directory=${IOTKIT_RECOVERY_EVIDENCE_DIR:-"/tmp/iotkit-recovery-evidence-$(date +%Y%m%d%H%M%S)-$$"}
+  [[ ! -e "$evidence_directory" ]]
+  mkdir -m 700 -p "$(dirname "$evidence_directory")"
+  mkdir -m 700 "$evidence_directory"
+  cp "$output/recovery/$case_name/final-report.json" \
+    "$evidence_directory/final-report.json"
+  cp "$output/recovery/$case_name/post-recovery-backup-inspection.json" \
+    "$output/recovery/$case_name/post-recovery-backup-status.json" \
+    "$evidence_directory/"
+  jq -n \
+    --arg storage_profile "$storage_profile" \
+    --argjson legacy_acl_upgraded true \
+    --argjson fenced_old_host_rejected true \
+    --argjson candidate_runtime_ownership_verified true \
+    --argjson candidate_service_account_handoff_verified \
+      "$candidate_service_account_handoff_verified" \
+    --argjson first_activate_failed_closed true \
+    --argjson broker_outage_failed_closed true \
+    --argjson completion_acknowledged true \
+    --argjson ownership_reestablished true \
+    --argjson post_recovery_backup_verified true \
+    --argjson cursor_converged true \
+    '{
+      storage_profile: $storage_profile,
+      legacy_acl_upgraded: $legacy_acl_upgraded,
+      fenced_old_host_rejected: $fenced_old_host_rejected,
+      candidate_runtime_ownership_verified: $candidate_runtime_ownership_verified,
+      candidate_service_account_handoff_verified: $candidate_service_account_handoff_verified,
+      first_activate_failed_closed: $first_activate_failed_closed,
+      broker_outage_failed_closed: $broker_outage_failed_closed,
+      completion_acknowledged: $completion_acknowledged,
+      ownership_reestablished: $ownership_reestablished,
+      post_recovery_backup_verified: $post_recovery_backup_verified,
+      cursor_converged: $cursor_converged
+    }' >"$evidence_directory/drill-summary.json"
+  chmod 600 "$evidence_directory"/*.json
+  echo "Recovery drill evidence: $evidence_directory"
+fi
+
+if [[ -n "$edge_pid" ]]; then
+  kill -INT "$edge_pid"
+  wait "$edge_pid"
+  edge_pid=""
+fi
 kill -INT "$edge2_pid"
 wait "$edge2_pid"
 edge2_pid=""

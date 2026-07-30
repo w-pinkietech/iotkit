@@ -885,6 +885,53 @@ fn create_fixture() -> CreateFixture {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn legacy_v1_manifest_derives_unaccepted_epoch_start_from_authenticated_database() {
+    let fixture = create_fixture();
+    let conn = rusqlite::Connection::open(&fixture.config.database).unwrap();
+    conn.execute(
+        "UPDATE publication_log
+         SET kind='annotation',subtype='epoch_start',reading_seq=NULL,
+             annotation_json='{\"prior_epoch\":\"epoch-A\"}'
+         WHERE pub_seq=2",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    drop(conn);
+
+    let snapshot_path = fixture.staging.path().join("legacy-snapshot.sqlite");
+    let snapshot =
+        create_consistent_snapshot(&fixture.config.database, &snapshot_path, "legacy-backup", 9)
+            .unwrap();
+    assert_eq!(snapshot.manifest.epoch_start_publication_seq, Some(2));
+    let mut legacy_manifest = snapshot.manifest;
+    legacy_manifest.epoch_start_publication_seq = None;
+    let destination = crate::DirectoryCapability::open(fixture.destination.path()).unwrap();
+    encrypt_container(
+        &snapshot_path,
+        &legacy_manifest,
+        &fixture.passphrase,
+        &destination,
+        "legacy.iotkit-node-backup",
+    )
+    .unwrap();
+    let artifact = fixture.destination.path().join("legacy.iotkit-node-backup");
+
+    assert_eq!(
+        inspect_backup(&artifact, &fixture.passphrase)
+            .unwrap()
+            .epoch_start_publication_seq,
+        None
+    );
+    let inspected =
+        inspect_backup_with_staging(&artifact, &fixture.passphrase, fixture.staging.path())
+            .unwrap();
+    assert_eq!(inspected.epoch_start_publication_seq, Some(2));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn snapshot_capacity_failure_is_recorded_before_begin_and_uses_manifest_length() {
     let fixture = create_fixture();
     let expected_snapshot_path = fixture.staging.path().join("expected-snapshot.sqlite");

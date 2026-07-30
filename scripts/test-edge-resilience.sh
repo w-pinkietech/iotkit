@@ -26,13 +26,15 @@ export IOTKIT_MOSQUITTO_PASSWORD_FILE="$scratch/passwords"
 export IOTKIT_MOSQUITTO_ACL_FILE="$scratch/acl"
 export IOTKIT_EDGE_ARCHIVE_PASSWORD_FILE="$scratch/edge-password"
 export IOTKIT_EDGE_DATA_DIR="$scratch/data"
+export IOTKIT_RECOVERY_DIR="$scratch/recovery"
 export IOTKIT_DEV_UID="$(id -u)"
 export IOTKIT_DEV_GID="$(id -g)"
 export IOTKIT_DEV_BROKER_PORT="$broker_port"
 export IOTKIT_EDGE_ID="edge-0123456789abcdef0123456789abcdef"
-mkdir -p "$IOTKIT_EDGE_DATA_DIR"
+mkdir -p "$IOTKIT_EDGE_DATA_DIR" "$IOTKIT_RECOVERY_DIR"
 chmod 700 "$scratch"
 chmod 755 "$IOTKIT_EDGE_DATA_DIR"
+chmod 700 "$IOTKIT_RECOVERY_DIR"
 
 compose() {
   docker compose -p "$project" -f "$repo_root/compose.dev.yaml" "$@"
@@ -240,15 +242,23 @@ user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
 topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
+topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result
+topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/completion-ack
 topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
 topic read iotkit/v1/edge-nodes/$edge_node_id/activation/request
+topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/request
+topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion
 
 user edge
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic read iotkit/v1/edge-nodes/+/activation/result
+topic read iotkit/v1/edge-nodes/+/recovery/result
+topic read iotkit/v1/edge-nodes/+/recovery/completion-ack
 topic write iotkit/v1/edge-nodes/+/accepted-through
 topic write iotkit/v1/edge-nodes/+/activation/request
+topic write iotkit/v1/edge-nodes/+/recovery/request
+topic write iotkit/v1/edge-nodes/+/recovery/completion
 EOF
 chmod 644 "$IOTKIT_MOSQUITTO_ACL_FILE"
 

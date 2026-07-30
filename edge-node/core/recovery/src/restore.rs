@@ -345,6 +345,7 @@ pub(crate) fn restore_candidate_inner(
         let facts = validate_snapshot(&temporary_fd_path)?;
         if facts.edge_node_id != manifest.edge_node_id
             || facts.ledger_epoch != manifest.ledger_epoch
+            || facts.schema_version != manifest.schema_version
             || facts.database_length != manifest.database_length
             || facts.database_sha256 != manifest.database_sha256
         {
@@ -354,6 +355,7 @@ pub(crate) fn restore_candidate_inner(
         if edge_id != request.handoff.edge_id {
             return Err(RecoveryError::HandoffMismatch);
         }
+        migrate_candidate_to_current(&temporary_fd_path)?;
         dispatch_install_candidate(
             &temporary_fd_path,
             InstallCandidateState {
@@ -459,6 +461,14 @@ fn dispatch_install_candidate(
 }
 
 #[cfg(target_os = "linux")]
+fn migrate_candidate_to_current(path: &Path) -> Result<(), RecoveryError> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|_| RecoveryError::CandidateFenceInvalid)?;
+    iotkit_core_storage::run_migrations(&conn, &crate::all_edge_node_migrations())
+        .map_err(|_| RecoveryError::CandidateFenceInvalid)
+}
+
+#[cfg(target_os = "linux")]
 fn checkpoint_without_wal(path: &Path) -> Result<(), RecoveryError> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|_| RecoveryError::CandidateFenceInvalid)?;
@@ -516,7 +526,13 @@ fn read_and_verify_candidate(
         || facts.ledger_epoch != manifest.ledger_epoch
         || facts.accepted_cursor != manifest.accepted_cursor
         || facts.allocation_high_water != manifest.allocation_high_water
-        || facts.schema_version != manifest.schema_version
+        || manifest
+            .epoch_start_publication_seq
+            .is_some_and(|sequence| facts.epoch_start_publication_seq != Some(sequence))
+        || facts.schema_version
+            != crate::all_edge_node_migrations()
+                .last()
+                .map_or(0, |migration| migration.version)
         || facts.counts != expected_counts
     {
         return Err(RecoveryError::CandidateConflict);
@@ -702,13 +718,17 @@ fn read_candidate_provenance(conn: &Connection) -> Result<CandidateProvenance, R
 fn read_candidate_receipt(conn: &Connection) -> Result<RestoreReceipt, RecoveryError> {
     let receipt = conn
         .query_row(
-            "SELECT recovery_id, candidate_instance_id, backup_id, edge_id, edge_node_id,
-                old_ledger_epoch, proposed_new_epoch, credential_generation
-         FROM edge_node_recovery_candidate WHERE singleton=1",
+            "SELECT candidate.recovery_id, candidate.candidate_instance_id,
+                candidate.backup_id, candidate.edge_id, candidate.edge_node_id,
+                candidate.old_ledger_epoch, candidate.proposed_new_epoch,
+                candidate.credential_generation, auth.device_credential_generation
+         FROM edge_node_recovery_candidate AS candidate
+         CROSS JOIN auth_state AS auth
+         WHERE candidate.singleton=1 AND auth.id=1",
             [],
             |row| {
                 Ok(RestoreReceipt {
-                    schema_version: 1,
+                    schema_version: 2,
                     status: RestoreStatus::DurablyFencedCandidate,
                     recovery_id: row.get(0)?,
                     candidate_instance_id: row.get(1)?,
@@ -718,6 +738,7 @@ fn read_candidate_receipt(conn: &Connection) -> Result<RestoreReceipt, RecoveryE
                     old_ledger_epoch: row.get(5)?,
                     proposed_new_epoch: row.get(6)?,
                     credential_generation: row.get(7)?,
+                    device_auth_generation: row.get(8)?,
                 })
             },
         )

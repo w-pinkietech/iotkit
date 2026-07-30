@@ -589,7 +589,10 @@ fn create_backup_guarded(
     }
     let source = Connection::open_with_flags(&config.database, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|_| RecoveryError::Storage)?;
-    if !matches!(startup_mode(&source)?, RecoveryStartupMode::Normal) {
+    if !matches!(
+        startup_mode(&source)?,
+        RecoveryStartupMode::Normal | RecoveryStartupMode::Recovered { .. }
+    ) {
         return Err(RecoveryError::InvalidStartupState);
     }
     let edge_node_id: String = source
@@ -850,6 +853,90 @@ pub fn inspect_backup(
         let _ = (input, passphrase);
         Err(RecoveryError::PlatformUnsupported)
     }
+}
+
+/// Authenticates a legacy v1 artifact and derives facts that were not present
+/// in its manifest from the encrypted database itself.
+///
+/// Plaintext is held only in an anonymous file on an owner-only tmpfs.
+#[cfg(target_os = "linux")]
+pub fn inspect_backup_with_staging(
+    input: &Path,
+    passphrase: &BackupPassphrase,
+    staging_directory: &Path,
+) -> Result<NodeBackupManifest, RecoveryError> {
+    let authenticated = inspect_backup(input, passphrase)?;
+    if authenticated.epoch_start_publication_seq.is_some() {
+        return Ok(authenticated);
+    }
+
+    let input_file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(input)
+        .map_err(|_| RecoveryError::Storage)?;
+    let input_metadata = input_file.metadata().map_err(|_| RecoveryError::Storage)?;
+    if !input_metadata.file_type().is_file()
+        || input_metadata.nlink() != 1
+        || input_metadata.uid() != unsafe { libc::geteuid() }
+        || input_metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    crate::config::clear_nonblock(&input_file)?;
+
+    let staging = crate::DirectoryCapability::open(staging_directory)?;
+    let staging_stat = unsafe {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+        if libc::fstat(staging.as_raw_fd(), stat.as_mut_ptr()) != 0 {
+            return Err(RecoveryError::Storage);
+        }
+        stat.assume_init()
+    };
+    if staging_stat.st_uid != unsafe { libc::geteuid() } || staging_stat.st_mode & 0o777 != 0o700 {
+        return Err(RecoveryError::InvalidConfiguration);
+    }
+    let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+    if unsafe { libc::fstatfs(staging.as_raw_fd(), filesystem.as_mut_ptr()) } != 0 {
+        return Err(RecoveryError::Storage);
+    }
+    if unsafe { filesystem.assume_init() }.f_type as u64 != 0x0102_1994 {
+        return Err(RecoveryError::DestinationInvalid);
+    }
+
+    let (plaintext, decrypted) = crate::container::decrypt_container_file_to_staging_file(
+        input_file,
+        passphrase,
+        &staging,
+        authenticated.database_length,
+    )?;
+    if decrypted != authenticated {
+        return Err(RecoveryError::ManifestInvalid);
+    }
+    let facts = crate::snapshot::validate_anonymous_snapshot(plaintext.as_file(), &staging)?;
+    if facts.edge_node_id != authenticated.edge_node_id
+        || facts.ledger_epoch != authenticated.ledger_epoch
+        || facts.accepted_cursor != authenticated.accepted_cursor
+        || facts.allocation_high_water != authenticated.allocation_high_water
+        || facts.schema_version != authenticated.schema_version
+        || facts.database_length != authenticated.database_length
+        || facts.database_sha256 != authenticated.database_sha256
+        || facts.counts != authenticated.counts
+    {
+        return Err(RecoveryError::ManifestInvalid);
+    }
+    let mut completed = authenticated;
+    completed.epoch_start_publication_seq = facts.epoch_start_publication_seq;
+    Ok(completed)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn inspect_backup_with_staging(
+    _input: &Path,
+    _passphrase: &BackupPassphrase,
+    _staging_directory: &Path,
+) -> Result<NodeBackupManifest, RecoveryError> {
+    Err(RecoveryError::PlatformUnsupported)
 }
 
 /// Reads durable backup readiness without mutating the configured database.

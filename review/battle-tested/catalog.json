@@ -97,25 +97,37 @@
     {
       "id": "BT-004",
       "title": "Edge Node computer replacement has an explicit loss boundary",
-      "evidence_level": "hypothesis",
+      "evidence_level": "reproduced",
       "concerns": ["custody", "edge-node-replacement", "restore"],
       "path_prefixes": [
         "edge-node/core/ledger/",
+        "edge-node/core/recovery/",
         "edge-node/core/storage/",
         "edge-node/apps/node/src/epoch_start.rs",
         "edge-node/apps/node/src/network_authority.rs",
         "edge-node/apps/node/src/record.rs",
+        "edge-node/apps/node/tests/recovery_startup.rs",
         "edge-node/apps/nodectl/",
         "edge/src/storage/activation.rs",
-        "edge/src/backup/"
+        "edge/src/storage/recovery_activation.rs",
+        "edge/src/application/recovery.rs",
+        "edge/src/backup/",
+        "scripts/test-edge-bootstrap.sh"
       ],
       "review_question": "If the Raspberry Pi or other Edge Node computer is lost or replaced, is every unrecoverable local record and identity transition explicit rather than silently treated as a sensor-device replacement?",
       "provenance": [
         "docs/okf/ja/contracts/edge-node-custody-v1.md",
-        "docs/okf/en/contracts/edge-node-custody-v1.md"
+        "docs/okf/en/contracts/edge-node-custody-v1.md",
+        "docs/okf/ja/operations/installation-and-recovery.md",
+        "docs/okf/en/operations/installation-and-recovery.md"
       ],
-      "guards": [],
-      "coverage_gap": "Encrypted replacement backup and restore for an Edge Node computer are deferred; sensor device replace commands do not cover this failure."
+      "guards": [
+        "edge-node/apps/node/tests/recovery_startup.rs",
+        "scripts/test-edge-bootstrap.sh",
+        "docs/okf/ja/operations/installation-and-recovery.md",
+        "docs/okf/en/operations/installation-and-recovery.md"
+      ],
+      "coverage_gap": "The controlled encrypted-backup drill does not reproduce physical hardware loss, and a second replacement before cursor convergence remains tracked in GitHub issue #117."
     },
     {
       "id": "BT-005",

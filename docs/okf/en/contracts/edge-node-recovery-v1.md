@@ -1,17 +1,17 @@
 ---
 type: Contract
 title: "IoTKit Edge Node recovery contract v1"
-description: "Defines the sanitized encrypted Edge Node backup container, local fenced-candidate restore, operator boundaries, and disabled replacement surfaces."
+description: "Defines the sanitized encrypted Edge Node backup container, fenced-candidate restore, and permitted production reactivation."
 language: en
 translation_key: contracts.edge-node-recovery-v1
 status: stable
-revision: 1
+revision: 2
 ---
 
 # IoTKit Edge Node recovery contract v1
 
-Status: **normative for the optional local Edge Node backup and slice-1
-fenced-candidate restore boundary**.
+Status: **normative for optional local Edge Node backup, fenced-candidate
+restore, and permitted production reactivation**.
 
 This contract is the authority for the exact encrypted Node artifact and its
 local restore boundary. It is paired with the schemas, fixtures, and
@@ -33,13 +33,10 @@ enables the timer. The service runs the exact CLI command in
 and the timer is
 `deploy/systemd/iotkit-edge-node-backup.timer`.
 
-Slice 1 does **not** ship production recovery-handoff creation, Broker fencing,
-a remote permit, reconciliation, dedup-risk resolution, reactivation, or a
-same-ID new ledger epoch. A valid handoff used by a conformance test or a
-restore drill is not an operator-created authorization. An installed or
-restored candidate remains unable to collect, publish, or bind the ingest
-listener until a later, separately contracted permit and generation check
-ships. No usable production replacement journey is claimed here.
+Revision 2 adds production recovery-handoff creation, bundled Broker credential
+fencing, a candidate-bound permit, accepted-through reconciliation, and
+reactivation under a same-ID new ledger epoch. A candidate cannot collect,
+publish, or bind ingest until it durably stores the matching completion.
 
 ## 2. Machine authority and conformance material
 
@@ -50,11 +47,14 @@ The paired machine artifacts are the executable wire authority:
 | Container header schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/node-backup-header-v1.schema.json) (`edge-node/core/recovery/contracts/node-backup-header-v1.schema.json`) |
 | Sanitized manifest schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/node-backup-manifest-v1.schema.json) (`edge-node/core/recovery/contracts/node-backup-manifest-v1.schema.json`) |
 | Recovery handoff schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/recovery-handoff-v1.schema.json) (`edge-node/core/recovery/contracts/recovery-handoff-v1.schema.json`) |
-| Fenced restore receipt schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/restore-receipt-v1.schema.json) (`edge-node/core/recovery/contracts/restore-receipt-v1.schema.json`) |
+| Broker fence receipt schema | `edge-node/core/recovery/contracts/broker-fence-receipt-v1.schema.json` |
+| Fenced restore receipt schema | `edge-node/core/recovery/contracts/restore-receipt-v2.schema.json` |
 | Header golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-header-v1.json) (`edge-node/core/recovery/tests/fixtures/node-backup-header-v1.json`) |
 | Manifest golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-manifest-v1.json) (`edge-node/core/recovery/tests/fixtures/node-backup-manifest-v1.json`) |
 | Handoff golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/recovery-handoff-v1.json) (`edge-node/core/recovery/tests/fixtures/recovery-handoff-v1.json`) |
-| Receipt golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/restore-receipt-v1.json) (`edge-node/core/recovery/tests/fixtures/restore-receipt-v1.json`) |
+| Broker fence receipt golden | `edge-node/core/recovery/tests/fixtures/broker-fence-receipt-v1.json` |
+| Receipt golden | `edge-node/core/recovery/tests/fixtures/restore-receipt-v2.json` |
+| Recovery MQTT control goldens | `testdata/egress/v1/recovery-activation-{request,result}.json`, `testdata/egress/v1/recovery-completion{,-ack}.json` |
 | Binary conformance vector | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-v1.bin) (`edge-node/core/recovery/tests/fixtures/node-backup-v1.bin`) |
 | Container conformance tests | [backup_contract.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/backup_contract.rs) and [container_tests.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/unit/container_tests.rs) |
 | Restore conformance tests | [restore_tests.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/unit/restore_tests.rs) and [recovery_startup.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/apps/node/tests/recovery_startup.rs) |
@@ -204,8 +204,11 @@ to an anonymous owner-only staging file and never overwrites an existing path.
 ## 5. Sanitized manifest and database invariant
 
 The manifest has `artifact_kind=iotkit-node-backup`, `format_version=1`,
-`snapshot_mode=online`, `shutdown_seal_id=null`, and the current Edge Node
-schema version (`23` in the checked-in vector). `backup_id`, `edge_node_id`,
+`snapshot_mode=online`, `shutdown_seal_id=null`, and the Edge Node schema
+version at backup time. Revision 2 accepts the checked-in version `23` vector
+and current version `24`; a version `23` database is canonically validated and
+migrated to version `24` in the fenced candidate before activation. New
+backups use the current schema. `backup_id`, `edge_node_id`,
 and `ledger_epoch` are nonempty, at most 255 Unicode scalar values, contain no
 colon or control character, and are not inferred from a pathname. Timestamps,
 cursors, and allocation high-water are nonnegative signed 64-bit integers;
@@ -215,6 +218,12 @@ lowercase hexadecimal characters. The twelve closed count fields are
 `devices`, `series`, `readings`, `publication_rows`, `ingest_dedup_rows`,
 `staged_readings`, `quarantine_rows`, `device_principals`,
 `device_credentials`, `activation_rows`, `ledger_events`, and `audit_events`.
+New writers also emit optional `epoch_start_publication_seq` when present, as
+the exact positive sequence no greater than `allocation_high_water`. It remains
+optional for format-v1 compatibility. When it is absent, production
+inspection decrypts the authenticated database only into an anonymous
+owner-only tmpfs file and derives the value from the database before preparing
+recovery authority.
 
 The source is copied through the recovery snapshot operation, then the copy is
 sanitized: `target_registry.credential_token` is cleared, journal mode is
@@ -237,15 +246,18 @@ are `recovery_id`, `edge_id`, `edge_node_id`, `old_ledger_epoch`,
 1..=255 bytes, and `old_ledger_epoch` MUST differ from
 `proposed_new_epoch`. The generation is an integer
 `0..=9,223,372,036,854,775,807`. The handoff MUST bind to the manifest's backup
-ID, Node ID, and old epoch. Slice 1 records the nonnegative generation in the
-candidate provenance and receipt; it does not compare that value with a live
-authority or reject a generation mismatch. Authority comparison and activation
-are deferred to the later permit/generation contract.
+ID, Node ID, and old epoch. Restore records the nonnegative Broker credential
+generation and the device-auth generation read from the restored database.
+IoTKit Edge compares the closed receipt with its durable recovery case before
+issuing a candidate-bound recovery request. The candidate then verifies both
+generations, the backup, candidate, old/new epochs, and Edge cursor before
+performing the atomic activation transition. A mismatch fails closed.
 
-The public receipt is closed schema v1 with status
+The public receipt is closed schema v2 with status
 `durably_fenced_candidate` and fields `recovery_id`, `candidate_instance_id`,
 `backup_id`, `edge_id`, `edge_node_id`, `old_ledger_epoch`,
-`proposed_new_epoch`, and `credential_generation`. Candidate-row provenance
+`proposed_new_epoch`, `credential_generation`, and
+`device_auth_generation`. Candidate-row provenance
 (source database length/digest and encrypted artifact length/digest) is bound
 privately for replay and is never returned in the receipt, status, audit, or
 errors.
@@ -266,7 +278,7 @@ uncertainty leaves the already-fenced candidate in place and returns
 supported reconciliation. No operation silently deletes a candidate to make a
 retry pass.
 
-## 7. Operator commands and restore-drill boundary
+## 7. Operator commands and restore boundary
 
 The local-root command shapes are:
 
@@ -284,32 +296,54 @@ Create, inspect, and status emit only bounded nonsecret summaries. Never put a
 passphrase on an argument, in shell history, or in a log. Keep an encrypted
 escrow copy of the passphrase under the deployment's approved owner-only
 procedure; without it an artifact is intentionally unrecoverable. Verify a
-successful artifact off-host and inspect it. Slice 1 permits restore
-conformance only for the checked-in handoff fixture with its matching
-test-generated artifact; it does not permit a real-artifact restore drill or
-reliance on that artifact's RPO from a restore. Real-backup RPO verification
-through a restore drill is deferred until a later recovery authority exists.
-
-The following is the conformance command shape, not a successful operator
-procedure in slice 1:
+successful artifact off-host and inspect it. A production restore drill uses
+the selected real artifact only after IoTKit Edge creates the matching handoff
+from the authenticated inspection and Broker fence receipt described in §8.
 
 ```text
 iotkit-edge-nodectl backup restore --input ARTIFACT \
   --candidate-db /secure/new/absent-candidate.db \
-  --live-db CONFIGURED_LIVE_DB --passphrase-file PASSPHRASE_FILE \
+  --live-db CONFIGURED_LIVE_DB --staging-directory OWNER_ONLY_TMPFS_PARENT \
+  --passphrase-file PASSPHRASE_FILE \
   --recovery-handoff VALID_HANDOFF_FILE
 ```
 
-The candidate path in a conformance run MUST be absent before the command and
-MUST remain fenced afterward. A checked-in handoff fixture is conformance-only
-and is valid only with the matching test-generated artifact; it MUST NOT be
-paired with a selected real backup. Slice 1 has no later authority or matching
-complete drill fixture, so a real-backup restore cannot succeed here and must
-fail closed. Production handoff creation, Broker fencing, remote permit, and
-reactivation are not shipped. A no-backup hardware replacement still restores
-neither readings nor dedup claims; an encrypted-backup candidate contains
-claims only through its authenticated snapshot boundary and remains fenced.
+The candidate path MUST be absent before the command and remains fenced after
+restore. Continue with the candidate-bound authorization and activation in
+§8; a restore receipt alone is never permission to run the normal Node
+runtime. Checked-in handoff and artifact fixtures are conformance-only and
+MUST NOT be paired with a selected real backup. A no-backup hardware
+replacement restores neither readings nor dedup claims.
 
 There is no legacy plaintext snapshot fallback. A former implementation's
 artifact, a renamed Edge server backup, an unauthenticated database copy, or a
 candidate with private MQTT/TLS material is not accepted by this contract.
+
+## 8. Production recovery authority and new-epoch activation
+
+In the revision-2 production journey, IoTKit Edge creates the handoff after checking
+the backup inspection and Broker fence receipt. The closed v1 Broker receipt
+has `status=fenced`, `fence_id`, `edge_node_id`, a positive
+`credential_generation`, and `fenced_at`; it contains no password, hash, or
+token. Fencing advances the password generation and restarts the Broker, so
+the old session and credential are invalid before the new request exists.
+
+The IoTKit Edge recovery case durably binds recovery/Node/backup/old-new epoch,
+Broker generation, snapshot cursor/high-water, the authenticated snapshot's
+exact `epoch_start` publication sequence, and Edge accepted-through.
+Restore receipt v2 additionally binds the candidate instance and Node
+device-auth generation. MQTT request, result, completion, and completion ACK
+are closed v1, QoS 1, and non-retained. Edge retries request and completion from
+durable outboxes. Only exact replay is idempotent; any field mismatch enters
+`recovery_hold`.
+
+Node apply is one Immediate transaction. It removes rows through Edge
+accepted-through from replay, excludes the old authenticated `epoch_start`,
+continuously renumbers remaining old-epoch publications into the new epoch,
+puts one new `epoch_start` at sequence 1, and commits
+the ledger epoch, target cursor 0, and result together. Failure rolls everything
+back. IoTKit Edge activates the new epoch and creates cursor 0 only for the
+matching result, then queues completion. After durably storing completion, the
+Node publishes the matching completion ACK. Edge closes its completion outbox
+only after that ACK. Normal runtime remains fenced until the Node has stored
+completion and published the ACK with QoS 1.

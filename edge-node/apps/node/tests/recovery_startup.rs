@@ -8,7 +8,18 @@ use rusqlite::Connection;
 
 const SENTINEL: &str = "sentinel-sensitive-config";
 
+struct RecoveryDrillCandidate {
+    receipt: iotkit_core_recovery::RestoreReceipt,
+    accepted_cursor: i64,
+    allocation_high_water: i64,
+    epoch_start_publication_seq: Option<i64>,
+}
+
 fn create_fenced_candidate(path: &Path) {
+    let _ = create_fenced_candidate_drill(path);
+}
+
+fn create_fenced_candidate_drill(path: &Path) -> RecoveryDrillCandidate {
     // Build this fixture through the same source -> snapshot -> encrypted
     // restore path used by `nodectl`, rather than synthesizing the candidate
     // row. This exercises publication, receipt, authority, and sidecar
@@ -84,7 +95,7 @@ fn create_fenced_candidate(path: &Path) {
     .unwrap();
     conn.execute(
         "UPDATE edge_node_activation
-         SET state='active', edge_id='edge-candidate',
+         SET state='active', edge_id='edge-0123456789abcdef0123456789abcdef',
              activation_id='act-0123456789abcdef0123456789abcdef',
              ledger_epoch='epoch-old', discard_through_reading_seq=0,
              cleanup_through_reading_seq=0, request_json='{}', result_json='{}', activated_at=1
@@ -147,8 +158,8 @@ fn create_fenced_candidate(path: &Path) {
             staging_directory: staging.path().to_path_buf(),
             handoff: iotkit_core_recovery::RecoveryHandoff {
                 schema_version: 1,
-                recovery_id: "recovery-candidate".into(),
-                edge_id: "edge-candidate".into(),
+                recovery_id: "recovery-0123456789abcdef0123456789abcdef".into(),
+                edge_id: "edge-0123456789abcdef0123456789abcdef".into(),
                 edge_node_id: "candidate-node".into(),
                 old_ledger_epoch: "epoch-old".into(),
                 expected_backup_id: Some(manifest.backup_id.clone()),
@@ -160,7 +171,7 @@ fn create_fenced_candidate(path: &Path) {
     )
     .unwrap();
     assert!(matches!(
-        receipt.status,
+        &receipt.status,
         iotkit_core_recovery::RestoreStatus::DurablyFencedCandidate
     ));
     let candidate_conn = Connection::open(path).unwrap();
@@ -201,6 +212,12 @@ fn create_fenced_candidate(path: &Path) {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(config_path).unwrap();
     std::fs::remove_file(passphrase_path).unwrap();
+    RecoveryDrillCandidate {
+        receipt,
+        accepted_cursor: manifest.accepted_cursor,
+        allocation_high_water: manifest.allocation_high_water,
+        epoch_start_publication_seq: manifest.epoch_start_publication_seq,
+    }
 }
 
 fn database_state(path: &Path) -> (Vec<u8>, Vec<Option<Vec<u8>>>) {
@@ -290,6 +307,196 @@ fn probe_listener_connections(address: std::net::SocketAddr) -> usize {
     } else {
         0
     }
+}
+
+#[test]
+fn real_encrypted_backup_drill_survives_candidate_restart_and_reaches_recovered() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("recovery-drill.db");
+    let drill = create_fenced_candidate_drill(&database);
+    let request = iotkit_core_recovery::RecoveryActivationRequest {
+        schema_version: 1,
+        recovery_id: drill.receipt.recovery_id.clone(),
+        edge_id: drill.receipt.edge_id.clone(),
+        edge_node_id: drill.receipt.edge_node_id.clone(),
+        candidate_instance_id: drill.receipt.candidate_instance_id.clone(),
+        backup_id: drill.receipt.backup_id.clone(),
+        old_ledger_epoch: drill.receipt.old_ledger_epoch.clone(),
+        new_ledger_epoch: drill.receipt.proposed_new_epoch.clone(),
+        broker_credential_generation: drill.receipt.credential_generation,
+        device_auth_generation: drill.receipt.device_auth_generation,
+        snapshot_accepted_through: drill.accepted_cursor,
+        snapshot_allocation_high_water: drill.allocation_high_water,
+        snapshot_epoch_start_publication_seq: drill.epoch_start_publication_seq,
+        edge_accepted_through: drill.accepted_cursor,
+        grant_revision: 1,
+        issued_at: 2,
+    };
+
+    let conn = Connection::open(&database).unwrap();
+    let result = iotkit_core_recovery::apply_recovery_activation(&conn, &request, 3).unwrap();
+    assert_eq!(result.replayed_records, 0);
+    assert!(matches!(
+        iotkit_core_recovery::startup_mode(&conn).unwrap(),
+        iotkit_core_recovery::RecoveryStartupMode::AwaitingCompletion { .. }
+    ));
+    drop(conn);
+
+    let restarted = Connection::open(&database).unwrap();
+    assert_eq!(
+        iotkit_core_recovery::apply_recovery_activation(&restarted, &request, 99).unwrap(),
+        result
+    );
+    let completion = iotkit_core_recovery::RecoveryCompletion {
+        schema_version: 1,
+        recovery_id: request.recovery_id.clone(),
+        edge_id: request.edge_id.clone(),
+        edge_node_id: request.edge_node_id.clone(),
+        candidate_instance_id: request.candidate_instance_id.clone(),
+        new_ledger_epoch: request.new_ledger_epoch.clone(),
+        status: "committed".into(),
+        accepted_through: 0,
+        committed_at: 4,
+    };
+    iotkit_core_recovery::complete_recovery_activation(&restarted, &completion, 0).unwrap();
+    drop(restarted);
+
+    let completed = Connection::open(&database).unwrap();
+    assert!(matches!(
+        iotkit_core_recovery::startup_mode(&completed).unwrap(),
+        iotkit_core_recovery::RecoveryStartupMode::Recovered { .. }
+    ));
+    assert_eq!(
+        iotkit_core_ledger::ledger_epoch(&completed).unwrap(),
+        request.new_ledger_epoch
+    );
+    assert_eq!(
+        completed
+            .query_row(
+                "SELECT count(*) FROM publication_log
+                 WHERE epoch=?1 AND pub_seq=1 AND kind='annotation' AND subtype='epoch_start'",
+                [request.new_ledger_epoch.clone()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    drop(completed);
+
+    let completed = Connection::open(&database).unwrap();
+    assert_eq!(
+        iotkit_core_ops::ownership_state(&completed).unwrap(),
+        iotkit_core_ops::OwnershipState::LocalRecoveryRequired
+    );
+    let recovered_passphrase_hash =
+        iotkit_core_ops::hash_passphrase("replacement-owner-passphrase").unwrap();
+    iotkit_core_ops::reset_passphrase_with_hash(
+        &completed,
+        &recovered_passphrase_hash,
+        "recovery_test",
+    )
+    .unwrap();
+    assert_eq!(
+        iotkit_core_ops::ownership_state(&completed).unwrap(),
+        iotkit_core_ops::OwnershipState::Owned
+    );
+    drop(completed);
+
+    let next_passphrase =
+        iotkit_core_recovery::BackupPassphrase::new("next-owner-only-passphrase".into());
+    let next_destination = tempfile::tempdir_in("/dev/shm").unwrap();
+    let next_backup_staging_parent = tempfile::tempdir_in("/dev/shm").unwrap();
+    let next_backup_staging = tempfile::tempdir_in(next_backup_staging_parent.path()).unwrap();
+    let next_config = directory.path().join("next-backup.json");
+    let next_passphrase_path = directory.path().join("next-passphrase");
+    std::fs::write(&next_passphrase_path, b"next-owner-only-passphrase").unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [
+            next_destination.path(),
+            next_backup_staging_parent.path(),
+            next_backup_staging.path(),
+            directory.path(),
+        ] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::set_permissions(
+            &next_passphrase_path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
+    iotkit_core_recovery::configure_backup(
+        &next_config,
+        &iotkit_core_recovery::BackupConfig {
+            schema_version: 1,
+            database: database.clone(),
+            destination: next_destination.path().to_path_buf(),
+            staging_directory: next_backup_staging.path().to_path_buf(),
+            passphrase_file: next_passphrase_path,
+            expected_mount: iotkit_core_recovery::MountIdentity {
+                mount_point: next_destination.path().to_path_buf(),
+                source: "pending".into(),
+                filesystem_type: "pending".into(),
+                filesystem_id: "pending".into(),
+            },
+            freshness_seconds: 60,
+            retention_count: 1,
+        },
+        iotkit_core_recovery::BackupConfigReplace::Refuse,
+    )
+    .unwrap();
+    let next = iotkit_core_recovery::create_backup(&next_config, &next_passphrase, 5).unwrap();
+    let next_artifact = next_destination.path().join(format!(
+        "{}{}",
+        next.backup_id,
+        iotkit_core_recovery::NODE_BACKUP_SUFFIX
+    ));
+    let next_candidate = directory.path().join("next-candidate.db");
+    let next_staging = tempfile::tempdir_in("/dev/shm").unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(next_staging.path(), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+    }
+    let next_receipt = iotkit_core_recovery::restore_candidate(
+        &iotkit_core_recovery::RestoreRequest {
+            input: next_artifact,
+            live_database: database,
+            candidate_database: next_candidate.clone(),
+            staging_directory: next_staging.path().to_path_buf(),
+            handoff: iotkit_core_recovery::RecoveryHandoff {
+                schema_version: 1,
+                recovery_id: "recovery-abcdefabcdefabcdefabcdefabcdefab".into(),
+                edge_id: request.edge_id,
+                edge_node_id: request.edge_node_id,
+                old_ledger_epoch: request.new_ledger_epoch,
+                expected_backup_id: Some(next.backup_id.clone()),
+                proposed_new_epoch: "epoch-fedcbafedcbafedcbafedcbafedcbafe".into(),
+                credential_generation: 3,
+            },
+        },
+        &next_passphrase,
+    )
+    .unwrap();
+    assert_eq!(next_receipt.backup_id, next.backup_id);
+    let next_candidate = Connection::open(next_candidate).unwrap();
+    assert_eq!(
+        next_candidate
+            .query_row(
+                "SELECT count(*) FROM edge_node_recovery_activation",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert!(matches!(
+        iotkit_core_recovery::startup_mode(&next_candidate).unwrap(),
+        iotkit_core_recovery::RecoveryStartupMode::FencedCandidate { .. }
+    ));
 }
 
 #[test]

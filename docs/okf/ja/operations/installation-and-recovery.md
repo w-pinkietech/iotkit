@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 5
+revision: 6
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -216,40 +216,263 @@ Pre-encryption snapshotは専用tmpfsへ置きます。Host CLIもowner-only、b
 
 ## 8. Restore
 
-### 8.1 Edge Node fenced-candidate restore drill (slice 1)
+### 8.1 Edge Nodeを暗号化backupから本番復帰する
 
-Edge Nodeの`restore` commandはconformance interfaceとして、later authorityが存在する
-場合のcontrolled drillだけに出荷します。Artifactのbackup ID、Edge Node ID、old ledger
-epochをbindするclosed valid recovery handoffが必要です。Slice 1にはproduction handoff
-producerがありません。Checked-in handoff fixtureはmatching test-generated artifactと
-だけ使うconformance専用で、`SELECTED` real backupと組み合わせてはいけません。Later
-authorityもmatching complete drill fixtureもないためreal-backup restoreは成功せずfail
-closedしなければなりません。Handoffをinventしたりepochを自分でincrementしたりactivation
-をclaimしたりしません。
+旧機を停止して物理的に隔離した後も、まずBroker credentialを失効させます。`fence-edge-node.sh`
+は同梱Mosquitto passwordを世代更新し、Brokerをrestartして既存sessionを切断します。
+新passwordと非secret receiptはowner-onlyの新directoryへ一度だけ出力されます。
 
-Slice 1ではreal-backup restoreを成功させるcommandがないため、`SELECTED` artifactや
-inventしたhandoffでoperator restoreを実行しません。Later authorityまたはmatching
-conformance requestのための非実行interface shapeは次です。
-
-```text
-iotkit-edge-nodectl backup restore --input ARTIFACT \
-  --candidate-db ABSENT_OWNER_ONLY_CANDIDATE \
-  --live-db CONFIGURED_LIVE_DB --passphrase-file PASSPHRASE_FILE \
-  --recovery-handoff LATER_AUTHORITY_HANDOFF
+```bash
+set -euo pipefail
+umask 077
+CASE="edge-node-${EDGE_NODE_ID}-$(date +%Y%m%d%H%M%S)"
+EDGE_CONTROL_SOCKET="/data/recovery-control.sock"
+INSPECT_STAGING="/run/iotkit-edge-node-recovery-inspect-$CASE"
+: "${IOTKIT_REPO_ROOT:?deploy/compose.edge.yamlを含むcheckoutを設定する}"
+: "${NODE_RUNTIME_USER:?Edge Nodeのservice accountを設定する}"
+: "${NODE_RUNTIME_GROUP:?Edge Nodeのservice groupを設定する}"
+getent passwd "$NODE_RUNTIME_USER" >/dev/null
+getent group "$NODE_RUNTIME_GROUP" >/dev/null
+NODE_RUNTIME_UID=$(id -u "$NODE_RUNTIME_USER")
+if [[ "$NODE_RUNTIME_UID" != "$(id -u)" ]]; then
+  echo "owner-bound recovery blockはNODE_RUNTIME_USERとして実行してください" >&2
+  exit 1
+fi
+install_root=$(realpath "$install_root")
+if [[ "$(stat -c %u "$install_root")" != "$(id -u)" ]]; then
+  echo "install_rootのownerとしてdeployment file操作を実行してください" >&2
+  exit 1
+fi
+install -d -m 700 "$install_root/recovery"
+LIVE_PARENT=$(realpath "$(dirname -- "$LIVE_DB")")
+for owner_bound_path in "$SELECTED" "$PASSPHRASE" "$LIVE_PARENT"; do
+  if [[ "$(stat -c %u "$owner_bound_path")" != "$NODE_RUNTIME_UID" ]] ||
+    (( (8#$(stat -c %a "$owner_bound_path") & 8#077) != 0 )); then
+    echo "backup evidenceとlive DB parentはowner-only NODE_RUNTIME_USER pathが必要です" >&2
+    exit 1
+  fi
+done
+sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 "$INSPECT_STAGING"
+edge_cli() {
+  sudo docker compose --env-file "$install_root/edge.env" \
+    -f "$IOTKIT_REPO_ROOT/deploy/compose.edge.yaml" \
+    exec --user 0 -T edge iotkit-edge "$@"
+}
+"$IOTKIT_REPO_ROOT/scripts/upgrade-edge-node-recovery-acl.sh" \
+  --edge-dir "$install_root" --edge-node-id "$EDGE_NODE_ID"
+sudo docker compose --env-file "$install_root/edge.env" \
+  -f "$IOTKIT_REPO_ROOT/deploy/compose.edge.yaml" \
+  up --detach --no-deps --force-recreate edge
+for _ in $(seq 1 30); do
+  sudo test -S "$install_root/data/edge/recovery-control.sock" && break
+  sleep 1
+done
+sudo test -S "$install_root/data/edge/recovery-control.sock"
+"$IOTKIT_REPO_ROOT/scripts/fence-edge-node.sh" \
+  --edge-dir "$install_root" --edge-node-id "$EDGE_NODE_ID" \
+  --output-directory "$install_root/recovery/$CASE"
+iotkit-edge-nodectl backup inspect --input "$SELECTED" \
+  --passphrase-file "$PASSPHRASE" \
+  --staging-directory "$INSPECT_STAGING" \
+  | tee "$install_root/recovery/$CASE/backup-inspection.json" >/dev/null
+rmdir "$INSPECT_STAGING"
+chmod 600 "$install_root/recovery/$CASE/backup-inspection.json"
+edge_cli recovery prepare --control-socket "$EDGE_CONTROL_SOCKET" \
+  --backup-inspection "/recovery/$CASE/backup-inspection.json" \
+  --broker-fence-receipt "/recovery/$CASE/broker-fence-receipt.json" \
+  --handoff-output "/recovery/$CASE/recovery-handoff.json"
+RECOVERY_ID=$(sudo jq -r .recovery_id \
+  "$install_root/recovery/$CASE/recovery-handoff.json")
 ```
 
-Matching conformance requestまたはlater-authority requestだけが
-`durably_fenced_candidate` receiptを返せます。Candidateはsnapshot boundaryまでの
-authenticated readingとdedup claimを含められますが、fenced中はcollect、publish、
-ingest bindできず、backup後のretry stateを証明しません。Replacementとして起動せず、
-Broker publishをenableせず、state tableを編集しません。Broker fencing、remote permit、
-reconciliation、dedup-risk resolution、reactivation、same-ID new epochはdefault-offで
-未出荷です。Rename後のexact replayはstored receiptを返し、異なるartifactやhandoffは
-conflictです。
+`prepare`はEdge上のactive old epochとdurable accepted-throughをbackup境界およびBroker
+generationと照合し、caseと新epochを保存します。Handoffを手編集せず、candidateはabsent
+pathへrestoreします。Restore receipt v2はcandidate instanceとNode側
+`device_auth_generation`を含みます。Candidate DBは新規の専用parent directory内へ置き、
+共有data directoryを転用しません。Restore操作はlive DBとcandidate parentのownerに
+boundされます。Rootは専用tmpfs leaf、candidate parent、handoff、passphraseを準備し、
+restoreの**前**に実際のNode service accountへ移管します。Restoreとactivationはともに
+そのaccountで実行します。
 
-Backupなしhardware replacementはreadingもdedup claimもrestoreしません。Legacy
-snapshotやplaintext DB copyはfallbackではありません。MQTT/TLS private materialは
-candidate artifactの外部で、restore operationへ渡しません。
+```bash
+CANDIDATE_PARENT=$(dirname -- "$CANDIDATE_DB")
+RESTORE_STAGING="/run/iotkit-edge-node-recovery-restore-$CASE"
+if sudo test -e "$CANDIDATE_PARENT"; then
+  echo "candidate parent must be a new dedicated directory" >&2
+  exit 1
+fi
+sudo install -d -o "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" -m 700 \
+  "$CANDIDATE_PARENT" "$RESTORE_STAGING"
+sudo install -o "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" -m 600 \
+  "$install_root/recovery/$CASE/recovery-handoff.json" \
+  "$RESTORE_STAGING/recovery-handoff.json"
+sudo install -o "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" -m 600 \
+  "$PASSPHRASE" "$RESTORE_STAGING/passphrase"
+sudo -u "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" \
+  iotkit-edge-nodectl backup restore --input "$SELECTED" \
+  --candidate-db "$CANDIDATE_DB" --live-db "$LIVE_DB" \
+  --staging-directory "$RESTORE_STAGING" \
+  --passphrase-file "$RESTORE_STAGING/passphrase" \
+  --recovery-handoff "$RESTORE_STAGING/recovery-handoff.json" \
+  | sudo tee "$install_root/recovery/$CASE/restore-receipt.json" >/dev/null
+sudo chmod 600 "$install_root/recovery/$CASE/restore-receipt.json"
+sudo rm -f "$RESTORE_STAGING/passphrase" "$RESTORE_STAGING/recovery-handoff.json"
+sudo rmdir "$RESTORE_STAGING"
+edge_cli recovery authorize --control-socket "$EDGE_CONTROL_SOCKET" \
+  --restore-receipt "/recovery/$CASE/restore-receipt.json"
+sudo -u "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" \
+  sh -c 'test -r "$1" && test -w "$2"; probe="$2/.iotkit-write-probe.$$"; (umask 077; : >"$probe") && rm -f "$probe"' \
+  sh "$CANDIDATE_DB" "$CANDIDATE_PARENT"
+sudo install -o "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" -m 600 \
+  "$install_root/recovery/$CASE/mqtt-password" \
+  /etc/iotkit/mqtt-password
+sudo -u "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" \
+  iotkit-edge-nodectl backup activate --candidate-db "$CANDIDATE_DB" \
+  --broker-host "$BROKER_HOST" --broker-port "$BROKER_PORT" \
+  --password-file /etc/iotkit/mqtt-password --ca-file /etc/iotkit/broker-ca.pem
+```
+
+Candidateはmatching requestを受けるまでcollect、publish、HTTP ingestを開始しません。
+一つのSQLite transactionでEdge accepted-through以下を収束させ、残るpublicationを新epochへ
+連続再採番し、`epoch_start`をseq 1へ置きます。Edgeがmatching resultをdurable commitして
+completionを返し、Nodeがそのcompletionを保存するまで通常runtimeはfencedです。Process、
+Broker、Edge、candidateのrestartでは同じrequest/result/completion/completion ACKを
+再利用します。EdgeはNodeがcompletionをdurably保存してmatching ACKをpublishするまで
+completionを保持してretryします。異なるcandidate、artifact、epoch、generation、cursorは
+`recovery_hold`です。
+
+`backup activate`の`recovered`はcandidateがcompletionを保存した証拠だけで、まだ
+production-readyではありません。Owner-only control socketを通じて稼働中Edgeをpollします。
+`completion_acknowledged`がfalseまたはtimeoutなら、同じcandidateで同じactivateを再実行して
+reportを取り直します。Durable Edge reportが`state=completed`かつ
+`completion_acknowledged=true`になるまで通常runtimeを開始しません。
+
+```bash
+while :; do
+  edge_cli recovery report --control-socket "$EDGE_CONTROL_SOCKET" \
+    --recovery-id "$RECOVERY_ID" \
+    | sudo tee "$install_root/recovery/$CASE/final-report.json" >/dev/null
+  sudo jq -e \
+    '.state == "completed" and .completion_acknowledged == true' \
+    "$install_root/recovery/$CASE/final-report.json" >/dev/null && break
+  sudo -u "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" \
+    iotkit-edge-nodectl backup activate --candidate-db "$CANDIDATE_DB" \
+    --broker-host "$BROKER_HOST" --broker-port "$BROKER_PORT" \
+    --password-file /etc/iotkit/mqtt-password \
+    --ca-file /etc/iotkit/broker-ca.pem
+  sleep 5
+done
+
+# Restoreは旧admin credentialと全operator/session tokenを意図的に除去しています。
+# 新passphraseをargv、環境変数、log、incident reportへ渡さず、対話的にlocal ownershipを
+# 再確立します。
+sudo -u "$NODE_RUNTIME_USER" -g "$NODE_RUNTIME_GROUP" \
+  iotkit-edge-nodectl --db "$CANDIDATE_DB" passphrase reset
+
+# Timerを再開する前に既存backup policyのDBをrecovered DBへ切り替えます。
+NODE_BACKUP_CONFIG=${NODE_BACKUP_CONFIG:-/etc/iotkit/edge-node-backup.json}
+NODE_BACKUP_DROP_IN=${NODE_BACKUP_DROP_IN:-/etc/systemd/system/iotkit-edge-node-backup.service.d/destination.conf}
+BACKUP_DESTINATION=$(sudo jq -er .destination "$NODE_BACKUP_CONFIG")
+BACKUP_STAGING=$(sudo jq -er .staging_directory "$NODE_BACKUP_CONFIG")
+BACKUP_PASSPHRASE=$(sudo jq -er .passphrase_file "$NODE_BACKUP_CONFIG")
+BACKUP_FRESHNESS=$(sudo jq -er .freshness_seconds "$NODE_BACKUP_CONFIG")
+BACKUP_RETENTION=$(sudo jq -er .retention_count "$NODE_BACKUP_CONFIG")
+sudo iotkit-edge-nodectl backup configure \
+  --config "$NODE_BACKUP_CONFIG" --db "$CANDIDATE_DB" \
+  --destination "$BACKUP_DESTINATION" \
+  --staging-directory "$BACKUP_STAGING" \
+  --passphrase-file "$BACKUP_PASSPHRASE" \
+  --freshness-seconds "$BACKUP_FRESHNESS" \
+  --retention-count "$BACKUP_RETENTION" \
+  --systemd-drop-in "$NODE_BACKUP_DROP_IN" --replace-existing
+sudo systemctl daemon-reload
+POST_RECOVERY_CREATED=$(sudo iotkit-edge-nodectl backup create \
+  --config "$NODE_BACKUP_CONFIG")
+POST_RECOVERY_BACKUP_ID=$(jq -er .backup_id <<<"$POST_RECOVERY_CREATED")
+POST_RECOVERY_ARTIFACT="$BACKUP_DESTINATION/$POST_RECOVERY_BACKUP_ID.iotkit-node-backup"
+sudo iotkit-edge-nodectl backup inspect \
+  --input "$POST_RECOVERY_ARTIFACT" --passphrase-file "$BACKUP_PASSPHRASE" \
+  | tee "$install_root/recovery/$CASE/post-recovery-backup-inspection.json" >/dev/null
+sudo iotkit-edge-nodectl backup status --config "$NODE_BACKUP_CONFIG" \
+  | tee "$install_root/recovery/$CASE/post-recovery-backup-status.json" >/dev/null
+sudo jq -e --arg backup_id "$POST_RECOVERY_BACKUP_ID" \
+  '.status == "authenticated" and .backup_id == $backup_id' \
+  "$install_root/recovery/$CASE/post-recovery-backup-inspection.json" >/dev/null
+sudo jq -e --arg backup_id "$POST_RECOVERY_BACKUP_ID" \
+  '.status == "healthy" and .backup_id == $backup_id' \
+  "$install_root/recovery/$CASE/post-recovery-backup-status.json" >/dev/null
+# 暗号化artifactを承認済みoff-host custody手順で保持した後、そのcopyを指定します。
+# 設定済みdestination自体が承認済みoff-host mountならartifact自身を指定できます。
+: "${POST_RECOVERY_OFF_HOST_ARTIFACT:?set the retained off-host artifact path}"
+sudo test -s "$POST_RECOVERY_OFF_HOST_ARTIFACT"
+sudo iotkit-edge-nodectl backup inspect \
+  --input "$POST_RECOVERY_OFF_HOST_ARTIFACT" \
+  --passphrase-file "$BACKUP_PASSPHRASE" \
+  | tee "$install_root/recovery/$CASE/post-recovery-off-host-inspection.json" >/dev/null
+sudo jq -e --arg backup_id "$POST_RECOVERY_BACKUP_ID" \
+  '.status == "authenticated" and .backup_id == $backup_id' \
+  "$install_root/recovery/$CASE/post-recovery-off-host-inspection.json" >/dev/null
+jq -n --arg backup_id "$POST_RECOVERY_BACKUP_ID" \
+  '{backup_id: $backup_id, authenticated: true, healthy: true,
+    off_host_copy_verified: true}' \
+  | tee "$install_root/recovery/$CASE/post-recovery-backup-evidence.json" >/dev/null
+chmod 600 "$install_root/recovery/$CASE"/post-recovery-backup-*.json
+
+sudo systemctl stop iotkit-edge-node.service
+sudo install -d -m 755 /etc/systemd/system/iotkit-edge-node.service.d
+printf '[Service]\nEnvironment="IOTKIT_DB_PATH=%s"\n' "$CANDIDATE_DB" \
+  | sudo tee /etc/systemd/system/iotkit-edge-node.service.d/50-recovered-database.conf \
+    >/dev/null
+sudo chmod 644 \
+  /etc/systemd/system/iotkit-edge-node.service.d/50-recovered-database.conf
+sudo systemctl daemon-reload
+sudo systemctl start iotkit-edge-node.service
+
+while :; do
+  edge_cli recovery report --control-socket "$EDGE_CONTROL_SOCKET" \
+    --recovery-id "$RECOVERY_ID" \
+    | sudo tee "$install_root/recovery/$CASE/final-report.json" >/dev/null
+  sudo jq -e \
+    '.state == "completed" and .completion_acknowledged == true and .cursor_converged == true' \
+    "$install_root/recovery/$CASE/final-report.json" >/dev/null && break
+  sleep 5
+done
+sudo chmod 600 "$install_root/recovery/$CASE/final-report.json"
+```
+
+Matching completionとcompletion ACKはadmin credentialを作りません。対話的なlocal
+passphrase resetは別の必須authority stepです。Normal startupの前に新しいownershipを
+確立し、残っているoperator/session authorityを失効させます。Authenticated HTTP ingestを
+使う場合は、reset後に通常のtyped operationを通じてdesired listener、TLS generation、
+device authorityを再適用します。Restoreはapplied listener generationをclearするため、
+明示的な再適用が成功するまでHTTP ingestは閉じたままです。Incidentをcloseする前に、
+recovered Nodeから新しい暗号化backupを作成できることも確認します。失敗時にownership
+fenceを迂回してはいけません。Incidentをcloseする前にfresh encrypted backupを作成し、
+authenticateし、backup statusがhealthyであることを確認し、artifactをoff-hostに保持します。
+ここでは`--replace-existing`が必須です。省略するとtimerは旧DBを指し続けます。このevidenceを
+完了できない状態もrecovery failureです。
+
+このbackup再設定とevidence blockは、暗号化backup candidateをproductionへ戻す本手順だから
+適用します。Siteはscheduled backupを設定しない選択もでき、backup設定自体は引き続き任意です。
+そのsiteは本encrypted-backup recovery手順を利用できず、別途acceptしたno-backup replacementの
+loss boundaryに従います。
+
+Final reportはNode clockの`backup_created_at`とEdge/Broker clockの
+`broker_fenced_at`を個別の観測として残しますが、独立clockからdurationを導けないため
+`recovery_window_ms=null`です。Snapshot boundary、replay数、new epochの
+expected/current accepted cursor、Edgeだけにあるbackup後rangeも含みます。
+`cursor_converged=true`はreplayがIoTKit Edge durable raw custodyへ到達した証拠です。
+`remaining_gap_review_required`はtrueのままです。失われた旧機ではauthenticated snapshot後に
+追加local tailをallocateしたか証明できないため、この明示的loss boundaryをincident reviewへ
+記録します。
+
+Repositoryは汎用Edge Node systemd unitを定義していません。上記unit名と
+`NODE_RUNTIME_USER`/`NODE_RUNTIME_GROUP`は実deploymentのsupervisorに合わせ、serviceが
+そのaccountで起動しcandidate DBへ書き込めることを確認してからevidenceを廃止します。
+旧credentialと旧DBは再利用せずincident evidenceとして保持し、旧機を廃止します。
+
+Backupなしhardware replacementはreadingもdedup claimもrestoreしません。Legacy snapshotや
+plaintext DB copy、SQL編集、自作handoffはfallbackではありません。
 
 ### 8.2 IoTKit Edge restore
 

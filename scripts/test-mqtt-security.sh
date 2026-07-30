@@ -387,22 +387,34 @@ user edge-a
 topic write iotkit/v1/edge-nodes/edge-a/records
 topic write iotkit/v1/edge-nodes/edge-a/descriptors
 topic write iotkit/v1/edge-nodes/edge-a/activation/result
+topic write iotkit/v1/edge-nodes/edge-a/recovery/result
+topic write iotkit/v1/edge-nodes/edge-a/recovery/completion-ack
 topic read iotkit/v1/edge-nodes/edge-a/accepted-through
 topic read iotkit/v1/edge-nodes/edge-a/activation/request
+topic read iotkit/v1/edge-nodes/edge-a/recovery/request
+topic read iotkit/v1/edge-nodes/edge-a/recovery/completion
 
 user edge-b
 topic write iotkit/v1/edge-nodes/edge-b/records
 topic write iotkit/v1/edge-nodes/edge-b/descriptors
 topic write iotkit/v1/edge-nodes/edge-b/activation/result
+topic write iotkit/v1/edge-nodes/edge-b/recovery/result
+topic write iotkit/v1/edge-nodes/edge-b/recovery/completion-ack
 topic read iotkit/v1/edge-nodes/edge-b/accepted-through
 topic read iotkit/v1/edge-nodes/edge-b/activation/request
+topic read iotkit/v1/edge-nodes/edge-b/recovery/request
+topic read iotkit/v1/edge-nodes/edge-b/recovery/completion
 
 user edge
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic read iotkit/v1/edge-nodes/+/activation/result
+topic read iotkit/v1/edge-nodes/+/recovery/result
+topic read iotkit/v1/edge-nodes/+/recovery/completion-ack
 topic write iotkit/v1/edge-nodes/+/accepted-through
 topic write iotkit/v1/edge-nodes/+/activation/request
+topic write iotkit/v1/edge-nodes/+/recovery/request
+topic write iotkit/v1/edge-nodes/+/recovery/completion
 EOF
 
 cat >"$scratch/mosquitto.conf" <<'EOF'
@@ -464,6 +476,18 @@ expect_success edge-a-own-activation-result mqtt_client edge-a mosquitto_pub \
 expect_success edge-own-activation-request mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/activation/request -m '{}'
+expect_success edge-a-own-recovery-result mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/recovery/result -m '{}'
+expect_success edge-own-recovery-request mqtt_client edge mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/recovery/request -m '{}'
+expect_success edge-own-recovery-completion mqtt_client edge mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/recovery/completion -m '{}'
+expect_success edge-a-own-recovery-completion-ack mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/recovery/completion-ack -m '{}'
 expect_status_and_error anonymous 135 'Connection error: Not authorized' \
   mqtt_client anonymous mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 -t test/anonymous -m '{}'
@@ -494,6 +518,26 @@ expect_publish_denied edge-writes-activation-result \
   iotkit/v1/edge-nodes/edge-a/activation/result mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/activation/result -m '{}'
+expect_publish_denied edge-a-writes-edge-b-recovery-result \
+  iotkit/v1/edge-nodes/edge-b/recovery/result mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-b/recovery/result -m '{}'
+expect_publish_denied edge-a-writes-edge-b-recovery-completion-ack \
+  iotkit/v1/edge-nodes/edge-b/recovery/completion-ack mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-b/recovery/completion-ack -m '{}'
+expect_publish_denied edge-a-writes-recovery-request \
+  iotkit/v1/edge-nodes/edge-a/recovery/request mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/recovery/request -m '{}'
+expect_publish_denied edge-writes-recovery-result \
+  iotkit/v1/edge-nodes/edge-a/recovery/result mqtt_client edge mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/recovery/result -m '{}'
+expect_publish_denied edge-writes-recovery-completion-ack \
+  iotkit/v1/edge-nodes/edge-a/recovery/completion-ack mqtt_client edge mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/recovery/completion-ack -m '{}'
 expect_tls_rejected wrong-ca 'unable to get local issuer certificate|self-signed certificate' \
   tls_probe -connect "localhost:$tls_port" -servername localhost \
   -CAfile "$scratch/unrelated-ca.pem" -verify_return_error -verify_hostname localhost
@@ -506,6 +550,47 @@ expect_tls_rejected expired-certificate 'certificate has expired' \
 expect_status_and_error plaintext-to-tls 7 'Error: The connection was lost.' \
   mqtt_client plaintext mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 -t test/plaintext -m '{}'
+
+# Recovery fencing must invalidate the old password and existing session before
+# the replacement password is usable. Hashing happens from an owner-only file;
+# no raw credential is placed in argv or the environment.
+openssl rand -hex 24 >"$scratch/passwords/edge-a-rotated.txt"
+edge_a_rotated_password=$(<"$scratch/passwords/edge-a-rotated.txt")
+printf 'edge-a:' >"$scratch/edge-a.next"
+tr -d '\r\n' <"$scratch/passwords/edge-a-rotated.txt" >>"$scratch/edge-a.next"
+printf '\n' >>"$scratch/edge-a.next"
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$scratch:/work" "$IOTKIT_MOSQUITTO_IMAGE" \
+  mosquitto_passwd -U /work/edge-a.next >/dev/null
+awk -F: '
+  NR == FNR { replacement=$0; next }
+  $1 == "edge-a" { print replacement; replaced=1; next }
+  { print }
+  END { if (!replaced) exit 1 }
+' "$scratch/edge-a.next" "$scratch/passwords.db" >"$scratch/passwords.next"
+cp "$scratch/passwords.next" "$scratch/passwords.db"
+docker restart "$broker" >/dev/null
+write_client_config edge-a-rotated edge-a "$edge_a_rotated_password" ca.pem
+replacement_ready=false
+for _ in $(seq 1 30); do
+  if mqtt_client edge-a-rotated mosquitto_pub -h localhost -p "$tls_port" -q 1 \
+    -t iotkit/v1/edge-nodes/edge-a/records -m '{}' >/dev/null 2>&1; then
+    replacement_ready=true
+    break
+  fi
+  sleep 0.2
+done
+[[ "$replacement_ready" == true ]] || {
+  echo "Broker did not accept the replacement credential after restart" >&2
+  exit 1
+}
+expect_status_and_error fenced-old-password 135 'Connection error: Not authorized' \
+  mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
+expect_success replacement-password mqtt_client edge-a-rotated mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 \
+  -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
 
 docker logs "$broker" >"$scratch/broker.log" 2>&1
 docker logs "$expired_broker" >"$scratch/expired-broker.log" 2>&1
@@ -536,6 +621,9 @@ done
   exit 1
 }
 [[ "$(grep -Ec '^listener 8883( |$)' "$scratch/mosquitto.conf")" == "1" ]]
-! grep -Eq '^listener 1883( |$)' "$scratch/mosquitto.conf"
+if grep -Eq '^listener 1883( |$)' "$scratch/mosquitto.conf"; then
+  echo "MQTT security Broker unexpectedly exposes a plaintext listener" >&2
+  exit 1
+fi
 
 echo "MQTT security matrix: OK"

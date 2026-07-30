@@ -27,7 +27,8 @@ jq -e '
   (keys | sort) == [
     "accepted_through_topic", "activation_request_topic", "activation_result_topic",
     "client_id", "descriptor_retain", "descriptor_topic", "edge_node_id", "qos",
-    "records_topic", "retain", "username"
+    "records_topic", "recovery_completion_ack_topic", "recovery_completion_topic", "recovery_request_topic",
+    "recovery_result_topic", "retain", "username"
   ]
   and (.edge_node_id | type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))
   and .username == .edge_node_id
@@ -37,6 +38,10 @@ jq -e '
   and .descriptor_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/descriptors")
   and .activation_request_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/request")
   and .activation_result_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/result")
+  and .recovery_request_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/recovery/request")
+  and .recovery_result_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/recovery/result")
+  and .recovery_completion_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/recovery/completion")
+  and .recovery_completion_ack_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/recovery/completion-ack")
   and .qos == 1 and .retain == false and .descriptor_retain == true
 ' "$binding" >/dev/null || { echo "binding is not an exact IoTKit Edge Node MQTT binding" >&2; exit 1; }
 
@@ -74,8 +79,12 @@ user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
 topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
+topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result
+topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/completion-ack
 topic read iotkit/v1/edge-nodes/$edge_node_id/accepted-through
 topic read iotkit/v1/edge-nodes/$edge_node_id/activation/request
+topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/request
+topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion
 EOF
 printf '%s:' "$edge_node_id" >"$stage/new-password"
 tr -d '\r\n' <"$stage/handoff/mqtt-password" >>"$stage/new-password"

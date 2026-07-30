@@ -3,7 +3,8 @@ use iotkit_core_recovery::{
     BackupConfig, BackupConfigReplace, BackupPairPhase, BackupPairRecord, BackupReadiness,
     RecoveryError, RestoreRequest, acquire_recovery_operation, backup_status,
     configure_backup_guarded_with_pre_publish, create_backup_from_files, inspect_backup,
-    load_owner_only_handoff, load_owner_only_passphrase, restore_candidate,
+    inspect_backup_with_staging, load_owner_only_handoff, load_owner_only_passphrase,
+    restore_candidate,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,7 @@ pub enum BackupCommand {
     Inspect(InspectArgs),
     Status(StatusArgs),
     Restore(RestoreArgs),
+    Activate(crate::cmd::recovery_activate::ActivateArgs),
 }
 
 #[derive(clap::Args)]
@@ -71,6 +73,8 @@ pub struct InspectArgs {
     pub input: PathBuf,
     #[arg(long = "passphrase-file")]
     pub passphrase_file: PathBuf,
+    #[arg(long = "staging-directory")]
+    pub staging_directory: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -91,6 +95,8 @@ pub struct RestoreArgs {
     pub passphrase_file: PathBuf,
     #[arg(long = "recovery-handoff")]
     pub recovery_handoff: PathBuf,
+    #[arg(long = "staging-directory")]
+    pub staging_directory: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -140,6 +146,7 @@ struct CreatedOutput<'a> {
     ledger_epoch: &'a str,
     accepted_cursor: i64,
     allocation_high_water: i64,
+    epoch_start_publication_seq: Option<i64>,
     created_at_ms: i64,
 }
 
@@ -154,6 +161,7 @@ struct InspectOutput<'a> {
     created_at_ms: i64,
     accepted_cursor: i64,
     allocation_high_water: i64,
+    epoch_start_publication_seq: Option<i64>,
     snapshot_mode: &'static str,
     schema_version: u32,
     database_length: u64,
@@ -188,6 +196,8 @@ pub fn run(command: BackupCommand) -> AppResult<()> {
         BackupCommand::Inspect(args) => inspect(args),
         BackupCommand::Status(args) => status(args),
         BackupCommand::Restore(args) => restore(args),
+        BackupCommand::Activate(args) => crate::cmd::recovery_activate::activate(args)
+            .map_err(|error| CliBackupError::recovery(error, "keep_candidate_fenced")),
     }
 }
 
@@ -1549,6 +1559,7 @@ fn create(args: CreateArgs) -> AppResult<()> {
         ledger_epoch: &manifest.ledger_epoch,
         accepted_cursor: manifest.accepted_cursor,
         allocation_high_water: manifest.allocation_high_water,
+        epoch_start_publication_seq: manifest.epoch_start_publication_seq,
         created_at_ms: manifest.created_at_ms,
     })
 }
@@ -1558,8 +1569,19 @@ fn inspect(args: InspectArgs) -> AppResult<()> {
     let passphrase_path = absolute_path(&args.passphrase_file, "inspect")?;
     let passphrase = load_owner_only_passphrase(&passphrase_path)
         .map_err(|error| CliBackupError::recovery(error, "read_owner_only_passphrase"))?;
-    let manifest = inspect_backup(&input, &passphrase)
+    let mut manifest = inspect_backup(&input, &passphrase)
         .map_err(|error| CliBackupError::recovery(error, "check_backup_artifact"))?;
+    if manifest.epoch_start_publication_seq.is_none() {
+        let staging_directory = args.staging_directory.as_ref().ok_or_else(|| {
+            CliBackupError::recovery(
+                RecoveryError::InvalidConfiguration,
+                "provide_staging_directory_for_legacy_artifact",
+            )
+        })?;
+        let staging_directory = absolute_path(staging_directory, "inspect")?;
+        manifest = inspect_backup_with_staging(&input, &passphrase, &staging_directory)
+            .map_err(|error| CliBackupError::recovery(error, "inspect_legacy_backup_database"))?;
+    }
     let snapshot_mode = match manifest.snapshot_mode {
         iotkit_core_recovery::SnapshotMode::Online => "online",
     };
@@ -1573,6 +1595,7 @@ fn inspect(args: InspectArgs) -> AppResult<()> {
         created_at_ms: manifest.created_at_ms,
         accepted_cursor: manifest.accepted_cursor,
         allocation_high_water: manifest.allocation_high_water,
+        epoch_start_publication_seq: manifest.epoch_start_publication_seq,
         snapshot_mode,
         schema_version: manifest.schema_version,
         database_length: manifest.database_length,
@@ -1632,7 +1655,12 @@ fn restore(args: RestoreArgs) -> AppResult<()> {
         .map_err(|error| CliBackupError::recovery(error, "read_owner_only_handoff"))?;
     let passphrase = load_owner_only_passphrase(&passphrase_path)
         .map_err(|error| CliBackupError::recovery(error, "read_owner_only_passphrase"))?;
-    let staging = create_restore_staging()
+    let staging_parent = args
+        .staging_directory
+        .as_ref()
+        .map(|path| absolute_path(path, "restore"))
+        .transpose()?;
+    let staging = create_restore_staging(staging_parent.as_deref())
         .map_err(|error| CliBackupError::recovery(error, "prepare_restore_staging"))?;
     let request = RestoreRequest {
         input,
@@ -1658,18 +1686,21 @@ fn restore(args: RestoreArgs) -> AppResult<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn create_restore_staging() -> Result<PathBuf, RecoveryError> {
-    create_restore_staging_with(|_| Ok(()))
+fn create_restore_staging(parent: Option<&Path>) -> Result<PathBuf, RecoveryError> {
+    create_restore_staging_with(parent, |_| Ok(()))
 }
 
 #[cfg(target_os = "linux")]
-fn create_restore_staging_with<F>(after_create: F) -> Result<PathBuf, RecoveryError>
+fn create_restore_staging_with<F>(
+    parent: Option<&Path>,
+    after_create: F,
+) -> Result<PathBuf, RecoveryError>
 where
     F: FnOnce(&Path) -> Result<(), RecoveryError>,
 {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 
-    let base = std::env::temp_dir();
+    let base = parent.map_or_else(std::env::temp_dir, Path::to_path_buf);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| RecoveryError::InvalidConfiguration)?
@@ -1705,7 +1736,7 @@ where
 }
 
 #[cfg(not(target_os = "linux"))]
-fn create_restore_staging() -> Result<PathBuf, RecoveryError> {
+fn create_restore_staging(_parent: Option<&Path>) -> Result<PathBuf, RecoveryError> {
     Err(RecoveryError::PlatformUnsupported)
 }
 

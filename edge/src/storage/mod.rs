@@ -27,6 +27,7 @@ mod history;
 mod migrate;
 mod profiles;
 mod recovery;
+mod recovery_activation;
 mod semantic_output;
 pub use activation::{
     ActivationCommand, DescriptorApply, DescriptorDevice, DescriptorSignal, EdgeNode, EdgeNodeState,
@@ -38,6 +39,7 @@ pub use history::{
     HistoryBucket, RawHistoryPage, RawHistoryQuery, StoredRawHistoryRow, StoredSemanticHistoryRow,
 };
 pub use migrate::{MigrationCursor, StorageMigrationReport, migrate_sqlite_to_postgres};
+pub use recovery_activation::{RecoveryCase, RecoveryCommand, RecoveryPrepare};
 pub use semantic_output::{ClaimedOutput, OutputMark};
 
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
@@ -213,6 +215,8 @@ pub enum StorageError {
     EdgeIdentityMismatch,
     #[error("Edge Node activation result conflicts with the pending activation")]
     ActivationConflict,
+    #[error("Edge Node recovery authority conflicts with durable recovery state")]
+    RecoveryConflict,
     #[error("descriptor revision conflicts with the previously accepted content")]
     DescriptorConflict,
     #[error("Edge account was not found")]

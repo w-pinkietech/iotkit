@@ -72,8 +72,11 @@ fn main() {
     // connection before catalog validation, effective-config logging, migration,
     // identity/provenance mutation, runtime construction, or any service setup.
     match iotkit_core_recovery::probe_startup_path(Path::new(db_path)) {
-        Ok(RecoveryStartupMode::Normal) => {}
-        Ok(RecoveryStartupMode::FencedCandidate { .. }) => {
+        Ok(RecoveryStartupMode::Normal | RecoveryStartupMode::Recovered { .. }) => {}
+        Ok(
+            RecoveryStartupMode::FencedCandidate { .. }
+            | RecoveryStartupMode::AwaitingCompletion { .. },
+        ) => {
             eprintln!("fenced recovery candidate; normal runtime is disabled");
             std::process::exit(3);
         }
@@ -158,7 +161,7 @@ fn main() {
     let startup_is_normal = db.with_conn_sync(|conn| {
         Ok(matches!(
             iotkit_core_recovery::startup_mode(conn),
-            Ok(RecoveryStartupMode::Normal)
+            Ok(RecoveryStartupMode::Normal | RecoveryStartupMode::Recovered { .. })
         ))
     });
     if !matches!(startup_is_normal, Ok(true)) {

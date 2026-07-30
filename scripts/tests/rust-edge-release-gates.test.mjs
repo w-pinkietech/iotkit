@@ -112,6 +112,16 @@ test("PostgreSQL gate covers upgrades, profile migration, and recovery hold", ()
   );
 });
 
+test("host release gate saves the real Edge Node recovery drill evidence", () => {
+  const source = sources["test-edge-host-release-gate.sh"];
+  assert.match(source, /IOTKIT_TEST_RECOVERY_DRILL=1/);
+  assert.match(source, /IOTKIT_RECOVERY_EVIDENCE_DIR/);
+  assert.match(source, /edge-node-recovery/);
+  assert.match(bootstrapGate, /passphrase reset/);
+  assert.match(bootstrapGate, /ownership_reestablished/);
+  assert.match(bootstrapGate, /post_recovery_backup_verified/);
+});
+
 test("real output outage covers generic and Pinikiet exports", () => {
   const source = sources["test-edge-output.sh"];
   const rustTest = readFileSync(

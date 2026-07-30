@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "recovery_id": "recovery-0123456789abcdef0123456789abcdef",
+  "edge_id": "edge-0123456789abcdef0123456789abcdef",
+  "edge_node_id": "edge-node-01",
+  "candidate_instance_id": "candidate-0123456789abcdef0123456789abcdef",
+  "backup_id": "backup-0123456789abcdef0123456789abcdef",
+  "old_ledger_epoch": "01JOLDLEDGEREPOCH",
+  "new_ledger_epoch": "01JNEWLEDGEREPOCH",
+  "broker_credential_generation": 2,
+  "device_auth_generation": 4,
+  "status": "applied",
+  "edge_accepted_through": 45,
+  "replayed_records": 5,
+  "first_new_publication_seq": 1,
+  "last_new_publication_seq": 6,
+  "applied_at": 1720000001000
+}

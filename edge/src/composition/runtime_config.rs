@@ -58,6 +58,7 @@ pub struct RuntimeConfig {
     pub secure_cookies: bool,
     pub broker_certificate_file: Option<PathBuf>,
     pub storage_warning_percent: i32,
+    pub recovery_control_socket: PathBuf,
 }
 
 impl fmt::Debug for RuntimeConfig {
@@ -73,6 +74,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("secure_cookies", &self.secure_cookies)
             .field("broker_certificate_file", &self.broker_certificate_file)
             .field("storage_warning_percent", &self.storage_warning_percent)
+            .field("recovery_control_socket", &self.recovery_control_socket)
             .finish()
     }
 }
@@ -159,6 +161,7 @@ impl RuntimeConfig {
             secure_cookies: !args.development_http,
             broker_certificate_file: args.broker_certificate_file.clone(),
             storage_warning_percent: args.storage_warning_percent,
+            recovery_control_socket: args.recovery_control_socket.clone(),
         })
     }
 }

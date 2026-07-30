@@ -2,8 +2,16 @@ user edge-node-01
 topic write iotkit/v1/edge-nodes/edge-node-01/records
 topic write iotkit/v1/edge-nodes/edge-node-01/descriptors
 topic read iotkit/v1/edge-nodes/edge-node-01/accepted-through
+topic write iotkit/v1/edge-nodes/edge-node-01/recovery/result
+topic write iotkit/v1/edge-nodes/edge-node-01/recovery/completion-ack
+topic read iotkit/v1/edge-nodes/edge-node-01/recovery/request
+topic read iotkit/v1/edge-nodes/edge-node-01/recovery/completion
 
 user edge
 topic read iotkit/v1/edge-nodes/+/records
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic write iotkit/v1/edge-nodes/+/accepted-through
+topic read iotkit/v1/edge-nodes/+/recovery/result
+topic read iotkit/v1/edge-nodes/+/recovery/completion-ack
+topic write iotkit/v1/edge-nodes/+/recovery/request
+topic write iotkit/v1/edge-nodes/+/recovery/completion

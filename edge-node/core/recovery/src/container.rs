@@ -675,6 +675,10 @@ impl DecryptedStage {
     pub fn rewind(&mut self) -> io::Result<()> {
         self.file.seek(SeekFrom::Start(0)).map(|_| ())
     }
+
+    pub(crate) fn as_file(&self) -> &File {
+        &self.file
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1036,12 +1040,16 @@ fn validate_manifest(manifest: &NodeBackupManifest) -> Result<(), RecoveryError>
         || manifest.accepted_cursor < 0
         || manifest.allocation_high_water < 0
         || manifest.accepted_cursor > manifest.allocation_high_water
+        || manifest
+            .epoch_start_publication_seq
+            .is_some_and(|sequence| sequence < 1 || sequence > manifest.allocation_high_water)
         || !matches!(manifest.snapshot_mode, SnapshotMode::Online)
         || manifest.shutdown_seal_id.is_some()
-        || manifest.schema_version
-            != crate::all_edge_node_migrations()
+        || !(crate::MIN_RESTORABLE_SCHEMA_VERSION
+            ..=crate::all_edge_node_migrations()
                 .last()
-                .map_or(0, |migration| migration.version)
+                .map_or(0, |migration| migration.version))
+            .contains(&manifest.schema_version)
         || manifest.database_sha256.len() != 64
         || !manifest
             .database_sha256
