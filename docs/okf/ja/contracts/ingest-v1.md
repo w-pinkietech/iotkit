@@ -5,7 +5,7 @@ description: "認証付きHTTP ingestのwire schema、権限、retry、validatio
 language: ja
 translation_key: contracts.ingest-v1
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit認証付きingest契約 v1
@@ -231,7 +231,9 @@ Stagingは最大Envelope一件分のevictable reserveを持ち、rowとbyteを�
 
 現行実装は、認証付きHTTP binding、bearer authority、bounded admission、TLS/private-LAN listener、freshness、副作用なしvalidation、bounded staging/dedup、health/audit hook、local recovery authority closure、custody-completeなsanitized Edge Node DBの暗号化backup、local fenced-candidate restoreを提供します。Restore境界はclosedなvalid handoffを要求し、absent candidateだけへ書き、candidateをfencedのまま残します。RemoteからclaimできるEdge Node setup pathではありません。
 
-Broker fencing、remote permit、production/remoteでのrename後reconciliation、dedup-risk resolution、reactivation、same-ID new ledger epochは延期かつdefault-offです。Completed candidate rename後のexact local same-request replayは出荷済みで、保存済みreceiptをbyte-for-byte返しますが、production/remote reconciliationではありません。Slice 1にはproduction recovery handoffのproducerがなく、後続のpermitとcredential-generation checkまでcandidateはingestもpublishもできません。Device-token secretが存在する場合、legacy plaintext replacement snapshotは利用できません。Tokenやhashを出力せず、その理由を示します。State-only inspectionはcompleteなreplacement backupではありません。
+暗号化backupからの明示的なhardware recoveryでは、同梱Broker credentialの旧generationを先にfenceし、IoTKit Edgeがcandidate、artifact、old/new ledger epoch、credential generation、authoritative cursorへbindした一回限りのproduction recovery authorityを発行します。Candidateはexact authorityを検証し、snapshot内の未ack readingを新epochへ再構成し、IoTKit Edgeのdurable completionとNodeのcompletion ACKが成立するまでrecovery fenceを解除しません。CompletionとACKはadmin authorityを作らないため、operatorは通常runtimeを起動する前に必須のlocal passphrase resetでownershipを再確立します。Authenticated HTTP ingestを使う場合は、reset後にdesired listener、TLS generation、device authorityをtyped operationで再適用し、成功するまでlistenerを閉じたままにします。その後だけold generationを拒否したsame-IDの新ledger epochで収集・publishを再開できます。Cursor収束と、fresh encrypted backupの認証、healthy status、off-host保持はこのencrypted-backup recoveryをcloseする必須evidenceです。一般的なremote setupや無人failoverではありません。
+
+このexact recovery case以外のdeactivation/reactivation、IoTKit Edge間transfer、split-brain自動解決、dedup-risk自動解決、cursor収束前に代替機が再故障した場合の再復旧は延期かつdefault-offです。Exact same-request replayだけがidempotentで、candidate、artifact、epoch、generation、cursorの不一致は`recovery_hold`にします。Device-token secretが存在する場合、legacy plaintext replacement snapshotは利用できません。Tokenやhashを出力せず、その理由を示します。State-only inspectionはcompleteなreplacement backupではありません。
 
 Snapshot sanitizerは`target_registry`のdeployment credential tokenを空にします。Account、session、device credential hashはprotectedな暗号化DB stateとして残り得ます。MQTT/TLS private materialはそのDBの外にありartifactへ入れません。暗号化artifactとpassphraseはsecretです。
 
