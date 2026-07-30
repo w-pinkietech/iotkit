@@ -359,7 +359,7 @@ fn receipt_and_marker_coexist_only_for_a_valid_post_commit_cleanup_state() {
 #[cfg(target_os = "linux")]
 #[test]
 fn configure_backup_writes_schema_one_owner_only_json_and_refuses_replacement() {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/dev/shm").unwrap();
     let config_path = root.path().join("backup.json");
     let input = prepare_config(root.path());
     let mountinfo = mountinfo_for(&input.destination);
@@ -442,7 +442,7 @@ fn configure_rejects_a_staging_parent_that_is_not_tmpfs() {
 #[cfg(target_os = "linux")]
 #[test]
 fn competing_configure_is_busy_before_creating_any_temporary_name() {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/dev/shm").unwrap();
     let config_path = root.path().join("backup.json");
     let input = prepare_config(root.path());
     let guard = acquire_recovery_operation(&config_path).unwrap();
@@ -477,7 +477,7 @@ fn competing_configure_is_busy_before_creating_any_temporary_name() {
 #[cfg(target_os = "linux")]
 #[test]
 fn configure_detects_exact_config_cleanup_markers_before_creating_a_temporary_name() {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/dev/shm").unwrap();
     let config_path = root.path().join("backup.json");
     let input = prepare_config(root.path());
     let exact_file = ".iotkit-cleanup-0123456789abcdef0123456789abcdef";
@@ -522,7 +522,7 @@ fn configure_detects_exact_config_cleanup_markers_before_creating_a_temporary_na
 #[cfg(target_os = "linux")]
 #[test]
 fn competing_configure_reports_busy_before_scanning_config_cleanup_markers() {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/dev/shm").unwrap();
     let config_path = root.path().join("backup.json");
     let input = prepare_config(root.path());
     let marker = ".iotkit-cleanup-0123456789abcdef0123456789abcdef";
@@ -598,7 +598,7 @@ fn substitute_validated_config(parent_fd: RawFd, name: &std::ffi::CStr) -> std::
 #[cfg(target_os = "linux")]
 #[test]
 fn replacement_rolls_back_when_the_validated_inode_is_substituted() {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/dev/shm").unwrap();
     let config_path = root.path().join("backup.json");
     let input = prepare_config(root.path());
     let mountinfo = mountinfo_for(&input.destination);
@@ -670,7 +670,7 @@ fn substitute_config_cleanup(parent_fd: RawFd, name: &std::ffi::CStr) -> std::io
 #[cfg(target_os = "linux")]
 #[test]
 fn config_cleanup_substitution_preserves_the_unrelated_file_and_fails() {
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/dev/shm").unwrap();
     let config_path = root.path().join("backup.json");
     let input = prepare_config(root.path());
     let mountinfo = mountinfo_for(&input.destination);
@@ -839,7 +839,7 @@ fn handoff_loader_accepts_only_bounded_owner_only_closed_json() {
 #[test]
 fn replacement_refuses_a_dangling_symlink_without_publishing_configuration() {
     use std::os::unix::fs::symlink;
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/dev/shm").unwrap();
     let config_path = root.path().join("backup.json");
     let input = prepare_config(root.path());
     symlink(root.path().join("missing"), &config_path).unwrap();

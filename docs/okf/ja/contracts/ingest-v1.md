@@ -5,7 +5,7 @@ description: "認証付きHTTP ingestのwire schema、権限、retry、validatio
 language: ja
 translation_key: contracts.ingest-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit認証付きingest契約 v1

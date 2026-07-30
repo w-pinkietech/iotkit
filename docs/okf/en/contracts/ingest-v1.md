@@ -5,7 +5,7 @@ description: "Defines the complete authenticated HTTP ingest wire schema, author
 language: en
 translation_key: contracts.ingest-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit authenticated ingest contract v1

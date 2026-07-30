@@ -833,8 +833,8 @@ fn create_fixture() -> CreateFixture {
     use std::os::unix::fs::PermissionsExt;
 
     let control = tempfile::TempDir::new().unwrap();
-    let destination = tempfile::TempDir::new().unwrap();
-    let database_root = tempfile::TempDir::new_in("/dev/shm").unwrap();
+    let destination = tempfile::TempDir::new_in("/dev/shm").unwrap();
+    let database_root = tempfile::TempDir::new().unwrap();
     let staging_parent = tempfile::TempDir::new_in("/dev/shm").unwrap();
     let staging = tempfile::TempDir::new_in(staging_parent.path()).unwrap();
     for directory in [

@@ -300,7 +300,7 @@ fn restore_publishes_an_already_fenced_wal_independent_candidate() {
     let candidate = root.path().join("candidate.db");
     let snapshot = root.path().join("snapshot.db");
     let artifact = root.path().join("backup.iotkit-node-backup");
-    let staging = tempfile::tempdir_in("/tmp").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
     fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700)).unwrap();
 
     let source = tests_support::active_database_with_publications(&live, 0, 1);
@@ -402,7 +402,7 @@ fn restore_fault_matrix_never_publishes_an_unfenced_name() {
         let candidate = root.path().join("candidate.db");
         let snapshot = root.path().join("snapshot.db");
         let artifact = root.path().join("backup.iotkit-node-backup");
-        let staging = tempfile::tempdir_in("/tmp").unwrap();
+        let staging = tempfile::tempdir_in("/dev/shm").unwrap();
         fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700)).unwrap();
 
         let source = tests_support::active_database_with_publications(&live, 0, 1);
@@ -608,7 +608,7 @@ fn restore_fixture() -> RestoreFixture {
     let candidate = root.path().join("candidate.db");
     let snapshot = root.path().join("snapshot.db");
     let artifact = root.path().join("backup.iotkit-node-backup");
-    let staging = tempfile::tempdir_in("/tmp").unwrap();
+    let staging = tempfile::tempdir_in("/dev/shm").unwrap();
     fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let staging_path = staging.path().to_path_buf();
 

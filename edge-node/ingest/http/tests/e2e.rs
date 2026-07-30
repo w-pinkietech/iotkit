@@ -173,7 +173,8 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
             move || TraceWriter(Arc::clone(&trace_capture))
         })
         .finish();
-    let _subscriber = tracing::subscriber::set_default(subscriber);
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("the ingest HTTP test process must install one tracing subscriber");
     let db_path = dir.path().join("journey.db");
     let (principal, token) = provision_device(&db_path);
     let running = start_edge(
@@ -185,6 +186,30 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
         token.clone(),
     )
     .await;
+
+    let mut malformed = tokio::net::TcpStream::connect(running.serving.local_addr())
+        .await
+        .unwrap();
+    let malformed_peer = malformed.local_addr().unwrap().to_string();
+    malformed.write_all(b"malformed TLS").await.unwrap();
+    malformed.shutdown().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let captured = String::from_utf8_lossy(&trace_capture.lock().unwrap()).into_owned();
+            if captured.lines().any(|line| {
+                line.contains("HTTP ingress peer connection rejected")
+                    && line.contains(&malformed_peer)
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the malformed peer must produce captured service/transport error output");
+    let trace_output = String::from_utf8_lossy(&trace_capture.lock().unwrap()).into_owned();
+    assert!(!trace_output.contains(&token));
+    assert!(!trace_output.contains(&passphrase));
 
     let (export, write, curl) = journey_commands();
     let setup = shell(
@@ -318,21 +343,6 @@ async fn documented_journey_is_pinned_tls_and_survives_duplicate_and_restart() {
         &unpinned,
     ];
     assert_captures_redact(&captures, &token, &passphrase);
-    let mut malformed = tokio::net::TcpStream::connect(running.serving.local_addr())
-        .await
-        .unwrap();
-    malformed.write_all(b"malformed TLS").await.unwrap();
-    malformed.shutdown().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if !trace_capture.lock().unwrap().is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the malformed peer must produce captured service/transport error output");
     let trace_output = String::from_utf8_lossy(&trace_capture.lock().unwrap()).into_owned();
     assert!(!trace_output.contains(&token));
     assert!(!trace_output.contains(&passphrase));

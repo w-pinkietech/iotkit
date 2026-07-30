@@ -9,7 +9,6 @@ use std::{
 use std::ffi::CString;
 #[cfg(not(target_os = "linux"))]
 use std::fs;
-#[cfg(target_os = "linux")]
 use std::mem::MaybeUninit;
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -216,10 +215,8 @@ pub fn encrypt_container(
 ) -> Result<(), RecoveryError> {
     validate_output_name(output_name)?;
     validate_passphrase(passphrase)?;
-    let mut salt = [0_u8; SALT_BYTES];
-    let mut nonce_prefix = [0_u8; NONCE_PREFIX_BYTES];
-    getrandom::fill(&mut salt).map_err(|_| RecoveryError::Random)?;
-    getrandom::fill(&mut nonce_prefix).map_err(|_| RecoveryError::Random)?;
+    let salt = random_bytes::<SALT_BYTES>()?;
+    let nonce_prefix = random_bytes::<NONCE_PREFIX_BYTES>()?;
     encrypt_with_entropy(
         snapshot,
         manifest,
@@ -229,6 +226,12 @@ pub fn encrypt_container(
         salt,
         nonce_prefix,
     )
+}
+
+fn random_bytes<const N: usize>() -> Result<[u8; N], RecoveryError> {
+    let mut bytes = [MaybeUninit::uninit(); N];
+    let initialized = getrandom::fill_uninit(&mut bytes).map_err(|_| RecoveryError::Random)?;
+    <[u8; N]>::try_from(initialized).map_err(|_| RecoveryError::Random)
 }
 
 fn encrypt_with_entropy(
