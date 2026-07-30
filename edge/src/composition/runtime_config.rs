@@ -1,9 +1,13 @@
-use std::{fmt, fs, net::SocketAddr, path::PathBuf};
+use std::{
+    fmt, fs,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 
 use url::Url;
 
 use crate::{
-    cli::{ServeArgs, read_owner_only_secret},
+    cli::{DeploymentProfileArg, ServeArgs, read_owner_only_secret},
     storage::StorageProfile,
 };
 
@@ -56,6 +60,7 @@ pub struct RuntimeConfig {
     pub http_listen: SocketAddr,
     pub public_origin: String,
     pub secure_cookies: bool,
+    pub trial_profile: bool,
     pub broker_certificate_file: Option<PathBuf>,
     pub storage_warning_percent: i32,
     pub recovery_control_socket: PathBuf,
@@ -72,6 +77,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("http_listen", &self.http_listen)
             .field("public_origin", &self.public_origin)
             .field("secure_cookies", &self.secure_cookies)
+            .field("trial_profile", &self.trial_profile)
             .field("broker_certificate_file", &self.broker_certificate_file)
             .field("storage_warning_percent", &self.storage_warning_percent)
             .field("recovery_control_socket", &self.recovery_control_socket)
@@ -151,6 +157,18 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::Invalid("invalid public origin"));
         }
+        let trial_profile = args.deployment_profile == DeploymentProfileArg::Trial;
+        if trial_profile {
+            let origin_is_loopback = origin
+                .host_str()
+                .and_then(|host| host.parse::<IpAddr>().ok())
+                .is_some_and(|address| address.is_loopback());
+            if !args.development_http || !origin_is_loopback {
+                return Err(RuntimeConfigError::Invalid(
+                    "trial profile requires development HTTP on a loopback public origin",
+                ));
+            }
+        }
         Ok(Self {
             storage,
             edge_id: args.edge_id.clone(),
@@ -159,6 +177,7 @@ impl RuntimeConfig {
             http_listen,
             public_origin: args.public_origin.clone(),
             secure_cookies: !args.development_http,
+            trial_profile,
             broker_certificate_file: args.broker_certificate_file.clone(),
             storage_warning_percent: args.storage_warning_percent,
             recovery_control_socket: args.recovery_control_socket.clone(),

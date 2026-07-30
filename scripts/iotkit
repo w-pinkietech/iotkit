@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+[[ ${1:-} == "trial" ]] || {
+  echo "usage: ./scripts/iotkit trial [--config PATH] {validate,up,status,down,reset}" >&2
+  exit 2
+}
+shift
+exec python3 "$repo_root/scripts/iotkit_trial.py" "$@"

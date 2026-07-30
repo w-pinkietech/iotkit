@@ -20,7 +20,33 @@ fn built_in_catalog_is_unique_and_uses_host_api_v1() {
         .into_iter()
         .map(|factory| ((factory.descriptor)()).adapter_type_id.as_str().to_owned())
         .collect();
-    assert_eq!(ids, ["bravepi-mainboard", "rpi-local"]);
+    assert_eq!(ids, ["bravepi-mainboard", "rpi-local", "trial-sample"]);
+}
+
+#[test]
+fn trial_sample_factory_has_inventory_and_rejects_hardware_fields() {
+    let mut sample = raw("trial-sample");
+    sample.poll_interval_ms = Some(1_000);
+    let prepared = resolve_instance("trial_sample".into(), sample)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        prepared.positional_inventory(),
+        [PositionalInventoryItem {
+            hardware_id: "input:test:line_a:sample".into(),
+            model_id: "opt3001".into(),
+            label: "Trial illuminance sensor".into(),
+        }]
+    );
+
+    let mut invalid = raw("trial-sample");
+    invalid.poll_interval_ms = Some(1_000);
+    invalid.bus_path = Some("/dev/i2c-1".into());
+    assert!(
+        resolve_instance("trial_sample".into(), invalid)
+            .unwrap_err()
+            .contains("trial-sample-only")
+    );
 }
 
 #[test]

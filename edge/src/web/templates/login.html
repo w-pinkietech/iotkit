@@ -8,6 +8,7 @@
 </head>
 <body class="login-body">
   <main class="login-card">
+    {% if trial_profile %}<div class="trial-banner" role="status"><strong>お試し環境</strong><span>このPCだけでIoTKitを試しています。現場運用には使用しないでください。</span></div>{% endif %}
     <div class="login-product"><img src="/static/pinkietech-mark.svg" alt=""><span><strong>IoTKit</strong><small>IoTKit Console</small></span></div>
     <h1>IoTKitへログイン</h1>
     <p>センサーの状態と現在値を確認します。</p>

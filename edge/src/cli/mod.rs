@@ -221,6 +221,8 @@ pub struct ServeArgs {
     pub public_origin: String,
     #[arg(long)]
     pub development_http: bool,
+    #[arg(long, value_enum, default_value_t = DeploymentProfileArg::Field)]
+    pub deployment_profile: DeploymentProfileArg,
     #[arg(long)]
     pub broker_certificate_file: Option<PathBuf>,
     #[arg(long, default_value_t = 90)]
@@ -241,6 +243,12 @@ pub struct ServeArgs {
     pub output_ca_file: Option<PathBuf>,
     #[arg(long)]
     pub output_allow_insecure: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DeploymentProfileArg {
+    Field,
+    Trial,
 }
 
 #[derive(Debug, Args)]

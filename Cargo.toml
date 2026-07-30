@@ -29,6 +29,7 @@ members = [
     "edge-node/input/hardware/sensor-drivers",
     "edge-node/tools/bravepi-poc",
     "edge-node/adapters/rpi-local",
+    "edge-node/adapters/trial-sample",
     "edge-node/apps/node",
     "edge-node/apps/nodectl",
     "edge-node/input/runtimes/polling",

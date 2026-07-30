@@ -9,7 +9,7 @@ use std::{
 };
 
 use iotkit_edge::{
-    cli::{ServeArgs, StorageArgs, StorageProfileArg},
+    cli::{DeploymentProfileArg, ServeArgs, StorageArgs, StorageProfileArg},
     composition::runtime::{ProductionRuntimeFactory, RuntimeError, RuntimeFactory, run_runtime},
     composition::runtime_config::{MqttTransportConfig, RuntimeConfig},
     lifecycle::ExitReason,
@@ -46,6 +46,7 @@ fn serve_args(directory: &TempDir) -> ServeArgs {
         http_listen: "127.0.0.1:0".into(),
         public_origin: "https://edge.example".into(),
         development_http: false,
+        deployment_profile: DeploymentProfileArg::Field,
         broker_certificate_file: None,
         storage_warning_percent: 90,
         recovery_control_socket: directory.path().join("recovery-control.sock"),
@@ -57,6 +58,24 @@ fn serve_args(directory: &TempDir) -> ServeArgs {
         output_ca_file: None,
         output_allow_insecure: false,
     }
+}
+
+#[test]
+fn trial_profile_requires_loopback_development_http() {
+    let directory = TempDir::new().unwrap();
+    let mut args = serve_args(&directory);
+    args.broker_url = "tcp://127.0.0.1:18883".into();
+    args.allow_insecure = true;
+    args.trust_mode = None;
+    args.ca_file = None;
+    args.development_http = true;
+    args.public_origin = "http://127.0.0.1:8080".into();
+    args.deployment_profile = DeploymentProfileArg::Trial;
+    let config = RuntimeConfig::from_serve_args(&args).unwrap();
+    assert!(config.trial_profile);
+
+    args.public_origin = "http://192.0.2.1:8080".into();
+    assert!(RuntimeConfig::from_serve_args(&args).is_err());
 }
 
 #[test]

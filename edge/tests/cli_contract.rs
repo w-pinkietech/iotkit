@@ -2,7 +2,7 @@ use std::{path::PathBuf, process::Command as ProcessCommand};
 
 use clap::Parser;
 use iotkit_edge::{
-    cli::{BackupCommand, Cli, Command},
+    cli::{BackupCommand, Cli, Command, DeploymentProfileArg},
     storage::{Storage, StorageProfile},
 };
 use tempfile::TempDir;
@@ -81,6 +81,8 @@ fn serve_preserves_storage_and_console_binding_flags() {
         "127.0.0.1:8080",
         "--public-origin",
         "https://edge.example",
+        "--deployment-profile",
+        "trial",
     ])
     .unwrap();
     match cli.command.unwrap() {
@@ -88,6 +90,7 @@ fn serve_preserves_storage_and_console_binding_flags() {
             assert_eq!(args.storage.database, PathBuf::from("/data/edge.db"));
             assert_eq!(args.http_listen.to_string(), "127.0.0.1:8080");
             assert_eq!(args.public_origin, "https://edge.example");
+            assert_eq!(args.deployment_profile, DeploymentProfileArg::Trial);
         }
         other => panic!("unexpected command: {other:?}"),
     }

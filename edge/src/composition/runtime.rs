@@ -87,6 +87,7 @@ where
         WebConfig {
             public_origin: config.public_origin,
             secure_cookies: config.secure_cookies,
+            trial_profile: config.trial_profile,
         },
         web_application,
     );

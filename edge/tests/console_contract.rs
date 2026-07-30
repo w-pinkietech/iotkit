@@ -236,6 +236,48 @@ async fn login_page_keeps_console_hooks() {
 }
 
 #[tokio::test]
+async fn trial_profile_is_always_visible_before_and_after_login() {
+    let config = WebConfig {
+        trial_profile: true,
+        ..WebConfig::test()
+    };
+    let app = router(config, Arc::new(StubApplication::default()));
+    let login = app
+        .clone()
+        .oneshot(Request::get("/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let login_html = String::from_utf8(
+        to_bytes(login.into_body(), 1_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(login_html.contains("お試し環境"));
+    assert!(login_html.contains("現場運用には使用しないでください"));
+
+    let console = app
+        .oneshot(
+            Request::get("/status")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let console_html = String::from_utf8(
+        to_bytes(console.into_body(), 1_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(console_html.contains("お試し環境"));
+    assert!(console_html.contains("サンプルデータ"));
+}
+
+#[tokio::test]
 async fn static_assets_are_served_from_the_existing_frontend_build() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
     for (path, content_type) in [

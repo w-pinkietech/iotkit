@@ -32,6 +32,7 @@ pub const MAX_HISTORY_EXPORT_ROWS: usize = 100_000;
 pub struct WebConfig {
     pub public_origin: String,
     pub secure_cookies: bool,
+    pub trial_profile: bool,
 }
 
 impl WebConfig {
@@ -39,6 +40,7 @@ impl WebConfig {
         Self {
             public_origin: "http://127.0.0.1:8080".into(),
             secure_cookies: false,
+            trial_profile: false,
         }
     }
 }
@@ -505,10 +507,14 @@ async fn root() -> Redirect {
 #[template(path = "login.html")]
 struct LoginTemplate<'a> {
     error: &'a str,
+    trial_profile: bool,
 }
 
-async fn login_page() -> Result<Html<String>, WebError> {
-    let template = LoginTemplate { error: "" };
+async fn login_page(State(state): State<AppState>) -> Result<Html<String>, WebError> {
+    let template = LoginTemplate {
+        error: "",
+        trial_profile: state.config.trial_profile,
+    };
     Ok(Html(template.render().map_err(internal)?))
 }
 
@@ -527,6 +533,7 @@ struct ConsoleTemplate<'a> {
     role: &'a str,
     is_owner: bool,
     is_admin: bool,
+    trial_profile: bool,
     view: ConsoleView,
 }
 
@@ -631,6 +638,7 @@ async fn console_page(
             role: &principal.role,
             is_owner: principal.role == "system_admin",
             is_admin: principal.role == "admin" || principal.role == "system_admin",
+            trial_profile: state.config.trial_profile,
             view,
         }
         .render()
@@ -794,6 +802,7 @@ async fn login_form(State(state): State<AppState>, request: Request) -> Response
         Err(_) => {
             let html = LoginTemplate {
                 error: "ログインIDまたはパスワードが正しくありません。",
+                trial_profile: state.config.trial_profile,
             }
             .render()
             .unwrap_or_else(|_| "画面を表示できません".to_owned());
