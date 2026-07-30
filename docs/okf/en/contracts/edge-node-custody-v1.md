@@ -5,7 +5,7 @@ description: "Defines the complete MQTT custody transfer, activation, record fam
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 3
+revision: 4
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -329,8 +329,14 @@ UI, and notifications.
 
 ## Deferred
 
-The following are deferred: deactivation/reactivation, IoTKit Edge transfer, Edge Node ID reuse, clone
-detection, automatic adoption of an existing standalone outbox, same-epoch `stream_start_after`,
-terminal/gap repair protocol, multi-Edge Node fleet operations, generic Broker fan-out, legacy HTTPS
+Only operator-authorized hardware recovery from an encrypted backup may reactivate the
+same Edge Node ID under a new ledger epoch after fencing the old credential generation,
+as defined by the [Edge Node recovery contract](edge-node-recovery-v1.md). This is not
+normal activation, transfer between Edge instances, or automatic clone adoption.
+
+Outside that exact recovery case, the following are deferred: deactivation/reactivation,
+IoTKit Edge transfer, Edge Node ID reuse, clone detection, automatic adoption of an
+existing standalone outbox, same-epoch `stream_start_after`, terminal/gap repair
+protocol, multi-Edge Node fleet operations, generic Broker fan-out, legacy HTTPS
 migration, and alternative egress bindings. Ambiguous legacy or restored state enters
 `recovery_hold`; it is never auto-activated or remotely cleaned.

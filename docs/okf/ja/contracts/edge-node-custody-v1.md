@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転、activation、record family、ack、re
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 3
+revision: 4
 ---
 
 # Edge Node保管責任契約 v1
@@ -177,4 +177,6 @@ Storage failure、ENOSPC、corruption、commit前cancel、gap、content conflict
 
 R10はcanonical Observationを運びます。IoTKit Edgeが保存seriesを`production`等へ写像しますが、そのmappingはR10へ入りません。Pinikietの業務成功はcustody ackではなく、製品、工程、生産record、OEE、alarm、UI、通知はPinikietが所有します。
 
-Deactivation/reactivation、IoTKit Edge移管、Edge Node ID再利用、clone検出、standalone outbox自動adopt、same-epoch start boundary、terminal/gap repair、fleet operation、Broker fan-out、legacy HTTPS migration、別egress bindingは延期中です。曖昧なlegacy/restore stateは`recovery_hold`にし、自動activationやremote cleanupを行いません。
+暗号化backupを使うoperator承認済みhardware recoveryだけは、[Edge Node復旧契約](edge-node-recovery-v1.md)に従い、旧credential generationをfenceしてsame-IDの新ledger epochへreactivateできます。これは通常のactivation、Edge間transfer、cloneの自動採用ではありません。
+
+このexact recovery case以外のdeactivation/reactivation、IoTKit Edge移管、Edge Node ID再利用、clone検出、standalone outbox自動adopt、same-epoch start boundary、terminal/gap repair、fleet operation、Broker fan-out、legacy HTTPS migration、別egress bindingは延期中です。曖昧なlegacy/restore stateは`recovery_hold`にし、自動activationやremote cleanupを行いません。

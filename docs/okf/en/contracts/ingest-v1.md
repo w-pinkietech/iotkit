@@ -5,7 +5,7 @@ description: "Defines the complete authenticated HTTP ingest wire schema, author
 language: en
 translation_key: contracts.ingest-v1
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit authenticated ingest contract v1
@@ -388,13 +388,28 @@ boundary requires a valid closed handoff, writes only an absent candidate, and l
 that candidate fenced. It is intentionally a device-builder HTTP path, not a remotely
 claimable Edge Node setup path.
 
-Broker fencing, a remote permit, production or remote post-rename reconciliation,
-dedup-risk resolution, reactivation, and a same-ID new ledger epoch remain deferred
-and default-off. The exact local same-request replay after a completed candidate
-rename is shipped and returns the stored receipt byte-for-byte; this does not provide
-production or remote reconciliation. Slice 1 does not produce a production recovery
-handoff; a candidate cannot ingest or publish before the later permit and
-credential-generation checks. Legacy plaintext replacement
+For explicit hardware recovery from an encrypted backup, the bundled Broker fences
+the old credential generation first. IoTKit Edge then issues one-time production
+recovery authority bound to the candidate, artifact, old and new ledger epochs,
+credential generations, and authoritative cursor. The candidate validates that exact
+authority, rebuilds snapshot-carried unacknowledged readings under the new epoch, and
+does not clear its recovery fence until IoTKit Edge has durably completed the case and
+the Node has acknowledged that completion. Completion and its ACK create no admin
+authority, so the operator must perform the required local passphrase reset to
+re-establish ownership before normal runtime starts. If authenticated HTTP ingest is
+used, the operator reapplies its desired listener, TLS generation, and device
+authority through typed operations after the reset; the listener remains closed until
+that succeeds. Only then may collection and publication resume for the same Edge Node
+ID under the new ledger epoch while the old generation remains rejected. Cursor
+convergence plus a fresh encrypted backup that is authenticated, healthy, and retained
+off host are required closure evidence for this encrypted-backup recovery. This is
+not a general remote setup or unattended failover path.
+
+Outside that exact recovery case, deactivation/reactivation, transfer between IoTKit
+Edge instances, automatic split-brain or dedup-risk resolution, and re-recovery when
+the replacement fails before cursor convergence remain deferred and default-off.
+Only an exact same-request replay is idempotent; a candidate, artifact, epoch,
+generation, or cursor mismatch enters `recovery_hold`. Legacy plaintext replacement
 snapshot export remains unavailable once a device-token secret exists; the Edge Node
 must say so without emitting the token or its hash. State-only inspection is not a
 complete replacement backup.
