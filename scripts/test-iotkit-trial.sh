@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 scratch=$(mktemp -d)
 export XDG_DATA_HOME="$scratch/state"
+state="$XDG_DATA_HOME/iotkit/trial"
 config="$scratch/iotkit.toml"
 password_file="$scratch/admin-password"
 launcher_log="$scratch/launcher.log"
@@ -13,12 +14,23 @@ port=$((21000 + $$ % 10000))
 broker_port=$((port + 1))
 
 cleanup() {
-  if [[ -f "$XDG_DATA_HOME/iotkit/trial/trial-state.json" ]]; then
+  status=$?
+  if ((status != 0)) && [[ -f "$state/trial.env" ]]; then
+    echo "== trial Compose state ==" >&2
+    docker compose --env-file "$state/trial.env" \
+      --file "$repo_root/deploy/compose.trial.yaml" ps --all >&2 || true
+    echo "== trial service logs ==" >&2
+    docker compose --env-file "$state/trial.env" \
+      --file "$repo_root/deploy/compose.trial.yaml" \
+      logs --no-color --tail 200 >&2 || true
+  fi
+  if [[ -f "$state/trial-state.json" ]]; then
     python3 "$repo_root/scripts/iotkit_trial.py" --config "$config" down >/dev/null 2>&1 || true
     python3 "$repo_root/scripts/iotkit_trial.py" --config "$config" \
       reset --confirm-trial-data-loss >/dev/null 2>&1 || true
   fi
   rm -rf "$scratch"
+  return "$status"
 }
 trap cleanup EXIT
 
@@ -96,7 +108,6 @@ done
 jq -e '[.items[].values[0]] | unique | length >= 2' "$scratch/history.json" >/dev/null
 grep -Fq "お試し環境" <(curl -fsS -b "$cookies" "$origin/status")
 
-state="$XDG_DATA_HOME/iotkit/trial"
 compose=(
   docker compose
   --env-file "$state/trial.env"
