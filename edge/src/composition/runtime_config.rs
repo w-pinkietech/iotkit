@@ -170,12 +170,12 @@ impl RuntimeConfig {
                     "trial profile requires a loopback ingest broker endpoint",
                 ));
             }
-            if let Some(output) = &output {
-                if !host_is_loopback_ip(&output.host) {
-                    return Err(RuntimeConfigError::Invalid(
-                        "trial profile requires a loopback output broker endpoint",
-                    ));
-                }
+            if let Some(output) = &output
+                && !host_is_loopback_ip(&output.host)
+            {
+                return Err(RuntimeConfigError::Invalid(
+                    "trial profile requires a loopback output broker endpoint",
+                ));
             }
         }
         Ok(Self {
