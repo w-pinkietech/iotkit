@@ -5,7 +5,7 @@ description: "Loopback限定のIoTKit試用profileを起動、確認、停止、
 language: ja
 translation_key: operations.trial-profile
 status: draft
-revision: 2
+revision: 3
 ---
 
 # このPCでIoTKitを試す
@@ -48,9 +48,15 @@ repository外の`${XDG_DATA_HOME:-$HOME/.local/share}/iotkit/trial`へowner-only
 
 1. **概要**で収集ノードが1台検出されていることを確認する。
 2. **機器管理**で収集ノードを選び、有効化する。
-3. 試用照度sensorを開き、案内された表示設定を完了する。
-4. **センサー一覧**で照度値が変化することを確認する。
-5. **受信履歴**で行が増えることを確認する。
+3. 試用照度sensorと試用接点状態sensorを開き、案内された表示設定を完了する。
+4. **センサー一覧**で次の両方を確認する。
+   - 照度（連続値・三角波）がゆっくり変化する。
+   - 接点状態（矩形波）が High / Low（1 / 0）を切り替える。
+5. **受信履歴**で両系列の行が増えることを確認する。
+
+試用sample Adapterは同じ`trial-sample`から連続値と状態の2系列を、通常のInput Adapter /
+保管責任経路へ流します。DB seedやConsole mockではありません。追加の波形設定は不要で、
+2行の`iotkit.toml`のまま両方有効です。
 
 有効化は実際の保管責任contractの一部なので、試用でも明示操作として残しています。
 停止と再起動ではDBを削除しません。

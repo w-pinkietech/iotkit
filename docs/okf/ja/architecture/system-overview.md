@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 9
+revision: 10
 ---
 
 # Architecture
@@ -131,7 +131,7 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/adapters/bravepi-mainboard/codec` (`bravepi-codec`) | BravePI frame codec |
 | `edge-node/adapters/bravepi-mainboard` (`bravepi-mainboard-adapter`) | BravePI transport + codec + driverからEnvelopeへの変換 |
 | `edge-node/adapters/rpi-local` (`rpi-local-adapter`) | Direct Linux I2C Adapter、対応model catalog、measurement projection |
-| `edge-node/adapters/trial-sample` (`trial-sample-adapter`) | 試用profileで明示設定するlocal限定sample Input Adapter。現場有効化には`IOTKIT_ENABLE_TRIAL_SAMPLE=1`が必要で、inventoryのmodel idはhardwareではない`trial-sample-illuminance`。通常のadapter hostとcustody経路へ変化する測定値を渡す |
+| `edge-node/adapters/trial-sample` (`trial-sample-adapter`) | 試用profileで明示設定するlocal限定sample Input Adapter。現場有効化には`IOTKIT_ENABLE_TRIAL_SAMPLE=1`が必要。inventoryのmodel idはhardwareではない`trial-sample-illuminance`（連続・三角波）と`trial-sample-contact`（状態・矩形波）。通常のadapter hostとcustody経路へ2系列の測定値を渡す |
 | `edge-node/tools/bravepi-poc` (`bravepi-poc`) | BravePI実機PoC用tool。非配布 |
 | `edge-node/apps/node` (`iotkit-edge-node`) | Edge Node composition root binary |
 | `edge-node/apps/nodectl` (`iotkit-edge-nodectl`) | Edge Node operator CLI |

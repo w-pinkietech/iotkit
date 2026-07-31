@@ -40,11 +40,18 @@ fn trial_sample_factory_has_inventory_and_rejects_hardware_fields() {
         .unwrap();
     assert_eq!(
         prepared.positional_inventory(),
-        [PositionalInventoryItem {
-            hardware_id: "input:test:line_a:sample".into(),
-            model_id: "trial-sample-illuminance".into(),
-            label: "Trial illuminance sensor".into(),
-        }]
+        [
+            PositionalInventoryItem {
+                hardware_id: "input:test:line_a:sample".into(),
+                model_id: "trial-sample-illuminance".into(),
+                label: "Trial illuminance sensor".into(),
+            },
+            PositionalInventoryItem {
+                hardware_id: "input:test:line_a:state".into(),
+                model_id: "trial-sample-contact".into(),
+                label: "Trial contact state".into(),
+            },
+        ]
     );
 
     let mut invalid = raw("trial-sample");

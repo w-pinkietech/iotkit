@@ -24,9 +24,9 @@ Git、Python 3.11以降、Docker Composeを使用できるLinux hostで、reposi
 ```
 
 表示に従って試用管理者のpasswordを決め、`http://127.0.0.1:8080`を開いて
-`admin`でログインします。変化する照度sampleはDBやConsoleへ直接seedされず、
-Input Adapter、Edge Nodeの保管責任、標準MQTT Broker、IoTKit Edgeの通常経路を
-通ります。確認方法と片付け方は
+`admin`でログインします。変化する照度（三角波）と接点状態（矩形波）のsampleは
+DBやConsoleへ直接seedされず、Input Adapter、Edge Nodeの保管責任、標準MQTT Broker、
+IoTKit Edgeの通常経路を通ります。確認方法と片付け方は
 [試用profileガイド](docs/okf/ja/operations/trial-profile.md)を参照してください。
 試用環境は現場導入には使用できません。
 
