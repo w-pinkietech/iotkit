@@ -20,6 +20,7 @@ jobs:
     outputs:
       rust: ${{ steps.select.outputs.rust }}
       edge: ${{ steps.select.outputs.edge }}
+      trial: ${{ steps.select.outputs.trial }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,9 +151,6 @@ jobs:
       - name: IoTKit Console browser journey
         run: scripts/test-edge-console-e2e.sh
 
-      - name: Trial profile first-run and custody journey
-        run: scripts/test-iotkit-trial.sh
-
       - name: Rust Edge tests
         run: cargo test -p iotkit-edge
 
@@ -161,3 +159,14 @@ jobs:
 
       - name: Durable output delivery
         run: scripts/test-edge-output.sh
+
+  trial:
+    name: Trial profile first-run and custody journey
+    needs: changes
+    if: needs.changes.outputs.trial == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trial profile first-run and custody journey
+        run: scripts/test-iotkit-trial.sh
