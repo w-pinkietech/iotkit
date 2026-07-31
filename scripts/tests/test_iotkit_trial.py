@@ -137,6 +137,111 @@ class TrialConfigTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(iotkit_trial.ConfigError, "does not match"):
                     iotkit_trial._validated_marker(state, config)
+                document = iotkit_trial._validated_marker(
+                    state, config, require_config_match=False
+                )
+                self.assertEqual(document["config"]["broker_port"], 19999)
+
+    def test_down_and_status_use_marker_config_when_toml_drifts(self):
+        stored = self.load(
+            'config_version = 1\nprofile = "trial"\n'
+            "[trial]\nconsole_port = 18080\nbroker_port = 18884\n"
+        )
+        drifted = self.load('config_version = 1\nprofile = "trial"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "iotkit" / "trial"
+            state.mkdir(parents=True)
+            (state / "trial-state.json").write_text(
+                json.dumps(
+                    {
+                        "format": 1,
+                        "profile": "trial",
+                        "project": iotkit_trial._compose_project(state),
+                        "config": stored.normalized(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            observed: list[list[str]] = []
+
+            def capture(args, **_kwargs):
+                observed.append(list(args))
+                return ""
+
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                with mock.patch.object(iotkit_trial, "_run", side_effect=capture):
+                    iotkit_trial.command_down(REPO_ROOT, state, drifted)
+                    iotkit_trial.command_status(REPO_ROOT, state, drifted)
+
+            env_files = [
+                Path(args[args.index("--env-file") + 1]).read_text(encoding="utf-8")
+                for args in observed
+            ]
+            self.assertTrue(all("IOTKIT_TRIAL_CONSOLE_PORT=18080" in text for text in env_files))
+            self.assertTrue(all("IOTKIT_TRIAL_BROKER_PORT=18884" in text for text in env_files))
+
+    def test_incomplete_state_is_recoverable_after_toml_drift(self):
+        stored = self.load(
+            'config_version = 1\nprofile = "trial"\n'
+            "[trial]\nconsole_port = 18080\nbroker_port = 18884\n"
+        )
+        drifted = self.load('config_version = 1\nprofile = "trial"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "iotkit" / "trial"
+            state.mkdir(parents=True)
+            (state / "initializing.json").write_text(
+                json.dumps(
+                    {
+                        "format": 1,
+                        "profile": "trial-initializing",
+                        "project": iotkit_trial._compose_project(state),
+                        "config": stored.normalized(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                self.assertTrue(
+                    iotkit_trial._is_recognized_incomplete_state(state, drifted)
+                )
+                with mock.patch("subprocess.run") as run:
+                    run.return_value = subprocess.CompletedProcess([], 0)
+                    iotkit_trial.command_reset(
+                        REPO_ROOT, state, drifted, confirmed=True
+                    )
+            self.assertFalse(state.exists())
+
+    def test_failed_init_cleanup_error_does_not_hide_original_error(self):
+        config = self.load('config_version = 1\nprofile = "trial"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "iotkit" / "trial"
+            original = RuntimeError("edge-node init failed")
+            cleanup = subprocess.CalledProcessError(1, ["docker", "compose", "down"])
+
+            def initialize(*_args, **_kwargs):
+                state.mkdir(parents=True)
+                (state / "initializing.json").write_text("{}", encoding="utf-8")
+                raise original
+
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                with mock.patch.object(iotkit_trial, "_require_tools"):
+                    with mock.patch.object(
+                        iotkit_trial, "_read_admin_password", return_value="x" * 12
+                    ):
+                        with mock.patch.object(
+                            iotkit_trial, "_initialize", side_effect=initialize
+                        ):
+                            with mock.patch.object(
+                                iotkit_trial,
+                                "_remove_incomplete_state",
+                                side_effect=cleanup,
+                            ):
+                                with mock.patch("builtins.print"):
+                                    with self.assertRaises(RuntimeError) as raised:
+                                        iotkit_trial.command_up(
+                                            REPO_ROOT, state, config, None
+                                        )
+            self.assertIs(raised.exception, original)
 
     def test_corrupt_state_marker_is_rejected(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
@@ -145,7 +250,9 @@ class TrialConfigTests(unittest.TestCase):
             state.mkdir(parents=True)
             (state / "trial-state.json").write_text("{}", encoding="utf-8")
             with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
-                with self.assertRaisesRegex(iotkit_trial.ConfigError, "does not match"):
+                with self.assertRaisesRegex(
+                    iotkit_trial.ConfigError, "unrecognized trial state"
+                ):
                     iotkit_trial._validated_marker(state, config)
 
     def test_compose_project_depends_on_state_not_repository(self):

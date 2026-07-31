@@ -89,6 +89,8 @@ services:
       - /run/iotkit/iotkit.toml
     environment:
       IOTKIT_EDGE_NODE_ID: ${IOTKIT_TRIAL_EDGE_NODE_ID}
+      # Explicit trial-only gate; the factory refuses trial-sample without this.
+      IOTKIT_ENABLE_TRIAL_SAMPLE: "1"
     volumes:
       - type: bind
         source: ${IOTKIT_TRIAL_STATE}/node

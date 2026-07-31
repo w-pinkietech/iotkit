@@ -254,6 +254,14 @@ fn rpi_local_inventory(
 }
 
 fn parse_trial_sample(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String> {
+    if std::env::var_os(trial_sample_adapter::ENABLE_ENV).as_deref()
+        != Some(std::ffi::OsStr::new("1"))
+    {
+        return Err(format!(
+            "requires {}=1 (trial profile only; refuse field enablement)",
+            trial_sample_adapter::ENABLE_ENV
+        ));
+    }
     if raw.port.is_some() || raw.bus_path.is_some() || raw.devices.is_some() {
         return Err("has non trial-sample-only fields".into());
     }

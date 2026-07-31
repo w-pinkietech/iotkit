@@ -9,6 +9,8 @@ fn descriptor_is_explicitly_a_trial_source() {
         descriptor.physical_transport_kind,
         PhysicalTransportKind::Other
     );
+    assert_eq!(MODEL_ID, "trial-sample-illuminance");
+    assert_ne!(MODEL_ID, "opt3001");
 }
 
 #[test]

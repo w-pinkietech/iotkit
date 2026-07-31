@@ -404,7 +404,30 @@ topic read iotkit/v1/edge-nodes/{edge_node_id}/recovery/completion
     return compose
 
 
-def _validated_marker(state: Path, config: TrialConfig) -> dict[str, Any]:
+def _trial_config_from_marker(document: dict[str, Any]) -> TrialConfig:
+    raw = document.get("config")
+    if not isinstance(raw, dict):
+        raise ConfigError("trial state marker is invalid")
+    try:
+        return TrialConfig(
+            console_bind=_loopback(raw["console_bind"], "trial.console_bind"),
+            console_port=_exact_int(raw["console_port"], "trial.console_port", 1024, 65535),
+            broker_bind=_loopback(raw["broker_bind"], "trial.broker_bind"),
+            broker_port=_exact_int(raw["broker_port"], "trial.broker_port", 1024, 65535),
+            sample_interval_ms=_exact_int(
+                raw["sample_interval_ms"], "trial.sample_interval_ms", 250, 60_000
+            ),
+        )
+    except KeyError as error:
+        raise ConfigError("trial state marker is invalid") from error
+
+
+def _validated_marker(
+    state: Path,
+    config: TrialConfig,
+    *,
+    require_config_match: bool = True,
+) -> dict[str, Any]:
     expected = _state_dir()
     if state.is_symlink() or state.resolve() != expected.resolve():
         raise ConfigError(f"refusing an unexpected or symlinked state path: {state}")
@@ -422,8 +445,9 @@ def _validated_marker(state: Path, config: TrialConfig) -> dict[str, Any]:
         or document.get("format") != 1
         or document.get("profile") != "trial"
         or document.get("project") != _compose_project(state)
-        or document.get("config") != config.normalized()
     ):
+        raise ConfigError(f"refusing unrecognized trial state: {state}")
+    if require_config_match and document.get("config") != config.normalized():
         raise ConfigError(
             "trial state does not match this configuration; reset with the original configuration"
         )
@@ -431,6 +455,7 @@ def _validated_marker(state: Path, config: TrialConfig) -> dict[str, Any]:
 
 
 def _is_recognized_incomplete_state(state: Path, config: TrialConfig) -> bool:
+    del config  # cleanup identity is path/project, not the live trial table
     if state.is_symlink() or state.resolve() != _state_dir().resolve():
         return False
     marker = state / "initializing.json"
@@ -442,12 +467,14 @@ def _is_recognized_incomplete_state(state: Path, config: TrialConfig) -> bool:
         document = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return document == {
-        "format": 1,
-        "profile": "trial-initializing",
-        "project": _compose_project(state),
-        "config": config.normalized(),
-    }
+    if not isinstance(document, dict):
+        return False
+    return (
+        document.get("format") == 1
+        and document.get("profile") == "trial-initializing"
+        and document.get("project") == _compose_project(state)
+        and isinstance(document.get("config"), dict)
+    )
 
 
 def _remove_incomplete_state(repo: Path, state: Path, config: TrialConfig) -> None:
@@ -475,10 +502,16 @@ def command_up(repo: Path, state: Path, config: TrialConfig, password_file: Path
         state_was_absent = not state.exists()
         try:
             compose = _initialize(repo, state, config, _read_admin_password(password_file))
-        except BaseException:
+        except BaseException as error:
             if state_was_absent and state.exists():
-                _remove_incomplete_state(repo, state, config)
-            raise
+                try:
+                    _remove_incomplete_state(repo, state, config)
+                except Exception as cleanup_error:
+                    print(
+                        f"iotkit trial: cleanup after failed init also failed: {cleanup_error}",
+                        file=sys.stderr,
+                    )
+            raise error
     _run(compose + ["up", "--detach"])
     print(f"IoTKit Console: http://{config.console_bind}:{config.console_port}")
     print("ログインID: admin")
@@ -497,8 +530,9 @@ def command_down(
     if not (state / "trial-state.json").exists():
         print("試用環境はまだ作成されていません。")
         return
-    _validated_marker(state, config)
-    command = _compose_args(repo, state, config) + ["down", "--remove-orphans"]
+    document = _validated_marker(state, config, require_config_match=False)
+    effective = _trial_config_from_marker(document)
+    command = _compose_args(repo, state, effective) + ["down", "--remove-orphans"]
     if remove_volumes:
         command.append("--volumes")
     _run(command)
@@ -512,9 +546,10 @@ def command_status(repo: Path, state: Path, config: TrialConfig) -> None:
     if not (state / "trial-state.json").exists():
         print("試用環境はまだ作成されていません。")
         return
-    _validated_marker(state, config)
-    _run(_compose_args(repo, state, config) + ["ps"])
-    print(f"IoTKit Console: http://{config.console_bind}:{config.console_port}")
+    document = _validated_marker(state, config, require_config_match=False)
+    effective = _trial_config_from_marker(document)
+    _run(_compose_args(repo, state, effective) + ["ps"])
+    print(f"IoTKit Console: http://{effective.console_bind}:{effective.console_port}")
 
 
 def command_reset(repo: Path, state: Path, config: TrialConfig, confirmed: bool) -> None:
@@ -530,8 +565,9 @@ def command_reset(repo: Path, state: Path, config: TrialConfig, confirmed: bool)
         _remove_incomplete_state(repo, state, config)
         print("試用環境のデータを削除しました。")
         return
-    _validated_marker(state, config)
-    command_down(repo, state, config, remove_volumes=True)
+    document = _validated_marker(state, config, require_config_match=False)
+    effective = _trial_config_from_marker(document)
+    command_down(repo, state, effective, remove_volumes=True)
     shutil.rmtree(state.resolve())
     print("試用環境のデータを削除しました。")
 

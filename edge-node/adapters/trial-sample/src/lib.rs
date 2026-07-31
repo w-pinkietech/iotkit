@@ -12,8 +12,12 @@ use iotkit_input_adapter_host_api::{
     runtime_channels,
 };
 
-pub const MODEL_ID: &str = "opt3001";
+/// Inventory model id is intentionally non-hardware so Console listings cannot
+/// be confused with a physical OPT3001.
+pub const MODEL_ID: &str = "trial-sample-illuminance";
 pub const INVENTORY_LABEL: &str = "Trial illuminance sensor";
+/// Edge Node enables this adapter only when the trial launcher sets this flag.
+pub const ENABLE_ENV: &str = "IOTKIT_ENABLE_TRIAL_SAMPLE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrialSampleConfig {
