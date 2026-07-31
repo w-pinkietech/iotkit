@@ -449,7 +449,9 @@ def _validated_marker(
         raise ConfigError(f"refusing unrecognized trial state: {state}")
     if require_config_match and document.get("config") != config.normalized():
         raise ConfigError(
-            "trial state does not match this configuration; reset with the original configuration"
+            "trial state does not match this configuration; "
+            "run ./scripts/iotkit trial reset --confirm-trial-data-loss "
+            "(uses stored trial state), then up with the desired configuration"
         )
     return document
 

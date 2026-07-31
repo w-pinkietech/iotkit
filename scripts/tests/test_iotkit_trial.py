@@ -135,7 +135,10 @@ class TrialConfigTests(unittest.TestCase):
                 (state / "trial-state.json").write_text(
                     json.dumps(marker), encoding="utf-8"
                 )
-                with self.assertRaisesRegex(iotkit_trial.ConfigError, "does not match"):
+                with self.assertRaisesRegex(
+                    iotkit_trial.ConfigError,
+                    r"does not match.*reset --confirm-trial-data-loss",
+                ):
                     iotkit_trial._validated_marker(state, config)
                 document = iotkit_trial._validated_marker(
                     state, config, require_config_match=False
