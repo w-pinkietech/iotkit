@@ -28,9 +28,10 @@ two-line [`iotkit.toml`](iotkit.toml) starts a loopback-only trial:
 ```
 
 Choose the trial administrator password when prompted, then open
-`http://127.0.0.1:8080` and sign in as `admin`. The changing illuminance sample
-travels through an Input Adapter, Edge Node custody, a standard MQTT Broker, and
-IoTKit Edge; it is not seeded into the database or Console. See the
+`http://127.0.0.1:8080` and sign in as `admin`. Changing illuminance (triangle wave)
+and contact-state (square wave) samples travel through an Input Adapter, Edge Node
+custody, a standard MQTT Broker, and IoTKit Edge; they are not seeded into the
+database or Console. See the
 [trial profile guide](docs/okf/en/operations/trial-profile.md) for review and
 cleanup. The trial is not a field deployment.
 

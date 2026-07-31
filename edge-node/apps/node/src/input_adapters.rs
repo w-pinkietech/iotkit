@@ -290,11 +290,14 @@ fn trial_sample_inventory(
     source: &ConfiguredSource,
     _config: &dyn Any,
 ) -> Vec<PositionalInventoryItem> {
-    vec![PositionalInventoryItem {
-        hardware_id: format!("{}:sample", source.as_str()),
-        model_id: trial_sample_adapter::MODEL_ID.into(),
-        label: trial_sample_adapter::INVENTORY_LABEL.into(),
-    }]
+    trial_sample_adapter::inventory_items(source.as_str())
+        .into_iter()
+        .map(|item| PositionalInventoryItem {
+            hardware_id: item.hardware_id,
+            model_id: item.model_id,
+            label: item.label,
+        })
+        .collect()
 }
 
 #[cfg(test)]

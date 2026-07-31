@@ -5,7 +5,7 @@ description: "Starts, reviews, stops, and resets the loopback-only IoTKit trial 
 language: en
 translation_key: operations.trial-profile
 status: draft
-revision: 2
+revision: 3
 ---
 
 # Try IoTKit on this PC
@@ -51,9 +51,16 @@ you chose. The yellow **Trial environment** banner must remain visible.
 
 1. On **Overview**, confirm that one Edge Node was detected.
 2. Open **Equipment**, select the Edge Node, and activate it.
-3. Open the trial illuminance sensor and complete any prompted display settings.
-4. Open **Sensors** and confirm that the illuminance value changes.
-5. Open **Received history** and confirm that more rows appear.
+3. Open the trial illuminance sensor and the trial contact-state sensor, and complete any prompted display settings.
+4. On **Sensors**, confirm both series:
+   - illuminance (continuous triangle wave) changes slowly
+   - contact state (square wave) toggles High / Low (`1` / `0`)
+5. Open **Received history** and confirm that rows for both series increase.
+
+The trial sample adapter emits both series from the same `trial-sample` instance through
+the normal Input Adapter and custody path. Values are not seeded into the database or
+Console. No extra waveform configuration is required; the two-line `iotkit.toml` enables
+both by default.
 
 Activation remains explicit because it is part of the real custody contract.
 Stopping and starting the trial does not delete its databases:

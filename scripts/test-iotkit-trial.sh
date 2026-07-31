@@ -122,21 +122,26 @@ activation_code=$(curl --noproxy '*' -sS -b "$cookies" \
   "$origin/api/v1/edge-nodes/$edge_node_ref/activation")
 [[ "$activation_code" == 202 ]]
 
-stage="waiting for changing sample history"
+stage="waiting for changing illuminance and contact-state sample history"
 received=false
 for _ in $(seq 1 90); do
   now=$(date +%s%3N)
   from=$((now - 120000))
   if curl --noproxy '*' -fsS -b "$cookies" \
-    "$origin/api/v1/history?from=$from&to=$now&limit=20" >"$scratch/history.json" &&
-    jq -e '.records | length >= 2' "$scratch/history.json" >/dev/null 2>&1; then
+    "$origin/api/v1/history?from=$from&to=$now&limit=40" >"$scratch/history.json" &&
+    jq -e '
+      (.records | length >= 4)
+      and ([.records[] | select(.series_key | test("illuminance_lux"))] | length >= 2)
+      and ([.records[] | select(.series_key | test("contact_state"))] | length >= 2)
+      and ([.records[] | select(.series_key | test("illuminance_lux")) | .values[0]] | unique | length >= 2)
+      and ([.records[] | select(.series_key | test("contact_state")) | .values[0]] | unique | length >= 2)
+    ' "$scratch/history.json" >/dev/null 2>&1; then
     received=true
     break
   fi
   sleep 1
 done
 [[ "$received" == true ]]
-jq -e '[.records[].values[0]] | unique | length >= 2' "$scratch/history.json" >/dev/null
 grep -Fq "お試し環境" \
   <(curl --noproxy '*' -fsS -b "$cookies" "$origin/status")
 
