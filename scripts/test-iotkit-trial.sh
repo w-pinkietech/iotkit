@@ -102,13 +102,12 @@ for _ in $(seq 1 60); do
 done
 [[ "$discovered" == true ]]
 
+stage="reading the discovered Edge Node reference"
 edge_node_ref=$(jq -er '.items[0].edge_node_ref' "$scratch/edge-nodes.json")
-revision=$(jq -er '.items[0].revision' "$scratch/edge-nodes.json")
 stage="activating the discovered Edge Node"
 activation_code=$(curl --noproxy '*' -sS -b "$cookies" \
   -o "$scratch/activation.json" -w '%{http_code}' \
   -X POST -H "Origin: $origin" -H "X-CSRF-Token: $csrf_token" \
-  -H "If-Match: \"$revision\"" \
   "$origin/api/v1/edge-nodes/$edge_node_ref/activation")
 [[ "$activation_code" == 202 ]]
 
