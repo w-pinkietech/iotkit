@@ -520,6 +520,16 @@ def command_status(repo: Path, state: Path, config: TrialConfig) -> None:
 def command_reset(repo: Path, state: Path, config: TrialConfig, confirmed: bool) -> None:
     if not confirmed:
         raise ConfigError("reset deletes trial data; repeat with --confirm-trial-data-loss")
+    marker = state / "trial-state.json"
+    if not state.exists() or (not marker.exists() and not any(state.iterdir())):
+        print("試用環境はまだ作成されていません。")
+        return
+    if not marker.exists():
+        if not _is_recognized_incomplete_state(state, config):
+            raise ConfigError(f"refusing unrecognized trial state: {state}")
+        _remove_incomplete_state(repo, state, config)
+        print("試用環境のデータを削除しました。")
+        return
     _validated_marker(state, config)
     command_down(repo, state, config, remove_volumes=True)
     shutil.rmtree(state.resolve())

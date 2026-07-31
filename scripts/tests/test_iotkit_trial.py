@@ -224,6 +224,52 @@ class TrialConfigTests(unittest.TestCase):
             self.assertTrue(state.exists())
             self.assertTrue((state / "runtime.json").exists())
 
+    def test_reset_requires_confirmation_before_state_checks(self):
+        config = self.load('config_version = 1\nprofile = "trial"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "iotkit" / "trial"
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                with self.assertRaisesRegex(
+                    iotkit_trial.ConfigError, "--confirm-trial-data-loss"
+                ):
+                    iotkit_trial.command_reset(REPO_ROOT, state, config, confirmed=False)
+
+    def test_reset_reports_when_trial_state_is_absent(self):
+        config = self.load('config_version = 1\nprofile = "trial"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "iotkit" / "trial"
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                with mock.patch("builtins.print") as printed:
+                    iotkit_trial.command_reset(
+                        REPO_ROOT, state, config, confirmed=True
+                    )
+            printed.assert_called_once_with("試用環境はまだ作成されていません。")
+
+    def test_reset_removes_recognized_incomplete_state(self):
+        config = self.load('config_version = 1\nprofile = "trial"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "iotkit" / "trial"
+            state.mkdir(parents=True)
+            marker = {
+                "format": 1,
+                "profile": "trial-initializing",
+                "project": iotkit_trial._compose_project(state),
+                "config": config.normalized(),
+            }
+            (state / "initializing.json").write_text(
+                json.dumps(marker), encoding="utf-8"
+            )
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                with mock.patch("subprocess.run") as run:
+                    run.return_value = subprocess.CompletedProcess([], 0)
+                    with mock.patch("builtins.print") as printed:
+                        iotkit_trial.command_reset(
+                            REPO_ROOT, state, config, confirmed=True
+                        )
+            self.assertFalse(state.exists())
+            printed.assert_called_with("試用環境のデータを削除しました。")
+            run.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
