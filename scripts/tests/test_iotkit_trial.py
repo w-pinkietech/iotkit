@@ -81,6 +81,17 @@ class TrialConfigTests(unittest.TestCase):
         self.assertIn('host = "127.0.0.1"', rendered)
         self.assertNotIn("password =", rendered)
 
+    def test_trial_broker_reads_owner_only_files_as_the_requesting_user(self):
+        compose = (REPO_ROOT / "deploy" / "compose.trial.yaml").read_text(
+            encoding="utf-8"
+        )
+        broker_service = compose.split("\n  edge:\n", maxsplit=1)[0]
+
+        self.assertIn('user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"', broker_service)
+        self.assertIn('entrypoint: ["mosquitto"]', broker_service)
+        self.assertNotIn("broker-data", compose)
+        self.assertIn("persistence false", MODULE_PATH.read_text(encoding="utf-8"))
+
     def test_state_marker_is_exact_and_rejects_configuration_drift(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
         with tempfile.TemporaryDirectory() as directory:

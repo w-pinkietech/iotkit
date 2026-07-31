@@ -1,6 +1,9 @@
 services:
   broker:
     image: "${IOTKIT_MOSQUITTO_IMAGE}"
+    user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"
+    entrypoint: ["mosquitto"]
+    command: ["-c", "/mosquitto/config/mosquitto.conf"]
     restart: unless-stopped
     ports:
       - "${IOTKIT_TRIAL_BROKER_BIND}:${IOTKIT_TRIAL_BROKER_PORT}:1883"
@@ -17,9 +20,6 @@ services:
         source: ${IOTKIT_TRIAL_STATE}/mosquitto/passwords
         target: /mosquitto/config/passwords
         read_only: true
-      - type: volume
-        source: broker-data
-        target: /mosquitto/data
 
   edge:
     build:
@@ -91,6 +91,3 @@ services:
         source: ${IOTKIT_TRIAL_STATE}/secrets/node-mqtt-password
         target: /run/secrets/node-mqtt-password
         read_only: true
-
-volumes:
-  broker-data:

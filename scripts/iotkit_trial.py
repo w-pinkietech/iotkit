@@ -331,8 +331,7 @@ topic read iotkit/v1/edge-nodes/{edge_node_id}/recovery/completion
 allow_anonymous false
 password_file /mosquitto/config/passwords
 acl_file /mosquitto/config/acl
-persistence true
-persistence_location /mosquitto/data/
+persistence false
 message_size_limit 1048576
 max_packet_size 1114112
 """,
