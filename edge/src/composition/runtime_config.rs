@@ -159,9 +159,7 @@ impl RuntimeConfig {
         }
         let trial_profile = args.deployment_profile == DeploymentProfileArg::Trial;
         if trial_profile {
-            let origin_is_loopback = origin
-                .host_str()
-                .is_some_and(host_is_loopback_ip);
+            let origin_is_loopback = origin.host_str().is_some_and(host_is_loopback_ip);
             if !args.development_http || !origin_is_loopback {
                 return Err(RuntimeConfigError::Invalid(
                     "trial profile requires development HTTP on a loopback public origin",
