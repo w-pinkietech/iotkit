@@ -38,8 +38,15 @@ static RPI_LOCAL_FACTORY: InputAdapterFactory = InputAdapterFactory {
     positional_inventory: rpi_local_inventory,
 };
 
-fn catalog() -> [&'static InputAdapterFactory; 2] {
-    [&BRAVEPI_FACTORY, &RPI_LOCAL_FACTORY]
+static TRIAL_SAMPLE_FACTORY: InputAdapterFactory = InputAdapterFactory {
+    descriptor: trial_sample_adapter::descriptor,
+    parse_and_validate: parse_trial_sample,
+    start: start_trial_sample,
+    positional_inventory: trial_sample_inventory,
+};
+
+fn catalog() -> [&'static InputAdapterFactory; 3] {
+    [&BRAVEPI_FACTORY, &RPI_LOCAL_FACTORY, &TRIAL_SAMPLE_FACTORY]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +251,50 @@ fn rpi_local_inventory(
             label: device.label,
         })
         .collect()
+}
+
+fn parse_trial_sample(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String> {
+    if std::env::var_os(trial_sample_adapter::ENABLE_ENV).as_deref()
+        != Some(std::ffi::OsStr::new("1"))
+    {
+        return Err(format!(
+            "requires {}=1 (trial profile only; refuse field enablement)",
+            trial_sample_adapter::ENABLE_ENV
+        ));
+    }
+    if raw.port.is_some() || raw.bus_path.is_some() || raw.devices.is_some() {
+        return Err("has non trial-sample-only fields".into());
+    }
+    let config = trial_sample_adapter::TrialSampleConfig {
+        poll_interval_ms: raw
+            .poll_interval_ms
+            .ok_or_else(|| "requires poll_interval_ms".to_string())?,
+    };
+    trial_sample_adapter::validate(config)
+        .map_err(|error| format!("invalid trial-sample config: {error}"))?;
+    Ok(Arc::new(config))
+}
+
+fn start_trial_sample(
+    context: AdapterStartContext,
+    config: &dyn Any,
+) -> Result<RunningInputAdapter, String> {
+    let config = *config
+        .downcast_ref::<trial_sample_adapter::TrialSampleConfig>()
+        .expect("trial sample factory owns validated TrialSampleConfig");
+    trial_sample_adapter::start_host(context, config)
+        .map_err(|error| format!("failed to start trial sample adapter: {error}"))
+}
+
+fn trial_sample_inventory(
+    source: &ConfiguredSource,
+    _config: &dyn Any,
+) -> Vec<PositionalInventoryItem> {
+    vec![PositionalInventoryItem {
+        hardware_id: format!("{}:sample", source.as_str()),
+        model_id: trial_sample_adapter::MODEL_ID.into(),
+        label: trial_sample_adapter::INVENTORY_LABEL.into(),
+    }]
 }
 
 #[cfg(test)]

@@ -37,13 +37,14 @@ DATA_PLANE = {
 }
 ADAPTERS = {
     "bravepi-mainboard-adapter", "bravepi-codec", "iotkit-sensor-drivers", "bravepi-poc",
-    "rpi-local-adapter", "iotkit-polling-adapter-runtime", "rpi4b-transport",
+    "rpi-local-adapter", "trial-sample-adapter",
+    "iotkit-polling-adapter-runtime", "rpi4b-transport",
     "iotkit-output-adapter-example",
     "iotkit-output-adapter-generic-mqtt-json-v1",
     "iotkit-output-adapter-pinikiet-mqtt-v1",
 }
 INPUT_ADAPTERS = {
-    "bravepi-mainboard-adapter", "rpi-local-adapter",
+    "bravepi-mainboard-adapter", "rpi-local-adapter", "trial-sample-adapter",
     "iotkit-polling-adapter-runtime",
 }
 OUTPUT_ADAPTERS = {

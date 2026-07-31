@@ -29,6 +29,7 @@ iotkit-core-ops = { path = "../../core/ops" }
 iotkit-core-recovery = { path = "../../core/recovery" }
 bravepi-mainboard-adapter = { path = "../../adapters/bravepi-mainboard" }
 rpi-local-adapter = { path = "../../adapters/rpi-local" }
+trial-sample-adapter = { path = "../../adapters/trial-sample" }
 axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util"] }

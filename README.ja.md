@@ -13,6 +13,23 @@
 
 現行の製品知識はOKF v0.1形式でも提供しています: [日本語](docs/okf/ja/index.md) / [英語](docs/okf/en/index.md)。
 
+## このPCでまず試す
+
+Git、Python 3.11以降、Docker Composeを使用できるLinux hostで、repositoryにある
+2行の[`iotkit.toml`](iotkit.toml)からloopback限定の試用環境を起動できます。
+
+```bash
+./scripts/iotkit trial validate
+./scripts/iotkit trial up
+```
+
+表示に従って試用管理者のpasswordを決め、`http://127.0.0.1:8080`を開いて
+`admin`でログインします。変化する照度sampleはDBやConsoleへ直接seedされず、
+Input Adapter、Edge Nodeの保管責任、標準MQTT Broker、IoTKit Edgeの通常経路を
+通ります。確認方法と片付け方は
+[試用profileガイド](docs/okf/ja/operations/trial-profile.md)を参照してください。
+試用環境は現場導入には使用できません。
+
 ## なぜ作るのか
 
 製造現場では、センサーを追加するたびに信頼性の仕組みを作り直さず、さまざまなセンサーを接続する必要があります。Adapterが担当するのは、センサーとの通信、設定、読取り、測定値への写像だけです。SQLite、MQTT、再送、保持、認証は所有しません。IoTKitがこれらを一度提供し、通信断の間も収集を継続し、停電後もデータを黙って失わず安全に復旧します。

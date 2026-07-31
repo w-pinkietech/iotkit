@@ -1625,6 +1625,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "trial-sample-adapter",
 ]
 
 [[package]]
@@ -3651,6 +3652,15 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "trial-sample-adapter"
+version = "0.3.0"
+dependencies = [
+ "iotkit-ingest-contract",
+ "iotkit-input-adapter-host-api",
+ "tokio",
 ]
 
 [[package]]

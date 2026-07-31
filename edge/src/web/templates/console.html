@@ -39,6 +39,7 @@
   <button class="mobile-overlay" type="button" hidden aria-label="メニューを閉じる"></button>
 
   <div class="console-area">
+    {% if trial_profile %}<div class="trial-banner console-trial-banner" role="status"><strong>お試し環境</strong><span>サンプルデータで動作を確認しています。現場へ導入するときは導入手順へ進んでください。</span></div>{% endif %}
     <header class="mobile-header">
       <button class="menu-button" type="button" aria-controls="sidebar" aria-expanded="false"><span aria-hidden="true">☰</span><span class="sr-only">メニューを開く</span></button>
       <span>IoTKit Console</span>

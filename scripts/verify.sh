@@ -19,6 +19,9 @@ scripts/check-layers
 echo "== scripts/check-source-layout (source/test boundary) =="
 scripts/check-source-layout
 
+echo "== trial profile configuration contract =="
+python3 -m unittest scripts.tests.test_iotkit_trial
+
 echo "== cargo test --workspace =="
 cargo test --workspace
 
@@ -52,6 +55,8 @@ if [[ "$full" == true ]]; then
   scripts/test-edge-postgres.sh
   echo "== scripts/test-edge-capacity.sh =="
   scripts/test-edge-capacity.sh
+  echo "== scripts/test-iotkit-trial.sh =="
+  scripts/test-iotkit-trial.sh
 fi
 
 echo "✔ verify.sh PASS"

@@ -17,6 +17,23 @@ until IoTKit Edge has durably stored it.
 Current product knowledge is also available as an OKF v0.1 bundle in
 [Japanese](docs/okf/ja/index.md) and [English](docs/okf/en/index.md).
 
+## Try IoTKit on this PC
+
+On a Linux host with Git, Python 3.11+, and Docker Compose, the repository's
+two-line [`iotkit.toml`](iotkit.toml) starts a loopback-only trial:
+
+```bash
+./scripts/iotkit trial validate
+./scripts/iotkit trial up
+```
+
+Choose the trial administrator password when prompted, then open
+`http://127.0.0.1:8080` and sign in as `admin`. The changing illuminance sample
+travels through an Input Adapter, Edge Node custody, a standard MQTT Broker, and
+IoTKit Edge; it is not seeded into the database or Console. See the
+[trial profile guide](docs/okf/en/operations/trial-profile.md) for review and
+cleanup. The trial is not a field deployment.
+
 ## Why
 
 Industrial sites need to connect varied sensors without rebuilding reliability for

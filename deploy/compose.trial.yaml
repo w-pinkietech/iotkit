@@ -1,0 +1,105 @@
+services:
+  broker:
+    image: "${IOTKIT_MOSQUITTO_IMAGE}"
+    user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"
+    entrypoint: ["mosquitto"]
+    command: ["-c", "/mosquitto/config/mosquitto.conf"]
+    restart: unless-stopped
+    # Process presence is the portable readiness signal in the pinned Mosquitto
+    # image (anonymous auth is disabled, so MQTT client probes require secrets).
+    healthcheck:
+      test: ["CMD-SHELL", "pidof mosquitto >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 1s
+    ports:
+      - "${IOTKIT_TRIAL_BROKER_BIND}:${IOTKIT_TRIAL_BROKER_PORT}:1883"
+    volumes:
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/mosquitto/mosquitto.conf
+        target: /mosquitto/config/mosquitto.conf
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/mosquitto/acl
+        target: /mosquitto/config/acl
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/mosquitto/passwords
+        target: /mosquitto/config/passwords
+        read_only: true
+
+  edge:
+    build:
+      context: ..
+      dockerfile: edge/Dockerfile
+      target: trial-runtime
+    user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      broker:
+        condition: service_healthy
+    entrypoint: ["/usr/local/bin/iotkit-edge"]
+    command:
+      - serve
+      - --db
+      - /data/edge.db
+      - --edge-id
+      - ${IOTKIT_TRIAL_EDGE_ID}
+      - --broker-url
+      - tcp://${IOTKIT_TRIAL_BROKER_BIND}:${IOTKIT_TRIAL_BROKER_PORT}
+      - --client-id
+      - iotkit-edge-trial
+      - --username
+      - edge
+      - --password-file
+      - /run/secrets/edge-mqtt-password
+      - --allow-insecure
+      - --http-listen
+      - ${IOTKIT_TRIAL_CONSOLE_BIND}:${IOTKIT_TRIAL_CONSOLE_PORT}
+      - --public-origin
+      - http://${IOTKIT_TRIAL_CONSOLE_BIND}:${IOTKIT_TRIAL_CONSOLE_PORT}
+      - --development-http
+      - --deployment-profile
+      - trial
+    volumes:
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/edge
+        target: /data
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/secrets/edge-mqtt-password
+        target: /run/secrets/edge-mqtt-password
+        read_only: true
+
+  edge-node:
+    build:
+      context: ..
+      dockerfile: edge/Dockerfile
+      target: trial-runtime
+    user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      broker:
+        condition: service_healthy
+    entrypoint: ["/usr/local/bin/iotkit-edge-node"]
+    command:
+      - --config
+      - /run/iotkit/iotkit.toml
+    environment:
+      IOTKIT_EDGE_NODE_ID: ${IOTKIT_TRIAL_EDGE_NODE_ID}
+      # Explicit trial-only gate; the factory refuses trial-sample without this.
+      IOTKIT_ENABLE_TRIAL_SAMPLE: "1"
+    volumes:
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/node
+        target: /data
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/node/iotkit.toml
+        target: /run/iotkit/iotkit.toml
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/secrets/node-mqtt-password
+        target: /run/secrets/node-mqtt-password
+        read_only: true

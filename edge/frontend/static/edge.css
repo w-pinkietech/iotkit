@@ -1347,3 +1347,15 @@ tr.selected-route td { background: var(--teal-soft); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+.trial-banner {
+  display: flex;
+  gap: .75rem;
+  align-items: center;
+  padding: .75rem 1rem;
+  border: 1px solid #e5a000;
+  border-radius: .5rem;
+  background: #fff6d8;
+  color: #513b00;
+}
+.trial-banner span { font-size: .9rem; }
+.console-trial-banner { border-radius: 0; justify-content: center; }

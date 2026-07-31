@@ -17,6 +17,25 @@ ENTRYPOINT ["/usr/local/bin/iotkit-edge-entrypoint"]
 
 FROM runtime-base AS runtime
 
+FROM rust:1.95-bookworm AS trial-build
+WORKDIR /src
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends pkg-config libudev-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY . .
+RUN cargo build --locked --release \
+    -p iotkit-edge -p iotkit-edge-node -p iotkit-edge-nodectl
+
+FROM debian:bookworm-slim AS trial-runtime
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates libudev1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home iotkit
+COPY --from=trial-build /src/target/release/iotkit-edge /usr/local/bin/iotkit-edge
+COPY --from=trial-build /src/target/release/iotkit-edge-node /usr/local/bin/iotkit-edge-node
+COPY --from=trial-build /src/target/release/iotkit-edge-nodectl /usr/local/bin/iotkit-edge-nodectl
+USER iotkit
+
 FROM postgres:17-bookworm AS postgres-tools
 
 FROM runtime-base AS runtime-postgres
