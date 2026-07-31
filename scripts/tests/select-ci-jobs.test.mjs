@@ -173,6 +173,14 @@ test("CI workflow routes heavy jobs through the classifier", () => {
     workflow,
     /node --test scripts\/tests\/adapter-author-docs\.test\.mjs/,
   );
+  // Rust job uses nextest for the workspace suite; no redundant full build step.
+  assert.match(workflow, /cargo nextest run --workspace/);
+  assert.match(workflow, /cargo test --workspace --doc/);
+  assert.doesNotMatch(
+    workflow,
+    /cargo build --workspace --all-targets/,
+    "redundant workspace build should stay out of the rust job",
+  );
   // Trial journey must not remain only inside the Edge integration job.
   const edgeJob = workflow.split(/name: Rust Edge \/ Console integration/)[1] ?? "";
   const edgeSection = edgeJob.split(/^  [a-z]/m)[0] ?? edgeJob;
@@ -180,6 +188,12 @@ test("CI workflow routes heavy jobs through the classifier", () => {
     edgeSection,
     /scripts\/test-iotkit-trial\.sh/,
     "trial journey should live in the dedicated trial job",
+  );
+  // Edge product tests stay in the rust workspace job; edge job is Console/e2e/custody.
+  assert.doesNotMatch(
+    edgeSection,
+    /cargo test -p iotkit-edge/,
+    "iotkit-edge unit/integration should not be duplicated in the edge job",
   );
 });
 

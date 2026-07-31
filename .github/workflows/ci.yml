@@ -16,6 +16,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # CI: skip incremental and debuginfo. Speeds compile of the large workspace;
+  # rust-cache already restores target artifacts across runs.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   changes:
@@ -120,17 +125,24 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Formatting (cargo fmt --check)
         run: cargo fmt --all --check
 
       - name: Lints (cargo clippy -D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Build
-        run: cargo build --workspace --all-targets
+      # No separate `cargo build --workspace`: nextest/test compiles what it needs.
+      - name: Tests (nextest)
+        run: cargo nextest run --workspace --profile ci
 
-      - name: Tests
-        run: cargo test --workspace
+      # nextest does not run rustdoc tests; keep them as a cheap separate pass.
+      - name: Doc tests
+        run: cargo test --workspace --doc --no-fail-fast
 
   edge:
     name: Rust Edge / Console integration
@@ -155,8 +167,9 @@ jobs:
       - name: IoTKit Console browser journey
         run: scripts/test-edge-console-e2e.sh
 
-      - name: Rust Edge tests
-        run: cargo test -p iotkit-edge
+      # Unit/integration for iotkit-edge run in the rust job (`cargo nextest
+      # --workspace`) whenever edge is selected: classifier always pairs
+      # edge=true with rust=true. This job keeps Console/e2e/custody/output only.
 
       - name: PostgreSQL, MQTT custody, and authentication
         run: scripts/test-rust-edge-custody.sh
