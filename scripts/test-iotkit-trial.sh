@@ -91,10 +91,10 @@ csrf_token=$(jq -er '.csrf_token' "$login_response")
 stage="waiting for Edge Node discovery"
 discovered=false
 for _ in $(seq 1 60); do
-  curl --noproxy '*' -fsS -b "$cookies" \
-    "$origin/api/v1/edge-nodes" >"$scratch/edge-nodes.json"
-  if jq -e '.items | length == 1 and .[0].state == "needs-setup"' \
-    "$scratch/edge-nodes.json" >/dev/null; then
+  if curl --noproxy '*' -fsS -b "$cookies" \
+    "$origin/api/v1/edge-nodes" >"$scratch/edge-nodes.json" &&
+    jq -e '.items | length == 1 and .[0].state == "needs-setup"' \
+      "$scratch/edge-nodes.json" >/dev/null; then
     discovered=true
     break
   fi
@@ -117,9 +117,9 @@ received=false
 for _ in $(seq 1 90); do
   now=$(date +%s%3N)
   from=$((now - 120000))
-  curl --noproxy '*' -fsS -b "$cookies" \
-    "$origin/api/v1/history?from=$from&to=$now&limit=20" >"$scratch/history.json"
-  if jq -e '.items | length >= 2' "$scratch/history.json" >/dev/null 2>&1; then
+  if curl --noproxy '*' -fsS -b "$cookies" \
+    "$origin/api/v1/history?from=$from&to=$now&limit=20" >"$scratch/history.json" &&
+    jq -e '.items | length >= 2' "$scratch/history.json" >/dev/null 2>&1; then
     received=true
     break
   fi
@@ -143,11 +143,11 @@ pub_seq=$(jq -er '.pub_seq' <<<"$smoke")
 stage="waiting for durable sample delivery"
 delivered=false
 for _ in $(seq 1 60); do
-  smoke_status=$("${compose[@]}" exec -T edge-node \
+  if smoke_status=$("${compose[@]}" exec -T edge-node \
     iotkit-edge-nodectl --db /data/node.db smoke status \
-    --ledger-epoch "$ledger_epoch" --pub-seq "$pub_seq")
-  if jq -e '.status == "delivered" and .accepted_through >= .pub_seq' \
-    <<<"$smoke_status" >/dev/null; then
+      --ledger-epoch "$ledger_epoch" --pub-seq "$pub_seq") &&
+    jq -e '.status == "delivered" and .accepted_through >= .pub_seq' \
+      <<<"$smoke_status" >/dev/null; then
     delivered=true
     break
   fi
