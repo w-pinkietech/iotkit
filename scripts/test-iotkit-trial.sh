@@ -118,14 +118,14 @@ for _ in $(seq 1 90); do
   from=$((now - 120000))
   if curl --noproxy '*' -fsS -b "$cookies" \
     "$origin/api/v1/history?from=$from&to=$now&limit=20" >"$scratch/history.json" &&
-    jq -e '.items | length >= 2' "$scratch/history.json" >/dev/null 2>&1; then
+    jq -e '.records | length >= 2' "$scratch/history.json" >/dev/null 2>&1; then
     received=true
     break
   fi
   sleep 1
 done
 [[ "$received" == true ]]
-jq -e '[.items[].values[0]] | unique | length >= 2' "$scratch/history.json" >/dev/null
+jq -e '[.records[].values[0]] | unique | length >= 2' "$scratch/history.json" >/dev/null
 grep -Fq "お試し環境" \
   <(curl --noproxy '*' -fsS -b "$cookies" "$origin/status")
 
