@@ -61,6 +61,189 @@ const lightweightFiles = new Set([
   "scripts/tests/release-version.test.mjs",
 ]);
 
+// Longest package roots first. Keep in sync with `cargo metadata --no-deps`.
+const packageRoots = [
+  ["edge-node/adapters/bravepi-mainboard/codec/", "bravepi-codec"],
+  [
+    "edge/output-adapters/generic-mqtt-json-v1/",
+    "iotkit-output-adapter-generic-mqtt-json-v1",
+  ],
+  ["edge-node/input/hardware/sensor-drivers/", "iotkit-sensor-drivers"],
+  ["edge-node/input/hardware/transports/rpi/", "rpi4b-transport"],
+  [
+    "edge/output-adapters/pinikiet-mqtt-v1/",
+    "iotkit-output-adapter-pinikiet-mqtt-v1",
+  ],
+  ["edge-node/adapters/bravepi-mainboard/", "bravepi-mainboard-adapter"],
+  ["edge-node/input/runtimes/polling/", "iotkit-polling-adapter-runtime"],
+  ["edge-node/adapters/trial-sample/", "trial-sample-adapter"],
+  ["edge/output-adapters/example/", "iotkit-output-adapter-example"],
+  ["edge/output-adapters/testkit/", "iotkit-output-adapter-testkit"],
+  ["edge-node/adapters/rpi-local/", "rpi-local-adapter"],
+  ["edge-node/tools/bravepi-poc/", "bravepi-poc"],
+  ["edge-node/core/supervision/", "iotkit-core-supervision"],
+  ["edge-node/core/timeseries/", "iotkit-core-timeseries"],
+  ["edge-node/ingest/contract/", "iotkit-ingest-contract"],
+  ["edge-node/core/collector/", "iotkit-core-collector"],
+  ["edge-node/input/host-api/", "iotkit-input-adapter-host-api"],
+  ["edge/output-adapters/api/", "iotkit-output-adapter-api"],
+  ["edge-node/core/recovery/", "iotkit-core-recovery"],
+  ["edge-node/core/registry/", "iotkit-core-registry"],
+  ["edge-node/ingest/client/", "iotkit-ingest-client"],
+  ["edge-node/input/testkit/", "iotkit-input-adapter-testkit"],
+  ["edge-node/core/publish/", "iotkit-core-publish"],
+  ["edge-node/core/storage/", "iotkit-core-storage"],
+  ["edge-node/apps/nodectl/", "iotkit-edge-nodectl"],
+  ["edge-node/core/engine/", "iotkit-core-engine"],
+  ["edge-node/core/ledger/", "iotkit-core-ledger"],
+  ["edge/custody-contract/", "iotkit-edge-custody-contract"],
+  ["edge-node/ingest/http/", "iotkit-ingest-http"],
+  ["edge-node/core/types/", "iotkit-core-types"],
+  ["edge-node/apps/node/", "iotkit-edge-node"],
+  ["edge-node/core/ops/", "iotkit-core-ops"],
+  ["edge/", "iotkit-edge"],
+];
+
+// Workspace path-deps that import each package (one hop). From cargo metadata.
+const reversePathDeps = {
+  "bravepi-codec": ["bravepi-mainboard-adapter"],
+  "bravepi-mainboard-adapter": ["bravepi-poc", "iotkit-edge-node"],
+  "iotkit-core-collector": [
+    "iotkit-core-registry",
+    "iotkit-edge-node",
+    "iotkit-ingest-client",
+    "iotkit-ingest-http",
+  ],
+  "iotkit-core-engine": ["iotkit-edge-node"],
+  "iotkit-core-ledger": [
+    "iotkit-core-collector",
+    "iotkit-core-ops",
+    "iotkit-core-publish",
+    "iotkit-core-recovery",
+    "iotkit-core-registry",
+    "iotkit-core-timeseries",
+    "iotkit-edge-node",
+    "iotkit-edge-nodectl",
+    "iotkit-ingest-client",
+    "iotkit-ingest-http",
+  ],
+  "iotkit-core-ops": [
+    "iotkit-core-recovery",
+    "iotkit-edge-node",
+    "iotkit-edge-nodectl",
+    "iotkit-ingest-http",
+  ],
+  "iotkit-core-publish": [
+    "iotkit-core-collector",
+    "iotkit-core-ops",
+    "iotkit-core-recovery",
+    "iotkit-core-registry",
+    "iotkit-edge-node",
+    "iotkit-edge-nodectl",
+    "iotkit-ingest-client",
+    "iotkit-ingest-http",
+  ],
+  "iotkit-core-recovery": ["iotkit-edge-node", "iotkit-edge-nodectl"],
+  "iotkit-core-registry": [
+    "iotkit-core-ops",
+    "iotkit-core-recovery",
+    "iotkit-edge-node",
+    "iotkit-edge-nodectl",
+    "iotkit-ingest-client",
+    "iotkit-ingest-http",
+    "iotkit-input-adapter-testkit",
+  ],
+  "iotkit-core-storage": [
+    "iotkit-core-collector",
+    "iotkit-core-ledger",
+    "iotkit-core-ops",
+    "iotkit-core-publish",
+    "iotkit-core-recovery",
+    "iotkit-core-registry",
+    "iotkit-core-timeseries",
+    "iotkit-edge-node",
+    "iotkit-edge-nodectl",
+    "iotkit-ingest-client",
+    "iotkit-ingest-http",
+  ],
+  "iotkit-core-supervision": [
+    "bravepi-mainboard-adapter",
+    "bravepi-poc",
+    "iotkit-core-engine",
+    "iotkit-edge-node",
+  ],
+  "iotkit-core-timeseries": [
+    "iotkit-core-collector",
+    "iotkit-core-ops",
+    "iotkit-core-publish",
+    "iotkit-core-recovery",
+    "iotkit-core-registry",
+    "iotkit-edge-node",
+    "iotkit-edge-nodectl",
+    "iotkit-ingest-client",
+    "iotkit-ingest-http",
+  ],
+  "iotkit-core-types": [
+    "bravepi-mainboard-adapter",
+    "iotkit-core-engine",
+    "iotkit-core-supervision",
+    "iotkit-edge-node",
+    "iotkit-polling-adapter-runtime",
+    "iotkit-sensor-drivers",
+    "rpi-local-adapter",
+  ],
+  "iotkit-edge-custody-contract": ["iotkit-edge"],
+  "iotkit-ingest-client": [
+    "bravepi-mainboard-adapter",
+    "iotkit-edge-node",
+    "iotkit-input-adapter-host-api",
+    "iotkit-input-adapter-testkit",
+  ],
+  "iotkit-ingest-contract": [
+    "bravepi-mainboard-adapter",
+    "iotkit-core-collector",
+    "iotkit-core-registry",
+    "iotkit-edge-nodectl",
+    "iotkit-ingest-client",
+    "iotkit-ingest-http",
+    "iotkit-input-adapter-host-api",
+    "iotkit-input-adapter-testkit",
+    "rpi-local-adapter",
+    "trial-sample-adapter",
+  ],
+  "iotkit-ingest-http": ["iotkit-edge-node"],
+  "iotkit-input-adapter-host-api": [
+    "bravepi-mainboard-adapter",
+    "iotkit-edge-node",
+    "iotkit-input-adapter-testkit",
+    "rpi-local-adapter",
+    "trial-sample-adapter",
+  ],
+  "iotkit-output-adapter-api": [
+    "iotkit-edge",
+    "iotkit-output-adapter-example",
+    "iotkit-output-adapter-generic-mqtt-json-v1",
+    "iotkit-output-adapter-pinikiet-mqtt-v1",
+    "iotkit-output-adapter-testkit",
+  ],
+  "iotkit-output-adapter-generic-mqtt-json-v1": ["iotkit-edge"],
+  "iotkit-output-adapter-pinikiet-mqtt-v1": ["iotkit-edge"],
+  "iotkit-output-adapter-testkit": [
+    "iotkit-output-adapter-example",
+    "iotkit-output-adapter-generic-mqtt-json-v1",
+    "iotkit-output-adapter-pinikiet-mqtt-v1",
+  ],
+  "iotkit-polling-adapter-runtime": ["rpi-local-adapter"],
+  "iotkit-sensor-drivers": ["bravepi-mainboard-adapter", "rpi-local-adapter"],
+  "rpi-local-adapter": ["iotkit-edge-node"],
+  "rpi4b-transport": ["bravepi-mainboard-adapter", "rpi-local-adapter"],
+  "trial-sample-adapter": ["iotkit-edge-node"],
+};
+
+// Beyond this many packages after reverse-dep expansion, run the full workspace.
+// Shared core crates expand to many consumers; full suite is safer and similar cost.
+const MAX_FOCUSED_PACKAGES = 6;
+
 function none() {
   return { rust: false, edge: false, trial: false };
 }
@@ -81,7 +264,8 @@ function classify(path) {
   if (
     path === "scripts/select-ci-jobs.mjs" ||
     path === "scripts/tests/select-ci-jobs.test.mjs" ||
-    path.startsWith(".github/workflows/")
+    path.startsWith(".github/workflows/") ||
+    path === ".config/nextest.toml"
   ) {
     return allHeavy();
   }
@@ -133,23 +317,98 @@ function classify(path) {
   return allHeavy();
 }
 
+function packageForPath(path) {
+  for (const [root, name] of packageRoots) {
+    if (path === root.slice(0, -1) || path.startsWith(root)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+function forcesFullRustSuite(path) {
+  if (rustFiles.has(path)) return true;
+  if (path.startsWith(".github/workflows/")) return true;
+  if (path === "scripts/select-ci-jobs.mjs") return true;
+  if (path === "scripts/tests/select-ci-jobs.test.mjs") return true;
+  if (path === ".config/nextest.toml") return true;
+  if (path === "edge/Dockerfile") return true;
+  if (path.startsWith("testdata/")) return true;
+  if (path.startsWith("deploy/") || path === "compose.dev.yaml") return true;
+  if (edgeScriptPrefixes.some((prefix) => path.startsWith(prefix))) return true;
+  // Unmapped rust-relevant paths stay on the safe full suite.
+  if (classify(path).rust && packageForPath(path) === null) return true;
+  return false;
+}
+
+function expandPackages(seed) {
+  const selected = new Set(seed);
+  for (const name of seed) {
+    for (const consumer of reversePathDeps[name] ?? []) {
+      selected.add(consumer);
+    }
+  }
+  return [...selected].sort();
+}
+
+/**
+ * Which Cargo packages the rust job should clippy/test.
+ * @returns {"all" | string} "all" or comma-separated package names
+ */
+export function selectRustPackages(paths) {
+  const normalized = paths.map((path) => path.trim()).filter(Boolean);
+  if (normalized.length === 0) {
+    return "all";
+  }
+
+  const seeds = new Set();
+  for (const path of normalized) {
+    if (!classify(path).rust) {
+      continue;
+    }
+    if (forcesFullRustSuite(path)) {
+      return "all";
+    }
+    const pkg = packageForPath(path);
+    if (pkg === null) {
+      return "all";
+    }
+    seeds.add(pkg);
+  }
+
+  if (seeds.size === 0) {
+    return "all";
+  }
+
+  const expanded = expandPackages([...seeds]);
+  if (expanded.length > MAX_FOCUSED_PACKAGES) {
+    return "all";
+  }
+  return expanded.join(",");
+}
+
 export function selectCiJobs(paths) {
   const normalized = paths.map((path) => path.trim()).filter(Boolean);
   if (normalized.length === 0) {
-    return allHeavy();
+    return { ...allHeavy(), packages: "all" };
   }
 
-  return normalized.reduce(
-    (selected, path) => {
+  const selected = normalized.reduce(
+    (acc, path) => {
       const classification = classify(path);
       return {
-        rust: selected.rust || classification.rust,
-        edge: selected.edge || classification.edge,
-        trial: selected.trial || classification.trial,
+        rust: acc.rust || classification.rust,
+        edge: acc.edge || classification.edge,
+        trial: acc.trial || classification.trial,
       };
     },
     none(),
   );
+
+  return {
+    ...selected,
+    packages: selected.rust ? selectRustPackages(normalized) : "",
+  };
 }
 
 async function main() {
@@ -160,7 +419,7 @@ async function main() {
   }
   const selected = selectCiJobs(input.split(/\r?\n/));
   process.stdout.write(
-    `rust=${selected.rust}\nedge=${selected.edge}\ntrial=${selected.trial}\n`,
+    `rust=${selected.rust}\nedge=${selected.edge}\ntrial=${selected.trial}\npackages=${selected.packages}\n`,
   );
 }
 
