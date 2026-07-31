@@ -24,7 +24,10 @@ pub const ILLUMINANCE_LABEL: &str = "Trial illuminance sensor";
 pub const CONTACT_LABEL: &str = "Trial contact state";
 /// Edge Node enables this adapter only when the trial launcher sets this flag.
 pub const ENABLE_ENV: &str = "IOTKIT_ENABLE_TRIAL_SAMPLE";
-/// Polls spent at High (1.0) then Low (0.0) for the contact square wave.
+/// Polls per half-cycle of the contact square wave.
+///
+/// Live samples start at sequence 1: Low (`0.0`) for `1..=half`, then High (`1.0`)
+/// for `half+1..=2*half`, and so on.
 pub const DEFAULT_STATE_HALF_PERIOD_POLLS: u64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
