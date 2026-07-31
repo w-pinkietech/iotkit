@@ -191,6 +191,22 @@ test("selectRustPackages keeps trial-sample narrowly focused", () => {
   );
 });
 
+test("unlisted nested crate under edge/ forces the full suite", () => {
+  assert.equal(
+    selectRustPackages(["edge/output-adapters/acme/Cargo.toml"]),
+    "all",
+  );
+  assert.equal(
+    selectRustPackages(["edge/output-adapters/acme/src/lib.rs"]),
+    "all",
+  );
+});
+
+test("listed edge sources still focus iotkit-edge only", () => {
+  assert.equal(selectRustPackages(["edge/src/storage/mod.rs"]), "iotkit-edge");
+  assert.equal(selectRustPackages(["edge/Cargo.toml"]), "iotkit-edge");
+});
+
 test("CI workflow routes heavy jobs through the classifier", () => {
   const workflow = readFileSync(
     new URL("../../.github/workflows/ci.yml", import.meta.url),

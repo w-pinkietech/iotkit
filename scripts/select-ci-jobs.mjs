@@ -101,8 +101,21 @@ const packageRoots = [
   ["edge-node/core/types/", "iotkit-core-types"],
   ["edge-node/apps/node/", "iotkit-edge-node"],
   ["edge-node/core/ops/", "iotkit-core-ops"],
-  ["edge/", "iotkit-edge"],
+  // iotkit-edge sources only — never catch-all `edge/` (new nested crates under
+  // edge/output-adapters/<new>/ must not map to -p iotkit-edge alone).
+  ["edge/src/", "iotkit-edge"],
+  ["edge/tests/", "iotkit-edge"],
+  ["edge/frontend/", "iotkit-edge"],
+  ["edge/examples/", "iotkit-edge"],
+  ["edge/migrations/", "iotkit-edge"],
+  ["edge/openapi/", "iotkit-edge"],
 ];
+
+// Package manifests / package-root files not covered by directory prefixes above.
+const packageFiles = new Map([
+  ["edge/Cargo.toml", "iotkit-edge"],
+  ["edge/askama.toml", "iotkit-edge"],
+]);
 
 // Workspace path-deps that import each package (one hop). From cargo metadata.
 const reversePathDeps = {
@@ -318,6 +331,20 @@ function classify(path) {
 }
 
 function packageForPath(path) {
+  if (packageFiles.has(path)) {
+    return packageFiles.get(path);
+  }
+
+  // Nested Cargo.toml that is not a known package root ⇒ unlisted workspace crate.
+  // Focused -p lists would skip it; force full suite via null.
+  if (path.endsWith("Cargo.toml")) {
+    const listed = packageRoots.find(([root]) => path === `${root}Cargo.toml`);
+    if (listed) {
+      return listed[1];
+    }
+    return null;
+  }
+
   for (const [root, name] of packageRoots) {
     if (path === root.slice(0, -1) || path.startsWith(root)) {
       return name;
