@@ -14,6 +14,16 @@ port=$((21000 + $$ % 10000))
 broker_port=$((port + 1))
 stage="initializing the trial journey"
 
+release_trial_build_artifacts() {
+  [[ -f "$state/trial.env" ]] || return 0
+  docker compose --env-file "$state/trial.env" \
+    --file "$repo_root/deploy/compose.trial.yaml" \
+    down --remove-orphans --rmi local
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    docker builder prune --force >/dev/null
+  fi
+}
+
 cleanup() {
   status=$?
   if ((status != 0)); then
@@ -34,6 +44,7 @@ cleanup() {
   fi
   if [[ -f "$state/trial-state.json" ]]; then
     python3 "$repo_root/scripts/iotkit_trial.py" --config "$config" down >/dev/null 2>&1 || true
+    release_trial_build_artifacts >/dev/null 2>&1 || true
     python3 "$repo_root/scripts/iotkit_trial.py" --config "$config" \
       reset --confirm-trial-data-loss >/dev/null 2>&1 || true
   fi
@@ -160,6 +171,7 @@ if curl --noproxy '*' -fsS --max-time 2 "$origin/login" >/dev/null 2>&1; then
   echo "trial Console remained reachable after down" >&2
   exit 1
 fi
+release_trial_build_artifacts
 python3 "$repo_root/scripts/iotkit_trial.py" --config "$config" \
   reset --confirm-trial-data-loss
 [[ ! -e "$XDG_DATA_HOME/iotkit/trial" ]]
