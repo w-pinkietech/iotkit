@@ -131,10 +131,10 @@ for _ in $(seq 1 90); do
     "$origin/api/v1/history?from=$from&to=$now&limit=40" >"$scratch/history.json" &&
     jq -e '
       (.records | length >= 4)
-      and ([.records[] | select(.series_key | test("illuminance_lux"))] | length >= 2)
-      and ([.records[] | select(.series_key | test("contact_state"))] | length >= 2)
-      and ([.records[] | select(.series_key | test("illuminance_lux")) | .values[0]] | unique | length >= 2)
-      and ([.records[] | select(.series_key | test("contact_state")) | .values[0]] | unique | length >= 2)
+      and ([.records[] | select(.series_key | test(":illuminance_lux:"))] | length >= 2)
+      and ([.records[] | select(.series_key | test(":contact_state:"))] | length >= 2)
+      and ([.records[] | select(.series_key | test(":illuminance_lux:")) | .values[0]] | unique | length >= 2)
+      and ([.records[] | select(.series_key | test(":contact_state:")) | .values[0]] | unique | length >= 2)
     ' "$scratch/history.json" >/dev/null 2>&1; then
     received=true
     break
