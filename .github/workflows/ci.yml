@@ -5,6 +5,10 @@ on:
     branches: [master, main]
   pull_request:
 
+# Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same ref.
 concurrency:
   group: ci-${{ github.ref }}
