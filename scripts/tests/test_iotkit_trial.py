@@ -68,6 +68,27 @@ class TrialConfigTests(unittest.TestCase):
                 '[trial]\nconsole_bind = "0.0.0.0"\n'
             )
 
+    def test_identical_ports_are_rejected(self):
+        with self.assertRaisesRegex(iotkit_trial.ConfigError, "must differ"):
+            self.load(
+                'config_version = 1\nprofile = "trial"\n'
+                "[trial]\nconsole_port = 18080\nbroker_port = 18080\n"
+            )
+
+    def test_ipv6_loopback_is_rejected(self):
+        with self.assertRaisesRegex(iotkit_trial.ConfigError, "IPv4 loopback"):
+            self.load(
+                'config_version = 1\nprofile = "trial"\n'
+                '[trial]\nconsole_bind = "::1"\n'
+            )
+
+    def test_short_admin_password_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "password"
+            path.write_text("short\n", encoding="utf-8")
+            with self.assertRaisesRegex(iotkit_trial.ConfigError, "12 and 128"):
+                iotkit_trial._read_admin_password(path)
+
     def test_generated_node_config_uses_trial_adapter_and_plaintext_local_broker(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
         rendered = iotkit_trial.render_edge_node_config(
@@ -81,16 +102,18 @@ class TrialConfigTests(unittest.TestCase):
         self.assertIn('host = "127.0.0.1"', rendered)
         self.assertNotIn("password =", rendered)
 
-    def test_trial_broker_reads_owner_only_files_as_the_requesting_user(self):
+    def test_trial_broker_runs_as_requesting_user_without_persistence(self):
         compose = (REPO_ROOT / "deploy" / "compose.trial.yaml").read_text(
             encoding="utf-8"
         )
-        broker_service = compose.split("\n  edge:\n", maxsplit=1)[0]
+        mosquitto = iotkit_trial.render_mosquitto_config()
 
-        self.assertIn('user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"', broker_service)
-        self.assertIn('entrypoint: ["mosquitto"]', broker_service)
+        self.assertIn('user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"', compose)
+        self.assertIn('entrypoint: ["mosquitto"]', compose)
         self.assertNotIn("broker-data", compose)
-        self.assertIn("persistence false", MODULE_PATH.read_text(encoding="utf-8"))
+        self.assertIn("persistence false", mosquitto)
+        self.assertIn("allow_anonymous false", mosquitto)
+        self.assertIn("condition: service_healthy", compose)
 
     def test_state_marker_is_exact_and_rejects_configuration_drift(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
@@ -138,6 +161,10 @@ class TrialConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "iotkit" / "trial"
             state.mkdir(parents=True)
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                self.assertTrue(
+                    iotkit_trial._is_recognized_incomplete_state(state, config)
+                )
             marker = {
                 "format": 1,
                 "profile": "trial-initializing",

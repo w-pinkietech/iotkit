@@ -161,12 +161,23 @@ impl RuntimeConfig {
         if trial_profile {
             let origin_is_loopback = origin
                 .host_str()
-                .and_then(|host| host.parse::<IpAddr>().ok())
-                .is_some_and(|address| address.is_loopback());
+                .is_some_and(host_is_loopback_ip);
             if !args.development_http || !origin_is_loopback {
                 return Err(RuntimeConfigError::Invalid(
                     "trial profile requires development HTTP on a loopback public origin",
                 ));
+            }
+            if !host_is_loopback_ip(&ingest.host) {
+                return Err(RuntimeConfigError::Invalid(
+                    "trial profile requires a loopback ingest broker endpoint",
+                ));
+            }
+            if let Some(output) = &output {
+                if !host_is_loopback_ip(&output.host) {
+                    return Err(RuntimeConfigError::Invalid(
+                        "trial profile requires a loopback output broker endpoint",
+                    ));
+                }
             }
         }
         Ok(Self {
@@ -250,6 +261,11 @@ fn valid_edge_id(value: &str) -> bool {
         && suffix
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn host_is_loopback_ip(host: &str) -> bool {
+    host.parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
 }
 
 #[derive(Debug, thiserror::Error)]

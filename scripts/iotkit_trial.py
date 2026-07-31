@@ -129,6 +129,17 @@ def load_config(path: Path) -> TrialConfig:
     )
 
 
+def render_mosquitto_config() -> str:
+    return """listener 1883 0.0.0.0
+allow_anonymous false
+password_file /mosquitto/config/passwords
+acl_file /mosquitto/config/acl
+persistence false
+message_size_limit 1048576
+max_packet_size 1114112
+"""
+
+
 def render_edge_node_config(config: TrialConfig, db_path: str, password_file: str) -> str:
     return f"""[edge_node]
 db_path = {json.dumps(db_path)}
@@ -189,7 +200,10 @@ def _compose_args(
     runtime = {}
     runtime_file = state / "runtime.json"
     if read_runtime and runtime_file.is_file():
-        runtime = json.loads(runtime_file.read_text(encoding="utf-8"))
+        try:
+            runtime = json.loads(runtime_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ConfigError(f"invalid trial runtime metadata: {error}") from error
     runtime_uid = os.getuid() if hasattr(os, "getuid") else 10001
     runtime_gid = os.getgid() if hasattr(os, "getgid") else 10001
     content = "\n".join(
@@ -279,24 +293,30 @@ def _initialize(repo: Path, state: Path, config: TrialConfig, admin_password: st
     )
     compose = _compose_args(repo, state, config)
     _run(compose + ["build", "edge", "edge-node"])
-    initialized = json.loads(
-        _run(
-            compose
-            + [
-                "run",
-                "--rm",
-                "--no-deps",
-                "--entrypoint",
-                "iotkit-edge-nodectl",
-                "edge-node",
-                "--db",
-                "/data/node.db",
-                "init",
-            ],
-            capture=True,
+    try:
+        initialized = json.loads(
+            _run(
+                compose
+                + [
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "--entrypoint",
+                    "iotkit-edge-nodectl",
+                    "edge-node",
+                    "--db",
+                    "/data/node.db",
+                    "init",
+                ],
+                capture=True,
+            )
         )
-    )
-    edge_node_id = initialized["edge_node_id"]
+    except json.JSONDecodeError as error:
+        raise ConfigError(f"edge-node init returned non-JSON output: {error}") from error
+    try:
+        edge_node_id = initialized["edge_node_id"]
+    except (TypeError, KeyError) as error:
+        raise ConfigError("edge-node init response is missing edge_node_id") from error
     edge_id = f"edge-{secrets.token_hex(16)}"
     _write_private(state / "runtime.json", json.dumps({"edge_id": edge_id, "edge_node_id": edge_node_id}))
     compose = _compose_args(repo, state, config)
@@ -325,22 +345,16 @@ topic read iotkit/v1/edge-nodes/{edge_node_id}/recovery/completion
 """
     _write_private(state / "mosquitto" / "acl", acl)
     _write_private(state / "mosquitto" / "passwords", f"edge:{edge_password}\n{edge_node_id}:{node_password}\n")
-    _write_private(
-        state / "mosquitto" / "mosquitto.conf",
-        """listener 1883 0.0.0.0
-allow_anonymous false
-password_file /mosquitto/config/passwords
-acl_file /mosquitto/config/acl
-persistence false
-message_size_limit 1048576
-max_packet_size 1114112
-""",
-    )
+    _write_private(state / "mosquitto" / "mosquitto.conf", render_mosquitto_config())
+    runtime_uid = os.getuid() if hasattr(os, "getuid") else 10001
+    runtime_gid = os.getgid() if hasattr(os, "getgid") else 10001
     _run(
         [
             "docker",
             "run",
             "--rm",
+            "--user",
+            f"{runtime_uid}:{runtime_gid}",
             "-v",
             f"{state / 'mosquitto'}:/work",
             MOSQUITTO_IMAGE,
@@ -420,6 +434,8 @@ def _is_recognized_incomplete_state(state: Path, config: TrialConfig) -> bool:
     if state.is_symlink() or state.resolve() != _state_dir().resolve():
         return False
     marker = state / "initializing.json"
+    if not marker.exists() and not any(state.iterdir()):
+        return True
     if marker.is_symlink() or not marker.is_file():
         return False
     try:
@@ -467,7 +483,7 @@ def command_up(repo: Path, state: Path, config: TrialConfig, password_file: Path
     print(f"IoTKit Console: http://{config.console_bind}:{config.console_port}")
     print("ログインID: admin")
     print("停止: ./scripts/iotkit trial down")
-    print("初期化: ./scripts/iotkit trial reset")
+    print("初期化: ./scripts/iotkit trial reset --confirm-trial-data-loss")
     print("現場への導入は docs/okf/ja/operations/installation-and-recovery.md を参照してください。")
 
 
@@ -486,7 +502,10 @@ def command_down(
     if remove_volumes:
         command.append("--volumes")
     _run(command)
-    print("試用環境を停止しました。データは保持されています。")
+    if remove_volumes:
+        print("試用環境を停止しました。")
+    else:
+        print("試用環境を停止しました。データは保持されています。")
 
 
 def command_status(repo: Path, state: Path, config: TrialConfig) -> None:
@@ -499,9 +518,9 @@ def command_status(repo: Path, state: Path, config: TrialConfig) -> None:
 
 
 def command_reset(repo: Path, state: Path, config: TrialConfig, confirmed: bool) -> None:
-    _validated_marker(state, config)
     if not confirmed:
         raise ConfigError("reset deletes trial data; repeat with --confirm-trial-data-loss")
+    _validated_marker(state, config)
     command_down(repo, state, config, remove_volumes=True)
     shutil.rmtree(state.resolve())
     print("試用環境のデータを削除しました。")
@@ -534,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
             command_down(repo, state, config)
         elif args.command == "reset":
             command_reset(repo, state, config, args.confirm_trial_data_loss)
-    except (ConfigError, OSError, subprocess.CalledProcessError) as error:
+    except (ConfigError, OSError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print(f"iotkit trial: {error}", file=sys.stderr)
         return 2
     return 0

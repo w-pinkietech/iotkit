@@ -5,7 +5,7 @@ description: "Starts, reviews, stops, and resets the loopback-only IoTKit trial 
 language: en
 translation_key: operations.trial-profile
 status: draft
-revision: 1
+revision: 2
 ---
 
 # Try IoTKit on this PC
@@ -33,6 +33,10 @@ From a clean repository clone:
 ./scripts/iotkit trial validate
 ./scripts/iotkit trial up
 ```
+
+The first `up` builds the trial image, so it can take several minutes depending
+on the host. If the command is interrupted, run the same `up` again to restart
+initialization.
 
 At the prompt, choose a trial administrator password of 12 to 128 characters.
 The launcher does not put the password in `iotkit.toml`, command arguments, or

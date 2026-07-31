@@ -5,6 +5,14 @@ services:
     entrypoint: ["mosquitto"]
     command: ["-c", "/mosquitto/config/mosquitto.conf"]
     restart: unless-stopped
+    # Process presence is the portable readiness signal in the pinned Mosquitto
+    # image (anonymous auth is disabled, so MQTT client probes require secrets).
+    healthcheck:
+      test: ["CMD-SHELL", "pidof mosquitto >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 1s
     ports:
       - "${IOTKIT_TRIAL_BROKER_BIND}:${IOTKIT_TRIAL_BROKER_PORT}:1883"
     volumes:
@@ -30,7 +38,8 @@ services:
     restart: unless-stopped
     network_mode: host
     depends_on:
-      - broker
+      broker:
+        condition: service_healthy
     entrypoint: ["/usr/local/bin/iotkit-edge"]
     command:
       - serve
@@ -72,7 +81,8 @@ services:
     restart: unless-stopped
     network_mode: host
     depends_on:
-      - broker
+      broker:
+        condition: service_healthy
     entrypoint: ["/usr/local/bin/iotkit-edge-node"]
     command:
       - --config

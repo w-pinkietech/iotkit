@@ -69,7 +69,7 @@ stage="validating the trial configuration"
 python3 "$repo_root/scripts/iotkit_trial.py" --config "$config" validate
 stage="building and starting the trial services"
 python3 "$repo_root/scripts/iotkit_trial.py" --config "$config" \
-  up --admin-password-file "$password_file" >"$launcher_log"
+  up --admin-password-file "$password_file" >"$launcher_log" 2>&1
 password=$(<"$password_file")
 stage="checking that the launcher did not expose the administrator password"
 if grep -Fq "$password" "$launcher_log"; then

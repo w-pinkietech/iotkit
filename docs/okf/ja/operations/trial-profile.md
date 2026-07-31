@@ -5,7 +5,7 @@ description: "Loopback限定のIoTKit試用profileを起動、確認、停止、
 language: ja
 translation_key: operations.trial-profile
 status: draft
-revision: 1
+revision: 2
 ---
 
 # このPCでIoTKitを試す
@@ -32,6 +32,9 @@ cleanなrepository cloneで実行します。
 ./scripts/iotkit trial validate
 ./scripts/iotkit trial up
 ```
+
+初回の`up`はtrial imageをbuildするため、host性能により数分かかります。途中で中断した
+場合は、同じ`up`をもう一度実行すると初期化をやり直します。
 
 表示に従い、12文字以上128文字以下の試用管理者passwordを決めます。Launcherは
 passwordを`iotkit.toml`、command argument、出力へ書きません。生成credentialとDBは

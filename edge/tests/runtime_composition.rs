@@ -76,6 +76,38 @@ fn trial_profile_requires_loopback_development_http() {
 
     args.public_origin = "http://192.0.2.1:8080".into();
     assert!(RuntimeConfig::from_serve_args(&args).is_err());
+
+    args.public_origin = "https://127.0.0.1:8080".into();
+    args.development_http = false;
+    assert!(RuntimeConfig::from_serve_args(&args).is_err());
+}
+
+#[test]
+fn trial_profile_requires_loopback_broker_endpoints() {
+    let directory = TempDir::new().unwrap();
+    let mut args = serve_args(&directory);
+    args.broker_url = "tcp://192.0.2.10:18883".into();
+    args.allow_insecure = true;
+    args.trust_mode = None;
+    args.ca_file = None;
+    args.development_http = true;
+    args.public_origin = "http://127.0.0.1:8080".into();
+    args.deployment_profile = DeploymentProfileArg::Trial;
+    assert!(RuntimeConfig::from_serve_args(&args).is_err());
+
+    args.broker_url = "tcp://127.0.0.1:18883".into();
+    let output_password = directory.path().join("output-mqtt-password");
+    secret(&output_password, "output-secret");
+    args.output_broker_url = Some("tcp://192.0.2.20:1883".into());
+    args.output_username = Some("edge-output".into());
+    args.output_password_file = Some(output_password);
+    args.output_allow_insecure = true;
+    assert!(RuntimeConfig::from_serve_args(&args).is_err());
+
+    args.output_broker_url = Some("tcp://127.0.0.1:18884".into());
+    let config = RuntimeConfig::from_serve_args(&args).expect("loopback output");
+    assert!(config.trial_profile);
+    assert!(config.output.is_some());
 }
 
 #[test]

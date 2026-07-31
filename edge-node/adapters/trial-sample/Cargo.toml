@@ -8,4 +8,4 @@ repository.workspace = true
 [dependencies]
 iotkit-input-adapter-host-api = { path = "../../input/host-api" }
 iotkit-ingest-contract = { path = "../../ingest/contract" }
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
