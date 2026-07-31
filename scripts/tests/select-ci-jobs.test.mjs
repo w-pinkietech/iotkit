@@ -50,6 +50,32 @@ const cases = [
     expected: rustEdge,
   },
   {
+    name: "Edge script family outside the old allowlist still selects Rust+Edge only",
+    paths: [
+      "scripts/test-edge-resilience.sh",
+      "scripts/test-edge-bootstrap.sh",
+      "scripts/test-edge-mqtt.sh",
+      "scripts/test-edge-parity.sh",
+      "scripts/test-edge-node-fence.sh",
+      "scripts/test-edge-host-release-gate.sh",
+    ],
+    expected: rustEdge,
+  },
+  {
+    name: "trial-related Edge runtime/config selects Rust, Edge, and trial Docker",
+    paths: ["edge/src/composition/runtime_config.rs"],
+    expected: rustEdgeTrial,
+  },
+  {
+    name: "trial banner template/CSS select Rust, Edge, and trial Docker",
+    paths: [
+      "edge/src/web/templates/console.html",
+      "edge/frontend/static/edge.css",
+    ],
+    expected: rustEdgeTrial,
+  },
+
+  {
     name: "shared contract fixtures select Rust, Edge, and trial",
     paths: ["testdata/egress/v1/record-batch.json"],
     expected: rustEdgeTrial,

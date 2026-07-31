@@ -8,15 +8,13 @@ const rustFiles = new Set([
   "rust-toolchain.toml",
 ]);
 
-const edgeScripts = new Set([
-  "scripts/test-edge-capacity.sh",
-  "scripts/test-edge-console-e2e.sh",
-  "scripts/test-edge-console-frontend.sh",
-  "scripts/test-edge-output.sh",
-  "scripts/test-edge-postgres.sh",
-  "scripts/test-rust-edge-custody.sh",
-  "scripts/test-rust-edge-runtime.sh",
-]);
+// Edge product integration scripts (not trial Docker). Match by prefix so new
+// scripts/test-edge-*.sh and scripts/test-rust-edge-*.sh do not fall through to
+// allHeavy() and re-introduce trial over-execution (#128).
+const edgeScriptPrefixes = [
+  "scripts/test-edge-",
+  "scripts/test-rust-edge-",
+];
 
 const trialOnlyFiles = new Set([
   "scripts/iotkit",
@@ -24,6 +22,21 @@ const trialOnlyFiles = new Set([
   "scripts/test-iotkit-trial.sh",
   "deploy/compose.trial.yaml",
   "iotkit.toml",
+]);
+
+// Edge paths that implement or surface the trial profile (banner, deployment
+// profile, loopback guards). Generic edge/** stays rust+edge only.
+const trialRelatedEdgeFiles = new Set([
+  "edge/frontend/static/edge.css",
+  "edge/src/cli/mod.rs",
+  "edge/src/composition/runtime.rs",
+  "edge/src/composition/runtime_config.rs",
+  "edge/src/web/mod.rs",
+  "edge/src/web/templates/console.html",
+  "edge/src/web/templates/login.html",
+  "edge/tests/cli_contract.rs",
+  "edge/tests/console_contract.rs",
+  "edge/tests/runtime_composition.rs",
 ]);
 
 const lightweightPrefixes = [
@@ -93,7 +106,14 @@ function classify(path) {
     return allHeavy();
   }
 
-  if (path.startsWith("edge/") || edgeScripts.has(path)) {
+  if (trialRelatedEdgeFiles.has(path)) {
+    return { rust: true, edge: true, trial: true };
+  }
+
+  if (
+    path.startsWith("edge/") ||
+    edgeScriptPrefixes.some((prefix) => path.startsWith(prefix))
+  ) {
     return { rust: true, edge: true, trial: false };
   }
 
