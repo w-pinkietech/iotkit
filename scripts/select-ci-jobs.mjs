@@ -102,10 +102,6 @@ function classify(path) {
     return allHeavy();
   }
 
-  if (path === "deploy/compose.trial.yaml") {
-    return { rust: false, edge: false, trial: true };
-  }
-
   if (path.startsWith("deploy/") || path === "compose.dev.yaml") {
     return { rust: true, edge: true, trial: false };
   }
