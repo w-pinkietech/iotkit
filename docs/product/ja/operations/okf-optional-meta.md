@@ -18,7 +18,8 @@ IoTKit product ゲートでは有効です。
 
 ## いつ書くか
 
-**残る製品事実**が変わるときに、任意の OKF 家族を追加または更新します。
+**残る製品事実**が変わるときは、任意の OKF family の追加を検討します。
+すでに載っている場合は更新します。
 
 - 公開 wire / custody の **契約**本文
 - 現場手順が変わる **runbook**
@@ -48,7 +49,7 @@ verified: { by: human:your-handle, at: 2026-08-01T12:30:00Z }
 sources:
   - id: schema
     resource: https://example.invalid/path-to-schema-or-fixture
-    title: 共権威の schema や設計メモ
+    title: 契約 schema・fixture・conformance test、または日付付き設計 evidence
 ---
 ```
 

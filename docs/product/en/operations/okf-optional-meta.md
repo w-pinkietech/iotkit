@@ -19,7 +19,8 @@ for agents and reviewers.
 
 ## When to add metadata
 
-Add or refresh optional OKF families when **lasting product facts** change:
+When **lasting product facts** change, consider adding these optional OKF
+families; if they are already present, refresh them:
 
 - Public wire or custody **contract** text
 - Operator **runbook** steps that change a field procedure
@@ -49,7 +50,7 @@ verified: { by: human:your-handle, at: 2026-08-01T12:30:00Z }
 sources:
   - id: schema
     resource: https://example.invalid/path-to-schema-or-fixture
-    title: Co-authority schema or design note
+    title: Contract schema, fixture, or conformance test; or dated design evidence
 ---
 ```
 
