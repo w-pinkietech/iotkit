@@ -1,7 +1,7 @@
 # superpowers/specs → OKF gap inventory
 
-**Status:** working survey for [#143](https://github.com/w-pinkietech/iotkit/issues/143)  
-**As-of:** 2026-08-01  
+**Status:** working survey for [#143](https://github.com/w-pinkietech/iotkit/issues/143)
+**As-of:** 2026-08-01
 **Authority:** none. Not product documentation. Current authority remains
 `docs/okf/` plus paired contracts, fixtures, and tests.
 
