@@ -1,29 +1,59 @@
-# Historical design and implementation records
+# Superpowers development artifacts
 
-The `specs/` and `plans/` directories preserve completed development-process
-artifacts. They may contain old names (including former Site vocabulary),
-superseded scope, unchecked steps, or implementation state from a specific
-point in time.
+The `specs/` and `plans/` directories hold optional process artifacts for
+scoped development issues. A reviewed specification can guide an active issue;
+an implementation plan can preserve ordered execution context. After the change
+merges, both freeze as lineage for that completed effort.
 
-These files are not current work instructions and do not override code, executable
-contracts, current contract documents, or [`docs/README.md`](../README.md). New work
-should update the current source that owns the behavior instead of treating an old
-plan as a living specification.
+These artifacts never override current product documentation, a versioned
+contract unit, code, or executable tests. Lasting product facts belong in their
+owning current source, not only in a specification or plan.
 
-## Keep this tree (lineage)
+## Responsibilities
 
-Policy ([#145](https://github.com/w-pinkietech/iotkit/issues/145)):
+- The GitHub issue owns the outcome, non-goals, lane, acceptance evidence, and
+  scope changes.
+- `specs/` records reviewed design choices, boundaries, and verification
+  strategy when an issue needs durable design context.
+- `plans/` records ordered implementation and verification steps when sequencing
+  needs durable context. A plan is not a product contract or backlog.
+- The pull request owns the actual diff, verification evidence, review, and
+  product-document impact judgment.
 
-- **Keep this directory permanently for lineage.** Do not bulk-delete, rename,
-  or move it to an archive.
-- **Do not add** new specs or plans for ongoing work by default.
-- Reuse the **writing style** (goal, non-goals, decision, verification; optional
-  plan for Full work) on AGENTS change lanes—not by growing this tree.
-- Specs→product docs absorption is **secondary**. Primary product-gap work is
-  redesign→product docs
-  ([#141](https://github.com/w-pinkietech/iotkit/issues/141)). The completed spec
-  gap survey and its conclusions remain on
-  [#143](https://github.com/w-pinkietech/iotkit/issues/143).
-- `plans/` are execution logs only—never normative.
+## Create only when needed
 
-Current process: Change lanes in [`AGENTS.md`](../../AGENTS.md) (Fast default).
+The change lanes in [`AGENTS.md`](../../AGENTS.md) remain the process authority:
+
+- **Fast:** create neither artifact by default.
+- **Standard:** create a specification for multiple credible approaches, a
+  meaningful new internal boundary, or a real UX decision.
+- **Full:** create a specification when design decisions need approval before
+  implementation; put lasting product or contract decisions in their owning
+  current authority in the same change.
+- **Any lane:** create a plan only for several order-dependent tasks,
+  irreversible steps, or work that needs durable context across sessions.
+
+Do not create a specification merely to repeat an issue or existing authority.
+Do not create a plan when a short issue checklist is sufficient.
+
+## Active work to lineage
+
+1. Link every new specification and plan to its issue.
+2. Review and approve a needed specification before implementation.
+3. Use a needed plan only for that issue's implementation and verification.
+4. After merge, stop updating both artifacts. A later behavior change uses a
+   new issue and, when needed, new artifacts.
+
+Keep this directory permanently for lineage. Do not bulk-delete, rename, move,
+or rewrite old artifacts to resemble the current product. Existing files may
+contain former Site vocabulary, superseded scope, unchecked steps, or
+implementation state from a specific point in time. Those properties are
+historical evidence, not current work instructions.
+
+The policy is tracked by [#145](https://github.com/w-pinkietech/iotkit/issues/145)
+and its approved
+[artifact lifecycle design](specs/2026-08-02-superpowers-artifact-lifecycle-design.md).
+The completed historical spec-gap survey remains on
+[#143](https://github.com/w-pinkietech/iotkit/issues/143); absorbing old
+Superpowers material into product docs remains secondary to actual current
+product gaps.

@@ -1,8 +1,10 @@
 # Superpowers artifact lifecycle design
 
-**Issue:** [#145](https://github.com/w-pinkietech/iotkit/issues/145)  
-**Status:** Approved design  
-**Lane:** Standard
+Issue: [#145](https://github.com/w-pinkietech/iotkit/issues/145)
+
+Status: approved
+
+Lane: Standard
 
 ## Goal
 
@@ -64,8 +66,9 @@ Do not create a plan when a short issue checklist is sufficient.
    acceptance evidence.
 2. If the creation policy selects a specification, write it under
    `docs/superpowers/specs/`, review it, and obtain approval before implementation.
-3. If the approved design needs a durable ordered plan, write it under
-   `docs/superpowers/plans/` before executing those steps.
+3. Independently of whether a specification exists, if the issue work meets the
+   plan criteria, write a plan under `docs/superpowers/plans/` before executing
+   those ordered steps.
 4. Implement and verify in the issue worktree and branch. The pull request links
    the issue and any created process artifacts.
 5. Before merge, put every lasting product fact in its owning `docs/product/`

@@ -38,7 +38,7 @@ Temporary notes stay on the issue or pull request. Process details:
 The short top-level compatibility documents under `docs/` are pointers only and are
 not authorities. `docs/okf/` is a one-hop stub to `docs/product/` for old links.
 
-Documentation trees (the historical rows never override product docs; see
+Documentation trees (supporting and historical rows never override product docs; see
 [#145](https://github.com/w-pinkietech/iotkit/issues/145)):
 
 | Tree | Role |
@@ -46,9 +46,11 @@ Documentation trees (the historical rows never override product docs; see
 | [`product/`](product/) | **Current** product corpus (OKF v0.2 packaging) |
 | [`okf/`](okf/) | Compatibility stub → `product/` |
 | [`redesign/`](redesign/) | Early rewrite decisions and evidence. Easy to misread as current law. Prefer absorbing still-true gaps into product docs ([#141](https://github.com/w-pinkietech/iotkit/issues/141)). Do not “fix” dated evidence to match today. |
-| [`superpowers/`](superpowers/) | Sprint design/plans **kept for lineage**. Not current law; do not add new specs/plans by default. Writing *style* may be reused on light change lanes. Spec→product docs is secondary ([#143](https://github.com/w-pinkietech/iotkit/issues/143)). |
+| [`superpowers/`](superpowers/) | Optional issue-linked design and implementation artifacts while work is active; frozen lineage after merge. Never current product law. Create only when the change-lane criteria need durable spec or plan context. |
 
-Development process (lanes, issue/PR loop) lives in [`AGENTS.md`](../AGENTS.md), not in these trees.
+Development process (lanes, issue/PR loop, and artifact creation criteria) lives
+in [`AGENTS.md`](../AGENTS.md); `superpowers/` stores selected process artifacts
+but does not define the process.
 
 The Edge Node encrypted backup and fenced-candidate recovery contract is paired
 across both language trees:
