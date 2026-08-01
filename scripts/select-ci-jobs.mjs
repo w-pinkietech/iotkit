@@ -58,6 +58,7 @@ const lightweightFiles = new Set([
   "scripts/docs/package-lock.json",
   "scripts/docs/frontmatter.mjs",
   "scripts/tests/product-docs-frontmatter.test.mjs",
+  "scripts/tests/product-docs-modes.test.mjs",
   "scripts/check-release-version.mjs",
   "scripts/check-source-layout",
   "scripts/tests/adapter-author-docs.test.mjs",

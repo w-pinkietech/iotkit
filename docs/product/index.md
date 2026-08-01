@@ -59,5 +59,12 @@ Install the pinned checker dependency after a fresh checkout or package-lock cha
 `npm ci --prefix scripts/docs`.
 
 **Checker:** `node scripts/check-product-docs.mjs` (compatibility entry:
-`scripts/check-okf-docs.mjs`). Failures are **IoTKit product-profile** failures unless
-a future `okf-min` mode says otherwise.
+`scripts/check-okf-docs.mjs`).
+
+| Mode | Command | Checks |
+|---|---|---|
+| `all` (default, CI) | `node scripts/check-product-docs.mjs` | OKF min + IoTKit product profile |
+| `okf-min` | `--mode=okf-min` | frontmatter + non-empty `type` + root `okf_version: "0.2"` |
+| `iotkit-product` | `--mode=iotkit-product` | bilingual pairs, revisions, type allow-list, closed in-bundle links, … |
+
+Failures print a layer tag (`[okf-min]` or `[iotkit-product]`).
