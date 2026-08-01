@@ -33,7 +33,7 @@ For each item:
 | Still true? | Does the *decision core* still match code / OKF / product intent? |
 | In product docs? | Covered by current `docs/product/{ja,en}` (and paired contracts)? |
 | Normative now? | Should operators/implementers treat it as a must-follow rule *today*? |
-| Action | `skip` · `leave-evidence` · `absorb-okf` · `needs-code-first` · `defer` |
+| Action | `skip` · `leave-evidence` · `absorb-product` · `needs-code-first` · `defer` |
 
 Actions for a later phase (not this survey):
 

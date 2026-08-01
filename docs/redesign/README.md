@@ -2,7 +2,7 @@
 
 This directory preserves the reasoning and evidence used while rewriting IoTKit.
 It is **not** current product authority. Start at [`docs/README.md`](../README.md)
-and [`docs/product/`](../okf/).
+and [`docs/product/`](../product/).
 
 Policy (see [#145](https://github.com/w-pinkietech/iotkit/issues/145)):
 

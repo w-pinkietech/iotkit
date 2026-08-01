@@ -80,6 +80,9 @@ jobs:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-product-docs.mjs
 
+      - name: Product documentation regression tests
+        run: node --test scripts/tests/check-product-docs.test.mjs
+
       - name: Trial profile configuration contract
         run: python3 -m unittest scripts.tests.test_iotkit_trial
 

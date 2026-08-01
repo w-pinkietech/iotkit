@@ -36,7 +36,7 @@ Temporary notes stay on the issue or pull request. Process details:
 The short top-level compatibility documents under `docs/` are pointers only and are
 not authorities. `docs/okf/` is a one-hop stub to `docs/product/` for old links.
 
-Historical trees (neither overrides product docs; see
+Documentation trees (the historical rows never override product docs; see
 [#145](https://github.com/w-pinkietech/iotkit/issues/145)):
 
 | Tree | Role |
