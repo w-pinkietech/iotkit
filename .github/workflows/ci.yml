@@ -82,8 +82,8 @@ jobs:
         env:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: |
-          node --test scripts/tests/product-docs-frontmatter.test.mjs
-          node scripts/check-product-docs.mjs
+          node --test scripts/tests/product-docs-frontmatter.test.mjs scripts/tests/product-docs-modes.test.mjs
+          node scripts/check-product-docs.mjs --mode=all
 
       - name: Product documentation regression tests
         run: node --test scripts/tests/check-product-docs.test.mjs
