@@ -17,6 +17,8 @@ import test from "node:test";
 
 const projectRoot = path.resolve(import.meta.dirname, "../..");
 const checkerSource = path.join(projectRoot, "scripts", "check-product-docs.mjs");
+const frontmatterSource = path.join(projectRoot, "scripts", "docs", "frontmatter.mjs");
+const toolingModules = path.join(projectRoot, "scripts", "docs", "node_modules");
 
 function write(repo, relative, content) {
   const target = path.join(repo, relative);
@@ -61,6 +63,8 @@ function createOldBundle() {
   runGit(repo, "config", "tag.gpgsign", "false");
   mkdirSync(path.join(repo, "scripts"), { recursive: true });
   copyFileSync(checkerSource, path.join(repo, "scripts", "check-product-docs.mjs"));
+  mkdirSync(path.join(repo, "scripts", "docs"), { recursive: true });
+  copyFileSync(frontmatterSource, path.join(repo, "scripts", "docs", "frontmatter.mjs"));
   write(repo, "docs/okf/index.md", "# Old OKF bundle\n\n* [日本語](ja/index.md)\n* [English](en/index.md)\n");
   for (const language of ["ja", "en"]) {
     write(repo, `docs/okf/${language}/index.md`, "# Concepts\n\n* [Example](concepts/example.md)\n");
@@ -104,7 +108,7 @@ function runChecker(repo, base) {
   return spawnSync(process.execPath, ["scripts/check-product-docs.mjs"], {
     cwd: repo,
     encoding: "utf8",
-    env: { ...process.env, OKF_BASE_REF: base },
+    env: { ...process.env, NODE_PATH: toolingModules, OKF_BASE_REF: base },
   });
 }
 
@@ -179,6 +183,37 @@ test("paired product-doc edits without revision bumps are rejected", () =>
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /revision must increase from the base version 1/);
+  }));
+
+test("bilingual revisions remain distinct above the JavaScript safe-integer limit", () =>
+  withRepo(({ repo }) => {
+    const base = migrate(repo);
+    write(repo, "docs/product/ja/concepts/example.md", concept("ja", "9007199254740992", "Updated body."));
+    write(repo, "docs/product/en/concepts/example.md", concept("en", "9007199254740993", "Updated body."));
+    commit(repo, "use distinct large revisions");
+
+    const result = runChecker(repo, base);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /revision differs from English translation/);
+  }));
+
+test("revision bump comparisons are exact above the JavaScript safe-integer limit", () =>
+  withRepo(({ repo }) => {
+    for (const language of ["ja", "en"]) {
+      write(
+        repo,
+        `docs/okf/${language}/concepts/example.md`,
+        concept(language, "9007199254740992", "Original body."),
+      );
+    }
+    commit(repo, "use a large base revision");
+    const base = runGit(repo, "rev-parse", "HEAD");
+    migrate(repo, { revision: "9007199254740993", body: "Updated body." });
+
+    const result = runChecker(repo, base);
+
+    assert.equal(result.status, 0, result.stderr);
   }));
 
 test("malformed link escapes are reported without aborting the checker", () =>

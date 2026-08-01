@@ -102,6 +102,7 @@ Run the smallest command that can disprove the change, then widen for risk.
 
 ```bash
 # Documentation, dependency, and source/test structure
+npm ci --prefix scripts/docs  # after a fresh checkout or package-lock change
 node scripts/check-product-docs.mjs
 scripts/check-layers
 scripts/check-source-layout

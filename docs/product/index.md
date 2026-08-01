@@ -32,9 +32,9 @@ Required on every product document—Concept, Architecture, Contract, and Runboo
 - `title` and `description` present
 
 OKF v0.2 itself only requires `type` on each concept. Optional OKF families
-(`sources`, `generated`, `verified`, `stale_after`, …) are format-valid, but the
-current gate accepts scalar values only. Nested mappings and lists require the
-separate full-YAML parser step and must not be added before that lands.
+(`sources`, `generated`, `verified`, `stale_after`, …) may appear as nested YAML
+without changing the authority path; the checker parses full YAML and accepts
+unknown keys.
 
 ## Intentional differences from plain OKF consumers
 
@@ -47,13 +47,16 @@ gate is stricter on purpose** so the corpus stays a closed, bilingual product au
 | Broken **in-bundle** links | Must not reject the bundle | **Fail** (product docs should form a closed graph) |
 | `log.md` | Allowed reserved file | **Not used** (history lives in git; checker forbids it) |
 | `type` values | Free strings; unknown types tolerated | **Allow-list:** Concept, Architecture, Contract, Runbook |
-| Extra frontmatter keys | Allowed extensions | Required extensions above; other quoted scalar values are accepted. Nested/list values await the full-YAML parser step |
+| Extra frontmatter keys | Allowed extensions | Allowed, including nested/list values; required extensions are listed above |
 | Root `okf_version` | MAY declare | **Must** be `"0.2"` on this bundle root |
 | Path layout | Free | Concepts under `ja\|en` × `concepts\|architecture\|contracts\|operations` |
 
 Co-authorities for versioned contracts (schemas, fixtures, tests) sit outside this
 bundle; disagreement is a contract defect, not permission to follow one artifact
 silently. Historical trees (`docs/redesign/`, `docs/superpowers/`) are not authority.
+
+Install the pinned checker dependency after a fresh checkout or package-lock change:
+`npm ci --prefix scripts/docs`.
 
 **Checker:** `node scripts/check-product-docs.mjs` (compatibility entry:
 `scripts/check-okf-docs.mjs`). Failures are **IoTKit product-profile** failures unless
