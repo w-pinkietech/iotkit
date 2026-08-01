@@ -35,11 +35,23 @@ function normalizedPath(value) {
   return String(value).replaceAll("\\", "/").replace(/^\.\/+/, "");
 }
 
-/** Strip HTML comments and collapse whitespace for PR body scanning. */
+/**
+ * Normalize PR body text for template scanning only (not HTML rendering).
+ * Drop full-line HTML comments used as PR-template placeholders.
+ */
 export function stripPrBodyNoise(body) {
   return String(body ?? "")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/\r\n/g, "\n");
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      // Template placeholders are single-line <!-- ... --> comments.
+      if (trimmed.startsWith("<!--") && trimmed.endsWith("-->")) {
+        return false;
+      }
+      return true;
+    })
+    .join("\n");
 }
 
 /**
