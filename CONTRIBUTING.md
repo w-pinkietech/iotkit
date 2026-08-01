@@ -29,6 +29,15 @@ Keep product docs current in the same change that alters lasting product facts.
 Temporary investigation notes stay on the issue or PR. Details:
 [`.agents/documentation-authority.md`](.agents/documentation-authority.md).
 
+For a lower-bound list of product docs that may need a freshness update:
+
+```bash
+node scripts/product-docs-impact.mjs select --base origin/master
+```
+
+Empty selection is not proof that no product-doc update is needed. After edits,
+run `node scripts/check-product-docs.mjs`.
+
 For each later task, use the **Before changing code** table in
 [`.agents/change-map.md`](.agents/change-map.md) and read only the rows relevant
 to that change. Work is issue-driven; see [`.agents/workflow.md`](.agents/workflow.md).

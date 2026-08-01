@@ -9,6 +9,10 @@ node scripts/check-product-docs.mjs
 scripts/check-layers
 scripts/check-source-layout
 
+# Product-docs impact (which docs/product files might need a freshness update)
+node scripts/product-docs-impact.mjs select --base origin/master
+# Empty selection ≠ “no product-doc update needed”
+
 # Battle-tested review routing
 node scripts/battle-tested-review.mjs select --base origin/master
 

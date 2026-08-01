@@ -84,9 +84,12 @@ const cases = [
       "docs/product/en/index.md",
       "AGENTS.md",
       "CONTRIBUTING.ja.md",
+      "scripts/product-docs-impact.mjs",
+      "scripts/docs/product-docs-impact-rules.json",
       "scripts/tests/adapter-author-docs.test.mjs",
       "scripts/tests/check-product-docs.test.mjs",
       "scripts/tests/product-docs-modes.test.mjs",
+      "scripts/tests/product-docs-impact.test.mjs",
     ],
     expected: none,
   },
@@ -313,6 +316,11 @@ test("CI workflow routes heavy jobs through the classifier", () => {
   assert.match(
     workflow,
     /node --test scripts\/tests\/check-product-docs\.test\.mjs/,
+  );
+  assert.match(workflow, /node scripts\/product-docs-impact\.mjs check/);
+  assert.match(
+    workflow,
+    /node --test scripts\/tests\/product-docs-impact\.test\.mjs/,
   );
   // Focused package selection drives clippy/nextest when not "all".
   assert.match(workflow, /cargo nextest run/);

@@ -19,7 +19,9 @@ then only the linked files needed for the task.
 3. **Keep product docs current** — lasting product facts change in the same
    issue and PR as the behavior or contract. Temporary investigation stays on
    the issue or PR. Record updated product-doc paths or a concrete no-update
-   reason in the PR.
+   reason in the PR. Use
+   `node scripts/product-docs-impact.mjs select --base origin/master` as a
+   lower-bound hint; empty output is not a safety proof.
 4. **Protect product invariants** — never expose secrets or customer data,
    never silently lose data, route mutations through typed operations, and do
    not confuse MQTT PUBACK with durable IoTKit acceptance. See

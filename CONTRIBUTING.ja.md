@@ -28,6 +28,15 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 調査メモなど一時記録は issue / PR に置き、正本へ混ぜません。詳細は
 [`.agents/documentation-authority.md`](.agents/documentation-authority.md) にあります。
 
+更新候補の正本を path から機械的に列挙する lower-bound セレクタ:
+
+```bash
+node scripts/product-docs-impact.mjs select --base origin/master
+```
+
+候補が空でも「正本更新不要」の証明にはなりません。編集後は
+`node scripts/check-product-docs.mjs` を実行してください。
+
 以後の各taskでは、[`.agents/change-map.md`](.agents/change-map.md)の**Before
 changing code**表を使い、変更に該当する行だけを読んでください。作業はissue駆動です。
 [`.agents/workflow.md`](.agents/workflow.md)を参照してください。

@@ -34,6 +34,25 @@ others.
   documented in `docs/product/<lang>/operations/okf-optional-meta.md`; they are
   not required by the product gate.
 
+### Product-docs impact selector
+
+Before opening or updating a PR, run a lower-bound path selector that maps
+changed paths to candidate `docs/product/` files:
+
+```bash
+node scripts/product-docs-impact.mjs select --base origin/master
+```
+
+- Rules live in `scripts/docs/product-docs-impact-rules.json` (shared later with
+  the CI soft gate in issue #165).
+- Output lists candidate bilingual paths plus the matched rule and source paths.
+- **Empty selection is not proof that product docs need no update.** Semantic or
+  operator-visible changes still need a human judgment: update the corpus or
+  record a concrete no-update reason on the PR.
+- After editing the corpus, run `node scripts/check-product-docs.mjs` (form /
+  IoTKit product gate). Impact answers “which docs might need a touch”; the
+  checker answers “are the touched docs well-formed.”
+
 ## Historical trees
 
 Neither historical tree overrides current product docs.
