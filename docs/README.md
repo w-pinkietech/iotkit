@@ -27,6 +27,10 @@ contract consists of its language-paired contract document, machine-readable sch
 or exported wire types, shared fixtures, and conformance tests. None silently
 overrides the others; disagreement is a contract defect.
 
+Keep the corpus current in the same change that alters lasting product facts.
+Temporary notes stay on the issue or pull request. Process details:
+[`AGENTS.md`](../AGENTS.md) (**Keep OKF current** and the change-lane table).
+
 The short top-level compatibility documents under `docs/` are pointers only and are
 not authorities.
 

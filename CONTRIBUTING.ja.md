@@ -21,6 +21,10 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 `docs/okf/`が現行の人間向け製品知識の正本です。`docs/redesign/`と
 `docs/superpowers/`は履歴であり、現行契約、実行可能fixture、testを上書きしません。
 
+残る製品事実を変える変更では、同じ変更の中で OKF を最新に保ちます。調査メモや
+捨てた案など一時的な記録は issue / PR に置き、正本へ混ぜません。詳細は
+[AGENTS.md](AGENTS.md) の **Keep OKF current** と change-lane 表です。
+
 以後の各taskでは、[AGENTS.md](AGENTS.md)の**Before changing code**表を使い、
 変更に該当する行だけを読んでください。
 
@@ -134,10 +138,14 @@ mapと配置ruleはArchitectureにあります。新しいcrateは、同文書�
 3. `.worktrees/issue-<number>-<slug>`を作り、その中だけで作業する。
 4. 製品動作を変更する前に、最も近いfocused testを追加または更新する。
 5. 差分をissueの範囲に収める。範囲が実質的に変わったら別issueにする。
-6. commitしてbranchをpushし、issueをcloseするdraft pull requestを作る。
-7. そこで停止して人間へreviewを依頼する。
-8. Review指摘は同じbranchとpull requestで修正する。
-9. 明示承認を得てからmergeする。
+6. 残る製品事実が変わるなら、同じ worktree で対応する `docs/okf/` を更新する
+   （日英同時、`revision` を上げる）。変わらないなら、PR 用に **No OKF update**
+   の具体的な理由を用意する。
+7. commitしてbranchをpushし、issueをcloseするdraft pull requestを作る。
+   PR の **OKF impact / 正本への影響** 欄に、更新パスまたは更新しない理由を書く。
+8. そこで停止して人間へreviewを依頼する。
+9. Review指摘は同じbranchとpull requestで修正する。
+10. 明示承認を得てからmergeする。
 
 最終reviewでは、差分に関係する現場の失敗観点だけを選びます。
 
@@ -203,7 +211,7 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
 - 埋め込みConsole JavaScriptは
   `npm run build --prefix edge/frontend`で生成する。
 - `Cargo.lock`、`package-lock.json`は各package managerからだけ更新する。
-- `docs/okf/`の日英fileは同時に変更する。
+- `docs/okf/`の日英fileは同時に変更し、concept 内容を変えたら共有 `revision` を上げる。
 - `testdata/`の共有JSONは正規contract dataとして扱う。一実装を通すためだけに
   fixtureを変更しない。
 
@@ -221,9 +229,13 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
 
 - PRが一つのissueをlinkし、closeする。
 - Descriptionに変更内容、理由、影響、検証を書く。
+- **OKF impact / 正本への影響** に、更新した `docs/okf/` パス（日英）**または**
+  更新しない具体的な理由を書く。残る製品事実を issue だけに残さない。
 - 公開動作に実行可能testまたはfixtureがある。
-- Contract変更では全表現を一緒に更新する。
-- Operator・contributor workflow変更では文書を更新する。
+- Contract変更では全表現を一緒に更新する（versioned 契約なら OKF + schema/types +
+  fixtures + conformance tests）。
+- merge 後も真である operator / contributor 手順は OKF に反映する（正本が
+  変わらないなら PR で理由を書く）。
 - Battle-tested selectorの関連ID、または該当なしの理由を書く。
 - 無関係なrefactor、secret、local DB、生成証明書、deployment artifactを含めない。
 - Branchは人間がreviewできる状態だが、mergeされていない。

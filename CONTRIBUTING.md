@@ -23,6 +23,10 @@ For initial repository orientation, read these in order once:
 `docs/redesign/` and `docs/superpowers/` preserve history; they do not override
 current contracts, executable fixtures, or tests.
 
+Keep OKF current in the same change that alters lasting product facts. Temporary
+investigation notes stay on the issue or PR. Details: **Keep OKF current** and
+the change-lane table in [AGENTS.md](AGENTS.md).
+
 For each later task, use the **Before changing code** table in
 [AGENTS.md](AGENTS.md) and read only the rows relevant to that change.
 
@@ -141,10 +145,14 @@ Every development task uses the following loop:
 4. Add or update the closest focused test before changing product behavior.
 5. Keep the diff inside the issue scope. Open another issue when the scope
    changes materially.
-6. Commit, push the branch, and open a draft pull request that closes the issue.
-7. Stop and request human review.
-8. Apply review feedback on the same branch and pull request.
-9. Merge only after explicit approval.
+6. If lasting product facts change, update the matching `docs/okf/` documents
+   (Japanese and English together, bump `revision`) in this worktree. If not,
+   prepare a concrete **No OKF update** reason for the PR.
+7. Commit, push the branch, and open a draft pull request that closes the issue.
+   Fill the PR **OKF impact** section (updated paths or No OKF update reason).
+8. Stop and request human review.
+9. Apply review feedback on the same branch and pull request.
+10. Merge only after explicit approval.
 
 For the final review, select only the field failure questions related to the
 change:
@@ -216,7 +224,8 @@ every pull request.
   `npm run build --prefix edge/frontend`.
 - Update `Cargo.lock` and `package-lock.json` only through their package
   managers.
-- Change Japanese and English files under `docs/okf/` together.
+- Change Japanese and English files under `docs/okf/` together and bump the
+  shared `revision` when concept content changes.
 - Treat shared JSON under `testdata/` as normative contract data. Do not update
   a fixture merely to make one implementation pass.
 
@@ -236,9 +245,13 @@ every pull request.
 
 - The PR links and closes exactly one issue.
 - The description explains what changed, why, impact, and verification.
+- **OKF impact** lists updated `docs/okf/` paths (ja+en) **or** a concrete
+  No OKF update reason. Lasting product facts are not left only on the issue.
 - Public behavior has an executable test or fixture.
-- Contract changes update all representations together.
-- Documentation is updated when an operator or contributor workflow changes.
+- Contract changes update all representations together (OKF + schema/types +
+  fixtures + conformance tests when the contract is versioned).
+- Operator or contributor procedures that remain true after merge are reflected
+  in OKF (or the PR explains why the corpus is unchanged).
 - Related battle-tested IDs are recorded, or the PR explains why none apply.
 - No unrelated refactor, secret, local database, generated certificate, or
   deployment artifact is included.

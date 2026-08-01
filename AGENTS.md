@@ -41,6 +41,23 @@ All of `docs/redesign/` and `docs/superpowers/` is historical or rationale-only.
 It never overrides the current corpus. Old IoTKit code is not an authority. If
 the task conflicts with a current contract, stop and report the conflict.
 
+### Keep OKF current
+
+`docs/okf/` must describe the product as it is after the change merges. Treat
+freshness as part of the change, not a follow-up chore.
+
+- **Write lasting product facts into OKF** in the same issue and PR as the code
+  or contract change: component ownership, public behavior, wire contracts,
+  operator procedures, and capacity/recovery rules that operators or integrators
+  rely on.
+- **Keep temporary work on the issue or PR:** investigation notes, discarded
+  options, one-off implementation steps, and local experiment results.
+- **Do not grow `docs/superpowers/` or rewrite `docs/redesign/` evidence** to
+  record current product law. Absorb still-true gaps into OKF in current terms
+  only (see open absorb issues; do not bulk-copy historical trees).
+- When you change an OKF concept, edit **both** `ja` and `en`, bump the shared
+  `revision`, and run `node scripts/check-okf-docs.mjs`.
+
 ## Before changing code
 
 Read `docs/README.md`, then only the rows relevant to the task. Do not load every
@@ -125,10 +142,15 @@ and exclusions before implementation.
 2. Create `agent/issue-<number>-<slug>` and
    `.worktrees/issue-<number>-<slug>`.
 3. Work and verify only in that worktree.
-4. Commit intentionally, push the branch, and open a draft PR that closes the
-   issue.
-5. Stop for human review. Apply feedback on the same branch and PR.
-6. Merge only after explicit approval. After confirmed merge, remove the local
+4. **Judge OKF impact** (see [Keep OKF current](#keep-okf-current) and the
+   change-lane table). If lasting product facts change, update the matching
+   `docs/okf/` documents in this same worktree before opening the PR. If they
+   do not, record **No OKF update** with a concrete reason on the PR.
+5. Commit intentionally, push the branch, and open a draft PR that closes the
+   issue. The PR body must list updated OKF paths (ja+en) **or** the No OKF
+   update reason.
+6. Stop for human review. Apply feedback on the same branch and PR.
+7. Merge only after explicit approval. After confirmed merge, remove the local
    worktree and branch.
 
 Keep the diff inside the issue scope. Create a separate issue when the scope
@@ -149,13 +171,13 @@ implementation.
 
 | Lane | Use for | Required process |
 |---|---|---|
-| Fast (default for most work) | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; focused test when behavior changes; focused verification; PR |
-| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | issue (or PR body) holds a short decision note: goal, non-goals, chosen approach, verification; one review; proportional tests. No separate plan file |
-| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority (issue, OKF, or contract docs—not a historical plan tree); tests first; independent review; broad verification. An implementation plan only when the work has many ordered slices or irreversible steps |
+| Fast (default for most work) | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; focused test when behavior changes; focused verification; PR. **OKF:** update ja+en when operator-, integrator-, or contract-visible facts change; otherwise PR states **No OKF update** with reason |
+| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | issue (or PR body) holds a short decision note: goal, non-goals, chosen approach, verification; one review; proportional tests. No separate plan file. **OKF:** lasting decisions that change product law land in `docs/okf/` (or paired contract artifacts) in the same PR; temporary notes stay on the issue/PR |
+| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority (**prefer OKF / contract docs**; issue notes are fine for transient design only—not a historical plan tree); tests first; independent review; broad verification. An implementation plan only when the work has many ordered slices or irreversible steps. **OKF:** ship corpus + schema/types + fixtures + tests as one contract unit |
 
 Quality that stays in every lane: scoped issue, no silent data loss, no secret
-leakage, focused tests for behavior changes, human merge approval, and
-verification matched to risk.
+leakage, focused tests for behavior changes, **OKF impact recorded on the PR**,
+human merge approval, and verification matched to risk.
 
 ### Process weight and optional harnesses
 
