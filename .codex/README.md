@@ -9,11 +9,17 @@ work instead of one session doing implement + verify + review alone.
 
 ## Roles
 
-| Role | File | Sandbox | Owns | Does not own |
+| Role | File | Configured sandbox default | Owns | Does not own |
 |---|---|---|---|---|
 | **implementer** | [agents/implementer.toml](agents/implementer.toml) | workspace-write | Settled code + focused tests for one task | Independent review; suite-wide “green” claims |
 | **executor** | [agents/executor.toml](agents/executor.toml) | workspace-write | Fresh verification commands and evidence | Feature implementation; design opinions |
-| **reviewer** | [agents/reviewer.toml](agents/reviewer.toml) | read-only | Spec-compliance and/or quality findings | Applying fixes by default; replacing test runs |
+| **reviewer** | [agents/reviewer.toml](agents/reviewer.toml) | read-only | Spec-compliance and/or quality findings | Applying fixes; replacing test runs |
+
+The sandbox column records custom-agent defaults, not a hard enforcement
+boundary. Codex reapplies live parent-turn sandbox and approval overrides when it
+spawns a subagent. Main must preserve the behavioral split even when the
+effective sandbox is broader. Executor workspace-write is for prescribed setup
+and build/test artifacts, not tracked-file fixes.
 
 Main keeps: issue/plan scope, product and trust decisions, worktree/branch/PR
 lifecycle, merge only after human approval, and **dispatch order**.

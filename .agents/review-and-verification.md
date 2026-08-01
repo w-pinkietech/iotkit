@@ -37,8 +37,8 @@ contracts and the [product invariants](product-invariants.md).
 
 ## Codex subagent split (optional Superpowers / multi-task plans)
 
-When using project Codex agents, keep verification and review off the
-implementer’s critical path:
+When using project Codex agents, keep verification and review outside the
+implementer’s ownership:
 
 | Concern | Owner |
 |---|---|
