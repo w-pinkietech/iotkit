@@ -68,6 +68,9 @@ Treat freshness as part of the change, not a follow-up chore.
 - When you change a product concept, edit **both** `ja` and `en`, bump the
   shared `revision`, and run `node scripts/check-product-docs.mjs` (or
   `node scripts/check-okf-docs.mjs`).
+- Optional OKF provenance fields (`sources`, `generated`, `verified`) are
+  documented in `docs/product/<lang>/operations/okf-optional-meta.md`. They are
+  **not** required by the product gate.
 
 ## Before changing code
 
