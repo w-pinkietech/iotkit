@@ -161,14 +161,16 @@ code入口、認証付きHTTP ingest、Console認証、運用、契約に関す�
 8. Review指摘は同じbranchとpull requestで修正する。
 9. 明示承認を得てからmergeする。
 
-最終reviewでは、差分に関係する現場の失敗観点だけを選びます。
+最終reviewでは、[レビュースイート](review/README.ja.md)から入り、合う
+perspective を選びます。製品や運用に触れる差分では battle-tested perspective を
+常に検討し、差分に関係する現場の失敗観点だけを selector で選びます。
 
 ```bash
 node scripts/battle-tested-review.mjs select --base origin/master
 ```
 
 選択方法、現場報告の秘匿化、review項目をtestまたはrunbookへ昇格させる規則は
-[Battle-testedレビュースイート](review/battle-tested/README.ja.md)にあります。実環境で
+[Battle-testedレビュー視点](review/battle-tested/README.ja.md)にあります。実環境で
 問題を見つけた場合は、GitHubの`Field report / 現場報告` Issue formを使い、生ログ、設定、
 DB、credential、顧客・工場・network・deviceの識別情報を添付しないでください。
 

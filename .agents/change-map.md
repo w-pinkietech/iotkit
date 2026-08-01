@@ -23,6 +23,6 @@ task. Do not load every historical plan.
 | Capacity, retention, or storage profile selection | `docs/product/<lang>/operations/storage-capacity.md` | `edge/src/storage/`, `edge/src/diagnostics/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
 | Vulnerability report or accidental secret exposure | `SECURITY.md` | reporting and containment path; do not copy secrets into repository artifacts | follow reporting policy; do not create a public reproducer with secrets |
 | Contract or documentation change | `docs/README.md`, both language files, schemas/types, fixtures, conformance tests | current authority; never a historical plan | `node scripts/check-product-docs.mjs` plus affected conformance tests |
-| PR review or field report triage | `.agents/skills/iotkit-battle-tested-review/SKILL.md`, `review/battle-tested/README.md` | selector output and linked evidence | `node scripts/battle-tested-review.mjs check` |
+| PR review or field report triage | `review/README.md`; for operational failure risk or field evidence, `.agents/skills/iotkit-battle-tested-review/SKILL.md` and `review/battle-tested/README.md` | selected perspectives and linked evidence | relevant perspective check; for battle-tested, `node scripts/battle-tested-review.mjs check` |
 
 Return to [`AGENTS.md`](../AGENTS.md).
