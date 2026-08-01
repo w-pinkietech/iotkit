@@ -60,8 +60,8 @@
       ],
       "review_question": "Does an abrupt Edge Node or IoTKit Edge host power loss preserve the last committed custody boundary and restart without acknowledging uncommitted data?",
       "provenance": [
-        "docs/okf/ja/operations/installation-and-recovery.md",
-        "docs/okf/en/operations/installation-and-recovery.md"
+        "docs/product/ja/operations/installation-and-recovery.md",
+        "docs/product/en/operations/installation-and-recovery.md"
       ],
       "guards": [
         "scripts/test-edge-resilience.sh"
@@ -86,8 +86,8 @@
       ],
       "review_question": "When a write, commit, or allocation fails because storage is full or unavailable, does the system retain retry authority, avoid a terminal success, and show an actionable capacity state?",
       "provenance": [
-        "docs/okf/ja/operations/storage-capacity.md",
-        "docs/okf/en/operations/storage-capacity.md"
+        "docs/product/ja/operations/storage-capacity.md",
+        "docs/product/en/operations/storage-capacity.md"
       ],
       "guards": [
         "scripts/test-edge-capacity.sh"
@@ -116,16 +116,16 @@
       ],
       "review_question": "If the Raspberry Pi or other Edge Node computer is lost or replaced, is every unrecoverable local record and identity transition explicit rather than silently treated as a sensor-device replacement?",
       "provenance": [
-        "docs/okf/ja/contracts/edge-node-custody-v1.md",
-        "docs/okf/en/contracts/edge-node-custody-v1.md",
-        "docs/okf/ja/operations/installation-and-recovery.md",
-        "docs/okf/en/operations/installation-and-recovery.md"
+        "docs/product/ja/contracts/edge-node-custody-v1.md",
+        "docs/product/en/contracts/edge-node-custody-v1.md",
+        "docs/product/ja/operations/installation-and-recovery.md",
+        "docs/product/en/operations/installation-and-recovery.md"
       ],
       "guards": [
         "edge-node/apps/node/tests/recovery_startup.rs",
         "scripts/test-edge-bootstrap.sh",
-        "docs/okf/ja/operations/installation-and-recovery.md",
-        "docs/okf/en/operations/installation-and-recovery.md"
+        "docs/product/ja/operations/installation-and-recovery.md",
+        "docs/product/en/operations/installation-and-recovery.md"
       ],
       "coverage_gap": "The controlled encrypted-backup drill does not reproduce physical hardware loss, and a second replacement before cursor convergence remains tracked in GitHub issue #117."
     },
@@ -145,8 +145,8 @@
       ],
       "review_question": "Can the Console and local diagnostics distinguish a stale sensor, stopped Input Adapter, stopped Edge Node, Broker path failure, IoTKit Edge ingestion failure, and blocked external output without guessing that the system is healthy?",
       "provenance": [
-        "docs/okf/ja/operations/installation-and-recovery.md",
-        "docs/okf/en/operations/installation-and-recovery.md"
+        "docs/product/ja/operations/installation-and-recovery.md",
+        "docs/product/en/operations/installation-and-recovery.md"
       ],
       "guards": [
         "scripts/test-edge-console-e2e.sh"

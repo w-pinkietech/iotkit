@@ -4,7 +4,7 @@ Date: 2026-07-01
 
 This is a historical workspace survey, not current project or workflow authority.
 Everything below is a dated snapshot. For current IoTKit decisions use
-`docs/README.md`, `docs/okf/`, and `AGENTS.md`.
+`docs/README.md`, `docs/product/`, and `AGENTS.md`.
 
 ## Local Repositories
 

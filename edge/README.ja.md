@@ -30,6 +30,6 @@ npm run check --prefix edge/frontend
 Rust schemaは新規baselineです。以前のGo実装が作成したDBと暗号化backup artifactは
 意図的に非対応です。
 
-正本のbehaviorは[Architecture](../docs/okf/ja/architecture/system-overview.md)、
-[Edge Node保管責任契約](../docs/okf/ja/contracts/edge-node-custody-v1.md)、
-[Output Adapter契約](../docs/okf/ja/contracts/output-adapter-v1.md)を参照してください。
+正本のbehaviorは[Architecture](../docs/product/ja/architecture/system-overview.md)、
+[Edge Node保管責任契約](../docs/product/ja/contracts/edge-node-custody-v1.md)、
+[Output Adapter契約](../docs/product/ja/contracts/output-adapter-v1.md)を参照してください。

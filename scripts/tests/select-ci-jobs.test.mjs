@@ -42,10 +42,11 @@ const cases = [
   {
     name: "documentation and repository guidance use lightweight checks only",
     paths: [
-      "docs/okf/en/index.md",
+      "docs/product/en/index.md",
       "AGENTS.md",
       "CONTRIBUTING.ja.md",
       "scripts/tests/adapter-author-docs.test.mjs",
+      "scripts/tests/check-product-docs.test.mjs",
     ],
     expected: none,
   },
@@ -227,6 +228,10 @@ test("CI workflow routes heavy jobs through the classifier", () => {
   assert.match(
     workflow,
     /node --test scripts\/tests\/adapter-author-docs\.test\.mjs/,
+  );
+  assert.match(
+    workflow,
+    /node --test scripts\/tests\/check-product-docs\.test\.mjs/,
   );
   // Focused package selection drives clippy/nextest when not "all".
   assert.match(workflow, /cargo nextest run/);

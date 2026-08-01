@@ -10,18 +10,23 @@ maintainer can understand without reconstructing the project's history.
 
 For initial repository orientation, read these in order once:
 
-1. [Product model](docs/okf/en/concepts/product-model.md) — what IoTKit owns and
+1. [Product model](docs/product/en/concepts/product-model.md) — what IoTKit owns and
    what remains in devices or external applications.
-2. [Architecture](docs/okf/en/architecture/system-overview.md) — runtime
+2. [Architecture](docs/product/en/architecture/system-overview.md) — runtime
    components, crate map, code placement, and dependency rules.
-3. The relevant [current contract](docs/okf/en/index.md#contracts) — ingest,
+3. The relevant [current contract](docs/product/en/index.md#contracts) — ingest,
    Input Adapter, Edge Node custody, or Output Adapter.
 4. [AGENTS.md](AGENTS.md) — repository invariants and the verification lanes
    used by both people and coding agents.
 
-`docs/okf/` is the current human-readable product authority.
-`docs/redesign/` and `docs/superpowers/` preserve history; they do not override
-current contracts, executable fixtures, or tests.
+`docs/product/` is the current human-readable product authority. It is packaged
+as an OKF v0.2 bundle (format, not a second corpus). `docs/okf/` is only a
+compatibility stub. `docs/redesign/` and `docs/superpowers/` preserve history;
+they do not override current contracts, executable fixtures, or tests.
+
+Keep product docs current in the same change that alters lasting product facts.
+Temporary investigation notes stay on the issue or PR. Details: **Keep product
+docs current** in [AGENTS.md](AGENTS.md).
 
 For each later task, use the **Before changing code** table in
 [AGENTS.md](AGENTS.md) and read only the rows relevant to that change.
@@ -57,7 +62,7 @@ local databases, or deployment output directories.
 ```bash
 git clone git@github.com:w-pinkietech/iotkit-next.git
 cd iotkit-next
-node scripts/check-okf-docs.mjs
+node scripts/check-product-docs.mjs
 scripts/check-layers
 scripts/check-source-layout
 ```
@@ -185,7 +190,7 @@ as the risk grows.
 
 ```bash
 # Documentation structure
-node scripts/check-okf-docs.mjs
+node scripts/check-product-docs.mjs
 
 # Rust formatting, dependency rules, source/test placement, tests, and Clippy
 scripts/verify.sh
@@ -216,7 +221,8 @@ every pull request.
   `npm run build --prefix edge/frontend`.
 - Update `Cargo.lock` and `package-lock.json` only through their package
   managers.
-- Change Japanese and English files under `docs/okf/` together.
+- Change Japanese and English files under `docs/product/` together and bump the
+  shared `revision` when concept content changes.
 - Treat shared JSON under `testdata/` as normative contract data. Do not update
   a fixture merely to make one implementation pass.
 

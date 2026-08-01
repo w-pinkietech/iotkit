@@ -7,7 +7,7 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const contracts = ["en", "ja"].map((locale) => ({
   locale,
   source: fs.readFileSync(
-    path.join(repoRoot, "docs", "okf", locale, "contracts", "output-adapter-v1.md"),
+    path.join(repoRoot, "docs", "product", locale, "contracts", "output-adapter-v1.md"),
     "utf8",
   ),
 }));

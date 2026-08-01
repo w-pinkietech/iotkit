@@ -11,7 +11,7 @@
 > [GitHub Releases](https://github.com/w-pinkietech/iotkit/releases)と
 > [ロードマップ](#ロードマップ)を参照してください。
 
-現行の製品知識はOKF v0.1形式でも提供しています: [日本語](docs/okf/ja/index.md) / [英語](docs/okf/en/index.md)。
+現行の製品知識はOKF v0.2形式でも提供しています: [日本語](docs/product/ja/index.md) / [英語](docs/product/en/index.md)。
 
 ## このPCでまず試す
 
@@ -27,7 +27,7 @@ Git、Python 3.11以降、Docker Composeを使用できるLinux hostで、reposi
 `admin`でログインします。変化する照度（三角波）と接点状態（矩形波）のsampleは
 DBやConsoleへ直接seedされず、Input Adapter、Edge Nodeの保管責任、標準MQTT Broker、
 IoTKit Edgeの通常経路を通ります。確認方法と片付け方は
-[試用profileガイド](docs/okf/ja/operations/trial-profile.md)を参照してください。
+[試用profileガイド](docs/product/ja/operations/trial-profile.md)を参照してください。
 試用環境は現場導入には使用できません。
 
 ## なぜ作るのか
@@ -57,14 +57,14 @@ IoTKit Edgeは保存済みsignalを汎用的な`numeric`、`boolean`、`cumulati
 - 停電を通常の事象として扱う、crash-consistentな**耐久取り込み**。
 - 機器名の変更やhardware交換でも履歴を分断しない**series identity**。
 - 標準語彙と導入環境ごとのoverrideを持つ**measurement registry**、未知・範囲外データのrow/series quarantine。
-- **Edge Node保管責任契約:** 標準Brokerを介したIoTKit Edgeへのat-least-once MQTT配送とtarget別cursor。IoTKit Edgeの耐久`accepted-through`だけが保持処理による削除を許可し、未ackのoriginalは古くても保護されます。[Edge Node保管責任契約](docs/okf/ja/contracts/edge-node-custody-v1.md)を参照してください。
-- **認証付きHTTP取り込み:** 既定offのLAN向けTLS listenerが、device別bearer credential、上限制御、位置対応item結果、重複再送、副作用のないvalidationを持つJSON Envelopeを受理します。[認証付きingest契約](docs/okf/ja/contracts/ingest-v1.md)を参照してください。
+- **Edge Node保管責任契約:** 標準Brokerを介したIoTKit Edgeへのat-least-once MQTT配送とtarget別cursor。IoTKit Edgeの耐久`accepted-through`だけが保持処理による削除を許可し、未ackのoriginalは古くても保護されます。[Edge Node保管責任契約](docs/product/ja/contracts/edge-node-custody-v1.md)を参照してください。
+- **認証付きHTTP取り込み:** 既定offのLAN向けTLS listenerが、device別bearer credential、上限制御、位置対応item結果、重複再送、副作用のないvalidationを持つJSON Envelopeを受理します。[認証付きingest契約](docs/product/ja/contracts/ingest-v1.md)を参照してください。
 - device ledger、measurement registry、snapshot/restore、IoTKit Edge targetを操作する**operator CLI**（`iotkit-edge-nodectl`）。
 - 範囲指定history/CSV、storage診断、暗号化backup、新規pathへのrestoreを提供する**IoTKit Edge運用機能**。
 - 新規または復元済み状態はlocal ownership/recoveryを必要とし、network setup routeは公開しません。復旧後はdevice tokenとoperator権限を再検査します。
 
 Edge Node host故障またはhardware交換では、
-[Edge Node hardware復旧クイックガイド](docs/okf/ja/operations/edge-node-hardware-recovery.md)から開始してください。
+[Edge Node hardware復旧クイックガイド](docs/product/ja/operations/edge-node-hardware-recovery.md)から開始してください。
 - control-plane APIはprivate LANからの到達を前提とします。private routed pathがない環境ではSSH port forwardingを使用します。
 
 ### Edge Nodeの初期化
@@ -127,7 +127,7 @@ docker compose --env-file "$install_root/edge.env" \
   up --build --detach
 ```
 
-profileは導入directoryの`storage-profile.json`へ固定され、起動flagと異なる場合は停止します。接続失敗時にSQLiteへfallbackせず、両DBへの二重書込みもしません。SQLiteからのoffline移行は[IoTKit Edgeの導入と復旧](docs/okf/ja/operations/installation-and-recovery.md)を参照してください。
+profileは導入directoryの`storage-profile.json`へ固定され、起動flagと異なる場合は停止します。接続失敗時にSQLiteへfallbackせず、両DBへの二重書込みもしません。SQLiteからのoffline移行は[IoTKit Edgeの導入と復旧](docs/product/ja/operations/installation-and-recovery.md)を参照してください。
 
 generatorは、anonymousを無効にしたBroker設定、Edge Node専用ACLとhash済みpassword DB、IoTKit Edge secret、`edge-handoff/`を作ります。三つのhandoff fileをEdge Nodeへ安全に転送してください。`mqtt-password`と`broker-ca.pem`を`edge-mqtt.toml`が指定するpathへ配置し、Edge Node service account所有、mode `0600`とします。Edge Node再起動前にTOML fragmentを設定へmergeします。転送成功後はIoTKit Edge host上の`edge-handoff/`を削除してください。credentialをargv、environment variable、log、Gitへ置いてはいけません。
 
@@ -148,7 +148,7 @@ rm "$install_root/secrets/initial-admin-password"
 
 Windows browserから`IOTKIT_EDGE_ORIGIN`を開きます。LANへ公開するHTTPS endpointはCaddyだけであり、IoTKit EdgeのHTTP listenerは`127.0.0.1`に留めます。全画面でloginが必要です。`viewer`は閲覧、`admin`は機器・信号・意味・出力の設定、`system_admin`はさらにaccount発行ができます。
 
-起動後は上記のcommissioning smoke commandを実行してください。bootstrapを再実行しても既存の出力directoryは置換しません。診断、password recovery、certificate renewal、rollbackは[IoTKit Edgeの導入と復旧](docs/okf/ja/operations/installation-and-recovery.md)を参照してください。
+起動後は上記のcommissioning smoke commandを実行してください。bootstrapを再実行しても既存の出力directoryは置換しません。診断、password recovery、certificate renewal、rollbackは[IoTKit Edgeの導入と復旧](docs/product/ja/operations/installation-and-recovery.md)を参照してください。
 
 ### IoTKit Edgeの意味付けとapplication出力
 
@@ -204,7 +204,7 @@ CIは各PRでcrate layer rule、Rust unit test、生成済みConsole asset、埋
 | `edge/` | Rust製IoTKit Edge、Console、raw/semantic store、cursor管理、application出力 |
 | `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | 共有contract、導入、automation、component横断fixture、review policy |
 
-crate全体図、layer rule、新しいcodeの配置表は[Architecture](docs/okf/ja/architecture/system-overview.md)にあります。
+crate全体図、layer rule、新しいcodeの配置表は[Architecture](docs/product/ja/architecture/system-overview.md)にあります。
 収集側は[`edge-node/README.ja.md`](edge-node/README.ja.md)、具体的Adapterは
 [`edge-node/adapters/README.ja.md`](edge-node/adapters/README.ja.md)、Edge/Consoleは
 [`edge/README.ja.md`](edge/README.ja.md)から読み始めてください。
@@ -214,9 +214,9 @@ Codex Cloudを含め、単一cloneから開発を再開できます。再開順�
 ## Architectureと契約
 
 - [ドキュメント入口](docs/README.md) — 読む順序と正本の優先関係。
-- [製品モデル](docs/okf/ja/concepts/product-model.md) — IoTKitの所有範囲、component境界、外部applicationに残すもの。
-- [Architecture](docs/okf/ja/architecture/system-overview.md) — crate map、配置rule、data flow、custody、concurrency。
-- [契約](docs/okf/ja/index.md#contracts) — device ingest、Input Adapter、Edge Node保管責任、Output Adapterの境界。
+- [製品モデル](docs/product/ja/concepts/product-model.md) — IoTKitの所有範囲、component境界、外部applicationに残すもの。
+- [Architecture](docs/product/ja/architecture/system-overview.md) — crate map、配置rule、data flow、custody、concurrency。
+- [契約](docs/product/ja/index.md#contracts) — device ingest、Input Adapter、Edge Node保管責任、Output Adapterの境界。
 
 過去のredesign決定と完了済みimplementation planは、理由と追跡可能性のためrepositoryに残します。ただし、現行の実行可能契約やdocumentation indexを上書きしません。
 

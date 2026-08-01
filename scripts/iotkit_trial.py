@@ -519,7 +519,7 @@ def command_up(repo: Path, state: Path, config: TrialConfig, password_file: Path
     print("ログインID: admin")
     print("停止: ./scripts/iotkit trial down")
     print("初期化: ./scripts/iotkit trial reset --confirm-trial-data-loss")
-    print("現場への導入は docs/okf/ja/operations/installation-and-recovery.md を参照してください。")
+    print("現場への導入は docs/product/ja/operations/installation-and-recovery.md を参照してください。")
 
 
 def command_down(

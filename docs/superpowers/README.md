@@ -19,7 +19,8 @@ Policy ([#145](https://github.com/w-pinkietech/iotkit/issues/145)):
 - **Do not add** new specs or plans for ongoing work by default.
 - Reuse the **writing style** (goal, non-goals, decision, verification; optional
   plan for Full work) on AGENTS change lanes—not by growing this tree.
-- Specs→OKF absorption is **secondary**. Primary product-gap work is redesign→OKF
+- Specs→product docs absorption is **secondary**. Primary product-gap work is
+  redesign→product docs
   ([#141](https://github.com/w-pinkietech/iotkit/issues/141)). The completed spec
   gap survey and its conclusions remain on
   [#143](https://github.com/w-pinkietech/iotkit/issues/143).

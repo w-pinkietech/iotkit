@@ -27,7 +27,7 @@ use super::{
 
 #[test]
 fn normative_contract_publishes_the_three_command_pinned_tls_journey() {
-    let contract = include_str!("../../../../docs/okf/en/contracts/ingest-v1.md");
+    let contract = include_str!("../../../../docs/product/en/contracts/ingest-v1.md");
     assert!(contract.contains("# IoTKit authenticated ingest contract v1"));
     assert!(contract.contains("export IOTKIT_URL"));
     assert!(contract.contains("printf '%s\\n'"));
@@ -37,7 +37,7 @@ fn normative_contract_publishes_the_three_command_pinned_tls_journey() {
 
 #[test]
 fn documented_json_examples_are_compatible_with_shipped_wire_types() {
-    let contract = include_str!("../../../../docs/okf/en/contracts/ingest-v1.md");
+    let contract = include_str!("../../../../docs/product/en/contracts/ingest-v1.md");
     let blocks = json_blocks(contract);
     let envelope = blocks
         .iter()
@@ -75,7 +75,7 @@ fn documented_json_examples_are_compatible_with_shipped_wire_types() {
 
 #[test]
 fn normative_contract_matches_shipped_wire_schema_and_finite_defaults() {
-    let contract = include_str!("../../../../docs/okf/en/contracts/ingest-v1.md");
+    let contract = include_str!("../../../../docs/product/en/contracts/ingest-v1.md");
     for heading in [
         "### Envelope field table",
         "### ReadingItem field table",
@@ -756,7 +756,7 @@ fn json_blocks(document: &str) -> Vec<&str> {
 }
 
 fn journey_commands() -> (String, String, String) {
-    let contract = include_str!("../../../../docs/okf/en/contracts/ingest-v1.md");
+    let contract = include_str!("../../../../docs/product/en/contracts/ingest-v1.md");
     let block = contract
         .split("```sh\n")
         .nth(1)
