@@ -47,6 +47,7 @@ const cases = [
       "CONTRIBUTING.ja.md",
       "scripts/tests/adapter-author-docs.test.mjs",
       "scripts/tests/check-product-docs.test.mjs",
+      "scripts/tests/product-docs-modes.test.mjs",
     ],
     expected: none,
   },
