@@ -70,7 +70,7 @@ function createOldBundle() {
   return { repo, base };
 }
 
-function migrate(repo, { revision = 1, body = "Original body." } = {}) {
+function migrate(repo, { revision = 1, body = "Original body.", forwardingStubs = true } = {}) {
   renameSync(path.join(repo, "docs", "okf"), path.join(repo, "docs", "product"));
   write(
     repo,
@@ -84,6 +84,18 @@ function migrate(repo, { revision = 1, body = "Original body." } = {}) {
   );
   for (const language of ["ja", "en"]) {
     write(repo, `docs/product/${language}/concepts/example.md`, concept(language, revision, body));
+    if (forwardingStubs) {
+      write(
+        repo,
+        `docs/okf/${language}/index.md`,
+        `# Moved\n\n* [Replacement](../../product/${language}/index.md)\n`,
+      );
+      write(
+        repo,
+        `docs/okf/${language}/concepts/example.md`,
+        `# Moved\n\n* [Replacement](../../../product/${language}/concepts/example.md)\n`,
+      );
+    }
   }
   return commit(repo, "migrate bundle");
 }
@@ -191,7 +203,11 @@ test("delete-add migration fallback compares content with the old translation ke
     }
     commit(repo, "expand old bodies");
     const expandedBase = runGit(repo, "rev-parse", "HEAD");
-    migrate(repo, { revision: 2, body: `Replacement material.\n\n${"new ".repeat(200)}` });
+    migrate(repo, {
+      revision: 2,
+      body: `Replacement material.\n\n${"new ".repeat(200)}`,
+      forwardingStubs: false,
+    });
     const statuses = runGit(
       repo,
       "diff",

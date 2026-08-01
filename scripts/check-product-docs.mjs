@@ -180,20 +180,22 @@ if (baseRef) {
         const dest = second.replace(/^docs\/okf\//, "docs/product/");
         // Ignore the compatibility stub at docs/okf/index.md.
         if (!dest.startsWith("docs/product/")) continue;
-        previousPath.set(dest, first);
+        const knownPrevious = previousPath.get(dest);
+        if (!knownPrevious || first.startsWith("docs/okf/")) previousPath.set(dest, first);
         const similarity = Number.parseInt(status.slice(1) || "0", 10);
         if (!(status.startsWith("R") && similarity === 100)) contentChanged.add(dest);
       } else if (first) {
         if (first === "docs/okf/index.md") continue;
         const dest = first.replace(/^docs\/okf\//, "docs/product/");
         if (!dest.startsWith("docs/product/")) continue;
-        previousPath.set(dest, first);
+        const knownPrevious = previousPath.get(dest);
+        if (!knownPrevious || first.startsWith("docs/okf/")) previousPath.set(dest, first);
         // Added/modified paths may still be renames Git did not pair; compare blobs below.
         if (status === "M" || status === "A") contentChanged.add(dest);
       }
     }
 
-    const baseFiles = execFileSync(
+    const baseMarkdownFiles = execFileSync(
       "git",
       ["ls-tree", "-r", "--name-only", baseRef, "--", "docs/product", "docs/okf"],
       { cwd: repoRoot, encoding: "utf8" },
@@ -207,6 +209,10 @@ if (baseRef) {
           !file.endsWith("/log.md") &&
           (file.startsWith("docs/product/") || file.startsWith("docs/okf/ja/") || file.startsWith("docs/okf/en/")),
       );
+    const baseHasProductCorpus = baseMarkdownFiles.some((file) => file.startsWith("docs/product/"));
+    const baseFiles = baseMarkdownFiles.filter((file) =>
+      baseHasProductCorpus ? file.startsWith("docs/product/") : file.startsWith("docs/okf/"),
+    );
     for (const file of baseFiles) {
       const previous = execFileSync("git", ["show", `${baseRef}:${file}`], { cwd: repoRoot, encoding: "utf8" });
       const parsed = parseFrontmatter(path.join(repoRoot, file), previous);
