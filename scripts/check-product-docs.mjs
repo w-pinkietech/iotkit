@@ -165,6 +165,25 @@ if (baseRef) {
   const baseConceptsByKey = new Map();
   const contentChanged = new Set();
   try {
+    const baseMarkdownFiles = execFileSync(
+      "git",
+      ["ls-tree", "-r", "--name-only", baseRef, "--", "docs/product", "docs/okf"],
+      { cwd: repoRoot, encoding: "utf8" },
+    )
+      .trim()
+      .split(/\r?\n/)
+      .filter(
+        (file) =>
+          file.endsWith(".md") &&
+          !file.endsWith("/index.md") &&
+          !file.endsWith("/log.md") &&
+          (file.startsWith("docs/product/") || file.startsWith("docs/okf/ja/") || file.startsWith("docs/okf/en/")),
+      );
+    const baseHasProductCorpus = baseMarkdownFiles.some((file) => file.startsWith("docs/product/"));
+    const baseFiles = baseMarkdownFiles.filter((file) =>
+      baseHasProductCorpus ? file.startsWith("docs/product/") : file.startsWith("docs/okf/"),
+    );
+
     const changes = execFileSync(
       "git",
       ["diff", "--name-status", "-M", `${baseRef}...HEAD`, "--", "docs/product", "docs/okf"],
@@ -176,6 +195,9 @@ if (baseRef) {
 
     for (const line of changes) {
       const [status, first, second] = line.split("\t");
+      // Once docs/product exists in the base, docs/okf files are forwarding
+      // stubs and must not drive product-document revision checks.
+      if (baseHasProductCorpus && first?.startsWith("docs/okf/")) continue;
       if (status.startsWith("R") || status.startsWith("C")) {
         const dest = second.replace(/^docs\/okf\//, "docs/product/");
         // Ignore the compatibility stub at docs/okf/index.md.
@@ -195,24 +217,6 @@ if (baseRef) {
       }
     }
 
-    const baseMarkdownFiles = execFileSync(
-      "git",
-      ["ls-tree", "-r", "--name-only", baseRef, "--", "docs/product", "docs/okf"],
-      { cwd: repoRoot, encoding: "utf8" },
-    )
-      .trim()
-      .split(/\r?\n/)
-      .filter(
-        (file) =>
-          file.endsWith(".md") &&
-          !file.endsWith("/index.md") &&
-          !file.endsWith("/log.md") &&
-          (file.startsWith("docs/product/") || file.startsWith("docs/okf/ja/") || file.startsWith("docs/okf/en/")),
-      );
-    const baseHasProductCorpus = baseMarkdownFiles.some((file) => file.startsWith("docs/product/"));
-    const baseFiles = baseMarkdownFiles.filter((file) =>
-      baseHasProductCorpus ? file.startsWith("docs/product/") : file.startsWith("docs/okf/"),
-    );
     for (const file of baseFiles) {
       const previous = execFileSync("git", ["show", `${baseRef}:${file}`], { cwd: repoRoot, encoding: "utf8" });
       const parsed = parseFrontmatter(path.join(repoRoot, file), previous);

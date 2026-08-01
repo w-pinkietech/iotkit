@@ -139,6 +139,21 @@ test("paired product-doc edits with revision bumps pass against a post-migration
     assert.equal(result.status, 0, result.stderr);
   }));
 
+test("forwarding-stub-only edits after migration do not require product revision bumps", () =>
+  withRepo(({ repo }) => {
+    const base = migrate(repo);
+    write(
+      repo,
+      "docs/okf/en/concepts/example.md",
+      "# Moved permanently\n\n* [Replacement](../../../product/en/concepts/example.md)\n",
+    );
+    commit(repo, "clarify forwarding stub");
+
+    const result = runChecker(repo, base);
+
+    assert.equal(result.status, 0, result.stderr);
+  }));
+
 test("a one-language product-doc edit is rejected", () =>
   withRepo(({ repo }) => {
     const base = migrate(repo);
