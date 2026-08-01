@@ -5,6 +5,18 @@
 **Authority:** none. Not product documentation. Current authority remains
 `docs/okf/` plus paired contracts, fixtures, and tests.
 
+## Policy context ([#145](https://github.com/w-pinkietech/iotkit/issues/145))
+
+- **`docs/superpowers/` is kept** for clear design/plan lineage. Do not bulk-delete
+  or rename as a priority. It is **not** product authority.
+- **Do not add new specs/plans** here by default. Reuse the *writing style*
+  (goal, non-goals, decision, verification; plan only when needed) on AGENTS
+  change lanes instead.
+- **Primary absorb path is redesign → OKF** ([#141](https://github.com/w-pinkietech/iotkit/issues/141)),
+  not superpowers. This inventory is secondary: Console/operator model gaps if
+  OKF stays too thin.
+- Plans remain execution logs only—never normative.
+
 ## Purpose
 
 Classify each file under `docs/superpowers/specs/` against current OKF and

@@ -28,8 +28,18 @@ or exported wire types, shared fixtures, and conformance tests. None silently
 overrides the others; disagreement is a contract defect.
 
 The short top-level compatibility documents under `docs/` are pointers only and are
-not authorities. `docs/redesign/` and `docs/superpowers/` preserve rationale and
-historical process records. They do not override the current corpus.
+not authorities.
+
+Historical trees (neither overrides OKF; see
+[#145](https://github.com/w-pinkietech/iotkit/issues/145)):
+
+| Tree | Role |
+|---|---|
+| [`okf/`](okf/) | **Current** product corpus |
+| [`redesign/`](redesign/) | Early rewrite decisions and evidence. Easy to misread as current law. Prefer absorbing still-true gaps into OKF ([#141](https://github.com/w-pinkietech/iotkit/issues/141)). Do not “fix” dated evidence to match today. |
+| [`superpowers/`](superpowers/) | Sprint design/plans **kept for lineage**. Not current law; do not add new specs/plans by default. Writing *style* may be reused on light change lanes. Spec→OKF is secondary ([gap inventory](superpowers/specs-okf-gap-inventory.md), [#143](https://github.com/w-pinkietech/iotkit/issues/143)). |
+
+Development process (lanes, issue/PR loop) lives in [`AGENTS.md`](../AGENTS.md), not in these trees.
 
 The Edge Node encrypted backup and fenced-candidate recovery contract is paired
 across both language trees:
