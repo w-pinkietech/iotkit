@@ -23,7 +23,7 @@ export function parseFrontmatterContent(content) {
   if (!match) return { error: "missing YAML frontmatter" };
   let parsed;
   try {
-    parsed = parseYaml(match[1], { uniqueKeys: true });
+    parsed = parseYaml(match[1], { intAsBigInt: true, uniqueKeys: true });
   } catch (error) {
     return { error: `invalid YAML frontmatter: ${error.message}` };
   }
@@ -31,7 +31,7 @@ export function parseFrontmatterContent(content) {
     return { error: "frontmatter must be a YAML mapping" };
   }
   const metadata = { ...parsed };
-  if (typeof metadata.revision === "number" && Number.isInteger(metadata.revision)) {
+  if (typeof metadata.revision === "bigint") {
     metadata.revision = String(metadata.revision);
   }
   return { metadata, body: content.slice(match[0].length) };

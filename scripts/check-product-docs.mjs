@@ -250,7 +250,14 @@ if (baseRef) {
       if (oldMetadata.translation_key !== concept.metadata.translation_key) {
         fail(concept.file, `translation_key is immutable and was ${oldMetadata.translation_key}`);
       }
-      if (Number(concept.metadata.revision) <= Number(oldMetadata.revision)) {
+      const currentRevision = concept.metadata.revision;
+      const previousRevision = oldMetadata.revision;
+      if (!/^[1-9][0-9]*$/.test(currentRevision ?? "")) continue;
+      if (!/^[1-9][0-9]*$/.test(previousRevision ?? "")) {
+        fail(concept.file, `base revision is not a positive integer: ${previousRevision ?? "<missing>"}`);
+        continue;
+      }
+      if (BigInt(currentRevision) <= BigInt(previousRevision)) {
         fail(concept.file, `revision must increase from the base version ${oldMetadata.revision}`);
       }
     }

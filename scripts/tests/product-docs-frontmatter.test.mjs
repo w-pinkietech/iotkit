@@ -92,3 +92,16 @@ body
   assert.ok(errors.some((e) => e.includes("title must be a scalar string")));
   assert.ok(errors.some((e) => e.includes("description must be a scalar string")));
 });
+
+test("preserves integer revision identity and rejects float or exponent notation", () => {
+  const exact = parseFrontmatterContent(`---\n${baseScalars.replace("revision: 1", "revision: 9007199254740993")}\n---\n`);
+  assert.equal(exact.error, undefined);
+  assert.equal(exact.metadata.revision, "9007199254740993");
+  assert.deepEqual(validateRequiredScalars(exact.metadata), []);
+
+  for (const revision of ["1.0", "1e3"]) {
+    const parsed = parseFrontmatterContent(`---\n${baseScalars.replace("revision: 1", `revision: ${revision}`)}\n---\n`);
+    assert.equal(parsed.error, undefined);
+    assert.ok(validateRequiredScalars(parsed.metadata).some((error) => error.includes("revision")), revision);
+  }
+});

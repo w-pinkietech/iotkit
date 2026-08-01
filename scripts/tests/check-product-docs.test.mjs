@@ -185,6 +185,37 @@ test("paired product-doc edits without revision bumps are rejected", () =>
     assert.match(result.stderr, /revision must increase from the base version 1/);
   }));
 
+test("bilingual revisions remain distinct above the JavaScript safe-integer limit", () =>
+  withRepo(({ repo }) => {
+    const base = migrate(repo);
+    write(repo, "docs/product/ja/concepts/example.md", concept("ja", "9007199254740992", "Updated body."));
+    write(repo, "docs/product/en/concepts/example.md", concept("en", "9007199254740993", "Updated body."));
+    commit(repo, "use distinct large revisions");
+
+    const result = runChecker(repo, base);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /revision differs from English translation/);
+  }));
+
+test("revision bump comparisons are exact above the JavaScript safe-integer limit", () =>
+  withRepo(({ repo }) => {
+    for (const language of ["ja", "en"]) {
+      write(
+        repo,
+        `docs/okf/${language}/concepts/example.md`,
+        concept(language, "9007199254740992", "Original body."),
+      );
+    }
+    commit(repo, "use a large base revision");
+    const base = runGit(repo, "rev-parse", "HEAD");
+    migrate(repo, { revision: "9007199254740993", body: "Updated body." });
+
+    const result = runChecker(repo, base);
+
+    assert.equal(result.status, 0, result.stderr);
+  }));
+
 test("malformed link escapes are reported without aborting the checker", () =>
   withRepo(({ repo }) => {
     const base = migrate(repo);
