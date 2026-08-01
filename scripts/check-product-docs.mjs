@@ -26,6 +26,7 @@ function resolveMode() {
 const mode = resolveMode();
 const runOkfMin = mode === "okf-min" || mode === "all";
 const runIotkit = mode === "iotkit-product" || mode === "all";
+const packagingLayer = runOkfMin ? "okf-min" : "iotkit-product";
 
 function fail(file, message, layer = "iotkit-product") {
   errors.push({ layer, text: `${path.relative(repoRoot, file)}: ${message}` });
@@ -48,12 +49,12 @@ function bundleFiles(directory) {
     const target = path.join(directory, entry.name);
     const stats = fs.lstatSync(target);
     if (stats.isSymbolicLink()) {
-      fail(target, "symbolic links are not allowed in the portable bundle");
+      fail(target, "symbolic links are not allowed in the portable bundle", packagingLayer);
       return [];
     }
     if (entry.isDirectory()) return bundleFiles(target);
     if (!entry.isFile() || !entry.name.endsWith(".md")) {
-      fail(target, "only Markdown files are allowed in the current bundle profile");
+      fail(target, "only Markdown files are allowed in the current bundle profile", packagingLayer);
       return [];
     }
     return [target];
@@ -82,7 +83,7 @@ function localMarkdownTarget(from, href) {
   try {
     withoutFragment = decodeURIComponent(raw);
   } catch {
-    fail(from, `local link is not a valid URI reference: ${href}`);
+    fail(from, `local link is not a valid URI reference: ${href}`, "iotkit-product");
     return null;
   }
   if (!withoutFragment || /^[a-z][a-z0-9+.-]*:/i.test(withoutFragment)) return null;
@@ -99,17 +100,16 @@ function inside(directory, target) {
 }
 
 if (!fs.existsSync(bundleRoot)) {
-  fail(bundleRoot, "does not exist");
+  fail(bundleRoot, "does not exist", packagingLayer);
   reportFailuresAndExit();
 }
 
 const rootIndex = path.join(bundleRoot, "index.md");
 if (!fs.existsSync(rootIndex)) {
-  fail(rootIndex, "does not exist", runOkfMin ? "okf-min" : "iotkit-product");
+  fail(rootIndex, "does not exist", packagingLayer);
   reportFailuresAndExit();
 }
-const rootLayer = runOkfMin ? "okf-min" : "iotkit-product";
-const root = parseFrontmatter(rootIndex, fs.readFileSync(rootIndex, "utf8"), rootLayer);
+const root = parseFrontmatter(rootIndex, fs.readFileSync(rootIndex, "utf8"), packagingLayer);
 if (runOkfMin) {
   if (!root || root.metadata.okf_version !== "0.2") {
     fail(rootIndex, 'bundle root must declare okf_version: "0.2"', "okf-min");
@@ -134,11 +134,11 @@ for (const file of bundleFiles(bundleRoot)) {
       fail(
         file,
         "reserved index files must not have concept frontmatter",
-        runIotkit ? "iotkit-product" : "okf-min",
+        packagingLayer,
       );
     }
   } else {
-    const parsed = parseFrontmatter(file, content, "okf-min");
+    const parsed = parseFrontmatter(file, content, packagingLayer);
     if (!parsed) continue;
     const { metadata } = parsed;
     if (runOkfMin) {
@@ -241,7 +241,7 @@ if (runIotkit && baseRef) {
 
     for (const file of baseFiles) {
       const previous = execFileSync("git", ["show", `${baseRef}:${file}`], { cwd: repoRoot, encoding: "utf8" });
-      const parsed = parseFrontmatter(path.join(repoRoot, file), previous);
+      const parsed = parseFrontmatter(path.join(repoRoot, file), previous, "iotkit-product");
       if (parsed) {
         const productPath = file.replace(/^docs\/okf\//, "docs/product/");
         baseConceptsByPath.set(file, parsed.metadata);

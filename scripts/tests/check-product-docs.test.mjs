@@ -229,7 +229,8 @@ test("malformed link escapes are reported without aborting the checker", () =>
     const result = runChecker(repo, base);
 
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Product docs \(IoTKit producer profile\) validation failed/);
+    assert.match(result.stderr, /Product docs validation failed \(mode=all/);
+    assert.match(result.stderr, /\[iotkit-product\]/);
     assert.match(result.stderr, /local link is not a valid URI reference: bad%zz\.md/);
     assert.doesNotMatch(result.stderr, /URIError|decodeURIComponent/);
   }));
@@ -243,12 +244,13 @@ test("a missing product bundle root index is reported without an ENOENT stack", 
     const result = runChecker(repo, base);
 
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Product docs \(IoTKit producer profile\) validation failed/);
+    assert.match(result.stderr, /Product docs validation failed \(mode=all/);
+    assert.match(result.stderr, /\[okf-min\]/);
     assert.match(result.stderr, /docs[\\/]product[\\/]index\.md: does not exist/);
     assert.doesNotMatch(result.stderr, /ENOENT|readFileSync/);
   }));
 
-test("a missing product bundle uses the IoTKit producer-profile failure banner", () =>
+test("a missing product bundle uses the layered failure banner", () =>
   withRepo(({ repo }) => {
     const base = migrate(repo);
     rmSync(path.join(repo, "docs", "product"), { recursive: true });
@@ -257,7 +259,8 @@ test("a missing product bundle uses the IoTKit producer-profile failure banner",
     const result = runChecker(repo, base);
 
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Product docs \(IoTKit producer profile\) validation failed/);
+    assert.match(result.stderr, /Product docs validation failed \(mode=all/);
+    assert.match(result.stderr, /\[okf-min\]/);
     assert.match(result.stderr, /docs[\\/]product: does not exist/);
   }));
 
