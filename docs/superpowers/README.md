@@ -44,6 +44,10 @@ Do not create a plan when a short issue checklist is sufficient.
 4. After merge, stop updating both artifacts. A later behavior change uses a
    new issue and, when needed, new artifacts.
 
+When executing a multi-task plan with Codex subagents, Main should dispatch
+**implementer → executor → reviewer** per task (not one agent owning all three).
+See [`.codex/README.md`](../../.codex/README.md).
+
 Keep this directory permanently for lineage. Do not bulk-delete, rename, move,
 or rewrite old artifacts to resemble the current product. Existing files may
 contain former Site vocabulary, superseded scope, unchecked steps, or

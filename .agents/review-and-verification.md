@@ -35,4 +35,18 @@ normally expected for the change, state the check and the concrete reason.
 Tests passing are necessary, not sufficient: also compare the result with current
 contracts and the [product invariants](product-invariants.md).
 
+## Codex subagent split (optional Superpowers / multi-task plans)
+
+When using project Codex agents, keep verification and review outside the
+implementer’s ownership:
+
+| Concern | Owner |
+|---|---|
+| Implement settled task + focused tests | `implementer` |
+| Fresh command evidence | `executor` |
+| Independent findings (spec and/or quality) | `reviewer` (read-only) |
+
+Orchestration, handoff checklist, and Superpowers skill mapping:
+[`.codex/README.md`](../.codex/README.md).
+
 Return to [`AGENTS.md`](../AGENTS.md).
