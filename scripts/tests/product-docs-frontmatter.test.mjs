@@ -71,3 +71,24 @@ body
   assert.ok(errors.some((e) => e.includes("description")));
   assert.ok(errors.some((e) => e.includes("translation_key")));
 });
+
+test("rejects non-string IoTKit fields instead of coercing YAML scalars", () => {
+  const content = `---
+type: 42
+title: true
+description: 123
+language: en
+translation_key: contracts.example
+status: stable
+revision: 1
+---
+
+body
+`;
+  const result = parseFrontmatterContent(content);
+  assert.equal(result.error, undefined);
+  const errors = validateRequiredScalars(result.metadata);
+  assert.ok(errors.some((e) => e.includes("type must be a scalar string")));
+  assert.ok(errors.some((e) => e.includes("title must be a scalar string")));
+  assert.ok(errors.some((e) => e.includes("description must be a scalar string")));
+});

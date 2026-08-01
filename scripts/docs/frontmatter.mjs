@@ -34,11 +34,6 @@ export function parseFrontmatterContent(content) {
   if (typeof metadata.revision === "number" && Number.isInteger(metadata.revision)) {
     metadata.revision = String(metadata.revision);
   }
-  for (const key of ["type", "title", "description", "language", "translation_key", "status"]) {
-    if (typeof metadata[key] === "number" || typeof metadata[key] === "boolean") {
-      metadata[key] = String(metadata[key]);
-    }
-  }
   return { metadata, body: content.slice(match[0].length) };
 }
 

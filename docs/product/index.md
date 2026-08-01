@@ -55,6 +55,9 @@ Co-authorities for versioned contracts (schemas, fixtures, tests) sit outside th
 bundle; disagreement is a contract defect, not permission to follow one artifact
 silently. Historical trees (`docs/redesign/`, `docs/superpowers/`) are not authority.
 
+Install the pinned checker dependency after a fresh checkout or package-lock change:
+`npm ci --prefix scripts/docs`.
+
 **Checker:** `node scripts/check-product-docs.mjs` (compatibility entry:
 `scripts/check-okf-docs.mjs`). Failures are **IoTKit product-profile** failures unless
 a future `okf-min` mode says otherwise.
