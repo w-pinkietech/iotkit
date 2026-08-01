@@ -30,6 +30,7 @@ jobs:
       rust: ${{ steps.select.outputs.rust }}
       edge: ${{ steps.select.outputs.edge }}
       trial: ${{ steps.select.outputs.trial }}
+      packages: ${{ steps.select.outputs.packages }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -131,18 +132,59 @@ jobs:
           tool: nextest
 
       - name: Formatting (cargo fmt --check)
+        # Full tree; fmt is seconds, not the bottleneck.
         run: cargo fmt --all --check
 
       - name: Lints (cargo clippy -D warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        env:
+          PACKAGES: ${{ needs.changes.outputs.packages }}
+        run: |
+          set -euo pipefail
+          if [[ "$PACKAGES" == "all" || -z "$PACKAGES" ]]; then
+            cargo clippy --workspace --all-targets -- -D warnings
+          else
+            args=()
+            IFS=',' read -ra pkgs <<< "$PACKAGES"
+            for p in "${pkgs[@]}"; do
+              args+=(-p "$p")
+            done
+            cargo clippy "${args[@]}" --all-targets -- -D warnings
+          fi
 
-      # No separate `cargo build --workspace`: nextest/test compiles what it needs.
+      # No separate full workspace build: nextest compiles what it needs.
+      # Path-focused package lists (not "all") skip the ~1300-test wall.
       - name: Tests (nextest)
-        run: cargo nextest run --workspace --profile ci
+        env:
+          PACKAGES: ${{ needs.changes.outputs.packages }}
+        run: |
+          set -euo pipefail
+          if [[ "$PACKAGES" == "all" || -z "$PACKAGES" ]]; then
+            cargo nextest run --workspace --profile ci
+          else
+            args=()
+            IFS=',' read -ra pkgs <<< "$PACKAGES"
+            for p in "${pkgs[@]}"; do
+              args+=(-p "$p")
+            done
+            cargo nextest run "${args[@]}" --profile ci
+          fi
 
       # nextest does not run rustdoc tests; keep them as a cheap separate pass.
       - name: Doc tests
-        run: cargo test --workspace --doc --no-fail-fast
+        env:
+          PACKAGES: ${{ needs.changes.outputs.packages }}
+        run: |
+          set -euo pipefail
+          if [[ "$PACKAGES" == "all" || -z "$PACKAGES" ]]; then
+            cargo test --workspace --doc --no-fail-fast
+          else
+            args=()
+            IFS=',' read -ra pkgs <<< "$PACKAGES"
+            for p in "${pkgs[@]}"; do
+              args+=(-p "$p")
+            done
+            cargo test "${args[@]}" --doc --no-fail-fast
+          fi
 
   edge:
     name: Rust Edge / Console integration
