@@ -18,9 +18,11 @@ Every development task maps to one GitHub issue.
 2. Create `agent/issue-<number>-<slug>` and
    `.worktrees/issue-<number>-<slug>`.
 3. Work and verify only in that worktree.
-4. Judge product-doc impact. If lasting product facts change, update matching
-   `docs/product/` files in the same worktree. Otherwise record a concrete
-   no-update reason on the PR.
+4. Judge product-doc impact. Run
+   `node scripts/product-docs-impact.mjs select --base origin/master` as a
+   lower-bound hint, then update matching `docs/product/` files in the same
+   worktree when lasting product facts change. Otherwise record a concrete
+   no-update reason on the PR. Empty selector output is not a safety proof.
 5. Commit intentionally, push the branch, and open a draft PR that closes the
    issue. List updated product-doc paths or the no-update reason in the body.
 6. Stop for human review. Apply feedback on the same branch and PR.

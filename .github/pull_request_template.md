@@ -6,8 +6,11 @@
 
 <!-- Required. Lasting product facts go in docs/product/ (ja+en; bump the shared revision when concept content changes, not for a path-only move).
      Temporary notes stay on the issue/PR. See AGENTS.md "Keep product docs current".
-     docs/product is packaged as OKF v0.2; OKF is the format, not a second corpus. -->
+     docs/product is packaged as OKF v0.2; OKF is the format, not a second corpus.
+     Lower-bound selector (empty ≠ safe): node scripts/product-docs-impact.mjs select --base origin/master -->
 
+- Impact selector candidates / セレクタ候補:
+  <!-- paste notable candidates from the selector, or "none (unmatched/empty — still judged by hand)" -->
 - Updated product-doc paths / 更新した正本:
   <!-- e.g. docs/product/{ja,en}/contracts/ingest-v1.md (revision N→N+1) or "none" -->
 - No product-docs update reason / 更新しない理由:

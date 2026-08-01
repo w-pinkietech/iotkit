@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Path → product-doc lower bound for freshness review.",
+    "Authority = docs/product/; Format = OKF v0.2; Gate = check-product-docs (iotkit-product).",
+    "Empty selection is not proof that product docs need no update.",
+    "doc_paths are relative to docs/product/<lang>/; both ja and en are implied."
+  ],
+  "rules": [
+    {
+      "id": "product-model",
+      "path_prefixes": [
+        "edge-node/apps/",
+        "edge/src/composition/",
+        "edge/src/config/"
+      ],
+      "doc_paths": [
+        "concepts/product-model.md",
+        "architecture/system-overview.md"
+      ],
+      "rationale": "Product boundary, composition, or top-level component ownership may change."
+    },
+    {
+      "id": "terminology",
+      "path_prefixes": [
+        "docs/product/en/concepts/terminology.md",
+        "docs/product/ja/concepts/terminology.md"
+      ],
+      "doc_paths": [
+        "concepts/terminology.md"
+      ],
+      "rationale": "Terminology corpus itself is under edit."
+    },
+    {
+      "id": "ingest-contract",
+      "path_prefixes": [
+        "edge-node/ingest/",
+        "edge-node/adapters/bravepi-mainboard/src/task/ingest_map.rs"
+      ],
+      "doc_paths": [
+        "contracts/ingest-v1.md",
+        "concepts/terminology.md"
+      ],
+      "rationale": "Device-to-Edge-Node envelope, admission, or ingest client/HTTP path."
+    },
+    {
+      "id": "input-adapter-contract",
+      "path_prefixes": [
+        "edge-node/adapters/",
+        "edge-node/input/"
+      ],
+      "doc_paths": [
+        "contracts/input-adapter-v1.md"
+      ],
+      "rationale": "Input Adapter host, sensor drivers, or polling runtime."
+    },
+    {
+      "id": "edge-node-custody",
+      "path_prefixes": [
+        "edge-node/core/",
+        "edge-node/apps/node/",
+        "edge-node/apps/nodectl/",
+        "edge/custody-contract/",
+        "edge/src/mqtt/ingest/"
+      ],
+      "doc_paths": [
+        "contracts/edge-node-custody-v1.md",
+        "architecture/system-overview.md"
+      ],
+      "rationale": "Edge Node durable delivery, ledger, publish, or Edge-side custody intake."
+    },
+    {
+      "id": "edge-node-recovery",
+      "path_prefixes": [
+        "scripts/add-edge-node.sh",
+        "scripts/bootstrap-edge.sh",
+        "scripts/fence-edge-node.sh",
+        "scripts/upgrade-edge-node-recovery-acl.sh",
+        "scripts/test-edge-node-fence.sh",
+        "scripts/test-edge-node-recovery-acl.sh",
+        "scripts/test-edge-bootstrap.sh"
+      ],
+      "doc_paths": [
+        "contracts/edge-node-recovery-v1.md",
+        "operations/edge-node-hardware-recovery.md",
+        "operations/installation-and-recovery.md"
+      ],
+      "rationale": "Edge Node replacement, fence, bootstrap, or recovery ACL tooling."
+    },
+    {
+      "id": "output-adapter-contract",
+      "path_prefixes": [
+        "edge/output-adapters/",
+        "edge/src/application/output_profiles.rs",
+        "edge/src/mqtt/output/",
+        "edge/src/storage/semantic_output/",
+        "edge/src/semantics/"
+      ],
+      "doc_paths": [
+        "contracts/output-adapter-v1.md"
+      ],
+      "rationale": "Output Adapter packages, meanings, semantic history, or external publish path."
+    },
+    {
+      "id": "console-and-edge-surface",
+      "path_prefixes": [
+        "edge/frontend/",
+        "edge/src/web/",
+        "edge/openapi/"
+      ],
+      "doc_paths": [
+        "architecture/system-overview.md",
+        "operations/installation-and-recovery.md"
+      ],
+      "rationale": "Console HTML/browser surface, Edge HTTP API, or OpenAPI representation."
+    },
+    {
+      "id": "accounts-auth",
+      "path_prefixes": [
+        "edge/src/auth/",
+        "edge/src/application/accounts.rs",
+        "edge/src/application/authorization.rs",
+        "edge/src/storage/auth.rs"
+      ],
+      "doc_paths": [
+        "operations/installation-and-recovery.md",
+        "architecture/system-overview.md"
+      ],
+      "rationale": "Accounts, sessions, CSRF, authorization, or operator recovery of access."
+    },
+    {
+      "id": "backup-restore-ops",
+      "path_prefixes": [
+        "edge/src/backup/",
+        "edge/src/cli/",
+        "edge/migrations/",
+        "deploy/"
+      ],
+      "doc_paths": [
+        "operations/installation-and-recovery.md",
+        "operations/edge-node-hardware-recovery.md"
+      ],
+      "rationale": "Backup, restore, CLI operator paths, migrations, or deployment packaging."
+    },
+    {
+      "id": "storage-capacity",
+      "path_prefixes": [
+        "edge/src/storage/",
+        "edge/src/diagnostics/",
+        "scripts/test-edge-capacity.sh",
+        "scripts/test-edge-postgres.sh"
+      ],
+      "notes": "Also matches edge/src/storage/semantic_output/ (overlap with output-adapter is intentional lower-bound).",
+      "doc_paths": [
+        "operations/storage-capacity.md",
+        "architecture/system-overview.md"
+      ],
+      "rationale": "Storage backends, diagnostics, capacity envelopes, or PostgreSQL readiness."
+    },
+    {
+      "id": "trial-profile",
+      "path_prefixes": [
+        "scripts/iotkit",
+        "scripts/iotkit_trial.py",
+        "scripts/test-iotkit-trial.sh"
+      ],
+      "doc_paths": [
+        "operations/trial-profile.md"
+      ],
+      "rationale": "Loopback trial journey entry points."
+    },
+    {
+      "id": "product-docs-corpus",
+      "path_prefixes": [
+        "docs/product/"
+      ],
+      "doc_paths": [],
+      "rationale": "Product corpus already in the diff; still confirm bilingual pairs and revision bumps.",
+      "flags": ["corpus_touched"]
+    },
+    {
+      "id": "product-docs-gate",
+      "path_prefixes": [
+        "scripts/check-product-docs.mjs",
+        "scripts/check-okf-docs.mjs",
+        "scripts/docs/",
+        "scripts/tests/check-product-docs.test.mjs",
+        "scripts/tests/product-docs-"
+      ],
+      "doc_paths": [
+        "operations/okf-optional-meta.md"
+      ],
+      "rationale": "Product-doc packaging gate or frontmatter tooling; optional provenance guidance may need alignment."
+    }
+  ]
+}
