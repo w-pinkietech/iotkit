@@ -16,7 +16,8 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
    code配置、依存rule。
 3. 対象となる[現行契約](docs/product/ja/index.md#contracts) — ingest、Input Adapter、
    Edge Node保管責任、Output Adapter。
-4. [AGENTS.md](AGENTS.md) — 人間とcoding agentが共通で守る不変条件と検証lane。
+4. [AGENTS.md](AGENTS.md) — 人間とcoding agentが共通で守る規則の入口（issue駆動、
+   不変条件、lane）。詳細は[`.agents/`](.agents/)にあります。
 
 `docs/product/`が現行の人間向け製品知識の正本です。中身は OKF v0.2 形式で
 パッケージされています（形式名であり第二の正本ではありません）。`docs/okf/`は
@@ -25,10 +26,11 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 
 残る製品事実を変える変更では、同じ変更の中で product docs を最新に保ちます。
 調査メモなど一時記録は issue / PR に置き、正本へ混ぜません。詳細は
-[AGENTS.md](AGENTS.md) の **Keep product docs current** です。
+[`.agents/documentation-authority.md`](.agents/documentation-authority.md) にあります。
 
-以後の各taskでは、[AGENTS.md](AGENTS.md)の**Before changing code**表を使い、
-変更に該当する行だけを読んでください。
+以後の各taskでは、[`.agents/change-map.md`](.agents/change-map.md)の**Before
+changing code**表を使い、変更に該当する行だけを読んでください。作業はissue駆動です。
+[`.agents/workflow.md`](.agents/workflow.md)を参照してください。
 
 ## 開発環境
 
@@ -111,14 +113,15 @@ directoryを流用してはいけません。
 
 変更したい領域に近い既存testを一つ選び、そのcall pathから製品codeへ入ります。
 最小変更を行い、同じfocused testを再実行します。repository全体を闇雲に検索する前に、
-[AGENTS.md](AGENTS.md)の**Before changing code**表を使ってください。
+[`.agents/change-map.md`](.agents/change-map.md)の**Before changing code**表を
+使ってください。
 
 ## 変更目的から場所を探す
 
-[AGENTS.md](AGENTS.md)のtask-routing表だけを、必読資料、code入口、認証付きHTTP
-ingest、Console認証、運用、契約に関するrepository共通の地図とします。完全なcrate
-mapと配置ruleはArchitectureにあります。新しいcrateは、同文書と
-`scripts/check-layers`へ分類するまで追加しません。
+[`.agents/change-map.md`](.agents/change-map.md)のtask-routing表だけを、必読資料、
+code入口、認証付きHTTP ingest、Console認証、運用、契約に関するrepository共通の
+地図とします。完全なcrate mapと配置ruleはArchitectureにあります。新しいcrateは、
+同文書と`scripts/check-layers`へ分類するまで追加しません。
 
 短いcomponent別の入口も用意しています。
 

@@ -22,3 +22,4 @@
 * [Edge Node hardware recovery quick guide](operations/edge-node-hardware-recovery.md) - Choose the backup or no-backup path and use the printable field checklist.
 * [Installation and recovery](operations/installation-and-recovery.md) - Installation, checks, certificates, backup, and recovery.
 * [Storage capacity](operations/storage-capacity.md) - Repeatable SQLite and PostgreSQL capacity regression smoke.
+* [Optional OKF provenance metadata](operations/okf-optional-meta.md) - When to add `sources` / `generated` / `verified` (optional; not required).

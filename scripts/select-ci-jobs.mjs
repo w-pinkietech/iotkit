@@ -63,6 +63,7 @@ const lightweightFiles = new Set([
   "scripts/docs/package-lock.json",
   "scripts/docs/frontmatter.mjs",
   "scripts/tests/product-docs-frontmatter.test.mjs",
+  "scripts/tests/product-docs-modes.test.mjs",
   "scripts/check-release-version.mjs",
   "scripts/check-source-layout",
   "scripts/tests/adapter-author-docs.test.mjs",
@@ -289,6 +290,13 @@ function isConsoleSurfacePath(path) {
   if (consoleScriptPrefixes.some((prefix) => path.startsWith(prefix))) {
     return true;
   }
+  if (
+    path === "edge/askama.toml" ||
+    path === "edge/src/composition/web.rs" ||
+    path.startsWith("edge/examples/console")
+  ) {
+    return true;
+  }
   if (path.startsWith("edge/frontend/")) return true;
   if (path.startsWith("edge/src/web/")) return true;
   if (path.startsWith("edge/openapi/")) return true;
@@ -343,6 +351,12 @@ function classify(path) {
 
   if (path === "edge/Dockerfile") {
     return allHeavy();
+  }
+
+  // The Edge manifest owns both browser dependencies (Askama/Axum) and
+  // custody/output dependencies (SQLx/MQTT/output adapters).
+  if (path === "edge/Cargo.toml") {
+    return { rust: true, console: true, edge: true, trial: false };
   }
 
   // Console lane first so presentation / web UI skips custody+output.

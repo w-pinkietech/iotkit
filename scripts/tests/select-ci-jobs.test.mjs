@@ -81,10 +81,12 @@ const cases = [
   {
     name: "documentation and repository guidance use lightweight checks only",
     paths: [
-      "docs/okf/en/index.md",
+      "docs/product/en/index.md",
       "AGENTS.md",
       "CONTRIBUTING.ja.md",
       "scripts/tests/adapter-author-docs.test.mjs",
+      "scripts/tests/check-product-docs.test.mjs",
+      "scripts/tests/product-docs-modes.test.mjs",
     ],
     expected: none,
   },
@@ -109,6 +111,11 @@ const cases = [
     expected: rustEdge("iotkit-output-adapter-example"),
   },
   {
+    name: "Edge manifest selects both Console and Edge integration",
+    paths: ["edge/Cargo.toml"],
+    expected: rustConsoleEdge("iotkit-edge"),
+  },
+  {
     name: "Console e2e script selects Console lane without custody/output",
     paths: ["scripts/test-edge-console-e2e.sh"],
     expected: rustConsole("all"),
@@ -119,6 +126,21 @@ const cases = [
       "edge/frontend/static/app.js",
       "edge/frontend/package.json",
     ],
+    expected: rustConsole("iotkit-edge"),
+  },
+  {
+    name: "browser composition adapter selects Console lane",
+    paths: ["edge/src/composition/web.rs"],
+    expected: rustConsole("iotkit-edge"),
+  },
+  {
+    name: "Askama template configuration selects Console lane",
+    paths: ["edge/askama.toml"],
+    expected: rustConsole("iotkit-edge"),
+  },
+  {
+    name: "Console fixture examples select Console lane",
+    paths: ["edge/examples/console_commissioning_fixture.rs"],
     expected: rustConsole("iotkit-edge"),
   },
   {
@@ -287,6 +309,10 @@ test("CI workflow routes heavy jobs through the classifier", () => {
   assert.match(
     workflow,
     /node --test scripts\/tests\/adapter-author-docs\.test\.mjs/,
+  );
+  assert.match(
+    workflow,
+    /node --test scripts\/tests\/check-product-docs\.test\.mjs/,
   );
   // Focused package selection drives clippy/nextest when not "all".
   assert.match(workflow, /cargo nextest run/);
