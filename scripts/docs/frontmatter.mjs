@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { parse: parseYaml } = require("yaml");
+const { isScalar, parseDocument } = require("yaml");
 
 const required = ["type", "title", "description", "language", "translation_key", "status", "revision"];
 const requiredStringPattern = {
@@ -21,9 +21,12 @@ const requiredStringPattern = {
 export function parseFrontmatterContent(content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!match) return { error: "missing YAML frontmatter" };
+  let document;
   let parsed;
   try {
-    parsed = parseYaml(match[1], { intAsBigInt: true, uniqueKeys: true });
+    document = parseDocument(match[1], { intAsBigInt: true, keepSourceTokens: true, uniqueKeys: true });
+    if (document.errors.length > 0) throw document.errors[0];
+    parsed = document.toJS();
   } catch (error) {
     return { error: `invalid YAML frontmatter: ${error.message}` };
   }
@@ -31,8 +34,16 @@ export function parseFrontmatterContent(content) {
     return { error: "frontmatter must be a YAML mapping" };
   }
   const metadata = { ...parsed };
-  if (typeof metadata.revision === "bigint") {
-    metadata.revision = String(metadata.revision);
+  const revision = document.get("revision", true);
+  if (revision !== undefined) {
+    const exactDecimalInteger =
+      isScalar(revision) &&
+      revision.tag === undefined &&
+      revision.type === "PLAIN" &&
+      revision.format === undefined &&
+      typeof revision.value === "bigint" &&
+      /^[1-9][0-9]*$/.test(revision.source);
+    metadata.revision = exactDecimalInteger ? revision.source : "<invalid revision syntax>";
   }
   return { metadata, body: content.slice(match[0].length) };
 }
