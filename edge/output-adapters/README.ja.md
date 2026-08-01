@@ -21,4 +21,4 @@ scripts/test-edge-output.sh
 Adapterはsandbox pluginではなく、IoTKitと同じ権限で動くtrusted compile-time Rust
 codeです。Filesystem、environment、network、secret、thread、clockへアクセスする
 sourceや依存を入れません。製品境界の正本は
-[Output Adapter v1契約](../../docs/okf/ja/contracts/output-adapter-v1.md)です。
+[Output Adapter v1契約](../../docs/product/ja/contracts/output-adapter-v1.md)です。

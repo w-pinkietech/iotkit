@@ -29,5 +29,5 @@ Choose an integration path before editing code:
 3. A different protocol or lifecycle becomes a sibling under `adapters`.
 
 The normative boundaries and dependency rules are in the
-[architecture map](../docs/okf/en/architecture/system-overview.md) and
-[Input Adapter contract](../docs/okf/en/contracts/input-adapter-v1.md).
+[architecture map](../docs/product/en/architecture/system-overview.md) and
+[Input Adapter contract](../docs/product/en/contracts/input-adapter-v1.md).

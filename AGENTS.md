@@ -30,16 +30,38 @@ enforced dependency map is in the architecture document and `scripts/check-layer
 
 ## Documentation authority
 
-Start at `docs/README.md`. The current human-readable product corpus is
-`docs/okf/`. Choose either `ja` or `en` to read; edit both language files together.
+Start at `docs/README.md`. The current human-readable **product documentation**
+lives under `docs/product/`. Choose either `ja` or `en` to read; edit both
+language files together.
 
-A versioned contract is one artifact made from its paired contract documents,
-machine-readable schema or exported wire types, shared fixtures, and conformance
-tests. None silently overrides the others.
+That tree is packaged as an **Open Knowledge Format (OKF) v0.2** bundle (see
+`docs/product/index.md`). OKF is the portable markdown-plus-frontmatter *format*;
+`docs/product/` is the *authority*. Do not treat the format name as a second
+corpus. `docs/okf/` is a compatibility stub only.
+
+A versioned contract is one artifact made from its paired product docs, machine
+schemas or exported wire types, shared fixtures, and conformance tests. None
+silently overrides the others.
 
 All of `docs/redesign/` and `docs/superpowers/` is historical or rationale-only.
 It never overrides the current corpus. Old IoTKit code is not an authority. If
 the task conflicts with a current contract, stop and report the conflict.
+
+### Keep product docs current
+
+`docs/product/` must describe the product as it is after the change merges.
+Treat freshness as part of the change, not a follow-up chore.
+
+- **Write lasting product facts into `docs/product/`** in the same issue and PR
+  as the code or contract change.
+- **Keep temporary work on the issue or PR** (investigation notes, discarded
+  options, one-off steps).
+- **Do not grow `docs/superpowers/` or rewrite `docs/redesign/` evidence** to
+  record current product law. Absorb still-true gaps into product docs in
+  current terms only.
+- When you change a product concept, edit **both** `ja` and `en`, bump the
+  shared `revision`, and run `node scripts/check-product-docs.mjs` (or
+  `node scripts/check-okf-docs.mjs`).
 
 ## Before changing code
 
@@ -48,24 +70,24 @@ historical plan.
 
 | Change area | Read before editing | Start in | Focused verification |
 |---|---|---|---|
-| Product boundary or component ownership | `docs/okf/<lang>/concepts/product-model.md`, `docs/okf/<lang>/architecture/system-overview.md` | owning component from the architecture map | affected contract and package tests |
-| Crate, package, dependency, or source placement | `docs/okf/<lang>/architecture/system-overview.md` | `Cargo.toml`, component `Cargo.toml`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
-| Sensor, driver, polling, UART, or Input Adapter host | `docs/okf/<lang>/contracts/input-adapter-v1.md` | `edge-node/adapters/bravepi-mainboard/src/`, `edge-node/adapters/rpi-local/src/`, `edge-node/input/hardware/sensor-drivers/src/`, `edge-node/input/runtimes/polling/src/` | `cargo test -p <owning-crate>` plus adapter conformance tests when the contract changes |
-| Envelope/Ack, authenticated device ingest, admission, or principal mapping | `docs/okf/<lang>/contracts/ingest-v1.md` and product model | `edge-node/ingest/contract/`, `edge-node/ingest/client/`, `edge-node/ingest/http/`, `edge-node/core/collector/`; BravePI envelope mapping starts at `edge-node/adapters/bravepi-mainboard/src/task/ingest_map.rs` | owning crate tests; use ingest conformance fixtures when wire behavior changes |
-| Edge Node activation, MQTT delivery, ack, retention, or data loss | `docs/okf/<lang>/contracts/edge-node-custody-v1.md`, `docs/okf/<lang>/contracts/ingest-v1.md` | `edge-node/core/ledger/`, `edge-node/core/publish/`, `edge-node/core/storage/`, `edge-node/core/timeseries/`, `edge-node/apps/node/` | owning crate tests, then `scripts/verify.sh` |
+| Product boundary or component ownership | `docs/product/<lang>/concepts/product-model.md`, `docs/product/<lang>/architecture/system-overview.md` | owning component from the architecture map | affected contract and package tests |
+| Crate, package, dependency, or source placement | `docs/product/<lang>/architecture/system-overview.md` | `Cargo.toml`, component `Cargo.toml`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
+| Sensor, driver, polling, UART, or Input Adapter host | `docs/product/<lang>/contracts/input-adapter-v1.md` | `edge-node/adapters/bravepi-mainboard/src/`, `edge-node/adapters/rpi-local/src/`, `edge-node/input/hardware/sensor-drivers/src/`, `edge-node/input/runtimes/polling/src/` | `cargo test -p <owning-crate>` plus adapter conformance tests when the contract changes |
+| Envelope/Ack, authenticated device ingest, admission, or principal mapping | `docs/product/<lang>/contracts/ingest-v1.md` and product model | `edge-node/ingest/contract/`, `edge-node/ingest/client/`, `edge-node/ingest/http/`, `edge-node/core/collector/`; BravePI envelope mapping starts at `edge-node/adapters/bravepi-mainboard/src/task/ingest_map.rs` | owning crate tests; use ingest conformance fixtures when wire behavior changes |
+| Edge Node activation, MQTT delivery, ack, retention, or data loss | `docs/product/<lang>/contracts/edge-node-custody-v1.md`, `docs/product/<lang>/contracts/ingest-v1.md` | `edge-node/core/ledger/`, `edge-node/core/publish/`, `edge-node/core/storage/`, `edge-node/core/timeseries/`, `edge-node/apps/node/` | owning crate tests, then `scripts/verify.sh` |
 | IoTKit Edge raw storage, meanings, history, or CSV | product model and architecture; for browser JSON also `edge/openapi/edge-console-v1.yaml` | `edge/src/storage/`, `edge/src/semantics/`, `edge/src/application/` | `cargo test -p iotkit-edge --test storage_contract --test semantic_contract` |
-| Output Adapter or external application contract | `docs/okf/<lang>/contracts/output-adapter-v1.md` | `edge/output-adapters/`, `edge/src/application/output_profiles.rs`, `edge/src/mqtt/output/` | owning Adapter tests, `cargo test -p iotkit-edge --test output_contract --test output_puback` |
+| Output Adapter or external application contract | `docs/product/<lang>/contracts/output-adapter-v1.md` | `edge/output-adapters/`, `edge/src/application/output_profiles.rs`, `edge/src/mqtt/output/` | owning Adapter tests, `cargo test -p iotkit-edge --test output_contract --test output_puback` |
 | Console HTML, navigation, or browser behavior | architecture; OpenAPI only for endpoints and schemas represented there | `edge/src/web/`, `edge/frontend/` | `scripts/test-edge-console-frontend.sh`, then `scripts/test-edge-console-e2e.sh` for journeys |
-| Account bootstrap or recovery | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `edge/src/application/accounts.rs`, `edge/src/storage/auth.rs`, `edge/src/cli/`; Console account management starts in `edge/src/web/` | `cargo test -p iotkit-edge --test auth_storage_contract --test cli_contract` |
+| Account bootstrap or recovery | `docs/product/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `edge/src/application/accounts.rs`, `edge/src/storage/auth.rs`, `edge/src/cli/`; Console account management starts in `edge/src/web/` | `cargo test -p iotkit-edge --test auth_storage_contract --test cli_contract` |
 | Login, password, session, cookie, CSRF, or authorization | relevant current contract plus `edge/src/web/router.rs`; session endpoints are not currently represented in the Console OpenAPI | `edge/src/auth/`, `edge/src/application/authorization.rs`, `edge/src/web/` | `cargo test -p iotkit-edge --test auth_contract --test session_contract --test http_contract` |
-| TLS, certificate, or deployment credentials | `docs/okf/<lang>/operations/installation-and-recovery.md` sections 1 and 3 | owning service and `deploy/` | focused security or deployment script for the changed path |
-| Encrypted backup or restore | `docs/okf/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `edge/src/backup/`, `edge/src/cli/`, backend-specific storage operations | `cargo test -p iotkit-edge --test backup_contract --test cli_contract`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
-| Device retirement or hardware replacement | `docs/okf/<lang>/operations/installation-and-recovery.md` section 9 and Edge Node custody contract | owning Edge Node identity/custody path | focused replacement and custody tests |
-| SQLite-to-PostgreSQL migration | `docs/okf/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `edge/src/backup/`, `edge/src/storage/`, `edge/src/cli/` | `scripts/test-edge-postgres.sh` plus affected command tests |
-| Manual update or rollback | `docs/okf/<lang>/operations/installation-and-recovery.md` section 11 | `deploy/`, affected startup and migration code | changed update/rollback journey |
-| Capacity, retention, or storage profile selection | `docs/okf/<lang>/operations/storage-capacity.md` | `edge/src/storage/`, `edge/src/diagnostics/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
+| TLS, certificate, or deployment credentials | `docs/product/<lang>/operations/installation-and-recovery.md` sections 1 and 3 | owning service and `deploy/` | focused security or deployment script for the changed path |
+| Encrypted backup or restore | `docs/product/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `edge/src/backup/`, `edge/src/cli/`, backend-specific storage operations | `cargo test -p iotkit-edge --test backup_contract --test cli_contract`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
+| Device retirement or hardware replacement | `docs/product/<lang>/operations/installation-and-recovery.md` section 9 and Edge Node custody contract | owning Edge Node identity/custody path | focused replacement and custody tests |
+| SQLite-to-PostgreSQL migration | `docs/product/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `edge/src/backup/`, `edge/src/storage/`, `edge/src/cli/` | `scripts/test-edge-postgres.sh` plus affected command tests |
+| Manual update or rollback | `docs/product/<lang>/operations/installation-and-recovery.md` section 11 | `deploy/`, affected startup and migration code | changed update/rollback journey |
+| Capacity, retention, or storage profile selection | `docs/product/<lang>/operations/storage-capacity.md` | `edge/src/storage/`, `edge/src/diagnostics/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
 | Vulnerability report or accidental secret exposure | `SECURITY.md` | reporting and containment path; do not copy secrets into repository artifacts | follow reporting policy; do not create a public reproducer with secrets |
-| Contract or documentation change | `docs/README.md`, both language files, schemas/types, fixtures, conformance tests | current authority; never a historical plan | `node scripts/check-okf-docs.mjs` plus affected conformance tests |
+| Contract or documentation change | `docs/README.md`, both language files, schemas/types, fixtures, conformance tests | current authority; never a historical plan | `node scripts/check-product-docs.mjs` plus affected conformance tests |
 | PR review or field report triage | `.agents/skills/iotkit-battle-tested-review/SKILL.md`, `review/battle-tested/README.md` | selector output and linked evidence | `node scripts/battle-tested-review.mjs check` |
 
 ## Common commands
@@ -74,7 +96,7 @@ Run the smallest command that can disprove the change, then widen for risk.
 
 ```bash
 # Documentation, dependency, and source/test structure
-node scripts/check-okf-docs.mjs
+node scripts/check-product-docs.mjs
 scripts/check-layers
 scripts/check-source-layout
 
@@ -125,10 +147,15 @@ and exclusions before implementation.
 2. Create `agent/issue-<number>-<slug>` and
    `.worktrees/issue-<number>-<slug>`.
 3. Work and verify only in that worktree.
-4. Commit intentionally, push the branch, and open a draft PR that closes the
-   issue.
-5. Stop for human review. Apply feedback on the same branch and PR.
-6. Merge only after explicit approval. After confirmed merge, remove the local
+4. **Judge product-docs impact** (see [Keep product docs current](#keep-product-docs-current)).
+   If lasting product facts change, update matching `docs/product/` files in this
+   worktree. If not, record **No product-docs update** with a concrete reason on
+   the PR.
+5. Commit intentionally, push the branch, and open a draft PR that closes the
+   issue. The PR body must list updated product-doc paths (ja+en) **or** the
+   No product-docs update reason.
+6. Stop for human review. Apply feedback on the same branch and PR.
+7. Merge only after explicit approval. After confirmed merge, remove the local
    worktree and branch.
 
 Keep the diff inside the issue scope. Create a separate issue when the scope
@@ -149,18 +176,18 @@ implementation.
 
 | Lane | Use for | Required process |
 |---|---|---|
-| Fast (default for most work) | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; focused test when behavior changes; focused verification; PR |
-| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | issue (or PR body) holds a short decision note: goal, non-goals, chosen approach, verification; one review; proportional tests. No separate plan file |
-| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority (issue, OKF, or contract docs—not a historical plan tree); tests first; independent review; broad verification. An implementation plan only when the work has many ordered slices or irreversible steps |
+| Fast (default for most work) | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; focused test when behavior changes; focused verification; PR. **Product docs:** update ja+en when operator-, integrator-, or contract-visible facts change; otherwise PR states **No product-docs update** with reason |
+| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | issue (or PR body) holds a short decision note: goal, non-goals, chosen approach, verification; one review; proportional tests. No separate plan file. **Product docs:** lasting decisions land in `docs/product/` (or paired contract artifacts) in the same PR |
+| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority (**prefer `docs/product/` / contract docs**; issue notes for transient design only—not a historical plan tree); tests first; independent review; broad verification. An implementation plan only when the work has many ordered slices or irreversible steps. **Product docs:** ship corpus + schema/types + fixtures + tests as one contract unit |
 
 Quality that stays in every lane: scoped issue, no silent data loss, no secret
-leakage, focused tests for behavior changes, human merge approval, and
-verification matched to risk.
+leakage, focused tests for behavior changes, **product-docs impact recorded on
+the PR**, human merge approval, and verification matched to risk.
 
 ### Process weight and optional harnesses
 
 - Do not create new files under `docs/superpowers/` for ongoing work. That tree
-  is historical. Put lasting decisions into the current corpus (`docs/okf/`,
+  is historical. Put lasting decisions into the current corpus (`docs/product/`,
   contracts, code, tests) or keep short decisions on the issue/PR.
 - Heavy multi-step harnesses (long specs, checkbox plans, mandatory
   subagent-per-task execution) are optional Full aids when risk or size

@@ -42,7 +42,7 @@ const cases = [
   {
     name: "documentation and repository guidance use lightweight checks only",
     paths: [
-      "docs/okf/en/index.md",
+      "docs/product/en/index.md",
       "AGENTS.md",
       "CONTRIBUTING.ja.md",
       "scripts/tests/adapter-author-docs.test.mjs",

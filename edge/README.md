@@ -31,6 +31,6 @@ The Rust schema is a fresh baseline. Databases and encrypted backup artifacts
 created by the former Go implementation are intentionally unsupported.
 
 Canonical behavior is documented in the
-[architecture map](../docs/okf/en/architecture/system-overview.md),
-[Edge Node custody contract](../docs/okf/en/contracts/edge-node-custody-v1.md),
-and [Output Adapter contract](../docs/okf/en/contracts/output-adapter-v1.md).
+[architecture map](../docs/product/en/architecture/system-overview.md),
+[Edge Node custody contract](../docs/product/en/contracts/edge-node-custody-v1.md),
+and [Output Adapter contract](../docs/product/en/contracts/output-adapter-v1.md).

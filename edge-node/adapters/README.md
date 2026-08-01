@@ -48,5 +48,5 @@ scripts/check-layers
 scripts/check-source-layout
 ```
 
-See the [Input Adapter contract](../../docs/okf/en/contracts/input-adapter-v1.md)
+See the [Input Adapter contract](../../docs/product/en/contracts/input-adapter-v1.md)
 for the required behavior and exact conformance ownership.

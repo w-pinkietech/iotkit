@@ -53,6 +53,7 @@ const lightweightFiles = new Set([
   "scripts/battle-tested-review.mjs",
   "scripts/check-layers",
   "scripts/check-okf-docs.mjs",
+  "scripts/check-product-docs.mjs",
   "scripts/check-release-version.mjs",
   "scripts/check-source-layout",
   "scripts/tests/adapter-author-docs.test.mjs",
