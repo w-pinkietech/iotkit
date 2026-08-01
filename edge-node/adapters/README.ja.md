@@ -46,4 +46,4 @@ scripts/check-source-layout
 ```
 
 必須behaviorとconformanceの所有範囲は
-[Input Adapter契約](../../docs/okf/ja/contracts/input-adapter-v1.md)を参照してください。
+[Input Adapter契約](../../docs/product/ja/contracts/input-adapter-v1.md)を参照してください。

@@ -1,13 +1,3 @@
----
-type: Guide
-title: "Source and test placement"
-description: "Where product code and unit or integration tests live under crates and frontend."
-language: en
-translation_key: agents.source-and-tests
-status: stable
-revision: 1
----
-
 # Source and test placement
 
 - Rust product `src/` contains product code, not test bodies or test helpers.

@@ -1,13 +1,3 @@
----
-type: Guide
-title: "Product invariants for agents"
-description: "Secrets, custody, typed mutations, and PUBACK non-custody rules."
-language: en
-translation_key: agents.product-invariants
-status: stable
-revision: 1
----
-
 # Product invariants
 
 - Never expose tokens, credentials, keys, their hashes, customer identifiers, or

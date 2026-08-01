@@ -2,6 +2,17 @@
 
 <!-- What changed and why? / 何をなぜ変更しましたか。 -->
 
+## Product docs impact / 正本への影響
+
+<!-- Required. Lasting product facts go in docs/product/ (ja+en; bump the shared revision when concept content changes, not for a path-only move).
+     Temporary notes stay on the issue/PR. See AGENTS.md "Keep product docs current".
+     docs/product is packaged as OKF v0.2; OKF is the format, not a second corpus. -->
+
+- Updated product-doc paths / 更新した正本:
+  <!-- e.g. docs/product/{ja,en}/contracts/ingest-v1.md (revision N→N+1) or "none" -->
+- No product-docs update reason / 更新しない理由:
+  <!-- Required when paths are "none" -->
+
 ## Verification / 検証
 
 <!-- Commands and results. / 実行したcommandと結果。 -->

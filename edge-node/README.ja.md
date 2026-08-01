@@ -28,5 +28,5 @@ Codeを編集する前に接続方法を選びます。
 2. 既存direct-I2C modelに合うsensor ICは`adapters/rpi-local`へ追加する。
 3. Protocolやlifecycleが異なる場合は`adapters`配下にsiblingを作る。
 
-正本の境界と依存ruleは[Architecture](../docs/okf/ja/architecture/system-overview.md)と
-[Input Adapter契約](../docs/okf/ja/contracts/input-adapter-v1.md)を参照してください。
+正本の境界と依存ruleは[Architecture](../docs/product/ja/architecture/system-overview.md)と
+[Input Adapter契約](../docs/product/ja/contracts/input-adapter-v1.md)を参照してください。

@@ -75,10 +75,18 @@ jobs:
           node --test scripts/tests/release-version.test.mjs
           node scripts/check-release-version.mjs
 
-      - name: IoTKit OKF documentation profile
+      - name: Install product-docs tooling
+        run: npm ci --prefix scripts/docs
+
+      - name: Product documentation (IoTKit profile; OKF v0.2 packaging)
         env:
           OKF_BASE_REF: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/check-okf-docs.mjs
+        run: |
+          node --test scripts/tests/product-docs-frontmatter.test.mjs scripts/tests/product-docs-modes.test.mjs
+          node scripts/check-product-docs.mjs --mode=all
+
+      - name: Product documentation regression tests
+        run: node --test scripts/tests/check-product-docs.test.mjs
 
       - name: Trial profile configuration contract
         run: python3 -m unittest scripts.tests.test_iotkit_trial

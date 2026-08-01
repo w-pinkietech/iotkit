@@ -1,15 +1,12 @@
+# Project Codex defaults for the primary (Main) session.
+# Custom subagents live as standalone files under .codex/agents/
+# (see https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 review_model = "gpt-5.6-sol"
 
-[agents.implementer]
-description = "Implement settled requirements and write focused tests. Escalate new product or trust decisions to Main."
-config_file = "agents/luna-max.toml"
-
-[agents.executor]
-description = "Run tests, verification commands, and bounded mechanical probes without changing approved contracts."
-config_file = "agents/luna-max.toml"
-
-[agents.reviewer]
-description = "Independently review design or implementation for correctness, safety, provenance, and contract compliance."
-config_file = "agents/sol-high.toml"
+[agents]
+# Global multi-agent settings only. Role definitions are the standalone
+# agent files in .codex/agents/ (implementer, executor, reviewer).
+# max_concurrent_threads_per_session = 6

@@ -1,13 +1,3 @@
----
-type: Guide
-title: "Review and verification"
-description: "Battle-tested review selection and risk-matched verification expectations."
-language: en
-translation_key: agents.review-and-verification
-status: stable
-revision: 1
----
-
 # Review and verification
 
 Before final review, use `$iotkit-battle-tested-review` or run the selector

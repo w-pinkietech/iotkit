@@ -21,4 +21,4 @@ scripts/test-edge-output.sh
 Adapters are trusted compile-time Rust code, not sandboxed plugins. Adapter
 source and dependencies must not use filesystem, environment, network, secret,
 thread, or clock access. The normative product boundary is the
-[Output Adapter v1 contract](../../docs/okf/en/contracts/output-adapter-v1.md).
+[Output Adapter v1 contract](../../docs/product/en/contracts/output-adapter-v1.md).

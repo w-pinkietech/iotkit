@@ -1,13 +1,3 @@
----
-type: Guide
-title: "IoTKit project overview for agents"
-description: "Product components, data flow, and adapter/ingest boundaries for coding agents."
-language: en
-translation_key: agents.project-overview
-status: stable
-revision: 1
----
-
 # Project overview
 
 `iotkit-next` is an on-premises-first IoT data collection foundation rebuilt from

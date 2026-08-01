@@ -1,20 +1,11 @@
----
-type: Guide
-title: "Common verification commands"
-description: "Smallest-first commands for docs checks, Rust tests, Console, and verify.sh."
-language: en
-translation_key: agents.commands
-status: stable
-revision: 1
----
-
 # Common commands
 
 Run the smallest command that can disprove the change, then widen for risk.
 
 ```bash
 # Documentation, dependency, and source/test structure
-node scripts/check-okf-docs.mjs
+npm ci --prefix scripts/docs  # after a fresh checkout or package-lock change
+node scripts/check-product-docs.mjs
 scripts/check-layers
 scripts/check-source-layout
 

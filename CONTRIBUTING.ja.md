@@ -10,17 +10,23 @@ IoTKitを、現場で使えて他の開発者にも保守できる基盤にす�
 
 初回のrepository案内では、次の順序で一度読んでください。
 
-1. [製品モデル](docs/okf/ja/concepts/product-model.md) — IoTKitが所有するものと、
+1. [製品モデル](docs/product/ja/concepts/product-model.md) — IoTKitが所有するものと、
    device・外部applicationに残すもの。
-2. [Architecture](docs/okf/ja/architecture/system-overview.md) — 実行component、crate map、
+2. [Architecture](docs/product/ja/architecture/system-overview.md) — 実行component、crate map、
    code配置、依存rule。
-3. 対象となる[現行契約](docs/okf/ja/index.md#contracts) — ingest、Input Adapter、
+3. 対象となる[現行契約](docs/product/ja/index.md#contracts) — ingest、Input Adapter、
    Edge Node保管責任、Output Adapter。
 4. [AGENTS.md](AGENTS.md) — 人間とcoding agentが共通で守る規則の入口（issue駆動、
    不変条件、lane）。詳細は[`.agents/`](.agents/)にあります。
 
-`docs/okf/`が現行の人間向け製品知識の正本です。`docs/redesign/`と
-`docs/superpowers/`は履歴であり、現行契約、実行可能fixture、testを上書きしません。
+`docs/product/`が現行の人間向け製品知識の正本です。中身は OKF v0.2 形式で
+パッケージされています（形式名であり第二の正本ではありません）。`docs/okf/`は
+互換スタブだけです。`docs/redesign/`と`docs/superpowers/`は履歴であり、現行契約、
+実行可能fixture、testを上書きしません。
+
+残る製品事実を変える変更では、同じ変更の中で product docs を最新に保ちます。
+調査メモなど一時記録は issue / PR に置き、正本へ混ぜません。詳細は
+[`.agents/documentation-authority.md`](.agents/documentation-authority.md) にあります。
 
 以後の各taskでは、[`.agents/change-map.md`](.agents/change-map.md)の**Before
 changing code**表を使い、変更に該当する行だけを読んでください。作業はissue駆動です。
@@ -56,7 +62,7 @@ commitしてはいけません。
 ```bash
 git clone git@github.com:w-pinkietech/iotkit-next.git
 cd iotkit-next
-node scripts/check-okf-docs.mjs
+node scripts/check-product-docs.mjs
 scripts/check-layers
 scripts/check-source-layout
 ```
@@ -178,7 +184,7 @@ git pull --prune
 
 ```bash
 # 文書構造
-node scripts/check-okf-docs.mjs
+node scripts/check-product-docs.mjs
 
 # Rust format・依存rule・source/test配置・test・Clippyと全Go test
 scripts/verify.sh
@@ -206,7 +212,7 @@ Rust製品動作や影響範囲が不明なcross-component変更では`scripts/v
 - 埋め込みConsole JavaScriptは
   `npm run build --prefix edge/frontend`で生成する。
 - `Cargo.lock`、`package-lock.json`は各package managerからだけ更新する。
-- `docs/okf/`の日英fileは同時に変更する。
+- `docs/product/`の日英fileは同時に変更し、concept 内容を変えたら共有 `revision` を上げる。
 - `testdata/`の共有JSONは正規contract dataとして扱う。一実装を通すためだけに
   fixtureを変更しない。
 

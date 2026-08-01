@@ -1,14 +1,29 @@
 # Historical design and implementation records
 
 The `specs/` and `plans/` directories preserve completed development-process
-artifacts. They may contain old names, superseded scope, unchecked steps, or
-implementation state from a specific point in time.
+artifacts. They may contain old names (including former Site vocabulary),
+superseded scope, unchecked steps, or implementation state from a specific
+point in time.
 
 These files are not current work instructions and do not override code, executable
 contracts, current contract documents, or [`docs/README.md`](../README.md). New work
 should update the current source that owns the behavior instead of treating an old
 plan as a living specification.
 
-Do not add new specs or plans here for ongoing development. Current process is
-the Change lanes section in [`AGENTS.md`](../../AGENTS.md): Fast by default,
-Standard with a short decision note, Full only for high-risk work.
+## Keep this tree (lineage)
+
+Policy ([#145](https://github.com/w-pinkietech/iotkit/issues/145)):
+
+- **Keep this directory permanently for lineage.** Do not bulk-delete, rename,
+  or move it to an archive.
+- **Do not add** new specs or plans for ongoing work by default.
+- Reuse the **writing style** (goal, non-goals, decision, verification; optional
+  plan for Full work) on AGENTS change lanes—not by growing this tree.
+- Specs→product docs absorption is **secondary**. Primary product-gap work is
+  redesign→product docs
+  ([#141](https://github.com/w-pinkietech/iotkit/issues/141)). The completed spec
+  gap survey and its conclusions remain on
+  [#143](https://github.com/w-pinkietech/iotkit/issues/143).
+- `plans/` are execution logs only—never normative.
+
+Current process: Change lanes in [`AGENTS.md`](../../AGENTS.md) (Fast default).
