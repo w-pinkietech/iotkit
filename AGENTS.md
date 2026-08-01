@@ -21,7 +21,9 @@ then only the linked files needed for the task.
    the issue or PR. Record updated product-doc paths or a concrete no-update
    reason in the PR. Use
    `node scripts/product-docs-impact.mjs select --base origin/master` as a
-   lower-bound hint; empty output is not a safety proof.
+   lower-bound hint; empty output is not a safety proof. PR CI may soft-warn
+   when candidates exist without docs/product updates or a no-update reason
+   (never a merge blocker).
 4. **Protect product invariants** — never expose secrets or customer data,
    never silently lose data, route mutations through typed operations, and do
    not confuse MQTT PUBACK with durable IoTKit acceptance. See

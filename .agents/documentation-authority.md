@@ -53,6 +53,22 @@ node scripts/product-docs-impact.mjs select --base origin/master
   IoTKit product gate). Impact answers “which docs might need a touch”; the
   checker answers “are the touched docs well-formed.”
 
+### Product-docs freshness soft gate (CI)
+
+On pull requests, lightweight CI also runs:
+
+```bash
+node scripts/product-docs-impact.mjs soft-check --base <base-sha> --pr-body-env PR_BODY
+```
+
+- **Warns** when impact candidates exist **and** the change has neither
+  `docs/product/**` markdown updates **nor** a filled
+  “No product-docs update reason / 更新しない理由” in the PR body.
+- **Does not fail** the job and is **not a merge blocker**. Treat the warning as
+  a prompt to update product docs or record a concrete no-update reason.
+- Empty impact is still not a safety proof (same as the selector).
+- Hard fail for high-risk paths is out of scope here (later issue).
+
 ## Historical trees
 
 Neither historical tree overrides current product docs.

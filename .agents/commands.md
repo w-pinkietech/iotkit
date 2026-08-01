@@ -12,6 +12,8 @@ scripts/check-source-layout
 # Product-docs impact (which docs/product files might need a freshness update)
 node scripts/product-docs-impact.mjs select --base origin/master
 # Empty selection ≠ “no product-doc update needed”
+# Soft freshness check (never fails; PR CI emits a warning when applicable)
+node scripts/product-docs-impact.mjs soft-check --base origin/master --pr-body-file /tmp/pr-body.md
 
 # Battle-tested review routing
 node scripts/battle-tested-review.mjs select --base origin/master

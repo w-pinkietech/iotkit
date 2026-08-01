@@ -322,6 +322,8 @@ test("CI workflow routes heavy jobs through the classifier", () => {
     workflow,
     /node --test scripts\/tests\/product-docs-impact\.test\.mjs/,
   );
+  assert.match(workflow, /node scripts\/product-docs-impact\.mjs soft-check/);
+  assert.match(workflow, /Product-docs freshness soft gate/);
   // Focused package selection drives clippy/nextest when not "all".
   assert.match(workflow, /cargo nextest run/);
   assert.match(workflow, /PACKAGES/);

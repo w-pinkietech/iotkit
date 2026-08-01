@@ -111,6 +111,17 @@ jobs:
           node scripts/product-docs-impact.mjs check
           node --test scripts/tests/product-docs-impact.test.mjs
 
+      - name: Product-docs freshness soft gate
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Soft only: the script always exits 0 and may emit ::warning::.
+          # Hard fail for high-risk paths is a later issue, not this step.
+          node scripts/product-docs-impact.mjs soft-check \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --pr-body-env PR_BODY
+
       - name: Selective CI routing
         run: node --test scripts/tests/select-ci-jobs.test.mjs
 
