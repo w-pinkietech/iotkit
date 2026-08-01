@@ -5,7 +5,7 @@ Cargo prevents dependency *cycles*, not dependency *direction*: nothing else sto
 an adapter from quietly gaining `iotkit-core-engine` or a direct data-plane
 dependency. This script is the hard gate; the review guides only reference it.
 
-Rules (see docs/okf/en/architecture/system-overview.md "Layer rules"):
+Rules (see docs/product/en/architecture/system-overview.md "Layer rules"):
   1. adapters never depend on edge-node/core/engine
   2. adapters reach the data plane only through iotkit-ingest-client
   3. iotkit-ingest-contract's runtime deps are serde and nothing else
