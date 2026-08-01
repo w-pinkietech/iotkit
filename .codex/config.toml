@@ -1,6 +1,8 @@
 # Project Codex defaults for the primary (Main) session.
 # Custom subagents live as standalone files under .codex/agents/
 # (see https://learn.chatgpt.com/docs/agent-configuration/subagents).
+# How Main should dispatch roles (including Superpowers plan loops):
+#   .codex/README.md
 
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
@@ -9,4 +11,5 @@ review_model = "gpt-5.6-sol"
 [agents]
 # Global multi-agent settings only. Role definitions are the standalone
 # agent files in .codex/agents/ (implementer, executor, reviewer).
+# Do not collapse those three roles into Main for multi-task Superpowers plans.
 # max_concurrent_threads_per_session = 6
