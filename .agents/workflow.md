@@ -1,3 +1,13 @@
+---
+type: Guide
+title: "Issue-driven development workflow"
+description: "Issue first, worktree, draft PR, change lanes, and lightweight design style."
+language: en
+translation_key: agents.workflow
+status: stable
+revision: 1
+---
+
 # Issue-driven workflow
 
 Development is **issue-driven**. Product and repository changes go through a

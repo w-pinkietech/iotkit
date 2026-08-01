@@ -1,3 +1,13 @@
+---
+type: Guide
+title: "Change map before editing code"
+description: "Task routing table: required reading, code entry points, and focused verification."
+language: en
+translation_key: agents.change-map
+status: stable
+revision: 1
+---
+
 # Before changing code
 
 Read [`docs/README.md`](../docs/README.md), then only the rows relevant to the

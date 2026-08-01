@@ -1,3 +1,13 @@
+---
+type: Guide
+title: "AGENTS index"
+description: "Common entry index for coding agents: always-on rules and links to .agents guides."
+language: en
+translation_key: agents.index
+status: stable
+revision: 1
+---
+
 # AGENTS.md
 
 Common repository guidance for coding agents and human maintainers.
@@ -5,6 +15,12 @@ Agent-specific files may point here but must not redefine these rules.
 
 Detailed rules live under [`.agents/`](.agents/). Read this index first, then
 only the linked files needed for the task.
+
+Agent guides use an OKF-like YAML frontmatter (`type`, `title`, `description`,
+`language`, `translation_key`, `status`, `revision`) so tools and humans can
+search and filter them. They are **not** part of the `docs/okf/` product bundle
+and are not checked by `scripts/check-okf-docs.mjs`. Profile notes:
+[`.agents/README.md`](.agents/README.md).
 
 ## Always
 

@@ -1,3 +1,13 @@
+---
+type: Guide
+title: "Documentation authority for agents"
+description: "OKF as current product corpus; redesign and superpowers as non-authoritative history."
+language: en
+translation_key: agents.documentation-authority
+status: stable
+revision: 1
+---
+
 # Documentation authority
 
 Start at [`docs/README.md`](../docs/README.md). The current human-readable product
