@@ -23,7 +23,9 @@ Policy (see [#145](https://github.com/w-pinkietech/iotkit/issues/145)):
 - Surface text may still say Go Edge, Wave 0, host-agent, or obsolete authority
   rules. Trust **decision cores** only after checking OKF and code.
 
-Machine-readable contracts and OKF form the current contract set. If this
-directory conflicts with that set, stop and resolve intent; do not silently
-follow redesign. Distill useful rationale into OKF (both languages, revision++);
-do not restore historical implementation state as a requirement.
+`docs/okf/` is the current human-readable product corpus. Each versioned contract
+consists of its language-paired contract document, machine-readable schema or
+exported wire types, shared fixtures, and conformance tests. If this directory
+conflicts with that set, stop and resolve intent; do not silently follow redesign.
+Distill useful rationale into OKF (both languages, revision++); do not restore
+historical implementation state as a requirement.
