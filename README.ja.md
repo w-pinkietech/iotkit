@@ -202,7 +202,7 @@ CIは各PRでcrate layer rule、Rust unit test、生成済みConsole asset、埋
 | `edge-node/input/` | Adapter host API、conformance testkit、polling runtime、transport、共有sensor driver |
 | `edge-node/adapters/` | BravePI MainboardやRaspberry Pi直結I2Cなどの具体的sensor family統合 |
 | `edge/` | Rust製IoTKit Edge、Console、raw/semantic store、cursor管理、application出力 |
-| `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | 共有contract、導入、automation、component横断fixture、review policy |
+| `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | 共有contract、導入、automation、component横断fixture、[レビュースイート](review/README.ja.md) の perspective |
 
 crate全体図、layer rule、新しいcodeの配置表は[Architecture](docs/product/ja/architecture/system-overview.md)にあります。
 収集側は[`edge-node/README.ja.md`](edge-node/README.ja.md)、具体的Adapterは

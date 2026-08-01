@@ -1,10 +1,13 @@
-# Battle-testedレビュースイート
+# Battle-testedレビュー視点
 
 日本語 | [English](README.md)
 
-このdirectoryは、IoTKitの変更によって再発させてはいけない現場の失敗を扱う、
-repository固有の小さな索引です。製品契約、incident database、機能backlogではなく、
-列挙したすべての条件をIoTKitが実地で経験済みだと主張するものでもありません。
+このdirectoryは [IoTKitレビュースイート](../README.ja.md) の **第一
+perspective** です。IoTKitの変更によって再発させてはいけない現場の失敗を扱う、
+repository固有の小さな索引であり、レビュー全体の定義ではありません。製品契約、
+incident database、機能backlogではなく、列挙したすべての条件をIoTKitが実地で
+経験済みだと主張するものでもありません。`.agents/skills/iotkit-battle-tested-review/`
+の skill はこの perspective 専用の実行手段です。
 
 レビュー項目の正本は`catalog.json`だけです。Codexと人間のreviewerはcatalog全体を
 読み込まず、selectorを使います。
@@ -53,7 +56,7 @@ Catalog項目はreview questionであり、製品機能を追加する許可で�
 - 通常PRのCIではcatalog構造とroutingだけを検査する。重い障害testとrelease gateは
   focused testまたはrelease時の検証に残す。
 
-次で検証します。
+この perspective は次で検証します。
 
 ```bash
 node scripts/battle-tested-review.mjs check
