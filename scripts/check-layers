@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check-layers — mechanically enforce the crate layer rules of the OKF architecture document.
+"""check-layers — mechanically enforce the crate layer rules of the product architecture document.
 
 Cargo prevents dependency *cycles*, not dependency *direction*: nothing else stops
 an adapter from quietly gaining `iotkit-core-engine` or a direct data-plane
@@ -146,7 +146,7 @@ def main() -> int:
 
     for name in sorted(workspace - CLASSIFIED):
         errors.append(f"{name}: new crate is not classified in scripts/check-layers — "
-                      f"place it in a layer deliberately, and in the OKF architecture "
+                      f"place it in a layer deliberately, and in the product architecture "
                       f"map (rule 5)")
 
     for name, pkg in sorted(packages.items()):
