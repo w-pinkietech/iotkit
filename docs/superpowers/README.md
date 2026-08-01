@@ -14,8 +14,8 @@ plan as a living specification.
 
 Policy ([#145](https://github.com/w-pinkietech/iotkit/issues/145)):
 
-- **Keep** this directory. Clear sprint lineage is useful; bulk delete/rename is
-  not a priority.
+- **Keep this directory permanently for lineage.** Do not bulk-delete, rename,
+  or move it to an archive.
 - **Do not add** new specs or plans for ongoing work by default.
 - Reuse the **writing style** (goal, non-goals, decision, verification; optional
   plan for Full work) on AGENTS change lanes—not by growing this tree.

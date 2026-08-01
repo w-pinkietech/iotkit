@@ -1,14 +1,16 @@
 # superpowers/specs → OKF gap inventory
 
-**Status:** working survey for [#143](https://github.com/w-pinkietech/iotkit/issues/143)
+**Status:** completed survey for [#143](https://github.com/w-pinkietech/iotkit/issues/143); retained as historical inventory
 **As-of:** 2026-08-01
-**Authority:** none. Not product documentation. Current authority remains
-`docs/okf/` plus paired contracts, fixtures, and tests.
+**Authority:** none. This file is not product documentation. `docs/okf/` is the
+current human-readable product corpus. Each versioned contract consists of its
+language-paired contract document, machine-readable schema or exported wire
+types, shared fixtures, and conformance tests.
 
 ## Policy context ([#145](https://github.com/w-pinkietech/iotkit/issues/145))
 
-- **`docs/superpowers/` is kept** for clear design/plan lineage. Do not bulk-delete
-  or rename as a priority. It is **not** product authority.
+- **Keep `docs/superpowers/` permanently** for clear design/plan lineage. Do not
+  bulk-delete, rename, or move it to an archive. It is **not** product authority.
 - **Do not add new specs/plans** here by default. Reuse the *writing style*
   (goal, non-goals, decision, verification; plan only when needed) on AGENTS
   change lanes instead.
@@ -50,35 +52,37 @@ unchanged paragraphs.
 
 | Bucket | Specs (approx.) | Implication |
 |---|---|---|
-| **Product UX / Console journey** | ~10 | Thickest gap vs OKF. Best absorb candidates. |
+| **Product UX / Console journey** | ~10 | Richest historical detail; verify current code and owning documents before calling any item a gap. |
 | **Naming / topology vocabulary** | 2 | Mostly in OKF; Site→Edge rename superseded earlier Site naming. |
-| **Output / delivery product model** | 2 | Partial OKF (output-adapter, product-model); Console-facing model thin. |
+| **Output / delivery product model** | 2 | Durable core is already represented by output-adapter-v1; specs remain rationale/evidence. |
 | **Custody / recovery** | 2 | Largely in OKF recovery + install; design is longer narrative. |
 | **Rust Edge rewrite / composition / CLI** | 3 | Implemented; architecture covers map; leave as evidence. |
 | **Repo process** | ~5 | CI, release, security policy, resilience *test* matrix—not OKF product. |
 
-**Volume insight:** Specs are often more detailed than OKF on **Console operator
-capabilities**. OKF is stronger on **contracts, custody, install/recovery**.
-Neither tree alone is complete.
+**Volume insight:** Specs often retain more historical detail about **Console
+operator capabilities**. They do not complete or override OKF. A product-
+documentation gap exists only after current code, contracts, and owning
+documents confirm it.
 
 **Do not absorb:** plans, Go-era resilience test designs as product law, full
 pixel-level UI specs unless elevated to durable operator Guide.
 
 ---
 
-## Priority absorb candidates (from specs)
+## Candidate assessment (from specs)
 
-Recommend separate child issues later. Prefer **durable operator/product
-concepts**, not one-off layout bugs.
+Do not open a specs-derived child issue until current code and owning documents
+demonstrate a material gap. Prefer **durable operator/product concepts**, not
+one-off layout bugs.
 
 | ID | Topic | Source specs (primary) | Suggested OKF home | Confidence |
 |---|---|---|---|---|
-| S1 | Console purpose & operator journey (discover → configure → verify → export; where stuck) | `site-console-operator-journey`, `site-console-api` | Concept or new Guide-like Concept “Console operator model” | High value; **needs-verify** vs current routes/roles |
-| S2 | Equipment hierarchy mental model (Edge Node ≠ device ≠ sensor; commissioning path) | `equipment-hierarchy`, `equipment-master-detail`, naming specs | Concept | High; aligns product-model + install |
-| S3 | Sensor work surface (list/detail, live preview, rule categories) | `sensor-master-detail`, `sensor-editor-simplification`, `sensor-rule-preview-selection` | Concept or operations “Console” section—keep short | Medium; UI churn risk |
-| S4 | Site-wide output destinations (not per-rule routes; no broker secrets in Console) | `site-wide-output-profiles`, `console-output-delivery-status` | Concept + cross-link output-adapter-v1 | High product value |
-| S5 | Console non-goals (no credential surfaces, no broker provision, thin client) | journey, hardening, D13-era api design | Fold into S1 or product-model | High; overlaps redesign G5 |
-| S6 | History / CSV as generic Observation export (not business reports) | `site-processed-history-csv` | operations or Concept one section | Medium—install already mentions CSV |
+| S1 | Console purpose & operator journey (discover → configure → verify → export; where stuck) | `site-console-operator-journey`, `site-console-api` | Possible Concept “Console operator model” | **needs-verify** vs current routes/roles before any child issue |
+| S2 | Equipment hierarchy mental model (Edge Node ≠ device ≠ sensor; commissioning path) | `equipment-hierarchy`, `equipment-master-detail`, naming specs | Possible Concept | **needs-verify** vs product-model + install before any child issue |
+| S3 | Sensor work surface (list/detail, live preview, rule categories) | `sensor-master-detail`, `sensor-editor-simplification`, `sensor-rule-preview-selection` | Possible short Concept or operations note | **needs-verify**; UI churn risk |
+| S4 | Site-wide output destinations and delivery state | `site-wide-output-profiles`, `console-output-delivery-status` | Already covered by output-adapter-v1 | **represented—skip** unless a narrower missing proposition is demonstrated |
+| S5 | Console non-goals (no Broker/TLS/deployment/device-secret provisioning or secret redisplay; thin client) | journey, hardening, D13-era api design | Fold into S1 or product-model only if a narrow gap remains | **needs-verify**; account password surfaces are intentionally in scope |
+| S6 | History / CSV as generic Observation export (not business reports) | `site-processed-history-csv` | Already covered by installation guidance and Console OpenAPI | **represented—skip** |
 
 **Defer / verify hard:** responsive layout (S may be test evidence only), auth
 concurrency hardening (security property—maybe architecture note if still true).
@@ -103,23 +107,23 @@ Paths are under `docs/superpowers/specs/`.
 
 | Spec | Still true? | In OKF? | Normative? | Action | Notes |
 |---|---|---|---|---|---|
-| `2026-07-15-site-console-api-design` | **Partial** (baseline + later revisions) | **Thin** | Partial | **absorb-okf** via **S1/S5** after verify | Large; Site-era names; OpenAPI is machine peer |
-| `2026-07-18-site-console-operator-journey-design` | **Partial–Yes** (intent) | **Thin** | Intent yes | **absorb-okf** **S1** | Best single “why Console exists” source |
-| `2026-07-18-site-console-equipment-hierarchy-design` | **Partial–Yes** | Thin (install commissioning bullets) | Yes if shipped | **absorb-okf** **S2** | |
+| `2026-07-15-site-console-api-design` | **Partial** (baseline + later revisions) | **Thin** | Partial | **needs-verify** → possible **S1/S5** | Large; Site-era names; OpenAPI is machine peer |
+| `2026-07-18-site-console-operator-journey-design` | **Partial–Yes** (intent) | **Thin** | Intent yes | **needs-verify** → possible **S1** | Best single historical “why Console exists” source |
+| `2026-07-18-site-console-equipment-hierarchy-design` | **Partial–Yes** | Thin (install commissioning bullets) | Yes if shipped | **needs-verify** → possible **S2** | |
 | `2026-07-18-site-console-equipment-master-detail-design` | **Partial** | No detailed | UX | **needs-verify** → maybe fold into S2 | Layout-level |
-| `2026-07-18-site-console-sensor-master-detail-design` | **Partial–Yes** | Thin | UX | **absorb-okf** **S3** (short) | |
+| `2026-07-18-site-console-sensor-master-detail-design` | **Partial–Yes** | Thin | UX | **needs-verify** → possible **S3** | |
 | `2026-07-20-site-console-sensor-editor-simplification-design` | **Partial** | No | UX polish | **leave-evidence** or tiny S3 note | Easy to rot |
 | `2026-07-28-console-sensor-rule-preview-selection-design` | **Partial–Yes** if #89 shipped | No | Behavior | **needs-verify** → S3 | Bugfix design |
 | `2026-07-28-console-responsive-layout-design` | **Partial** | No | UX | **leave-evidence** | Device breakpoints; not product law |
 | `2026-07-24-console-hardening-design` | **Partial** | Partial (auth ops) | Security UX | **needs-verify** → S5 | CSRF/session etc. may be code-only |
-| `2026-07-27-console-output-delivery-status-design` | **Partial–Yes** (#101) | Thin | Operator-facing | **absorb-okf** **S4** | |
+| `2026-07-27-console-output-delivery-status-design` | **Yes** for the durable core | **Yes** — output-adapter-v1 §§5–7 | Yes | **skip** | Current contract covers profile operations and separate transformation/delivery state. |
 
 ### Output & data products
 
 | Spec | Still true? | In OKF? | Normative? | Action | Notes |
 |---|---|---|---|---|---|
-| `2026-07-20-site-wide-output-profiles-design` | **Yes** (model) | **Partial** output-adapter-v1 | Yes | **absorb-okf** **S4** | Console terms vs internal model |
-| `2026-07-21-site-processed-history-csv-design` | **Partial–Yes** | Thin (install mentions CSV) | Yes if shipped | **absorb-okf** **S6** | Generic Observation export |
+| `2026-07-20-site-wide-output-profiles-design` | **Yes** (model) | **Yes** — output-adapter-v1 §6 | Yes | **skip** | Edge-wide `export_profile` expands into routes; users do not create per-rule routes. |
+| `2026-07-21-site-processed-history-csv-design` | **Yes** for the durable core | **Yes** — installation guidance + Console OpenAPI | Yes | **skip** | Raw and persisted semantic CSV operations are represented; exports are not business reports. |
 
 ### Custody / recovery / resilience
 
@@ -157,9 +161,9 @@ Paths are under `docs/superpowers/specs/`.
 | G4 R-map | Not in specs |
 | D12 southbound | Barely; adapter onboarding mentions care incomplete |
 
-**Conclusion:** Specs dominate **Console / output operator model** gaps. Redesign
-dominates **platform identity / custody skeleton** gaps. Both feed OKF; different
-chapters.
+**Conclusion:** Specs retain historical **Console / output operator model**
+rationale, while current output behavior is owned by output-adapter-v1 and the
+Console code/OpenAPI. Redesign remains the primary gap-survey source.
 
 ---
 
@@ -175,16 +179,17 @@ chapters.
 
 ## Suggested next steps
 
-1. Merge this inventory (and #141 redesign inventory if open) as survey only.
-2. First absorb PR from specs: **S1** (operator journey, 1–2 pages Concept) or **S4** (output destinations + delivery status model).
-3. Parallel redesign absorb: **G1** series identity Why if still desired.
-4. Optional: point `docs/superpowers/README.md` at this file (already historical).
+1. Do not start an immediate specs-derived absorption.
+2. Continue the redesign→OKF mainline selected in #145.
+3. Open a specs-derived child issue only when current code and owning documents
+   demonstrate a material gap. Verify S1–S3 first; S4 and S6 are represented,
+   and any narrow S5 gap folds into S1.
 
 ## Read order until absorbs land
 
 ```text
-1. docs/okf/                          current product law
-2. edge/openapi + console code/e2e   Console “what is”
-3. superpowers/specs (this inventory)  why / intended journey (distrust Site/Go)
-4. superpowers/plans                 never normative
+1. Product/contract rules → docs/okf/ + schema/types + fixtures + conformance tests
+2. Current surface/process → code + OpenAPI/e2e + AGENTS/SECURITY/RELEASING
+3. Historical rationale    → superpowers/specs (verify and rewrite before use)
+4. Execution history       → superpowers/plans (never normative)
 ```
