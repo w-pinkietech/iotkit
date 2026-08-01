@@ -86,7 +86,14 @@ function linksFrom(content) {
 }
 
 function localMarkdownTarget(from, href) {
-  const withoutFragment = decodeURIComponent(href.split("#", 1)[0]);
+  const raw = href.split("#", 1)[0];
+  let withoutFragment;
+  try {
+    withoutFragment = decodeURIComponent(raw);
+  } catch {
+    fail(from, `local link is not a valid URI reference: ${href}`);
+    return null;
+  }
   if (!withoutFragment || /^[a-z][a-z0-9+.-]*:/i.test(withoutFragment)) return null;
   const candidate = withoutFragment.startsWith("/")
     ? path.join(bundleRoot, withoutFragment.slice(1))
@@ -106,6 +113,12 @@ if (!fs.existsSync(bundleRoot)) {
 }
 
 const rootIndex = path.join(bundleRoot, "index.md");
+if (!fs.existsSync(rootIndex)) {
+  fail(rootIndex, "does not exist");
+  console.error(`Product docs / OKF validation failed (${errors.length}):`);
+  for (const error of errors) console.error(`- ${error}`);
+  process.exit(1);
+}
 const root = parseFrontmatter(rootIndex, fs.readFileSync(rootIndex, "utf8"));
 if (!root || root.metadata.okf_version !== "0.2") fail(rootIndex, 'bundle root must declare okf_version: "0.2"');
 if (root && Object.keys(root.metadata).some((key) => key !== "okf_version")) {

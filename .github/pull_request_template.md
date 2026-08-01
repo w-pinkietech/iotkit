@@ -4,7 +4,7 @@
 
 ## Product docs impact / 正本への影響
 
-<!-- Required. Lasting product facts go in docs/product/ (ja+en, bump revision).
+<!-- Required. Lasting product facts go in docs/product/ (ja+en; bump the shared revision when concept content changes, not for a path-only move).
      Temporary notes stay on the issue/PR. See AGENTS.md "Keep product docs current".
      docs/product is packaged as OKF v0.2; OKF is the format, not a second corpus. -->
 

@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -56,6 +57,8 @@ function createOldBundle() {
   runGit(repo, "config", "user.name", "IoTKit Test");
   runGit(repo, "config", "user.email", "iotkit-test@example.invalid");
   runGit(repo, "config", "core.autocrlf", "false");
+  runGit(repo, "config", "commit.gpgsign", "false");
+  runGit(repo, "config", "tag.gpgsign", "false");
   mkdirSync(path.join(repo, "scripts"), { recursive: true });
   copyFileSync(checkerSource, path.join(repo, "scripts", "check-product-docs.mjs"));
   write(repo, "docs/okf/index.md", "# Old OKF bundle\n\n* [日本語](ja/index.md)\n* [English](en/index.md)\n");
@@ -150,6 +153,36 @@ test("paired product-doc edits without revision bumps are rejected", () =>
     assert.match(result.stderr, /revision must increase from the base version 1/);
   }));
 
+test("malformed link escapes are reported without aborting the checker", () =>
+  withRepo(({ repo }) => {
+    const base = migrate(repo);
+    write(
+      repo,
+      "docs/product/en/index.md",
+      "# Concepts\n\n* [Example](concepts/example.md)\n* [Malformed](bad%zz.md)\n",
+    );
+    commit(repo, "add malformed link");
+
+    const result = runChecker(repo, base);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /local link is not a valid URI reference: bad%zz\.md/);
+    assert.doesNotMatch(result.stderr, /URIError|decodeURIComponent/);
+  }));
+
+test("a missing product bundle root index is reported without an ENOENT stack", () =>
+  withRepo(({ repo }) => {
+    const base = migrate(repo);
+    rmSync(path.join(repo, "docs", "product", "index.md"));
+    commit(repo, "remove product root index");
+
+    const result = runChecker(repo, base);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /docs[\\/]product[\\/]index\.md: does not exist/);
+    assert.doesNotMatch(result.stderr, /ENOENT|readFileSync/);
+  }));
+
 test("delete-add migration fallback compares content with the old translation keys", () =>
   withRepo(({ repo }) => {
     const oldBody = `Old material.\n\n${"old ".repeat(200)}`;
@@ -181,9 +214,34 @@ test("the docs/okf compatibility stub links directly to existing product entries
   const stub = path.join(projectRoot, "docs", "okf", "index.md");
   const links = [...readFileSync(stub, "utf8").matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map((match) => match[1]);
 
-  assert.deepEqual(links, ["../product/", "../product/en/index.md", "../product/ja/index.md", "../product/index.md"]);
+  assert.deepEqual(
+    [...links].sort(),
+    ["../product/", "../product/en/index.md", "../product/ja/index.md", "../product/index.md"].sort(),
+  );
   for (const href of links) {
     const target = path.resolve(path.dirname(stub), href);
     assert.equal(existsSync(target), true, `${href} must resolve from docs/okf/index.md`);
+  }
+});
+
+function markdownFiles(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) return markdownFiles(target);
+    return entry.isFile() && entry.name.endsWith(".md") ? [target] : [];
+  });
+}
+
+test("former deep docs/okf paths forward one hop to every product document", () => {
+  const productRoot = path.join(projectRoot, "docs", "product");
+  const oldRoot = path.join(projectRoot, "docs", "okf");
+  for (const productFile of markdownFiles(productRoot)) {
+    const relative = path.relative(productRoot, productFile);
+    if (relative === "index.md") continue;
+    const stub = path.join(oldRoot, relative);
+    assert.equal(existsSync(stub), true, `${path.relative(projectRoot, stub)} must remain as a forwarding stub`);
+    const expectedHref = path.relative(path.dirname(stub), productFile).split(path.sep).join("/");
+    const links = [...readFileSync(stub, "utf8").matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map((match) => match[1]);
+    assert.deepEqual(links, [expectedHref], `${path.relative(projectRoot, stub)} must link directly to its replacement`);
   }
 });

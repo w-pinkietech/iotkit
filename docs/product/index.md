@@ -15,7 +15,7 @@ bundle so agents and tools can consume a portable markdown-plus-frontmatter layo
 
 IoTKit uses a small **producer profile** on top of OKF v0.2:
 
-- Every concept has Japanese and English documents at the same relative path.
+- Every product document, including Concepts, Architectures, Contracts, and Runbooks, has Japanese and English counterparts at the same relative path.
 - Both share `translation_key`, `type`, `status`, and a positive integer `revision`.
 - A content change must update both translations and increment their shared revision.
 - `language` records the file locale and must match the path (`ja/` or `en/`).
