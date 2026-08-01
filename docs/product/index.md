@@ -32,8 +32,9 @@ Required on every product document—Concept, Architecture, Contract, and Runboo
 - `title` and `description` present
 
 OKF v0.2 itself only requires `type` on each concept. Optional OKF families
-(`sources`, `generated`, `verified`, `stale_after`, …) may appear later without
-changing the authority path.
+(`sources`, `generated`, `verified`, `stale_after`, …) are format-valid, but the
+current gate accepts scalar values only. Nested mappings and lists require the
+separate full-YAML parser step and must not be added before that lands.
 
 ## Intentional differences from plain OKF consumers
 
@@ -46,7 +47,7 @@ gate is stricter on purpose** so the corpus stays a closed, bilingual product au
 | Broken **in-bundle** links | Must not reject the bundle | **Fail** (product docs should form a closed graph) |
 | `log.md` | Allowed reserved file | **Not used** (history lives in git; checker forbids it) |
 | `type` values | Free strings; unknown types tolerated | **Allow-list:** Concept, Architecture, Contract, Runbook |
-| Extra frontmatter keys | Allowed extensions | Allowed; **required** extensions listed above |
+| Extra frontmatter keys | Allowed extensions | Required extensions above; other quoted scalar values are accepted. Nested/list values await the full-YAML parser step |
 | Root `okf_version` | MAY declare | **Must** be `"0.2"` on this bundle root |
 | Path layout | Free | Concepts under `ja\|en` × `concepts\|architecture\|contracts\|operations` |
 
