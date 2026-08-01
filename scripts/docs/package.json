@@ -1,0 +1,12 @@
+{
+  "name": "iotkit-product-docs-tools",
+  "private": true,
+  "description": "Tooling dependencies for product documentation (OKF packaging) checks",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}

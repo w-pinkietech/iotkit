@@ -4,15 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { execFileSync } from "node:child_process";
+import { parseFrontmatterContent, validateRequiredScalars } from "./docs/frontmatter.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const bundleRoot = path.join(repoRoot, "docs", "product");
 const locales = ["ja", "en"];
-const required = ["type", "title", "description", "language", "translation_key", "status", "revision"];
 const allowedTypes = new Set(["Concept", "Architecture", "Contract", "Runbook"]);
 const allowedStatuses = new Set(["draft", "stable", "deprecated"]);
 const allowedCategories = new Set(["concepts", "architecture", "contracts", "operations"]);
-const plainStringFields = new Set(["type", "language", "translation_key", "status"]);
 const errors = [];
 
 function fail(file, message) {
@@ -45,46 +44,13 @@ function bundleFiles(directory) {
   });
 }
 
-function scalar(raw, key) {
-  const value = raw.trim();
-  if (key === "revision") return /^[1-9][0-9]*$/.test(value) ? value : null;
-  if (plainStringFields.has(key)) {
-    return /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(value) ? value : null;
-  }
-  if (value.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(value);
-      return typeof parsed === "string" ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 function parseFrontmatter(file, content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  if (!match) {
-    fail(file, "missing YAML frontmatter");
+  const result = parseFrontmatterContent(content);
+  if (result.error) {
+    fail(file, result.error);
     return null;
   }
-  const metadata = {};
-  for (const [index, line] of match[1].split(/\r?\n/).entries()) {
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const field = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.+)$/);
-    if (!field) {
-      fail(file, `unsupported or invalid frontmatter at line ${index + 2}`);
-      continue;
-    }
-    if (Object.hasOwn(metadata, field[1])) fail(file, `duplicate frontmatter field ${field[1]}`);
-    const value = scalar(field[2], field[1]);
-    if (value === null) {
-      fail(file, `frontmatter value at line ${index + 2} is outside the IoTKit OKF scalar profile`);
-      continue;
-    }
-    metadata[field[1]] = value;
-  }
-  return { metadata, body: content.slice(match[0].length) };
+  return result;
 }
 
 function linksFrom(content) {
@@ -145,10 +111,9 @@ for (const file of bundleFiles(bundleRoot)) {
     const parsed = parseFrontmatter(file, content);
     if (!parsed) continue;
     const { metadata } = parsed;
-    for (const key of required) if (!metadata[key]) fail(file, `missing required field ${key}`);
+    for (const message of validateRequiredScalars(metadata)) fail(file, message);
     if (metadata.type && !allowedTypes.has(metadata.type)) fail(file, `unsupported type ${metadata.type}`);
     if (metadata.status && !allowedStatuses.has(metadata.status)) fail(file, `unsupported status ${metadata.status}`);
-    if (!/^[1-9][0-9]*$/.test(metadata.revision ?? "")) fail(file, "revision must be a positive integer");
     const [locale, category] = relative.split(path.sep);
     if (!locales.includes(locale)) fail(file, "concept must be below ja/ or en/");
     if (!allowedCategories.has(category)) fail(file, `unsupported top-level category ${category ?? "<missing>"}`);
