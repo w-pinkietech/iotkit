@@ -140,23 +140,37 @@ effects still require explicit approval.
 
 ## Change lanes
 
-Choose the lightest lane that covers realistic risk.
+Default is lightweight. Choose the lightest lane that covers realistic risk.
+Do not open with a long design/plan pipeline unless the work is Full or the user
+asks for it.
 
 For every product behavior change, add or update the closest focused test before
 implementation.
 
 | Lane | Use for | Required process |
 |---|---|---|
-| Fast | local bug, refactor, docs, configuration, or small feature without contract/security/custody/migration/restore impact | focused test when behavior changes, focused verification |
-| Standard | multiple packages, a new internal boundary, or several credible implementations | concise design, one review, proportional tests |
-| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | explicit design, implementation plan when useful, tests first, independent review, broad verification |
+| Fast (default for most work) | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; focused test when behavior changes; focused verification; PR |
+| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | issue (or PR body) holds a short decision note: goal, non-goals, chosen approach, verification; one review; proportional tests. No separate plan file |
+| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority (issue, OKF, or contract docs—not a historical plan tree); tests first; independent review; broad verification. An implementation plan only when the work has many ordered slices or irreversible steps |
 
-Process plugins and skills are optional aids unless the user names one or this
-file requires one. They do not override the user request or repository rules.
-Prefer current code, executable tests, and existing authority over new process
-documents. Do not create a spec only to repeat an existing decision.
-Use repository-local independent review by default. Call an external review
-model or service only when the user explicitly requests it.
+Quality that stays in every lane: scoped issue, no silent data loss, no secret
+leakage, focused tests for behavior changes, human merge approval, and
+verification matched to risk.
+
+### Process weight and optional harnesses
+
+- Do not create new files under `docs/superpowers/` for ongoing work. That tree
+  is historical. Put lasting decisions into the current corpus (`docs/okf/`,
+  contracts, code, tests) or keep short decisions on the issue/PR.
+- Heavy multi-step harnesses (long specs, checkbox plans, mandatory
+  subagent-per-task execution) are optional Full aids when risk or size
+  justifies them—not the default development loop.
+- Process plugins and skills are optional unless the user names one or this
+  file requires one. They do not override the user request or repository rules.
+- Prefer current code, executable tests, and existing authority over new process
+  documents. Do not create a spec only to repeat an existing decision.
+- Use repository-local independent review by default. Call an external review
+  model or service only when the user explicitly requests it.
 
 ## Source and test placement
 
