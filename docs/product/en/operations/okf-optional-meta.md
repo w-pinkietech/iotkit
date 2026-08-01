@@ -57,10 +57,12 @@ Actor convention (OKF):
 
 - `human:<id>` for people
 - `process:<id>` for automation
-- `<tool>/<version>` for agents
+- `<producer>/<version>` for agents and tools
 
 `verified` may be a single mapping or a list. Prefer `human:` when a person
 confirmed the definition against code or co-authority artifacts.
+Within a family that is present, every source has `resource`, `generated` has
+`by`, and each verification event has `by` and `at`; `at` uses an ISO 8601 datetime.
 
 ## Coexistence with IoTKit required keys
 

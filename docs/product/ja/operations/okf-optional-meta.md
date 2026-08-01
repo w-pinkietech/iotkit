@@ -56,10 +56,12 @@ actor 規約（OKF）:
 
 - 人: `human:<id>`
 - 自動化: `process:<id>`
-- エージェント: `<tool>/<version>`
+- エージェントやツール: `<producer>/<version>`
 
 `verified` は単一 mapping でもリストでも構いません。定義をコードや共権威と照合したなら
 `human:` を優先します。
+各 family を載せる場合、各 source には `resource`、`generated` には `by`、各 verification
+event には `by` と `at` を書きます。`at` は ISO 8601 datetime にします。
 
 ## IoTKit 必須キーとの共存
 
