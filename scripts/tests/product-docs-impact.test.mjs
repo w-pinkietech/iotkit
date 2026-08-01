@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  evaluateFreshnessSoft,
   formatSelection,
+  formatSoftCheck,
+  hasNoProductDocsReason,
   loadRules,
   parseNameStatus,
   selectImpact,
@@ -178,4 +181,75 @@ test("formatSelection lists bilingual full paths and empty-not-safe note", () =>
   assert.match(text, /docs\/product\/ja\/operations\/trial-profile\.md/);
   assert.match(text, /Empty selection is not proof/i);
   assert.match(text, /Authority: docs\/product\//);
+});
+
+test("soft-check warns when impact exists without docs or PR reason", () => {
+  const result = evaluateFreshnessSoft({
+    rules,
+    paths: ["edge-node/ingest/http/src/admission.rs"],
+    prBody: "## Summary\n\nChanged admission only.\n",
+  });
+  assert.equal(result.status, "warn");
+  assert.equal(result.code, "missing_docs_and_reason");
+  assert.match(formatSoftCheck(result), /soft warning only/i);
+});
+
+test("soft-check ok when docs/product is updated", () => {
+  const result = evaluateFreshnessSoft({
+    rules,
+    paths: [
+      "edge-node/ingest/http/src/admission.rs",
+      "docs/product/en/contracts/ingest-v1.md",
+      "docs/product/ja/contracts/ingest-v1.md",
+    ],
+    prBody: "",
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(result.code, "product_docs_updated");
+});
+
+test("soft-check ok when PR records no-update reason", () => {
+  const prBody = `## Product docs impact / 正本への影響
+
+- Updated product-doc paths / 更新した正本:
+  none
+- No product-docs update reason / 更新しない理由:
+  Internal refactor of admission helpers; public ingest contract and operator steps unchanged.
+`;
+  const result = evaluateFreshnessSoft({
+    rules,
+    paths: ["edge-node/ingest/http/src/admission.rs"],
+    prBody,
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(result.code, "no_update_reason_recorded");
+  assert.equal(hasNoProductDocsReason(prBody), true);
+});
+
+test("soft-check does not treat empty template comments as a reason", () => {
+  const prBody = `## Product docs impact / 正本への影響
+
+- Updated product-doc paths / 更新した正本:
+  <!-- e.g. docs/product/... -->
+- No product-docs update reason / 更新しない理由:
+  <!-- Required when paths are "none" -->
+`;
+  assert.equal(hasNoProductDocsReason(prBody), false);
+  const result = evaluateFreshnessSoft({
+    rules,
+    paths: ["edge-node/core/ledger/src/lib.rs"],
+    prBody,
+  });
+  assert.equal(result.status, "warn");
+});
+
+test("soft-check ok with no impact candidates (still not a safety proof)", () => {
+  const result = evaluateFreshnessSoft({
+    rules,
+    paths: ["LICENSE"],
+    prBody: "",
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(result.code, "no_impact_candidates");
+  assert.match(result.message, /not a safety proof/i);
 });

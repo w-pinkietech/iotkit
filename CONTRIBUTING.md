@@ -38,6 +38,12 @@ node scripts/product-docs-impact.mjs select --base origin/master
 Empty selection is not proof that no product-doc update is needed. After edits,
 run `node scripts/check-product-docs.mjs`.
 
+Pull-request CI runs a **soft** freshness warning when the selector finds
+candidates but the PR neither updates `docs/product/` nor fills the template’s
+“No product-docs update reason”. The step never fails the job. If you see the
+warning: update the matching product docs (ja+en) or write a concrete reason in
+the PR body, then re-run checks.
+
 For each later task, use the **Before changing code** table in
 [`.agents/change-map.md`](.agents/change-map.md) and read only the rows relevant
 to that change. Work is issue-driven; see [`.agents/workflow.md`](.agents/workflow.md).

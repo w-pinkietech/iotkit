@@ -37,6 +37,10 @@ node scripts/product-docs-impact.mjs select --base origin/master
 候補が空でも「正本更新不要」の証明にはなりません。編集後は
 `node scripts/check-product-docs.mjs` を実行してください。
 
+PR の CI では、セレクタが候補を出したのに `docs/product/` の更新も
+「更新しない理由」も無い場合に **soft 警告**が出ます。ジョブは失敗しません。
+警告が出たら正本を更新するか、PR 本文に具体的な不要理由を書いてください。
+
 以後の各taskでは、[`.agents/change-map.md`](.agents/change-map.md)の**Before
 changing code**表を使い、変更に該当する行だけを読んでください。作業はissue駆動です。
 [`.agents/workflow.md`](.agents/workflow.md)を参照してください。
