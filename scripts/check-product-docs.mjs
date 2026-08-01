@@ -19,6 +19,15 @@ function fail(file, message) {
   errors.push(`${path.relative(repoRoot, file)}: ${message}`);
 }
 
+function reportFailuresAndExit() {
+  console.error(
+    `Product docs (IoTKit producer profile) validation failed (${errors.length}). ` +
+      `This is the repository product gate, not plain OKF consumer tolerance:`,
+  );
+  for (const error of errors) console.error(`- ${error}`);
+  process.exit(1);
+}
+
 function bundleFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const target = path.join(directory, entry.name);
@@ -108,16 +117,14 @@ function inside(directory, target) {
 }
 
 if (!fs.existsSync(bundleRoot)) {
-  console.error("docs/product does not exist");
-  process.exit(1);
+  fail(bundleRoot, "does not exist");
+  reportFailuresAndExit();
 }
 
 const rootIndex = path.join(bundleRoot, "index.md");
 if (!fs.existsSync(rootIndex)) {
   fail(rootIndex, "does not exist");
-  console.error(`Product docs / OKF validation failed (${errors.length}):`);
-  for (const error of errors) console.error(`- ${error}`);
-  process.exit(1);
+  reportFailuresAndExit();
 }
 const root = parseFrontmatter(rootIndex, fs.readFileSync(rootIndex, "utf8"));
 if (!root || root.metadata.okf_version !== "0.2") fail(rootIndex, 'bundle root must declare okf_version: "0.2"');
@@ -318,12 +325,7 @@ for (const { file } of concepts.values()) {
 }
 
 if (errors.length > 0) {
-  console.error(
-    `Product docs (IoTKit producer profile) validation failed (${errors.length}). ` +
-      `This is the repository product gate, not plain OKF consumer tolerance:`,
-  );
-  for (const error of errors) console.error(`- ${error}`);
-  process.exit(1);
+  reportFailuresAndExit();
 }
 console.log(
   `Product docs (IoTKit producer profile; OKF v0.2 packaging) validation passed: ` +
