@@ -8,3 +8,7 @@ These files are not current work instructions and do not override code, executab
 contracts, current contract documents, or [`docs/README.md`](../README.md). New work
 should update the current source that owns the behavior instead of treating an old
 plan as a living specification.
+
+Do not add new specs or plans here for ongoing development. Current process is
+the Change lanes section in [`AGENTS.md`](../../AGENTS.md): Fast by default,
+Standard with a short decision note, Full only for high-risk work.
