@@ -24,10 +24,12 @@ structure and requires both translations to change together.
 
 The **`docs/product/`** tree is the current human-readable product corpus.
 It is packaged as an [OKF v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
-bundle: OKF is the format; product docs are the authority. A versioned contract
-consists of its language-paired product document, machine-readable schema or
-exported wire types, shared fixtures, and conformance tests. None silently
-overrides the others; disagreement is a contract defect.
+bundle: OKF is the **format**; product docs are the **authority**; CI runs the
+**IoTKit producer profile** gate (stricter than plain OKF consumers—see
+[product/index.md](product/index.md)). A versioned contract consists of its
+language-paired product document, machine-readable schema or exported wire types,
+shared fixtures, and conformance tests. None silently overrides the others;
+disagreement is a contract defect.
 
 Keep the corpus current in the same change that alters lasting product facts.
 Temporary notes stay on the issue or pull request. Process details:

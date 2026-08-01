@@ -124,6 +124,7 @@ test("pure docs/okf to docs/product renames do not require revision bumps", () =
     const result = runChecker(repo, base);
 
     assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Product docs \(IoTKit producer profile; OKF v0\.2 packaging\) validation passed/);
   }));
 
 test("paired product-doc edits with revision bumps pass against a post-migration base", () =>
@@ -193,6 +194,7 @@ test("malformed link escapes are reported without aborting the checker", () =>
     const result = runChecker(repo, base);
 
     assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Product docs \(IoTKit producer profile\) validation failed/);
     assert.match(result.stderr, /local link is not a valid URI reference: bad%zz\.md/);
     assert.doesNotMatch(result.stderr, /URIError|decodeURIComponent/);
   }));
@@ -206,8 +208,22 @@ test("a missing product bundle root index is reported without an ENOENT stack", 
     const result = runChecker(repo, base);
 
     assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Product docs \(IoTKit producer profile\) validation failed/);
     assert.match(result.stderr, /docs[\\/]product[\\/]index\.md: does not exist/);
     assert.doesNotMatch(result.stderr, /ENOENT|readFileSync/);
+  }));
+
+test("a missing product bundle uses the IoTKit producer-profile failure banner", () =>
+  withRepo(({ repo }) => {
+    const base = migrate(repo);
+    rmSync(path.join(repo, "docs", "product"), { recursive: true });
+    commit(repo, "remove product bundle");
+
+    const result = runChecker(repo, base);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Product docs \(IoTKit producer profile\) validation failed/);
+    assert.match(result.stderr, /docs[\\/]product: does not exist/);
   }));
 
 test("delete-add migration fallback compares content with the old translation keys", () =>
