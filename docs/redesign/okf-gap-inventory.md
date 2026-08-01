@@ -5,6 +5,17 @@
 **Authority:** none. This file is not product documentation. Current product
 authority remains `docs/okf/` plus paired contracts, fixtures, and tests.
 
+## Policy context ([#145](https://github.com/w-pinkietech/iotkit/issues/145))
+
+- **OKF** is the only human-readable product authority.
+- **`docs/superpowers/` stays.** Clear lineage as sprint design/plans; do not
+  bulk-delete or rename. Writing *style* may be reused on light lanes; trees
+  are not current law. Specs→OKF absorbs are secondary ([#143](https://github.com/w-pinkietech/iotkit/issues/143)).
+- **`docs/redesign/` is the main risk and the main absorb path.** It is easy to
+  misread as a second current corpus. Fix by rewriting still-true gaps into OKF
+  (this inventory’s G1–G7), not by “updating” dated evidence to match today.
+- Do not paste redesign wholesale. Verify against code/contracts first.
+
 ## Purpose
 
 Classify `docs/redesign/` material against current OKF so later work can
