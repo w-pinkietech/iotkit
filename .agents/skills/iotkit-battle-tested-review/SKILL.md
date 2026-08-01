@@ -5,6 +5,10 @@ description: Use when reviewing an IoTKit pull request for operational failure r
 
 # IoTKit Battle-tested Review
 
+This skill runs the **battle-tested perspective** of the
+[IoTKit review suite](../../../review/README.md). It does not define the whole
+review process. Start at `review/README.md` when choosing perspectives.
+
 Use the catalog as an index, not a safety verdict or backlog. Tests and runbooks
 remain authoritative.
 

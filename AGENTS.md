@@ -43,9 +43,10 @@ then only the linked files needed for the task.
 | Common verification commands | [`.agents/commands.md`](.agents/commands.md) |
 | Source and test placement | [`.agents/source-and-tests.md`](.agents/source-and-tests.md) |
 | Review and verification | [`.agents/review-and-verification.md`](.agents/review-and-verification.md) |
+| Review suite (perspectives) | [`review/README.md`](review/README.md) |
 | Codex subagent roles (implementer / executor / reviewer) | [`.codex/README.md`](.codex/README.md) |
 | Product invariants | [`.agents/product-invariants.md`](.agents/product-invariants.md) |
-| Battle-tested review skill | [`.agents/skills/iotkit-battle-tested-review/SKILL.md`](.agents/skills/iotkit-battle-tested-review/SKILL.md) |
+| Battle-tested review skill (one perspective) | [`.agents/skills/iotkit-battle-tested-review/SKILL.md`](.agents/skills/iotkit-battle-tested-review/SKILL.md) |
 
 ## Start of a development task
 

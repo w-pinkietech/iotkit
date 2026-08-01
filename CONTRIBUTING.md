@@ -169,14 +169,16 @@ Every development task uses the following loop:
 8. Apply review feedback on the same branch and pull request.
 9. Merge only after explicit approval.
 
-For the final review, select only the field failure questions related to the
-change:
+For the final review, start at the [review suite](review/README.md) and pick
+matching perspectives. Always consider the battle-tested perspective for product
+or operations-touching diffs; select only the field failure questions related to
+the change:
 
 ```bash
 node scripts/battle-tested-review.mjs select --base origin/master
 ```
 
-See the [battle-tested review suite](review/battle-tested/README.md) for selection,
+See the [battle-tested perspective](review/battle-tested/README.md) for selection,
 redaction, triage, and promotion rules. Use the GitHub
 `Field report / 現場報告` issue form for problems found in a real installation.
 Do not attach raw logs, configuration, databases, credentials, or customer,

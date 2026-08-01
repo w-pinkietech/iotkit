@@ -270,7 +270,7 @@ PostgreSQL, and Broker failures.
 | `edge-node/input/` | Adapter host API, conformance testkit, polling runtime, transports, and reusable sensor drivers |
 | `edge-node/adapters/` | Concrete sensor-family integrations such as BravePI Mainboard and direct Raspberry Pi I2C |
 | `edge/` | Rust IoTKit Edge service, Console, raw/semantic storage, cursor management, and application output |
-| `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | Shared contracts, deployment, automation, cross-component fixtures, and review policy |
+| `docs/`, `deploy/`, `scripts/`, `testdata/`, `review/` | Shared contracts, deployment, automation, cross-component fixtures, and [review suite](review/README.md) perspectives |
 
 The full crate map, layer rules, and "where does new code go" placement table
 live in the [architecture documentation](docs/product/en/architecture/system-overview.md).

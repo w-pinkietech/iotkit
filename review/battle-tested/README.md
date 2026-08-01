@@ -1,11 +1,14 @@
-# Battle-tested review suite
+# Battle-tested review perspective
 
 [日本語](README.ja.md) | English
 
-This directory is a small, repository-specific index of operational failures that
-IoTKit changes must not accidentally reintroduce. It is not a product contract,
-an incident database, a feature backlog, or a claim that IoTKit has survived every
-listed condition.
+This directory is the **first perspective** of the
+[IoTKit review suite](../README.md): a small, repository-specific index of
+operational failures that IoTKit changes must not accidentally reintroduce. It is
+not the whole review process, a product contract, an incident database, a feature
+backlog, or a claim that IoTKit has survived every listed condition. The skill
+under `.agents/skills/iotkit-battle-tested-review/` is an execution aid for this
+perspective only.
 
 `catalog.json` is the only source of review entries. Codex and human reviewers use
 the selector instead of loading the entire catalog:
@@ -60,7 +63,7 @@ become implementation work.
 - Normal pull-request CI checks catalog structure and routing logic only. Heavy
   outage and release gates remain focused or release-time tests.
 
-Validate the suite with:
+Validate this perspective with:
 
 ```bash
 node scripts/battle-tested-review.mjs check
