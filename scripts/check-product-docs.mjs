@@ -318,8 +318,14 @@ for (const { file } of concepts.values()) {
 }
 
 if (errors.length > 0) {
-  console.error(`Product docs / OKF validation failed (${errors.length}):`);
+  console.error(
+    `Product docs (IoTKit producer profile) validation failed (${errors.length}). ` +
+      `This is the repository product gate, not plain OKF consumer tolerance:`,
+  );
   for (const error of errors) console.error(`- ${error}`);
   process.exit(1);
 }
-console.log(`IoTKit product docs (OKF v0.2 producer profile) validation passed: ${translationKeys.size} bilingual concepts.`);
+console.log(
+  `Product docs (IoTKit producer profile; OKF v0.2 packaging) validation passed: ` +
+    `${translationKeys.size} bilingual concepts.`,
+);

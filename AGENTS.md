@@ -35,9 +35,15 @@ lives under `docs/product/`. Choose either `ja` or `en` to read; edit both
 language files together.
 
 That tree is packaged as an **Open Knowledge Format (OKF) v0.2** bundle (see
-`docs/product/index.md`). OKF is the portable markdown-plus-frontmatter *format*;
-`docs/product/` is the *authority*. Do not treat the format name as a second
-corpus. `docs/okf/` is a compatibility stub only.
+`docs/product/index.md`). Layers:
+
+- **Authority:** `docs/product/`
+- **Format:** OKF v0.2 packaging
+- **Gate:** IoTKit producer profile (`scripts/check-product-docs.mjs`)—stricter
+  than plain OKF consumers (closed in-bundle links, bilingual revisions, …)
+
+Do not treat “OKF” as a second corpus or as the name of the CI gate. `docs/okf/`
+is a compatibility stub only.
 
 A versioned contract is one artifact made from its paired product docs, machine
 schemas or exported wire types, shared fixtures, and conformance tests. None

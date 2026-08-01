@@ -7,27 +7,53 @@ okf_version: "0.2"
 * [日本語](ja/index.md) - IoTKitの製品モデル、構成、公開契約、導入・復旧の正本への入口。
 * [English](en/index.md) - Entry point for the IoTKit product model, architecture, public contracts, and operations.
 
-# Authority and format
+# Authority, format, and gate
 
-This tree is the **current human-readable product corpus** (product documentation).
-It is packaged as an [Open Knowledge Format (OKF) v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
-bundle so agents and tools can consume a portable markdown-plus-frontmatter layout.
+Three layers—do not mix them when diagnosing failures:
 
-IoTKit uses a small **producer profile** on top of OKF v0.2:
+| Layer | Name | Role |
+|---|---|---|
+| **Authority** | Product documentation | This tree (`docs/product/`) is the human-readable current product corpus |
+| **Format** | OKF v0.2 packaging | Portable markdown + YAML frontmatter ([SPEC](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)) |
+| **Gate** | IoTKit product producer profile | Repository CI rules on top of OKF (bilingual pairs, revisions, closed links, …) |
 
-- Every product document, including Concepts, Architectures, Contracts, and Runbooks, has Japanese and English counterparts at the same relative path.
-- Both share `translation_key`, `type`, `status`, and a positive integer `revision`.
-- A content change must update both translations and increment their shared revision.
-- `language` records the file locale and must match the path (`ja/` or `en/`).
+`docs/okf/` is only a compatibility stub that points here. OKF is the *format*, not a
+second corpus and not the name of the CI gate.
 
-Those bilingual and revision rules are repository extensions (OKF allows producer-defined keys).
-OKF v0.2 itself only requires `type` on each concept; optional provenance/trust/lifecycle
-fields (`sources`, `generated`, `verified`, `stale_after`, …) may be added later without
+## IoTKit product producer profile
+
+Required on every product document—Concept, Architecture, Contract, and Runbook
+(repository extensions; OKF allows producer-defined keys):
+
+- Japanese and English files at the **same relative path**
+- Shared `translation_key`, `type`, `status`, and positive integer `revision`
+- Content changes update **both** translations and increment the shared `revision`
+- `language` matches the path locale (`ja/` or `en/`)
+- `title` and `description` present
+
+OKF v0.2 itself only requires `type` on each concept. Optional OKF families
+(`sources`, `generated`, `verified`, `stale_after`, …) may appear later without
 changing the authority path.
 
-Versioned machine schemas, exported wire types, shared fixtures, and conformance tests
-remain co-authorities for their contracts; a disagreement is a contract defect rather
-than permission to follow one artifact silently. Historical plans, review transcripts,
-local machine details, and customer configuration do not belong in this tree.
-`scripts/check-product-docs.mjs` (and the compatibility entry `scripts/check-okf-docs.mjs`)
-enforces this repository profile.
+## Intentional differences from plain OKF consumers
+
+The official OKF consumer rules are deliberately tolerant (missing optional fields,
+unknown types, broken links must not reject a bundle). **This repository’s product
+gate is stricter on purpose** so the corpus stays a closed, bilingual product authority:
+
+| Topic | OKF (typical consumer) | IoTKit product gate |
+|---|---|---|
+| Broken **in-bundle** links | Must not reject the bundle | **Fail** (product docs should form a closed graph) |
+| `log.md` | Allowed reserved file | **Not used** (history lives in git; checker forbids it) |
+| `type` values | Free strings; unknown types tolerated | **Allow-list:** Concept, Architecture, Contract, Runbook |
+| Extra frontmatter keys | Allowed extensions | Allowed; **required** extensions listed above |
+| Root `okf_version` | MAY declare | **Must** be `"0.2"` on this bundle root |
+| Path layout | Free | Concepts under `ja\|en` × `concepts\|architecture\|contracts\|operations` |
+
+Co-authorities for versioned contracts (schemas, fixtures, tests) sit outside this
+bundle; disagreement is a contract defect, not permission to follow one artifact
+silently. Historical trees (`docs/redesign/`, `docs/superpowers/`) are not authority.
+
+**Checker:** `node scripts/check-product-docs.mjs` (compatibility entry:
+`scripts/check-okf-docs.mjs`). Failures are **IoTKit product-profile** failures unless
+a future `okf-min` mode says otherwise.
