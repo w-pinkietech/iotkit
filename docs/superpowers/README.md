@@ -20,9 +20,9 @@ Policy ([#145](https://github.com/w-pinkietech/iotkit/issues/145)):
 - Reuse the **writing style** (goal, non-goals, decision, verification; optional
   plan for Full work) on AGENTS change lanes—not by growing this tree.
 - Specs→OKF absorption is **secondary**. Primary product-gap work is redesign→OKF
-  ([#141](https://github.com/w-pinkietech/iotkit/issues/141)). Spec gap survey:
-  [`specs-okf-gap-inventory.md`](specs-okf-gap-inventory.md)
-  ([#143](https://github.com/w-pinkietech/iotkit/issues/143)).
+  ([#141](https://github.com/w-pinkietech/iotkit/issues/141)). The completed spec
+  gap survey and its conclusions remain on
+  [#143](https://github.com/w-pinkietech/iotkit/issues/143).
 - `plans/` are execution logs only—never normative.
 
 Current process: Change lanes in [`AGENTS.md`](../../AGENTS.md) (Fast default).
