@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.select.outputs.rust }}
+      console: ${{ steps.select.outputs.console }}
       edge: ${{ steps.select.outputs.edge }}
       trial: ${{ steps.select.outputs.trial }}
       packages: ${{ steps.select.outputs.packages }}
@@ -194,10 +195,12 @@ jobs:
             cargo test "${args[@]}" --doc --no-fail-fast
           fi
 
-  edge:
-    name: Rust Edge / Console integration
+  # Console UI lane: frontend check + browser e2e only (#166).
+  # Custody/output live in the edge job so pure Console PRs stay shorter.
+  console:
+    name: Console frontend and browser journey
     needs: changes
-    if: needs.changes.outputs.edge == 'true'
+    if: needs.changes.outputs.console == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -217,9 +220,16 @@ jobs:
       - name: IoTKit Console browser journey
         run: scripts/test-edge-console-e2e.sh
 
-      # Unit/integration for iotkit-edge run in the rust job (`cargo nextest
-      # --workspace`) whenever edge is selected: classifier always pairs
-      # edge=true with rust=true. This job keeps Console/e2e/custody/output only.
+  edge:
+    name: Edge custody and output integration
+    needs: changes
+    if: needs.changes.outputs.edge == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unit/integration for iotkit-edge run in the rust job when rust=true.
+      # This job is custody + durable output only (Console is the console job).
 
       - name: PostgreSQL, MQTT custody, and authentication
         run: scripts/test-rust-edge-custody.sh

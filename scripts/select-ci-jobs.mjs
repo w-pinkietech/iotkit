@@ -16,6 +16,13 @@ const edgeScriptPrefixes = [
   "scripts/test-rust-edge-",
 ];
 
+// Console frontend / browser journey only (not custody/output integration).
+const consoleScriptPrefixes = ["scripts/test-edge-console-"];
+
+// Heavy Edge integration (custody, durable output). Not the Console lane.
+const edgeIntegrationScriptPrefixes = ["scripts/test-rust-edge-"];
+const edgeIntegrationScriptFiles = new Set(["scripts/test-edge-output.sh"]);
+
 const trialOnlyFiles = new Set([
   "scripts/iotkit",
   "scripts/iotkit_trial.py",
@@ -24,16 +31,14 @@ const trialOnlyFiles = new Set([
   "iotkit.toml",
 ]);
 
-// Edge paths that implement or surface the trial profile (banner, deployment
-// profile, loopback guards). Generic edge/** stays rust+edge only.
+// Edge paths that implement trial profile behavior (deployment profile, loopback
+// guards, CLI). Presentation-only files (templates/CSS) stay on the console lane
+// without the trial Docker journey (#166).
 const trialRelatedEdgeFiles = new Set([
-  "edge/frontend/static/edge.css",
   "edge/src/cli/mod.rs",
   "edge/src/composition/runtime.rs",
   "edge/src/composition/runtime_config.rs",
   "edge/src/web/mod.rs",
-  "edge/src/web/templates/console.html",
-  "edge/src/web/templates/login.html",
   "edge/tests/cli_contract.rs",
   "edge/tests/console_contract.rs",
   "edge/tests/runtime_composition.rs",
@@ -265,11 +270,11 @@ const reversePathDeps = {
 const MAX_FOCUSED_PACKAGES = 6;
 
 function none() {
-  return { rust: false, edge: false, trial: false };
+  return { rust: false, console: false, edge: false, trial: false };
 }
 
 function allHeavy() {
-  return { rust: true, edge: true, trial: true };
+  return { rust: true, console: true, edge: true, trial: true };
 }
 
 function isLightweight(path) {
@@ -280,6 +285,44 @@ function isLightweight(path) {
   );
 }
 
+/** Console UI, OpenAPI, and browser-journey surfaces (short CI lane). */
+function isConsoleSurfacePath(path) {
+  if (consoleScriptPrefixes.some((prefix) => path.startsWith(prefix))) {
+    return true;
+  }
+  if (
+    path === "edge/askama.toml" ||
+    path === "edge/src/composition/web.rs" ||
+    path.startsWith("edge/examples/console")
+  ) {
+    return true;
+  }
+  if (path.startsWith("edge/frontend/")) return true;
+  if (path.startsWith("edge/src/web/")) return true;
+  if (path.startsWith("edge/openapi/")) return true;
+  if (
+    path === "edge/tests/console_contract.rs" ||
+    path === "edge/tests/http_contract.rs" ||
+    path === "edge/tests/history_contract.rs"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isEdgeIntegrationScript(path) {
+  return (
+    edgeIntegrationScriptFiles.has(path) ||
+    edgeIntegrationScriptPrefixes.some((prefix) => path.startsWith(prefix))
+  );
+}
+
+/**
+ * Job flags for one changed path.
+ * - console: frontend check + browser e2e
+ * - edge: custody + durable output integration (not Console)
+ * - trial: trial Docker first-run journey
+ */
 function classify(path) {
   if (
     path === "scripts/select-ci-jobs.mjs" ||
@@ -295,30 +338,54 @@ function classify(path) {
   }
 
   if (trialOnlyFiles.has(path)) {
-    return { rust: false, edge: false, trial: true };
+    return { rust: false, console: false, edge: false, trial: true };
   }
 
   if (path.startsWith("edge-node/adapters/trial-sample/")) {
-    return { rust: true, edge: false, trial: true };
+    return { rust: true, console: false, edge: false, trial: true };
   }
 
   if (path.startsWith("edge-node/")) {
-    return { rust: true, edge: false, trial: false };
+    return { rust: true, console: false, edge: false, trial: false };
   }
 
   if (path === "edge/Dockerfile") {
     return allHeavy();
   }
 
-  if (trialRelatedEdgeFiles.has(path)) {
-    return { rust: true, edge: true, trial: true };
+  // The Edge manifest owns both browser dependencies (Askama/Axum) and
+  // custody/output dependencies (SQLx/MQTT/output adapters).
+  if (path === "edge/Cargo.toml") {
+    return { rust: true, console: true, edge: true, trial: false };
   }
 
-  if (
-    path.startsWith("edge/") ||
-    edgeScriptPrefixes.some((prefix) => path.startsWith(prefix))
-  ) {
-    return { rust: true, edge: true, trial: false };
+  // Console lane first so presentation / web UI skips custody+output.
+  if (isConsoleSurfacePath(path)) {
+    return {
+      rust: true,
+      console: true,
+      edge: false,
+      trial: trialRelatedEdgeFiles.has(path),
+    };
+  }
+
+  if (isEdgeIntegrationScript(path)) {
+    return { rust: true, console: false, edge: true, trial: false };
+  }
+
+  if (trialRelatedEdgeFiles.has(path)) {
+    return { rust: true, console: false, edge: true, trial: true };
+  }
+
+  if (edgeScriptPrefixes.some((prefix) => path.startsWith(prefix))) {
+    // Other edge product scripts (resilience, bootstrap, …): keep both product
+    // lanes; trial stays off unless the path is trial-only above.
+    return { rust: true, console: true, edge: true, trial: false };
+  }
+
+  if (path.startsWith("edge/")) {
+    // Non-console Edge product code: custody/output integration, not browser e2e.
+    return { rust: true, console: false, edge: true, trial: false };
   }
 
   if (rustFiles.has(path)) {
@@ -327,7 +394,7 @@ function classify(path) {
   }
 
   if (path.startsWith("deploy/") || path === "compose.dev.yaml") {
-    return { rust: true, edge: true, trial: false };
+    return { rust: true, console: true, edge: true, trial: false };
   }
 
   if (path.startsWith("testdata/")) {
@@ -432,6 +499,7 @@ export function selectCiJobs(paths) {
       const classification = classify(path);
       return {
         rust: acc.rust || classification.rust,
+        console: acc.console || classification.console,
         edge: acc.edge || classification.edge,
         trial: acc.trial || classification.trial,
       };
@@ -453,7 +521,7 @@ async function main() {
   }
   const selected = selectCiJobs(input.split(/\r?\n/));
   process.stdout.write(
-    `rust=${selected.rust}\nedge=${selected.edge}\ntrial=${selected.trial}\npackages=${selected.packages}\n`,
+    `rust=${selected.rust}\nconsole=${selected.console}\nedge=${selected.edge}\ntrial=${selected.trial}\npackages=${selected.packages}\n`,
   );
 }
 
