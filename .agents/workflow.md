@@ -39,7 +39,7 @@ effects still require explicit approval.
 ## Change lanes
 
 Default is lightweight. Choose the lightest lane that covers realistic risk.
-Do not open with a long design or plan pipeline unless the work is Full or the
+Create a durable design or plan only when the criteria below call for one or the
 user asks for it.
 
 For every product behavior change, add or update the closest focused test
@@ -48,17 +48,29 @@ before implementation.
 | Lane | Use for | Required process |
 |---|---|---|
 | Fast | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; focused test when behavior changes; focused verification; PR. Update `docs/product/` ja+en when operator-, integrator-, or contract-visible facts change; otherwise record a no-update reason |
-| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | short decision note with goal, non-goals, chosen approach, and verification; one review; proportional tests; lasting decisions in `docs/product/` or paired contract artifacts |
-| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority; tests first; independent review; broad verification; an implementation plan only for many ordered slices or irreversible steps; ship corpus, schema/types, fixtures, and tests as one contract unit |
+| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | short decision note with goal, non-goals, chosen approach, and verification; use `docs/superpowers/specs/` when those choices need durable reviewed context; one review; proportional tests; lasting decisions in `docs/product/` or paired contract artifacts |
+| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority; use a supporting `docs/superpowers/specs/` artifact when design choices need approval before implementation; tests first; independent review; broad verification; an implementation plan only for many ordered slices or irreversible steps; ship corpus, schema/types, fixtures, and tests as one contract unit |
 
 Every lane keeps the scoped issue, product invariants, focused behavior tests,
 product-doc impact, human merge approval, and risk-matched verification.
 
 ### Process weight and optional harnesses
 
-- Do not create new files under `docs/superpowers/` for ongoing work. That tree
-  is historical. Put lasting decisions in `docs/product/`, contracts, code, or
-  tests; keep transient decisions on the issue or PR.
+- `docs/superpowers/` holds optional development-process artifacts, not current
+  product authority. Specifications capture reviewed choices and boundaries;
+  plans capture ordered implementation and verification steps.
+- Fast work creates neither artifact by default. Standard work uses a
+  specification only for multiple credible approaches, a meaningful new
+  internal boundary, or a real UX decision. Full work uses one when design
+  choices need approval before implementation.
+- Any lane uses a plan only for several order-dependent tasks, irreversible
+  steps, or work that needs durable context across sessions. Use a short issue
+  checklist otherwise.
+- Link new specifications and plans to their issue. After merge, stop updating
+  them; they become lineage for the completed effort.
+- Put lasting decisions in `docs/product/`, paired contract artifacts, code, or
+  tests. Keep investigation notes, discarded options, and one-off steps on the
+  issue or PR.
 - Heavy multi-step harnesses are optional Full aids, not the default loop.
 - Process plugins and skills are optional unless the user names one or
   [`AGENTS.md`](../AGENTS.md) requires one. They do not override the user

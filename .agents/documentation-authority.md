@@ -69,19 +69,21 @@ node scripts/product-docs-impact.mjs soft-check --base <base-sha> --pr-body-env 
 - Empty impact is still not a safety proof (same as the selector).
 - Hard fail for high-risk paths is out of scope here (later issue).
 
-## Historical trees
+## Supporting and historical trees
 
-Neither historical tree overrides current product docs.
+Neither development-process artifacts nor historical evidence override current
+product docs.
 
 | Tree | Role |
 |---|---|
 | `docs/product/` | Current product authority, packaged as OKF v0.2 |
 | `docs/okf/` | Compatibility stub pointing to `docs/product/` |
 | `docs/redesign/` | Early rewrite decisions and evidence; do not rewrite dated evidence to match today |
-| `docs/superpowers/` | Sprint designs and plans kept for lineage; do not add new specs or plans by default |
+| `docs/superpowers/` | Optional issue-linked specifications and plans while work is active; frozen lineage after merge; never current product authority |
 
-Absorb still-true historical gaps into product docs using current terms; do not
-rewrite historical evidence to make it look current.
+Create a Superpowers artifact only under the need-based rules in
+[`workflow.md`](workflow.md). Absorb still-true historical gaps into product docs
+using current terms; do not rewrite frozen evidence to make it look current.
 
 Old IoTKit code is not an authority. If a task conflicts with a current
 contract, stop and report the conflict.
