@@ -16,8 +16,9 @@ For initial repository orientation, read these in order once:
    components, crate map, code placement, and dependency rules.
 3. The relevant [current contract](docs/product/en/index.md#contracts) — ingest,
    Input Adapter, Edge Node custody, or Output Adapter.
-4. [AGENTS.md](AGENTS.md) — repository invariants and the verification lanes
-   used by both people and coding agents.
+4. [AGENTS.md](AGENTS.md) — index of repository rules for people and coding
+   agents (issue-driven workflow, invariants, lanes). Details live under
+   [`.agents/`](.agents/).
 
 `docs/product/` is the current human-readable product authority. It is packaged
 as an OKF v0.2 bundle (format, not a second corpus). `docs/okf/` is only a
@@ -25,11 +26,12 @@ compatibility stub. `docs/redesign/` and `docs/superpowers/` preserve history;
 they do not override current contracts, executable fixtures, or tests.
 
 Keep product docs current in the same change that alters lasting product facts.
-Temporary investigation notes stay on the issue or PR. Details: **Keep product
-docs current** in [AGENTS.md](AGENTS.md).
+Temporary investigation notes stay on the issue or PR. Details:
+[`.agents/documentation-authority.md`](.agents/documentation-authority.md).
 
 For each later task, use the **Before changing code** table in
-[AGENTS.md](AGENTS.md) and read only the rows relevant to that change.
+[`.agents/change-map.md`](.agents/change-map.md) and read only the rows relevant
+to that change. Work is issue-driven; see [`.agents/workflow.md`](.agents/workflow.md).
 
 ## Development environment
 
@@ -113,16 +115,17 @@ credentials, certificates, or deployment directories.
 
 Pick one existing test close to the area you want to change. Follow its call
 path into product code, make the smallest change, and rerun that focused test.
-Use the **Before changing code** table in [AGENTS.md](AGENTS.md) instead of
-searching the whole repository blindly.
+Use the **Before changing code** table in
+[`.agents/change-map.md`](.agents/change-map.md) instead of searching the whole
+repository blindly.
 
 ## Where to make a change
 
-The task-routing table in [AGENTS.md](AGENTS.md) is the single repository map for
-required reading, code entry points, authenticated HTTP ingest, Console
-authentication, operations, and contracts. The complete crate map and placement
-rules live in the architecture document. Do not create a new crate until it is
-classified there and in `scripts/check-layers`.
+The task-routing table in [`.agents/change-map.md`](.agents/change-map.md) is the
+single repository map for required reading, code entry points, authenticated
+HTTP ingest, Console authentication, operations, and contracts. The complete
+crate map and placement rules live in the architecture document. Do not create a
+new crate until it is classified there and in `scripts/check-layers`.
 
 Use the component entry points for a shorter local tour:
 

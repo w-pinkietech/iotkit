@@ -1,0 +1,28 @@
+# Before changing code
+
+Read [`docs/README.md`](../docs/README.md), then only the rows relevant to the
+task. Do not load every historical plan.
+
+| Change area | Read before editing | Start in | Focused verification |
+|---|---|---|---|
+| Product boundary or component ownership | `docs/product/<lang>/concepts/product-model.md`, `docs/product/<lang>/architecture/system-overview.md` | owning component from the architecture map | affected contract and package tests |
+| Crate, package, dependency, or source placement | `docs/product/<lang>/architecture/system-overview.md` | `Cargo.toml`, component `Cargo.toml`, `scripts/check-layers` | `scripts/check-layers`, `scripts/check-source-layout` |
+| Sensor, driver, polling, UART, or Input Adapter host | `docs/product/<lang>/contracts/input-adapter-v1.md` | `edge-node/adapters/bravepi-mainboard/src/`, `edge-node/adapters/rpi-local/src/`, `edge-node/input/hardware/sensor-drivers/src/`, `edge-node/input/runtimes/polling/src/` | `cargo test -p <owning-crate>` plus adapter conformance tests when the contract changes |
+| Envelope/Ack, authenticated device ingest, admission, or principal mapping | `docs/product/<lang>/contracts/ingest-v1.md` and product model | `edge-node/ingest/contract/`, `edge-node/ingest/client/`, `edge-node/ingest/http/`, `edge-node/core/collector/`; BravePI envelope mapping starts at `edge-node/adapters/bravepi-mainboard/src/task/ingest_map.rs` | owning crate tests; use ingest conformance fixtures when wire behavior changes |
+| Edge Node activation, MQTT delivery, ack, retention, or data loss | `docs/product/<lang>/contracts/edge-node-custody-v1.md`, `docs/product/<lang>/contracts/ingest-v1.md` | `edge-node/core/ledger/`, `edge-node/core/publish/`, `edge-node/core/storage/`, `edge-node/core/timeseries/`, `edge-node/apps/node/` | owning crate tests, then `scripts/verify.sh` |
+| IoTKit Edge raw storage, meanings, history, or CSV | product model and architecture; for browser JSON also `edge/openapi/edge-console-v1.yaml` | `edge/src/storage/`, `edge/src/semantics/`, `edge/src/application/` | `cargo test -p iotkit-edge --test storage_contract --test semantic_contract` |
+| Output Adapter or external application contract | `docs/product/<lang>/contracts/output-adapter-v1.md` | `edge/output-adapters/`, `edge/src/application/output_profiles.rs`, `edge/src/mqtt/output/` | owning Adapter tests, `cargo test -p iotkit-edge --test output_contract --test output_puback` |
+| Console HTML, navigation, or browser behavior | architecture; OpenAPI only for endpoints and schemas represented there | `edge/src/web/`, `edge/frontend/` | `scripts/test-edge-console-frontend.sh`, then `scripts/test-edge-console-e2e.sh` for journeys |
+| Account bootstrap or recovery | `docs/product/<lang>/operations/installation-and-recovery.md` sections 1 and 4 | `edge/src/application/accounts.rs`, `edge/src/storage/auth.rs`, `edge/src/cli/`; Console account management starts in `edge/src/web/` | `cargo test -p iotkit-edge --test auth_storage_contract --test cli_contract` |
+| Login, password, session, cookie, CSRF, or authorization | relevant current contract plus `edge/src/web/router.rs`; session endpoints are not currently represented in the Console OpenAPI | `edge/src/auth/`, `edge/src/application/authorization.rs`, `edge/src/web/` | `cargo test -p iotkit-edge --test auth_contract --test session_contract --test http_contract` |
+| TLS, certificate, or deployment credentials | `docs/product/<lang>/operations/installation-and-recovery.md` sections 1 and 3 | owning service and `deploy/` | focused security or deployment script for the changed path |
+| Encrypted backup or restore | `docs/product/<lang>/operations/installation-and-recovery.md` section 7 for backup or section 8 for restore | `edge/src/backup/`, `edge/src/cli/`, backend-specific storage operations | `cargo test -p iotkit-edge --test backup_contract --test cli_contract`; `scripts/test-edge-postgres.sh` covers its named PostgreSQL cases, not the entire operator journey |
+| Device retirement or hardware replacement | `docs/product/<lang>/operations/installation-and-recovery.md` section 9 and Edge Node custody contract | owning Edge Node identity/custody path | focused replacement and custody tests |
+| SQLite-to-PostgreSQL migration | `docs/product/<lang>/operations/installation-and-recovery.md` section 10 and storage capacity document | `edge/src/backup/`, `edge/src/storage/`, `edge/src/cli/` | `scripts/test-edge-postgres.sh` plus affected command tests |
+| Manual update or rollback | `docs/product/<lang>/operations/installation-and-recovery.md` section 11 | `deploy/`, affected startup and migration code | changed update/rollback journey |
+| Capacity, retention, or storage profile selection | `docs/product/<lang>/operations/storage-capacity.md` | `edge/src/storage/`, `edge/src/diagnostics/`, `scripts/test-edge-capacity.sh`, `scripts/test-edge-postgres.sh` | relevant capacity or PostgreSQL case only |
+| Vulnerability report or accidental secret exposure | `SECURITY.md` | reporting and containment path; do not copy secrets into repository artifacts | follow reporting policy; do not create a public reproducer with secrets |
+| Contract or documentation change | `docs/README.md`, both language files, schemas/types, fixtures, conformance tests | current authority; never a historical plan | `node scripts/check-product-docs.mjs` plus affected conformance tests |
+| PR review or field report triage | `.agents/skills/iotkit-battle-tested-review/SKILL.md`, `review/battle-tested/README.md` | selector output and linked evidence | `node scripts/battle-tested-review.mjs check` |
+
+Return to [`AGENTS.md`](../AGENTS.md).
