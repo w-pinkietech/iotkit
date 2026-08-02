@@ -5,7 +5,7 @@ description: "Defines the sanitized encrypted Edge Node backup container, fenced
 language: en
 translation_key: contracts.edge-node-recovery-v1
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit Edge Node recovery contract v1
@@ -314,6 +314,14 @@ restore. Continue with the candidate-bound authorization and activation in
 runtime. Checked-in handoff and artifact fixtures are conformance-only and
 MUST NOT be paired with a selected real backup. A no-backup hardware
 replacement restores neither readings nor dedup claims.
+
+If no authenticated backup is usable, or the operator abandons a recovery that cannot satisfy its
+gates, clean replacement is outside this recovery protocol. The operator preserves the old host,
+storage, case, and nonsecret evidence that remain available; keeps the old Broker credential
+fenced; initializes a fresh database under a new `edge_node_id`; and follows normal commissioning.
+A prior `recovery_hold` is not deleted, rewritten, or treated as permission for the new Node. It
+does not block normal commissioning of the separate new identity. Sensor identity and configuration consequences are defined by the
+[custody contract](edge-node-custody-v1.md#identity-across-restart-and-replacement).
 
 There is no legacy plaintext snapshot fallback. A former implementation's
 artifact, a renamed Edge server backup, an unauthenticated database copy, or a

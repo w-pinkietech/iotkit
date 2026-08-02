@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転、activation、record family、ack、re
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # Edge Node保管責任契約 v1
@@ -80,6 +80,23 @@ Descriptor topicはEdge Node所有device/signal metadataのschema version 2 comp
 任意`model_id`は明示persistしたsoftware catalog IDで、1–64 ASCII byteの`[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*`です。Display label、device identity、semantic分類ではありません。IoTKit Edgeは表示できますが、semantic mapping、grouping、authorizationを分岐しません。
 
 Snapshotは`system_id`、`series_key`、任意display ID、device state、measurement key、channel、variant、canonical unit、value typeを含みます。Hardware/provider ID、Adapter type/instance、physical locator、configured source、credential、Adapter payloadを含みません。Lower revisionはignoreし、同epoch・同revision・異内容はconflictです。Descriptorはinactive Nodeをdiscoverできますがactivateせず、purge/admission/ackを変更しません。
+
+### Restart・交換時のidentity
+
+物理的に同じであることはidentityの証明ではありません。Descriptorはhardware/provider IDと
+physical locatorを意図的に含まないため、IoTKit Edgeは二つのsignalが同じだと推測しません。
+
+| 状況 | Edge Node所有identity | IoTKit Edgeでの結果 |
+| --- | --- | --- |
+| 同じDBを使うprocess・host restart | 同じ`edge_node_id`、`system_id`、`series_key`を継続する。 | 既存`device_ref`、`signal_ref`、profile、rule、output binding、historyを継続する。Sensor再設定は不要。 |
+| Authenticate済みEdge Node backupからの承認済み復旧 | Restoreした`edge_node_id`、`system_id`、`series_key`を、permit済みnew ledger epochで継続する。 | Recovery activation後も既存refとEdge所有設定を継続する。物理照合ではなく復旧契約がcontinuityを許可する。 |
+| 利用可能なbackupがないclean replacement、またはoperatorが失敗した復旧を断念した場合 | Fresh DBは新しい`edge_node_id`を使わなければならず、新しいledger所有device・series identityを作る。 | Descriptorは新しい`device_ref`と`signal_ref`を未設定状態で作る。旧profile、rule、calibration、output bindingは継承しない。旧inventory、設定、historyは旧identityに残す。 |
+| Edge Node ledgerが存続した状態で確認済みの個体識別device hardwareを交換 | Typed replacement operationがhardware bindingだけを変更し、`system_id`と既存series identityを維持する。 | 既存ref、設定、historyを継続する。これはEdge Node host復旧ではない。 |
+
+Clean replacementへ同じ物理sensorを接続し、同じmeasurement typeを報告してもnew signalです。
+IoTKit Edgeはhistoryをmergeせず、設定を自動copyしません。将来、選択した設定のcopyを
+supportする場合も、別の明示操作でありidentity mergeではありません。IoTKit Edge所有refと
+設定の継続は、正本DBが存続しているか、IoTKit Edge復旧手順で別途restoreされることを前提にします。
 
 ## Record batch
 

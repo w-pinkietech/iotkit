@@ -112,6 +112,9 @@
         "edge/src/storage/recovery_activation.rs",
         "edge/src/application/recovery.rs",
         "edge/src/backup/",
+        "edge/tests/profile_contract.rs",
+        "docs/product/en/operations/edge-node-hardware-recovery.md",
+        "docs/product/ja/operations/edge-node-hardware-recovery.md",
         "scripts/test-edge-bootstrap.sh"
       ],
       "review_question": "If the Raspberry Pi or other Edge Node computer is lost or replaced, is every unrecoverable local record and identity transition explicit rather than silently treated as a sensor-device replacement?",
@@ -123,11 +126,14 @@
       ],
       "guards": [
         "edge-node/apps/node/tests/recovery_startup.rs",
+        "edge/tests/profile_contract.rs",
         "scripts/test-edge-bootstrap.sh",
+        "docs/product/ja/operations/edge-node-hardware-recovery.md",
+        "docs/product/en/operations/edge-node-hardware-recovery.md",
         "docs/product/ja/operations/installation-and-recovery.md",
         "docs/product/en/operations/installation-and-recovery.md"
       ],
-      "coverage_gap": "The controlled encrypted-backup drill does not reproduce physical hardware loss, and a second replacement before cursor convergence remains tracked in GitHub issue #117."
+      "coverage_gap": "The controlled encrypted-backup drill and clean-replacement identity test do not reproduce physical hardware loss, damaged storage, or field sensor recabling."
     },
     {
       "id": "BT-005",

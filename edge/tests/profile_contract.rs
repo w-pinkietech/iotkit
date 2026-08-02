@@ -118,6 +118,64 @@ async fn sqlite_profiles_keep_stable_refs_revisions_audit_and_reload() {
 }
 
 #[tokio::test]
+async fn clean_edge_node_replacement_creates_unconfigured_signal_without_reusing_old_profile() {
+    let (_directory, storage) = sqlite_store().await;
+    let inventory = InventoryProfiles::new(storage.clone());
+    let old_signal = inventory.signals().await.unwrap().remove(0);
+    inventory
+        .update_signal(
+            AuditActor::local_cli(),
+            &old_signal.signal_ref,
+            SignalProfileInput {
+                display_name: "乾燥炉入口 接点".into(),
+                display_sensor_type: "contact".into(),
+                display_sensor_type_label: String::new(),
+                display_value_kind: "boolean".into(),
+                display_unit_mode: "dimensionless".into(),
+                display_unit: String::new(),
+                decimal_places: 0,
+            },
+            None,
+            1_720_000_000_100,
+        )
+        .await
+        .unwrap();
+
+    let mut clean_replacement = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    clean_replacement.edge_node_id = "edge-node-clean-replacement".into();
+    clean_replacement.ledger_epoch = "epoch-clean-replacement".into();
+    clean_replacement.devices[0].system_id = "018f0000-0000-7000-8000-000000000002".into();
+    clean_replacement.signals[0].system_id = "018f0000-0000-7000-8000-000000000002".into();
+    clean_replacement.signals[0].series_key =
+        "018f0000-0000-7000-8000-000000000002:contact_state:na:primary".into();
+    storage
+        .apply_descriptor(&clean_replacement, 1_720_000_000_200)
+        .await
+        .unwrap();
+
+    let signals = inventory.signals().await.unwrap();
+    assert_eq!(signals.len(), 2);
+    let preserved = signals
+        .iter()
+        .find(|signal| signal.edge_node_id == "edge-node-01")
+        .unwrap();
+    let replacement = signals
+        .iter()
+        .find(|signal| signal.edge_node_id == "edge-node-clean-replacement")
+        .unwrap();
+
+    assert_eq!(preserved.signal_ref, old_signal.signal_ref);
+    assert_eq!(preserved.display_name, "乾燥炉入口 接点");
+    assert_eq!(preserved.profile_revision, Some(1));
+    assert_ne!(replacement.signal_ref, old_signal.signal_ref);
+    assert!(replacement.display_name.is_empty());
+    assert_eq!(replacement.profile_revision, None);
+}
+
+#[tokio::test]
 async fn boolean_profile_is_dimensionless() {
     let (_directory, storage) = sqlite_store().await;
     let inventory = InventoryProfiles::new(storage);

@@ -5,7 +5,7 @@ description: "故障したEdge Node hostを交換するための現場判断表�
 language: ja
 translation_key: operations.edge-node-hardware-recovery
 status: stable
-revision: 1
+revision: 2
 ---
 
 # Edge Node hardware復旧クイックガイド
@@ -84,6 +84,24 @@ Legacy snapshot、plaintext DB copy、SQL編集、自作handoffをbackupとし�
       continuityを主張しない。
 - [ ] Clean commissioningと後続のnew ledger epochを別operationとして計画、検証する。
       Downstream idempotencyでpossible duplicateを露出させ、restore済みcontinuityとは記載しない。
+
+## Clean replacement後のidentity
+
+No-backup loss boundaryを承認した後、fresh DBと新しい`edge_node_id`を使って通常の
+[導入手順](installation-and-recovery.md#1-導入)を実行します。新しいMQTT bindingとcredentialを
+生成し、fenced済みcredential、DB、recovery handoff、失敗したidentityのcandidateを再利用
+しません。保持した`recovery_hold`とevidenceは、別のnew Nodeをcommissioningする前に削除する
+必要はありません。
+
+New Nodeがsensorを報告すると、同じ物理sensorを同じportへ接続し、同じmeasurement typeを
+使っていても、IoTKit Edgeは新しい`device_ref`と`signal_ref`を作ります。New signalには
+display profile、semantic rule、calibration、output bindingを継承せず、通常の登録後flowで
+設定します。Old signal、設定、historyは旧Edge Node identityに残ります。新しいObservationが
+なければ運用上staleになりますが、clean replacementは自動retire・削除、history merge、
+continuity claimを行いません。
+
+Clean commissioning evidenceとしてnew Edge Node IDとnew signal refを記録します。二つのhistoryを
+一つの連続sensorと誤認しないよう、old IDとloss boundaryは別に記録します。
 
 ## Incident完了evidence
 
