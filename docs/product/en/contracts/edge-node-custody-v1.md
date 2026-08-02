@@ -5,7 +5,7 @@ description: "Defines the complete MQTT custody transfer, activation, record fam
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -133,6 +133,24 @@ series identity and durably replicates the snapshot. Lower revisions in one ledg
 ignored; equal revisions with different content are conflicts. Persisted model binding changes
 advance `descriptor_revision`, so different model content is never published under the same
 revision.
+
+### Identity across restart and replacement
+
+Physical sameness is not an identity claim. The descriptor deliberately omits hardware/provider
+IDs and physical locators, so IoTKit Edge never guesses that two signals are the same.
+
+| Situation | Edge Node-owned identity | IoTKit Edge result |
+| --- | --- | --- |
+| Process or host restart with the same database | The same `edge_node_id`, `system_id`, and `series_key` continue. | Existing `device_ref`, `signal_ref`, profiles, rules, output bindings, and history continue. No sensor reconfiguration is required. |
+| Authorized recovery from an authenticated Edge Node backup | The restored `edge_node_id`, `system_id`, and `series_key` continue under the permitted new ledger epoch. | Existing refs and Edge-owned settings continue after recovery activation. The recovery contract, not physical matching, authorizes continuity. |
+| Clean replacement without a usable backup, or after the operator abandons a failed recovery | A fresh database MUST use a new `edge_node_id` and creates new ledger-owned device and series identities. | The descriptor creates new `device_ref` and `signal_ref` inventory with no inherited profile, rule, calibration, or output binding. The old inventory, settings, and history remain attached to the old identity. |
+| Confirmed identity-bearing device hardware replacement while the Edge Node ledger survives | The typed replacement operation preserves `system_id` and its existing series identities while changing only the hardware binding. | Existing refs, settings, and history continue. This is not Edge Node host recovery. |
+
+A clean replacement may attach the same physical sensor and report the same measurement type; it
+is still a new signal. IoTKit Edge does not merge history or copy configuration automatically.
+Copying selected settings, if later supported, is a separate explicit operation and never an
+identity merge. Continuation of IoTKit Edge-owned refs and settings assumes its authoritative
+database remains available or is separately restored through the IoTKit Edge recovery procedure.
 
 A descriptor may discover an inactive Edge Node but never activates it. A descriptor failure never
 authorizes purge, changes publication admission, or suppresses `accepted-through` for an already

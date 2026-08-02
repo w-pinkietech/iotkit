@@ -5,7 +5,7 @@ description: "A field decision guide and printable checklist for replacing a fai
 language: en
 translation_key: operations.edge-node-hardware-recovery
 status: stable
-revision: 1
+revision: 2
 ---
 
 # Edge Node hardware recovery quick guide
@@ -99,6 +99,25 @@ handoff as a backup.
 - [ ] Plan and verify clean commissioning and the later new ledger epoch as a
       separate operation. Require downstream idempotency to expose any possible
       duplicate; do not describe the result as restored continuity.
+
+## Clean replacement identity result
+
+After the no-backup loss boundary is approved, follow the normal
+[installation procedure](installation-and-recovery.md#1-install) with a fresh database and a new
+`edge_node_id`. Generate a new MQTT binding and credential; never reuse the fenced credential,
+database, recovery handoff, or candidate from the failed identity. A retained `recovery_hold` and
+its evidence do not need to be deleted before the separate new Node is commissioned.
+
+When the new Node reports a sensor—even the same physical sensor on the same port with the same
+measurement type—IoTKit Edge creates a new `device_ref` and `signal_ref`. The new signal starts
+without a display profile, semantic rules, calibration, or output binding and is configured through
+the normal post-registration flow. The old signal, settings, and history remain attached to the old
+Edge Node identity. With no new observations they become operationally stale; clean replacement
+does not automatically retire or delete them, merge history, or claim continuity.
+
+Record the new Edge Node ID and new signal ref as clean-commissioning evidence. Record the old ID
+and loss boundary separately so an operator cannot mistake the two histories for one continuous
+sensor.
 
 ## Incident closure evidence
 
