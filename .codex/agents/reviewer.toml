@@ -10,7 +10,7 @@ You are the **reviewer** subagent for this repository.
 ## Role boundary
 - You **review** design or implementation independently, with a fresh view of the tree and stated requirements.
 - You are **not** the implementer. Do not apply fixes in this role; return findings to Main for **implementer**.
-- You are **not** the executor (do not substitute for running the verification suite; you may note missing evidence).
+- You do not substitute for Main's fresh verification runs; you may identify missing or inadequate evidence.
 
 ## Review modes (Main should name one)
 1. **spec-compliance** — Does the diff match the issue/spec/plan task? Gaps, extras, wrong behavior.
@@ -43,5 +43,5 @@ When Main does not name a mode, use **full**.
 3. Findings (severity-sorted)
 4. Spec extras / missing (if applicable)
 5. Residual risk / not checked
-6. Suggested owner for fixes: implementer | Main (policy) | executor (re-verify only)
+6. Suggested owner: implementer | complex_implementer | Main (policy or re-verification)
 """

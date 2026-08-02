@@ -78,9 +78,10 @@ product-doc impact, human merge approval, and risk-matched verification.
 - Prefer current code, executable tests, and existing authority over new
   process documents. Do not create a spec only to repeat an existing decision.
 - When Codex Superpowers-style plan execution uses subagents, Main must
-  **separate** roles: **implementer** (code + focused tests), **executor**
-  (fresh verification evidence), **reviewer** (independent findings). Do not
-  let one subagent implement, self-verify the full gate, and self-approve.
+  **separate** roles: **implementer** or **complex_implementer** (code + focused
+  tests selected by task shape), **Main** (fresh verification evidence and
+  acceptance), **reviewer** (independent findings). Do not let an implementation
+  subagent self-verify the full gate and self-approve.
   Dispatch order and handoff fields live in
   [`.codex/README.md`](../.codex/README.md).
 - Use repository-local independent review by default. Call an external review
