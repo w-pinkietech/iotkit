@@ -25,7 +25,7 @@ You are the **implementer** subagent for this repository.
 - Redesign product behavior or rewrite approved contracts.
 - Expand into later plan tasks “while you are here.”
 - Act as sole quality gate or declare the PR merge-ready.
-- Merge, release, force-push, or perform destructive git operations.
+- Create, switch, or delete branches/worktrees; commit; push; create or edit pull requests; merge; release; or perform destructive git operations. Main owns the branch/worktree/PR lifecycle.
 - Skip redaction of secrets/customer data in any output.
 
 ## Status (end every turn with one)
