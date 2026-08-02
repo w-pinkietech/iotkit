@@ -11,18 +11,48 @@ work instead of one session doing implement + verify + review alone.
 
 | Role | File | Configured sandbox default | Owns | Does not own |
 |---|---|---|---|---|
-| **implementer** | [agents/implementer.toml](agents/implementer.toml) | workspace-write | Settled code + focused tests for one task | Independent review; suite-wide “green” claims |
-| **executor** | [agents/executor.toml](agents/executor.toml) | workspace-write | Fresh verification commands and evidence | Feature implementation; design opinions |
+| **implementer** | [agents/implementer.toml](agents/implementer.toml) | workspace-write | Routine settled code + focused tests for one task | Architecture decisions; independent review; suite-wide “green” claims |
+| **complex_implementer** | [agents/complex-implementer.toml](agents/complex-implementer.toml) | workspace-write | Settled context-heavy or higher-risk code + focused tests | Architecture decisions; independent review; suite-wide “green” claims |
 | **reviewer** | [agents/reviewer.toml](agents/reviewer.toml) | read-only | Spec-compliance and/or quality findings | Applying fixes; replacing test runs |
 
 The sandbox column records custom-agent defaults, not a hard enforcement
 boundary. Codex reapplies live parent-turn sandbox and approval overrides when it
 spawns a subagent. Main must preserve the behavioral split even when the
-effective sandbox is broader. Executor workspace-write is for prescribed setup
-and build/test artifacts, not tracked-file fixes.
+effective sandbox is broader.
 
-Main keeps: issue/plan scope, product and trust decisions, worktree/branch/PR
-lifecycle, merge only after human approval, and **dispatch order**.
+Main keeps: issue/plan scope, architecture, product and trust decisions,
+implementation-lane selection, fresh acceptance verification, final acceptance,
+worktree/branch/PR lifecycle, merge only after human approval, and **dispatch
+order**.
+
+## Implementation routing
+
+Use `implementer` (Luna / Max) by default when the settled specification largely
+determines the result: bounded bug fixes, boilerplate, wiring, straightforward
+features, mechanical refactors, and routine focused tests.
+
+Use `complex_implementer` (Terra / Max) only when correctness materially depends
+on context or judgment that the handoff cannot fully encode, such as subtle
+concurrency, difficult debugging, security- or custody-sensitive paths, public
+contract or migration work, broad refactors, or a larger realistic blast radius.
+Terra resolves difficult implementation details inside a settled architecture;
+Main still owns architecture and policy decisions.
+
+One failed Luna attempt may demonstrate that Main misclassified the task. Main
+must first correct the handoff using the observed failure, then may escalate to
+Terra. Do not repeat an unchanged prompt, choose a lane by prestige, or silently
+substitute another role, model, or reasoning level. If the required custom agent
+is unavailable, stop that lane and report the limitation.
+
+Before accepting delegated work, use native spawn/details metadata when exposed
+to confirm the selected role and its configured model/reasoning. If the runtime
+does not expose a value, report it as unobserved rather than claiming verified
+routing. A fresh task may be required after agent definitions change.
+
+Implementation-agent checks are focused self-checks, not the acceptance gate.
+Main inspects the actual diff and reruns the specified verification commands from
+a fresh Main turn before acceptance. Reviewer findings are independent judgment;
+they do not replace Main's command evidence.
 
 ## When Superpowers (or a plan) is in use
 
@@ -31,42 +61,49 @@ Fast single-file work may stay on Main alone; do not invent subagents for
 noise.
 
 ```text
-Main: settle task text, constraints, and verification commands
-  → implementer: implement + focused self-check only
-  → executor: run the plan’s / Main’s verification commands (fresh evidence)
+Main: settle task text, interfaces, constraints, and verification commands;
+      select implementer or complex_implementer
+  → selected implementation lane: implement + focused self-check only
+  → Main: inspect the diff and rerun the required commands (fresh evidence)
   → reviewer: mode=spec-compliance against issue/spec/task
-       if changes-requested → implementer → executor → reviewer (same mode)
+       if changes-requested → selected implementation lane → Main verification → reviewer (same mode)
   → reviewer: mode=quality (or one full pass if Main prefers a single review)
-       if changes-requested → implementer → executor → reviewer
+       if changes-requested → selected implementation lane → Main verification → reviewer
   → Main: mark task done; next task
 After all tasks:
-  → executor: broader verification warranted by risk
+  → Main: broader verification warranted by risk
   → reviewer: mode=full on the whole branch/PR diff
   → Main: draft PR, product-doc impact, stop for human review
 ```
+
+Any tracked diff change after a review invalidates that verdict. Run the relevant
+Main verification commands again and obtain a fresh review before relying on
+approval.
 
 ### Mapping from Superpowers skills
 
 | Superpowers idea | Project role |
 |---|---|
-| Implementer subagent / task implementation | **implementer** |
-| Verification-before-completion / plan check commands | **executor** |
+| Routine implementer subagent / task implementation | **implementer** |
+| Context-heavy or higher-risk settled implementation | **complex_implementer** |
+| Verification-before-completion / plan check commands | **Main** |
 | Spec compliance reviewer | **reviewer** (`spec-compliance`) |
 | Code quality / final code review | **reviewer** (`quality` or `full`) |
 | Controller / orchestrator | **Main** (not a custom agent file) |
 
-Do not dispatch multiple **implementers** in parallel on the same worktree.
-Executor and reviewer should see implementer output as untrusted until
-commands and diff evidence support it.
+Do not dispatch multiple implementation agents (`implementer` or
+`complex_implementer`) in parallel on the same worktree. Main and reviewer should
+see implementation-agent output as untrusted until Main's fresh commands and
+diff evidence support it.
 
 ## When Superpowers is not in use
 
 Still split when useful:
 
-- Main implements small Fast changes alone, then **executor** for the focused
-  command set, then **reviewer** before asking a human to merge risky work.
-- For PR babysitting: **reviewer** for findings, **implementer** for fixes,
-  **executor** for re-check — not one agent rewriting and self-approving.
+- Main implements small Fast changes alone, runs the focused command set, then
+  uses **reviewer** before asking a human to merge risky work.
+- For PR babysitting: **reviewer** for findings, the task-shaped implementation
+  lane for fixes, Main for re-check — not one agent rewriting and self-approving.
 
 ## Handoff checklist (Main → subagent)
 
@@ -74,10 +111,12 @@ Always give:
 
 1. Issue number and outcome / non-goals
 2. Worktree path and base ref
-3. Exact task text or file list (do not make the subagent re-read an entire plan
-   file unless necessary; paste the task)
-4. For **executor**: full command list
-5. For **reviewer**: mode, BASE/HEAD SHAs or PR number, and the requirement
+3. Exact task objective and owned files or bounded responsibility (do not make
+   the subagent re-read an entire plan file unless necessary; paste the task)
+4. Interfaces that must remain compatible
+5. Constraints, exclusions, and settled decisions
+6. Exact verification commands and concrete success evidence
+7. For **reviewer**: mode, BASE/HEAD SHAs or PR number, and the requirement
    source (issue/spec/plan task)
 
 ## Authority reminders

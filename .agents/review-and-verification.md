@@ -37,13 +37,14 @@ contracts and the [product invariants](product-invariants.md).
 
 ## Codex subagent split (optional Superpowers / multi-task plans)
 
-When using project Codex agents, keep verification and review outside the
-implementer’s ownership:
+When using project Codex agents, keep acceptance verification and review outside
+the implementation agent’s ownership:
 
 | Concern | Owner |
 |---|---|
-| Implement settled task + focused tests | `implementer` |
-| Fresh command evidence | `executor` |
+| Implement routine settled task + focused tests | `implementer` |
+| Implement context-heavy or higher-risk settled task + focused tests | `complex_implementer` |
+| Fresh command evidence and acceptance | Main |
 | Independent findings (spec and/or quality) | `reviewer` (read-only) |
 
 Orchestration, handoff checklist, and Superpowers skill mapping:

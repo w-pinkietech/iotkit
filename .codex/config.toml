@@ -10,6 +10,6 @@ review_model = "gpt-5.6-sol"
 
 [agents]
 # Global multi-agent settings only. Role definitions are the standalone
-# agent files in .codex/agents/ (implementer, executor, reviewer).
-# Do not collapse those three roles into Main for multi-task Superpowers plans.
+# agent files in .codex/agents/ (implementer, complex_implementer, reviewer).
+# Do not collapse those roles into Main for multi-task Superpowers plans.
 # max_concurrent_threads_per_session = 6
