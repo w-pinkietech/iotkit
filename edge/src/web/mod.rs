@@ -31,6 +31,7 @@ pub const MAX_HISTORY_EXPORT_ROWS: usize = 100_000;
 #[derive(Clone)]
 pub struct WebConfig {
     pub public_origin: String,
+    pub display_time_zone: String,
     pub secure_cookies: bool,
     pub trial_profile: bool,
 }
@@ -39,6 +40,7 @@ impl WebConfig {
     pub fn test() -> Self {
         Self {
             public_origin: "http://127.0.0.1:8080".into(),
+            display_time_zone: "UTC".into(),
             secure_cookies: false,
             trial_profile: false,
         }
@@ -163,6 +165,8 @@ pub struct ConsoleView {
     pub selected_signal: Option<ConsoleSignal>,
     pub history: Vec<RawHistoryRow>,
     pub history_chart_path: String,
+    pub history_signal_ref: String,
+    pub history_range: String,
     pub history_raw_export_url: String,
     pub history_processed_export_url: String,
     pub outputs: Vec<ConsoleOutput>,
@@ -534,6 +538,7 @@ struct ConsoleTemplate<'a> {
     is_owner: bool,
     is_admin: bool,
     trial_profile: bool,
+    display_time_zone: &'a str,
     view: ConsoleView,
 }
 
@@ -639,6 +644,7 @@ async fn console_page(
             is_owner: principal.role == "system_admin",
             is_admin: principal.role == "admin" || principal.role == "system_admin",
             trial_profile: state.config.trial_profile,
+            display_time_zone: &state.config.display_time_zone,
             view,
         }
         .render()
@@ -2064,6 +2070,8 @@ pub mod test_support {
                     display_value_kind: "numeric".into(),
                 }],
                 history_chart_path: "M0 90 L120 60 L240 70 L360 20".into(),
+                history_signal_ref: "signal-01".into(),
+                history_range: "1h".into(),
                 history_raw_export_url:
                     "/api/v1/history.csv?from=0&to=2678400000&signal_ref=signal-01".into(),
                 history_processed_export_url:

@@ -86,6 +86,7 @@ where
     let app = router(
         WebConfig {
             public_origin: config.public_origin,
+            display_time_zone: config.display_time_zone,
             secure_cookies: config.secure_cookies,
             trial_profile: config.trial_profile,
         },

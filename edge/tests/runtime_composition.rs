@@ -45,6 +45,7 @@ fn serve_args(directory: &TempDir) -> ServeArgs {
         allow_insecure: false,
         http_listen: "127.0.0.1:0".into(),
         public_origin: "https://edge.example".into(),
+        display_time_zone: "UTC".into(),
         development_http: false,
         deployment_profile: DeploymentProfileArg::Field,
         broker_certificate_file: None,
@@ -58,6 +59,18 @@ fn serve_args(directory: &TempDir) -> ServeArgs {
         output_ca_file: None,
         output_allow_insecure: false,
     }
+}
+
+#[test]
+fn typed_runtime_config_accepts_iana_display_time_zone_and_rejects_invalid_value() {
+    let directory = TempDir::new().unwrap();
+    let mut args = serve_args(&directory);
+    args.display_time_zone = "Asia/Tokyo".into();
+    let config = RuntimeConfig::from_serve_args(&args).expect("valid IANA time zone");
+    assert_eq!(config.display_time_zone, "Asia/Tokyo");
+
+    args.display_time_zone = "JST-ish".into();
+    assert!(RuntimeConfig::from_serve_args(&args).is_err());
 }
 
 #[test]

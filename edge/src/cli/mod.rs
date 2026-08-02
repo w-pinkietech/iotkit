@@ -219,6 +219,8 @@ pub struct ServeArgs {
     pub http_listen: String,
     #[arg(long)]
     pub public_origin: String,
+    #[arg(long, env = "IOTKIT_DISPLAY_TIME_ZONE", default_value = "UTC")]
+    pub display_time_zone: String,
     #[arg(long)]
     pub development_http: bool,
     #[arg(long, value_enum, default_value_t = DeploymentProfileArg::Field)]

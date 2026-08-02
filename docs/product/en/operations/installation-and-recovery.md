@@ -77,7 +77,7 @@ fallback.
 - **Monitor**: current value and last receipt. A stopped or old signal must be
   investigated at the sensor, adapter, Edge Node, broker, then IoTKit Edge—in that order.
 - **Reception history**: filter sensor, Edge Node, and period on one screen, then inspect
-  the aggregate graph and recent raw rows. CSV with the same filter exports generic
+  the bounded graph and recent raw rows that match the selected sensor. CSV with the same filter exports generic
   observations and is not a business report.
 - **Output**: active purpose-bound routes. Pending output is not deleted until
   broker PUBACK.
@@ -91,6 +91,8 @@ fallback.
 - `iotkit-edge-nodectl smoke status`: durable IoTKit Edge acceptance, not merely MQTT PUBACK.
 - `scripts/iotkit-broker-cert status --config DEPLOYMENT/broker-cert.env`: exact
   certificate expiry and bundle validation.
+
+Absolute Console timestamps use the display time zone selected when IoTKit Edge starts. For a Compose deployment, set an IANA time zone such as `IOTKIT_DISPLAY_TIME_ZONE=Asia/Tokyo` in the owner-only `edge.env`; a direct launch may instead pass `iotkit-edge serve --display-time-zone Asia/Tokyo ...`. The default is `UTC`, and an invalid value is a startup error. Raw storage, API, and CSV timestamps remain Unix milliseconds; this setting changes display only.
 
 ## 3. Certificate renewal
 

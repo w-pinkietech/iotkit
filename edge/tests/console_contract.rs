@@ -414,8 +414,12 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             "/logs",
             &[
                 r#"id="history-filter""#,
+                r#"data-display-time-zone="UTC""#,
+                r#"<option value="signal-01" selected>"#,
                 r#"class="history-chart""#,
+                r#"class="history-export-actions""#,
                 r#"id="log-table""#,
+                r#"<time data-unix-ms="1735689601000">"#,
                 r#"class="table-wrap history-table-wrap""#,
                 "加工後CSV",
                 "受信した生データCSV",

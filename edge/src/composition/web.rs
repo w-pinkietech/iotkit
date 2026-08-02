@@ -766,13 +766,29 @@ impl WebApplication for StorageWebApplication {
             })
             .collect();
         let storage = self.storage_view().await?;
-        let history = if request.path == "/logs" {
-            self.raw_history(history_query(&request.query, &signals), false)
-                .await?
-                .rows
+        let history_selection =
+            (request.path == "/logs").then(|| history_query(&request.query, &signals, now()));
+        let history = if let Some(query) = &history_selection {
+            self.raw_history(query.clone(), false).await?.rows
         } else {
             Vec::new()
         };
+        let history_chart_path = raw_history_chart_path(&history);
+        let history_signal_ref = history_selection
+            .as_ref()
+            .and_then(|query| query.signal_ref.clone())
+            .unwrap_or_default();
+        let history_range = selected_history_range(&request.query).into();
+        let history_raw_export_url = history_selection
+            .as_ref()
+            .map_or_else(String::new, |query| {
+                history_url("/api/v1/history.csv", query)
+            });
+        let history_processed_export_url = history_selection
+            .as_ref()
+            .map_or_else(String::new, |query| {
+                history_url("/api/v1/semantic-history.csv", query)
+            });
         let commissioning = commissioning_view(&edge_nodes, &devices, &signals);
         let (output_summary, outputs) = if request.path == "/output" {
             self.console_outputs(&rules, &signals).await?
@@ -802,12 +818,11 @@ impl WebApplication for StorageWebApplication {
             accounts,
             audit,
             storage,
-            history_chart_path: String::new(),
-            history_raw_export_url: history_url("/api/v1/history.csv", &request.query),
-            history_processed_export_url: history_url(
-                "/api/v1/semantic-history.csv",
-                &request.query,
-            ),
+            history_chart_path,
+            history_signal_ref,
+            history_range,
+            history_raw_export_url,
+            history_processed_export_url,
             ..ConsoleView::default()
         })
     }
@@ -1803,12 +1818,20 @@ fn output_presentation_name<'a>(adapter_id: &str, fallback: &'a str) -> &'a str 
     }
 }
 
-fn history_url(base: &str, query: &HashMap<String, String>) -> String {
-    let mut values = query.clone();
-    values.entry("from".into()).or_insert_with(|| "0".into());
-    values
-        .entry("to".into())
-        .or_insert_with(|| now().to_string());
+fn history_url(base: &str, query: &HistoryQuery) -> String {
+    let mut values = HashMap::new();
+    if let Some(value) = &query.from {
+        values.insert("from", value.clone());
+    }
+    if let Some(value) = &query.to {
+        values.insert("to", value.clone());
+    }
+    if let Some(value) = &query.signal_ref {
+        values.insert("signal_ref", value.clone());
+    }
+    if let Some(value) = &query.edge_node_id {
+        values.insert("edge_node_id", value.clone());
+    }
     format!(
         "{base}?{}",
         serde_urlencoded::to_string(values).unwrap_or_default()
@@ -2025,23 +2048,119 @@ fn optional_f64(body: &Value, field: &'static str, default: f64) -> Result<f64, 
     }
 }
 
-fn history_query(params: &HashMap<String, String>, signals: &[ConsoleSignal]) -> HistoryQuery {
-    let signal_ref = params.get("signal_ref").cloned();
+fn history_query(
+    params: &HashMap<String, String>,
+    signals: &[ConsoleSignal],
+    current_time: i64,
+) -> HistoryQuery {
+    let signal_ref = params
+        .get("signal_ref")
+        .filter(|reference| {
+            signals
+                .iter()
+                .any(|signal| signal.signal_ref == **reference)
+        })
+        .cloned()
+        .or_else(|| signals.first().map(|signal| signal.signal_ref.clone()));
     let edge_node_id = signal_ref.as_ref().and_then(|reference| {
         signals
             .iter()
             .find(|signal| signal.signal_ref == *reference)
             .map(|signal| signal.edge_node_id.clone())
     });
+    let explicit_bounds = params
+        .get("from")
+        .and_then(|from| from.parse::<i64>().ok())
+        .zip(params.get("to").and_then(|to| to.parse::<i64>().ok()))
+        .filter(|(from, to)| *from >= 0 && *to > *from);
+    let (from, to) = explicit_bounds
+        .unwrap_or_else(|| history_range_bounds(selected_history_range(params), current_time));
     HistoryQuery {
-        from: params.get("from").cloned(),
-        to: params.get("to").cloned(),
+        from: Some(from.to_string()),
+        to: Some(to.to_string()),
         limit: Some(200),
         cursor: None,
         signal_ref,
         edge_node_id,
         bucket_ms: None,
     }
+}
+
+fn selected_history_range(params: &HashMap<String, String>) -> &str {
+    params
+        .get("range")
+        .map(String::as_str)
+        .filter(|range| matches!(*range, "1h" | "24h" | "7d" | "30d"))
+        .unwrap_or("1h")
+}
+
+fn history_range_bounds(range: &str, current_time: i64) -> (i64, i64) {
+    let duration = match range {
+        "24h" => 24 * 60 * 60 * 1_000,
+        "7d" => 7 * 24 * 60 * 60 * 1_000,
+        "30d" => 30 * 24 * 60 * 60 * 1_000,
+        _ => 60 * 60 * 1_000,
+    };
+    let to = current_time.max(0);
+    (to.saturating_sub(duration), to)
+}
+
+fn raw_history_chart_path(rows: &[RawHistoryRow]) -> String {
+    let mut points = rows
+        .iter()
+        .filter_map(|row| {
+            let received_at = row.received_at.parse::<i64>().ok()?;
+            let values = serde_json::from_str::<Value>(&row.values).ok()?;
+            let value = match values {
+                Value::Array(values) => values.first().and_then(history_number),
+                value => history_number(&value),
+            }?;
+            Some((received_at, value))
+        })
+        .collect::<Vec<_>>();
+    points.sort_by_key(|(received_at, _)| *received_at);
+    if points.is_empty() {
+        return String::new();
+    }
+    let start = points.first().map_or(0, |point| point.0);
+    let end = points.last().map_or(start, |point| point.0);
+    let minimum = points
+        .iter()
+        .map(|(_, value)| *value)
+        .fold(f64::INFINITY, f64::min);
+    let maximum = points
+        .iter()
+        .map(|(_, value)| *value)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mut path = String::new();
+    for (index, (received_at, value)) in points.iter().enumerate() {
+        let x = if end == start {
+            380.0
+        } else {
+            20.0 + 720.0 * (*received_at - start) as f64 / (end - start) as f64
+        };
+        let y = if (maximum - minimum).abs() < f64::EPSILON {
+            130.0
+        } else {
+            240.0 - 220.0 * (*value - minimum) / (maximum - minimum)
+        };
+        if index == 0 {
+            path.push_str(&format!("M{x:.1} {y:.1}"));
+        } else {
+            path.push_str(&format!(" L{x:.1} {y:.1}"));
+        }
+    }
+    if points.len() == 1 {
+        path.push_str(" L380.1 130.0");
+    }
+    path
+}
+
+fn history_number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_bool().map(|state| if state { 1.0 } else { 0.0 }))
+        .filter(|value| value.is_finite())
 }
 
 fn not_found_error() -> WebError {
@@ -2176,5 +2295,52 @@ impl serde::Serialize for crate::storage::AuditEvent {
 impl From<StorageError> for WebError {
     fn from(error: StorageError) -> Self {
         internal(error)
+    }
+}
+
+#[cfg(test)]
+mod history_view_tests {
+    use super::*;
+
+    #[test]
+    fn range_bounds_are_bounded_by_the_selected_window() {
+        assert_eq!(
+            history_range_bounds("1h", 7_200_000),
+            (3_600_000, 7_200_000)
+        );
+        assert_eq!(
+            history_range_bounds("24h", 90_000_000),
+            (3_600_000, 90_000_000)
+        );
+    }
+
+    #[test]
+    fn numeric_history_builds_a_non_empty_bounded_chart_path() {
+        let rows = [
+            history_row("1735689602000", "[30.0]"),
+            history_row("1735689601000", "[20.0]"),
+        ];
+        let path = raw_history_chart_path(&rows);
+        assert!(path.starts_with('M'));
+        assert!(path.contains(" L"));
+        assert!(!path.contains("NaN"));
+    }
+
+    fn history_row(received_at: &str, values: &str) -> RawHistoryRow {
+        RawHistoryRow {
+            received_at: received_at.into(),
+            observed_at: received_at.into(),
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            pub_seq: 1,
+            signal_ref: "signal-01".into(),
+            series_key: "temperature".into(),
+            sensor_name: "温度".into(),
+            values: values.into(),
+            value_type: "number".into(),
+            unit: "℃".into(),
+            decimal_places: 1,
+            display_value_kind: "numeric".into(),
+        }
     }
 }

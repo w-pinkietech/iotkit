@@ -59,6 +59,7 @@ pub struct RuntimeConfig {
     pub output: Option<MqttConnectionConfig>,
     pub http_listen: SocketAddr,
     pub public_origin: String,
+    pub display_time_zone: String,
     pub secure_cookies: bool,
     pub trial_profile: bool,
     pub broker_certificate_file: Option<PathBuf>,
@@ -76,6 +77,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("output", &self.output)
             .field("http_listen", &self.http_listen)
             .field("public_origin", &self.public_origin)
+            .field("display_time_zone", &self.display_time_zone)
             .field("secure_cookies", &self.secure_cookies)
             .field("trial_profile", &self.trial_profile)
             .field("broker_certificate_file", &self.broker_certificate_file)
@@ -157,6 +159,9 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::Invalid("invalid public origin"));
         }
+        if args.display_time_zone.parse::<chrono_tz::Tz>().is_err() {
+            return Err(RuntimeConfigError::Invalid("invalid display time zone"));
+        }
         let trial_profile = args.deployment_profile == DeploymentProfileArg::Trial;
         if trial_profile {
             let origin_is_loopback = origin.host_str().is_some_and(host_is_loopback_ip);
@@ -185,6 +190,7 @@ impl RuntimeConfig {
             output,
             http_listen,
             public_origin: args.public_origin.clone(),
+            display_time_zone: args.display_time_zone.clone(),
             secure_cookies: !args.development_http,
             trial_profile,
             broker_certificate_file: args.broker_certificate_file.clone(),

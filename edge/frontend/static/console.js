@@ -250,13 +250,25 @@
     target.focus();
   }
   function initializeLocalizedTimes() {
+    const timeZone = document.body.dataset.displayTimeZone || "UTC";
+    const formatter = new Intl.DateTimeFormat("ja-JP", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      timeZone,
+      timeZoneName: "short"
+    });
     for (const time of queryAll("time[data-unix-ms]")) {
       const milliseconds = Number(time.dataset.unixMs);
       if (!Number.isFinite(milliseconds)) continue;
       const date = new Date(milliseconds);
       if (Number.isNaN(date.getTime())) continue;
       time.dateTime = date.toISOString();
-      time.textContent = date.toLocaleString("ja-JP");
+      time.textContent = formatter.format(date);
     }
     const checkedAt = query("[data-activation-checked-at]");
     if (checkedAt) {
