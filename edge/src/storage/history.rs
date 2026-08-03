@@ -232,7 +232,7 @@ impl Storage {
                  ON signal.edge_node_id=raw.edge_node_id \
                  AND signal.series_key=json_extract(raw.record_json,'$.series_key') \
                  WHERE signal.signal_ref=? AND raw.received_at>=? AND raw.received_at<? \
-                 AND json_type(raw.record_json,'$.values[0]') IN ('integer','real') \
+                 AND json_type(raw.record_json,'$.values[0]') IN ('integer','real','true','false') \
                  GROUP BY bucket_start ORDER BY bucket_start",
             )
             .bind(from)
@@ -249,14 +249,20 @@ impl Storage {
             .collect::<Result<Vec<_>, _>>()?,
             StorageInner::Postgres { pool, .. } => sqlx::query(
                 "SELECT ((raw.received_at-$1)/$2)*$2+$1 bucket_start,\
-                 MIN((convert_from(raw.record_json,'UTF8')::jsonb->'values'->>0)::double precision) minimum,\
-                 AVG((convert_from(raw.record_json,'UTF8')::jsonb->'values'->>0)::double precision) average,\
-                 MAX((convert_from(raw.record_json,'UTF8')::jsonb->'values'->>0)::double precision) maximum,\
+                 MIN(CASE convert_from(raw.record_json,'UTF8')::jsonb->'values'->0 \
+                     WHEN 'true'::jsonb THEN 1 WHEN 'false'::jsonb THEN 0 \
+                     ELSE (convert_from(raw.record_json,'UTF8')::jsonb->'values'->>0)::double precision END) minimum,\
+                 AVG(CASE convert_from(raw.record_json,'UTF8')::jsonb->'values'->0 \
+                     WHEN 'true'::jsonb THEN 1 WHEN 'false'::jsonb THEN 0 \
+                     ELSE (convert_from(raw.record_json,'UTF8')::jsonb->'values'->>0)::double precision END) average,\
+                 MAX(CASE convert_from(raw.record_json,'UTF8')::jsonb->'values'->0 \
+                     WHEN 'true'::jsonb THEN 1 WHEN 'false'::jsonb THEN 0 \
+                     ELSE (convert_from(raw.record_json,'UTF8')::jsonb->'values'->>0)::double precision END) maximum,\
                  COUNT(*)::bigint count FROM raw_records raw JOIN inventory_signals signal \
                  ON signal.edge_node_id=raw.edge_node_id \
                  AND signal.series_key=convert_from(raw.record_json,'UTF8')::jsonb->>'series_key' \
                  WHERE signal.signal_ref=$3 AND raw.received_at>=$1 AND raw.received_at<$4 \
-                 AND jsonb_typeof(convert_from(raw.record_json,'UTF8')::jsonb->'values'->0)='number' \
+                 AND jsonb_typeof(convert_from(raw.record_json,'UTF8')::jsonb->'values'->0) IN ('number','boolean') \
                  GROUP BY bucket_start ORDER BY bucket_start",
             )
             .bind(from)

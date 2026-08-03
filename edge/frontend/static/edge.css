@@ -284,6 +284,28 @@ tr.selected-route td { background: var(--teal-soft); }
 .status-pill.stale, .status-pill.needs-setup { color: var(--warning); border-color: #e6ca88; background: var(--warning-soft); }
 .status-pill.never { color: var(--muted); border-color: var(--line-strong); background: var(--canvas); }
 .status-pill.failed { color: var(--danger); border-color: #f2b8b2; background: var(--danger-soft); }
+
+.live-dashboard-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+.live-dashboard-heading h2 { margin: 2px 0 5px; font-size: 1.25rem; }
+.live-dashboard-heading p:last-child { margin: 0; color: var(--muted); font-size: .82rem; }
+.live-dashboard-state { flex: 0 0 auto; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--teal-dark); background: var(--surface); font-size: .74rem; font-weight: 700; }
+.live-signal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 16px; }
+.live-signal-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-top: 4px solid var(--teal); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow); }
+.live-signal-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 17px 18px 10px; }
+.live-signal-card > header > div { min-width: 0; }
+.live-signal-card > header span:first-child { color: var(--muted); font-size: .7rem; font-weight: 700; }
+.live-signal-card h2 { overflow: hidden; margin: 3px 0 0; font-size: .98rem; text-overflow: ellipsis; white-space: nowrap; }
+.live-current { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 3px 12px; margin: 0 18px 8px; padding: 12px 14px; border-radius: 8px; background: var(--teal-soft); }
+.live-current > span { color: var(--muted); font-size: .7rem; font-weight: 650; }
+.live-current > strong { grid-row: 1 / 3; grid-column: 2; color: var(--ink); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 1.45rem; font-weight: 500; line-height: 1.1; }
+.live-chart { display: block; width: calc(100% - 24px); height: auto; margin: 0 12px; }
+.live-chart-grid { stroke: #dfe5e7; stroke-width: 1; }
+.live-chart-axis-label { fill: var(--muted); font-size: 9px; }
+.live-chart-line { fill: none; stroke: var(--teal-dark); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.live-chart-empty { fill: var(--muted); font-size: 11px; }
+.live-signal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 18px 14px; border-top: 1px solid var(--line); font-size: .73rem; }
+.live-signal-card > footer > span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.live-signal-card > footer a { flex: 0 0 auto; font-weight: 700; text-decoration: none; }
 .empty-row td { padding: 44px 24px; color: var(--muted); text-align: center; }
 .empty-state { grid-column: 1 / -1; display: grid; min-height: 180px; place-items: center; align-content: center; gap: 12px; padding: 32px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--muted); background: var(--surface); text-align: center; }
 .empty-state > span { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--teal-dark); }

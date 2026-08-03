@@ -304,13 +304,20 @@ components:
     HistorySeries:
       type: object
       additionalProperties: false
-      required: [signal_ref, display_name, unit, value_type, sample_count, points]
+      required: [signal_ref, display_name, unit, value_type, sample_count, latest_received_at, latest_value, points]
       properties:
         signal_ref: { type: string }
         display_name: { type: string }
         unit: { type: string }
         value_type: { type: string }
         sample_count: { type: integer, format: int64 }
+        latest_received_at:
+          description: Exact IoTKit Edge receipt time of the latest value, or null before first receipt.
+          type: [integer, "null"]
+          format: int64
+        latest_value:
+          description: First raw value from the latest record, or null before first receipt.
+          type: [number, boolean, string, "null"]
         points:
           type: array
           items:

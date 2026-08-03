@@ -1504,6 +1504,24 @@ impl WebApplication for StorageWebApplication {
             .find(|signal| signal.signal_ref == signal_ref)
             .ok_or_else(not_found_error)?;
         let sample_count: i64 = buckets.iter().map(|bucket| bucket.count).sum();
+        let latest = self
+            .storage
+            .recent_signal_inputs(signal_ref, 1)
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .next();
+        let latest_received_at = latest.as_ref().map(|item| item.received_at);
+        let latest_value = latest
+            .as_ref()
+            .and_then(|item| serde_json::from_slice::<Value>(&item.record_json).ok())
+            .and_then(|record| {
+                record
+                    .get("values")
+                    .and_then(Value::as_array)
+                    .and_then(|values| values.first())
+                    .cloned()
+            });
         Ok(json!({
             "signal_ref": signal_ref,
             "display_name": if signal.display_name.is_empty() {
@@ -1514,6 +1532,8 @@ impl WebApplication for StorageWebApplication {
             "unit": signal.display_unit,
             "value_type": signal.value_type,
             "sample_count": sample_count,
+            "latest_received_at": latest_received_at,
+            "latest_value": latest_value,
             "points": buckets.into_iter().map(|bucket| json!({
                 "bucket_start":bucket.bucket_start,
                 "minimum":bucket.minimum,

@@ -1,0 +1,171 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { initializeLiveDashboard } from "../../src/live";
+
+function card(
+  signalRef: string,
+  kind: "numeric" | "boolean",
+  unit = "",
+): string {
+  return `
+    <article data-live-signal data-signal-ref="${signalRef}"
+      data-value-kind="${kind}" data-decimal-places="1" data-unit="${unit}">
+      <span data-live-status>確認中</span>
+      <strong data-live-value>—</strong>
+      <span data-live-received>最終受信を確認中</span>
+      <svg data-live-chart></svg>
+      <span data-live-summary></span>
+    </article>
+  `;
+}
+
+function responseFor(signalRef: string): Response {
+  const boolean = signalRef === "contact-01";
+  return new Response(
+    JSON.stringify({
+      signal_ref: signalRef,
+      display_name: boolean ? "運転接点" : "炉内温度",
+      unit: boolean ? "" : "℃",
+      value_type: boolean ? "boolean" : "number",
+      sample_count: 3,
+      latest_received_at: 1_700_000_000_000,
+      latest_value: boolean ? true : 24.8,
+      points: boolean
+        ? [
+            { bucket_start: 1_699_999_970_000, minimum: 0, average: 0, maximum: 0, sample_count: 1 },
+            { bucket_start: 1_699_999_985_000, minimum: 1, average: 1, maximum: 1, sample_count: 1 },
+            { bucket_start: 1_700_000_000_000, minimum: 1, average: 1, maximum: 1, sample_count: 1 },
+          ]
+        : [
+            { bucket_start: 1_699_999_970_000, minimum: 22, average: 22, maximum: 22, sample_count: 1 },
+            { bucket_start: 1_699_999_985_000, minimum: 23, average: 23, maximum: 23, sample_count: 1 },
+            { bucket_start: 1_700_000_000_000, minimum: 24.8, average: 24.8, maximum: 24.8, sample_count: 1 },
+          ],
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  document.body.replaceChildren();
+});
+
+describe("live dashboard", () => {
+  it("renders numeric lines and boolean steps with current values and axes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_005_000);
+    document.body.innerHTML = `
+      <section data-live-dashboard>
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("temperature-01", "numeric", "℃")}
+        ${card("contact-01", "boolean")}
+      </section>
+    `;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(String(input), "http://localhost");
+        return Promise.resolve(responseFor(url.searchParams.get("signal_ref") ?? ""));
+      }),
+    );
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const numeric = document.querySelector<HTMLElement>(
+      '[data-signal-ref="temperature-01"]',
+    )!;
+    const contact = document.querySelector<HTMLElement>(
+      '[data-signal-ref="contact-01"]',
+    )!;
+    expect(numeric.querySelector("[data-live-value]")?.textContent).toBe("24.8 ℃");
+    expect(numeric.querySelector("path")?.getAttribute("d")).toContain(" L ");
+    expect(numeric.querySelector("[data-live-summary]")?.textContent).toContain(
+      "縦軸は値",
+    );
+    expect(contact.querySelector("[data-live-value]")?.textContent).toBe("ON");
+    expect(contact.querySelector("path")?.getAttribute("d")).toMatch(/H .* V /);
+    expect(contact.querySelector("[data-live-summary]")?.textContent).toContain(
+      "ON/OFF",
+    );
+    expect(document.querySelector("[data-live-dashboard-state]")?.textContent).toContain(
+      "自動更新中",
+    );
+  });
+
+  it("does not poll hidden documents and bounds one cycle to twelve cards", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = `
+      <section data-live-dashboard>
+        <span data-live-dashboard-state></span>
+        ${Array.from({ length: 13 }, (_, index) => card(`signal-${index}`, "numeric")).join("")}
+      </section>
+    `;
+    const fetch = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      return Promise.resolve(responseFor(url.searchParams.get("signal_ref") ?? ""));
+    });
+    vi.stubGlobal("fetch", fetch);
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fetch).not.toHaveBeenCalled();
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(12);
+  });
+
+  it("distinguishes never received data from an advisory stale state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_600_000);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-stale-after-ms="300000">
+        <span data-live-dashboard-state></span>
+        ${card("stale-01", "numeric", "℃")}
+        ${card("never-01", "boolean")}
+      </section>
+    `;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const signalRef = new URL(String(input), "http://localhost").searchParams.get(
+          "signal_ref",
+        )!;
+        const base = await responseFor("temperature-01").json();
+        return new Response(
+          JSON.stringify({
+            ...base,
+            signal_ref: signalRef,
+            latest_received_at:
+              signalRef === "stale-01" ? 1_700_000_000_000 : null,
+            latest_value: signalRef === "stale-01" ? 24.8 : null,
+            points: signalRef === "stale-01" ? base.points : [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const stale = document.querySelector<HTMLElement>('[data-signal-ref="stale-01"]')!;
+    const never = document.querySelector<HTMLElement>('[data-signal-ref="never-01"]')!;
+    expect(stale.querySelector("[data-live-status]")?.textContent).toBe("要確認");
+    expect(stale.querySelector("[data-live-status]")?.classList.contains("stale")).toBe(true);
+    expect(never.querySelector("[data-live-status]")?.textContent).toBe("未受信");
+    expect(never.querySelector("[data-live-value]")?.textContent).toBe("—");
+  });
+});

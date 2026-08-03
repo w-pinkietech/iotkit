@@ -102,6 +102,31 @@ async fn history_rejects_invalid_timestamps_ranges_and_missing_series_bucket() {
 }
 
 #[tokio::test]
+async fn history_series_includes_exact_latest_value_for_live_cards() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(authenticated(
+            Request::get(
+                "/api/v1/history/series?from=1735689590000&to=1735689610000&signal_ref=signal-1&bucket_ms=1000",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert_eq!(body["signal_ref"], "signal-1");
+    assert_eq!(body["latest_received_at"], 1_735_689_600_000_i64);
+    assert_eq!(body["latest_value"], 1.0);
+    assert_eq!(body["points"][0]["average"], 1.0);
+}
+
+#[tokio::test]
 async fn history_json_preserves_go_page_and_record_schema() {
     let app = router(
         WebConfig::test(),

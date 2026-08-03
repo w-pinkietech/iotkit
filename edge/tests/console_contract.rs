@@ -355,6 +355,19 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             ][..],
         ),
         (
+            "/live",
+            &[
+                r#"data-live-dashboard"#,
+                r#"data-live-signal"#,
+                r#"data-signal-ref="signal-01""#,
+                r#"data-value-kind="numeric""#,
+                r#"data-live-chart"#,
+                r#"data-live-status"#,
+                r#"href="/sensors/signal-01""#,
+                "表示領域内から最大12件を同時に自動更新",
+            ][..],
+        ),
+        (
             "/equipment",
             &[
                 r#"class="equipment-row""#,

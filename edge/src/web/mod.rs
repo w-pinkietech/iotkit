@@ -679,6 +679,7 @@ fn navigation_page(path: &str) -> &str {
 fn console_title(path: &str) -> &str {
     match navigation_page(path) {
         "status" => "システム概要",
+        "live" => "ライブモニター",
         "sensors" => "センサー一覧",
         "logs" => "受信履歴",
         "equipment" => "機器管理",
@@ -2345,7 +2346,22 @@ pub mod test_support {
             })
         }
         async fn history_series(&self, _query: HistoryQuery) -> Result<Value, WebError> {
-            Ok(json!({"series":[]}))
+            Ok(json!({
+                "signal_ref":"signal-1",
+                "display_name":"Temperature",
+                "unit":"C",
+                "value_type":"number",
+                "sample_count":1,
+                "latest_received_at":1735689600000_i64,
+                "latest_value":1.0,
+                "points":[{
+                    "bucket_start":1735689600000_i64,
+                    "minimum":1.0,
+                    "average":1.0,
+                    "maximum":1.0,
+                    "sample_count":1
+                }]
+            }))
         }
         async fn semantic_history(
             &self,

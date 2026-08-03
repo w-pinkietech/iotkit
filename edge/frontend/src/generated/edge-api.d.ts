@@ -168,6 +168,13 @@ export interface components {
             value_type: string;
             /** Format: int64 */
             sample_count: number;
+            /**
+             * Format: int64
+             * @description Exact IoTKit Edge receipt time of the latest value, or null before first receipt.
+             */
+            latest_received_at: number | null;
+            /** @description First raw value from the latest record, or null before first receipt. */
+            latest_value: number | boolean | string | null;
             points: components["schemas"]["HistorySeriesPoint"][];
         };
         StorageStatus: {

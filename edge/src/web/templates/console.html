@@ -17,6 +17,7 @@
     <nav class="side-nav" aria-label="メインメニュー">
       <p class="nav-heading">状態を見る</p>
       <a href="/status"{% if page == "status" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">⌂</span>概要</a>
+      <a href="/live"{% if page == "live" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">⌁</span>ライブ</a>
       <a href="/sensors"{% if page == "sensors" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">◉</span>センサー一覧</a>
       <a href="/logs"{% if page == "logs" %} class="active" aria-current="page"{% endif %}><span class="nav-symbol" aria-hidden="true">≡</span>受信履歴</a>
       <p class="nav-heading">設定</p>
@@ -129,6 +130,37 @@
         <div class="signal-table-wrap status-signal-table">
           {% include "signal-table.html" %}
         </div>
+      </section>
+      {% endif %}
+
+      {% if page == "live" %}
+      <section class="live-dashboard-heading" aria-label="ライブ更新の状態">
+        <div>
+          <p class="section-kicker">REAL TIME</p>
+          <h2>現場の値をまとめて確認</h2>
+          <p>直近15分の推移を5秒ごとに確認します。表示領域内から最大12件を同時に自動更新します。</p>
+        </div>
+        <span class="live-dashboard-state" data-live-dashboard-state aria-live="polite">更新を準備中</span>
+      </section>
+      <section class="live-signal-grid" data-live-dashboard data-stale-after-ms="300000" aria-label="センサーのライブ値">
+        {% for signal in view.signals %}
+        <article class="live-signal-card" data-live-signal data-signal-ref="{{ signal.signal_ref }}" data-value-kind="{{ signal.value_kind }}" data-decimal-places="{{ signal.decimal_places }}" data-unit="{{ signal.unit }}">
+          <header>
+            <div><span>{{ signal.sensor_type }}</span><h2>{{ signal.name }}</h2></div>
+            <span class="status-pill {{ signal.status_class }}" data-live-status>{{ signal.status_label }}</span>
+          </header>
+          <div class="live-current">
+            <span>現在値</span>
+            <strong data-live-value>{{ signal.value }}{% if !signal.unit.is_empty() %} {{ signal.unit }}{% endif %}</strong>
+            <span data-live-received>{% if signal.status_class == "never" %}まだ受信していません{% else %}最終受信を確認中{% endif %}</span>
+          </div>
+          <svg class="live-chart" data-live-chart viewBox="0 0 360 160" role="img" aria-label="{{ signal.name }}の直近15分の受信値"></svg>
+          <p class="sr-only" data-live-summary>受信値を確認中です。</p>
+          <footer><span>{{ signal.edge_node_id }}</span><a href="/sensors/{{ signal.signal_ref }}">詳細を見る <span aria-hidden="true">→</span></a></footer>
+        </article>
+        {% else %}
+        <div class="empty-state"><span aria-hidden="true">◉</span><strong>表示できるセンサーがありません</strong><p>機器を登録すると、ここに現在値と推移が表示されます。</p><a class="button" href="/equipment">機器管理を開く</a></div>
+        {% endfor %}
       </section>
       {% endif %}
 

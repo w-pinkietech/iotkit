@@ -62,6 +62,29 @@
     }
     return { ok: true, value: payload };
   }
+  function isHistorySeries(value) {
+    return isRecord(value) && typeof value.signal_ref === "string" && (typeof value.latest_received_at === "number" || value.latest_received_at === null) && Array.isArray(value.points) && value.points.every(
+      (point) => isRecord(point) && typeof point.bucket_start === "number" && typeof point.minimum === "number" && typeof point.average === "number" && typeof point.maximum === "number" && typeof point.sample_count === "number"
+    );
+  }
+  async function getHistorySeries(signalRef, from, to, bucketMs, signal) {
+    const query2 = new URLSearchParams({
+      signal_ref: signalRef,
+      from: String(from),
+      to: String(to),
+      bucket_ms: String(bucketMs)
+    });
+    const response = await fetch(`/api/v1/history/series?${query2}`, { signal });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: isAPIError(payload) ? payload : null
+      };
+    }
+    return isHistorySeries(payload) ? { ok: true, value: payload } : { ok: false, status: response.status, error: null };
+  }
 
   // src/dom.ts
   function query(selector, root = document) {
@@ -1389,8 +1412,208 @@
     }
   }
 
+  // src/live.ts
+  var WINDOW_MS = 15 * 60 * 1e3;
+  var BUCKET_MS = 15 * 1e3;
+  var REFRESH_MS = 5 * 1e3;
+  var MAX_ACTIVE_CARDS = 12;
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function addSVG2(svg, tag, attributes) {
+    const element = document.createElementNS(SVG_NS, tag);
+    for (const [name, value] of Object.entries(attributes)) {
+      element.setAttribute(name, String(value));
+    }
+    svg.append(element);
+    return element;
+  }
+  function formatNumber2(value, decimalPlaces = 1) {
+    return value.toLocaleString("ja-JP", {
+      maximumFractionDigits: Math.max(0, decimalPlaces)
+    });
+  }
+  function isBooleanKind(kind) {
+    return kind === "bool" || kind === "boolean";
+  }
+  function relativeTime(receivedAt, now) {
+    const elapsed = Math.max(0, now - receivedAt);
+    if (elapsed < 1e4) return "\u305F\u3063\u305F\u4ECA";
+    if (elapsed < 6e4) return `${Math.floor(elapsed / 1e3)}\u79D2\u524D`;
+    if (elapsed < 60 * 6e4) return `${Math.floor(elapsed / 6e4)}\u5206\u524D`;
+    return `${Math.floor(elapsed / (60 * 6e4))}\u6642\u9593\u524D`;
+  }
+  function renderEmpty(svg, boolean) {
+    svg.replaceChildren();
+    const label = addSVG2(svg, "text", {
+      x: 180,
+      y: 82,
+      "text-anchor": "middle",
+      class: "live-chart-empty"
+    });
+    label.textContent = boolean ? "\u63A5\u70B9\u30C7\u30FC\u30BF\u3092\u5F85\u3063\u3066\u3044\u307E\u3059" : "\u6570\u5024\u30C7\u30FC\u30BF\u3092\u5F85\u3063\u3066\u3044\u307E\u3059";
+  }
+  function renderChart(svg, payload, boolean, unit, now) {
+    svg.replaceChildren();
+    const points = payload.points;
+    if (!points.length) {
+      renderEmpty(svg, boolean);
+      return;
+    }
+    const width = 360;
+    const height = 160;
+    const left = 42;
+    const right = 12;
+    const top = 12;
+    const bottom = 28;
+    const plotWidth = width - left - right;
+    const plotHeight = height - top - bottom;
+    const windowStart = now - WINDOW_MS;
+    const x = (time) => left + Math.max(0, Math.min(1, (time - windowStart) / WINDOW_MS)) * plotWidth;
+    const sourceValues = points.flatMap((point) => [point.minimum, point.maximum]);
+    let minimum = boolean ? 0 : Math.min(...sourceValues);
+    let maximum = boolean ? 1 : Math.max(...sourceValues);
+    if (!boolean) {
+      const padding = minimum === maximum ? Math.max(1, Math.abs(minimum) * 0.1) : (maximum - minimum) * 0.08;
+      minimum -= padding;
+      maximum += padding;
+    }
+    const y = (value) => top + (maximum - value) * plotHeight / (maximum - minimum);
+    for (const ratio of [0, 0.5, 1]) {
+      const gridY = top + ratio * plotHeight;
+      addSVG2(svg, "line", {
+        x1: left,
+        x2: width - right,
+        y1: gridY,
+        y2: gridY,
+        class: "live-chart-grid"
+      });
+    }
+    for (const [value, label] of boolean ? [[1, "ON"], [0, "OFF"]] : [[maximum, formatNumber2(maximum)], [minimum, formatNumber2(minimum)]]) {
+      const text = addSVG2(svg, "text", {
+        x: left - 7,
+        y: y(value) + 4,
+        "text-anchor": "end",
+        class: "live-chart-axis-label"
+      });
+      text.textContent = label;
+    }
+    const startLabel = addSVG2(svg, "text", {
+      x: left,
+      y: height - 7,
+      "text-anchor": "start",
+      class: "live-chart-axis-label"
+    });
+    startLabel.textContent = "15\u5206\u524D";
+    const endLabel = addSVG2(svg, "text", {
+      x: width - right,
+      y: height - 7,
+      "text-anchor": "end",
+      class: "live-chart-axis-label"
+    });
+    endLabel.textContent = "\u73FE\u5728";
+    let path = "";
+    points.forEach((point, index) => {
+      const pointX = x(point.bucket_start).toFixed(2);
+      const pointY = y(boolean ? point.average >= 0.5 ? 1 : 0 : point.average).toFixed(2);
+      if (index === 0) path = `M ${pointX} ${pointY}`;
+      else if (boolean) path += ` H ${pointX} V ${pointY}`;
+      else path += ` L ${pointX} ${pointY}`;
+    });
+    addSVG2(svg, "path", { d: path, class: "live-chart-line" });
+    const title = addSVG2(svg, "title", {});
+    title.textContent = boolean ? "\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
+  }
+  function setStatus(card, label, className) {
+    const status = query("[data-live-status]", card);
+    if (!status) return;
+    status.textContent = label;
+    status.className = `status-pill ${className}`;
+  }
+  function renderCard(card, payload, now, staleAfterMs) {
+    const kind = card.dataset.valueKind ?? payload.value_type;
+    const boolean = isBooleanKind(kind);
+    const unit = card.dataset.unit ?? payload.unit;
+    const decimalPlaces = Number(card.dataset.decimalPlaces ?? 1);
+    const value = query("[data-live-value]", card);
+    const received = query("[data-live-received]", card);
+    const summary = query("[data-live-summary]", card);
+    const chart = query("[data-live-chart]", card);
+    if (chart) renderChart(chart, payload, boolean, unit, now);
+    if (payload.latest_received_at === null) {
+      setStatus(card, "\u672A\u53D7\u4FE1", "never");
+      if (value) value.textContent = "\u2014";
+      if (received) received.textContent = "\u307E\u3060\u53D7\u4FE1\u3057\u3066\u3044\u307E\u305B\u3093";
+    } else {
+      const relative = relativeTime(payload.latest_received_at, now);
+      const stale = now - payload.latest_received_at > staleAfterMs;
+      setStatus(card, stale ? "\u8981\u78BA\u8A8D" : "\u53D7\u4FE1\u4E2D", stale ? "stale" : "receiving");
+      if (received) {
+        received.textContent = `\u6700\u7D42\u53D7\u4FE1 ${relative}`;
+        received.title = new Date(payload.latest_received_at).toLocaleString("ja-JP");
+      }
+      if (value) {
+        if (boolean && (typeof payload.latest_value === "boolean" || typeof payload.latest_value === "number")) {
+          value.textContent = (typeof payload.latest_value === "boolean" ? payload.latest_value : payload.latest_value >= 0.5) ? "ON" : "OFF";
+        } else if (typeof payload.latest_value === "number") {
+          value.textContent = `${formatNumber2(payload.latest_value, decimalPlaces)}${unit ? ` ${unit}` : ""}`;
+        }
+      }
+    }
+    if (summary) {
+      summary.textContent = boolean ? `${payload.sample_count}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306FON/OFF\u3067\u3059\u3002` : `${payload.sample_count}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
+    }
+  }
+  function activeCards(dashboard) {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    return queryAll("[data-live-signal]", dashboard).filter((card) => {
+      const bounds = card.getBoundingClientRect();
+      return bounds.bottom >= 0 && bounds.top <= viewportHeight;
+    }).slice(0, MAX_ACTIVE_CARDS);
+  }
+  function initializeLiveDashboard() {
+    const dashboard = query("[data-live-dashboard]");
+    const state = query("[data-live-dashboard-state]");
+    if (!dashboard) return;
+    const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 3e5);
+    let controller = null;
+    const refresh = async () => {
+      if (!dashboard.isConnected || document.visibilityState !== "visible") return;
+      controller?.abort();
+      controller = new AbortController();
+      const now = Date.now();
+      const cards = activeCards(dashboard);
+      if (!cards.length) return;
+      const results = await Promise.all(
+        cards.map(async (card) => {
+          const signalRef = card.dataset.signalRef;
+          if (!signalRef) return false;
+          const result = await getHistorySeries(
+            signalRef,
+            now - WINDOW_MS,
+            now + 1,
+            BUCKET_MS,
+            controller.signal
+          ).catch(() => null);
+          if (!result?.ok) return false;
+          renderCard(card, result.value, now, staleAfterMs);
+          return true;
+        })
+      );
+      if (state) {
+        const succeeded = results.filter(Boolean).length;
+        state.textContent = succeeded === cards.length ? `\u81EA\u52D5\u66F4\u65B0\u4E2D\u30FB${succeeded}\u4EF6\u3092\u78BA\u8A8D` : `\u4E00\u90E8\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u30FB${succeeded}/${cards.length}\u4EF6`;
+      }
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void refresh();
+      else controller?.abort();
+    });
+    if (document.visibilityState === "visible") void refresh();
+    window.setInterval(() => void refresh(), REFRESH_MS);
+  }
+
   // src/console.ts
   initializeShell();
+  initializeLiveDashboard();
   initializeSemanticForms();
   initializePreviews();
 })();

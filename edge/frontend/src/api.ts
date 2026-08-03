@@ -5,6 +5,8 @@ export type MappingPreviewRequest =
 export type MappingPreviewResponse =
   operations["createMappingPreview"]["responses"][200]["content"]["application/json"];
 export type APIError = components["schemas"]["ErrorResponse"];
+export type HistorySeries =
+  operations["getHistorySeries"]["responses"][200]["content"]["application/json"];
 
 export type APIResult<T> =
   | { ok: true; value: T }
@@ -103,4 +105,49 @@ export async function createMappingPreview(
     return { ok: false, status: response.status, error: null };
   }
   return { ok: true, value: payload };
+}
+
+function isHistorySeries(value: unknown): value is HistorySeries {
+  return (
+    isRecord(value) &&
+    typeof value.signal_ref === "string" &&
+    (typeof value.latest_received_at === "number" || value.latest_received_at === null) &&
+    Array.isArray(value.points) &&
+    value.points.every(
+      (point) =>
+        isRecord(point) &&
+        typeof point.bucket_start === "number" &&
+        typeof point.minimum === "number" &&
+        typeof point.average === "number" &&
+        typeof point.maximum === "number" &&
+        typeof point.sample_count === "number",
+    )
+  );
+}
+
+export async function getHistorySeries(
+  signalRef: string,
+  from: number,
+  to: number,
+  bucketMs: number,
+  signal: AbortSignal,
+): Promise<APIResult<HistorySeries>> {
+  const query = new URLSearchParams({
+    signal_ref: signalRef,
+    from: String(from),
+    to: String(to),
+    bucket_ms: String(bucketMs),
+  });
+  const response = await fetch(`/api/v1/history/series?${query}`, { signal });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      error: isAPIError(payload) ? payload : null,
+    };
+  }
+  return isHistorySeries(payload)
+    ? { ok: true, value: payload }
+    : { ok: false, status: response.status, error: null };
 }

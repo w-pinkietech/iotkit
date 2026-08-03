@@ -70,6 +70,21 @@ fn record(sequence: i64, series_key: &str, value: f64, received_at: i64) -> RawR
     .unwrap()
 }
 
+fn boolean_record(sequence: i64, series_key: &str, value: bool, received_at: i64) -> RawRecord {
+    RawRecord::new(
+        sequence,
+        serde_json::to_vec(&serde_json::json!({
+            "family":"measurement","schema_version":1,"epoch":"epoch-a",
+            "pub_seq":sequence,"series_key":series_key,"values":[value],
+            "event_time":received_at-1,"event_time_source":"received_at",
+            "time_source":"edge_node","time_quality":"unsynced",
+            "received_at":received_at,"device_time":null
+        }))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn raw_history_pages_stably_across_epochs_and_keeps_profile_metadata() {
     let (_directory, storage, signal_ref, series_key) = fixture().await;
@@ -183,4 +198,30 @@ async fn semantic_history_preserves_exact_provenance_and_series_buckets_preserve
     assert_eq!(buckets[0].minimum, 1.0);
     assert_eq!(buckets[0].maximum, 100.0);
     assert_eq!(buckets[0].count, 3);
+}
+
+#[tokio::test]
+async fn history_series_preserves_boolean_contact_transitions_as_zero_and_one() {
+    let (_directory, storage, signal_ref, series_key) = fixture().await;
+    for (sequence, value, received_at) in [(1, false, 100), (2, true, 110)] {
+        storage
+            .accept_batch(AcceptBatch {
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-a".into(),
+                publication_id: format!("boolean-history-{sequence}"),
+                received_at,
+                records: vec![boolean_record(sequence, &series_key, value, received_at)],
+            })
+            .await
+            .unwrap();
+    }
+
+    let buckets = storage
+        .query_history_series(&signal_ref, 100, 200, 10)
+        .await
+        .unwrap();
+
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets[0].average, 0.0);
+    assert_eq!(buckets[1].average, 1.0);
 }
