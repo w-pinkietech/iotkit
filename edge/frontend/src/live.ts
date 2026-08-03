@@ -1,9 +1,11 @@
 import { getHistorySeries, type HistorySeries } from "./api";
 import { query, queryAll } from "./dom";
 
-const WINDOW_MS = 15 * 60 * 1_000;
-const BUCKET_MS = 15 * 1_000;
 const REFRESH_MS = 5 * 1_000;
+const SESSION_WINDOW_MS = 5 * 60 * 1_000;
+const BUCKET_MS = REFRESH_MS;
+const MAX_NUMERIC_POINTS = 60;
+const MAX_BOOLEAN_POINTS = 10;
 const MAX_ACTIVE_CARDS = 12;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -42,7 +44,7 @@ function relativeTime(receivedAt: number, now: number): string {
   return `${Math.floor(elapsed / (60 * 60_000))}時間前`;
 }
 
-function renderEmpty(svg: SVGSVGElement, boolean: boolean): void {
+function renderEmpty(svg: SVGSVGElement): void {
   svg.replaceChildren();
   const label = addSVG(svg, "text", {
     x: 180,
@@ -50,7 +52,28 @@ function renderEmpty(svg: SVGSVGElement, boolean: boolean): void {
     "text-anchor": "middle",
     class: "live-chart-empty",
   });
-  label.textContent = boolean ? "接点データを待っています" : "数値データを待っています";
+  label.textContent = "この画面を開いてからの受信を待っています";
+}
+
+function sessionPoints(
+  payload: HistorySeries,
+  boolean: boolean,
+  windowStart: number,
+): HistorySeries["points"] {
+  const points = payload.points.filter((point) => point.bucket_start >= windowStart);
+  if (!boolean) return points.slice(-MAX_NUMERIC_POINTS);
+  const transitions: HistorySeries["points"] = [];
+  for (const point of points) {
+    const state = point.average >= 0.5 ? 1 : 0;
+    if (transitions.at(-1)?.average === state) continue;
+    transitions.push({
+      ...point,
+      minimum: state,
+      average: state,
+      maximum: state,
+    });
+  }
+  return transitions.slice(-MAX_BOOLEAN_POINTS);
 }
 
 function renderChart(
@@ -59,12 +82,14 @@ function renderChart(
   boolean: boolean,
   unit: string,
   now: number,
-): void {
+  sessionStartedAt: number,
+): number {
   svg.replaceChildren();
-  const points = payload.points;
+  const windowStart = Math.max(sessionStartedAt, now - SESSION_WINDOW_MS);
+  const points = sessionPoints(payload, boolean, windowStart);
   if (!points.length) {
-    renderEmpty(svg, boolean);
-    return;
+    renderEmpty(svg);
+    return 0;
   }
   const width = 360;
   const height = 160;
@@ -74,10 +99,10 @@ function renderChart(
   const bottom = 28;
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
-  const windowStart = now - WINDOW_MS;
+  const windowEnd = Math.max(now, windowStart + REFRESH_MS);
   const x = (time: number): number =>
     left +
-    Math.max(0, Math.min(1, (time - windowStart) / WINDOW_MS)) * plotWidth;
+    Math.max(0, Math.min(1, (time - windowStart) / (windowEnd - windowStart))) * plotWidth;
   const sourceValues = points.flatMap((point) => [point.minimum, point.maximum]);
   let minimum = boolean ? 0 : Math.min(...sourceValues);
   let maximum = boolean ? 1 : Math.max(...sourceValues);
@@ -118,7 +143,7 @@ function renderChart(
     "text-anchor": "start",
     class: "live-chart-axis-label",
   });
-  startLabel.textContent = "15分前";
+  startLabel.textContent = windowStart === sessionStartedAt ? "開始" : "5分前";
   const endLabel = addSVG(svg, "text", {
     x: width - right,
     y: height - 7,
@@ -137,7 +162,11 @@ function renderChart(
   });
   addSVG(svg, "path", { d: path, class: "live-chart-line" });
   const latest = points.at(-1)!;
-  const latestX = x(payload.latest_received_at ?? latest.bucket_start);
+  const latestX = x(
+    payload.latest_received_at !== null && payload.latest_received_at >= windowStart
+      ? payload.latest_received_at
+      : latest.bucket_start,
+  );
   const latestY = y(boolean ? (latest.average >= 0.5 ? 1 : 0) : latest.average);
   addSVG(svg, "line", {
     x1: latestX,
@@ -161,8 +190,9 @@ function renderChart(
   latestLabel.textContent = "最終データ";
   const title = addSVG(svg, "title", {});
   title.textContent = boolean
-    ? "横軸は直近15分、縦軸は接点のON/OFFです。"
-    : `横軸は直近15分、縦軸は値${unit ? `（${unit}）` : ""}です。`;
+    ? "横軸はこの画面を開いてから（最大5分）、縦軸は接点のON/OFFです。"
+    : `横軸はこの画面を開いてから（最大5分）、縦軸は値${unit ? `（${unit}）` : ""}です。`;
+  return points.length;
 }
 
 function setStatus(card: HTMLElement, label: string, className: string): void {
@@ -172,7 +202,13 @@ function setStatus(card: HTMLElement, label: string, className: string): void {
   status.className = `status-pill ${className}`;
 }
 
-function renderCard(card: HTMLElement, payload: HistorySeries, now: number, staleAfterMs: number): void {
+function renderCard(
+  card: HTMLElement,
+  payload: HistorySeries,
+  now: number,
+  staleAfterMs: number,
+  sessionStartedAt: number,
+): void {
   const kind = card.dataset.valueKind ?? payload.value_type;
   const boolean = isBooleanKind(kind);
   const unit = card.dataset.unit ?? payload.unit;
@@ -181,7 +217,9 @@ function renderCard(card: HTMLElement, payload: HistorySeries, now: number, stal
   const received = query<HTMLElement>("[data-live-received]", card);
   const summary = query<HTMLElement>("[data-live-summary]", card);
   const chart = query<SVGSVGElement>("[data-live-chart]", card);
-  if (chart) renderChart(chart, payload, boolean, unit, now);
+  const pointCount = chart
+    ? renderChart(chart, payload, boolean, unit, now, sessionStartedAt)
+    : 0;
   if (payload.latest_received_at === null) {
     setStatus(card, "未受信", "never");
     if (value) value.textContent = "—";
@@ -213,8 +251,8 @@ function renderCard(card: HTMLElement, payload: HistorySeries, now: number, stal
   }
   if (summary) {
     summary.textContent = boolean
-      ? `${payload.sample_count}件を表示しています。横軸は直近15分、縦軸はON/OFFです。`
-      : `${payload.sample_count}件を表示しています。横軸は直近15分、縦軸は値${unit ? `（${unit}）` : ""}です。`;
+      ? `この画面を開いてから${pointCount}件を表示しています。横軸は開始から現在（最大5分）、縦軸はON/OFFです。`
+      : `この画面を開いてから${pointCount}件を表示しています。横軸は開始から現在（最大5分）、縦軸は値${unit ? `（${unit}）` : ""}です。`;
   }
 }
 
@@ -233,6 +271,7 @@ export function initializeLiveDashboard(): void {
   const state = query<HTMLElement>("[data-live-dashboard-state]");
   if (!dashboard) return;
   const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 300_000);
+  const sessionStartedAt = Date.now();
   const latestPayloads = new WeakMap<HTMLElement, HistorySeries>();
   let controller: AbortController | null = null;
 
@@ -245,7 +284,7 @@ export function initializeLiveDashboard(): void {
     if (!cards.length) return;
     for (const card of cards) {
       const cached = latestPayloads.get(card);
-      if (cached) renderCard(card, cached, now, staleAfterMs);
+      if (cached) renderCard(card, cached, now, staleAfterMs, sessionStartedAt);
     }
     const results = await Promise.all(
       cards.map(async (card) => {
@@ -253,14 +292,14 @@ export function initializeLiveDashboard(): void {
         if (!signalRef) return false;
         const result = await getHistorySeries(
           signalRef,
-          now - WINDOW_MS,
+          Math.max(sessionStartedAt, now - SESSION_WINDOW_MS),
           now + 1,
           BUCKET_MS,
           controller!.signal,
         ).catch(() => null);
         if (!result?.ok) return false;
         latestPayloads.set(card, result.value);
-        renderCard(card, result.value, now, staleAfterMs);
+        renderCard(card, result.value, now, staleAfterMs, sessionStartedAt);
         return true;
       }),
     );

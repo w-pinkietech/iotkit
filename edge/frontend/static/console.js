@@ -1413,9 +1413,11 @@
   }
 
   // src/live.ts
-  var WINDOW_MS = 15 * 60 * 1e3;
-  var BUCKET_MS = 15 * 1e3;
   var REFRESH_MS = 5 * 1e3;
+  var SESSION_WINDOW_MS = 5 * 60 * 1e3;
+  var BUCKET_MS = REFRESH_MS;
+  var MAX_NUMERIC_POINTS = 60;
+  var MAX_BOOLEAN_POINTS = 10;
   var MAX_ACTIVE_CARDS = 12;
   var SVG_NS = "http://www.w3.org/2000/svg";
   function addSVG2(svg, tag, attributes) {
@@ -1445,7 +1447,7 @@
     }
     return `${Math.floor(elapsed / (60 * 6e4))}\u6642\u9593\u524D`;
   }
-  function renderEmpty(svg, boolean) {
+  function renderEmpty(svg) {
     svg.replaceChildren();
     const label = addSVG2(svg, "text", {
       x: 180,
@@ -1453,14 +1455,31 @@
       "text-anchor": "middle",
       class: "live-chart-empty"
     });
-    label.textContent = boolean ? "\u63A5\u70B9\u30C7\u30FC\u30BF\u3092\u5F85\u3063\u3066\u3044\u307E\u3059" : "\u6570\u5024\u30C7\u30FC\u30BF\u3092\u5F85\u3063\u3066\u3044\u307E\u3059";
+    label.textContent = "\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u53D7\u4FE1\u3092\u5F85\u3063\u3066\u3044\u307E\u3059";
   }
-  function renderChart(svg, payload, boolean, unit, now) {
+  function sessionPoints(payload, boolean, windowStart) {
+    const points = payload.points.filter((point) => point.bucket_start >= windowStart);
+    if (!boolean) return points.slice(-MAX_NUMERIC_POINTS);
+    const transitions = [];
+    for (const point of points) {
+      const state = point.average >= 0.5 ? 1 : 0;
+      if (transitions.at(-1)?.average === state) continue;
+      transitions.push({
+        ...point,
+        minimum: state,
+        average: state,
+        maximum: state
+      });
+    }
+    return transitions.slice(-MAX_BOOLEAN_POINTS);
+  }
+  function renderChart(svg, payload, boolean, unit, now, sessionStartedAt) {
     svg.replaceChildren();
-    const points = payload.points;
+    const windowStart = Math.max(sessionStartedAt, now - SESSION_WINDOW_MS);
+    const points = sessionPoints(payload, boolean, windowStart);
     if (!points.length) {
-      renderEmpty(svg, boolean);
-      return;
+      renderEmpty(svg);
+      return 0;
     }
     const width = 360;
     const height = 160;
@@ -1470,8 +1489,8 @@
     const bottom = 28;
     const plotWidth = width - left - right;
     const plotHeight = height - top - bottom;
-    const windowStart = now - WINDOW_MS;
-    const x = (time) => left + Math.max(0, Math.min(1, (time - windowStart) / WINDOW_MS)) * plotWidth;
+    const windowEnd = Math.max(now, windowStart + REFRESH_MS);
+    const x = (time) => left + Math.max(0, Math.min(1, (time - windowStart) / (windowEnd - windowStart))) * plotWidth;
     const sourceValues = points.flatMap((point) => [point.minimum, point.maximum]);
     let minimum = boolean ? 0 : Math.min(...sourceValues);
     let maximum = boolean ? 1 : Math.max(...sourceValues);
@@ -1506,7 +1525,7 @@
       "text-anchor": "start",
       class: "live-chart-axis-label"
     });
-    startLabel.textContent = "15\u5206\u524D";
+    startLabel.textContent = windowStart === sessionStartedAt ? "\u958B\u59CB" : "5\u5206\u524D";
     const endLabel = addSVG2(svg, "text", {
       x: width - right,
       y: height - 7,
@@ -1524,7 +1543,9 @@
     });
     addSVG2(svg, "path", { d: path, class: "live-chart-line" });
     const latest = points.at(-1);
-    const latestX = x(payload.latest_received_at ?? latest.bucket_start);
+    const latestX = x(
+      payload.latest_received_at !== null && payload.latest_received_at >= windowStart ? payload.latest_received_at : latest.bucket_start
+    );
     const latestY = y(boolean ? latest.average >= 0.5 ? 1 : 0 : latest.average);
     addSVG2(svg, "line", {
       x1: latestX,
@@ -1547,7 +1568,8 @@
     });
     latestLabel.textContent = "\u6700\u7D42\u30C7\u30FC\u30BF";
     const title = addSVG2(svg, "title", {});
-    title.textContent = boolean ? "\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
+    title.textContent = boolean ? "\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
+    return points.length;
   }
   function setStatus(card, label, className) {
     const status = query("[data-live-status]", card);
@@ -1555,7 +1577,7 @@
     status.textContent = label;
     status.className = `status-pill ${className}`;
   }
-  function renderCard(card, payload, now, staleAfterMs) {
+  function renderCard(card, payload, now, staleAfterMs, sessionStartedAt) {
     const kind = card.dataset.valueKind ?? payload.value_type;
     const boolean = isBooleanKind(kind);
     const unit = card.dataset.unit ?? payload.unit;
@@ -1564,7 +1586,7 @@
     const received = query("[data-live-received]", card);
     const summary = query("[data-live-summary]", card);
     const chart = query("[data-live-chart]", card);
-    if (chart) renderChart(chart, payload, boolean, unit, now);
+    const pointCount = chart ? renderChart(chart, payload, boolean, unit, now, sessionStartedAt) : 0;
     if (payload.latest_received_at === null) {
       setStatus(card, "\u672A\u53D7\u4FE1", "never");
       if (value) value.textContent = "\u2014";
@@ -1586,7 +1608,7 @@
       }
     }
     if (summary) {
-      summary.textContent = boolean ? `${payload.sample_count}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306FON/OFF\u3067\u3059\u3002` : `${payload.sample_count}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
+      summary.textContent = boolean ? `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u958B\u59CB\u304B\u3089\u73FE\u5728\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306FON/OFF\u3067\u3059\u3002` : `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u958B\u59CB\u304B\u3089\u73FE\u5728\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
     }
   }
   function activeCards(dashboard) {
@@ -1601,6 +1623,7 @@
     const state = query("[data-live-dashboard-state]");
     if (!dashboard) return;
     const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 3e5);
+    const sessionStartedAt = Date.now();
     const latestPayloads = /* @__PURE__ */ new WeakMap();
     let controller = null;
     const refresh = async () => {
@@ -1612,7 +1635,7 @@
       if (!cards.length) return;
       for (const card of cards) {
         const cached = latestPayloads.get(card);
-        if (cached) renderCard(card, cached, now, staleAfterMs);
+        if (cached) renderCard(card, cached, now, staleAfterMs, sessionStartedAt);
       }
       const results = await Promise.all(
         cards.map(async (card) => {
@@ -1620,14 +1643,14 @@
           if (!signalRef) return false;
           const result = await getHistorySeries(
             signalRef,
-            now - WINDOW_MS,
+            Math.max(sessionStartedAt, now - SESSION_WINDOW_MS),
             now + 1,
             BUCKET_MS,
             controller.signal
           ).catch(() => null);
           if (!result?.ok) return false;
           latestPayloads.set(card, result.value);
-          renderCard(card, result.value, now, staleAfterMs);
+          renderCard(card, result.value, now, staleAfterMs, sessionStartedAt);
           return true;
         })
       );

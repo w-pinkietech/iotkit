@@ -56,7 +56,7 @@ afterEach(() => {
 describe("live dashboard", () => {
   it("renders numeric lines and boolean steps with current values and axes", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(1_700_000_005_000);
+    vi.setSystemTime(1_699_999_960_000);
     document.body.innerHTML = `
       <section data-live-dashboard>
         <span data-live-dashboard-state>更新を準備中</span>
@@ -88,6 +88,7 @@ describe("live dashboard", () => {
     );
     expect(contact.querySelector("[data-live-value]")?.textContent).toBe("ON");
     expect(contact.querySelector("path")?.getAttribute("d")).toMatch(/H .* V /);
+    expect(contact.querySelector("path")?.getAttribute("d")?.match(/ V /g)).toHaveLength(1);
     expect(contact.querySelector("[data-live-summary]")?.textContent).toContain(
       "ON/OFF",
     );
@@ -96,7 +97,120 @@ describe("live dashboard", () => {
     );
   });
 
-  it("keeps the received age and latest point moving when a refresh fails", async () => {
+  it("starts empty and plots only data received after the live view opens", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_005_000);
+    document.body.innerHTML = `
+      <section data-live-dashboard>
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("temperature-01", "numeric", "℃")}
+      </section>
+    `;
+    const historical = await responseFor("temperature-01").json();
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(historical)))
+      .mockResolvedValue(new Response(JSON.stringify({
+        ...historical,
+        sample_count: 1,
+        latest_received_at: 1_700_000_010_000,
+        latest_value: 25.2,
+        points: [
+          ...historical.points,
+          {
+            bucket_start: 1_700_000_010_000,
+            minimum: 25.2,
+            average: 25.2,
+            maximum: 25.2,
+            sample_count: 1,
+          },
+        ],
+      })));
+    vi.stubGlobal("fetch", fetch);
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const liveCard = document.querySelector<HTMLElement>(
+      '[data-signal-ref="temperature-01"]',
+    )!;
+    expect(liveCard.querySelector("path")).toBeNull();
+    expect(liveCard.querySelector(".live-chart-empty")?.textContent).toBe(
+      "この画面を開いてからの受信を待っています",
+    );
+    const firstRequest = new URL(String(fetch.mock.calls[0]?.[0]), "http://localhost");
+    expect(firstRequest.searchParams.get("from")).toBe("1700000005000");
+    expect(firstRequest.searchParams.get("bucket_ms")).toBe("5000");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(liveCard.querySelector("path")?.getAttribute("d")).toMatch(/^M /);
+    expect(liveCard.querySelector(".live-chart-latest-point")).not.toBeNull();
+    expect(liveCard.querySelector("[data-live-summary]")?.textContent).toContain(
+      "この画面を開いてから1件",
+    );
+  });
+
+  it("bounds numeric samples to sixty and contact transitions to ten", async () => {
+    vi.useFakeTimers();
+    const sessionStart = 1_700_000_000_000;
+    vi.setSystemTime(sessionStart);
+    document.body.innerHTML = `
+      <section data-live-dashboard>
+        <span data-live-dashboard-state></span>
+        ${card("temperature-01", "numeric", "℃")}
+        ${card("contact-01", "boolean")}
+      </section>
+    `;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const signalRef = new URL(String(input), "http://localhost").searchParams.get(
+          "signal_ref",
+        )!;
+        const boolean = signalRef === "contact-01";
+        const points = Array.from({ length: 65 }, (_, index) => ({
+          bucket_start: sessionStart + index * 5_000,
+          minimum: boolean ? index % 2 : index,
+          average: boolean ? index % 2 : index,
+          maximum: boolean ? index % 2 : index,
+          sample_count: 1,
+        }));
+        return Promise.resolve(new Response(JSON.stringify({
+          signal_ref: signalRef,
+          display_name: boolean ? "運転接点" : "炉内温度",
+          unit: boolean ? "" : "℃",
+          value_type: boolean ? "boolean" : "number",
+          sample_count: points.length,
+          latest_received_at: points.at(-1)!.bucket_start,
+          latest_value: points.at(-1)!.average,
+          points,
+        })));
+      }),
+    );
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const numericPath = document.querySelector<SVGPathElement>(
+      '[data-signal-ref="temperature-01"] path',
+    )!.getAttribute("d")!;
+    const contactPath = document.querySelector<SVGPathElement>(
+      '[data-signal-ref="contact-01"] path',
+    )!.getAttribute("d")!;
+    expect(numericPath.match(/ L /g)).toHaveLength(59);
+    expect(contactPath.match(/ V /g)).toHaveLength(9);
+    expect(
+      document.querySelector('[data-signal-ref="temperature-01"] [data-live-summary]')
+        ?.textContent,
+    ).toContain("60件");
+    expect(
+      document.querySelector('[data-signal-ref="contact-01"] [data-live-summary]')
+        ?.textContent,
+    ).toContain("10件");
+  });
+
+  it("keeps the received age moving when a refresh fails", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_125_000);
     document.body.innerHTML = `
@@ -124,23 +238,13 @@ describe("live dashboard", () => {
     expect(liveCard.querySelector("[data-live-received]")?.textContent).toBe(
       "最終受信 2分2秒前",
     );
-    expect(liveCard.querySelector(".live-chart-latest-point")).not.toBeNull();
-    expect(liveCard.querySelector(".live-chart-latest-label")?.textContent).toBe(
-      "最終データ",
-    );
-    const pointBefore = Number(
-      liveCard.querySelector(".live-chart-latest-point")?.getAttribute("cx"),
-    );
-    expect(pointBefore).toBeCloseTo(306.35, 1);
+    expect(liveCard.querySelector(".live-chart-latest-point")).toBeNull();
 
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(liveCard.querySelector("[data-live-received]")?.textContent).toBe(
       "最終受信 2分7秒前",
     );
-    expect(
-      Number(liveCard.querySelector(".live-chart-latest-point")?.getAttribute("cx")),
-    ).toBeLessThan(pointBefore);
     expect(document.querySelector("[data-live-dashboard-state]")?.textContent).toContain(
       "一部を確認できません",
     );

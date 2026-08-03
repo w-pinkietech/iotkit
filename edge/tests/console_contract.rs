@@ -364,6 +364,7 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"data-live-chart"#,
                 r#"data-live-status"#,
                 r#"href="/sensors/signal-01""#,
+                "この画面を開いてから届く値",
                 "表示領域内から最大12件を同時に自動更新",
             ][..],
         ),
