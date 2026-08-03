@@ -7,7 +7,7 @@
   <title>{{ title }} | IoTKit</title>
   <link rel="stylesheet" href="/static/edge.css">
 </head>
-<body class="console-shell" data-console-page="{{ page }}" data-sensor-view="{{ sensor_view }}"{% if activation_refresh %} data-activation-refresh="true"{% endif %}>
+<body class="console-shell" data-console-page="{{ page }}" data-sensor-view="{{ sensor_view }}" data-display-time-zone="{{ display_time_zone }}"{% if activation_refresh %} data-activation-refresh="true"{% endif %}>
   <a class="skip-link" href="#main-content">本文へ移動</a>
   <aside class="sidebar" id="sidebar">
     <a class="product-mark" href="/status" aria-label="IoTKit システム概要">
@@ -142,7 +142,7 @@
       </header>
       <section class="content-section sensor-setting-simulation" data-setting-simulation data-signal-ref="{{ signal.signal_ref }}" data-unit="{{ signal.unit }}" data-can-edit="false">
         <div class="section-heading"><div><h2>受信値の推移</h2></div></div>
-        <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値のグラフ"><path d="{{ view.history_chart_path }}"></path></svg>
+        <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値のグラフ"><path d="{{ view.history_chart.path }}"></path></svg>
         <p class="sr-only" data-preview-accessible-summary>受信値を表示しています。</p>
       </section>
       {% when None %}
@@ -542,19 +542,42 @@
 
       {% if page == "logs" %}
       <form id="history-filter" class="toolbar" method="get" action="/logs">
-        <label>期間<select name="range"><option value="1h">直近1時間</option><option value="24h">直近24時間</option><option value="7d">直近7日</option><option value="30d">直近30日</option></select></label>
-        <label>センサー<select name="signal_ref">{% for signal in view.signals %}<option value="{{ signal.signal_ref }}">{{ signal.name }}</option>{% endfor %}</select></label>
+        <label>期間<select name="range"><option value="1h"{% if view.history_range == "1h" %} selected{% endif %}>直近1時間</option><option value="24h"{% if view.history_range == "24h" %} selected{% endif %}>直近24時間</option><option value="7d"{% if view.history_range == "7d" %} selected{% endif %}>直近7日</option><option value="30d"{% if view.history_range == "30d" %} selected{% endif %}>直近30日</option></select></label>
+        <label>センサー<select name="signal_ref">{% for signal in view.signals %}<option value="{{ signal.signal_ref }}"{% if signal.signal_ref == view.history_signal_ref %} selected{% endif %}>{{ signal.name }}</option>{% endfor %}</select></label>
         <button type="submit">表示</button>
       </form>
       <section class="content-section">
         <div class="section-heading"><div><h2>受信値の推移</h2></div></div>
-        <svg class="history-chart" viewBox="0 0 760 260" role="img"><path d="{{ view.history_chart_path }}"></path></svg>
-        <div class="button-row"><a href="{{ view.history_processed_export_url }}">加工後CSV</a><a href="{{ view.history_raw_export_url }}">受信した生データCSV</a></div>
+        <svg class="history-chart" viewBox="0 0 760 280" role="img" aria-label="選択したセンサーの受信値。横軸は受信日時、縦軸は値です。">
+          <title>選択したセンサーの受信値の推移</title>
+          <desc>横軸は受信日時、縦軸は値{% if !view.history_chart.unit.is_empty() %}（{{ view.history_chart.unit }}）{% endif %}です。</desc>
+          {% if !view.history_chart.path.is_empty() %}
+          <g aria-hidden="true">
+            <line class="history-chart-grid" x1="72" y1="20" x2="740" y2="20"></line>
+            <line class="history-chart-grid" x1="72" y1="120" x2="740" y2="120"></line>
+            <line class="history-chart-grid" x1="72" y1="220" x2="740" y2="220"></line>
+            <line x1="72" y1="20" x2="72" y2="220"></line>
+            <line x1="72" y1="220" x2="740" y2="220"></line>
+            <text class="history-chart-axis-label" x="62" y="24" text-anchor="end">{{ view.history_chart.maximum_label }}{% if !view.history_chart.unit.is_empty() %} {{ view.history_chart.unit }}{% endif %}</text>
+            <text class="history-chart-axis-label" x="62" y="124" text-anchor="end">{{ view.history_chart.midpoint_label }}{% if !view.history_chart.unit.is_empty() %} {{ view.history_chart.unit }}{% endif %}</text>
+            <text class="history-chart-axis-label" x="62" y="224" text-anchor="end">{{ view.history_chart.minimum_label }}{% if !view.history_chart.unit.is_empty() %} {{ view.history_chart.unit }}{% endif %}</text>
+            <text class="history-chart-axis-label" x="72" y="246" text-anchor="start" data-history-axis-time data-unix-ms="{{ view.history_chart.start_at }}">{{ view.history_chart.start_at }}</text>
+            <text class="history-chart-axis-label" x="740" y="246" text-anchor="end" data-history-axis-time data-unix-ms="{{ view.history_chart.end_at }}">{{ view.history_chart.end_at }}</text>
+            <text class="history-chart-axis-title" x="406" y="274" text-anchor="middle">受信日時</text>
+            <text class="history-chart-axis-title" x="14" y="120" text-anchor="middle" transform="rotate(-90 14 120)">値{% if !view.history_chart.unit.is_empty() %}（{{ view.history_chart.unit }}）{% endif %}</text>
+            <path d="{{ view.history_chart.path }}"></path>
+          </g>
+          {% else %}
+          <text class="history-chart-empty" x="380" y="140" text-anchor="middle">表示できる数値データがありません</text>
+          {% endif %}
+        </svg>
+        <p class="sr-only">{{ view.history_chart.point_count }}件の受信値を表示しています。横軸は受信日時、縦軸は値{% if !view.history_chart.unit.is_empty() %}（{{ view.history_chart.unit }}）{% endif %}です。</p>
+        <div class="history-export-actions"><a class="button secondary" href="{{ view.history_processed_export_url }}">加工後CSV</a><a class="button secondary" href="{{ view.history_raw_export_url }}">受信した生データCSV</a></div>
       </section>
       <section class="content-section flush">
         <div class="table-wrap history-table-wrap">
           <table id="log-table"><thead><tr><th>受信日時</th><th>センサー</th><th>値</th><th>収集ノード</th></tr></thead><tbody>
-            {% for row in view.history %}<tr><td>{{ row.received_at }}</td><td>{{ row.sensor_name }}</td><td>{{ row.values }} {{ row.unit }}</td><td>{{ row.edge_node_id }}</td></tr>{% endfor %}
+            {% for row in view.history %}<tr><td><time data-unix-ms="{{ row.received_at }}">{{ row.received_at }} (Unix ms)</time></td><td>{{ row.sensor_name }}</td><td>{{ row.values }} {{ row.unit }}</td><td>{{ row.edge_node_id }}</td></tr>{% endfor %}
           </tbody></table>
         </div>
       </section>

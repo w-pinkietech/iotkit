@@ -250,13 +250,27 @@
     target.focus();
   }
   function initializeLocalizedTimes() {
-    for (const time of queryAll("time[data-unix-ms]")) {
-      const milliseconds = Number(time.dataset.unixMs);
+    const timeZone = document.body.dataset.displayTimeZone || "UTC";
+    const formatter = new Intl.DateTimeFormat("ja-JP", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      timeZone,
+      timeZoneName: "short"
+    });
+    for (const timestamp of queryAll("[data-unix-ms]")) {
+      const milliseconds = Number(timestamp.dataset.unixMs);
       if (!Number.isFinite(milliseconds)) continue;
       const date = new Date(milliseconds);
       if (Number.isNaN(date.getTime())) continue;
-      time.dateTime = date.toISOString();
-      time.textContent = date.toLocaleString("ja-JP");
+      if (timestamp instanceof HTMLTimeElement) {
+        timestamp.dateTime = date.toISOString();
+      }
+      timestamp.textContent = formatter.format(date);
     }
     const checkedAt = query("[data-activation-checked-at]");
     if (checkedAt) {

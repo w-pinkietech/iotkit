@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 6
+revision: 7
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -44,13 +44,15 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 - **状態:** IoTKit Edge、signal数、意味未設定、certificate残日数。
 - **機器管理 / 収集ノード:** discovery、登録、最終descriptor通信、診断対象generation。**登録済み**は認可stateで、online保証ではない。
 - **モニター:** current valueと最終受信。古いsignalはsensor、Adapter、Edge Node、Broker、IoTKit Edgeの順に確認。
-- **受信履歴:** sensor・Edge Node・期間を一画面で絞り、aggregate graphとrecent rawを確認。同条件CSVは汎用Observation exportで業務帳票ではない。
+- **受信履歴:** sensor・Edge Node・期間を一画面で絞り、選択中sensorと一致するbounded graphとrecent rawを確認。Graphの横軸は実際の受信日時を表示time zoneで示し、縦軸は値の範囲とsensor単位を示す。同条件CSVは汎用Observation exportで業務帳票ではない。
 - **出力:** Active purpose-bound route。Pending publicationはBroker PUBACKまで削除しない。
 - **システム:** Filesystem、DB size、raw/semantic/outbox件数、最終backup、原因別診断。Console応答だけでEdge Node/Broker正常と判断しない。
 - `postgres`はSQLからnamed volume空き容量を得られない。Host監視へ`docker compose ... exec postgres df -Pk /var/lib/postgresql/data`を追加し、使用率90%または空き2 GiBでwarning、512 MiBでcritical。
 - **監査:** Display name、意味、出力、accountを誰が変更したか。
 - `iotkit-edge-nodectl smoke status`: MQTT PUBACKではなくIoTKit Edge durable acceptance。
 - `scripts/iotkit-broker-cert status --config DEPLOYMENT/broker-cert.env`: Certificate期限とbundle validation。
+
+Consoleの絶対日時はIoTKit Edge起動時の表示time zoneを使う。Compose deploymentはowner-only `edge.env`の`IOTKIT_DISPLAY_TIME_ZONE=Asia/Tokyo`などIANA time zoneで設定し、直接起動は`iotkit-edge serve --display-time-zone Asia/Tokyo ...`でも指定できる。省略時は`UTC`で、不正な値はstartup errorにする。Raw storage、API、CSVのtimestampはUnix msのままで、この設定は表示だけを変える。
 
 ## 3. Certificate自動更新
 

@@ -286,13 +286,26 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
         "event_time": 4,
         "received_at": 4
     });
+    let unmatched_record = serde_json::json!({
+        "family": "measurement",
+        "schema_version": 1,
+        "epoch": "epoch-01",
+        "pub_seq": 2,
+        "series_key": "unconfigured-series",
+        "values": [999.0],
+        "event_time": 4,
+        "received_at": 4
+    });
     storage
         .accept_batch(AcceptBatch {
             edge_node_id: descriptor.edge_node_id,
             ledger_epoch: descriptor.ledger_epoch,
             publication_id: "console-state-1".into(),
             received_at: 4,
-            records: vec![RawRecord::new(1, serde_json::to_vec(&record).unwrap()).unwrap()],
+            records: vec![
+                RawRecord::new(1, serde_json::to_vec(&record).unwrap()).unwrap(),
+                RawRecord::new(2, serde_json::to_vec(&unmatched_record).unwrap()).unwrap(),
+            ],
         })
         .await
         .unwrap();
@@ -313,6 +326,24 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
     assert_eq!(active.signals[0].value, "ON");
     assert_eq!(active.devices.len(), 1);
     assert_eq!(active.edge_nodes[0].devices.len(), 1);
+
+    let history = application
+        .console(ConsoleRequest {
+            path: "/logs".into(),
+            query: HashMap::from([("from".into(), "0".into()), ("to".into(), "10".into())]),
+            principal: principal.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(history.history_signal_ref, active.signals[0].signal_ref);
+    assert_eq!(history.history.len(), 1);
+    assert_eq!(history.history[0].signal_ref, history.history_signal_ref);
+    assert!(!history.history_chart.path.is_empty());
+    assert!(
+        history
+            .history_raw_export_url
+            .contains(&format!("signal_ref={}", history.history_signal_ref))
+    );
 
     reduced_descriptor.descriptor_revision += 1;
     reduced_descriptor.devices.clear();

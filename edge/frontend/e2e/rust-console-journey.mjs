@@ -1224,7 +1224,7 @@ try {
     ],
     [
       "/logs",
-      "Boolean(document.querySelector('#history-filter') && document.querySelector('.history-chart') && document.querySelector('#log-table'))",
+      "Boolean(document.querySelector('#history-filter') && document.querySelector('.history-chart') && document.querySelectorAll('.history-chart-axis-title').length === 2 && document.querySelectorAll('[data-history-axis-time]').length === 2 && document.querySelector('#log-table'))",
       "history view",
     ],
     [

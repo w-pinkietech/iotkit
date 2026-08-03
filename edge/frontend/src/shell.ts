@@ -203,13 +203,27 @@ function initializeFocusedSection(): void {
 }
 
 function initializeLocalizedTimes(): void {
-  for (const time of queryAll<HTMLTimeElement>("time[data-unix-ms]")) {
-    const milliseconds = Number(time.dataset.unixMs);
+  const timeZone = document.body.dataset.displayTimeZone || "UTC";
+  const formatter = new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZone,
+    timeZoneName: "short",
+  });
+  for (const timestamp of queryAll<HTMLElement | SVGTextElement>("[data-unix-ms]")) {
+    const milliseconds = Number(timestamp.dataset.unixMs);
     if (!Number.isFinite(milliseconds)) continue;
     const date = new Date(milliseconds);
     if (Number.isNaN(date.getTime())) continue;
-    time.dateTime = date.toISOString();
-    time.textContent = date.toLocaleString("ja-JP");
+    if (timestamp instanceof HTMLTimeElement) {
+      timestamp.dateTime = date.toISOString();
+    }
+    timestamp.textContent = formatter.format(date);
   }
   const checkedAt = query<HTMLTimeElement>("[data-activation-checked-at]");
   if (checkedAt) {

@@ -321,7 +321,10 @@ tr.selected-route td { background: var(--teal-soft); }
 .history-chart line { stroke: var(--line-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .history-chart .history-chart-grid { stroke: var(--line); stroke-dasharray: 4 5; }
 .history-chart path { fill: none; stroke: var(--teal-dark); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-.history-chart-axis { display: flex; justify-content: space-between; padding-left: 24px; color: var(--muted); font-size: .7rem; }
+.history-chart text { font-family: "JetBrains Mono", ui-monospace, monospace; }
+.history-chart-axis-label { fill: var(--muted); font-size: 11px; }
+.history-chart-axis-title { fill: var(--ink-soft); font-family: inherit !important; font-size: 12px; font-weight: 700; }
+.history-chart-empty { fill: var(--muted); font-family: inherit !important; font-size: 14px; }
 .history-chart-card .form-hint { margin: 10px 0 0; }
 .history-table-heading { padding: 18px 20px 10px; }
 .history-table-heading .toolbar-summary { min-height: 0; padding: 0; }
