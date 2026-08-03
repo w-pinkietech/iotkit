@@ -96,6 +96,56 @@ describe("live dashboard", () => {
     );
   });
 
+  it("keeps the received age and latest point moving when a refresh fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_125_000);
+    document.body.innerHTML = `
+      <section data-live-dashboard>
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("temperature-01", "numeric", "℃")}
+      </section>
+    `;
+    const initialPayload = await responseFor("temperature-01").json();
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ...initialPayload,
+        latest_received_at: 1_700_000_002_500,
+      })))
+      .mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetch);
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const liveCard = document.querySelector<HTMLElement>(
+      '[data-signal-ref="temperature-01"]',
+    )!;
+    expect(liveCard.querySelector("[data-live-received]")?.textContent).toBe(
+      "最終受信 2分2秒前",
+    );
+    expect(liveCard.querySelector(".live-chart-latest-point")).not.toBeNull();
+    expect(liveCard.querySelector(".live-chart-latest-label")?.textContent).toBe(
+      "最終データ",
+    );
+    const pointBefore = Number(
+      liveCard.querySelector(".live-chart-latest-point")?.getAttribute("cx"),
+    );
+    expect(pointBefore).toBeCloseTo(306.35, 1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(liveCard.querySelector("[data-live-received]")?.textContent).toBe(
+      "最終受信 2分7秒前",
+    );
+    expect(
+      Number(liveCard.querySelector(".live-chart-latest-point")?.getAttribute("cx")),
+    ).toBeLessThan(pointBefore);
+    expect(document.querySelector("[data-live-dashboard-state]")?.textContent).toContain(
+      "一部を確認できません",
+    );
+  });
+
   it("does not poll hidden documents and bounds one cycle to twelve cards", async () => {
     vi.useFakeTimers();
     document.body.innerHTML = `

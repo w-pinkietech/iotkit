@@ -34,7 +34,11 @@ function relativeTime(receivedAt: number, now: number): string {
   const elapsed = Math.max(0, now - receivedAt);
   if (elapsed < 10_000) return "たった今";
   if (elapsed < 60_000) return `${Math.floor(elapsed / 1_000)}秒前`;
-  if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)}分前`;
+  if (elapsed < 60 * 60_000) {
+    const minutes = Math.floor(elapsed / 60_000);
+    const seconds = Math.floor((elapsed % 60_000) / 1_000);
+    return `${minutes}分${seconds}秒前`;
+  }
   return `${Math.floor(elapsed / (60 * 60_000))}時間前`;
 }
 
@@ -132,6 +136,29 @@ function renderChart(
     else path += ` L ${pointX} ${pointY}`;
   });
   addSVG(svg, "path", { d: path, class: "live-chart-line" });
+  const latest = points.at(-1)!;
+  const latestX = x(payload.latest_received_at ?? latest.bucket_start);
+  const latestY = y(boolean ? (latest.average >= 0.5 ? 1 : 0) : latest.average);
+  addSVG(svg, "line", {
+    x1: latestX,
+    x2: latestX,
+    y1: latestY,
+    y2: top + plotHeight,
+    class: "live-chart-latest-guide",
+  });
+  addSVG(svg, "circle", {
+    cx: latestX,
+    cy: latestY,
+    r: 4,
+    class: "live-chart-latest-point",
+  });
+  const latestLabel = addSVG(svg, "text", {
+    x: latestX + (latestX > width - 82 ? -7 : 7),
+    y: Math.max(top + 10, latestY - 7),
+    "text-anchor": latestX > width - 82 ? "end" : "start",
+    class: "live-chart-latest-label",
+  });
+  latestLabel.textContent = "最終データ";
   const title = addSVG(svg, "title", {});
   title.textContent = boolean
     ? "横軸は直近15分、縦軸は接点のON/OFFです。"
@@ -206,6 +233,7 @@ export function initializeLiveDashboard(): void {
   const state = query<HTMLElement>("[data-live-dashboard-state]");
   if (!dashboard) return;
   const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 300_000);
+  const latestPayloads = new WeakMap<HTMLElement, HistorySeries>();
   let controller: AbortController | null = null;
 
   const refresh = async (): Promise<void> => {
@@ -215,6 +243,10 @@ export function initializeLiveDashboard(): void {
     const now = Date.now();
     const cards = activeCards(dashboard);
     if (!cards.length) return;
+    for (const card of cards) {
+      const cached = latestPayloads.get(card);
+      if (cached) renderCard(card, cached, now, staleAfterMs);
+    }
     const results = await Promise.all(
       cards.map(async (card) => {
         const signalRef = card.dataset.signalRef;
@@ -227,6 +259,7 @@ export function initializeLiveDashboard(): void {
           controller!.signal,
         ).catch(() => null);
         if (!result?.ok) return false;
+        latestPayloads.set(card, result.value);
         renderCard(card, result.value, now, staleAfterMs);
         return true;
       }),

@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 8
+revision: 9
 ---
 
 # IoTKit Edge installation and recovery
@@ -76,11 +76,13 @@ fallback.
   state; it does not mean the Edge Node is currently online.
 - **Live**: show the current value, last receipt, and latest 15-minute trend for every
   registered signal. Numeric signals use a line and contacts use an ON/OFF step line;
-  each card links to sensor detail. The browser refreshes at most 12 cards in the visible
-  region every five seconds, and only while the document is visible. It identifies signals
-  that have never received data and marks five minutes without a new value as **Check**,
-  not as proof of a stopped device. Investigate Check at the sensor, adapter, Edge Node,
-  broker, then IoTKit Edge—in that order.
+  the chart marks the latest data position, and each card links to sensor detail. The browser
+  refreshes at most 12 cards in the visible region every five seconds, and only while the
+  document is visible. After a successful fetch, the elapsed last-receipt time and chart window
+  continue to advance from the browser clock even if a later fetch temporarily fails. It
+  identifies signals that have never received data and marks five minutes without a new value
+  as **Check**, not as proof of a stopped device. Investigate Check at the sensor, adapter,
+  Edge Node, broker, then IoTKit Edge—in that order.
 - **Reception history**: filter sensor, Edge Node, and period on one screen, then inspect
   the bounded graph and recent raw rows that match the selected sensor. The graph's horizontal
   axis shows the actual reception timestamps in the display time zone, and its vertical axis shows

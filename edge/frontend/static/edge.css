@@ -302,6 +302,9 @@ tr.selected-route td { background: var(--teal-soft); }
 .live-chart-grid { stroke: #dfe5e7; stroke-width: 1; }
 .live-chart-axis-label { fill: var(--muted); font-size: 9px; }
 .live-chart-line { fill: none; stroke: var(--teal-dark); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.live-chart-latest-guide { stroke: var(--teal-dark); stroke-width: 1; stroke-dasharray: 3 3; opacity: .5; }
+.live-chart-latest-point { fill: var(--paper); stroke: var(--teal-dark); stroke-width: 2.5; }
+.live-chart-latest-label { fill: var(--teal-dark); font-size: 9px; font-weight: 700; }
 .live-chart-empty { fill: var(--muted); font-size: 11px; }
 .live-signal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 18px 14px; border-top: 1px solid var(--line); font-size: .73rem; }
 .live-signal-card > footer > span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }

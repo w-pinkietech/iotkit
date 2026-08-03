@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 8
+revision: 9
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -43,7 +43,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 
 - **状態:** IoTKit Edge、signal数、意味未設定、certificate残日数。
 - **機器管理 / 収集ノード:** discovery、登録、最終descriptor通信、診断対象generation。**登録済み**は認可stateで、online保証ではない。
-- **ライブ:** 登録済みsignalごとにcurrent value、最終受信、直近15分の推移を表示する。数値は折れ線、接点はON/OFFの段差線で、cardからsensor詳細へ進める。Browserは画面がvisibleな間だけ5秒ごとに表示領域内の最大12件を更新する。未受信は明示し、5分以上新着がないsignalは停止と断定せず**要確認**にする。要確認時はsensor、Adapter、Edge Node、Broker、IoTKit Edgeの順に確認する。
+- **ライブ:** 登録済みsignalごとにcurrent value、最終受信、直近15分の推移を表示する。数値は折れ線、接点はON/OFFの段差線とし、graph上に最終data位置を示してcardからsensor詳細へ進める。Browserは画面がvisibleな間だけ5秒ごとに表示領域内の最大12件を更新する。一度取得した最終受信の経過時間とgraphの時間窓は、一時的に再取得へ失敗してもBrowserの時計で進める。未受信は明示し、5分以上新着がないsignalは停止と断定せず**要確認**にする。要確認時はsensor、Adapter、Edge Node、Broker、IoTKit Edgeの順に確認する。
 - **受信履歴:** sensor・Edge Node・期間を一画面で絞り、選択中sensorと一致するbounded graphとrecent rawを確認。Graphの横軸は実際の受信日時を表示time zoneで示し、縦軸は値の範囲とsensor単位を示す。同条件CSVは汎用Observation exportで業務帳票ではない。
 - **出力:** Active purpose-bound route。Pending publicationはBroker PUBACKまで削除しない。
 - **システム:** Filesystem、DB size、raw/semantic/outbox件数、最終backup、原因別診断。Console応答だけでEdge Node/Broker正常と判断しない。

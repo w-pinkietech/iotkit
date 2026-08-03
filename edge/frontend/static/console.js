@@ -1438,7 +1438,11 @@
     const elapsed = Math.max(0, now - receivedAt);
     if (elapsed < 1e4) return "\u305F\u3063\u305F\u4ECA";
     if (elapsed < 6e4) return `${Math.floor(elapsed / 1e3)}\u79D2\u524D`;
-    if (elapsed < 60 * 6e4) return `${Math.floor(elapsed / 6e4)}\u5206\u524D`;
+    if (elapsed < 60 * 6e4) {
+      const minutes = Math.floor(elapsed / 6e4);
+      const seconds = Math.floor(elapsed % 6e4 / 1e3);
+      return `${minutes}\u5206${seconds}\u79D2\u524D`;
+    }
     return `${Math.floor(elapsed / (60 * 6e4))}\u6642\u9593\u524D`;
   }
   function renderEmpty(svg, boolean) {
@@ -1519,6 +1523,29 @@
       else path += ` L ${pointX} ${pointY}`;
     });
     addSVG2(svg, "path", { d: path, class: "live-chart-line" });
+    const latest = points.at(-1);
+    const latestX = x(payload.latest_received_at ?? latest.bucket_start);
+    const latestY = y(boolean ? latest.average >= 0.5 ? 1 : 0 : latest.average);
+    addSVG2(svg, "line", {
+      x1: latestX,
+      x2: latestX,
+      y1: latestY,
+      y2: top + plotHeight,
+      class: "live-chart-latest-guide"
+    });
+    addSVG2(svg, "circle", {
+      cx: latestX,
+      cy: latestY,
+      r: 4,
+      class: "live-chart-latest-point"
+    });
+    const latestLabel = addSVG2(svg, "text", {
+      x: latestX + (latestX > width - 82 ? -7 : 7),
+      y: Math.max(top + 10, latestY - 7),
+      "text-anchor": latestX > width - 82 ? "end" : "start",
+      class: "live-chart-latest-label"
+    });
+    latestLabel.textContent = "\u6700\u7D42\u30C7\u30FC\u30BF";
     const title = addSVG2(svg, "title", {});
     title.textContent = boolean ? "\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u76F4\u8FD115\u5206\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
   }
@@ -1574,6 +1601,7 @@
     const state = query("[data-live-dashboard-state]");
     if (!dashboard) return;
     const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 3e5);
+    const latestPayloads = /* @__PURE__ */ new WeakMap();
     let controller = null;
     const refresh = async () => {
       if (!dashboard.isConnected || document.visibilityState !== "visible") return;
@@ -1582,6 +1610,10 @@
       const now = Date.now();
       const cards = activeCards(dashboard);
       if (!cards.length) return;
+      for (const card of cards) {
+        const cached = latestPayloads.get(card);
+        if (cached) renderCard(card, cached, now, staleAfterMs);
+      }
       const results = await Promise.all(
         cards.map(async (card) => {
           const signalRef = card.dataset.signalRef;
@@ -1594,6 +1626,7 @@
             controller.signal
           ).catch(() => null);
           if (!result?.ok) return false;
+          latestPayloads.set(card, result.value);
           renderCard(card, result.value, now, staleAfterMs);
           return true;
         })
