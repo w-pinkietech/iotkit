@@ -192,6 +192,7 @@ describe("console shell", () => {
     document.body.dataset.displayTimeZone = "Asia/Tokyo";
     document.body.innerHTML = `
       <time data-unix-ms="1735689602000">1735689602000 (Unix ms)</time>
+      <svg><text data-history-axis-time data-unix-ms="1735689601000">1735689601000</text></svg>
     `;
 
     initializeShell();
@@ -200,6 +201,9 @@ describe("console shell", () => {
     expect(time.textContent).toContain("09:00:02");
     expect(time.textContent).toContain("JST");
     expect(time.dateTime).toBe("2025-01-01T00:00:02.000Z");
+    const axisTime = document.querySelector("[data-history-axis-time]")!;
+    expect(axisTime.textContent).toContain("09:00:01");
+    expect(axisTime.textContent).toContain("JST");
   });
 
   it("requires confirmation before submitting a destructive form", () => {

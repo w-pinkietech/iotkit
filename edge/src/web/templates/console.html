@@ -142,7 +142,7 @@
       </header>
       <section class="content-section sensor-setting-simulation" data-setting-simulation data-signal-ref="{{ signal.signal_ref }}" data-unit="{{ signal.unit }}" data-can-edit="false">
         <div class="section-heading"><div><h2>受信値の推移</h2></div></div>
-        <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値のグラフ"><path d="{{ view.history_chart_path }}"></path></svg>
+        <svg data-preview-chart viewBox="0 0 760 260" role="img" aria-label="受信値のグラフ"><path d="{{ view.history_chart.path }}"></path></svg>
         <p class="sr-only" data-preview-accessible-summary>受信値を表示しています。</p>
       </section>
       {% when None %}
@@ -548,7 +548,30 @@
       </form>
       <section class="content-section">
         <div class="section-heading"><div><h2>受信値の推移</h2></div></div>
-        <svg class="history-chart" viewBox="0 0 760 260" role="img"><path d="{{ view.history_chart_path }}"></path></svg>
+        <svg class="history-chart" viewBox="0 0 760 280" role="img" aria-label="選択したセンサーの受信値。横軸は受信日時、縦軸は値です。">
+          <title>選択したセンサーの受信値の推移</title>
+          <desc>横軸は受信日時、縦軸は値{% if !view.history_chart.unit.is_empty() %}（{{ view.history_chart.unit }}）{% endif %}です。</desc>
+          {% if !view.history_chart.path.is_empty() %}
+          <g aria-hidden="true">
+            <line class="history-chart-grid" x1="72" y1="20" x2="740" y2="20"></line>
+            <line class="history-chart-grid" x1="72" y1="120" x2="740" y2="120"></line>
+            <line class="history-chart-grid" x1="72" y1="220" x2="740" y2="220"></line>
+            <line x1="72" y1="20" x2="72" y2="220"></line>
+            <line x1="72" y1="220" x2="740" y2="220"></line>
+            <text class="history-chart-axis-label" x="62" y="24" text-anchor="end">{{ view.history_chart.maximum_label }}{% if !view.history_chart.unit.is_empty() %} {{ view.history_chart.unit }}{% endif %}</text>
+            <text class="history-chart-axis-label" x="62" y="124" text-anchor="end">{{ view.history_chart.midpoint_label }}{% if !view.history_chart.unit.is_empty() %} {{ view.history_chart.unit }}{% endif %}</text>
+            <text class="history-chart-axis-label" x="62" y="224" text-anchor="end">{{ view.history_chart.minimum_label }}{% if !view.history_chart.unit.is_empty() %} {{ view.history_chart.unit }}{% endif %}</text>
+            <text class="history-chart-axis-label" x="72" y="246" text-anchor="start" data-history-axis-time data-unix-ms="{{ view.history_chart.start_at }}">{{ view.history_chart.start_at }}</text>
+            <text class="history-chart-axis-label" x="740" y="246" text-anchor="end" data-history-axis-time data-unix-ms="{{ view.history_chart.end_at }}">{{ view.history_chart.end_at }}</text>
+            <text class="history-chart-axis-title" x="406" y="274" text-anchor="middle">受信日時</text>
+            <text class="history-chart-axis-title" x="14" y="120" text-anchor="middle" transform="rotate(-90 14 120)">値{% if !view.history_chart.unit.is_empty() %}（{{ view.history_chart.unit }}）{% endif %}</text>
+            <path d="{{ view.history_chart.path }}"></path>
+          </g>
+          {% else %}
+          <text class="history-chart-empty" x="380" y="140" text-anchor="middle">表示できる数値データがありません</text>
+          {% endif %}
+        </svg>
+        <p class="sr-only">{{ view.history_chart.point_count }}件の受信値を表示しています。横軸は受信日時、縦軸は値{% if !view.history_chart.unit.is_empty() %}（{{ view.history_chart.unit }}）{% endif %}です。</p>
         <div class="history-export-actions"><a class="button secondary" href="{{ view.history_processed_export_url }}">加工後CSV</a><a class="button secondary" href="{{ view.history_raw_export_url }}">受信した生データCSV</a></div>
       </section>
       <section class="content-section flush">

@@ -338,7 +338,7 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
     assert_eq!(history.history_signal_ref, active.signals[0].signal_ref);
     assert_eq!(history.history.len(), 1);
     assert_eq!(history.history[0].signal_ref, history.history_signal_ref);
-    assert!(!history.history_chart_path.is_empty());
+    assert!(!history.history_chart.path.is_empty());
     assert!(
         history
             .history_raw_export_url

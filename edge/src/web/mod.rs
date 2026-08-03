@@ -164,7 +164,7 @@ pub struct ConsoleView {
     pub selected_device: Option<ConsoleDevice>,
     pub selected_signal: Option<ConsoleSignal>,
     pub history: Vec<RawHistoryRow>,
-    pub history_chart_path: String,
+    pub history_chart: ConsoleHistoryChart,
     pub history_signal_ref: String,
     pub history_range: String,
     pub history_raw_export_url: String,
@@ -174,6 +174,18 @@ pub struct ConsoleView {
     pub accounts: Vec<ConsoleAccount>,
     pub audit: Vec<ConsoleAudit>,
     pub storage: ConsoleStorage,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConsoleHistoryChart {
+    pub path: String,
+    pub start_at: String,
+    pub end_at: String,
+    pub minimum_label: String,
+    pub midpoint_label: String,
+    pub maximum_label: String,
+    pub unit: String,
+    pub point_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -2069,7 +2081,16 @@ pub mod test_support {
                     decimal_places: 1,
                     display_value_kind: "numeric".into(),
                 }],
-                history_chart_path: "M0 90 L120 60 L240 70 L360 20".into(),
+                history_chart: ConsoleHistoryChart {
+                    path: "M406.0 120.0 L406.1 120.0".into(),
+                    start_at: "1735689601000".into(),
+                    end_at: "1735689601000".into(),
+                    minimum_label: "28.5".into(),
+                    midpoint_label: "28.5".into(),
+                    maximum_label: "28.5".into(),
+                    unit: "℃".into(),
+                    point_count: 1,
+                },
                 history_signal_ref: "signal-01".into(),
                 history_range: "1h".into(),
                 history_raw_export_url:

@@ -521,11 +521,15 @@ try {
   const historyState = await devtools.evaluate(`(() => ({
     filter: Boolean(document.querySelector("#history-filter")),
     chart: document.querySelector("svg.history-chart path")?.getAttribute("d") ?? "",
+    axisTitles: [...document.querySelectorAll(".history-chart-axis-title")].map((node) => node.textContent.trim()),
+    axisTimes: [...document.querySelectorAll("[data-history-axis-time]")].map((node) => node.textContent.trim()),
     rows: document.querySelectorAll("#log-table tbody tr:not(.empty-row)").length,
     body: document.body.textContent.replace(/\\s+/g, " ").trim().slice(0, 1400),
   }))()`);
   assert(
-    historyState.filter && historyState.chart && historyState.rows > 0,
+    historyState.filter && historyState.chart && historyState.axisTitles.includes("受信日時") &&
+      historyState.axisTitles.some((label) => label.startsWith("値")) &&
+      historyState.axisTimes.length === 2 && historyState.rows > 0,
     `history filter, chart, and raw table are not available together: ${JSON.stringify(historyState)}`,
   );
   const csvResult = await devtools.evaluate(`(async () => {

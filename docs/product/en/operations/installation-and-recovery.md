@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 6
+revision: 7
 ---
 
 # IoTKit Edge installation and recovery
@@ -77,8 +77,10 @@ fallback.
 - **Monitor**: current value and last receipt. A stopped or old signal must be
   investigated at the sensor, adapter, Edge Node, broker, then IoTKit Edge—in that order.
 - **Reception history**: filter sensor, Edge Node, and period on one screen, then inspect
-  the bounded graph and recent raw rows that match the selected sensor. CSV with the same filter exports generic
-  observations and is not a business report.
+  the bounded graph and recent raw rows that match the selected sensor. The graph's horizontal
+  axis shows the actual reception timestamps in the display time zone, and its vertical axis shows
+  the value range and sensor unit. CSV with the same filter exports generic observations and is not
+  a business report.
 - **Output**: active purpose-bound routes. Pending output is not deleted until
   broker PUBACK.
 - **System**: filesystem use, database size, raw/semantic/outbox counts, latest backup,

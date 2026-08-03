@@ -262,13 +262,15 @@
       timeZone,
       timeZoneName: "short"
     });
-    for (const time of queryAll("time[data-unix-ms]")) {
-      const milliseconds = Number(time.dataset.unixMs);
+    for (const timestamp of queryAll("[data-unix-ms]")) {
+      const milliseconds = Number(timestamp.dataset.unixMs);
       if (!Number.isFinite(milliseconds)) continue;
       const date = new Date(milliseconds);
       if (Number.isNaN(date.getTime())) continue;
-      time.dateTime = date.toISOString();
-      time.textContent = formatter.format(date);
+      if (timestamp instanceof HTMLTimeElement) {
+        timestamp.dateTime = date.toISOString();
+      }
+      timestamp.textContent = formatter.format(date);
     }
     const checkedAt = query("[data-activation-checked-at]");
     if (checkedAt) {

@@ -41,10 +41,10 @@ use crate::{
     },
     web::{
         ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleBinding, ConsoleDevice,
-        ConsoleEdgeNode, ConsoleModeOption, ConsoleOutput, ConsoleOutputSummary, ConsoleRequest,
-        ConsoleRule, ConsoleSignal, ConsoleStorage, ConsoleView, HistoryPage, HistoryQuery,
-        LoginSession, MutationOutput, Principal, RawHistoryRow, SemanticHistoryPage,
-        SemanticHistoryRow, WebApplication, WebError,
+        ConsoleEdgeNode, ConsoleHistoryChart, ConsoleModeOption, ConsoleOutput,
+        ConsoleOutputSummary, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage,
+        ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal,
+        RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
         console::{
             commissioning::commissioning_view,
             output::{apply_destination_state, binding_state, summarize},
@@ -773,7 +773,7 @@ impl WebApplication for StorageWebApplication {
         } else {
             Vec::new()
         };
-        let history_chart_path = raw_history_chart_path(&history);
+        let history_chart = raw_history_chart(&history);
         let history_signal_ref = history_selection
             .as_ref()
             .and_then(|query| query.signal_ref.clone())
@@ -818,7 +818,7 @@ impl WebApplication for StorageWebApplication {
             accounts,
             audit,
             storage,
-            history_chart_path,
+            history_chart,
             history_signal_ref,
             history_range,
             history_raw_export_url,
@@ -2105,7 +2105,7 @@ fn history_range_bounds(range: &str, current_time: i64) -> (i64, i64) {
     (to.saturating_sub(duration), to)
 }
 
-fn raw_history_chart_path(rows: &[RawHistoryRow]) -> String {
+fn raw_history_chart(rows: &[RawHistoryRow]) -> ConsoleHistoryChart {
     let mut points = rows
         .iter()
         .filter_map(|row| {
@@ -2115,34 +2115,39 @@ fn raw_history_chart_path(rows: &[RawHistoryRow]) -> String {
                 Value::Array(values) => values.first().and_then(history_number),
                 value => history_number(&value),
             }?;
-            Some((received_at, value))
+            Some((
+                received_at,
+                value,
+                row.decimal_places.clamp(0, 6) as usize,
+                row.unit.clone(),
+            ))
         })
         .collect::<Vec<_>>();
-    points.sort_by_key(|(received_at, _)| *received_at);
+    points.sort_by_key(|(received_at, _, _, _)| *received_at);
     if points.is_empty() {
-        return String::new();
+        return ConsoleHistoryChart::default();
     }
     let start = points.first().map_or(0, |point| point.0);
     let end = points.last().map_or(start, |point| point.0);
     let minimum = points
         .iter()
-        .map(|(_, value)| *value)
+        .map(|(_, value, _, _)| *value)
         .fold(f64::INFINITY, f64::min);
     let maximum = points
         .iter()
-        .map(|(_, value)| *value)
+        .map(|(_, value, _, _)| *value)
         .fold(f64::NEG_INFINITY, f64::max);
     let mut path = String::new();
-    for (index, (received_at, value)) in points.iter().enumerate() {
+    for (index, (received_at, value, _, _)) in points.iter().enumerate() {
         let x = if end == start {
-            380.0
+            406.0
         } else {
-            20.0 + 720.0 * (*received_at - start) as f64 / (end - start) as f64
+            72.0 + 668.0 * (*received_at - start) as f64 / (end - start) as f64
         };
         let y = if (maximum - minimum).abs() < f64::EPSILON {
-            130.0
+            120.0
         } else {
-            240.0 - 220.0 * (*value - minimum) / (maximum - minimum)
+            220.0 - 200.0 * (*value - minimum) / (maximum - minimum)
         };
         if index == 0 {
             path.push_str(&format!("M{x:.1} {y:.1}"));
@@ -2151,9 +2156,23 @@ fn raw_history_chart_path(rows: &[RawHistoryRow]) -> String {
         }
     }
     if points.len() == 1 {
-        path.push_str(" L380.1 130.0");
+        path.push_str(" L406.1 120.0");
     }
-    path
+    let decimal_places = points.first().map_or(0, |point| point.2);
+    let unit = points
+        .first()
+        .map_or_else(String::new, |point| point.3.clone());
+    let midpoint = minimum + (maximum - minimum) / 2.0;
+    ConsoleHistoryChart {
+        path,
+        start_at: start.to_string(),
+        end_at: end.to_string(),
+        minimum_label: format!("{minimum:.decimal_places$}"),
+        midpoint_label: format!("{midpoint:.decimal_places$}"),
+        maximum_label: format!("{maximum:.decimal_places$}"),
+        unit,
+        point_count: points.len(),
+    }
 }
 
 fn history_number(value: &Value) -> Option<f64> {
@@ -2320,10 +2339,17 @@ mod history_view_tests {
             history_row("1735689602000", "[30.0]"),
             history_row("1735689601000", "[20.0]"),
         ];
-        let path = raw_history_chart_path(&rows);
-        assert!(path.starts_with('M'));
-        assert!(path.contains(" L"));
-        assert!(!path.contains("NaN"));
+        let chart = raw_history_chart(&rows);
+        assert!(chart.path.starts_with('M'));
+        assert!(chart.path.contains(" L"));
+        assert!(!chart.path.contains("NaN"));
+        assert_eq!(chart.start_at, "1735689601000");
+        assert_eq!(chart.end_at, "1735689602000");
+        assert_eq!(chart.minimum_label, "20.0");
+        assert_eq!(chart.midpoint_label, "25.0");
+        assert_eq!(chart.maximum_label, "30.0");
+        assert_eq!(chart.unit, "℃");
+        assert_eq!(chart.point_count, 2);
     }
 
     fn history_row(received_at: &str, values: &str) -> RawHistoryRow {

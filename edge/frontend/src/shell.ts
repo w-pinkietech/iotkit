@@ -215,13 +215,15 @@ function initializeLocalizedTimes(): void {
     timeZone,
     timeZoneName: "short",
   });
-  for (const time of queryAll<HTMLTimeElement>("time[data-unix-ms]")) {
-    const milliseconds = Number(time.dataset.unixMs);
+  for (const timestamp of queryAll<HTMLElement | SVGTextElement>("[data-unix-ms]")) {
+    const milliseconds = Number(timestamp.dataset.unixMs);
     if (!Number.isFinite(milliseconds)) continue;
     const date = new Date(milliseconds);
     if (Number.isNaN(date.getTime())) continue;
-    time.dateTime = date.toISOString();
-    time.textContent = formatter.format(date);
+    if (timestamp instanceof HTMLTimeElement) {
+      timestamp.dateTime = date.toISOString();
+    }
+    timestamp.textContent = formatter.format(date);
   }
   const checkedAt = query<HTMLTimeElement>("[data-activation-checked-at]");
   if (checkedAt) {
