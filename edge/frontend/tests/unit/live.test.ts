@@ -7,7 +7,7 @@ function card(
   unit = "",
 ): string {
   return `
-    <article data-live-signal data-signal-ref="${signalRef}"
+    <article data-live-signal data-rule-id="rule-${signalRef}" data-signal-ref="${signalRef}"
       data-value-kind="${kind}" data-decimal-places="1" data-unit="${unit}">
       <span data-live-status>確認中</span>
       <strong data-live-value>—</strong>
@@ -58,7 +58,7 @@ describe("live dashboard", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_699_999_960_000);
     document.body.innerHTML = `
-      <section data-live-dashboard>
+      <section data-live-dashboard data-live-session-started-at="1699999960000">
         <span data-live-dashboard-state>更新を準備中</span>
         ${card("temperature-01", "numeric", "℃")}
         ${card("contact-01", "boolean")}
@@ -68,7 +68,7 @@ describe("live dashboard", () => {
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const url = new URL(String(input), "http://localhost");
-        return Promise.resolve(responseFor(url.searchParams.get("signal_ref") ?? ""));
+        return Promise.resolve(responseFor((url.searchParams.get("rule_id") ?? "").replace("rule-", "")));
       }),
     );
 
@@ -101,7 +101,7 @@ describe("live dashboard", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_005_000);
     document.body.innerHTML = `
-      <section data-live-dashboard>
+      <section data-live-dashboard data-live-session-started-at="1700000005000">
         <span data-live-dashboard-state>更新を準備中</span>
         ${card("temperature-01", "numeric", "℃")}
       </section>
@@ -140,6 +140,8 @@ describe("live dashboard", () => {
     );
     const firstRequest = new URL(String(fetch.mock.calls[0]?.[0]), "http://localhost");
     expect(firstRequest.searchParams.get("from")).toBe("1700000005000");
+    expect(firstRequest.searchParams.get("rule_id")).toBe("rule-temperature-01");
+    expect(firstRequest.searchParams.has("signal_ref")).toBe(false);
     expect(firstRequest.searchParams.get("bucket_ms")).toBe("5000");
 
     await vi.advanceTimersByTimeAsync(5_000);
@@ -151,12 +153,96 @@ describe("live dashboard", () => {
     );
   });
 
+  it("uses Edge time when the browser clock is ahead", async () => {
+    vi.useFakeTimers();
+    const edgeStartedAt = 1_700_000_000_000;
+    vi.setSystemTime(edgeStartedAt + 60_000);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="${edgeStartedAt}">
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("temperature-01", "numeric", "℃")}
+      </section>
+    `;
+    const historical = await responseFor("temperature-01").json();
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ...historical,
+        latest_received_at: null,
+        latest_value: null,
+        points: [],
+      })))
+      .mockResolvedValue(new Response(JSON.stringify({
+        ...historical,
+        sample_count: 1,
+        latest_received_at: edgeStartedAt + 5_000,
+        latest_value: 25.2,
+        points: [{
+          bucket_start: edgeStartedAt + 5_000,
+          minimum: 25.2,
+          average: 25.2,
+          maximum: 25.2,
+          sample_count: 1,
+        }],
+      })));
+    vi.stubGlobal("fetch", fetch);
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const firstRequest = new URL(String(fetch.mock.calls[0]?.[0]), "http://localhost");
+    const secondRequest = new URL(String(fetch.mock.calls[1]?.[0]), "http://localhost");
+    expect(firstRequest.searchParams.get("from")).toBe(String(edgeStartedAt));
+    expect(secondRequest.searchParams.get("from")).toBe(String(edgeStartedAt));
+    expect(secondRequest.searchParams.get("to")).toBe(String(edgeStartedAt + 5_001));
+    expect(document.querySelector(".live-chart-latest-point")).not.toBeNull();
+  });
+
+  it("uses Edge time when the browser clock is behind", async () => {
+    vi.useFakeTimers();
+    const edgeStartedAt = 1_700_000_000_000;
+    vi.setSystemTime(edgeStartedAt - 60_000);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="${edgeStartedAt}">
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("temperature-01", "numeric", "℃")}
+      </section>
+    `;
+    const fetch = vi.fn((_: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify({
+      signal_ref: "temperature-01",
+      display_name: "炉内温度",
+      unit: "℃",
+      value_type: "number",
+      sample_count: 1,
+      latest_received_at: edgeStartedAt - 1,
+      latest_value: 24.8,
+      points: [{
+        bucket_start: edgeStartedAt - 5_000,
+        minimum: 24.8,
+        average: 24.8,
+        maximum: 24.8,
+        sample_count: 1,
+      }],
+    }))));
+    vi.stubGlobal("fetch", fetch);
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const request = new URL(String(fetch.mock.calls[0]?.[0]), "http://localhost");
+    const liveCard = document.querySelector<HTMLElement>("[data-live-signal]")!;
+    expect(request.searchParams.get("from")).toBe(String(edgeStartedAt));
+    expect(liveCard.querySelector(".live-chart-empty")).not.toBeNull();
+    expect(liveCard.querySelector("[data-live-value]")?.textContent).toBe("24.8 ℃");
+  });
+
   it("bounds numeric samples to sixty and contact transitions to ten", async () => {
     vi.useFakeTimers();
     const sessionStart = 1_700_000_000_000;
     vi.setSystemTime(sessionStart);
     document.body.innerHTML = `
-      <section data-live-dashboard>
+      <section data-live-dashboard data-live-session-started-at="${sessionStart}">
         <span data-live-dashboard-state></span>
         ${card("temperature-01", "numeric", "℃")}
         ${card("contact-01", "boolean")}
@@ -165,9 +251,8 @@ describe("live dashboard", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
-        const signalRef = new URL(String(input), "http://localhost").searchParams.get(
-          "signal_ref",
-        )!;
+        const signalRef = new URL(String(input), "http://localhost").searchParams
+          .get("rule_id")!.replace("rule-", "");
         const boolean = signalRef === "contact-01";
         const points = Array.from({ length: 65 }, (_, index) => ({
           bucket_start: sessionStart + index * 5_000,
@@ -214,7 +299,7 @@ describe("live dashboard", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_125_000);
     document.body.innerHTML = `
-      <section data-live-dashboard>
+      <section data-live-dashboard data-live-session-started-at="1700000125000">
         <span data-live-dashboard-state>更新を準備中</span>
         ${card("temperature-01", "numeric", "℃")}
       </section>
@@ -253,14 +338,14 @@ describe("live dashboard", () => {
   it("does not poll hidden documents and bounds one cycle to twelve cards", async () => {
     vi.useFakeTimers();
     document.body.innerHTML = `
-      <section data-live-dashboard>
+      <section data-live-dashboard data-live-session-started-at="1700000000000">
         <span data-live-dashboard-state></span>
         ${Array.from({ length: 13 }, (_, index) => card(`signal-${index}`, "numeric")).join("")}
       </section>
     `;
     const fetch = vi.fn((input: RequestInfo | URL) => {
       const url = new URL(String(input), "http://localhost");
-      return Promise.resolve(responseFor(url.searchParams.get("signal_ref") ?? ""));
+      return Promise.resolve(responseFor((url.searchParams.get("rule_id") ?? "").replace("rule-", "")));
     });
     vi.stubGlobal("fetch", fetch);
     Object.defineProperty(document, "visibilityState", {
@@ -285,7 +370,7 @@ describe("live dashboard", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_600_000);
     document.body.innerHTML = `
-      <section data-live-dashboard data-stale-after-ms="300000">
+      <section data-live-dashboard data-live-session-started-at="1700000600000" data-stale-after-ms="300000">
         <span data-live-dashboard-state></span>
         ${card("stale-01", "numeric", "℃")}
         ${card("never-01", "boolean")}
@@ -294,9 +379,8 @@ describe("live dashboard", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        const signalRef = new URL(String(input), "http://localhost").searchParams.get(
-          "signal_ref",
-        )!;
+        const signalRef = new URL(String(input), "http://localhost").searchParams
+          .get("rule_id")!.replace("rule-", "");
         const base = await responseFor("temperature-01").json();
         return new Response(
           JSON.stringify({
@@ -321,5 +405,24 @@ describe("live dashboard", () => {
     expect(stale.querySelector("[data-live-status]")?.classList.contains("stale")).toBe(true);
     expect(never.querySelector("[data-live-status]")?.textContent).toBe("未受信");
     expect(never.querySelector("[data-live-value]")?.textContent).toBe("—");
+  });
+
+  it("settles the ruleless dashboard on setup guidance", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="1700000000000">
+        <span data-live-dashboard-state>更新を準備中</span>
+      </section>
+    `;
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(document.querySelector("[data-live-dashboard-state]")?.textContent).toBe(
+      "有効な計測ルールがありません。計測ルールを設定してください",
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

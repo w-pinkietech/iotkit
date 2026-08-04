@@ -359,12 +359,14 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             &[
                 r#"data-live-dashboard"#,
                 r#"data-live-signal"#,
+                r#"data-rule-id="rule-01""#,
                 r#"data-signal-ref="signal-01""#,
                 r#"data-value-kind="numeric""#,
                 r#"data-live-chart"#,
                 r#"data-live-status"#,
                 r#"href="/sensors/signal-01""#,
-                "この画面を開いてから届く値",
+                "現在温度",
+                "有効な計測ルールごとに",
                 "表示領域内から最大12件を同時に自動更新",
             ][..],
         ),
@@ -500,6 +502,33 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             assert!(html.contains(hook), "{path} missing {hook}");
         }
     }
+}
+
+#[tokio::test]
+async fn live_page_shows_per_signal_setup_guidance_without_active_rules() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::unconfigured()));
+    let response = app
+        .oneshot(
+            Request::get("/live")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(html.contains("乾燥炉入口 温度の計測ルールがありません"));
+    assert!(html.contains(r#"href="/sensors/signal-01""#));
+    assert!(html.contains("計測ルールを設定"));
+    assert!(!html.contains("data-live-signal"));
 }
 
 #[tokio::test]

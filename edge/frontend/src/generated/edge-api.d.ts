@@ -24,7 +24,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Aggregate one sensor history into bounded time buckets */
+        /** Aggregate one raw sensor or processed measurement rule into bounded time buckets */
         get: operations["getHistorySeries"];
         put?: never;
         post?: never;
@@ -170,10 +170,10 @@ export interface components {
             sample_count: number;
             /**
              * Format: int64
-             * @description Exact IoTKit Edge receipt time of the latest value, or null before first receipt.
+             * @description Exact IoTKit Edge receipt time of the latest raw or processed value, or null before first receipt.
              */
             latest_received_at: number | null;
-            /** @description First raw value from the latest record, or null before first receipt. */
+            /** @description Exact latest raw value for signal_ref or processed value for rule_id, or null before first receipt. */
             latest_value: number | boolean | string | null;
             points: components["schemas"]["HistorySeriesPoint"][];
         };
@@ -424,7 +424,9 @@ export interface operations {
                 from: components["parameters"]["HistoryFrom"];
                 /** @description Exclusive IoTKit Edge receipt time in Unix milliseconds; ranges are limited to 31 days. */
                 to: components["parameters"]["HistoryTo"];
-                signal_ref: components["parameters"]["HistorySignalRefRequired"];
+                signal_ref?: components["parameters"]["HistorySignalRef"];
+                /** @description Active semantic rule to read instead of raw sensor values. */
+                rule_id?: string;
                 bucket_ms: number;
             };
             header?: never;

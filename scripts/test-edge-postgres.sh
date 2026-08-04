@@ -82,6 +82,11 @@ IOTKIT_REQUIRE_POSTGRES=1 \
     -- --ignored --exact --nocapture
 
 reset_database
+cargo test -p iotkit-edge --test history_storage_contract \
+  postgres_semantic_history_series_obeys_the_shared_contract \
+  -- --ignored --exact --nocapture
+
+reset_database
 cargo test -p iotkit-edge --test auth_storage_contract \
   postgres_obeys_account_session_and_admin_safety_contract \
   -- --ignored --exact --nocapture
@@ -131,4 +136,4 @@ cargo test -p iotkit-edge --test backup_contract \
   postgres_custom_snapshot_round_trips_through_real_tools_when_required \
   -- --exact --nocapture
 
-echo "Rust Edge PostgreSQL custody, auth, revision, upgrade, migration, recovery, backup, and restore tests passed."
+echo "Rust Edge PostgreSQL custody, semantic history, auth, revision, upgrade, migration, recovery, backup, and restore tests passed."

@@ -42,13 +42,18 @@ paths:
   /api/v1/history/series:
     get:
       operationId: getHistorySeries
-      summary: Aggregate one sensor history into bounded time buckets
+      summary: Aggregate one raw sensor or processed measurement rule into bounded time buckets
       security:
         - EdgeSession: []
       parameters:
         - $ref: "#/components/parameters/HistoryFrom"
         - $ref: "#/components/parameters/HistoryTo"
-        - $ref: "#/components/parameters/HistorySignalRefRequired"
+        - $ref: "#/components/parameters/HistorySignalRef"
+        - name: rule_id
+          in: query
+          description: Active semantic rule to read instead of raw sensor values.
+          schema:
+            type: string
         - name: bucket_ms
           in: query
           required: true
@@ -312,11 +317,11 @@ components:
         value_type: { type: string }
         sample_count: { type: integer, format: int64 }
         latest_received_at:
-          description: Exact IoTKit Edge receipt time of the latest value, or null before first receipt.
+          description: Exact IoTKit Edge receipt time of the latest raw or processed value, or null before first receipt.
           type: [integer, "null"]
           format: int64
         latest_value:
-          description: First raw value from the latest record, or null before first receipt.
+          description: Exact latest raw value for signal_ref or processed value for rule_id, or null before first receipt.
           type: [number, boolean, string, "null"]
         points:
           type: array

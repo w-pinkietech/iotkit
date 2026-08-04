@@ -67,9 +67,9 @@
       (point) => isRecord(point) && typeof point.bucket_start === "number" && typeof point.minimum === "number" && typeof point.average === "number" && typeof point.maximum === "number" && typeof point.sample_count === "number"
     );
   }
-  async function getHistorySeries(signalRef, from, to, bucketMs, signal) {
+  async function getHistorySeries(ruleId, from, to, bucketMs, signal) {
     const query2 = new URLSearchParams({
-      signal_ref: signalRef,
+      rule_id: ruleId,
       from: String(from),
       to: String(to),
       bucket_ms: String(bucketMs)
@@ -1434,7 +1434,7 @@
     });
   }
   function isBooleanKind(kind) {
-    return kind === "bool" || kind === "boolean";
+    return kind === "bool" || kind === "boolean" || kind === "alarm";
   }
   function relativeTime(receivedAt, now) {
     const elapsed = Math.max(0, now - receivedAt);
@@ -1623,26 +1623,35 @@
     const state = query("[data-live-dashboard-state]");
     if (!dashboard) return;
     const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 3e5);
-    const sessionStartedAt = Date.now();
+    const sessionStartedAt = Number(dashboard.dataset.liveSessionStartedAt);
+    if (!Number.isFinite(sessionStartedAt)) {
+      if (state) state.textContent = "\u30E9\u30A4\u30D6\u66F4\u65B0\u3092\u958B\u59CB\u3067\u304D\u307E\u305B\u3093";
+      return;
+    }
+    const pageOpenedAt = performance.now();
+    const edgeNow = () => Math.floor(sessionStartedAt + Math.max(0, performance.now() - pageOpenedAt));
     const latestPayloads = /* @__PURE__ */ new WeakMap();
     let controller = null;
     const refresh = async () => {
       if (!dashboard.isConnected || document.visibilityState !== "visible") return;
       controller?.abort();
       controller = new AbortController();
-      const now = Date.now();
+      const now = edgeNow();
       const cards = activeCards(dashboard);
-      if (!cards.length) return;
+      if (!cards.length) {
+        if (state) state.textContent = "\u6709\u52B9\u306A\u8A08\u6E2C\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002\u8A08\u6E2C\u30EB\u30FC\u30EB\u3092\u8A2D\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044";
+        return;
+      }
       for (const card of cards) {
         const cached = latestPayloads.get(card);
         if (cached) renderCard(card, cached, now, staleAfterMs, sessionStartedAt);
       }
       const results = await Promise.all(
         cards.map(async (card) => {
-          const signalRef = card.dataset.signalRef;
-          if (!signalRef) return false;
+          const ruleId = card.dataset.ruleId;
+          if (!ruleId) return false;
           const result = await getHistorySeries(
-            signalRef,
+            ruleId,
             Math.max(sessionStartedAt, now - SESSION_WINDOW_MS),
             now + 1,
             BUCKET_MS,

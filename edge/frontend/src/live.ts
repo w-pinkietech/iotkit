@@ -29,7 +29,7 @@ function formatNumber(value: number, decimalPlaces = 1): string {
 }
 
 function isBooleanKind(kind: string): boolean {
-  return kind === "bool" || kind === "boolean";
+  return kind === "bool" || kind === "boolean" || kind === "alarm";
 }
 
 function relativeTime(receivedAt: number, now: number): string {
@@ -271,7 +271,14 @@ export function initializeLiveDashboard(): void {
   const state = query<HTMLElement>("[data-live-dashboard-state]");
   if (!dashboard) return;
   const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 300_000);
-  const sessionStartedAt = Date.now();
+  const sessionStartedAt = Number(dashboard.dataset.liveSessionStartedAt);
+  if (!Number.isFinite(sessionStartedAt)) {
+    if (state) state.textContent = "ライブ更新を開始できません";
+    return;
+  }
+  const pageOpenedAt = performance.now();
+  const edgeNow = (): number =>
+    Math.floor(sessionStartedAt + Math.max(0, performance.now() - pageOpenedAt));
   const latestPayloads = new WeakMap<HTMLElement, HistorySeries>();
   let controller: AbortController | null = null;
 
@@ -279,19 +286,22 @@ export function initializeLiveDashboard(): void {
     if (!dashboard.isConnected || document.visibilityState !== "visible") return;
     controller?.abort();
     controller = new AbortController();
-    const now = Date.now();
+    const now = edgeNow();
     const cards = activeCards(dashboard);
-    if (!cards.length) return;
+    if (!cards.length) {
+      if (state) state.textContent = "有効な計測ルールがありません。計測ルールを設定してください";
+      return;
+    }
     for (const card of cards) {
       const cached = latestPayloads.get(card);
       if (cached) renderCard(card, cached, now, staleAfterMs, sessionStartedAt);
     }
     const results = await Promise.all(
       cards.map(async (card) => {
-        const signalRef = card.dataset.signalRef;
-        if (!signalRef) return false;
+        const ruleId = card.dataset.ruleId;
+        if (!ruleId) return false;
         const result = await getHistorySeries(
-          signalRef,
+          ruleId,
           Math.max(sessionStartedAt, now - SESSION_WINDOW_MS),
           now + 1,
           BUCKET_MS,

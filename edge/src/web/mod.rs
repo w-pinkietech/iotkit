@@ -3,7 +3,11 @@ pub mod console;
 mod error;
 pub mod router;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use askama::Template;
 use async_trait::async_trait;
@@ -441,6 +445,7 @@ pub struct HistoryQuery {
     pub limit: Option<u16>,
     pub cursor: Option<String>,
     pub signal_ref: Option<String>,
+    pub rule_id: Option<String>,
     pub edge_node_id: Option<String>,
     pub bucket_ms: Option<i64>,
 }
@@ -551,6 +556,7 @@ struct ConsoleTemplate<'a> {
     is_admin: bool,
     trial_profile: bool,
     display_time_zone: &'a str,
+    live_session_started_at: i64,
     view: ConsoleView,
 }
 
@@ -657,12 +663,19 @@ async fn console_page(
             is_admin: principal.role == "admin" || principal.role == "system_admin",
             trial_profile: state.config.trial_profile,
             display_time_zone: &state.config.display_time_zone,
+            live_session_started_at: current_unix_millis(),
             view,
         }
         .render()
         .map_err(internal)?,
     )
     .into_response())
+}
+
+fn current_unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as i64)
 }
 
 fn navigation_page(path: &str) -> &str {
@@ -1154,13 +1167,15 @@ async fn history_series(
 ) -> Result<Json<Value>, WebError> {
     api_auth(&state, &headers).await?;
     validate_history_query(&query)?;
-    if query.signal_ref.as_deref().unwrap_or("").is_empty() {
+    if query.signal_ref.as_deref().unwrap_or("").is_empty()
+        && query.rule_id.as_deref().unwrap_or("").is_empty()
+    {
         return Err(WebError::new(
             StatusCode::BAD_REQUEST,
             "invalid_query",
-            "signal_ref is required",
+            "signal_ref or rule_id is required",
         )
-        .field("signal_ref"));
+        .field("rule_id"));
     }
     let bucket_ms = query.bucket_ms.unwrap_or_default();
     let from = parse_history_time(query.from.as_deref(), "from")?;
@@ -1797,7 +1812,21 @@ pub mod test_support {
             calibration_offset: 0.0,
             calibration_revision: 1,
             has_alarm_rules: false,
-            rules: Vec::new(),
+            rules: vec![ConsoleRule {
+                rule_id: "rule-01".into(),
+                display_name: "現在温度".into(),
+                kind: "numeric".into(),
+                kind_label: "測定値".into(),
+                count_summary: String::new(),
+                revision: 1,
+                detector_mode: String::new(),
+                detector_is_boolean: false,
+                rise_threshold: 0.0,
+                fall_threshold: 0.0,
+                rise_debounce_seconds: 0.0,
+                fall_debounce_seconds: 0.0,
+                trigger: String::new(),
+            }],
         };
         let devices = if active {
             vec![ConsoleDevice {
