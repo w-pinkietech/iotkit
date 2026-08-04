@@ -4,8 +4,9 @@ Custom subagents live in [`.codex/agents/`](agents/). Session defaults are in
 [`config.toml`](config.toml). Upstream shape:
 [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
-These roles exist so Main (and Superpowers-style plan execution) can **split**
-work instead of one session doing implement + verify + review alone.
+These roles define the routine Codex development loop: Main **splits**
+implementation, fresh verification, and independent review instead of one
+session doing all three alone.
 
 ## Roles
 
@@ -54,11 +55,10 @@ Main inspects the actual diff and reruns the specified verification commands fro
 a fresh Main turn before acceptance. Reviewer findings are independent judgment;
 they do not replace Main's command evidence.
 
-## When Superpowers (or a plan) is in use
+## Routine implementation loop
 
-Use this loop for **each** plan task (or each clearly bounded checklist item).
-Fast single-file work may stay on Main alone; do not invent subagents for
-noise.
+Use this loop for every routine task (or each clearly bounded plan/checklist
+item), regardless of whether an optional process artifact is used.
 
 ```text
 Main: settle task text, interfaces, constraints, and verification commands;
@@ -69,7 +69,7 @@ Main: settle task text, interfaces, constraints, and verification commands;
        if changes-requested → selected implementation lane → Main verification → reviewer (same mode)
   → reviewer: mode=quality (or one full pass if Main prefers a single review)
        if changes-requested → selected implementation lane → Main verification → reviewer
-  → Main: mark task done; next task
+  → Main: final acceptance; mark task done; next task
 After all tasks:
   → Main: broader verification warranted by risk
   → reviewer: mode=full on the whole branch/PR diff
@@ -96,14 +96,10 @@ Do not dispatch multiple implementation agents (`implementer` or
 see implementation-agent output as untrusted until Main's fresh commands and
 diff evidence support it.
 
-## When Superpowers is not in use
-
-Still split when useful:
-
-- Main implements small Fast changes alone, runs the focused command set, then
-  uses **reviewer** before asking a human to merge risky work.
-- For PR babysitting: **reviewer** for findings, the task-shaped implementation
-  lane for fixes, Main for re-check — not one agent rewriting and self-approving.
+For work outside a plan, use the same task-shaped implementation lane, Main
+fresh verification, and independent reviewer sequence. For PR babysitting,
+the reviewer reports findings, the selected implementation lane applies fixes,
+and Main re-checks; no agent rewrites and self-approves.
 
 ## Handoff checklist (Main → subagent)
 
