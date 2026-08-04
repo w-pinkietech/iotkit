@@ -68,6 +68,14 @@ Rustは[rustup](https://rustup.rs/)、Node.js 22は通常使うpackage manager�
 導入してください。credential、生成した証明書、local DB、deployment出力directoryを
 commitしてはいけません。
 
+通常の開発でhostの全coreを使い切らないよう、repositoryのCargo既定値はcompiler jobと
+Rust test threadをそれぞれ4に制限します。既存の環境変数が優先されるため、必要な場合は
+command単位で明示的に上書きできます。
+
+```bash
+CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p iotkit-edge
+```
+
 ## 最初の60分
 
 ### 0〜10分: 地図を確認する
