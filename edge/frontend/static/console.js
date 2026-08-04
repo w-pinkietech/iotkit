@@ -67,9 +67,9 @@
       (point) => isRecord(point) && typeof point.bucket_start === "number" && typeof point.minimum === "number" && typeof point.average === "number" && typeof point.maximum === "number" && typeof point.sample_count === "number"
     );
   }
-  async function getHistorySeries(signalRef, from, to, bucketMs, signal) {
+  async function getHistorySeries(ruleId, from, to, bucketMs, signal) {
     const query2 = new URLSearchParams({
-      signal_ref: signalRef,
+      rule_id: ruleId,
       from: String(from),
       to: String(to),
       bucket_ms: String(bucketMs)
@@ -1434,7 +1434,7 @@
     });
   }
   function isBooleanKind(kind) {
-    return kind === "bool" || kind === "boolean";
+    return kind === "bool" || kind === "boolean" || kind === "alarm";
   }
   function relativeTime(receivedAt, now) {
     const elapsed = Math.max(0, now - receivedAt);
@@ -1577,33 +1577,15 @@
     status.textContent = label;
     status.className = `status-pill ${className}`;
   }
-  function cardLatestReceivedAt(card) {
-    const value = card.dataset.latestReceivedAt;
-    if (value === void 0 || value === "") return null;
-    const receivedAt = Number(value);
-    return Number.isFinite(receivedAt) ? receivedAt : null;
-  }
-  function initialPayload(card) {
-    const latestReceivedAt = cardLatestReceivedAt(card);
-    if (latestReceivedAt === null) return null;
-    return {
-      signal_ref: card.dataset.signalRef ?? "",
-      display_name: "",
-      unit: card.dataset.unit ?? "",
-      value_type: card.dataset.valueKind ?? "",
-      sample_count: 0,
-      latest_received_at: latestReceivedAt,
-      latest_value: null,
-      points: []
-    };
-  }
-  function retainCardLatest(card, payload) {
-    if (payload.latest_received_at !== null) {
-      card.dataset.latestReceivedAt = String(payload.latest_received_at);
+  function retainCardLatest(previous, payload) {
+    if (payload.latest_received_at !== null || previous?.latest_received_at === null || !previous) {
       return payload;
     }
-    const latestReceivedAt = cardLatestReceivedAt(card);
-    return latestReceivedAt === null ? payload : { ...payload, latest_received_at: latestReceivedAt };
+    return {
+      ...payload,
+      latest_received_at: previous.latest_received_at,
+      latest_value: previous.latest_value
+    };
   }
   function renderCard(card, payload, now, staleAfterMs, sessionStartedAt) {
     const kind = card.dataset.valueKind ?? payload.value_type;
@@ -1651,7 +1633,13 @@
     const state = query("[data-live-dashboard-state]");
     if (!dashboard) return;
     const staleAfterMs = Number(dashboard.dataset.staleAfterMs ?? 3e5);
-    const sessionStartedAt = Date.now();
+    const sessionStartedAt = Number(dashboard.dataset.liveSessionStartedAt);
+    if (!Number.isFinite(sessionStartedAt)) {
+      if (state) state.textContent = "\u30E9\u30A4\u30D6\u66F4\u65B0\u3092\u958B\u59CB\u3067\u304D\u307E\u305B\u3093";
+      return;
+    }
+    const pageOpenedAt = performance.now();
+    const edgeNow = () => Math.floor(sessionStartedAt + Math.max(0, performance.now() - pageOpenedAt));
     const snapshotAt = Number(dashboard.dataset.liveSnapshotAt);
     const liveSnapshotAt = Number.isFinite(snapshotAt) && snapshotAt >= 0 && snapshotAt <= sessionStartedAt ? snapshotAt : sessionStartedAt;
     const latestPayloads = /* @__PURE__ */ new WeakMap();
@@ -1661,30 +1649,37 @@
       if (!dashboard.isConnected || document.visibilityState !== "visible") return;
       controller?.abort();
       controller = new AbortController();
-      const now = Date.now();
+      const now = edgeNow();
+      const totalCards = queryAll("[data-live-signal]", dashboard).length;
+      if (!totalCards) {
+        if (state) state.textContent = "\u6709\u52B9\u306A\u8A08\u6E2C\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002\u8A08\u6E2C\u30EB\u30FC\u30EB\u3092\u8A2D\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044";
+        return;
+      }
       const cards = activeCards(dashboard);
-      if (!cards.length) return;
+      if (!cards.length) {
+        if (state) state.textContent = "\u8868\u793A\u9818\u57DF\u5185\u306E\u8A08\u6E2C\u30EB\u30FC\u30EB\u3092\u5F85\u3063\u3066\u3044\u307E\u3059";
+        return;
+      }
       for (const card of cards) {
-        const cached = latestPayloads.get(card) ?? initialPayload(card);
+        const cached = latestPayloads.get(card);
         if (cached) {
-          latestPayloads.set(card, cached);
           renderCard(card, cached, now, staleAfterMs, sessionStartedAt);
         }
       }
       const results = await Promise.all(
         cards.map(async (card) => {
-          const signalRef = card.dataset.signalRef;
-          if (!signalRef) return false;
+          const ruleId = card.dataset.ruleId;
+          if (!ruleId) return false;
           const catchingUp = liveSnapshotAt < sessionStartedAt && !catchUpComplete.has(card);
           const result = await getHistorySeries(
-            signalRef,
+            ruleId,
             Math.max(catchingUp ? liveSnapshotAt : sessionStartedAt, now - SESSION_WINDOW_MS),
             now + 1,
             BUCKET_MS,
             controller.signal
           ).catch(() => null);
           if (!result?.ok) return false;
-          const payload = retainCardLatest(card, result.value);
+          const payload = retainCardLatest(latestPayloads.get(card), result.value);
           const renderedPayload = catchingUp ? { ...payload, sample_count: 0, points: [] } : payload;
           if (catchingUp) catchUpComplete.add(card);
           latestPayloads.set(card, renderedPayload);

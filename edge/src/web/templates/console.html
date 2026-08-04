@@ -137,27 +137,31 @@
       <section class="live-dashboard-heading" aria-label="ライブ更新の状態">
         <div>
           <p class="section-kicker">REAL TIME</p>
-          <h2>現場の値をまとめて確認</h2>
-          <p>この画面を開いてから届く値を5秒ごとにグラフへ追加します。表示領域内から最大12件を同時に自動更新します。</p>
+          <h2>計測結果をまとめて確認</h2>
+          <p>有効な計測ルールごとに、この画面を開いてから届く結果を5秒ごとにグラフへ追加します。表示領域内から最大12件を同時に自動更新します。</p>
         </div>
         <span class="live-dashboard-state" data-live-dashboard-state aria-live="polite">更新を準備中</span>
       </section>
-      <section class="live-signal-grid" data-live-dashboard data-live-snapshot-at="{{ view.live_snapshot_at }}" data-stale-after-ms="300000" aria-label="センサーのライブ値">
+      <section class="live-signal-grid" data-live-dashboard data-live-session-started-at="{{ live_session_started_at }}" data-live-snapshot-at="{{ view.live_snapshot_at }}" data-stale-after-ms="300000" aria-label="センサーのライブ値">
         {% for signal in view.signals %}
-        <article class="live-signal-card" data-live-signal data-signal-ref="{{ signal.signal_ref }}" data-value-kind="{{ signal.value_kind }}" data-decimal-places="{{ signal.decimal_places }}" data-unit="{{ signal.unit }}" data-latest-received-at="{% match signal.latest_received_at %}{% when Some with (received_at) %}{{ received_at }}{% when None %}{% endmatch %}">
+        {% for rule in signal.rules %}
+        <article class="live-signal-card" data-live-signal data-rule-id="{{ rule.rule_id }}" data-signal-ref="{{ signal.signal_ref }}" data-value-kind="{{ rule.kind }}" data-decimal-places="{{ signal.decimal_places }}" data-unit="{{ signal.unit }}">
           <header>
-            <div><span>{{ signal.sensor_type }}</span><h2>{{ signal.name }}</h2></div>
-            <span class="status-pill {{ signal.status_class }}" data-live-status>{{ signal.status_label }}</span>
+            <div><span>{{ signal.name }}</span><h2>{{ rule.display_name }}</h2></div>
+            <span class="status-pill" data-live-status>確認中</span>
           </header>
           <div class="live-current">
             <span>現在値</span>
-            <strong data-live-value>{{ signal.value }}{% if !signal.unit.is_empty() %} {{ signal.unit }}{% endif %}</strong>
-            <span data-live-received>{% if signal.status_class == "never" %}まだ受信していません{% else %}最終受信を確認中{% endif %}</span>
+            <strong data-live-value>—</strong>
+            <span data-live-received>計測結果を確認中</span>
           </div>
-          <svg class="live-chart" data-live-chart viewBox="0 0 360 160" role="img" aria-label="{{ signal.name }}を画面開始後に受信した値"></svg>
-          <p class="sr-only" data-live-summary>受信値を確認中です。</p>
+          <svg class="live-chart" data-live-chart viewBox="0 0 360 160" role="img" aria-label="{{ rule.display_name }}を画面開始後に計測した結果"></svg>
+          <p class="sr-only" data-live-summary>計測結果を確認中です。</p>
           <footer><span>{{ signal.edge_node_id }}</span><a href="/sensors/{{ signal.signal_ref }}">詳細を見る <span aria-hidden="true">→</span></a></footer>
         </article>
+        {% else %}
+        <div class="empty-state"><span aria-hidden="true">◉</span><strong>{{ signal.name }}の計測ルールがありません</strong><p>センサー詳細で計測ルールを作成すると、ここに結果が表示されます。</p><a class="button" href="/sensors/{{ signal.signal_ref }}">計測ルールを設定</a></div>
+        {% endfor %}
         {% else %}
         <div class="empty-state"><span aria-hidden="true">◉</span><strong>表示できるセンサーがありません</strong><p>機器を登録すると、ここに現在値と推移が表示されます。</p><a class="button" href="/equipment">機器管理を開く</a></div>
         {% endfor %}

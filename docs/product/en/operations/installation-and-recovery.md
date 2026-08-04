@@ -74,17 +74,23 @@ fallback.
 - **Equipment / Collection Nodes**: discovery, registration, the last descriptor communication,
   and the exact data generation used for diagnosis. **Registered** is an authorization
   state; it does not mean the Edge Node is currently online.
-- **Live**: show the current value and last receipt for every registered signal, then add only
-  values received after the operator opened the page. Numeric charts retain the latest 60
-  five-second buckets; contact charts derive the latest 10 state changes from five-second buckets. The view becomes
-  a rolling window after five minutes. Until a post-open value arrives, the chart stays empty and
-  says that it is waiting. Each card links to sensor detail. The browser refreshes at most 12
-  cards in the visible region every five seconds, and only while the document is visible. After
-  a successful fetch, the elapsed last-receipt time and chart window continue to advance from the
-  browser clock even if a later fetch temporarily fails. It identifies signals that have never
-  received data and marks five minutes without a new value as **Check**, not as proof of a stopped
-  device. Use **Reception history** for data from before the page opened. Investigate Check at the
-  sensor, adapter, Edge Node, broker, then IoTKit Edge—in that order.
+- **Live**: show one card for every active measurement rule. Each card uses the latest persisted
+  processed value after calibration and rule evaluation, with its receipt time, independently of
+  its chart. The chart contains only results received after the operator opened the page.
+  Multiple active rules for one signal become
+  separate cards; a signal without a rule shows configuration guidance. Numeric charts retain the
+  latest 60 five-second buckets; boolean and alarm charts derive the latest 10 state changes from
+  five-second buckets.
+  The view becomes a rolling window after five minutes. Until a post-open processed value arrives,
+  the chart stays empty and says that it is waiting, even when a prior processed current value is
+  available. Each card links to sensor detail. The browser
+  refreshes at most 12 cards in the visible region every five seconds, and only while the document
+  is visible. After a successful fetch, the elapsed last-receipt time and chart window stay anchored
+  to the IoTKit Edge time at page open and advance by the browser's monotonic elapsed time, even if a
+  later fetch temporarily fails. It identifies rules that
+  have never produced data and marks five minutes without a new result as **Check**, not as proof
+  of a stopped device. Use **Reception history** for raw and past data. Investigate Check at the
+  sensor, adapter, Edge Node, broker, IoTKit Edge, then semantic projection—in that order.
 - **Reception history**: filter sensor, Edge Node, and period on one screen, then inspect
   the bounded graph and recent raw rows that match the selected sensor. The graph's horizontal
   axis shows the actual reception timestamps in the display time zone, and its vertical axis shows

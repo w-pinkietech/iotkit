@@ -126,14 +126,14 @@ function isHistorySeries(value: unknown): value is HistorySeries {
 }
 
 export async function getHistorySeries(
-  signalRef: string,
+  ruleId: string,
   from: number,
   to: number,
   bucketMs: number,
   signal: AbortSignal,
 ): Promise<APIResult<HistorySeries>> {
   const query = new URLSearchParams({
-    signal_ref: signalRef,
+    rule_id: ruleId,
     from: String(from),
     to: String(to),
     bucket_ms: String(bucketMs),

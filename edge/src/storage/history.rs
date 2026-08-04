@@ -277,6 +277,113 @@ impl Storage {
         };
         Ok(rows)
     }
+
+    pub async fn query_semantic_history_series(
+        &self,
+        rule_id: &str,
+        from: i64,
+        to: i64,
+        bucket_ms: i64,
+    ) -> Result<(Vec<HistoryBucket>, Option<(i64, Vec<u8>)>), StorageError> {
+        if rule_id.is_empty() || from < 0 || to <= from || bucket_ms <= 0 {
+            return Err(StorageError::InvalidHistory(
+                "invalid semantic series query".into(),
+            ));
+        }
+        match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                let buckets = sqlx::query(
+                    "SELECT ((raw.received_at-?)/?)*?+? bucket_start,\
+                     MIN(CAST(json_extract(observation.value_json,'$') AS REAL)) minimum,\
+                     AVG(CAST(json_extract(observation.value_json,'$') AS REAL)) average,\
+                     MAX(CAST(json_extract(observation.value_json,'$') AS REAL)) maximum,\
+                     COUNT(*) count FROM semantic_observations observation JOIN raw_records raw \
+                     ON raw.edge_node_id=observation.edge_node_id \
+                     AND raw.ledger_epoch=observation.ledger_epoch \
+                     AND raw.pub_seq=observation.source_pub_seq \
+                     WHERE observation.rule_id=? AND raw.received_at>=? AND raw.received_at<? \
+                     AND json_type(observation.value_json,'$') IN ('integer','real','true','false') \
+                     GROUP BY bucket_start ORDER BY bucket_start",
+                )
+                .bind(from)
+                .bind(bucket_ms)
+                .bind(bucket_ms)
+                .bind(from)
+                .bind(rule_id)
+                .bind(from)
+                .bind(to)
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(|row| bucket_row(&row))
+                .collect::<Result<Vec<_>, _>>()?;
+                let latest = sqlx::query(
+                    "WITH latest AS (SELECT edge_node_id,ledger_epoch,source_pub_seq,value_json \
+                     FROM semantic_observations WHERE rule_id=? \
+                     ORDER BY observation_row_id DESC LIMIT 1) \
+                     SELECT raw.received_at,latest.value_json FROM latest JOIN raw_records raw \
+                     ON raw.edge_node_id=latest.edge_node_id \
+                     AND raw.ledger_epoch=latest.ledger_epoch \
+                     AND raw.pub_seq=latest.source_pub_seq",
+                )
+                .bind(rule_id)
+                .fetch_optional(pool)
+                .await?
+                .map(|row| {
+                    Ok::<_, StorageError>((row.try_get("received_at")?, row.try_get("value_json")?))
+                })
+                .transpose()?;
+                Ok((buckets, latest))
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let buckets = sqlx::query(
+                    "SELECT ((raw.received_at-$1)/$2)*$2+$1 bucket_start,\
+                     MIN(CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
+                         WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END) minimum,\
+                     AVG(CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
+                         WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END) average,\
+                     MAX(CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
+                         WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END) maximum,\
+                     COUNT(*)::bigint count FROM semantic_observations observation JOIN raw_records raw \
+                     ON raw.edge_node_id=observation.edge_node_id \
+                     AND raw.ledger_epoch=observation.ledger_epoch \
+                     AND raw.pub_seq=observation.source_pub_seq \
+                     WHERE observation.rule_id=$3 AND raw.received_at>=$1 AND raw.received_at<$4 \
+                     AND jsonb_typeof(observation.value_json) IN ('number','boolean') \
+                     GROUP BY bucket_start ORDER BY bucket_start",
+                )
+                .bind(from)
+                .bind(bucket_ms)
+                .bind(rule_id)
+                .bind(to)
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(|row| bucket_row(&row))
+                .collect::<Result<Vec<_>, _>>()?;
+                let latest = sqlx::query(
+                    "WITH latest AS (SELECT edge_node_id,ledger_epoch,source_pub_seq,value_json \
+                     FROM semantic_observations WHERE rule_id=$1 \
+                     ORDER BY observation_row_id DESC LIMIT 1) \
+                     SELECT raw.received_at,latest.value_json::text value_json FROM latest \
+                     JOIN raw_records raw ON raw.edge_node_id=latest.edge_node_id \
+                     AND raw.ledger_epoch=latest.ledger_epoch \
+                     AND raw.pub_seq=latest.source_pub_seq",
+                )
+                .bind(rule_id)
+                .fetch_optional(pool)
+                .await?
+                .map(|row| {
+                    Ok::<_, StorageError>((
+                        row.try_get("received_at")?,
+                        row.try_get::<String, _>("value_json")?.into_bytes(),
+                    ))
+                })
+                .transpose()?;
+                Ok((buckets, latest))
+            }
+        }
+    }
 }
 
 fn raw_row<R>(row: &R) -> Result<StoredRawHistoryRow, StorageError>

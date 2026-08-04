@@ -127,6 +127,28 @@ async fn history_series_includes_exact_latest_value_for_live_cards() {
 }
 
 #[tokio::test]
+async fn history_series_accepts_a_rule_id_without_a_raw_signal_ref() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::authenticated()),
+    );
+    let response = app
+        .oneshot(authenticated(
+            Request::get(
+                "/api/v1/history/series?from=1735689590000&to=1735689610000&rule_id=rule-1&bucket_ms=1000",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert_eq!(body["latest_received_at"], 1_735_689_600_000_i64);
+}
+
+#[tokio::test]
 async fn history_json_preserves_go_page_and_record_schema() {
     let app = router(
         WebConfig::test(),

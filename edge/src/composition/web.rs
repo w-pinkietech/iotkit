@@ -1482,7 +1482,6 @@ impl WebApplication for StorageWebApplication {
     }
 
     async fn history_series(&self, query: HistoryQuery) -> Result<Value, WebError> {
-        let signal_ref = query.signal_ref.as_deref().unwrap_or_default();
         let from = query
             .from
             .as_deref()
@@ -1493,6 +1492,55 @@ impl WebApplication for StorageWebApplication {
             .as_deref()
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or_default();
+        if let Some(rule_id) = query.rule_id.as_deref().filter(|value| !value.is_empty()) {
+            let rule = self
+                .storage
+                .list_semantic_rules()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .find(|rule| rule.rule_id == rule_id && rule.active)
+                .ok_or_else(not_found_error)?;
+            let (buckets, latest) = self
+                .storage
+                .query_semantic_history_series(
+                    rule_id,
+                    from,
+                    to,
+                    query.bucket_ms.unwrap_or_default(),
+                )
+                .await
+                .map_err(internal)?;
+            let signal = self
+                .storage
+                .inventory_signals()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .find(|signal| signal.signal_ref == rule.signal_ref)
+                .ok_or_else(not_found_error)?;
+            let sample_count: i64 = buckets.iter().map(|bucket| bucket.count).sum();
+            let (latest_received_at, latest_value) = latest.map_or((None, None), |(at, value)| {
+                (Some(at), serde_json::from_slice::<Value>(&value).ok())
+            });
+            return Ok(json!({
+                "signal_ref": rule.signal_ref,
+                "display_name": rule.display_name,
+                "unit": if signal.display_unit.is_empty() { signal.unit } else { signal.display_unit },
+                "value_type": semantic_kind(rule.kind),
+                "sample_count": sample_count,
+                "latest_received_at": latest_received_at,
+                "latest_value": latest_value,
+                "points": buckets.into_iter().map(|bucket| json!({
+                    "bucket_start":bucket.bucket_start,
+                    "minimum":bucket.minimum,
+                    "average":bucket.average,
+                    "maximum":bucket.maximum,
+                    "sample_count":bucket.count,
+                })).collect::<Vec<_>>(),
+            }));
+        }
+        let signal_ref = query.signal_ref.as_deref().unwrap_or_default();
         let buckets = self
             .storage
             .query_history_series(signal_ref, from, to, query.bucket_ms.unwrap_or_default())
@@ -2112,6 +2160,7 @@ fn history_query(
         limit: Some(200),
         cursor: None,
         signal_ref,
+        rule_id: None,
         edge_node_id,
         bucket_ms: None,
     }

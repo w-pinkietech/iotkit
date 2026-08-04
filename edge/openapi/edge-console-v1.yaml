@@ -42,13 +42,18 @@ paths:
   /api/v1/history/series:
     get:
       operationId: getHistorySeries
-      summary: Aggregate one sensor history into bounded time buckets
+      summary: Aggregate one raw sensor or processed measurement rule into bounded time buckets
       security:
         - EdgeSession: []
       parameters:
         - $ref: "#/components/parameters/HistoryFrom"
         - $ref: "#/components/parameters/HistoryTo"
-        - $ref: "#/components/parameters/HistorySignalRefRequired"
+        - $ref: "#/components/parameters/HistorySignalRef"
+        - name: rule_id
+          in: query
+          description: Active semantic rule to read instead of raw sensor values. Buckets honor the requested range; latest_* reports the latest persisted processed observation regardless of that range.
+          schema:
+            type: string
         - name: bucket_ms
           in: query
           required: true
@@ -217,6 +222,7 @@ components:
     HistorySignalRef:
       name: signal_ref
       in: query
+      description: Raw sensor selection when rule_id is absent. For /history/series, both buckets and latest_* are constrained to the requested range.
       schema:
         type: string
     HistorySignalRefRequired:
@@ -312,11 +318,11 @@ components:
         value_type: { type: string }
         sample_count: { type: integer, format: int64 }
         latest_received_at:
-          description: Exact IoTKit Edge receipt time of the latest value within the requested range, or null when the requested range has no receipt.
+          description: For signal_ref, exact IoTKit Edge receipt time of the latest raw record within the requested range. For rule_id, receipt time of the latest persisted processed observation regardless of the requested chart range. Null when the selected source has no value.
           type: [integer, "null"]
           format: int64
         latest_value:
-          description: First raw value from the latest record within the requested range, or null when the requested range has no receipt.
+          description: For signal_ref, the first raw value from that latest in-range record. For rule_id, the latest persisted processed value regardless of the requested chart range. Null when the selected source has no value.
           type: [number, boolean, string, "null"]
         points:
           type: array
