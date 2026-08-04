@@ -72,6 +72,15 @@ Install Rust through [rustup](https://rustup.rs/) and Node.js 22 through your
 normal package manager. Do not commit credentials, generated certificates,
 local databases, or deployment output directories.
 
+Repository Cargo defaults keep compiler jobs and Rust test threads at four so
+normal development does not consume every host core. Existing environment
+values take precedence; override either limit explicitly for a single command
+when needed, for example:
+
+```bash
+CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p iotkit-edge
+```
+
 ## First hour
 
 ### 0–10 minutes: establish the map

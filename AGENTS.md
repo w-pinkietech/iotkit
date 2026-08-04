@@ -6,6 +6,26 @@ Agent-specific files may point here but must not redefine these rules.
 Detailed guidance lives under [`.agents/`](.agents/). Read this index first,
 then only the linked files needed for the task.
 
+## Solution choice
+
+Use Ponytail's seven-rung ladder to choose the first solution that holds:
+Apply it only after understanding the task and tracing the real affected flow;
+the ladder shortens the solution, never the investigation.
+
+1. Does this need to exist at all? Skip speculative work; **YAGNI is rung one,
+   not the entire rule**.
+2. Is it already in this codebase? Reuse the existing helper, utility, type, or
+   pattern.
+3. Does the standard library do it?
+4. Does a native platform feature cover it?
+5. Does an already-installed dependency solve it? Do not add one for a few
+   lines.
+6. Can it be one line? Use one line.
+7. Only then write the minimum code that works.
+
+Do not simplify away trust or security boundaries, data-loss prevention,
+accessibility basics, explicit requirements, or focused checks.
+
 ## Always
 
 1. **Issue-driven development** — every development task maps to one GitHub
@@ -31,6 +51,14 @@ then only the linked files needed for the task.
 5. **Use the lightest sufficient process** — Fast is the default. Add or update
    the closest focused test before changing product behavior, then widen
    verification only for realistic risk. See [`.agents/workflow.md`](.agents/workflow.md).
+6. **Split routine Codex development** — Fast-lane work uses the lightweight
+   `implementer` (Luna) by default; Main does not implement Fast work directly.
+   Route only actual context-heavy or higher-risk settled work to
+   `complex_implementer`, independent of the Fast/Standard/Full process lane.
+   Main reruns fresh acceptance verification and owns final acceptance;
+   `reviewer` supplies independent findings. Main retains read-only
+   investigation plus issue, architecture, policy, and orchestration ownership.
+   See [`.codex/README.md`](.codex/README.md).
 
 ## Index
 
