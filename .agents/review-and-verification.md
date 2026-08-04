@@ -35,10 +35,11 @@ normally expected for the change, state the check and the concrete reason.
 Tests passing are necessary, not sufficient: also compare the result with current
 contracts and the [product invariants](product-invariants.md).
 
-## Codex subagent split (optional Superpowers / multi-task plans)
+## Codex implementation roles
 
-When using project Codex agents, keep acceptance verification and review outside
-the implementation agent’s ownership:
+For every routine Codex task, keep acceptance verification and review outside the
+implementation agent’s ownership. Select the implementation role by task shape,
+then follow this order:
 
 | Concern | Owner |
 |---|---|
@@ -46,6 +47,10 @@ the implementation agent’s ownership:
 | Implement context-heavy or higher-risk settled task + focused tests | `complex_implementer` |
 | Fresh command evidence and acceptance | Main |
 | Independent findings (spec and/or quality) | `reviewer` (read-only) |
+
+Main retains orchestration, architecture, policy, and final acceptance. If review
+requests changes, return to the selected implementation role, rerun Main's fresh
+verification, and obtain a new independent review.
 
 Orchestration, handoff checklist, and Superpowers skill mapping:
 [`.codex/README.md`](../.codex/README.md).
