@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 10
+revision: 11
 ---
 
 # IoTKit Edge installation and recovery
@@ -76,7 +76,7 @@ fallback.
   state; it does not mean the Edge Node is currently online.
 - **Live**: show the current value and last receipt for every registered signal, then add only
   values received after the operator opened the page. Numeric charts retain the latest 60
-  five-second buckets; contact charts retain the latest 10 ON/OFF transitions. The view becomes
+  five-second buckets; contact charts derive the latest 10 state changes from five-second buckets. The view becomes
   a rolling window after five minutes. Until a post-open value arrives, the chart stays empty and
   says that it is waiting. Each card links to sensor detail. The browser refreshes at most 12
   cards in the visible region every five seconds, and only while the document is visible. After

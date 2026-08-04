@@ -170,10 +170,10 @@ export interface components {
             sample_count: number;
             /**
              * Format: int64
-             * @description Exact IoTKit Edge receipt time of the latest value, or null before first receipt.
+             * @description Exact IoTKit Edge receipt time of the latest value within the requested range, or null when the requested range has no receipt.
              */
             latest_received_at: number | null;
-            /** @description First raw value from the latest record, or null before first receipt. */
+            /** @description First raw value from the latest record within the requested range, or null when the requested range has no receipt. */
             latest_value: number | boolean | string | null;
             points: components["schemas"]["HistorySeriesPoint"][];
         };

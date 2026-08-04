@@ -304,6 +304,7 @@ impl StorageWebApplication {
                 sensor_type,
                 sensor_type_code,
                 value,
+                latest_received_at: latest.as_ref().map(|item| item.received_at),
                 unit: console_unit_label(&if signal.display_unit_mode == "dimensionless" {
                     String::new()
                 } else if signal.display_unit.is_empty() {
@@ -617,6 +618,7 @@ impl WebApplication for StorageWebApplication {
     async fn console(&self, request: ConsoleRequest) -> Result<ConsoleView, WebError> {
         let nodes = self.storage.list_edge_nodes(100).await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        let live_snapshot_at = now();
         let signals = self.console_signals_with_rules(&rules).await?;
         let inventory_devices = self.storage.inventory_devices().await.map_err(internal)?;
         let mut devices = Vec::with_capacity(inventory_devices.len());
@@ -802,6 +804,7 @@ impl WebApplication for StorageWebApplication {
                 .iter()
                 .filter(|node| node.state == EdgeNodeState::Active)
                 .count(),
+            live_snapshot_at,
             receiving_signal_count: signals
                 .iter()
                 .filter(|signal| signal.status_class == "receiving")
@@ -1506,9 +1509,17 @@ impl WebApplication for StorageWebApplication {
         let sample_count: i64 = buckets.iter().map(|bucket| bucket.count).sum();
         let latest = self
             .storage
-            .recent_signal_inputs(signal_ref, 1)
+            .query_raw_history(RawHistoryQuery {
+                from,
+                to,
+                limit: 1,
+                cursor: None,
+                signal_ref: Some(signal_ref.to_owned()),
+                edge_node_id: None,
+            })
             .await
             .map_err(internal)?
+            .rows
             .into_iter()
             .next();
         let latest_received_at = latest.as_ref().map(|item| item.received_at);

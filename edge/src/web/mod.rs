@@ -157,6 +157,7 @@ pub struct ConsoleView {
     pub commissioning: console::commissioning::CommissioningView,
     pub edge_nodes: Vec<ConsoleEdgeNode>,
     pub registered_edge_node_count: usize,
+    pub live_snapshot_at: i64,
     pub receiving_signal_count: usize,
     pub devices: Vec<ConsoleDevice>,
     pub signals: Vec<ConsoleSignal>,
@@ -232,6 +233,7 @@ pub struct ConsoleSignal {
     pub sensor_type: String,
     pub sensor_type_code: String,
     pub value: String,
+    pub latest_received_at: Option<i64>,
     pub unit: String,
     pub value_kind: String,
     pub unit_mode: String,
@@ -1783,6 +1785,7 @@ pub mod test_support {
             sensor_type: "温度".into(),
             sensor_type_code: "thermocouple".into(),
             value: "28.5".into(),
+            latest_received_at: Some(1_735_689_600_000),
             unit: if active { "℃".into() } else { "Cel".into() },
             value_kind: "numeric".into(),
             unit_mode: "unit".into(),
@@ -1948,6 +1951,7 @@ pub mod test_support {
                 sensor_type: "温度".into(),
                 sensor_type_code: "thermocouple".into(),
                 value: "28.5".into(),
+                latest_received_at: Some(1_735_689_600_000),
                 unit: if self.resources_configured {
                     "℃".into()
                 } else {
@@ -2061,6 +2065,7 @@ pub mod test_support {
                 commissioning,
                 edge_nodes,
                 registered_edge_node_count: 1,
+                live_snapshot_at: 1_735_689_595_000,
                 receiving_signal_count: 1,
                 devices,
                 signals,

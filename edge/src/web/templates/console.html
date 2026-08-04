@@ -142,9 +142,9 @@
         </div>
         <span class="live-dashboard-state" data-live-dashboard-state aria-live="polite">更新を準備中</span>
       </section>
-      <section class="live-signal-grid" data-live-dashboard data-stale-after-ms="300000" aria-label="センサーのライブ値">
+      <section class="live-signal-grid" data-live-dashboard data-live-snapshot-at="{{ view.live_snapshot_at }}" data-stale-after-ms="300000" aria-label="センサーのライブ値">
         {% for signal in view.signals %}
-        <article class="live-signal-card" data-live-signal data-signal-ref="{{ signal.signal_ref }}" data-value-kind="{{ signal.value_kind }}" data-decimal-places="{{ signal.decimal_places }}" data-unit="{{ signal.unit }}">
+        <article class="live-signal-card" data-live-signal data-signal-ref="{{ signal.signal_ref }}" data-value-kind="{{ signal.value_kind }}" data-decimal-places="{{ signal.decimal_places }}" data-unit="{{ signal.unit }}" data-latest-received-at="{% match signal.latest_received_at %}{% when Some with (received_at) %}{{ received_at }}{% when None %}{% endmatch %}">
           <header>
             <div><span>{{ signal.sensor_type }}</span><h2>{{ signal.name }}</h2></div>
             <span class="status-pill {{ signal.status_class }}" data-live-status>{{ signal.status_label }}</span>

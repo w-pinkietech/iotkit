@@ -5,9 +5,10 @@ use iotkit_edge::{
         profiles::{InventoryProfiles, SignalProfileInput},
         semantics::{SemanticRuleDraft, Semantics},
     },
-    composition::registered_output_adapters,
+    composition::{StorageWebApplication, registered_output_adapters},
     semantics::{Detector, RuleSpec, SemanticKind, TriggerMode},
     storage::{AcceptBatch, AuditActor, RawHistoryQuery, RawRecord, Storage, StorageProfile},
+    web::{HistoryQuery, WebApplication},
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
 
@@ -224,4 +225,54 @@ async fn history_series_preserves_boolean_contact_transitions_as_zero_and_one() 
     assert_eq!(buckets.len(), 2);
     assert_eq!(buckets[0].average, 0.0);
     assert_eq!(buckets[1].average, 1.0);
+}
+
+#[tokio::test]
+async fn history_series_limits_its_exact_latest_value_to_the_requested_range() {
+    let (_directory, storage, signal_ref, series_key) = fixture().await;
+    let application = StorageWebApplication::new(storage.clone());
+    let query = || HistoryQuery {
+        from: Some("200".into()),
+        to: Some("300".into()),
+        limit: None,
+        cursor: None,
+        signal_ref: Some(signal_ref.clone()),
+        edge_node_id: None,
+        bucket_ms: Some(10),
+    };
+
+    storage
+        .accept_batch(AcceptBatch {
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-a".into(),
+            publication_id: "before-range".into(),
+            received_at: 100,
+            records: vec![record(1, &series_key, 12.5, 100)],
+        })
+        .await
+        .unwrap();
+
+    let before_range = application.history_series(query()).await.unwrap();
+    assert_eq!(before_range["sample_count"], 0);
+    assert_eq!(before_range["latest_received_at"], serde_json::Value::Null);
+    assert_eq!(before_range["latest_value"], serde_json::Value::Null);
+    assert_eq!(before_range["points"], serde_json::json!([]));
+
+    for (sequence, value, received_at) in [(2, 20.0, 220), (3, 22.5, 250)] {
+        storage
+            .accept_batch(AcceptBatch {
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-a".into(),
+                publication_id: format!("in-range-{sequence}"),
+                received_at,
+                records: vec![record(sequence, &series_key, value, received_at)],
+            })
+            .await
+            .unwrap();
+    }
+
+    let in_range = application.history_series(query()).await.unwrap();
+    assert_eq!(in_range["sample_count"], 2);
+    assert_eq!(in_range["latest_received_at"], 250);
+    assert_eq!(in_range["latest_value"], 22.5);
 }

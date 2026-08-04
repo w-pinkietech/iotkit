@@ -312,11 +312,11 @@ components:
         value_type: { type: string }
         sample_count: { type: integer, format: int64 }
         latest_received_at:
-          description: Exact IoTKit Edge receipt time of the latest value, or null before first receipt.
+          description: Exact IoTKit Edge receipt time of the latest value within the requested range, or null when the requested range has no receipt.
           type: [integer, "null"]
           format: int64
         latest_value:
-          description: First raw value from the latest record, or null before first receipt.
+          description: First raw value from the latest record within the requested range, or null when the requested range has no receipt.
           type: [number, boolean, string, "null"]
         points:
           type: array
