@@ -1,0 +1,8 @@
+# Preserve host responsiveness during normal local development. Environment
+# variables still take precedence when a developer intentionally needs a
+# different limit.
+[build]
+jobs = 4
+
+[env]
+RUST_TEST_THREADS = { value = "4", force = false }
