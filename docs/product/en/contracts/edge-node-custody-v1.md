@@ -5,7 +5,7 @@ description: "Defines the complete MQTT custody transfer, activation, record fam
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 5
+revision: 6
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -299,6 +299,14 @@ Edge Node validates schema version, topic/body Edge Node identity, epoch, public
 and that `accepted_through` does not exceed the published batch. Only then may it advance its target
 cursor. MQTT PUBACK never advances this cursor and never authorizes retention purge.
 
+After moving to a later inflight batch, an Edge Node ignores a delayed duplicate prior acknowledgement
+only when its version, Edge Node/epoch identity, deterministic prior `publication_id`, and prior cursor
+bound validate. Ignoring it does not advance the cursor, clear the current inflight batch, or degrade
+publish health. If a restart rebuilds a wider current batch from the same cursor start, a delayed
+acknowledgement for a validated strict prefix advances only through its `accepted_through`, clears the
+rebuilt inflight batch, and rebuilds the remaining range. A malformed, wrong-identity, future,
+non-prefix, or current-batch-mismatched acknowledgement remains invalid.
+
 The shared machine conformance cases at repository path
 `testdata/egress/v1/record-family-cases.json` must produce the same accept/reject result in the
 Rust Edge Node publisher and Rust IoTKit Edge decoder.
@@ -312,7 +320,9 @@ Rust Edge Node publisher and Rust IoTKit Edge decoder.
 - While inactive, Edge Node continues bounded local commissioning collection without creating an R10
   publication backlog.
 - If IoTKit Edge or the network is down, Edge Node continues local collection and retains unacknowledged rows.
-- On reconnect, Edge Node republishes the same batch until IoTKit Edge confirms the contiguous cursor.
+- On reconnect, Edge Node retries the current batch. If a restart rebuilds it wider from the same cursor
+  start, a validated prior-prefix acknowledgement advances only that prefix and rebuilds the remaining
+  range.
 - IoTKit Edge exact replay verifies existing rows and republishes the already committed watermark.
 
 ## Authentication

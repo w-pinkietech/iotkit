@@ -219,6 +219,88 @@ impl AcceptedThrough {
         }
         Ok(())
     }
+
+    pub fn validate_stale_for(
+        &self,
+        batch: &RecordBatch,
+        prior_cursor: i64,
+    ) -> Result<(), WireError> {
+        batch.validate()?;
+        if self.schema_version != EGRESS_SCHEMA_VERSION {
+            return invalid("ack schema_version mismatch");
+        }
+        if self.edge_node_id != batch.edge_node_id {
+            return invalid("ack edge_node_id mismatch");
+        }
+        if self.ledger_epoch != batch.ledger_epoch {
+            return invalid("ack ledger_epoch mismatch");
+        }
+        if self.accepted_through > prior_cursor {
+            return invalid("stale ack advances the cursor");
+        }
+
+        let (_, end) = self.publication_id_range()?;
+        if end != self.accepted_through {
+            return invalid("stale ack publication_id range is invalid");
+        }
+        Ok(())
+    }
+
+    pub fn validate_prior_prefix_for(
+        &self,
+        batch: &RecordBatch,
+        prior_cursor: i64,
+    ) -> Result<(), WireError> {
+        batch.validate()?;
+        if self.schema_version != EGRESS_SCHEMA_VERSION {
+            return invalid("ack schema_version mismatch");
+        }
+        if self.edge_node_id != batch.edge_node_id {
+            return invalid("ack edge_node_id mismatch");
+        }
+        if self.ledger_epoch != batch.ledger_epoch {
+            return invalid("ack ledger_epoch mismatch");
+        }
+        let expected_start = prior_cursor
+            .checked_add(1)
+            .ok_or_else(|| WireError("prior cursor overflow".into()))?;
+        if batch.cursor_start != expected_start {
+            return invalid("current batch does not start after the prior cursor");
+        }
+
+        let (start, end) = self.publication_id_range()?;
+        if start != batch.cursor_start || end != self.accepted_through {
+            return invalid("prior prefix ack publication_id range is invalid");
+        }
+        if self.accepted_through <= prior_cursor || self.accepted_through >= batch.cursor_end {
+            return invalid("ack is not a strict prior prefix");
+        }
+        Ok(())
+    }
+
+    fn publication_id_range(&self) -> Result<(i64, i64), WireError> {
+        let parts: Vec<_> = self.publication_id.split(':').collect();
+        let [edge_node_id, ledger_epoch, start, end] = parts.as_slice() else {
+            return invalid("ack publication_id is malformed");
+        };
+        if *edge_node_id != self.edge_node_id || *ledger_epoch != self.ledger_epoch {
+            return invalid("ack publication_id identity mismatch");
+        }
+        let start = start
+            .parse::<i64>()
+            .map_err(|_| WireError("ack publication_id range is invalid".into()))?;
+        let end = end
+            .parse::<i64>()
+            .map_err(|_| WireError("ack publication_id range is invalid".into()))?;
+        if start < 1 || end < start {
+            return invalid("ack publication_id range is invalid");
+        }
+        if self.publication_id != publication_id(&self.edge_node_id, &self.ledger_epoch, start, end)
+        {
+            return invalid("ack publication_id is not deterministic");
+        }
+        Ok((start, end))
+    }
 }
 
 pub fn publication_id(

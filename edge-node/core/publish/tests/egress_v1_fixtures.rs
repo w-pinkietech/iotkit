@@ -1,4 +1,4 @@
-use iotkit_core_publish::wire::{AcceptedThrough, RecordBatch};
+use iotkit_core_publish::wire::{AcceptedThrough, RecordBatch, publication_id};
 
 const BATCH_FIXTURE: &str = include_str!("../../../../testdata/egress/v1/record-batch.json");
 const ACK_FIXTURE: &str = include_str!("../../../../testdata/egress/v1/accepted-through.json");
@@ -32,6 +32,252 @@ fn rust_decodes_and_correlates_v1_ack_fixture() {
     let batch: RecordBatch = serde_json::from_str(BATCH_FIXTURE).unwrap();
     let ack: AcceptedThrough = serde_json::from_str(ACK_FIXTURE).unwrap();
     ack.validate_for(&batch, 0).unwrap();
+}
+
+#[test]
+fn validated_prior_ack_is_a_safe_stale_duplicate() {
+    let mut current: RecordBatch = serde_json::from_str(BATCH_FIXTURE).unwrap();
+    current.cursor_start = 2;
+    current.cursor_end = 2;
+    current.publication_id = publication_id("edge-node-01", "epoch-01", 2, 2);
+    current.records[0]["pub_seq"] = serde_json::json!(2);
+    current.validate().unwrap();
+
+    let stale = AcceptedThrough {
+        schema_version: 1,
+        edge_node_id: "edge-node-01".into(),
+        ledger_epoch: "epoch-01".into(),
+        publication_id: publication_id("edge-node-01", "epoch-01", 1, 1),
+        accepted_through: 1,
+    };
+
+    stale.validate_stale_for(&current, 1).unwrap();
+}
+
+#[test]
+fn validated_prior_prefix_ack_starts_at_the_current_batch() {
+    let mut current: RecordBatch = serde_json::from_str(BATCH_FIXTURE).unwrap();
+    current.cursor_end = 2;
+    current.publication_id = publication_id("edge-node-01", "epoch-01", 1, 2);
+    let mut second = current.records[0].clone();
+    second["pub_seq"] = serde_json::json!(2);
+    current.records.push(second);
+    current.validate().unwrap();
+
+    let prefix = AcceptedThrough {
+        schema_version: 1,
+        edge_node_id: "edge-node-01".into(),
+        ledger_epoch: "epoch-01".into(),
+        publication_id: publication_id("edge-node-01", "epoch-01", 1, 1),
+        accepted_through: 1,
+    };
+
+    prefix.validate_prior_prefix_for(&current, 0).unwrap();
+}
+
+#[test]
+fn prior_prefix_ack_rejects_non_prefix_or_noncanonical_correlation() {
+    let mut current: RecordBatch = serde_json::from_str(BATCH_FIXTURE).unwrap();
+    current.cursor_end = 2;
+    current.publication_id = publication_id("edge-node-01", "epoch-01", 1, 2);
+    let mut second = current.records[0].clone();
+    second["pub_seq"] = serde_json::json!(2);
+    current.records.push(second);
+    current.validate().unwrap();
+
+    let invalid_for_prefix = [
+        (
+            AcceptedThrough {
+                schema_version: 2,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: publication_id("edge-node-01", "epoch-01", 1, 1),
+                accepted_through: 1,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: "not-a-publication-id".into(),
+                accepted_through: 1,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: "edge-node-01:epoch-01:01:01".into(),
+                accepted_through: 1,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-other".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: publication_id("edge-other", "epoch-01", 1, 1),
+                accepted_through: 1,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-other".into(),
+                publication_id: publication_id("edge-node-01", "epoch-other", 1, 1),
+                accepted_through: 1,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: publication_id("edge-node-01", "epoch-01", 2, 2),
+                accepted_through: 2,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: publication_id("edge-node-01", "epoch-01", 1, 2),
+                accepted_through: 2,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: publication_id("edge-node-01", "epoch-01", 1, 3),
+                accepted_through: 3,
+            },
+            0,
+        ),
+        (
+            AcceptedThrough {
+                schema_version: 1,
+                edge_node_id: "edge-node-01".into(),
+                ledger_epoch: "epoch-01".into(),
+                publication_id: publication_id("edge-node-01", "epoch-01", 1, 1),
+                accepted_through: 1,
+            },
+            1,
+        ),
+    ];
+
+    for (ack, prior_cursor) in invalid_for_prefix {
+        assert!(
+            ack.validate_prior_prefix_for(&current, prior_cursor)
+                .is_err(),
+            "{ack:?}",
+        );
+    }
+}
+
+#[test]
+fn stale_ack_requires_a_prior_deterministic_correlation() {
+    let mut current: RecordBatch = serde_json::from_str(BATCH_FIXTURE).unwrap();
+    current.cursor_start = 2;
+    current.cursor_end = 2;
+    current.publication_id = publication_id("edge-node-01", "epoch-01", 2, 2);
+    current.records[0]["pub_seq"] = serde_json::json!(2);
+
+    let invalid_for_stale = [
+        AcceptedThrough {
+            schema_version: 2,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-node-01", "epoch-01", 1, 1),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: "not-a-publication-id".into(),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-node-01", "epoch-01", 0, 0),
+            accepted_through: 0,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-node-01", "epoch-01", 2, 1),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-node-01", "epoch-01", 1, 2),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: "edge-node-01:epoch-01:01:01".into(),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-other".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-other", "epoch-01", 1, 1),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-other".into(),
+            publication_id: publication_id("edge-node-01", "epoch-other", 1, 1),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-node-01", "epoch-01", 2, 2),
+            accepted_through: 1,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-node-01", "epoch-01", 3, 3),
+            accepted_through: 3,
+        },
+        AcceptedThrough {
+            schema_version: 1,
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-01".into(),
+            publication_id: publication_id("edge-node-01", "epoch-01", 2, 2),
+            accepted_through: 2,
+        },
+    ];
+
+    for ack in invalid_for_stale {
+        assert!(ack.validate_stale_for(&current, 1).is_err(), "{ack:?}");
+    }
 }
 
 #[test]

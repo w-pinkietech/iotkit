@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転、activation、record family、ack、re
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 5
+revision: 6
 ---
 
 # Edge Node保管責任契約 v1
@@ -179,13 +179,15 @@ IoTKit Edgeは一つのcustody transactionで、topic/active state/version/ident
 
 Storage failure、ENOSPC、corruption、commit前cancel、gap、content conflictではackを出しません。Lost ackはexact replayで安全に収束します。Edge Nodeはschema、topic/body identity、epoch、publication ID、monotonicity、batch boundを検証してからcursorを進めます。MQTT PUBACKはcursorもpurge権威も進めません。Rust製Edge Node publisherとRust製IoTKit Edge decoderは`testdata/egress/v1/record-family-cases.json`へ同じaccept/reject結果を返します。
 
+後続batchをinflightにした後の遅延した過去ackは、version、Edge Node/epoch identity、決定的な過去`publication_id`、過去cursor boundがすべて検証できる場合だけignoreします。Ignoreしてもcursorをadvanceせず、現在のinflight batchをclearせず、publish healthをdegradeしません。restartにより同じcursor startからより広いcurrent batchをrebuildした場合、検証済みstrict prefixの遅延ackは、その`accepted_through`までだけcursorをadvanceし、rebuild済みinflight batchをclearして残りrangeをrebuildします。Malformed、identity不一致、future、non-prefix、またはcurrent batchと不一致のackはinvalidのままです。
+
 ## Retry・停止・認証
 
 - Edge Node outboxはapplication ackまでのretry権威。
 - Activation command outboxとEdge Node receiptはactivation retry権威。Broker sessionではない。
 - Inactive中もbounded local commissioning collectionを続けるがR10 backlogを作らない。
 - IoTKit Edge/network停止中もlocal collectionと未ack rowを保持。
-- Reconnect後は同じbatchをcontiguous cursor確認まで再送。
+- Reconnect後はcurrent batchをretryする。restartで同じcursor startからより広いbatchをrebuildした場合、検証済みの過去prefix ackはそのprefixだけをadvanceし、残りrangeをrebuildする。
 - IoTKit Edge exact replayは既存rowを検証し、commit済みwatermarkを再publish。
 
 初期実装はoperator提供IP path上のMQTT/TLS、anonymous無効、Edge Node別static credential/topic ACLです。Local network、VPN、private route等を使えますが特定VPN製品を要求しません。SecretはGit、argv、log、Debug、audit detail、query outputへ出しません。Plain MQTTは`allow_insecure=true`を明示したlocal Docker testだけです。
