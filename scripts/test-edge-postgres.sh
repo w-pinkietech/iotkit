@@ -71,7 +71,7 @@ if [[ "$mode" == "capacity" ]]; then
   IOTKIT_TEST_CAPACITY_BACKUP="$scratch/postgres.iotkit-backup" \
   IOTKIT_CAPACITY_REPORT="$report_path" \
     cargo test -p iotkit-edge --test capacity_regression \
-      capacity_regression_smoke_emits_existing_evidence_schema \
+      capacity_regression_profile_emits_semantic_backlog_evidence \
       -- --ignored --exact --nocapture
   exit 0
 fi
@@ -79,6 +79,30 @@ fi
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test storage_contract \
     postgres_obeys_the_same_raw_custody_contract_when_configured \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test semantic_projection_queue_contract \
+    postgres_candidate_plan_uses_the_bounded_pending_queue_lookup \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --lib \
+    storage::semantic_output::postgres_tests::ready_rule_plan_uses_indexes_and_sorts_only_rule_heads \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test semantic_projection_queue_contract \
+    postgres_first_unseen_epoch_accept_and_rule_creation_serialize_at_the_edge_lock \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test semantic_projection_queue_contract \
+    postgres_multiple_pending_resets_fence_a_new_epoch_until_each_boundary_is_applied \
     -- --ignored --exact --nocapture
 
 reset_database
@@ -95,6 +119,12 @@ reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test schema_upgrade_contract \
     postgres_startup_upgrades_a_v6_database_without_losing_identity \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test schema_upgrade_contract \
+    postgres_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_each_pending_pair \
     -- --ignored --exact --nocapture
 
 reset_database

@@ -20,7 +20,7 @@ IOTKIT_TEST_CAPACITY_SQLITE="$scratch/embedded.db" \
 IOTKIT_TEST_CAPACITY_BACKUP="$scratch/embedded.iotkit-backup" \
 IOTKIT_CAPACITY_REPORT="$report_dir/embedded.json" \
   cargo test -p iotkit-edge --test capacity_regression \
-    capacity_regression_smoke_emits_existing_evidence_schema \
+    capacity_regression_profile_emits_semantic_backlog_evidence \
     -- --ignored --exact --nocapture
 
 cargo test -p iotkit-edge --test diagnostics_contract
@@ -32,15 +32,23 @@ report_contract='
   .regression_smoke_passed == true
   and (.edge_nodes == 4)
   and (.sensors_per_edge == 8)
-  and (.records == 8000)
+  and (.records >= 396000)
   and (.payload_bytes > 0)
   and (.records_per_second > 0)
   and (.accept_p99_millis >= 0)
   and (.history_query_millis >= 0)
   and (.backup_millis >= 0)
+  and (.restart_millis >= 0)
+  and (.projection_recovery_wall_millis >= 0)
   and (.database_bytes > 0)
+  and (.semantic_observations > 0)
+  and (.projection_pending_before > 0)
+  and (.projection_pending_after == 0)
   and (.pending_output == 0)
   and (.projection_failures == 0)
+  and (.foreground_storage_completed == true)
+  and (.restart_completed == true)
+  and (.full_retained_history_profile == true)
 '
 jq -e "$report_contract and .profile == \"embedded\"" \
   "$report_dir/embedded.json" >/dev/null
