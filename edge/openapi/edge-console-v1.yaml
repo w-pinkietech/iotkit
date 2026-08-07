@@ -306,6 +306,9 @@ components:
         minimum: { type: number }
         average: { type: number }
         maximum: { type: number }
+        last_value:
+          description: For rule_id series, the exact last persisted processed state in this bucket, ordered by observation persistence rather than by the aggregate average. Omitted for signal_ref series.
+          type: number
         sample_count: { type: integer, format: int64 }
     HistorySeries:
       type: object
@@ -536,6 +539,9 @@ components:
         received_at:
           type: integer
           format: int64
+        plot_at:
+          type: integer
+          format: int64
         input:
           type: number
         input_min:
@@ -594,6 +600,8 @@ components:
               items:
                 $ref: "#/components/schemas/PreviewPoint"
             - type: "null"
+        latest_point:
+          $ref: "#/components/schemas/PreviewPoint"
         test_result:
           $ref: "#/components/schemas/PreviewResult"
         window_start:

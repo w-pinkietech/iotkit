@@ -1365,6 +1365,24 @@ impl WebApplication for StorageWebApplication {
         if route == "/api/v1/mapping-previews" {
             let request = serde_json::from_value(body).map_err(bad_request)?;
             let preview = semantics.preview(request).await.map_err(operation_error)?;
+            let point_json = |point: crate::semantics::PreviewPoint| {
+                json!({
+                    "received_at":point.received_at,
+                    "plot_at":point.plot_at,
+                    "input":point.input,
+                    "input_min":point.input_min,
+                    "input_max":point.input_max,
+                    "calibrated":point.calibrated,
+                    "calibrated_min":point.calibrated_min,
+                    "calibrated_max":point.calibrated_max,
+                    "active":point.active,
+                    "counter":point.counter,
+                    "sample_count":point.sample_count,
+                    "active_samples":point.active_samples,
+                    "transitions":point.transitions,
+                    "increment":point.increment,
+                })
+            };
             return Ok(MutationOutput::ok(json!({
                 "calibration":{"scale":preview.calibration.scale,"offset":preview.calibration.offset},
                 "window_start":preview.window_start,
@@ -1376,6 +1394,7 @@ impl WebApplication for StorageWebApplication {
                     "input_count":rule.input_count,
                     "plot_count":rule.plot_count,
                     "error":rule.error,
+                    "latest_point":rule.latest_point.map(point_json),
                     "test_result":rule.test_result.map(|result| json!({
                         "emitted":result.emitted,
                         "number":result.number,
@@ -1383,21 +1402,7 @@ impl WebApplication for StorageWebApplication {
                         "integer":result.integer,
                         "calibrated":result.calibrated,
                     })),
-                    "points":rule.points.into_iter().map(|point| json!({
-                        "received_at":point.received_at,
-                        "input":point.input,
-                        "input_min":point.input_min,
-                        "input_max":point.input_max,
-                        "calibrated":point.calibrated,
-                        "calibrated_min":point.calibrated_min,
-                        "calibrated_max":point.calibrated_max,
-                        "active":point.active,
-                        "counter":point.counter,
-                        "sample_count":point.sample_count,
-                        "active_samples":point.active_samples,
-                        "transitions":point.transitions,
-                        "increment":point.increment,
-                    })).collect::<Vec<_>>(),
+                    "points":rule.points.into_iter().map(point_json).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             })));
         }
@@ -1531,13 +1536,19 @@ impl WebApplication for StorageWebApplication {
                 "sample_count": sample_count,
                 "latest_received_at": latest_received_at,
                 "latest_value": latest_value,
-                "points": buckets.into_iter().map(|bucket| json!({
-                    "bucket_start":bucket.bucket_start,
-                    "minimum":bucket.minimum,
-                    "average":bucket.average,
-                    "maximum":bucket.maximum,
-                    "sample_count":bucket.count,
-                })).collect::<Vec<_>>(),
+                "points": buckets.into_iter().map(|bucket| {
+                    let mut point = json!({
+                        "bucket_start":bucket.bucket_start,
+                        "minimum":bucket.minimum,
+                        "average":bucket.average,
+                        "maximum":bucket.maximum,
+                        "sample_count":bucket.count,
+                    });
+                    if let Some(last_value) = bucket.last_value {
+                        point["last_value"] = json!(last_value);
+                    }
+                    point
+                }).collect::<Vec<_>>(),
             }));
         }
         let signal_ref = query.signal_ref.as_deref().unwrap_or_default();

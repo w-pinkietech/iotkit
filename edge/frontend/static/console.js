@@ -64,7 +64,7 @@
   }
   function isHistorySeries(value) {
     return isRecord(value) && typeof value.signal_ref === "string" && (typeof value.latest_received_at === "number" || value.latest_received_at === null) && Array.isArray(value.points) && value.points.every(
-      (point) => isRecord(point) && typeof point.bucket_start === "number" && typeof point.minimum === "number" && typeof point.average === "number" && typeof point.maximum === "number" && typeof point.sample_count === "number"
+      (point) => isRecord(point) && typeof point.bucket_start === "number" && typeof point.minimum === "number" && typeof point.average === "number" && typeof point.maximum === "number" && (!("last_value" in point) || typeof point.last_value === "number") && typeof point.sample_count === "number"
     );
   }
   async function getHistorySeries(ruleId, from, to, bucketMs, signal) {
@@ -530,22 +530,347 @@
     }
   }
 
+  // src/signal-chart.ts
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var GEOMETRIES = {
+    preview: {
+      width: 760,
+      height: 260,
+      left: 58,
+      right: 18,
+      top: 18,
+      bottom: 42
+    },
+    compact: {
+      width: 360,
+      height: 160,
+      left: 72,
+      right: 12,
+      top: 12,
+      bottom: 28
+    }
+  };
+  function addSVG(parent, name, attributes = {}) {
+    const element = document.createElementNS(SVG_NS, name);
+    for (const [key, value] of Object.entries(attributes)) {
+      element.setAttribute(key, String(value));
+    }
+    parent.append(element);
+    return element;
+  }
+  function finite(value) {
+    return typeof value === "number" && Number.isFinite(value);
+  }
+  function numberLabel(value) {
+    return value.toLocaleString("ja-JP", { maximumFractionDigits: 3 });
+  }
+  function drawText(svg, text, attributes) {
+    const element = addSVG(svg, "text", attributes);
+    element.textContent = text;
+  }
+  function emptyChart(svg, title, hint, geometry) {
+    drawText(svg, title, {
+      x: geometry.width / 2,
+      y: geometry.height / 2 - 8,
+      "text-anchor": "middle",
+      class: "chart-empty-title live-chart-empty"
+    });
+    drawText(svg, hint, {
+      x: geometry.width / 2,
+      y: geometry.height / 2 + 18,
+      "text-anchor": "middle",
+      class: "chart-empty-hint live-chart-empty-hint"
+    });
+  }
+  function pathFor(points, x, y, value, step) {
+    let path = "";
+    let previous;
+    points.forEach((point) => {
+      const current = value(point);
+      if (!finite(current)) return;
+      const pointX = x(point.at).toFixed(2);
+      const pointY = y(current).toFixed(2);
+      if (!path) {
+        path = `M ${pointX} ${pointY}`;
+      } else if (step && finite(previous)) {
+        path += ` H ${pointX} V ${pointY}`;
+      } else {
+        path += ` L ${pointX} ${pointY}`;
+      }
+      previous = current;
+    });
+    return path;
+  }
+  function sameShape(target, source) {
+    return target.tagName === source.tagName && target.getAttribute("class") === source.getAttribute("class");
+  }
+  function syncElement(target, source, syncAttributes = true) {
+    if (syncAttributes) {
+      for (const attribute of Array.from(target.attributes)) {
+        if (!source.hasAttribute(attribute.name)) target.removeAttribute(attribute.name);
+      }
+      for (const attribute of Array.from(source.attributes)) {
+        if (target.getAttribute(attribute.name) !== attribute.value) {
+          target.setAttribute(attribute.name, attribute.value);
+        }
+      }
+    }
+    const sourceChildren = Array.from(source.children);
+    if (!sourceChildren.length) {
+      if (target.textContent !== source.textContent) {
+        target.textContent = source.textContent;
+      }
+      return;
+    }
+    for (const child of Array.from(target.childNodes)) {
+      if (child.nodeType !== Node.ELEMENT_NODE) child.remove();
+    }
+    sourceChildren.forEach((sourceChild, index) => {
+      const targetChild = target.children[index];
+      if (targetChild && sameShape(targetChild, sourceChild)) {
+        syncElement(targetChild, sourceChild);
+        return;
+      }
+      target.insertBefore(sourceChild.cloneNode(true), targetChild ?? null);
+    });
+    while (target.children.length > sourceChildren.length) {
+      target.lastElementChild?.remove();
+    }
+  }
+  function syncChartDOM(target, source) {
+    target.setAttribute("viewBox", source.getAttribute("viewBox") ?? "");
+    const geometry = source.dataset.chartGeometry;
+    if (geometry) target.dataset.chartGeometry = geometry;
+    syncElement(target, source, false);
+  }
+  function renderSignalChartDraft(svg, options) {
+    const geometry = GEOMETRIES[options.geometry ?? "preview"];
+    const plotWidth = geometry.width - geometry.left - geometry.right;
+    const plotHeight = geometry.height - geometry.top - geometry.bottom;
+    svg.setAttribute(
+      "viewBox",
+      `0 0 ${geometry.width} ${geometry.height}`
+    );
+    svg.dataset.chartGeometry = options.geometry ?? "preview";
+    const points = options.points.filter(
+      (point) => finite(point.at) && finite(point.value)
+    );
+    if (!points.length) {
+      emptyChart(
+        svg,
+        options.emptyTitle ?? "\u307E\u3060\u53D7\u4FE1\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093",
+        options.emptyHint ?? "\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3092\u5F85\u3063\u3066\u3044\u307E\u3059",
+        geometry
+      );
+      return 0;
+    }
+    const startAt = finite(options.startAt) ? options.startAt : points[0].at;
+    const latestPointAt = points.at(-1)?.at ?? startAt;
+    const requestedEnd = finite(options.endAt) ? options.endAt : latestPointAt;
+    const endAt = Math.max(startAt + 1e3, requestedEnd);
+    const x = (at) => geometry.left + Math.max(0, Math.min(1, (at - startAt) / (endAt - startAt))) * plotWidth;
+    const rawValues = points.flatMap((point) => [
+      finite(point.minimum) ? point.minimum : point.value,
+      finite(point.maximum) ? point.maximum : point.value
+    ]);
+    const resultValues = options.showResult ? points.flatMap(
+      (point) => [point.resultMinimum, point.resultMaximum, point.result].filter(finite)
+    ) : [];
+    const thresholdValues = options.thresholds ? [options.thresholds.rise, options.thresholds.fall].filter(finite) : [];
+    const values = [...rawValues, ...resultValues, ...thresholdValues];
+    let minimum = options.boolean ? 0 : Math.min(...values);
+    let maximum = options.boolean ? 1 : Math.max(...values);
+    if (!finite(minimum) || !finite(maximum)) {
+      minimum = 0;
+      maximum = 1;
+    }
+    if (minimum === maximum) {
+      const padding = Math.max(1, Math.abs(minimum) * 0.1);
+      minimum -= padding;
+      maximum += padding;
+    } else if (!options.boolean) {
+      const padding = (maximum - minimum) * 0.08;
+      minimum -= padding;
+      maximum += padding;
+    }
+    const y = (value) => geometry.top + (maximum - value) * plotHeight / (maximum - minimum);
+    for (let index = 0; index <= 4; index += 1) {
+      const gridY = geometry.top + index * plotHeight / 4;
+      addSVG(svg, "line", {
+        x1: geometry.left,
+        x2: geometry.width - geometry.right,
+        y1: gridY,
+        y2: gridY,
+        class: "chart-grid"
+      });
+      drawText(
+        svg,
+        options.boolean ? index === 0 ? "ON" : index === 4 ? "OFF" : "" : numberLabel(maximum - index * (maximum - minimum) / 4),
+        {
+          x: geometry.left - 9,
+          y: gridY + 4,
+          "text-anchor": "end",
+          class: "chart-axis-label"
+        }
+      );
+    }
+    const drawThreshold = (value, labelText) => {
+      if (!finite(value)) return;
+      const thresholdY = y(value);
+      addSVG(svg, "line", {
+        x1: geometry.left,
+        x2: geometry.width - geometry.right,
+        y1: thresholdY,
+        y2: thresholdY,
+        class: "chart-threshold"
+      });
+      drawText(svg, `${labelText} ${numberLabel(value)}`, {
+        x: geometry.width - geometry.right - 4,
+        y: thresholdY - 6,
+        "text-anchor": "end",
+        class: "chart-threshold-label"
+      });
+    };
+    drawThreshold(options.thresholds?.rise, "\u7ACB\u4E0A\u308A");
+    drawThreshold(options.thresholds?.fall, "\u7ACB\u4E0B\u308A");
+    if (options.showRanges !== false) {
+      points.forEach((point) => {
+        const sampleCount = point.sampleCount ?? 1;
+        if (sampleCount <= 1) return;
+        const minimumValue = finite(point.minimum) ? point.minimum : point.value;
+        const maximumValue = finite(point.maximum) ? point.maximum : point.value;
+        addSVG(svg, "line", {
+          x1: x(point.at),
+          x2: x(point.at),
+          y1: y(minimumValue),
+          y2: y(maximumValue),
+          class: "chart-range"
+        });
+        if (options.showResult) {
+          const resultMinimum = finite(point.resultMinimum) ? point.resultMinimum : point.result;
+          const resultMaximum = finite(point.resultMaximum) ? point.resultMaximum : point.result;
+          if (finite(resultMinimum) && finite(resultMaximum)) {
+            addSVG(svg, "line", {
+              x1: x(point.at) + 2,
+              x2: x(point.at) + 2,
+              y1: y(resultMinimum),
+              y2: y(resultMaximum),
+              class: "chart-range-result"
+            });
+          }
+        }
+      });
+    }
+    if (options.showActiveBands) {
+      points.forEach((point) => {
+        const ratio = Math.max(0, Math.min(1, point.activeRatio ?? 0));
+        if (!ratio) return;
+        addSVG(svg, "rect", {
+          x: x(point.at) - Math.max(1, plotWidth / Math.max(points.length, 1) / 2),
+          y: geometry.top,
+          width: Math.max(2, plotWidth / Math.max(points.length, 1)),
+          height: plotHeight,
+          class: "chart-active-band",
+          opacity: Math.max(0.12, ratio * 0.24)
+        });
+      });
+    }
+    const rawPath = pathFor(
+      points,
+      x,
+      y,
+      (point) => options.boolean ? point.value >= 0.5 ? 1 : 0 : point.value,
+      options.rawStep ?? Boolean(options.boolean)
+    );
+    if (rawPath) {
+      addSVG(svg, "path", {
+        d: rawPath,
+        class: "chart-line chart-line-raw live-chart-line"
+      });
+    }
+    if (options.showResult) {
+      const resultPath = pathFor(
+        points,
+        x,
+        y,
+        (point) => point.result,
+        Boolean(options.resultStep)
+      );
+      if (resultPath) {
+        addSVG(svg, "path", {
+          d: resultPath,
+          class: "chart-line chart-line-result live-chart-result-line"
+        });
+      }
+    }
+    const latestPoint = points.at(-1);
+    if (options.showLatestMarker && latestPoint) {
+      const latestAt = finite(options.latestAt) ? options.latestAt : latestPoint.at;
+      const latestValue = options.showResult && finite(latestPoint.result) ? latestPoint.result : options.boolean ? latestPoint.value >= 0.5 ? 1 : 0 : latestPoint.value;
+      const latestX = x(latestAt);
+      const latestY = y(latestValue);
+      addSVG(svg, "line", {
+        x1: latestX,
+        x2: latestX,
+        y1: latestY,
+        y2: geometry.top + plotHeight,
+        class: "chart-latest-guide live-chart-latest-guide"
+      });
+      addSVG(svg, "circle", {
+        cx: latestX,
+        cy: latestY,
+        r: 5,
+        class: "chart-latest-point live-chart-latest-point"
+      });
+      drawText(svg, "\u6700\u65B0", {
+        x: Math.min(geometry.width - geometry.right - 4, latestX - 8),
+        y: Math.max(geometry.top + 13, latestY - 10),
+        "text-anchor": "end",
+        class: "chart-latest-label live-chart-latest-label"
+      });
+    }
+    const startLabel = options.axisLabels?.start ?? new Date(startAt).toLocaleTimeString("ja-JP", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+    const endLabel = options.axisLabels?.end ?? new Date(endAt).toLocaleTimeString("ja-JP", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+    drawText(svg, startLabel, {
+      x: geometry.left,
+      y: geometry.height - 14,
+      class: "chart-axis-label"
+    });
+    drawText(svg, endLabel, {
+      x: geometry.width - geometry.right,
+      y: geometry.height - 14,
+      "text-anchor": "end",
+      class: "chart-axis-label"
+    });
+    const title = addSVG(svg, "title");
+    title.textContent = options.title ?? `\u6A2A\u8EF8\u306F\u76F4\u8FD1\u306E\u6642\u9593\u3001\u7E26\u8EF8\u306F\u5024${options.unit ? `\uFF08${options.unit}\uFF09` : ""}\u3067\u3059\u3002`;
+    return points.length;
+  }
+  function renderSignalChart(svg, options) {
+    const draft = document.createElementNS(SVG_NS, "svg");
+    const plottedCount = renderSignalChartDraft(draft, options);
+    syncChartDOM(svg, draft);
+    return plottedCount;
+  }
+
   // src/preview.ts
+  var COUNTER_WINDOW_MS = 6e4;
+  var COUNTER_BUCKET_MS = 1e3;
+  var COUNTER_SESSION_MAX_POINTS = 60;
   var kindLabels = {
     numeric: "\u6E2C\u5B9A\u5024",
     boolean: "ON / OFF",
     cumulative_counter: "\u7D2F\u7A4D\u5024",
     alarm: "\u7570\u5E38\u691C\u77E5"
   };
-  var svgNamespace = "http://www.w3.org/2000/svg";
-  function addSVG(parent, name, attributes = {}) {
-    const element = document.createElementNS(svgNamespace, name);
-    for (const [key, value] of Object.entries(attributes)) {
-      element.setAttribute(key, String(value));
-    }
-    parent.appendChild(element);
-    return element;
-  }
   function isFiniteNumber(value) {
     return Number.isFinite(Number(value));
   }
@@ -607,8 +932,186 @@
   function kindLabel(kind) {
     return kindLabels[kind];
   }
-  function latestRuleOutcome(payload, unit) {
-    const latest = payload.points?.at(-1);
+  function pointPlotAt(point) {
+    return isFiniteNumber(point.plot_at) ? Number(point.plot_at) : point.received_at;
+  }
+  function latestPreviewPoint(payload) {
+    return payload.latest_point ?? payload.points?.at(-1) ?? void 0;
+  }
+  function hasMeaningfulResult(points) {
+    const epsilon = 1e-9;
+    return points.some(
+      (point) => Math.abs(point.calibrated - point.input) > epsilon || Math.abs(point.calibrated_min - point.input_min) > epsilon || Math.abs(point.calibrated_max - point.input_max) > epsilon
+    );
+  }
+  function counterWindowDelta(payload) {
+    const points = payload.points ?? [];
+    const window2 = previewWindow(payload, points);
+    return points.reduce((total, point) => {
+      const at = pointPlotAt(point);
+      if (at < window2.start || at > window2.end) return total;
+      return total + Math.max(0, Number(point.increment ?? 0));
+    }, 0);
+  }
+  function persistedCounterRuleID(forms, activeID, selected) {
+    if (!selected || selected.kind !== "cumulative_counter" || !activeID) {
+      return void 0;
+    }
+    return counterRuleIDForActiveForm(forms, activeID);
+  }
+  function counterRuleIDForActiveForm(forms, activeID) {
+    const form = forms.find((candidate) => candidate.dataset.previewId === activeID);
+    return form?.dataset.ruleId && formField(form, "kind")?.value === "cumulative_counter" ? form.dataset.ruleId : void 0;
+  }
+  async function loadCounterHistory(ruleID, signal) {
+    const end = Date.now();
+    try {
+      const result = await getHistorySeries(
+        ruleID,
+        end - COUNTER_WINDOW_MS,
+        end,
+        COUNTER_BUCKET_MS,
+        signal
+      );
+      return result.ok ? { status: "available", value: result.value } : { status: "unavailable" };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
+      return { status: "unavailable" };
+    }
+  }
+  function availableCounterHistory(state) {
+    return state.history?.status === "available" ? state.history.value : void 0;
+  }
+  function latestHistoryValue(history) {
+    return history && typeof history.latest_value === "number" && Number.isFinite(history.latest_value) ? Number(history.latest_value) : void 0;
+  }
+  function latestHistoryReceivedAt(history) {
+    return typeof history.latest_received_at === "number" && Number.isFinite(history.latest_received_at) ? history.latest_received_at : void 0;
+  }
+  function retainLatestHistory(previous, next) {
+    if (latestHistoryValue(next) !== void 0 || previous === void 0 || latestHistoryValue(previous) === void 0) {
+      return next;
+    }
+    return {
+      ...next,
+      latest_received_at: previous.latest_received_at,
+      latest_value: previous.latest_value
+    };
+  }
+  function appendCounterSessionPoint(points, point) {
+    const previous = points.at(-1);
+    if (previous === void 0) return [point];
+    if (point.at < previous.at) return points;
+    if (point.at === previous.at) {
+      const replaced = [...points.slice(0, -1), point];
+      return replaced.length > 1 && replaced.at(-2)?.value === point.value ? replaced.slice(0, -1) : replaced;
+    }
+    if (point.value === previous.value) return points;
+    return [...points, point].slice(-COUNTER_SESSION_MAX_POINTS);
+  }
+  function counterCurrentPointAt(session, latestReceivedAt, capturedAt) {
+    const previousAt = session.points.at(-1)?.at;
+    const minimumAt = previousAt === void 0 ? session.startedAt : previousAt + 1;
+    if (latestReceivedAt !== void 0 && latestReceivedAt >= minimumAt) {
+      return latestReceivedAt;
+    }
+    return Math.max(
+      Number.isFinite(capturedAt) ? capturedAt : minimumAt,
+      minimumAt
+    );
+  }
+  function mergeCounterHistorySession(session, history, capturedAt) {
+    let baselineCaptured = session.baselineCaptured;
+    let points = session.points;
+    const latestValue = latestHistoryValue(history);
+    const latestReceivedAt = latestHistoryReceivedAt(history);
+    if (!baselineCaptured) {
+      baselineCaptured = true;
+      if (latestValue !== void 0) {
+        const at = latestReceivedAt !== void 0 && latestReceivedAt >= session.startedAt ? counterCurrentPointAt(session, latestReceivedAt, capturedAt) : session.startedAt;
+        points = appendCounterSessionPoint(points, {
+          at,
+          value: latestValue,
+          minimum: latestValue,
+          maximum: latestValue,
+          sampleCount: 1
+        });
+      }
+    }
+    if (baselineCaptured && latestValue !== void 0 && points.at(-1)?.value !== latestValue) {
+      const at = counterCurrentPointAt(
+        { ...session, points },
+        latestReceivedAt,
+        capturedAt
+      );
+      points = appendCounterSessionPoint(points, {
+        at,
+        value: latestValue,
+        minimum: latestValue,
+        maximum: latestValue,
+        sampleCount: 1
+      });
+    }
+    return { ...session, baselineCaptured, points };
+  }
+  function renderCounterHistoryChart(svg, state) {
+    if (state.history?.status !== "available") {
+      const unavailable = state.history?.status === "unavailable";
+      return renderSignalChart(svg, {
+        points: [],
+        geometry: "compact",
+        axisLabels: { start: "\u8868\u793A\u958B\u59CB", end: "\u73FE\u5728" },
+        emptyTitle: unavailable ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093" : "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059",
+        emptyHint: unavailable ? "\u63A5\u7D9A\u3092\u78BA\u8A8D\u3057\u3066\u3001\u3082\u3046\u4E00\u5EA6\u8868\u793A\u3057\u3066\u304F\u3060\u3055\u3044" : "\u4FDD\u5B58\u6E08\u307F\u306E\u7D50\u679C\u3092\u78BA\u8A8D\u3057\u3066\u3044\u307E\u3059",
+        title: "\u6A2A\u8EF8\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6642\u9593\u3001\u7E26\u8EF8\u306F\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3067\u3059\u3002\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6700\u65B0\u6700\u592760\u70B9\u3092\u793A\u3057\u300161\u70B9\u76EE\u304B\u3089\u6700\u53E4\u70B9\u3092\u5916\u3057\u307E\u3059\u3002"
+      });
+    }
+    const chartPoints = state.session?.points ?? [];
+    const startAt = chartPoints[0]?.at ?? state.session?.startedAt;
+    const endAt = chartPoints.at(-1)?.at ?? startAt;
+    return renderSignalChart(svg, {
+      points: chartPoints,
+      geometry: "compact",
+      rawStep: true,
+      ...startAt === void 0 ? {} : { startAt },
+      ...endAt === void 0 ? {} : { endAt },
+      showLatestMarker: chartPoints.length > 0,
+      ...endAt === void 0 ? {} : { latestAt: endAt },
+      emptyTitle: "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093",
+      emptyHint: "\u4FDD\u5B58\u6E08\u307F\u306E\u610F\u5473\u7D50\u679C\u304C\u5909\u5316\u3059\u308B\u3068\u3001\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6700\u65B0\u6700\u592760\u70B9\u3092\u8868\u793A\u3057\u307E\u3059",
+      title: "\u6A2A\u8EF8\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6642\u9593\u3001\u7E26\u8EF8\u306F\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3067\u3059\u3002\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6700\u65B0\u6700\u592760\u70B9\u3092\u793A\u3057\u300161\u70B9\u76EE\u304B\u3089\u6700\u53E4\u70B9\u3092\u5916\u3057\u307E\u3059\u3002"
+    });
+  }
+  function counterSummaryText(state, plottedCount) {
+    if (state.history?.status === "pending") {
+      return "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u3002";
+    }
+    if (state.history?.status === "unavailable") {
+      return "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3002";
+    }
+    const history = availableCounterHistory(state);
+    const latestValue = latestHistoryValue(history);
+    return latestValue === void 0 ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093\u3002" : `${formatNumber(latestValue)}\uFF08\u4FDD\u5B58\u6E08\u307F\u3001\u8868\u793A\u958B\u59CB\u5F8C\u306E${plottedCount}\u70B9\uFF0F\u6700\u65B0\u6700\u592760\u70B9\uFF09`;
+  }
+  function counterPreviewMessage(state) {
+    if (!state.persisted) return "\u4FDD\u5B58\u5F8C\u306B\u7D2F\u7A4D\u958B\u59CB\u3002";
+    if (state.history?.status === "pending") {
+      return "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u3002";
+    }
+    if (state.history?.status === "unavailable") {
+      return "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3002";
+    }
+    return latestHistoryValue(availableCounterHistory(state)) === void 0 ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093\u3002" : "\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5909\u5316\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002";
+  }
+  function counterHistorySignature(state) {
+    if (!state.history) return "none";
+    if (state.history.status !== "available") return state.history.status;
+    return JSON.stringify(state.session?.points ?? []);
+  }
+  function latestRuleOutcome(payload, unit, counterState = { persisted: false }) {
+    const latest = latestPreviewPoint(payload);
     if (!latest) {
       return {
         value: "\u53D7\u4FE1\u5F85\u3061",
@@ -623,12 +1126,44 @@
           detail: "\u73FE\u5728\u306E\u5224\u5B9A",
           alarm: false
         };
-      case "cumulative_counter":
+      case "cumulative_counter": {
+        const delta = counterWindowDelta(payload);
+        const history = availableCounterHistory(counterState);
+        const persistedTotal = latestHistoryValue(history);
+        if (counterState.persisted) {
+          if (counterState.history?.status === "pending") {
+            return {
+              value: "\u7D2F\u7A4D\u5024\u3092\u8AAD\u307F\u8FBC\u307F\u4E2D",
+              detail: `\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3092\u78BA\u8A8D\u3057\u3066\u3044\u307E\u3059\u3002\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(delta)}`,
+              alarm: false
+            };
+          }
+          if (counterState.history?.status === "unavailable") {
+            return {
+              value: "\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093",
+              detail: `\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3002\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(delta)}`,
+              alarm: false
+            };
+          }
+          if (persistedTotal === void 0) {
+            return {
+              value: "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093",
+              detail: `\u4FDD\u5B58\u6E08\u307F\u306E\u610F\u5473\u7D50\u679C\u304C\u5C4A\u304F\u3068\u7D2F\u7A4D\u5024\u3092\u8868\u793A\u3057\u307E\u3059\u3002\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(delta)}`,
+              alarm: false
+            };
+          }
+          return {
+            value: `\u7D2F\u7A4D ${formatNumber(persistedTotal)}`,
+            detail: `\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(delta)}`,
+            alarm: false
+          };
+        }
         return {
-          value: `\u7D2F\u7A4D ${formatNumber(latest.counter ?? 0)}`,
-          detail: Number(latest.increment ?? 0) > 0 ? `\u4ECA\u56DE +${formatNumber(latest.increment)}` : "\u4ECA\u56DE\u306E\u5897\u5206\u306A\u3057",
+          value: `\u76F4\u8FD160\u79D2\u3067 +${formatNumber(delta)}`,
+          detail: "\u4FDD\u5B58\u5F8C\u306B\u7D2F\u7A4D\u958B\u59CB\u3002\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u306F\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002",
           alarm: false
         };
+      }
       case "alarm":
         return {
           value: latest.active ? "\u7570\u5E38" : "\u6B63\u5E38",
@@ -643,7 +1178,7 @@
         };
     }
   }
-  function renderRuleResult(panel, selected, state, unit) {
+  function renderRuleResult(panel, selected, state, unit, counterState) {
     const container = query("[data-preview-rule-result]", panel);
     const name = query("[data-preview-rule-name]", panel);
     const kind = query("[data-preview-rule-kind]", panel);
@@ -666,7 +1201,7 @@
         none: [
           "\u9078\u629E\u4E2D\u306E\u30EB\u30FC\u30EB\u306F\u3042\u308A\u307E\u305B\u3093",
           "\u2014",
-          "\u30EB\u30FC\u30EB\u3092\u958B\u304F\u3068\u5224\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+          "\u4FDD\u5B58\u6E08\u307F\u30EB\u30FC\u30EB\u3092\u9078\u629E\u3059\u308B\u3068\u5224\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
         ],
         invalid: [
           "\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044",
@@ -686,7 +1221,7 @@
       setText(detail, hint);
       return null;
     }
-    const outcome = latestRuleOutcome(selected, unit);
+    const outcome = latestRuleOutcome(selected, unit, counterState);
     setText(name, selected.display_name);
     setText(kind, kindLabel(selected.kind));
     setText(value, outcome.value);
@@ -694,20 +1229,17 @@
     container.classList.toggle("is-alarm", outcome.alarm);
     return outcome;
   }
-  function clearAuxiliaryOutputs(summary, testResult, state) {
+  function clearAuxiliaryOutputs(summary, state) {
     const messages = {
       none: "\u30B0\u30E9\u30D5\u306B\u8868\u793A\u3067\u304D\u308B\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002",
       invalid: "\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002",
       error: "\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
     };
     if (summary) setText(summary, messages[state]);
-    if (testResult) {
-      setText(testResult, "\u5024\u3092\u5165\u529B\u3059\u308B\u3068\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059");
-    }
   }
-  function updateAccessibleSummary(summary, raw, selected, outcome, unit) {
+  function updateAccessibleSummary(summary, raw, selected, outcome, unit, plotPoints = raw.points ?? []) {
     if (!summary) return;
-    const points = raw.points ?? [];
+    const points = plotPoints;
     if (selected?.error) {
       if (!points.length) {
         setText(
@@ -720,10 +1252,11 @@
         Number(point.input_min),
         Number(point.input_max)
       ]);
-      const count2 = raw.input_count ?? points.length;
+      const evaluatedCount2 = raw.input_count ?? points.length;
+      const bucketCount2 = points.length;
       setText(
         summary,
-        `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs2))}\u304B\u3089${formatNumber(Math.max(...inputs2))}\u3067\u3059\u3002\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3067\u3059\u304C\u3001\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002${count2}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+        `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs2))}\u304B\u3089${formatNumber(Math.max(...inputs2))}\u3067\u3059\u3002\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3067\u3059\u304C\u3001\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002${evaluatedCount2}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001\u76F4\u8FD160\u79D2\u306E${bucketCount2}bucket\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
       );
       return;
     }
@@ -738,276 +1271,124 @@
       Number(point.input_min),
       Number(point.input_max)
     ]);
-    const count = raw.input_count ?? points.length;
-    const ruleText = selected && outcome ? `\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3001\u73FE\u5728\u306F${outcome.value}\u3067\u3059\u3002` : "\u9078\u629E\u4E2D\u306E\u30EB\u30FC\u30EB\u306F\u3042\u308A\u307E\u305B\u3093\u3002";
+    const evaluatedCount = raw.input_count ?? points.length;
+    const bucketCount = points.length;
+    const ruleText = selected && outcome ? selected.kind === "cumulative_counter" ? `\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3001${outcome.value}\u3067\u3059\u3002${outcome.detail}` : `\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3001\u73FE\u5728\u306F${outcome.value}\u3067\u3059\u3002` : "\u9078\u629E\u4E2D\u306E\u30EB\u30FC\u30EB\u306F\u3042\u308A\u307E\u305B\u3093\u3002";
     const calibratedText = selected?.kind === "numeric" && outcome ? (() => {
       const calibrated = points.flatMap((point) => [
         Number(point.calibrated_min),
         Number(point.calibrated_max)
       ]);
-      const latest = points.at(-1);
+      const latest = latestPreviewPoint(selected);
       if (!latest || !calibrated.length) return "";
       return `\u88DC\u6B63\u5F8C\u306F${formatNumber(Math.min(...calibrated))}\u304B\u3089${formatNumber(Math.max(...calibrated))}\u3001\u6700\u65B0\u306E\u88DC\u6B63\u5F8C\u306F${formatNumber(latest.calibrated)}${unit ? ` ${unit}` : ""}\u3067\u3059\u3002`;
     })() : "";
     setText(
       summary,
-      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3067\u3059\u3002${calibratedText}${ruleText}${count}\u4EF6\u306E\u53D7\u4FE1\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3067\u3059\u3002${calibratedText}${ruleText}${evaluatedCount}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001\u76F4\u8FD160\u79D2\u306E${bucketCount}bucket\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
     );
   }
   function previewWindow(payload, points) {
     const now = Date.now();
+    const end = payload.window_end ?? (points.at(-1) ? pointPlotAt(points.at(-1)) : now);
     return {
-      start: payload.window_start ?? points[0]?.received_at ?? now,
-      end: payload.window_end ?? points.at(-1)?.received_at ?? now
+      start: payload.window_start ?? (points[0] ? pointPlotAt(points[0]) : end),
+      end
     };
   }
-  function renderEmptyChart(svg, payload) {
-    const title = addSVG(svg, "text", {
-      x: 380,
-      y: 122,
-      "text-anchor": "middle",
-      class: "chart-empty-title"
-    });
-    title.textContent = payload.error ? "\u3053\u306E\u30EB\u30FC\u30EB\u3067\u306F\u53D7\u4FE1\u5024\u3092\u5224\u5B9A\u3067\u304D\u307E\u305B\u3093" : "\u307E\u3060\u53D7\u4FE1\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093";
-    const hint = addSVG(svg, "text", {
-      x: 380,
-      y: 148,
-      "text-anchor": "middle",
-      class: "chart-empty-hint"
-    });
-    hint.textContent = payload.error ? "\u5165\u529B\u5024\u306E\u88DC\u6B63\u3068\u5224\u5B9A\u6761\u4EF6\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044" : "\u8A66\u3059\u5024\u3092\u5165\u529B\u3057\u3066\u3001\u8A2D\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059";
-  }
-  function renderPreviewChart(svg, payload, showSemanticOverlays) {
-    svg.replaceChildren();
+  function renderPreviewChart(svg, payload, showSemanticOverlays, unit, rawBoolean, showResult) {
     const points = payload.points ?? [];
-    const width = 760;
-    const height = 260;
-    const left = 58;
-    const right = 18;
-    const top = 18;
-    const bottom = 42;
-    const plotWidth = width - left - right;
-    const plotHeight = height - top - bottom;
-    if (!points.length) {
-      renderEmptyChart(svg, payload);
-      return;
-    }
-    const values = [];
-    for (const point of points) {
-      const pointValues = showSemanticOverlays ? [
-        point.input_min,
-        point.input_max,
-        point.calibrated_min,
-        point.calibrated_max
-      ] : [point.input_min, point.input_max];
-      for (const value of pointValues) {
-        if (isFiniteNumber(value)) values.push(Number(value));
-      }
-    }
-    if (showSemanticOverlays && isFiniteNumber(payload.rise_threshold)) {
-      values.push(payload.rise_threshold);
-    }
-    if (showSemanticOverlays && isFiniteNumber(payload.fall_threshold)) {
-      values.push(payload.fall_threshold);
-    }
-    let minValue = Math.min(...values);
-    let maxValue = Math.max(...values);
-    if (minValue === maxValue) {
-      const padding = Math.max(1, Math.abs(minValue) * 0.1);
-      minValue -= padding;
-      maxValue += padding;
-    } else {
-      const padding = (maxValue - minValue) * 0.08;
-      minValue -= padding;
-      maxValue += padding;
-    }
-    const firstReceivedAt = points[0].received_at;
-    const lastReceivedAt = points.at(-1)?.received_at ?? firstReceivedAt;
-    const x = (index) => {
-      if (points.length === 1) return left + plotWidth / 2;
-      const point = points[index];
-      if (lastReceivedAt > firstReceivedAt) {
-        return left + (point.received_at - firstReceivedAt) * plotWidth / (lastReceivedAt - firstReceivedAt);
-      }
-      return left + index * plotWidth / (points.length - 1);
-    };
-    const y = (value) => top + (maxValue - value) * plotHeight / (maxValue - minValue);
-    for (let index = 0; index <= 4; index += 1) {
-      const gridY = top + index * plotHeight / 4;
-      addSVG(svg, "line", {
-        x1: left,
-        x2: width - right,
-        y1: gridY,
-        y2: gridY,
-        class: "chart-grid"
-      });
-      const label = addSVG(svg, "text", {
-        x: left - 9,
-        y: gridY + 4,
-        "text-anchor": "end",
-        class: "chart-axis-label"
-      });
-      label.textContent = formatNumber(
-        maxValue - index * (maxValue - minValue) / 4
-      );
-    }
-    const drawThreshold = (value, labelText) => {
-      if (!isFiniteNumber(value)) return;
-      const thresholdY = y(value);
-      addSVG(svg, "line", {
-        x1: left,
-        x2: width - right,
-        y1: thresholdY,
-        y2: thresholdY,
-        class: "chart-threshold"
-      });
-      const label = addSVG(svg, "text", {
-        x: width - right - 4,
-        y: thresholdY - 6,
-        "text-anchor": "end",
-        class: "chart-threshold-label"
-      });
-      label.textContent = `${labelText} ${formatNumber(value)}`;
-    };
-    if (showSemanticOverlays) {
-      drawThreshold(payload.rise_threshold, "\u7ACB\u4E0A\u308A");
-      drawThreshold(payload.fall_threshold, "\u7ACB\u4E0B\u308A");
-    }
-    points.forEach((point, index) => {
-      if (point.sample_count > 1) {
-        addSVG(svg, "line", {
-          x1: x(index),
-          x2: x(index),
-          y1: y(point.input_min),
-          y2: y(point.input_max),
-          class: "chart-range"
-        });
-        if (showSemanticOverlays) {
-          addSVG(svg, "line", {
-            x1: x(index) + 2,
-            x2: x(index) + 2,
-            y1: y(point.calibrated_min),
-            y2: y(point.calibrated_max),
-            class: "chart-range-result"
-          });
-        }
-      }
-      if (showSemanticOverlays && payload.kind !== "numeric") {
-        const ratio = point.sample_count ? Number(point.active_samples ?? 0) / point.sample_count : 0;
-        if (ratio > 0) {
-          addSVG(svg, "rect", {
-            x: x(index) - Math.max(1, plotWidth / Math.max(points.length, 1) / 2),
-            y: top,
-            width: Math.max(2, plotWidth / Math.max(points.length, 1)),
-            height: plotHeight,
-            class: "chart-active-band",
-            opacity: Math.max(0.12, ratio * 0.24)
-          });
-        }
-      }
-    });
-    const path = (field) => points.map(
-      (point, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${y(point[field]).toFixed(2)}`
-    ).join(" ");
-    addSVG(svg, "path", {
-      d: path("input"),
-      class: "chart-line chart-line-raw"
-    });
-    if (showSemanticOverlays) {
-      addSVG(svg, "path", {
-        d: path("calibrated"),
-        class: "chart-line chart-line-result"
-      });
-    }
-    const latestPoint = points.at(-1);
-    if (showSemanticOverlays && latestPoint) {
-      addSVG(svg, "circle", {
-        cx: x(points.length - 1),
-        cy: y(latestPoint.calibrated),
-        r: 5,
-        class: "chart-latest-point"
-      });
-      const latestLabel = addSVG(svg, "text", {
-        x: Math.min(width - right - 4, x(points.length - 1) - 8),
-        y: Math.max(top + 13, y(latestPoint.calibrated) - 10),
-        "text-anchor": "end",
-        class: "chart-latest-label"
-      });
-      latestLabel.textContent = "\u6700\u65B0";
-    }
-    if (showSemanticOverlays && payload.kind === "cumulative_counter") {
-      const maxIncrement = Math.max(
-        1,
-        ...points.map((point) => Number(point.increment ?? 0))
-      );
-      points.forEach((point, index) => {
-        const increment = Number(point.increment ?? 0);
-        if (!increment) return;
-        const barHeight = Math.max(3, increment / maxIncrement * 34);
-        addSVG(svg, "rect", {
-          x: x(index) - 2,
-          y: top + plotHeight - barHeight,
-          width: 4,
-          height: barHeight,
-          class: "chart-increment"
-        });
-      });
-      const maxCounter = Math.max(
-        1,
-        ...points.map((point) => Number(point.counter ?? 0))
-      );
-      const counterY = (value) => top + (maxCounter - Number(value ?? 0)) * plotHeight / maxCounter;
-      const counterPath = points.map(
-        (point, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${counterY(point.counter).toFixed(2)}`
-      ).join(" ");
-      addSVG(svg, "path", {
-        d: counterPath,
-        class: "chart-line chart-line-counter"
-      });
-      const latestCounter = points.at(-1)?.counter;
-      const counterLabel = addSVG(svg, "text", {
-        x: width - right - 4,
-        y: counterY(latestCounter) - 7,
-        "text-anchor": "end",
-        class: "chart-counter-label"
-      });
-      counterLabel.textContent = `\u7D2F\u7A4D ${formatNumber(latestCounter ?? 0)}`;
-    }
     const window2 = previewWindow(payload, points);
-    const start = addSVG(svg, "text", {
-      x: left,
-      y: height - 14,
-      class: "chart-axis-label"
+    renderSignalChart(svg, {
+      points: points.map((point) => ({
+        at: pointPlotAt(point),
+        value: point.input,
+        minimum: point.input_min,
+        maximum: point.input_max,
+        sampleCount: point.sample_count,
+        result: point.calibrated,
+        resultMinimum: point.calibrated_min,
+        resultMaximum: point.calibrated_max,
+        activeRatio: point.sample_count ? Number(point.active_samples ?? 0) / point.sample_count : 0
+      })),
+      geometry: "compact",
+      unit,
+      boolean: rawBoolean && !showSemanticOverlays,
+      rawStep: rawBoolean,
+      startAt: window2.start,
+      endAt: window2.end,
+      showResult,
+      resultStep: showResult && rawBoolean,
+      showLatestMarker: showSemanticOverlays,
+      showActiveBands: showSemanticOverlays && payload.kind !== "numeric" && payload.kind !== "cumulative_counter",
+      thresholds: showSemanticOverlays ? { rise: payload.rise_threshold, fall: payload.fall_threshold } : void 0,
+      emptyTitle: payload.error ? "\u3053\u306E\u30EB\u30FC\u30EB\u3067\u306F\u53D7\u4FE1\u5024\u3092\u5224\u5B9A\u3067\u304D\u307E\u305B\u3093" : "\u307E\u3060\u53D7\u4FE1\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093",
+      emptyHint: payload.error ? "\u5165\u529B\u5024\u306E\u88DC\u6B63\u3068\u5224\u5B9A\u6761\u4EF6\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044" : "\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3092\u5F85\u3063\u3066\u3044\u307E\u3059",
+      title: `\u6A2A\u8EF8\u306F\u76F4\u8FD160\u79D2\u3001\u7E26\u8EF8\u306F\u53D7\u4FE1\u5024${unit ? `\uFF08${unit}\uFF09` : ""}${showResult ? "\u3068\u8A2D\u5B9A\u7D50\u679C" : ""}\u3067\u3059\u3002`
     });
-    start.textContent = new Date(window2.start).toLocaleTimeString("ja-JP", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-    const end = addSVG(svg, "text", {
-      x: width - right,
-      y: height - 14,
-      "text-anchor": "end",
-      class: "chart-axis-label"
-    });
-    end.textContent = new Date(window2.end).toLocaleTimeString("ja-JP", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
+    return points;
   }
   function isMultipleRulePreview(response) {
     return "rules" in response;
   }
-  function activePreviewID(scope) {
-    const activePanel = queryAll(
+  function activeSettingPanel(scope) {
+    return queryAll(
       "[data-setting-panel]",
       scope
     ).find((panel) => !panel.hidden);
-    const form = activePanel?.querySelector(
-      "details[data-preview-target][open] form.semantic-form[data-preview-id]"
+  }
+  function previewTargetID(target) {
+    return target.dataset.ruleId || query("form.semantic-form[data-preview-id]", target)?.dataset.previewId;
+  }
+  function previewTargets(panel) {
+    return queryAll(
+      "details[data-preview-target]",
+      panel
+    ).filter((target) => !!previewTargetID(target));
+  }
+  function persistedPreviewTargets(panel) {
+    return previewTargets(panel).filter((target) => !!target.dataset.ruleId);
+  }
+  function previewTargetLabel(target) {
+    const form = query("form.semantic-form", target);
+    const name = form ? formField(form, "display_name")?.value.trim() : void 0;
+    const targetID = previewTargetID(target);
+    return name || (targetID === "draft-alarm" ? "\u65B0\u3057\u3044\u7570\u5E38\u691C\u77E5" : targetID === "draft-normal" ? "\u65B0\u3057\u3044\u8A08\u6E2C\u30EB\u30FC\u30EB" : void 0) || query("summary strong", target)?.textContent?.trim() || targetID || "\u30EB\u30FC\u30EB";
+  }
+  function renderPreviewRuleOptions(selector, targets, selectedID) {
+    if (!selector) return;
+    selector.replaceChildren();
+    if (!targets.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "\u9078\u629E\u3067\u304D\u308B\u30EB\u30FC\u30EB\u306A\u3057";
+      option.disabled = true;
+      option.selected = true;
+      selector.append(option);
+      selector.disabled = true;
+      return;
+    }
+    const hasPersistedTarget = targets.some((target) => !!target.dataset.ruleId);
+    if (!hasPersistedTarget) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "\u30EB\u30FC\u30EB\u3092\u9078\u629E";
+      option.disabled = true;
+      option.selected = !selectedID;
+      selector.append(option);
+    }
+    selector.disabled = false;
+    for (const target of targets) {
+      const option = document.createElement("option");
+      option.value = previewTargetID(target) ?? "";
+      option.textContent = previewTargetLabel(target);
+      selector.append(option);
+    }
+    const selectedTarget = targets.find(
+      (target) => previewTargetID(target) === selectedID
     );
-    return form?.dataset.previewId;
+    const firstPersistedTarget = targets.find((target) => !!target.dataset.ruleId);
+    selector.value = selectedTarget ? previewTargetID(selectedTarget) ?? "" : firstPersistedTarget ? previewTargetID(firstPersistedTarget) ?? "" : "";
   }
   function selectPreview(response, activeID) {
     if (!isMultipleRulePreview(response)) {
@@ -1029,26 +1410,27 @@
     };
   }
   function rawOnlyPreview(payload) {
+    const rawPoint = (point) => ({
+      ...point,
+      calibrated: point.input,
+      calibrated_min: point.input_min,
+      calibrated_max: point.input_max,
+      active: void 0,
+      active_samples: void 0,
+      transitions: void 0,
+      counter: void 0,
+      increment: void 0
+    });
     return {
       ...payload,
       kind: "numeric",
-      test_result: void 0,
       rise_threshold: void 0,
       fall_threshold: void 0,
-      points: (payload.points ?? []).map((point) => ({
-        ...point,
-        calibrated: point.input,
-        calibrated_min: point.input_min,
-        calibrated_max: point.input_max,
-        active: void 0,
-        active_samples: void 0,
-        transitions: void 0,
-        counter: void 0,
-        increment: void 0
-      }))
+      points: (payload.points ?? []).map(rawPoint),
+      latest_point: payload.latest_point ? rawPoint(payload.latest_point) : void 0
     };
   }
-  function buildRequest(signalRef, forms, calibrationForm, multipleRules, testInput, activeID) {
+  function buildRequest(signalRef, forms, calibrationForm, multipleRules, activeID) {
     const body = { signal_ref: signalRef };
     const firstForm = forms[0];
     if (multipleRules) {
@@ -1078,8 +1460,6 @@
     } else if (firstForm) {
       body.spec = definitionSpec(firstForm);
     }
-    const testValue = testInput?.value.trim();
-    if (testValue) body.test_value = Number(testValue);
     return body;
   }
   function initializePreview(panel) {
@@ -1093,22 +1473,27 @@
       `form[action="/console/signals/${signalRef}/calibration"]`
     );
     const multipleRules = forms.some((form) => !!form.dataset.ruleId) || forms.some((form) => form.action.endsWith("/semantic-rules"));
-    const testInput = query(
-      '[name="preview_test_value"]',
-      panel
+    const rawBoolean = forms.some(
+      (form) => form.dataset.booleanInput === "true"
     );
-    const testResult = query("[data-preview-test-result]", panel);
     const range = query("[data-preview-range]", panel);
     const count = query("[data-preview-count]", panel);
     const message = query("[data-preview-message]", panel);
     const feedState = query("[data-preview-feed-state]", panel);
     const checkedAt = query("[data-preview-checked-at]", panel);
-    const accessibleSummary = query(
-      "[data-preview-accessible-summary]",
-      panel
-    );
     const toggle = query("[data-preview-toggle]", panel);
     const chart = query("[data-preview-chart]", panel);
+    const accessibleSummaryID = chart?.getAttribute("aria-describedby");
+    const accessibleSummary = accessibleSummaryID ? document.getElementById(accessibleSummaryID) : null;
+    const counterPanel = query("[data-preview-counter]", panel);
+    const counterChart = query(
+      "[data-preview-counter-chart]",
+      panel
+    );
+    const counterSummary = query(
+      "[data-preview-counter-summary]",
+      panel
+    );
     const resultLegend = query(
       "[data-preview-result-legend]",
       panel
@@ -1125,6 +1510,10 @@
       "[data-preview-current-received]",
       panel
     );
+    const ruleSelector = query(
+      "[data-preview-rule-select]",
+      panel
+    );
     const unit = panel.dataset.unit ?? "";
     if (!range || !count || !message || !chart) return;
     const sourceSummary = query(
@@ -1139,15 +1528,35 @@
       'form[data-signal-profile] [name="decimal_places"]'
     );
     let controller;
+    let counterHistoryController;
+    let counterHistoryRuleID;
+    let counterHistory;
+    let counterHistorySession;
+    let lastAvailableCounterHistory;
+    let renderedCounterHistoryKey;
+    let renderedCounterHistoryPointCount = 0;
+    let renderCurrentCounter;
     let debounce;
     let previewUnavailable = false;
     let paused = false;
     let lastSeenReceivedAt;
-    const setSemanticLegends = (visible, payload) => {
-      if (resultLegend) resultLegend.hidden = !visible;
+    let selectedPreviewID;
+    const lastSelectedTargetByPanel = /* @__PURE__ */ new WeakMap();
+    const pendingInitialToggleStates = /* @__PURE__ */ new Map();
+    const setCounterPanel = (visible) => {
+      if (counterPanel) counterPanel.hidden = !visible;
+    };
+    const setSemanticLegends = (semanticVisible, resultVisible, payload) => {
+      if (resultLegend) resultLegend.hidden = !resultVisible;
       if (thresholdLegend) {
-        thresholdLegend.hidden = !visible || !payload || !isFiniteNumber(payload.rise_threshold) && !isFiniteNumber(payload.fall_threshold);
+        thresholdLegend.hidden = !semanticVisible || !payload || !isFiniteNumber(payload.rise_threshold) && !isFiniteNumber(payload.fall_threshold);
       }
+    };
+    const hideSemanticAuxiliaries = () => {
+      setSemanticLegends(false, false);
+      setCounterPanel(false);
+      renderedCounterHistoryKey = void 0;
+      renderedCounterHistoryPointCount = 0;
     };
     const setFeedState = (state) => {
       if (feedState) setText(feedState, state);
@@ -1163,27 +1572,152 @@
         })}`
       );
     };
+    const selectPreviewTarget = (selectedTarget) => {
+      const activePanel = activeSettingPanel(previewScope);
+      const targets = activePanel ? previewTargets(activePanel) : [];
+      const selectedID = selectedTarget ? previewTargetID(selectedTarget) : void 0;
+      if (!activePanel || !selectedTarget || !selectedID || !targets.includes(selectedTarget)) {
+        selectedPreviewID = void 0;
+        if (activePanel) lastSelectedTargetByPanel.delete(activePanel);
+        renderPreviewRuleOptions(ruleSelector, targets, void 0);
+        return;
+      }
+      selectedPreviewID = selectedID;
+      lastSelectedTargetByPanel.set(activePanel, selectedID);
+      renderPreviewRuleOptions(ruleSelector, targets, selectedID);
+      for (const target of queryAll(
+        "details[data-preview-target]",
+        activePanel
+      )) {
+        target.open = target === selectedTarget;
+      }
+    };
+    const restorePreviewTarget = () => {
+      const activePanel = activeSettingPanel(previewScope);
+      const targets = activePanel ? previewTargets(activePanel) : [];
+      const persistedTargets = activePanel ? persistedPreviewTargets(activePanel) : [];
+      const rememberedID = activePanel ? lastSelectedTargetByPanel.get(activePanel) : void 0;
+      selectPreviewTarget(
+        targets.find((target) => previewTargetID(target) === rememberedID) ?? persistedTargets[0]
+      );
+    };
+    const refreshRuleSelectorLabels = (form) => {
+      const activePanel = activeSettingPanel(previewScope);
+      if (!activePanel || !activePanel.contains(form)) return;
+      const targets = previewTargets(activePanel);
+      const selectedID = targets.some(
+        (target) => previewTargetID(target) === selectedPreviewID
+      ) ? selectedPreviewID : void 0;
+      renderPreviewRuleOptions(ruleSelector, targets, selectedID);
+    };
+    const counterStateFor = (ruleID) => {
+      if (!ruleID) {
+        counterHistoryController?.abort();
+        counterHistoryController = void 0;
+        counterHistoryRuleID = void 0;
+        counterHistory = void 0;
+        counterHistorySession = void 0;
+        lastAvailableCounterHistory = void 0;
+        renderedCounterHistoryKey = void 0;
+        renderedCounterHistoryPointCount = 0;
+        renderCurrentCounter = void 0;
+        return { persisted: false };
+      }
+      if (counterHistoryRuleID !== ruleID) {
+        counterHistoryController?.abort();
+        counterHistoryController = void 0;
+        counterHistoryRuleID = ruleID;
+        counterHistory = { status: "pending" };
+        counterHistorySession = {
+          startedAt: Date.now(),
+          baselineCaptured: false,
+          points: []
+        };
+        lastAvailableCounterHistory = void 0;
+        renderedCounterHistoryKey = void 0;
+        renderedCounterHistoryPointCount = 0;
+      }
+      return {
+        persisted: true,
+        history: counterHistory ?? { status: "pending" },
+        session: counterHistorySession
+      };
+    };
+    const refreshCounterHistory = (ruleID) => {
+      if (counterHistoryController || counterHistoryRuleID !== ruleID) return;
+      const historyController = new AbortController();
+      counterHistoryController = historyController;
+      void loadCounterHistory(ruleID, historyController.signal).then((history) => {
+        if (counterHistoryController !== historyController || counterHistoryRuleID !== ruleID || historyController.signal.aborted) {
+          return;
+        }
+        counterHistoryController = void 0;
+        if (history.status === "available") {
+          const value = retainLatestHistory(lastAvailableCounterHistory, history.value);
+          lastAvailableCounterHistory = value;
+          counterHistory = { status: "available", value };
+          if (counterHistorySession) {
+            counterHistorySession = mergeCounterHistorySession(
+              counterHistorySession,
+              history.value,
+              Date.now()
+            );
+          }
+          renderCurrentCounter?.({
+            persisted: true,
+            history: counterHistory,
+            session: counterHistorySession
+          });
+          return;
+        }
+        counterHistory = history;
+        renderCurrentCounter?.({
+          persisted: true,
+          history,
+          session: counterHistorySession
+        });
+      }).catch(() => {
+        if (counterHistoryController !== historyController || counterHistoryRuleID !== ruleID || historyController.signal.aborted) {
+          return;
+        }
+        counterHistoryController = void 0;
+        const unavailable = { status: "unavailable" };
+        counterHistory = unavailable;
+        renderCurrentCounter?.({
+          persisted: true,
+          history: unavailable,
+          session: counterHistorySession
+        });
+      });
+    };
     const refresh = async () => {
       controller?.abort();
-      controller = new AbortController();
+      renderCurrentCounter = void 0;
+      const requestController = new AbortController();
+      controller = requestController;
       clearFieldErrors(previewScope);
-      const activeID = activePreviewID(previewScope);
-      setSemanticLegends(false);
+      const activeID = selectedPreviewID;
+      const requestedCounterRuleID = counterRuleIDForActiveForm(forms, activeID);
+      counterStateFor(requestedCounterRuleID);
+      if (requestedCounterRuleID) {
+        refreshCounterHistory(requestedCounterRuleID);
+      }
       const body = buildRequest(
         signalRef,
         forms,
         calibrationForm,
         multipleRules,
-        testInput,
         activeID
       );
       try {
         const result = await createMappingPreview(
           body,
           csrfToken(),
-          controller.signal
+          requestController.signal
         );
+        if (controller !== requestController || requestController.signal.aborted) return;
         if (!result.ok) {
+          hideSemanticAuxiliaries();
           const fieldName = result.error?.error.field;
           const activeForm = forms.find(
             (candidate) => candidate.dataset.previewId === activeID
@@ -1193,7 +1727,7 @@
           if (result.status === 404 && !forms[0]) {
             previewUnavailable = true;
             renderRuleResult(panel, null, "none", unit);
-            clearAuxiliaryOutputs(accessibleSummary, testResult, "none");
+            clearAuxiliaryOutputs(accessibleSummary, "none");
             setFeedState("\u8868\u793A\u3059\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093");
             setText(
               message,
@@ -1201,7 +1735,7 @@
             );
           } else if (fieldLabel && invalidField) {
             renderRuleResult(panel, null, "invalid", unit);
-            clearAuxiliaryOutputs(accessibleSummary, testResult, "invalid");
+            clearAuxiliaryOutputs(accessibleSummary, "invalid");
             setFeedState("\u8A2D\u5B9A\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
             showFieldError(invalidField, fieldLabel);
             setText(
@@ -1217,7 +1751,6 @@
             );
             clearAuxiliaryOutputs(
               accessibleSummary,
-              testResult,
               result.status === 400 ? "invalid" : "error"
             );
             setFeedState("\u66F4\u65B0\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093");
@@ -1233,6 +1766,7 @@
         const selectedFailure = selection.selected?.error ? selection.selected : null;
         const payload = selectedReady ?? (selection.raw ? rawOnlyPreview(selection.raw) : null);
         if (!payload) {
+          hideSemanticAuxiliaries();
           renderRuleResult(
             panel,
             null,
@@ -1241,31 +1775,98 @@
           );
           clearAuxiliaryOutputs(
             accessibleSummary,
-            testResult,
             activeID ? "error" : "none"
           );
           setFeedState("\u8868\u793A\u3059\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093");
           setText(message, "\u78BA\u8A8D\u3067\u304D\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002");
           return;
         }
-        setSemanticLegends(Boolean(selectedReady), payload);
-        renderPreviewChart(chart, payload, Boolean(selectedReady));
-        const resultState = !activeID ? "none" : selectedReady ? "ready" : "error";
-        const outcome = renderRuleResult(
-          panel,
-          selectedReady ?? selectedFailure,
-          resultState,
-          unit
+        const persistedRuleID = persistedCounterRuleID(
+          forms,
+          activeID,
+          selectedReady
         );
-        updateAccessibleSummary(
-          accessibleSummary,
+        const counterState = counterStateFor(persistedRuleID);
+        const showResult = Boolean(selectedReady) && hasMeaningfulResult(payload.points ?? []);
+        setSemanticLegends(Boolean(selectedReady), showResult, payload);
+        if (!persistedRuleID) {
+          setCounterPanel(false);
+          renderedCounterHistoryKey = void 0;
+          renderedCounterHistoryPointCount = 0;
+        }
+        const plottedPoints = renderPreviewChart(
+          chart,
           payload,
-          selectedReady ?? selectedFailure,
-          outcome,
-          unit
+          Boolean(selectedReady),
+          unit,
+          rawBoolean,
+          showResult
         );
-        const points = payload.points ?? [];
-        const latest = selection.raw?.points?.at(-1);
+        const points = plottedPoints;
+        const renderPreviewMessage = (state) => {
+          if (payload.input_count === 0) {
+            range.textContent = "\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093";
+            count.textContent = "\u53D7\u4FE1\u5024\u304C\u5C4A\u304F\u3068\u8A2D\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002";
+            setText(message, "\u5C65\u6B74\u306F\u4F5C\u3089\u305A\u3001\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3060\u3051\u3092\u8868\u793A\u3057\u307E\u3059\u3002");
+          } else {
+            const window2 = previewWindow(payload, points);
+            range.textContent = `\u76F4\u8FD1${formatDuration(window2.start, window2.end)}\u306E\u53D7\u4FE1\u5024`;
+            count.textContent = `${payload.input_count.toLocaleString("ja-JP")}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001\u76F4\u8FD160\u79D2\u306E${points.length.toLocaleString("ja-JP")}bucket\u3092\u8868\u793A`;
+            setText(
+              message,
+              payload.truncated_by === "input_count" ? "\u9AD8\u901F\u306A\u4FE1\u53F7\u306E\u305F\u3081\u3001\u6700\u65B020,000\u4EF6\u3092\u8981\u7D04\u3057\u3066\u3044\u307E\u3059\u3002" : payload.kind === "cumulative_counter" ? `\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(counterWindowDelta(payload))}\u3002` + counterPreviewMessage(state) : !showResult ? "\u5909\u63DB\u524D\u5F8C\u306E\u5024\u306F\u540C\u3058\u3067\u3059\u3002\u88DC\u6B63\u3092\u5909\u66F4\u3059\u308B\u3068\u5DEE\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002" : "\u8A2D\u5B9A\u3092\u5909\u3048\u308B\u3068\u3001\u4FDD\u5B58\u524D\u306E\u7D50\u679C\u3092\u3053\u306E\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+            );
+          }
+          if (selectedFailure) {
+            setText(
+              message,
+              "\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+            );
+          }
+        };
+        const renderCounterState = (state) => {
+          if (persistedRuleID && counterChart) {
+            const historyKey = counterHistorySignature(state);
+            let plottedCount = 0;
+            if (historyKey !== renderedCounterHistoryKey) {
+              plottedCount = renderCounterHistoryChart(
+                counterChart,
+                state
+              );
+              renderedCounterHistoryKey = historyKey;
+              renderedCounterHistoryPointCount = plottedCount;
+            } else {
+              plottedCount = renderedCounterHistoryPointCount;
+            }
+            setCounterPanel(true);
+            if (counterSummary) {
+              setText(counterSummary, counterSummaryText(state, plottedCount));
+            }
+          }
+          const resultState = !activeID ? "none" : selectedReady ? "ready" : "error";
+          const outcome = renderRuleResult(
+            panel,
+            selectedReady ?? selectedFailure,
+            resultState,
+            unit,
+            state
+          );
+          updateAccessibleSummary(
+            accessibleSummary,
+            payload,
+            selectedReady ?? selectedFailure,
+            outcome,
+            unit,
+            plottedPoints
+          );
+          renderPreviewMessage(state);
+        };
+        renderCurrentCounter = persistedRuleID ? renderCounterState : void 0;
+        renderCounterState(counterState);
+        if (persistedRuleID) {
+          refreshCounterHistory(persistedRuleID);
+        }
+        const latest = selection.raw ? latestPreviewPoint(selection.raw) : void 0;
         markChecked();
         if (!latest) {
           setFeedState("\u53D7\u4FE1\u5F85\u3061");
@@ -1309,57 +1910,11 @@
             sourceCurrentReceived.title = receivedTitle;
           }
         }
-        if (payload.input_count === 0) {
-          range.textContent = "\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093";
-          count.textContent = "\u8A66\u3059\u5024\u3067\u8A2D\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002";
-          setText(message, "\u5C65\u6B74\u306F\u4F5C\u3089\u305A\u3001\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3060\u3051\u3092\u8868\u793A\u3057\u307E\u3059\u3002");
-        } else {
-          const window2 = previewWindow(payload, points);
-          range.textContent = `\u76F4\u8FD1${formatDuration(window2.start, window2.end)}\u306E\u53D7\u4FE1\u5024`;
-          count.textContent = `${payload.input_count.toLocaleString("ja-JP")}\u4EF6\u3092${payload.plot_count.toLocaleString("ja-JP")}\u70B9\u3067\u8868\u793A`;
-          const valuesOverlap = points.every(
-            (point) => Math.abs(point.input - point.calibrated) < 1e-9
-          );
-          setText(
-            message,
-            payload.truncated_by === "input_count" ? "\u9AD8\u901F\u306A\u4FE1\u53F7\u306E\u305F\u3081\u3001\u6700\u65B020,000\u4EF6\u3092\u8981\u7D04\u3057\u3066\u3044\u307E\u3059\u3002" : payload.kind === "cumulative_counter" ? `\u8868\u793A\u7BC4\u56F2\u5185\u306E\u7D2F\u7A4D\u5024\u306F ${points.at(-1)?.counter ?? 0} \u3067\u3059\u3002\u5148\u982D\u306E\u5024\u306F\u6570\u3048\u307E\u305B\u3093\u3002` : valuesOverlap ? "\u5909\u63DB\u524D\u5F8C\u306E\u5024\u306F\u540C\u3058\u3067\u3059\u3002\u88DC\u6B63\u3092\u5909\u66F4\u3059\u308B\u3068\u5DEE\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002" : "\u8A2D\u5B9A\u3092\u5909\u3048\u308B\u3068\u3001\u4FDD\u5B58\u524D\u306E\u7D50\u679C\u3092\u3053\u306E\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
-          );
-        }
-        if (selectedFailure) {
-          setText(
-            message,
-            "\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
-          );
-        }
-        if (testResult) {
-          const previewResult = payload.test_result;
-          if (!previewResult) {
-            testResult.textContent = "\u5024\u3092\u5165\u529B\u3059\u308B\u3068\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059";
-          } else {
-            switch (payload.kind) {
-              case "boolean":
-                testResult.textContent = previewResult.boolean ? "ON" : "OFF";
-                break;
-              case "alarm":
-                testResult.textContent = previewResult.boolean ? "\u7570\u5E38" : "\u6B63\u5E38";
-                break;
-              case "cumulative_counter":
-                testResult.textContent = previewResult.integer !== void 0 ? `\u7D2F\u7A4D ${formatNumber(previewResult.integer)}` : "\u6700\u521D\u306E\u5024\u3068\u3057\u3066\u78BA\u8A8D\uFF08\u7D2F\u7A4D\u306B\u306F\u52A0\u3048\u307E\u305B\u3093\uFF09";
-                break;
-              default:
-                if (previewResult.number !== void 0) {
-                  testResult.textContent = `${formatNumber(previewResult.number)}${unit ? ` ${unit}` : ""}`;
-                } else {
-                  testResult.textContent = `\u88DC\u6B63\u5F8C ${formatNumber(previewResult.calibrated)}${unit ? ` ${unit}` : ""}`;
-                }
-                break;
-            }
-          }
-        }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
+          hideSemanticAuxiliaries();
           renderRuleResult(panel, null, "error", unit);
-          clearAuxiliaryOutputs(accessibleSummary, testResult, "error");
+          clearAuxiliaryOutputs(accessibleSummary, "error");
           setFeedState("\u66F4\u65B0\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093");
           setText(
             message,
@@ -1372,20 +1927,49 @@
       if (debounce !== void 0) window.clearTimeout(debounce);
       debounce = window.setTimeout(refresh, 300);
     };
+    restorePreviewTarget();
     for (const form of forms) {
-      form.addEventListener("input", schedule);
-      form.addEventListener("change", schedule);
+      const onFormChange = (event) => {
+        if (event.target instanceof HTMLInputElement && event.target.name === "display_name") {
+          refreshRuleSelectorLabels(form);
+        }
+        schedule();
+      };
+      form.addEventListener("input", onFormChange);
+      form.addEventListener("change", onFormChange);
     }
     calibrationForm?.addEventListener("input", schedule);
     calibrationForm?.addEventListener("change", schedule);
-    previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, schedule);
+    previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, () => {
+      restorePreviewTarget();
+      schedule();
+    });
+    ruleSelector?.addEventListener("change", () => {
+      const activePanel = activeSettingPanel(previewScope);
+      const selectedTarget = activePanel ? previewTargets(activePanel).find(
+        (target) => previewTargetID(target) === ruleSelector.value
+      ) : void 0;
+      selectPreviewTarget(selectedTarget);
+      schedule();
+    });
     for (const target of queryAll(
       "details[data-preview-target]",
       previewScope
     )) {
-      target.addEventListener("toggle", schedule);
+      pendingInitialToggleStates.set(target, target.open);
+      target.addEventListener("toggle", () => {
+        const initialOpen = pendingInitialToggleStates.get(target);
+        if (initialOpen !== void 0) {
+          pendingInitialToggleStates.delete(target);
+          if (target.open === initialOpen) return;
+        }
+        const activePanel = activeSettingPanel(previewScope);
+        if (target.open && activePanel?.contains(target) && previewTargets(activePanel).includes(target)) {
+          selectPreviewTarget(target);
+        }
+        schedule();
+      });
     }
-    testInput?.addEventListener("input", schedule);
     toggle?.addEventListener("click", () => {
       paused = !paused;
       toggle.setAttribute("aria-checked", String(!paused));
@@ -1414,20 +1998,11 @@
 
   // src/live.ts
   var REFRESH_MS = 5 * 1e3;
-  var SESSION_WINDOW_MS = 5 * 60 * 1e3;
-  var BUCKET_MS = REFRESH_MS;
+  var SESSION_WINDOW_MS = 60 * 1e3;
+  var BUCKET_MS = 1e3;
   var MAX_NUMERIC_POINTS = 60;
   var MAX_BOOLEAN_POINTS = 10;
   var MAX_ACTIVE_CARDS = 12;
-  var SVG_NS = "http://www.w3.org/2000/svg";
-  function addSVG2(svg, tag, attributes) {
-    const element = document.createElementNS(SVG_NS, tag);
-    for (const [name, value] of Object.entries(attributes)) {
-      element.setAttribute(name, String(value));
-    }
-    svg.append(element);
-    return element;
-  }
   function formatNumber2(value, decimalPlaces = 1) {
     return value.toLocaleString("ja-JP", {
       maximumFractionDigits: Math.max(0, decimalPlaces)
@@ -1447,16 +2022,6 @@
     }
     return `${Math.floor(elapsed / (60 * 6e4))}\u6642\u9593\u524D`;
   }
-  function renderEmpty(svg) {
-    svg.replaceChildren();
-    const label = addSVG2(svg, "text", {
-      x: 180,
-      y: 82,
-      "text-anchor": "middle",
-      class: "live-chart-empty"
-    });
-    label.textContent = "\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u53D7\u4FE1\u3092\u5F85\u3063\u3066\u3044\u307E\u3059";
-  }
   function sessionPoints(payload, boolean, windowStart) {
     const points = payload.points.filter((point) => point.bucket_start >= windowStart);
     if (!boolean) return points.slice(-MAX_NUMERIC_POINTS);
@@ -1474,102 +2039,32 @@
     return transitions.slice(-MAX_BOOLEAN_POINTS);
   }
   function renderChart(svg, payload, boolean, unit, now, sessionStartedAt) {
-    svg.replaceChildren();
     const windowStart = Math.max(sessionStartedAt, now - SESSION_WINDOW_MS);
     const points = sessionPoints(payload, boolean, windowStart);
-    if (!points.length) {
-      renderEmpty(svg);
-      return 0;
-    }
-    const width = 360;
-    const height = 160;
-    const left = 42;
-    const right = 12;
-    const top = 12;
-    const bottom = 28;
-    const plotWidth = width - left - right;
-    const plotHeight = height - top - bottom;
-    const windowEnd = Math.max(now, windowStart + REFRESH_MS);
-    const x = (time) => left + Math.max(0, Math.min(1, (time - windowStart) / (windowEnd - windowStart))) * plotWidth;
-    const sourceValues = points.flatMap((point) => [point.minimum, point.maximum]);
-    let minimum = boolean ? 0 : Math.min(...sourceValues);
-    let maximum = boolean ? 1 : Math.max(...sourceValues);
-    if (!boolean) {
-      const padding = minimum === maximum ? Math.max(1, Math.abs(minimum) * 0.1) : (maximum - minimum) * 0.08;
-      minimum -= padding;
-      maximum += padding;
-    }
-    const y = (value) => top + (maximum - value) * plotHeight / (maximum - minimum);
-    for (const ratio of [0, 0.5, 1]) {
-      const gridY = top + ratio * plotHeight;
-      addSVG2(svg, "line", {
-        x1: left,
-        x2: width - right,
-        y1: gridY,
-        y2: gridY,
-        class: "live-chart-grid"
-      });
-    }
-    for (const [value, label] of boolean ? [[1, "ON"], [0, "OFF"]] : [[maximum, formatNumber2(maximum)], [minimum, formatNumber2(minimum)]]) {
-      const text = addSVG2(svg, "text", {
-        x: left - 7,
-        y: y(value) + 4,
-        "text-anchor": "end",
-        class: "live-chart-axis-label"
-      });
-      text.textContent = label;
-    }
-    const startLabel = addSVG2(svg, "text", {
-      x: left,
-      y: height - 7,
-      "text-anchor": "start",
-      class: "live-chart-axis-label"
+    const chartPoints = points.map((point) => ({
+      at: point.bucket_start,
+      value: point.average,
+      minimum: point.minimum,
+      maximum: point.maximum,
+      sampleCount: point.sample_count
+    }));
+    return renderSignalChart(svg, {
+      points: chartPoints,
+      geometry: "compact",
+      unit,
+      boolean,
+      startAt: windowStart,
+      endAt: Math.max(now, windowStart + 1e3),
+      latestAt: payload.latest_received_at !== null && payload.latest_received_at >= windowStart ? payload.latest_received_at : points.at(-1)?.bucket_start,
+      showLatestMarker: true,
+      axisLabels: {
+        start: windowStart === sessionStartedAt ? "\u958B\u59CB" : "60\u79D2\u524D",
+        end: "\u73FE\u5728"
+      },
+      emptyTitle: "\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u53D7\u4FE1\u3092\u5F85\u3063\u3066\u3044\u307E\u3059",
+      emptyHint: "1\u79D2\u5358\u4F4D\u30FB\u76F4\u8FD160\u79D2\u306E\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u307E\u3059",
+      title: boolean ? "\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u592760\u79D2\uFF09\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u592760\u79D2\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`
     });
-    startLabel.textContent = windowStart === sessionStartedAt ? "\u958B\u59CB" : "5\u5206\u524D";
-    const endLabel = addSVG2(svg, "text", {
-      x: width - right,
-      y: height - 7,
-      "text-anchor": "end",
-      class: "live-chart-axis-label"
-    });
-    endLabel.textContent = "\u73FE\u5728";
-    let path = "";
-    points.forEach((point, index) => {
-      const pointX = x(point.bucket_start).toFixed(2);
-      const pointY = y(boolean ? point.average >= 0.5 ? 1 : 0 : point.average).toFixed(2);
-      if (index === 0) path = `M ${pointX} ${pointY}`;
-      else if (boolean) path += ` H ${pointX} V ${pointY}`;
-      else path += ` L ${pointX} ${pointY}`;
-    });
-    addSVG2(svg, "path", { d: path, class: "live-chart-line" });
-    const latest = points.at(-1);
-    const latestX = x(
-      payload.latest_received_at !== null && payload.latest_received_at >= windowStart ? payload.latest_received_at : latest.bucket_start
-    );
-    const latestY = y(boolean ? latest.average >= 0.5 ? 1 : 0 : latest.average);
-    addSVG2(svg, "line", {
-      x1: latestX,
-      x2: latestX,
-      y1: latestY,
-      y2: top + plotHeight,
-      class: "live-chart-latest-guide"
-    });
-    addSVG2(svg, "circle", {
-      cx: latestX,
-      cy: latestY,
-      r: 4,
-      class: "live-chart-latest-point"
-    });
-    const latestLabel = addSVG2(svg, "text", {
-      x: latestX + (latestX > width - 82 ? -7 : 7),
-      y: Math.max(top + 10, latestY - 7),
-      "text-anchor": latestX > width - 82 ? "end" : "start",
-      class: "live-chart-latest-label"
-    });
-    latestLabel.textContent = "\u6700\u7D42\u30C7\u30FC\u30BF";
-    const title = addSVG2(svg, "title", {});
-    title.textContent = boolean ? "\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
-    return points.length;
   }
   function setStatus(card, label, className) {
     const status = query("[data-live-status]", card);
@@ -1618,7 +2113,7 @@
       }
     }
     if (summary) {
-      summary.textContent = boolean ? `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u958B\u59CB\u304B\u3089\u73FE\u5728\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306FON/OFF\u3067\u3059\u3002` : `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u6A2A\u8EF8\u306F\u958B\u59CB\u304B\u3089\u73FE\u5728\uFF08\u6700\u59275\u5206\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
+      summary.textContent = boolean ? `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u30021\u79D2\u5358\u4F4D\u30FB\u76F4\u8FD160\u79D2\u3001\u7E26\u8EF8\u306FON/OFF\u3067\u3059\u3002` : `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u30021\u79D2\u5358\u4F4D\u30FB\u76F4\u8FD160\u79D2\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
     }
   }
   function activeCards(dashboard) {

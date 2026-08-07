@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 11
+revision: 19
 ---
 
 # IoTKit Edge installation and recovery
@@ -79,9 +79,8 @@ fallback.
   its chart. The chart contains only results received after the operator opened the page.
   Multiple active rules for one signal become
   separate cards; a signal without a rule shows configuration guidance. Numeric charts retain the
-  latest 60 five-second buckets; boolean and alarm charts derive the latest 10 state changes from
-  five-second buckets.
-  The view becomes a rolling window after five minutes. Until a post-open processed value arrives,
+  latest 60 one-second buckets; boolean and alarm charts derive the latest 10 state changes from
+  those one-second buckets. The chart covers the recent 60 seconds at most. Until a post-open processed value arrives,
   the chart stays empty and says that it is waiting, even when a prior processed current value is
   available. Each card links to sensor detail. The browser
   refreshes at most 12 cards in the visible region every five seconds, and only while the document
@@ -91,9 +90,23 @@ fallback.
   have never produced data and marks five minutes without a new result as **Check**, not as proof
   of a stopped device. Use **Reception history** for raw and past data. Investigate Check at the
   sensor, adapter, Edge Node, broker, IoTKit Edge, then semantic projection—in that order.
+  Live and sensor-detail **real-signal** chart axes use semantic observed/event time when it is
+  available; the latest receipt/current freshness remains the IoTKit Edge raw receipt time.
+  The real-signal preview uses the same recent 60-second, one-second chart buckets while
+  evaluating its bounded input history so boolean and cumulative results retain their state.
+  For cumulative rules, the result card shows the persisted current total. The real-signal preview
+  labels the hypothetical last-60-second delta and remains a recent-60-second chart. An existing
+  rule also shows a separate persisted cumulative staircase after that selected saved rule becomes
+  active. It records saved-current changes and keeps only the latest 60 displayed points after
+  display starts; when a 61st point arrives, the oldest displayed point falls away. It does not
+  discard session changes merely because they leave a rolling 60-second history request; a draft
+  says accumulation starts after save. Each stair samples the persisted current state in
+  persistence order, not an observed-time bucket or bucket average. A successful session with no
+  captured saved point is shown as no saved change since display started, while a failed history
+  request is shown as unavailable.
 - **Reception history**: filter sensor, Edge Node, and period on one screen, then inspect
-  the bounded graph and recent raw rows that match the selected sensor. The graph's horizontal
-  axis shows the actual reception timestamps in the display time zone, and its vertical axis shows
+  the bounded graph and recent raw rows that match the selected sensor. The raw graph's horizontal
+  axis shows IoTKit Edge receipt timestamps in the display time zone, and its vertical axis shows
   the value range and sensor unit. CSV with the same filter exports generic observations and is not
   a business report.
 - **Output**: active purpose-bound routes. Pending output is not deleted until

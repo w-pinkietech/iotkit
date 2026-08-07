@@ -299,13 +299,6 @@ tr.selected-route td { background: var(--teal-soft); }
 .live-current > span { color: var(--muted); font-size: .7rem; font-weight: 650; }
 .live-current > strong { grid-row: 1 / 3; grid-column: 2; color: var(--ink); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 1.45rem; font-weight: 500; line-height: 1.1; }
 .live-chart { display: block; width: calc(100% - 24px); height: auto; margin: 0 12px; }
-.live-chart-grid { stroke: #dfe5e7; stroke-width: 1; }
-.live-chart-axis-label { fill: var(--muted); font-size: 9px; }
-.live-chart-line { fill: none; stroke: var(--teal-dark); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
-.live-chart-latest-guide { stroke: var(--teal-dark); stroke-width: 1; stroke-dasharray: 3 3; opacity: .5; }
-.live-chart-latest-point { fill: var(--paper); stroke: var(--teal-dark); stroke-width: 2.5; }
-.live-chart-latest-label { fill: var(--teal-dark); font-size: 9px; font-weight: 700; }
-.live-chart-empty { fill: var(--muted); font-size: 11px; }
 .live-signal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 18px 14px; border-top: 1px solid var(--line); font-size: .73rem; }
 .live-signal-card > footer > span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .live-signal-card > footer a { flex: 0 0 auto; font-weight: 700; text-decoration: none; }
@@ -728,6 +721,9 @@ tr.selected-route td { background: var(--teal-soft); }
   border-radius: var(--radius);
   background: var(--canvas);
 }
+.preview-rule-select { display: grid; gap: .35rem; }
+.preview-rule-select > span { color: var(--muted); font-size: .7rem; font-weight: 650; }
+.preview-rule-select > select { width: 100%; }
 .preview-rule-result dl {
   display: grid;
   gap: .35rem;
@@ -771,6 +767,7 @@ tr.selected-route td { background: var(--teal-soft); }
 .simulation-summary span { color: var(--muted); font-size: .78rem; text-align: right; }
 .simulation-chart-wrap { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(180deg, #fbfdfd 0%, #f7f9f9 100%); }
 .simulation-chart-wrap svg { display: block; width: 100%; height: auto; min-height: 190px; max-height: 235px; font-family: "JetBrains Mono", ui-monospace, monospace; }
+.simulation-counter { display: grid; gap: 8px; margin-top: 12px; }
 .chart-grid { stroke: #dfe5e7; stroke-width: 1; }
 .chart-axis-label { fill: #667085; font-size: 13px; }
 .chart-empty-title { fill: var(--ink-soft); font-family: inherit; font-size: 14px; font-weight: 700; }
@@ -780,14 +777,12 @@ tr.selected-route td { background: var(--teal-soft); }
 .chart-line { fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .chart-line-raw { stroke: #667085; stroke-width: 1.7; }
 .chart-line-result { stroke: var(--teal-dark); stroke-width: 2.5; }
-.chart-line-counter { stroke: #075c61; stroke-width: 2; stroke-dasharray: 4 3; }
+.chart-latest-guide { stroke: var(--teal-dark); stroke-width: 1; stroke-dasharray: 3 3; opacity: .5; vector-effect: non-scaling-stroke; }
 .chart-latest-point { fill: #fff; stroke: var(--teal-dark); stroke-width: 3; vector-effect: non-scaling-stroke; }
 .chart-latest-label { fill: var(--teal-dark); font-family: inherit; font-size: 11px; font-weight: 700; }
-.chart-counter-label { fill: #075c61; font-family: inherit; font-size: 12px; font-weight: 700; }
 .chart-threshold { stroke: #9a4b08; stroke-width: 1.7; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
 .chart-threshold-label { fill: #9a4b08; font-family: inherit; font-size: 12px; font-weight: 650; }
 .chart-active-band { fill: var(--teal); }
-.chart-increment { fill: var(--teal-dark); opacity: .7; }
 .simulation-legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 10px 2px 0; color: var(--ink-soft); font-size: .8rem; }
 .simulation-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .simulation-legend i { display: inline-block; width: 20px; height: 3px; border-radius: 2px; }
@@ -795,17 +790,8 @@ tr.selected-route td { background: var(--teal-soft); }
 .simulation-legend .legend-result { background: var(--teal-dark); }
 .simulation-legend .legend-threshold { height: 0; border-top: 2px dashed #9a4b08; border-radius: 0; background: transparent; }
 .simulation-message { min-height: 1.4em; margin: 8px 0 0; color: var(--ink-soft); font-size: .78rem; }
-.simulation-test { margin-top: 8px; border-top: 1px solid var(--line); }
-.simulation-test > summary { padding: 10px 2px 2px; color: var(--teal-dark); font-size: .78rem; font-weight: 700; cursor: pointer; }
-.simulation-test-fields { display: grid; grid-template-columns: minmax(160px, .42fr) 1fr; align-items: end; gap: 12px; padding-top: 10px; }
-.simulation-test label { margin: 0; }
-.simulation-test label span,
-.simulation-test-fields > div > span { display: block; margin-bottom: 5px; color: var(--teal-dark); font-size: .78rem; font-weight: 700; }
-.simulation-test input { background: var(--surface); }
 .semantic-form [aria-invalid="true"] { border-color: #c73f2f; box-shadow: 0 0 0 3px rgba(199, 63, 47, .12); }
 .field-error { display: block; margin-top: 2px; color: var(--danger); font-size: .78rem; font-weight: 600; }
-.simulation-test-fields > div { min-width: 0; padding-bottom: 10px; }
-.simulation-test-fields > div strong { display: block; overflow-wrap: anywhere; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .88rem; }
 .sensor-detail-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; margin: 0; border: 1px solid var(--line); border-radius: 8px; }
 .sensor-detail-facts > div { min-width: 0; padding: 13px 15px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); background: #fafafa; }
 .sensor-detail-facts > div:nth-child(-n+3) { border-top: 0; }
@@ -1141,8 +1127,8 @@ tr.selected-route td { background: var(--teal-soft); }
   .sensor-setting-workspace {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "controls"
-      "preview";
+      "preview"
+      "controls";
   }
   .sensor-setting-workspace--detail {
     grid-template-areas:
@@ -1228,8 +1214,6 @@ tr.selected-route td { background: var(--teal-soft); }
   .sensor-detail-header { align-items: flex-start; flex-direction: column; gap: 12px; }
   .sensor-detail-header-side { width: 100%; align-items: flex-start; justify-content: space-between; }
   .sensor-detail-latest { text-align: left; }
-  .simulation-test-fields { grid-template-columns: 1fr; align-items: stretch; }
-  .simulation-test-fields > div { padding-bottom: 0; }
   .sensor-detail-settings { grid-template-columns: 1fr; }
   .sensor-summary-facts,
   .sensor-summary-rules { grid-template-columns: 1fr; }

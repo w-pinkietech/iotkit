@@ -158,6 +158,8 @@ export interface components {
             minimum: number;
             average: number;
             maximum: number;
+            /** @description For rule_id series, the exact last persisted processed state in this bucket, ordered by observation persistence rather than by the aggregate average. Omitted for signal_ref series. */
+            last_value?: number;
             /** Format: int64 */
             sample_count: number;
         };
@@ -288,6 +290,8 @@ export interface components {
         PreviewPoint: {
             /** Format: int64 */
             received_at: number;
+            /** Format: int64 */
+            plot_at?: number;
             input: number;
             input_min: number;
             input_max: number;
@@ -316,6 +320,7 @@ export interface components {
             input_count: number;
             plot_count: number;
             points: components["schemas"]["PreviewPoint"][] | null;
+            latest_point?: components["schemas"]["PreviewPoint"];
             test_result?: components["schemas"]["PreviewResult"];
             /** Format: int64 */
             window_start?: number;

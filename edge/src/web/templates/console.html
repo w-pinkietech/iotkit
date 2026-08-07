@@ -138,7 +138,7 @@
         <div>
           <p class="section-kicker">REAL TIME</p>
           <h2>計測結果をまとめて確認</h2>
-          <p>有効な計測ルールごとに、この画面を開いてから届く結果を5秒ごとにグラフへ追加します。表示領域内から最大12件を同時に自動更新します。</p>
+          <p>有効な計測ルールごとに、この画面を開いてから届く結果を1秒単位・直近60秒のグラフで確認します。5秒ごとに更新し、表示領域内から最大12件を同時に自動更新します。</p>
         </div>
         <span class="live-dashboard-state" data-live-dashboard-state aria-live="polite">更新を準備中</span>
       </section>
@@ -155,7 +155,7 @@
             <strong data-live-value>—</strong>
             <span data-live-received>計測結果を確認中</span>
           </div>
-          <svg class="live-chart" data-live-chart viewBox="0 0 360 160" role="img" aria-label="{{ rule.display_name }}を画面開始後に計測した結果"></svg>
+          <svg class="live-chart" data-live-chart viewBox="0 0 360 160" role="img" aria-label="{{ rule.display_name }}の画面開始後直近60秒の計測結果（1秒単位）"></svg>
           <p class="sr-only" data-live-summary>計測結果を確認中です。</p>
           <footer><span>{{ signal.edge_node_id }}</span><a href="/sensors/{{ signal.signal_ref }}">詳細を見る <span aria-hidden="true">→</span></a></footer>
         </article>
@@ -238,12 +238,18 @@
                 <p class="section-kicker">SELECTED RULE</p>
                 <h3 id="preview-rule-result-title">選択中ルールの結果</h3>
               </div>
+              <label class="preview-rule-select">
+                <span>プレビューするルール</span>
+                <select data-preview-rule-select disabled>
+                  <option value="" selected disabled>選択できるルールなし</option>
+                </select>
+              </label>
               <dl>
                 <div><dt>ルール</dt><dd data-preview-rule-name>選択中のルールはありません</dd></div>
                 <div><dt>種類</dt><dd data-preview-rule-kind>—</dd></div>
               </dl>
               <strong data-preview-rule-value>—</strong>
-              <p data-preview-rule-detail>ルールを開くと判定結果を確認できます。</p>
+              <p data-preview-rule-detail>ルールを選択すると判定結果を確認できます。</p>
             </section>
             <div class="simulation-summary">
               <strong data-preview-range>受信データを読み込んでいます</strong>
@@ -254,6 +260,12 @@
                 <text x="380" y="130" text-anchor="middle">受信データを読み込んでいます</text>
               </svg>
             </div>
+            <section class="simulation-counter" data-preview-counter hidden aria-labelledby="sensor-preview-counter-title">
+              <div class="simulation-summary"><strong id="sensor-preview-counter-title" data-preview-counter-label>保存済み累積値</strong><span id="sensor-preview-counter-summary" data-preview-counter-summary>保存済み履歴を読み込んでいます。</span></div>
+              <div class="simulation-chart-wrap">
+                <svg data-preview-counter-chart viewBox="0 0 360 160" role="img" aria-label="保存済み累積値の推移" aria-describedby="sensor-preview-counter-summary"></svg>
+              </div>
+            </section>
             <p class="sr-only" id="sensor-preview-chart-summary" data-preview-accessible-summary>受信データを読み込んでいます。</p>
             <div class="simulation-legend" aria-label="グラフの凡例">
               <span><i class="legend-raw"></i>受信値</span>
@@ -261,15 +273,6 @@
               <span data-preview-threshold-legend hidden><i class="legend-threshold"></i>立上り・立下り</span>
             </div>
             <p class="simulation-message" data-preview-message role="status">読み込み中です。</p>
-            {% if is_admin %}
-            <details class="simulation-test">
-              <summary>値を指定して結果を確認</summary>
-              <div class="simulation-test-fields">
-                <label><span>試す値</span><input name="preview_test_value" type="number" step="any" inputmode="decimal" placeholder="例：28.5"></label>
-                <div><span>この値なら</span><strong data-preview-test-result>値を入力すると結果を確認できます</strong></div>
-              </div>
-            </details>
-            {% endif %}
           </section>
         </aside>
         <div class="sensor-detail-settings sensor-setting-controls">

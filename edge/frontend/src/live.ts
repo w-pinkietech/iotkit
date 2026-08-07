@@ -1,26 +1,13 @@
 import { getHistorySeries, type HistorySeries } from "./api";
 import { query, queryAll } from "./dom";
+import { renderSignalChart, type SignalChartPoint } from "./signal-chart";
 
 const REFRESH_MS = 5 * 1_000;
-const SESSION_WINDOW_MS = 5 * 60 * 1_000;
-const BUCKET_MS = REFRESH_MS;
+const SESSION_WINDOW_MS = 60 * 1_000;
+const BUCKET_MS = 1_000;
 const MAX_NUMERIC_POINTS = 60;
 const MAX_BOOLEAN_POINTS = 10;
 const MAX_ACTIVE_CARDS = 12;
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-function addSVG<K extends keyof SVGElementTagNameMap>(
-  svg: SVGSVGElement,
-  tag: K,
-  attributes: Record<string, string | number>,
-): SVGElementTagNameMap[K] {
-  const element = document.createElementNS(SVG_NS, tag);
-  for (const [name, value] of Object.entries(attributes)) {
-    element.setAttribute(name, String(value));
-  }
-  svg.append(element);
-  return element;
-}
 
 function formatNumber(value: number, decimalPlaces = 1): string {
   return value.toLocaleString("ja-JP", {
@@ -42,17 +29,6 @@ function relativeTime(receivedAt: number, now: number): string {
     return `${minutes}分${seconds}秒前`;
   }
   return `${Math.floor(elapsed / (60 * 60_000))}時間前`;
-}
-
-function renderEmpty(svg: SVGSVGElement): void {
-  svg.replaceChildren();
-  const label = addSVG(svg, "text", {
-    x: 180,
-    y: 82,
-    "text-anchor": "middle",
-    class: "live-chart-empty",
-  });
-  label.textContent = "この画面を開いてからの受信を待っています";
 }
 
 function sessionPoints(
@@ -84,115 +60,38 @@ function renderChart(
   now: number,
   sessionStartedAt: number,
 ): number {
-  svg.replaceChildren();
   const windowStart = Math.max(sessionStartedAt, now - SESSION_WINDOW_MS);
   const points = sessionPoints(payload, boolean, windowStart);
-  if (!points.length) {
-    renderEmpty(svg);
-    return 0;
-  }
-  const width = 360;
-  const height = 160;
-  const left = 42;
-  const right = 12;
-  const top = 12;
-  const bottom = 28;
-  const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
-  const windowEnd = Math.max(now, windowStart + REFRESH_MS);
-  const x = (time: number): number =>
-    left +
-    Math.max(0, Math.min(1, (time - windowStart) / (windowEnd - windowStart))) * plotWidth;
-  const sourceValues = points.flatMap((point) => [point.minimum, point.maximum]);
-  let minimum = boolean ? 0 : Math.min(...sourceValues);
-  let maximum = boolean ? 1 : Math.max(...sourceValues);
-  if (!boolean) {
-    const padding = minimum === maximum
-      ? Math.max(1, Math.abs(minimum) * 0.1)
-      : (maximum - minimum) * 0.08;
-    minimum -= padding;
-    maximum += padding;
-  }
-  const y = (value: number): number =>
-    top + ((maximum - value) * plotHeight) / (maximum - minimum);
-
-  for (const ratio of [0, 0.5, 1]) {
-    const gridY = top + ratio * plotHeight;
-    addSVG(svg, "line", {
-      x1: left,
-      x2: width - right,
-      y1: gridY,
-      y2: gridY,
-      class: "live-chart-grid",
-    });
-  }
-  for (const [value, label] of boolean
-    ? [[1, "ON"], [0, "OFF"]] as Array<[number, string]>
-    : [[maximum, formatNumber(maximum)], [minimum, formatNumber(minimum)]] as Array<[number, string]>) {
-    const text = addSVG(svg, "text", {
-      x: left - 7,
-      y: y(value) + 4,
-      "text-anchor": "end",
-      class: "live-chart-axis-label",
-    });
-    text.textContent = label;
-  }
-  const startLabel = addSVG(svg, "text", {
-    x: left,
-    y: height - 7,
-    "text-anchor": "start",
-    class: "live-chart-axis-label",
+  const chartPoints: SignalChartPoint[] = points.map((point) => ({
+    at: point.bucket_start,
+    value: point.average,
+    minimum: point.minimum,
+    maximum: point.maximum,
+    sampleCount: point.sample_count,
+  }));
+  return renderSignalChart(svg, {
+    points: chartPoints,
+    geometry: "compact",
+    unit,
+    boolean,
+    startAt: windowStart,
+    endAt: Math.max(now, windowStart + 1_000),
+    latestAt:
+      payload.latest_received_at !== null &&
+      payload.latest_received_at >= windowStart
+        ? payload.latest_received_at
+        : points.at(-1)?.bucket_start,
+    showLatestMarker: true,
+    axisLabels: {
+      start: windowStart === sessionStartedAt ? "開始" : "60秒前",
+      end: "現在",
+    },
+    emptyTitle: "この画面を開いてからの受信を待っています",
+    emptyHint: "1秒単位・直近60秒のデータを表示します",
+    title: boolean
+      ? "横軸はこの画面を開いてから（最大60秒）、縦軸は接点のON/OFFです。"
+      : `横軸はこの画面を開いてから（最大60秒）、縦軸は値${unit ? `（${unit}）` : ""}です。`,
   });
-  startLabel.textContent = windowStart === sessionStartedAt ? "開始" : "5分前";
-  const endLabel = addSVG(svg, "text", {
-    x: width - right,
-    y: height - 7,
-    "text-anchor": "end",
-    class: "live-chart-axis-label",
-  });
-  endLabel.textContent = "現在";
-
-  let path = "";
-  points.forEach((point, index) => {
-    const pointX = x(point.bucket_start).toFixed(2);
-    const pointY = y(boolean ? (point.average >= 0.5 ? 1 : 0) : point.average).toFixed(2);
-    if (index === 0) path = `M ${pointX} ${pointY}`;
-    else if (boolean) path += ` H ${pointX} V ${pointY}`;
-    else path += ` L ${pointX} ${pointY}`;
-  });
-  addSVG(svg, "path", { d: path, class: "live-chart-line" });
-  const latest = points.at(-1)!;
-  const latestX = x(
-    payload.latest_received_at !== null && payload.latest_received_at >= windowStart
-      ? payload.latest_received_at
-      : latest.bucket_start,
-  );
-  const latestY = y(boolean ? (latest.average >= 0.5 ? 1 : 0) : latest.average);
-  addSVG(svg, "line", {
-    x1: latestX,
-    x2: latestX,
-    y1: latestY,
-    y2: top + plotHeight,
-    class: "live-chart-latest-guide",
-  });
-  addSVG(svg, "circle", {
-    cx: latestX,
-    cy: latestY,
-    r: 4,
-    class: "live-chart-latest-point",
-  });
-  const latestLabel = addSVG(svg, "text", {
-    x: latestX + (latestX > width - 82 ? -7 : 7),
-    y: Math.max(top + 10, latestY - 7),
-    "text-anchor": latestX > width - 82 ? "end" : "start",
-    class: "live-chart-latest-label",
-  });
-  latestLabel.textContent = "最終データ";
-  const title = addSVG(svg, "title", {});
-  title.textContent = boolean
-    ? "横軸はこの画面を開いてから（最大5分）、縦軸は接点のON/OFFです。"
-    : `横軸はこの画面を開いてから（最大5分）、縦軸は値${unit ? `（${unit}）` : ""}です。`;
-  return points.length;
 }
 
 function setStatus(card: HTMLElement, label: string, className: string): void {
@@ -265,8 +164,8 @@ function renderCard(
   }
   if (summary) {
     summary.textContent = boolean
-      ? `この画面を開いてから${pointCount}件を表示しています。横軸は開始から現在（最大5分）、縦軸はON/OFFです。`
-      : `この画面を開いてから${pointCount}件を表示しています。横軸は開始から現在（最大5分）、縦軸は値${unit ? `（${unit}）` : ""}です。`;
+      ? `この画面を開いてから${pointCount}件を表示しています。1秒単位・直近60秒、縦軸はON/OFFです。`
+      : `この画面を開いてから${pointCount}件を表示しています。1秒単位・直近60秒、縦軸は値${unit ? `（${unit}）` : ""}です。`;
   }
 }
 

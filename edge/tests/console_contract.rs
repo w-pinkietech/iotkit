@@ -297,6 +297,36 @@ async fn static_assets_are_served_from_the_existing_frontend_build() {
 }
 
 #[tokio::test]
+async fn narrow_sensor_settings_show_preview_before_controls() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
+    let response = app
+        .oneshot(
+            Request::get("/static/edge.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let css = String::from_utf8(
+        to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let narrow = css
+        .split("@media (max-width: 1100px)")
+        .nth(1)
+        .and_then(|section| section.split("@media (max-width: 960px)").next())
+        .unwrap();
+
+    assert!(narrow.contains(
+        ".sensor-setting-workspace {\n    grid-template-columns: 1fr;\n    grid-template-areas:\n      \"preview\"\n      \"controls\";\n  }"
+    ));
+}
+
+#[tokio::test]
 async fn console_redirects_anonymous_users_and_preserves_shell_hooks() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
     let anonymous = app
@@ -421,6 +451,10 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"data-signal-profile"#,
                 r#"id="rule-create""#,
                 r#"data-preview-chart"#,
+                r#"aria-describedby="sensor-preview-chart-summary""#,
+                r#"id="sensor-preview-chart-summary" data-preview-accessible-summary"#,
+                r#"<span id="sensor-preview-counter-summary" data-preview-counter-summary>"#,
+                r#"aria-describedby="sensor-preview-counter-summary""#,
                 r#"data-preview-feed-state"#,
                 r#"data-preview-checked-at"#,
                 "Edge Nodeから届いた実データ",
@@ -1107,10 +1141,24 @@ async fn sensor_rule_creation_and_preview_targets_are_scoped_by_tab() {
     .unwrap();
 
     assert!(html.contains("data-preview-rule-result"));
+    assert!(html.contains("data-preview-rule-select"));
+    assert!(html.contains("プレビューするルール"));
+    assert!(html.contains("選択できるルールなし"));
     assert!(html.contains("data-preview-rule-name"));
     assert!(html.contains("data-preview-rule-kind"));
     assert!(html.contains("data-preview-rule-value"));
     assert!(html.contains("data-preview-rule-detail"));
+    for forbidden in [
+        "値を指定して結果を確認",
+        "simulation-test",
+        "preview_test_value",
+        "data-preview-test-result",
+    ] {
+        assert!(
+            !html.contains(forbidden),
+            "manual preview test UI must stay removed: {forbidden}"
+        );
+    }
 
     let normal_start = html.find(r#"id="setting-panel-normal""#).unwrap();
     let alarm_start = html.find(r#"id="setting-panel-alarm""#).unwrap();

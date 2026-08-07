@@ -120,6 +120,7 @@ function isHistorySeries(value: unknown): value is HistorySeries {
         typeof point.minimum === "number" &&
         typeof point.average === "number" &&
         typeof point.maximum === "number" &&
+        (!("last_value" in point) || typeof point.last_value === "number") &&
         typeof point.sample_count === "number",
     )
   );

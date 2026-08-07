@@ -143,7 +143,10 @@ describe("live dashboard", () => {
     expect(firstRequest.searchParams.get("from")).toBe("1700000005000");
     expect(firstRequest.searchParams.get("rule_id")).toBe("rule-temperature-01");
     expect(firstRequest.searchParams.has("signal_ref")).toBe(false);
-    expect(firstRequest.searchParams.get("bucket_ms")).toBe("5000");
+    expect(firstRequest.searchParams.get("bucket_ms")).toBe("1000");
+    expect(Number(firstRequest.searchParams.get("to"))).toBeLessThanOrEqual(
+      1_700_000_005_001,
+    );
 
     await vi.advanceTimersByTimeAsync(5_000);
 
@@ -449,7 +452,7 @@ describe("live dashboard", () => {
           .get("rule_id")!.replace("rule-", "");
         const boolean = signalRef === "contact-01";
         const points = Array.from({ length: 65 }, (_, index) => ({
-          bucket_start: sessionStart + index * 5_000,
+          bucket_start: sessionStart + index * 1_000,
           minimum: boolean ? index % 2 : index,
           average: boolean ? index % 2 : index,
           maximum: boolean ? index % 2 : index,

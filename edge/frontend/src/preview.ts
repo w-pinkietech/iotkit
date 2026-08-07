@@ -1,6 +1,8 @@
 import type { components } from "./generated/edge-api";
 import {
   createMappingPreview,
+  getHistorySeries,
+  type HistorySeries,
   type MappingPreviewRequest,
   type MappingPreviewResponse,
 } from "./api";
@@ -16,6 +18,7 @@ import {
   ruleSpec,
   type SemanticKind,
 } from "./semantic";
+import { renderSignalChart } from "./signal-chart";
 
 type PreviewBody = components["schemas"]["PreviewBody"];
 type PreviewPoint = components["schemas"]["PreviewPoint"];
@@ -32,27 +35,41 @@ interface RuleOutcome {
   alarm: boolean;
 }
 
+type CounterHistory =
+  | { status: "pending" }
+  | { status: "available"; value: HistorySeries }
+  | { status: "unavailable" };
+
+interface CounterPreviewState {
+  persisted: boolean;
+  history?: CounterHistory;
+  session?: CounterHistorySession;
+}
+
+interface CounterHistorySessionPoint {
+  at: number;
+  value: number;
+  minimum: number;
+  maximum: number;
+  sampleCount: number;
+}
+
+interface CounterHistorySession {
+  startedAt: number;
+  baselineCaptured: boolean;
+  points: CounterHistorySessionPoint[];
+}
+
+const COUNTER_WINDOW_MS = 60_000;
+const COUNTER_BUCKET_MS = 1_000;
+const COUNTER_SESSION_MAX_POINTS = 60;
+
 const kindLabels: Record<SemanticKind, string> = {
   numeric: "測定値",
   boolean: "ON / OFF",
   cumulative_counter: "累積値",
   alarm: "異常検知",
 };
-
-const svgNamespace = "http://www.w3.org/2000/svg";
-
-function addSVG<K extends keyof SVGElementTagNameMap>(
-  parent: SVGElement,
-  name: K,
-  attributes: Record<string, string | number> = {},
-): SVGElementTagNameMap[K] {
-  const element = document.createElementNS(svgNamespace, name);
-  for (const [key, value] of Object.entries(attributes)) {
-    element.setAttribute(key, String(value));
-  }
-  parent.appendChild(element);
-  return element;
-}
 
 function isFiniteNumber(value: unknown): value is number {
   return Number.isFinite(Number(value));
@@ -134,11 +151,281 @@ function kindLabel(kind: SemanticKind): string {
   return kindLabels[kind];
 }
 
+function pointPlotAt(point: PreviewPoint): number {
+  return isFiniteNumber(point.plot_at) ? Number(point.plot_at) : point.received_at;
+}
+
+function latestPreviewPoint(payload: PreviewBody): PreviewPoint | undefined {
+  return payload.latest_point ?? payload.points?.at(-1) ?? undefined;
+}
+
+function hasMeaningfulResult(points: PreviewPoint[]): boolean {
+  const epsilon = 1e-9;
+  return points.some(
+    (point) =>
+      Math.abs(point.calibrated - point.input) > epsilon ||
+      Math.abs(point.calibrated_min - point.input_min) > epsilon ||
+      Math.abs(point.calibrated_max - point.input_max) > epsilon,
+  );
+}
+
+function counterWindowDelta(payload: PreviewBody): number {
+  const points = payload.points ?? [];
+  const window = previewWindow(payload, points);
+  return points.reduce((total, point) => {
+    const at = pointPlotAt(point);
+    if (at < window.start || at > window.end) return total;
+    return total + Math.max(0, Number(point.increment ?? 0));
+  }, 0);
+}
+
+function persistedCounterRuleID(
+  forms: HTMLFormElement[],
+  activeID: string | undefined,
+  selected: SemanticRulePreview | null,
+): string | undefined {
+  if (!selected || selected.kind !== "cumulative_counter" || !activeID) {
+    return undefined;
+  }
+  return counterRuleIDForActiveForm(forms, activeID);
+}
+
+function counterRuleIDForActiveForm(
+  forms: HTMLFormElement[],
+  activeID: string | undefined,
+): string | undefined {
+  const form = forms.find((candidate) => candidate.dataset.previewId === activeID);
+  return form?.dataset.ruleId && formField(form, "kind")?.value === "cumulative_counter"
+    ? form.dataset.ruleId
+    : undefined;
+}
+
+async function loadCounterHistory(
+  ruleID: string,
+  signal: AbortSignal,
+): Promise<CounterHistory> {
+  const end = Date.now();
+  try {
+    const result = await getHistorySeries(
+      ruleID,
+      end - COUNTER_WINDOW_MS,
+      end,
+      COUNTER_BUCKET_MS,
+      signal,
+    );
+    return result.ok
+      ? { status: "available", value: result.value }
+      : { status: "unavailable" };
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
+    return { status: "unavailable" };
+  }
+}
+
+function availableCounterHistory(
+  state: CounterPreviewState,
+): HistorySeries | undefined {
+  return state.history?.status === "available" ? state.history.value : undefined;
+}
+
+function latestHistoryValue(history: HistorySeries | undefined): number | undefined {
+  return history &&
+    typeof history.latest_value === "number" &&
+    Number.isFinite(history.latest_value)
+    ? Number(history.latest_value)
+    : undefined;
+}
+
+function latestHistoryReceivedAt(history: HistorySeries): number | undefined {
+  return typeof history.latest_received_at === "number" &&
+    Number.isFinite(history.latest_received_at)
+    ? history.latest_received_at
+    : undefined;
+}
+
+function retainLatestHistory(
+  previous: HistorySeries | undefined,
+  next: HistorySeries,
+): HistorySeries {
+  if (
+    latestHistoryValue(next) !== undefined ||
+    previous === undefined ||
+    latestHistoryValue(previous) === undefined
+  ) {
+    return next;
+  }
+  return {
+    ...next,
+    latest_received_at: previous.latest_received_at,
+    latest_value: previous.latest_value,
+  };
+}
+
+function appendCounterSessionPoint(
+  points: CounterHistorySessionPoint[],
+  point: CounterHistorySessionPoint,
+): CounterHistorySessionPoint[] {
+  const previous = points.at(-1);
+  if (previous === undefined) return [point];
+  if (point.at < previous.at) return points;
+  if (point.at === previous.at) {
+    const replaced = [...points.slice(0, -1), point];
+    return replaced.length > 1 && replaced.at(-2)?.value === point.value
+      ? replaced.slice(0, -1)
+      : replaced;
+  }
+  if (point.value === previous.value) return points;
+  return [...points, point].slice(-COUNTER_SESSION_MAX_POINTS);
+}
+
+function counterCurrentPointAt(
+  session: CounterHistorySession,
+  latestReceivedAt: number | undefined,
+  capturedAt: number,
+): number {
+  const previousAt = session.points.at(-1)?.at;
+  const minimumAt = previousAt === undefined
+    ? session.startedAt
+    : previousAt + 1;
+  if (
+    latestReceivedAt !== undefined && latestReceivedAt >= minimumAt
+  ) {
+    return latestReceivedAt;
+  }
+  return Math.max(
+    Number.isFinite(capturedAt) ? capturedAt : minimumAt,
+    minimumAt,
+  );
+}
+
+function mergeCounterHistorySession(
+  session: CounterHistorySession,
+  history: HistorySeries,
+  capturedAt: number,
+): CounterHistorySession {
+  let baselineCaptured = session.baselineCaptured;
+  let points = session.points;
+  const latestValue = latestHistoryValue(history);
+  const latestReceivedAt = latestHistoryReceivedAt(history);
+  if (!baselineCaptured) {
+    baselineCaptured = true;
+    if (latestValue !== undefined) {
+      const at = latestReceivedAt !== undefined &&
+          latestReceivedAt >= session.startedAt
+        ? counterCurrentPointAt(session, latestReceivedAt, capturedAt)
+        : session.startedAt;
+      points = appendCounterSessionPoint(points, {
+        at,
+        value: latestValue,
+        minimum: latestValue,
+        maximum: latestValue,
+        sampleCount: 1,
+      });
+    }
+  }
+  if (
+    baselineCaptured &&
+    latestValue !== undefined &&
+    points.at(-1)?.value !== latestValue
+  ) {
+    const at = counterCurrentPointAt(
+      { ...session, points },
+      latestReceivedAt,
+      capturedAt,
+    );
+    points = appendCounterSessionPoint(points, {
+      at,
+      value: latestValue,
+      minimum: latestValue,
+      maximum: latestValue,
+      sampleCount: 1,
+    });
+  }
+  return { ...session, baselineCaptured, points };
+}
+
+function renderCounterHistoryChart(
+  svg: SVGSVGElement,
+  state: CounterPreviewState,
+): number {
+  if (state.history?.status !== "available") {
+    const unavailable = state.history?.status === "unavailable";
+    return renderSignalChart(svg, {
+      points: [],
+      geometry: "compact",
+      axisLabels: { start: "表示開始", end: "現在" },
+      emptyTitle: unavailable
+        ? "表示開始後の保存済み累積履歴を取得できません"
+        : "表示開始後の保存済み累積履歴を読み込んでいます",
+      emptyHint: unavailable
+        ? "接続を確認して、もう一度表示してください"
+        : "保存済みの結果を確認しています",
+      title: "横軸は表示開始後の時間、縦軸は保存済み累積値です。表示開始後の最新最大60点を示し、61点目から最古点を外します。",
+    });
+  }
+  const chartPoints = state.session?.points ?? [];
+  const startAt = chartPoints[0]?.at ?? state.session?.startedAt;
+  const endAt = chartPoints.at(-1)?.at ?? startAt;
+  return renderSignalChart(svg, {
+    points: chartPoints,
+    geometry: "compact",
+    rawStep: true,
+    ...(startAt === undefined ? {} : { startAt }),
+    ...(endAt === undefined ? {} : { endAt }),
+    showLatestMarker: chartPoints.length > 0,
+    ...(endAt === undefined ? {} : { latestAt: endAt }),
+    emptyTitle: "表示開始後の保存済み累積変化はありません",
+    emptyHint: "保存済みの意味結果が変化すると、表示開始後の最新最大60点を表示します",
+    title: "横軸は表示開始後の時間、縦軸は保存済み累積値です。表示開始後の最新最大60点を示し、61点目から最古点を外します。",
+  });
+}
+
+function counterSummaryText(
+  state: CounterPreviewState,
+  plottedCount: number,
+): string {
+  if (state.history?.status === "pending") {
+    return "表示開始後の保存済み累積履歴を読み込んでいます。";
+  }
+  if (state.history?.status === "unavailable") {
+    return "表示開始後の保存済み累積履歴を取得できません。";
+  }
+  const history = availableCounterHistory(state);
+  const latestValue = latestHistoryValue(history);
+  return latestValue === undefined
+    ? "表示開始後の保存済み累積変化はありません。"
+    : `${formatNumber(latestValue)}（保存済み、表示開始後の${plottedCount}点／最新最大60点）`;
+}
+
+function counterPreviewMessage(
+  state: CounterPreviewState,
+): string {
+  if (!state.persisted) return "保存後に累積開始。";
+  if (state.history?.status === "pending") {
+    return "表示開始後の保存済み累積値を読み込んでいます。";
+  }
+  if (state.history?.status === "unavailable") {
+    return "表示開始後の保存済み累積履歴を取得できません。";
+  }
+  return latestHistoryValue(availableCounterHistory(state)) === undefined
+    ? "表示開始後の保存済み累積変化はありません。"
+    : "保存済み累積値は表示開始後の変化グラフで確認できます。";
+}
+
+function counterHistorySignature(state: CounterPreviewState): string {
+  if (!state.history) return "none";
+  if (state.history.status !== "available") return state.history.status;
+  return JSON.stringify(state.session?.points ?? []);
+}
+
 function latestRuleOutcome(
   payload: PreviewBody,
   unit: string,
+  counterState: CounterPreviewState = { persisted: false },
 ): RuleOutcome {
-  const latest = payload.points?.at(-1);
+  const latest = latestPreviewPoint(payload);
   if (!latest) {
     return {
       value: "受信待ち",
@@ -154,14 +441,44 @@ function latestRuleOutcome(
         alarm: false,
       };
     case "cumulative_counter":
-      return {
-        value: `累積 ${formatNumber(latest.counter ?? 0)}`,
-        detail:
-          Number(latest.increment ?? 0) > 0
-            ? `今回 +${formatNumber(latest.increment)}`
-            : "今回の増分なし",
-        alarm: false,
-      };
+      {
+        const delta = counterWindowDelta(payload);
+        const history = availableCounterHistory(counterState);
+        const persistedTotal = latestHistoryValue(history);
+        if (counterState.persisted) {
+          if (counterState.history?.status === "pending") {
+            return {
+              value: "累積値を読み込み中",
+              detail: `保存済み累積値を確認しています。この設定なら直近60秒で +${formatNumber(delta)}`,
+              alarm: false,
+            };
+          }
+          if (counterState.history?.status === "unavailable") {
+            return {
+              value: "保存済み累積値を取得できません",
+              detail: `保存済み累積履歴を取得できません。この設定なら直近60秒で +${formatNumber(delta)}`,
+              alarm: false,
+            };
+          }
+          if (persistedTotal === undefined) {
+            return {
+              value: "表示開始後の保存済み累積変化はありません",
+              detail: `保存済みの意味結果が届くと累積値を表示します。この設定なら直近60秒で +${formatNumber(delta)}`,
+              alarm: false,
+            };
+          }
+          return {
+            value: `累積 ${formatNumber(persistedTotal)}`,
+            detail: `この設定なら直近60秒で +${formatNumber(delta)}`,
+            alarm: false,
+          };
+        }
+        return {
+          value: `直近60秒で +${formatNumber(delta)}`,
+          detail: "保存後に累積開始。保存済み累積値はここに表示されます。",
+          alarm: false,
+        };
+      }
     case "alarm":
       return {
         value: latest.active ? "異常" : "正常",
@@ -182,6 +499,7 @@ function renderRuleResult(
   selected: SemanticRulePreview | null,
   state: "ready" | "none" | "invalid" | "error",
   unit: string,
+  counterState?: CounterPreviewState,
 ): RuleOutcome | null {
   const container = query<HTMLElement>("[data-preview-rule-result]", panel);
   const name = query<HTMLElement>("[data-preview-rule-name]", panel);
@@ -206,7 +524,7 @@ function renderRuleResult(
       none: [
         "選択中のルールはありません",
         "—",
-        "ルールを開くと判定結果を確認できます。",
+        "保存済みルールを選択すると判定結果を確認できます。",
       ],
       invalid: [
         "設定内容を確認してください",
@@ -227,7 +545,7 @@ function renderRuleResult(
     return null;
   }
 
-  const outcome = latestRuleOutcome(selected, unit);
+  const outcome = latestRuleOutcome(selected, unit, counterState);
   setText(name, selected.display_name);
   setText(kind, kindLabel(selected.kind));
   setText(value, outcome.value);
@@ -238,7 +556,6 @@ function renderRuleResult(
 
 function clearAuxiliaryOutputs(
   summary: HTMLElement | null,
-  testResult: HTMLElement | null,
   state: "none" | "invalid" | "error",
 ): void {
   const messages = {
@@ -247,9 +564,6 @@ function clearAuxiliaryOutputs(
     error: "判定結果を更新できません。受信値はそのまま確認できます。",
   } as const;
   if (summary) setText(summary, messages[state]);
-  if (testResult) {
-    setText(testResult, "値を入力すると結果を確認できます");
-  }
 }
 
 function updateAccessibleSummary(
@@ -258,9 +572,10 @@ function updateAccessibleSummary(
   selected: SemanticRulePreview | null,
   outcome: RuleOutcome | null,
   unit: string,
+  plotPoints: PreviewPoint[] = raw.points ?? [],
 ): void {
   if (!summary) return;
-  const points = raw.points ?? [];
+  const points = plotPoints;
   if (selected?.error) {
     if (!points.length) {
       setText(
@@ -274,14 +589,15 @@ function updateAccessibleSummary(
       Number(point.input_min),
       Number(point.input_max),
     ]);
-    const count = raw.input_count ?? points.length;
+    const evaluatedCount = raw.input_count ?? points.length;
+    const bucketCount = points.length;
     setText(
       summary,
       `受信値は${formatNumber(Math.min(...inputs))}から` +
         `${formatNumber(Math.max(...inputs))}です。` +
         `選択中は${selected.display_name}、${kindLabel(selected.kind)}ですが、` +
         "判定結果を更新できません。受信値はそのまま確認できます。" +
-        `${count}件の受信データを表示しています。`,
+        `${evaluatedCount}件を評価し、直近60秒の${bucketCount}bucketを表示しています。`,
     );
     return;
   }
@@ -298,9 +614,13 @@ function updateAccessibleSummary(
     Number(point.input_min),
     Number(point.input_max),
   ]);
-  const count = raw.input_count ?? points.length;
+  const evaluatedCount = raw.input_count ?? points.length;
+  const bucketCount = points.length;
   const ruleText = selected && outcome
-    ? `選択中は${selected.display_name}、${kindLabel(selected.kind)}、現在は${outcome.value}です。`
+    ? selected.kind === "cumulative_counter"
+      ? `選択中は${selected.display_name}、${kindLabel(selected.kind)}、` +
+        `${outcome.value}です。${outcome.detail}`
+      : `選択中は${selected.display_name}、${kindLabel(selected.kind)}、現在は${outcome.value}です。`
     : "選択中のルールはありません。";
   const calibratedText =
     selected?.kind === "numeric" && outcome
@@ -309,7 +629,7 @@ function updateAccessibleSummary(
             Number(point.calibrated_min),
             Number(point.calibrated_max),
           ]);
-          const latest = points.at(-1);
+          const latest = latestPreviewPoint(selected);
           if (!latest || !calibrated.length) return "";
           return (
             `補正後は${formatNumber(Math.min(...calibrated))}から` +
@@ -322,7 +642,7 @@ function updateAccessibleSummary(
     summary,
     `受信値は${formatNumber(Math.min(...inputs))}から` +
       `${formatNumber(Math.max(...inputs))}です。${calibratedText}${ruleText}` +
-      `${count}件の受信データを表示しています。`,
+      `${evaluatedCount}件を評価し、直近60秒の${bucketCount}bucketを表示しています。`,
   );
 }
 
@@ -331,290 +651,64 @@ function previewWindow(
   points: PreviewPoint[],
 ): { start: number; end: number } {
   const now = Date.now();
+  const end = payload.window_end ?? (
+    points.at(-1) ? pointPlotAt(points.at(-1)!) : now
+  );
   return {
-    start: payload.window_start ?? points[0]?.received_at ?? now,
-    end: payload.window_end ?? points.at(-1)?.received_at ?? now,
+    start: payload.window_start ?? (points[0] ? pointPlotAt(points[0]) : end),
+    end,
   };
-}
-
-function renderEmptyChart(
-  svg: SVGSVGElement,
-  payload: PreviewBody,
-): void {
-  const title = addSVG(svg, "text", {
-    x: 380,
-    y: 122,
-    "text-anchor": "middle",
-    class: "chart-empty-title",
-  });
-  title.textContent = payload.error
-    ? "このルールでは受信値を判定できません"
-    : "まだ受信データがありません";
-  const hint = addSVG(svg, "text", {
-    x: 380,
-    y: 148,
-    "text-anchor": "middle",
-    class: "chart-empty-hint",
-  });
-  hint.textContent = payload.error
-    ? "入力値の補正と判定条件を確認してください"
-    : "試す値を入力して、設定結果を確認できます";
 }
 
 function renderPreviewChart(
   svg: SVGSVGElement,
   payload: PreviewBody,
   showSemanticOverlays: boolean,
-): void {
-  svg.replaceChildren();
+  unit: string,
+  rawBoolean: boolean,
+  showResult: boolean,
+): PreviewPoint[] {
   const points = payload.points ?? [];
-  const width = 760;
-  const height = 260;
-  const left = 58;
-  const right = 18;
-  const top = 18;
-  const bottom = 42;
-  const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
-  if (!points.length) {
-    renderEmptyChart(svg, payload);
-    return;
-  }
-
-  const values: number[] = [];
-  for (const point of points) {
-    const pointValues = showSemanticOverlays
-      ? [
-          point.input_min,
-          point.input_max,
-          point.calibrated_min,
-          point.calibrated_max,
-        ]
-      : [point.input_min, point.input_max];
-    for (const value of pointValues) {
-      if (isFiniteNumber(value)) values.push(Number(value));
-    }
-  }
-  if (showSemanticOverlays && isFiniteNumber(payload.rise_threshold)) {
-    values.push(payload.rise_threshold);
-  }
-  if (showSemanticOverlays && isFiniteNumber(payload.fall_threshold)) {
-    values.push(payload.fall_threshold);
-  }
-  let minValue = Math.min(...values);
-  let maxValue = Math.max(...values);
-  if (minValue === maxValue) {
-    const padding = Math.max(1, Math.abs(minValue) * 0.1);
-    minValue -= padding;
-    maxValue += padding;
-  } else {
-    const padding = (maxValue - minValue) * 0.08;
-    minValue -= padding;
-    maxValue += padding;
-  }
-
-  const firstReceivedAt = points[0].received_at;
-  const lastReceivedAt = points.at(-1)?.received_at ?? firstReceivedAt;
-  const x = (index: number): number => {
-    if (points.length === 1) return left + plotWidth / 2;
-    const point = points[index];
-    if (lastReceivedAt > firstReceivedAt) {
-      return (
-        left +
-        ((point.received_at - firstReceivedAt) * plotWidth) /
-          (lastReceivedAt - firstReceivedAt)
-      );
-    }
-    return left + (index * plotWidth) / (points.length - 1);
-  };
-  const y = (value: number): number =>
-    top + ((maxValue - value) * plotHeight) / (maxValue - minValue);
-
-  for (let index = 0; index <= 4; index += 1) {
-    const gridY = top + (index * plotHeight) / 4;
-    addSVG(svg, "line", {
-      x1: left,
-      x2: width - right,
-      y1: gridY,
-      y2: gridY,
-      class: "chart-grid",
-    });
-    const label = addSVG(svg, "text", {
-      x: left - 9,
-      y: gridY + 4,
-      "text-anchor": "end",
-      class: "chart-axis-label",
-    });
-    label.textContent = formatNumber(
-      maxValue - (index * (maxValue - minValue)) / 4,
-    );
-  }
-
-  const drawThreshold = (
-    value: number | undefined,
-    labelText: string,
-  ): void => {
-    if (!isFiniteNumber(value)) return;
-    const thresholdY = y(value);
-    addSVG(svg, "line", {
-      x1: left,
-      x2: width - right,
-      y1: thresholdY,
-      y2: thresholdY,
-      class: "chart-threshold",
-    });
-    const label = addSVG(svg, "text", {
-      x: width - right - 4,
-      y: thresholdY - 6,
-      "text-anchor": "end",
-      class: "chart-threshold-label",
-    });
-    label.textContent = `${labelText} ${formatNumber(value)}`;
-  };
-  if (showSemanticOverlays) {
-    drawThreshold(payload.rise_threshold, "立上り");
-    drawThreshold(payload.fall_threshold, "立下り");
-  }
-
-  points.forEach((point, index) => {
-    if (point.sample_count > 1) {
-      addSVG(svg, "line", {
-        x1: x(index),
-        x2: x(index),
-        y1: y(point.input_min),
-        y2: y(point.input_max),
-        class: "chart-range",
-      });
-      if (showSemanticOverlays) {
-        addSVG(svg, "line", {
-          x1: x(index) + 2,
-          x2: x(index) + 2,
-          y1: y(point.calibrated_min),
-          y2: y(point.calibrated_max),
-          class: "chart-range-result",
-        });
-      }
-    }
-    if (showSemanticOverlays && payload.kind !== "numeric") {
-      const ratio = point.sample_count
-        ? Number(point.active_samples ?? 0) / point.sample_count
-        : 0;
-      if (ratio > 0) {
-        addSVG(svg, "rect", {
-          x:
-            x(index) -
-            Math.max(1, plotWidth / Math.max(points.length, 1) / 2),
-          y: top,
-          width: Math.max(2, plotWidth / Math.max(points.length, 1)),
-          height: plotHeight,
-          class: "chart-active-band",
-          opacity: Math.max(0.12, ratio * 0.24),
-        });
-      }
-    }
-  });
-
-  const path = (field: "input" | "calibrated"): string =>
-    points
-      .map(
-        (point, index) =>
-          `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ` +
-          `${y(point[field]).toFixed(2)}`,
-      )
-      .join(" ");
-  addSVG(svg, "path", {
-    d: path("input"),
-    class: "chart-line chart-line-raw",
-  });
-  if (showSemanticOverlays) {
-    addSVG(svg, "path", {
-      d: path("calibrated"),
-      class: "chart-line chart-line-result",
-    });
-  }
-  const latestPoint = points.at(-1);
-  if (showSemanticOverlays && latestPoint) {
-    addSVG(svg, "circle", {
-      cx: x(points.length - 1),
-      cy: y(latestPoint.calibrated),
-      r: 5,
-      class: "chart-latest-point",
-    });
-    const latestLabel = addSVG(svg, "text", {
-      x: Math.min(width - right - 4, x(points.length - 1) - 8),
-      y: Math.max(top + 13, y(latestPoint.calibrated) - 10),
-      "text-anchor": "end",
-      class: "chart-latest-label",
-    });
-    latestLabel.textContent = "最新";
-  }
-
-  if (showSemanticOverlays && payload.kind === "cumulative_counter") {
-    const maxIncrement = Math.max(
-      1,
-      ...points.map((point) => Number(point.increment ?? 0)),
-    );
-    points.forEach((point, index) => {
-      const increment = Number(point.increment ?? 0);
-      if (!increment) return;
-      const barHeight = Math.max(3, (increment / maxIncrement) * 34);
-      addSVG(svg, "rect", {
-        x: x(index) - 2,
-        y: top + plotHeight - barHeight,
-        width: 4,
-        height: barHeight,
-        class: "chart-increment",
-      });
-    });
-    const maxCounter = Math.max(
-      1,
-      ...points.map((point) => Number(point.counter ?? 0)),
-    );
-    const counterY = (value: number | undefined): number =>
-      top + ((maxCounter - Number(value ?? 0)) * plotHeight) / maxCounter;
-    const counterPath = points
-      .map(
-        (point, index) =>
-          `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ` +
-          `${counterY(point.counter).toFixed(2)}`,
-      )
-      .join(" ");
-    addSVG(svg, "path", {
-      d: counterPath,
-      class: "chart-line chart-line-counter",
-    });
-    const latestCounter = points.at(-1)?.counter;
-    const counterLabel = addSVG(svg, "text", {
-      x: width - right - 4,
-      y: counterY(latestCounter) - 7,
-      "text-anchor": "end",
-      class: "chart-counter-label",
-    });
-    counterLabel.textContent = `累積 ${formatNumber(latestCounter ?? 0)}`;
-  }
-
   const window = previewWindow(payload, points);
-  const start = addSVG(svg, "text", {
-    x: left,
-    y: height - 14,
-    class: "chart-axis-label",
+  renderSignalChart(svg, {
+    points: points.map((point) => ({
+      at: pointPlotAt(point),
+      value: point.input,
+      minimum: point.input_min,
+      maximum: point.input_max,
+      sampleCount: point.sample_count,
+      result: point.calibrated,
+      resultMinimum: point.calibrated_min,
+      resultMaximum: point.calibrated_max,
+      activeRatio: point.sample_count
+        ? Number(point.active_samples ?? 0) / point.sample_count
+        : 0,
+    })),
+    geometry: "compact",
+    unit,
+    boolean: rawBoolean && !showSemanticOverlays,
+    rawStep: rawBoolean,
+    startAt: window.start,
+    endAt: window.end,
+    showResult,
+    resultStep: showResult && rawBoolean,
+    showLatestMarker: showSemanticOverlays,
+    showActiveBands:
+      showSemanticOverlays &&
+      payload.kind !== "numeric" &&
+      payload.kind !== "cumulative_counter",
+    thresholds: showSemanticOverlays
+      ? { rise: payload.rise_threshold, fall: payload.fall_threshold }
+      : undefined,
+    emptyTitle: payload.error
+      ? "このルールでは受信値を判定できません"
+      : "まだ受信データがありません",
+    emptyHint: payload.error
+      ? "入力値の補正と判定条件を確認してください"
+      : "実際に届いた値を待っています",
+    title: `横軸は直近60秒、縦軸は受信値${unit ? `（${unit}）` : ""}${showResult ? "と設定結果" : ""}です。`,
   });
-  start.textContent = new Date(window.start).toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const end = addSVG(svg, "text", {
-    x: width - right,
-    y: height - 14,
-    "text-anchor": "end",
-    class: "chart-axis-label",
-  });
-  end.textContent = new Date(window.end).toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return points;
 }
 
 function isMultipleRulePreview(
@@ -623,15 +717,87 @@ function isMultipleRulePreview(
   return "rules" in response;
 }
 
-function activePreviewID(scope: HTMLElement): string | undefined {
-  const activePanel = queryAll<HTMLElement>(
+function activeSettingPanel(scope: HTMLElement): HTMLElement | undefined {
+  return queryAll<HTMLElement>(
     "[data-setting-panel]",
     scope,
   ).find((panel) => !panel.hidden);
-  const form = activePanel?.querySelector<HTMLFormElement>(
-    "details[data-preview-target][open] form.semantic-form[data-preview-id]",
+}
+
+function previewTargetID(target: HTMLDetailsElement): string | undefined {
+  return target.dataset.ruleId ||
+    query<HTMLFormElement>("form.semantic-form[data-preview-id]", target)
+      ?.dataset.previewId;
+}
+
+function previewTargets(panel: HTMLElement): HTMLDetailsElement[] {
+  return queryAll<HTMLDetailsElement>(
+    "details[data-preview-target]",
+    panel,
+  ).filter((target) => !!previewTargetID(target));
+}
+
+function persistedPreviewTargets(panel: HTMLElement): HTMLDetailsElement[] {
+  return previewTargets(panel).filter((target) => !!target.dataset.ruleId);
+}
+
+function previewTargetLabel(target: HTMLDetailsElement): string {
+  const form = query<HTMLFormElement>("form.semantic-form", target);
+  const name = form ? formField(form, "display_name")?.value.trim() : undefined;
+  const targetID = previewTargetID(target);
+  return name ||
+    (targetID === "draft-alarm"
+      ? "新しい異常検知"
+      : targetID === "draft-normal"
+        ? "新しい計測ルール"
+        : undefined) ||
+    query<HTMLElement>("summary strong", target)?.textContent?.trim() ||
+    targetID ||
+    "ルール";
+}
+
+function renderPreviewRuleOptions(
+  selector: HTMLSelectElement | null,
+  targets: HTMLDetailsElement[],
+  selectedID: string | undefined,
+): void {
+  if (!selector) return;
+  selector.replaceChildren();
+  if (!targets.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "選択できるルールなし";
+    option.disabled = true;
+    option.selected = true;
+    selector.append(option);
+    selector.disabled = true;
+    return;
+  }
+  const hasPersistedTarget = targets.some((target) => !!target.dataset.ruleId);
+  if (!hasPersistedTarget) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "ルールを選択";
+    option.disabled = true;
+    option.selected = !selectedID;
+    selector.append(option);
+  }
+  selector.disabled = false;
+  for (const target of targets) {
+    const option = document.createElement("option");
+    option.value = previewTargetID(target) ?? "";
+    option.textContent = previewTargetLabel(target);
+    selector.append(option);
+  }
+  const selectedTarget = targets.find(
+    (target) => previewTargetID(target) === selectedID,
   );
-  return form?.dataset.previewId;
+  const firstPersistedTarget = targets.find((target) => !!target.dataset.ruleId);
+  selector.value = selectedTarget
+    ? previewTargetID(selectedTarget) ?? ""
+    : firstPersistedTarget
+      ? previewTargetID(firstPersistedTarget) ?? ""
+      : "";
 }
 
 function selectPreview(
@@ -665,23 +831,26 @@ function selectPreview(
 }
 
 function rawOnlyPreview(payload: PreviewBody): PreviewBody {
+  const rawPoint = (point: PreviewPoint): PreviewPoint => ({
+    ...point,
+    calibrated: point.input,
+    calibrated_min: point.input_min,
+    calibrated_max: point.input_max,
+    active: undefined,
+    active_samples: undefined,
+    transitions: undefined,
+    counter: undefined,
+    increment: undefined,
+  });
   return {
     ...payload,
     kind: "numeric",
-    test_result: undefined,
     rise_threshold: undefined,
     fall_threshold: undefined,
-    points: (payload.points ?? []).map((point) => ({
-      ...point,
-      calibrated: point.input,
-      calibrated_min: point.input_min,
-      calibrated_max: point.input_max,
-      active: undefined,
-      active_samples: undefined,
-      transitions: undefined,
-      counter: undefined,
-      increment: undefined,
-    })),
+    points: (payload.points ?? []).map(rawPoint),
+    latest_point: payload.latest_point
+      ? rawPoint(payload.latest_point)
+      : undefined,
   };
 }
 
@@ -690,7 +859,6 @@ function buildRequest(
   forms: HTMLFormElement[],
   calibrationForm: HTMLFormElement | null,
   multipleRules: boolean,
-  testInput: HTMLInputElement | null,
   activeID?: string,
 ): MappingPreviewRequest {
   const body: MappingPreviewRequest = { signal_ref: signalRef };
@@ -732,8 +900,6 @@ function buildRequest(
   } else if (firstForm) {
     body.spec = definitionSpec(firstForm);
   }
-  const testValue = testInput?.value.trim();
-  if (testValue) body.test_value = Number(testValue);
   return body;
 }
 
@@ -751,22 +917,29 @@ function initializePreview(panel: HTMLElement): void {
   const multipleRules =
     forms.some((form) => !!form.dataset.ruleId) ||
     forms.some((form) => form.action.endsWith("/semantic-rules"));
-  const testInput = query<HTMLInputElement>(
-    '[name="preview_test_value"]',
-    panel,
+  const rawBoolean = forms.some(
+    (form) => form.dataset.booleanInput === "true",
   );
-  const testResult = query<HTMLElement>("[data-preview-test-result]", panel);
   const range = query<HTMLElement>("[data-preview-range]", panel);
   const count = query<HTMLElement>("[data-preview-count]", panel);
   const message = query<HTMLElement>("[data-preview-message]", panel);
   const feedState = query<HTMLElement>("[data-preview-feed-state]", panel);
   const checkedAt = query<HTMLElement>("[data-preview-checked-at]", panel);
-  const accessibleSummary = query<HTMLElement>(
-    "[data-preview-accessible-summary]",
-    panel,
-  );
   const toggle = query<HTMLButtonElement>("[data-preview-toggle]", panel);
   const chart = query<SVGSVGElement>("[data-preview-chart]", panel);
+  const accessibleSummaryID = chart?.getAttribute("aria-describedby");
+  const accessibleSummary = accessibleSummaryID
+    ? document.getElementById(accessibleSummaryID)
+    : null;
+  const counterPanel = query<HTMLElement>("[data-preview-counter]", panel);
+  const counterChart = query<SVGSVGElement>(
+    "[data-preview-counter-chart]",
+    panel,
+  );
+  const counterSummary = query<HTMLElement>(
+    "[data-preview-counter-summary]",
+    panel,
+  );
   const resultLegend = query<HTMLElement>(
     "[data-preview-result-legend]",
     panel,
@@ -781,6 +954,10 @@ function initializePreview(panel: HTMLElement): void {
   );
   const currentReceived = query<HTMLElement>(
     "[data-preview-current-received]",
+    panel,
+  );
+  const ruleSelector = query<HTMLSelectElement>(
+    "[data-preview-rule-select]",
     panel,
   );
   const unit = panel.dataset.unit ?? "";
@@ -802,23 +979,48 @@ function initializePreview(panel: HTMLElement): void {
     'form[data-signal-profile] [name="decimal_places"]',
   );
   let controller: AbortController | undefined;
+  let counterHistoryController: AbortController | undefined;
+  let counterHistoryRuleID: string | undefined;
+  let counterHistory: CounterHistory | undefined;
+  let counterHistorySession: CounterHistorySession | undefined;
+  let lastAvailableCounterHistory: HistorySeries | undefined;
+  let renderedCounterHistoryKey: string | undefined;
+  let renderedCounterHistoryPointCount = 0;
+  let renderCurrentCounter:
+    | ((state: CounterPreviewState) => void)
+    | undefined;
   let debounce: number | undefined;
   let previewUnavailable = false;
   let paused = false;
   let lastSeenReceivedAt: number | undefined;
+  let selectedPreviewID: string | undefined;
+  const lastSelectedTargetByPanel = new WeakMap<HTMLElement, string>();
+  const pendingInitialToggleStates = new Map<HTMLDetailsElement, boolean>();
+
+  const setCounterPanel = (visible: boolean): void => {
+    if (counterPanel) counterPanel.hidden = !visible;
+  };
 
   const setSemanticLegends = (
-    visible: boolean,
+    semanticVisible: boolean,
+    resultVisible: boolean,
     payload?: PreviewBody | null,
   ): void => {
-    if (resultLegend) resultLegend.hidden = !visible;
+    if (resultLegend) resultLegend.hidden = !resultVisible;
     if (thresholdLegend) {
       thresholdLegend.hidden =
-        !visible ||
+        !semanticVisible ||
         !payload ||
         (!isFiniteNumber(payload.rise_threshold) &&
           !isFiniteNumber(payload.fall_threshold));
     }
+  };
+
+  const hideSemanticAuxiliaries = (): void => {
+    setSemanticLegends(false, false);
+    setCounterPanel(false);
+    renderedCounterHistoryKey = undefined;
+    renderedCounterHistoryPointCount = 0;
   };
 
   const setFeedState = (state: string): void => {
@@ -837,28 +1039,179 @@ function initializePreview(panel: HTMLElement): void {
     );
   };
 
+  const selectPreviewTarget = (
+    selectedTarget: HTMLDetailsElement | undefined,
+  ): void => {
+    const activePanel = activeSettingPanel(previewScope);
+    const targets = activePanel ? previewTargets(activePanel) : [];
+    const selectedID = selectedTarget ? previewTargetID(selectedTarget) : undefined;
+    if (!activePanel || !selectedTarget || !selectedID || !targets.includes(selectedTarget)) {
+      selectedPreviewID = undefined;
+      if (activePanel) lastSelectedTargetByPanel.delete(activePanel);
+      renderPreviewRuleOptions(ruleSelector, targets, undefined);
+      return;
+    }
+    selectedPreviewID = selectedID;
+    lastSelectedTargetByPanel.set(activePanel, selectedID);
+    renderPreviewRuleOptions(ruleSelector, targets, selectedID);
+    for (const target of queryAll<HTMLDetailsElement>(
+      "details[data-preview-target]",
+      activePanel,
+    )) {
+      target.open = target === selectedTarget;
+    }
+  };
+
+  const restorePreviewTarget = (): void => {
+    const activePanel = activeSettingPanel(previewScope);
+    const targets = activePanel ? previewTargets(activePanel) : [];
+    const persistedTargets = activePanel
+      ? persistedPreviewTargets(activePanel)
+      : [];
+    const rememberedID = activePanel
+      ? lastSelectedTargetByPanel.get(activePanel)
+      : undefined;
+    selectPreviewTarget(
+      targets.find((target) => previewTargetID(target) === rememberedID) ??
+        persistedTargets[0],
+    );
+  };
+
+  const refreshRuleSelectorLabels = (form: HTMLFormElement): void => {
+    const activePanel = activeSettingPanel(previewScope);
+    if (!activePanel || !activePanel.contains(form)) return;
+    const targets = previewTargets(activePanel);
+    const selectedID = targets.some(
+      (target) => previewTargetID(target) === selectedPreviewID,
+    )
+      ? selectedPreviewID
+      : undefined;
+    renderPreviewRuleOptions(ruleSelector, targets, selectedID);
+  };
+
+  const counterStateFor = (
+    ruleID: string | undefined,
+  ): CounterPreviewState => {
+    if (!ruleID) {
+      counterHistoryController?.abort();
+      counterHistoryController = undefined;
+      counterHistoryRuleID = undefined;
+      counterHistory = undefined;
+      counterHistorySession = undefined;
+      lastAvailableCounterHistory = undefined;
+      renderedCounterHistoryKey = undefined;
+      renderedCounterHistoryPointCount = 0;
+      renderCurrentCounter = undefined;
+      return { persisted: false };
+    }
+    if (counterHistoryRuleID !== ruleID) {
+      counterHistoryController?.abort();
+      counterHistoryController = undefined;
+      counterHistoryRuleID = ruleID;
+      counterHistory = { status: "pending" };
+      counterHistorySession = {
+        startedAt: Date.now(),
+        baselineCaptured: false,
+        points: [],
+      };
+      lastAvailableCounterHistory = undefined;
+      renderedCounterHistoryKey = undefined;
+      renderedCounterHistoryPointCount = 0;
+    }
+    return {
+      persisted: true,
+      history: counterHistory ?? { status: "pending" },
+      session: counterHistorySession,
+    };
+  };
+
+  const refreshCounterHistory = (ruleID: string): void => {
+    if (counterHistoryController || counterHistoryRuleID !== ruleID) return;
+    const historyController = new AbortController();
+    counterHistoryController = historyController;
+    void loadCounterHistory(ruleID, historyController.signal)
+      .then((history) => {
+        if (
+          counterHistoryController !== historyController ||
+          counterHistoryRuleID !== ruleID ||
+          historyController.signal.aborted
+        ) {
+          return;
+        }
+        counterHistoryController = undefined;
+        if (history.status === "available") {
+          const value = retainLatestHistory(lastAvailableCounterHistory, history.value);
+          lastAvailableCounterHistory = value;
+          counterHistory = { status: "available", value };
+          if (counterHistorySession) {
+            counterHistorySession = mergeCounterHistorySession(
+              counterHistorySession,
+              history.value,
+              Date.now(),
+            );
+          }
+          renderCurrentCounter?.({
+            persisted: true,
+            history: counterHistory,
+            session: counterHistorySession,
+          });
+          return;
+        }
+        counterHistory = history;
+        renderCurrentCounter?.({
+          persisted: true,
+          history,
+          session: counterHistorySession,
+        });
+      })
+      .catch(() => {
+        if (
+          counterHistoryController !== historyController ||
+          counterHistoryRuleID !== ruleID ||
+          historyController.signal.aborted
+        ) {
+          return;
+        }
+        counterHistoryController = undefined;
+        const unavailable: CounterHistory = { status: "unavailable" };
+        counterHistory = unavailable;
+        renderCurrentCounter?.({
+          persisted: true,
+          history: unavailable,
+          session: counterHistorySession,
+        });
+      });
+  };
+
   const refresh = async (): Promise<void> => {
     controller?.abort();
-    controller = new AbortController();
+    renderCurrentCounter = undefined;
+    const requestController = new AbortController();
+    controller = requestController;
     clearFieldErrors(previewScope);
-    const activeID = activePreviewID(previewScope);
-    setSemanticLegends(false);
+    const activeID = selectedPreviewID;
+    const requestedCounterRuleID = counterRuleIDForActiveForm(forms, activeID);
+    counterStateFor(requestedCounterRuleID);
+    if (requestedCounterRuleID) {
+      refreshCounterHistory(requestedCounterRuleID);
+    }
 
     const body = buildRequest(
       signalRef,
       forms,
       calibrationForm,
       multipleRules,
-      testInput,
       activeID,
     );
     try {
       const result = await createMappingPreview(
         body,
         csrfToken(),
-        controller.signal,
+        requestController.signal,
       );
+      if (controller !== requestController || requestController.signal.aborted) return;
       if (!result.ok) {
+        hideSemanticAuxiliaries();
         const fieldName = result.error?.error.field;
         const activeForm = forms.find(
           (candidate) => candidate.dataset.previewId === activeID,
@@ -874,7 +1227,7 @@ function initializePreview(panel: HTMLElement): void {
         if (result.status === 404 && !forms[0]) {
           previewUnavailable = true;
           renderRuleResult(panel, null, "none", unit);
-          clearAuxiliaryOutputs(accessibleSummary, testResult, "none");
+          clearAuxiliaryOutputs(accessibleSummary, "none");
           setFeedState("表示するルールがありません");
           setText(
             message,
@@ -882,7 +1235,7 @@ function initializePreview(panel: HTMLElement): void {
           );
         } else if (fieldLabel && invalidField) {
           renderRuleResult(panel, null, "invalid", unit);
-          clearAuxiliaryOutputs(accessibleSummary, testResult, "invalid");
+          clearAuxiliaryOutputs(accessibleSummary, "invalid");
           setFeedState("設定内容を確認してください");
           showFieldError(invalidField, fieldLabel);
           setText(message,
@@ -898,7 +1251,6 @@ function initializePreview(panel: HTMLElement): void {
           );
           clearAuxiliaryOutputs(
             accessibleSummary,
-            testResult,
             result.status === 400 ? "invalid" : "error",
           );
           setFeedState("更新を確認できません");
@@ -921,6 +1273,7 @@ function initializePreview(panel: HTMLElement): void {
         selectedReady ??
         (selection.raw ? rawOnlyPreview(selection.raw) : null);
       if (!payload) {
+        hideSemanticAuxiliaries();
         renderRuleResult(
           panel,
           null,
@@ -929,35 +1282,114 @@ function initializePreview(panel: HTMLElement): void {
         );
         clearAuxiliaryOutputs(
           accessibleSummary,
-          testResult,
           activeID ? "error" : "none",
         );
         setFeedState("表示するルールがありません");
         setText(message, "確認できるルールがありません。");
         return;
       }
-      setSemanticLegends(Boolean(selectedReady), payload);
-      renderPreviewChart(chart, payload, Boolean(selectedReady));
-      const resultState: "ready" | "none" | "error" = !activeID
-        ? "none"
-        : selectedReady
-          ? "ready"
-          : "error";
-      const outcome = renderRuleResult(
-        panel,
-        selectedReady ?? selectedFailure,
-        resultState,
-        unit,
+      const persistedRuleID = persistedCounterRuleID(
+        forms,
+        activeID,
+        selectedReady,
       );
-      updateAccessibleSummary(
-        accessibleSummary,
+      const counterState = counterStateFor(persistedRuleID);
+      const showResult =
+        Boolean(selectedReady) && hasMeaningfulResult(payload.points ?? []);
+      setSemanticLegends(Boolean(selectedReady), showResult, payload);
+      if (!persistedRuleID) {
+        setCounterPanel(false);
+        renderedCounterHistoryKey = undefined;
+        renderedCounterHistoryPointCount = 0;
+      }
+      const plottedPoints = renderPreviewChart(
+        chart,
         payload,
-        selectedReady ?? selectedFailure,
-        outcome,
+        Boolean(selectedReady),
         unit,
+        rawBoolean,
+        showResult,
       );
-      const points = payload.points ?? [];
-      const latest = selection.raw?.points?.at(-1);
+      const points = plottedPoints;
+      const renderPreviewMessage = (state: CounterPreviewState): void => {
+        if (payload.input_count === 0) {
+          range.textContent = "受信データはまだありません";
+          count.textContent = "受信値が届くと設定結果を確認できます。";
+          setText(message, "履歴は作らず、実際に届いた値だけを表示します。");
+        } else {
+          const window = previewWindow(payload, points);
+          range.textContent = `直近${formatDuration(window.start, window.end)}の受信値`;
+          count.textContent =
+            `${payload.input_count.toLocaleString("ja-JP")}件を評価し、` +
+            `直近60秒の${points.length.toLocaleString("ja-JP")}bucketを表示`;
+          setText(
+            message,
+            payload.truncated_by === "input_count"
+              ? "高速な信号のため、最新20,000件を要約しています。"
+              : payload.kind === "cumulative_counter"
+                ? `この設定なら直近60秒で +${formatNumber(counterWindowDelta(payload))}。` +
+                  counterPreviewMessage(state)
+                : !showResult
+                  ? "変換前後の値は同じです。補正を変更すると差を確認できます。"
+                  : "設定を変えると、保存前の結果をこのグラフで確認できます。",
+          );
+        }
+        if (selectedFailure) {
+          setText(
+            message,
+            "判定結果を更新できません。受信値はそのまま確認できます。",
+          );
+        }
+      };
+      const renderCounterState = (state: CounterPreviewState): void => {
+        if (persistedRuleID && counterChart) {
+          const historyKey = counterHistorySignature(state);
+          let plottedCount = 0;
+          if (historyKey !== renderedCounterHistoryKey) {
+            plottedCount = renderCounterHistoryChart(
+              counterChart,
+              state,
+            );
+            renderedCounterHistoryKey = historyKey;
+            renderedCounterHistoryPointCount = plottedCount;
+          } else {
+            plottedCount = renderedCounterHistoryPointCount;
+          }
+          setCounterPanel(true);
+          if (counterSummary) {
+            setText(counterSummary, counterSummaryText(state, plottedCount));
+          }
+        }
+        const resultState: "ready" | "none" | "error" = !activeID
+          ? "none"
+          : selectedReady
+            ? "ready"
+            : "error";
+        const outcome = renderRuleResult(
+          panel,
+          selectedReady ?? selectedFailure,
+          resultState,
+          unit,
+          state,
+        );
+        updateAccessibleSummary(
+          accessibleSummary,
+          payload,
+          selectedReady ?? selectedFailure,
+          outcome,
+          unit,
+          plottedPoints,
+        );
+        renderPreviewMessage(state);
+      };
+      renderCurrentCounter = persistedRuleID ? renderCounterState : undefined;
+      renderCounterState(counterState);
+      if (persistedRuleID) {
+        refreshCounterHistory(persistedRuleID);
+      }
+      const latest = selection.raw
+        ? latestPreviewPoint(selection.raw)
+        : undefined;
       markChecked();
       if (!latest) {
         setFeedState("受信待ち");
@@ -1007,74 +1439,11 @@ function initializePreview(panel: HTMLElement): void {
         }
       }
 
-      if (payload.input_count === 0) {
-        range.textContent = "受信データはまだありません";
-        count.textContent = "試す値で設定結果を確認できます。";
-        setText(message, "履歴は作らず、実際に届いた値だけを表示します。");
-      } else {
-        const window = previewWindow(payload, points);
-        range.textContent = `直近${formatDuration(window.start, window.end)}の受信値`;
-        count.textContent =
-          `${payload.input_count.toLocaleString("ja-JP")}件を` +
-          `${payload.plot_count.toLocaleString("ja-JP")}点で表示`;
-        const valuesOverlap = points.every(
-          (point) => Math.abs(point.input - point.calibrated) < 1e-9,
-        );
-        setText(
-          message,
-          payload.truncated_by === "input_count"
-            ? "高速な信号のため、最新20,000件を要約しています。"
-            : payload.kind === "cumulative_counter"
-              ? `表示範囲内の累積値は ${points.at(-1)?.counter ?? 0} です。` +
-                "先頭の値は数えません。"
-              : valuesOverlap
-                ? "変換前後の値は同じです。補正を変更すると差を確認できます。"
-                : "設定を変えると、保存前の結果をこのグラフで確認できます。",
-        );
-      }
-      if (selectedFailure) {
-        setText(
-          message,
-          "判定結果を更新できません。受信値はそのまま確認できます。",
-        );
-      }
-
-      if (testResult) {
-        const previewResult = payload.test_result;
-        if (!previewResult) {
-          testResult.textContent = "値を入力すると結果を確認できます";
-        } else {
-          switch (payload.kind) {
-            case "boolean":
-              testResult.textContent = previewResult.boolean ? "ON" : "OFF";
-              break;
-            case "alarm":
-              testResult.textContent = previewResult.boolean ? "異常" : "正常";
-              break;
-            case "cumulative_counter":
-              testResult.textContent =
-                previewResult.integer !== undefined
-                  ? `累積 ${formatNumber(previewResult.integer)}`
-                  : "最初の値として確認（累積には加えません）";
-              break;
-            default:
-              if (previewResult.number !== undefined) {
-                testResult.textContent =
-                  `${formatNumber(previewResult.number)}` +
-                  `${unit ? ` ${unit}` : ""}`;
-              } else {
-                testResult.textContent =
-                  `補正後 ${formatNumber(previewResult.calibrated)}` +
-                  `${unit ? ` ${unit}` : ""}`;
-              }
-              break;
-          }
-        }
-      }
     } catch (error: unknown) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
+        hideSemanticAuxiliaries();
         renderRuleResult(panel, null, "error", unit);
-        clearAuxiliaryOutputs(accessibleSummary, testResult, "error");
+        clearAuxiliaryOutputs(accessibleSummary, "error");
         setFeedState("更新を確認できません");
         setText(
           message,
@@ -1088,20 +1457,58 @@ function initializePreview(panel: HTMLElement): void {
     if (debounce !== undefined) window.clearTimeout(debounce);
     debounce = window.setTimeout(refresh, 300);
   };
+  restorePreviewTarget();
   for (const form of forms) {
-    form.addEventListener("input", schedule);
-    form.addEventListener("change", schedule);
+    const onFormChange = (event: Event): void => {
+      if (
+        event.target instanceof HTMLInputElement &&
+        event.target.name === "display_name"
+      ) {
+        refreshRuleSelectorLabels(form);
+      }
+      schedule();
+    };
+    form.addEventListener("input", onFormChange);
+    form.addEventListener("change", onFormChange);
   }
   calibrationForm?.addEventListener("input", schedule);
   calibrationForm?.addEventListener("change", schedule);
-  previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, schedule);
+  previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, () => {
+    restorePreviewTarget();
+    schedule();
+  });
+  ruleSelector?.addEventListener("change", () => {
+    const activePanel = activeSettingPanel(previewScope);
+    const selectedTarget = activePanel
+      ? previewTargets(activePanel).find(
+        (target) => previewTargetID(target) === ruleSelector.value,
+      )
+      : undefined;
+    selectPreviewTarget(selectedTarget);
+    schedule();
+  });
   for (const target of queryAll<HTMLDetailsElement>(
     "details[data-preview-target]",
     previewScope,
   )) {
-    target.addEventListener("toggle", schedule);
+    pendingInitialToggleStates.set(target, target.open);
+    target.addEventListener("toggle", () => {
+      const initialOpen = pendingInitialToggleStates.get(target);
+      if (initialOpen !== undefined) {
+        pendingInitialToggleStates.delete(target);
+        if (target.open === initialOpen) return;
+      }
+      const activePanel = activeSettingPanel(previewScope);
+      if (
+        target.open &&
+        activePanel?.contains(target) &&
+        previewTargets(activePanel).includes(target)
+      ) {
+        selectPreviewTarget(target);
+      }
+      schedule();
+    });
   }
-  testInput?.addEventListener("input", schedule);
   toggle?.addEventListener("click", () => {
     paused = !paused;
     toggle.setAttribute("aria-checked", String(!paused));

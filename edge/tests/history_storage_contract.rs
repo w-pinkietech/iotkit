@@ -90,12 +90,22 @@ fn counter_rule(series_key: &str, display_name: &str) -> SemanticRuleDraft {
 }
 
 fn record(sequence: i64, series_key: &str, value: f64, received_at: i64) -> RawRecord {
+    record_with_event(sequence, series_key, value, received_at - 1, received_at)
+}
+
+fn record_with_event(
+    sequence: i64,
+    series_key: &str,
+    value: f64,
+    event_time: i64,
+    received_at: i64,
+) -> RawRecord {
     RawRecord::new(
         sequence,
         serde_json::to_vec(&serde_json::json!({
             "family":"measurement","schema_version":1,"epoch":"epoch-a",
             "pub_seq":sequence,"series_key":series_key,"values":[value],
-            "event_time":received_at-1,"event_time_source":"received_at",
+            "event_time":event_time,"event_time_source":"received_at",
             "time_source":"edge_node","time_quality":"unsynced",
             "received_at":received_at,"device_time":null
         }))
@@ -172,13 +182,14 @@ async fn assert_semantic_history_series_contract(
     series_key: &str,
 ) {
     let semantics = Semantics::new(storage.clone());
+    assert_semantic_counter_bucket_last_value_contract(storage, series_key).await;
     storage
         .accept_batch(AcceptBatch {
             edge_node_id: "edge-node-01".into(),
             ledger_epoch: "epoch-a".into(),
             publication_id: "history-seed".into(),
             received_at: 50,
-            records: vec![record(1, series_key, 0.0, 50)],
+            records: vec![record(5, series_key, 0.0, 50)],
         })
         .await
         .unwrap();
@@ -197,9 +208,10 @@ async fn assert_semantic_history_series_contract(
             publication_id: "history-observations".into(),
             received_at: 100,
             records: vec![
-                record(2, series_key, 1.0, 100),
-                record(3, series_key, 100.0, 110),
-                record(4, series_key, 2.0, 120),
+                record_with_event(6, series_key, 1.0, 150, 100),
+                record_with_event(7, series_key, 100.0, 160, 100),
+                record_with_event(8, series_key, 2.0, 170, 100),
+                record_with_event(9, series_key, -10.0, 50, 100),
             ],
         })
         .await
@@ -208,24 +220,24 @@ async fn assert_semantic_history_series_contract(
         .project_pending(10, registered_output_adapters())
         .await
         .unwrap();
-    assert_eq!(progress.observations, 3, "{progress:?}");
+    assert_eq!(progress.observations, 4, "{progress:?}");
     let rows = storage
         .query_semantic_history(0, 1_000, 100_001, Some(signal_ref), None)
         .await
         .unwrap();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert!(rows.iter().all(|row| row.rule_revision == 1));
     assert!(rows.iter().all(|row| row.calibration_revision == 2));
-    assert_eq!(rows[0].source_pub_seq, 4);
+    assert_eq!(rows[0].source_pub_seq, 8);
     assert_eq!(rows[0].rule_name, rule.display_name);
     let buckets = storage
         .query_history_series(signal_ref, 100, 200, 100)
         .await
         .unwrap();
     assert_eq!(buckets.len(), 1);
-    assert_eq!(buckets[0].minimum, 1.0);
+    assert_eq!(buckets[0].minimum, -10.0);
     assert_eq!(buckets[0].maximum, 100.0);
-    assert_eq!(buckets[0].count, 3);
+    assert_eq!(buckets[0].count, 4);
     let (semantic_buckets, latest) = storage
         .query_semantic_history_series(&rule.rule_id, 100, 200, 100)
         .await
@@ -234,14 +246,15 @@ async fn assert_semantic_history_series_contract(
     assert_eq!(semantic_buckets[0].minimum, 12.0);
     assert_eq!(semantic_buckets[0].maximum, 210.0);
     assert_eq!(semantic_buckets[0].count, 3);
-    assert_eq!(latest, Some((100, b"14.0".to_vec())));
+    assert_eq!(semantic_buckets[0].last_value, Some(14.0));
+    assert_eq!(latest, Some((100, b"-10.0".to_vec())));
     storage
         .accept_batch(AcceptBatch {
             edge_node_id: "edge-node-01".into(),
             ledger_epoch: "epoch-a".into(),
             publication_id: "history-after-range".into(),
             received_at: 200,
-            records: vec![record(5, series_key, 3.0, 200)],
+            records: vec![record_with_event(10, series_key, 3.0, 200, 200)],
         })
         .await
         .unwrap();
@@ -262,7 +275,7 @@ async fn assert_semantic_history_series_contract(
             limit: None,
             cursor: None,
             signal_ref: None,
-            rule_id: Some(rule.rule_id),
+            rule_id: Some(rule.rule_id.clone()),
             edge_node_id: None,
             bucket_ms: Some(100),
         })
@@ -273,6 +286,70 @@ async fn assert_semantic_history_series_contract(
     assert_eq!(payload["latest_received_at"], 200);
     assert_eq!(payload["latest_value"], 16.0);
     assert_eq!(payload["points"][0]["maximum"], 210.0);
+    assert_eq!(payload["points"][0]["last_value"], 14.0);
+}
+
+async fn assert_semantic_counter_bucket_last_value_contract(storage: &Storage, series_key: &str) {
+    let semantics = Semantics::new(storage.clone());
+    let rule = semantics
+        .create_rule(counter_rule(series_key, "Production count"), 300)
+        .await
+        .unwrap();
+    storage
+        .accept_batch(AcceptBatch {
+            edge_node_id: "edge-node-01".into(),
+            ledger_epoch: "epoch-a".into(),
+            publication_id: "counter-bucket-values".into(),
+            received_at: 1_000,
+            records: vec![
+                record_with_event(1, series_key, 0.0, 1_000, 1_000),
+                record_with_event(2, series_key, 1.0, 1_010, 1_000),
+                record_with_event(3, series_key, 0.0, 1_020, 1_000),
+                record_with_event(4, series_key, 1.0, 1_030, 1_000),
+            ],
+        })
+        .await
+        .unwrap();
+    let counter_progress = semantics
+        .project_pending(20, registered_output_adapters())
+        .await
+        .unwrap();
+    assert_eq!(counter_progress.observations, 2, "{counter_progress:?}");
+    semantics.reset_counter(&rule.rule_id, 1_050).await.unwrap();
+    let reset_progress = semantics
+        .project_pending(20, registered_output_adapters())
+        .await
+        .unwrap();
+    assert_eq!(reset_progress.observations, 1, "{reset_progress:?}");
+
+    let (buckets, latest) = storage
+        .query_semantic_history_series(&rule.rule_id, 1_000, 2_000, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets[0].minimum, 0.0);
+    assert_eq!(buckets[0].average, 1.0);
+    assert_eq!(buckets[0].maximum, 2.0);
+    assert_eq!(buckets[0].count, 3);
+    assert_eq!(buckets[0].last_value, Some(0.0));
+    assert_eq!(latest, Some((1_000, b"0".to_vec())));
+
+    let payload = StorageWebApplication::new(storage.clone())
+        .history_series(HistoryQuery {
+            from: Some("1000".into()),
+            to: Some("2000".into()),
+            limit: None,
+            cursor: None,
+            signal_ref: None,
+            rule_id: Some(rule.rule_id.clone()),
+            edge_node_id: None,
+            bucket_ms: Some(1_000),
+        })
+        .await
+        .unwrap();
+    assert_eq!(payload["points"][0]["average"], 1.0);
+    assert_eq!(payload["points"][0]["last_value"], 0.0);
+    semantics.retire_rule(&rule.rule_id, 1_060).await.unwrap();
 }
 
 #[tokio::test]
@@ -486,4 +563,5 @@ async fn history_series_limits_its_exact_latest_value_to_the_requested_range() {
     assert_eq!(in_range["sample_count"], 2);
     assert_eq!(in_range["latest_received_at"], 250);
     assert_eq!(in_range["latest_value"], 22.5);
+    assert!(in_range["points"][0].get("last_value").is_none());
 }

@@ -61,6 +61,7 @@ pub struct HistoryBucket {
     pub minimum: f64,
     pub average: f64,
     pub maximum: f64,
+    pub last_value: Option<f64>,
     pub count: i64,
 }
 
@@ -228,6 +229,7 @@ impl Storage {
                  MIN(CAST(json_extract(raw.record_json,'$.values[0]') AS REAL)) minimum,\
                  AVG(CAST(json_extract(raw.record_json,'$.values[0]') AS REAL)) average,\
                  MAX(CAST(json_extract(raw.record_json,'$.values[0]') AS REAL)) maximum,\
+                 NULL last_value,\
                  COUNT(*) count FROM raw_records raw JOIN inventory_signals signal \
                  ON signal.edge_node_id=raw.edge_node_id \
                  AND signal.series_key=json_extract(raw.record_json,'$.series_key') \
@@ -258,6 +260,7 @@ impl Storage {
                  MAX(CASE convert_from(raw.record_json,'UTF8')::jsonb->'values'->0 \
                      WHEN 'true'::jsonb THEN 1 WHEN 'false'::jsonb THEN 0 \
                      ELSE (convert_from(raw.record_json,'UTF8')::jsonb->'values'->>0)::double precision END) maximum,\
+                 NULL::double precision last_value,\
                  COUNT(*)::bigint count FROM raw_records raw JOIN inventory_signals signal \
                  ON signal.edge_node_id=raw.edge_node_id \
                  AND signal.series_key=convert_from(raw.record_json,'UTF8')::jsonb->>'series_key' \
@@ -293,17 +296,19 @@ impl Storage {
         match self.inner.as_ref() {
             StorageInner::Sqlite { pool, .. } => {
                 let buckets = sqlx::query(
-                    "SELECT ((raw.received_at-?)/?)*?+? bucket_start,\
-                     MIN(CAST(json_extract(observation.value_json,'$') AS REAL)) minimum,\
-                     AVG(CAST(json_extract(observation.value_json,'$') AS REAL)) average,\
-                     MAX(CAST(json_extract(observation.value_json,'$') AS REAL)) maximum,\
-                     COUNT(*) count FROM semantic_observations observation JOIN raw_records raw \
-                     ON raw.edge_node_id=observation.edge_node_id \
+                    "WITH bucket_values AS (SELECT ((observation.observed_at-?)/?)*?+? bucket_start,\
+                     CAST(json_extract(observation.value_json,'$') AS REAL) numeric_value,\
+                     observation.observation_row_id FROM semantic_observations observation \
+                     JOIN raw_records raw ON raw.edge_node_id=observation.edge_node_id \
                      AND raw.ledger_epoch=observation.ledger_epoch \
-                     AND raw.pub_seq=observation.source_pub_seq \
-                     WHERE observation.rule_id=? AND raw.received_at>=? AND raw.received_at<? \
-                     AND json_type(observation.value_json,'$') IN ('integer','real','true','false') \
-                     GROUP BY bucket_start ORDER BY bucket_start",
+                     AND raw.pub_seq=observation.source_pub_seq WHERE observation.rule_id=? \
+                     AND observation.observed_at>=? AND observation.observed_at<? \
+                     AND json_type(observation.value_json,'$') IN ('integer','real','true','false')),\
+                     ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY bucket_start \
+                     ORDER BY observation_row_id DESC) latest_rank FROM bucket_values) \
+                     SELECT bucket_start,MIN(numeric_value) minimum,AVG(numeric_value) average,\
+                     MAX(numeric_value) maximum,MAX(CASE WHEN latest_rank=1 THEN numeric_value END) last_value,\
+                     COUNT(*) count FROM ranked GROUP BY bucket_start ORDER BY bucket_start",
                 )
                 .bind(from)
                 .bind(bucket_ms)
@@ -337,20 +342,20 @@ impl Storage {
             }
             StorageInner::Postgres { pool, .. } => {
                 let buckets = sqlx::query(
-                    "SELECT ((raw.received_at-$1)/$2)*$2+$1 bucket_start,\
-                     MIN(CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
-                         WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END) minimum,\
-                     AVG(CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
-                         WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END) average,\
-                     MAX(CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
-                         WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END) maximum,\
-                     COUNT(*)::bigint count FROM semantic_observations observation JOIN raw_records raw \
-                     ON raw.edge_node_id=observation.edge_node_id \
+                    "WITH bucket_values AS (SELECT ((observation.observed_at-$1)/$2)*$2+$1 bucket_start,\
+                     CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
+                     WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END numeric_value,\
+                     observation.observation_row_id FROM semantic_observations observation \
+                     JOIN raw_records raw ON raw.edge_node_id=observation.edge_node_id \
                      AND raw.ledger_epoch=observation.ledger_epoch \
-                     AND raw.pub_seq=observation.source_pub_seq \
-                     WHERE observation.rule_id=$3 AND raw.received_at>=$1 AND raw.received_at<$4 \
-                     AND jsonb_typeof(observation.value_json) IN ('number','boolean') \
-                     GROUP BY bucket_start ORDER BY bucket_start",
+                     AND raw.pub_seq=observation.source_pub_seq WHERE observation.rule_id=$3 \
+                     AND observation.observed_at>=$1 AND observation.observed_at<$4 \
+                     AND jsonb_typeof(observation.value_json) IN ('number','boolean')),\
+                     ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY bucket_start \
+                     ORDER BY observation_row_id DESC) latest_rank FROM bucket_values) \
+                     SELECT bucket_start,MIN(numeric_value) minimum,AVG(numeric_value) average,\
+                     MAX(numeric_value) maximum,MAX(CASE WHEN latest_rank=1 THEN numeric_value END) last_value,\
+                     COUNT(*)::bigint count FROM ranked GROUP BY bucket_start ORDER BY bucket_start",
                 )
                 .bind(from)
                 .bind(bucket_ms)
@@ -448,12 +453,14 @@ where
     for<'a> &'a str: sqlx::ColumnIndex<R>,
     i64: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     f64: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    Option<f64>: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
 {
     Ok(HistoryBucket {
         bucket_start: row.try_get("bucket_start")?,
         minimum: row.try_get("minimum")?,
         average: row.try_get("average")?,
         maximum: row.try_get("maximum")?,
+        last_value: row.try_get("last_value")?,
         count: row.try_get("count")?,
     })
 }
