@@ -325,7 +325,7 @@ export interface components {
             input_count: number;
             plot_count: number;
             points: components["schemas"]["PreviewPoint"][] | null;
-            latest_point?: components["schemas"]["PreviewPoint"];
+            latest_point?: components["schemas"]["PreviewPoint"] | null;
             test_result?: components["schemas"]["PreviewResult"];
             /** Format: int64 */
             window_start?: number;

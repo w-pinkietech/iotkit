@@ -105,9 +105,9 @@ pub async fn migrate_sqlite_to_postgres(
         sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM _sqlx_migrations")
             .fetch_one(&source)
             .await?;
-    if schema_version != 9 {
+    if !migratable_source_schema_version(schema_version) {
         return Err(StorageError::ProfileMigration(format!(
-            "SQLite migration source schema is {schema_version}, want 9"
+            "SQLite migration source schema is {schema_version}, want 9 or 10"
         )));
     }
     let edge_id: String = sqlx::query_scalar("SELECT edge_id FROM edge_meta WHERE singleton=1")
@@ -212,6 +212,11 @@ pub async fn migrate_sqlite_to_postgres(
         content_digest: source_digest,
         completed: true,
     })
+}
+
+fn migratable_source_schema_version(schema_version: i64) -> bool {
+    // v10 only adds a semantic-history index; v9 has the same copied table shape.
+    (9..=10).contains(&schema_version)
 }
 
 async fn validate_source_schema(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {

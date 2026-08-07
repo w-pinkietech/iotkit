@@ -95,8 +95,16 @@ async fn sqlite_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect output route schema");
-    assert_eq!(version, 9);
+    let history_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' \
+         AND name='ix_semantic_observation_rule_observed_at_row'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .expect("inspect semantic history index");
+    assert_eq!(version, 10);
     assert_eq!(column_count, 1);
+    assert_eq!(history_index_count, 1);
 }
 
 #[tokio::test]
@@ -270,6 +278,20 @@ async fn sqlite_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_ea
     let inspection = SqlitePool::connect(&format!("sqlite:{}", path.display()))
         .await
         .expect("inspect upgraded database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let history_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' \
+         AND name='ix_semantic_observation_rule_observed_at_row'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 10);
+    assert_eq!(history_index_count, 1);
     let queue: Vec<(i64, i64, i64)> = sqlx::query_as(
         "SELECT pub_seq,revision,calibration_revision FROM semantic_projection_queue \
          WHERE rule_id='rule' ORDER BY pub_seq",
@@ -354,8 +376,17 @@ async fn postgres_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect output route schema");
-    assert_eq!(version, 9);
+    let history_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' \
+         AND tablename='semantic_observations' \
+         AND indexname='ix_semantic_observation_rule_observed_at_row'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .expect("inspect semantic history index");
+    assert_eq!(version, 10);
     assert_eq!(column_count, 1);
+    assert_eq!(history_index_count, 1);
     inspection.close().await;
 }
 
@@ -520,6 +551,21 @@ async fn postgres_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_
     let inspection = PgPool::connect(&dsn)
         .await
         .expect("inspect upgraded database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let history_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' \
+         AND tablename='semantic_observations' \
+         AND indexname='ix_semantic_observation_rule_observed_at_row'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 10);
+    assert_eq!(history_index_count, 1);
     let queue: Vec<(i64, i64, i64)> = sqlx::query_as(
         "SELECT pub_seq,revision,calibration_revision FROM semantic_projection_queue \
          WHERE rule_id='rule' ORDER BY pub_seq",

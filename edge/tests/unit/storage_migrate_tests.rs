@@ -5,6 +5,14 @@ use serde_json::Value;
 use super::*;
 
 #[test]
+fn profile_migration_accepts_the_v9_projection_queue_schema_and_current_schema() {
+    assert!(migratable_source_schema_version(9));
+    assert!(migratable_source_schema_version(10));
+    assert!(!migratable_source_schema_version(8));
+    assert!(!migratable_source_schema_version(11));
+}
+
+#[test]
 fn table_digest_verification_rejects_swapped_tables_even_when_the_aggregate_matches() {
     let first = [1_u8; 32];
     let second = [2_u8; 32];

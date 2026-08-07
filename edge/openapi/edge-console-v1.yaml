@@ -607,7 +607,9 @@ components:
                 $ref: "#/components/schemas/PreviewPoint"
             - type: "null"
         latest_point:
-          $ref: "#/components/schemas/PreviewPoint"
+          oneOf:
+            - $ref: "#/components/schemas/PreviewPoint"
+            - type: "null"
         test_result:
           $ref: "#/components/schemas/PreviewResult"
         window_start:

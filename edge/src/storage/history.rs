@@ -299,9 +299,7 @@ impl Storage {
                     "WITH bucket_values AS (SELECT ((observation.observed_at-?)/?)*?+? bucket_start,\
                      CAST(json_extract(observation.value_json,'$') AS REAL) numeric_value,\
                      observation.observation_row_id FROM semantic_observations observation \
-                     JOIN raw_records raw ON raw.edge_node_id=observation.edge_node_id \
-                     AND raw.ledger_epoch=observation.ledger_epoch \
-                     AND raw.pub_seq=observation.source_pub_seq WHERE observation.rule_id=? \
+                     WHERE observation.rule_id=? \
                      AND observation.observed_at>=? AND observation.observed_at<? \
                      AND json_type(observation.value_json,'$') IN ('integer','real','true','false')),\
                      ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY bucket_start \
@@ -346,9 +344,7 @@ impl Storage {
                      CASE observation.value_json WHEN 'true'::jsonb THEN 1 \
                      WHEN 'false'::jsonb THEN 0 ELSE (observation.value_json#>>'{}')::double precision END numeric_value,\
                      observation.observation_row_id FROM semantic_observations observation \
-                     JOIN raw_records raw ON raw.edge_node_id=observation.edge_node_id \
-                     AND raw.ledger_epoch=observation.ledger_epoch \
-                     AND raw.pub_seq=observation.source_pub_seq WHERE observation.rule_id=$3 \
+                     WHERE observation.rule_id=$3 \
                      AND observation.observed_at>=$1 AND observation.observed_at<$4 \
                      AND jsonb_typeof(observation.value_json) IN ('number','boolean')),\
                      ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY bucket_start \

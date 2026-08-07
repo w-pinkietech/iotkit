@@ -2066,6 +2066,13 @@ fn rule_spec(body: &Value) -> Result<RuleSpec, WebError> {
         "alarm" => SemanticKind::Alarm,
         _ => return Err(bad_request("unknown semantic kind")),
     };
+    if kind == SemanticKind::Numeric {
+        return Ok(RuleSpec {
+            kind,
+            detector: Detector::default(),
+            trigger: TriggerMode::None,
+        });
+    }
     let default_detector = match kind {
         SemanticKind::Numeric => "",
         SemanticKind::Boolean | SemanticKind::CumulativeCounter => "boolean_high_active",

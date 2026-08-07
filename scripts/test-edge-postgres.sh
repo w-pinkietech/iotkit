@@ -87,6 +87,11 @@ cargo test -p iotkit-edge --test history_storage_contract \
   -- --ignored --exact --nocapture
 
 reset_database
+cargo test -p iotkit-edge --test history_storage_contract \
+  postgres_semantic_history_recent_range_uses_the_observed_at_index \
+  -- --ignored --exact --nocapture
+
+reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test semantic_projection_queue_contract \
     postgres_candidate_plan_uses_the_bounded_pending_queue_lookup \

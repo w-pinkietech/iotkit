@@ -11,6 +11,10 @@ use iotkit_edge::{
     web::{ConsoleRequest, HistoryQuery, Principal, WebApplication},
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
+use sqlx::{
+    PgPool, Row,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 
 async fn prepare_fixture(storage: Storage) -> (Storage, String, String) {
     storage.initialize_edge_identity(1).await.unwrap();
@@ -367,6 +371,142 @@ async fn postgres_semantic_history_series_obeys_the_shared_contract() {
         .unwrap();
     let (storage, signal_ref, series_key) = prepare_fixture(storage).await;
     assert_semantic_history_series_contract(&storage, &signal_ref, &series_key).await;
+}
+
+#[tokio::test]
+async fn sqlite_semantic_history_recent_range_uses_the_observed_at_index() {
+    const RETAINED_PREFIX: i64 = 10_000;
+    let (directory, storage, _, _) = fixture().await;
+    let inspection = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(PathBuf::from(directory.path()).join("edge.db"))
+                .create_if_missing(false),
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "WITH RECURSIVE numbers(value) AS (VALUES(1) UNION ALL SELECT value+1 FROM numbers \
+         WHERE value<?) INSERT INTO semantic_observations(observation_id,rule_id,revision,\
+         calibration_revision,series_id,sequence,kind,value_json,reading,signal_ref,\
+         edge_node_id,ledger_epoch,source_pub_seq,observed_at,created_at) \
+         SELECT 'history-index-' || value,'history-index-rule',1,1,'history-index-series',\
+         value,'numeric',CAST(value AS TEXT),NULL,'signal','node','epoch',value,value,value \
+         FROM numbers",
+    )
+    .bind(RETAINED_PREFIX)
+    .execute(&inspection)
+    .await
+    .unwrap();
+    sqlx::query("ANALYZE semantic_observations")
+        .execute(&inspection)
+        .await
+        .unwrap();
+
+    let plan = sqlx::query(
+        "EXPLAIN QUERY PLAN SELECT observation.observation_row_id \
+         FROM semantic_observations AS observation WHERE observation.rule_id=? \
+         AND observation.observed_at>=? AND observation.observed_at<? \
+         ORDER BY observation.observed_at,observation.observation_row_id",
+    )
+    .bind("history-index-rule")
+    .bind(RETAINED_PREFIX - 2)
+    .bind(RETAINED_PREFIX + 1)
+    .fetch_all(&inspection)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| row.try_get::<String, _>("detail").unwrap())
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(
+        plan.contains("ix_semantic_observation_rule_observed_at_row"),
+        "recent semantic history must use its rule/time index: {plan}"
+    );
+    assert!(
+        !plan.contains("SCAN observation") && !plan.contains("USE TEMP B-TREE"),
+        "recent semantic history must not scan or sort its retained per-rule prefix: {plan}"
+    );
+
+    let (buckets, _) = storage
+        .query_semantic_history_series(
+            "history-index-rule",
+            RETAINED_PREFIX - 2,
+            RETAINED_PREFIX + 1,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets[0].count, 3);
+    assert_eq!(buckets[0].minimum, (RETAINED_PREFIX - 2) as f64);
+    assert_eq!(buckets[0].maximum, RETAINED_PREFIX as f64);
+}
+
+#[tokio::test]
+#[ignore = "requires IOTKIT_TEST_POSTGRES_DSN; run scripts/test-edge-postgres.sh"]
+async fn postgres_semantic_history_recent_range_uses_the_observed_at_index() {
+    const RETAINED_PREFIX: i64 = 10_000;
+    let dsn = std::env::var("IOTKIT_TEST_POSTGRES_DSN").expect("PostgreSQL DSN");
+    let storage = Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+        .await
+        .unwrap();
+    let inspection = PgPool::connect(&dsn).await.unwrap();
+    sqlx::query(
+        "INSERT INTO semantic_observations(observation_id,rule_id,revision,\
+         calibration_revision,series_id,sequence,kind,value_json,reading,signal_ref,\
+         edge_node_id,ledger_epoch,source_pub_seq,observed_at,created_at) \
+         SELECT concat('history-index-',value),'history-index-rule',1,1,\
+         'history-index-series',value,'numeric','1'::jsonb,NULL,'signal','node','epoch',\
+         value,value,value FROM generate_series(1,$1) AS value",
+    )
+    .bind(RETAINED_PREFIX)
+    .execute(&inspection)
+    .await
+    .unwrap();
+    sqlx::query("ANALYZE semantic_observations")
+        .execute(&inspection)
+        .await
+        .unwrap();
+
+    let plan = sqlx::query_scalar::<_, String>(
+        "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) \
+         SELECT observation.observation_row_id FROM semantic_observations AS observation \
+         WHERE observation.rule_id=$1 AND observation.observed_at>=$2 \
+         AND observation.observed_at<$3 ORDER BY observation.observed_at,\
+         observation.observation_row_id",
+    )
+    .bind("history-index-rule")
+    .bind(RETAINED_PREFIX - 2)
+    .bind(RETAINED_PREFIX + 1)
+    .fetch_all(&inspection)
+    .await
+    .unwrap()
+    .join("\n");
+    assert!(
+        plan.contains("using ix_semantic_observation_rule_observed_at_row"),
+        "recent semantic history must use its rule/time index: {plan}"
+    );
+    assert!(
+        !plan.contains("Seq Scan on semantic_observations") && !plan.contains("Sort"),
+        "recent semantic history must not scan or sort its retained per-rule prefix: {plan}"
+    );
+
+    let (buckets, _) = storage
+        .query_semantic_history_series(
+            "history-index-rule",
+            RETAINED_PREFIX - 2,
+            RETAINED_PREFIX + 1,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets[0].count, 3);
+    assert_eq!(buckets[0].minimum, 1.0);
+    assert_eq!(buckets[0].maximum, 1.0);
+    inspection.close().await;
 }
 
 #[tokio::test]
