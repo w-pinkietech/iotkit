@@ -423,23 +423,29 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
         .await
         .unwrap();
     let edge_id = storage.initialize_edge_identity(1).await.unwrap();
-    storage
-        .accept_batch(AcceptBatch {
-            edge_node_id: "edge-node-01".into(),
-            ledger_epoch: "epoch-01".into(),
-            publication_id: "publication-1".into(),
-            received_at: 2,
-            records: vec![RawRecord::new(1, r#"{"series_key":"contact","values":[1]}"#).unwrap()],
-        })
+    apply_contact_descriptor(&storage, "edge-node-01").await;
+    LegacyMappings::new(storage.clone())
+        .put(
+            LegacyMappingSpec {
+                edge_node_id: "edge-node-01".into(),
+                series_key: "018f0000-0000-7000-8000-000000000001:contact:na:primary".into(),
+                meaning: "production_pulse".into(),
+                trigger_mode: LegacyTriggerMode::ActiveEdge,
+                active_value: 1,
+            },
+            2,
+        )
         .await
         .unwrap();
+    accept_contact(&storage, 1, 1).await;
     drop(storage);
 
     let report = migrate_sqlite_to_postgres(&path, &dsn).await.unwrap();
     assert!(report.completed);
     assert_eq!(report.edge_id, edge_id);
-    assert_eq!(report.schema_version, 8);
+    assert_eq!(report.schema_version, 9);
     assert_eq!(report.table_counts["raw_records"], 1);
+    assert_eq!(report.table_counts["semantic_projection_queue"], 1);
     assert_eq!(report.cursors[0].accepted_through, 1);
     assert_eq!(report.content_digest.len(), 64);
 }

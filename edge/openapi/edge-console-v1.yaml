@@ -345,6 +345,7 @@ components:
         - warning_percent
         - raw_record_count
         - semantic_observation_count
+        - pending_semantic_projection_count
         - pending_output_count
         - projection_failure_count
         - backup_protected_raw_count
@@ -363,6 +364,11 @@ components:
         warning_percent: { type: integer, minimum: 50, maximum: 99 }
         raw_record_count: { type: integer, format: int64, minimum: 0 }
         semantic_observation_count: { type: integer, format: int64, minimum: 0 }
+        pending_semantic_projection_count:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Durable rule-record work awaiting semantic projection, not raw-record or receipt lag.
         pending_output_count: { type: integer, format: int64, minimum: 0 }
         projection_failure_count: { type: integer, format: int64, minimum: 0 }
         last_backup_id: { type: string }

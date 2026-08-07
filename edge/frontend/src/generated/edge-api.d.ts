@@ -197,6 +197,11 @@ export interface components {
             raw_record_count: number;
             /** Format: int64 */
             semantic_observation_count: number;
+            /**
+             * Format: int64
+             * @description Durable rule-record work awaiting semantic projection, not raw-record or receipt lag.
+             */
+            pending_semantic_projection_count: number;
             /** Format: int64 */
             pending_output_count: number;
             /** Format: int64 */

@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 19
+revision: 20
 ---
 
 # IoTKit Edge installation and recovery
@@ -111,7 +111,7 @@ fallback.
   a business report.
 - **Output**: active purpose-bound routes. Pending output is not deleted until
   broker PUBACK.
-- **System**: filesystem use, database size, raw/semantic/outbox counts, latest backup,
+- **System**: filesystem use, database size, raw/semantic/pending-projection/outbox counts, latest backup,
   and diagnosis by cause. A responsive Console does not prove that an Edge Node or Broker is healthy.
 - For `postgres`, SQL cannot report free space in the named volume, so the Console does not
   claim capacity is healthy. Add `docker compose ... exec postgres df -Pk /var/lib/postgresql/data`
@@ -186,8 +186,8 @@ Git.
 4. Check Mosquitto authentication and exact-topic ACL.
 5. Check Edge Node `accepted-through`; an unaccepted record must remain in Edge Node
    storage.
-6. Check IoTKit Edge's output queue. Retry uses the same observation identity.
-7. After recovery, confirm raw cursor and pending output converge before
+6. Check IoTKit Edge's semantic-projection queue and output queue. Retry uses the same observation identity.
+7. After recovery, confirm raw cursor, pending semantic projection, and pending output converge before
    deleting any retained data.
 
 ## 6. Edge Node registration recovery
@@ -766,10 +766,15 @@ PostgreSQL side; recreate an empty database and run migration again.
    credentials or private keys in Git.
 3. Fetch the new version and build the IoTKit Edge image. Keep the Broker running and stop only
    IoTKit Edge. Edge Nodes retain unacknowledged records.
-4. Start the new IoTKit Edge. Schema migrations run transactionally at startup.
-5. Verify HTTPS login, `/api/v1/system/diagnostics`, cursor reconvergence, pending outbox, history
-   graphs, and CSV. After the retention period, remove the old image and pre-update database hold.
-6. If startup, migration, or health verification fails, stop IoTKit Edge. Do not open a migrated
+4. For schema v9, retain the encrypted pre-update backup and leave enough free space for the durable
+   semantic-projection queue, its indexes, and SQLite WAL growth. Startup backfills every eligible
+   unreceipted rule-record pair in the migration transaction; it can take time on retained history,
+   but it either commits the complete queue with schema v9 or rolls back.
+5. Start the new IoTKit Edge. Schema migrations run transactionally at startup.
+6. Verify HTTPS login, `/api/v1/system/diagnostics`, cursor reconvergence, pending semantic projection,
+   pending outbox, history graphs, and CSV. Let the queue drain before treating restart recovery as
+   complete. After the retention period, remove the old image and pre-update database hold.
+7. If startup, migration, or health verification fails, stop IoTKit Edge. Do not open a migrated
    database with the old binary. Return to the old commit/image, restore the pre-update backup into
    a **new candidate database**, and perform the same swap as section 8. Do not recreate Broker or
    Edge Node identities or credentials.

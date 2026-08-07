@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
@@ -694,11 +695,21 @@ async fn accept_sqlite(
         .bind(&batch.ledger_epoch)
         .bind(record.pub_seq)
         .bind(&batch.publication_id)
-        .bind(encoded)
+        .bind(&encoded)
         .bind(hash)
         .bind(batch.received_at)
         .execute(&mut **transaction)
         .await?;
+        if let Some(series_key) = semantic_projection_series_key(&encoded) {
+            semantic_output::enqueue_projection_queue_sqlite(
+                transaction,
+                &batch.edge_node_id,
+                &batch.ledger_epoch,
+                record.pub_seq,
+                &series_key,
+            )
+            .await?;
+        }
         cursor = record.pub_seq;
     }
     if cursor > initial_cursor {
@@ -721,6 +732,7 @@ async fn accept_postgres(
     transaction: &mut Transaction<'_, Postgres>,
     batch: &AcceptBatch,
 ) -> Result<i64, StorageError> {
+    semantic_output::lock_edge_cursors_postgres(transaction, &batch.edge_node_id).await?;
     sqlx::query(
         "INSERT INTO accepted_cursors(edge_node_id, ledger_epoch, accepted_through, updated_at) \
          VALUES($1, $2, 0, 0) ON CONFLICT(edge_node_id, ledger_epoch) DO NOTHING",
@@ -775,11 +787,21 @@ async fn accept_postgres(
         .bind(&batch.ledger_epoch)
         .bind(record.pub_seq)
         .bind(&batch.publication_id)
-        .bind(encoded)
+        .bind(&encoded)
         .bind(hash)
         .bind(batch.received_at)
         .execute(&mut **transaction)
         .await?;
+        if let Some(series_key) = semantic_projection_series_key(&encoded) {
+            semantic_output::enqueue_projection_queue_postgres(
+                transaction,
+                &batch.edge_node_id,
+                &batch.ledger_epoch,
+                record.pub_seq,
+                &series_key,
+            )
+            .await?;
+        }
         cursor = record.pub_seq;
     }
     if cursor > initial_cursor {
@@ -795,6 +817,23 @@ async fn accept_postgres(
         .await?;
     }
     Ok(cursor)
+}
+
+#[derive(Deserialize)]
+struct SemanticProjectionEnvelope<'a> {
+    #[serde(borrow)]
+    family: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    series_key: Option<Cow<'a, str>>,
+}
+
+fn semantic_projection_series_key(record_json: &[u8]) -> Option<String> {
+    let Ok(envelope) = serde_json::from_slice::<SemanticProjectionEnvelope<'_>>(record_json) else {
+        return None;
+    };
+    (envelope.family.as_deref() == Some("measurement"))
+        .then(|| envelope.series_key.map(Cow::into_owned))
+        .flatten()
 }
 
 fn decode_sqlite_rows(rows: Vec<SqliteRow>) -> Result<Vec<StoredRawRecord>, StorageError> {

@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 11
+revision: 13
 ---
 
 # Architecture
@@ -67,7 +67,9 @@ Broker enrollmentはtransport接続許可だけで、activationではありま�
 
 ### Semanticとapplication export
 
-IoTKit Edgeはcommit済みraw dataから汎用semantic Observationをprojectし、versioned application eventを耐久outboxへenqueueします。MQTT QoS 1 publishがPUBACKを受けた時だけpublishedにします。Projection、enqueue、publish errorはpayloadやcredentialをlogへ出さず、loopを停止しません。
+IoTKit Edgeは100 msごとの独立したconvergence loopで、`semantic_projection_queue`にある耐久済みrule-record workだけを汎用semantic Observationへprojectし、versioned application eventを耐久outboxへenqueueします。Raw受理はmatchingするactive ruleごとにqueue rowを同一transactionで追加し、そのrule revisionとcalibration revisionをsnapshotします。Candidate選択はqueueを順序付けしてからimmutable raw recordとsnapshotをjoinするため、保持済みraw historyやreceipt historyを再scanしません。Queue rowはraw record件数やreceipt lagではなく、pendingのrule-record pair一件です。
+
+一つのprojection transactionはObservation、routeのoutbox row、durable receipt、runtime stateを作成してからqueue rowを削除します。Poison inputではfailureとterminal receiptを書いてから削除します。それ以外のfailureは全てrollbackし、queue rowをretry可能なまま残します。Receiptは引き続きdurable idempotency authorityです。Pending counter resetのboundaryは、境界までのworkがdrainするまで同じruleの後続queue rowをfenceします。各tickは最大16 itemをadmitし、20 ms後には次のitemをadmitしません。一つのin-flight transactionはこのwall-time budgetを超え得ます。Cancellationを確認してitem間でyieldするため、recovery中もlogin、diagnostics、custody workを進められます。MQTT QoS 1 publishがPUBACKを受けた時だけoutbox rowをpublishedにします。Publish failureまたは15秒timeoutではoutbox rowを後のtick向けにpendingのまま残します。transaction内のprojectionまたはenqueue failureは変更をrollbackし、queue rowをrestart後もretry可能なまま残します。Criticalなstorageまたはprojection task failureはpayloadやcredentialをlogへ出さず、loopを黙って継続せずserviceをcancelします。
 
 Raw batch transactionと`accepted-through`はsemantic projectionやapplication outputを待ちません。Application停止がEdge Node custodyを拘束しないためです。Semantic mappingとMQTT routeはfuture-onlyで、過去dataを暗黙にbackfillしません。
 

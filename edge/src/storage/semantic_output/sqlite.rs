@@ -65,6 +65,56 @@ async fn create_rule_sqlite(
     Ok(rule)
 }
 
+pub(crate) async fn enqueue_projection_queue_sqlite(
+    tx: &mut Transaction<'_, Sqlite>,
+    edge_node_id: &str,
+    ledger_epoch: &str,
+    pub_seq: i64,
+    series_key: &str,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "INSERT INTO semantic_projection_queue(\
+         rule_id,signal_ref,edge_node_id,ledger_epoch,pub_seq,received_at,rule_created_at,\
+         revision,calibration_revision) \
+         SELECT rule.rule_id,rule.signal_ref,raw.edge_node_id,raw.ledger_epoch,raw.pub_seq,\
+         raw.received_at,rule.created_at,revision.revision,calibration.revision \
+         FROM semantic_rules AS rule JOIN semantic_signals AS signal \
+         ON signal.signal_ref=rule.signal_ref JOIN raw_records AS raw \
+         ON raw.edge_node_id=? AND raw.ledger_epoch=? AND raw.pub_seq=? \
+         JOIN semantic_rule_revisions AS revision ON revision.rule_id=rule.rule_id \
+         AND revision.revision=CASE \
+           WHEN EXISTS(SELECT 1 FROM semantic_rule_starts AS all_start \
+             WHERE all_start.rule_id=rule.rule_id AND all_start.ledger_epoch=raw.ledger_epoch) \
+           THEN COALESCE((SELECT MAX(start.revision) FROM semantic_rule_starts AS start \
+             WHERE start.rule_id=rule.rule_id AND start.ledger_epoch=raw.ledger_epoch \
+             AND raw.pub_seq>start.start_after_pub_seq),\
+             (SELECT MIN(start.revision)-1 FROM semantic_rule_starts AS start \
+               WHERE start.rule_id=rule.rule_id AND start.ledger_epoch=raw.ledger_epoch)) \
+           ELSE rule.revision END \
+         JOIN semantic_calibration_revisions AS calibration \
+         ON calibration.signal_ref=signal.signal_ref AND calibration.revision=CASE \
+           WHEN EXISTS(SELECT 1 FROM semantic_calibration_starts AS all_cal \
+             WHERE all_cal.signal_ref=signal.signal_ref AND all_cal.ledger_epoch=raw.ledger_epoch) \
+           THEN COALESCE((SELECT MAX(start.revision) FROM semantic_calibration_starts AS start \
+             WHERE start.signal_ref=signal.signal_ref AND start.ledger_epoch=raw.ledger_epoch \
+             AND raw.pub_seq>start.start_after_pub_seq),\
+             (SELECT MIN(start.revision)-1 FROM semantic_calibration_starts AS start \
+               WHERE start.signal_ref=signal.signal_ref \
+                 AND start.ledger_epoch=raw.ledger_epoch)) \
+           ELSE signal.calibration_revision END \
+         WHERE signal.edge_node_id=? AND signal.series_key=? AND rule.active=1 \
+         ON CONFLICT(rule_id,ledger_epoch,pub_seq) DO NOTHING",
+    )
+    .bind(edge_node_id)
+    .bind(ledger_epoch)
+    .bind(pub_seq)
+    .bind(edge_node_id)
+    .bind(series_key)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn ensure_signal_sqlite(
     tx: &mut Transaction<'_, Sqlite>,
     edge_node_id: &str,
@@ -962,6 +1012,7 @@ async fn project_sqlite(
         next_sequence,
     )
     .await?;
+    delete_projection_queue_sqlite(tx, &candidate).await?;
     Ok(Some(ProjectedOne {
         receipt: true,
         observation: produced.is_some(),
@@ -997,6 +1048,7 @@ async fn record_projection_failure_sqlite(
     .bind(candidate.current_calibration_revision)
     .execute(&mut **tx)
     .await?;
+    delete_projection_queue_sqlite(tx, candidate).await?;
     Ok(Some(ProjectedOne {
         receipt: true,
         observation: false,
@@ -1004,51 +1056,29 @@ async fn record_projection_failure_sqlite(
     }))
 }
 
+const CANDIDATE_SQLITE: &str =
+    "SELECT queue.rule_id,queue.signal_ref,queue.edge_node_id,queue.ledger_epoch,queue.pub_seq,\
+     queue.received_at,raw.record_json,revision.revision,revision.series_id,revision.spec_json,\
+     calibration.revision AS calibration_revision,calibration.scale,\
+     calibration.calibration_offset AS calibration_offset \
+     FROM semantic_projection_queue AS queue JOIN raw_records AS raw \
+     ON raw.edge_node_id=queue.edge_node_id AND raw.ledger_epoch=queue.ledger_epoch \
+     AND raw.pub_seq=queue.pub_seq JOIN semantic_rule_revisions AS revision \
+     ON revision.rule_id=queue.rule_id AND revision.revision=queue.revision \
+     JOIN semantic_calibration_revisions AS calibration \
+     ON calibration.signal_ref=queue.signal_ref AND calibration.revision=queue.calibration_revision \
+     WHERE NOT EXISTS(SELECT 1 FROM semantic_counter_resets AS reset \
+       WHERE reset.rule_id=queue.rule_id AND reset.applied_at IS NULL \
+       AND NOT EXISTS(SELECT 1 FROM semantic_counter_reset_boundaries AS boundary \
+         WHERE boundary.reset_id=reset.reset_id AND boundary.ledger_epoch=queue.ledger_epoch \
+         AND queue.pub_seq<=boundary.apply_after_pub_seq)) \
+     ORDER BY queue.received_at,queue.edge_node_id,queue.ledger_epoch,queue.pub_seq,\
+     queue.rule_created_at,queue.rule_id LIMIT 1";
+
 async fn candidate_sqlite(
     tx: &mut Transaction<'_, Sqlite>,
 ) -> Result<Option<ProjectionCandidate>, StorageError> {
-    let row = sqlx::query(
-        "SELECT rule.rule_id,rule.signal_ref,signal.edge_node_id,raw.ledger_epoch,raw.pub_seq,\
-         raw.received_at,\
-         raw.record_json,revision.revision,revision.series_id,revision.spec_json,\
-         calibration.revision AS calibration_revision,calibration.scale,\
-         calibration.calibration_offset AS calibration_offset \
-         FROM semantic_rules AS rule JOIN semantic_signals AS signal \
-         ON signal.signal_ref=rule.signal_ref JOIN raw_records AS raw \
-         ON raw.edge_node_id=signal.edge_node_id \
-         AND json_extract(raw.record_json,'$.series_key')=signal.series_key \
-         JOIN semantic_rule_revisions AS revision ON revision.rule_id=rule.rule_id \
-         AND revision.revision=CASE \
-           WHEN EXISTS(SELECT 1 FROM semantic_rule_starts all_start \
-             WHERE all_start.rule_id=rule.rule_id AND all_start.ledger_epoch=raw.ledger_epoch) \
-           THEN COALESCE((SELECT MAX(start.revision) FROM semantic_rule_starts start \
-             WHERE start.rule_id=rule.rule_id AND start.ledger_epoch=raw.ledger_epoch \
-             AND raw.pub_seq>start.start_after_pub_seq),\
-             (SELECT MIN(start.revision)-1 FROM semantic_rule_starts start \
-               WHERE start.rule_id=rule.rule_id AND start.ledger_epoch=raw.ledger_epoch)) \
-           ELSE rule.revision END \
-         JOIN semantic_calibration_revisions AS calibration \
-         ON calibration.signal_ref=signal.signal_ref AND calibration.revision=CASE \
-           WHEN EXISTS(SELECT 1 FROM semantic_calibration_starts all_cal \
-             WHERE all_cal.signal_ref=signal.signal_ref AND all_cal.ledger_epoch=raw.ledger_epoch) \
-           THEN COALESCE((SELECT MAX(start.revision) FROM semantic_calibration_starts start \
-             WHERE start.signal_ref=signal.signal_ref AND start.ledger_epoch=raw.ledger_epoch \
-             AND raw.pub_seq>start.start_after_pub_seq),\
-             (SELECT MIN(start.revision)-1 FROM semantic_calibration_starts start \
-               WHERE start.signal_ref=signal.signal_ref \
-                 AND start.ledger_epoch=raw.ledger_epoch)) \
-           ELSE signal.calibration_revision END \
-         WHERE json_extract(raw.record_json,'$.family')='measurement' \
-         AND NOT EXISTS(SELECT 1 FROM semantic_projection_receipts receipt \
-           WHERE receipt.rule_id=rule.rule_id AND receipt.ledger_epoch=raw.ledger_epoch \
-           AND receipt.pub_seq=raw.pub_seq) \
-         AND (NOT EXISTS(SELECT 1 FROM semantic_rule_ends finish \
-           WHERE finish.rule_id=rule.rule_id AND finish.ledger_epoch=raw.ledger_epoch) \
-           OR raw.pub_seq<=(SELECT finish.end_at_pub_seq FROM semantic_rule_ends finish \
-             WHERE finish.rule_id=rule.rule_id AND finish.ledger_epoch=raw.ledger_epoch)) \
-         ORDER BY raw.received_at,raw.edge_node_id,raw.ledger_epoch,raw.pub_seq,rule.created_at \
-         LIMIT 1",
-    )
+    let row = sqlx::query(CANDIDATE_SQLITE)
     .fetch_optional(&mut **tx)
     .await?;
     row.map(|row| {
@@ -1071,6 +1101,26 @@ async fn candidate_sqlite(
         })
     })
     .transpose()
+}
+
+async fn delete_projection_queue_sqlite(
+    tx: &mut Transaction<'_, Sqlite>,
+    candidate: &ProjectionCandidate,
+) -> Result<(), StorageError> {
+    let deleted = sqlx::query(
+        "DELETE FROM semantic_projection_queue WHERE rule_id=? AND ledger_epoch=? AND pub_seq=?",
+    )
+    .bind(&candidate.rule_id)
+    .bind(&candidate.ledger_epoch)
+    .bind(candidate.pub_seq)
+    .execute(&mut **tx)
+    .await?;
+    if deleted.rows_affected() != 1 {
+        return Err(StorageError::InvalidSemantic(
+            "projection queue candidate disappeared".into(),
+        ));
+    }
+    Ok(())
 }
 
 async fn insert_observation_sqlite(
@@ -1389,13 +1439,10 @@ async fn ready_reset_sqlite(
          ON runtime.rule_id=rule.rule_id LEFT JOIN semantic_counter_reset_boundaries AS boundary \
          ON boundary.reset_id=reset.reset_id WHERE reset.applied_at IS NULL \
          AND NOT EXISTS(SELECT 1 FROM semantic_counter_reset_boundaries pending \
-           JOIN raw_records raw ON raw.edge_node_id=signal.edge_node_id \
-             AND raw.ledger_epoch=pending.ledger_epoch \
-             AND raw.pub_seq<=pending.apply_after_pub_seq \
-           WHERE pending.reset_id=reset.reset_id AND json_extract(raw.record_json,'$.series_key')=signal.series_key \
-             AND NOT EXISTS(SELECT 1 FROM semantic_projection_receipts receipt \
-               WHERE receipt.rule_id=reset.rule_id AND receipt.ledger_epoch=raw.ledger_epoch \
-               AND receipt.pub_seq=raw.pub_seq)) \
+           JOIN semantic_projection_queue queue ON queue.rule_id=reset.rule_id \
+             AND queue.ledger_epoch=pending.ledger_epoch \
+             AND queue.pub_seq<=pending.apply_after_pub_seq \
+           WHERE pending.reset_id=reset.reset_id) \
          ORDER BY reset.requested_at,reset.reset_id,boundary.ledger_epoch LIMIT 1",
     )
     .fetch_optional(&mut **tx)

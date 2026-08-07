@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 19
+revision: 20
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -46,7 +46,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 - **ライブ:** 有効な計測ruleごとにcardを表示し、calibrationとruleを適用した最新の処理済みcurrent valueと最終受信を、graphとは独立して示す。Graphは画面を開いてからの結果だけを示す。同じsignalに複数の有効ruleがあれば別cardになり、ruleがなければ設定案内を示す。数値は1秒bucketの折れ線を直近60秒、boolean/alarmは同じ1秒bucketから導出した最新10状態変化を表示する。Graphは最大でも直近60秒に限定する。開始後の処理済み値がまだなければ、過去のcurrent valueが表示できる場合でもgraphを空にして待機中と示し、cardからsensor詳細へ進める。Browserは画面がvisibleな間だけ5秒ごとに表示領域内の最大12件を更新する。一度取得した最終受信の経過時間とgraphの時間窓は、IoTKit Edgeの画面開始時刻を基準にBrowserの単調な経過時間で進めるため、一時的に再取得へ失敗しても進み続ける。未受信は明示し、5分以上新着がないruleは停止と断定せず**要確認**にする。Rawと過去dataは**受信履歴**で確認する。要確認時はsensor、Adapter、Edge Node、Broker、IoTKit Edge、semantic projectionの順に確認する。ライブとSensor詳細の**実信号プレビュー**のgraph横軸は有効なsemantic observed/event time、最終受信とcurrentの鮮度はIoTKit Edgeのraw receipt timeを使う。実信号プレビューは同じ直近60秒・1秒bucket graphで、bounded input history全体を評価してbooleanと累積のstateを維持する。累積ruleのresult cardには保存済みcurrent totalを示し、実信号プレビューには仮計算の直近60秒deltaを明記し、このgraph自体は直近60秒のままにする。保存済みruleは別のstaircase graphで、選択した保存済みruleの表示開始後の累積を示す。永続化済みcurrentの変化を追加し、表示開始後の最新最大60点だけを保持する。61点目から最古点を外すため、rolling 60秒の履歴requestから古い変化が外れても、最大60点の範囲では画面中のsession変化を消さない。新規draftは保存後に累積開始と示す。Staircaseは1秒bucketの平均ではなく、保存順の保存済みcurrent stateを示す。正常に保存済みの点を取得できないsessionは表示開始後の保存済み変化なしと示し、履歴取得失敗は取得できないと示す。
 - **受信履歴:** sensor・Edge Node・期間を一画面で絞り、選択中sensorと一致するbounded graphとrecent rawを確認。Raw graphの横軸はIoTKit Edge receipt日時を表示time zoneで示し、縦軸は値の範囲とsensor単位を示す。同条件CSVは汎用Observation exportで業務帳票ではない。
 - **出力:** Active purpose-bound route。Pending publicationはBroker PUBACKまで削除しない。
-- **システム:** Filesystem、DB size、raw/semantic/outbox件数、最終backup、原因別診断。Console応答だけでEdge Node/Broker正常と判断しない。
+- **システム:** Filesystem、DB size、raw/semantic/pending projection/outbox件数、最終backup、原因別診断。Console応答だけでEdge Node/Broker正常と判断しない。
 - `postgres`はSQLからnamed volume空き容量を得られない。Host監視へ`docker compose ... exec postgres df -Pk /var/lib/postgresql/data`を追加し、使用率90%または空き2 GiBでwarning、512 MiBでcritical。
 - **監査:** Display name、意味、出力、accountを誰が変更したか。
 - `iotkit-edge-nodectl smoke status`: MQTT PUBACKではなくIoTKit Edge durable acceptance。
@@ -98,8 +98,8 @@ Recoveryは既存sessionを失効します。Password、MQTT credential、privat
 3. DNS/routeとcertificateを確認する。
 4. Mosquitto authとexact-topic ACLを確認する。
 5. Edge Node `accepted-through`を確認する。未受理recordはEdge Nodeに残す。
-6. IoTKit Edge output queueを確認する。同じObservation identityでretryする。
-7. 復旧後、raw cursorとpending outputの収束前に保持dataを削除しない。
+6. IoTKit Edgeのsemantic projection queueとoutput queueを確認する。同じObservation identityでretryする。
+7. 復旧後、raw cursor、pending semantic projection、pending outputの収束前に保持dataを削除しない。
 
 ## 6. Edge Node登録の復旧
 
@@ -534,8 +534,9 @@ iotkit-edge storage migrate \
 1. 暗号化backupを作りConsole表示を確認する。
 2. Git commit、Compose設定、image IDを記録し、credential/keyをGitへ入れない。
 3. 新versionを取得・buildし、Brokerを動かしたままEdgeだけ停止する。
-4. 新Edgeを起動する。Schema migrationはstartup transaction。
-5. HTTPS login、diagnostics、cursor再収束、pending outbox、history graph、CSVを確認する。
-6. 失敗時はEdgeを停止する。旧binaryでmigration済みDBを開かず、旧commit/imageへ戻し、更新前backupを**新candidate DB**へrestoreして§8と同じswapを行う。Identity/credentialを作り直さない。
+4. Schema v9では暗号化済み更新前backupを保持し、durable semantic projection queue、そのindex、SQLite WAL増加分に十分な空き容量を確保する。Startup migrationは対象となる未receipt rule-record pairを全件backfillし、保持historyでは時間がかかり得るが、schema v9と完全なqueueを同時にcommitするかrollbackする。
+5. 新Edgeを起動する。Schema migrationはstartup transaction。
+6. HTTPS login、diagnostics、cursor再収束、pending semantic projection、pending outbox、history graph、CSVを確認する。Restart recovery完了として扱う前にqueueをdrainする。
+7. 失敗時はEdgeを停止する。旧binaryでmigration済みDBを開かず、旧commit/imageへ戻し、更新前backupを**新candidate DB**へrestoreして§8と同じswapを行う。Identity/credentialを作り直さない。
 
 これはmanual updateです。Migration後にimageだけ戻すのはrollbackではなく、対応する更新前DBも戻します。
