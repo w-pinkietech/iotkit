@@ -20,7 +20,8 @@ const SENSORS_PER_EDGE: usize = 8;
 const DEFAULT_RECORDS_PER_EDGE: usize = 100_000;
 const BATCH_SIZE: usize = 100;
 const MAX_PENDING_TAIL_PER_EDGE: usize = 64;
-const CAPACITY_SERIES_KEY: &str = "018f0000-0000-7000-8000-000000000001:temperature:na:primary";
+const CAPACITY_SYSTEM_ID: &str = "018f0000-0000-7000-8000-000000000001";
+const CAPACITY_SERIES_KEY: &str = "018f0000-0000-7000-8000-000000000001:temperature_c:0:primary";
 
 enum CapacityStorage {
     Sqlite(PathBuf),
@@ -83,6 +84,10 @@ fn edge_node_id(edge: usize) -> String {
     format!("capacity-edge-{edge}")
 }
 
+fn capacity_series_key(sensor: usize) -> String {
+    format!("{CAPACITY_SYSTEM_ID}:temperature_c:{sensor}:primary")
+}
+
 fn capacity_record(sequence: usize, series_key: &str) -> RawRecord {
     let encoded = serde_json::to_vec(&serde_json::json!({
         "family": "measurement",
@@ -104,6 +109,19 @@ fn capacity_record(sequence: usize, series_key: &str) -> RawRecord {
 
 async fn apply_capacity_descriptor(storage: &Storage, edge: usize) {
     let edge_node_id = edge_node_id(edge);
+    let signals = (0..SENSORS_PER_EDGE)
+        .map(|sensor| {
+            serde_json::json!({
+                "series_key": capacity_series_key(sensor),
+                "system_id": CAPACITY_SYSTEM_ID,
+                "measurement_key": "temperature_c",
+                "channel_index": sensor,
+                "variant": "primary",
+                "unit": null,
+                "value_type": "float"
+            })
+        })
+        .collect::<Vec<_>>();
     let descriptor = DescriptorSnapshot::decode(
         &serde_json::to_vec(&serde_json::json!({
             "schema_version": 2,
@@ -112,24 +130,17 @@ async fn apply_capacity_descriptor(storage: &Storage, edge: usize) {
             "descriptor_revision": 1,
             "complete": true,
             "devices": [{
-                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "system_id": CAPACITY_SYSTEM_ID,
                 "identifier": format!("capacity-device-{edge}"),
                 "state": "active",
                 "model_id": "capacity"
             }],
-            "signals": [{
-                "series_key": CAPACITY_SERIES_KEY,
-                "system_id": "018f0000-0000-7000-8000-000000000001",
-                "measurement_key": "temperature",
-                "channel_index": null,
-                "variant": "primary",
-                "unit": null,
-                "value_type": "float"
-            }]
+            "signals": signals
         }))
         .expect("encode capacity descriptor"),
     )
     .expect("decode capacity descriptor");
+    assert_eq!(descriptor.signals.len(), SENSORS_PER_EDGE);
     storage
         .apply_descriptor(&descriptor, 1_720_000_000_000 + edge as i64)
         .await
@@ -179,10 +190,7 @@ async fn capacity_regression_profile_emits_semantic_backlog_evidence() {
             let batch_end = (batch_start + BATCH_SIZE - 1).min(prefix_records);
             let records = (batch_start..=batch_end)
                 .map(|sequence| {
-                    let series_key = format!(
-                        "capacity-sensor-{}:temperature_c:na:primary",
-                        (sequence - 1) % SENSORS_PER_EDGE + 1
-                    );
+                    let series_key = capacity_series_key((sequence - 1) % SENSORS_PER_EDGE);
                     let record = capacity_record(sequence, &series_key);
                     payload_bytes += record.record_json.len();
                     record
@@ -323,6 +331,7 @@ async fn capacity_regression_profile_emits_semantic_backlog_evidence() {
         && status_before.pending_output_count == 0
         && status_before.projection_failure_count == 0
         && projected.receipts == expected_pending as usize
+        && status_after.semantic_observation_count == expected_pending
         && status_after.pending_semantic_projection_count == 0
         && status_after.pending_output_count == 0
         && status_after.projection_failure_count == 0

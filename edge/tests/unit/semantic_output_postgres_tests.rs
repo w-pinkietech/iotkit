@@ -247,6 +247,10 @@ async fn ready_rule_plan_uses_indexes_and_sorts_only_rule_heads() {
             .await
             .expect("analyze ready-rule plan tables");
     }
+    assert!(
+        !READY_RULE_POSTGRES.contains("$1"),
+        "ready-rule selection chooses the global rule head and must remain parameter-free"
+    );
     let plan: serde_json::Value = sqlx::query_scalar(&format!(
         "EXPLAIN (ANALYZE, FORMAT JSON, TIMING OFF) {READY_RULE_POSTGRES}"
     ))

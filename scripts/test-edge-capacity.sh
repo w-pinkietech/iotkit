@@ -41,7 +41,7 @@ report_contract='
   and (.restart_millis >= 0)
   and (.projection_recovery_wall_millis >= 0)
   and (.database_bytes > 0)
-  and (.semantic_observations > 0)
+  and (.semantic_observations == .projection_pending_before)
   and (.projection_pending_before > 0)
   and (.projection_pending_after == 0)
   and (.pending_output == 0)
