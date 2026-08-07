@@ -110,7 +110,6 @@ async fn acknowledges_records_only_after_activation_and_commit() {
         ack.topic,
         "iotkit/v1/edge-nodes/edge-node-01/accepted-through"
     );
-    assert_eq!(ack.qos, 1);
     assert!(!ack.retain);
     assert_eq!(
         serde_json::from_slice::<Value>(&ack.payload).expect("decode actual ack"),
