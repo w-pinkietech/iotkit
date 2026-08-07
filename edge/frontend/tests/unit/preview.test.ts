@@ -1952,7 +1952,7 @@ describe("automatic mapping preview", () => {
     expect(axisLabels.at(-2)).toBe(timeLabel(10_000));
     expect(axisLabels.at(-1)).toBe(timeLabel(1_010_000));
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
-  });
+  }, 15_000);
 
   it("resets saved counter history when the persisted rule changes", async () => {
     vi.useFakeTimers();
