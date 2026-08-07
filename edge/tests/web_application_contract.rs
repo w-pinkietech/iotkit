@@ -95,6 +95,7 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
 
 #[tokio::test]
 async fn empty_mapping_preview_returns_a_nullable_latest_point() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("empty-preview.db"),
@@ -105,7 +106,7 @@ async fn empty_mapping_preview_returns_a_nullable_latest_point() {
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
@@ -120,7 +121,7 @@ async fn empty_mapping_preview_returns_a_nullable_latest_point() {
         .clone();
     let application = StorageWebApplication::new(storage);
     let principal = application
-        .login("owner", "long enough owner password")
+        .login("owner", &password)
         .await
         .unwrap()
         .principal;
