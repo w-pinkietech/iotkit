@@ -1480,7 +1480,7 @@ describe("automatic mapping preview", () => {
       "[data-preview-counter-chart] .chart-line-raw",
     );
     expect(counterPath?.getAttribute("d")).toMatch(/^M 72\.00 /);
-    expect(counterPath?.getAttribute("d")).not.toContain(" H ");
+    expect(counterPath?.getAttribute("d")).toContain(" H ");
     expect(
       document.querySelector("[data-preview-counter-summary]")?.textContent,
     ).toContain("90");
@@ -1489,7 +1489,7 @@ describe("automatic mapping preview", () => {
     ).toContain("1点");
     expect(
       document.querySelector("[data-preview-counter-chart] title")?.textContent,
-    ).toContain("最新最大60点");
+    ).toContain("全期間を最大1,000点");
     const historyRequest = fetchMock.mock.calls
       .map(([input]) => new URL(String(input), "http://localhost"))
       .find((url) => url.pathname === "/api/v1/history/series");
@@ -1575,7 +1575,7 @@ describe("automatic mapping preview", () => {
       document.querySelector<SVGPathElement>(
         "[data-preview-counter-chart] .chart-line-raw",
       )?.getAttribute("d"),
-    ).not.toContain(" H ");
+    ).toContain(" H ");
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -1623,6 +1623,13 @@ describe("automatic mapping preview", () => {
       ),
     ).map((label) => label.textContent ?? "");
     expect(axisLabels.at(-2)).toBe(
+      new Date(10_000).toLocaleTimeString("ja-JP", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
+    );
+    expect(axisLabels.at(-1)).toBe(
       new Date(11_000).toLocaleTimeString("ja-JP", {
         hour: "2-digit",
         minute: "2-digit",
@@ -1690,6 +1697,13 @@ describe("automatic mapping preview", () => {
       ),
     ).map((label) => label.textContent ?? "");
     expect(axisLabels.at(-2)).toBe(
+      new Date(10_000).toLocaleTimeString("ja-JP", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
+    );
+    expect(axisLabels.at(-1)).toBe(
       new Date(11_000).toLocaleTimeString("ja-JP", {
         hour: "2-digit",
         minute: "2-digit",
@@ -1860,7 +1874,7 @@ describe("automatic mapping preview", () => {
       ),
     ).map((label) => label.textContent ?? "");
     expect(axisLabels.at(-1)).toBe(
-      new Date(11_500).toLocaleTimeString("ja-JP", {
+      new Date(12_000).toLocaleTimeString("ja-JP", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
@@ -1869,7 +1883,7 @@ describe("automatic mapping preview", () => {
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
-  it("drops the oldest saved counter point when a session reaches 61 points", async () => {
+  it("caps saved counter session history at 1,000 points", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     installPreviewDOM();
@@ -1903,26 +1917,28 @@ describe("automatic mapping preview", () => {
       ),
     );
 
-    await vi.advanceTimersByTimeAsync(60_000);
-    await vi.waitFor(() => expect(historyCalls).toBe(61));
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    await vi.waitFor(() => expect(historyCalls).toBe(1_001));
     await vi.waitFor(() =>
       expect(document.querySelector("[data-preview-counter-summary]")?.textContent).toContain(
-        "60",
+        "1,000",
       ),
     );
     const path = document.querySelector<SVGPathElement>(
       "[data-preview-counter-chart] .chart-line-raw",
     )?.getAttribute("d");
-    expect(path?.match(/ V /g)).toHaveLength(59);
+    expect(path?.match(/ V /g)).toHaveLength(999);
+    const summary = document.querySelector(
+      "[data-preview-counter-summary]",
+    )?.textContent;
+    expect(summary).toContain("表示開始後の1000点");
+    expect(summary).not.toContain("表示開始後の1001点");
     expect(
       document.querySelector("[data-preview-counter-summary]")?.textContent,
-    ).toContain("60点");
-    expect(
-      document.querySelector("[data-preview-counter-summary]")?.textContent,
-    ).toContain("最新最大60点");
+    ).toContain("最大1,000点");
     expect(
       document.querySelector("[data-preview-counter-chart] title")?.textContent,
-    ).toContain("61点目から最古点");
+    ).toContain("全期間を最大1,000点");
     const axisLabels = Array.from(
       document.querySelectorAll<SVGTextElement>(
         "[data-preview-counter-chart] .chart-axis-label",
@@ -1933,8 +1949,8 @@ describe("automatic mapping preview", () => {
       minute: "2-digit",
       second: "2-digit",
     });
-    expect(axisLabels.at(-2)).toBe(timeLabel(11_000));
-    expect(axisLabels.at(-2)).not.toBe(timeLabel(10_000));
+    expect(axisLabels.at(-2)).toBe(timeLabel(10_000));
+    expect(axisLabels.at(-1)).toBe(timeLabel(1_010_000));
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -2073,7 +2089,7 @@ describe("automatic mapping preview", () => {
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
-  it("keeps the saved total and baseline after a quiet rolling history poll", async () => {
+  it("extends a frozen saved total while the page clock advances", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     installPreviewDOM();
@@ -2087,14 +2103,14 @@ describe("automatic mapping preview", () => {
           historyCalls += 1;
           return Promise.resolve(
             historyCalls === 1
-              ? historySeriesResponse(100, [])
+              ? historySeriesResponse(10_000, [])
               : historySeriesResponse(null, []),
           );
         }
         return Promise.resolve(
           okPreviewResponse({
             kind: "cumulative_counter",
-            point: { counter: 100, increment: 0 },
+            point: { counter: 10_000, increment: 0 },
           }),
         );
       }),
@@ -2103,18 +2119,19 @@ describe("automatic mapping preview", () => {
     initializePreviews();
     await vi.waitFor(() =>
       expect(document.querySelector("[data-preview-counter-summary]")?.textContent).toContain(
-        "100",
+        "10,000",
       ),
     );
     const chartPath = document.querySelector<SVGPathElement>(
       "[data-preview-counter-chart] .chart-line-raw",
     );
+    const initialPath = chartPath?.getAttribute("d");
 
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(historyCalls).toBe(2));
     await vi.waitFor(() =>
       expect(document.querySelector("[data-preview-counter-summary]")?.textContent).toContain(
-        "100",
+        "10,000",
       ),
     );
     expect(
@@ -2125,6 +2142,7 @@ describe("automatic mapping preview", () => {
         "[data-preview-counter-chart] .chart-line-raw",
       ),
     ).toBe(chartPath);
+    expect(chartPath?.getAttribute("d")).not.toBe(initialPath);
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -2174,7 +2192,7 @@ describe("automatic mapping preview", () => {
       "[data-preview-counter-chart] .chart-line-raw",
     )?.getAttribute("d");
     const coordinates = path?.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
-    expect(coordinates).toHaveLength(2);
+    expect(coordinates).toHaveLength(3);
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -2425,7 +2443,7 @@ describe("automatic mapping preview", () => {
         document.querySelector<SVGPathElement>(
           "[data-preview-counter-chart] .chart-line-raw",
         )?.getAttribute("d"),
-      ).toBe(initialPath),
+      ).not.toBe(initialPath),
     );
     expect(
       document.querySelector<SVGPathElement>(

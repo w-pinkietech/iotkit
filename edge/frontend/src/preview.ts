@@ -62,7 +62,7 @@ interface CounterHistorySession {
 
 const COUNTER_WINDOW_MS = 60_000;
 const COUNTER_BUCKET_MS = 1_000;
-const COUNTER_SESSION_MAX_POINTS = 60;
+const COUNTER_SESSION_MAX_POINTS = 1_000;
 
 const kindLabels: Record<SemanticKind, string> = {
   numeric: "測定値",
@@ -203,8 +203,8 @@ function counterRuleIDForActiveForm(
 async function loadCounterHistory(
   ruleID: string,
   signal: AbortSignal,
+  end: number,
 ): Promise<CounterHistory> {
-  const end = Date.now();
   try {
     const result = await getHistorySeries(
       ruleID,
@@ -349,6 +349,7 @@ function mergeCounterHistorySession(
 function renderCounterHistoryChart(
   svg: SVGSVGElement,
   state: CounterPreviewState,
+  now: number,
 ): number {
   if (state.history?.status !== "available") {
     const unavailable = state.history?.status === "unavailable";
@@ -362,13 +363,20 @@ function renderCounterHistoryChart(
       emptyHint: unavailable
         ? "接続を確認して、もう一度表示してください"
         : "保存済みの結果を確認しています",
-      title: "横軸は表示開始後の時間、縦軸は保存済み累積値です。表示開始後の最新最大60点を示し、61点目から最古点を外します。",
+      title: "横軸は表示開始後の時間、縦軸は保存済み累積値です。表示開始後の全期間を最大1,000点で表示します。",
     });
   }
-  const chartPoints = state.session?.points ?? [];
-  const startAt = chartPoints[0]?.at ?? state.session?.startedAt;
-  const endAt = chartPoints.at(-1)?.at ?? startAt;
-  return renderSignalChart(svg, {
+  const sessionPoints = state.session?.points ?? [];
+  const lastPoint = sessionPoints.at(-1);
+  const currentAt = lastPoint
+    ? Math.max(lastPoint.at, now)
+    : undefined;
+  const chartPoints = lastPoint && currentAt !== undefined && currentAt > lastPoint.at
+    ? [...sessionPoints, { ...lastPoint, at: currentAt }]
+    : sessionPoints;
+  const startAt = state.session?.startedAt ?? chartPoints[0]?.at;
+  const endAt = currentAt ?? startAt;
+  renderSignalChart(svg, {
     points: chartPoints,
     geometry: "compact",
     rawStep: true,
@@ -377,9 +385,10 @@ function renderCounterHistoryChart(
     showLatestMarker: chartPoints.length > 0,
     ...(endAt === undefined ? {} : { latestAt: endAt }),
     emptyTitle: "表示開始後の保存済み累積変化はありません",
-    emptyHint: "保存済みの意味結果が変化すると、表示開始後の最新最大60点を表示します",
-    title: "横軸は表示開始後の時間、縦軸は保存済み累積値です。表示開始後の最新最大60点を示し、61点目から最古点を外します。",
+    emptyHint: "保存済みの意味結果が変化すると、表示開始後の全期間を表示します",
+    title: "横軸は表示開始後の時間、縦軸は保存済み累積値です。表示開始後の全期間を最大1,000点で表示します。",
   });
+  return sessionPoints.length;
 }
 
 function counterSummaryText(
@@ -396,7 +405,7 @@ function counterSummaryText(
   const latestValue = latestHistoryValue(history);
   return latestValue === undefined
     ? "表示開始後の保存済み累積変化はありません。"
-    : `${formatNumber(latestValue)}（保存済み、表示開始後の${plottedCount}点／最新最大60点）`;
+    : `${formatNumber(latestValue)}（保存済み、表示開始後の${plottedCount}点／最大1,000点）`;
 }
 
 function counterPreviewMessage(
@@ -412,12 +421,6 @@ function counterPreviewMessage(
   return latestHistoryValue(availableCounterHistory(state)) === undefined
     ? "表示開始後の保存済み累積変化はありません。"
     : "保存済み累積値は表示開始後の変化グラフで確認できます。";
-}
-
-function counterHistorySignature(state: CounterPreviewState): string {
-  if (!state.history) return "none";
-  if (state.history.status !== "available") return state.history.status;
-  return JSON.stringify(state.session?.points ?? []);
 }
 
 function latestRuleOutcome(
@@ -962,6 +965,12 @@ function initializePreview(panel: HTMLElement): void {
   );
   const unit = panel.dataset.unit ?? "";
   if (!range || !count || !message || !chart) return;
+  const clockStartedAt = Date.now();
+  const monotonicStartedAt = performance.now();
+  const edgeNow = (): number =>
+    Math.floor(
+      clockStartedAt + Math.max(0, performance.now() - monotonicStartedAt),
+    );
 
   const sourceSummary = query<HTMLElement>(
     ".sensor-detail-latest[data-source-value]",
@@ -984,8 +993,6 @@ function initializePreview(panel: HTMLElement): void {
   let counterHistory: CounterHistory | undefined;
   let counterHistorySession: CounterHistorySession | undefined;
   let lastAvailableCounterHistory: HistorySeries | undefined;
-  let renderedCounterHistoryKey: string | undefined;
-  let renderedCounterHistoryPointCount = 0;
   let renderCurrentCounter:
     | ((state: CounterPreviewState) => void)
     | undefined;
@@ -1019,8 +1026,6 @@ function initializePreview(panel: HTMLElement): void {
   const hideSemanticAuxiliaries = (): void => {
     setSemanticLegends(false, false);
     setCounterPanel(false);
-    renderedCounterHistoryKey = undefined;
-    renderedCounterHistoryPointCount = 0;
   };
 
   const setFeedState = (state: string): void => {
@@ -1099,24 +1104,21 @@ function initializePreview(panel: HTMLElement): void {
       counterHistory = undefined;
       counterHistorySession = undefined;
       lastAvailableCounterHistory = undefined;
-      renderedCounterHistoryKey = undefined;
-      renderedCounterHistoryPointCount = 0;
       renderCurrentCounter = undefined;
       return { persisted: false };
     }
     if (counterHistoryRuleID !== ruleID) {
       counterHistoryController?.abort();
       counterHistoryController = undefined;
+      renderCurrentCounter = undefined;
       counterHistoryRuleID = ruleID;
       counterHistory = { status: "pending" };
       counterHistorySession = {
-        startedAt: Date.now(),
+        startedAt: edgeNow(),
         baselineCaptured: false,
         points: [],
       };
       lastAvailableCounterHistory = undefined;
-      renderedCounterHistoryKey = undefined;
-      renderedCounterHistoryPointCount = 0;
     }
     return {
       persisted: true,
@@ -1129,7 +1131,8 @@ function initializePreview(panel: HTMLElement): void {
     if (counterHistoryController || counterHistoryRuleID !== ruleID) return;
     const historyController = new AbortController();
     counterHistoryController = historyController;
-    void loadCounterHistory(ruleID, historyController.signal)
+    const requestAt = edgeNow();
+    void loadCounterHistory(ruleID, historyController.signal, requestAt)
       .then((history) => {
         if (
           counterHistoryController !== historyController ||
@@ -1147,7 +1150,7 @@ function initializePreview(panel: HTMLElement): void {
             counterHistorySession = mergeCounterHistorySession(
               counterHistorySession,
               history.value,
-              Date.now(),
+              edgeNow(),
             );
           }
           renderCurrentCounter?.({
@@ -1185,7 +1188,6 @@ function initializePreview(panel: HTMLElement): void {
 
   const refresh = async (): Promise<void> => {
     controller?.abort();
-    renderCurrentCounter = undefined;
     const requestController = new AbortController();
     controller = requestController;
     clearFieldErrors(previewScope);
@@ -1211,6 +1213,7 @@ function initializePreview(panel: HTMLElement): void {
       );
       if (controller !== requestController || requestController.signal.aborted) return;
       if (!result.ok) {
+        renderCurrentCounter = undefined;
         hideSemanticAuxiliaries();
         const fieldName = result.error?.error.field;
         const activeForm = forms.find(
@@ -1273,6 +1276,7 @@ function initializePreview(panel: HTMLElement): void {
         selectedReady ??
         (selection.raw ? rawOnlyPreview(selection.raw) : null);
       if (!payload) {
+        renderCurrentCounter = undefined;
         hideSemanticAuxiliaries();
         renderRuleResult(
           panel,
@@ -1299,8 +1303,6 @@ function initializePreview(panel: HTMLElement): void {
       setSemanticLegends(Boolean(selectedReady), showResult, payload);
       if (!persistedRuleID) {
         setCounterPanel(false);
-        renderedCounterHistoryKey = undefined;
-        renderedCounterHistoryPointCount = 0;
       }
       const plottedPoints = renderPreviewChart(
         chart,
@@ -1343,18 +1345,11 @@ function initializePreview(panel: HTMLElement): void {
       };
       const renderCounterState = (state: CounterPreviewState): void => {
         if (persistedRuleID && counterChart) {
-          const historyKey = counterHistorySignature(state);
-          let plottedCount = 0;
-          if (historyKey !== renderedCounterHistoryKey) {
-            plottedCount = renderCounterHistoryChart(
-              counterChart,
-              state,
-            );
-            renderedCounterHistoryKey = historyKey;
-            renderedCounterHistoryPointCount = plottedCount;
-          } else {
-            plottedCount = renderedCounterHistoryPointCount;
-          }
+          const plottedCount = renderCounterHistoryChart(
+            counterChart,
+            state,
+            edgeNow(),
+          );
           setCounterPanel(true);
           if (counterSummary) {
             setText(counterSummary, counterSummaryText(state, plottedCount));
@@ -1419,7 +1414,7 @@ function initializePreview(panel: HTMLElement): void {
         sourceSummary.dataset.sourceValue = rawValue;
       }
       if (latest && (currentReceived || sourceCurrentReceived)) {
-        const elapsed = Math.max(0, Date.now() - latest.received_at);
+        const elapsed = Math.max(0, edgeNow() - latest.received_at);
         const relative =
           elapsed < 5_000
             ? "たった今"
@@ -1441,6 +1436,7 @@ function initializePreview(panel: HTMLElement): void {
 
     } catch (error: unknown) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
+        renderCurrentCounter = undefined;
         hideSemanticAuxiliaries();
         renderRuleResult(panel, null, "error", unit);
         clearAuxiliaryOutputs(accessibleSummary, "error");
@@ -1530,6 +1526,9 @@ function initializePreview(panel: HTMLElement): void {
       !paused
     ) {
       void refresh();
+      if (counterHistoryRuleID) {
+        renderCurrentCounter?.(counterStateFor(counterHistoryRuleID));
+      }
     }
   }, 1000);
 }

@@ -149,7 +149,8 @@ function pathFor(
     if (!path) {
       path = `M ${pointX} ${pointY}`;
     } else if (step && finite(previous)) {
-      path += ` H ${pointX} V ${pointY}`;
+      path += ` H ${pointX}`;
+      if (current !== previous) path += ` V ${pointY}`;
     } else {
       path += ` L ${pointX} ${pointY}`;
     }

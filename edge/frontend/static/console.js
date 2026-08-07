@@ -593,7 +593,8 @@
       if (!path) {
         path = `M ${pointX} ${pointY}`;
       } else if (step && finite(previous)) {
-        path += ` H ${pointX} V ${pointY}`;
+        path += ` H ${pointX}`;
+        if (current !== previous) path += ` V ${pointY}`;
       } else {
         path += ` L ${pointX} ${pointY}`;
       }
@@ -864,7 +865,7 @@
   // src/preview.ts
   var COUNTER_WINDOW_MS = 6e4;
   var COUNTER_BUCKET_MS = 1e3;
-  var COUNTER_SESSION_MAX_POINTS = 60;
+  var COUNTER_SESSION_MAX_POINTS = 1e3;
   var kindLabels = {
     numeric: "\u6E2C\u5B9A\u5024",
     boolean: "ON / OFF",
@@ -963,8 +964,7 @@
     const form = forms.find((candidate) => candidate.dataset.previewId === activeID);
     return form?.dataset.ruleId && formField(form, "kind")?.value === "cumulative_counter" ? form.dataset.ruleId : void 0;
   }
-  async function loadCounterHistory(ruleID, signal) {
-    const end = Date.now();
+  async function loadCounterHistory(ruleID, signal, end) {
     try {
       const result = await getHistorySeries(
         ruleID,
@@ -1056,7 +1056,7 @@
     }
     return { ...session, baselineCaptured, points };
   }
-  function renderCounterHistoryChart(svg, state) {
+  function renderCounterHistoryChart(svg, state, now) {
     if (state.history?.status !== "available") {
       const unavailable = state.history?.status === "unavailable";
       return renderSignalChart(svg, {
@@ -1065,13 +1065,16 @@
         axisLabels: { start: "\u8868\u793A\u958B\u59CB", end: "\u73FE\u5728" },
         emptyTitle: unavailable ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093" : "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059",
         emptyHint: unavailable ? "\u63A5\u7D9A\u3092\u78BA\u8A8D\u3057\u3066\u3001\u3082\u3046\u4E00\u5EA6\u8868\u793A\u3057\u3066\u304F\u3060\u3055\u3044" : "\u4FDD\u5B58\u6E08\u307F\u306E\u7D50\u679C\u3092\u78BA\u8A8D\u3057\u3066\u3044\u307E\u3059",
-        title: "\u6A2A\u8EF8\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6642\u9593\u3001\u7E26\u8EF8\u306F\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3067\u3059\u3002\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6700\u65B0\u6700\u592760\u70B9\u3092\u793A\u3057\u300161\u70B9\u76EE\u304B\u3089\u6700\u53E4\u70B9\u3092\u5916\u3057\u307E\u3059\u3002"
+        title: "\u6A2A\u8EF8\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6642\u9593\u3001\u7E26\u8EF8\u306F\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3067\u3059\u3002\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5168\u671F\u9593\u3092\u6700\u59271,000\u70B9\u3067\u8868\u793A\u3057\u307E\u3059\u3002"
       });
     }
-    const chartPoints = state.session?.points ?? [];
-    const startAt = chartPoints[0]?.at ?? state.session?.startedAt;
-    const endAt = chartPoints.at(-1)?.at ?? startAt;
-    return renderSignalChart(svg, {
+    const sessionPoints2 = state.session?.points ?? [];
+    const lastPoint = sessionPoints2.at(-1);
+    const currentAt = lastPoint ? Math.max(lastPoint.at, now) : void 0;
+    const chartPoints = lastPoint && currentAt !== void 0 && currentAt > lastPoint.at ? [...sessionPoints2, { ...lastPoint, at: currentAt }] : sessionPoints2;
+    const startAt = state.session?.startedAt ?? chartPoints[0]?.at;
+    const endAt = currentAt ?? startAt;
+    renderSignalChart(svg, {
       points: chartPoints,
       geometry: "compact",
       rawStep: true,
@@ -1080,9 +1083,10 @@
       showLatestMarker: chartPoints.length > 0,
       ...endAt === void 0 ? {} : { latestAt: endAt },
       emptyTitle: "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093",
-      emptyHint: "\u4FDD\u5B58\u6E08\u307F\u306E\u610F\u5473\u7D50\u679C\u304C\u5909\u5316\u3059\u308B\u3068\u3001\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6700\u65B0\u6700\u592760\u70B9\u3092\u8868\u793A\u3057\u307E\u3059",
-      title: "\u6A2A\u8EF8\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6642\u9593\u3001\u7E26\u8EF8\u306F\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3067\u3059\u3002\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6700\u65B0\u6700\u592760\u70B9\u3092\u793A\u3057\u300161\u70B9\u76EE\u304B\u3089\u6700\u53E4\u70B9\u3092\u5916\u3057\u307E\u3059\u3002"
+      emptyHint: "\u4FDD\u5B58\u6E08\u307F\u306E\u610F\u5473\u7D50\u679C\u304C\u5909\u5316\u3059\u308B\u3068\u3001\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5168\u671F\u9593\u3092\u8868\u793A\u3057\u307E\u3059",
+      title: "\u6A2A\u8EF8\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u6642\u9593\u3001\u7E26\u8EF8\u306F\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u3067\u3059\u3002\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5168\u671F\u9593\u3092\u6700\u59271,000\u70B9\u3067\u8868\u793A\u3057\u307E\u3059\u3002"
     });
+    return sessionPoints2.length;
   }
   function counterSummaryText(state, plottedCount) {
     if (state.history?.status === "pending") {
@@ -1093,7 +1097,7 @@
     }
     const history = availableCounterHistory(state);
     const latestValue = latestHistoryValue(history);
-    return latestValue === void 0 ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093\u3002" : `${formatNumber(latestValue)}\uFF08\u4FDD\u5B58\u6E08\u307F\u3001\u8868\u793A\u958B\u59CB\u5F8C\u306E${plottedCount}\u70B9\uFF0F\u6700\u65B0\u6700\u592760\u70B9\uFF09`;
+    return latestValue === void 0 ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093\u3002" : `${formatNumber(latestValue)}\uFF08\u4FDD\u5B58\u6E08\u307F\u3001\u8868\u793A\u958B\u59CB\u5F8C\u306E${plottedCount}\u70B9\uFF0F\u6700\u59271,000\u70B9\uFF09`;
   }
   function counterPreviewMessage(state) {
     if (!state.persisted) return "\u4FDD\u5B58\u5F8C\u306B\u7D2F\u7A4D\u958B\u59CB\u3002";
@@ -1104,11 +1108,6 @@
       return "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5C65\u6B74\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3002";
     }
     return latestHistoryValue(availableCounterHistory(state)) === void 0 ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5909\u5316\u306F\u3042\u308A\u307E\u305B\u3093\u3002" : "\u4FDD\u5B58\u6E08\u307F\u7D2F\u7A4D\u5024\u306F\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5909\u5316\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002";
-  }
-  function counterHistorySignature(state) {
-    if (!state.history) return "none";
-    if (state.history.status !== "available") return state.history.status;
-    return JSON.stringify(state.session?.points ?? []);
   }
   function latestRuleOutcome(payload, unit, counterState = { persisted: false }) {
     const latest = latestPreviewPoint(payload);
@@ -1516,6 +1515,11 @@
     );
     const unit = panel.dataset.unit ?? "";
     if (!range || !count || !message || !chart) return;
+    const clockStartedAt = Date.now();
+    const monotonicStartedAt = performance.now();
+    const edgeNow = () => Math.floor(
+      clockStartedAt + Math.max(0, performance.now() - monotonicStartedAt)
+    );
     const sourceSummary = query(
       ".sensor-detail-latest[data-source-value]"
     );
@@ -1533,8 +1537,6 @@
     let counterHistory;
     let counterHistorySession;
     let lastAvailableCounterHistory;
-    let renderedCounterHistoryKey;
-    let renderedCounterHistoryPointCount = 0;
     let renderCurrentCounter;
     let debounce;
     let previewUnavailable = false;
@@ -1555,8 +1557,6 @@
     const hideSemanticAuxiliaries = () => {
       setSemanticLegends(false, false);
       setCounterPanel(false);
-      renderedCounterHistoryKey = void 0;
-      renderedCounterHistoryPointCount = 0;
     };
     const setFeedState = (state) => {
       if (feedState) setText(feedState, state);
@@ -1618,24 +1618,21 @@
         counterHistory = void 0;
         counterHistorySession = void 0;
         lastAvailableCounterHistory = void 0;
-        renderedCounterHistoryKey = void 0;
-        renderedCounterHistoryPointCount = 0;
         renderCurrentCounter = void 0;
         return { persisted: false };
       }
       if (counterHistoryRuleID !== ruleID) {
         counterHistoryController?.abort();
         counterHistoryController = void 0;
+        renderCurrentCounter = void 0;
         counterHistoryRuleID = ruleID;
         counterHistory = { status: "pending" };
         counterHistorySession = {
-          startedAt: Date.now(),
+          startedAt: edgeNow(),
           baselineCaptured: false,
           points: []
         };
         lastAvailableCounterHistory = void 0;
-        renderedCounterHistoryKey = void 0;
-        renderedCounterHistoryPointCount = 0;
       }
       return {
         persisted: true,
@@ -1647,7 +1644,8 @@
       if (counterHistoryController || counterHistoryRuleID !== ruleID) return;
       const historyController = new AbortController();
       counterHistoryController = historyController;
-      void loadCounterHistory(ruleID, historyController.signal).then((history) => {
+      const requestAt = edgeNow();
+      void loadCounterHistory(ruleID, historyController.signal, requestAt).then((history) => {
         if (counterHistoryController !== historyController || counterHistoryRuleID !== ruleID || historyController.signal.aborted) {
           return;
         }
@@ -1660,7 +1658,7 @@
             counterHistorySession = mergeCounterHistorySession(
               counterHistorySession,
               history.value,
-              Date.now()
+              edgeNow()
             );
           }
           renderCurrentCounter?.({
@@ -1692,7 +1690,6 @@
     };
     const refresh = async () => {
       controller?.abort();
-      renderCurrentCounter = void 0;
       const requestController = new AbortController();
       controller = requestController;
       clearFieldErrors(previewScope);
@@ -1717,6 +1714,7 @@
         );
         if (controller !== requestController || requestController.signal.aborted) return;
         if (!result.ok) {
+          renderCurrentCounter = void 0;
           hideSemanticAuxiliaries();
           const fieldName = result.error?.error.field;
           const activeForm = forms.find(
@@ -1766,6 +1764,7 @@
         const selectedFailure = selection.selected?.error ? selection.selected : null;
         const payload = selectedReady ?? (selection.raw ? rawOnlyPreview(selection.raw) : null);
         if (!payload) {
+          renderCurrentCounter = void 0;
           hideSemanticAuxiliaries();
           renderRuleResult(
             panel,
@@ -1791,8 +1790,6 @@
         setSemanticLegends(Boolean(selectedReady), showResult, payload);
         if (!persistedRuleID) {
           setCounterPanel(false);
-          renderedCounterHistoryKey = void 0;
-          renderedCounterHistoryPointCount = 0;
         }
         const plottedPoints = renderPreviewChart(
           chart,
@@ -1826,18 +1823,11 @@
         };
         const renderCounterState = (state) => {
           if (persistedRuleID && counterChart) {
-            const historyKey = counterHistorySignature(state);
-            let plottedCount = 0;
-            if (historyKey !== renderedCounterHistoryKey) {
-              plottedCount = renderCounterHistoryChart(
-                counterChart,
-                state
-              );
-              renderedCounterHistoryKey = historyKey;
-              renderedCounterHistoryPointCount = plottedCount;
-            } else {
-              plottedCount = renderedCounterHistoryPointCount;
-            }
+            const plottedCount = renderCounterHistoryChart(
+              counterChart,
+              state,
+              edgeNow()
+            );
             setCounterPanel(true);
             if (counterSummary) {
               setText(counterSummary, counterSummaryText(state, plottedCount));
@@ -1896,7 +1886,7 @@
           sourceSummary.dataset.sourceValue = rawValue;
         }
         if (latest && (currentReceived || sourceCurrentReceived)) {
-          const elapsed = Math.max(0, Date.now() - latest.received_at);
+          const elapsed = Math.max(0, edgeNow() - latest.received_at);
           const relative = elapsed < 5e3 ? "\u305F\u3063\u305F\u4ECA" : elapsed < 6e4 ? `${Math.floor(elapsed / 1e3)}\u79D2\u524D` : `${Math.floor(elapsed / 6e4)}\u5206\u524D`;
           const receivedTitle = new Date(latest.received_at).toLocaleString(
             "ja-JP"
@@ -1912,6 +1902,7 @@
         }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
+          renderCurrentCounter = void 0;
           hideSemanticAuxiliaries();
           renderRuleResult(panel, null, "error", unit);
           clearAuxiliaryOutputs(accessibleSummary, "error");
@@ -1987,6 +1978,9 @@
     window.setInterval(() => {
       if (document.visibilityState === "visible" && !previewUnavailable && !paused) {
         void refresh();
+        if (counterHistoryRuleID) {
+          renderCurrentCounter?.(counterStateFor(counterHistoryRuleID));
+        }
       }
     }, 1e3);
   }
@@ -1998,10 +1992,10 @@
 
   // src/live.ts
   var REFRESH_MS = 5 * 1e3;
-  var SESSION_WINDOW_MS = 60 * 1e3;
   var BUCKET_MS = 1e3;
-  var MAX_NUMERIC_POINTS = 60;
-  var MAX_BOOLEAN_POINTS = 10;
+  var MAX_HISTORY_BUCKETS = 1e3;
+  var MAX_NUMERIC_POINTS = MAX_HISTORY_BUCKETS;
+  var MAX_BOOLEAN_POINTS = MAX_HISTORY_BUCKETS;
   var MAX_ACTIVE_CARDS = 12;
   function formatNumber2(value, decimalPlaces = 1) {
     return value.toLocaleString("ja-JP", {
@@ -2022,12 +2016,22 @@
     }
     return `${Math.floor(elapsed / (60 * 6e4))}\u6642\u9593\u524D`;
   }
-  function sessionPoints(payload, boolean, windowStart) {
-    const points = payload.points.filter((point) => point.bucket_start >= windowStart);
+  function historyWindow(from, to) {
+    const duration = Math.max(BUCKET_MS, to - from);
+    const bucketMs = Math.max(
+      BUCKET_MS,
+      Math.ceil(duration / MAX_HISTORY_BUCKETS / BUCKET_MS) * BUCKET_MS
+    );
+    return { from, to, bucketMs };
+  }
+  function sessionPoints(payload, boolean, sessionStartedAt) {
+    const points = payload.points.filter(
+      (point) => point.bucket_start >= sessionStartedAt
+    );
     if (!boolean) return points.slice(-MAX_NUMERIC_POINTS);
     const transitions = [];
     for (const point of points) {
-      const state = point.average >= 0.5 ? 1 : 0;
+      const state = (point.last_value ?? point.average) >= 0.5 ? 1 : 0;
       if (transitions.at(-1)?.average === state) continue;
       transitions.push({
         ...point,
@@ -2039,8 +2043,7 @@
     return transitions.slice(-MAX_BOOLEAN_POINTS);
   }
   function renderChart(svg, payload, boolean, unit, now, sessionStartedAt) {
-    const windowStart = Math.max(sessionStartedAt, now - SESSION_WINDOW_MS);
-    const points = sessionPoints(payload, boolean, windowStart);
+    const points = sessionPoints(payload, boolean, sessionStartedAt);
     const chartPoints = points.map((point) => ({
       at: point.bucket_start,
       value: point.average,
@@ -2053,17 +2056,17 @@
       geometry: "compact",
       unit,
       boolean,
-      startAt: windowStart,
-      endAt: Math.max(now, windowStart + 1e3),
-      latestAt: payload.latest_received_at !== null && payload.latest_received_at >= windowStart ? payload.latest_received_at : points.at(-1)?.bucket_start,
+      startAt: sessionStartedAt,
+      endAt: Math.max(now, sessionStartedAt + 1e3),
+      latestAt: payload.latest_received_at !== null && payload.latest_received_at >= sessionStartedAt ? payload.latest_received_at : points.at(-1)?.bucket_start,
       showLatestMarker: true,
       axisLabels: {
-        start: windowStart === sessionStartedAt ? "\u958B\u59CB" : "60\u79D2\u524D",
+        start: "\u958B\u59CB",
         end: "\u73FE\u5728"
       },
       emptyTitle: "\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u53D7\u4FE1\u3092\u5F85\u3063\u3066\u3044\u307E\u3059",
-      emptyHint: "1\u79D2\u5358\u4F4D\u30FB\u76F4\u8FD160\u79D2\u306E\u30C7\u30FC\u30BF\u3092\u8868\u793A\u3057\u307E\u3059",
-      title: boolean ? "\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u592760\u79D2\uFF09\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\uFF08\u6700\u592760\u79D2\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`
+      emptyHint: "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5168\u671F\u9593\u3092\u6700\u59271,000bucket\u3067\u8868\u793A\u3057\u307E\u3059",
+      title: boolean ? "\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u5168\u671F\u9593\uFF08\u6700\u59271,000bucket\uFF09\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u5168\u671F\u9593\uFF08\u6700\u59271,000bucket\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`
     });
   }
   function setStatus(card, label, className) {
@@ -2113,7 +2116,7 @@
       }
     }
     if (summary) {
-      summary.textContent = boolean ? `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u30021\u79D2\u5358\u4F4D\u30FB\u76F4\u8FD160\u79D2\u3001\u7E26\u8EF8\u306FON/OFF\u3067\u3059\u3002` : `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u30021\u79D2\u5358\u4F4D\u30FB\u76F4\u8FD160\u79D2\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
+      summary.textContent = boolean ? `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u306E\u72B6\u614B\u5909\u5316\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u5168\u671F\u9593\u30FB\u6700\u59271,000bucket\u3001\u7E26\u8EF8\u306FON/OFF\u3067\u3059\u3002` : `\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089${pointCount}\u4EF6\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002\u5168\u671F\u9593\u30FB\u6700\u59271,000bucket\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`;
     }
   }
   function activeCards(dashboard) {
@@ -2166,11 +2169,13 @@
           const ruleId = card.dataset.ruleId;
           if (!ruleId) return false;
           const catchingUp = liveSnapshotAt < sessionStartedAt && !catchUpComplete.has(card);
+          const requestFrom = catchingUp ? liveSnapshotAt : sessionStartedAt;
+          const requestWindow = historyWindow(requestFrom, now + 1);
           const result = await getHistorySeries(
             ruleId,
-            Math.max(catchingUp ? liveSnapshotAt : sessionStartedAt, now - SESSION_WINDOW_MS),
-            now + 1,
-            BUCKET_MS,
+            requestWindow.from,
+            requestWindow.to,
+            requestWindow.bucketMs,
             controller.signal
           ).catch(() => null);
           if (!result?.ok) return false;

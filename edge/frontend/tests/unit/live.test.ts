@@ -97,6 +97,49 @@ describe("live dashboard", () => {
     );
   });
 
+  it("uses the exact terminal value for a multi-sample boolean bucket", async () => {
+    vi.useFakeTimers();
+    const sessionStart = 1_700_000_000_000;
+    vi.setSystemTime(sessionStart);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="${sessionStart}">
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("contact-01", "boolean")}
+      </section>
+    `;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+          signal_ref: "contact-01",
+          display_name: "運転接点",
+          unit: "",
+          value_type: "boolean",
+          sample_count: 2,
+          latest_received_at: sessionStart,
+          latest_value: false,
+          points: [{
+            bucket_start: sessionStart,
+            minimum: 0,
+            average: 0.5,
+            maximum: 1,
+            last_value: 0,
+            sample_count: 2,
+          }],
+        })))),
+    );
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const contact = document.querySelector<HTMLElement>(
+      '[data-signal-ref="contact-01"]',
+    )!;
+    expect(contact.querySelector("[data-live-value]")?.textContent).toBe("OFF");
+    expect(contact.querySelector("path")?.getAttribute("d")).toMatch(
+      /^M 72\.00 132\.00$/,
+    );
+  });
+
   it("starts empty and plots only data received after the live view opens", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_005_000);
@@ -434,7 +477,7 @@ describe("live dashboard", () => {
     expect(liveCard.querySelector("[data-live-value]")?.textContent).toBe("24.8 ℃");
   });
 
-  it("bounds numeric samples to sixty and contact transitions to ten", async () => {
+  it("keeps the live graph growing after one minute with bounded history", async () => {
     vi.useFakeTimers();
     const sessionStart = 1_700_000_000_000;
     vi.setSystemTime(sessionStart);
@@ -474,22 +517,62 @@ describe("live dashboard", () => {
     initializeLiveDashboard();
     await vi.advanceTimersByTimeAsync(0);
 
+    await vi.advanceTimersByTimeAsync(65_000);
+
     const numericPath = document.querySelector<SVGPathElement>(
       '[data-signal-ref="temperature-01"] path',
     )!.getAttribute("d")!;
     const contactPath = document.querySelector<SVGPathElement>(
       '[data-signal-ref="contact-01"] path',
     )!.getAttribute("d")!;
-    expect(numericPath.match(/ L /g)).toHaveLength(59);
-    expect(contactPath.match(/ V /g)).toHaveLength(9);
+    expect(numericPath.match(/ L /g)).toHaveLength(64);
+    expect(contactPath.match(/ V /g)).toHaveLength(64);
     expect(
       document.querySelector('[data-signal-ref="temperature-01"] [data-live-summary]')
         ?.textContent,
-    ).toContain("60件");
+    ).toContain("65件");
     expect(
       document.querySelector('[data-signal-ref="contact-01"] [data-live-summary]')
         ?.textContent,
-    ).toContain("10件");
+    ).toContain("65件");
+  });
+
+  it("widens live buckets after 1,000 seconds without moving the page-open boundary", async () => {
+    vi.useFakeTimers();
+    const sessionStart = 1_700_000_000_000;
+    vi.setSystemTime(sessionStart);
+    const performanceNow = vi.spyOn(performance, "now");
+    performanceNow.mockReturnValueOnce(0).mockReturnValue(1_005_000);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="${sessionStart}">
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("temperature-01", "numeric", "℃")}
+      </section>
+    `;
+    const fetchMock = vi.fn((_input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify({
+      signal_ref: "temperature-01",
+      display_name: "炉内温度",
+      unit: "℃",
+      value_type: "number",
+      sample_count: 1,
+      latest_received_at: sessionStart + 1_005_000,
+      latest_value: 25.2,
+      points: [{
+        bucket_start: sessionStart,
+        minimum: 25.2,
+        average: 25.2,
+        maximum: 25.2,
+        sample_count: 1,
+      }],
+    }))));
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const request = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://localhost");
+    expect(request.searchParams.get("from")).toBe(String(sessionStart));
+    expect(Number(request.searchParams.get("bucket_ms"))).toBeGreaterThan(1_000);
   });
 
   it("keeps the received age moving when a refresh fails", async () => {

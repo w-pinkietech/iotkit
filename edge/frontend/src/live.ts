@@ -3,11 +3,17 @@ import { query, queryAll } from "./dom";
 import { renderSignalChart, type SignalChartPoint } from "./signal-chart";
 
 const REFRESH_MS = 5 * 1_000;
-const SESSION_WINDOW_MS = 60 * 1_000;
 const BUCKET_MS = 1_000;
-const MAX_NUMERIC_POINTS = 60;
-const MAX_BOOLEAN_POINTS = 10;
+const MAX_HISTORY_BUCKETS = 1_000;
+const MAX_NUMERIC_POINTS = MAX_HISTORY_BUCKETS;
+const MAX_BOOLEAN_POINTS = MAX_HISTORY_BUCKETS;
 const MAX_ACTIVE_CARDS = 12;
+
+interface HistoryWindow {
+  from: number;
+  to: number;
+  bucketMs: number;
+}
 
 function formatNumber(value: number, decimalPlaces = 1): string {
   return value.toLocaleString("ja-JP", {
@@ -31,16 +37,27 @@ function relativeTime(receivedAt: number, now: number): string {
   return `${Math.floor(elapsed / (60 * 60_000))}時間前`;
 }
 
+function historyWindow(from: number, to: number): HistoryWindow {
+  const duration = Math.max(BUCKET_MS, to - from);
+  const bucketMs = Math.max(
+    BUCKET_MS,
+    Math.ceil(duration / MAX_HISTORY_BUCKETS / BUCKET_MS) * BUCKET_MS,
+  );
+  return { from, to, bucketMs };
+}
+
 function sessionPoints(
   payload: HistorySeries,
   boolean: boolean,
-  windowStart: number,
+  sessionStartedAt: number,
 ): HistorySeries["points"] {
-  const points = payload.points.filter((point) => point.bucket_start >= windowStart);
+  const points = payload.points.filter(
+    (point) => point.bucket_start >= sessionStartedAt,
+  );
   if (!boolean) return points.slice(-MAX_NUMERIC_POINTS);
   const transitions: HistorySeries["points"] = [];
   for (const point of points) {
-    const state = point.average >= 0.5 ? 1 : 0;
+    const state = (point.last_value ?? point.average) >= 0.5 ? 1 : 0;
     if (transitions.at(-1)?.average === state) continue;
     transitions.push({
       ...point,
@@ -60,8 +77,7 @@ function renderChart(
   now: number,
   sessionStartedAt: number,
 ): number {
-  const windowStart = Math.max(sessionStartedAt, now - SESSION_WINDOW_MS);
-  const points = sessionPoints(payload, boolean, windowStart);
+  const points = sessionPoints(payload, boolean, sessionStartedAt);
   const chartPoints: SignalChartPoint[] = points.map((point) => ({
     at: point.bucket_start,
     value: point.average,
@@ -74,23 +90,23 @@ function renderChart(
     geometry: "compact",
     unit,
     boolean,
-    startAt: windowStart,
-    endAt: Math.max(now, windowStart + 1_000),
+    startAt: sessionStartedAt,
+    endAt: Math.max(now, sessionStartedAt + 1_000),
     latestAt:
       payload.latest_received_at !== null &&
-      payload.latest_received_at >= windowStart
+      payload.latest_received_at >= sessionStartedAt
         ? payload.latest_received_at
         : points.at(-1)?.bucket_start,
     showLatestMarker: true,
     axisLabels: {
-      start: windowStart === sessionStartedAt ? "開始" : "60秒前",
+      start: "開始",
       end: "現在",
     },
     emptyTitle: "この画面を開いてからの受信を待っています",
-    emptyHint: "1秒単位・直近60秒のデータを表示します",
+    emptyHint: "表示開始後の全期間を最大1,000bucketで表示します",
     title: boolean
-      ? "横軸はこの画面を開いてから（最大60秒）、縦軸は接点のON/OFFです。"
-      : `横軸はこの画面を開いてから（最大60秒）、縦軸は値${unit ? `（${unit}）` : ""}です。`,
+      ? "横軸はこの画面を開いてからの全期間（最大1,000bucket）、縦軸は接点のON/OFFです。"
+      : `横軸はこの画面を開いてからの全期間（最大1,000bucket）、縦軸は値${unit ? `（${unit}）` : ""}です。`,
   });
 }
 
@@ -164,8 +180,8 @@ function renderCard(
   }
   if (summary) {
     summary.textContent = boolean
-      ? `この画面を開いてから${pointCount}件を表示しています。1秒単位・直近60秒、縦軸はON/OFFです。`
-      : `この画面を開いてから${pointCount}件を表示しています。1秒単位・直近60秒、縦軸は値${unit ? `（${unit}）` : ""}です。`;
+      ? `この画面を開いてから${pointCount}件の状態変化を表示しています。全期間・最大1,000bucket、縦軸はON/OFFです。`
+      : `この画面を開いてから${pointCount}件を表示しています。全期間・最大1,000bucket、縦軸は値${unit ? `（${unit}）` : ""}です。`;
   }
 }
 
@@ -226,11 +242,13 @@ export function initializeLiveDashboard(): void {
         const ruleId = card.dataset.ruleId;
         if (!ruleId) return false;
         const catchingUp = liveSnapshotAt < sessionStartedAt && !catchUpComplete.has(card);
+        const requestFrom = catchingUp ? liveSnapshotAt : sessionStartedAt;
+        const requestWindow = historyWindow(requestFrom, now + 1);
         const result = await getHistorySeries(
           ruleId,
-          Math.max(catchingUp ? liveSnapshotAt : sessionStartedAt, now - SESSION_WINDOW_MS),
-          now + 1,
-          BUCKET_MS,
+          requestWindow.from,
+          requestWindow.to,
+          requestWindow.bucketMs,
           controller!.signal,
         ).catch(() => null);
         if (!result?.ok) return false;
