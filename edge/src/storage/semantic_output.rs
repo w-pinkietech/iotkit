@@ -4,3 +4,7 @@ include!("semantic_output/operations.rs");
 include!("semantic_output/common.rs");
 include!("semantic_output/sqlite.rs");
 include!("semantic_output/postgres.rs");
+
+#[cfg(test)]
+#[path = "../../tests/unit/semantic_output_postgres_tests.rs"]
+mod postgres_tests;

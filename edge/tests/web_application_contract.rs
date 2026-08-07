@@ -55,6 +55,7 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
         .await
         .unwrap();
     assert_eq!(storage_status["profile"], "embedded");
+    assert_eq!(storage_status["pending_semantic_projection_count"], 0);
 
     let console = application
         .console(ConsoleRequest {

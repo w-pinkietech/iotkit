@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 7
+revision: 8
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -46,7 +46,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 - **モニター:** current valueと最終受信。古いsignalはsensor、Adapter、Edge Node、Broker、IoTKit Edgeの順に確認。
 - **受信履歴:** sensor・Edge Node・期間を一画面で絞り、選択中sensorと一致するbounded graphとrecent rawを確認。Graphの横軸は実際の受信日時を表示time zoneで示し、縦軸は値の範囲とsensor単位を示す。同条件CSVは汎用Observation exportで業務帳票ではない。
 - **出力:** Active purpose-bound route。Pending publicationはBroker PUBACKまで削除しない。
-- **システム:** Filesystem、DB size、raw/semantic/outbox件数、最終backup、原因別診断。Console応答だけでEdge Node/Broker正常と判断しない。
+- **システム:** Filesystem、DB size、raw/semantic/pending projection/outbox件数、最終backup、原因別診断。Console応答だけでEdge Node/Broker正常と判断しない。
 - `postgres`はSQLからnamed volume空き容量を得られない。Host監視へ`docker compose ... exec postgres df -Pk /var/lib/postgresql/data`を追加し、使用率90%または空き2 GiBでwarning、512 MiBでcritical。
 - **監査:** Display name、意味、出力、accountを誰が変更したか。
 - `iotkit-edge-nodectl smoke status`: MQTT PUBACKではなくIoTKit Edge durable acceptance。
@@ -98,8 +98,8 @@ Recoveryは既存sessionを失効します。Password、MQTT credential、privat
 3. DNS/routeとcertificateを確認する。
 4. Mosquitto authとexact-topic ACLを確認する。
 5. Edge Node `accepted-through`を確認する。未受理recordはEdge Nodeに残す。
-6. IoTKit Edge output queueを確認する。同じObservation identityでretryする。
-7. 復旧後、raw cursorとpending outputの収束前に保持dataを削除しない。
+6. IoTKit Edgeのsemantic projection queueとoutput queueを確認する。同じObservation identityでretryする。
+7. 復旧後、raw cursor、pending semantic projection、pending outputの収束前に保持dataを削除しない。
 
 ## 6. Edge Node登録の復旧
 
@@ -534,8 +534,9 @@ iotkit-edge storage migrate \
 1. 暗号化backupを作りConsole表示を確認する。
 2. Git commit、Compose設定、image IDを記録し、credential/keyをGitへ入れない。
 3. 新versionを取得・buildし、Brokerを動かしたままEdgeだけ停止する。
-4. 新Edgeを起動する。Schema migrationはstartup transaction。
-5. HTTPS login、diagnostics、cursor再収束、pending outbox、history graph、CSVを確認する。
-6. 失敗時はEdgeを停止する。旧binaryでmigration済みDBを開かず、旧commit/imageへ戻し、更新前backupを**新candidate DB**へrestoreして§8と同じswapを行う。Identity/credentialを作り直さない。
+4. Schema v9では暗号化済み更新前backupを保持し、durable semantic projection queue、そのindex、SQLite WAL増加分に十分な空き容量を確保する。Startup migrationは対象となる未receipt rule-record pairを全件backfillし、保持historyでは時間がかかり得るが、schema v9と完全なqueueを同時にcommitするかrollbackする。
+5. 新Edgeを起動する。Schema migrationはstartup transaction。
+6. HTTPS login、diagnostics、cursor再収束、pending semantic projection、pending outbox、history graph、CSVを確認する。Restart recovery完了として扱う前にqueueをdrainする。
+7. 失敗時はEdgeを停止する。旧binaryでmigration済みDBを開かず、旧commit/imageへ戻し、更新前backupを**新candidate DB**へrestoreして§8と同じswapを行う。Identity/credentialを作り直さない。
 
 これはmanual updateです。Migration後にimageだけ戻すのはrollbackではなく、対応する更新前DBも戻します。

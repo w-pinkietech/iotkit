@@ -30,6 +30,8 @@ pub struct StorageStatus {
     pub warning_percent: i32,
     pub raw_record_count: i64,
     pub semantic_observation_count: i64,
+    /// Durable rule-record work awaiting semantic projection, not raw-record or receipt lag.
+    pub pending_semantic_projection_count: i64,
     pub pending_output_count: i64,
     pub projection_failure_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,7 +129,7 @@ pub async fn storage_status(
             } else {
                 StorageState::Healthy
             };
-            let (raw, semantic, pending, failures, backup_id, backup_at) =
+            let (raw, semantic, projection_pending, pending, failures, backup_id, backup_at) =
                 sqlite_counts(pool).await?;
             Ok(StorageStatus {
                 profile: "embedded".into(),
@@ -141,6 +143,7 @@ pub async fn storage_status(
                 warning_percent,
                 raw_record_count: raw,
                 semantic_observation_count: semantic,
+                pending_semantic_projection_count: projection_pending,
                 pending_output_count: pending,
                 projection_failure_count: failures,
                 last_backup_id: backup_id,
@@ -160,7 +163,7 @@ pub async fn storage_status(
                 sqlx::query_scalar("SELECT pg_database_size(current_database())")
                     .fetch_one(pool)
                     .await?;
-            let (raw, semantic, pending, failures, backup_id, backup_at) =
+            let (raw, semantic, projection_pending, pending, failures, backup_id, backup_at) =
                 postgres_counts(pool).await?;
             Ok(StorageStatus {
                 profile: "postgres".into(),
@@ -174,6 +177,7 @@ pub async fn storage_status(
                 warning_percent,
                 raw_record_count: raw,
                 semantic_observation_count: semantic,
+                pending_semantic_projection_count: projection_pending,
                 pending_output_count: pending,
                 projection_failure_count: failures,
                 last_backup_id: backup_id,
@@ -288,9 +292,9 @@ pub async fn diagnostics_with_certificate(
                     Some(row.get("updated_at")),
                 );
             }
-            if sqlite_table_exists(pool, "output_outbox_v3").await? {
+            if sqlite_table_exists(pool, "output_outbox").await? {
                 let oldest: Option<i64> = sqlx::query_scalar(
-                    "SELECT MIN(created_at) FROM output_outbox_v3 WHERE published_at IS NULL",
+                    "SELECT MIN(created_at) FROM output_outbox WHERE published_at IS NULL",
                 )
                 .fetch_one(pool)
                 .await?;
@@ -342,9 +346,9 @@ pub async fn diagnostics_with_certificate(
                     Some(row.get("updated_at")),
                 );
             }
-            if postgres_table_exists(pool, "output_outbox_v3").await? {
+            if postgres_table_exists(pool, "output_outbox").await? {
                 let oldest: Option<i64> = sqlx::query_scalar(
-                    "SELECT MIN(created_at) FROM output_outbox_v3 WHERE published_at IS NULL",
+                    "SELECT MIN(created_at) FROM output_outbox WHERE published_at IS NULL",
                 )
                 .fetch_one(pool)
                 .await?;
@@ -487,14 +491,15 @@ async fn postgres_table_exists(pool: &sqlx::PgPool, table: &str) -> Result<bool,
 
 async fn sqlite_counts(
     pool: &sqlx::SqlitePool,
-) -> Result<(i64, i64, i64, i64, Option<String>, Option<i64>), sqlx::Error> {
+) -> Result<(i64, i64, i64, i64, i64, Option<String>, Option<i64>), sqlx::Error> {
     let raw = sqlx::query_scalar("SELECT count(*) FROM raw_records")
         .fetch_one(pool)
         .await?;
-    let semantic = sqlite_optional_count(pool, "semantic_observations_v3", None).await?;
+    let semantic = sqlite_optional_count(pool, "semantic_observations", None).await?;
+    let projection_pending = sqlite_optional_count(pool, "semantic_projection_queue", None).await?;
     let pending =
-        sqlite_optional_count(pool, "output_outbox_v3", Some("published_at IS NULL")).await?;
-    let failures = sqlite_optional_count(pool, "semantic_projection_failures_v3", None).await?;
+        sqlite_optional_count(pool, "output_outbox", Some("published_at IS NULL")).await?;
+    let failures = sqlite_optional_count(pool, "semantic_projection_failures", None).await?;
     let backup = sqlx::query(
         "SELECT backup_id, created_at FROM edge_backup_events \
          ORDER BY created_at DESC, backup_id DESC LIMIT 1",
@@ -504,6 +509,7 @@ async fn sqlite_counts(
     Ok((
         raw,
         semantic,
+        projection_pending,
         pending,
         failures,
         backup.as_ref().map(|row| row.get::<String, _>("backup_id")),
@@ -513,14 +519,16 @@ async fn sqlite_counts(
 
 async fn postgres_counts(
     pool: &sqlx::PgPool,
-) -> Result<(i64, i64, i64, i64, Option<String>, Option<i64>), sqlx::Error> {
+) -> Result<(i64, i64, i64, i64, i64, Option<String>, Option<i64>), sqlx::Error> {
     let raw = sqlx::query_scalar("SELECT count(*) FROM raw_records")
         .fetch_one(pool)
         .await?;
-    let semantic = postgres_optional_count(pool, "semantic_observations_v3", None).await?;
+    let semantic = postgres_optional_count(pool, "semantic_observations", None).await?;
+    let projection_pending =
+        postgres_optional_count(pool, "semantic_projection_queue", None).await?;
     let pending =
-        postgres_optional_count(pool, "output_outbox_v3", Some("published_at IS NULL")).await?;
-    let failures = postgres_optional_count(pool, "semantic_projection_failures_v3", None).await?;
+        postgres_optional_count(pool, "output_outbox", Some("published_at IS NULL")).await?;
+    let failures = postgres_optional_count(pool, "semantic_projection_failures", None).await?;
     let backup = sqlx::query(
         "SELECT backup_id, created_at FROM edge_backup_events \
          ORDER BY created_at DESC, backup_id DESC LIMIT 1",
@@ -530,6 +538,7 @@ async fn postgres_counts(
     Ok((
         raw,
         semantic,
+        projection_pending,
         pending,
         failures,
         backup.as_ref().map(|row| row.get::<String, _>("backup_id")),
