@@ -108,10 +108,6 @@ function renderChart(
         ? payload.latest_received_at
         : points.at(-1)?.bucket_start,
     showLatestMarker: true,
-    axisLabels: {
-      start: "開始",
-      end: "現在",
-    },
     emptyTitle: "この画面を開いてからの受信を待っています",
     emptyHint: "表示開始後の全期間を最大1,000bucketで表示します",
     title: boolean

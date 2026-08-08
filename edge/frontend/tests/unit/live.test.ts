@@ -103,6 +103,45 @@ describe("live dashboard", () => {
     );
   });
 
+  it("uses local time labels for the page-open and current axis endpoints", async () => {
+    vi.useFakeTimers();
+    const sessionStart = 1_700_000_000_000;
+    vi.setSystemTime(sessionStart);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="${sessionStart}">
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("counter-01", "cumulative_counter", "回")}
+      </section>
+    `;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(responseFor("counter-01"))),
+    );
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const chart = document.querySelector<SVGSVGElement>("[data-live-chart]")!;
+    const axisLabels = Array.from(
+      chart.querySelectorAll<SVGTextElement>(".chart-axis-label"),
+    )
+      .filter((label) => ["72", "348"].includes(label.getAttribute("x") ?? ""))
+      .map((label) => label.textContent);
+    const timeOptions: Intl.DateTimeFormatOptions = {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    expect(axisLabels).toEqual([
+      new Date(sessionStart).toLocaleTimeString("ja-JP", timeOptions),
+      new Date(sessionStart + 5_000).toLocaleTimeString("ja-JP", timeOptions),
+    ]);
+    expect(chart.querySelector(".live-chart-empty")).toBeNull();
+    expect(chart.textContent).not.toContain("開始");
+    expect(chart.textContent).not.toContain("現在");
+  });
+
   it("uses a cumulative bucket's terminal value instead of its average", async () => {
     vi.useFakeTimers();
     const sessionStart = 1_700_000_000_000;

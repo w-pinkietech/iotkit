@@ -2347,10 +2347,6 @@
       endAt: Math.max(now, sessionStartedAt + 1e3),
       latestAt: payload.latest_received_at !== null && payload.latest_received_at >= sessionStartedAt ? payload.latest_received_at : points.at(-1)?.bucket_start,
       showLatestMarker: true,
-      axisLabels: {
-        start: "\u958B\u59CB",
-        end: "\u73FE\u5728"
-      },
       emptyTitle: "\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u53D7\u4FE1\u3092\u5F85\u3063\u3066\u3044\u307E\u3059",
       emptyHint: "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5168\u671F\u9593\u3092\u6700\u59271,000bucket\u3067\u8868\u793A\u3057\u307E\u3059",
       title: boolean ? "\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u5168\u671F\u9593\uFF08\u6700\u59271,000bucket\uFF09\u3001\u7E26\u8EF8\u306F\u63A5\u70B9\u306EON/OFF\u3067\u3059\u3002" : `\u6A2A\u8EF8\u306F\u3053\u306E\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u306E\u5168\u671F\u9593\uFF08\u6700\u59271,000bucket\uFF09\u3001\u7E26\u8EF8\u306F\u5024${unit ? `\uFF08${unit}\uFF09` : ""}\u3067\u3059\u3002`
