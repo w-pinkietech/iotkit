@@ -23,6 +23,7 @@ use rusqlite::Connection;
 
 const TARGET_ID: &str = "edge";
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
+const IDLE_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
 
@@ -103,8 +104,14 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
     });
 
     let (client, mut event_loop) = AsyncClient::new(options, 10);
-    let mut retry = tokio::time::interval(RETRY_INTERVAL);
+    let timer_started_at = tokio::time::Instant::now();
+    let mut retry = tokio::time::interval_at(timer_started_at + RETRY_INTERVAL, RETRY_INTERVAL);
+    // Start after a full interval; a delayed task then performs one bounded retry.
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut idle_probe =
+        tokio::time::interval_at(timer_started_at + IDLE_PROBE_INTERVAL, IDLE_PROBE_INTERVAL);
+    // Start after a full interval. One indexed no-inflight probe is enough after a busy interval.
+    idle_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut subscribed = false;
     let mut inflight: Option<PreparedBatch> = None;
     let mut published_descriptor: Option<DescriptorIdentity> = None;
@@ -251,6 +258,25 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                 ).await {
                     tracing::warn!(error = %error, "MQTT descriptor publish retry failed");
                 }
+                if inflight.is_some()
+                    && let Err(error) = publish_current_or_next(
+                        &db,
+                        &client,
+                        &records_topic,
+                        &runtime.binding.edge_node_id,
+                        qos,
+                        runtime.binding.retain,
+                        &mut inflight,
+                    ).await
+                {
+                    tracing::warn!(error = %error, "MQTT publish retry failed");
+                    super::publish_task::refresh_publish_health(&db, &health, &Err(error)).await;
+                }
+                if let Err(error) = cleanup_activation_prefix(&db).await {
+                    tracing::warn!(error = %error, "pre-activation reading cleanup failed");
+                }
+            }
+            _ = idle_probe.tick(), if subscribed && inflight.is_none() => {
                 if let Err(error) = publish_current_or_next(
                     &db,
                     &client,
@@ -260,11 +286,8 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                     runtime.binding.retain,
                     &mut inflight,
                 ).await {
-                    tracing::warn!(error = %error, "MQTT publish retry failed");
+                    tracing::warn!(error = %error, "MQTT idle publish probe failed");
                     super::publish_task::refresh_publish_health(&db, &health, &Err(error)).await;
-                }
-                if let Err(error) = cleanup_activation_prefix(&db).await {
-                    tracing::warn!(error = %error, "pre-activation reading cleanup failed");
                 }
             }
         }

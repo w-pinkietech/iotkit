@@ -5,7 +5,7 @@ description: "Defines the complete MQTT custody transfer, activation, record fam
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 6
+revision: 8
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -295,6 +295,21 @@ For a valid batch, IoTKit Edge performs one custody transaction:
 Storage failure, ENOSPC, corruption, cancellation before commit, a gap, or a content conflict MUST NOT
 produce an accepted-through acknowledgement. A lost acknowledgement causes a harmless exact replay.
 
+If the post-commit `AsyncClient::try_publish` enqueue fails because IoTKit Edge's MQTT request queue is
+temporarily full, IoTKit Edge retains the correlated accepted-through topic and payload in one pending
+entry per Edge Node topic. Accepted-through is fixed at QoS 1 and MUST NOT be retained. At the 250 ms
+convergence opportunity, it retries that entry before activation and recovery commands, removing it only
+after the client request queue accepts it. This is neither MQTT PUBACK nor cursor advancement.
+
+Before coalescing, IoTKit Edge decodes the retained wire payload as `AcceptedThrough`. For the same topic
+and `(edge_node_id, ledger_epoch)`, it retains the greatest `accepted_through`; an exact or stale replay
+cannot replace that acknowledgement. At the same accepted-through value, the `publication_id` MUST also
+match. A different Edge Node identity or ledger epoch, or a different publication ID at the same
+accepted-through value, is a correlation conflict: IoTKit Edge neither replaces nor adds a pending entry,
+and fails its ingest runtime closed. If that process-local entry is discarded by a runtime restart, the
+Edge Node's durable records retry remains authoritative; IoTKit Edge exact replay verifies the committed
+rows and republishes the already committed watermark.
+
 Edge Node validates schema version, topic/body Edge Node identity, epoch, publication ID, monotonicity,
 and that `accepted_through` does not exceed the published batch. Only then may it advance its target
 cursor. MQTT PUBACK never advances this cursor and never authorizes retention purge.
@@ -320,6 +335,11 @@ Rust Edge Node publisher and Rust IoTKit Edge decoder.
 - While inactive, Edge Node continues bounded local commissioning collection without creating an R10
   publication backlog.
 - If IoTKit Edge or the network is down, Edge Node continues local collection and retains unacknowledged rows.
+- While subscribed with no application-unacknowledged batch, Edge Node probes the indexed outbox at a
+  one-second interval to start rows created after the last acknowledgement. This probe never retransmits
+  an inflight batch; the separate 30-second retry remains responsible for inflight retransmission,
+  descriptor refresh, and pre-activation cleanup. The first tick of both schedules is after its full
+  interval, rather than immediately when the task starts.
 - On reconnect, Edge Node retries the current batch. If a restart rebuilds it wider from the same cursor
   start, a validated prior-prefix acknowledgement advances only that prefix and rebuilds the remaining
   range.

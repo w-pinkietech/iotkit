@@ -1,10 +1,10 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS, Transport};
+use rumqttc::{AsyncClient, ClientError, Event, Incoming, MqttOptions, QoS, Transport};
 use tokio_util::sync::CancellationToken;
 
-use super::IngestProcessor;
-use iotkit_edge_custody_contract::{MAX_BATCH_BYTES, MAX_DESCRIPTOR_BYTES};
+use super::{AckPublication, IngestError, IngestProcessor};
+use iotkit_edge_custody_contract::{AcceptedThrough, MAX_BATCH_BYTES, MAX_DESCRIPTOR_BYTES};
 
 const SUBSCRIPTIONS: [&str; 5] = [
     "iotkit/v1/edge-nodes/+/records",
@@ -99,6 +99,7 @@ impl IngestRuntime {
         let storage = self.processor.storage();
         let mut connected = false;
         let mut subscribed = false;
+        let mut pending_custody_acks = PendingCustodyAcks::default();
         let mut convergence = tokio::time::interval(Duration::from_millis(250));
         convergence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -120,19 +121,16 @@ impl IngestRuntime {
                                 &publication.payload,
                                 unix_millis(),
                             ).await {
-                                Ok(Some(ack)) => {
-                                    if let Err(error) = client.try_publish(
-                                        ack.topic,
-                                        QoS::AtLeastOnce,
-                                        ack.retain,
-                                        ack.payload,
-                                    ) {
+                                Ok(Some(ack)) => match pending_custody_acks.try_enqueue(&client, ack) {
+                                    Ok(()) => {}
+                                    Err(RuntimeError::Client(error)) => {
                                         tracing::warn!(
                                             %error,
-                                            "custody acknowledgement enqueue deferred until replay"
+                                            "custody acknowledgement enqueue deferred until retry"
                                         );
                                     }
-                                }
+                                    Err(error) => return Err(error),
+                                },
                                 Ok(None) => {}
                                 Err(error) if error.is_fatal_runtime() => {
                                     return Err(RuntimeError::Ingest(error));
@@ -159,6 +157,13 @@ impl IngestRuntime {
                     }
                 }
                 _ = convergence.tick() => {
+                    if let Err(error) = pending_custody_acks.retry(&client) {
+                        tracing::debug!(
+                            %error,
+                            "MQTT custody acknowledgement queue is not currently writable"
+                        );
+                        continue;
+                    }
                     if connected && !subscribed {
                         subscribed = try_subscribe(&client);
                     }
@@ -245,6 +250,82 @@ impl IngestRuntime {
     }
 }
 
+#[derive(Default)]
+struct PendingCustodyAcks {
+    by_topic: BTreeMap<String, PendingCustodyAck>,
+}
+
+struct PendingCustodyAck {
+    acknowledgement: AckPublication,
+    accepted: AcceptedThrough,
+}
+
+impl PendingCustodyAcks {
+    fn try_enqueue(
+        &mut self,
+        client: &AsyncClient,
+        acknowledgement: AckPublication,
+    ) -> Result<(), RuntimeError> {
+        let accepted = AcceptedThrough::decode(&acknowledgement.payload)
+            .map_err(IngestError::Contract)
+            .map_err(RuntimeError::Ingest)?;
+        let topic = acknowledgement.topic.clone();
+        if let Some(pending) = self.by_topic.get_mut(&topic) {
+            if accepted.edge_node_id != pending.accepted.edge_node_id
+                || accepted.ledger_epoch != pending.accepted.ledger_epoch
+            {
+                return Err(RuntimeError::PendingAcknowledgementCorrelation);
+            }
+            if accepted.accepted_through > pending.accepted.accepted_through {
+                *pending = PendingCustodyAck {
+                    acknowledgement,
+                    accepted,
+                };
+            } else if accepted.accepted_through == pending.accepted.accepted_through
+                && accepted.publication_id != pending.accepted.publication_id
+            {
+                return Err(RuntimeError::PendingAcknowledgementCorrelation);
+            }
+            return Ok(());
+        }
+        match publish_custody_ack(client, &acknowledgement) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.by_topic.insert(
+                    topic,
+                    PendingCustodyAck {
+                        acknowledgement,
+                        accepted,
+                    },
+                );
+                Err(RuntimeError::Client(error))
+            }
+        }
+    }
+
+    fn retry(&mut self, client: &AsyncClient) -> Result<(), ClientError> {
+        for topic in self.by_topic.keys().cloned().collect::<Vec<_>>() {
+            let acknowledgement = &self.by_topic[&topic].acknowledgement;
+            publish_custody_ack(client, acknowledgement)?;
+            self.by_topic.remove(&topic);
+        }
+        Ok(())
+    }
+}
+
+fn publish_custody_ack(
+    client: &AsyncClient,
+    acknowledgement: &AckPublication,
+) -> Result<(), ClientError> {
+    client.try_publish(
+        &acknowledgement.topic,
+        // accepted-through is fixed at QoS 1 by the custody contract.
+        QoS::AtLeastOnce,
+        acknowledgement.retain,
+        acknowledgement.payload.clone(),
+    )
+}
+
 fn configure_packet_limits(options: &mut MqttOptions) {
     let limit = MAX_BATCH_BYTES.max(MAX_DESCRIPTOR_BYTES)
         + MAX_MQTT_TOPIC_BYTES
@@ -289,6 +370,8 @@ pub enum RuntimeError {
     Config(String),
     #[error("MQTT client error: {0}")]
     Client(#[from] rumqttc::ClientError),
+    #[error("conflicting pending MQTT custody acknowledgement")]
+    PendingAcknowledgementCorrelation,
     #[error("MQTT ingest processing error: {0}")]
     Ingest(#[from] super::IngestError),
     #[error("MQTT activation storage error: {0}")]

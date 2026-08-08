@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転、activation、record family、ack、re
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 6
+revision: 8
 ---
 
 # Edge Node保管責任契約 v1
@@ -179,6 +179,10 @@ IoTKit Edgeは一つのcustody transactionで、topic/active state/version/ident
 
 Storage failure、ENOSPC、corruption、commit前cancel、gap、content conflictではackを出しません。Lost ackはexact replayで安全に収束します。Edge Nodeはschema、topic/body identity、epoch、publication ID、monotonicity、batch boundを検証してからcursorを進めます。MQTT PUBACKはcursorもpurge権威も進めません。Rust製Edge Node publisherとRust製IoTKit Edge decoderは`testdata/egress/v1/record-family-cases.json`へ同じaccept/reject結果を返します。
 
+commit後にIoTKit EdgeのMQTT request queueが一時的にfullで`AsyncClient::try_publish`のenqueueに失敗した場合、IoTKit Edgeはcorrelation済みの`accepted-through` topicとpayloadをEdge Node topicごとに一つのpending entryとして保持します。`accepted-through`はQoS 1固定でretain禁止です。250 msのconvergence opportunityでactivation/recovery commandより先にそのentryをretryし、client request queueが受理した時だけ除去します。これはMQTT PUBACKでもcursor advanceでもありません。
+
+IoTKit Edgeはcoalesceの前に保持するwire payloadを`AcceptedThrough`としてdecodeします。同一topicかつ`(edge_node_id, ledger_epoch)`が同じ相関では最大の`accepted_through`を保持し、exact replayまたはより小さいstale replayがそのacknowledgementを置換することはありません。同じ`accepted_through`なら`publication_id`も一致しなければなりません。異なるEdge Node identityまたはledger epoch、あるいは同じ`accepted_through`で異なる`publication_id`はcorrelation conflictです。IoTKit Edgeはpending entryを置換も追加もせず、ingest runtimeをfail-closedにします。runtime restartでこのprocess-local entryが破棄されても、Edge Nodeのdurable records retryが権威のままです。IoTKit Edgeのexact replayはcommit済みrowを検証し、すでにcommit済みのwatermarkを再publishします。
+
 後続batchをinflightにした後の遅延した過去ackは、version、Edge Node/epoch identity、決定的な過去`publication_id`、過去cursor boundがすべて検証できる場合だけignoreします。Ignoreしてもcursorをadvanceせず、現在のinflight batchをclearせず、publish healthをdegradeしません。restartにより同じcursor startからより広いcurrent batchをrebuildした場合、検証済みstrict prefixの遅延ackは、その`accepted_through`までだけcursorをadvanceし、rebuild済みinflight batchをclearして残りrangeをrebuildします。Malformed、identity不一致、future、non-prefix、またはcurrent batchと不一致のackはinvalidのままです。
 
 ## Retry・停止・認証
@@ -187,6 +191,7 @@ Storage failure、ENOSPC、corruption、commit前cancel、gap、content conflict
 - Activation command outboxとEdge Node receiptはactivation retry権威。Broker sessionではない。
 - Inactive中もbounded local commissioning collectionを続けるがR10 backlogを作らない。
 - IoTKit Edge/network停止中もlocal collectionと未ack rowを保持。
+- subscription済みでapplication未ack batchがない間、Edge Nodeは最後のack後に追加されたrowを開始するため、1秒間隔でindexed outboxをprobeする。このprobeはinflight batchを再送せず、別の30秒retryはinflight retransmit、descriptor refresh、pre-activation cleanupを担う。両scheduleの最初のtickはtask開始直後ではなく、各intervalを完全に経過した後である。
 - Reconnect後はcurrent batchをretryする。restartで同じcursor startからより広いbatchをrebuildした場合、検証済みの過去prefix ackはそのprefixだけをadvanceし、残りrangeをrebuildする。
 - IoTKit Edge exact replayは既存rowを検証し、commit済みwatermarkを再publish。
 

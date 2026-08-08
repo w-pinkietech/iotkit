@@ -8,7 +8,6 @@ use crate::storage::{AcceptBatch, RawRecord, Storage, StorageError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AckPublication {
     pub topic: String,
-    pub qos: u8,
     pub retain: bool,
     pub payload: Vec<u8>,
 }
@@ -100,7 +99,6 @@ impl IngestProcessor {
                         "iotkit/v1/edge-nodes/{}/accepted-through",
                         batch.edge_node_id
                     ),
-                    qos: 1,
                     retain: false,
                     payload: serde_json::to_vec(&ack)?,
                 }))
