@@ -397,7 +397,7 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"data-value-kind="cumulative_counter""#,
                 r#"data-live-chart"#,
                 r#"data-live-status"#,
-                r#"href="/sensors/signal-01""#,
+                r#"href="/equipment/devices/device-01/sensors/signal-01""#,
                 "累積電力量",
                 "累積値",
                 "保存済みで有効な累積ルールごとに",
@@ -551,6 +551,7 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             assert!(!html.contains(r#"data-value-kind="numeric""#));
             assert!(!html.contains(r#"data-value-kind="boolean""#));
             assert!(!html.contains(r#"data-signal-ref="signal-02""#));
+            assert!(!html.contains(r#"href="/sensors/signal-01""#));
             assert!(!html.contains(r#"data-live-no-rules"#));
             assert!(!html.contains("計測ルールがありません"));
         }

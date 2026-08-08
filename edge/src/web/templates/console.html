@@ -161,7 +161,7 @@
           </div>
           <svg class="live-chart" data-live-chart viewBox="0 0 360 160" role="img" aria-label="{{ rule.display_name }}の画面開始後全期間（最大1,000bucket）の累積結果"></svg>
           <p class="sr-only" data-live-summary>計測結果を確認中です。</p>
-          <footer><span>{{ signal.edge_node_id }}</span><a href="/sensors/{{ signal.signal_ref }}">詳細を見る <span aria-hidden="true">→</span></a></footer>
+          <footer><span>{{ signal.edge_node_id }}</span><a href="/equipment/devices/{{ signal.device_ref }}/sensors/{{ signal.signal_ref }}">詳細を見る <span aria-hidden="true">→</span></a></footer>
         </article>
         {% endif %}
         {% endfor %}
