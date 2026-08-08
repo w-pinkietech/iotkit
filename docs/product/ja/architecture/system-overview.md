@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 14
+revision: 15
 ---
 
 # Architecture
@@ -103,7 +103,7 @@ effective UIDですでに動くhostile codeから保護するsecurity boundary�
 
 ## 現行実装
 
-V1候補は、BravePI温度・接点入力、汎用Input Adapter/driver、複数Edge Node、標準Broker、一つのIoTKit Edge、SQLite/PostgreSQL raw store、application-level `accepted-through`、future-only semantic projection、durable Output Adapter outbox、認証付きConsole、保存済みで有効な計測ruleごとの処理済み結果を示すbounded live dashboard（ruleのないsignalは省略し、有効ruleが一つもない場合だけdashboard全体に設定案内を一つ表示）、範囲付きhistory graph、汎用CSVを提供します。
+V1候補は、BravePI温度・接点入力、汎用Input Adapter/driver、複数Edge Node、標準Broker、一つのIoTKit Edge、SQLite/PostgreSQL raw store、application-level `accepted-through`、future-only semantic projection、durable Output Adapter outbox、認証付きConsole、保存済みで有効な`cumulative_counter`計測ruleごとの処理済み累積結果を示すbounded live dashboard（numeric、boolean、alarmのrule cardとruleのないsignalは省略し、有効な累積ruleが一つもない場合だけdashboard全体に設定案内を一つ表示）、範囲付きhistory graph、汎用CSVを提供します。
 
 BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所有し、IoTKitはBravePI Mainboard UART streamから始まります。Broker host certificate componentはbundle検証・atomic install、`lego` ACME更新、MQTT/HTTPS probe、失敗時rollbackを提供します。短命credential enrollment/rotationとarchive gap復元後のretained replayはv1後のhardeningです。
 

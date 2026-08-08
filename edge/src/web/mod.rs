@@ -1676,6 +1676,7 @@ pub mod test_support {
         pending_node_state: EdgeNodeState,
         resources_configured: bool,
         include_pending_node: bool,
+        include_live_cumulative_rule: bool,
     }
     impl Default for StubApplication {
         fn default() -> Self {
@@ -1686,6 +1687,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
             }
         }
     }
@@ -1698,6 +1700,18 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
+            }
+        }
+        pub fn numeric_only() -> Self {
+            Self {
+                authenticated: true,
+                role: "admin",
+                rate_limited: false,
+                pending_node_state: EdgeNodeState::Discovered,
+                resources_configured: true,
+                include_pending_node: true,
+                include_live_cumulative_rule: false,
             }
         }
         pub fn complete() -> Self {
@@ -1708,6 +1722,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
                 include_pending_node: false,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn unconfigured() -> Self {
@@ -1718,6 +1733,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: false,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn activating() -> Self {
@@ -1728,6 +1744,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Activating,
                 resources_configured: true,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn post_activation() -> Self {
@@ -1738,6 +1755,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: false,
                 include_pending_node: false,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn post_activation_viewer() -> Self {
@@ -1748,6 +1766,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: false,
                 include_pending_node: false,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn viewer() -> Self {
@@ -1758,6 +1777,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn recovery() -> Self {
@@ -1768,6 +1788,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::RecoveryHold,
                 resources_configured: true,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn system_admin() -> Self {
@@ -1778,6 +1799,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
             }
         }
         pub fn rate_limited() -> Self {
@@ -1788,6 +1810,7 @@ pub mod test_support {
                 pending_node_state: EdgeNodeState::Discovered,
                 resources_configured: true,
                 include_pending_node: true,
+                include_live_cumulative_rule: true,
             }
         }
     }
@@ -2050,12 +2073,20 @@ pub mod test_support {
                 });
             let signals = if request.path == "/live" && self.resources_configured {
                 let mut ruled_signal = signal.clone();
-                let mut counter_rule = ruled_signal.rules[0].clone();
-                counter_rule.rule_id = "rule-02".into();
-                counter_rule.display_name = "累積電力量".into();
-                counter_rule.kind = "cumulative_counter".into();
-                counter_rule.kind_label = "累積値".into();
-                ruled_signal.rules.push(counter_rule);
+                if self.include_live_cumulative_rule {
+                    let mut counter_rule = ruled_signal.rules[0].clone();
+                    counter_rule.rule_id = "rule-02".into();
+                    counter_rule.display_name = "累積電力量".into();
+                    counter_rule.kind = "cumulative_counter".into();
+                    counter_rule.kind_label = "累積値".into();
+                    ruled_signal.rules.push(counter_rule);
+                }
+                let mut boolean_rule = ruled_signal.rules[0].clone();
+                boolean_rule.rule_id = "rule-03".into();
+                boolean_rule.display_name = "運転接点".into();
+                boolean_rule.kind = "boolean".into();
+                boolean_rule.kind_label = "ON/OFF".into();
+                ruled_signal.rules.push(boolean_rule);
                 let mut ruleless_signal = signal.clone();
                 ruleless_signal.signal_ref = "signal-02".into();
                 ruleless_signal.name = "乾燥炉入口 湿度".into();
@@ -2111,7 +2142,11 @@ pub mod test_support {
                 edge_nodes,
                 registered_edge_node_count: 1,
                 live_snapshot_at: 1_735_689_595_000,
-                live_rule_count: signals.iter().map(|signal| signal.rules.len()).sum(),
+                live_rule_count: signals
+                    .iter()
+                    .flat_map(|signal| signal.rules.iter())
+                    .filter(|rule| rule.kind == "cumulative_counter")
+                    .count(),
                 receiving_signal_count: signals
                     .iter()
                     .filter(|signal| signal.status_class == "receiving")
