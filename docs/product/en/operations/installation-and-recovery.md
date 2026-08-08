@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 21
+revision: 22
 ---
 
 # IoTKit Edge installation and recovery
@@ -74,13 +74,14 @@ fallback.
 - **Equipment / Collection Nodes**: discovery, registration, the last descriptor communication,
   and the exact data generation used for diagnosis. **Registered** is an authorization
   state; it does not mean the Edge Node is currently online.
-- **Live**: show one card for every active measurement rule. Each card uses the latest persisted
+- **Live**: show one card for every saved active measurement rule. Each card uses the latest persisted
   processed value after calibration and rule evaluation, with its receipt time, independently of
   its chart. The chart contains only results received after the operator opened the page.
   Multiple active rules for one signal become
-  separate cards; a signal without a rule shows configuration guidance. Numeric charts grow from
-  page open across the whole page session; boolean and alarm charts derive state changes from the
-  same buckets and use each bucket's exact terminal value. The browser keeps the result bounded to
+  separate cards; signals without an active rule are omitted, and one dashboard-level setup message
+  appears only when no active rules exist. Numeric charts grow from page open across the whole page
+  session; boolean and alarm charts derive state changes from the same buckets and use each bucket's
+  exact terminal value, while cumulative counters use a staircase. The browser keeps the result bounded to
   at most 1,000 buckets, increasing the bucket width after the session exceeds that range rather
   than rolling the time window. Until a post-open processed value arrives,
   the chart stays empty and says that it is waiting, even when a prior processed current value is

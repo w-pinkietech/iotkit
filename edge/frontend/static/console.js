@@ -2286,6 +2286,9 @@
   function isBooleanKind(kind) {
     return kind === "bool" || kind === "boolean" || kind === "alarm";
   }
+  function isStepKind(kind) {
+    return isBooleanKind(kind) || kind === "cumulative_counter";
+  }
   function relativeTime(receivedAt, now) {
     const elapsed = Math.max(0, now - receivedAt);
     if (elapsed < 1e4) return "\u305F\u3063\u305F\u4ECA";
@@ -2323,11 +2326,13 @@
     }
     return transitions.slice(-MAX_BOOLEAN_POINTS);
   }
-  function renderChart(svg, payload, boolean, unit, now, sessionStartedAt) {
+  function renderChart(svg, payload, kind, unit, now, sessionStartedAt) {
+    const boolean = isBooleanKind(kind);
+    const step = isStepKind(kind);
     const points = sessionPoints(payload, boolean, sessionStartedAt);
     const chartPoints = points.map((point) => ({
       at: point.bucket_start,
-      value: point.average,
+      value: kind === "cumulative_counter" ? point.last_value ?? point.average : point.average,
       minimum: point.minimum,
       maximum: point.maximum,
       sampleCount: point.sample_count
@@ -2337,6 +2342,7 @@
       geometry: "compact",
       unit,
       boolean,
+      rawStep: step,
       startAt: sessionStartedAt,
       endAt: Math.max(now, sessionStartedAt + 1e3),
       latestAt: payload.latest_received_at !== null && payload.latest_received_at >= sessionStartedAt ? payload.latest_received_at : points.at(-1)?.bucket_start,
@@ -2375,7 +2381,7 @@
     const received = query("[data-live-received]", card);
     const summary = query("[data-live-summary]", card);
     const chart = query("[data-live-chart]", card);
-    const pointCount = chart ? renderChart(chart, payload, boolean, unit, now, sessionStartedAt) : 0;
+    const pointCount = chart ? renderChart(chart, payload, kind, unit, now, sessionStartedAt) : 0;
     if (payload.latest_received_at === null) {
       setStatus(card, "\u672A\u53D7\u4FE1", "never");
       if (value) value.textContent = "\u2014";

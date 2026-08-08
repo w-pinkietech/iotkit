@@ -393,12 +393,17 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"data-live-snapshot-at="1735689595000""#,
                 r#"data-live-signal"#,
                 r#"data-rule-id="rule-01""#,
+                r#"data-rule-id="rule-02""#,
                 r#"data-signal-ref="signal-01""#,
                 r#"data-value-kind="numeric""#,
+                r#"data-value-kind="cumulative_counter""#,
                 r#"data-live-chart"#,
                 r#"data-live-status"#,
                 r#"href="/sensors/signal-01""#,
                 "現在温度",
+                "累積電力量",
+                "測定値",
+                "累積値",
                 "有効な計測ルールごとに",
                 "表示領域内から最大12件を同時に自動更新",
             ][..],
@@ -543,12 +548,16 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 !html.contains("data-latest-received-at"),
                 "{path} must not seed semantic rule status from a raw signal receipt",
             );
+            assert_eq!(html.matches(r#"data-live-signal"#).count(), 2);
+            assert!(!html.contains(r#"data-signal-ref="signal-02""#));
+            assert!(!html.contains(r#"data-live-no-rules"#));
+            assert!(!html.contains("計測ルールがありません"));
         }
     }
 }
 
 #[tokio::test]
-async fn live_page_shows_per_signal_setup_guidance_without_active_rules() {
+async fn live_page_shows_one_dashboard_setup_message_without_active_rules() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::unconfigured()));
     let response = app
         .oneshot(
@@ -568,9 +577,13 @@ async fn live_page_shows_per_signal_setup_guidance_without_active_rules() {
     )
     .unwrap();
 
-    assert!(html.contains("乾燥炉入口 温度の計測ルールがありません"));
-    assert!(html.contains(r#"href="/sensors/signal-01""#));
-    assert!(html.contains("計測ルールを設定"));
+    assert_eq!(html.matches(r#"data-live-no-rules"#).count(), 1);
+    assert_eq!(html.matches(r#"role="status""#).count(), 1);
+    assert!(!html.contains("data-live-dashboard-state"));
+    assert!(html.contains("表示できる計測ルールがありません"));
+    assert!(html.contains(r#"href="/sensors""#));
+    assert!(html.contains("センサー設定を開く"));
+    assert!(!html.contains("乾燥炉入口 温度の計測ルールがありません"));
     assert!(!html.contains("data-live-signal"));
 }
 

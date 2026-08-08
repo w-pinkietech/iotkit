@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 13
+revision: 14
 ---
 
 # Architecture
@@ -315,7 +315,7 @@ Range BLE/BravePI Mainboard/UART path and generic Input Adapter/driver boundarie
 IoTKit Edge Nodes, one standard MQTT Broker, one IoTKit Edge, one selected
 embedded SQLite or PostgreSQL raw store,
 application-level accepted-through, future-only semantic projection, durable Output Adapter MQTT
-outboxes, an authenticated IoTKit Console, a bounded live dashboard of processed values per active measurement rule, bounded history graphs, and generic CSV export. BravePI owns
+outboxes, an authenticated IoTKit Console, a bounded live dashboard of processed results for each saved active measurement rule (ruleless signals are omitted and a dashboard-level setup message is shown only when none are active), bounded history graphs, and generic CSV export. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
 BravePI Mainboard UART stream. A production-shaped multi-Edge Node bootstrap exists for the Broker/IoTKit Edge
 TLS boundary. The Broker-host certificate component validates and atomically installs bundles,

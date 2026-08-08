@@ -805,6 +805,7 @@ impl WebApplication for StorageWebApplication {
                 .filter(|node| node.state == EdgeNodeState::Active)
                 .count(),
             live_snapshot_at,
+            live_rule_count: signals.iter().map(|signal| signal.rules.len()).sum(),
             receiving_signal_count: signals
                 .iter()
                 .filter(|signal| signal.status_class == "receiving")

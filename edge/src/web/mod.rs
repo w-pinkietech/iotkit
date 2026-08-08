@@ -162,6 +162,7 @@ pub struct ConsoleView {
     pub edge_nodes: Vec<ConsoleEdgeNode>,
     pub registered_edge_node_count: usize,
     pub live_snapshot_at: i64,
+    pub live_rule_count: usize,
     pub receiving_signal_count: usize,
     pub devices: Vec<ConsoleDevice>,
     pub signals: Vec<ConsoleSignal>,
@@ -2047,6 +2048,22 @@ pub mod test_support {
                         .contains("/edge-nodes/edge-node-01")
                         .then(|| console_stub_edge_node(true, self.resources_configured))
                 });
+            let signals = if request.path == "/live" && self.resources_configured {
+                let mut ruled_signal = signal.clone();
+                let mut counter_rule = ruled_signal.rules[0].clone();
+                counter_rule.rule_id = "rule-02".into();
+                counter_rule.display_name = "累積電力量".into();
+                counter_rule.kind = "cumulative_counter".into();
+                counter_rule.kind_label = "累積値".into();
+                ruled_signal.rules.push(counter_rule);
+                let mut ruleless_signal = signal.clone();
+                ruleless_signal.signal_ref = "signal-02".into();
+                ruleless_signal.name = "乾燥炉入口 湿度".into();
+                ruleless_signal.rules.clear();
+                vec![ruled_signal, ruleless_signal]
+            } else {
+                vec![signal.clone()]
+            };
             let device = ConsoleDevice {
                 device_ref: "device-01".into(),
                 edge_node_ref: "edge-node-01".into(),
@@ -2071,7 +2088,7 @@ pub mod test_support {
                 model_id: "bravepi".into(),
                 descriptor_current: true,
                 revision: i64::from(self.resources_configured),
-                signals: vec![signal.clone()],
+                signals: signals.clone(),
             };
             let selected_device = request
                 .path
@@ -2086,7 +2103,6 @@ pub mod test_support {
                 edge_nodes.push(pending_node);
             }
             let devices = vec![device];
-            let signals = vec![signal];
             let commissioning =
                 console::commissioning::commissioning_view(&edge_nodes, &devices, &signals);
             Ok(ConsoleView {
@@ -2095,7 +2111,11 @@ pub mod test_support {
                 edge_nodes,
                 registered_edge_node_count: 1,
                 live_snapshot_at: 1_735_689_595_000,
-                receiving_signal_count: 1,
+                live_rule_count: signals.iter().map(|signal| signal.rules.len()).sum(),
+                receiving_signal_count: signals
+                    .iter()
+                    .filter(|signal| signal.status_class == "receiving")
+                    .count(),
                 devices,
                 signals,
                 selected_edge_node,
