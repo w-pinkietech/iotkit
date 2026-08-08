@@ -216,6 +216,90 @@ fn preview_window_buckets_same_second_samples_after_full_history_evaluation() {
 }
 
 #[test]
+fn preview_window_uses_absolute_second_boundaries_for_rolling_windows() {
+    let inputs = vec![
+        PreviewInput {
+            received_at: 0,
+            observed_at: None,
+            value: 0.0,
+        },
+        PreviewInput {
+            received_at: 80_300,
+            observed_at: None,
+            value: 2.0,
+        },
+        PreviewInput {
+            received_at: 80_600,
+            observed_at: None,
+            value: 4.0,
+        },
+        PreviewInput {
+            received_at: 80_900,
+            observed_at: None,
+            value: 6.0,
+        },
+        PreviewInput {
+            received_at: 81_100,
+            observed_at: None,
+            value: 8.0,
+        },
+    ];
+    let spec = DefinitionSpec {
+        kind: SemanticKind::CumulativeCounter,
+        scale: 1.0,
+        offset: 0.0,
+        detector: Detector {
+            mode: DetectorMode::HighActive,
+            rise_threshold: 1.0,
+            fall_threshold: 0.5,
+            ..Detector::default()
+        },
+        trigger: TriggerMode::OnNotification,
+    };
+    let preview = build_preview_window(spec, &inputs, 200, None, Some(80_250)).expect("preview");
+
+    assert_eq!(
+        preview
+            .points
+            .iter()
+            .map(|point| point.plot_at)
+            .collect::<Vec<_>>(),
+        vec![80_000, 81_000]
+    );
+    let shifted =
+        build_preview_window(spec, &inputs, 200, None, Some(80_500)).expect("shifted preview");
+    assert_eq!(
+        shifted
+            .points
+            .iter()
+            .map(|point| point.plot_at)
+            .collect::<Vec<_>>(),
+        vec![80_000, 81_000]
+    );
+    let first = preview.points.first().expect("first bucket");
+    let shifted_first = shifted.points.first().expect("shifted first bucket");
+    assert_eq!(first.plot_at, 80_000);
+    assert_eq!(first.sample_count, 3);
+    assert_eq!(first.input_min, 2.0);
+    assert_eq!(first.input_max, 6.0);
+    assert_eq!(first.increment, 3);
+    assert_eq!(
+        (
+            shifted_first.sample_count,
+            shifted_first.input_min,
+            shifted_first.input_max,
+            shifted_first.increment,
+        ),
+        (
+            first.sample_count,
+            first.input_min,
+            first.input_max,
+            first.increment,
+        )
+    );
+}
+
+#[test]
 fn preview_plot_uses_observed_time_for_batched_receipts() {
     let inputs: Vec<_> = (0..20)
         .map(|index| {

@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 20
+revision: 21
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -43,7 +43,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 
 - **状態:** IoTKit Edge、signal数、意味未設定、certificate残日数。
 - **機器管理 / 収集ノード:** discovery、登録、最終descriptor通信、診断対象generation。**登録済み**は認可stateで、online保証ではない。
-- **ライブ:** 有効な計測ruleごとにcardを表示し、calibrationとruleを適用した最新の処理済みcurrent valueと最終受信を、graphとは独立して示す。Graphは画面を開いてからの結果だけを示す。同じsignalに複数の有効ruleがあれば別cardになり、ruleがなければ設定案内を示す。数値は画面を開いてから全期間のbucketを伸ばし、boolean/alarmは同じbucketから状態変化を導出する。各boolean/alarm bucketの終端stateは平均値ではなく保存された最終値を使う。Browser側は最大1,000bucketにboundedし、sessionが長くなったらbucket幅を広げて時間窓を巻き戻さない。開始後の処理済み値がまだなければ、過去のcurrent valueが表示できる場合でもgraphを空にして待機中と示し、cardからsensor詳細へ進める。Browserは画面がvisibleな間だけ5秒ごとに表示領域内の最大12件を更新する。一度取得した最終受信の経過時間とgraphの時間窓は、IoTKit Edgeの画面開始時刻を基準にBrowserの単調な経過時間で進めるため、一時的に再取得へ失敗しても進み続ける。未受信は明示し、5分以上新着がないruleは停止と断定せず**要確認**にする。Rawと過去dataは**受信履歴**で確認する。要確認時はsensor、Adapter、Edge Node、Broker、IoTKit Edge、semantic projectionの順に確認する。ライブとSensor詳細の**実信号プレビュー**のgraph横軸は有効なsemantic observed/event time、最終受信とcurrentの鮮度はIoTKit Edgeのraw receipt timeを使う。実信号プレビューは同じ直近60秒・1秒bucket graphで、bounded input history全体を評価してbooleanと累積のstateを維持する。累積ruleのresult cardには保存済みcurrent totalを示し、実信号プレビューには仮計算の直近60秒deltaを明記し、このgraph自体は直近60秒のままにする。保存済みruleは別のstaircase graphで、選択した保存済みruleの表示開始後の累積を示す。永続化済みcurrentの変化を保存順に追加し、変化がなくても保存済み値を単調な画面時刻まで延長する。表示点は最大1,000点にboundedする。新規draftは保存後に累積開始と示す。Staircaseは1秒bucketの平均ではなく、保存順の保存済みcurrent stateを示す。正常に保存済みの点を取得できないsessionは表示開始後の保存済み変化なしと示し、履歴取得失敗は取得できないと示す。
+- **ライブ:** 有効な計測ruleごとにcardを表示し、calibrationとruleを適用した最新の処理済みcurrent valueと最終受信を、graphとは独立して示す。Graphは画面を開いてからの結果だけを示す。同じsignalに複数の有効ruleがあれば別cardになり、ruleがなければ設定案内を示す。数値は画面を開いてから全期間のbucketを伸ばし、boolean/alarmは同じbucketから状態変化を導出する。各boolean/alarm bucketの終端stateは平均値ではなく保存された最終値を使う。Browser側は最大1,000bucketにboundedし、sessionが長くなったらbucket幅を広げて時間窓を巻き戻さない。開始後の処理済み値がまだなければ、過去のcurrent valueが表示できる場合でもgraphを空にして待機中と示し、cardからsensor詳細へ進める。Browserは画面がvisibleな間だけ5秒ごとに表示領域内の最大12件を更新する。一度取得した最終受信の経過時間とgraphの時間窓は、IoTKit Edgeの画面開始時刻を基準にBrowserの単調な経過時間で進めるため、一時的に再取得へ失敗しても進み続ける。未受信は明示し、5分以上新着がないruleは停止と断定せず**要確認**にする。Rawと過去dataは**受信履歴**で確認する。要確認時はsensor、Adapter、Edge Node、Broker、IoTKit Edge、semantic projectionの順に確認する。ライブとSensor詳細の**実信号プレビュー**のgraph横軸は有効なsemantic observed/event time、最終受信とcurrentの鮮度はIoTKit Edgeのraw receipt timeを使う。実信号プレビューは同じ直近60秒・1秒bucket graphで、bounded input history全体を評価してbooleanと累積のstateを維持する。累積ruleのresult cardには保存済みcurrent totalを示し、実信号プレビューには仮計算の直近60秒deltaを明記する。numeric、boolean、alarmと新規draftの上段graphは直近60秒のままだが、保存済み累積ruleを選択中は上段の受信値/設定結果graphと下段の保存済み累積staircaseが同じ画面を開いた時刻（表示開始）から現在までの横軸を使う。上段は重なり合う直近応答をbrowser内で継続し、表示点は全期間を代表する最大1,000点にまとめる。保存済みruleは別のstaircase graphで、選択した保存済みruleの表示開始後の累積を示す。永続化済みcurrentの変化を保存順に追加し、変化がなくても保存済み値を単調な画面時刻まで延長する。表示点は最大1,000点にboundedする。新規draftは保存後に累積開始と示す。Staircaseは1秒bucketの平均ではなく、保存順の保存済みcurrent stateを示す。正常に保存済みの点を取得できないsessionは表示開始後の保存済み変化なしと示し、履歴取得失敗は取得できないと示す。
 - **受信履歴:** sensor・Edge Node・期間を一画面で絞り、選択中sensorと一致するbounded graphとrecent rawを確認。Raw graphの横軸はIoTKit Edge receipt日時を表示time zoneで示し、縦軸は値の範囲とsensor単位を示す。同条件CSVは汎用Observation exportで業務帳票ではない。
 - **出力:** Active purpose-bound route。Pending publicationはBroker PUBACKまで削除しない。
 - **システム:** Filesystem、DB size、raw/semantic/pending projection/outbox件数、最終backup、原因別診断。Console応答だけでEdge Node/Broker正常と判断しない。

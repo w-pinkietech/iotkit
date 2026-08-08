@@ -60,9 +60,31 @@ interface CounterHistorySession {
   points: CounterHistorySessionPoint[];
 }
 
+interface PreviewSessionPoint {
+  raw: PreviewPoint;
+  result?: PreviewPoint;
+}
+
+interface PreviewPointCache {
+  archive: PreviewSessionPoint[];
+  recent: PreviewSessionPoint[];
+}
+
+interface PreviewSession {
+  startedAt: number;
+  points: PreviewPointCache;
+  resultKey?: string;
+}
+
+interface PreviewTimeWindow {
+  start: number;
+  end: number;
+}
+
 const COUNTER_WINDOW_MS = 60_000;
 const COUNTER_BUCKET_MS = 1_000;
 const COUNTER_SESSION_MAX_POINTS = 1_000;
+const PREVIEW_SESSION_MAX_POINTS = 1_000;
 
 const kindLabels: Record<SemanticKind, string> = {
   numeric: "測定値",
@@ -155,6 +177,206 @@ function pointPlotAt(point: PreviewPoint): number {
   return isFiniteNumber(point.plot_at) ? Number(point.plot_at) : point.received_at;
 }
 
+function rawPreviewPoint(point: PreviewPoint): PreviewPoint {
+  return {
+    ...point,
+    calibrated: point.input,
+    calibrated_min: point.input_min,
+    calibrated_max: point.input_max,
+    active: undefined,
+    active_samples: undefined,
+    transitions: undefined,
+    counter: undefined,
+    increment: undefined,
+  };
+}
+
+function sampleWeight(point: PreviewPoint): number {
+  return Math.max(1, Number(point.sample_count) || 0);
+}
+
+function mergePreviewPoints(
+  left: PreviewPoint,
+  right: PreviewPoint,
+): PreviewPoint {
+  const leftWeight = sampleWeight(left);
+  const rightWeight = sampleWeight(right);
+  const sampleCount = leftWeight + rightWeight;
+  const hasActiveSamples =
+    left.active_samples !== undefined || right.active_samples !== undefined;
+  const hasTransitions =
+    left.transitions !== undefined || right.transitions !== undefined;
+  const hasIncrement = left.increment !== undefined || right.increment !== undefined;
+  return {
+    ...right,
+    input: (left.input * leftWeight + right.input * rightWeight) / sampleCount,
+    input_min: Math.min(left.input_min, right.input_min),
+    input_max: Math.max(left.input_max, right.input_max),
+    calibrated:
+      (left.calibrated * leftWeight + right.calibrated * rightWeight) /
+      sampleCount,
+    calibrated_min: Math.min(left.calibrated_min, right.calibrated_min),
+    calibrated_max: Math.max(left.calibrated_max, right.calibrated_max),
+    sample_count: sampleCount,
+    active_samples: hasActiveSamples
+      ? (left.active_samples ?? 0) + (right.active_samples ?? 0)
+      : undefined,
+    transitions: hasTransitions
+      ? (left.transitions ?? 0) + (right.transitions ?? 0)
+      : undefined,
+    increment: hasIncrement
+      ? (left.increment ?? 0) + (right.increment ?? 0)
+      : undefined,
+  };
+}
+
+export function compactAdjacent<T>(
+  points: T[],
+  maximum: number,
+  weight: (point: T) => number,
+  merge: (left: T, right: T) => T,
+): T[] {
+  const compacted = [...points];
+  if (maximum < 2) return compacted.slice(0, maximum);
+  while (compacted.length > maximum) {
+    let best = 1;
+    let bestWeight = weight(compacted[1]) + weight(compacted[2]);
+    for (let index = 2; index < compacted.length - 1; index += 1) {
+      const combined = weight(compacted[index]) + weight(compacted[index + 1]);
+      if (combined < bestWeight) {
+        best = index;
+        bestWeight = combined;
+      }
+    }
+    compacted.splice(best, 2, merge(compacted[best], compacted[best + 1]));
+  }
+  return compacted;
+}
+
+function pointAt(point: PreviewSessionPoint): number {
+  return pointPlotAt(point.raw);
+}
+
+function mergePreviewSessionPoints(
+  left: PreviewSessionPoint,
+  right: PreviewSessionPoint,
+): PreviewSessionPoint {
+  return {
+    raw: mergePreviewPoints(left.raw, right.raw),
+    result: left.result && right.result
+      ? mergePreviewPoints(left.result, right.result)
+      : undefined,
+  };
+}
+
+function sortedSessionPoints(
+  points: PreviewSessionPoint[],
+): PreviewSessionPoint[] {
+  const byAt = new Map<number, PreviewSessionPoint>();
+  for (const point of points) byAt.set(pointAt(point), point);
+  return [...byAt.values()].sort((left, right) => pointAt(left) - pointAt(right));
+}
+
+function retainFullerSessionPoint(
+  cached: PreviewSessionPoint,
+  incoming: PreviewSessionPoint,
+): PreviewSessionPoint {
+  return {
+    raw: cached.raw,
+    // Results can only stay paired with this raw aggregate when both came
+    // from the current result identity. Result invalidation removes cached
+    // results before a changed identity reaches this path.
+    result: cached.result && incoming.result ? cached.result : undefined,
+  };
+}
+
+function cachedSessionPoints(cache: PreviewPointCache): PreviewSessionPoint[] {
+  const byAt = new Map<number, PreviewSessionPoint>();
+  for (const point of [...cache.archive, ...cache.recent]) {
+    const cached = byAt.get(pointAt(point));
+    byAt.set(
+      pointAt(point),
+      cached && sampleWeight(point.raw) < sampleWeight(cached.raw)
+        ? retainFullerSessionPoint(cached, point)
+        : point,
+    );
+  }
+  return [...byAt.values()].sort((left, right) => pointAt(left) - pointAt(right));
+}
+
+function mergePreviewPointCache(
+  cache: PreviewPointCache,
+  response: PreviewSessionPoint[],
+): PreviewPointCache {
+  const cached = cachedSessionPoints(cache);
+  const cachedByAt = new Map(cached.map((point) => [pointAt(point), point]));
+  const recent = sortedSessionPoints(response).map((incoming) => {
+    const previous = cachedByAt.get(pointAt(incoming));
+    return previous && sampleWeight(incoming.raw) < sampleWeight(previous.raw)
+      ? retainFullerSessionPoint(previous, incoming)
+      : incoming;
+  });
+  const replaced = new Set(recent.map(pointAt));
+  const archiveLimit = PREVIEW_SESSION_MAX_POINTS - recent.length;
+  const archive = archiveLimit > 0
+    ? compactAdjacent(
+      cached.filter((point) => !replaced.has(pointAt(point))),
+      archiveLimit,
+      (point) => sampleWeight(point.raw),
+      mergePreviewSessionPoints,
+    )
+    : [];
+  return { archive, recent };
+}
+
+function mergePreviewSession(
+  session: PreviewSession,
+  rawPoints: PreviewPoint[],
+  resultPoints: PreviewPoint[] | undefined,
+  resultKey: string | undefined,
+): void {
+  const results = new Map(
+    (resultPoints ?? []).map((point) => [pointPlotAt(point), point]),
+  );
+  const response = rawPoints
+    .filter((point) => pointPlotAt(point) + COUNTER_BUCKET_MS > session.startedAt)
+    .map((point) => ({
+      raw: rawPreviewPoint(point),
+      result: resultKey ? results.get(pointPlotAt(point)) : undefined,
+    }));
+  session.points = mergePreviewPointCache(session.points, response);
+  if (resultKey) session.resultKey = resultKey;
+}
+
+function invalidatePreviewResults(session: PreviewSession): void {
+  session.points = {
+    archive: session.points.archive.map(({ raw }) => ({ raw })),
+    recent: session.points.recent.map(({ raw }) => ({ raw })),
+  };
+  session.resultKey = undefined;
+}
+
+function previewSessionPoints(
+  session: PreviewSession,
+  resultKey: string | undefined,
+): PreviewPoint[] {
+  return [...session.points.archive, ...session.points.recent]
+    .sort((left, right) => pointAt(left) - pointAt(right))
+    .map(({ raw, result }) => result && session.resultKey === resultKey
+      ? {
+          ...raw,
+          calibrated: result.calibrated,
+          calibrated_min: result.calibrated_min,
+          calibrated_max: result.calibrated_max,
+          active: result.active,
+          active_samples: result.active_samples,
+          transitions: result.transitions,
+          counter: result.counter,
+          increment: result.increment,
+        }
+      : raw);
+}
+
 function latestPreviewPoint(payload: PreviewBody): PreviewPoint | undefined {
   return payload.latest_point ?? payload.points?.at(-1) ?? undefined;
 }
@@ -174,7 +396,9 @@ function counterWindowDelta(payload: PreviewBody): number {
   const window = previewWindow(payload, points);
   return points.reduce((total, point) => {
     const at = pointPlotAt(point);
-    if (at < window.start || at > window.end) return total;
+    if (at + COUNTER_BUCKET_MS <= window.start || at > window.end) {
+      return total;
+    }
     return total + Math.max(0, Number(point.increment ?? 0));
   }, 0);
 }
@@ -263,6 +487,22 @@ function retainLatestHistory(
   };
 }
 
+function compactCounterSessionPoints(
+  points: CounterHistorySessionPoint[],
+): CounterHistorySessionPoint[] {
+  return compactAdjacent(
+    points,
+    COUNTER_SESSION_MAX_POINTS,
+    (point) => Math.max(1, point.sampleCount),
+    (left, right) => ({
+      ...right,
+      minimum: Math.min(left.minimum, right.minimum),
+      maximum: Math.max(left.maximum, right.maximum),
+      sampleCount: Math.max(1, left.sampleCount) + Math.max(1, right.sampleCount),
+    }),
+  );
+}
+
 function appendCounterSessionPoint(
   points: CounterHistorySessionPoint[],
   point: CounterHistorySessionPoint,
@@ -277,7 +517,7 @@ function appendCounterSessionPoint(
       : replaced;
   }
   if (point.value === previous.value) return points;
-  return [...points, point].slice(-COUNTER_SESSION_MAX_POINTS);
+  return compactCounterSessionPoints([...points, point]);
 }
 
 function counterCurrentPointAt(
@@ -350,6 +590,7 @@ function renderCounterHistoryChart(
   svg: SVGSVGElement,
   state: CounterPreviewState,
   now: number,
+  sharedWindow?: PreviewTimeWindow,
 ): number {
   if (state.history?.status !== "available") {
     const unavailable = state.history?.status === "unavailable";
@@ -369,13 +610,13 @@ function renderCounterHistoryChart(
   const sessionPoints = state.session?.points ?? [];
   const lastPoint = sessionPoints.at(-1);
   const currentAt = lastPoint
-    ? Math.max(lastPoint.at, now)
+    ? Math.max(lastPoint.at, sharedWindow?.end ?? now)
     : undefined;
   const chartPoints = lastPoint && currentAt !== undefined && currentAt > lastPoint.at
-    ? [...sessionPoints, { ...lastPoint, at: currentAt }]
+    ? compactCounterSessionPoints([...sessionPoints, { ...lastPoint, at: currentAt }])
     : sessionPoints;
-  const startAt = state.session?.startedAt ?? chartPoints[0]?.at;
-  const endAt = currentAt ?? startAt;
+  const startAt = sharedWindow?.start ?? state.session?.startedAt ?? chartPoints[0]?.at;
+  const endAt = sharedWindow?.end ?? currentAt ?? startAt;
   renderSignalChart(svg, {
     points: chartPoints,
     geometry: "compact",
@@ -500,7 +741,7 @@ function latestRuleOutcome(
 function renderRuleResult(
   panel: HTMLElement,
   selected: SemanticRulePreview | null,
-  state: "ready" | "none" | "invalid" | "error",
+  state: "ready" | "none" | "invalid" | "error" | "pending",
   unit: string,
   counterState?: CounterPreviewState,
 ): RuleOutcome | null {
@@ -536,6 +777,11 @@ function renderRuleResult(
       ],
       error: [
         "判定結果を更新できません",
+        "—",
+        "受信値はそのまま確認できます。",
+      ],
+      pending: [
+        "設定結果を再計算しています",
         "—",
         "受信値はそのまま確認できます。",
       ],
@@ -576,9 +822,11 @@ function updateAccessibleSummary(
   outcome: RuleOutcome | null,
   unit: string,
   plotPoints: PreviewPoint[] = raw.points ?? [],
+  sessionWide = false,
 ): void {
   if (!summary) return;
   const points = plotPoints;
+  const period = sessionWide ? "画面を開いてから現在まで（全期間）" : "直近60秒";
   if (selected?.error) {
     if (!points.length) {
       setText(
@@ -600,7 +848,7 @@ function updateAccessibleSummary(
         `${formatNumber(Math.max(...inputs))}です。` +
         `選択中は${selected.display_name}、${kindLabel(selected.kind)}ですが、` +
         "判定結果を更新できません。受信値はそのまま確認できます。" +
-        `${evaluatedCount}件を評価し、直近60秒の${bucketCount}bucketを表示しています。`,
+        `${evaluatedCount}件を評価し、${period}の${bucketCount}bucketを表示しています。`,
     );
     return;
   }
@@ -645,14 +893,14 @@ function updateAccessibleSummary(
     summary,
     `受信値は${formatNumber(Math.min(...inputs))}から` +
       `${formatNumber(Math.max(...inputs))}です。${calibratedText}${ruleText}` +
-      `${evaluatedCount}件を評価し、直近60秒の${bucketCount}bucketを表示しています。`,
+      `${evaluatedCount}件を評価し、${period}の${bucketCount}bucketを表示しています。`,
   );
 }
 
 function previewWindow(
   payload: PreviewBody,
   points: PreviewPoint[],
-): { start: number; end: number } {
+): PreviewTimeWindow {
   const now = Date.now();
   const end = payload.window_end ?? (
     points.at(-1) ? pointPlotAt(points.at(-1)!) : now
@@ -670,9 +918,11 @@ function renderPreviewChart(
   unit: string,
   rawBoolean: boolean,
   showResult: boolean,
+  sharedWindow?: PreviewTimeWindow,
+  sessionWide = false,
 ): PreviewPoint[] {
   const points = payload.points ?? [];
-  const window = previewWindow(payload, points);
+  const window = sharedWindow ?? previewWindow(payload, points);
   renderSignalChart(svg, {
     points: points.map((point) => ({
       at: pointPlotAt(point),
@@ -709,7 +959,8 @@ function renderPreviewChart(
     emptyHint: payload.error
       ? "入力値の補正と判定条件を確認してください"
       : "実際に届いた値を待っています",
-    title: `横軸は直近60秒、縦軸は受信値${unit ? `（${unit}）` : ""}${showResult ? "と設定結果" : ""}です。`,
+    title: `横軸は${sessionWide ? "画面を開いてから現在まで" : "直近60秒"}、` +
+      `縦軸は受信値${unit ? `（${unit}）` : ""}${showResult ? "と設定結果" : ""}です。`,
   });
   return points;
 }
@@ -834,25 +1085,14 @@ function selectPreview(
 }
 
 function rawOnlyPreview(payload: PreviewBody): PreviewBody {
-  const rawPoint = (point: PreviewPoint): PreviewPoint => ({
-    ...point,
-    calibrated: point.input,
-    calibrated_min: point.input_min,
-    calibrated_max: point.input_max,
-    active: undefined,
-    active_samples: undefined,
-    transitions: undefined,
-    counter: undefined,
-    increment: undefined,
-  });
   return {
     ...payload,
     kind: "numeric",
     rise_threshold: undefined,
     fall_threshold: undefined,
-    points: (payload.points ?? []).map(rawPoint),
+    points: (payload.points ?? []).map(rawPreviewPoint),
     latest_point: payload.latest_point
-      ? rawPoint(payload.latest_point)
+      ? rawPreviewPoint(payload.latest_point)
       : undefined,
   };
 }
@@ -1001,6 +1241,13 @@ function initializePreview(panel: HTMLElement): void {
   let paused = false;
   let lastSeenReceivedAt: number | undefined;
   let selectedPreviewID: string | undefined;
+  let previewResultKey: string | undefined;
+  let previewGeneration = 0;
+  let lastRawPreview: PreviewBody | undefined;
+  const previewSession: PreviewSession = {
+    startedAt: edgeNow(),
+    points: { archive: [], recent: [] },
+  };
   const lastSelectedTargetByPanel = new WeakMap<HTMLElement, string>();
   const pendingInitialToggleStates = new Map<HTMLDetailsElement, boolean>();
 
@@ -1127,6 +1374,100 @@ function initializePreview(panel: HTMLElement): void {
     };
   };
 
+  const previewResultIdentity = (
+    activeID = selectedPreviewID,
+  ): string | undefined => {
+    const activeForm = forms.find(
+      (candidate) => candidate.dataset.previewId === activeID,
+    );
+    if (!activeID || !activeForm) return undefined;
+    return JSON.stringify({
+      activeID,
+      calibration: {
+        scale: calibrationForm
+          ? numericFormField(calibrationForm, "scale")
+          : 1,
+        offset: calibrationForm
+          ? numericFormField(calibrationForm, "offset")
+          : 0,
+      },
+      spec: ruleSpec(activeForm),
+    });
+  };
+
+  const renderCachedRaw = (state?: CounterPreviewState): void => {
+    if (!lastRawPreview) return;
+    const activeCounterRuleID = counterRuleIDForActiveForm(
+      forms,
+      selectedPreviewID,
+    );
+    const persisted = Boolean(
+      activeCounterRuleID && activeCounterRuleID === counterHistoryRuleID,
+    );
+    const points = persisted
+      ? previewSessionPoints(previewSession, undefined)
+      : lastRawPreview.points ?? [];
+    const now = edgeNow();
+    const window = persisted
+      ? { start: previewSession.startedAt, end: now }
+      : previewWindow(lastRawPreview, points);
+    renderPreviewChart(
+      chart,
+      {
+        ...lastRawPreview,
+        points,
+        window_start: window.start,
+        window_end: window.end,
+      },
+      false,
+      unit,
+      rawBoolean,
+      false,
+      window,
+      persisted,
+    );
+    if (persisted && state && counterChart) {
+      const plottedCount = renderCounterHistoryChart(
+        counterChart,
+        state,
+        now,
+        window,
+      );
+      setCounterPanel(true);
+      if (counterSummary) {
+        setText(counterSummary, counterSummaryText(state, plottedCount));
+      }
+    }
+  };
+
+  const synchronizePreviewResult = (): string | undefined => {
+    const key = previewResultIdentity();
+    if (key === previewResultKey) return key;
+    previewResultKey = key;
+    previewGeneration += 1;
+    invalidatePreviewResults(previewSession);
+    controller?.abort();
+    setSemanticLegends(false, false);
+    const activeCounterRuleID = counterRuleIDForActiveForm(
+      forms,
+      selectedPreviewID,
+    );
+    if (activeCounterRuleID !== counterHistoryRuleID) {
+      counterStateFor(activeCounterRuleID);
+      setCounterPanel(false);
+    }
+    const state = activeCounterRuleID
+      ? counterStateFor(activeCounterRuleID)
+      : undefined;
+    if (state?.persisted && renderCurrentCounter) {
+      renderCurrentCounter(state);
+    } else {
+      renderCachedRaw(state);
+    }
+    if (lastRawPreview) renderRuleResult(panel, null, "pending", unit);
+    return key;
+  };
+
   const refreshCounterHistory = (ruleID: string): void => {
     if (counterHistoryController || counterHistoryRuleID !== ruleID) return;
     const historyController = new AbortController();
@@ -1187,11 +1528,13 @@ function initializePreview(panel: HTMLElement): void {
   };
 
   const refresh = async (): Promise<void> => {
+    const activeID = selectedPreviewID;
+    const resultKey = synchronizePreviewResult();
+    const generation = previewGeneration;
     controller?.abort();
     const requestController = new AbortController();
     controller = requestController;
     clearFieldErrors(previewScope);
-    const activeID = selectedPreviewID;
     const requestedCounterRuleID = counterRuleIDForActiveForm(forms, activeID);
     counterStateFor(requestedCounterRuleID);
     if (requestedCounterRuleID) {
@@ -1211,7 +1554,14 @@ function initializePreview(panel: HTMLElement): void {
         csrfToken(),
         requestController.signal,
       );
-      if (controller !== requestController || requestController.signal.aborted) return;
+      if (
+        controller !== requestController ||
+        requestController.signal.aborted ||
+        generation !== previewGeneration ||
+        resultKey !== previewResultKey
+      ) {
+        return;
+      }
       if (!result.ok) {
         renderCurrentCounter = undefined;
         hideSemanticAuxiliaries();
@@ -1292,38 +1642,40 @@ function initializePreview(panel: HTMLElement): void {
         setText(message, "確認できるルールがありません。");
         return;
       }
+      const rawPayload = rawOnlyPreview(selection.raw ?? payload);
+      lastRawPreview = rawPayload;
+      const rawPoints = rawPayload.points ?? [];
+      const rawWindow = previewWindow(rawPayload, rawPoints);
+      mergePreviewSession(
+        previewSession,
+        rawPoints,
+        selectedReady?.points ?? undefined,
+        selectedReady ? resultKey : undefined,
+      );
       const persistedRuleID = persistedCounterRuleID(
         forms,
         activeID,
         selectedReady,
       );
       const counterState = counterStateFor(persistedRuleID);
-      const showResult =
-        Boolean(selectedReady) && hasMeaningfulResult(payload.points ?? []);
-      setSemanticLegends(Boolean(selectedReady), showResult, payload);
-      if (!persistedRuleID) {
-        setCounterPanel(false);
-      }
-      const plottedPoints = renderPreviewChart(
-        chart,
-        payload,
-        Boolean(selectedReady),
-        unit,
-        rawBoolean,
-        showResult,
-      );
-      const points = plottedPoints;
-      const renderPreviewMessage = (state: CounterPreviewState): void => {
+      if (!persistedRuleID) setCounterPanel(false);
+      const renderPreviewMessage = (
+        state: CounterPreviewState,
+        points: PreviewPoint[],
+        window: PreviewTimeWindow,
+        showResult: boolean,
+      ): void => {
         if (payload.input_count === 0) {
           range.textContent = "受信データはまだありません";
           count.textContent = "受信値が届くと設定結果を確認できます。";
           setText(message, "履歴は作らず、実際に届いた値だけを表示します。");
         } else {
-          const window = previewWindow(payload, points);
-          range.textContent = `直近${formatDuration(window.start, window.end)}の受信値`;
+          range.textContent = `${persistedRuleID ? "表示開始後" : "直近"}` +
+            `${formatDuration(window.start, window.end)}の受信値`;
           count.textContent =
             `${payload.input_count.toLocaleString("ja-JP")}件を評価し、` +
-            `直近60秒の${points.length.toLocaleString("ja-JP")}bucketを表示`;
+            `${persistedRuleID ? "表示開始後の全期間" : "直近60秒"}の` +
+            `${points.length.toLocaleString("ja-JP")}bucketを表示`;
           setText(
             message,
             payload.truncated_by === "input_count"
@@ -1344,11 +1696,53 @@ function initializePreview(panel: HTMLElement): void {
         }
       };
       const renderCounterState = (state: CounterPreviewState): void => {
+        if (
+          generation !== previewGeneration ||
+          resultKey !== previewResultKey
+        ) {
+          setSemanticLegends(false, false);
+          renderCachedRaw(state);
+          if (lastRawPreview) renderRuleResult(panel, null, "pending", unit);
+          return;
+        }
+        const now = edgeNow();
+        const points = persistedRuleID
+          ? previewSessionPoints(
+            previewSession,
+            selectedReady ? resultKey : undefined,
+          )
+          : payload.points ?? [];
+        const window: PreviewTimeWindow = persistedRuleID
+          ? {
+              start: previewSession.startedAt,
+              end: now,
+            }
+          : previewWindow(payload, points);
+        const showResult =
+          Boolean(selectedReady) && hasMeaningfulResult(points);
+        const chartPayload: PreviewBody = {
+          ...payload,
+          points,
+          window_start: window.start,
+          window_end: window.end,
+        };
+        setSemanticLegends(Boolean(selectedReady), showResult, payload);
+        const plottedPoints = renderPreviewChart(
+          chart,
+          chartPayload,
+          Boolean(selectedReady),
+          unit,
+          rawBoolean,
+          showResult,
+          window,
+          Boolean(persistedRuleID),
+        );
         if (persistedRuleID && counterChart) {
           const plottedCount = renderCounterHistoryChart(
             counterChart,
             state,
-            edgeNow(),
+            now,
+            window,
           );
           setCounterPanel(true);
           if (counterSummary) {
@@ -1369,13 +1763,14 @@ function initializePreview(panel: HTMLElement): void {
         );
         updateAccessibleSummary(
           accessibleSummary,
-          payload,
+          chartPayload,
           selectedReady ?? selectedFailure,
           outcome,
           unit,
           plottedPoints,
+          Boolean(persistedRuleID),
         );
-        renderPreviewMessage(state);
+        renderPreviewMessage(state, plottedPoints, window, showResult);
       };
       renderCurrentCounter = persistedRuleID ? renderCounterState : undefined;
       renderCounterState(counterState);
@@ -1462,16 +1857,21 @@ function initializePreview(panel: HTMLElement): void {
       ) {
         refreshRuleSelectorLabels(form);
       }
+      synchronizePreviewResult();
       schedule();
     };
     form.addEventListener("input", onFormChange);
     form.addEventListener("change", onFormChange);
   }
-  calibrationForm?.addEventListener("input", schedule);
-  calibrationForm?.addEventListener("change", schedule);
+  const scheduleAfterIdentityChange = (): void => {
+    synchronizePreviewResult();
+    schedule();
+  };
+  calibrationForm?.addEventListener("input", scheduleAfterIdentityChange);
+  calibrationForm?.addEventListener("change", scheduleAfterIdentityChange);
   previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, () => {
     restorePreviewTarget();
-    schedule();
+    scheduleAfterIdentityChange();
   });
   ruleSelector?.addEventListener("change", () => {
     const activePanel = activeSettingPanel(previewScope);
@@ -1481,7 +1881,7 @@ function initializePreview(panel: HTMLElement): void {
       )
       : undefined;
     selectPreviewTarget(selectedTarget);
-    schedule();
+    scheduleAfterIdentityChange();
   });
   for (const target of queryAll<HTMLDetailsElement>(
     "details[data-preview-target]",
@@ -1502,7 +1902,7 @@ function initializePreview(panel: HTMLElement): void {
       ) {
         selectPreviewTarget(target);
       }
-      schedule();
+      scheduleAfterIdentityChange();
     });
   }
   toggle?.addEventListener("click", () => {
@@ -1518,6 +1918,7 @@ function initializePreview(panel: HTMLElement): void {
       void refresh();
     }
   });
+  synchronizePreviewResult();
   void refresh();
   window.setInterval(() => {
     if (

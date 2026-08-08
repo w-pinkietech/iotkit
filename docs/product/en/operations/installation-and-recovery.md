@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 20
+revision: 21
 ---
 
 # IoTKit Edge installation and recovery
@@ -97,7 +97,11 @@ fallback.
   The real-signal preview uses the same recent 60-second, one-second chart buckets while
   evaluating its bounded input history so boolean and cumulative results retain their state.
   For cumulative rules, the result card shows the persisted current total. The real-signal preview
-  labels the hypothetical last-60-second delta and remains a recent-60-second chart. An existing
+  labels the hypothetical last-60-second delta. Numeric, boolean, alarm, and draft upper charts
+  remain recent-60-second charts, while a selected persisted cumulative rule gives the upper
+  received/settings-result chart and lower persisted cumulative staircase the same page-open
+  display-start to current-time axis. The upper chart retains overlapping recent responses in the browser and
+  compacts them to at most 1,000 representative points across the whole display period. An existing
   rule also shows a separate persisted cumulative staircase after that selected saved rule becomes
   active. It records saved-current changes from display start, extends an unchanged value to the
   monotonic current page time, and keeps at most 1,000 displayed points. It does not discard session

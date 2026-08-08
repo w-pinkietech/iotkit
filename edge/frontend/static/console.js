@@ -866,6 +866,7 @@
   var COUNTER_WINDOW_MS = 6e4;
   var COUNTER_BUCKET_MS = 1e3;
   var COUNTER_SESSION_MAX_POINTS = 1e3;
+  var PREVIEW_SESSION_MAX_POINTS = 1e3;
   var kindLabels = {
     numeric: "\u6E2C\u5B9A\u5024",
     boolean: "ON / OFF",
@@ -936,6 +937,142 @@
   function pointPlotAt(point) {
     return isFiniteNumber(point.plot_at) ? Number(point.plot_at) : point.received_at;
   }
+  function rawPreviewPoint(point) {
+    return {
+      ...point,
+      calibrated: point.input,
+      calibrated_min: point.input_min,
+      calibrated_max: point.input_max,
+      active: void 0,
+      active_samples: void 0,
+      transitions: void 0,
+      counter: void 0,
+      increment: void 0
+    };
+  }
+  function sampleWeight(point) {
+    return Math.max(1, Number(point.sample_count) || 0);
+  }
+  function mergePreviewPoints(left, right) {
+    const leftWeight = sampleWeight(left);
+    const rightWeight = sampleWeight(right);
+    const sampleCount = leftWeight + rightWeight;
+    const hasActiveSamples = left.active_samples !== void 0 || right.active_samples !== void 0;
+    const hasTransitions = left.transitions !== void 0 || right.transitions !== void 0;
+    const hasIncrement = left.increment !== void 0 || right.increment !== void 0;
+    return {
+      ...right,
+      input: (left.input * leftWeight + right.input * rightWeight) / sampleCount,
+      input_min: Math.min(left.input_min, right.input_min),
+      input_max: Math.max(left.input_max, right.input_max),
+      calibrated: (left.calibrated * leftWeight + right.calibrated * rightWeight) / sampleCount,
+      calibrated_min: Math.min(left.calibrated_min, right.calibrated_min),
+      calibrated_max: Math.max(left.calibrated_max, right.calibrated_max),
+      sample_count: sampleCount,
+      active_samples: hasActiveSamples ? (left.active_samples ?? 0) + (right.active_samples ?? 0) : void 0,
+      transitions: hasTransitions ? (left.transitions ?? 0) + (right.transitions ?? 0) : void 0,
+      increment: hasIncrement ? (left.increment ?? 0) + (right.increment ?? 0) : void 0
+    };
+  }
+  function compactAdjacent(points, maximum, weight, merge) {
+    const compacted = [...points];
+    if (maximum < 2) return compacted.slice(0, maximum);
+    while (compacted.length > maximum) {
+      let best = 1;
+      let bestWeight = weight(compacted[1]) + weight(compacted[2]);
+      for (let index = 2; index < compacted.length - 1; index += 1) {
+        const combined = weight(compacted[index]) + weight(compacted[index + 1]);
+        if (combined < bestWeight) {
+          best = index;
+          bestWeight = combined;
+        }
+      }
+      compacted.splice(best, 2, merge(compacted[best], compacted[best + 1]));
+    }
+    return compacted;
+  }
+  function pointAt(point) {
+    return pointPlotAt(point.raw);
+  }
+  function mergePreviewSessionPoints(left, right) {
+    return {
+      raw: mergePreviewPoints(left.raw, right.raw),
+      result: left.result && right.result ? mergePreviewPoints(left.result, right.result) : void 0
+    };
+  }
+  function sortedSessionPoints(points) {
+    const byAt = /* @__PURE__ */ new Map();
+    for (const point of points) byAt.set(pointAt(point), point);
+    return [...byAt.values()].sort((left, right) => pointAt(left) - pointAt(right));
+  }
+  function retainFullerSessionPoint(cached, incoming) {
+    return {
+      raw: cached.raw,
+      // Results can only stay paired with this raw aggregate when both came
+      // from the current result identity. Result invalidation removes cached
+      // results before a changed identity reaches this path.
+      result: cached.result && incoming.result ? cached.result : void 0
+    };
+  }
+  function cachedSessionPoints(cache) {
+    const byAt = /* @__PURE__ */ new Map();
+    for (const point of [...cache.archive, ...cache.recent]) {
+      const cached = byAt.get(pointAt(point));
+      byAt.set(
+        pointAt(point),
+        cached && sampleWeight(point.raw) < sampleWeight(cached.raw) ? retainFullerSessionPoint(cached, point) : point
+      );
+    }
+    return [...byAt.values()].sort((left, right) => pointAt(left) - pointAt(right));
+  }
+  function mergePreviewPointCache(cache, response) {
+    const cached = cachedSessionPoints(cache);
+    const cachedByAt = new Map(cached.map((point) => [pointAt(point), point]));
+    const recent = sortedSessionPoints(response).map((incoming) => {
+      const previous = cachedByAt.get(pointAt(incoming));
+      return previous && sampleWeight(incoming.raw) < sampleWeight(previous.raw) ? retainFullerSessionPoint(previous, incoming) : incoming;
+    });
+    const replaced = new Set(recent.map(pointAt));
+    const archiveLimit = PREVIEW_SESSION_MAX_POINTS - recent.length;
+    const archive = archiveLimit > 0 ? compactAdjacent(
+      cached.filter((point) => !replaced.has(pointAt(point))),
+      archiveLimit,
+      (point) => sampleWeight(point.raw),
+      mergePreviewSessionPoints
+    ) : [];
+    return { archive, recent };
+  }
+  function mergePreviewSession(session, rawPoints, resultPoints, resultKey) {
+    const results = new Map(
+      (resultPoints ?? []).map((point) => [pointPlotAt(point), point])
+    );
+    const response = rawPoints.filter((point) => pointPlotAt(point) + COUNTER_BUCKET_MS > session.startedAt).map((point) => ({
+      raw: rawPreviewPoint(point),
+      result: resultKey ? results.get(pointPlotAt(point)) : void 0
+    }));
+    session.points = mergePreviewPointCache(session.points, response);
+    if (resultKey) session.resultKey = resultKey;
+  }
+  function invalidatePreviewResults(session) {
+    session.points = {
+      archive: session.points.archive.map(({ raw }) => ({ raw })),
+      recent: session.points.recent.map(({ raw }) => ({ raw }))
+    };
+    session.resultKey = void 0;
+  }
+  function previewSessionPoints(session, resultKey) {
+    return [...session.points.archive, ...session.points.recent].sort((left, right) => pointAt(left) - pointAt(right)).map(({ raw, result }) => result && session.resultKey === resultKey ? {
+      ...raw,
+      calibrated: result.calibrated,
+      calibrated_min: result.calibrated_min,
+      calibrated_max: result.calibrated_max,
+      active: result.active,
+      active_samples: result.active_samples,
+      transitions: result.transitions,
+      counter: result.counter,
+      increment: result.increment
+    } : raw);
+  }
   function latestPreviewPoint(payload) {
     return payload.latest_point ?? payload.points?.at(-1) ?? void 0;
   }
@@ -950,7 +1087,9 @@
     const window2 = previewWindow(payload, points);
     return points.reduce((total, point) => {
       const at = pointPlotAt(point);
-      if (at < window2.start || at > window2.end) return total;
+      if (at + COUNTER_BUCKET_MS <= window2.start || at > window2.end) {
+        return total;
+      }
       return total + Math.max(0, Number(point.increment ?? 0));
     }, 0);
   }
@@ -1000,6 +1139,19 @@
       latest_value: previous.latest_value
     };
   }
+  function compactCounterSessionPoints(points) {
+    return compactAdjacent(
+      points,
+      COUNTER_SESSION_MAX_POINTS,
+      (point) => Math.max(1, point.sampleCount),
+      (left, right) => ({
+        ...right,
+        minimum: Math.min(left.minimum, right.minimum),
+        maximum: Math.max(left.maximum, right.maximum),
+        sampleCount: Math.max(1, left.sampleCount) + Math.max(1, right.sampleCount)
+      })
+    );
+  }
   function appendCounterSessionPoint(points, point) {
     const previous = points.at(-1);
     if (previous === void 0) return [point];
@@ -1009,7 +1161,7 @@
       return replaced.length > 1 && replaced.at(-2)?.value === point.value ? replaced.slice(0, -1) : replaced;
     }
     if (point.value === previous.value) return points;
-    return [...points, point].slice(-COUNTER_SESSION_MAX_POINTS);
+    return compactCounterSessionPoints([...points, point]);
   }
   function counterCurrentPointAt(session, latestReceivedAt, capturedAt) {
     const previousAt = session.points.at(-1)?.at;
@@ -1056,7 +1208,7 @@
     }
     return { ...session, baselineCaptured, points };
   }
-  function renderCounterHistoryChart(svg, state, now) {
+  function renderCounterHistoryChart(svg, state, now, sharedWindow) {
     if (state.history?.status !== "available") {
       const unavailable = state.history?.status === "unavailable";
       return renderSignalChart(svg, {
@@ -1070,10 +1222,10 @@
     }
     const sessionPoints2 = state.session?.points ?? [];
     const lastPoint = sessionPoints2.at(-1);
-    const currentAt = lastPoint ? Math.max(lastPoint.at, now) : void 0;
-    const chartPoints = lastPoint && currentAt !== void 0 && currentAt > lastPoint.at ? [...sessionPoints2, { ...lastPoint, at: currentAt }] : sessionPoints2;
-    const startAt = state.session?.startedAt ?? chartPoints[0]?.at;
-    const endAt = currentAt ?? startAt;
+    const currentAt = lastPoint ? Math.max(lastPoint.at, sharedWindow?.end ?? now) : void 0;
+    const chartPoints = lastPoint && currentAt !== void 0 && currentAt > lastPoint.at ? compactCounterSessionPoints([...sessionPoints2, { ...lastPoint, at: currentAt }]) : sessionPoints2;
+    const startAt = sharedWindow?.start ?? state.session?.startedAt ?? chartPoints[0]?.at;
+    const endAt = sharedWindow?.end ?? currentAt ?? startAt;
     renderSignalChart(svg, {
       points: chartPoints,
       geometry: "compact",
@@ -1211,6 +1363,11 @@
           "\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093",
           "\u2014",
           "\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+        ],
+        pending: [
+          "\u8A2D\u5B9A\u7D50\u679C\u3092\u518D\u8A08\u7B97\u3057\u3066\u3044\u307E\u3059",
+          "\u2014",
+          "\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
         ]
       };
       const [title, result, hint] = messages[state === "ready" ? "none" : state];
@@ -1236,9 +1393,10 @@
     };
     if (summary) setText(summary, messages[state]);
   }
-  function updateAccessibleSummary(summary, raw, selected, outcome, unit, plotPoints = raw.points ?? []) {
+  function updateAccessibleSummary(summary, raw, selected, outcome, unit, plotPoints = raw.points ?? [], sessionWide = false) {
     if (!summary) return;
     const points = plotPoints;
+    const period = sessionWide ? "\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u73FE\u5728\u307E\u3067\uFF08\u5168\u671F\u9593\uFF09" : "\u76F4\u8FD160\u79D2";
     if (selected?.error) {
       if (!points.length) {
         setText(
@@ -1255,7 +1413,7 @@
       const bucketCount2 = points.length;
       setText(
         summary,
-        `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs2))}\u304B\u3089${formatNumber(Math.max(...inputs2))}\u3067\u3059\u3002\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3067\u3059\u304C\u3001\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002${evaluatedCount2}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001\u76F4\u8FD160\u79D2\u306E${bucketCount2}bucket\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+        `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs2))}\u304B\u3089${formatNumber(Math.max(...inputs2))}\u3067\u3059\u3002\u9078\u629E\u4E2D\u306F${selected.display_name}\u3001${kindLabel(selected.kind)}\u3067\u3059\u304C\u3001\u5224\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u53D7\u4FE1\u5024\u306F\u305D\u306E\u307E\u307E\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002${evaluatedCount2}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001${period}\u306E${bucketCount2}bucket\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
       );
       return;
     }
@@ -1284,7 +1442,7 @@
     })() : "";
     setText(
       summary,
-      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3067\u3059\u3002${calibratedText}${ruleText}${evaluatedCount}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001\u76F4\u8FD160\u79D2\u306E${bucketCount}bucket\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
+      `\u53D7\u4FE1\u5024\u306F${formatNumber(Math.min(...inputs))}\u304B\u3089${formatNumber(Math.max(...inputs))}\u3067\u3059\u3002${calibratedText}${ruleText}${evaluatedCount}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001${period}\u306E${bucketCount}bucket\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002`
     );
   }
   function previewWindow(payload, points) {
@@ -1295,9 +1453,9 @@
       end
     };
   }
-  function renderPreviewChart(svg, payload, showSemanticOverlays, unit, rawBoolean, showResult) {
+  function renderPreviewChart(svg, payload, showSemanticOverlays, unit, rawBoolean, showResult, sharedWindow, sessionWide = false) {
     const points = payload.points ?? [];
-    const window2 = previewWindow(payload, points);
+    const window2 = sharedWindow ?? previewWindow(payload, points);
     renderSignalChart(svg, {
       points: points.map((point) => ({
         at: pointPlotAt(point),
@@ -1323,7 +1481,7 @@
       thresholds: showSemanticOverlays ? { rise: payload.rise_threshold, fall: payload.fall_threshold } : void 0,
       emptyTitle: payload.error ? "\u3053\u306E\u30EB\u30FC\u30EB\u3067\u306F\u53D7\u4FE1\u5024\u3092\u5224\u5B9A\u3067\u304D\u307E\u305B\u3093" : "\u307E\u3060\u53D7\u4FE1\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093",
       emptyHint: payload.error ? "\u5165\u529B\u5024\u306E\u88DC\u6B63\u3068\u5224\u5B9A\u6761\u4EF6\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044" : "\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3092\u5F85\u3063\u3066\u3044\u307E\u3059",
-      title: `\u6A2A\u8EF8\u306F\u76F4\u8FD160\u79D2\u3001\u7E26\u8EF8\u306F\u53D7\u4FE1\u5024${unit ? `\uFF08${unit}\uFF09` : ""}${showResult ? "\u3068\u8A2D\u5B9A\u7D50\u679C" : ""}\u3067\u3059\u3002`
+      title: `\u6A2A\u8EF8\u306F${sessionWide ? "\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u73FE\u5728\u307E\u3067" : "\u76F4\u8FD160\u79D2"}\u3001\u7E26\u8EF8\u306F\u53D7\u4FE1\u5024${unit ? `\uFF08${unit}\uFF09` : ""}${showResult ? "\u3068\u8A2D\u5B9A\u7D50\u679C" : ""}\u3067\u3059\u3002`
     });
     return points;
   }
@@ -1409,24 +1567,13 @@
     };
   }
   function rawOnlyPreview(payload) {
-    const rawPoint = (point) => ({
-      ...point,
-      calibrated: point.input,
-      calibrated_min: point.input_min,
-      calibrated_max: point.input_max,
-      active: void 0,
-      active_samples: void 0,
-      transitions: void 0,
-      counter: void 0,
-      increment: void 0
-    });
     return {
       ...payload,
       kind: "numeric",
       rise_threshold: void 0,
       fall_threshold: void 0,
-      points: (payload.points ?? []).map(rawPoint),
-      latest_point: payload.latest_point ? rawPoint(payload.latest_point) : void 0
+      points: (payload.points ?? []).map(rawPreviewPoint),
+      latest_point: payload.latest_point ? rawPreviewPoint(payload.latest_point) : void 0
     };
   }
   function buildRequest(signalRef, forms, calibrationForm, multipleRules, activeID) {
@@ -1543,6 +1690,13 @@
     let paused = false;
     let lastSeenReceivedAt;
     let selectedPreviewID;
+    let previewResultKey;
+    let previewGeneration = 0;
+    let lastRawPreview;
+    const previewSession = {
+      startedAt: edgeNow(),
+      points: { archive: [], recent: [] }
+    };
     const lastSelectedTargetByPanel = /* @__PURE__ */ new WeakMap();
     const pendingInitialToggleStates = /* @__PURE__ */ new Map();
     const setCounterPanel = (visible) => {
@@ -1640,6 +1794,85 @@
         session: counterHistorySession
       };
     };
+    const previewResultIdentity = (activeID = selectedPreviewID) => {
+      const activeForm = forms.find(
+        (candidate) => candidate.dataset.previewId === activeID
+      );
+      if (!activeID || !activeForm) return void 0;
+      return JSON.stringify({
+        activeID,
+        calibration: {
+          scale: calibrationForm ? numericFormField(calibrationForm, "scale") : 1,
+          offset: calibrationForm ? numericFormField(calibrationForm, "offset") : 0
+        },
+        spec: ruleSpec(activeForm)
+      });
+    };
+    const renderCachedRaw = (state) => {
+      if (!lastRawPreview) return;
+      const activeCounterRuleID = counterRuleIDForActiveForm(
+        forms,
+        selectedPreviewID
+      );
+      const persisted = Boolean(
+        activeCounterRuleID && activeCounterRuleID === counterHistoryRuleID
+      );
+      const points = persisted ? previewSessionPoints(previewSession, void 0) : lastRawPreview.points ?? [];
+      const now = edgeNow();
+      const window2 = persisted ? { start: previewSession.startedAt, end: now } : previewWindow(lastRawPreview, points);
+      renderPreviewChart(
+        chart,
+        {
+          ...lastRawPreview,
+          points,
+          window_start: window2.start,
+          window_end: window2.end
+        },
+        false,
+        unit,
+        rawBoolean,
+        false,
+        window2,
+        persisted
+      );
+      if (persisted && state && counterChart) {
+        const plottedCount = renderCounterHistoryChart(
+          counterChart,
+          state,
+          now,
+          window2
+        );
+        setCounterPanel(true);
+        if (counterSummary) {
+          setText(counterSummary, counterSummaryText(state, plottedCount));
+        }
+      }
+    };
+    const synchronizePreviewResult = () => {
+      const key = previewResultIdentity();
+      if (key === previewResultKey) return key;
+      previewResultKey = key;
+      previewGeneration += 1;
+      invalidatePreviewResults(previewSession);
+      controller?.abort();
+      setSemanticLegends(false, false);
+      const activeCounterRuleID = counterRuleIDForActiveForm(
+        forms,
+        selectedPreviewID
+      );
+      if (activeCounterRuleID !== counterHistoryRuleID) {
+        counterStateFor(activeCounterRuleID);
+        setCounterPanel(false);
+      }
+      const state = activeCounterRuleID ? counterStateFor(activeCounterRuleID) : void 0;
+      if (state?.persisted && renderCurrentCounter) {
+        renderCurrentCounter(state);
+      } else {
+        renderCachedRaw(state);
+      }
+      if (lastRawPreview) renderRuleResult(panel, null, "pending", unit);
+      return key;
+    };
     const refreshCounterHistory = (ruleID) => {
       if (counterHistoryController || counterHistoryRuleID !== ruleID) return;
       const historyController = new AbortController();
@@ -1689,11 +1922,13 @@
       });
     };
     const refresh = async () => {
+      const activeID = selectedPreviewID;
+      const resultKey = synchronizePreviewResult();
+      const generation = previewGeneration;
       controller?.abort();
       const requestController = new AbortController();
       controller = requestController;
       clearFieldErrors(previewScope);
-      const activeID = selectedPreviewID;
       const requestedCounterRuleID = counterRuleIDForActiveForm(forms, activeID);
       counterStateFor(requestedCounterRuleID);
       if (requestedCounterRuleID) {
@@ -1712,7 +1947,9 @@
           csrfToken(),
           requestController.signal
         );
-        if (controller !== requestController || requestController.signal.aborted) return;
+        if (controller !== requestController || requestController.signal.aborted || generation !== previewGeneration || resultKey !== previewResultKey) {
+          return;
+        }
         if (!result.ok) {
           renderCurrentCounter = void 0;
           hideSemanticAuxiliaries();
@@ -1780,35 +2017,31 @@
           setText(message, "\u78BA\u8A8D\u3067\u304D\u308B\u30EB\u30FC\u30EB\u304C\u3042\u308A\u307E\u305B\u3093\u3002");
           return;
         }
+        const rawPayload = rawOnlyPreview(selection.raw ?? payload);
+        lastRawPreview = rawPayload;
+        const rawPoints = rawPayload.points ?? [];
+        const rawWindow = previewWindow(rawPayload, rawPoints);
+        mergePreviewSession(
+          previewSession,
+          rawPoints,
+          selectedReady?.points ?? void 0,
+          selectedReady ? resultKey : void 0
+        );
         const persistedRuleID = persistedCounterRuleID(
           forms,
           activeID,
           selectedReady
         );
         const counterState = counterStateFor(persistedRuleID);
-        const showResult = Boolean(selectedReady) && hasMeaningfulResult(payload.points ?? []);
-        setSemanticLegends(Boolean(selectedReady), showResult, payload);
-        if (!persistedRuleID) {
-          setCounterPanel(false);
-        }
-        const plottedPoints = renderPreviewChart(
-          chart,
-          payload,
-          Boolean(selectedReady),
-          unit,
-          rawBoolean,
-          showResult
-        );
-        const points = plottedPoints;
-        const renderPreviewMessage = (state) => {
+        if (!persistedRuleID) setCounterPanel(false);
+        const renderPreviewMessage = (state, points, window2, showResult) => {
           if (payload.input_count === 0) {
             range.textContent = "\u53D7\u4FE1\u30C7\u30FC\u30BF\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093";
             count.textContent = "\u53D7\u4FE1\u5024\u304C\u5C4A\u304F\u3068\u8A2D\u5B9A\u7D50\u679C\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002";
             setText(message, "\u5C65\u6B74\u306F\u4F5C\u3089\u305A\u3001\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3060\u3051\u3092\u8868\u793A\u3057\u307E\u3059\u3002");
           } else {
-            const window2 = previewWindow(payload, points);
-            range.textContent = `\u76F4\u8FD1${formatDuration(window2.start, window2.end)}\u306E\u53D7\u4FE1\u5024`;
-            count.textContent = `${payload.input_count.toLocaleString("ja-JP")}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001\u76F4\u8FD160\u79D2\u306E${points.length.toLocaleString("ja-JP")}bucket\u3092\u8868\u793A`;
+            range.textContent = `${persistedRuleID ? "\u8868\u793A\u958B\u59CB\u5F8C" : "\u76F4\u8FD1"}${formatDuration(window2.start, window2.end)}\u306E\u53D7\u4FE1\u5024`;
+            count.textContent = `${payload.input_count.toLocaleString("ja-JP")}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001${persistedRuleID ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5168\u671F\u9593" : "\u76F4\u8FD160\u79D2"}\u306E${points.length.toLocaleString("ja-JP")}bucket\u3092\u8868\u793A`;
             setText(
               message,
               payload.truncated_by === "input_count" ? "\u9AD8\u901F\u306A\u4FE1\u53F7\u306E\u305F\u3081\u3001\u6700\u65B020,000\u4EF6\u3092\u8981\u7D04\u3057\u3066\u3044\u307E\u3059\u3002" : payload.kind === "cumulative_counter" ? `\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(counterWindowDelta(payload))}\u3002` + counterPreviewMessage(state) : !showResult ? "\u5909\u63DB\u524D\u5F8C\u306E\u5024\u306F\u540C\u3058\u3067\u3059\u3002\u88DC\u6B63\u3092\u5909\u66F4\u3059\u308B\u3068\u5DEE\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002" : "\u8A2D\u5B9A\u3092\u5909\u3048\u308B\u3068\u3001\u4FDD\u5B58\u524D\u306E\u7D50\u679C\u3092\u3053\u306E\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
@@ -1822,11 +2055,45 @@
           }
         };
         const renderCounterState = (state) => {
+          if (generation !== previewGeneration || resultKey !== previewResultKey) {
+            setSemanticLegends(false, false);
+            renderCachedRaw(state);
+            if (lastRawPreview) renderRuleResult(panel, null, "pending", unit);
+            return;
+          }
+          const now = edgeNow();
+          const points = persistedRuleID ? previewSessionPoints(
+            previewSession,
+            selectedReady ? resultKey : void 0
+          ) : payload.points ?? [];
+          const window2 = persistedRuleID ? {
+            start: previewSession.startedAt,
+            end: now
+          } : previewWindow(payload, points);
+          const showResult = Boolean(selectedReady) && hasMeaningfulResult(points);
+          const chartPayload = {
+            ...payload,
+            points,
+            window_start: window2.start,
+            window_end: window2.end
+          };
+          setSemanticLegends(Boolean(selectedReady), showResult, payload);
+          const plottedPoints = renderPreviewChart(
+            chart,
+            chartPayload,
+            Boolean(selectedReady),
+            unit,
+            rawBoolean,
+            showResult,
+            window2,
+            Boolean(persistedRuleID)
+          );
           if (persistedRuleID && counterChart) {
             const plottedCount = renderCounterHistoryChart(
               counterChart,
               state,
-              edgeNow()
+              now,
+              window2
             );
             setCounterPanel(true);
             if (counterSummary) {
@@ -1843,13 +2110,14 @@
           );
           updateAccessibleSummary(
             accessibleSummary,
-            payload,
+            chartPayload,
             selectedReady ?? selectedFailure,
             outcome,
             unit,
-            plottedPoints
+            plottedPoints,
+            Boolean(persistedRuleID)
           );
-          renderPreviewMessage(state);
+          renderPreviewMessage(state, plottedPoints, window2, showResult);
         };
         renderCurrentCounter = persistedRuleID ? renderCounterState : void 0;
         renderCounterState(counterState);
@@ -1924,16 +2192,21 @@
         if (event.target instanceof HTMLInputElement && event.target.name === "display_name") {
           refreshRuleSelectorLabels(form);
         }
+        synchronizePreviewResult();
         schedule();
       };
       form.addEventListener("input", onFormChange);
       form.addEventListener("change", onFormChange);
     }
-    calibrationForm?.addEventListener("input", schedule);
-    calibrationForm?.addEventListener("change", schedule);
+    const scheduleAfterIdentityChange = () => {
+      synchronizePreviewResult();
+      schedule();
+    };
+    calibrationForm?.addEventListener("input", scheduleAfterIdentityChange);
+    calibrationForm?.addEventListener("change", scheduleAfterIdentityChange);
     previewScope.addEventListener(SETTING_TAB_CHANGE_EVENT, () => {
       restorePreviewTarget();
-      schedule();
+      scheduleAfterIdentityChange();
     });
     ruleSelector?.addEventListener("change", () => {
       const activePanel = activeSettingPanel(previewScope);
@@ -1941,7 +2214,7 @@
         (target) => previewTargetID(target) === ruleSelector.value
       ) : void 0;
       selectPreviewTarget(selectedTarget);
-      schedule();
+      scheduleAfterIdentityChange();
     });
     for (const target of queryAll(
       "details[data-preview-target]",
@@ -1958,7 +2231,7 @@
         if (target.open && activePanel?.contains(target) && previewTargets(activePanel).includes(target)) {
           selectPreviewTarget(target);
         }
-        schedule();
+        scheduleAfterIdentityChange();
       });
     }
     toggle?.addEventListener("click", () => {
@@ -1974,6 +2247,7 @@
         void refresh();
       }
     });
+    synchronizePreviewResult();
     void refresh();
     window.setInterval(() => {
       if (document.visibilityState === "visible" && !previewUnavailable && !paused) {

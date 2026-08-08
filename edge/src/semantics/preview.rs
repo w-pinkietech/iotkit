@@ -114,20 +114,16 @@ pub fn build_preview_window(
     })
 }
 
-/// Collapse the already-evaluated recent window into time-based one-second
-/// buckets. The plotted value follows the live chart's average/minimum/maximum
-/// meaning; the receipt-order latest point is returned separately.
+/// Collapse the bounded evaluated history into absolute one-second buckets,
+/// then return buckets overlapping the recent window. Fixed boundaries make
+/// overlapping rolling responses replaceable in the browser cache; the
+/// receipt-order latest point is returned separately.
 fn bucket_by_second(points: &[PreviewPoint], plot_start: i64) -> Vec<PreviewPoint> {
-    let mut plotted: Vec<_> = points
-        .iter()
-        .filter(|point| point.plot_at >= plot_start)
-        .copied()
-        .collect();
+    let mut plotted = points.to_vec();
     plotted.sort_by_key(|point| point.plot_at);
     let mut buckets = Vec::new();
     for point in plotted {
-        let elapsed = point.plot_at.saturating_sub(plot_start);
-        let bucket_start = plot_start.saturating_add(elapsed.div_euclid(1_000) * 1_000);
+        let bucket_start = point.plot_at.div_euclid(1_000) * 1_000;
         if buckets
             .last()
             .is_some_and(|bucket: &PreviewBucket| bucket.plot_at == bucket_start)
@@ -137,7 +133,11 @@ fn bucket_by_second(points: &[PreviewPoint], plot_start: i64) -> Vec<PreviewPoin
             buckets.push(PreviewBucket::new(bucket_start, point));
         }
     }
-    buckets.into_iter().map(PreviewBucket::finish).collect()
+    buckets
+        .into_iter()
+        .map(PreviewBucket::finish)
+        .filter(|point| point.plot_at.saturating_add(1_000) > plot_start)
+        .collect()
 }
 
 struct PreviewBucket {

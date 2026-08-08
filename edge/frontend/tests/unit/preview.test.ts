@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initializePreviews } from "../../src/preview";
+import { compactAdjacent, initializePreviews } from "../../src/preview";
 import { SETTING_TAB_CHANGE_EVENT } from "../../src/shell";
 
 function installPreviewDOM(): void {
@@ -175,6 +175,8 @@ interface PreviewResponseOptions {
   displayName?: string;
   riseThreshold?: number;
   fallThreshold?: number;
+  windowStart?: number;
+  windowEnd?: number;
 }
 
 function okPreviewResponse({
@@ -187,6 +189,8 @@ function okPreviewResponse({
   displayName = "温度",
   riseThreshold,
   fallThreshold,
+  windowStart,
+  windowEnd,
 }: PreviewResponseOptions = {}): Response {
   const receivedAt = Number(point?.received_at ?? 1_000);
   const input = Number(point?.input ?? 24.8);
@@ -227,8 +231,14 @@ function okPreviewResponse({
           latest_point: resolvedLatestPoint,
         },
       ],
-      window_start: resolvedPoints[0]?.plot_at ?? resolvedPoints[0]?.received_at ?? receivedAt,
-      window_end: resolvedPoints.at(-1)?.plot_at ?? resolvedPoints.at(-1)?.received_at ?? receivedAt,
+      window_start: windowStart ??
+        resolvedPoints[0]?.plot_at ??
+        resolvedPoints[0]?.received_at ??
+        receivedAt,
+      window_end: windowEnd ??
+        resolvedPoints.at(-1)?.plot_at ??
+        resolvedPoints.at(-1)?.received_at ??
+        receivedAt,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
@@ -742,7 +752,9 @@ describe("automatic mapping preview", () => {
             ? new Response("unavailable", { status: 503 })
             : okPreviewResponse({
                 kind: kind as PreviewKind,
-                point,
+                point: kind === "cumulative_counter"
+                  ? { ...point, received_at: Date.now() }
+                  : point,
                 displayName: "確認対象",
               }),
         );
@@ -1373,9 +1385,10 @@ describe("automatic mapping preview", () => {
   it("keeps cumulative previews to one raw line and latest marker", async () => {
     installPreviewDOM();
     setSavedRuleKind("cumulative_counter");
+    const start = Date.now();
     const points = [0, 10, 20, 10, 0].map((input, index) => ({
-      received_at: 1_000 + index * 1_000,
-      plot_at: 1_000 + index * 1_000,
+      received_at: start + index * 1_000,
+      plot_at: start + index * 1_000,
       input,
       input_min: input,
       input_max: input,
@@ -1743,7 +1756,7 @@ describe("automatic mapping preview", () => {
         return Promise.resolve(
           okPreviewResponse({
             kind: "cumulative_counter",
-            point: { counter: 101, increment: 1 },
+            point: { received_at: 10_000, counter: 101, increment: 1 },
           }),
         );
       }),
@@ -1780,12 +1793,12 @@ describe("automatic mapping preview", () => {
         "[data-preview-counter-chart] .chart-axis-label",
       ),
     ).map((label) => label.textContent ?? "");
-    expect(axisLabels.at(-1)).toBe(
-      new Date(12_000).toLocaleTimeString("ja-JP", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }),
+    expect(axisLabels.slice(-2)).toEqual(
+      Array.from(
+        document.querySelectorAll<SVGTextElement>(
+          "[data-preview-chart] .chart-axis-label",
+        ),
+      ).slice(-2).map((label) => label.textContent ?? ""),
     );
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
@@ -1883,6 +1896,565 @@ describe("automatic mapping preview", () => {
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
+  it("keeps page-start raw data and shares full-session axes after a rolling response", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    installPreviewDOM();
+    setSavedRuleKind("cumulative_counter");
+    const rollingResponse = (round: number): Response => {
+      const start = 11_000 + (round - 1) * 59_000;
+      const points = Array.from({ length: 60 }, (_, index) => {
+        const receivedAt = start + index * 1_000;
+        return {
+          received_at: receivedAt,
+          input: 2,
+          input_min: 2,
+          input_max: 2,
+          calibrated: 3,
+          calibrated_min: 3,
+          calibrated_max: 3,
+          sample_count: 1,
+          counter: round * 60 + index,
+          increment: 1,
+        };
+      });
+      return okPreviewResponse({
+        kind: "cumulative_counter",
+        points,
+        inputCount: points.length,
+        windowStart: start,
+        windowEnd: start + 59_000,
+      });
+    };
+    let mappingCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const pathname = new URL(String(input), "http://localhost").pathname;
+        if (pathname === "/api/v1/history/series") {
+          return Promise.resolve(historySeriesResponse(100, []));
+        }
+        mappingCalls += 1;
+        return Promise.resolve(
+          mappingCalls === 1
+            ? okPreviewResponse({
+                kind: "cumulative_counter",
+                point: { received_at: 10_000, input: 1, calibrated: 2 },
+                windowStart: 10_000,
+                windowEnd: 10_000,
+              })
+            : rollingResponse(mappingCalls - 1),
+        );
+      }),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-counter-summary]")?.textContent).toContain(
+        "100",
+      ),
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    const form = document.querySelector<HTMLFormElement>(
+      "form.semantic-form[data-rule-id]",
+    )!;
+    for (let round = 1; round <= 17; round += 1) {
+      await vi.advanceTimersByTimeAsync(61_000);
+      form.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.waitFor(() => expect(mappingCalls).toBe(round + 1));
+    }
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-count]")?.textContent).toContain(
+        "1,000bucket",
+      ),
+    );
+
+    expect(
+      document.querySelector("[data-preview-accessible-summary]")?.textContent,
+    ).toContain("受信値は1から2");
+    expect(
+      document.querySelector("[data-preview-accessible-summary]")?.textContent,
+    ).toContain("画面を開いてから現在まで（全期間）の1000bucket");
+    const chartAxes = Array.from(
+      document.querySelectorAll<SVGTextElement>(
+        "[data-preview-chart] .chart-axis-label",
+      ),
+    ).slice(-2).map((label) => label.textContent);
+    const counterAxes = Array.from(
+      document.querySelectorAll<SVGTextElement>(
+        "[data-preview-counter-chart] .chart-axis-label",
+      ),
+    ).slice(-2).map((label) => label.textContent);
+    expect(chartAxes).toEqual(counterAxes);
+    expect(document.querySelector("[data-preview-chart] title")?.textContent).toContain(
+      "画面を開いてから現在まで",
+    );
+    expect(document.querySelector("[data-preview-chart] title")?.textContent).not.toContain(
+      "直近60秒",
+    );
+    expect(
+      document.querySelector("[data-preview-counter-summary]")?.textContent,
+    ).toContain("1点");
+  });
+
+  it("retains fuller and unreplaced cached buckets across a capped rolling response", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    installPreviewDOM();
+    setSavedRuleKind("cumulative_counter");
+    let mappingCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const pathname = new URL(String(input), "http://localhost").pathname;
+        if (pathname === "/api/v1/history/series") {
+          return Promise.resolve(historySeriesResponse(10, [], 10_000));
+        }
+        mappingCalls += 1;
+        if (mappingCalls === 1) {
+          return Promise.resolve(okPreviewResponse({
+            kind: "cumulative_counter",
+            inputCount: 2_000,
+            points: [
+              {
+                received_at: 10_000,
+                input: 1,
+                input_min: 1,
+                input_max: 1,
+                calibrated: 10,
+                calibrated_min: 10,
+                calibrated_max: 10,
+                sample_count: 4,
+                counter: 10,
+                increment: 4,
+              },
+              {
+                received_at: 11_000,
+                input: 2,
+                input_min: 2,
+                input_max: 2,
+                calibrated: 20,
+                calibrated_min: 20,
+                calibrated_max: 20,
+                sample_count: 1,
+                counter: 11,
+                increment: 1,
+              },
+            ],
+            windowStart: 10_000,
+            windowEnd: 11_000,
+          }));
+        }
+        if (mappingCalls === 2) {
+          return Promise.resolve(okPreviewResponse({
+            kind: "cumulative_counter",
+            inputCount: 2_000,
+            points: [
+              // The 2,000-input boundary can return only this smaller part of
+              // the same absolute-second bucket.
+              {
+                received_at: 10_000,
+                input: 9,
+                input_min: 9,
+                input_max: 9,
+                calibrated: 90,
+                calibrated_min: 90,
+                calibrated_max: 90,
+                sample_count: 1,
+                counter: 10,
+                increment: 1,
+              },
+              {
+                received_at: 12_000,
+                input: 3,
+                input_min: 3,
+                input_max: 3,
+                calibrated: 30,
+                calibrated_min: 30,
+                calibrated_max: 30,
+                sample_count: 1,
+                counter: 12,
+                increment: 1,
+              },
+            ],
+            // The high-frequency cap can discard older recent buckets before
+            // the 60-second window start moves.
+            windowStart: 10_000,
+            windowEnd: 12_000,
+          }));
+        }
+        return Promise.resolve(okPreviewResponse({
+          kind: "cumulative_counter",
+          inputCount: 2_000,
+          point: {
+            received_at: 10_000,
+            input: 9,
+            calibrated: 90,
+            sample_count: 1,
+            counter: 10,
+            increment: 1,
+          },
+          windowStart: 10_000,
+          windowEnd: 12_000,
+        }));
+      }),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-chart] .chart-line-result")).not.toBeNull(),
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    const form = document.querySelector<HTMLFormElement>(
+      "form.semantic-form[data-rule-id]",
+    )!;
+    form.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(mappingCalls).toBe(2));
+
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-accessible-summary]")?.textContent).toContain(
+        "受信値は1から3",
+      ),
+    );
+    expect(document.querySelector("[data-preview-count]")?.textContent).toContain("3bucket");
+    expect(document.querySelector("[data-preview-chart] .chart-line-result")).not.toBeNull();
+
+    const threshold = form.querySelector<HTMLInputElement>("[name=rise_threshold]")!;
+    threshold.value = "5";
+    threshold.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(mappingCalls).toBe(3));
+
+    expect(document.querySelector("[data-preview-accessible-summary]")?.textContent).toContain(
+      "受信値は1から3",
+    );
+    expect(document.querySelector("[data-preview-chart] .chart-line-result")).toBeNull();
+  });
+
+  it("keeps non-cumulative previews to the current 60-second response", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    installPreviewDOM();
+    let mappingCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        mappingCalls += 1;
+        return Promise.resolve(okPreviewResponse({
+          point: {
+            received_at: mappingCalls === 1 ? 10_000 : 71_000,
+            input: mappingCalls === 1 ? 1 : 2,
+            calibrated: mappingCalls === 1 ? 1 : 2,
+          },
+        }));
+      }),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-accessible-summary]")?.textContent).toContain(
+        "受信値は1から1",
+      ),
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    await vi.advanceTimersByTimeAsync(61_000);
+    document
+      .querySelector<HTMLFormElement>("form.semantic-form[data-rule-id]")
+      ?.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(mappingCalls).toBe(2));
+
+    expect(document.querySelector("[data-preview-accessible-summary]")?.textContent).toContain(
+      "受信値は2から2",
+    );
+    expect(document.querySelector("[data-preview-accessible-summary]")?.textContent).not.toContain(
+      "受信値は1から2",
+    );
+    expect(document.querySelector("[data-preview-count]")?.textContent).toContain("1bucket");
+    expect(document.querySelector("[data-preview-chart] title")?.textContent).toContain(
+      "直近60秒",
+    );
+  });
+
+  it("filters pre-page persisted buckets but keeps the page-open overlap bucket", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_500);
+    installPreviewDOM();
+    setSavedRuleKind("cumulative_counter");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const pathname = new URL(String(input), "http://localhost").pathname;
+        if (pathname === "/api/v1/history/series") {
+          return Promise.resolve(historySeriesResponse(10, [], 10_500));
+        }
+        return Promise.resolve(okPreviewResponse({
+          kind: "cumulative_counter",
+          points: [
+            {
+              received_at: 9_000,
+              plot_at: 9_000,
+              input: 1,
+              input_min: 1,
+              input_max: 1,
+              calibrated: 2,
+              calibrated_min: 2,
+              calibrated_max: 2,
+              sample_count: 1,
+              counter: 9,
+              increment: 99,
+            },
+            {
+              received_at: 10_900,
+              plot_at: 10_000,
+              input: 2,
+              input_min: 2,
+              input_max: 2,
+              calibrated: 3,
+              calibrated_min: 3,
+              calibrated_max: 3,
+              sample_count: 3,
+              counter: 10,
+              increment: 3,
+            },
+            {
+              received_at: 11_000,
+              plot_at: 11_000,
+              input: 3,
+              input_min: 3,
+              input_max: 3,
+              calibrated: 4,
+              calibrated_min: 4,
+              calibrated_max: 4,
+              sample_count: 1,
+              counter: 11,
+              increment: 2,
+            },
+          ],
+          windowStart: 10_500,
+          windowEnd: 11_000,
+        }));
+      }),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-accessible-summary]")?.textContent).toContain(
+        "受信値は2から3",
+      ),
+    );
+    expect(document.querySelector("[data-preview-accessible-summary]")?.textContent).not.toContain(
+      "受信値は1から3",
+    );
+    expect(document.querySelector("[data-preview-count]")?.textContent).toContain("2bucket");
+    expect(document.querySelector("[data-preview-message]")?.textContent).toContain(
+      "直近60秒で +5",
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("keeps raw data while a changed draft result is invalidated and then pairs the replacement", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    installPreviewDOM();
+    let draftResponses = 0;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, request: RequestInit) => {
+      const body = JSON.parse(String(request.body)) as {
+        rules?: Array<{ rule_id: string }>;
+      };
+      const isDraft = body.rules?.some((rule) => rule.rule_id === "draft-normal");
+      if (isDraft) draftResponses += 1;
+      return Promise.resolve(okPreviewResponse({
+        ruleId: isDraft ? "draft-normal" : "rule-01",
+        displayName: isDraft ? "新しい計測ルール" : "温度",
+        point: {
+          received_at: 10_000,
+          input: 10,
+          calibrated: isDraft && draftResponses > 1 ? 30 : 20,
+        },
+      }));
+    });
+    vi.stubGlobal(
+      "fetch",
+      fetchMock,
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-chart] .chart-line-result")).not.toBeNull(),
+    );
+    const selector = document.querySelector<HTMLSelectElement>(
+      "[data-preview-rule-select]",
+    )!;
+    selector.value = "draft-normal";
+    selector.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const [, draftRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(String(draftRequest.body))).toMatchObject({
+      rules: [{ rule_id: "rule-01" }, { rule_id: "draft-normal" }],
+    });
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-rule-name]")?.textContent).toContain(
+        "新しい計測ルール",
+      ),
+    );
+    const draftThreshold = document.querySelector<HTMLInputElement>(
+      'form[data-preview-id="draft-normal"] [name="rise_threshold"]',
+    )!;
+    draftThreshold.value = "5";
+    draftThreshold.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(document.querySelector("[data-preview-chart] .chart-line-raw")).not.toBeNull();
+    expect(document.querySelector("[data-preview-chart] .chart-line-result")).toBeNull();
+    expect(document.querySelector("[data-preview-rule-value]")?.textContent).toBe("—");
+
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-chart] .chart-line-result")).not.toBeNull(),
+    );
+    const rawPath = document.querySelector<SVGPathElement>(
+      "[data-preview-chart] .chart-line-raw",
+    )?.getAttribute("d");
+    const resultPath = document.querySelector<SVGPathElement>(
+      "[data-preview-chart] .chart-line-result",
+    )?.getAttribute("d");
+    expect(rawPath?.match(/^M ([\d.]+)/)?.[1]).toBe(
+      resultPath?.match(/^M ([\d.]+)/)?.[1],
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("rejects an old result while a persisted-rule switch is pending", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    installPreviewDOM();
+    addSavedRule("rule-02", "湿度");
+    const lateRuleOne = deferredResponse();
+    let mappingCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        mappingCalls += 1;
+        if (mappingCalls === 2) return lateRuleOne.promise;
+        const secondRule = mappingCalls > 2;
+        return Promise.resolve(okPreviewResponse({
+          ruleId: secondRule ? "rule-02" : "rule-01",
+          displayName: secondRule ? "湿度" : "温度",
+          point: {
+            received_at: 10_000,
+            input: 10,
+            calibrated: secondRule ? 40 : 20,
+          },
+        }));
+      }),
+    );
+
+    initializePreviews();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-chart] .chart-line-result")).not.toBeNull(),
+    );
+    document
+      .querySelector<HTMLInputElement>('form[data-preview-id="rule-01"] [name="rise_threshold"]')
+      ?.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(mappingCalls).toBe(2));
+
+    const selector = document.querySelector<HTMLSelectElement>(
+      "[data-preview-rule-select]",
+    )!;
+    selector.value = "rule-02";
+    selector.dispatchEvent(new Event("change", { bubbles: true }));
+    lateRuleOne.resolve(okPreviewResponse({
+      ruleId: "rule-01",
+      displayName: "温度",
+      point: { received_at: 10_000, input: 10, calibrated: 30 },
+    }));
+    await vi.advanceTimersByTimeAsync(299);
+
+    expect(document.querySelector("[data-preview-chart] .chart-line-result")).toBeNull();
+    expect(document.querySelector("[data-preview-rule-value]")?.textContent).toBe("—");
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-rule-name]")?.textContent).toContain(
+        "湿度",
+      ),
+    );
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+  });
+
+  it("does not restore a stale same-rule result when counter history resolves", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    installPreviewDOM();
+    setSavedRuleKind("cumulative_counter");
+    const delayedHistory = deferredResponse();
+    const pendingReplacement = deferredResponse();
+    const supersededReplacement = deferredResponse();
+    const currentReplacement = deferredResponse();
+    let mappingCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const pathname = new URL(String(input), "http://localhost").pathname;
+        if (pathname === "/api/v1/history/series") return delayedHistory.promise;
+        mappingCalls += 1;
+        return mappingCalls === 1
+          ? Promise.resolve(okPreviewResponse({
+              kind: "cumulative_counter",
+              point: { received_at: 11_000, input: 10, calibrated: 20, counter: 10 },
+            }))
+          : mappingCalls === 2
+            ? pendingReplacement.promise
+            : mappingCalls === 3
+              ? supersededReplacement.promise
+              : currentReplacement.promise;
+      }),
+    );
+
+    initializePreviews();
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-chart] .chart-line-result")).not.toBeNull(),
+    );
+
+    const scale = document.querySelector<HTMLInputElement>(
+      'form[action="/console/signals/sig_01/calibration"] [name="scale"]',
+    )!;
+    scale.value = "2";
+    scale.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector("[data-preview-chart] .chart-line-result")).toBeNull();
+    expect(document.querySelector("[data-preview-rule-value]")?.textContent).toBe("—");
+
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(mappingCalls).toBe(2));
+    delayedHistory.resolve(historySeriesResponse(10, [], 10_000));
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-counter-summary]")?.textContent).toContain(
+        "10",
+      ),
+    );
+    expect(document.querySelector("[data-preview-chart] .chart-line-result")).toBeNull();
+    expect(document.querySelector("[data-preview-rule-value]")?.textContent).toBe("—");
+
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    await vi.advanceTimersByTimeAsync(700);
+    await vi.waitFor(() => expect(mappingCalls).toBe(4));
+    expect(document.querySelector("[data-preview-chart] .chart-line-result")).toBeNull();
+
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
+    currentReplacement.resolve(okPreviewResponse({
+      kind: "cumulative_counter",
+      point: { received_at: 11_000, input: 10, calibrated: 30, counter: 10 },
+    }));
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-preview-chart] .chart-line-result")).not.toBeNull(),
+    );
+  });
+
   it("caps saved counter session history at 1,000 points", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -1927,6 +2499,7 @@ describe("automatic mapping preview", () => {
     const path = document.querySelector<SVGPathElement>(
       "[data-preview-counter-chart] .chart-line-raw",
     )?.getAttribute("d");
+    expect(path).toMatch(/^M 72\.00 /);
     expect(path?.match(/ V /g)).toHaveLength(999);
     const summary = document.querySelector(
       "[data-preview-counter-summary]",
@@ -1954,6 +2527,24 @@ describe("automatic mapping preview", () => {
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   }, 15_000);
 
+  it("fairly compacts 3,000 sequential changes without losing page-start or late history", () => {
+    const points = Array.from({ length: 3_000 }, (_, at) => ({
+      at,
+      weight: 1,
+    }));
+    const compacted = compactAdjacent(
+      points,
+      1_000,
+      (point) => point.weight,
+      (left, right) => ({ ...right, weight: left.weight + right.weight }),
+    );
+
+    expect(compacted).toHaveLength(1_000);
+    expect(compacted[0]).toEqual({ at: 0, weight: 1 });
+    expect(Math.max(...compacted.map((point) => point.weight))).toBeLessThan(16);
+    expect(compacted.filter((point) => point.at >= 1_500).length).toBeGreaterThan(200);
+  });
+
   it("resets saved counter history when the persisted rule changes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -1978,7 +2569,11 @@ describe("automatic mapping preview", () => {
           okPreviewResponse({
             kind: "cumulative_counter",
             ruleId: mappingCalls === 1 ? "rule-01" : "rule-02",
-            point: { counter: mappingCalls === 1 ? 100 : 200, increment: 1 },
+            point: {
+              received_at: mappingCalls === 1 ? 10_000 : 10_300,
+              counter: mappingCalls === 1 ? 100 : 200,
+              increment: 1,
+            },
           }),
         );
       }),
@@ -2009,6 +2604,24 @@ describe("automatic mapping preview", () => {
       document.querySelector("[data-preview-counter-summary]")?.textContent,
     ).toContain("1点");
     expect(historyRuleIDs).toEqual(["rule-01", "rule-02"]);
+    const chartAxes = Array.from(
+      document.querySelectorAll<SVGTextElement>(
+        "[data-preview-chart] .chart-axis-label",
+      ),
+    ).slice(-2).map((label) => label.textContent ?? "");
+    const counterAxes = Array.from(
+      document.querySelectorAll<SVGTextElement>(
+        "[data-preview-counter-chart] .chart-axis-label",
+      ),
+    ).slice(-2).map((label) => label.textContent ?? "");
+    expect(chartAxes).toEqual(counterAxes);
+    expect(chartAxes.at(-2)).toBe(
+      new Date(10_000).toLocaleTimeString("ja-JP", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
+    );
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -2246,6 +2859,7 @@ describe("automatic mapping preview", () => {
 
   it("keeps accepted legends and counter chart while mapping polling is pending", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(10_000);
     installPreviewDOM();
     setSavedRuleKind("cumulative_counter");
     const pendingMapping = deferredResponse();
@@ -2272,6 +2886,7 @@ describe("automatic mapping preview", () => {
             okPreviewResponse({
               kind: "cumulative_counter",
               point: {
+                received_at: 10_000,
                 input: 24,
                 input_min: 23,
                 input_max: 25,
@@ -2334,6 +2949,7 @@ describe("automatic mapping preview", () => {
       okPreviewResponse({
         kind: "cumulative_counter",
         point: {
+          received_at: 10_000,
           input: 24,
           input_min: 23,
           input_max: 25,
