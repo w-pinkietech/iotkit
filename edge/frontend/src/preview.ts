@@ -1228,6 +1228,7 @@ function initializePreview(panel: HTMLElement): void {
     'form[data-signal-profile] [name="decimal_places"]',
   );
   let controller: AbortController | undefined;
+  let controllerResultKey: string | undefined;
   let counterHistoryController: AbortController | undefined;
   let counterHistoryRuleID: string | undefined;
   let counterHistory: CounterHistory | undefined;
@@ -1527,13 +1528,15 @@ function initializePreview(panel: HTMLElement): void {
       });
   };
 
-  const refresh = async (): Promise<void> => {
+  const refresh = async (force = false): Promise<void> => {
     const activeID = selectedPreviewID;
     const resultKey = synchronizePreviewResult();
+    if (!force && controller && controllerResultKey === resultKey) return;
     const generation = previewGeneration;
     controller?.abort();
     const requestController = new AbortController();
     controller = requestController;
+    controllerResultKey = resultKey;
     clearFieldErrors(previewScope);
     const requestedCounterRuleID = counterRuleIDForActiveForm(forms, activeID);
     counterStateFor(requestedCounterRuleID);
@@ -1841,12 +1844,17 @@ function initializePreview(panel: HTMLElement): void {
           "設定結果を更新できません。データ受信には影響ありません。",
         );
       }
+    } finally {
+      if (controller === requestController) {
+        controller = undefined;
+        controllerResultKey = undefined;
+      }
     }
   };
 
   const schedule = (): void => {
     if (debounce !== undefined) window.clearTimeout(debounce);
-    debounce = window.setTimeout(refresh, 300);
+    debounce = window.setTimeout(() => void refresh(true), 300);
   };
   restorePreviewTarget();
   for (const form of forms) {
