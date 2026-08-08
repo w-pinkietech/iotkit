@@ -2287,7 +2287,15 @@ fn not_found_error() -> WebError {
 fn display_raw_value(value: &Value, decimal_places: i32) -> String {
     if let Some(number) = value.as_f64() {
         let places = usize::try_from(decimal_places.clamp(0, 6)).unwrap_or_default();
-        return format!("{number:.places$}");
+        let formatted = format!("{number:.places$}");
+        return if formatted.contains('.') {
+            formatted
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_owned()
+        } else {
+            formatted
+        };
     }
     match value {
         Value::Bool(state) => {

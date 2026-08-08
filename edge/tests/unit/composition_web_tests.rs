@@ -31,6 +31,13 @@ fn numeric_history_builds_a_non_empty_bounded_chart_path() {
     assert_eq!(chart.point_count, 2);
 }
 
+#[test]
+fn display_raw_value_rounds_without_padding_fractional_zeroes() {
+    assert_eq!(display_raw_value(&serde_json::json!(42.0), 1), "42");
+    assert_eq!(display_raw_value(&serde_json::json!(42.45), 1), "42.5");
+    assert_eq!(display_raw_value(&serde_json::json!(0), 0), "0");
+}
+
 fn history_row(received_at: &str, values: &str) -> RawHistoryRow {
     RawHistoryRow {
         received_at: received_at.into(),

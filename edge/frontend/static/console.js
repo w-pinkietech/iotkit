@@ -888,7 +888,6 @@
     if (!Number.isInteger(decimalPlaces)) return formatNumber(value);
     const digits = Math.min(6, Math.max(0, Number(decimalPlaces)));
     return Number(value).toLocaleString("ja-JP", {
-      minimumFractionDigits: digits,
       maximumFractionDigits: digits
     });
   }

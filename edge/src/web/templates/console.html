@@ -307,7 +307,7 @@
                 <label>値の見せ方<select name="display_value_kind" required><option value="numeric"{% if signal.value_kind == "numeric" || signal.value_kind == "number" %} selected{% endif %}>数値</option><option value="boolean"{% if signal.value_kind == "boolean" || signal.value_kind == "bool" %} selected{% endif %}>ON/OFF</option></select></label>
                 <label>単位の扱い<select name="display_unit_mode" data-unit-mode required><option value="unit"{% if signal.unit_mode == "unit" %} selected{% endif %}>単位を表示する</option><option value="dimensionless"{% if signal.unit_mode == "dimensionless" %} selected{% endif %}>単位を表示しない</option></select></label>
                 <label data-display-unit>表示単位<input name="display_unit" value="{{ signal.unit }}"></label>
-                <label>小数点以下の桁数<input name="decimal_places" type="number" min="0" max="6" value="{{ signal.decimal_places }}"></label>
+                <label>小数点以下の最大桁数<input name="decimal_places" type="number" min="0" max="6" value="{{ signal.decimal_places }}"></label>
                 <button type="submit">保存</button>
               </form>
             {% endif %}
