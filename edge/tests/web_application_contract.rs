@@ -55,6 +55,7 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
         .await
         .unwrap();
     assert_eq!(storage_status["profile"], "embedded");
+    assert_eq!(storage_status["pending_semantic_projection_count"], 0);
 
     let console = application
         .console(ConsoleRequest {
@@ -90,6 +91,69 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
 
     application.logout(&login.token).await.unwrap();
     assert!(application.authenticate(&login.token).await.is_err());
+}
+
+#[tokio::test]
+async fn empty_mapping_preview_returns_a_nullable_latest_point() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
+    let directory = test_directory();
+    let storage = Storage::connect(StorageProfile::Sqlite {
+        path: PathBuf::from(directory.path()).join("empty-preview.db"),
+    })
+    .await
+    .unwrap();
+    AccountService::new(storage.clone())
+        .create_initial_system_admin(
+            "owner",
+            "System Owner",
+            Password::new(&password).unwrap(),
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+    let descriptor = DescriptorSnapshot::decode(include_bytes!(
+        "../../testdata/egress/v2/descriptor-snapshot.json"
+    ))
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 1).await.unwrap();
+    let signal_ref = storage.inventory_signals().await.unwrap()[0]
+        .signal_ref
+        .clone();
+    let application = StorageWebApplication::new(storage);
+    let principal = application
+        .login("owner", &password)
+        .await
+        .unwrap()
+        .principal;
+
+    let response = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: "/api/v1/mapping-previews".into(),
+                params: HashMap::new(),
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "signal_ref": signal_ref,
+                "calibration": {"scale": 1.0, "offset": 0.0},
+                "rules": [{
+                    "rule_id": "draft-empty-preview",
+                    "display_name": "No readings yet",
+                    "spec": {"kind": "numeric"}
+                }]
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, axum::http::StatusCode::OK);
+    let rule = &response.body["rules"][0];
+    assert_eq!(rule["input_count"], 0);
+    assert_eq!(rule["plot_count"], 0);
+    assert_eq!(rule["points"], serde_json::json!([]));
+    assert_eq!(rule["latest_point"], serde_json::Value::Null);
 }
 
 #[tokio::test]
@@ -196,6 +260,12 @@ async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing
             serde_json::json!({
                 "display_name": "First numeric rule",
                 "kind": "numeric",
+                "detector_mode": "boolean_high_active",
+                "rise_threshold": "0",
+                "fall_threshold": "0",
+                "rise_debounce_seconds": "0",
+                "fall_debounce_seconds": "0",
+                "trigger": "on_transition",
             }),
         )
         .await
@@ -203,6 +273,8 @@ async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing
 
     assert_eq!(created.status, axum::http::StatusCode::CREATED);
     assert_eq!(created.body["display_name"], "First numeric rule");
+    assert_eq!(created.body["spec"]["detector"]["mode"], "");
+    assert_eq!(created.body["spec"]["trigger"], "");
 }
 
 #[tokio::test]

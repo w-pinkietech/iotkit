@@ -1,6 +1,6 @@
 use iotkit_edge::semantics::{
     Calibration, DefinitionSpec, Detector, DetectorMode, EvaluationState, PreviewInput, RuleSpec,
-    SemanticKind, TriggerMode, build_preview, evaluate_at, evaluate_rule,
+    SemanticKind, TriggerMode, build_preview, build_preview_window, evaluate_at, evaluate_rule,
 };
 
 fn boolean_detector() -> Detector {
@@ -113,6 +113,315 @@ fn preview_downsamples_after_evaluation_without_losing_spikes_or_counts() {
             .iter()
             .any(|point| point.input_max == 1_000.0 && point.calibrated_max == 2_001.0)
     );
+}
+
+#[test]
+fn preview_window_keeps_state_history_but_plots_only_recent_points() {
+    let mut inputs = Vec::with_capacity(2_000);
+    inputs.push(PreviewInput {
+        received_at: 0,
+        observed_at: None,
+        value: 0.0,
+    });
+    for index in 1..2_000 {
+        inputs.push(PreviewInput {
+            received_at: index * 1_000,
+            observed_at: None,
+            value: 2.0,
+        });
+    }
+    let preview = build_preview_window(
+        DefinitionSpec {
+            kind: SemanticKind::CumulativeCounter,
+            scale: 1.0,
+            offset: 0.0,
+            detector: Detector {
+                mode: DetectorMode::HighActive,
+                rise_threshold: 1.0,
+                fall_threshold: 0.5,
+                ..Detector::default()
+            },
+            trigger: TriggerMode::OnNotification,
+        },
+        &inputs,
+        200,
+        None,
+        Some(1_940_000),
+    )
+    .expect("preview");
+
+    assert_eq!(preview.input_count, 2_000);
+    assert_eq!(preview.points.first().unwrap().received_at, 1_940_000);
+    assert_eq!(preview.points.last().unwrap().received_at, 1_999_000);
+    assert_eq!(preview.points.first().unwrap().counter, Some(1_940));
+}
+
+#[test]
+fn preview_window_buckets_same_second_samples_after_full_history_evaluation() {
+    let inputs = vec![
+        PreviewInput {
+            received_at: 0,
+            observed_at: None,
+            value: 0.0,
+        },
+        PreviewInput {
+            received_at: 80_100,
+            observed_at: None,
+            value: 2.0,
+        },
+        PreviewInput {
+            received_at: 80_900,
+            observed_at: None,
+            value: 4.0,
+        },
+        PreviewInput {
+            received_at: 81_100,
+            observed_at: None,
+            value: 6.0,
+        },
+    ];
+    let preview = build_preview_window(
+        DefinitionSpec {
+            kind: SemanticKind::CumulativeCounter,
+            scale: 1.0,
+            offset: 0.0,
+            detector: Detector {
+                mode: DetectorMode::HighActive,
+                rise_threshold: 1.0,
+                fall_threshold: 0.5,
+                ..Detector::default()
+            },
+            trigger: TriggerMode::OnNotification,
+        },
+        &inputs,
+        200,
+        None,
+        Some(80_000),
+    )
+    .expect("preview");
+
+    assert_eq!(preview.input_count, 4);
+    assert_eq!(preview.points.len(), 2);
+    let first = preview.points.first().expect("first bucket");
+    assert_eq!(first.received_at, 80_900);
+    assert_eq!(first.plot_at, 80_000);
+    assert_eq!(first.sample_count, 2);
+    assert_eq!(first.input, 3.0);
+    assert_eq!(first.input_min, 2.0);
+    assert_eq!(first.input_max, 4.0);
+    assert_eq!(first.counter, Some(2));
+    assert_eq!(first.increment, 2);
+    assert_eq!(preview.latest_point.unwrap().received_at, 81_100);
+    assert_eq!(preview.latest_point.unwrap().plot_at, 81_100);
+}
+
+#[test]
+fn preview_window_uses_absolute_second_boundaries_for_rolling_windows() {
+    let inputs = vec![
+        PreviewInput {
+            received_at: 0,
+            observed_at: None,
+            value: 0.0,
+        },
+        PreviewInput {
+            received_at: 80_300,
+            observed_at: None,
+            value: 2.0,
+        },
+        PreviewInput {
+            received_at: 80_600,
+            observed_at: None,
+            value: 4.0,
+        },
+        PreviewInput {
+            received_at: 80_900,
+            observed_at: None,
+            value: 6.0,
+        },
+        PreviewInput {
+            received_at: 81_100,
+            observed_at: None,
+            value: 8.0,
+        },
+    ];
+    let spec = DefinitionSpec {
+        kind: SemanticKind::CumulativeCounter,
+        scale: 1.0,
+        offset: 0.0,
+        detector: Detector {
+            mode: DetectorMode::HighActive,
+            rise_threshold: 1.0,
+            fall_threshold: 0.5,
+            ..Detector::default()
+        },
+        trigger: TriggerMode::OnNotification,
+    };
+    let preview = build_preview_window(spec, &inputs, 200, None, Some(80_250)).expect("preview");
+
+    assert_eq!(
+        preview
+            .points
+            .iter()
+            .map(|point| point.plot_at)
+            .collect::<Vec<_>>(),
+        vec![80_000, 81_000]
+    );
+    let shifted =
+        build_preview_window(spec, &inputs, 200, None, Some(80_500)).expect("shifted preview");
+    assert_eq!(
+        shifted
+            .points
+            .iter()
+            .map(|point| point.plot_at)
+            .collect::<Vec<_>>(),
+        vec![80_000, 81_000]
+    );
+    let first = preview.points.first().expect("first bucket");
+    let shifted_first = shifted.points.first().expect("shifted first bucket");
+    assert_eq!(first.plot_at, 80_000);
+    assert_eq!(first.sample_count, 3);
+    assert_eq!(first.input_min, 2.0);
+    assert_eq!(first.input_max, 6.0);
+    assert_eq!(first.increment, 3);
+    assert_eq!(
+        (
+            shifted_first.sample_count,
+            shifted_first.input_min,
+            shifted_first.input_max,
+            shifted_first.increment,
+        ),
+        (
+            first.sample_count,
+            first.input_min,
+            first.input_max,
+            first.increment,
+        )
+    );
+}
+
+#[test]
+fn preview_plot_uses_observed_time_for_batched_receipts() {
+    let inputs: Vec<_> = (0..20)
+        .map(|index| {
+            let distance = if index < 10 { index } else { 19 - index };
+            PreviewInput {
+                received_at: 500_000,
+                observed_at: Some(100_000 + index * 1_000),
+                value: distance as f64,
+            }
+        })
+        .collect();
+    let preview = build_preview_window(
+        DefinitionSpec {
+            kind: SemanticKind::Numeric,
+            scale: 1.0,
+            offset: 0.0,
+            detector: Detector::default(),
+            trigger: TriggerMode::None,
+        },
+        &inputs,
+        200,
+        None,
+        Some(60_000),
+    )
+    .expect("preview");
+
+    assert_eq!(preview.input_count, 20);
+    assert_eq!(preview.points.len(), 20);
+    assert_eq!(preview.points.first().unwrap().received_at, 500_000);
+    assert_eq!(preview.points.first().unwrap().plot_at, 100_000);
+    assert_eq!(preview.points[9].input, 9.0);
+    assert_eq!(preview.points.last().unwrap().received_at, 500_000);
+    assert_eq!(preview.points.last().unwrap().plot_at, 119_000);
+    assert_eq!(preview.points.last().unwrap().input, 0.0);
+    assert_eq!(preview.latest_point.unwrap().received_at, 500_000);
+    assert_eq!(preview.latest_point.unwrap().plot_at, 119_000);
+
+    let safe_fallback = build_preview_window(
+        DefinitionSpec {
+            kind: SemanticKind::Numeric,
+            scale: 1.0,
+            offset: 0.0,
+            detector: Detector::default(),
+            trigger: TriggerMode::None,
+        },
+        &[
+            PreviewInput {
+                received_at: 500,
+                observed_at: Some(0),
+                value: 1.0,
+            },
+            PreviewInput {
+                received_at: 600,
+                observed_at: Some(-1),
+                value: 2.0,
+            },
+        ],
+        200,
+        None,
+        None,
+    )
+    .expect("fallback preview");
+    assert_eq!(
+        safe_fallback
+            .points
+            .iter()
+            .map(|point| point.received_at)
+            .collect::<Vec<_>>(),
+        [500, 600]
+    );
+
+    let sorted = build_preview_window(
+        DefinitionSpec {
+            kind: SemanticKind::CumulativeCounter,
+            scale: 1.0,
+            offset: 0.0,
+            detector: boolean_detector(),
+            trigger: TriggerMode::OnTransition,
+        },
+        &[
+            PreviewInput {
+                received_at: 500_000,
+                observed_at: Some(102_000),
+                value: 1.0,
+            },
+            PreviewInput {
+                received_at: 500_000,
+                observed_at: Some(100_000),
+                value: 0.0,
+            },
+            PreviewInput {
+                received_at: 500_000,
+                observed_at: Some(101_000),
+                value: 1.0,
+            },
+        ],
+        200,
+        None,
+        Some(99_000),
+    )
+    .expect("out-of-order preview");
+    assert_eq!(
+        sorted
+            .points
+            .iter()
+            .map(|point| point.received_at)
+            .collect::<Vec<_>>(),
+        [500_000, 500_000, 500_000]
+    );
+    assert_eq!(
+        sorted
+            .points
+            .iter()
+            .map(|point| point.plot_at)
+            .collect::<Vec<_>>(),
+        [100_000, 101_000, 102_000]
+    );
+    let latest = sorted.latest_point.expect("latest evaluated point");
+    assert_eq!(latest.received_at, 500_000);
+    assert_eq!(latest.plot_at, 101_000);
+    assert_eq!(latest.counter, Some(1));
+    assert_eq!(latest.active, Some(true));
 }
 
 #[test]

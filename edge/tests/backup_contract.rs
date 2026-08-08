@@ -1,6 +1,7 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
 use iotkit_edge::{
+    application::semantics::{SemanticRuleDraft, Semantics},
     auth::{
         password::{Password, hash_password},
         principal::AccountRole,
@@ -10,12 +11,94 @@ use iotkit_edge::{
         BackupError, create_encrypted_backup, restore_encrypted_backup_postgres,
         restore_encrypted_backup_sqlite,
     },
+    composition::registered_output_adapters,
+    diagnostics::storage_status,
+    semantics::{Detector, RuleSpec, SemanticKind, TriggerMode},
     storage::{
         AcceptBatch, AccountProvision, AuditActor, EdgeNodeState, RawRecord, Storage, StorageError,
         StorageProfile,
     },
 };
+use iotkit_edge_custody_contract::DescriptorSnapshot;
 use tempfile::TempDir;
+
+const QUEUE_SERIES: &str = "018f0000-0000-7000-8000-000000000001:temperature:na:primary";
+
+async fn seed_pending_projection(storage: &Storage, edge_node_id: &str, ledger_epoch: &str) {
+    let descriptor = DescriptorSnapshot::decode(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
+            "edge_node_id": edge_node_id,
+            "ledger_epoch": ledger_epoch,
+            "descriptor_revision": 1,
+            "complete": true,
+            "devices": [{
+                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "identifier": "backup-queue-device",
+                "state": "active",
+                "model_id": "contract"
+            }],
+            "signals": [{
+                "series_key": QUEUE_SERIES,
+                "system_id": "018f0000-0000-7000-8000-000000000001",
+                "measurement_key": "temperature",
+                "channel_index": null,
+                "variant": "primary",
+                "unit": null,
+                "value_type": "float"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    storage.apply_descriptor(&descriptor, 2).await.unwrap();
+    Semantics::new(storage.clone())
+        .create_rule(
+            SemanticRuleDraft {
+                edge_node_id: edge_node_id.into(),
+                series_key: QUEUE_SERIES.into(),
+                display_name: "Backup queue temperature".into(),
+                spec: RuleSpec {
+                    kind: SemanticKind::Numeric,
+                    detector: Detector::default(),
+                    trigger: TriggerMode::None,
+                },
+            },
+            3,
+        )
+        .await
+        .unwrap();
+    storage
+        .accept_batch(AcceptBatch {
+            edge_node_id: edge_node_id.into(),
+            ledger_epoch: ledger_epoch.into(),
+            publication_id: "pending-projection".into(),
+            received_at: 4,
+            records: vec![
+                RawRecord::new(
+                    1,
+                    serde_json::to_vec(&serde_json::json!({
+                        "family": "measurement",
+                        "schema_version": 1,
+                        "epoch": ledger_epoch,
+                        "pub_seq": 1,
+                        "series_key": QUEUE_SERIES,
+                        "values": [42.0],
+                        "event_time": 4,
+                        "event_time_source": "received_at",
+                        "time_source": "edge_node",
+                        "time_quality": "unsynced",
+                        "received_at": 4,
+                        "device_time": null
+                    }))
+                    .unwrap(),
+                )
+                .unwrap(),
+            ],
+        })
+        .await
+        .unwrap();
+}
 
 async fn populated_store() -> (TempDir, PathBuf, Storage) {
     let directory = TempDir::new().expect("temporary directory");
@@ -86,6 +169,7 @@ async fn encrypted_sqlite_backup_round_trips_and_revokes_sessions() {
         .expect("create encrypted backup");
     assert_eq!(manifest.storage_profile, "embedded");
     assert_eq!(manifest.payload_format, "sqlite-database");
+    assert_eq!(manifest.schema_version, 10);
     assert_eq!(manifest.raw_record_count, 2);
     assert_eq!(
         fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
@@ -115,6 +199,55 @@ async fn encrypted_sqlite_backup_round_trips_and_revokes_sessions() {
         2
     );
     assert_eq!(restored_store.active_session_count().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn encrypted_sqlite_backup_retains_pending_semantic_projection_work() {
+    let directory = TempDir::new().unwrap();
+    let database = directory.path().join("edge.db");
+    let backup = directory.path().join("edge.iotkit-backup");
+    let restored = directory.path().join("restored.db");
+    let storage = Storage::connect(StorageProfile::Sqlite { path: database })
+        .await
+        .unwrap();
+    storage.initialize_edge_identity(1).await.unwrap();
+    seed_pending_projection(&storage, "queue-node", "queue-epoch").await;
+    assert_eq!(
+        storage_status(&storage, 90)
+            .await
+            .unwrap()
+            .pending_semantic_projection_count,
+        1
+    );
+    create_encrypted_backup(&storage, &backup, "queue backup passphrase")
+        .await
+        .unwrap();
+    drop(storage);
+
+    restore_encrypted_backup_sqlite(&backup, &restored, "queue backup passphrase")
+        .await
+        .unwrap();
+    let restored = Storage::connect(StorageProfile::Sqlite { path: restored })
+        .await
+        .unwrap();
+    assert_eq!(
+        storage_status(&restored, 90)
+            .await
+            .unwrap()
+            .pending_semantic_projection_count,
+        1
+    );
+    Semantics::new(restored.clone())
+        .project_pending(1, registered_output_adapters())
+        .await
+        .unwrap();
+    assert_eq!(
+        storage_status(&restored, 90)
+            .await
+            .unwrap()
+            .pending_semantic_projection_count,
+        0
+    );
 }
 
 #[tokio::test]
@@ -208,21 +341,20 @@ async fn postgres_custom_snapshot_round_trips_through_real_tools_when_required()
         )
         .await
         .unwrap();
-    storage
-        .accept_batch(AcceptBatch {
-            edge_node_id: "postgres-node".into(),
-            ledger_epoch: "postgres-epoch".into(),
-            publication_id: "postgres-publication".into(),
-            received_at: 2,
-            records: vec![RawRecord::new(1, br#"{"value":42}"#).unwrap()],
-        })
-        .await
-        .unwrap();
+    seed_pending_projection(&storage, "postgres-node", "postgres-epoch").await;
+    assert_eq!(
+        storage_status(&storage, 90)
+            .await
+            .unwrap()
+            .pending_semantic_projection_count,
+        1
+    );
 
     let manifest = create_encrypted_backup(&storage, &backup, "postgres backup secret")
         .await
         .unwrap();
     assert_eq!(manifest.storage_profile, "postgres");
+    assert_eq!(manifest.schema_version, 10);
     drop(storage);
     assert!(matches!(
         restore_encrypted_backup_sqlite(
@@ -281,6 +413,24 @@ async fn postgres_custom_snapshot_round_trips_through_real_tools_when_required()
             .unwrap()
             .len(),
         1
+    );
+    assert_eq!(
+        storage_status(&restored_storage, 90)
+            .await
+            .unwrap()
+            .pending_semantic_projection_count,
+        1
+    );
+    Semantics::new(restored_storage.clone())
+        .project_pending(1, registered_output_adapters())
+        .await
+        .unwrap();
+    assert_eq!(
+        storage_status(&restored_storage, 90)
+            .await
+            .unwrap()
+            .pending_semantic_projection_count,
+        0
     );
     assert_eq!(restored_storage.active_session_count().await.unwrap(), 0);
     drop(restored_storage);

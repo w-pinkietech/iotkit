@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 10
+revision: 13
 ---
 
 # Architecture
@@ -149,11 +149,26 @@ application-level `accepted-through`.
 
 ### IoTKit Edge semantic and application-export loop
 
-While `iotkit-edge serve` consumes raw batches, an independent 250 ms convergence loop projects
-committed raw contact values, enqueues versioned application events in the IoTKit Edge outbox, and
-publishes pending rows at MQTT QoS 1. Only a successful PUBACK marks an outbox row published;
-failure or the 15-second timeout leaves it pending for a later tick. Projection, enqueue, and
-publish errors are logged without payloads or credentials and do not stop the loop.
+While `iotkit-edge serve` consumes raw batches, an independent 100 ms convergence loop projects
+durable rule-record work from `semantic_projection_queue`, enqueues versioned application events in
+the IoTKit Edge outbox, and publishes pending rows at MQTT QoS 1. Raw acceptance atomically adds a
+queue row for every matching active rule and snapshots that rule and calibration revision. Candidate
+selection is therefore proportional to pending work: it orders the queue, then joins immutable raw
+records and those snapshots; it never rescans retained raw history or receipt history. A queue row is
+one pending rule-record pair, not a raw-record count or receipt lag.
+
+One projection transaction creates the observation, routes its outbox rows, writes the durable receipt
+and runtime state, then removes the queue row. A poison input writes its failure and terminal receipt
+before removing that row. Any other failure rolls all of that back, leaving the queue row retryable;
+receipts remain the durable idempotency authority. Pending counter-reset boundaries fence later queue
+rows for that rule until the bounded pre-reset work drains. Each loop tick admits at most 16 items and
+stops admitting another after 20 ms; one in-flight transaction can exceed that wall-time budget. It
+checks cancellation and yields between items so login, diagnostics, and custody work remain available
+during recovery. Only a successful PUBACK marks an
+outbox row published; failure or the 15-second timeout leaves it pending for a later tick. A
+transactional projection or enqueue failure rolls its changes back and leaves the queue row
+restart-retryable. A critical storage or projection-task failure is logged without payloads or
+credentials and cancels service rather than silently continuing the loop.
 
 This is deliberately a two-stage failure boundary. The raw batch transaction and its
 `accepted-through` publish never wait for semantic projection or application export, so an
@@ -300,7 +315,7 @@ Range BLE/BravePI Mainboard/UART path and generic Input Adapter/driver boundarie
 IoTKit Edge Nodes, one standard MQTT Broker, one IoTKit Edge, one selected
 embedded SQLite or PostgreSQL raw store,
 application-level accepted-through, future-only semantic projection, durable Output Adapter MQTT
-outboxes, an authenticated IoTKit Console, bounded history graphs, and generic CSV export. BravePI owns
+outboxes, an authenticated IoTKit Console, a bounded live dashboard of processed values per active measurement rule, bounded history graphs, and generic CSV export. BravePI owns
 BLE, pairing through its existing iOS application, and transmitter management; IoTKit starts at the
 BravePI Mainboard UART stream. A production-shaped multi-Edge Node bootstrap exists for the Broker/IoTKit Edge
 TLS boundary. The Broker-host certificate component validates and atomically installs bundles,

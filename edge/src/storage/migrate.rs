@@ -41,6 +41,7 @@ const TABLES: &[&str] = &[
     "semantic_calibration_revisions",
     "semantic_calibration_starts",
     "semantic_rule_runtime",
+    "semantic_projection_queue",
     "semantic_projection_receipts",
     "semantic_observations",
     "semantic_projection_failures",
@@ -104,9 +105,9 @@ pub async fn migrate_sqlite_to_postgres(
         sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM _sqlx_migrations")
             .fetch_one(&source)
             .await?;
-    if schema_version != 8 {
+    if !migratable_source_schema_version(schema_version) {
         return Err(StorageError::ProfileMigration(format!(
-            "SQLite migration source schema is {schema_version}, want 8"
+            "SQLite migration source schema is {schema_version}, want 9 or 10"
         )));
     }
     let edge_id: String = sqlx::query_scalar("SELECT edge_id FROM edge_meta WHERE singleton=1")
@@ -139,15 +140,20 @@ pub async fn migrate_sqlite_to_postgres(
 
     let mut table_counts = BTreeMap::new();
     let mut source_hashes = Vec::new();
+    let mut source_table_digests = BTreeMap::new();
     for table in TABLES {
         let columns = postgres_columns(&mut tx, table).await?;
         validate_source_columns(&source, table, &columns).await?;
-        let count = copy_table(&source, &mut tx, table, &columns, &mut source_hashes).await?;
+        let mut table_hashes = Vec::new();
+        let count = copy_table(&source, &mut tx, table, &columns, &mut table_hashes).await?;
+        source_hashes.extend(table_hashes.iter().copied());
+        source_table_digests.insert(*table, digest_hashes(table_hashes));
         table_counts.insert((*table).into(), count);
     }
     reset_sequences(&mut tx).await?;
 
     let mut target_hashes = Vec::new();
+    let mut target_table_digests = BTreeMap::new();
     for table in TABLES {
         let expected = table_counts[*table];
         let actual: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM \"{table}\""))
@@ -158,8 +164,12 @@ pub async fn migrate_sqlite_to_postgres(
                 "migration row count mismatch for {table}"
             )));
         }
-        hash_target_table(&mut tx, table, &mut target_hashes).await?;
+        let mut table_hashes = Vec::new();
+        hash_target_table(&mut tx, table, &mut table_hashes).await?;
+        target_table_digests.insert(*table, digest_hashes(table_hashes.clone()));
+        target_hashes.extend(table_hashes);
     }
+    verify_table_digests(&source_table_digests, &target_table_digests)?;
     let source_digest = digest_hashes(source_hashes);
     let target_digest = digest_hashes(target_hashes);
     if source_digest != target_digest {
@@ -202,6 +212,11 @@ pub async fn migrate_sqlite_to_postgres(
         content_digest: source_digest,
         completed: true,
     })
+}
+
+fn migratable_source_schema_version(schema_version: i64) -> bool {
+    // v10 only adds a semantic-history index; v9 has the same copied table shape.
+    (9..=10).contains(&schema_version)
 }
 
 async fn validate_source_schema(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
@@ -315,8 +330,11 @@ async fn copy_table(
             .map(|row| sqlite_json_row(row, columns))
             .collect::<Result<Vec<_>, _>>()?;
         hashes.extend(values.iter().map(row_hash));
+        let identity_override = matches!(table, "audit_events" | "semantic_observations")
+            .then_some(" OVERRIDING SYSTEM VALUE")
+            .unwrap_or("");
         sqlx::query(&format!(
-            "INSERT INTO \"{table}\" SELECT * FROM \
+            "INSERT INTO \"{table}\"{identity_override} SELECT * FROM \
              jsonb_populate_recordset(NULL::\"{table}\", $1)"
         ))
         .bind(Value::Array(values))
@@ -340,13 +358,7 @@ fn sqlite_json_row(row: &SqliteRow, columns: &[ColumnKind]) -> Result<Value, Sto
                 "int2" | "int4" | "int8" => Value::from(row.try_get::<i64, _>(name)?),
                 "float4" | "float8" => {
                     let number = row.try_get::<f64, _>(name)?;
-                    serde_json::Number::from_f64(number)
-                        .map(Value::Number)
-                        .ok_or_else(|| {
-                            StorageError::ProfileMigration(
-                                "SQLite contains a non-finite number".into(),
-                            )
-                        })?
+                    sqlite_float_json(number)?
                 }
                 "bool" => Value::Bool(row.try_get::<i64, _>(name)? != 0),
                 "bytea" => {
@@ -373,6 +385,24 @@ fn sqlite_json_row(row: &SqliteRow, columns: &[ColumnKind]) -> Result<Value, Sto
         value.insert(column.name.clone(), field);
     }
     Ok(Value::Object(value))
+}
+
+fn sqlite_float_json(number: f64) -> Result<Value, StorageError> {
+    if !number.is_finite() {
+        return Err(StorageError::ProfileMigration(
+            "SQLite contains a non-finite number".into(),
+        ));
+    }
+    if number == 0.0 {
+        return Ok(Value::from(0));
+    }
+    let i64_upper_exclusive = -(i64::MIN as f64);
+    if number.fract() == 0.0 && number >= i64::MIN as f64 && number < i64_upper_exclusive {
+        return Ok(Value::from(number as i64));
+    }
+    Ok(Value::Number(
+        serde_json::Number::from_f64(number).expect("finite float encodes"),
+    ))
 }
 
 async fn hash_target_table(
@@ -413,6 +443,20 @@ fn digest_hashes(mut hashes: Vec<[u8; 32]>) -> String {
     encode_hex(&digest.finalize())
 }
 
+fn verify_table_digests(
+    source: &BTreeMap<&str, String>,
+    target: &BTreeMap<&str, String>,
+) -> Result<(), StorageError> {
+    for (table, source_digest) in source {
+        if target.get(table) != Some(source_digest) {
+            return Err(StorageError::ProfileMigration(format!(
+                "migration content digest mismatch for {table}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn reset_sequences(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<(), StorageError> {
@@ -439,3 +483,7 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     encoded
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/storage_migrate_tests.rs"]
+mod tests;

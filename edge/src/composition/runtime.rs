@@ -3,7 +3,7 @@ use std::{
     path::Path,
     pin::Pin,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use rumqttc::{MqttOptions, Transport};
@@ -27,6 +27,9 @@ use super::{
     StorageWebApplication, registered_output_adapters,
     runtime_config::{MqttConnectionConfig, MqttTransportConfig, RuntimeConfig},
 };
+
+const SEMANTIC_PROJECTION_ITEMS_PER_TICK: usize = 16;
+const SEMANTIC_PROJECTION_TIME_BUDGET: Duration = Duration::from_millis(20);
 
 pub trait RuntimeFactory: Send + Sync {
     fn web_application(
@@ -163,16 +166,49 @@ async fn run_semantic_projection(
         tokio::select! {
             () = cancellation.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                semantics
-                    .project_pending(256, registered_output_adapters())
+                if !project_semantic_tick(
+                    &semantics,
+                    &cancellation,
+                    SEMANTIC_PROJECTION_ITEMS_PER_TICK,
+                    SEMANTIC_PROJECTION_TIME_BUDGET,
+                )
                     .await
                     .map_err(|error| {
                         tracing::error!(%error, "critical semantic projection task failed");
                         CriticalTaskError::new("semantic-projection")
-                    })?;
+                    })?
+                {
+                    return Ok(());
+                }
             }
         }
     }
+}
+
+async fn project_semantic_tick(
+    semantics: &Semantics,
+    cancellation: &CancellationToken,
+    item_budget: usize,
+    time_budget: Duration,
+) -> Result<bool, StorageError> {
+    let started = Instant::now();
+    for _ in 0..item_budget {
+        if started.elapsed() >= time_budget {
+            break;
+        }
+        let progress = tokio::select! {
+            () = cancellation.cancelled() => return Ok(false),
+            result = semantics.project_pending(1, registered_output_adapters()) => result?,
+        };
+        if progress == Default::default() {
+            break;
+        }
+        tokio::select! {
+            () = cancellation.cancelled() => return Ok(false),
+            () = tokio::task::yield_now() => {}
+        }
+    }
+    Ok(true)
 }
 
 fn ingest_config(config: MqttConnectionConfig) -> Result<IngestRuntimeConfig, RuntimeError> {
@@ -273,3 +309,7 @@ pub enum RuntimeError {
     #[error("MQTT runtime configuration failed: {0}")]
     MqttConfiguration(String),
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/composition_runtime_tests.rs"]
+mod tests;

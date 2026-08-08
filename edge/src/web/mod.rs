@@ -3,7 +3,11 @@ pub mod console;
 mod error;
 pub mod router;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use askama::Template;
 use async_trait::async_trait;
@@ -157,6 +161,7 @@ pub struct ConsoleView {
     pub commissioning: console::commissioning::CommissioningView,
     pub edge_nodes: Vec<ConsoleEdgeNode>,
     pub registered_edge_node_count: usize,
+    pub live_snapshot_at: i64,
     pub receiving_signal_count: usize,
     pub devices: Vec<ConsoleDevice>,
     pub signals: Vec<ConsoleSignal>,
@@ -232,6 +237,7 @@ pub struct ConsoleSignal {
     pub sensor_type: String,
     pub sensor_type_code: String,
     pub value: String,
+    pub latest_received_at: Option<i64>,
     pub unit: String,
     pub value_kind: String,
     pub unit_mode: String,
@@ -441,6 +447,7 @@ pub struct HistoryQuery {
     pub limit: Option<u16>,
     pub cursor: Option<String>,
     pub signal_ref: Option<String>,
+    pub rule_id: Option<String>,
     pub edge_node_id: Option<String>,
     pub bucket_ms: Option<i64>,
 }
@@ -551,6 +558,7 @@ struct ConsoleTemplate<'a> {
     is_admin: bool,
     trial_profile: bool,
     display_time_zone: &'a str,
+    live_session_started_at: i64,
     view: ConsoleView,
 }
 
@@ -657,12 +665,19 @@ async fn console_page(
             is_admin: principal.role == "admin" || principal.role == "system_admin",
             trial_profile: state.config.trial_profile,
             display_time_zone: &state.config.display_time_zone,
+            live_session_started_at: current_unix_millis(),
             view,
         }
         .render()
         .map_err(internal)?,
     )
     .into_response())
+}
+
+fn current_unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as i64)
 }
 
 fn navigation_page(path: &str) -> &str {
@@ -679,6 +694,7 @@ fn navigation_page(path: &str) -> &str {
 fn console_title(path: &str) -> &str {
     match navigation_page(path) {
         "status" => "システム概要",
+        "live" => "ライブモニター",
         "sensors" => "センサー一覧",
         "logs" => "受信履歴",
         "equipment" => "機器管理",
@@ -1153,13 +1169,15 @@ async fn history_series(
 ) -> Result<Json<Value>, WebError> {
     api_auth(&state, &headers).await?;
     validate_history_query(&query)?;
-    if query.signal_ref.as_deref().unwrap_or("").is_empty() {
+    if query.signal_ref.as_deref().unwrap_or("").is_empty()
+        && query.rule_id.as_deref().unwrap_or("").is_empty()
+    {
         return Err(WebError::new(
             StatusCode::BAD_REQUEST,
             "invalid_query",
-            "signal_ref is required",
+            "signal_ref or rule_id is required",
         )
-        .field("signal_ref"));
+        .field("rule_id"));
     }
     let bucket_ms = query.bucket_ms.unwrap_or_default();
     let from = parse_history_time(query.from.as_deref(), "from")?;
@@ -1782,6 +1800,7 @@ pub mod test_support {
             sensor_type: "温度".into(),
             sensor_type_code: "thermocouple".into(),
             value: "28.5".into(),
+            latest_received_at: Some(1_735_689_600_000),
             unit: if active { "℃".into() } else { "Cel".into() },
             value_kind: "numeric".into(),
             unit_mode: "unit".into(),
@@ -1796,7 +1815,21 @@ pub mod test_support {
             calibration_offset: 0.0,
             calibration_revision: 1,
             has_alarm_rules: false,
-            rules: Vec::new(),
+            rules: vec![ConsoleRule {
+                rule_id: "rule-01".into(),
+                display_name: "現在温度".into(),
+                kind: "numeric".into(),
+                kind_label: "測定値".into(),
+                count_summary: String::new(),
+                revision: 1,
+                detector_mode: String::new(),
+                detector_is_boolean: false,
+                rise_threshold: 0.0,
+                fall_threshold: 0.0,
+                rise_debounce_seconds: 0.0,
+                fall_debounce_seconds: 0.0,
+                trigger: String::new(),
+            }],
         };
         let devices = if active {
             vec![ConsoleDevice {
@@ -1947,6 +1980,7 @@ pub mod test_support {
                 sensor_type: "温度".into(),
                 sensor_type_code: "thermocouple".into(),
                 value: "28.5".into(),
+                latest_received_at: Some(1_735_689_600_000),
                 unit: if self.resources_configured {
                     "℃".into()
                 } else {
@@ -2060,6 +2094,7 @@ pub mod test_support {
                 commissioning,
                 edge_nodes,
                 registered_edge_node_count: 1,
+                live_snapshot_at: 1_735_689_595_000,
                 receiving_signal_count: 1,
                 devices,
                 signals,
@@ -2345,7 +2380,22 @@ pub mod test_support {
             })
         }
         async fn history_series(&self, _query: HistoryQuery) -> Result<Value, WebError> {
-            Ok(json!({"series":[]}))
+            Ok(json!({
+                "signal_ref":"signal-1",
+                "display_name":"Temperature",
+                "unit":"C",
+                "value_type":"number",
+                "sample_count":1,
+                "latest_received_at":1735689600000_i64,
+                "latest_value":1.0,
+                "points":[{
+                    "bucket_start":1735689600000_i64,
+                    "minimum":1.0,
+                    "average":1.0,
+                    "maximum":1.0,
+                    "sample_count":1
+                }]
+            }))
         }
         async fn semantic_history(
             &self,

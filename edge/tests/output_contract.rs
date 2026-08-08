@@ -280,6 +280,27 @@ async fn outbox_insert_failure_rolls_back_observation_and_projection_receipt() {
             .expect("count atomic rows");
         assert_eq!(count, 0, "{table} must roll back with the failed outbox");
     }
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM semantic_projection_queue")
+        .fetch_one(&inspection)
+        .await
+        .expect("count retriable queue work");
+    assert_eq!(pending, 1, "the failed projection must remain pending");
+    inspection
+        .execute("DROP TRIGGER fail_output_insert")
+        .await
+        .expect("remove fault");
+    semantics
+        .project_pending(1, registered_output_adapters())
+        .await
+        .expect("retry queued projection after repairing output");
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM semantic_projection_queue")
+        .fetch_one(&inspection)
+        .await
+        .expect("count completed queue work");
+    assert_eq!(
+        pending, 0,
+        "the successful receipt atomically drains the queue row"
+    );
 }
 
 #[tokio::test]
@@ -344,6 +365,14 @@ async fn poison_semantic_input_is_durable_and_does_not_block_an_independent_rule
         .await
         .expect("count failures");
     assert_eq!(failures, 1);
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM semantic_projection_queue")
+        .fetch_one(&inspection)
+        .await
+        .expect("count terminally handled queue work");
+    assert_eq!(
+        pending, 0,
+        "poison input must write its terminal receipt and drain work"
+    );
 }
 
 #[tokio::test]
@@ -365,10 +394,6 @@ async fn rule_and_calibration_revisions_apply_only_after_their_captured_cursors(
         .await
         .expect("calibrate after accepted input");
     accept(&storage, 3, TEMPERATURE_1, 30.0).await;
-    semantics
-        .project_pending(10, registered_output_adapters())
-        .await
-        .expect("project lagged inputs with historical revisions");
 
     let inspection = SqlitePool::connect_with(
         SqliteConnectOptions::new()
@@ -377,6 +402,20 @@ async fn rule_and_calibration_revisions_apply_only_after_their_captured_cursors(
     )
     .await
     .expect("open inspection connection");
+    let snapshots: Vec<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT pub_seq,revision,calibration_revision FROM semantic_projection_queue \
+         WHERE rule_id=? ORDER BY pub_seq",
+    )
+    .bind(&rule.rule_id)
+    .fetch_all(&inspection)
+    .await
+    .expect("read enqueued revision snapshots");
+    assert_eq!(snapshots, vec![(1, 1, 1), (2, 2, 1), (3, 2, 2)]);
+    semantics
+        .project_pending(10, registered_output_adapters())
+        .await
+        .expect("project lagged inputs with historical revisions");
+
     let rows: Vec<(i64, i64, String)> = sqlx::query_as(
         "SELECT revision,calibration_revision,CAST(value_json AS TEXT) \
          FROM semantic_observations \
@@ -634,16 +673,16 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
     accept(&restarted, 4, TEMPERATURE_3, 24.0).await;
 
     let inspection = PgPool::connect(&dsn).await.expect("inspection pool");
-    let mut raw_lock = inspection.begin().await.expect("raw lock transaction");
+    let mut queue_lock = inspection.begin().await.expect("queue lock transaction");
     sqlx::query(
-        "SELECT pub_seq FROM raw_records WHERE edge_node_id=$1 AND ledger_epoch=$2 \
+        "SELECT pub_seq FROM semantic_projection_queue WHERE rule_id=$1 AND ledger_epoch=$2 \
          AND pub_seq=3 FOR UPDATE",
     )
-    .bind("edge-node-01")
+    .bind(&ordered_rule.rule_id)
     .bind("epoch-01")
-    .fetch_one(&mut *raw_lock)
+    .fetch_one(&mut *queue_lock)
     .await
-    .expect("lock oldest raw row");
+    .expect("lock oldest queued row");
     let projection = tokio::spawn({
         let storage = restarted.clone();
         async move {
@@ -657,9 +696,12 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
         tokio::time::timeout(std::time::Duration::from_millis(150), &mut projection)
             .await
             .is_err(),
-        "a projector must wait for the same rule's oldest raw row"
+        "a projector must wait for the same rule's oldest queued row"
     );
-    raw_lock.rollback().await.expect("release oldest raw row");
+    queue_lock
+        .rollback()
+        .await
+        .expect("release oldest queued row");
     tokio::time::timeout(std::time::Duration::from_secs(5), &mut projection)
         .await
         .expect("ordered projector timed out")
@@ -763,19 +805,19 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
 
     accept(&restarted, 6, TEMPERATURE_3, 26.0).await;
     accept(&restarted, 7, TEMPERATURE_1, 27.0).await;
-    let mut per_rule_raw_lock = inspection
+    let mut per_rule_queue_lock = inspection
         .begin()
         .await
-        .expect("per-rule raw lock transaction");
+        .expect("per-rule queue lock transaction");
     sqlx::query(
-        "SELECT pub_seq FROM raw_records WHERE edge_node_id=$1 AND ledger_epoch=$2 \
+        "SELECT pub_seq FROM semantic_projection_queue WHERE rule_id=$1 AND ledger_epoch=$2 \
          AND pub_seq=6 FOR UPDATE",
     )
-    .bind("edge-node-01")
+    .bind(&ordered_rule.rule_id)
     .bind("epoch-01")
-    .fetch_one(&mut *per_rule_raw_lock)
+    .fetch_one(&mut *per_rule_queue_lock)
     .await
-    .expect("lock one rule's oldest raw row");
+    .expect("lock one rule's oldest queued row");
     let blocked_rule_projection = tokio::spawn({
         let storage = restarted.clone();
         async move {
@@ -807,10 +849,10 @@ async fn postgres_failed_routes_retry_fairly_and_converge_after_storage_restart(
             .await
             .expect("read independently projected observation");
     assert_eq!(independently_projected, 1);
-    per_rule_raw_lock
+    per_rule_queue_lock
         .rollback()
         .await
-        .expect("release per-rule raw row");
+        .expect("release per-rule queued row");
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
         &mut blocked_rule_projection,

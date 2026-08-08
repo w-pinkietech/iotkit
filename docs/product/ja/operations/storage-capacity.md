@@ -5,7 +5,7 @@ description: "Embedded SQLiteとPostgreSQL profileの再現可能な容量回帰
 language: ja
 translation_key: operations.storage-capacity
 status: stable
-revision: 1
+revision: 2
 ---
 
 # IoTKit Edge storage capacity regression smoke
@@ -18,17 +18,30 @@ IoTKitは、`embedded`または`postgres`という名前だけで無制限の規
 scripts/test-edge-capacity.sh /secure/report/directory
 ```
 
-このsmokeは両profileへ同じ4 Edge Nodes、各8 sensor、合計8,000 raw recordを投入し、通常batch受理、
-最大8,000件の履歴読出し、暗号化backupを順に行う。JSON reportにはprofile、records/s、batch受理p99、
-query/backup時間、DB bytes、pending output、projection failureを残す。reportを保存していない構成を
-「検証済み規模」として案内してはならない。
+既定profileは両profileへ同じ4 Edge Nodes、各8 sensorを用い、Edge Nodeごとに100,000 raw record
+（合計400,000件）を保持して一つの100,000件historyを読む。保持prefix後に各Edge Nodeへ一つのnumeric
+semantic ruleを作り、nodeごとに64件のmatching tailを受理し、暗号化backup、storage restart、256件の
+durable queue rowのdrainを順に行う。Recovery中はprojection開始後かつqueueがzeroになる前に実際の
+storage status読出しを完了させる。これはschedulerがauthoritative storage workを進められることの証拠であり、
+latency SLAではない。
+
+JSON reportにはprofile、raw件数、records/s、batch受理p99、history/backup/restart/projection recoveryの
+wall time、DB bytes、semantic observation、recovery前後のqueue lag、pending output、failure、foreground
+storage completionを残す。`projection_pending_before`と`projection_pending_after`は
+`semantic_projection_queue` row、すなわちraw record件数やreceipt lagではないdurable rule-record workを数える。
+Status実装は現行の`semantic_observations`、`output_outbox`、`semantic_projection_failures` rowも別々に数える。
+Scriptはfull retained-history profileとrecovery後queue zeroを必須にするが、時間値はportableなpass/fail
+thresholdではなくevidenceである。CPU/RAMはtarget hostでreportと同時に採取する。Rust profileはcross-platformな
+CPU metricを捏造しない。
+
+reportを保存していない構成を「検証済み規模」として案内してはならない。
 
 この短いsmokeは回帰検知用であり、実導入のsizingや対応上限を証明しない。本格導入前には予定する
 Edge Node数、sensor数、ピークrecords/s、平均payload、意味付けrule数、保持日数、CSV/graph利用、
 外部Broker停止、backup、restartを再現し、少なくとも次を記録する。
 
 - accepted-through p99と未ack backlog
-- 意味付けprojectionとoutput outboxの遅延
+- 意味付けprojection queueのlag/recoveryとoutput outboxの遅延
 - DB/WAL容量、空き容量、増加量/日
 - CPU、RAM、履歴query時間、100,000件CSV時間、backup時間
 - 強制終了後の再起動時間とcursor/hash整合性

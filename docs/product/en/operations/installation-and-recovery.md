@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 7
+revision: 21
 ---
 
 # IoTKit Edge installation and recovery
@@ -74,16 +74,50 @@ fallback.
 - **Equipment / Collection Nodes**: discovery, registration, the last descriptor communication,
   and the exact data generation used for diagnosis. **Registered** is an authorization
   state; it does not mean the Edge Node is currently online.
-- **Monitor**: current value and last receipt. A stopped or old signal must be
-  investigated at the sensor, adapter, Edge Node, broker, then IoTKit Edge—in that order.
+- **Live**: show one card for every active measurement rule. Each card uses the latest persisted
+  processed value after calibration and rule evaluation, with its receipt time, independently of
+  its chart. The chart contains only results received after the operator opened the page.
+  Multiple active rules for one signal become
+  separate cards; a signal without a rule shows configuration guidance. Numeric charts grow from
+  page open across the whole page session; boolean and alarm charts derive state changes from the
+  same buckets and use each bucket's exact terminal value. The browser keeps the result bounded to
+  at most 1,000 buckets, increasing the bucket width after the session exceeds that range rather
+  than rolling the time window. Until a post-open processed value arrives,
+  the chart stays empty and says that it is waiting, even when a prior processed current value is
+  available. Each card links to sensor detail. The browser
+  refreshes at most 12 cards in the visible region every five seconds, and only while the document
+  is visible. After a successful fetch, the elapsed last-receipt time and chart window stay anchored
+  to the IoTKit Edge time at page open and advance by the browser's monotonic elapsed time, even if a
+  later fetch temporarily fails. It identifies rules that
+  have never produced data and marks five minutes without a new result as **Check**, not as proof
+  of a stopped device. Use **Reception history** for raw and past data. Investigate Check at the
+  sensor, adapter, Edge Node, broker, IoTKit Edge, then semantic projection—in that order.
+  Live and sensor-detail **real-signal** chart axes use semantic observed/event time when it is
+  available; the latest receipt/current freshness remains the IoTKit Edge raw receipt time.
+  The real-signal preview uses the same recent 60-second, one-second chart buckets while
+  evaluating its bounded input history so boolean and cumulative results retain their state.
+  For cumulative rules, the result card shows the persisted current total. The real-signal preview
+  labels the hypothetical last-60-second delta. Numeric, boolean, alarm, and draft upper charts
+  remain recent-60-second charts, while a selected persisted cumulative rule gives the upper
+  received/settings-result chart and lower persisted cumulative staircase the same page-open
+  display-start to current-time axis. The upper chart retains overlapping recent responses in the browser and
+  compacts them to at most 1,000 representative points across the whole display period. An existing
+  rule also shows a separate persisted cumulative staircase after that selected saved rule becomes
+  active. It records saved-current changes from display start, extends an unchanged value to the
+  monotonic current page time, and keeps at most 1,000 displayed points. It does not discard session
+  changes merely because they leave a rolling 60-second history request; a draft says accumulation
+  starts after save. Each stair samples the persisted current state in persistence order, not an
+  observed-time bucket or bucket average. A successful session with no captured saved point is
+  shown as no saved change since display started, while a failed history request is shown as
+  unavailable.
 - **Reception history**: filter sensor, Edge Node, and period on one screen, then inspect
-  the bounded graph and recent raw rows that match the selected sensor. The graph's horizontal
-  axis shows the actual reception timestamps in the display time zone, and its vertical axis shows
+  the bounded graph and recent raw rows that match the selected sensor. The raw graph's horizontal
+  axis shows IoTKit Edge receipt timestamps in the display time zone, and its vertical axis shows
   the value range and sensor unit. CSV with the same filter exports generic observations and is not
   a business report.
 - **Output**: active purpose-bound routes. Pending output is not deleted until
   broker PUBACK.
-- **System**: filesystem use, database size, raw/semantic/outbox counts, latest backup,
+- **System**: filesystem use, database size, raw/semantic/pending-projection/outbox counts, latest backup,
   and diagnosis by cause. A responsive Console does not prove that an Edge Node or Broker is healthy.
 - For `postgres`, SQL cannot report free space in the named volume, so the Console does not
   claim capacity is healthy. Add `docker compose ... exec postgres df -Pk /var/lib/postgresql/data`
@@ -158,8 +192,8 @@ Git.
 4. Check Mosquitto authentication and exact-topic ACL.
 5. Check Edge Node `accepted-through`; an unaccepted record must remain in Edge Node
    storage.
-6. Check IoTKit Edge's output queue. Retry uses the same observation identity.
-7. After recovery, confirm raw cursor and pending output converge before
+6. Check IoTKit Edge's semantic-projection queue and output queue. Retry uses the same observation identity.
+7. After recovery, confirm raw cursor, pending semantic projection, and pending output converge before
    deleting any retained data.
 
 ## 6. Edge Node registration recovery
@@ -738,10 +772,15 @@ PostgreSQL side; recreate an empty database and run migration again.
    credentials or private keys in Git.
 3. Fetch the new version and build the IoTKit Edge image. Keep the Broker running and stop only
    IoTKit Edge. Edge Nodes retain unacknowledged records.
-4. Start the new IoTKit Edge. Schema migrations run transactionally at startup.
-5. Verify HTTPS login, `/api/v1/system/diagnostics`, cursor reconvergence, pending outbox, history
-   graphs, and CSV. After the retention period, remove the old image and pre-update database hold.
-6. If startup, migration, or health verification fails, stop IoTKit Edge. Do not open a migrated
+4. For schema v9, retain the encrypted pre-update backup and leave enough free space for the durable
+   semantic-projection queue, its indexes, and SQLite WAL growth. Startup backfills every eligible
+   unreceipted rule-record pair in the migration transaction; it can take time on retained history,
+   but it either commits the complete queue with schema v9 or rolls back.
+5. Start the new IoTKit Edge. Schema migrations run transactionally at startup.
+6. Verify HTTPS login, `/api/v1/system/diagnostics`, cursor reconvergence, pending semantic projection,
+   pending outbox, history graphs, and CSV. Let the queue drain before treating restart recovery as
+   complete. After the retention period, remove the old image and pre-update database hold.
+7. If startup, migration, or health verification fails, stop IoTKit Edge. Do not open a migrated
    database with the old binary. Return to the old commit/image, restore the pre-update backup into
    a **new candidate database**, and perform the same swap as section 8. Do not recreate Broker or
    Edge Node identities or credentials.
