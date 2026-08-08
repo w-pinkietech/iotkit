@@ -25,6 +25,10 @@ function isBooleanKind(kind: string): boolean {
   return kind === "bool" || kind === "boolean" || kind === "alarm";
 }
 
+function isStepKind(kind: string): boolean {
+  return isBooleanKind(kind) || kind === "cumulative_counter";
+}
+
 function relativeTime(receivedAt: number, now: number): string {
   const elapsed = Math.max(0, now - receivedAt);
   if (elapsed < 10_000) return "たった今";
@@ -72,15 +76,20 @@ function sessionPoints(
 function renderChart(
   svg: SVGSVGElement,
   payload: HistorySeries,
-  boolean: boolean,
+  kind: string,
   unit: string,
   now: number,
   sessionStartedAt: number,
 ): number {
+  const boolean = isBooleanKind(kind);
+  const step = isStepKind(kind);
   const points = sessionPoints(payload, boolean, sessionStartedAt);
   const chartPoints: SignalChartPoint[] = points.map((point) => ({
     at: point.bucket_start,
-    value: point.average,
+    value:
+      kind === "cumulative_counter"
+        ? point.last_value ?? point.average
+        : point.average,
     minimum: point.minimum,
     maximum: point.maximum,
     sampleCount: point.sample_count,
@@ -90,6 +99,7 @@ function renderChart(
     geometry: "compact",
     unit,
     boolean,
+    rawStep: step,
     startAt: sessionStartedAt,
     endAt: Math.max(now, sessionStartedAt + 1_000),
     latestAt:
@@ -98,10 +108,6 @@ function renderChart(
         ? payload.latest_received_at
         : points.at(-1)?.bucket_start,
     showLatestMarker: true,
-    axisLabels: {
-      start: "開始",
-      end: "現在",
-    },
     emptyTitle: "この画面を開いてからの受信を待っています",
     emptyHint: "表示開始後の全期間を最大1,000bucketで表示します",
     title: boolean
@@ -147,7 +153,7 @@ function renderCard(
   const summary = query<HTMLElement>("[data-live-summary]", card);
   const chart = query<SVGSVGElement>("[data-live-chart]", card);
   const pointCount = chart
-    ? renderChart(chart, payload, boolean, unit, now, sessionStartedAt)
+    ? renderChart(chart, payload, kind, unit, now, sessionStartedAt)
     : 0;
   if (payload.latest_received_at === null) {
     setStatus(card, "未受信", "never");

@@ -3,7 +3,7 @@ import { initializeLiveDashboard } from "../../src/live";
 
 function card(
   signalRef: string,
-  kind: "numeric" | "boolean",
+  kind: "numeric" | "boolean" | "cumulative_counter",
   unit = "",
 ): string {
   return `
@@ -62,6 +62,7 @@ describe("live dashboard", () => {
         <span data-live-dashboard-state>更新を準備中</span>
         ${card("temperature-01", "numeric", "℃")}
         ${card("contact-01", "boolean")}
+        ${card("counter-01", "cumulative_counter", "kWh")}
       </section>
     `;
     vi.stubGlobal(
@@ -92,9 +93,102 @@ describe("live dashboard", () => {
     expect(contact.querySelector("[data-live-summary]")?.textContent).toContain(
       "ON/OFF",
     );
+    const counter = document.querySelector<HTMLElement>(
+      '[data-signal-ref="counter-01"]',
+    )!;
+    expect(counter.querySelector("path")?.getAttribute("d")).toMatch(/H .* V /);
+    expect(counter.querySelector("path")?.getAttribute("d")).not.toContain(" L ");
     expect(document.querySelector("[data-live-dashboard-state]")?.textContent).toContain(
       "自動更新中",
     );
+  });
+
+  it("uses local time labels for the page-open and current axis endpoints", async () => {
+    vi.useFakeTimers();
+    const sessionStart = 1_700_000_000_000;
+    vi.setSystemTime(sessionStart);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="${sessionStart}">
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("counter-01", "cumulative_counter", "回")}
+      </section>
+    `;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(responseFor("counter-01"))),
+    );
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const chart = document.querySelector<SVGSVGElement>("[data-live-chart]")!;
+    const axisLabels = Array.from(
+      chart.querySelectorAll<SVGTextElement>(".chart-axis-label"),
+    )
+      .filter((label) => ["72", "348"].includes(label.getAttribute("x") ?? ""))
+      .map((label) => label.textContent);
+    const timeOptions: Intl.DateTimeFormatOptions = {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    expect(axisLabels).toEqual([
+      new Date(sessionStart).toLocaleTimeString("ja-JP", timeOptions),
+      new Date(sessionStart + 5_000).toLocaleTimeString("ja-JP", timeOptions),
+    ]);
+    expect(chart.querySelector(".live-chart-empty")).toBeNull();
+    expect(chart.textContent).not.toContain("開始");
+    expect(chart.textContent).not.toContain("現在");
+  });
+
+  it("uses a cumulative bucket's terminal value instead of its average", async () => {
+    vi.useFakeTimers();
+    const sessionStart = 1_700_000_000_000;
+    vi.setSystemTime(sessionStart);
+    document.body.innerHTML = `
+      <section data-live-dashboard data-live-session-started-at="${sessionStart}">
+        <span data-live-dashboard-state>更新を準備中</span>
+        ${card("counter-01", "cumulative_counter", "kWh")}
+      </section>
+    `;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+        signal_ref: "counter-01",
+        display_name: "累積電力量",
+        unit: "kWh",
+        value_type: "number",
+        sample_count: 4,
+        latest_received_at: sessionStart + 1_000,
+        latest_value: 0,
+        points: [
+          {
+            bucket_start: sessionStart,
+            minimum: 0,
+            average: 1,
+            maximum: 2,
+            last_value: 2,
+            sample_count: 2,
+          },
+          {
+            bucket_start: sessionStart + 1_000,
+            minimum: 0,
+            average: 1,
+            maximum: 2,
+            last_value: 0,
+            sample_count: 2,
+          },
+        ],
+      })))),
+    );
+
+    initializeLiveDashboard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(
+      document.querySelector<SVGPathElement>("[data-live-chart] path")?.getAttribute("d"),
+    ).toBe("M 72.00 20.28 H 348.00 V 123.72");
   });
 
   it("uses the exact terminal value for a multi-sample boolean bucket", async () => {
