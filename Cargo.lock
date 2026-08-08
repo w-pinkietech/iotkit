@@ -394,11 +394,11 @@ checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 
 [[package]]
 name = "bravepi-codec"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "bravepi-mainboard-adapter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bravepi-codec",
  "iotkit-core-supervision",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "bravepi-poc"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bravepi-mainboard-adapter",
  "iotkit-core-supervision",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-collector"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-ledger",
  "iotkit-core-publish",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-supervision",
  "iotkit-core-types",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-ledger"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-storage",
  "rusqlite",
@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-ops"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "base64",
@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-publish"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-ledger",
  "iotkit-core-storage",
@@ -1483,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-recovery"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "base64",
@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-registry"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-collector",
  "iotkit-core-ledger",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-storage"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "rusqlite",
  "tempfile",
@@ -1536,14 +1536,14 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-supervision"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-types",
 ]
 
 [[package]]
 name = "iotkit-core-timeseries"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-ledger",
  "iotkit-core-storage",
@@ -1554,11 +1554,11 @@ dependencies = [
 
 [[package]]
 name = "iotkit-core-types"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "iotkit-edge"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "askama",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-edge-custody-contract"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-edge-node"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -1650,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-edge-nodectl"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "iotkit-core-ledger",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-ingest-client"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-collector",
  "iotkit-core-ledger",
@@ -1692,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-ingest-contract"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-ingest-http"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-input-adapter-host-api"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-ingest-client",
  "iotkit-ingest-contract",
@@ -1744,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-input-adapter-testkit"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-registry",
  "iotkit-ingest-client",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-output-adapter-api"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1764,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-output-adapter-example"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-output-adapter-api",
  "iotkit-output-adapter-testkit",
@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-output-adapter-generic-mqtt-json-v1"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-output-adapter-api",
  "iotkit-output-adapter-testkit",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-output-adapter-pinikiet-mqtt-v1"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-output-adapter-api",
  "iotkit-output-adapter-testkit",
@@ -1794,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-output-adapter-testkit"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-output-adapter-api",
  "serde_json",
@@ -1802,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-polling-adapter-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-types",
  "tokio",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "iotkit-sensor-drivers"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-types",
 ]
@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "rpi-local-adapter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-core-types",
  "iotkit-ingest-contract",
@@ -2668,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "rpi4b-transport"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "i2cdev",
  "rppal",
@@ -3700,7 +3700,7 @@ dependencies = [
 
 [[package]]
 name = "trial-sample-adapter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iotkit-ingest-contract",
  "iotkit-input-adapter-host-api",

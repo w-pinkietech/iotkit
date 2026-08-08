@@ -6,6 +6,19 @@ configuration, or OKF format identifiers.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-08
+
+- iotkit.tomlからloopback限定のtrial profileを起動し、通常のInput Adapterと保管責任経路を通る照度三角波・接点状態矩形波のsampleを確認できるようにしました。安全なvalidate、up、down、reset手順も追加しました。
+- Added a TOML-driven loopback-only trial profile with illuminance triangle-wave and contact-state square-wave samples through the normal Input Adapter and custody path, plus safe validate, up, down, and reset operations.
+- 登録済みsensorのLive monitorを追加し、保存済みで有効なcumulative_counter ruleの画面開始後グラフとcurrent/statusを示します。Liveからcanonicalなsensor詳細へ移動できます。
+- Added a Live monitor for registered sensors with page-open history and current/status for saved active cumulative_counter rules, with navigation to the canonical sensor-detail page.
+- Historyとsensor-detail previewの選択sensor、graph、表示時刻を揃え、遅いpreview pollingが後続requestを妨げないようにしました。表示値の不要な小数末尾0も省略します。
+- Aligned history and sensor-detail preview selection, charts, and display times; slow preview polling no longer starves later requests, and displayed values omit unnecessary trailing fractional zeroes.
+- Semantic projectionを保持するraw history（既定4 Edge Nodeで合計400,000件）とは独立したbounded queue/workとして処理し、schema v10のsemantic-history indexを追加しました。
+- Semantic projection now runs as bounded pending work independent of retained raw history (400,000 records in the default four-Edge-Node profile), with the schema v10 semantic-history index for history queries.
+- 遅延したMQTT custody ACK、deferred ACK、idle後の新規recordを安全に処理し、pending ACKのretryとidle probeによってdeliveryを継続します。
+- Improved MQTT custody handling for delayed and deferred acknowledgements and new records after idle, retrying pending ACKs and keeping delivery continuous with an idle probe.
+
 ## [0.3.0] - 2026-07-31
 
 - Edge Nodeの暗号化backup、fail-closedなfenced restoreとhardware replacement、復旧権限による安全な再稼働、現場向け復旧手順を追加しました。backupの設定と保存先は現場要件に応じて任意に選べます。
