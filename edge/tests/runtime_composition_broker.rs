@@ -21,11 +21,11 @@ use iotkit_edge::{
         runtime_config::RuntimeConfig,
     },
     lifecycle::ExitReason,
-    semantics::{Detector, RuleSpec, SemanticKind, TriggerMode},
+    semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
     storage::{EdgeNodeState, Storage},
     web::{WebApplication, test_support::StubApplication},
 };
-use iotkit_edge_custody_contract::{ActivationRequest, ActivationResult};
+use iotkit_edge_custody_contract::{ActivationRequest, ActivationResult, DescriptorSnapshot};
 use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
 use serde_json::Map;
 use tempfile::TempDir;
@@ -104,6 +104,7 @@ async fn composed_runtime_custodies_projects_serves_and_marks_output_puback() {
         listener.local_addr().expect("HTTP address")
     };
     let database = directory.path().join("edge.db");
+    let recovery_control_socket = directory.path().join("r.sock");
     let mut arguments = vec![
         "iotkit-edge".to_owned(),
         "serve".into(),
@@ -111,6 +112,8 @@ async fn composed_runtime_custodies_projects_serves_and_marks_output_puback() {
         profile.clone(),
         "--db".into(),
         database.display().to_string(),
+        "--recovery-control-socket".into(),
+        recovery_control_socket.display().to_string(),
         "--storage-metadata".into(),
         metadata.display().to_string(),
     ];
@@ -166,22 +169,6 @@ async fn composed_runtime_custodies_projects_serves_and_marks_output_puback() {
         .ensure_edge_identity("edge-0123456789abcdef0123456789abcdef", 1_720_000_000_000)
         .await
         .expect("initialize configured identity");
-    let rule = Semantics::new(setup.clone())
-        .create_rule(
-            SemanticRuleDraft {
-                edge_node_id: "edge-node-01".into(),
-                series_key: "series-temperature-01".into(),
-                display_name: "Runtime temperature".into(),
-                spec: RuleSpec {
-                    kind: SemanticKind::Numeric,
-                    detector: Detector::default(),
-                    trigger: TriggerMode::None,
-                },
-            },
-            1_720_000_000_001,
-        )
-        .await
-        .expect("create semantic rule");
     OutputProfiles::new(setup.clone(), registered_output_adapters())
         .activate(
             "Runtime MQTT",
@@ -249,6 +236,28 @@ async fn composed_runtime_custodies_projects_serves_and_marks_output_puback() {
         .await
         .expect("publish descriptor");
     wait_for_state(&storage, EdgeNodeState::Discovered).await;
+    let descriptor =
+        DescriptorSnapshot::decode(&fixture("testdata/egress/v2/descriptor-snapshot.json"))
+            .expect("decode descriptor fixture");
+    let rule = Semantics::new(storage.clone())
+        .create_rule(
+            SemanticRuleDraft {
+                edge_node_id: descriptor.edge_node_id.clone(),
+                series_key: descriptor.signals[0].series_key.clone(),
+                display_name: "Runtime contact state".into(),
+                spec: RuleSpec {
+                    kind: SemanticKind::Boolean,
+                    detector: Detector {
+                        mode: DetectorMode::BooleanHighActive,
+                        ..Detector::default()
+                    },
+                    trigger: TriggerMode::None,
+                },
+            },
+            1_720_000_000_001,
+        )
+        .await
+        .expect("create semantic rule");
     let command = storage
         .request_activation("edge-node-01", 1_720_000_000_100)
         .await
@@ -285,7 +294,14 @@ async fn composed_runtime_custodies_projects_serves_and_marks_output_puback() {
             "iotkit/v1/edge-nodes/edge-node-01/records",
             QoS::AtLeastOnce,
             false,
-            fixture("testdata/egress/v1/record-batch.json"),
+            {
+                let mut batch: serde_json::Value =
+                    serde_json::from_slice(&fixture("testdata/egress/v1/record-batch.json"))
+                        .expect("decode record fixture");
+                batch["records"][0]["series_key"] = descriptor.signals[0].series_key.clone().into();
+                batch["records"][0]["values"][0] = 1.0.into();
+                serde_json::to_vec(&batch).expect("encode runtime record")
+            },
         )
         .await
         .expect("publish record");
