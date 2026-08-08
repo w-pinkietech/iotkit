@@ -376,7 +376,8 @@ try {
     await waitFor(
       () =>
         devtools.evaluate(
-          "location.search.includes('saved=1') && document.body.textContent.includes('現在の蒸気温度')",
+          `location.search.includes("saved=1") && [...document.querySelectorAll("details.semantic-rule-card summary strong")]
+            .some((name) => name.textContent.trim() === "現在の蒸気温度")`,
         ),
       "commissioning numeric semantic rule creation",
     );
@@ -406,7 +407,8 @@ try {
     await waitFor(
       () =>
         devtools.evaluate(
-          "location.search.includes('saved=1') && document.body.textContent.includes('蒸気温度通知回数')",
+          `location.search.includes("saved=1") && [...document.querySelectorAll("details.semantic-rule-card summary strong")]
+            .some((name) => name.textContent.trim() === "蒸気温度通知回数")`,
         ),
       "commissioning cumulative semantic rule creation",
     );

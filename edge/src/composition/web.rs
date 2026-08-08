@@ -304,6 +304,7 @@ impl StorageWebApplication {
                 sensor_type,
                 sensor_type_code,
                 value,
+                latest_received_at: latest.as_ref().map(|item| item.received_at),
                 unit: console_unit_label(&if signal.display_unit_mode == "dimensionless" {
                     String::new()
                 } else if signal.display_unit.is_empty() {
@@ -617,6 +618,7 @@ impl WebApplication for StorageWebApplication {
     async fn console(&self, request: ConsoleRequest) -> Result<ConsoleView, WebError> {
         let nodes = self.storage.list_edge_nodes(100).await.map_err(internal)?;
         let rules = self.storage.list_semantic_rules().await.map_err(internal)?;
+        let live_snapshot_at = now();
         let signals = self.console_signals_with_rules(&rules).await?;
         let inventory_devices = self.storage.inventory_devices().await.map_err(internal)?;
         let mut devices = Vec::with_capacity(inventory_devices.len());
@@ -802,6 +804,7 @@ impl WebApplication for StorageWebApplication {
                 .iter()
                 .filter(|node| node.state == EdgeNodeState::Active)
                 .count(),
+            live_snapshot_at,
             receiving_signal_count: signals
                 .iter()
                 .filter(|signal| signal.status_class == "receiving")
@@ -1362,6 +1365,24 @@ impl WebApplication for StorageWebApplication {
         if route == "/api/v1/mapping-previews" {
             let request = serde_json::from_value(body).map_err(bad_request)?;
             let preview = semantics.preview(request).await.map_err(operation_error)?;
+            let point_json = |point: crate::semantics::PreviewPoint| {
+                json!({
+                    "received_at":point.received_at,
+                    "plot_at":point.plot_at,
+                    "input":point.input,
+                    "input_min":point.input_min,
+                    "input_max":point.input_max,
+                    "calibrated":point.calibrated,
+                    "calibrated_min":point.calibrated_min,
+                    "calibrated_max":point.calibrated_max,
+                    "active":point.active,
+                    "counter":point.counter,
+                    "sample_count":point.sample_count,
+                    "active_samples":point.active_samples,
+                    "transitions":point.transitions,
+                    "increment":point.increment,
+                })
+            };
             return Ok(MutationOutput::ok(json!({
                 "calibration":{"scale":preview.calibration.scale,"offset":preview.calibration.offset},
                 "window_start":preview.window_start,
@@ -1373,6 +1394,7 @@ impl WebApplication for StorageWebApplication {
                     "input_count":rule.input_count,
                     "plot_count":rule.plot_count,
                     "error":rule.error,
+                    "latest_point":rule.latest_point.map(point_json),
                     "test_result":rule.test_result.map(|result| json!({
                         "emitted":result.emitted,
                         "number":result.number,
@@ -1380,21 +1402,7 @@ impl WebApplication for StorageWebApplication {
                         "integer":result.integer,
                         "calibrated":result.calibrated,
                     })),
-                    "points":rule.points.into_iter().map(|point| json!({
-                        "received_at":point.received_at,
-                        "input":point.input,
-                        "input_min":point.input_min,
-                        "input_max":point.input_max,
-                        "calibrated":point.calibrated,
-                        "calibrated_min":point.calibrated_min,
-                        "calibrated_max":point.calibrated_max,
-                        "active":point.active,
-                        "counter":point.counter,
-                        "sample_count":point.sample_count,
-                        "active_samples":point.active_samples,
-                        "transitions":point.transitions,
-                        "increment":point.increment,
-                    })).collect::<Vec<_>>(),
+                    "points":rule.points.into_iter().map(point_json).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             })));
         }
@@ -1479,7 +1487,6 @@ impl WebApplication for StorageWebApplication {
     }
 
     async fn history_series(&self, query: HistoryQuery) -> Result<Value, WebError> {
-        let signal_ref = query.signal_ref.as_deref().unwrap_or_default();
         let from = query
             .from
             .as_deref()
@@ -1490,6 +1497,61 @@ impl WebApplication for StorageWebApplication {
             .as_deref()
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or_default();
+        if let Some(rule_id) = query.rule_id.as_deref().filter(|value| !value.is_empty()) {
+            let rule = self
+                .storage
+                .list_semantic_rules()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .find(|rule| rule.rule_id == rule_id && rule.active)
+                .ok_or_else(not_found_error)?;
+            let (buckets, latest) = self
+                .storage
+                .query_semantic_history_series(
+                    rule_id,
+                    from,
+                    to,
+                    query.bucket_ms.unwrap_or_default(),
+                )
+                .await
+                .map_err(internal)?;
+            let signal = self
+                .storage
+                .inventory_signals()
+                .await
+                .map_err(internal)?
+                .into_iter()
+                .find(|signal| signal.signal_ref == rule.signal_ref)
+                .ok_or_else(not_found_error)?;
+            let sample_count: i64 = buckets.iter().map(|bucket| bucket.count).sum();
+            let (latest_received_at, latest_value) = latest.map_or((None, None), |(at, value)| {
+                (Some(at), serde_json::from_slice::<Value>(&value).ok())
+            });
+            return Ok(json!({
+                "signal_ref": rule.signal_ref,
+                "display_name": rule.display_name,
+                "unit": if signal.display_unit.is_empty() { signal.unit } else { signal.display_unit },
+                "value_type": semantic_kind(rule.kind),
+                "sample_count": sample_count,
+                "latest_received_at": latest_received_at,
+                "latest_value": latest_value,
+                "points": buckets.into_iter().map(|bucket| {
+                    let mut point = json!({
+                        "bucket_start":bucket.bucket_start,
+                        "minimum":bucket.minimum,
+                        "average":bucket.average,
+                        "maximum":bucket.maximum,
+                        "sample_count":bucket.count,
+                    });
+                    if let Some(last_value) = bucket.last_value {
+                        point["last_value"] = json!(last_value);
+                    }
+                    point
+                }).collect::<Vec<_>>(),
+            }));
+        }
+        let signal_ref = query.signal_ref.as_deref().unwrap_or_default();
         let buckets = self
             .storage
             .query_history_series(signal_ref, from, to, query.bucket_ms.unwrap_or_default())
@@ -1504,6 +1566,32 @@ impl WebApplication for StorageWebApplication {
             .find(|signal| signal.signal_ref == signal_ref)
             .ok_or_else(not_found_error)?;
         let sample_count: i64 = buckets.iter().map(|bucket| bucket.count).sum();
+        let latest = self
+            .storage
+            .query_raw_history(RawHistoryQuery {
+                from,
+                to,
+                limit: 1,
+                cursor: None,
+                signal_ref: Some(signal_ref.to_owned()),
+                edge_node_id: None,
+            })
+            .await
+            .map_err(internal)?
+            .rows
+            .into_iter()
+            .next();
+        let latest_received_at = latest.as_ref().map(|item| item.received_at);
+        let latest_value = latest
+            .as_ref()
+            .and_then(|item| serde_json::from_slice::<Value>(&item.record_json).ok())
+            .and_then(|record| {
+                record
+                    .get("values")
+                    .and_then(Value::as_array)
+                    .and_then(|values| values.first())
+                    .cloned()
+            });
         Ok(json!({
             "signal_ref": signal_ref,
             "display_name": if signal.display_name.is_empty() {
@@ -1514,6 +1602,8 @@ impl WebApplication for StorageWebApplication {
             "unit": signal.display_unit,
             "value_type": signal.value_type,
             "sample_count": sample_count,
+            "latest_received_at": latest_received_at,
+            "latest_value": latest_value,
             "points": buckets.into_iter().map(|bucket| json!({
                 "bucket_start":bucket.bucket_start,
                 "minimum":bucket.minimum,
@@ -1976,6 +2066,13 @@ fn rule_spec(body: &Value) -> Result<RuleSpec, WebError> {
         "alarm" => SemanticKind::Alarm,
         _ => return Err(bad_request("unknown semantic kind")),
     };
+    if kind == SemanticKind::Numeric {
+        return Ok(RuleSpec {
+            kind,
+            detector: Detector::default(),
+            trigger: TriggerMode::None,
+        });
+    }
     let default_detector = match kind {
         SemanticKind::Numeric => "",
         SemanticKind::Boolean | SemanticKind::CumulativeCounter => "boolean_high_active",
@@ -2081,6 +2178,7 @@ fn history_query(
         limit: Some(200),
         cursor: None,
         signal_ref,
+        rule_id: None,
         edge_node_id,
         bucket_ms: None,
     }

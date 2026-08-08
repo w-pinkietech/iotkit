@@ -15,6 +15,7 @@ async fn security_headers_and_route_inventory_are_stable() {
         "/login",
         "/password",
         "/status",
+        "/live",
         "/monitor",
         "/sensors",
         "/sensors/signal-1",

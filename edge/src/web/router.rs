@@ -3,6 +3,7 @@
 
 pub const CONSOLE_GET_ROUTES: &[&str] = &[
     "/status",
+    "/live",
     "/monitor",
     "/sensors",
     "/sensors/{signal_ref}",

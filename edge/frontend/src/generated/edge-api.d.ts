@@ -24,7 +24,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Aggregate one sensor history into bounded time buckets */
+        /** Aggregate one raw sensor or processed measurement rule into bounded time buckets */
         get: operations["getHistorySeries"];
         put?: never;
         post?: never;
@@ -158,6 +158,8 @@ export interface components {
             minimum: number;
             average: number;
             maximum: number;
+            /** @description For rule_id series, the exact last persisted processed state in this bucket, ordered by observation persistence rather than by the aggregate average. Omitted for signal_ref series. */
+            last_value?: number;
             /** Format: int64 */
             sample_count: number;
         };
@@ -168,6 +170,13 @@ export interface components {
             value_type: string;
             /** Format: int64 */
             sample_count: number;
+            /**
+             * Format: int64
+             * @description For signal_ref, exact IoTKit Edge receipt time of the latest raw record within the requested range. For rule_id, receipt time of the latest persisted processed observation regardless of the requested chart range. Null when the selected source has no value.
+             */
+            latest_received_at: number | null;
+            /** @description For signal_ref, the first raw value from that latest in-range record. For rule_id, the latest persisted processed value regardless of the requested chart range. Null when the selected source has no value. */
+            latest_value: number | boolean | string | null;
             points: components["schemas"]["HistorySeriesPoint"][];
         };
         StorageStatus: {
@@ -286,6 +295,8 @@ export interface components {
         PreviewPoint: {
             /** Format: int64 */
             received_at: number;
+            /** Format: int64 */
+            plot_at?: number;
             input: number;
             input_min: number;
             input_max: number;
@@ -314,6 +325,7 @@ export interface components {
             input_count: number;
             plot_count: number;
             points: components["schemas"]["PreviewPoint"][] | null;
+            latest_point?: components["schemas"]["PreviewPoint"] | null;
             test_result?: components["schemas"]["PreviewResult"];
             /** Format: int64 */
             window_start?: number;
@@ -373,6 +385,7 @@ export interface components {
         HistoryFrom: number;
         /** @description Exclusive IoTKit Edge receipt time in Unix milliseconds; ranges are limited to 31 days. */
         HistoryTo: number;
+        /** @description Raw sensor selection when rule_id is absent. For /history/series, both buckets and latest_* are constrained to the requested range. */
         HistorySignalRef: string;
         HistorySignalRefRequired: string;
         HistoryEdgeNodeID: string;
@@ -392,6 +405,7 @@ export interface operations {
                 from: components["parameters"]["HistoryFrom"];
                 /** @description Exclusive IoTKit Edge receipt time in Unix milliseconds; ranges are limited to 31 days. */
                 to: components["parameters"]["HistoryTo"];
+                /** @description Raw sensor selection when rule_id is absent. For /history/series, both buckets and latest_* are constrained to the requested range. */
                 signal_ref?: components["parameters"]["HistorySignalRef"];
                 edge_node_id?: components["parameters"]["HistoryEdgeNodeID"];
                 limit?: number;
@@ -422,7 +436,10 @@ export interface operations {
                 from: components["parameters"]["HistoryFrom"];
                 /** @description Exclusive IoTKit Edge receipt time in Unix milliseconds; ranges are limited to 31 days. */
                 to: components["parameters"]["HistoryTo"];
-                signal_ref: components["parameters"]["HistorySignalRefRequired"];
+                /** @description Raw sensor selection when rule_id is absent. For /history/series, both buckets and latest_* are constrained to the requested range. */
+                signal_ref?: components["parameters"]["HistorySignalRef"];
+                /** @description Active semantic rule to read instead of raw sensor values. Buckets honor the requested range; latest_* reports the latest persisted processed observation regardless of that range. */
+                rule_id?: string;
                 bucket_ms: number;
             };
             header?: never;
@@ -450,6 +467,7 @@ export interface operations {
                 from: components["parameters"]["HistoryFrom"];
                 /** @description Exclusive IoTKit Edge receipt time in Unix milliseconds; ranges are limited to 31 days. */
                 to: components["parameters"]["HistoryTo"];
+                /** @description Raw sensor selection when rule_id is absent. For /history/series, both buckets and latest_* are constrained to the requested range. */
                 signal_ref?: components["parameters"]["HistorySignalRef"];
                 edge_node_id?: components["parameters"]["HistoryEdgeNodeID"];
             };
@@ -487,6 +505,7 @@ export interface operations {
                 from: components["parameters"]["HistoryFrom"];
                 /** @description Exclusive IoTKit Edge receipt time in Unix milliseconds; ranges are limited to 31 days. */
                 to: components["parameters"]["HistoryTo"];
+                /** @description Raw sensor selection when rule_id is absent. For /history/series, both buckets and latest_* are constrained to the requested range. */
                 signal_ref?: components["parameters"]["HistorySignalRef"];
                 edge_node_id?: components["parameters"]["HistoryEdgeNodeID"];
             };

@@ -22,6 +22,7 @@ fn commissioning_signal(profile_complete: bool, has_rule: bool) -> ConsoleSignal
         sensor_type: "温度".into(),
         sensor_type_code: "temperature".into(),
         value: "—".into(),
+        latest_received_at: None,
         unit: "℃".into(),
         value_kind: "numeric".into(),
         unit_mode: "unit".into(),
@@ -296,6 +297,36 @@ async fn static_assets_are_served_from_the_existing_frontend_build() {
 }
 
 #[tokio::test]
+async fn narrow_sensor_settings_show_preview_before_controls() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
+    let response = app
+        .oneshot(
+            Request::get("/static/edge.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let css = String::from_utf8(
+        to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let narrow = css
+        .split("@media (max-width: 1100px)")
+        .nth(1)
+        .and_then(|section| section.split("@media (max-width: 960px)").next())
+        .unwrap();
+
+    assert!(narrow.contains(
+        ".sensor-setting-workspace {\n    grid-template-columns: 1fr;\n    grid-template-areas:\n      \"preview\"\n      \"controls\";\n  }"
+    ));
+}
+
+#[tokio::test]
 async fn console_redirects_anonymous_users_and_preserves_shell_hooks() {
     let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
     let anonymous = app
@@ -355,6 +386,24 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             ][..],
         ),
         (
+            "/live",
+            &[
+                r#"data-live-dashboard"#,
+                r#"data-live-session-started-at=""#,
+                r#"data-live-snapshot-at="1735689595000""#,
+                r#"data-live-signal"#,
+                r#"data-rule-id="rule-01""#,
+                r#"data-signal-ref="signal-01""#,
+                r#"data-value-kind="numeric""#,
+                r#"data-live-chart"#,
+                r#"data-live-status"#,
+                r#"href="/sensors/signal-01""#,
+                "現在温度",
+                "有効な計測ルールごとに",
+                "表示領域内から最大12件を同時に自動更新",
+            ][..],
+        ),
+        (
             "/equipment",
             &[
                 r#"class="equipment-row""#,
@@ -402,6 +451,10 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"data-signal-profile"#,
                 r#"id="rule-create""#,
                 r#"data-preview-chart"#,
+                r#"aria-describedby="sensor-preview-chart-summary""#,
+                r#"id="sensor-preview-chart-summary" data-preview-accessible-summary"#,
+                r#"<span id="sensor-preview-counter-summary" data-preview-counter-summary>"#,
+                r#"aria-describedby="sensor-preview-counter-summary""#,
                 r#"data-preview-feed-state"#,
                 r#"data-preview-checked-at"#,
                 "Edge Nodeから届いた実データ",
@@ -485,7 +538,40 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
         for hook in hooks {
             assert!(html.contains(hook), "{path} missing {hook}");
         }
+        if path == "/live" {
+            assert!(
+                !html.contains("data-latest-received-at"),
+                "{path} must not seed semantic rule status from a raw signal receipt",
+            );
+        }
     }
+}
+
+#[tokio::test]
+async fn live_page_shows_per_signal_setup_guidance_without_active_rules() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::unconfigured()));
+    let response = app
+        .oneshot(
+            Request::get("/live")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(html.contains("乾燥炉入口 温度の計測ルールがありません"));
+    assert!(html.contains(r#"href="/sensors/signal-01""#));
+    assert!(html.contains("計測ルールを設定"));
+    assert!(!html.contains("data-live-signal"));
 }
 
 #[tokio::test]
@@ -1055,10 +1141,24 @@ async fn sensor_rule_creation_and_preview_targets_are_scoped_by_tab() {
     .unwrap();
 
     assert!(html.contains("data-preview-rule-result"));
+    assert!(html.contains("data-preview-rule-select"));
+    assert!(html.contains("プレビューするルール"));
+    assert!(html.contains("選択できるルールなし"));
     assert!(html.contains("data-preview-rule-name"));
     assert!(html.contains("data-preview-rule-kind"));
     assert!(html.contains("data-preview-rule-value"));
     assert!(html.contains("data-preview-rule-detail"));
+    for forbidden in [
+        "値を指定して結果を確認",
+        "simulation-test",
+        "preview_test_value",
+        "data-preview-test-result",
+    ] {
+        assert!(
+            !html.contains(forbidden),
+            "manual preview test UI must stay removed: {forbidden}"
+        );
+    }
 
     let normal_start = html.find(r#"id="setting-panel-normal""#).unwrap();
     let alarm_start = html.find(r#"id="setting-panel-alarm""#).unwrap();

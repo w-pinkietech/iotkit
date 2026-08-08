@@ -82,6 +82,16 @@ IOTKIT_REQUIRE_POSTGRES=1 \
     -- --ignored --exact --nocapture
 
 reset_database
+cargo test -p iotkit-edge --test history_storage_contract \
+  postgres_semantic_history_series_obeys_the_shared_contract \
+  -- --ignored --exact --nocapture
+
+reset_database
+cargo test -p iotkit-edge --test history_storage_contract \
+  postgres_semantic_history_recent_range_uses_the_observed_at_index \
+  -- --ignored --exact --nocapture
+
+reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test semantic_projection_queue_contract \
     postgres_candidate_plan_uses_the_bounded_pending_queue_lookup \
@@ -161,4 +171,4 @@ cargo test -p iotkit-edge --test backup_contract \
   postgres_custom_snapshot_round_trips_through_real_tools_when_required \
   -- --exact --nocapture
 
-echo "Rust Edge PostgreSQL custody, auth, revision, upgrade, migration, recovery, backup, and restore tests passed."
+echo "Rust Edge PostgreSQL custody, semantic history, semantic projection, auth, revision, upgrade, migration, recovery, backup, and restore tests passed."

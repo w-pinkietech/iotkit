@@ -443,11 +443,22 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
     let report = migrate_sqlite_to_postgres(&path, &dsn).await.unwrap();
     assert!(report.completed);
     assert_eq!(report.edge_id, edge_id);
-    assert_eq!(report.schema_version, 9);
+    assert_eq!(report.schema_version, 10);
     assert_eq!(report.table_counts["raw_records"], 1);
     assert_eq!(report.table_counts["semantic_projection_queue"], 1);
     assert_eq!(report.cursors[0].accepted_through, 1);
     assert_eq!(report.content_digest.len(), 64);
+    let target = sqlx::PgPool::connect(&dsn).await.unwrap();
+    let history_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' \
+         AND tablename='semantic_observations' \
+         AND indexname='ix_semantic_observation_rule_observed_at_row'",
+    )
+    .fetch_one(&target)
+    .await
+    .unwrap();
+    assert_eq!(history_index_count, 1);
+    target.close().await;
 }
 
 #[tokio::test]

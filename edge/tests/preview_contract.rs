@@ -36,20 +36,22 @@ async fn fixture() -> (tempfile::TempDir, Storage, String) {
         .unwrap()[0]
         .signal_ref
         .clone();
+    const BASE_RECEIVED_AT: i64 = 100_000;
+    const BASE_OBSERVED_AT: i64 = 200_000;
     for (sequence, value) in [(1, 18.0), (2, 21.0), (3, 19.0), (4, 22.0)] {
         let record = serde_json::json!({
             "family":"measurement","schema_version":1,"epoch":"epoch-01",
             "pub_seq":sequence,"series_key":descriptor.signals[0].series_key,
-            "values":[value],"event_time":1000+sequence,
+            "values":[value],"event_time":BASE_OBSERVED_AT+sequence*1000,
             "event_time_source":"received_at","time_source":"edge_node",
-            "time_quality":"unsynced","received_at":1000+sequence,"device_time":null
+            "time_quality":"unsynced","received_at":BASE_RECEIVED_AT,"device_time":null
         });
         storage
             .accept_batch(AcceptBatch {
                 edge_node_id: descriptor.edge_node_id.clone(),
                 ledger_epoch: descriptor.ledger_epoch.clone(),
                 publication_id: format!("preview-{sequence}"),
-                received_at: 1000 + sequence,
+                received_at: BASE_RECEIVED_AT,
                 records: vec![
                     RawRecord::new(sequence, serde_json::to_vec(&record).unwrap()).unwrap(),
                 ],
@@ -91,12 +93,16 @@ async fn semantic_preview_uses_real_calibration_evaluator_and_bounded_raw_window
     assert_eq!(response.rules.len(), 1);
     assert_eq!(response.rules[0].input_count, 4);
     assert_eq!(response.rules[0].points[0].calibrated, 37.0);
+    assert_eq!(response.rules[0].points[0].received_at, 100_000);
+    assert_eq!(response.rules[0].points[0].plot_at, 201_000);
+    assert_eq!(response.rules[0].latest_point.unwrap().received_at, 100_000);
+    assert_eq!(response.rules[0].latest_point.unwrap().plot_at, 204_000);
     assert_eq!(
         response.rules[0].test_result.as_ref().unwrap().calibrated,
         21.0
     );
-    assert_eq!(response.window_start, Some(1001));
-    assert_eq!(response.window_end, Some(1004));
+    assert_eq!(response.window_start, Some(144_000));
+    assert_eq!(response.window_end, Some(204_000));
 }
 
 #[tokio::test]

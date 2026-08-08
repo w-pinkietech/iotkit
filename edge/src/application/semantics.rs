@@ -4,7 +4,7 @@ use crate::{
     composition::OutputAdapterRegistration,
     semantics::{
         Calibration, DefinitionSpec, Evaluation, PreviewInput, RuleSpec, SemanticKind,
-        build_preview,
+        build_preview_window,
     },
     storage::{AuditActor, Storage, StorageError},
 };
@@ -88,6 +88,7 @@ pub struct SemanticRulePreview {
     pub input_count: usize,
     pub plot_count: usize,
     pub points: Vec<crate::semantics::PreviewPoint>,
+    pub latest_point: Option<crate::semantics::PreviewPoint>,
     pub test_result: Option<Evaluation>,
     pub error: String,
 }
@@ -163,8 +164,10 @@ impl Semantics {
                 value: number,
             });
         }
-        let window_start = inputs.first().map(|input| input.received_at);
-        let window_end = inputs.last().map(|input| input.received_at);
+        let window_end = inputs.iter().map(|input| input.plot_at()).max();
+        const PREVIEW_WINDOW_MS: i64 = 60_000;
+        let plot_start = window_end.map(|end| end.saturating_sub(PREVIEW_WINDOW_MS));
+        let window_start = plot_start;
         let mut rules = Vec::with_capacity(request.rules.len());
         for draft in request.rules {
             let definition = DefinitionSpec {
@@ -174,7 +177,8 @@ impl Semantics {
                 detector: draft.spec.detector,
                 trigger: draft.spec.trigger,
             };
-            let result = build_preview(definition, &inputs, 200, request.test_value);
+            let result =
+                build_preview_window(definition, &inputs, 200, request.test_value, plot_start);
             rules.push(match result {
                 Ok(preview) => SemanticRulePreview {
                     rule_id: draft.rule_id,
@@ -183,6 +187,7 @@ impl Semantics {
                     input_count: preview.input_count,
                     plot_count: preview.plot_count,
                     points: preview.points,
+                    latest_point: preview.latest_point,
                     test_result: preview.test_result,
                     error: String::new(),
                 },
@@ -193,6 +198,7 @@ impl Semantics {
                     input_count: inputs.len(),
                     plot_count: 0,
                     points: Vec::new(),
+                    latest_point: None,
                     test_result: None,
                     error: error.to_string(),
                 },

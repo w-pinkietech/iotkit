@@ -42,13 +42,18 @@ paths:
   /api/v1/history/series:
     get:
       operationId: getHistorySeries
-      summary: Aggregate one sensor history into bounded time buckets
+      summary: Aggregate one raw sensor or processed measurement rule into bounded time buckets
       security:
         - EdgeSession: []
       parameters:
         - $ref: "#/components/parameters/HistoryFrom"
         - $ref: "#/components/parameters/HistoryTo"
-        - $ref: "#/components/parameters/HistorySignalRefRequired"
+        - $ref: "#/components/parameters/HistorySignalRef"
+        - name: rule_id
+          in: query
+          description: Active semantic rule to read instead of raw sensor values. Buckets honor the requested range; latest_* reports the latest persisted processed observation regardless of that range.
+          schema:
+            type: string
         - name: bucket_ms
           in: query
           required: true
@@ -217,6 +222,7 @@ components:
     HistorySignalRef:
       name: signal_ref
       in: query
+      description: Raw sensor selection when rule_id is absent. For /history/series, both buckets and latest_* are constrained to the requested range.
       schema:
         type: string
     HistorySignalRefRequired:
@@ -300,17 +306,27 @@ components:
         minimum: { type: number }
         average: { type: number }
         maximum: { type: number }
+        last_value:
+          description: For rule_id series, the exact last persisted processed state in this bucket, ordered by observation persistence rather than by the aggregate average. Omitted for signal_ref series.
+          type: number
         sample_count: { type: integer, format: int64 }
     HistorySeries:
       type: object
       additionalProperties: false
-      required: [signal_ref, display_name, unit, value_type, sample_count, points]
+      required: [signal_ref, display_name, unit, value_type, sample_count, latest_received_at, latest_value, points]
       properties:
         signal_ref: { type: string }
         display_name: { type: string }
         unit: { type: string }
         value_type: { type: string }
         sample_count: { type: integer, format: int64 }
+        latest_received_at:
+          description: For signal_ref, exact IoTKit Edge receipt time of the latest raw record within the requested range. For rule_id, receipt time of the latest persisted processed observation regardless of the requested chart range. Null when the selected source has no value.
+          type: [integer, "null"]
+          format: int64
+        latest_value:
+          description: For signal_ref, the first raw value from that latest in-range record. For rule_id, the latest persisted processed value regardless of the requested chart range. Null when the selected source has no value.
+          type: [number, boolean, string, "null"]
         points:
           type: array
           items:
@@ -529,6 +545,9 @@ components:
         received_at:
           type: integer
           format: int64
+        plot_at:
+          type: integer
+          format: int64
         input:
           type: number
         input_min:
@@ -586,6 +605,10 @@ components:
             - type: array
               items:
                 $ref: "#/components/schemas/PreviewPoint"
+            - type: "null"
+        latest_point:
+          oneOf:
+            - $ref: "#/components/schemas/PreviewPoint"
             - type: "null"
         test_result:
           $ref: "#/components/schemas/PreviewResult"
