@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 15
+revision: 17
 ---
 
 # Architecture
@@ -85,6 +85,15 @@ and placement follow the [IoTKit Edge operations](../operations/installation-and
 and [capacity runbook](../operations/storage-capacity.md). TimescaleDB or a similar extension
 is not a third authority; it may be considered inside the `postgres` profile only after
 measurements show a need.
+
+Raw custody keeps canonical record JSON and its record hash authoritative. Schema v11 additionally
+stores a nullable derived series key only for valid measurement envelopes. The settings real-signal
+preview resolves its signal reference and reads its bounded raw tail through the indexed
+`(edge_node_id, series_key, received_at DESC, ledger_epoch DESC, pub_seq DESC)` order in either
+profile; it does not extract JSON fields or sort retained raw history for that read.
+SQLite indexes the full key. PostgreSQL indexes a fixed-length `md5(series_key)` discriminator and
+rechecks the complete key, so a long retained key cannot overflow the raw-preview B-tree tuple and a
+digest collision cannot select another signal's records.
 
 `deploy/mosquitto-image.env` is the repository's single source for the verified Mosquitto patch
 release used by production generation, Compose, and integration tests. Updating that exact patch

@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 23
+revision: 24
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -514,6 +514,8 @@ Device正本ledgerはEdge Nodeにあります。Console row編集を交換扱い
 
 IoTKit Edgeを停止し、未ack dataはBroker/Edge Nodeに保持させます。Dual-write、自動fallbackをせず、IoTKit tableのない空DBへ移行します。Running Edgeがdeployment lockを持つため停止忘れでは開始しません。Protected consistent snapshotから全tableをcopyします。Connection情報はmode `0600` JSONへ置き、DSN/passwordをargvへ渡しません。
 
+Offline profile移行が受理するSQLite sourceは現行schema v11だけです。v9またはv10のsourceでは、先にそのSQLite DBを現行IoTKit Edgeで起動してtransactionalなv11 upgradeの完了を待ち、停止してから移行します。この一回限りのupgradeはcanonicalな有効measurement envelopeだけから導出raw series keyをbackfillします。Offline copyはその保存値とv11 raw-preview indexを保持・検証し、targetで別の値を導出しません。
+
 ```json
 {"dsn":"postgres://iotkit:REDACTED@postgres:5432/iotkit?sslmode=require"}
 ```
@@ -534,7 +536,7 @@ iotkit-edge storage migrate \
 1. 暗号化backupを作りConsole表示を確認する。
 2. Git commit、Compose設定、image IDを記録し、credential/keyをGitへ入れない。
 3. 新versionを取得・buildし、Brokerを動かしたままEdgeだけ停止する。
-4. Schema v9では暗号化済み更新前backupを保持し、durable semantic projection queue、そのindex、SQLite WAL増加分に十分な空き容量を確保する。Startup migrationは対象となる未receipt rule-record pairを全件backfillし、保持historyでは時間がかかり得るが、schema v9と完全なqueueを同時にcommitするかrollbackする。
+4. Schema v11では暗号化済み更新前backupを保持し、導出raw-series-key backfill、raw-preview index、SQLite WAL増加分に十分な空き容量を確保する。Startup migrationは有効canonical measurement envelopeをbackfillし、保持historyでは時間がかかり得るが、schema v11を完全にcommitするかrollbackする。
 5. 新Edgeを起動する。Schema migrationはstartup transaction。
 6. HTTPS login、diagnostics、cursor再収束、pending semantic projection、pending outbox、history graph、CSVを確認する。Restart recovery完了として扱う前にqueueをdrainする。
 7. 失敗時はEdgeを停止する。旧binaryでmigration済みDBを開かず、旧commit/imageへ戻し、更新前backupを**新candidate DB**へrestoreして§8と同じswapを行う。Identity/credentialを作り直さない。

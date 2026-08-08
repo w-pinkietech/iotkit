@@ -93,6 +93,12 @@ cargo test -p iotkit-edge --test history_storage_contract \
 
 reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test preview_contract \
+    postgres_recent_signal_inputs_uses_the_indexed_bounded_signal_tail \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test semantic_projection_queue_contract \
     postgres_candidate_plan_uses_the_bounded_pending_queue_lookup \
     -- --ignored --exact --nocapture
@@ -129,6 +135,24 @@ reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test schema_upgrade_contract \
     postgres_startup_upgrades_a_v6_database_without_losing_identity \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test schema_upgrade_contract \
+    postgres_startup_upgrades_v10_and_backfills_only_valid_measurement_series_keys \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test schema_upgrade_contract \
+    postgres_v11_upgrade_acceptance_and_preview_support_a_2679_byte_series_key \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test schema_upgrade_contract \
+    postgres_v11_migration_failure_rolls_back_the_new_column \
     -- --ignored --exact --nocapture
 
 reset_database
@@ -171,4 +195,4 @@ cargo test -p iotkit-edge --test backup_contract \
   postgres_custom_snapshot_round_trips_through_real_tools_when_required \
   -- --exact --nocapture
 
-echo "Rust Edge PostgreSQL custody, semantic history, semantic projection, auth, revision, upgrade, migration, recovery, backup, and restore tests passed."
+echo "Rust Edge PostgreSQL custody, preview, semantic history, semantic projection, auth, revision, upgrade, migration, recovery, backup, and restore tests passed."

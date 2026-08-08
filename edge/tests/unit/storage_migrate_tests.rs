@@ -5,11 +5,11 @@ use serde_json::Value;
 use super::*;
 
 #[test]
-fn profile_migration_accepts_the_v9_projection_queue_schema_and_current_schema() {
-    assert!(migratable_source_schema_version(9));
-    assert!(migratable_source_schema_version(10));
-    assert!(!migratable_source_schema_version(8));
-    assert!(!migratable_source_schema_version(11));
+fn profile_migration_requires_the_current_v11_schema() {
+    assert!(!migratable_source_schema_version(9));
+    assert!(!migratable_source_schema_version(10));
+    assert!(migratable_source_schema_version(11));
+    assert!(!migratable_source_schema_version(12));
 }
 
 #[test]

@@ -5,7 +5,7 @@ description: "Embedded SQLiteとPostgreSQL profileの再現可能な容量回帰
 language: ja
 translation_key: operations.storage-capacity
 status: stable
-revision: 2
+revision: 4
 ---
 
 # IoTKit Edge storage capacity regression smoke
@@ -24,6 +24,9 @@ semantic ruleを作り、nodeごとに64件のmatching tailを受理し、暗号
 durable queue rowのdrainを順に行う。Recovery中はprojection開始後かつqueueがzeroになる前に実際の
 storage status読出しを完了させる。これはschedulerがauthoritative storage workを進められることの証拠であり、
 latency SLAではない。
+
+設定のreal-signal previewは選択したsignalを一度だけ解決し、profileのraw
+`(edge_node_id, series_key, received_at DESC, ledger_epoch DESC, pub_seq DESC)` indexを使います。したがってraw読出しは要求tail（`1..=2000`）にboundedされ、保持済みraw history全体へのJSON抽出とsortにはなりません。SQLiteはこのindexにfull keyを保持します。PostgreSQLは固定長の`md5(series_key)` discriminatorを使った後に完全なkeyを再照合するため、長い保持keyでもPostgreSQL raw-preview B-tree tuple limit内に収まり、digest collisionでpreview結果は変わりません。
 
 JSON reportにはprofile、raw件数、records/s、batch受理p99、history/backup/restart/projection recoveryの
 wall time、DB bytes、semantic observation、recovery前後のqueue lag、pending output、failure、foreground

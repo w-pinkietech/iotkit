@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 15
+revision: 17
 ---
 
 # Architecture
@@ -43,6 +43,8 @@ IoTKitは、Rust製`iotkit-edge-node`とoperator CLIの`iotkit-edge-nodectl`、�
 基準deploymentは、Edge NodeをRaspberry Piでnative実行し、BrokerとIoTKit EdgeをLinux host上のDockerで動かします。ただしco-locationは要件ではなく、認証付きMQTT/TLS contractを守れば別hostに分離できます。`scripts/bootstrap-edge.sh`は非secret bindingとoperator提供のTLS materialから、anonymous無効Broker、Edge Node別ACL、owner-only credential、handoffを生成します。Certificate発行、DNS、firewall、VPN、Edge Node変更は行いません。
 
 IoTKit Edgeの`embedded`と`postgres`は同じ製品契約を満たします。SQLite fileはIoTKit Edge processと同じhostのlocal storageへ置きます。一つのEdgeが両DBへdual-writeしたり、障害時に空の別backendへfallbackしたりしません。Profileは導入時に固定し、SQLiteからPostgreSQLへの変更は停止、整合backup、全identity・cursor・outbox検証を伴うoffline operationです。[導入と復旧](../operations/installation-and-recovery.md)と[容量runbook](../operations/storage-capacity.md)に従います。
+
+Raw custodyではcanonical record JSONとrecord hashを正本として保持します。Schema v11は、有効なmeasurement envelopeだけにnullableの導出`series_key`を追加します。設定のreal-signal previewはsignal referenceを解決し、両profileでindexされた`(edge_node_id, series_key, received_at DESC, ledger_epoch DESC, pub_seq DESC)`順にbounded raw tailを読みます。この読出しで保持済みraw historyのJSON field抽出やsortは行いません。SQLiteはfull keyをindexします。PostgreSQLは固定長の`md5(series_key)` discriminatorをindexし、完全なkeyを再照合します。そのため長い保持keyでもraw-preview B-tree tupleをoverflowせず、digest collisionで別signalのrecordを選びません。
 
 ## Data flow
 

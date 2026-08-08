@@ -5,7 +5,7 @@ description: "Defines a repeatable capacity regression smoke for embedded SQLite
 language: en
 translation_key: operations.storage-capacity
 status: stable
-revision: 2
+revision: 4
 ---
 
 # IoTKit Edge storage capacity regression smoke
@@ -23,6 +23,14 @@ node, creates an encrypted backup, restarts storage, then drains the 256 durable
 that recovery it completes a real storage-status read only after projection has started and before the
 queue reaches zero. This demonstrates that the scheduler leaves authoritative-storage work available;
 it is not a latency SLA.
+
+The settings real-signal preview resolves the selected signal once and uses its profile's raw
+`(edge_node_id, series_key, received_at DESC, ledger_epoch DESC, pub_seq DESC)` index. Its raw read
+is therefore bounded by the requested tail (`1..=2000`), rather than a JSON extraction and sort of
+all retained raw history. SQLite stores the full key in that index; PostgreSQL uses a fixed-length
+`md5(series_key)` discriminator and then rechecks the full key. This keeps long retained keys within
+the PostgreSQL raw-preview B-tree tuple limit without allowing a digest collision to change preview
+results.
 
 The JSON report records profile, raw count, records per second, batch-accept p99, history/backup/restart
 and projection-recovery wall time, database bytes, semantic observations, queue lag before and after

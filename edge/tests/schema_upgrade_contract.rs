@@ -1,6 +1,8 @@
 use std::{borrow::Cow, path::PathBuf};
 
-use iotkit_edge::storage::{Storage, StorageProfile};
+use iotkit_edge::storage::{
+    AcceptBatch, RawRecord, Storage, StorageError, StorageProfile, migrate_sqlite_to_postgres,
+};
 use sqlx::{
     PgPool, SqlitePool,
     migrate::Migrator,
@@ -42,6 +44,89 @@ async fn migrator_through_v8(profile: &str) -> Migrator {
         ),
         ..Migrator::DEFAULT
     }
+}
+
+async fn migrator_through_v10(profile: &str) -> Migrator {
+    let full = Migrator::new(migrations(profile))
+        .await
+        .expect("load migrations");
+    Migrator {
+        migrations: Cow::Owned(
+            full.iter()
+                .filter(|migration| migration.version <= 10)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+}
+
+fn v10_backfill_records() -> Vec<(i64, Vec<u8>)> {
+    [
+        (
+            "measurement",
+            serde_json::Value::String("series-good".into()),
+        ),
+        ("status", serde_json::Value::String("series-status".into())),
+        ("measurement", serde_json::Value::Null),
+        ("measurement", serde_json::json!(42)),
+        ("measurement", serde_json::Value::String(String::new())),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (family, series_key))| {
+        let sequence = i64::try_from(index + 1).unwrap();
+        (
+            sequence,
+            serde_json::to_vec(&serde_json::json!({
+                "family": family,
+                "schema_version": 1,
+                "epoch": "epoch",
+                "pub_seq": sequence,
+                "series_key": series_key,
+                "values": [sequence],
+                "event_time": sequence,
+                "event_time_source": "received_at",
+                "time_source": "edge_node",
+                "time_quality": "unsynced",
+                "received_at": sequence,
+                "device_time": null
+            }))
+            .unwrap(),
+        )
+    })
+    .collect()
+}
+
+fn measurement_record(ledger_epoch: &str, pub_seq: i64, series_key: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "family": "measurement",
+        "schema_version": 1,
+        "epoch": ledger_epoch,
+        "pub_seq": pub_seq,
+        "series_key": series_key,
+        "values": [pub_seq],
+        "event_time": pub_seq,
+        "event_time_source": "received_at",
+        "time_source": "edge_node",
+        "time_quality": "unsynced",
+        "received_at": pub_seq,
+        "device_time": null
+    }))
+    .unwrap()
+}
+
+fn incompressible_series_key(byte_len: usize) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut series_key = String::with_capacity(byte_len);
+    for _ in 0..byte_len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        series_key.push(ALPHABET[(state % ALPHABET.len() as u64) as usize] as char);
+    }
+    series_key
 }
 
 #[tokio::test]
@@ -102,9 +187,186 @@ async fn sqlite_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect semantic history index");
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert_eq!(column_count, 1);
     assert_eq!(history_index_count, 1);
+}
+
+#[tokio::test]
+async fn sqlite_startup_upgrades_v10_and_backfills_only_valid_measurement_series_keys() {
+    let directory = TempDir::new_in(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target"),
+    )
+    .expect("temporary directory");
+    let path = directory.path().join("upgrade-v10.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("create v10 database");
+    migrator_through_v10("sqlite")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v10");
+    sqlx::query(
+        "INSERT INTO edge_meta(singleton,edge_id,created_at) VALUES(1,'edge-upgrade-v10',1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (sequence, record_json) in v10_backfill_records() {
+        sqlx::query(
+            "INSERT INTO raw_records(edge_node_id,ledger_epoch,pub_seq,publication_id,\
+             record_json,record_sha256,received_at) VALUES('node','epoch',?,?,?,?,?)",
+        )
+        .bind(sequence)
+        .bind(format!("publication-{sequence}"))
+        .bind(record_json)
+        .bind(vec![sequence as u8; 32])
+        .bind(sequence)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    pool.close().await;
+
+    let storage = Storage::connect(StorageProfile::Sqlite { path: path.clone() })
+        .await
+        .expect("upgrade v10 database");
+    assert_eq!(storage.edge_id().await.unwrap(), "edge-upgrade-v10");
+    drop(storage);
+
+    let inspection = SqlitePool::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .expect("inspect upgraded database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let series_keys: Vec<(i64, Option<String>)> =
+        sqlx::query_as("SELECT pub_seq,series_key FROM raw_records ORDER BY pub_seq")
+            .fetch_all(&inspection)
+            .await
+            .unwrap();
+    let column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('raw_records') WHERE name='series_key'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' \
+         AND name='ix_raw_records_preview_signal_received'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 11);
+    assert_eq!(
+        series_keys,
+        vec![
+            (1, Some("series-good".into())),
+            (2, None),
+            (3, None),
+            (4, None),
+            (5, None),
+        ]
+    );
+    assert_eq!(column_count, 1);
+    assert_eq!(index_count, 1);
+}
+
+#[tokio::test]
+async fn sqlite_v11_migration_failure_rolls_back_the_new_column() {
+    let directory = TempDir::new_in(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target"),
+    )
+    .expect("temporary directory");
+    let path = directory.path().join("upgrade-v10-failure.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("create v10 database");
+    migrator_through_v10("sqlite")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v10");
+    sqlx::query("CREATE INDEX ix_raw_records_preview_signal_received ON raw_records(received_at)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    assert!(
+        Storage::connect(StorageProfile::Sqlite { path: path.clone() })
+            .await
+            .is_err()
+    );
+
+    let inspection = SqlitePool::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .expect("inspect rolled-back database");
+    let column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('raw_records') WHERE name='series_key'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    assert_eq!(column_count, 0);
+    assert_eq!(version, 10);
+}
+
+#[tokio::test]
+async fn sqlite_to_postgres_requires_v11_startup_upgrade_before_copy() {
+    let directory = TempDir::new_in(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target"),
+    )
+    .expect("temporary directory");
+    let path = directory.path().join("source-v10.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("create v10 database");
+    migrator_through_v10("sqlite")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v10");
+    pool.close().await;
+
+    let error = migrate_sqlite_to_postgres(&path, "postgres://must-not-be-opened")
+        .await
+        .expect_err("v10 source must be upgraded before offline profile migration");
+    assert!(matches!(&error, StorageError::ProfileMigration(_)));
+    assert!(error.to_string().contains("start current IoTKit Edge"));
 }
 
 #[tokio::test]
@@ -290,7 +552,7 @@ async fn sqlite_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_ea
     .fetch_one(&inspection)
     .await
     .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert_eq!(history_index_count, 1);
     let queue: Vec<(i64, i64, i64)> = sqlx::query_as(
         "SELECT pub_seq,revision,calibration_revision FROM semantic_projection_queue \
@@ -384,9 +646,237 @@ async fn postgres_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect semantic history index");
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert_eq!(column_count, 1);
     assert_eq!(history_index_count, 1);
+    inspection.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires IOTKIT_TEST_POSTGRES_DSN; run scripts/test-edge-postgres.sh"]
+async fn postgres_startup_upgrades_v10_and_backfills_only_valid_measurement_series_keys() {
+    let dsn = match std::env::var("IOTKIT_TEST_POSTGRES_DSN") {
+        Ok(dsn) => dsn,
+        Err(_) if std::env::var_os("IOTKIT_REQUIRE_POSTGRES").is_some() => {
+            panic!("IOTKIT_TEST_POSTGRES_DSN is required")
+        }
+        Err(_) => return,
+    };
+    let pool = PgPool::connect(&dsn).await.expect("create v10 database");
+    migrator_through_v10("postgres")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v10");
+    sqlx::query(
+        "INSERT INTO edge_meta(singleton,edge_id,created_at) VALUES(1,'edge-upgrade-v10',1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (sequence, record_json) in v10_backfill_records() {
+        sqlx::query(
+            "INSERT INTO raw_records(edge_node_id,ledger_epoch,pub_seq,publication_id,\
+             record_json,record_sha256,received_at) VALUES('node','epoch',$1,$2,$3,$4,$1)",
+        )
+        .bind(sequence)
+        .bind(format!("publication-{sequence}"))
+        .bind(record_json)
+        .bind(vec![sequence as u8; 32])
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    pool.close().await;
+
+    let storage = Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+        .await
+        .expect("upgrade v10 database");
+    assert_eq!(storage.edge_id().await.unwrap(), "edge-upgrade-v10");
+    drop(storage);
+
+    let inspection = PgPool::connect(&dsn)
+        .await
+        .expect("inspect upgraded database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let series_keys: Vec<(i64, Option<String>)> =
+        sqlx::query_as("SELECT pub_seq,series_key FROM raw_records ORDER BY pub_seq")
+            .fetch_all(&inspection)
+            .await
+            .unwrap();
+    let column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' \
+         AND table_name='raw_records' AND column_name='series_key'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND tablename='raw_records' \
+         AND indexname='ix_raw_records_preview_signal_received'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 11);
+    assert_eq!(
+        series_keys,
+        vec![
+            (1, Some("series-good".into())),
+            (2, None),
+            (3, None),
+            (4, None),
+            (5, None),
+        ]
+    );
+    assert_eq!(column_count, 1);
+    assert_eq!(index_count, 1);
+    inspection.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires IOTKIT_TEST_POSTGRES_DSN; run scripts/test-edge-postgres.sh"]
+async fn postgres_v11_upgrade_acceptance_and_preview_support_a_2679_byte_series_key() {
+    const LONG_SERIES_KEY_BYTES: usize = 2_679;
+
+    let dsn = match std::env::var("IOTKIT_TEST_POSTGRES_DSN") {
+        Ok(dsn) => dsn,
+        Err(_) if std::env::var_os("IOTKIT_REQUIRE_POSTGRES").is_some() => {
+            panic!("IOTKIT_TEST_POSTGRES_DSN is required")
+        }
+        Err(_) => return,
+    };
+    let series_key = incompressible_series_key(LONG_SERIES_KEY_BYTES);
+    assert_eq!(series_key.len(), LONG_SERIES_KEY_BYTES);
+    let pool = PgPool::connect(&dsn).await.expect("create v10 database");
+    migrator_through_v10("postgres")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v10");
+    sqlx::query(
+        "INSERT INTO raw_records(edge_node_id,ledger_epoch,pub_seq,publication_id,\
+         record_json,record_sha256,received_at) VALUES('long-node','legacy-epoch',1,\
+         'legacy-long-key',$1,$2,10)",
+    )
+    .bind(measurement_record("legacy-epoch", 1, &series_key))
+    .bind(vec![0_u8; 32])
+    .execute(&pool)
+    .await
+    .expect("seed long legacy record");
+    sqlx::query(
+        "INSERT INTO inventory_signals(signal_ref,edge_node_id,series_key,system_id,created_at) \
+         VALUES('sig-long-key','long-node',$1,'long-system',1)",
+    )
+    .bind(&series_key)
+    .execute(&pool)
+    .await
+    .expect("seed long legacy signal identity");
+    pool.close().await;
+
+    let storage = Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+        .await
+        .expect("upgrade v10 long-key record to v11");
+    storage
+        .initialize_edge_identity(1)
+        .await
+        .expect("initialize identity");
+    let inspection = PgPool::connect(&dsn).await.expect("inspect v11 database");
+    let index_definition: String = sqlx::query_scalar(
+        "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='raw_records' \
+         AND indexname='ix_raw_records_preview_signal_received'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .expect("read long-key preview index definition");
+    assert!(
+        index_definition.contains("md5(series_key)"),
+        "PostgreSQL preview index must use a fixed-length key discriminator: {index_definition}"
+    );
+    storage
+        .accept_batch(AcceptBatch {
+            edge_node_id: "long-node".into(),
+            ledger_epoch: "accepted-epoch".into(),
+            publication_id: "accepted-long-key".into(),
+            received_at: 20,
+            records: vec![
+                RawRecord::new(1, measurement_record("accepted-epoch", 1, &series_key))
+                    .expect("encode long accepted record"),
+            ],
+        })
+        .await
+        .expect("accept long v11 record");
+    let inputs = storage
+        .recent_signal_inputs("sig-long-key", 10)
+        .await
+        .expect("read exact long-key preview tail");
+    assert_eq!(
+        inputs
+            .iter()
+            .map(|input| input.received_at)
+            .collect::<Vec<_>>(),
+        vec![10, 20]
+    );
+    let stored_keys: Vec<String> = sqlx::query_scalar(
+        "SELECT series_key FROM raw_records WHERE edge_node_id='long-node' \
+         ORDER BY received_at",
+    )
+    .fetch_all(&inspection)
+    .await
+    .expect("read derived long keys");
+    assert_eq!(stored_keys, vec![series_key.clone(), series_key]);
+    inspection.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires IOTKIT_TEST_POSTGRES_DSN; run scripts/test-edge-postgres.sh"]
+async fn postgres_v11_migration_failure_rolls_back_the_new_column() {
+    let dsn = match std::env::var("IOTKIT_TEST_POSTGRES_DSN") {
+        Ok(dsn) => dsn,
+        Err(_) if std::env::var_os("IOTKIT_REQUIRE_POSTGRES").is_some() => {
+            panic!("IOTKIT_TEST_POSTGRES_DSN is required")
+        }
+        Err(_) => return,
+    };
+    let pool = PgPool::connect(&dsn).await.expect("create v10 database");
+    migrator_through_v10("postgres")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v10");
+    sqlx::query("CREATE INDEX ix_raw_records_preview_signal_received ON raw_records(received_at)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    assert!(
+        Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+            .await
+            .is_err()
+    );
+
+    let inspection = PgPool::connect(&dsn)
+        .await
+        .expect("inspect rolled-back database");
+    let column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' \
+         AND table_name='raw_records' AND column_name='series_key'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    assert_eq!(column_count, 0);
+    assert_eq!(version, 10);
     inspection.close().await;
 }
 
@@ -564,7 +1054,7 @@ async fn postgres_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_
     .fetch_one(&inspection)
     .await
     .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     assert_eq!(history_index_count, 1);
     let queue: Vec<(i64, i64, i64)> = sqlx::query_as(
         "SELECT pub_seq,revision,calibration_revision FROM semantic_projection_queue \
