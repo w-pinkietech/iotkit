@@ -2393,8 +2393,6 @@ describe("automatic mapping preview", () => {
     setSavedRuleKind("cumulative_counter");
     const delayedHistory = deferredResponse();
     const pendingReplacement = deferredResponse();
-    const supersededReplacement = deferredResponse();
-    const currentReplacement = deferredResponse();
     let mappingCalls = 0;
     vi.stubGlobal(
       "fetch",
@@ -2407,11 +2405,7 @@ describe("automatic mapping preview", () => {
               kind: "cumulative_counter",
               point: { received_at: 11_000, input: 10, calibrated: 20, counter: 10 },
             }))
-          : mappingCalls === 2
-            ? pendingReplacement.promise
-            : mappingCalls === 3
-              ? supersededReplacement.promise
-              : currentReplacement.promise;
+          : pendingReplacement.promise;
       }),
     );
 
@@ -2442,11 +2436,11 @@ describe("automatic mapping preview", () => {
 
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
     await vi.advanceTimersByTimeAsync(700);
-    await vi.waitFor(() => expect(mappingCalls).toBe(4));
+    expect(mappingCalls).toBe(2);
     expect(document.querySelector("[data-preview-chart] .chart-line-result")).toBeNull();
 
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
-    currentReplacement.resolve(okPreviewResponse({
+    pendingReplacement.resolve(okPreviewResponse({
       kind: "cumulative_counter",
       point: { received_at: 11_000, input: 10, calibrated: 30, counter: 10 },
     }));
@@ -3712,6 +3706,70 @@ describe("automatic mapping preview", () => {
 
     expect(firstSignal?.aborted).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not starve a slow mapping request during periodic polling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    installPreviewDOM();
+    setSavedRuleKind("cumulative_counter");
+    const delayedMapping = deferredResponse();
+    let mappingCalls = 0;
+    let firstMappingSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((input: RequestInfo | URL, request?: RequestInit) => {
+      const pathname = new URL(String(input), "http://localhost").pathname;
+      if (pathname === "/api/v1/history/series") {
+        return Promise.resolve(historySeriesResponse(100, []));
+      }
+      mappingCalls += 1;
+      if (mappingCalls === 1) {
+        firstMappingSignal = request?.signal ?? undefined;
+        return delayedMapping.promise;
+      }
+      return Promise.resolve(
+        okPreviewResponse({
+          kind: "cumulative_counter",
+          point: {
+            received_at: 13_000,
+            input: 24,
+            calibrated: 49,
+            counter: 102,
+            increment: 1,
+          },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+    await vi.waitFor(() => expect(mappingCalls).toBe(1));
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(mappingCalls).toBe(1);
+    expect(firstMappingSignal?.aborted).toBe(false);
+
+    delayedMapping.resolve(
+      okPreviewResponse({
+        kind: "cumulative_counter",
+        point: {
+          received_at: 12_000,
+          input: 24,
+          calibrated: 48,
+          counter: 101,
+          increment: 1,
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 4; index += 1) await Promise.resolve();
+    expect(
+      document.querySelector<HTMLElement>("[data-preview-result-legend]")?.hidden,
+    ).toBe(false);
+    expect(mappingCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(mappingCalls).toBe(2));
+    document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
   it("marks the invalid field returned by the server", async () => {

@@ -1679,6 +1679,7 @@
       'form[data-signal-profile] [name="decimal_places"]'
     );
     let controller;
+    let controllerResultKey;
     let counterHistoryController;
     let counterHistoryRuleID;
     let counterHistory;
@@ -1921,13 +1922,15 @@
         });
       });
     };
-    const refresh = async () => {
+    const refresh = async (force = false) => {
       const activeID = selectedPreviewID;
       const resultKey = synchronizePreviewResult();
+      if (!force && controller && controllerResultKey === resultKey) return;
       const generation = previewGeneration;
       controller?.abort();
       const requestController = new AbortController();
       controller = requestController;
+      controllerResultKey = resultKey;
       clearFieldErrors(previewScope);
       const requestedCounterRuleID = counterRuleIDForActiveForm(forms, activeID);
       counterStateFor(requestedCounterRuleID);
@@ -2180,11 +2183,16 @@
             "\u8A2D\u5B9A\u7D50\u679C\u3092\u66F4\u65B0\u3067\u304D\u307E\u305B\u3093\u3002\u30C7\u30FC\u30BF\u53D7\u4FE1\u306B\u306F\u5F71\u97FF\u3042\u308A\u307E\u305B\u3093\u3002"
           );
         }
+      } finally {
+        if (controller === requestController) {
+          controller = void 0;
+          controllerResultKey = void 0;
+        }
       }
     };
     const schedule = () => {
       if (debounce !== void 0) window.clearTimeout(debounce);
-      debounce = window.setTimeout(refresh, 300);
+      debounce = window.setTimeout(() => void refresh(true), 300);
     };
     restorePreviewTarget();
     for (const form of forms) {
