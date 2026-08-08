@@ -415,11 +415,27 @@ async fn handle_ack(
     };
     let ack: AcceptedThrough = serde_json::from_slice(payload)
         .map_err(|error| format!("accepted-through decode failed: {error}"))?;
-    ack.validate_for(&prepared.batch, prepared.prior_cursor)
-        .map_err(|error| error.to_string())?;
+    let cursor_end = match ack.validate_for(&prepared.batch, prepared.prior_cursor) {
+        Ok(()) => prepared.batch.cursor_end,
+        Err(error) => {
+            if ack
+                .validate_stale_for(&prepared.batch, prepared.prior_cursor)
+                .is_ok()
+            {
+                return Ok(false);
+            }
+            if ack
+                .validate_prior_prefix_for(&prepared.batch, prepared.prior_cursor)
+                .is_ok()
+            {
+                ack.accepted_through
+            } else {
+                return Err(error.to_string());
+            }
+        }
+    };
 
     let epoch = prepared.batch.ledger_epoch.clone();
-    let cursor_end = prepared.batch.cursor_end;
     let prior_cursor = prepared.prior_cursor;
     db.with_conn(move |conn| {
         apply_ack(conn, &epoch, prior_cursor, cursor_end).map_err(storage_error)

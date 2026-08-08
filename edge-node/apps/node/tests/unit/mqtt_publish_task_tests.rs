@@ -163,6 +163,168 @@ fn application_ack_advances_cursor_but_mismatch_does_not() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn delayed_prior_ack_keeps_the_next_batch_inflight() {
+    let db = test_db();
+    let (epoch, first) = db
+        .with_conn_sync(|conn| {
+            let (epoch, first) = seed_annotation(conn, "edge-01");
+            let second = iotkit_core_publish::store::enqueue_commissioning_smoke(
+                conn,
+                &epoch,
+                "smoke-0123456789abcdef0123456789abcdea",
+                2,
+            )
+            .unwrap();
+            assert_eq!(second, 2);
+            Ok((epoch, first))
+        })
+        .unwrap();
+    let binding = MqttBinding::for_edge_node("edge-01").unwrap();
+    let prior_ack = AcceptedThrough {
+        schema_version: EGRESS_SCHEMA_VERSION,
+        edge_node_id: "edge-01".into(),
+        ledger_epoch: epoch.clone(),
+        publication_id: first.batch.publication_id.clone(),
+        accepted_through: first.batch.cursor_end,
+    };
+    let prior_payload = serde_json::to_vec(&prior_ack).unwrap();
+    let mut inflight = Some(first);
+
+    assert!(
+        handle_ack(
+            &db,
+            &binding.accepted_through_topic,
+            &binding.accepted_through_topic,
+            &prior_payload,
+            &mut inflight,
+        )
+        .await
+        .unwrap()
+    );
+    assert!(inflight.is_none());
+
+    let next = db
+        .with_conn_sync(|conn| Ok(prepare_batch(conn, "edge-01").unwrap().unwrap()))
+        .unwrap();
+    assert_eq!(next.prior_cursor, 1);
+    assert_eq!(next.batch.cursor_start, 2);
+    let mut inflight = Some(next);
+
+    assert!(
+        !handle_ack(
+            &db,
+            &binding.accepted_through_topic,
+            &binding.accepted_through_topic,
+            &prior_payload,
+            &mut inflight,
+        )
+        .await
+        .unwrap()
+    );
+    let current = inflight.as_ref().unwrap();
+    assert_eq!(current.prior_cursor, 1);
+    assert_eq!(current.batch.cursor_start, 2);
+
+    let malformed = AcceptedThrough {
+        schema_version: EGRESS_SCHEMA_VERSION,
+        edge_node_id: "edge-01".into(),
+        ledger_epoch: epoch.clone(),
+        publication_id: "edge-01:epoch:bad".into(),
+        accepted_through: 1,
+    };
+    assert!(
+        handle_ack(
+            &db,
+            &binding.accepted_through_topic,
+            &binding.accepted_through_topic,
+            &serde_json::to_vec(&malformed).unwrap(),
+            &mut inflight,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(inflight.as_ref().unwrap().batch.cursor_start, 2);
+    assert_eq!(
+        db.with_conn_sync(|conn| {
+            Ok(effective_cursor(
+                &epoch,
+                &target_get(conn).unwrap().unwrap(),
+            ))
+        })
+        .unwrap(),
+        1,
+    );
+}
+
+#[tokio::test]
+async fn delayed_prior_prefix_ack_advances_only_the_proven_prefix() {
+    let db = test_db();
+    let (epoch, prior) = db
+        .with_conn_sync(|conn| Ok(seed_annotation(conn, "edge-01")))
+        .unwrap();
+    let binding = MqttBinding::for_edge_node("edge-01").unwrap();
+    let prefix_ack = AcceptedThrough {
+        schema_version: EGRESS_SCHEMA_VERSION,
+        edge_node_id: "edge-01".into(),
+        ledger_epoch: epoch.clone(),
+        publication_id: prior.batch.publication_id.clone(),
+        accepted_through: prior.batch.cursor_end,
+    };
+    let widened = db
+        .with_conn_sync(|conn| {
+            let next = iotkit_core_publish::store::enqueue_commissioning_smoke(
+                conn,
+                &epoch,
+                "smoke-0123456789abcdef0123456789abcdea",
+                2,
+            )
+            .unwrap();
+            assert_eq!(next, 2);
+            Ok(prepare_batch(conn, "edge-01").unwrap().unwrap())
+        })
+        .unwrap();
+    assert_eq!(widened.prior_cursor, 0);
+    assert_eq!(widened.batch.cursor_start, 1);
+    assert_eq!(widened.batch.cursor_end, 2);
+    let mut inflight = Some(widened);
+
+    assert!(
+        handle_ack(
+            &db,
+            &binding.accepted_through_topic,
+            &binding.accepted_through_topic,
+            &serde_json::to_vec(&prefix_ack).unwrap(),
+            &mut inflight,
+        )
+        .await
+        .unwrap()
+    );
+    assert!(inflight.is_none());
+    assert_eq!(
+        db.with_conn_sync(|conn| {
+            Ok(effective_cursor(
+                &epoch,
+                &target_get(conn).unwrap().unwrap(),
+            ))
+        })
+        .unwrap(),
+        1,
+    );
+
+    let remainder = db
+        .with_conn_sync(|conn| Ok(prepare_batch(conn, "edge-01").unwrap().unwrap()))
+        .unwrap();
+    assert_eq!(remainder.prior_cursor, 1);
+    assert_eq!(remainder.batch.cursor_start, 2);
+    assert_eq!(remainder.batch.cursor_end, 2);
+    assert_eq!(remainder.batch.records.len(), 1);
+    assert_eq!(
+        remainder.batch.records[0]["family"],
+        serde_json::json!("commissioning_smoke"),
+    );
+}
+
 #[test]
 fn existing_legacy_target_is_not_silently_rewritten() {
     let db = test_db();
