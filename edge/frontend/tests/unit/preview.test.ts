@@ -589,6 +589,32 @@ describe("automatic mapping preview", () => {
       ?.click();
   });
 
+  it("does not pad integer current values to the profile decimal-place setting", async () => {
+    installPreviewDOM();
+    const profile = document.createElement("form");
+    profile.dataset.signalProfile = "";
+    profile.innerHTML = `
+      <select name="display_value_kind"><option value="numeric" selected>数値</option></select>
+      <input name="decimal_places" value="1">
+    `;
+    document.body.append(profile);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(previewResponse(1_000, 100)));
+
+    initializePreviews();
+
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector("[data-preview-current-value]")?.textContent,
+      ).toBe("100"),
+    );
+    expect(
+      document.querySelector("[data-source-current-value]")?.textContent,
+    ).toBe("100");
+    document
+      .querySelector<HTMLButtonElement>("[data-preview-toggle]")
+      ?.click();
+  });
+
   it("updates the compact sensor header with the latest received value", async () => {
     installPreviewDOM();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(previewResponse()));
