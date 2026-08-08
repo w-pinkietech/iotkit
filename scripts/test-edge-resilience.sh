@@ -110,6 +110,20 @@ wait_for_convergence() {
   return 1
 }
 
+wait_for_convergence_within_five_seconds() {
+  local expected=$1
+  local expected_stats="$expected|1|$expected|$expected"
+  for _ in $(seq 1 20); do
+    if [[ "$(edge_cursor)" == "$expected" && "$(edge_stats)" == "$expected_stats" ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  diagnostics
+  echo "convergence did not complete within five seconds at pub_seq $expected" >&2
+  return 1
+}
+
 assert_cursor() {
   local expected=$1
   local actual
@@ -321,31 +335,44 @@ fi
 restart_edge
 wait_for_convergence 300
 
+# Establish a freshly connected, acknowledged idle state. The marker proves the
+# restarted Edge Node is subscribed; after its acknowledgement there is no
+# inflight batch when the next row is inserted.
+restart_edge
+seed_range 301 301
+wait_for_convergence 301
+sleep 1
+
+# Keep Edge Node, Broker, and IoTKit Edge connected. A row arriving while the
+# publisher is idle must not wait for the 30-second inflight retry cadence.
+seed_range 302 302
+wait_for_convergence_within_five_seconds 302
+
 # The Broker remains available, but transport receipt cannot replace Edge custody.
 compose stop edge
-seed_range 301 301
+seed_range 303 303
 restart_edge
 sleep 2
-assert_cursor 300
+assert_cursor 302
 compose start edge
 restart_edge
-wait_for_convergence 301
+wait_for_convergence 303
 
 # Edge restart by itself.
-seed_range 302 302
+seed_range 304 304
 restart_edge
-wait_for_convergence 302
+wait_for_convergence 304
 
 # Broker restart by itself while Edge and Edge retain their databases.
 compose stop broker
-seed_range 303 303
+seed_range 305 305
 compose start broker
-wait_for_convergence 303
+wait_for_convergence 305
 
 # Edge restart by itself. Edge stays alive and uses its normal bounded retry.
 compose restart edge
-seed_range 304 304
-wait_for_convergence 304
+seed_range 306 306
+wait_for_convergence 306
 
 stop_edge
 compose stop edge broker
@@ -357,11 +384,11 @@ if [[ "$edge_node_check" != "ok" || "$central_edge_check" != "ok" ]]; then
   echo "SQLite quick_check failed: Edge Node=$edge_node_check Edge=$central_edge_check" >&2
   exit 1
 fi
-assert_cursor 304
-if [[ "$(edge_stats)" != "304|1|304|304" ]]; then
+assert_cursor 306
+if [[ "$(edge_stats)" != "306|1|306|306" ]]; then
   diagnostics
-  echo "Edge records are not one contiguous 1..304 prefix" >&2
+  echo "Edge records are not one contiguous 1..306 prefix" >&2
   exit 1
 fi
 
-echo "Edge/Broker/Edge resilience matrix: OK (304 contiguous records)"
+echo "Edge/Broker/Edge resilience matrix: OK (306 contiguous records)"

@@ -5,7 +5,7 @@ description: "Defines the complete MQTT custody transfer, activation, record fam
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 7
+revision: 8
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -335,6 +335,11 @@ Rust Edge Node publisher and Rust IoTKit Edge decoder.
 - While inactive, Edge Node continues bounded local commissioning collection without creating an R10
   publication backlog.
 - If IoTKit Edge or the network is down, Edge Node continues local collection and retains unacknowledged rows.
+- While subscribed with no application-unacknowledged batch, Edge Node probes the indexed outbox at a
+  one-second interval to start rows created after the last acknowledgement. This probe never retransmits
+  an inflight batch; the separate 30-second retry remains responsible for inflight retransmission,
+  descriptor refresh, and pre-activation cleanup. The first tick of both schedules is after its full
+  interval, rather than immediately when the task starts.
 - On reconnect, Edge Node retries the current batch. If a restart rebuilds it wider from the same cursor
   start, a validated prior-prefix acknowledgement advances only that prefix and rebuilds the remaining
   range.

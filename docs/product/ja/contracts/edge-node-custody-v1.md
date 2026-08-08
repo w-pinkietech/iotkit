@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転、activation、record family、ack、re
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 7
+revision: 8
 ---
 
 # Edge Node保管責任契約 v1
@@ -191,6 +191,7 @@ IoTKit Edgeはcoalesceの前に保持するwire payloadを`AcceptedThrough`と�
 - Activation command outboxとEdge Node receiptはactivation retry権威。Broker sessionではない。
 - Inactive中もbounded local commissioning collectionを続けるがR10 backlogを作らない。
 - IoTKit Edge/network停止中もlocal collectionと未ack rowを保持。
+- subscription済みでapplication未ack batchがない間、Edge Nodeは最後のack後に追加されたrowを開始するため、1秒間隔でindexed outboxをprobeする。このprobeはinflight batchを再送せず、別の30秒retryはinflight retransmit、descriptor refresh、pre-activation cleanupを担う。両scheduleの最初のtickはtask開始直後ではなく、各intervalを完全に経過した後である。
 - Reconnect後はcurrent batchをretryする。restartで同じcursor startからより広いbatchをrebuildした場合、検証済みの過去prefix ackはそのprefixだけをadvanceし、残りrangeをrebuildする。
 - IoTKit Edge exact replayは既存rowを検証し、commit済みwatermarkを再publish。
 
