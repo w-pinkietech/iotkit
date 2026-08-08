@@ -56,6 +56,7 @@ const TABLES: &[&str] = &[
     "output_outbox",
     "output_route_attempts",
 ];
+const RAW_RECORDS_PREVIEW_INDEX: &str = "ix_raw_records_preview_signal_received";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MigrationCursor {
@@ -101,15 +102,18 @@ pub async fn migrate_sqlite_to_postgres(
         .await?;
     validate_source_schema(&source).await?;
 
-    let schema_version: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM _sqlx_migrations")
-            .fetch_one(&source)
-            .await?;
+    let schema_version: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(version),0) FROM _sqlx_migrations WHERE success=TRUE",
+    )
+    .fetch_one(&source)
+    .await?;
     if !migratable_source_schema_version(schema_version) {
         return Err(StorageError::ProfileMigration(format!(
-            "SQLite migration source schema is {schema_version}, want 9 or 10"
+            "SQLite migration source schema is {schema_version}, want 11; start current IoTKit Edge \
+             against SQLite to complete its schema upgrade before offline migration"
         )));
     }
+    validate_source_preview_index(&source).await?;
     let edge_id: String = sqlx::query_scalar("SELECT edge_id FROM edge_meta WHERE singleton=1")
         .fetch_one(&source)
         .await
@@ -127,6 +131,7 @@ pub async fn migrate_sqlite_to_postgres(
         unreachable!("constructed PostgreSQL storage")
     };
     let mut tx = pool.begin().await?;
+    validate_target_preview_index(&mut tx).await?;
     for table in TABLES {
         let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM \"{table}\""))
             .fetch_one(&mut *tx)
@@ -215,8 +220,7 @@ pub async fn migrate_sqlite_to_postgres(
 }
 
 fn migratable_source_schema_version(schema_version: i64) -> bool {
-    // v10 only adds a semantic-history index; v9 has the same copied table shape.
-    (9..=10).contains(&schema_version)
+    schema_version == 11
 }
 
 async fn validate_source_schema(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
@@ -258,6 +262,42 @@ async fn validate_source_schema(pool: &sqlx::SqlitePool) -> Result<(), StorageEr
             missing.join(","),
             unexpected.join(",")
         )));
+    }
+    Ok(())
+}
+
+async fn validate_source_preview_index(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='raw_records' \
+         AND name=?",
+    )
+    .bind(RAW_RECORDS_PREVIEW_INDEX)
+    .fetch_one(pool)
+    .await?;
+    if exists != 1 {
+        return Err(StorageError::ProfileMigration(
+            "SQLite migration source is missing the schema-v11 raw preview index; start current \
+             IoTKit Edge to complete its schema upgrade before offline migration"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn validate_target_preview_index(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), StorageError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname=current_schema() \
+         AND tablename='raw_records' AND indexname=$1)",
+    )
+    .bind(RAW_RECORDS_PREVIEW_INDEX)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !exists {
+        return Err(StorageError::ProfileMigration(
+            "PostgreSQL migration target is missing the schema-v11 raw preview index".into(),
+        ));
     }
     Ok(())
 }

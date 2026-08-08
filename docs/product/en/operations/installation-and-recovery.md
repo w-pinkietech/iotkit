@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 23
+revision: 24
 ---
 
 # IoTKit Edge installation and recovery
@@ -746,6 +746,12 @@ so migration cannot begin if shutdown was forgotten. Migration creates a protect
 snapshot before copying every table. Store PostgreSQL connection data in a mode-`0600` JSON file;
 never pass a DSN or password on the command line.
 
+Offline profile migration accepts a current schema-v11 SQLite source only. For a v9 or v10 source,
+first start the current IoTKit Edge against that SQLite database and wait for its transactional v11
+upgrade to complete, then stop it again before migration. That one-time upgrade backfills the derived
+raw series key only from valid canonical measurement envelopes. The offline copy preserves and verifies
+that stored value and the v11 raw-preview index; it does not derive a different target value.
+
 ```json
 {"dsn":"postgres://iotkit:REDACTED@postgres:5432/iotkit?sslmode=require"}
 ```
@@ -772,10 +778,10 @@ PostgreSQL side; recreate an empty database and run migration again.
    credentials or private keys in Git.
 3. Fetch the new version and build the IoTKit Edge image. Keep the Broker running and stop only
    IoTKit Edge. Edge Nodes retain unacknowledged records.
-4. For schema v9, retain the encrypted pre-update backup and leave enough free space for the durable
-   semantic-projection queue, its indexes, and SQLite WAL growth. Startup backfills every eligible
-   unreceipted rule-record pair in the migration transaction; it can take time on retained history,
-   but it either commits the complete queue with schema v9 or rolls back.
+4. For schema v11, retain the encrypted pre-update backup and leave enough free space for the derived
+   raw-series-key backfill, its raw-preview index, and SQLite WAL growth. Startup backfills valid
+   canonical measurement envelopes in the migration transaction; it can take time on retained history,
+   but it either commits schema v11 completely or rolls back.
 5. Start the new IoTKit Edge. Schema migrations run transactionally at startup.
 6. Verify HTTPS login, `/api/v1/system/diagnostics`, cursor reconvergence, pending semantic projection,
    pending outbox, history graphs, and CSV. Let the queue drain before treating restart recovery as

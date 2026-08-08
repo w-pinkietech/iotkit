@@ -172,6 +172,53 @@ async fn accept(storage: &Storage, first: i64, last: i64) {
         .expect("accept records");
 }
 
+#[tokio::test]
+async fn acceptance_stores_the_same_measurement_series_key_used_for_semantic_queueing() {
+    let (directory, storage) = store().await;
+    let rule = Semantics::new(storage.clone())
+        .create_rule(
+            SemanticRuleDraft {
+                edge_node_id: "edge-node-01".into(),
+                series_key: SERIES_KEY.into(),
+                display_name: "Queue temperature".into(),
+                spec: RuleSpec {
+                    kind: SemanticKind::Numeric,
+                    detector: Detector::default(),
+                    trigger: TriggerMode::None,
+                },
+            },
+            3,
+        )
+        .await
+        .expect("create rule");
+    accept(&storage, 1, 1).await;
+
+    let inspection = SqlitePool::connect_with(
+        SqliteConnectOptions::new()
+            .filename(PathBuf::from(directory.path()).join("edge.db"))
+            .create_if_missing(false),
+    )
+    .await
+    .expect("open inspection connection");
+    let stored_series_key: Option<String> = sqlx::query_scalar(
+        "SELECT series_key FROM raw_records WHERE edge_node_id='edge-node-01' \
+         AND ledger_epoch='epoch-01' AND pub_seq=1",
+    )
+    .fetch_one(&inspection)
+    .await
+    .expect("read stored series key");
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM semantic_projection_queue WHERE rule_id=? \
+         AND ledger_epoch='epoch-01' AND pub_seq=1",
+    )
+    .bind(&rule.rule_id)
+    .fetch_one(&inspection)
+    .await
+    .expect("read pending queue row");
+    assert_eq!(stored_series_key.as_deref(), Some(SERIES_KEY));
+    assert_eq!(pending, 1);
+}
+
 async fn seed_applied_reset_history_sqlite(pool: &SqlitePool, rule_id: &str) {
     sqlx::query(
         "WITH RECURSIVE reset_history(value) AS (\

@@ -11,6 +11,25 @@ use super::{
     auth::{insert_audit_postgres, insert_audit_sqlite},
 };
 
+#[doc(hidden)]
+pub const SQLITE_SIGNAL_IDENTITY_SQL: &str =
+    "SELECT edge_node_id,series_key FROM inventory_signals WHERE signal_ref=?";
+
+#[doc(hidden)]
+pub const POSTGRES_SIGNAL_IDENTITY_SQL: &str =
+    "SELECT edge_node_id,series_key FROM inventory_signals WHERE signal_ref=$1";
+
+#[doc(hidden)]
+pub const SQLITE_RECENT_SIGNAL_INPUTS_SQL: &str = "SELECT received_at,record_json FROM raw_records \
+     WHERE edge_node_id=? AND series_key=? \
+     ORDER BY received_at DESC,ledger_epoch DESC,pub_seq DESC LIMIT ?";
+
+#[doc(hidden)]
+// The digest narrows the index lookup; the following full-key predicate preserves exact identity.
+pub const POSTGRES_RECENT_SIGNAL_INPUTS_SQL: &str = "SELECT received_at,record_json FROM raw_records \
+     WHERE edge_node_id=$1 AND md5(series_key)=md5($2) AND series_key=$2 \
+     ORDER BY received_at DESC,ledger_epoch DESC,pub_seq DESC LIMIT $3";
+
 impl Storage {
     pub async fn recent_signal_inputs(
         &self,
@@ -23,44 +42,53 @@ impl Storage {
             ));
         }
         let mut values = match self.inner.as_ref() {
-            StorageInner::Sqlite { pool, .. } => sqlx::query(
-                "SELECT raw.received_at,raw.record_json FROM raw_records AS raw \
-                 JOIN inventory_signals AS signal ON signal.edge_node_id=raw.edge_node_id \
-                 WHERE signal.signal_ref=? \
-                 AND json_extract(raw.record_json,'$.series_key')=signal.series_key \
-                 ORDER BY raw.received_at DESC,raw.ledger_epoch DESC,raw.pub_seq DESC LIMIT ?",
-            )
-            .bind(signal_ref)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(|row| {
-                Ok(StoredPreviewInput {
-                    received_at: row.try_get("received_at")?,
-                    record_json: row.try_get("record_json")?,
-                })
-            })
-            .collect::<Result<Vec<_>, StorageError>>()?,
-            StorageInner::Postgres { pool, .. } => sqlx::query(
-                "SELECT raw.received_at,raw.record_json FROM raw_records AS raw \
-                 JOIN inventory_signals AS signal ON signal.edge_node_id=raw.edge_node_id \
-                 WHERE signal.signal_ref=$1 \
-                 AND convert_from(raw.record_json,'UTF8')::jsonb->>'series_key'=signal.series_key \
-                 ORDER BY raw.received_at DESC,raw.ledger_epoch DESC,raw.pub_seq DESC LIMIT $2",
-            )
-            .bind(signal_ref)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(|row| {
-                Ok(StoredPreviewInput {
-                    received_at: row.try_get("received_at")?,
-                    record_json: row.try_get("record_json")?,
-                })
-            })
-            .collect::<Result<Vec<_>, StorageError>>()?,
+            StorageInner::Sqlite { pool, .. } => {
+                let identity: Option<(String, String)> = sqlx::query_as(SQLITE_SIGNAL_IDENTITY_SQL)
+                    .bind(signal_ref)
+                    .fetch_optional(pool)
+                    .await?;
+                let Some((edge_node_id, series_key)) = identity else {
+                    return Ok(Vec::new());
+                };
+                sqlx::query(SQLITE_RECENT_SIGNAL_INPUTS_SQL)
+                    .bind(edge_node_id)
+                    .bind(series_key)
+                    .bind(limit)
+                    .fetch_all(pool)
+                    .await?
+                    .into_iter()
+                    .map(|row| {
+                        Ok(StoredPreviewInput {
+                            received_at: row.try_get("received_at")?,
+                            record_json: row.try_get("record_json")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, StorageError>>()?
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let identity: Option<(String, String)> =
+                    sqlx::query_as(POSTGRES_SIGNAL_IDENTITY_SQL)
+                        .bind(signal_ref)
+                        .fetch_optional(pool)
+                        .await?;
+                let Some((edge_node_id, series_key)) = identity else {
+                    return Ok(Vec::new());
+                };
+                sqlx::query(POSTGRES_RECENT_SIGNAL_INPUTS_SQL)
+                    .bind(edge_node_id)
+                    .bind(series_key)
+                    .bind(limit)
+                    .fetch_all(pool)
+                    .await?
+                    .into_iter()
+                    .map(|row| {
+                        Ok(StoredPreviewInput {
+                            received_at: row.try_get("received_at")?,
+                            record_json: row.try_get("record_json")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, StorageError>>()?
+            }
         };
         values.reverse();
         Ok(values)

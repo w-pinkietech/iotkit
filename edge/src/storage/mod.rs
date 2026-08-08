@@ -40,6 +40,11 @@ pub use history::{
     HistoryBucket, RawHistoryPage, RawHistoryQuery, StoredRawHistoryRow, StoredSemanticHistoryRow,
 };
 pub use migrate::{MigrationCursor, StorageMigrationReport, migrate_sqlite_to_postgres};
+#[doc(hidden)]
+pub use profiles::{
+    POSTGRES_RECENT_SIGNAL_INPUTS_SQL, POSTGRES_SIGNAL_IDENTITY_SQL,
+    SQLITE_RECENT_SIGNAL_INPUTS_SQL, SQLITE_SIGNAL_IDENTITY_SQL,
+};
 pub use recovery_activation::{RecoveryCase, RecoveryCommand, RecoveryPrepare};
 pub use semantic_output::{ClaimedOutput, OutputMark};
 
@@ -686,10 +691,11 @@ async fn accept_sqlite(
                 actual: record.pub_seq,
             });
         }
+        let series_key = semantic_projection_series_key(&encoded);
         sqlx::query(
             "INSERT INTO raw_records(\
              edge_node_id, ledger_epoch, pub_seq, publication_id, record_json, \
-             record_sha256, received_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+             record_sha256, received_at, series_key) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&batch.edge_node_id)
         .bind(&batch.ledger_epoch)
@@ -698,15 +704,16 @@ async fn accept_sqlite(
         .bind(&encoded)
         .bind(hash)
         .bind(batch.received_at)
+        .bind(series_key.as_deref())
         .execute(&mut **transaction)
         .await?;
-        if let Some(series_key) = semantic_projection_series_key(&encoded) {
+        if let Some(series_key) = series_key.as_deref() {
             semantic_output::enqueue_projection_queue_sqlite(
                 transaction,
                 &batch.edge_node_id,
                 &batch.ledger_epoch,
                 record.pub_seq,
-                &series_key,
+                series_key,
             )
             .await?;
         }
@@ -778,10 +785,11 @@ async fn accept_postgres(
                 actual: record.pub_seq,
             });
         }
+        let series_key = semantic_projection_series_key(&encoded);
         sqlx::query(
             "INSERT INTO raw_records(\
              edge_node_id, ledger_epoch, pub_seq, publication_id, record_json, \
-             record_sha256, received_at) VALUES($1, $2, $3, $4, $5, $6, $7)",
+             record_sha256, received_at, series_key) VALUES($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&batch.edge_node_id)
         .bind(&batch.ledger_epoch)
@@ -790,15 +798,16 @@ async fn accept_postgres(
         .bind(&encoded)
         .bind(hash)
         .bind(batch.received_at)
+        .bind(series_key.as_deref())
         .execute(&mut **transaction)
         .await?;
-        if let Some(series_key) = semantic_projection_series_key(&encoded) {
+        if let Some(series_key) = series_key.as_deref() {
             semantic_output::enqueue_projection_queue_postgres(
                 transaction,
                 &batch.edge_node_id,
                 &batch.ledger_epoch,
                 record.pub_seq,
-                &series_key,
+                series_key,
             )
             .await?;
         }
@@ -827,13 +836,14 @@ struct SemanticProjectionEnvelope<'a> {
     series_key: Option<Cow<'a, str>>,
 }
 
-fn semantic_projection_series_key(record_json: &[u8]) -> Option<String> {
+fn semantic_projection_series_key(record_json: &[u8]) -> Option<Cow<'_, str>> {
     let Ok(envelope) = serde_json::from_slice::<SemanticProjectionEnvelope<'_>>(record_json) else {
         return None;
     };
     (envelope.family.as_deref() == Some("measurement"))
-        .then(|| envelope.series_key.map(Cow::into_owned))
+        .then_some(envelope.series_key)
         .flatten()
+        .filter(|series_key| !series_key.is_empty())
 }
 
 fn decode_sqlite_rows(rows: Vec<SqliteRow>) -> Result<Vec<StoredRawRecord>, StorageError> {

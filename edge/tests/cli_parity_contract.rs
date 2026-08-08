@@ -440,10 +440,42 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
     accept_contact(&storage, 1, 1).await;
     drop(storage);
 
+    let source = sqlx::SqlitePool::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    // The offline copy must copy the stored v11 key exactly, not rederive it from record_json.
+    sqlx::query(
+        "UPDATE raw_records SET series_key='stored-source-series-key' \
+         WHERE edge_node_id='edge-node-01' AND ledger_epoch='epoch-01' AND pub_seq=1",
+    )
+    .execute(&source)
+    .await
+    .unwrap();
+    let source_series_key: Option<String> = sqlx::query_scalar(
+        "SELECT series_key FROM raw_records WHERE edge_node_id='edge-node-01' \
+         AND ledger_epoch='epoch-01' AND pub_seq=1",
+    )
+    .fetch_one(&source)
+    .await
+    .unwrap();
+    let source_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' \
+         AND name='ix_raw_records_preview_signal_received'",
+    )
+    .fetch_one(&source)
+    .await
+    .unwrap();
+    assert_eq!(
+        source_series_key.as_deref(),
+        Some("stored-source-series-key")
+    );
+    assert_eq!(source_index_count, 1);
+    source.close().await;
+
     let report = migrate_sqlite_to_postgres(&path, &dsn).await.unwrap();
     assert!(report.completed);
     assert_eq!(report.edge_id, edge_id);
-    assert_eq!(report.schema_version, 10);
+    assert_eq!(report.schema_version, 11);
     assert_eq!(report.table_counts["raw_records"], 1);
     assert_eq!(report.table_counts["semantic_projection_queue"], 1);
     assert_eq!(report.cursors[0].accepted_through, 1);
@@ -457,7 +489,26 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
     .fetch_one(&target)
     .await
     .unwrap();
+    let target_series_key: Option<String> = sqlx::query_scalar(
+        "SELECT series_key FROM raw_records WHERE edge_node_id='edge-node-01' \
+         AND ledger_epoch='epoch-01' AND pub_seq=1",
+    )
+    .fetch_one(&target)
+    .await
+    .unwrap();
+    let preview_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND tablename='raw_records' \
+         AND indexname='ix_raw_records_preview_signal_received'",
+    )
+    .fetch_one(&target)
+    .await
+    .unwrap();
     assert_eq!(history_index_count, 1);
+    assert_eq!(
+        target_series_key.as_deref(),
+        Some("stored-source-series-key")
+    );
+    assert_eq!(preview_index_count, 1);
     target.close().await;
 }
 

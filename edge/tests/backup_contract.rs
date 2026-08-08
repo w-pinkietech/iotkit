@@ -169,7 +169,7 @@ async fn encrypted_sqlite_backup_round_trips_and_revokes_sessions() {
         .expect("create encrypted backup");
     assert_eq!(manifest.storage_profile, "embedded");
     assert_eq!(manifest.payload_format, "sqlite-database");
-    assert_eq!(manifest.schema_version, 10);
+    assert_eq!(manifest.schema_version, 11);
     assert_eq!(manifest.raw_record_count, 2);
     assert_eq!(
         fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
@@ -354,7 +354,7 @@ async fn postgres_custom_snapshot_round_trips_through_real_tools_when_required()
         .await
         .unwrap();
     assert_eq!(manifest.storage_profile, "postgres");
-    assert_eq!(manifest.schema_version, 10);
+    assert_eq!(manifest.schema_version, 11);
     drop(storage);
     assert!(matches!(
         restore_encrypted_backup_sqlite(
