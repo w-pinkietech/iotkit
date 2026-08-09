@@ -61,6 +61,7 @@ and receives approval.
 | layer-rules | `scripts/check-layers` | CI lightweight | Every PR and default-branch push | — | Seconds |
 | source-layout | `scripts/check-source-layout` | CI lightweight | Every PR and default-branch push | — | Seconds |
 | battle-tested-routing | Battle-tested catalog and selector check | CI lightweight | Every PR and default-branch push | — | Seconds |
+| pure-refactoring-evaluator | `check`, focused regression, and checked-in `score --results` report | CI lightweight | Every PR and default-branch push; validates captured metrics only, never rollout authority | — | Seconds |
 | product-docs-impact | Product-docs impact selector and regression | CI lightweight | Every PR and default-branch push | — | Seconds |
 | ci-selector | `scripts/tests/select-ci-jobs.test.mjs` | CI lightweight | Every PR and default-branch push | — | Seconds |
 | verification-policy | `scripts/tests/verification-policy.test.mjs` | CI lightweight | Every PR and default-branch push | — | Seconds |
