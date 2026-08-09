@@ -125,6 +125,12 @@ jobs:
       - name: Selective CI routing
         run: node --test scripts/tests/select-ci-jobs.test.mjs
 
+      - name: Verification ownership policy
+        run: node --test scripts/tests/verification-policy.test.mjs
+
+      - name: Codex Cloud wrapper regression
+        run: scripts/test-codex-cloud.sh
+
       - name: Rust Edge release-gate contracts
         run: node --test scripts/tests/rust-edge-release-gates.test.mjs
 
@@ -272,3 +278,56 @@ jobs:
 
       - name: Trial profile first-run and custody journey
         run: scripts/test-iotkit-trial.sh
+
+  # Stable required check: a selected lane must succeed; an unselected optional
+  # lane is skipped. `changes` fails closed to all lanes when diff metadata or
+  # CI infrastructure is unsafe, so omitting a lane here is a policy failure.
+  required-ci:
+    name: required CI
+    if: ${{ always() }}
+    needs: [changes, lightweight, check, console, edge, trial]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require mandatory and selected lanes
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          LIGHTWEIGHT_RESULT: ${{ needs.lightweight.result }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          CONSOLE_RESULT: ${{ needs.console.result }}
+          EDGE_RESULT: ${{ needs.edge.result }}
+          TRIAL_RESULT: ${{ needs.trial.result }}
+          RUST_SELECTED: ${{ needs.changes.outputs.rust }}
+          CONSOLE_SELECTED: ${{ needs.changes.outputs.console }}
+          EDGE_SELECTED: ${{ needs.changes.outputs.edge }}
+          TRIAL_SELECTED: ${{ needs.changes.outputs.trial }}
+        run: |
+          set -euo pipefail
+          [[ "$CHANGES_RESULT" == "success" ]] || {
+            echo "changes must succeed (was $CHANGES_RESULT)" >&2
+            exit 1
+          }
+          [[ "$LIGHTWEIGHT_RESULT" == "success" ]] || {
+            echo "lightweight must succeed (was $LIGHTWEIGHT_RESULT)" >&2
+            exit 1
+          }
+          check_lane() {
+            local name=$1 selected=$2 result=$3
+            if [[ "$selected" == "true" ]]; then
+              [[ "$result" == "success" ]] || {
+                echo "$name was selected but did not succeed (was $result)" >&2
+                exit 1
+              }
+            elif [[ "$selected" == "false" ]]; then
+              [[ "$result" == "skipped" ]] || {
+                echo "$name was not selected but did not skip (was $result)" >&2
+                exit 1
+              }
+            else
+              echo "$name has unsafe selector output: $selected" >&2
+              exit 1
+            fi
+          }
+          check_lane rust "$RUST_SELECTED" "$CHECK_RESULT"
+          check_lane console "$CONSOLE_SELECTED" "$CONSOLE_RESULT"
+          check_lane edge "$EDGE_SELECTED" "$EDGE_RESULT"
+          check_lane trial "$TRIAL_SELECTED" "$TRIAL_RESULT"

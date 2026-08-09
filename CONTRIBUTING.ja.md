@@ -167,7 +167,15 @@ code入口、認証付きHTTP ingest、Console認証、運用、契約に関す�
 6. commitしてbranchをpushし、issueをcloseするdraft pull requestを作る。
 7. そこで停止して人間へreviewを依頼する。
 8. Review指摘は同じbranchとpull requestで修正する。
-9. 明示承認を得てからmergeする。
+9. 明示承認を得てからmergeする。`User`である人間のアカウントで、associationが`OWNER`、
+   `MEMBER`、`COLLABORATOR`のいずれか、かつrepositoryへのeffective permissionが`admin`、
+   `maintain`、`write`のいずれかであるmaintainerだけが、default branchを対象とするopenかつ
+   non-draftのPRへ完全一致の`/auto-merge`をcommentして承認を記録できる。GitHubは`required CI`を
+   待ち、current headの`human approval` statusが成功してからnative squash auto-mergeを行う。
+   opened、reopened、ready-for-review、synchronizeごとにPR headの`human approval`はpendingへ戻る。
+   新しいcommitはauto-mergeを解除し、そのstatusをpendingへ戻すため、更新をreviewした後に
+   もう一度完全一致のcommentを残して再度armする。これはreviewを置き換えない。default branchの
+   protectionでは`required CI`、`human approval`、CodeQLを必須にする。
 
 最終reviewでは、[レビュースイート](review/README.ja.md)から入り、合う
 perspective を選びます。製品や運用に触れる差分では battle-tested perspective を
@@ -209,8 +217,12 @@ git pull --prune
 # 文書構造
 node scripts/check-product-docs.mjs
 
-# Rust format・依存rule・source/test配置・test・Clippyと全Go test
-scripts/verify.sh
+# 対象crateのRust testとlint
+cargo test -p <owning-crate>
+cargo clippy -p <owning-crate> --all-targets -- -D warnings
+
+# 明示した場合だけのworkspace全体診断。通常のPR sweepではない
+scripts/verify.sh --workspace
 
 # Console schema・生成型/asset・unit test
 scripts/test-edge-console-frontend.sh
@@ -224,9 +236,12 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
 scripts/test-edge-postgres.sh
 ```
 
-Rust製品動作や影響範囲が不明なcross-component変更では`scripts/verify.sh`を使います。
-文書だけの変更は通常、文書checker、link・command確認、`git diff --check`に絞ります。
+通常のRust製品変更では、最も近いfocused testとlintから始めます。CIが変更範囲に応じて
+Rust、Console、Edge、trial laneを選び、これが権威ある検証です。local passで置き換えません。
+`scripts/verify.sh --workspace`は明示的なcross-workspace診断だけに使います。文書だけの変更は
+通常、文書checker、link・command確認、`git diff --check`に絞ります。
 `scripts/test-edge-host-release-gate.sh`はPRごとではなく、release candidateで一度実行します。
+完全なownerと想定runtimeは[検証所有マトリクス](.github/verification-ownership.md)を参照してください。
 
 ## 生成fileとcontract変更
 

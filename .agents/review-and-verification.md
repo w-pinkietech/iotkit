@@ -27,10 +27,16 @@ executes one perspective; it does not replace the suite entry.
 
 ## Verification
 
-Verification must match the changed failure paths. Run `scripts/verify.sh` when
-Rust product behavior changes or cannot be excluded. Documentation-only changes
-may use documentation, link, structure, and diff checks. When skipping a check
-normally expected for the change, state the check and the concrete reason.
+Verification must match the changed failure paths. For routine Rust work, run
+the closest focused test and package lint needed for immediate feedback; the
+selected CI lane is the authoritative independent merge evidence.
+`scripts/verify.sh --workspace` is an opt-in cross-workspace diagnosis, not an
+unconditional Rust-change default. Documentation-only changes may use
+documentation, link, structure, and diff checks. Release and field suites have
+one default owner in the
+[verification ownership matrix](../.github/verification-ownership.md). When
+skipping a check normally expected for the change, state the check and the
+concrete reason.
 
 Tests passing are necessary, not sufficient: also compare the result with current
 contracts and the [product invariants](product-invariants.md).

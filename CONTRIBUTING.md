@@ -176,7 +176,17 @@ Every development task uses the following loop:
 6. Commit, push the branch, and open a draft pull request that closes the issue.
 7. Stop and request human review.
 8. Apply review feedback on the same branch and pull request.
-9. Merge only after explicit approval.
+9. Merge only after explicit approval. Only a human `User` account with an
+   `OWNER`, `MEMBER`, or `COLLABORATOR` association and effective repository
+   permission of `admin`, `maintain`, or `write` may record that approval with
+   an exact `/auto-merge` comment on an open, non-draft PR that targets the
+   default branch; GitHub then waits for `required CI` and the current head's
+   `human approval` status before native squash auto-merge. Every opened,
+   reopened, ready-for-review, or synchronized PR head receives pending
+   `human approval`. New commits disarm it, reset that status to pending;
+   review the update and leave a new exact comment before it can be armed
+   again. This does not replace review. Default-branch protection must require
+   `required CI`, `human approval`, and CodeQL.
 
 For the final review, start at the [review suite](review/README.md) and pick
 matching perspectives. Always consider the battle-tested perspective for product
@@ -221,8 +231,12 @@ as the risk grows.
 # Documentation structure
 node scripts/check-product-docs.mjs
 
-# Rust formatting, dependency rules, source/test placement, tests, and Clippy
-scripts/verify.sh
+# Focused Rust behavior and lint
+cargo test -p <owning-crate>
+cargo clippy -p <owning-crate> --all-targets -- -D warnings
+
+# Explicit full-workspace diagnosis, not a routine PR sweep
+scripts/verify.sh --workspace
 
 # Console schema, generated types/assets, and unit tests
 scripts/test-edge-console-frontend.sh
@@ -236,11 +250,15 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
 scripts/test-edge-postgres.sh
 ```
 
-Use `scripts/verify.sh` for Rust product behavior or uncertain cross-component
-changes. Documentation-only changes normally need the documentation checker,
-link/command inspection, and `git diff --check`. Run
+For routine Rust behavior, start with the closest focused test and lint. CI
+selects the authoritative changed-scope Rust, Console, Edge, and trial lanes;
+do not substitute a reported local pass for it. Use
+`scripts/verify.sh --workspace` only for an explicit cross-workspace diagnosis.
+Documentation-only changes normally need the documentation checker, link/command
+inspection, and `git diff --check`. Run
 `scripts/test-edge-host-release-gate.sh` once for a release candidate, not for
-every pull request.
+every pull request. The complete owner and runtime policy is in the
+[verification ownership matrix](.github/verification-ownership.md).
 
 ## Generated files and contract changes
 
