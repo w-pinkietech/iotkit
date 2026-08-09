@@ -48,6 +48,17 @@ fn legacy_gateway_time_sources_are_rejected() {
 }
 
 #[test]
+fn v1_ignores_unknown_object_fields_but_rejects_unknown_enum_values() {
+    let original = sample_envelope();
+    let mut value = serde_json::to_value(&original).unwrap();
+    value["future_envelope_field"] = serde_json::json!(true);
+    value["items"][0]["future_item_field"] = serde_json::json!(true);
+
+    assert_eq!(serde_json::from_value::<Envelope>(value).unwrap(), original);
+    assert!(serde_json::from_str::<TimeSource>("\"future_time_source\"").is_err());
+}
+
+#[test]
 fn ack_json_round_trip() {
     let ack = EnvelopeAck {
         envelope_id: "gw-1-1".into(),

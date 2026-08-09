@@ -5,7 +5,7 @@ description: "Defines the complete authenticated HTTP ingest wire schema, author
 language: en
 translation_key: contracts.ingest-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit authenticated ingest contract v1
@@ -68,6 +68,21 @@ authentication is not a supported setup. Do not disable certificate validation
 to make a first connection work.
 
 ## Wire schema
+
+### v1 decoding and version boundaries
+
+The shipped v1 Rust decoders intentionally ignore otherwise-valid unknown
+object members in `Envelope`, `ReadingItem`, acknowledgement, and validation
+report objects. They do not preserve or echo those members. Unknown enum or
+tagged-variant values, missing required fields, wrong JSON types, and values
+outside the stated Rust ranges fail decoding. The `declaration_version` field
+is declaration metadata, not HTTP wire-version negotiation.
+
+`/api/v1` is the only supported HTTP major for this contract. There is no
+request-body `schema_version` switch, and an unsupported API-version path is
+not interpreted as a compatible ingest endpoint. For the product-1.x support
+window and the difference between tolerant and strict surfaces, see the
+[v1 compatibility policy](compatibility-policy-v1.md).
 
 ### Request envelope
 

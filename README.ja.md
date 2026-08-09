@@ -10,6 +10,8 @@
 > 公開しています。0.xの間はAPI、ディスク上のschema、wire contractが変更される可能性があります。
 > [GitHub Releases](https://github.com/w-pinkietech/iotkit/releases)と
 > [ロードマップ](#ロードマップ)を参照してください。
+> [v1互換性方針](docs/product/ja/contracts/compatibility-policy-v1.md)は製品1.0.0から適用し、
+> このpre-1.0の状態を変更しません。
 
 現行の製品知識はOKF v0.2形式でも提供しています: [日本語](docs/product/ja/index.md) / [英語](docs/product/en/index.md)。
 

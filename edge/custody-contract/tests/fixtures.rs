@@ -3,8 +3,21 @@ use iotkit_edge_custody_contract::{
     RecoveryActivationRequest, RecoveryActivationResult, RecoveryCompletion, RecoveryCompletionAck,
     StatusHeartbeat,
 };
+use serde::Deserialize;
 
 type StatusMutation = Box<dyn Fn(&mut serde_json::Value)>;
+
+#[derive(Deserialize)]
+struct RecordFamilyCases {
+    cases: Vec<RecordFamilyCase>,
+}
+
+#[derive(Deserialize)]
+struct RecordFamilyCase {
+    name: String,
+    valid: bool,
+    record: serde_json::Value,
+}
 
 fn fixture(path: &str) -> Vec<u8> {
     std::fs::read(
@@ -28,6 +41,32 @@ fn decodes_the_shared_record_batch_and_ack_fixtures() {
         .expect("decode acknowledgement");
     ack.validate_for(&batch, 0)
         .expect("acknowledgement matches batch");
+}
+
+#[test]
+fn receiver_matches_the_shared_record_family_conformance_cases() {
+    let cases: RecordFamilyCases =
+        serde_json::from_slice(&fixture("testdata/egress/v1/record-family-cases.json"))
+            .expect("decode shared record-family cases");
+
+    for case in cases.cases {
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "edge_node_id": "edge-node-01",
+            "ledger_epoch": "epoch-01",
+            "publication_id": "edge-node-01:epoch-01:1:1",
+            "cursor_start": 1,
+            "cursor_end": 1,
+            "records": [case.record],
+        }))
+        .expect("encode record batch");
+        assert_eq!(
+            RecordBatch::decode(&payload).is_ok(),
+            case.valid,
+            "conformance case: {}",
+            case.name
+        );
+    }
 }
 
 #[test]

@@ -9,20 +9,37 @@
     const error = value.error;
     return isRecord(error) && "code" in error && typeof error.code === "string" && "message" in error && typeof error.message === "string";
   }
+  function hasExactKeys(value, keys) {
+    return Object.keys(value).length === keys.length && keys.every((key) => key in value);
+  }
+  function isNumberOrNull(value) {
+    return typeof value === "number" || value === null;
+  }
   function isPreviewPoint(value) {
     if (!isRecord(value)) return false;
-    return [
+    const required = [
       "received_at",
+      "plot_at",
       "input",
       "input_min",
       "input_max",
       "calibrated",
       "calibrated_min",
       "calibrated_max",
-      "sample_count"
-    ].every((field) => typeof value[field] === "number");
+      "active",
+      "counter",
+      "sample_count",
+      "active_samples",
+      "transitions",
+      "increment"
+    ];
+    return hasExactKeys(value, required) && required.filter((field) => field !== "active" && field !== "counter").every((field) => typeof value[field] === "number") && (typeof value.active === "boolean" || value.active === null) && isNumberOrNull(value.counter);
   }
-  function isPreviewBody(value) {
+  function isPreviewResult(value) {
+    if (!isRecord(value)) return false;
+    return hasExactKeys(value, ["emitted", "number", "boolean", "integer", "calibrated"]) && typeof value.emitted === "boolean" && isNumberOrNull(value.number) && (typeof value.boolean === "boolean" || value.boolean === null) && isNumberOrNull(value.integer) && typeof value.calibrated === "number";
+  }
+  function isSemanticRulePreview(value) {
     if (!isRecord(value)) return false;
     const kinds = /* @__PURE__ */ new Set([
       "numeric",
@@ -30,14 +47,21 @@
       "cumulative_counter",
       "alarm"
     ]);
-    return typeof value.kind === "string" && kinds.has(value.kind) && typeof value.input_count === "number" && typeof value.plot_count === "number" && (value.points === null || Array.isArray(value.points) && value.points.every(isPreviewPoint));
+    return hasExactKeys(value, [
+      "rule_id",
+      "display_name",
+      "kind",
+      "input_count",
+      "plot_count",
+      "points",
+      "latest_point",
+      "test_result",
+      "error"
+    ]) && typeof value.rule_id === "string" && typeof value.display_name === "string" && typeof value.kind === "string" && kinds.has(value.kind) && typeof value.input_count === "number" && typeof value.plot_count === "number" && Array.isArray(value.points) && value.points.every(isPreviewPoint) && (value.latest_point === null || isPreviewPoint(value.latest_point)) && (value.test_result === null || isPreviewResult(value.test_result)) && typeof value.error === "string";
   }
   function isMappingPreviewResponse(value) {
-    if (isPreviewBody(value)) return true;
     if (!isRecord(value) || !isRecord(value.calibration)) return false;
-    return typeof value.calibration.scale === "number" && typeof value.calibration.offset === "number" && Array.isArray(value.rules) && value.rules.every(
-      (rule) => isPreviewBody(rule) && isRecord(rule) && typeof rule.rule_id === "string" && typeof rule.display_name === "string"
-    );
+    return hasExactKeys(value, ["calibration", "rules", "window_start", "window_end"]) && hasExactKeys(value.calibration, ["scale", "offset"]) && typeof value.calibration.scale === "number" && typeof value.calibration.offset === "number" && Array.isArray(value.rules) && value.rules.length > 0 && value.rules.every(isSemanticRulePreview) && isNumberOrNull(value.window_start) && isNumberOrNull(value.window_end);
   }
   async function createMappingPreview(request, csrfToken2, signal) {
     const response = await fetch("/api/v1/mapping-previews", {
@@ -440,15 +464,6 @@
       triggerModes,
       "trigger mode"
     );
-  }
-  function definitionSpec(form) {
-    return {
-      kind: semanticKind(form),
-      scale: numericFormField(form, "scale"),
-      offset: numericFormField(form, "offset"),
-      detector: detectorSpec(form),
-      trigger: triggerMode(form)
-    };
   }
   function ruleSpec(form) {
     return {
@@ -942,11 +957,11 @@
       calibrated: point.input,
       calibrated_min: point.input_min,
       calibrated_max: point.input_max,
-      active: void 0,
-      active_samples: void 0,
-      transitions: void 0,
-      counter: void 0,
-      increment: void 0
+      active: null,
+      active_samples: 0,
+      transitions: 0,
+      counter: null,
+      increment: 0
     };
   }
   function sampleWeight(point) {
@@ -956,9 +971,6 @@
     const leftWeight = sampleWeight(left);
     const rightWeight = sampleWeight(right);
     const sampleCount = leftWeight + rightWeight;
-    const hasActiveSamples = left.active_samples !== void 0 || right.active_samples !== void 0;
-    const hasTransitions = left.transitions !== void 0 || right.transitions !== void 0;
-    const hasIncrement = left.increment !== void 0 || right.increment !== void 0;
     return {
       ...right,
       input: (left.input * leftWeight + right.input * rightWeight) / sampleCount,
@@ -968,9 +980,9 @@
       calibrated_min: Math.min(left.calibrated_min, right.calibrated_min),
       calibrated_max: Math.max(left.calibrated_max, right.calibrated_max),
       sample_count: sampleCount,
-      active_samples: hasActiveSamples ? (left.active_samples ?? 0) + (right.active_samples ?? 0) : void 0,
-      transitions: hasTransitions ? (left.transitions ?? 0) + (right.transitions ?? 0) : void 0,
-      increment: hasIncrement ? (left.increment ?? 0) + (right.increment ?? 0) : void 0
+      active_samples: left.active_samples + right.active_samples,
+      transitions: left.transitions + right.transitions,
+      increment: left.increment + right.increment
     };
   }
   function compactAdjacent(points, maximum, weight, merge) {
@@ -1073,7 +1085,7 @@
     } : raw);
   }
   function latestPreviewPoint(payload) {
-    return payload.latest_point ?? payload.points?.at(-1) ?? void 0;
+    return payload.latest_point ?? payload.points.at(-1);
   }
   function hasMeaningfulResult(points) {
     const epsilon = 1e-9;
@@ -1082,7 +1094,7 @@
     );
   }
   function counterWindowDelta(payload) {
-    const points = payload.points ?? [];
+    const points = payload.points;
     const window2 = previewWindow(payload, points);
     return points.reduce((total, point) => {
       const at = pointPlotAt(point);
@@ -1453,7 +1465,7 @@
     };
   }
   function renderPreviewChart(svg, payload, showSemanticOverlays, unit, rawBoolean, showResult, sharedWindow, sessionWide = false) {
-    const points = payload.points ?? [];
+    const points = payload.points;
     const window2 = sharedWindow ?? previewWindow(payload, points);
     renderSignalChart(svg, {
       points: points.map((point) => ({
@@ -1477,15 +1489,12 @@
       resultStep: showResult && rawBoolean,
       showLatestMarker: showSemanticOverlays,
       showActiveBands: showSemanticOverlays && payload.kind !== "numeric" && payload.kind !== "cumulative_counter",
-      thresholds: showSemanticOverlays ? { rise: payload.rise_threshold, fall: payload.fall_threshold } : void 0,
+      thresholds: void 0,
       emptyTitle: payload.error ? "\u3053\u306E\u30EB\u30FC\u30EB\u3067\u306F\u53D7\u4FE1\u5024\u3092\u5224\u5B9A\u3067\u304D\u307E\u305B\u3093" : "\u307E\u3060\u53D7\u4FE1\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093",
       emptyHint: payload.error ? "\u5165\u529B\u5024\u306E\u88DC\u6B63\u3068\u5224\u5B9A\u6761\u4EF6\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044" : "\u5B9F\u969B\u306B\u5C4A\u3044\u305F\u5024\u3092\u5F85\u3063\u3066\u3044\u307E\u3059",
       title: `\u6A2A\u8EF8\u306F${sessionWide ? "\u753B\u9762\u3092\u958B\u3044\u3066\u304B\u3089\u73FE\u5728\u307E\u3067" : "\u76F4\u8FD160\u79D2"}\u3001\u7E26\u8EF8\u306F\u53D7\u4FE1\u5024${unit ? `\uFF08${unit}\uFF09` : ""}${showResult ? "\u3068\u8A2D\u5B9A\u7D50\u679C" : ""}\u3067\u3059\u3002`
     });
     return points;
-  }
-  function isMultipleRulePreview(response) {
-    return "rules" in response;
   }
   function activeSettingPanel(scope) {
     return queryAll(
@@ -1547,14 +1556,10 @@
     selector.value = selectedTarget ? previewTargetID(selectedTarget) ?? "" : firstPersistedTarget ? previewTargetID(firstPersistedTarget) ?? "" : "";
   }
   function selectPreview(response, activeID) {
-    if (!isMultipleRulePreview(response)) {
-      return { raw: response, selected: null };
-    }
     const withWindow = (rule) => rule ? {
       ...rule,
       window_start: response.window_start,
-      window_end: response.window_end,
-      truncated_by: response.truncated_by
+      window_end: response.window_end
     } : null;
     return {
       raw: withWindow(
@@ -1569,43 +1574,35 @@
     return {
       ...payload,
       kind: "numeric",
-      rise_threshold: void 0,
-      fall_threshold: void 0,
-      points: (payload.points ?? []).map(rawPreviewPoint),
-      latest_point: payload.latest_point ? rawPreviewPoint(payload.latest_point) : void 0
+      points: payload.points.map(rawPreviewPoint),
+      latest_point: payload.latest_point ? rawPreviewPoint(payload.latest_point) : null
     };
   }
-  function buildRequest(signalRef, forms, calibrationForm, multipleRules, activeID) {
-    const body = { signal_ref: signalRef };
-    const firstForm = forms[0];
-    if (multipleRules) {
-      const rules = forms.filter((candidate) => {
-        const previewID = candidate.dataset.previewId;
-        const hasName = !!formField(candidate, "display_name")?.value.trim();
-        return !!previewID && (hasName || previewID === activeID);
-      }).map((candidate) => ({
-        rule_id: candidate.dataset.previewId,
-        display_name: formField(candidate, "display_name")?.value.trim() || (candidate.dataset.previewId === "draft-alarm" ? "\u65B0\u3057\u3044\u7570\u5E38\u691C\u77E5" : "\u65B0\u3057\u3044\u8A08\u6E2C\u30EB\u30FC\u30EB"),
-        spec: ruleSpec(candidate)
-      }));
-      if (!rules.length) {
-        rules.push({
-          rule_id: "draft-raw",
-          display_name: "\u53D7\u4FE1\u5024",
-          spec: { kind: "numeric" }
-        });
-      }
-      if (rules.length) {
-        body.calibration = {
-          scale: calibrationForm ? numericFormField(calibrationForm, "scale") : 1,
-          offset: calibrationForm ? numericFormField(calibrationForm, "offset") : 0
-        };
-        body.rules = rules;
-      }
-    } else if (firstForm) {
-      body.spec = definitionSpec(firstForm);
+  function buildRequest(signalRef, forms, calibrationForm, activeID) {
+    const rules = forms.filter((candidate) => {
+      const previewID = candidate.dataset.previewId;
+      const hasName = !!formField(candidate, "display_name")?.value.trim();
+      return !!previewID && (hasName || previewID === activeID);
+    }).map((candidate) => ({
+      rule_id: candidate.dataset.previewId,
+      display_name: formField(candidate, "display_name")?.value.trim() || (candidate.dataset.previewId === "draft-alarm" ? "\u65B0\u3057\u3044\u7570\u5E38\u691C\u77E5" : "\u65B0\u3057\u3044\u8A08\u6E2C\u30EB\u30FC\u30EB"),
+      spec: ruleSpec(candidate)
+    }));
+    if (!rules.length) {
+      rules.push({
+        rule_id: "draft-raw",
+        display_name: "\u53D7\u4FE1\u5024",
+        spec: { kind: "numeric" }
+      });
     }
-    return body;
+    return {
+      signal_ref: signalRef,
+      calibration: {
+        scale: calibrationForm ? numericFormField(calibrationForm, "scale") : 1,
+        offset: calibrationForm ? numericFormField(calibrationForm, "offset") : 0
+      },
+      rules
+    };
   }
   function initializePreview(panel) {
     const signalRef = panel.dataset.signalRef;
@@ -1617,7 +1614,6 @@
     const calibrationForm = query(
       `form[action="/console/signals/${signalRef}/calibration"]`
     );
-    const multipleRules = forms.some((form) => !!form.dataset.ruleId) || forms.some((form) => form.action.endsWith("/semantic-rules"));
     const rawBoolean = forms.some(
       (form) => form.dataset.booleanInput === "true"
     );
@@ -1702,10 +1698,10 @@
     const setCounterPanel = (visible) => {
       if (counterPanel) counterPanel.hidden = !visible;
     };
-    const setSemanticLegends = (semanticVisible, resultVisible, payload) => {
+    const setSemanticLegends = (semanticVisible, resultVisible, _payload) => {
       if (resultLegend) resultLegend.hidden = !resultVisible;
       if (thresholdLegend) {
-        thresholdLegend.hidden = !semanticVisible || !payload || !isFiniteNumber(payload.rise_threshold) && !isFiniteNumber(payload.fall_threshold);
+        thresholdLegend.hidden = true;
       }
     };
     const hideSemanticAuxiliaries = () => {
@@ -1940,7 +1936,6 @@
         signalRef,
         forms,
         calibrationForm,
-        multipleRules,
         activeID
       );
       try {
@@ -2046,7 +2041,7 @@
             count.textContent = `${payload.input_count.toLocaleString("ja-JP")}\u4EF6\u3092\u8A55\u4FA1\u3057\u3001${persistedRuleID ? "\u8868\u793A\u958B\u59CB\u5F8C\u306E\u5168\u671F\u9593" : "\u76F4\u8FD160\u79D2"}\u306E${points.length.toLocaleString("ja-JP")}bucket\u3092\u8868\u793A`;
             setText(
               message,
-              payload.truncated_by === "input_count" ? "\u9AD8\u901F\u306A\u4FE1\u53F7\u306E\u305F\u3081\u3001\u6700\u65B020,000\u4EF6\u3092\u8981\u7D04\u3057\u3066\u3044\u307E\u3059\u3002" : payload.kind === "cumulative_counter" ? `\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(counterWindowDelta(payload))}\u3002` + counterPreviewMessage(state) : !showResult ? "\u5909\u63DB\u524D\u5F8C\u306E\u5024\u306F\u540C\u3058\u3067\u3059\u3002\u88DC\u6B63\u3092\u5909\u66F4\u3059\u308B\u3068\u5DEE\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002" : "\u8A2D\u5B9A\u3092\u5909\u3048\u308B\u3068\u3001\u4FDD\u5B58\u524D\u306E\u7D50\u679C\u3092\u3053\u306E\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
+              payload.kind === "cumulative_counter" ? `\u3053\u306E\u8A2D\u5B9A\u306A\u3089\u76F4\u8FD160\u79D2\u3067 +${formatNumber(counterWindowDelta(payload))}\u3002` + counterPreviewMessage(state) : !showResult ? "\u5909\u63DB\u524D\u5F8C\u306E\u5024\u306F\u540C\u3058\u3067\u3059\u3002\u88DC\u6B63\u3092\u5909\u66F4\u3059\u308B\u3068\u5DEE\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002" : "\u8A2D\u5B9A\u3092\u5909\u3048\u308B\u3068\u3001\u4FDD\u5B58\u524D\u306E\u7D50\u679C\u3092\u3053\u306E\u30B0\u30E9\u30D5\u3067\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002"
             );
           }
           if (selectedFailure) {

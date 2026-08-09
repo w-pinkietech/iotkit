@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転と、分離したbounded Edge Node運�
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 10
+revision: 11
 ---
 
 # Edge Node保管責任契約 v1
@@ -121,6 +121,11 @@ Clean replacementへ同じ物理sensorを接続し、同じmeasurement typeを�
 IoTKit Edgeはhistoryをmergeせず、設定を自動copyしません。将来、選択した設定のcopyを
 supportする場合も、別の明示操作でありidentity mergeではありません。IoTKit Edge所有refと
 設定の継続は、正本DBが存続しているか、IoTKit Edge復旧手順で別途restoreされることを前提にします。
+
+Product 1.0.0前は、Edge NodeとIoTKit Edgeをdescriptor schema version 2に対して同時に開発・
+配備し、互換性のないpre-release databaseとretained descriptorは互換codeを持たず再作成します。
+Product 1.xでは、古いsupport対象custody-v1 Edge Nodeと新しいIoTKit Edgeの組み合わせを
+[v1互換性ポリシー](compatibility-policy-v1.md)に従ってsupportします。
 
 ## Record batch
 

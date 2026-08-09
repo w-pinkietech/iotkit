@@ -28,21 +28,55 @@ function isAPIError(value: unknown): value is APIError {
   );
 }
 
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).length === keys.length && keys.every((key) => key in value);
+}
+
+function isNumberOrNull(value: unknown): boolean {
+  return typeof value === "number" || value === null;
+}
+
 function isPreviewPoint(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  return [
+  const required = [
     "received_at",
+    "plot_at",
     "input",
     "input_min",
     "input_max",
     "calibrated",
     "calibrated_min",
     "calibrated_max",
+    "active",
+    "counter",
     "sample_count",
-  ].every((field) => typeof value[field] === "number");
+    "active_samples",
+    "transitions",
+    "increment",
+  ];
+  return (
+    hasExactKeys(value, required) &&
+    required
+      .filter((field) => field !== "active" && field !== "counter")
+      .every((field) => typeof value[field] === "number") &&
+    (typeof value.active === "boolean" || value.active === null) &&
+    isNumberOrNull(value.counter)
+  );
 }
 
-function isPreviewBody(value: unknown): boolean {
+function isPreviewResult(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    hasExactKeys(value, ["emitted", "number", "boolean", "integer", "calibrated"]) &&
+    typeof value.emitted === "boolean" &&
+    isNumberOrNull(value.number) &&
+    (typeof value.boolean === "boolean" || value.boolean === null) &&
+    isNumberOrNull(value.integer) &&
+    typeof value.calibrated === "number"
+  );
+}
+
+function isSemanticRulePreview(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const kinds = new Set([
     "numeric",
@@ -51,31 +85,45 @@ function isPreviewBody(value: unknown): boolean {
     "alarm",
   ]);
   return (
+    hasExactKeys(value, [
+      "rule_id",
+      "display_name",
+      "kind",
+      "input_count",
+      "plot_count",
+      "points",
+      "latest_point",
+      "test_result",
+      "error",
+    ]) &&
+    typeof value.rule_id === "string" &&
+    typeof value.display_name === "string" &&
     typeof value.kind === "string" &&
     kinds.has(value.kind) &&
     typeof value.input_count === "number" &&
     typeof value.plot_count === "number" &&
-    (value.points === null ||
-      (Array.isArray(value.points) && value.points.every(isPreviewPoint)))
+    Array.isArray(value.points) &&
+    value.points.every(isPreviewPoint) &&
+    (value.latest_point === null || isPreviewPoint(value.latest_point)) &&
+    (value.test_result === null || isPreviewResult(value.test_result)) &&
+    typeof value.error === "string"
   );
 }
 
 function isMappingPreviewResponse(
   value: unknown,
 ): value is MappingPreviewResponse {
-  if (isPreviewBody(value)) return true;
   if (!isRecord(value) || !isRecord(value.calibration)) return false;
   return (
+    hasExactKeys(value, ["calibration", "rules", "window_start", "window_end"]) &&
+    hasExactKeys(value.calibration, ["scale", "offset"]) &&
     typeof value.calibration.scale === "number" &&
     typeof value.calibration.offset === "number" &&
     Array.isArray(value.rules) &&
-    value.rules.every(
-      (rule) =>
-        isPreviewBody(rule) &&
-        isRecord(rule) &&
-        typeof rule.rule_id === "string" &&
-        typeof rule.display_name === "string",
-    )
+    value.rules.length > 0 &&
+    value.rules.every(isSemanticRulePreview) &&
+    isNumberOrNull(value.window_start) &&
+    isNumberOrNull(value.window_end)
   );
 }
 

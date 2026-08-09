@@ -136,9 +136,16 @@ impl Semantics {
             .calibration
             .validate()
             .map_err(|error| StorageError::InvalidSemantic(error.to_string()))?;
-        if request.signal_ref.is_empty() || request.rules.is_empty() || request.rules.len() > 16 {
+        if request.signal_ref.trim().is_empty()
+            || request.rules.is_empty()
+            || request.rules.len() > 16
+            || request
+                .rules
+                .iter()
+                .any(|rule| rule.rule_id.trim().is_empty() || rule.display_name.trim().is_empty())
+        {
             return Err(StorageError::InvalidSemantic(
-                "signal and between 1 and 16 preview rules are required".into(),
+                "signal, non-blank rule identity/display name, and between 1 and 16 preview rules are required".into(),
             ));
         }
         let stored = self

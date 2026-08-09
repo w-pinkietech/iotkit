@@ -77,6 +77,10 @@ function linksFrom(content) {
   return links;
 }
 
+function isMovingGitHubMasterLink(href) {
+  return /^https?:\/\/github\.com\/[^/?#]+\/[^/?#]+\/(?:blob|tree)\/master(?:[/?#]|$)/i.test(href);
+}
+
 function localMarkdownTarget(from, href) {
   const raw = href.split("#", 1)[0];
   let withoutFragment;
@@ -172,6 +176,10 @@ for (const file of bundleFiles(bundleRoot)) {
   }
   if (runIotkit) {
     for (const href of linksFrom(content)) {
+      if (isMovingGitHubMasterLink(href)) {
+        fail(file, `moving GitHub master link is not release evidence: ${href}`, "iotkit-product");
+        continue;
+      }
       const target = localMarkdownTarget(file, href);
       if (target && !inside(bundleRoot, target)) fail(file, `local link escapes the bundle: ${href}`, "iotkit-product");
       else if (target && !fs.existsSync(target)) fail(file, `broken local link ${href}`, "iotkit-product");

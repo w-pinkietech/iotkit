@@ -5,10 +5,10 @@ description: "Defines MQTT custody transfer plus the separate bounded Edge Node 
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 10
+revision: 11
 ---
 
-# Edge Node custody contract v1 (R10 exit)
+# Edge Node custody contract v1 (R11 exit)
 
 Status: Approved MQTT v1 target contract. The records/descriptors/accepted-through custody path is
 implemented, including Edge Node activation and publication admission. The older HTTPS
@@ -190,9 +190,11 @@ database remains available or is separately restored through the IoTKit Edge rec
 
 A descriptor may discover an inactive Edge Node but never activates it. A descriptor failure never
 authorizes purge, changes publication admission, or suppresses `accepted-through` for an already
-active Edge Node. Edge Node and IoTKit Edge are developed and deployed together against schema version 2; incompatible
-pre-release databases and retained descriptors are recreated instead of carrying compatibility
-code.
+active Edge Node. Before product 1.0.0, Edge Node and IoTKit Edge are developed and deployed
+together against descriptor schema version 2; incompatible pre-release databases and retained
+descriptors are recreated instead of carrying compatibility code. For product 1.x, an older
+supported custody-v1 Edge Node is supported with a newer IoTKit Edge under the
+[v1 compatibility policy](compatibility-policy-v1.md).
 
 ## Record batch
 

@@ -116,7 +116,7 @@ export interface paths {
         put?: never;
         /**
          * Preview future-only semantic settings without writing them
-         * @description Requires an authenticated IoTKit Console session, a matching X-CSRF-Token header, and a same-origin browser request. The schema documents the supported Console request; the server may continue to read older DefinitionSpec representations for stored-client compatibility.
+         * @description Requires an authenticated IoTKit Console session, a matching X-CSRF-Token header, and a same-origin browser request.
          */
         post: operations["createMappingPreview"];
         delete?: never;
@@ -275,33 +275,14 @@ export interface components {
             /** Format: int64 */
             fall_debounce_ms?: number;
         };
-        LegacyCondition: {
-            mode?: string;
-            bool_value?: boolean;
-            threshold?: number;
-            hysteresis?: number;
-        };
-        DefinitionSpec: {
-            kind: components["schemas"]["SemanticKind"];
-            scale: number;
-            offset?: number;
-            detector?: components["schemas"]["Detector"];
-            condition?: components["schemas"]["LegacyCondition"];
-            trigger?: components["schemas"]["TriggerMode"];
-        };
         RuleSpec: {
             kind: components["schemas"]["SemanticKind"];
             detector?: components["schemas"]["Detector"];
             trigger?: components["schemas"]["TriggerMode"];
         };
-        CalibrationDraft: {
-            signal_ref?: string;
-            /** Format: int64 */
-            revision?: number;
+        PreviewCalibration: {
             scale: number;
-            offset?: number;
-            /** Format: int64 */
-            created_at?: number;
+            offset: number;
         };
         SemanticRulePreviewDraft: {
             rule_id: string;
@@ -310,77 +291,52 @@ export interface components {
         };
         MappingPreviewRequest: {
             signal_ref: string;
-            spec?: components["schemas"]["DefinitionSpec"];
             test_value?: number;
-            calibration?: components["schemas"]["CalibrationDraft"];
-            rules?: components["schemas"]["SemanticRulePreviewDraft"][];
+            calibration: components["schemas"]["PreviewCalibration"];
+            rules: components["schemas"]["SemanticRulePreviewDraft"][];
         };
         PreviewPoint: {
             /** Format: int64 */
             received_at: number;
             /** Format: int64 */
-            plot_at?: number;
+            plot_at: number;
             input: number;
             input_min: number;
             input_max: number;
             calibrated: number;
             calibrated_min: number;
             calibrated_max: number;
-            active?: boolean;
-            /** Format: int64 */
-            counter?: number;
+            active: boolean | null;
+            counter: number | null;
             sample_count: number;
-            active_samples?: number;
-            transitions?: number;
+            active_samples: number;
+            transitions: number;
             /** Format: int64 */
-            increment?: number;
+            increment: number;
         };
         PreviewResult: {
             emitted: boolean;
-            number?: number;
-            boolean?: boolean;
-            /** Format: int64 */
-            integer?: number;
+            number: number | null;
+            boolean: boolean | null;
+            integer: number | null;
             calibrated: number;
         };
-        PreviewBody: {
+        SemanticRulePreview: {
+            rule_id: string;
+            display_name: string;
             kind: components["schemas"]["SemanticKind"];
             input_count: number;
             plot_count: number;
-            points: components["schemas"]["PreviewPoint"][] | null;
-            latest_point?: components["schemas"]["PreviewPoint"] | null;
-            test_result?: components["schemas"]["PreviewResult"];
-            /** Format: int64 */
-            window_start?: number;
-            /** Format: int64 */
-            window_end?: number;
-            truncated_by?: string;
-            rise_threshold?: number;
-            fall_threshold?: number;
-            error?: string;
-        };
-        MappingPreview: components["schemas"]["PreviewBody"];
-        SemanticRulePreview: components["schemas"]["PreviewBody"] & {
-            rule_id: string;
-            display_name: string;
+            points: components["schemas"]["PreviewPoint"][];
+            latest_point: components["schemas"]["PreviewPoint"] | null;
+            test_result: components["schemas"]["PreviewResult"] | null;
+            error: string;
         };
         MultipleRuleMappingPreview: {
-            calibration: components["schemas"]["Calibration"];
+            calibration: components["schemas"]["PreviewCalibration"];
             rules: components["schemas"]["SemanticRulePreview"][];
-            /** Format: int64 */
-            window_start?: number;
-            /** Format: int64 */
-            window_end?: number;
-            truncated_by?: string;
-        };
-        Calibration: {
-            signal_ref: string;
-            /** Format: int64 */
-            revision: number;
-            scale: number;
-            offset: number;
-            /** Format: int64 */
-            created_at: number;
+            window_start: number | null;
+            window_end: number | null;
         };
         ErrorDetail: {
             code: string;
@@ -623,7 +579,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MappingPreview"] | components["schemas"]["MultipleRuleMappingPreview"];
+                    "application/json": components["schemas"]["MultipleRuleMappingPreview"];
                 };
             };
             400: components["responses"]["RequestError"];

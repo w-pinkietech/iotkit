@@ -7,7 +7,6 @@ import {
   requiredFormField,
 } from "./dom";
 
-export type DefinitionSpec = components["schemas"]["DefinitionSpec"];
 export type RuleSpec = components["schemas"]["RuleSpec"];
 export type SemanticKind = components["schemas"]["SemanticKind"];
 type DetectorMode = NonNullable<
@@ -81,16 +80,6 @@ function triggerMode(
     triggerModes,
     "trigger mode",
   );
-}
-
-export function definitionSpec(form: HTMLFormElement): DefinitionSpec {
-  return {
-    kind: semanticKind(form),
-    scale: numericFormField(form, "scale"),
-    offset: numericFormField(form, "offset"),
-    detector: detectorSpec(form),
-    trigger: triggerMode(form),
-  };
 }
 
 export function ruleSpec(form: HTMLFormElement): RuleSpec {
