@@ -1,0 +1,751 @@
+{
+  "provenance_version": 2,
+  "corpus_version": 2,
+  "cutoff_commit_sha": "7070e73577763e893e9f23bd8456ace3799ebfd0",
+  "selection_policy_sha256": "184ed652007c09b276a3c1947141b57534263cb9c438cbff869bb04f30464a2f",
+  "cases": [
+    {
+      "case_id": "RF-22748F2C8DF7",
+      "pull_request": 84,
+      "merge_commit_sha": "6e98d963456eb5354b3010ff3d3ed82d9bc9c44f",
+      "source_commit_sha": "a8dd790a5d778130bcacb6b64d8529cf50ec514d",
+      "source_parent_sha": "d9d39e4094de219224b9da40545922c9380951c0",
+      "pathspec": [
+        "edge/src/backup/mod.rs",
+        "edge/src/backup/sqlite.rs",
+        "edge/src/diagnostics/mod.rs",
+        "edge/tests/unit/backup_sqlite_tests.rs",
+        "edge/tests/unit/backup_tests.rs",
+        "edge/tests/unit/diagnostics_tests.rs"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "9dad11fa46608162775150e20eb82d767052b9bb9818962d20223d36456462a7",
+      "model_diff_sha256": "22748f2c8df7553d7f811f0545f4fd767bb0e05ac10b62ea40760a9b62aa1e4f",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index fa3c2e1..b148677 100644"
+          },
+          {
+            "raw_line": 24,
+            "text": "index 1bfea00..77fd6ce 100644"
+          },
+          {
+            "raw_line": 46,
+            "text": "index 964f3d0..1e25e69 100644"
+          },
+          {
+            "raw_line": 72,
+            "text": "index 0000000..ea18e07"
+          },
+          {
+            "raw_line": 88,
+            "text": "index 0000000..4d5d45d"
+          },
+          {
+            "raw_line": 104,
+            "text": "index 0000000..aa0846f"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The complete diff moves three existing test modules out of product source and preserves their module contents."
+    },
+    {
+      "case_id": "RF-41A5AEE1AB8E",
+      "pull_request": 122,
+      "merge_commit_sha": "afd57362f6b08cdd92f4694f728283b7212b39f7",
+      "source_commit_sha": "c3b760da7e957f978b3d1400ebd564084990625b",
+      "source_parent_sha": "760eac8f25e6c70b2f835149aba5f1f77e6c6707",
+      "pathspec": [
+        "docs/okf/en/contracts/edge-node-custody-v1.md",
+        "docs/okf/en/contracts/ingest-v1.md",
+        "docs/okf/ja/contracts/edge-node-custody-v1.md",
+        "docs/okf/ja/contracts/ingest-v1.md"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "949fa4de4bea4c7f4aa9dbc97ef45bf54a4c34bb2d18060e559a1360e07d4de2",
+      "model_diff_sha256": "41a5aee1ab8ee70780be8524f696901e457b52eb3d6ee1909c27c45f8ee8d611",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index b64d963..ab26c83 100644"
+          },
+          {
+            "raw_line": 33,
+            "text": "index ec43f0a..3555155 100644"
+          },
+          {
+            "raw_line": 82,
+            "text": "index 3a1f710..5ed02fa 100644"
+          },
+          {
+            "raw_line": 103,
+            "text": "index 12365a3..7109cec 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The paired recovery and custody contract text changes backup and restore constraints."
+    },
+    {
+      "case_id": "RF-481E705866E5",
+      "pull_request": 123,
+      "merge_commit_sha": "2e3aea737d25f89b70972ecde0eba37c4bb52d9f",
+      "source_commit_sha": "2a9dd753e72222de0516c7a70ece48bcff180473",
+      "source_parent_sha": "afd57362f6b08cdd92f4694f728283b7212b39f7",
+      "pathspec": [
+        "CHANGELOG.md",
+        "scripts/bootstrap-edge.sh",
+        "scripts/iotkit-broker-cert",
+        "scripts/lib/certificate-hostname.sh",
+        "scripts/test-certificate-hostname.sh",
+        "scripts/test-edge-host-release-gate.sh",
+        "scripts/tests/rust-edge-release-gates.test.mjs",
+        "scripts/verify.sh"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "86a550226cc148debcdee5a6653f2c83591bf03edcc711f77a68a3ca3ddabfbb",
+      "model_diff_sha256": "481e705866e5d8f297db39f045409537d491b94ac1e1a17891f13b4eb363294c",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 8286e69..d06c89e 100644"
+          },
+          {
+            "raw_line": 16,
+            "text": "index 5c7f3cb..247d46c 100755"
+          },
+          {
+            "raw_line": 38,
+            "text": "index 90102b6..4364547 100755"
+          },
+          {
+            "raw_line": 63,
+            "text": "index 0000000..804b840"
+          },
+          {
+            "raw_line": 79,
+            "text": "index 0000000..7c2ce54"
+          },
+          {
+            "raw_line": 158,
+            "text": "index 040f637..27d1439 100755"
+          },
+          {
+            "raw_line": 170,
+            "text": "index bae77cf..1862af5 100644"
+          },
+          {
+            "raw_line": 185,
+            "text": "index a62f70a..948998c 100755"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "Certificate hostname validation changes an authentication and trust boundary, so structural equivalence is not established."
+    },
+    {
+      "case_id": "RF-51804B57B46A",
+      "pull_request": 121,
+      "merge_commit_sha": "760eac8f25e6c70b2f835149aba5f1f77e6c6707",
+      "source_commit_sha": "91c3164b01621916715764ea3a7c03e59cdbb379",
+      "source_parent_sha": "7ff238556d3cd60c38d05c5a881f581570146bde",
+      "pathspec": [
+        "docs/okf/en/operations/edge-node-hardware-recovery.md",
+        "docs/okf/ja/operations/edge-node-hardware-recovery.md"
+      ],
+      "selection_mode": "path_family",
+      "source_diff_sha256": "59b41080c3857a6d3d672b8cef8c95080e55f59adac1dfbd4668a1b109d0dd12",
+      "model_diff_sha256": "51804b57b46a0cd719187880b66e7fdbd3f712f440c5f7a8706ba4982b3e6b30",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 3,
+            "text": "index 0000000..cd3c10a"
+          },
+          {
+            "raw_line": 127,
+            "text": "index 0000000..45df463"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The paired field guide defines recovery practice and product documentation authority."
+    },
+    {
+      "case_id": "RF-6643FD99AC3C",
+      "pull_request": 60,
+      "merge_commit_sha": "936df06dfef6bb7d99a2c7adf9c71f752b8f33bb",
+      "source_commit_sha": "c0826a00619164198232e3a452b424b505091586",
+      "source_parent_sha": "e6e61c46e2525716bc7aeff115e13223dc4b54da",
+      "pathspec": [
+        "core/collector/src/actor.rs",
+        "core/ledger/src/lib.rs",
+        "core/timeseries/src/lib.rs",
+        "iotkit-edge/src/api/tls.rs",
+        "iotkit-edge/src/config.rs",
+        "iotkit-edge/src/mqtt_publish_task.rs",
+        "iotkit-edge/tests/api_basic.rs",
+        "iotkit-ingest-http/tests/e2e.rs"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "20926726834cbdf88501c79d9453076b0ce315e1b7867473469f8effa3e2f867",
+      "model_diff_sha256": "6643fd99ac3c31a074d5631900cbdcd70c89221efd0e3325dd98e902529f134b",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 8362299..0948a75 100644"
+          },
+          {
+            "raw_line": 16,
+            "text": "index 6676b71..96ebcab 100644"
+          },
+          {
+            "raw_line": 31,
+            "text": "index 488ee68..31bd3c1 100644"
+          },
+          {
+            "raw_line": 45,
+            "text": "index 7529d13..4fd76be 100644"
+          },
+          {
+            "raw_line": 64,
+            "text": "index 6ada1d1..716715a 100644"
+          },
+          {
+            "raw_line": 90,
+            "text": "index 52e3a52..0e18ed3 100644"
+          },
+          {
+            "raw_line": 120,
+            "text": "index f4c7819..cf8b158 100644"
+          },
+          {
+            "raw_line": 146,
+            "text": "index ef9c62c..5501558 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The complete source diff is a mechanically equivalent formatting pass across renamed Rust code."
+    },
+    {
+      "case_id": "RF-7ECACA2BB8A2",
+      "pull_request": 192,
+      "merge_commit_sha": "97dcd420499abaca381bd7192292a46453626d7b",
+      "source_commit_sha": "303db799cac7ce5a62a9086803dd7b3a3410f99f",
+      "source_parent_sha": "9e9e932d4e031cb352be51bae56e14b6b02be00b",
+      "pathspec": [
+        "edge-node/apps/node/src/mqtt_publish_task.rs",
+        "edge-node/apps/node/tests/unit/mqtt_publish_task_tests.rs",
+        "edge-node/core/publish/src/wire.rs",
+        "edge-node/core/publish/tests/egress_v1_fixtures.rs"
+      ],
+      "selection_mode": "path_family",
+      "source_diff_sha256": "dacecf93583dbb723acf8257e063bf2fe44cc4224f18b72719b18d11169def65",
+      "model_diff_sha256": "7ecaca2bb8a25094f2ac5e9267b5a67f98548318eba9a6d3ed23d685380c07f1",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 0e77412..3e41580 100644"
+          },
+          {
+            "raw_line": 37,
+            "text": "index 30fad85..67d5198 100644"
+          },
+          {
+            "raw_line": 210,
+            "text": "index d04f6e8..86b2ea7 100644"
+          },
+          {
+            "raw_line": 303,
+            "text": "index 3b4e315..1d3669c 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "Delayed acknowledgement validation and cursor advancement affect durable MQTT custody behavior."
+    },
+    {
+      "case_id": "RF-829BC337AB79",
+      "pull_request": 206,
+      "merge_commit_sha": "fff48aea32acf1be79b73471b7f1bb6dd9d89228",
+      "source_commit_sha": "088f978ece48d149415bffa7182e0c9a7b739a93",
+      "source_parent_sha": "58e142842121c77d232c4ca0eaf21840b29691f3",
+      "pathspec": [
+        "CHANGELOG.md",
+        "Cargo.lock",
+        "Cargo.toml",
+        "README.ja.md",
+        "README.md"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "5b0b0331d563ba33e9e51bccb1eb43ab1b72010163698613452844f4103b6085",
+      "model_diff_sha256": "829bc337ab7910be7e3e16c0c146ddb112112ae2e1b7ecd52ec6d1f7b06630e8",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 83fa410..e31cfd2 100644"
+          },
+          {
+            "raw_line": 26,
+            "text": "index 7bd3186..430340a 100644"
+          },
+          {
+            "raw_line": 318,
+            "text": "index 4c0abeb..c2864e7 100644"
+          },
+          {
+            "raw_line": 330,
+            "text": "index e3fa903..cfbb58e 100644"
+          },
+          {
+            "raw_line": 343,
+            "text": "index 8eaf906..6fb2c3e 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "Manifest and lockfile changes cross the dependency boundary even when release text changes alongside them."
+    },
+    {
+      "case_id": "RF-B4BEB88706CD",
+      "pull_request": 38,
+      "merge_commit_sha": "15b6d81544f19f12eb9af6bcc3b807ffb30a063a",
+      "source_commit_sha": "6ef5c582b122770f801f20a6c94a338b2d9424bc",
+      "source_parent_sha": "fe30802dcf5914180e3e23cd1c162a6bafd2570f",
+      "pathspec": [
+        "core/storage/migrations/0001_init.sql",
+        "core/storage/src/lib.rs",
+        "core/storage/src/migrate.rs"
+      ],
+      "selection_mode": "path_family",
+      "source_diff_sha256": "0ccde9789286427fcc0d69eafd5509c8b14f5e888e243085ae78b93c871754f5",
+      "model_diff_sha256": "b4beb88706cd342aca62643956995dbe89b4fc267b0a9a85e2c4ddb6f102dbc9",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 3,
+            "text": "index 0000000..2752308"
+          },
+          {
+            "raw_line": 10,
+            "text": "index daa5e54..d95330d 100644"
+          },
+          {
+            "raw_line": 23,
+            "text": "index 0000000..226c95c"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "Versioned schema creation and migration application change the database migration boundary."
+    },
+    {
+      "case_id": "RF-B7D2D9E782C5",
+      "pull_request": 127,
+      "merge_commit_sha": "e7d18ef98b2cf9b37bc498bde53b8ae46be02ec1",
+      "source_commit_sha": "f6d498c4368a3c782edb7a25b4162e344be0728f",
+      "source_parent_sha": "1bc257a65b55310dd346a1fec6f0738d7932751f",
+      "pathspec": [
+        "scripts/iotkit_trial.py",
+        "scripts/tests/test_iotkit_trial.py"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "2226362b1b7d7cd5b03bc78d136986a1345e764110666cd626fd76880ed1e1ed",
+      "model_diff_sha256": "b7d2d9e782c5ea39d2015e3f85a2fca731977e7c5c1f8f3f615451cc24835461",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index abe84a0..97835a2 100755"
+          },
+          {
+            "raw_line": 17,
+            "text": "index 05f6ad4..b71b7ef 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The trial configuration path changes deployment-facing failure behavior."
+    },
+    {
+      "case_id": "RF-B86B5F0605AB",
+      "pull_request": 60,
+      "merge_commit_sha": "936df06dfef6bb7d99a2c7adf9c71f752b8f33bb",
+      "source_commit_sha": "cf5dc6e3fefa941e8a72f2df691d6f736d36cd7f",
+      "source_parent_sha": "8decfbba11b7ee75fb82fbb7bf6e85c68f4e767f",
+      "pathspec": [
+        "core/publish/src/wire.rs",
+        "core/publish/tests/egress_v1_fixtures.rs",
+        "iotkit-site-server/internal/contract/contract.go",
+        "iotkit-site-server/internal/contract/contract_test.go",
+        "testdata/egress/v1/accepted-through.json",
+        "testdata/egress/v1/record-batch.json"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "e8aff2df04c3062dab96ec654fc2749a21934685880ad88974f988510e2d223e",
+      "model_diff_sha256": "b86b5f0605aba012bacd3cf799c9cd3daf4721ec3e2c4cfcc9a63a3930194ce2",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index a779510..5c79f80 100644"
+          },
+          {
+            "raw_line": 68,
+            "text": "index fb7f1f9..6d60b73 100644"
+          },
+          {
+            "raw_line": 106,
+            "text": "index 43dab8c..15ec9d8 100644"
+          },
+          {
+            "raw_line": 177,
+            "text": "index 0773c0a..8ab4ecc 100644"
+          },
+          {
+            "raw_line": 218,
+            "text": "index 9a7426e..70c79c2 100644"
+          },
+          {
+            "raw_line": 232,
+            "text": "index c829799..0c5cd88 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "MQTT identity fields and shared fixture shapes form a public wire contract across consumers."
+    },
+    {
+      "case_id": "RF-BD2AB69DEC16",
+      "pull_request": 184,
+      "merge_commit_sha": "3345155b16bb71957af09e198be468bb9eab1095",
+      "source_commit_sha": "5fb884965b8e74606413469604f953c95ab03aa4",
+      "source_parent_sha": "a2a9b99fdc3fc09e5b2b14909add495ff6ff8f52",
+      "pathspec": [
+        "edge/frontend/src/live.ts",
+        "edge/frontend/static/console.js",
+        "edge/frontend/tests/unit/live.test.ts"
+      ],
+      "selection_mode": "path_family",
+      "source_diff_sha256": "ddbc0120573a7ab525c1b761026be3e770c8c1aa603dd2dbdc305fd6f585b0b2",
+      "model_diff_sha256": "bd2ab69dec1691ff401ae416a63809ea3aacedbc26c3d383d93701bc9ad2cf1d",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 3,
+            "text": "index 0000000..f035e1d"
+          },
+          {
+            "raw_line": 256,
+            "text": "index 863547c..6adbe24 100644"
+          },
+          {
+            "raw_line": 500,
+            "text": "index 0000000..128bbc9"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The source, generated static artifact, and unit change must remain coupled; equivalence cannot be inferred from this bounded diff."
+    },
+    {
+      "case_id": "RF-C12FCD839D8C",
+      "pull_request": 204,
+      "merge_commit_sha": "58e142842121c77d232c4ca0eaf21840b29691f3",
+      "source_commit_sha": "621405dbd5b0aaf501e905edc0d69e808ff3e348",
+      "source_parent_sha": "f36974691dde862485b6e5b55507a7a6bc94f9b1",
+      "pathspec": [
+        "edge/src/web/templates/console.html",
+        "edge/tests/console_contract.rs"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "341e674de7faec067f42d112862fb8b40427a3511e9a182885c10aed5c3ed786",
+      "model_diff_sha256": "c12fcd839d8c4a64d5691d46117f36770cbee8ff098336c58754b7906264abc5",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 7ffbfd4..ddd2b90 100644"
+          },
+          {
+            "raw_line": 15,
+            "text": "index e8ee00e..146160f 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "Changing a console navigation target alters an operator-visible journey and its contract test."
+    },
+    {
+      "case_id": "RF-D608C82EE3AE",
+      "pull_request": 65,
+      "merge_commit_sha": "31768781f70bbd7417980cca53f5e650fa1623d7",
+      "source_commit_sha": "31768781f70bbd7417980cca53f5e650fa1623d7",
+      "source_parent_sha": "529aedb147830e590e6f44e85ee701a0b2bfc9c1",
+      "pathspec": [
+        "core/ops/tests/device_credentials.rs"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "48f36501c67576ede7ea37e5545badbf60ca0deeb5701c9b93dcb3f68682e082",
+      "model_diff_sha256": "d608c82ee3ae9902bd1557115a98d63e306b277e255f435eec2f71b498a9941b",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 12fc10a..e551c3d 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "A test-only timestamp assertion change does not establish the production behavior needed to prove a pure refactor."
+    },
+    {
+      "case_id": "RF-DFC1DD5B39B9",
+      "pull_request": 84,
+      "merge_commit_sha": "6e98d963456eb5354b3010ff3d3ed82d9bc9c44f",
+      "source_commit_sha": "0069e79457d35bdb00c29bfe326e55a38a081033",
+      "source_parent_sha": "b162360e3cf9e3371feaa4e64493063d00c2d298",
+      "pathspec": [
+        "edge/src/mqtt/ingest/runtime.rs",
+        "edge/tests/unit/mqtt_ingest_runtime_tests.rs"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "f8a53b985c19b03d49edff01fcb3e77a1d269291fc953d53a6e69875b00140af",
+      "model_diff_sha256": "dfc1dd5b39b976b97f601af915f3ed7e96d657ed050571e60763fada75bd6d85",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index dca8e09..217696f 100644"
+          },
+          {
+            "raw_line": 28,
+            "text": "index 0000000..ab36a9d"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The complete diff relocates the existing MQTT packet-limit test module without altering its assertions."
+    },
+    {
+      "case_id": "RF-E4D4453F1336",
+      "pull_request": 127,
+      "merge_commit_sha": "e7d18ef98b2cf9b37bc498bde53b8ae46be02ec1",
+      "source_commit_sha": "95b6afb9cf9e3d555357b6927103b1346a0bb64e",
+      "source_parent_sha": "c6684a6d29b565547a739407fc8915dc1b2be8ed",
+      "pathspec": [
+        "edge/src/composition/runtime_config.rs"
+      ],
+      "selection_mode": "complete_source_commit",
+      "source_diff_sha256": "df12ebefe23a5fabf1711cf69575112b642ec7b60470161aa956c45fb8d86a51",
+      "model_diff_sha256": "e4d4453f1336cc382bdcd2cde98102875d7b3da47e2e60244ecaa8ef3c3a298f",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 6c248fe..2f25380 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "The complete selected diff is formatting-only within one private runtime configuration implementation."
+    },
+    {
+      "case_id": "RF-E9352880443D",
+      "pull_request": 209,
+      "merge_commit_sha": "75c6bfd6b76d0585d9c415feccdb27d455cc5232",
+      "source_commit_sha": "c5ed685935ac19744edd9517545bad779528081c",
+      "source_parent_sha": "4118867117a53e423aa71a577ec51fa3f2d03242",
+      "pathspec": [
+        "edge-node/apps/node/src/main.rs",
+        "edge-node/apps/node/tests/unit/main_tests.rs"
+      ],
+      "selection_mode": "path_family",
+      "source_diff_sha256": "471297872c50c338515788f180e663f7a1c047eedcaaf381f3f5221f5f9eb182",
+      "model_diff_sha256": "e9352880443d1bf299229e015a4ae481210fef8a46448e9b60ba954df4baaef3",
+      "sanitization": {
+        "line_endings": "lf",
+        "removed_lines": [
+          "index"
+        ],
+        "removed_index_lines": [
+          {
+            "raw_line": 2,
+            "text": "index 11b218f..4de8ad2 100644"
+          },
+          {
+            "raw_line": 245,
+            "text": "index 3042167..eb4fb76 100644"
+          }
+        ],
+        "excluded_metadata": [
+          "pull_request",
+          "commit",
+          "title",
+          "label"
+        ],
+        "content_redaction": "not_required"
+      },
+      "answer_rationale": "Signal handling and bounded shutdown timing alter concurrency and termination behavior."
+    }
+  ]
+}

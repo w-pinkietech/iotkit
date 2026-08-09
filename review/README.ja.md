@@ -27,7 +27,7 @@
 | Perspective | 状態 | Intent（短） | 入口 |
 |---|---|---|---|
 | **battle-tested** | 有効 — **第一 perspective** | 再発させてはいけない運用失敗；現場証拠の triage | [battle-tested/README.ja.md](battle-tested/README.ja.md) |
-| **pure-refactoring** | 実験的 — レポート専用 | blinded な合成 evaluator を測る；evidence や merge authority にはしない | [pure-refactoring/README.ja.md](pure-refactoring/README.ja.md) |
+| **pure-refactoring** | 実験的 — レポート専用 / iterate | blinded な合成／記録済み historical evaluator corpus を測る；evidence や merge authority にはしない | [pure-refactoring/README.ja.md](pure-refactoring/README.ja.md) |
 
 将来の perspective（ここでは未定義）の例: secrets 扱い、issue-scope のずれ、
 公開 contract、Console 操作者 journey、layer 規則。Intent が違うものは
