@@ -27,6 +27,7 @@ and quality review, not a second product corpus.
 | Perspective | Status | Intent (short) | Entry |
 |---|---|---|---|
 | **battle-tested** | Active — first perspective | Operational failures IoTKit must not reintroduce; field evidence triage | [battle-tested/README.md](battle-tested/README.md) |
+| **pure-refactoring** | Experimental — report-only | Measure a blinded synthetic evaluator; never evidence or merge authority | [pure-refactoring/README.md](pure-refactoring/README.md) |
 
 Future perspectives (not defined here yet) may cover secrets handling,
 issue-scope drift, public contracts, Console operator journeys, or layer rules.
@@ -43,7 +44,9 @@ How / Not shape. Do not fold every concern into the battle-tested catalog.
    node scripts/battle-tested-review.mjs select --base origin/master
    ```
 
-3. Apply any other active perspectives listed above.
+3. Apply any other active perspectives listed above. The experimental
+   **pure-refactoring** perspective is only for evaluating its own rubric and
+   captured runs; it is never a normal PR gate or proof of equivalence.
 4. Record selected IDs (for example `BT-NNN`) or a concrete reason that none
    apply. Record semantic concerns path routing cannot see.
 5. Match verification to the failure paths you reviewed

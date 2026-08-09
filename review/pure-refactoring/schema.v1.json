@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "rubric_version": 1,
+  "prompt_version": 1,
+  "result_format": {
+    "top_level_keys": [
+      "schema_version",
+      "rubric_version",
+      "prompt_version",
+      "bundle_sha256",
+      "runs"
+    ],
+    "run_keys": [
+      "run_id",
+      "model_id",
+      "status",
+      "cases"
+    ],
+    "case_keys": [
+      "case_id",
+      "classification",
+      "reason_codes",
+      "evidence"
+    ],
+    "run_statuses": [
+      "complete",
+      "ambiguous",
+      "incomplete"
+    ]
+  }
+}

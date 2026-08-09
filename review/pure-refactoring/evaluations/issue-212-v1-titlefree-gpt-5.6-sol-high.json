@@ -1,0 +1,429 @@
+{
+  "schema_version": 1,
+  "rubric_version": 1,
+  "prompt_version": 1,
+  "bundle_sha256": "fbe6dce65589d706d53c0f9c65bdb68cf9fca5030bffcd8866d8b9be281730af",
+  "runs": [
+    {
+      "run_id": "issue212-titlefree-run-001",
+      "model_id": "gpt-5.6-sol/high",
+      "status": "complete",
+      "cases": [
+        {
+          "case_id": "RF-01CCF1FFB28A",
+          "classification": "not_proven",
+          "reason_codes": [
+            "database_migration",
+            "custody_data_loss"
+          ],
+          "evidence": "The diff replaces an additive ALTER TABLE with DROP TABLE followed by CREATE TABLE, changing the persisted schema operation and discarding existing readings."
+        },
+        {
+          "case_id": "RF-0438B76E9972",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The exported label function still returns String(value).trim(); the diff only extracts that unchanged expression into a local normalize helper."
+        },
+        {
+          "case_id": "RF-095E24D5DF19",
+          "classification": "not_proven",
+          "reason_codes": [
+            "dependencies"
+          ],
+          "evidence": "The diff changes a Cargo.lock version from 1.0.0 to 2.0.0, altering a locked dependency or build input."
+        },
+        {
+          "case_id": "RF-11D0CF604269",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore"
+          ],
+          "evidence": "The product contract changes restore activation from requiring prior integrity validation to permitting activation before validation."
+        },
+        {
+          "case_id": "RF-193E06AD5704",
+          "classification": "not_proven",
+          "reason_codes": [
+            "generated_artifacts",
+            "public_wire_api_contract"
+          ],
+          "evidence": "The generated client artifact changes its endpoint path from /v1/readings to /v2/readings."
+        },
+        {
+          "case_id": "RF-2781674FCE36",
+          "classification": "not_proven",
+          "reason_codes": [
+            "backup_restore"
+          ],
+          "evidence": "The diff removes verify_backup_digest from the restore path, changing restore integrity validation behavior."
+        },
+        {
+          "case_id": "RF-4475A2CECA9E",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The same value !== null predicate is moved from a named local function into an inline filter callback."
+        },
+        {
+          "case_id": "RF-44E823760A24",
+          "classification": "not_proven",
+          "reason_codes": [
+            "configuration_deployment"
+          ],
+          "evidence": "The service bind address changes from loopback-only 127.0.0.1 to all interfaces 0.0.0.0."
+        },
+        {
+          "case_id": "RF-46E2A0021BF6",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The unchanged constant separator value \"/\" is moved from module scope into format, while the returned template expression remains the same."
+        },
+        {
+          "case_id": "RF-544438A67FBE",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "database_migration"
+          ],
+          "evidence": "The DELETE query changes from removing only acknowledged readings to removing every reading, changing deletion semantics and risking data loss."
+        },
+        {
+          "case_id": "RF-59429CEA4563",
+          "classification": "not_proven",
+          "reason_codes": [
+            "public_wire_api_contract"
+          ],
+          "evidence": "The JSON field name changes from delivery_state to state, changing the supplied data schema."
+        },
+        {
+          "case_id": "RF-614F51E548B9",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "concurrency_timing"
+          ],
+          "evidence": "The acknowledgement is reordered before store.append, so an acknowledgement can be sent before durable storage succeeds."
+        },
+        {
+          "case_id": "RF-68EAF97B50D6",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "The visible console status changes from a pending retry state to a completed-delivery state."
+        },
+        {
+          "case_id": "RF-8F8436F5198D",
+          "classification": "not_proven",
+          "reason_codes": [
+            "auth_secrets"
+          ],
+          "evidence": "The diff removes requireAdmin(actor) before destroying a user, changing authorization enforcement."
+        },
+        {
+          "case_id": "RF-96019D9B57AA",
+          "classification": "not_proven",
+          "reason_codes": [
+            "insufficient_evidence"
+          ],
+          "evidence": "The implementation switches from transform(input) to helper(input), but the diff supplies no definitions establishing equivalent behavior."
+        },
+        {
+          "case_id": "RF-C56C9B4581F0",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The loop variable is renamed from x to value while the iteration and total += operation remain unchanged."
+        }
+      ]
+    },
+    {
+      "run_id": "issue212-titlefree-run-002",
+      "model_id": "gpt-5.6-sol/high",
+      "status": "complete",
+      "cases": [
+        {
+          "case_id": "RF-01CCF1FFB28A",
+          "classification": "not_proven",
+          "reason_codes": [
+            "database_migration",
+            "custody_data_loss"
+          ],
+          "evidence": "The diff replaces an additive ALTER TABLE with DROP TABLE followed by CREATE TABLE, changing migration semantics and discarding existing readings."
+        },
+        {
+          "case_id": "RF-0438B76E9972",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The original String(value).trim() expression is moved unchanged into a local normalize helper that label immediately returns."
+        },
+        {
+          "case_id": "RF-095E24D5DF19",
+          "classification": "not_proven",
+          "reason_codes": [
+            "dependencies"
+          ],
+          "evidence": "The Cargo.lock version entry changes from 1.0.0 to 2.0.0, altering a locked dependency or package input."
+        },
+        {
+          "case_id": "RF-11D0CF604269",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore"
+          ],
+          "evidence": "A docs/product recovery contract changes restore activation from requiring prior integrity validation to allowing activation before validation."
+        },
+        {
+          "case_id": "RF-193E06AD5704",
+          "classification": "not_proven",
+          "reason_codes": [
+            "generated_artifacts",
+            "public_wire_api_contract"
+          ],
+          "evidence": "A generated client artifact changes its endpoint path from /v1/readings to /v2/readings."
+        },
+        {
+          "case_id": "RF-2781674FCE36",
+          "classification": "not_proven",
+          "reason_codes": [
+            "backup_restore"
+          ],
+          "evidence": "The restore code removes the verify_backup_digest call, changing integrity validation during restore."
+        },
+        {
+          "case_id": "RF-4475A2CECA9E",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The unchanged value !== null predicate is inlined directly into filter in place of the local isPresent helper."
+        },
+        {
+          "case_id": "RF-44E823760A24",
+          "classification": "not_proven",
+          "reason_codes": [
+            "configuration_deployment"
+          ],
+          "evidence": "The service bind address changes from loopback-only 127.0.0.1 to all interfaces 0.0.0.0."
+        },
+        {
+          "case_id": "RF-46E2A0021BF6",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The same constant separator value is moved from module scope into format and used unchanged in the returned template."
+        },
+        {
+          "case_id": "RF-544438A67FBE",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "database_migration"
+          ],
+          "evidence": "The DELETE query changes from removing only acknowledged readings to removing every reading."
+        },
+        {
+          "case_id": "RF-59429CEA4563",
+          "classification": "not_proven",
+          "reason_codes": [
+            "public_wire_api_contract",
+            "operator_visible_behavior"
+          ],
+          "evidence": "The status JSON field is renamed from delivery_state to state, changing the emitted status schema and its visible field name."
+        },
+        {
+          "case_id": "RF-614F51E548B9",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "concurrency_timing"
+          ],
+          "evidence": "Acknowledgement is reordered to occur before store.append, changing operation ordering and allowing an acknowledgement before the reading is appended."
+        },
+        {
+          "case_id": "RF-68EAF97B50D6",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "The console status text changes from a pending retry state to Delivery complete."
+        },
+        {
+          "case_id": "RF-8F8436F5198D",
+          "classification": "not_proven",
+          "reason_codes": [
+            "auth_secrets"
+          ],
+          "evidence": "The requireAdmin(actor) authorization check is removed before destroy(user)."
+        },
+        {
+          "case_id": "RF-96019D9B57AA",
+          "classification": "not_proven",
+          "reason_codes": [
+            "insufficient_evidence"
+          ],
+          "evidence": "The implementation changes from transform(input) to helper(input), but the diff provides no definitions establishing equivalent behavior."
+        },
+        {
+          "case_id": "RF-C56C9B4581F0",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "Only the local loop variable is renamed from x to value while the same values are added to total."
+        }
+      ]
+    },
+    {
+      "run_id": "issue212-titlefree-run-003",
+      "model_id": "gpt-5.6-sol/high",
+      "status": "complete",
+      "cases": [
+        {
+          "case_id": "RF-01CCF1FFB28A",
+          "classification": "not_proven",
+          "reason_codes": [
+            "database_migration",
+            "custody_data_loss"
+          ],
+          "evidence": "The migration replaces an additive ALTER TABLE with DROP TABLE followed by CREATE TABLE, changing schema migration semantics and risking loss of existing readings."
+        },
+        {
+          "case_id": "RF-0438B76E9972",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The same String(value).trim() expression is moved into a local normalize helper, and label still returns that expression's result."
+        },
+        {
+          "case_id": "RF-095E24D5DF19",
+          "classification": "not_proven",
+          "reason_codes": [
+            "dependencies"
+          ],
+          "evidence": "Cargo.lock changes a locked version from 1.0.0 to 2.0.0, altering a dependency/build input."
+        },
+        {
+          "case_id": "RF-11D0CF604269",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore"
+          ],
+          "evidence": "The product contract changes restore activation from requiring prior integrity validation to allowing activation before validation."
+        },
+        {
+          "case_id": "RF-193E06AD5704",
+          "classification": "not_proven",
+          "reason_codes": [
+            "generated_artifacts",
+            "public_wire_api_contract"
+          ],
+          "evidence": "A generated client artifact changes its endpoint path from /v1/readings to /v2/readings, altering both generated output and a wire/API path."
+        },
+        {
+          "case_id": "RF-2781674FCE36",
+          "classification": "not_proven",
+          "reason_codes": [
+            "backup_restore"
+          ],
+          "evidence": "The restore path removes verify_backup_digest and replaces it with a comment, changing restore integrity validation behavior."
+        },
+        {
+          "case_id": "RF-4475A2CECA9E",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The named isPresent predicate is inlined with the identical value !== null condition passed to filter."
+        },
+        {
+          "case_id": "RF-44E823760A24",
+          "classification": "not_proven",
+          "reason_codes": [
+            "configuration_deployment"
+          ],
+          "evidence": "The service bind address changes from loopback-only 127.0.0.1 to all interfaces 0.0.0.0, changing runtime network exposure."
+        },
+        {
+          "case_id": "RF-46E2A0021BF6",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The unchanged constant separator value is moved from module scope into format, which still constructs the same template string."
+        },
+        {
+          "case_id": "RF-544438A67FBE",
+          "classification": "not_proven",
+          "reason_codes": [
+            "database_migration",
+            "custody_data_loss"
+          ],
+          "evidence": "The DELETE query changes from removing only acknowledged readings to removing every reading, changing query semantics and deletion behavior."
+        },
+        {
+          "case_id": "RF-59429CEA4563",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "The status output renames delivery_state to state, changing the field exposed in the status JSON."
+        },
+        {
+          "case_id": "RF-614F51E548B9",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "concurrency_timing"
+          ],
+          "evidence": "Acknowledgement is reordered before durable store.append, permitting an acknowledgement before the reading is stored."
+        },
+        {
+          "case_id": "RF-68EAF97B50D6",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "The console message changes from a pending retry state to a completed state, changing operator-visible delivery meaning."
+        },
+        {
+          "case_id": "RF-8F8436F5198D",
+          "classification": "not_proven",
+          "reason_codes": [
+            "auth_secrets"
+          ],
+          "evidence": "The removeUser operation removes requireAdmin(actor), changing authorization enforcement for user deletion."
+        },
+        {
+          "case_id": "RF-96019D9B57AA",
+          "classification": "not_proven",
+          "reason_codes": [
+            "insufficient_evidence"
+          ],
+          "evidence": "The implementation switches from transform(input) to helper(input), but the diff provides no definitions proving equivalent behavior."
+        },
+        {
+          "case_id": "RF-C56C9B4581F0",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "Only the loop variable is renamed from x to value while the same values are added to total."
+        }
+      ]
+    }
+  ]
+}

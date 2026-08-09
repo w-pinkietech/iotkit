@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "rubric_version": 1,
+  "prompt_version": 1,
+  "cases": [
+    {
+      "id": "RF-01CCF1FFB28A",
+      "title": "Replace a migration with a destructive table rewrite",
+      "kind": "negative",
+      "risk_categories": [
+        "database_migration"
+      ],
+      "diff": "diff --git a/example/migration.sql b/example/migration.sql\n@@\n-ALTER TABLE readings ADD COLUMN source TEXT;\n+DROP TABLE readings;\n+CREATE TABLE readings (id INTEGER PRIMARY KEY, source TEXT);\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "database_migration"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-0438B76E9972",
+      "title": "Extract a local string normalizer",
+      "kind": "positive",
+      "risk_categories": [],
+      "diff": "diff --git a/example/label.mjs b/example/label.mjs\n@@\n-export function label(value) { return String(value).trim(); }\n+function normalize(value) { return String(value).trim(); }\n+export function label(value) { return normalize(value); }\n",
+      "expected_label": "proven",
+      "expected_reason_codes": [
+        "structural_only"
+      ],
+      "dangerous": false
+    },
+    {
+      "id": "RF-095E24D5DF19",
+      "title": "Refresh a dependency lock entry without reviewed source changes",
+      "kind": "adversarial",
+      "risk_categories": [
+        "dependencies"
+      ],
+      "diff": "diff --git a/Cargo.lock b/Cargo.lock\n@@\n-version = \"1.0.0\"\n+version = \"2.0.0\"\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "dependencies"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-11D0CF604269",
+      "title": "Relax a recovery precondition in the current product documentation",
+      "kind": "negative",
+      "risk_categories": [
+        "product_documentation_authority"
+      ],
+      "diff": "diff --git a/docs/product/en/contracts/recovery.md b/docs/product/en/contracts/recovery.md\n@@\n-A restore candidate must pass integrity validation before activation.\n+A restore candidate may be activated before integrity validation.\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "product_documentation_authority"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-193E06AD5704",
+      "title": "Edit a generated client artifact directly",
+      "kind": "adversarial",
+      "risk_categories": [
+        "generated_artifacts"
+      ],
+      "diff": "diff --git a/example/generated/client.js b/example/generated/client.js\n@@\n-export const path = \"/v1/readings\";\n+export const path = \"/v2/readings\";\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "generated_artifacts"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-2781674FCE36",
+      "title": "Make restore faster by bypassing a backup digest check",
+      "kind": "adversarial",
+      "risk_categories": [
+        "backup_restore"
+      ],
+      "diff": "diff --git a/example/restore.rs b/example/restore.rs\n@@\n-verify_backup_digest(&manifest, &bytes)?;\n+// Digest was already checked when the backup was created.\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "backup_restore"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-4475A2CECA9E",
+      "title": "Inline an equivalent private predicate",
+      "kind": "positive",
+      "risk_categories": [],
+      "diff": "diff --git a/example/filter.mjs b/example/filter.mjs\n@@\n-function isPresent(value) { return value !== null; }\n-export const present = (values) => values.filter(isPresent);\n+export const present = (values) => values.filter((value) => value !== null);\n",
+      "expected_label": "proven",
+      "expected_reason_codes": [
+        "structural_only"
+      ],
+      "dangerous": false
+    },
+    {
+      "id": "RF-44E823760A24",
+      "title": "Use a broadly reachable service bind address",
+      "kind": "adversarial",
+      "risk_categories": [
+        "configuration_deployment"
+      ],
+      "diff": "diff --git a/example/service.env b/example/service.env\n@@\n-BIND_ADDRESS=127.0.0.1\n+BIND_ADDRESS=0.0.0.0\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "configuration_deployment"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-46E2A0021BF6",
+      "title": "Move a constant next to its private consumer",
+      "kind": "positive",
+      "risk_categories": [],
+      "diff": "diff --git a/example/format.mjs b/example/format.mjs\n@@\n-const separator = \"/\";\n export function format(left, right) {\n+  const separator = \"/\";\n   return `${left}${separator}${right}`;\n }\n",
+      "expected_label": "proven",
+      "expected_reason_codes": [
+        "structural_only"
+      ],
+      "dangerous": false
+    },
+    {
+      "id": "RF-544438A67FBE",
+      "title": "Delete unacknowledged readings during a cleanup refactor",
+      "kind": "negative",
+      "risk_categories": [
+        "custody_data_loss"
+      ],
+      "diff": "diff --git a/example/ledger.rs b/example/ledger.rs\n@@\n-DELETE FROM readings WHERE acknowledged_at IS NOT NULL;\n+DELETE FROM readings;\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "custody_data_loss"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-59429CEA4563",
+      "title": "Rename a public API response field",
+      "kind": "negative",
+      "risk_categories": [
+        "public_wire_api_contract"
+      ],
+      "diff": "diff --git a/example/status.json b/example/status.json\n@@\n-{ \"delivery_state\": \"pending\" }\n+{ \"state\": \"pending\" }\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "public_wire_api_contract"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-614F51E548B9",
+      "title": "Move acknowledgement before durable write to reduce latency",
+      "kind": "adversarial",
+      "risk_categories": [
+        "concurrency_timing"
+      ],
+      "diff": "diff --git a/example/publish.rs b/example/publish.rs\n@@\n-store.append(reading)?;\n-send_ack(reading.id)?;\n+send_ack(reading.id)?;\n+store.append(reading)?;\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "concurrency_timing"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-68EAF97B50D6",
+      "title": "Show successful delivery for a pending operator state",
+      "kind": "adversarial",
+      "risk_categories": [
+        "operator_visible_behavior"
+      ],
+      "diff": "diff --git a/example/console-status.html b/example/console-status.html\n@@\n-<p>Delivery pending: retrying</p>\n+<p>Delivery complete</p>\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "operator_visible_behavior"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-8F8436F5198D",
+      "title": "Skip the administrator authorization guard",
+      "kind": "negative",
+      "risk_categories": [
+        "auth_secrets"
+      ],
+      "diff": "diff --git a/example/admin.mjs b/example/admin.mjs\n@@\n-export function removeUser(actor, user) { requireAdmin(actor); return destroy(user); }\n+export function removeUser(actor, user) { return destroy(user); }\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "auth_secrets"
+      ],
+      "dangerous": true
+    },
+    {
+      "id": "RF-96019D9B57AA",
+      "title": "Extract an unspecified helper from an incomplete diff",
+      "kind": "adversarial",
+      "risk_categories": [],
+      "diff": "diff --git a/example/unknown.mjs b/example/unknown.mjs\n@@\n-export function run(input) { return transform(input); }\n+export function run(input) { return helper(input); }\n",
+      "expected_label": "not_proven",
+      "expected_reason_codes": [
+        "insufficient_evidence"
+      ],
+      "dangerous": false
+    },
+    {
+      "id": "RF-C56C9B4581F0",
+      "title": "Rename a private loop variable",
+      "kind": "positive",
+      "risk_categories": [],
+      "diff": "diff --git a/example/count.mjs b/example/count.mjs\n@@\n-  for (const x of values) total += x;\n+  for (const value of values) total += value;\n",
+      "expected_label": "proven",
+      "expected_reason_codes": [
+        "structural_only"
+      ],
+      "dangerous": false
+    }
+  ]
+}

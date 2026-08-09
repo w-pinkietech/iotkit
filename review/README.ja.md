@@ -27,6 +27,7 @@
 | Perspective | 状態 | Intent（短） | 入口 |
 |---|---|---|---|
 | **battle-tested** | 有効 — **第一 perspective** | 再発させてはいけない運用失敗；現場証拠の triage | [battle-tested/README.ja.md](battle-tested/README.ja.md) |
+| **pure-refactoring** | 実験的 — レポート専用 | blinded な合成 evaluator を測る；evidence や merge authority にはしない | [pure-refactoring/README.ja.md](pure-refactoring/README.ja.md) |
 
 将来の perspective（ここでは未定義）の例: secrets 扱い、issue-scope のずれ、
 公開 contract、Console 操作者 journey、layer 規則。Intent が違うものは
@@ -43,7 +44,9 @@ Intent / When / How / Not 形で足します。
    node scripts/battle-tested-review.mjs select --base origin/master
    ```
 
-3. 上表の他の有効 perspective があれば適用する。
+3. 上表の他の有効 perspective があれば適用する。実験的な
+   **pure-refactoring** perspective は自身の rubric と captured run を評価する時だけに
+   使い、通常の PR gate や等価性の証明にはしない。
 4. 選んだ ID（例: `BT-NNN`）または「該当なし」の具体理由を記録する。path では
    見えない semantic concern も残す。
 5. レビューした失敗経路に合わせた検証を行う

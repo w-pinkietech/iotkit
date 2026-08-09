@@ -106,6 +106,14 @@ jobs:
           node scripts/battle-tested-review.mjs check
           node --test scripts/tests/battle-tested-review.test.mjs
 
+      - name: Pure-refactoring evaluator foundation
+        run: |
+          node scripts/pure-refactoring-evaluator.mjs check
+          node --test scripts/tests/pure-refactoring-evaluator.test.mjs
+          # This validates checked-in capture/report metrics only; it never
+          # applies a rollout threshold, posts a status, or creates authority.
+          node scripts/pure-refactoring-evaluator.mjs score --results review/pure-refactoring/evaluations/issue-212-v1-titlefree-gpt-5.6-sol-high.json
+
       - name: Product-docs impact selector
         run: |
           node scripts/product-docs-impact.mjs check

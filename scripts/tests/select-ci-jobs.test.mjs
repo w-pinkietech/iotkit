@@ -90,6 +90,8 @@ const cases = [
       "scripts/tests/check-product-docs.test.mjs",
       "scripts/tests/product-docs-modes.test.mjs",
       "scripts/tests/product-docs-impact.test.mjs",
+      "scripts/pure-refactoring-evaluator.mjs",
+      "scripts/tests/pure-refactoring-evaluator.test.mjs",
     ],
     expected: none,
   },

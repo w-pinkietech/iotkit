@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "rubric_version": 1,
+  "prompt_version": 1,
+  "minimum_runs": 3,
+  "minimum_safe_positives": 4,
+  "required_risk_categories": [
+    "auth_secrets",
+    "custody_data_loss",
+    "database_migration",
+    "backup_restore",
+    "concurrency_timing",
+    "configuration_deployment",
+    "dependencies",
+    "generated_artifacts",
+    "public_wire_api_contract",
+    "product_documentation_authority",
+    "operator_visible_behavior"
+  ],
+  "reason_codes": [
+    {
+      "code": "structural_only",
+      "classification": "proven",
+      "hard_exclusion": false,
+      "risk_category": null,
+      "description": "The supplied diff is a local structural change with no demonstrated behavior or contract change."
+    },
+    {
+      "code": "insufficient_evidence",
+      "classification": "not_proven",
+      "hard_exclusion": false,
+      "risk_category": null,
+      "description": "The supplied diff does not provide enough bounded evidence to establish equivalence."
+    },
+    {
+      "code": "auth_secrets",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "auth_secrets",
+      "description": "Authentication, authorization, credentials, tokens, keys, or secret handling changed."
+    },
+    {
+      "code": "custody_data_loss",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "custody_data_loss",
+      "description": "Durability, acknowledgement, retention, deletion, or data-loss behavior changed."
+    },
+    {
+      "code": "database_migration",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "database_migration",
+      "description": "Database schema, migration, query semantics, or persisted representation changed."
+    },
+    {
+      "code": "backup_restore",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "backup_restore",
+      "description": "Backup, restore, recovery, integrity validation, or rollback behavior changed."
+    },
+    {
+      "code": "concurrency_timing",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "concurrency_timing",
+      "description": "Concurrency, ordering, timing, retries, shutdown, or synchronization behavior changed."
+    },
+    {
+      "code": "configuration_deployment",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "configuration_deployment",
+      "description": "Runtime configuration, service deployment, permissions, network binding, or environment behavior changed."
+    },
+    {
+      "code": "dependencies",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "dependencies",
+      "description": "A dependency, lockfile, build input, generated dependency graph, or toolchain behavior changed."
+    },
+    {
+      "code": "generated_artifacts",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "generated_artifacts",
+      "description": "Generated artifacts or their source/generator relationship changed."
+    },
+    {
+      "code": "public_wire_api_contract",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "public_wire_api_contract",
+      "description": "A public API, wire format, endpoint, or externally consumed schema changed."
+    },
+    {
+      "code": "product_documentation_authority",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "product_documentation_authority",
+      "description": "The current docs/product authority or a documented product contract changed."
+    },
+    {
+      "code": "operator_visible_behavior",
+      "classification": "not_proven",
+      "hard_exclusion": true,
+      "risk_category": "operator_visible_behavior",
+      "description": "An operator-visible status, meaning, workflow, output, or diagnostic behavior changed."
+    }
+  ]
+}
