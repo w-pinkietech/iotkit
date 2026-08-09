@@ -109,10 +109,14 @@ jobs:
       - name: Pure-refactoring evaluator foundation
         run: |
           node scripts/pure-refactoring-evaluator.mjs check
+          node scripts/pure-refactoring-evaluator.mjs check --corpus-version 2
           node --test scripts/tests/pure-refactoring-evaluator.test.mjs
-          # This validates checked-in capture/report metrics only; it never
-          # applies a rollout threshold, posts a status, or creates authority.
+          # This validates checked-in report-only captures and their descriptive
+          # comparison; it never applies a rollout threshold, posts a status,
+          # or creates authority.
           node scripts/pure-refactoring-evaluator.mjs score --results review/pure-refactoring/evaluations/issue-212-v1-titlefree-gpt-5.6-sol-high.json
+          node scripts/pure-refactoring-evaluator.mjs score --corpus-version 2 --results review/pure-refactoring/evaluations/issue-214-v2-historical-gpt-5.6-sol-high.json
+          node scripts/pure-refactoring-evaluator.mjs compare --baseline-results review/pure-refactoring/evaluations/issue-212-v1-titlefree-gpt-5.6-sol-high.json --historical-results review/pure-refactoring/evaluations/issue-214-v2-historical-gpt-5.6-sol-high.json
 
       - name: Product-docs impact selector
         run: |

@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "rubric_version": 1,
+  "prompt_version": 1,
+  "bundle_sha256": "6b1e81d597d3085326978477a333d715658d90d4a7a76a74122da9e5af87fd94",
+  "runs": [
+    {
+      "run_id": "issue-214-v2-run-001",
+      "model_id": "gpt-5.6-sol/high",
+      "status": "complete",
+      "cases": [
+        {
+          "case_id": "RF-22748F2C8DF7",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The three inline test modules are replaced by path modules whose new files contain the same imports, test names, assertions, and values."
+        },
+        {
+          "case_id": "RF-41A5AEE1AB8E",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore",
+            "custody_data_loss"
+          ],
+          "evidence": "Stable custody and ingest contracts are revised to authorize same-ID recovery, fencing, cursor convergence, and restored-reading handling."
+        },
+        {
+          "case_id": "RF-481E705866E5",
+          "classification": "not_proven",
+          "reason_codes": [
+            "auth_secrets",
+            "configuration_deployment"
+          ],
+          "evidence": "Bootstrap and broker-certificate validation now require an exact OpenSSL hostname-match message in addition to its exit status, changing certificate acceptance."
+        },
+        {
+          "case_id": "RF-51804B57B46A",
+          "classification": "not_proven",
+          "reason_codes": [
+            "backup_restore",
+            "custody_data_loss",
+            "operator_visible_behavior"
+          ],
+          "evidence": "New stable recovery runbooks prescribe fencing, encrypted restore, no-backup loss acceptance, cursor convergence, and incident closure steps."
+        },
+        {
+          "case_id": "RF-6643FD99AC3C",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "Every hunk only reflows existing Rust expressions or reorders adjacent re-exports without changing identifiers, calls, values, or assertions."
+        },
+        {
+          "case_id": "RF-7ECACA2BB8A2",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "public_wire_api_contract"
+          ],
+          "evidence": "ACK handling now accepts stale duplicates and strict prior-prefix acknowledgements, and may advance only part of the current batch cursor."
+        },
+        {
+          "case_id": "RF-829BC337AB79",
+          "classification": "not_proven",
+          "reason_codes": [
+            "dependencies"
+          ],
+          "evidence": "The workspace package version and many Cargo.lock package entries change from 0.3.0 to 0.4.0, altering lockfile and build inputs."
+        },
+        {
+          "case_id": "RF-B4BEB88706CD",
+          "classification": "not_proven",
+          "reason_codes": [
+            "database_migration"
+          ],
+          "evidence": "A migration runner and baseline SQL create and persist _schema_version state, apply transactional migrations, and reject ahead schemas."
+        },
+        {
+          "case_id": "RF-B7D2D9E782C5",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "A configuration-mismatch error now directs operators to a specific reset command carrying an explicit trial-data-loss confirmation flag."
+        },
+        {
+          "case_id": "RF-B86B5F0605AB",
+          "classification": "not_proven",
+          "reason_codes": [
+            "public_wire_api_contract"
+          ],
+          "evidence": "The v1 JSON wire field gateway_identity is renamed to edge_node_id in Rust, Go, fixtures, validation, and publication IDs; legacy-only payloads are rejected."
+        },
+        {
+          "case_id": "RF-BD2AB69DEC16",
+          "classification": "not_proven",
+          "reason_codes": [
+            "generated_artifacts",
+            "concurrency_timing",
+            "operator_visible_behavior"
+          ],
+          "evidence": "New source and bundled console output add five-second polling, request cancellation, live charts, stale status, and visible dashboard messages."
+        },
+        {
+          "case_id": "RF-C12FCD839D8C",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "The console's visible sensor-details link changes from /sensors/{signal} to a device-scoped equipment route."
+        },
+        {
+          "case_id": "RF-D608C82EE3AE",
+          "classification": "not_proven",
+          "reason_codes": [
+            "insufficient_evidence"
+          ],
+          "evidence": "The test assertion changes from updated > first to updated > 100, but the supplied hunk does not establish that these predicates are equivalent."
+        },
+        {
+          "case_id": "RF-DFC1DD5B39B9",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The inline MQTT packet-limit test is moved verbatim to the path-selected unit-test file with the same import, setup, and assertion."
+        },
+        {
+          "case_id": "RF-E4D4453F1336",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The sole change joins a method-chain expression onto one line while preserving the exact call sequence and operands."
+        },
+        {
+          "case_id": "RF-E9352880443D",
+          "classification": "not_proven",
+          "reason_codes": [
+            "concurrency_timing",
+            "operator_visible_behavior"
+          ],
+          "evidence": "Signal registration moves earlier, SIGTERM is added, cleanup and runtime shutdown gain deadlines, and cleanup timeout now forces a nonzero exit."
+        }
+      ]
+    },
+    {
+      "run_id": "issue-214-v2-run-002",
+      "model_id": "gpt-5.6-sol/high",
+      "status": "complete",
+      "cases": [
+        {
+          "case_id": "RF-22748F2C8DF7",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "Three cfg(test) modules are replaced by path declarations, and the removed test bodies reappear verbatim in the referenced files; no production logic changes."
+        },
+        {
+          "case_id": "RF-41A5AEE1AB8E",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore",
+            "custody_data_loss",
+            "auth_secrets"
+          ],
+          "evidence": "Stable EN/JA contracts are revised to authorize same-ID hardware recovery and define credential fencing, recovery authority, cursor convergence, and backup closure requirements."
+        },
+        {
+          "case_id": "RF-481E705866E5",
+          "classification": "not_proven",
+          "reason_codes": [
+            "auth_secrets",
+            "configuration_deployment"
+          ],
+          "evidence": "Deployment and certificate-management scripts replace OpenSSL exit-status acceptance with an exact hostname-match output check, changing TLS certificate validation behavior."
+        },
+        {
+          "case_id": "RF-51804B57B46A",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore",
+            "custody_data_loss",
+            "auth_secrets"
+          ],
+          "evidence": "New stable EN/JA recovery runbooks prescribe credential fencing, authenticated backup restore, loss-boundary approval, cursor convergence, and post-recovery backup requirements."
+        },
+        {
+          "case_id": "RF-6643FD99AC3C",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The diff only reflows expressions and import/export lists without changing identifiers, values, calls, assertions, or control flow."
+        },
+        {
+          "case_id": "RF-7ECACA2BB8A2",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "public_wire_api_contract"
+          ],
+          "evidence": "ACK handling now accepts stale duplicates and prior-prefix acknowledgements and may advance only part of a batch, changing wire validation and durable cursor advancement semantics."
+        },
+        {
+          "case_id": "RF-829BC337AB79",
+          "classification": "not_proven",
+          "reason_codes": [
+            "dependencies",
+            "operator_visible_behavior"
+          ],
+          "evidence": "The workspace and lockfile package versions move from 0.3.0 to 0.4.0, while changelog and README release/version output are updated."
+        },
+        {
+          "case_id": "RF-B4BEB88706CD",
+          "classification": "not_proven",
+          "reason_codes": [
+            "database_migration"
+          ],
+          "evidence": "A production migration runner and baseline SQL create and mutate the persisted _schema_version table, apply transactional migrations, and reject schemas ahead of the binary."
+        },
+        {
+          "case_id": "RF-B7D2D9E782C5",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "The trial configuration error changes from a generic reset instruction to a concrete destructive reset command and recovery workflow shown to operators."
+        },
+        {
+          "case_id": "RF-B86B5F0605AB",
+          "classification": "not_proven",
+          "reason_codes": [
+            "public_wire_api_contract",
+            "custody_data_loss"
+          ],
+          "evidence": "Serialized schema fields change from gateway_identity to edge_node_id, publication IDs change accordingly, and legacy payloads are explicitly rejected across Rust, Go, and fixtures."
+        },
+        {
+          "case_id": "RF-BD2AB69DEC16",
+          "classification": "not_proven",
+          "reason_codes": [
+            "generated_artifacts",
+            "operator_visible_behavior"
+          ],
+          "evidence": "A new polling live dashboard renders charts, values, freshness statuses, and failure summaries, with matching compiled console.js changes alongside the TypeScript source."
+        },
+        {
+          "case_id": "RF-C12FCD839D8C",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior",
+            "public_wire_api_contract"
+          ],
+          "evidence": "The rendered detail link changes from /sensors/{signal} to a device-scoped endpoint, altering operator navigation and the externally addressed route."
+        },
+        {
+          "case_id": "RF-D608C82EE3AE",
+          "classification": "not_proven",
+          "reason_codes": [
+            "insufficient_evidence"
+          ],
+          "evidence": "A test assertion changes from updated > first to updated > 100; the supplied hunk does not establish that first is always 100 or that the assertions are equivalent."
+        },
+        {
+          "case_id": "RF-DFC1DD5B39B9",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The cfg(test) module becomes a path declaration and its sole test body is reproduced verbatim in that referenced file; production MQTT code is unchanged."
+        },
+        {
+          "case_id": "RF-E4D4453F1336",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "Only line wrapping changes around the same host_str().is_some_and(host_is_loopback_ip) expression."
+        },
+        {
+          "case_id": "RF-E9352880443D",
+          "classification": "not_proven",
+          "reason_codes": [
+            "concurrency_timing",
+            "configuration_deployment",
+            "operator_visible_behavior"
+          ],
+          "evidence": "Signal registration moves earlier, SIGTERM support and shutdown deadlines are added, runtime teardown becomes bounded, and cleanup timeout now forces a nonzero exit."
+        }
+      ]
+    },
+    {
+      "run_id": "issue-214-v2-run-003",
+      "model_id": "gpt-5.6-sol/high",
+      "status": "complete",
+      "cases": [
+        {
+          "case_id": "RF-22748F2C8DF7",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "Three cfg(test) modules move to path-addressed files with their test bodies unchanged; production code is untouched."
+        },
+        {
+          "case_id": "RF-41A5AEE1AB8E",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore",
+            "custody_data_loss",
+            "auth_secrets"
+          ],
+          "evidence": "Stable custody and ingest contracts are revised to authorize encrypted-backup recovery, credential fencing, cursor convergence, and reactivation behavior."
+        },
+        {
+          "case_id": "RF-481E705866E5",
+          "classification": "not_proven",
+          "reason_codes": [
+            "auth_secrets",
+            "configuration_deployment"
+          ],
+          "evidence": "Certificate hostname acceptance in bootstrap and broker-certificate workflows now requires an exact OpenSSL success message as well as a zero status."
+        },
+        {
+          "case_id": "RF-51804B57B46A",
+          "classification": "not_proven",
+          "reason_codes": [
+            "product_documentation_authority",
+            "backup_restore",
+            "custody_data_loss"
+          ],
+          "evidence": "New stable runbooks define backup and no-backup recovery paths, fencing gates, restored-data boundaries, and explicitly accepted loss boundaries."
+        },
+        {
+          "case_id": "RF-6643FD99AC3C",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The diff only reflows existing Rust expressions and import ordering without changing tokens that affect behavior."
+        },
+        {
+          "case_id": "RF-7ECACA2BB8A2",
+          "classification": "not_proven",
+          "reason_codes": [
+            "custody_data_loss",
+            "concurrency_timing",
+            "public_wire_api_contract"
+          ],
+          "evidence": "ACK handling newly accepts stale and strict-prefix acknowledgements and can advance only part of the durable cursor, changing ordering and wire-acceptance semantics."
+        },
+        {
+          "case_id": "RF-829BC337AB79",
+          "classification": "not_proven",
+          "reason_codes": [
+            "dependencies",
+            "operator_visible_behavior"
+          ],
+          "evidence": "Workspace and lockfile package versions change from 0.3.0 to 0.4.0, while README and changelog expose the new release status."
+        },
+        {
+          "case_id": "RF-B4BEB88706CD",
+          "classification": "not_proven",
+          "reason_codes": [
+            "database_migration"
+          ],
+          "evidence": "The diff adds a schema-version table, migration SQL, transactional migration execution, and schema-ahead rejection."
+        },
+        {
+          "case_id": "RF-B7D2D9E782C5",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "A configuration-mismatch diagnostic now directs operators to a specific reset command that explicitly confirms trial data loss."
+        },
+        {
+          "case_id": "RF-B86B5F0605AB",
+          "classification": "not_proven",
+          "reason_codes": [
+            "public_wire_api_contract"
+          ],
+          "evidence": "The v1 JSON field changes from gateway_identity to edge_node_id in Rust, Go, publication IDs, and fixtures, and legacy-only payloads are rejected."
+        },
+        {
+          "case_id": "RF-BD2AB69DEC16",
+          "classification": "not_proven",
+          "reason_codes": [
+            "generated_artifacts",
+            "operator_visible_behavior"
+          ],
+          "evidence": "A new live-dashboard source module and its bundled console.js output add polling, charts, values, and visible stale/never-received statuses."
+        },
+        {
+          "case_id": "RF-C12FCD839D8C",
+          "classification": "not_proven",
+          "reason_codes": [
+            "operator_visible_behavior"
+          ],
+          "evidence": "The console's visible sensor-detail link changes from /sensors/... to an equipment/device-scoped destination."
+        },
+        {
+          "case_id": "RF-D608C82EE3AE",
+          "classification": "not_proven",
+          "reason_codes": [
+            "insufficient_evidence"
+          ],
+          "evidence": "The assertion changes from comparing updated against first to comparing it against 100; the diff does not establish those predicates are equivalent."
+        },
+        {
+          "case_id": "RF-DFC1DD5B39B9",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "The cfg(test) MQTT packet-limit test moves verbatim to a path-addressed unit-test file; runtime code is unchanged."
+        },
+        {
+          "case_id": "RF-E4D4453F1336",
+          "classification": "proven",
+          "reason_codes": [
+            "structural_only"
+          ],
+          "evidence": "A single method chain is reflowed onto one line with the expression unchanged."
+        },
+        {
+          "case_id": "RF-E9352880443D",
+          "classification": "not_proven",
+          "reason_codes": [
+            "concurrency_timing",
+            "configuration_deployment",
+            "operator_visible_behavior"
+          ],
+          "evidence": "Signal registration moves before startup work, SIGTERM is added, cleanup and runtime teardown gain deadlines, and timeout now forces a nonzero exit."
+        }
+      ]
+    }
+  ]
+}

@@ -8,11 +8,21 @@ import { fileURLToPath } from "node:url";
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRepoRoot = resolve(dirname(scriptPath), "..");
 const assetPaths = {
-  schema: "review/pure-refactoring/schema.v1.json",
-  rubric: "review/pure-refactoring/rubric.v1.json",
-  corpus: "review/pure-refactoring/corpus.v1.json",
+  1: {
+    schema: "review/pure-refactoring/schema.v1.json",
+    rubric: "review/pure-refactoring/rubric.v1.json",
+    corpus: "review/pure-refactoring/corpus.v1.json",
+  },
+  2: {
+    schema: "review/pure-refactoring/schema.v1.json",
+    rubric: "review/pure-refactoring/rubric.v1.json",
+    corpus: "review/pure-refactoring/corpus.v2.json",
+    provenance: "review/pure-refactoring/historical-provenance.v2.json",
+    selectionPolicy: "review/pure-refactoring/historical-selection-policy.v1.md",
+  },
 };
 const supportedVersion = 1;
+const historicalCorpusVersion = 2;
 const classifications = ["proven", "not_proven"];
 const classificationSet = new Set(classifications);
 const caseKinds = new Set(["positive", "negative", "adversarial"]);
@@ -60,6 +70,38 @@ const bundleKeys = [
   "cases",
   "bundle_sha256",
 ];
+const historicalProvenanceKeys = [
+  "provenance_version",
+  "corpus_version",
+  "cutoff_commit_sha",
+  "selection_policy_sha256",
+  "cases",
+];
+const historicalProvenanceCaseKeys = [
+  "case_id",
+  "pull_request",
+  "merge_commit_sha",
+  "source_commit_sha",
+  "source_parent_sha",
+  "pathspec",
+  "selection_mode",
+  "source_diff_sha256",
+  "model_diff_sha256",
+  "sanitization",
+  "answer_rationale",
+];
+const historicalSanitizationKeys = [
+  "line_endings",
+  "removed_lines",
+  "removed_index_lines",
+  "excluded_metadata",
+  "content_redaction",
+];
+const historicalRemovedIndexLineKeys = ["raw_line", "text"];
+const historicalMetadata = ["pull_request", "commit", "title", "label"];
+const sha256Pattern = /^[a-f0-9]{64}$/;
+const gitShaPattern = /^[a-f0-9]{40}$/;
+const gitIndexLinePattern = /^index [0-9a-f]+\.\.[0-9a-f]+(?: \d+)?$/;
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -179,9 +221,92 @@ export function sha256Json(value) {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
+export function sha256Bytes(value) {
+  if (typeof value !== "string" && !ArrayBuffer.isView(value)) {
+    throw new TypeError("SHA-256 input must be a string or byte view");
+  }
+  return createHash("sha256").update(value).digest("hex");
+}
+
 export function opaqueCaseId(diff) {
   if (typeof diff !== "string") throw new TypeError("opaque case IDs require a string diff");
   return `RF-${createHash("sha256").update(diff).digest("hex").slice(0, 12).toUpperCase()}`;
+}
+
+export function sanitizeHistoricalDiff(sourceDiff) {
+  if (typeof sourceDiff !== "string") {
+    throw new TypeError("historical diff sanitization requires a string");
+  }
+  return sourceDiff
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter((line) => !gitIndexLinePattern.test(line))
+    .join("\n");
+}
+
+export function restoreHistoricalDiff(modelDiff, removedIndexLines) {
+  if (typeof modelDiff !== "string") {
+    throw new TypeError("historical diff restoration requires a string model diff");
+  }
+  if (!Array.isArray(removedIndexLines) || removedIndexLines.length === 0) {
+    throw new TypeError("historical diff restoration requires removed index lines");
+  }
+  const rawLineCount = modelDiff.split("\n").length + removedIndexLines.length;
+  let previousLine = 0;
+  for (const entry of removedIndexLines) {
+    if (!isRecord(entry) || !Number.isSafeInteger(entry.raw_line) || entry.raw_line < 1) {
+      throw new TypeError("historical removed index lines require positive raw line positions");
+    }
+    if (entry.raw_line <= previousLine || entry.raw_line > rawLineCount) {
+      throw new TypeError("historical removed index lines must be ordered raw line positions");
+    }
+    if (typeof entry.text !== "string" || !gitIndexLinePattern.test(entry.text)) {
+      throw new TypeError("historical removed index lines must be Git index lines");
+    }
+    previousLine = entry.raw_line;
+  }
+
+  const modelLines = modelDiff.split("\n");
+  const restored = [];
+  let modelIndex = 0;
+  let removedIndex = 0;
+  for (let rawLine = 1; rawLine <= rawLineCount; rawLine += 1) {
+    const removed = removedIndexLines[removedIndex];
+    if (removed?.raw_line === rawLine) {
+      restored.push(removed.text);
+      removedIndex += 1;
+      continue;
+    }
+    restored.push(modelLines[modelIndex]);
+    modelIndex += 1;
+  }
+  if (modelIndex !== modelLines.length || removedIndex !== removedIndexLines.length) {
+    throw new TypeError("historical removed index lines cannot reconstruct the raw diff");
+  }
+  return restored.join("\n");
+}
+
+function hasHistoricalMetadata(diff) {
+  return diff.split("\n").some((line) => {
+    const content = /^[+\- ]/.test(line) ? line.slice(1) : line;
+    const trimmed = content.trimStart();
+    if (/^(?:commit(?:\s+[0-9a-f]{7,40}|:\s|$)|(?:pull[ -]?request|pr)\s*(?:#|:)?\s*\d+)/i.test(trimmed)) {
+      return true;
+    }
+    const titleOrLabel = /^(?:title|labels?)\s*:\s*(.*)$/i.exec(content);
+    return content === trimmed && titleOrLabel !== null && (
+      titleOrLabel[1] === "" || !/^["'`]/.test(titleOrLabel[1])
+    );
+  });
+}
+
+function hasRedactedContent(diff) {
+  return /(?:\[redacted\]|<redacted>|\bredacted\b)/i.test(diff);
+}
+
+function isHistoricalCorpus(corpus) {
+  return isRecord(corpus) && Object.hasOwn(corpus, "corpus_version");
 }
 
 export function validateSchema(schema) {
@@ -280,9 +405,18 @@ export function validateRubric(rubric, schema) {
 
 export function validateCorpus(corpus, rubric, schema) {
   const errors = [];
-  const keys = ["schema_version", "rubric_version", "prompt_version", "cases"];
+  const historical = isHistoricalCorpus(corpus);
+  const keys = historical
+    ? ["schema_version", "rubric_version", "prompt_version", "corpus_version", "provenance_sha256", "cases"]
+    : ["schema_version", "rubric_version", "prompt_version", "cases"];
   if (!hasExactKeys(corpus, keys, keys, "corpus", errors)) return errors;
   validateMatchingVersions(corpus, schema, "corpus", errors);
+  if (historical) {
+    validateVersion(corpus, "corpus_version", historicalCorpusVersion, "corpus", errors);
+    if (!sha256Pattern.test(corpus.provenance_sha256 ?? "")) {
+      errors.push("corpus.provenance_sha256 must be a lowercase SHA-256 digest");
+    }
+  }
   if (corpus.rubric_version !== rubric?.rubric_version) {
     errors.push("corpus.rubric_version must match the checked-in rubric");
   }
@@ -315,8 +449,23 @@ export function validateCorpus(corpus, rubric, schema) {
       ids.add(entry.id);
     }
     nonEmptyString(entry.title, `${path}.title`, errors);
-    if (nonEmptyString(entry.diff, `${path}.diff`, errors) && entry.id !== opaqueCaseId(entry.diff)) {
+    const hasDiff = nonEmptyString(entry.diff, `${path}.diff`, errors);
+    if (hasDiff && entry.id !== opaqueCaseId(entry.diff)) {
       errors.push(`${path}.id must equal the opaque SHA-256 ID derived from its diff`);
+    }
+    if (historical && hasDiff) {
+      if (entry.diff !== sanitizeHistoricalDiff(entry.diff)) {
+        errors.push(`${path}.diff must use LF and remove diff index lines`);
+      }
+      if (!entry.diff.startsWith("diff --git ")) {
+        errors.push(`${path}.diff must be a sanitized source diff`);
+      }
+      if (hasHistoricalMetadata(entry.diff)) {
+        errors.push(`${path}.diff must not include pull-request, commit, title, or label metadata`);
+      }
+      if (hasRedactedContent(entry.diff)) {
+        errors.push(`${path}.diff must not contain redacted content`);
+      }
     }
     if (!caseKinds.has(entry.kind)) {
       errors.push(`${path}.kind is invalid`);
@@ -391,7 +540,174 @@ export function validateCorpus(corpus, rubric, schema) {
   return errors;
 }
 
-function assetErrors({ schema, rubric, corpus }) {
+function nonEmptyBytes(value, path, errors) {
+  if (typeof value === "string" && value.length > 0) return true;
+  if (ArrayBuffer.isView(value) && value.byteLength > 0) return true;
+  errors.push(`${path} must be non-empty policy bytes`);
+  return false;
+}
+
+function validateHistoricalSanitization(value, path, errors) {
+  const startErrorCount = errors.length;
+  if (!hasExactKeys(value, historicalSanitizationKeys, historicalSanitizationKeys, path, errors)) return null;
+  if (value.line_endings !== "lf") errors.push(`${path}.line_endings must be lf`);
+  if (!sameStrings(value.removed_lines, ["index"])) {
+    errors.push(`${path}.removed_lines must equal [\"index\"]`);
+  }
+  if (!Array.isArray(value.removed_index_lines) || value.removed_index_lines.length === 0) {
+    errors.push(`${path}.removed_index_lines must be a non-empty array`);
+  } else {
+    let previousLine = 0;
+    for (const [index, removed] of value.removed_index_lines.entries()) {
+      const removedPath = `${path}.removed_index_lines[${index}]`;
+      if (!hasExactKeys(
+        removed,
+        historicalRemovedIndexLineKeys,
+        historicalRemovedIndexLineKeys,
+        removedPath,
+        errors,
+      )) continue;
+      if (!Number.isSafeInteger(removed.raw_line) || removed.raw_line < 1) {
+        errors.push(`${removedPath}.raw_line must be a positive integer`);
+      } else if (removed.raw_line <= previousLine) {
+        errors.push(`${removedPath}.raw_line must be strictly increasing`);
+      } else {
+        previousLine = removed.raw_line;
+      }
+      if (typeof removed.text !== "string" || !gitIndexLinePattern.test(removed.text)) {
+        errors.push(`${removedPath}.text must be an exact Git index line`);
+      }
+    }
+  }
+  if (!sameStrings(value.excluded_metadata, historicalMetadata)) {
+    errors.push(`${path}.excluded_metadata must exclude pull-request metadata`);
+  }
+  if (value.content_redaction !== "not_required") {
+    errors.push(`${path}.content_redaction must be not_required`);
+  }
+  return errors.length === startErrorCount ? value.removed_index_lines : null;
+}
+
+export function validateHistoricalAssets(assets) {
+  const { schema, rubric, corpus, provenance, selectionPolicy } = assets ?? {};
+  const errors = [
+    ...validateSchema(schema),
+    ...validateRubric(rubric, schema),
+    ...validateCorpus(corpus, rubric, schema),
+  ];
+  if (!isHistoricalCorpus(corpus)) {
+    errors.push("historical assets require corpus_version 2");
+    return errors;
+  }
+  if (!hasExactKeys(
+    provenance,
+    historicalProvenanceKeys,
+    historicalProvenanceKeys,
+    "historical provenance",
+    errors,
+  )) return errors;
+  validateVersion(provenance, "provenance_version", historicalCorpusVersion, "historical provenance", errors);
+  validateVersion(provenance, "corpus_version", historicalCorpusVersion, "historical provenance", errors);
+  if (!gitShaPattern.test(provenance.cutoff_commit_sha ?? "")) {
+    errors.push("historical provenance.cutoff_commit_sha must be a full lowercase Git SHA");
+  }
+  if (!sha256Pattern.test(provenance.selection_policy_sha256 ?? "")) {
+    errors.push("historical provenance.selection_policy_sha256 must be a lowercase SHA-256 digest");
+  }
+  const hasPolicy = nonEmptyBytes(selectionPolicy, "historical selection policy", errors);
+  if (hasPolicy && provenance.selection_policy_sha256 !== sha256Bytes(selectionPolicy)) {
+    errors.push("historical provenance.selection_policy_sha256 must match the raw selection policy bytes");
+  }
+  if (hasPolicy) {
+    const policyText = typeof selectionPolicy === "string"
+      ? selectionPolicy
+      : Buffer.from(selectionPolicy.buffer, selectionPolicy.byteOffset, selectionPolicy.byteLength).toString("utf8");
+    if (!policyText.includes(provenance.cutoff_commit_sha)) {
+      errors.push("historical selection policy must name the provenance cutoff commit");
+    }
+  }
+  if (corpus.provenance_sha256 !== sha256Json(provenance)) {
+    errors.push("corpus.provenance_sha256 must match the canonical historical provenance");
+  }
+  if (!Array.isArray(provenance.cases) || provenance.cases.length === 0) {
+    errors.push("historical provenance.cases must be a non-empty array");
+    return errors;
+  }
+  const corpusById = new Map((corpus.cases ?? []).map((entry) => [entry.id, entry]));
+  const provenanceIds = new Set();
+  const pullRequestCounts = new Map();
+  for (const [index, entry] of provenance.cases.entries()) {
+    const path = `historical provenance.cases[${index}]`;
+    if (!hasExactKeys(entry, historicalProvenanceCaseKeys, historicalProvenanceCaseKeys, path, errors)) continue;
+    if (!/^RF-[0-9A-F]{12}$/.test(entry.case_id ?? "")) {
+      errors.push(`${path}.case_id must match RF-XXXXXXXXXXXX`);
+    } else if (provenanceIds.has(entry.case_id)) {
+      errors.push(`${path}.case_id duplicates ${entry.case_id}`);
+    } else {
+      provenanceIds.add(entry.case_id);
+    }
+    if (!Number.isSafeInteger(entry.pull_request) || entry.pull_request < 1) {
+      errors.push(`${path}.pull_request must be a positive integer`);
+    } else {
+      pullRequestCounts.set(entry.pull_request, (pullRequestCounts.get(entry.pull_request) ?? 0) + 1);
+    }
+    for (const field of ["merge_commit_sha", "source_commit_sha", "source_parent_sha"]) {
+      if (!gitShaPattern.test(entry[field] ?? "")) {
+        errors.push(`${path}.${field} must be a full lowercase Git SHA`);
+      }
+    }
+    const pathspec = uniqueStringArray(entry.pathspec, `${path}.pathspec`, errors);
+    for (const item of pathspec) {
+      if (item.startsWith("/") || item.includes("\0") || item.split("/").includes("..")) {
+        errors.push(`${path}.pathspec must contain repository-relative paths`);
+      }
+    }
+    if (!["complete_source_commit", "path_family"].includes(entry.selection_mode)) {
+      errors.push(`${path}.selection_mode is invalid`);
+    }
+    for (const field of ["source_diff_sha256", "model_diff_sha256"]) {
+      if (!sha256Pattern.test(entry[field] ?? "")) {
+        errors.push(`${path}.${field} must be a lowercase SHA-256 digest`);
+      }
+    }
+    const removedIndexLines = validateHistoricalSanitization(entry.sanitization, `${path}.sanitization`, errors);
+    nonEmptyString(entry.answer_rationale, `${path}.answer_rationale`, errors);
+    const corpusCase = corpusById.get(entry.case_id);
+    if (!corpusCase) {
+      errors.push(`${path}.case_id has no matching corpus case: ${entry.case_id}`);
+    } else {
+      if (entry.model_diff_sha256 !== sha256Bytes(corpusCase.diff)) {
+        errors.push(`${path}.model_diff_sha256 must match its corpus case diff`);
+      }
+      if (removedIndexLines) {
+        try {
+          const sourceDiff = restoreHistoricalDiff(corpusCase.diff, removedIndexLines);
+          if (entry.source_diff_sha256 !== sha256Bytes(sourceDiff)) {
+            errors.push(`${path}.source_diff_sha256 must match the deterministically reconstructed raw diff`);
+          }
+          if (sanitizeHistoricalDiff(sourceDiff) !== corpusCase.diff) {
+            errors.push(`${path}.sanitization must reconstruct a source diff that sanitizes to its corpus diff`);
+          }
+        } catch (error) {
+          errors.push(`${path}.sanitization.removed_index_lines cannot reconstruct the raw source diff`);
+        }
+      }
+    }
+  }
+  for (const [pullRequest, count] of pullRequestCounts) {
+    if (count > 2) errors.push(`historical provenance has more than two cases for PR ${pullRequest}`);
+  }
+  for (const caseId of corpusById.keys()) {
+    if (!provenanceIds.has(caseId)) {
+      errors.push(`historical provenance is missing corpus case: ${caseId}`);
+    }
+  }
+  return errors;
+}
+
+export function validateAssets(assets) {
+  if (isHistoricalCorpus(assets?.corpus)) return validateHistoricalAssets(assets);
+  const { schema, rubric, corpus } = assets ?? {};
   return [
     ...validateSchema(schema),
     ...validateRubric(rubric, schema),
@@ -400,7 +716,7 @@ function assetErrors({ schema, rubric, corpus }) {
 }
 
 function requireValidAssets(assets) {
-  const errors = assetErrors(assets);
+  const errors = validateAssets(assets);
   if (errors.length > 0) throw new Error(errors.join("\n"));
 }
 
@@ -457,10 +773,10 @@ function validateBundle(bundle, assets, errors) {
 }
 
 export function validateResults(results, assets) {
-  const errors = assetErrors(assets ?? {});
+  const errors = validateAssets(assets ?? {});
   if (errors.length > 0) return errors;
   const { schema, rubric, corpus, bundle } = assets;
-  validateBundle(bundle, { schema, rubric, corpus }, errors);
+  validateBundle(bundle, assets, errors);
   if (!isRecord(bundle)) return errors;
   if (!hasExactKeys(results, resultTopLevelKeys, resultTopLevelKeys, "results", errors)) return errors;
   for (const name of ["schema_version", "rubric_version", "prompt_version"]) {
@@ -678,16 +994,143 @@ export function scoreResults(results, assets) {
   };
 }
 
+function errorMetricSummary(value) {
+  return {
+    decisions: value.decisions,
+    eligible_decisions: value.eligible_decisions,
+    rate: value.rate,
+  };
+}
+
+function agreementMetricSummary(value) {
+  return {
+    unanimous_cases: value.unanimous_cases,
+    total_cases: value.total_cases,
+    unanimous_rate: value.total_cases === 0 ? 0 : value.unanimous_cases / value.total_cases,
+    pairwise_agreements: value.pairwise_agreements,
+    pairwise_comparisons: value.pairwise_comparisons,
+    pairwise_rate: value.pairwise_comparisons === 0
+      ? 0
+      : value.pairwise_agreements / value.pairwise_comparisons,
+  };
+}
+
+function comparisonSummary(score) {
+  const { metrics } = score;
+  return {
+    runs: metrics.runs,
+    cases: metrics.cases,
+    decisions: metrics.decisions,
+    false_safe: errorMetricSummary(metrics.false_safe),
+    false_reject: errorMetricSummary(metrics.false_reject),
+    dangerous_false_safe: errorMetricSummary(metrics.dangerous_false_safe),
+    adversarial_false_safe: errorMetricSummary(metrics.adversarial_false_safe),
+    expected_reason_misses: errorMetricSummary(metrics.expected_reason_misses),
+    classification_agreement: agreementMetricSummary(metrics.classification_agreement),
+    reason_code_set_agreement: agreementMetricSummary(metrics.reason_code_set_agreement),
+  };
+}
+
+function numericDeltas(baseline, historical) {
+  return Object.fromEntries(
+    Object.keys(baseline).map((key) => [key, historical[key] - baseline[key]]),
+  );
+}
+
+function comparisonDeltas(baseline, historical) {
+  return {
+    runs: historical.runs - baseline.runs,
+    cases: historical.cases - baseline.cases,
+    decisions: historical.decisions - baseline.decisions,
+    false_safe: numericDeltas(baseline.false_safe, historical.false_safe),
+    false_reject: numericDeltas(baseline.false_reject, historical.false_reject),
+    dangerous_false_safe: numericDeltas(
+      baseline.dangerous_false_safe,
+      historical.dangerous_false_safe,
+    ),
+    adversarial_false_safe: numericDeltas(
+      baseline.adversarial_false_safe,
+      historical.adversarial_false_safe,
+    ),
+    expected_reason_misses: numericDeltas(
+      baseline.expected_reason_misses,
+      historical.expected_reason_misses,
+    ),
+    classification_agreement: numericDeltas(
+      baseline.classification_agreement,
+      historical.classification_agreement,
+    ),
+    reason_code_set_agreement: numericDeltas(
+      baseline.reason_code_set_agreement,
+      historical.reason_code_set_agreement,
+    ),
+  };
+}
+
+export function compareResults({
+  baselineResults,
+  historicalResults,
+  baselineAssets,
+  historicalAssets,
+}) {
+  if (isHistoricalCorpus(baselineAssets?.corpus)) {
+    throw new Error("comparison baseline must use corpus version 1");
+  }
+  if (historicalAssets?.corpus?.corpus_version !== historicalCorpusVersion) {
+    throw new Error("comparison historical input must use corpus version 2");
+  }
+  const baselineErrors = validateResults(baselineResults, baselineAssets);
+  if (baselineErrors.length > 0) throw new Error(baselineErrors.join("\n"));
+  const historicalErrors = validateResults(historicalResults, historicalAssets);
+  if (historicalErrors.length > 0) throw new Error(historicalErrors.join("\n"));
+  const baselineRubricSha256 = sha256Json(baselineAssets.rubric);
+  const historicalRubricSha256 = sha256Json(historicalAssets.rubric);
+  if (baselineRubricSha256 !== historicalRubricSha256) {
+    throw new Error("comparison results must use the same rubric");
+  }
+  const baselineModelId = baselineResults.runs[0].model_id;
+  const historicalModelId = historicalResults.runs[0].model_id;
+  if (baselineModelId !== historicalModelId) {
+    throw new Error("comparison results must use the same model_id");
+  }
+  const baseline = comparisonSummary(scoreResults(baselineResults, baselineAssets));
+  const historical = comparisonSummary(scoreResults(historicalResults, historicalAssets));
+  return {
+    authority: "report_only",
+    comparison: "unpaired_descriptive",
+    model_id: baselineModelId,
+    rubric_sha256: baselineRubricSha256,
+    baseline: {
+      corpus_version: 1,
+      bundle_sha256: baselineAssets.bundle.bundle_sha256,
+      metrics: baseline,
+    },
+    historical: {
+      corpus_version: historicalCorpusVersion,
+      bundle_sha256: historicalAssets.bundle.bundle_sha256,
+      metrics: historical,
+    },
+    deltas: comparisonDeltas(baseline, historical),
+  };
+}
+
 function loadJson(repoRoot, relativePath) {
   return JSON.parse(readFileSync(resolve(repoRoot, relativePath), "utf8"));
 }
 
-function loadAssets(repoRoot = defaultRepoRoot) {
-  return {
-    schema: loadJson(repoRoot, assetPaths.schema),
-    rubric: loadJson(repoRoot, assetPaths.rubric),
-    corpus: loadJson(repoRoot, assetPaths.corpus),
+function loadAssets(repoRoot = defaultRepoRoot, corpusVersion = 1) {
+  const paths = assetPaths[corpusVersion];
+  if (!paths) throw new Error(`unsupported corpus version: ${corpusVersion}`);
+  const assets = {
+    schema: loadJson(repoRoot, paths.schema),
+    rubric: loadJson(repoRoot, paths.rubric),
+    corpus: loadJson(repoRoot, paths.corpus),
   };
+  if (paths.provenance) {
+    assets.provenance = loadJson(repoRoot, paths.provenance);
+    assets.selectionPolicy = readFileSync(resolve(repoRoot, paths.selectionPolicy));
+  }
+  return assets;
 }
 
 function printErrors(errors) {
@@ -695,33 +1138,109 @@ function printErrors(errors) {
 }
 
 function usage() {
-  console.error("usage: node scripts/pure-refactoring-evaluator.mjs check | prompt | score --results FILE");
+  console.error("usage: node scripts/pure-refactoring-evaluator.mjs check [--corpus-version 1|2] | prompt [--corpus-version 1|2] | score [--corpus-version 1|2] --results FILE | compare --baseline-results FILE --historical-results FILE");
+}
+
+function parseCorpusVersion(args) {
+  let corpusVersion = 1;
+  let seen = false;
+  const remaining = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--corpus-version") {
+      remaining.push(args[index]);
+      continue;
+    }
+    const value = args[index + 1];
+    if (seen || !["1", "2"].includes(value)) return null;
+    seen = true;
+    corpusVersion = Number(value);
+    index += 1;
+  }
+  return { corpusVersion, remaining };
+}
+
+function parseFileOptions(args, names) {
+  if (args.length !== names.length * 2) return null;
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const name = args[index];
+    const value = args[index + 1];
+    if (!names.includes(name) || !value || Object.hasOwn(values, name)) return null;
+    values[name] = value;
+  }
+  return names.every((name) => Object.hasOwn(values, name)) ? values : null;
+}
+
+function readResults(path) {
+  return JSON.parse(readFileSync(resolve(process.cwd(), path), "utf8"));
+}
+
+function validateLoadedAssets(assets) {
+  const errors = validateAssets(assets);
+  if (errors.length > 0) {
+    printErrors(errors);
+    process.exitCode = 2;
+    return false;
+  }
+  return true;
 }
 
 function main(args) {
   const command = args[0];
-  if (!command || (command === "check" && args.length !== 1) || (command === "prompt" && args.length !== 1)) {
+  if (!command || !["check", "prompt", "score", "compare"].includes(command)) {
     usage();
     process.exitCode = 2;
     return;
   }
-  if (command !== "check" && command !== "prompt" && command !== "score") {
+  if (command === "compare") {
+    const files = parseFileOptions(args.slice(1), ["--baseline-results", "--historical-results"]);
+    if (!files) {
+      usage();
+      process.exitCode = 2;
+      return;
+    }
+    const baselineAssets = loadAssets(defaultRepoRoot, 1);
+    const historicalAssets = loadAssets(defaultRepoRoot, 2);
+    if (!validateLoadedAssets(baselineAssets) || !validateLoadedAssets(historicalAssets)) return;
+    const baseline = { ...baselineAssets, bundle: buildPromptBundle(baselineAssets) };
+    const historical = { ...historicalAssets, bundle: buildPromptBundle(historicalAssets) };
+    let baselineResults;
+    let historicalResults;
+    try {
+      baselineResults = readResults(files["--baseline-results"]);
+      historicalResults = readResults(files["--historical-results"]);
+    } catch (error) {
+      console.error(`pure-refactoring evaluator: cannot read results: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 2;
+      return;
+    }
+    console.log(JSON.stringify(compareResults({
+      baselineResults,
+      historicalResults,
+      baselineAssets: baseline,
+      historicalAssets: historical,
+    }), null, 2));
+    return;
+  }
+  const parsed = parseCorpusVersion(args.slice(1));
+  if (!parsed) {
     usage();
     process.exitCode = 2;
     return;
   }
-  if (command === "score" && (args.length !== 3 || args[1] !== "--results" || !args[2])) {
+  if ((command === "check" || command === "prompt") && parsed.remaining.length !== 0) {
     usage();
     process.exitCode = 2;
     return;
   }
-  const assets = loadAssets();
-  const errors = assetErrors(assets);
-  if (errors.length > 0) {
-    printErrors(errors);
+  const files = command === "score" ? parseFileOptions(parsed.remaining, ["--results"]) : null;
+  if (command === "score" && !files) {
+    usage();
     process.exitCode = 2;
     return;
   }
+  const assets = loadAssets(defaultRepoRoot, parsed.corpusVersion);
+  if (!validateLoadedAssets(assets)) return;
   const bundle = buildPromptBundle(assets);
   if (command === "check") {
     console.log(`pure-refactoring evaluator: OK (${assets.corpus.cases.length} cases, ${assets.rubric.minimum_runs} required runs)`);
@@ -733,7 +1252,7 @@ function main(args) {
   }
   let results;
   try {
-    results = JSON.parse(readFileSync(resolve(process.cwd(), args[2]), "utf8"));
+    results = readResults(files["--results"]);
   } catch (error) {
     console.error(`pure-refactoring evaluator: cannot read results: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;

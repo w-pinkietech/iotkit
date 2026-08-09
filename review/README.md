@@ -27,7 +27,7 @@ and quality review, not a second product corpus.
 | Perspective | Status | Intent (short) | Entry |
 |---|---|---|---|
 | **battle-tested** | Active — first perspective | Operational failures IoTKit must not reintroduce; field evidence triage | [battle-tested/README.md](battle-tested/README.md) |
-| **pure-refactoring** | Experimental — report-only | Measure a blinded synthetic evaluator; never evidence or merge authority | [pure-refactoring/README.md](pure-refactoring/README.md) |
+| **pure-refactoring** | Experimental — report-only / iterate | Measure blinded synthetic and recorded historical evaluator corpora; never evidence or merge authority | [pure-refactoring/README.md](pure-refactoring/README.md) |
 
 Future perspectives (not defined here yet) may cover secrets handling,
 issue-scope drift, public contracts, Console operator journeys, or layer rules.
