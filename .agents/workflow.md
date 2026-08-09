@@ -53,6 +53,20 @@ before implementation.
 
 Every lane keeps the scoped issue, product invariants, focused behavior tests,
 product-doc impact, human merge approval, and risk-matched verification.
+Run focused checks first; the stable `required CI` aggregate is the remote
+authority for selected PR lanes. `scripts/verify.sh --workspace` is an opt-in
+diagnosis, not a routine acceptance sweep. The exact `/auto-merge` comment from
+a human `User` account with an `OWNER`, `MEMBER`, or `COLLABORATOR` association
+and effective repository permission of `admin`, `maintain`, or `write` on an
+eligible PR is an explicit human approval action: it posts `human approval`
+success for the current PR head and arms native squash auto-merge, which waits
+for `required CI`; it does not replace review. Every opened, reopened,
+ready-for-review, or synchronized PR head gets a pending `human approval`
+status. New commits disarm it and reset that status to pending, so an authorized
+maintainer must leave a new exact comment after reviewing the updated PR.
+Default-branch protection must require `required CI`, `human approval`, and
+CodeQL. See the
+[verification ownership matrix](../.github/verification-ownership.md).
 
 ### Process weight and optional harnesses
 

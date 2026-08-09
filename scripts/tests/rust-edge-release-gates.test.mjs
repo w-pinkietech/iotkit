@@ -44,7 +44,8 @@ test("capacity gate emits and validates both existing evidence profiles", () => 
 });
 
 test("MQTT and output gates retain real broker and outage coverage", () => {
-  assert.match(sources["verify.sh"], /test-edge-output\.sh/);
+  assert.match(sources["verify.sh"], /--workspace/);
+  assert.doesNotMatch(sources["verify.sh"], /test-edge-output\.sh/);
   assert.match(sources["test-edge-mqtt.sh"], /test-rust-edge-custody\.sh/);
   assert.match(sources["test-edge-mqtt.sh"], /test-rust-edge-runtime\.sh/);
   assert.match(
@@ -140,6 +141,7 @@ test("PostgreSQL gate covers upgrades, profile migration, and recovery hold", ()
 
 test("host release gate saves the real Edge Node recovery drill evidence", () => {
   const source = sources["test-edge-host-release-gate.sh"];
+  assert.match(source, /test-edge-mqtt\.sh/);
   assert.match(source, /IOTKIT_TEST_RECOVERY_DRILL=1/);
   assert.match(source, /IOTKIT_RECOVERY_EVIDENCE_DIR/);
   assert.match(source, /edge-node-recovery/);

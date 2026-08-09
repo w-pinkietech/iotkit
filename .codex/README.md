@@ -55,6 +55,11 @@ Main inspects the actual diff and reruns the specified verification commands fro
 a fresh Main turn before acceptance. Reviewer findings are independent judgment;
 they do not replace Main's command evidence.
 
+Focused checks are the normal implementation evidence. Do not make
+`scripts/verify.sh --workspace` a routine delegated-task sweep; it is an
+explicit diagnosis. The `required CI` aggregate owns selected remote acceptance;
+see the [verification ownership matrix](../.github/verification-ownership.md).
+
 ## Routine implementation loop
 
 Use this loop for every routine task (or each clearly bounded plan/checklist

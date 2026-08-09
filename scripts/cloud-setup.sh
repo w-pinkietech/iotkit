@@ -18,4 +18,4 @@ command -v cargo >/dev/null 2>&1 || {
 rustup show active-toolchain
 cargo fetch --locked
 
-echo "Codex Cloud environment ready for scripts/verify.sh"
+echo "Codex Cloud environment ready for scripts/verify.sh --workspace"

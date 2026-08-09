@@ -25,6 +25,9 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres \
 echo "== PostgreSQL Console operator journey =="
 IOTKIT_TEST_STORAGE_PROFILE=postgres "$repo_root/scripts/test-edge-console-e2e.sh"
 
+echo "== Composed MQTT custody, projection, HTTP, and output PUBACK =="
+"$repo_root/scripts/test-edge-mqtt.sh"
+
 echo "== PostgreSQL semantics, Output Adapters, MQTT outage convergence =="
 IOTKIT_TEST_STORAGE_PROFILE=postgres "$repo_root/scripts/test-edge-output.sh"
 

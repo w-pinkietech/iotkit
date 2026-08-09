@@ -3,7 +3,7 @@
 Status: **Optional operator guide** (2026-07-13)
 
 Codex Cloud は候補実装や調査を別環境で行うための任意ツールであり、通常のローカル開発
-パイプラインや `scripts/verify.sh` の一部ではない。Cloud の結果は候補としてローカルへ
+パイプラインや `scripts/verify.sh --workspace` の一部ではない。Cloud の結果は候補としてローカルへ
 戻し、`AGENTS.md`のlaneと検証規則に従って扱う。
 
 ## Start or resume

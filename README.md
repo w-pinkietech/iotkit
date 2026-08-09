@@ -223,10 +223,13 @@ Requires the pinned toolchain in [`rust-toolchain.toml`](rust-toolchain.toml)
 (Rust 1.95.0; `rustup` installs it automatically).
 
 ```bash
-cargo build --workspace
-cargo test  --workspace      # ~530 tests; 2 hardware-only tests are #[ignore]d
-cargo clippy --workspace --all-targets -- -D warnings
+# Focused Rust feedback
+cargo test -p <owning-crate>
+cargo clippy -p <owning-crate> --all-targets -- -D warnings
 cargo fmt --all --check
+
+# Opt-in full-workspace diagnosis; not a routine PR sweep
+scripts/verify.sh --workspace
 
 # External Output Adapter, PUBACK, and reconnect gate with Docker Mosquitto
 scripts/test-edge-output.sh
@@ -254,11 +257,14 @@ generated from `edge/openapi/edge-console-v1.yaml`. The distribution embeds
 the esbuild output as `static/console.js`, so the IoTKit Edge runtime does not
 require Node.js.
 
-CI checks the crate layer rules, Rust unit tests, generated Console assets, and the embedded
-browser journey on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Run
-`test-edge-host-release-gate.sh` once before release for integration coverage including Docker,
-PostgreSQL, and Broker failures.
-`scripts/verify.sh` runs the fmt / layer-rule / test / clippy checks locally.
+CI selects changed-scope Rust, Console, Edge, and trial lanes and publishes the
+stable `required CI` aggregate on every PR (see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Unknown paths and CI
+infrastructure changes fail closed to all lanes. Run focused checks locally;
+`scripts/verify.sh --workspace` is an opt-in diagnosis, not a routine PR sweep.
+Run `test-edge-host-release-gate.sh` once before release for Docker,
+PostgreSQL, and Broker integration coverage. The complete default ownership and
+runtime policy is in the [verification ownership matrix](.github/verification-ownership.md).
 
 ## Repository layout
 

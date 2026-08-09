@@ -163,10 +163,13 @@ Edge NodeとIoTKit Edgeを結ぶ内部Brokerと、外部application Brokerは別
 [`rust-toolchain.toml`](rust-toolchain.toml)で固定したtoolchain（Rust 1.95.0）が必要です。`rustup`が自動的に導入します。
 
 ```bash
-cargo build --workspace
-cargo test  --workspace      # 約530テスト。hardware専用の2テストは#[ignore]
-cargo clippy --workspace --all-targets -- -D warnings
+# 対象crateのRust feedback
+cargo test -p <owning-crate>
+cargo clippy -p <owning-crate> --all-targets -- -D warnings
 cargo fmt --all --check
+
+# 明示した場合だけのworkspace全体診断。通常のPR sweepではない
+scripts/verify.sh --workspace
 
 # Docker Mosquittoによる外部Output Adapter、PUBACK、再接続ゲート
 scripts/test-edge-output.sh
@@ -190,7 +193,13 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 
 IoTKit ConsoleはRustの型付きserver-side renderingを使い、browser動作を`edge/frontend/src/`のTypeScriptで実装します。JSON API型は`edge/openapi/edge-console-v1.yaml`から生成します。配布物にはesbuild済みの`static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要です。
 
-CIは各PRでcrate layer rule、Rust unit test、生成済みConsole asset、埋め込みbrowser journeyを検査します（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。Docker、PostgreSQL、Broker障害を含む統合検証は、release前に`test-edge-host-release-gate.sh`を一度実行します。`scripts/verify.sh`はfmt、layer rule、test、clippyをlocalで実行します。
+CIは変更範囲に応じてRust、Console、Edge、trial laneを選び、各PRで安定した
+`required CI` aggregateを公開します（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。
+unknown pathとCI infrastructureの変更は全laneへfail closedします。localではfocused checkを
+実行し、`scripts/verify.sh --workspace`は通常のPR sweepではなく明示的な診断だけに使います。
+Docker、PostgreSQL、Broker障害を含む統合検証は、release前に
+`test-edge-host-release-gate.sh`を一度実行します。既定ownerと想定runtimeは
+[検証所有マトリクス](.github/verification-ownership.md)にあります。
 
 ## Repository構成
 

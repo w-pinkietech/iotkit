@@ -31,12 +31,16 @@ version="$(node --input-type=module -e \
   'import { readFileSync } from "node:fs"; import { extractWorkspaceVersion } from "./scripts/check-release-version.mjs"; process.stdout.write(extractWorkspaceVersion(readFileSync("Cargo.toml", "utf8")));')"
 tag="v${version}"
 node scripts/check-release-version.mjs --tag "$tag"
-scripts/verify.sh
+scripts/verify.sh --workspace
+scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 git status --short --branch
 ```
 
 The checker refuses a tag that does not exactly equal `v` plus the workspace
-version. The worktree must be clean before continuing.
+version. The worktree must be clean before continuing. The host gate owns the
+release integration suites; field/manual recovery, fencing, and hardware
+evidence remain outside the release default. See the
+[verification ownership matrix](.github/verification-ownership.md).
 
 ## Publish from the merged commit
 

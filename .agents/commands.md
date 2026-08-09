@@ -18,9 +18,11 @@ node scripts/product-docs-impact.mjs soft-check --base origin/master --pr-body-f
 # Battle-tested review routing
 node scripts/battle-tested-review.mjs select --base origin/master
 
-# Rust focused / full
+# Rust focused / explicit workspace diagnosis
 cargo test -p <crate-name>
-scripts/verify.sh
+cargo clippy -p <crate-name> --all-targets -- -D warnings
+# Opt-in diagnosis only; not a routine PR command
+scripts/verify.sh --workspace
 
 # IoTKit Edge focused / full
 cargo test -p iotkit-edge --test <contract-test>
@@ -34,8 +36,13 @@ scripts/test-edge-console-e2e.sh
 scripts/test-edge-host-release-gate.sh NEW_REPORT_DIRECTORY
 ```
 
-`scripts/verify.sh` runs Rust formatting, layer rules, workspace tests, and
-Clippy with `-D warnings`. The host release gate is not a per-PR default.
+For routine Rust work, use the affected package or contract check first. CI
+selects the authoritative changed-scope Rust, Console, Edge, and trial lanes;
+a local pass does not replace it. `scripts/verify.sh --workspace` runs Rust
+formatting, layer rules, workspace tests, and Clippy with `-D warnings` only
+when an explicit full-workspace diagnosis is useful. The host release gate and
+field evidence are not per-PR defaults; see the
+[verification ownership matrix](../.github/verification-ownership.md).
 Raspberry Pi and physical sensors are required only when the task explicitly
 requires hardware evidence.
 
