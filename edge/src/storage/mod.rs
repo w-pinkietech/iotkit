@@ -30,6 +30,7 @@ mod profiles;
 mod recovery;
 mod recovery_activation;
 mod semantic_output;
+mod status;
 pub use activation::{
     ActivationCommand, DescriptorApply, DescriptorDevice, DescriptorSignal, EdgeNode, EdgeNodeState,
 };
@@ -42,11 +43,14 @@ pub use history::{
 pub use migrate::{MigrationCursor, StorageMigrationReport, migrate_sqlite_to_postgres};
 #[doc(hidden)]
 pub use profiles::{
+    POSTGRES_DIAGNOSTIC_SIGNAL_IDENTITIES_SQL, POSTGRES_DIAGNOSTIC_SIGNAL_RECEIPT_SQL,
     POSTGRES_RECENT_SIGNAL_INPUTS_SQL, POSTGRES_SIGNAL_IDENTITY_SQL,
-    SQLITE_RECENT_SIGNAL_INPUTS_SQL, SQLITE_SIGNAL_IDENTITY_SQL,
+    SQLITE_DIAGNOSTIC_SIGNAL_RECEIPTS_SQL, SQLITE_RECENT_SIGNAL_INPUTS_SQL,
+    SQLITE_SIGNAL_IDENTITY_SQL,
 };
 pub use recovery_activation::{RecoveryCase, RecoveryCommand, RecoveryPrepare};
 pub use semantic_output::{ClaimedOutput, OutputMark};
+pub use status::{EdgeNodeStatus, StatusApply};
 
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/postgres");

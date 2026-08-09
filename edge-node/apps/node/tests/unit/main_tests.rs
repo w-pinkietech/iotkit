@@ -103,3 +103,21 @@ fn stale_activity_from_a_previous_runtime_generation_is_ignored() {
         }
     ));
 }
+
+#[test]
+fn mqtt_status_publisher_waits_for_collector_and_all_configured_adapters() {
+    let health = Arc::new(Mutex::new(health::HealthState::new(90)));
+    assert!(!may_start_status_publisher(&health, 1));
+
+    {
+        let mut state = health.lock().unwrap();
+        state.collector_alive = true;
+    }
+    assert!(
+        may_start_status_publisher(&health, 0),
+        "adapterless service-only mode is ready once its collector starts"
+    );
+    health.lock().unwrap().note_adapter_running("adapter-1");
+    assert!(may_start_status_publisher(&health, 1));
+    assert!(!may_start_status_publisher(&health, 2));
+}

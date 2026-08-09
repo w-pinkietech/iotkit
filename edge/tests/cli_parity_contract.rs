@@ -443,6 +443,23 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
     let source = sqlx::SqlitePool::connect(&format!("sqlite:{}", path.display()))
         .await
         .unwrap();
+    sqlx::query(
+        "UPDATE edge_node_activations SET state='active' \
+         WHERE edge_node_id='edge-node-01' AND ledger_epoch='epoch-01'",
+    )
+    .execute(&source)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO edge_node_status(\
+         edge_node_id,ledger_epoch,boot_id,status_seq,collector_state,adapters_json,\
+         accepted_through,pending_publications,storage_pressure,received_at,last_live_received_at,pending_since_at\
+         ) VALUES('edge-node-01','epoch-01','boot-0123456789abcdef0123456789abcdef',1,'running',?,1,0,0,3,3,NULL)",
+    )
+    .bind(b"[]".as_slice())
+    .execute(&source)
+    .await
+    .unwrap();
     // The offline copy must copy the stored v11 key exactly, not rederive it from record_json.
     sqlx::query(
         "UPDATE raw_records SET series_key='stored-source-series-key' \
@@ -475,8 +492,9 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
     let report = migrate_sqlite_to_postgres(&path, &dsn).await.unwrap();
     assert!(report.completed);
     assert_eq!(report.edge_id, edge_id);
-    assert_eq!(report.schema_version, 11);
+    assert_eq!(report.schema_version, 12);
     assert_eq!(report.table_counts["raw_records"], 1);
+    assert_eq!(report.table_counts["edge_node_status"], 1);
     assert_eq!(report.table_counts["semantic_projection_queue"], 1);
     assert_eq!(report.cursors[0].accepted_through, 1);
     assert_eq!(report.content_digest.len(), 64);
@@ -503,12 +521,23 @@ async fn postgres_migration_copies_and_verifies_a_fresh_rust_schema_when_configu
     .fetch_one(&target)
     .await
     .unwrap();
+    let copied_status: (String, i64, Option<i64>) = sqlx::query_as(
+        "SELECT boot_id,status_seq,last_live_received_at FROM edge_node_status \
+         WHERE edge_node_id='edge-node-01'",
+    )
+    .fetch_one(&target)
+    .await
+    .unwrap();
     assert_eq!(history_index_count, 1);
     assert_eq!(
         target_series_key.as_deref(),
         Some("stored-source-series-key")
     );
     assert_eq!(preview_index_count, 1);
+    assert_eq!(
+        copied_status,
+        ("boot-0123456789abcdef0123456789abcdef".into(), 1, Some(3))
+    );
     target.close().await;
 }
 

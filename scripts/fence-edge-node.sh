@@ -68,12 +68,14 @@ edge_username=$(awk -F= '
   exit 1
 }
 required_acl=(
+  "topic write iotkit/v1/edge-nodes/$edge_node_id/status"
   "topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result"
   "topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/completion-ack"
   "topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/request"
   "topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion"
   "topic read iotkit/v1/edge-nodes/+/recovery/result"
   "topic read iotkit/v1/edge-nodes/+/recovery/completion-ack"
+  "topic read iotkit/v1/edge-nodes/+/status"
   "topic write iotkit/v1/edge-nodes/+/recovery/request"
   "topic write iotkit/v1/edge-nodes/+/recovery/completion"
 )
@@ -85,7 +87,7 @@ required_acl=(
 }
 for rule in "${required_acl[@]}"; do
   [[ $(grep -Fxc "$rule" "$acl") -eq 1 ]] || {
-    echo "Recovery ACL is not current; run upgrade-edge-node-recovery-acl.sh before fencing" >&2
+    echo "Edge Node ACL is not current; run upgrade-edge-node-recovery-acl.sh before fencing" >&2
     exit 1
   }
 done

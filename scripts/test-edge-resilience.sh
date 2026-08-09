@@ -84,6 +84,32 @@ edge_stats() {
     2>/dev/null || true
 }
 
+edge_node_live_status() {
+  if [[ ! -f "$IOTKIT_EDGE_DATA_DIR/edge.db" ]]; then
+    return 0
+  fi
+  sqlite3 -separator '|' "$IOTKIT_EDGE_DATA_DIR/edge.db" \
+    "SELECT boot_id, status_seq
+     FROM edge_node_status
+     WHERE edge_node_id = '$edge_node_id'
+       AND ledger_epoch = '$ledger_epoch'
+       AND last_live_received_at IS NOT NULL" \
+    2>/dev/null || true
+}
+
+edge_node_live_status_detail() {
+  if [[ ! -f "$IOTKIT_EDGE_DATA_DIR/edge.db" ]]; then
+    return 0
+  fi
+  sqlite3 -separator '|' "$IOTKIT_EDGE_DATA_DIR/edge.db" \
+    "SELECT boot_id,status_seq,collector_state,json_array_length(CAST(adapters_json AS TEXT))
+     FROM edge_node_status
+     WHERE edge_node_id = '$edge_node_id'
+       AND ledger_epoch = '$ledger_epoch'
+       AND last_live_received_at IS NOT NULL" \
+    2>/dev/null || true
+}
+
 diagnostics() {
   echo "edge_cursor=$(edge_cursor) edge_stats=$(edge_stats)" >&2
   compose ps >&2 || true
@@ -121,6 +147,34 @@ wait_for_convergence_within_five_seconds() {
   done
   diagnostics
   echo "convergence did not complete within five seconds at pub_seq $expected" >&2
+  return 1
+}
+
+wait_for_live_status() {
+  local prior_boot_id=${1:-} current_boot_id current_status_seq
+  for _ in $(seq 1 20); do
+    IFS='|' read -r current_boot_id current_status_seq <<<"$(edge_node_live_status)"
+    if [[ -n "$current_boot_id" && "$current_boot_id" != "$prior_boot_id" ]]; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  diagnostics
+  echo "Edge Node did not publish a live status immediately after MQTT readiness" >&2
+  return 1
+}
+
+wait_for_next_status_heartbeat() {
+  local boot_id=$1 status_seq=$2 current_boot_id current_status_seq
+  for _ in $(seq 1 80); do
+    IFS='|' read -r current_boot_id current_status_seq <<<"$(edge_node_live_status)"
+    if [[ "$current_boot_id" == "$boot_id" && "$current_status_seq" -gt "$status_seq" ]]; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  diagnostics
+  echo "Edge Node did not publish its 30-second status heartbeat" >&2
   return 1
 }
 
@@ -254,6 +308,7 @@ SQL
 cat >"$IOTKIT_MOSQUITTO_ACL_FILE" <<EOF
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
+topic write iotkit/v1/edge-nodes/$edge_node_id/status
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
 topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
 topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result
@@ -265,6 +320,7 @@ topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion
 
 user edge
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/status
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic read iotkit/v1/edge-nodes/+/activation/result
 topic read iotkit/v1/edge-nodes/+/recovery/result
@@ -333,6 +389,25 @@ if [[ "$central_activation_ready" != true ]]; then
   exit 1
 fi
 restart_edge
+wait_for_live_status
+IFS='|' read -r prior_status_boot_id _ <<<"$(edge_node_live_status)"
+if [[ -z "$prior_status_boot_id" ]]; then
+  diagnostics
+  echo "Edge Node had no live status before the restart assertion" >&2
+  exit 1
+fi
+restart_edge
+wait_for_live_status "$prior_status_boot_id"
+IFS='|' read -r status_boot_id status_seq <<<"$(edge_node_live_status)"
+IFS='|' read -r first_boot_id first_status_seq first_collector_state first_adapter_count \
+  <<<"$(edge_node_live_status_detail)"
+if [[ "$status_boot_id" == "$prior_status_boot_id" || "$first_boot_id" != "$status_boot_id" || "$first_status_seq" != "1" || \
+  "$first_collector_state" != "running" || "$first_adapter_count" != "0" ]]; then
+  diagnostics
+  echo "first accepted status did not follow a new boot collector initialization: prior=$prior_status_boot_id current=$first_boot_id|$first_status_seq|$first_collector_state|$first_adapter_count" >&2
+  exit 1
+fi
+wait_for_next_status_heartbeat "$status_boot_id" "$status_seq"
 wait_for_convergence 300
 
 # Establish a freshly connected, acknowledged idle state. The marker proves the

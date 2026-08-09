@@ -335,6 +335,7 @@ components:
       type: object
       additionalProperties: false
       required:
+        - profile
         - state
         - filesystem_available
         - database_bytes
@@ -348,10 +349,11 @@ components:
         - pending_semantic_projection_count
         - pending_output_count
         - projection_failure_count
-        - backup_protected_raw_count
-        - unprotected_raw_count
-        - automatic_raw_purge_enabled
+        - absolute_reserve_state
       properties:
+        profile:
+          type: string
+          enum: [embedded, postgres]
         state:
           type: string
           enum: [healthy, warning, critical, unavailable]
@@ -373,10 +375,9 @@ components:
         projection_failure_count: { type: integer, format: int64, minimum: 0 }
         last_backup_id: { type: string }
         last_backup_at: { type: integer, format: int64, minimum: 0 }
-        last_backup_raw_record_count: { type: integer, format: int64, minimum: 0 }
-        backup_protected_raw_count: { type: integer, format: int64, minimum: 0 }
-        unprotected_raw_count: { type: integer, format: int64, minimum: 0 }
-        automatic_raw_purge_enabled: { type: boolean }
+        absolute_reserve_state:
+          type: string
+          enum: [adequate, warning, critical, unknown]
     DiagnosticIssue:
       type: object
       additionalProperties: false
@@ -394,7 +395,7 @@ components:
     DiagnosticReport:
       type: object
       additionalProperties: false
-      required: [generated_at, state, issues, truncated, limitations]
+      required: [generated_at, state, issues, truncated, limitations, stages]
       properties:
         generated_at: { type: integer, format: int64, minimum: 0 }
         state:
@@ -408,6 +409,42 @@ components:
         limitations:
           type: array
           items: { type: string }
+        stages:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiagnosticStage"
+        broker_certificate:
+          $ref: "#/components/schemas/CertificateStatus"
+    DiagnosticStage:
+      type: object
+      additionalProperties: false
+      required: [stage, state, code, affected_count, scope, cause, action, href]
+      properties:
+        stage:
+          type: string
+          enum: [sensor, adapter, node, broker, raw_custody, projection, external_output]
+        state:
+          type: string
+          enum: [ok, warning, critical, unknown, not_applicable]
+        code: { type: string }
+        last_success_at: { type: integer, format: int64, minimum: 0 }
+        affected_count: { type: integer, minimum: 0, maximum: 64 }
+        scope: { type: string }
+        cause: { type: string }
+        action: { type: string }
+        href: { type: string }
+        blocked_by:
+          type: string
+          enum: [sensor, adapter, node, broker, raw_custody, projection, external_output]
+    CertificateStatus:
+      type: object
+      additionalProperties: false
+      required: [available, needs_action]
+      properties:
+        available: { type: boolean }
+        not_after: { type: integer, format: int64 }
+        days_remaining: { type: integer, format: int64 }
+        needs_action: { type: boolean }
     SemanticKind:
       type: string
       enum: [numeric, boolean, cumulative_counter, alarm]

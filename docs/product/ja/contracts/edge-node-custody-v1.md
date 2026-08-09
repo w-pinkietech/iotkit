@@ -1,11 +1,11 @@
 ---
 type: Contract
 title: "Edge Node保管責任契約 v1"
-description: "MQTTによるcustody移転、activation、record family、ack、retry、認証を定義します。"
+description: "MQTTによるcustody移転と、分離したbounded Edge Node運用status heartbeat契約を定義します。"
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 9
+revision: 10
 ---
 
 # Edge Node保管責任契約 v1
@@ -25,13 +25,37 @@ revision: 9
 
 ```text
 iotkit/v1/edge-nodes/{edge_node_id}/records
+iotkit/v1/edge-nodes/{edge_node_id}/status
 iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
 iotkit/v1/edge-nodes/{edge_node_id}/descriptors
 iotkit/v1/edge-nodes/{edge_node_id}/activation/request
 iotkit/v1/edge-nodes/{edge_node_id}/activation/result
 ```
 
-`records`と`accepted-through`はQoS 1、retain禁止です。`descriptors`はQoS 1 retainedのcomplete current-state replicaで、custody streamではありません。Activation request/resultはQoS 1、retain禁止です。IoTKit Edgeはmatching resultをcommitするまでrequestを耐久retryし、MQTT PUBACKをactivation完了としません。ACLは各Edge Nodeを自身のtopicへ限定します。
+`records`と`accepted-through`はQoS 1、retain禁止です。`descriptors`と`status`はQoS 1 retainedのcurrent-state replicaで、custody streamではありません。Activation request/resultはQoS 1、retain禁止です。IoTKit Edgeはmatching resultをcommitするまでrequestを耐久retryし、MQTT PUBACKをactivation完了としません。ACLは各Edge Nodeを自身のrecords/status/descriptors/activation result publishと、自身のacknowledgement/activation request subscribeへ限定します。
+
+## 運用status heartbeat
+
+`status`はstrictかつsecret-freeなv1運用heartbeatです。Topic identityとpayloadの`edge_node_id`は一致しなければなりません。Edge NodeはMQTT subscriptionの確認後に一度、その後30秒ごとにpublishします。Last-will messageは使いません。
+
+```json
+{
+  "schema_version": 1,
+  "edge_node_id": "edge-node-01",
+  "ledger_epoch": "epoch-01",
+  "boot_id": "boot-0123456789abcdef0123456789abcdef",
+  "status_seq": 1,
+  "collector_state": "running",
+  "adapters": [{"adapter_id": "trial-sample", "state": "running"}],
+  "accepted_through": 42,
+  "pending_publications": 3,
+  "storage_pressure": false
+}
+```
+
+Schema versionは正確に`1`、`status_seq`は正であり一つの`boot_id`内で単調増加します。`collector_state`は`running`または`stopped`です。最大64個のuniqueでboundedなopaque adapter IDを持て、各stateは`running`、`restarting`、`exhausted`、`stopped`です。Cursorとpending countはnon-negativeでboundedな整数です。Unknown field、安全でないidentity、duplicate adapter、無効enum、無効encoding、identity mismatchはrejectします。Producer timestamp、endpoint、credential、topic、filesystem path、adapter error text、raw errorは含めません。
+
+IoTKit Edgeは自身のreceipt timeをfreshness authorityとし、current activeな`(edge_node_id, ledger_epoch)`だけをlive statusとして受け入れます。一つのbootではより大きいsequenceだけを受け入れ、新しいbootは新しいsequenceを始めます。Duplicateまたはlower sequenceはfreshnessを更新しません。Retained replayはabsentな過去rowを補えますが、live statusを更新せず新しいlive rowを上書きしません。Heartbeat内の`accepted_through`はNodeの観測でありacknowledgementではありません。Custodyをcommitして通常purgeを許可するのは、IoTKit Edgeが検証した`accepted-through` topicだけです。
 
 ## Activationとpublication admission
 

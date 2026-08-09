@@ -2,6 +2,10 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+command -v sqlite3 >/dev/null || {
+  echo "sqlite3 is required for the trial status contract" >&2
+  exit 1
+}
 scratch=$(mktemp -d)
 export XDG_DATA_HOME="$scratch/state"
 state="$XDG_DATA_HOME/iotkit/trial"
@@ -77,6 +81,12 @@ if grep -Fq "$password" "$launcher_log"; then
   exit 1
 fi
 
+stage="checking the trial status-topic ACL"
+edge_node_id=$(jq -er '.edge_node_id' "$state/runtime.json")
+grep -Fxq 'topic read iotkit/v1/edge-nodes/+/status' "$state/mosquitto/acl"
+grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/status" \
+  "$state/mosquitto/acl"
+
 origin="http://127.0.0.1:$port"
 stage="waiting for the trial Console login page"
 trial_login_ready=false
@@ -150,6 +160,74 @@ compose=(
   --env-file "$state/trial.env"
   --file "$repo_root/deploy/compose.trial.yaml"
 )
+stage="checking the first post-restart status heartbeat reports initialized trial collection"
+previous_boot_id=$(sqlite3 "$state/edge/edge.db" \
+  "SELECT boot_id FROM edge_node_status WHERE edge_node_id='$edge_node_id' LIMIT 1" \
+  2>/dev/null || true)
+"${compose[@]}" restart edge-node
+truthful_first_status=false
+for _ in $(seq 1 60); do
+  status_row=$(sqlite3 -separator '|' "$state/edge/edge.db" \
+    "SELECT status.boot_id,status.collector_state,\
+      json_array_length(CAST(status.adapters_json AS TEXT)),\
+      (SELECT COUNT(*) FROM json_each(CAST(status.adapters_json AS TEXT)) \
+       WHERE json_extract(value,'$.state')='running') \
+     FROM edge_node_status AS status JOIN edge_node_activations AS activation \
+       ON activation.edge_node_id=status.edge_node_id AND activation.ledger_epoch=status.ledger_epoch \
+     WHERE activation.state='active' AND status.edge_node_id='$edge_node_id' \
+       AND status.last_live_received_at IS NOT NULL\
+       AND ('$previous_boot_id'='' OR status.boot_id<>'$previous_boot_id')" 2>/dev/null || true)
+  if [[ "$status_row" == *'|running|1|1' ]]; then
+    truthful_first_status=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$truthful_first_status" != true ]]; then
+  echo "accepted trial status did not report initialized collection (previous boot: ${previous_boot_id:-none}; last row: ${status_row:-none})" >&2
+  exit 1
+fi
+
+stage="checking causal diagnostics during an internal Broker outage"
+"${compose[@]}" stop broker
+broker_fault_detected=false
+for _ in $(seq 1 60); do
+  if curl --noproxy '*' -fsS -b "$cookies" \
+    "$origin/api/v1/system/diagnostics" >"$scratch/diagnostics.json" &&
+    jq -e '
+      ([.stages[] | select(.stage == "broker" and .state == "critical" and .code == "broker_disconnected")] | length == 1)
+      and ([.stages[] | select(.stage == "node" and .blocked_by == "broker")] | length == 1)
+    ' "$scratch/diagnostics.json" >/dev/null &&
+    curl --noproxy '*' -fsS -b "$cookies" "$origin/status" >"$scratch/status.html" &&
+    grep -Fq '内部Broker経路' "$scratch/status.html" &&
+    grep -Fq '>重大<' "$scratch/status.html"; then
+    broker_fault_detected=true
+    break
+  fi
+  sleep 1
+done
+[[ "$broker_fault_detected" == true ]]
+
+stage="checking causal diagnostics recover after internal Broker restart"
+"${compose[@]}" start broker
+broker_recovered=false
+for _ in $(seq 1 60); do
+  if curl --noproxy '*' -fsS -b "$cookies" \
+    "$origin/api/v1/system/diagnostics" >"$scratch/diagnostics.json" &&
+    jq -e '
+      ([.stages[] | select(.stage == "broker" and .state == "ok" and .code == "broker_ready")] | length == 1)
+      and ([.stages[] | select(.stage == "node" and has("blocked_by"))] | length == 0)
+    ' "$scratch/diagnostics.json" >/dev/null &&
+    curl --noproxy '*' -fsS -b "$cookies" "$origin/status" >"$scratch/status.html" &&
+    grep -Fq '内部Broker経路' "$scratch/status.html" &&
+    grep -Fq '>正常<' "$scratch/status.html"; then
+    broker_recovered=true
+    break
+  fi
+  sleep 1
+done
+[[ "$broker_recovered" == true ]]
+
 stage="enqueuing a custody smoke record"
 smoke=$("${compose[@]}" exec -T edge-node \
   iotkit-edge-nodectl --db /data/node.db smoke enqueue)

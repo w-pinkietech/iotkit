@@ -7,10 +7,12 @@ use iotkit_core_publish::activation::{
 };
 use iotkit_core_publish::mqtt::MqttBinding;
 use iotkit_core_publish::store::{
-    TargetRow, effective_cursor, select_batch, target_advance_cursor, target_get,
+    TargetRow, effective_cursor, outbox_backlog_count, select_batch, target_advance_cursor,
+    target_get,
 };
 use iotkit_core_publish::wire::{
-    AcceptedThrough, EGRESS_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_RECORDS, RecordBatch,
+    AcceptedThrough, AdapterState, CollectorState, EGRESS_SCHEMA_VERSION, MAX_BATCH_BYTES,
+    MAX_BATCH_RECORDS, MAX_STATUS_BYTES, RecordBatch, StatusAdapter, StatusHeartbeat,
     publication_id,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
@@ -20,14 +22,16 @@ use rumqttc::{
     AsyncClient, Event, Incoming, MqttOptions, QoS, SubscribeFilter, SubscribeReasonCode, Transport,
 };
 use rusqlite::Connection;
+use uuid::Uuid;
 
 const TARGET_ID: &str = "edge";
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
+const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-struct RuntimeConfig {
+pub(crate) struct RuntimeConfig {
     connection: MqttExitConfig,
     binding: MqttBinding,
     password: String,
@@ -50,11 +54,13 @@ struct PreparedDescriptor {
     payload: Vec<u8>,
 }
 
-pub(crate) async fn spawn_mqtt_publish_task(
+/// Installs the durable publication target before an adapter can create a
+/// standalone outbox. Starting the MQTT network task remains a later lifecycle
+/// decision so its first status heartbeat reflects the running collector.
+pub(crate) async fn prepare_mqtt_publish_runtime(
     db: DbHandle,
-    health: Arc<Mutex<HealthState>>,
     config: MqttExitConfig,
-) -> Result<tokio::task::JoinHandle<()>, String> {
+) -> Result<RuntimeConfig, String> {
     let password = read_password(&config)?;
     let ca = read_ca(&config)?;
     let expected_endpoint = endpoint(&config);
@@ -70,17 +76,25 @@ pub(crate) async fn spawn_mqtt_publish_task(
         .await
         .map_err(|error| error.to_string())?;
 
-    let runtime = RuntimeConfig {
+    Ok(RuntimeConfig {
         connection: config,
         binding,
         password,
         ca,
-    };
-    Ok(tokio::spawn(run(db, health, runtime)))
+    })
+}
+
+pub(crate) fn spawn_mqtt_publish_task(
+    db: DbHandle,
+    health: Arc<Mutex<HealthState>>,
+    runtime: RuntimeConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(run(db, health, runtime))
 }
 
 async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConfig) {
     let records_topic = runtime.binding.records_topic.clone();
+    let status_topic = runtime.binding.status_topic.clone();
     let ack_topic = runtime.binding.accepted_through_topic.clone();
     let descriptor_topic = runtime.binding.descriptor_topic.clone();
     let activation_request_topic = runtime.binding.activation_request_topic.clone();
@@ -91,7 +105,13 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
         runtime.connection.host.clone(),
         runtime.connection.port,
     );
-    configure_packet_limits(&mut options, &records_topic, &ack_topic, &descriptor_topic);
+    configure_packet_limits(
+        &mut options,
+        &records_topic,
+        &ack_topic,
+        &descriptor_topic,
+        &status_topic,
+    );
     options.set_keep_alive(Duration::from_secs(30));
     options.set_clean_session(true);
     options.set_credentials(&runtime.binding.username, &runtime.password);
@@ -108,6 +128,11 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
     let mut retry = tokio::time::interval_at(timer_started_at + RETRY_INTERVAL, RETRY_INTERVAL);
     // Start after a full interval; a delayed task then performs one bounded retry.
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut heartbeat = tokio::time::interval_at(
+        timer_started_at + STATUS_HEARTBEAT_INTERVAL,
+        STATUS_HEARTBEAT_INTERVAL,
+    );
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut idle_probe =
         tokio::time::interval_at(timer_started_at + IDLE_PROBE_INTERVAL, IDLE_PROBE_INTERVAL);
     // Start after a full interval. One indexed no-inflight probe is enough after a busy interval.
@@ -115,6 +140,8 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
     let mut subscribed = false;
     let mut inflight: Option<PreparedBatch> = None;
     let mut published_descriptor: Option<DescriptorIdentity> = None;
+    let boot_id = format!("boot-{}", Uuid::new_v4().simple());
+    let mut status_seq = 0_u64;
 
     loop {
         tokio::select! {
@@ -150,6 +177,20 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                             tracing::warn!("MQTT Broker rejected one or more control subscriptions");
                             continue;
                         }
+                        if let Err(error) = publish_status_heartbeat(
+                            &db,
+                            &health,
+                            &client,
+                            &runtime.binding,
+                            &boot_id,
+                            &mut status_seq,
+                        ).await {
+                            tracing::warn!(error = %error, "MQTT status heartbeat publish attempt failed");
+                        }
+                        // The reconnect-path heartbeat above is the initial status for this
+                        // confirmed subscription. Do not immediately emit a second one when
+                        // an overdue interval tick is selected next.
+                        heartbeat.reset();
                         if let Err(error) = publish_current_or_next(
                             &db,
                             &client,
@@ -276,6 +317,18 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                     tracing::warn!(error = %error, "pre-activation reading cleanup failed");
                 }
             }
+            _ = heartbeat.tick(), if subscribed => {
+                if let Err(error) = publish_status_heartbeat(
+                    &db,
+                    &health,
+                    &client,
+                    &runtime.binding,
+                    &boot_id,
+                    &mut status_seq,
+                ).await {
+                    tracing::warn!(error = %error, "MQTT status heartbeat publish retry failed");
+                }
+            }
             _ = idle_probe.tick(), if subscribed && inflight.is_none() => {
                 if let Err(error) = publish_current_or_next(
                     &db,
@@ -291,6 +344,119 @@ async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConf
                 }
             }
         }
+    }
+}
+
+async fn publish_status_heartbeat(
+    db: &DbHandle,
+    health: &Arc<Mutex<HealthState>>,
+    client: &AsyncClient,
+    binding: &MqttBinding,
+    boot_id: &str,
+    status_seq: &mut u64,
+) -> Result<(), String> {
+    let next_seq = next_status_sequence(*status_seq)?;
+    let edge_node_id = binding.edge_node_id.clone();
+    let (ledger_epoch, accepted_through, pending_publications) = db
+        .with_conn(move |conn| {
+            let ledger_epoch = iotkit_core_ledger::ledger_epoch(conn)
+                .map_err(|error| storage_error(error.to_string()))?;
+            let target = target_get(conn).map_err(|error| storage_error(error.to_string()))?;
+            let Some(target) = target else {
+                return Err(storage_error("MQTT exit target is not initialized".into()));
+            };
+            if target.target_id != TARGET_ID || !target.archive_responsible {
+                return Err(storage_error("MQTT exit target is not active".into()));
+            }
+            let accepted_through = effective_cursor(&ledger_epoch, &target);
+            let pending_publications = outbox_backlog_count(conn, &ledger_epoch, &target)
+                .map_err(|error| storage_error(error.to_string()))?;
+            Ok((ledger_epoch, accepted_through, pending_publications))
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    let snapshot = health.lock().expect("health state mutex poisoned").clone();
+    let heartbeat = build_status_heartbeat(
+        &snapshot,
+        edge_node_id,
+        ledger_epoch,
+        boot_id,
+        next_seq,
+        accepted_through,
+        pending_publications,
+    );
+    heartbeat.validate().map_err(|error| error.to_string())?;
+    let payload = serde_json::to_vec(&heartbeat).map_err(|error| error.to_string())?;
+    if payload.len() > MAX_STATUS_BYTES {
+        return Err("status heartbeat exceeds encoded byte limit".into());
+    }
+    client
+        .publish(
+            &binding.status_topic,
+            mqtt_qos(binding),
+            binding.status_retain,
+            payload,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    *status_seq = next_seq;
+    Ok(())
+}
+
+fn next_status_sequence(status_seq: u64) -> Result<u64, String> {
+    status_seq
+        .checked_add(1)
+        .ok_or_else(|| "status heartbeat sequence exhausted".to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_status_heartbeat(
+    snapshot: &HealthState,
+    edge_node_id: String,
+    ledger_epoch: String,
+    boot_id: &str,
+    status_seq: u64,
+    accepted_through: i64,
+    pending_publications: i64,
+) -> StatusHeartbeat {
+    StatusHeartbeat {
+        schema_version: EGRESS_SCHEMA_VERSION,
+        edge_node_id,
+        ledger_epoch,
+        boot_id: boot_id.into(),
+        status_seq,
+        collector_state: if snapshot.collector_alive {
+            CollectorState::Running
+        } else {
+            CollectorState::Stopped
+        },
+        // Do not truncate: omitting a failed adapter would make the Console
+        // claim a bounded but incomplete health view. The wire validator
+        // rejects an invalid local configuration before anything is sent.
+        adapters: snapshot
+            .adapters
+            .iter()
+            .map(|adapter| StatusAdapter {
+                adapter_id: adapter.id.clone(),
+                state: match adapter.status {
+                    iotkit_edge_node::health::AdapterRuntimeStatus::Running => {
+                        AdapterState::Running
+                    }
+                    iotkit_edge_node::health::AdapterRuntimeStatus::Restarting => {
+                        AdapterState::Restarting
+                    }
+                    iotkit_edge_node::health::AdapterRuntimeStatus::Exhausted => {
+                        AdapterState::Exhausted
+                    }
+                    iotkit_edge_node::health::AdapterRuntimeStatus::Stopped => {
+                        AdapterState::Stopped
+                    }
+                },
+            })
+            .collect(),
+        accepted_through,
+        pending_publications,
+        storage_pressure: snapshot.db.watermark_exceeded,
     }
 }
 
@@ -628,17 +794,24 @@ fn configure_packet_limits(
     records_topic: &str,
     ack_topic: &str,
     descriptor_topic: &str,
+    status_topic: &str,
 ) {
-    let limit = mqtt_packet_limit(records_topic, ack_topic, descriptor_topic);
+    let limit = mqtt_packet_limit(records_topic, ack_topic, descriptor_topic, status_topic);
     options.set_max_packet_size(limit, limit);
 }
 
-fn mqtt_packet_limit(records_topic: &str, ack_topic: &str, descriptor_topic: &str) -> usize {
+fn mqtt_packet_limit(
+    records_topic: &str,
+    ack_topic: &str,
+    descriptor_topic: &str,
+    status_topic: &str,
+) -> usize {
     MAX_BATCH_BYTES
         + records_topic
             .len()
             .max(ack_topic.len())
             .max(descriptor_topic.len())
+            .max(status_topic.len())
         + MQTT_PACKET_OVERHEAD_BYTES
 }
 

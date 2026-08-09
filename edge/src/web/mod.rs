@@ -368,6 +368,20 @@ pub struct ConsoleStorage {
     pub host_capacity_available: bool,
     pub retention_note: String,
     pub diagnostic_messages: Vec<String>,
+    pub causal_stages: Vec<ConsoleDiagnosticStage>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConsoleDiagnosticStage {
+    pub label: String,
+    pub state_label: String,
+    pub state_class: String,
+    pub last_success_at: Option<i64>,
+    pub scope: String,
+    pub cause: String,
+    pub action: String,
+    pub href: String,
+    pub primary: bool,
 }
 
 #[async_trait]
@@ -1677,6 +1691,7 @@ pub mod test_support {
         resources_configured: bool,
         include_pending_node: bool,
         include_live_cumulative_rule: bool,
+        causal_stages: Vec<ConsoleDiagnosticStage>,
     }
     impl Default for StubApplication {
         fn default() -> Self {
@@ -1688,6 +1703,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
     }
@@ -1701,6 +1717,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn numeric_only() -> Self {
@@ -1712,6 +1729,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: false,
+                causal_stages: Vec::new(),
             }
         }
         pub fn complete() -> Self {
@@ -1723,6 +1741,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: false,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn unconfigured() -> Self {
@@ -1734,6 +1753,7 @@ pub mod test_support {
                 resources_configured: false,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn activating() -> Self {
@@ -1745,6 +1765,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn post_activation() -> Self {
@@ -1756,6 +1777,7 @@ pub mod test_support {
                 resources_configured: false,
                 include_pending_node: false,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn post_activation_viewer() -> Self {
@@ -1767,6 +1789,7 @@ pub mod test_support {
                 resources_configured: false,
                 include_pending_node: false,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn viewer() -> Self {
@@ -1778,6 +1801,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn recovery() -> Self {
@@ -1789,6 +1813,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn system_admin() -> Self {
@@ -1800,6 +1825,7 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
             }
         }
         pub fn rate_limited() -> Self {
@@ -1811,6 +1837,14 @@ pub mod test_support {
                 resources_configured: true,
                 include_pending_node: true,
                 include_live_cumulative_rule: true,
+                causal_stages: Vec::new(),
+            }
+        }
+        pub fn with_diagnostic_stages(causal_stages: Vec<ConsoleDiagnosticStage>) -> Self {
+            Self {
+                authenticated: true,
+                causal_stages,
+                ..Self::default()
             }
         }
     }
@@ -2362,6 +2396,7 @@ pub mod test_support {
                     host_capacity_available: true,
                     retention_note: "rawの自動削除は無効".into(),
                     diagnostic_messages: vec!["確認が必要なことはありません".into()],
+                    causal_stages: self.causal_stages.clone(),
                 },
                 ..ConsoleView::default()
             })

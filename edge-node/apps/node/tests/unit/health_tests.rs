@@ -1,4 +1,12 @@
 use super::*;
+
+#[test]
+fn a_new_health_state_does_not_claim_the_collector_is_running() {
+    assert!(
+        !HealthState::new(90).collector_alive,
+        "the MQTT publisher must not report a running collector before startup marks it"
+    );
+}
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

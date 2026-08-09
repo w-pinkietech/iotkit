@@ -60,13 +60,15 @@ node_result="topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result"
 node_ack="topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/completion-ack"
 node_request="topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/request"
 node_completion="topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion"
+node_status="topic write iotkit/v1/edge-nodes/$edge_node_id/status"
 edge_result="topic read iotkit/v1/edge-nodes/+/recovery/result"
 edge_ack="topic read iotkit/v1/edge-nodes/+/recovery/completion-ack"
 edge_request="topic write iotkit/v1/edge-nodes/+/recovery/request"
 edge_completion="topic write iotkit/v1/edge-nodes/+/recovery/completion"
+edge_status="topic read iotkit/v1/edge-nodes/+/status"
 required=(
-  "$node_result" "$node_ack" "$node_request" "$node_completion"
-  "$edge_result" "$edge_ack" "$edge_request" "$edge_completion"
+  "$node_result" "$node_ack" "$node_request" "$node_completion" "$node_status"
+  "$edge_result" "$edge_ack" "$edge_request" "$edge_completion" "$edge_status"
 )
 recovery_directory="$edge_dir/recovery"
 if [[ ! -e "$recovery_directory" ]]; then
@@ -113,9 +115,9 @@ awk \
   -v node_user="user $edge_node_id" \
   -v edge_user="user $edge_username" \
   -v node_result="$node_result" -v node_ack="$node_ack" \
-  -v node_request="$node_request" -v node_completion="$node_completion" \
+  -v node_request="$node_request" -v node_completion="$node_completion" -v node_status="$node_status" \
   -v edge_result="$edge_result" -v edge_ack="$edge_ack" \
-  -v edge_request="$edge_request" -v edge_completion="$edge_completion" '
+  -v edge_request="$edge_request" -v edge_completion="$edge_completion" -v edge_status="$edge_status" '
   NR == FNR { present[$0]=1; next }
   {
     print
@@ -124,11 +126,13 @@ awk \
       if (!present[node_ack]) print node_ack
       if (!present[node_request]) print node_request
       if (!present[node_completion]) print node_completion
+      if (!present[node_status]) print node_status
     } else if ($0 == edge_user) {
       if (!present[edge_result]) print edge_result
       if (!present[edge_ack]) print edge_ack
       if (!present[edge_request]) print edge_request
       if (!present[edge_completion]) print edge_completion
+      if (!present[edge_status]) print edge_status
     }
   }
 ' "$acl" "$acl" >"$work/acl.next"

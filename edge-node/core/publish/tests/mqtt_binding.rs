@@ -12,6 +12,10 @@ fn mqtt_binding_derives_the_d9_identity_and_topics() {
         "iotkit/v1/edge-nodes/edge-node-01/records"
     );
     assert_eq!(
+        binding.status_topic,
+        "iotkit/v1/edge-nodes/edge-node-01/status"
+    );
+    assert_eq!(
         binding.accepted_through_topic,
         "iotkit/v1/edge-nodes/edge-node-01/accepted-through"
     );
@@ -46,6 +50,7 @@ fn mqtt_binding_derives_the_d9_identity_and_topics() {
     assert_eq!(binding.qos, 1);
     assert!(!binding.retain);
     assert!(binding.descriptor_retain);
+    assert!(binding.status_retain);
 }
 
 #[test]

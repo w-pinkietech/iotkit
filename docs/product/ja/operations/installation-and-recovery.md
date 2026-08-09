@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 24
+revision: 28
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -42,6 +42,7 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 ## 2. 日常確認
 
 - **状態:** IoTKit Edge、signal数、意味未設定、certificate残日数。
+- **状態 / 因果診断:** Sensor input → Input Adapter → Edge Node collector → internal Broker path → raw custody → semantic projection → external outputの順でevidenceを読みます。一つだけ表示される最初のcriticalまたはwarning actionから始めます。各stageは、確認できる最終成功時刻（不明なら**まだ確認できません**）、boundedな影響範囲、慎重な原因、次の確認を表示します。current durable/process factから再計算し、後続の一致する成功evidenceでactive stateを自動clearします。手動でincidentをdismissする操作はありません。`unknown`はcurrent evidence不足でありhealthyではありません。Edge Node heartbeatは90秒未満がfresh、90秒以上300秒未満がwarning、300秒以上がcriticalです。Retainedだけのheartbeatは過去detailであり、古いraw値も上流evidenceがhealthyなときだけadvisoryです。どちらもsensor停止の証明にはなりません。
 - **機器管理 / 収集ノード:** discovery、登録、最終descriptor通信、診断対象generation。**登録済み**は認可stateで、online保証ではない。
 - **ライブ:** 保存済みで有効な`cumulative_counter`計測ruleごとにcardを表示し、calibrationとruleを適用した最新の処理済み累積current valueと最終受信を、graphとは独立して示す。Graphは画面を開いてからの結果だけを示す。同じsignalに複数の有効な累積ruleがあれば別cardになり、numeric、boolean、alarmのrule cardとruleのないsignalは表示せず、有効な累積ruleが一つもない場合だけdashboard全体に設定案内を一つ表示する。累積graphは画面を開いてから全期間のbucketを伸ばし、各bucketの保存された終端stateをstaircaseで示す。Browser側は最大1,000bucketにboundedし、sessionが長くなったらbucket幅を広げて時間窓を巻き戻さない。開始後の処理済み値がまだなければ、過去のcurrent valueが表示できる場合でもgraphを空にして待機中と示し、cardからsensor詳細へ進める。Browserは画面がvisibleな間だけ5秒ごとに表示領域内の最大12件を更新する。一度取得した最終受信の経過時間とgraphの時間窓は、IoTKit Edgeの画面開始時刻を基準にBrowserの単調な経過時間で進めるため、一時的に再取得へ失敗しても進み続ける。未受信は明示し、5分以上新着がないruleは停止と断定せず**要確認**にする。Rawと過去dataは**受信履歴**で確認する。要確認時はsensor、Adapter、Edge Node、Broker、IoTKit Edge、semantic projectionの順に確認する。ライブとSensor詳細の**実信号プレビュー**のgraph横軸は有効なsemantic observed/event time、最終受信とcurrentの鮮度はIoTKit Edgeのraw receipt timeを使う。実信号プレビューは同じ直近60秒・1秒bucket graphで、bounded input history全体を評価してbooleanと累積のstateを維持する。累積ruleのresult cardには保存済みcurrent totalを示し、実信号プレビューには仮計算の直近60秒deltaを明記する。numeric、boolean、alarmと新規draftの上段graphは直近60秒のままだが、保存済み累積ruleを選択中は上段の受信値/設定結果graphと下段の保存済み累積staircaseが同じ画面を開いた時刻（表示開始）から現在までの横軸を使う。上段は重なり合う直近応答をbrowser内で継続し、表示点は全期間を代表する最大1,000点にまとめる。保存済みruleは別のstaircase graphで、選択した保存済みruleの表示開始後の累積を示す。永続化済みcurrentの変化を保存順に追加し、変化がなくても保存済み値を単調な画面時刻まで延長する。表示点は最大1,000点にboundedする。新規draftは保存後に累積開始と示す。Staircaseは1秒bucketの平均ではなく、保存順の保存済みcurrent stateを示す。正常に保存済みの点を取得できないsessionは表示開始後の保存済み変化なしと示し、履歴取得失敗は取得できないと示す。
 - **受信履歴:** sensor・Edge Node・期間を一画面で絞り、選択中sensorと一致するbounded graphとrecent rawを確認。Raw graphの横軸はIoTKit Edge receipt日時を表示time zoneで示し、縦軸は値の範囲とsensor単位を示す。同条件CSVは汎用Observation exportで業務帳票ではない。
@@ -94,9 +95,9 @@ Recoveryは既存sessionを失効します。Password、MQTT credential、privat
 ## 5. 障害確認順序
 
 1. Edge NodeとIoTKit Edge両方のDBを保全する。
-2. Consoleとservice logを読み、最初にidentityを作り直さない。
+2. Consoleが使える場合は因果status sectionを読み、最初のactionable criticalまたはwarning原因から確認する。`unknown`、登録済み、descriptor、過去raw dataをonlineの根拠にしない。IoTKit Edgeのsupervised fatal taskが終了した場合はConsoleを意図的に利用できないため、hostのservice managerとservice logを使う。
 3. DNS/routeとcertificateを確認する。
-4. Mosquitto authとexact-topic ACLを確認する。
+4. Mosquitto authとexact-topic ACLを確認する。`iotkit/v1/edge-nodes/{edge_node_id}/status`について、Edge NodeのwriteとIoTKit Edgeのread permissionも含める。
 5. Edge Node `accepted-through`を確認する。未受理recordはEdge Nodeに残す。
 6. IoTKit Edgeのsemantic projection queueとoutput queueを確認する。同じObservation identityでretryする。
 7. 復旧後、raw cursor、pending semantic projection、pending outputの収束前に保持dataを削除しない。
@@ -223,6 +224,10 @@ Pre-encryption snapshotは専用tmpfsへ置きます。Host CLIもowner-only、b
 旧機を停止して物理的に隔離した後も、まずBroker credentialを失効させます。`fence-edge-node.sh`
 は同梱Mosquitto passwordを世代更新し、Brokerをrestartして既存sessionを切断します。
 新passwordと非secret receiptはowner-onlyの新directoryへ一度だけ出力されます。
+
+このreleaseへ更新後は、Edge Nodeを再起動または登録する前にACL upgradeを実行します。これは
+recovery権限に加え、Edge Nodeの`status` publishとEdgeのwildcard `status` readを両方追加します。
+片側だけを手作業で追加してはいけません。
 
 ```bash
 set -euo pipefail
@@ -514,7 +519,7 @@ Device正本ledgerはEdge Nodeにあります。Console row編集を交換扱い
 
 IoTKit Edgeを停止し、未ack dataはBroker/Edge Nodeに保持させます。Dual-write、自動fallbackをせず、IoTKit tableのない空DBへ移行します。Running Edgeがdeployment lockを持つため停止忘れでは開始しません。Protected consistent snapshotから全tableをcopyします。Connection情報はmode `0600` JSONへ置き、DSN/passwordをargvへ渡しません。
 
-Offline profile移行が受理するSQLite sourceは現行schema v11だけです。v9またはv10のsourceでは、先にそのSQLite DBを現行IoTKit Edgeで起動してtransactionalなv11 upgradeの完了を待ち、停止してから移行します。この一回限りのupgradeはcanonicalな有効measurement envelopeだけから導出raw series keyをbackfillします。Offline copyはその保存値とv11 raw-preview indexを保持・検証し、targetで別の値を導出しません。
+Offline profile移行が受理するSQLite sourceは現行schema v12だけです。v9、v10、v11のsourceでは、先にそのSQLite DBを現行IoTKit Edgeで起動してtransactionalなv12 upgradeの完了を待ち、停止してから移行します。このupgradeは導出raw series keyを保持し、latest Edge Node運用status row、current epoch raw receipt、active rule/route診断lookupのindexを追加します。rowのbackfill、保持済みhistoryのcopy、heartbeat historyの作成は行いませんが、index構築は保持済みraw、Observation、outbox historyを読むため、history量に応じた時間と一時的なdatabase/WAL容量を確保します。Offline copyは保存済みraw-series value、v11 raw-preview index、v12 latest-status table、v12 diagnostic indexを保持・検証し、targetで別の値を導出しません。
 
 ```json
 {"dsn":"postgres://iotkit:REDACTED@postgres:5432/iotkit?sslmode=require"}
@@ -536,7 +541,7 @@ iotkit-edge storage migrate \
 1. 暗号化backupを作りConsole表示を確認する。
 2. Git commit、Compose設定、image IDを記録し、credential/keyをGitへ入れない。
 3. 新versionを取得・buildし、Brokerを動かしたままEdgeだけ停止する。
-4. Schema v11では暗号化済み更新前backupを保持し、導出raw-series-key backfill、raw-preview index、SQLite WAL増加分に十分な空き容量を確保する。Startup migrationは有効canonical measurement envelopeをbackfillし、保持historyでは時間がかかり得るが、schema v11を完全にcommitするかrollbackする。
+4. Schema v12では暗号化済み更新前backupを保持し、導出raw-series-key backfill、raw-preview index、latest-status table、current epoch raw receiptとactive rule/route診断index、SQLite WAL増加に必要な時間と十分な空き容量を確保する。必要な有効canonical measurement envelopeをstartup migrationでbackfillするが、status tableはheartbeat historyをbackfillせず、診断indexはhistory rowをcopyしない。一方でindex構築は保持済みraw、Observation、outbox historyを読む。Migrationはschema v12を完全にcommitするかrollbackする。
 5. 新Edgeを起動する。Schema migrationはstartup transaction。
 6. HTTPS login、diagnostics、cursor再収束、pending semantic projection、pending outbox、history graph、CSVを確認する。Restart recovery完了として扱う前にqueueをdrainする。
 7. 失敗時はEdgeを停止する。旧binaryでmigration済みDBを開かず、旧commit/imageへ戻し、更新前backupを**新candidate DB**へrestoreして§8と同じswapを行う。Identity/credentialを作り直さない。

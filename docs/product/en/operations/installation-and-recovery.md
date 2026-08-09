@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 24
+revision: 28
 ---
 
 # IoTKit Edge installation and recovery
@@ -71,6 +71,16 @@ fallback.
 ## 2. Daily checks
 
 - **Status**: IoTKit Edge, signal count, missing meaning, and certificate days remaining.
+- **Status / causal diagnosis**: read the ordered Sensor input → Input Adapter → Edge Node
+  collector → internal Broker path → raw custody → semantic projection → external output evidence.
+  Start with its single earliest critical or warning action. Each stage shows its last successful
+  fact when known (otherwise **not yet confirmed**), bounded affected scope, cautious cause, and
+  next check. It is recalculated from current durable and process facts: a later matching success
+  clears an active state automatically, with no manual incident dismissal. An `unknown` state means
+  there is not enough current evidence, not that the stage is healthy. An Edge Node heartbeat is fresh for 90
+  seconds, warning from 90 through 299 seconds, and critical at or after 300 seconds. A retained-only
+  heartbeat is historical detail, and an old raw value is only an advisory when upstream evidence
+  is healthy: neither proves a sensor is stopped.
 - **Equipment / Collection Nodes**: discovery, registration, the last descriptor communication,
   and the exact data generation used for diagnosis. **Registered** is an authorization
   state; it does not mean the Edge Node is currently online.
@@ -187,9 +197,13 @@ Git.
 ## 5. Failure order
 
 1. Preserve both Edge Node and IoTKit Edge databases.
-2. Read the Console and service logs; do not recreate identity as a first step.
+2. If the Console is available, read its causal status section and start with the first actionable
+   critical or warning cause. Do not turn `unknown`, registration, a descriptor, or historic raw
+   data into an online assertion. If a fatal supervised IoTKit Edge task exited, the Console is
+   intentionally unavailable; use the host service manager and service logs instead.
 3. Check DNS/route and certificate status.
-4. Check Mosquitto authentication and exact-topic ACL.
+4. Check Mosquitto authentication and exact-topic ACL, including the Edge Node write and IoTKit
+   Edge read permissions for `iotkit/v1/edge-nodes/{edge_node_id}/status`.
 5. Check Edge Node `accepted-through`; an unaccepted record must remain in Edge Node
    storage.
 6. Check IoTKit Edge's semantic-projection queue and output queue. Retry uses the same observation identity.
@@ -367,6 +381,10 @@ Stop and physically isolate the old host, then fence its Broker credential first
 `fence-edge-node.sh` advances the bundled Mosquitto password generation and
 restarts the Broker to sever existing sessions. It emits the new password once,
 alongside a non-secret receipt, in a new owner-only directory.
+
+After an upgrade to this release, run the ACL upgrade before restarting or enrolling an Edge
+Node. It installs both recovery permissions and the Edge Node `status` publish / Edge wildcard
+`status` read permissions; do not add only one side by hand.
 
 ```bash
 set -euo pipefail
@@ -746,11 +764,15 @@ so migration cannot begin if shutdown was forgotten. Migration creates a protect
 snapshot before copying every table. Store PostgreSQL connection data in a mode-`0600` JSON file;
 never pass a DSN or password on the command line.
 
-Offline profile migration accepts a current schema-v11 SQLite source only. For a v9 or v10 source,
-first start the current IoTKit Edge against that SQLite database and wait for its transactional v11
-upgrade to complete, then stop it again before migration. That one-time upgrade backfills the derived
-raw series key only from valid canonical measurement envelopes. The offline copy preserves and verifies
-that stored value and the v11 raw-preview index; it does not derive a different target value.
+Offline profile migration accepts a current schema-v12 SQLite source only. For a v9, v10, or v11
+source, first start the current IoTKit Edge against that SQLite database and wait for its transactional
+v12 upgrade to complete, then stop it again before migration. That upgrade preserves the derived raw
+series key, adds the latest Edge Node operational-status row, and builds current-epoch raw-receipt and
+active rule/route diagnostic indexes. It neither backfills rows, copies retained history, nor creates a
+heartbeat history, but the index builds read retained raw, observation, and outbox history; leave time
+and temporary database/WAL capacity in proportion to that history. The offline copy preserves and
+verifies the stored raw-series value, the v11 raw-preview index, the v12 latest-status table, and the
+v12 diagnostic indexes; it does not derive different target values.
 
 ```json
 {"dsn":"postgres://iotkit:REDACTED@postgres:5432/iotkit?sslmode=require"}
@@ -778,10 +800,12 @@ PostgreSQL side; recreate an empty database and run migration again.
    credentials or private keys in Git.
 3. Fetch the new version and build the IoTKit Edge image. Keep the Broker running and stop only
    IoTKit Edge. Edge Nodes retain unacknowledged records.
-4. For schema v11, retain the encrypted pre-update backup and leave enough free space for the derived
-   raw-series-key backfill, its raw-preview index, and SQLite WAL growth. Startup backfills valid
-   canonical measurement envelopes in the migration transaction; it can take time on retained history,
-   but it either commits schema v11 completely or rolls back.
+4. For schema v12, retain the encrypted pre-update backup and leave enough free space and time for the
+   derived raw-series-key backfill, its raw-preview index, the latest-status table, current-epoch
+   raw-receipt and active rule/route diagnostic indexes, and SQLite WAL growth. Startup backfills valid
+   canonical measurement envelopes where needed; the status table has no heartbeat-history backfill and
+   the diagnostic indexes add no copied history rows. Their builds read retained raw, observation, and
+   outbox history. The migration either commits schema v12 completely or rolls back.
 5. Start the new IoTKit Edge. Schema migrations run transactionally at startup.
 6. Verify HTTPS login, `/api/v1/system/diagnostics`, cursor reconvergence, pending semantic projection,
    pending outbox, history graphs, and CSV. Let the queue drain before treating restart recovery as

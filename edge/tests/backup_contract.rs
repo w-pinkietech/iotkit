@@ -20,9 +20,25 @@ use iotkit_edge::{
     },
 };
 use iotkit_edge_custody_contract::DescriptorSnapshot;
+use iotkit_edge_custody_contract::{CollectorState, StatusHeartbeat};
 use tempfile::TempDir;
 
 const QUEUE_SERIES: &str = "018f0000-0000-7000-8000-000000000001:temperature:na:primary";
+
+fn status_heartbeat(edge_node_id: &str, ledger_epoch: &str) -> StatusHeartbeat {
+    StatusHeartbeat {
+        schema_version: 1,
+        edge_node_id: edge_node_id.into(),
+        ledger_epoch: ledger_epoch.into(),
+        boot_id: "boot-0123456789abcdef0123456789abcdef".into(),
+        status_seq: 1,
+        collector_state: CollectorState::Running,
+        adapters: Vec::new(),
+        accepted_through: 2,
+        pending_publications: 0,
+        storage_pressure: false,
+    }
+}
 
 async fn seed_pending_projection(storage: &Storage, edge_node_id: &str, ledger_epoch: &str) {
     let descriptor = DescriptorSnapshot::decode(
@@ -125,6 +141,25 @@ async fn populated_store() -> (TempDir, PathBuf, Storage) {
         })
         .await
         .expect("accept records");
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", database.display()))
+        .await
+        .expect("open active-node fixture pool");
+    sqlx::query(
+        "INSERT INTO edge_node_activations(edge_node_ref,edge_node_id,ledger_epoch,state,revision,created_at,updated_at) \
+         VALUES('node-01-ref','node-01','epoch-01','active',1,1,1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed active node");
+    pool.close().await;
+    storage
+        .apply_edge_node_status(
+            &status_heartbeat("node-01", "epoch-01"),
+            1_721_800_000_150,
+            false,
+        )
+        .await
+        .expect("seed latest status");
     (directory, database, storage)
 }
 
@@ -169,7 +204,7 @@ async fn encrypted_sqlite_backup_round_trips_and_revokes_sessions() {
         .expect("create encrypted backup");
     assert_eq!(manifest.storage_profile, "embedded");
     assert_eq!(manifest.payload_format, "sqlite-database");
-    assert_eq!(manifest.schema_version, 11);
+    assert_eq!(manifest.schema_version, 12);
     assert_eq!(manifest.raw_record_count, 2);
     assert_eq!(
         fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
@@ -199,6 +234,13 @@ async fn encrypted_sqlite_backup_round_trips_and_revokes_sessions() {
         2
     );
     assert_eq!(restored_store.active_session_count().await.unwrap(), 0);
+    let status = restored_store
+        .edge_node_status("node-01")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.status_seq, 1);
+    assert_eq!(status.last_live_received_at, Some(1_721_800_000_150));
 }
 
 #[tokio::test]
@@ -342,6 +384,26 @@ async fn postgres_custom_snapshot_round_trips_through_real_tools_when_required()
         .await
         .unwrap();
     seed_pending_projection(&storage, "postgres-node", "postgres-epoch").await;
+    let status_pool = sqlx::PgPool::connect(&source_dsn)
+        .await
+        .expect("open PostgreSQL status fixture pool");
+    let activated = sqlx::query(
+        "UPDATE edge_node_activations SET state='active' \
+         WHERE edge_node_id='postgres-node' AND ledger_epoch='postgres-epoch'",
+    )
+    .execute(&status_pool)
+    .await
+    .expect("activate PostgreSQL status node");
+    assert_eq!(activated.rows_affected(), 1);
+    status_pool.close().await;
+    storage
+        .apply_edge_node_status(
+            &status_heartbeat("postgres-node", "postgres-epoch"),
+            4,
+            false,
+        )
+        .await
+        .expect("seed latest PostgreSQL status");
     assert_eq!(
         storage_status(&storage, 90)
             .await
@@ -354,7 +416,7 @@ async fn postgres_custom_snapshot_round_trips_through_real_tools_when_required()
         .await
         .unwrap();
     assert_eq!(manifest.storage_profile, "postgres");
-    assert_eq!(manifest.schema_version, 11);
+    assert_eq!(manifest.schema_version, 12);
     drop(storage);
     assert!(matches!(
         restore_encrypted_backup_sqlite(
@@ -433,6 +495,13 @@ async fn postgres_custom_snapshot_round_trips_through_real_tools_when_required()
         0
     );
     assert_eq!(restored_storage.active_session_count().await.unwrap(), 0);
+    let status = restored_storage
+        .edge_node_status("postgres-node")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.status_seq, 1);
+    assert_eq!(status.last_live_received_at, Some(4));
     drop(restored_storage);
     let inspection_pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -457,13 +526,6 @@ async fn restored_gap_enters_durable_recovery_hold_until_audited_archive_loss_ac
     let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", database.display()))
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO edge_node_activations(edge_node_ref,edge_node_id,ledger_epoch,state,revision,\
-         created_at,updated_at) VALUES('node-ref','node-01','epoch-01','active',1,1,1)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
     sqlx::query(
         "INSERT INTO edge_restore_events(restore_id,backup_id,restored_at,backup_created_at,\
          backup_edge_id,backup_schema_version,backup_sha256) \

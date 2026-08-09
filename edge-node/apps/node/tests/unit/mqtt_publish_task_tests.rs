@@ -2,6 +2,7 @@ use super::*;
 use iotkit_core_publish::activation::{
     ActivationRequest, ActivationResult, ActivationState, activation_state,
 };
+use iotkit_core_timeseries::NewReading;
 
 fn test_db() -> DbHandle {
     let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -43,6 +44,106 @@ fn seed_annotation(conn: &Connection, edge_node_id: &str) -> (String, PreparedBa
     (epoch, prepared)
 }
 
+#[tokio::test]
+async fn preparing_target_before_network_spawn_accepts_an_intervening_reading_without_adoption() {
+    let db = test_db();
+    db.with_conn_sync(|conn| {
+        conn.execute(
+            "INSERT INTO ledger_meta(key, value) VALUES('edge_node_id', 'edge-01')",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let password = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(password.path(), "test-password\n").unwrap();
+
+    let _runtime = prepare_mqtt_publish_runtime(
+        db.clone(),
+        MqttExitConfig {
+            host: "broker".into(),
+            port: 1883,
+            password_file: password.path().into(),
+            trust_mode: MqttTrustMode::SystemRoots,
+            ca_file: None,
+            allow_insecure: true,
+        },
+    )
+    .await
+    .expect("durably prepare target before adapters can emit");
+
+    db.with_conn_sync(|conn| {
+        assert_eq!(
+            activation_state(conn).unwrap(),
+            ActivationState::DiscoveryOnly,
+            "preparation has installed the target but has not started network publishing"
+        );
+        let device = iotkit_core_ledger::insert_device(
+            conn,
+            &iotkit_core_ledger::NewDevice {
+                hardware_id: "between-prepare-and-spawn".into(),
+                user_label: None,
+                parent: None,
+                kind: iotkit_core_ledger::DeviceKind::Individual,
+                initial_state: iotkit_core_ledger::DeviceState::Active,
+            },
+        )
+        .unwrap();
+        let series = iotkit_core_ledger::ensure_series(
+            conn,
+            &device,
+            "temperature_c",
+            iotkit_core_ledger::CHANNEL_NA,
+            iotkit_core_ledger::DEFAULT_VARIANT,
+            false,
+            None,
+        )
+        .unwrap();
+        let reading_seq = iotkit_core_timeseries::insert_reading_v3(
+            conn,
+            &NewReading {
+                series_id: series,
+                received_at_ms: 10,
+                device_time_ms: None,
+                time_source: "edge_node".into(),
+                values: vec![21.5],
+                rssi: None,
+                battery_pct: None,
+                quarantined: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            !publication_admitted(conn).unwrap(),
+            "the durable target prevents a pre-activation reading from allocating standalone publication"
+        );
+        let publication_rows: i64 = conn
+            .query_row("SELECT count(*) FROM publication_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(publication_rows, 0);
+
+        let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+        let result = apply_activation(
+            conn,
+            &ActivationRequest {
+                schema_version: 1,
+                activation_id: "act-0123456789abcdef0123456789abcdef".into(),
+                edge_id: "edge-0123456789abcdef0123456789abcdef".into(),
+                edge_node_id: "edge-01".into(),
+                expected_ledger_epoch: epoch,
+                grant_revision: 1,
+                issued_at: 10,
+            },
+            20,
+        )
+        .expect("intervening durable reading is accepted without standalone-outbox adoption");
+        assert_eq!(result.discard_through_reading_seq, reading_seq);
+        Ok(())
+    })
+    .unwrap();
+}
+
 #[test]
 fn prepares_versioned_contiguous_batch_for_edge_node_topic() {
     let db = test_db();
@@ -72,17 +173,124 @@ fn prepares_versioned_contiguous_batch_for_edge_node_topic() {
 fn mqtt_client_accepts_the_wire_batch_limit_plus_protocol_overhead() {
     let binding = MqttBinding::for_edge_node("edge-01").unwrap();
     let records_topic = binding.records_topic;
+    let status_topic = binding.status_topic;
     let ack_topic = binding.accepted_through_topic;
     let descriptor_topic = binding.descriptor_topic;
     let mut options = MqttOptions::new("test-client", "localhost", 1883);
 
-    configure_packet_limits(&mut options, &records_topic, &ack_topic, &descriptor_topic);
+    configure_packet_limits(
+        &mut options,
+        &records_topic,
+        &ack_topic,
+        &descriptor_topic,
+        &status_topic,
+    );
 
     assert!(options.max_packet_size() > MAX_BATCH_BYTES);
     assert_eq!(
         options.max_packet_size(),
-        mqtt_packet_limit(&records_topic, &ack_topic, &descriptor_topic)
+        mqtt_packet_limit(&records_topic, &ack_topic, &descriptor_topic, &status_topic)
     );
+}
+
+#[test]
+fn status_heartbeat_maps_only_bounded_operational_health_and_separates_custody() {
+    let mut health = iotkit_edge_node::health::HealthState::new(7);
+    health.collector_alive = false;
+    health.db.watermark_exceeded = true;
+    health.note_adapter_running("running-adapter");
+    health.note_adapter_restarting("restarting-adapter");
+    health.note_adapter_exhausted("exhausted-adapter");
+    health.note_adapter_closed("stopped-adapter");
+    health
+        .publish
+        .push(iotkit_edge_node::health::TargetDeliveryHealth {
+            target_id: "edge".into(),
+            cursor_pub_seq: 999,
+            backlog: 777,
+            last_push_at: Some(1),
+            last_error: Some("must-not-leave-the-host".into()),
+        });
+
+    let heartbeat = build_status_heartbeat(
+        &health,
+        "edge-01".into(),
+        "epoch-01".into(),
+        "boot-0123456789abcdef0123456789abcdef",
+        4,
+        42,
+        3,
+    );
+
+    assert_eq!(heartbeat.collector_state, CollectorState::Stopped);
+    assert_eq!(heartbeat.accepted_through, 42);
+    assert_eq!(heartbeat.pending_publications, 3);
+    assert!(heartbeat.storage_pressure);
+    assert_eq!(
+        heartbeat
+            .adapters
+            .iter()
+            .map(|adapter| (adapter.adapter_id.as_str(), adapter.state))
+            .collect::<Vec<_>>(),
+        vec![
+            ("running-adapter", AdapterState::Running),
+            ("restarting-adapter", AdapterState::Restarting),
+            ("exhausted-adapter", AdapterState::Exhausted),
+            ("stopped-adapter", AdapterState::Stopped),
+        ]
+    );
+    let encoded = serde_json::to_string(&heartbeat).unwrap();
+    assert!(!encoded.contains("must-not-leave-the-host"));
+    assert!(!encoded.contains("last_error"));
+    heartbeat.validate().unwrap();
+}
+
+#[test]
+fn status_heartbeat_refuses_to_hide_an_unbounded_adapter_set() {
+    let mut health = iotkit_edge_node::health::HealthState::new(7);
+    for number in 0..65 {
+        health.note_adapter_running(&format!("adapter-{number}"));
+    }
+    let heartbeat = build_status_heartbeat(
+        &health,
+        "edge-01".into(),
+        "epoch-01".into(),
+        "boot-0123456789abcdef0123456789abcdef",
+        1,
+        0,
+        0,
+    );
+    assert!(heartbeat.validate().is_err());
+}
+
+#[tokio::test]
+async fn failed_status_enqueue_does_not_consume_the_sequence() {
+    let db = test_db();
+    db.with_conn_sync(|conn| {
+        seed_annotation(conn, "edge-01");
+        Ok(())
+    })
+    .unwrap();
+    let health = Arc::new(Mutex::new(iotkit_edge_node::health::HealthState::new(7)));
+    let binding = MqttBinding::for_edge_node("edge-01").unwrap();
+    let (client, event_loop) =
+        AsyncClient::new(MqttOptions::new("test-client", "localhost", 1883), 1);
+    drop(event_loop);
+    let mut sequence = 7;
+
+    assert!(
+        publish_status_heartbeat(
+            &db,
+            &health,
+            &client,
+            &binding,
+            "boot-0123456789abcdef0123456789abcdef",
+            &mut sequence,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(sequence, 7);
 }
 
 #[test]

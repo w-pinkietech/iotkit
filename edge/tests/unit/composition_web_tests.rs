@@ -38,6 +38,92 @@ fn display_raw_value_rounds_without_padding_fractional_zeroes() {
     assert_eq!(display_raw_value(&serde_json::json!(0), 0), "0");
 }
 
+#[test]
+fn causal_primary_action_prefers_actionable_root_over_blocked_unknowns() {
+    let stages = [
+        diagnostic_stage(
+            diagnostics::DiagnosticStageKind::Sensor,
+            diagnostics::DiagnosticStageState::Unknown,
+            Some(diagnostics::DiagnosticStageKind::Adapter),
+        ),
+        diagnostic_stage(
+            diagnostics::DiagnosticStageKind::Adapter,
+            diagnostics::DiagnosticStageState::Unknown,
+            Some(diagnostics::DiagnosticStageKind::Node),
+        ),
+        diagnostic_stage(
+            diagnostics::DiagnosticStageKind::Node,
+            diagnostics::DiagnosticStageState::Unknown,
+            Some(diagnostics::DiagnosticStageKind::Broker),
+        ),
+        diagnostic_stage(
+            diagnostics::DiagnosticStageKind::Broker,
+            diagnostics::DiagnosticStageState::Critical,
+            None,
+        ),
+    ];
+    let rendered = console_diagnostic_stages(&stages);
+    assert_eq!(rendered.iter().filter(|stage| stage.primary).count(), 1);
+    assert!(rendered[3].primary);
+}
+
+#[test]
+fn causal_primary_action_ranks_critical_before_earlier_warning() {
+    let stages = [
+        diagnostic_stage(
+            diagnostics::DiagnosticStageKind::Sensor,
+            diagnostics::DiagnosticStageState::Warning,
+            None,
+        ),
+        diagnostic_stage(
+            diagnostics::DiagnosticStageKind::Projection,
+            diagnostics::DiagnosticStageState::Critical,
+            None,
+        ),
+    ];
+    let rendered = console_diagnostic_stages(&stages);
+    assert!(!rendered[0].primary);
+    assert!(rendered[1].primary);
+}
+
+#[test]
+fn causal_stage_keeps_known_and_unknown_last_success() {
+    let mut known = diagnostic_stage(
+        diagnostics::DiagnosticStageKind::Broker,
+        diagnostics::DiagnosticStageState::Ok,
+        None,
+    );
+    known.last_success_at = Some(1_735_689_600_000);
+    let unknown = diagnostic_stage(
+        diagnostics::DiagnosticStageKind::RawCustody,
+        diagnostics::DiagnosticStageState::Unknown,
+        None,
+    );
+
+    let rendered = console_diagnostic_stages(&[known, unknown]);
+    assert_eq!(rendered[0].last_success_at, Some(1_735_689_600_000));
+    assert_eq!(rendered[1].last_success_at, None);
+}
+
+fn diagnostic_stage(
+    stage: diagnostics::DiagnosticStageKind,
+    state: diagnostics::DiagnosticStageState,
+    blocked_by: Option<diagnostics::DiagnosticStageKind>,
+) -> diagnostics::DiagnosticStage {
+    diagnostics::DiagnosticStage {
+        stage,
+        state,
+        code: "test".into(),
+        last_success_at: None,
+        affected_count: 0,
+        scope: "test".into(),
+        cause: "test".into(),
+        action: "test".into(),
+        href: "/status".into(),
+        blocked_by,
+    }
+}
+
 fn history_row(received_at: &str, values: &str) -> RawHistoryRow {
     RawHistoryRow {
         received_at: received_at.into(),

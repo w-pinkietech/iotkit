@@ -1,5 +1,5 @@
 use serde_json::json;
-use sqlx::{Row, postgres::PgRow, sqlite::SqliteRow};
+use sqlx::{Postgres, QueryBuilder, Row, postgres::PgRow, sqlite::SqliteRow};
 
 use crate::application::profiles::{
     DeviceProfile, DeviceProfileInput, InventoryDevice, InventorySignal, SignalProfile,
@@ -30,7 +30,68 @@ pub const POSTGRES_RECENT_SIGNAL_INPUTS_SQL: &str = "SELECT received_at,record_j
      WHERE edge_node_id=$1 AND md5(series_key)=md5($2) AND series_key=$2 \
      ORDER BY received_at DESC,ledger_epoch DESC,pub_seq DESC LIMIT $3";
 
+/// Returns one latest receipt per deliberately bounded current signal
+/// inventory. Callers ask for one extra row so they can report `64+` rather
+/// than silently claiming a complete healthy inventory.
+#[doc(hidden)]
+pub const SQLITE_DIAGNOSTIC_SIGNAL_RECEIPTS_SQL: &str = "SELECT (SELECT raw.received_at \
+    FROM raw_records AS raw WHERE raw.edge_node_id=activation.edge_node_id \
+    AND raw.ledger_epoch=activation.ledger_epoch AND raw.series_key=signal.series_key \
+    ORDER BY raw.received_at DESC,raw.pub_seq DESC LIMIT 1) AS received_at \
+    FROM inventory_signals AS signal CROSS JOIN edge_node_activations AS activation \
+    WHERE activation.edge_node_id=signal.edge_node_id AND activation.state='active' \
+    AND EXISTS(SELECT 1 FROM descriptor_signals AS descriptor WHERE descriptor.edge_node_id=signal.edge_node_id \
+      AND descriptor.series_key=signal.series_key AND descriptor.presence='current') \
+    ORDER BY signal.edge_node_id,signal.series_key LIMIT ?";
+#[doc(hidden)]
+pub const POSTGRES_DIAGNOSTIC_SIGNAL_IDENTITIES_SQL: &str = "SELECT signal.edge_node_id,activation.ledger_epoch,signal.series_key \
+    FROM inventory_signals AS signal JOIN edge_node_activations AS activation \
+    ON activation.edge_node_id=signal.edge_node_id WHERE activation.state='active' \
+    AND EXISTS(SELECT 1 FROM descriptor_signals AS descriptor WHERE descriptor.edge_node_id=signal.edge_node_id \
+      AND descriptor.series_key=signal.series_key AND descriptor.presence='current') \
+    ORDER BY signal.edge_node_id,signal.series_key LIMIT $1";
+
+/// One direct-bound raw lookup used for every arm of the bounded PostgreSQL
+/// diagnostic batch.  The fixed-width digest chooses the existing index and
+/// the full-key predicate remains the collision-safe authority.
+#[doc(hidden)]
+pub const POSTGRES_DIAGNOSTIC_SIGNAL_RECEIPT_SQL: &str = "SELECT (SELECT raw.received_at \
+    FROM raw_records AS raw WHERE raw.edge_node_id=$1 \
+    AND raw.ledger_epoch=$2 AND md5(raw.series_key)=md5($3) AND raw.series_key=$3 \
+    ORDER BY raw.received_at DESC,raw.pub_seq DESC LIMIT 1) AS received_at";
+
 impl Storage {
+    /// Bounded latest receipts only; this is intentionally not
+    /// `inventory_signals`, whose unbounded result is suitable for pages but
+    /// not a health check.
+    pub async fn diagnostic_signal_receipts(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<Option<i64>>, StorageError> {
+        if !(1..=65).contains(&limit) {
+            return Err(StorageError::InvalidProfile(
+                "diagnostic signal limit must be between 1 and 65".into(),
+            ));
+        }
+        let rows = match self.inner.as_ref() {
+            StorageInner::Sqlite { pool, .. } => {
+                sqlx::query_scalar(SQLITE_DIAGNOSTIC_SIGNAL_RECEIPTS_SQL)
+                    .bind(limit)
+                    .fetch_all(pool)
+                    .await?
+            }
+            StorageInner::Postgres { pool, .. } => {
+                let identities: Vec<(String, String, String)> =
+                    sqlx::query_as(POSTGRES_DIAGNOSTIC_SIGNAL_IDENTITIES_SQL)
+                        .bind(limit)
+                        .fetch_all(pool)
+                        .await?;
+                postgres_diagnostic_signal_receipts(pool, &identities).await?
+            }
+        };
+        Ok(rows)
+    }
+
     pub async fn recent_signal_inputs(
         &self,
         signal_ref: &str,
@@ -396,6 +457,45 @@ impl Storage {
             }
         }
     }
+}
+
+async fn postgres_diagnostic_signal_receipts(
+    pool: &sqlx::PgPool,
+    identities: &[(String, String, String)],
+) -> Result<Vec<Option<i64>>, sqlx::Error> {
+    if identities.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // A correlated outer inventory variable makes PostgreSQL favour the
+    // received-at history index even for a single-key lookup.  Keep the
+    // inventory selection bounded, then issue one batched query whose arms
+    // use direct parameters; this retains the proven md5+full-key plan
+    // without reintroducing 64 sequential database round trips.
+    let mut query = QueryBuilder::<Postgres>::new("");
+    for (index, (edge_node_id, ledger_epoch, series_key)) in identities.iter().enumerate() {
+        if index > 0 {
+            query.push(" UNION ALL ");
+        }
+        query
+            .push("SELECT (SELECT raw.received_at FROM raw_records AS raw WHERE raw.edge_node_id=");
+        query.push_bind(edge_node_id);
+        query.push(" AND raw.ledger_epoch=");
+        query.push_bind(ledger_epoch);
+        query.push(" AND md5(raw.series_key)=md5(");
+        query.push_bind(series_key);
+        query.push(") AND raw.series_key=");
+        query.push_bind(series_key);
+        query.push(" ORDER BY raw.received_at DESC,raw.pub_seq DESC LIMIT 1) AS received_at");
+    }
+    query
+        .build_query_scalar()
+        // A fresh prepared statement retains PostgreSQL's custom plan for
+        // these direct identities; a cached generic plan can otherwise prefer
+        // the broad received-at index solely because it satisfies LIMIT 1.
+        .persistent(false)
+        .fetch_all(pool)
+        .await
 }
 
 fn check_revision(current: Option<i64>, expected: Option<i64>) -> Result<(), StorageError> {

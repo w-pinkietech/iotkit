@@ -1,13 +1,24 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use rumqttc::{AsyncClient, ClientError, Event, Incoming, MqttOptions, QoS, Transport};
+use rumqttc::{
+    AsyncClient, ClientError, Event, Incoming, MqttOptions, QoS, SubscribeFilter,
+    SubscribeReasonCode, Transport,
+};
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use super::{AckPublication, IngestError, IngestProcessor};
-use iotkit_edge_custody_contract::{AcceptedThrough, MAX_BATCH_BYTES, MAX_DESCRIPTOR_BYTES};
+use iotkit_edge_custody_contract::{
+    AcceptedThrough, MAX_BATCH_BYTES, MAX_DESCRIPTOR_BYTES, MAX_STATUS_BYTES,
+};
 
-const SUBSCRIPTIONS: [&str; 5] = [
+const SUBSCRIPTIONS: [&str; 6] = [
     "iotkit/v1/edge-nodes/+/records",
+    "iotkit/v1/edge-nodes/+/status",
     "iotkit/v1/edge-nodes/+/descriptors",
     "iotkit/v1/edge-nodes/+/activation/result",
     "iotkit/v1/edge-nodes/+/recovery/result",
@@ -31,6 +42,69 @@ pub enum IngestTransport {
     TlsSystemRoots,
     TlsBundle { ca_pem: Vec<u8> },
     PlaintextForDevelopment,
+}
+
+/// Closed, process-local evidence for the IoTKit Edge MQTT ingest path.
+/// It intentionally retains no broker error text or connection endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestConnectionState {
+    Unknown,
+    Connecting,
+    Ready,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IngestRuntimeHealth {
+    pub state: IngestConnectionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ready_at: Option<i64>,
+}
+
+#[derive(Clone)]
+pub struct IngestHealth(Arc<Mutex<IngestRuntimeHealth>>);
+
+impl Default for IngestHealth {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(IngestRuntimeHealth {
+            state: IngestConnectionState::Unknown,
+            last_ready_at: None,
+        })))
+    }
+}
+
+impl IngestHealth {
+    #[must_use]
+    pub fn snapshot(&self) -> IngestRuntimeHealth {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn connecting(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .state = IngestConnectionState::Connecting;
+    }
+
+    fn ready(&self, ready_at: i64) {
+        let mut health = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        health.state = IngestConnectionState::Ready;
+        health.last_ready_at = Some(ready_at);
+    }
+
+    fn disconnected(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .state = IngestConnectionState::Disconnected;
+    }
 }
 
 impl std::fmt::Debug for IngestTransport {
@@ -60,12 +134,31 @@ impl std::fmt::Debug for IngestRuntimeConfig {
 pub struct IngestRuntime {
     config: IngestRuntimeConfig,
     processor: IngestProcessor,
+    health: IngestHealth,
 }
 
 impl IngestRuntime {
     #[must_use]
     pub fn new(config: IngestRuntimeConfig, processor: IngestProcessor) -> Self {
-        Self { config, processor }
+        Self::with_health(config, processor, IngestHealth::default())
+    }
+
+    #[must_use]
+    pub fn with_health(
+        config: IngestRuntimeConfig,
+        processor: IngestProcessor,
+        health: IngestHealth,
+    ) -> Self {
+        Self {
+            config,
+            processor,
+            health,
+        }
+    }
+
+    #[must_use]
+    pub fn health(&self) -> IngestHealth {
+        self.health.clone()
     }
 
     pub async fn run(self, cancellation: CancellationToken) -> Result<(), RuntimeError> {
@@ -97,8 +190,10 @@ impl IngestRuntime {
         }
         let (client, mut event_loop) = AsyncClient::new(options, 64);
         let storage = self.processor.storage();
+        self.health.connecting();
         let mut connected = false;
         let mut subscribed = false;
+        let mut subscription_requested = false;
         let mut pending_custody_acks = PendingCustodyAcks::default();
         let mut convergence = tokio::time::interval(Duration::from_millis(250));
         convergence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -113,13 +208,31 @@ impl IngestRuntime {
                     match event {
                         Ok(Event::Incoming(Incoming::ConnAck(_))) => {
                             connected = true;
-                            subscribed = try_subscribe(&client);
+                            subscribed = false;
+                            self.health.connecting();
+                            subscription_requested = try_subscribe_all(&client);
+                        }
+                        Ok(Event::Incoming(Incoming::SubAck(ack))) => {
+                            if subscription_requested && subscriptions_confirmed(&ack.return_codes) {
+                                subscribed = true;
+                                subscription_requested = false;
+                                self.health.ready(unix_millis());
+                            } else {
+                                // An invalid or stale SubAck is not proof that every
+                                // required subscription is active. Retry one bounded
+                                // Subscribe packet from the convergence tick.
+                                subscribed = false;
+                                subscription_requested = false;
+                                self.health.connecting();
+                                tracing::warn!("MQTT Broker did not confirm every ingest subscription");
+                            }
                         }
                         Ok(Event::Incoming(Incoming::Publish(publication))) => {
-                            match self.processor.handle(
+                            match self.processor.handle_publication(
                                 &publication.topic,
                                 &publication.payload,
                                 unix_millis(),
+                                publication.retain,
                             ).await {
                                 Ok(Some(ack)) => match pending_custody_acks.try_enqueue(&client, ack) {
                                     Ok(()) => {}
@@ -148,6 +261,8 @@ impl IngestRuntime {
                         Err(error) => {
                             connected = false;
                             subscribed = false;
+                            subscription_requested = false;
+                            self.health.disconnected();
                             tracing::warn!(%error, "MQTT ingest connection interrupted");
                             tokio::select! {
                                 () = cancellation.cancelled() => return Ok(()),
@@ -164,8 +279,9 @@ impl IngestRuntime {
                         );
                         continue;
                     }
-                    if connected && !subscribed {
-                        subscribed = try_subscribe(&client);
+                    if connected && !subscribed && !subscription_requested {
+                        self.health.connecting();
+                        subscription_requested = try_subscribe_all(&client);
                     }
                     if !subscribed {
                         continue;
@@ -327,7 +443,9 @@ fn publish_custody_ack(
 }
 
 fn configure_packet_limits(options: &mut MqttOptions) {
-    let limit = MAX_BATCH_BYTES.max(MAX_DESCRIPTOR_BYTES)
+    let limit = MAX_BATCH_BYTES
+        .max(MAX_DESCRIPTOR_BYTES)
+        .max(MAX_STATUS_BYTES)
         + MAX_MQTT_TOPIC_BYTES
         + MQTT_PACKET_OVERHEAD_BYTES;
     options.set_max_packet_size(limit, limit);
@@ -345,14 +463,21 @@ pub(crate) fn install_crypto_provider() -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn try_subscribe(client: &AsyncClient) -> bool {
-    for topic in SUBSCRIPTIONS {
-        if let Err(error) = client.try_subscribe(topic, QoS::AtLeastOnce) {
-            tracing::debug!(%error, "MQTT subscription enqueue will be retried");
-            return false;
-        }
+fn try_subscribe_all(client: &AsyncClient) -> bool {
+    let filters =
+        SUBSCRIPTIONS.map(|topic| SubscribeFilter::new(topic.to_string(), QoS::AtLeastOnce));
+    if let Err(error) = client.try_subscribe_many(filters) {
+        tracing::debug!(%error, "MQTT subscription enqueue will be retried");
+        return false;
     }
     true
+}
+
+fn subscriptions_confirmed(return_codes: &[SubscribeReasonCode]) -> bool {
+    return_codes.len() == SUBSCRIPTIONS.len()
+        && return_codes
+            .iter()
+            .all(|code| matches!(code, SubscribeReasonCode::Success(QoS::AtLeastOnce)))
 }
 
 fn unix_millis() -> i64 {

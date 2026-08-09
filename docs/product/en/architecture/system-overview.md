@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 17
+revision: 20
 ---
 
 # Architecture
@@ -95,6 +95,12 @@ SQLite indexes the full key. PostgreSQL indexes a fixed-length `md5(series_key)`
 rechecks the complete key, so a long retained key cannot overflow the raw-preview B-tree tuple and a
 digest collision cannot select another signal's records.
 
+Schema v12 adds a latest-only active-epoch Edge Node status row and indexes the current-epoch raw
+receipt and active rule/route diagnostic lookups. It does not backfill rows, copy retained history,
+or create heartbeat history. Building those indexes reads the corresponding retained raw,
+observation, and outbox history, so an upgrade needs time and temporary database/WAL capacity in
+proportion to retained history.
+
 `deploy/mosquitto-image.env` is the repository's single source for the verified Mosquitto patch
 release used by production generation, Compose, and integration tests. Updating that exact patch
 reference requires the MQTT security matrix and the normal final verification gate; floating
@@ -155,6 +161,28 @@ it changes neither `accepted-through` nor post-activation purge authority.
 retained only as transitional code and is not spawned. A broker PUBACK confirms transport receipt
 only; IoTKit Edge Node retains its outbox until IoTKit Edge commits raw records and publishes
 application-level `accepted-through`.
+
+### Operational status and causal diagnosis
+
+Alongside custody, an Edge Node publishes the bounded v1 `status` heartbeat on its own
+retained QoS 1 MQTT topic. It sends one immediately after its MQTT subscriptions are confirmed and
+then every 30 seconds. This is operational evidence only: its local view of
+`accepted_through` and pending publications never advances the custody cursor, authorizes purge,
+or turns a Broker PUBACK into durable acceptance. IoTKit Edge stores only the latest accepted
+status for the currently active ledger epoch. A retained replay can provide historical detail but
+does not make a Node live.
+
+IoTKit Edge keeps its own process-local Broker/subscription state separately from that Node
+heartbeat. The existing server-rendered `/status` page orders evidence as Sensor input, Input
+Adapter, Edge Node collector, internal Broker path, raw custody, semantic projection, and external
+output. It shows one earliest actionable cause rather than treating registration or an old raw value
+as an online claim. Each stage shows its last successful fact when known (otherwise **not yet
+confirmed**), bounded affected scope, cautious cause, and next check. It is recalculated from current
+durable and process facts: a later matching success clears its active state automatically, and there
+is no manual incident dismissal. A heartbeat is warning after 90 seconds and critical after 300
+seconds; an old raw value is only an advisory when the upstream path is healthy. A fatal supervised IoTKit Edge task
+stops the service, so the Console is unavailable in that case and the host service manager and logs
+are the diagnostic surface.
 
 ### IoTKit Edge semantic and application-export loop
 

@@ -147,12 +147,13 @@ jq -e '
     "accepted_through_topic", "activation_request_topic", "activation_result_topic",
     "client_id", "descriptor_retain", "descriptor_topic", "edge_node_id", "qos",
     "records_topic", "recovery_completion_ack_topic", "recovery_completion_topic", "recovery_request_topic",
-    "recovery_result_topic", "retain", "username"
+    "recovery_result_topic", "retain", "status_retain", "status_topic", "username"
   ]
   and (.edge_node_id | type == "string" and length > 0)
   and .username == .edge_node_id
   and .client_id == ("iotkit-edge-node-" + .edge_node_id)
   and .records_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/records")
+  and .status_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/status")
   and .accepted_through_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/accepted-through")
   and .descriptor_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/descriptors")
   and .activation_request_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/request")
@@ -164,6 +165,7 @@ jq -e '
   and .qos == 1
   and .retain == false
   and .descriptor_retain == true
+  and .status_retain == true
 ' "$binding" >/dev/null || fail "binding file is not an exact iotkit-edge-nodectl mqtt-binding document"
 edge_node_id=$(jq -er '.edge_node_id' "$binding")
 [[ "$edge_node_id" =~ ^[A-Za-z0-9._-]{1,128}$ ]] \
@@ -258,6 +260,7 @@ EOF
 cat >"$stage/mosquitto/acl" <<EOF
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
+topic write iotkit/v1/edge-nodes/$edge_node_id/status
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
 topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
 topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result
@@ -269,6 +272,7 @@ topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion
 
 user $edge_archive_principal
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/status
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic read iotkit/v1/edge-nodes/+/activation/result
 topic read iotkit/v1/edge-nodes/+/recovery/result

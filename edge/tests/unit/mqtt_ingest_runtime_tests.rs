@@ -3,6 +3,95 @@ use iotkit_edge_custody_contract::{AcceptedThrough, SCHEMA_VERSION};
 use rumqttc::Request;
 
 #[test]
+fn ingest_health_is_closed_and_keeps_only_the_last_ready_time() {
+    let health = IngestHealth::default();
+    assert_eq!(
+        health.snapshot(),
+        IngestRuntimeHealth {
+            state: IngestConnectionState::Unknown,
+            last_ready_at: None,
+        }
+    );
+
+    health.connecting();
+    assert_eq!(health.snapshot().state, IngestConnectionState::Connecting);
+    health.ready(42);
+    assert_eq!(
+        health.snapshot(),
+        IngestRuntimeHealth {
+            state: IngestConnectionState::Ready,
+            last_ready_at: Some(42),
+        }
+    );
+    health.disconnected();
+    assert_eq!(
+        health.snapshot(),
+        IngestRuntimeHealth {
+            state: IngestConnectionState::Disconnected,
+            last_ready_at: Some(42),
+        }
+    );
+    assert!(
+        !serde_json::to_string(&health.snapshot())
+            .unwrap()
+            .contains("error")
+    );
+}
+
+#[test]
+fn ingest_becomes_ready_only_after_one_complete_qos1_suback() {
+    assert!(subscriptions_confirmed(&vec![
+        SubscribeReasonCode::Success(
+            QoS::AtLeastOnce
+        );
+        SUBSCRIPTIONS.len()
+    ]));
+    assert!(!subscriptions_confirmed(&vec![
+        SubscribeReasonCode::Success(
+            QoS::AtLeastOnce
+        );
+        SUBSCRIPTIONS.len() - 1
+    ]));
+    let mut rejected = vec![SubscribeReasonCode::Success(QoS::AtLeastOnce); SUBSCRIPTIONS.len()];
+    rejected[2] = SubscribeReasonCode::Failure;
+    assert!(!subscriptions_confirmed(&rejected));
+    let mut wrong_qos = vec![SubscribeReasonCode::Success(QoS::AtLeastOnce); SUBSCRIPTIONS.len()];
+    wrong_qos[4] = SubscribeReasonCode::Success(QoS::AtMostOnce);
+    assert!(!subscriptions_confirmed(&wrong_qos));
+}
+
+#[test]
+fn ingest_enqueues_one_subscription_packet_for_the_complete_contract() {
+    let (client, mut event_loop) = AsyncClient::new(MqttOptions::new("test", "localhost", 1883), 1);
+    assert!(try_subscribe_all(&client));
+    event_loop.clean();
+    let subscriptions = event_loop
+        .pending
+        .iter()
+        .filter_map(|request| match request {
+            Request::Subscribe(subscribe) => Some(subscribe),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(subscriptions.len(), 1);
+    assert_eq!(subscriptions[0].filters.len(), SUBSCRIPTIONS.len());
+    assert_eq!(
+        subscriptions[0]
+            .filters
+            .iter()
+            .map(|filter| filter.path.as_str())
+            .collect::<Vec<_>>(),
+        SUBSCRIPTIONS
+    );
+    assert!(
+        subscriptions[0]
+            .filters
+            .iter()
+            .all(|filter| filter.qos == QoS::AtLeastOnce)
+    );
+}
+
+#[test]
 fn mqtt_packet_limit_covers_the_largest_custody_payload_and_topic() {
     let mut options = MqttOptions::new("test", "localhost", 1883);
 

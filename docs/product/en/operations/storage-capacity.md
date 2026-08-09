@@ -5,7 +5,7 @@ description: "Defines a repeatable capacity regression smoke for embedded SQLite
 language: en
 translation_key: operations.storage-capacity
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit Edge storage capacity regression smoke
@@ -31,6 +31,11 @@ all retained raw history. SQLite stores the full key in that index; PostgreSQL u
 `md5(series_key)` discriminator and then rechecks the full key. This keeps long retained keys within
 the PostgreSQL raw-preview B-tree tuple limit without allowing a digest collision to change preview
 results.
+
+Schema v12 also adds a latest-only Edge Node status row plus current-epoch raw-receipt and active
+rule/route diagnostic indexes. Those indexes do not backfill or copy history rows, but their build
+reads retained raw, observation, and outbox history. Include the associated startup time and temporary
+database/WAL footprint in the capacity smoke at the deployment's retained-history scale.
 
 The JSON report records profile, raw count, records per second, batch-accept p99, history/backup/restart
 and projection-recovery wall time, database bytes, semantic observations, queue lag before and after

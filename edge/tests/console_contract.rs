@@ -7,8 +7,9 @@ use axum::{
 use iotkit_edge::{
     storage::EdgeNodeState,
     web::{
-        ConsoleDevice, ConsoleEdgeNode, ConsoleRule, ConsoleSignal, WebConfig,
-        console::commissioning::commissioning_view, router, test_support::StubApplication,
+        ConsoleDevice, ConsoleDiagnosticStage, ConsoleEdgeNode, ConsoleRule, ConsoleSignal,
+        WebConfig, console::commissioning::commissioning_view, router,
+        test_support::StubApplication,
     },
 };
 use tower::ServiceExt;
@@ -378,9 +379,12 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             "/status",
             &[
                 r#"class="health-banner"#,
+                r#"class="content-section causal-diagnostics"#,
                 r#"id="signal-table""#,
                 r#"class="signal-table-wrap status-signal-table""#,
                 "センサーの現在値",
+                "センサーデータの受信履歴があります",
+                "現在値あり",
                 "登録済みの収集ノード",
                 r#"<strong>1</strong><small>台</small>"#,
             ][..],
@@ -410,7 +414,8 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
                 r#"class="equipment-row""#,
                 "/equipment/edge-nodes/edge-node-02",
                 "assembly-edge-02",
-                "接続されている収集ノード",
+                "収集ノード",
+                "登録状態はオンライン状態ではありません",
             ][..],
         ),
         (
@@ -539,6 +544,12 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
         for hook in hooks {
             assert!(html.contains(hook), "{path} missing {hook}");
         }
+        if path == "/status" {
+            assert!(
+                !html.contains("センサーデータを受信しています"),
+                "historical values must not claim that the ingest path is currently live"
+            );
+        }
         if path == "/live" {
             assert!(
                 !html.contains("data-latest-received-at"),
@@ -556,6 +567,85 @@ async fn console_pages_render_the_existing_operator_content_and_form_hooks() {
             assert!(!html.contains("計測ルールがありません"));
         }
     }
+}
+
+#[tokio::test]
+async fn causal_diagnostics_keep_operator_text_at_accessible_size() {
+    let app = router(WebConfig::test(), Arc::new(StubApplication::default()));
+    let response = app
+        .oneshot(
+            Request::get("/static/edge.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let css = String::from_utf8(
+        to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(css.contains(".status-pill.causal-stage-state { font-size: .875rem; }"));
+    assert!(css.contains(
+        ".causal-stage small { display: block; margin-top: 5px; color: var(--muted); font-size: .875rem;"
+    ));
+}
+
+#[tokio::test]
+async fn causal_diagnostics_render_known_and_unknown_last_success() {
+    let app = router(
+        WebConfig::test(),
+        Arc::new(StubApplication::with_diagnostic_stages(vec![
+            ConsoleDiagnosticStage {
+                label: "内部Broker経路".into(),
+                state_label: "正常".into(),
+                state_class: "healthy".into(),
+                last_success_at: Some(1_735_689_600_000),
+                scope: "IoTKit Edge MQTT ingest".into(),
+                cause: "購読を確認しています。".into(),
+                action: "IoTKit Edgeサービスを確認する".into(),
+                href: "/system".into(),
+                primary: false,
+            },
+            ConsoleDiagnosticStage {
+                label: "IoTKit Edge受信・保管".into(),
+                state_label: "未確認".into(),
+                state_class: "unknown".into(),
+                last_success_at: None,
+                scope: "有効な収集ノードの受理カーソル集計".into(),
+                cause: "受理カーソルをまだ確認できません。".into(),
+                action: "受信状態を確認する".into(),
+                href: "/logs".into(),
+                primary: true,
+            },
+        ])),
+    );
+    let response = app
+        .oneshot(
+            Request::get("/status")
+                .header("cookie", "iotkit_edge_session=valid; iotkit_edge_csrf=csrf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 2_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("最終成功:"));
+    assert!(html.contains(r#"<time data-unix-ms="1735689600000">1735689600000 (Unix ms)</time>"#));
+    assert!(html.contains("まだ確認できません"));
+    assert!(html.contains("内部Broker経路"));
+    assert!(html.contains("未確認"));
+    assert!(!html.contains("broker_ready"));
+    assert!(!html.contains("raw_custody_unknown"));
 }
 
 #[tokio::test]
@@ -947,7 +1037,7 @@ async fn completed_commissioning_does_not_displace_the_normal_monitor() {
     .unwrap();
 
     assert!(!html.contains(r#"class="onboarding""#));
-    assert!(html.contains("センサーデータを受信しています"));
+    assert!(html.contains("センサーデータの受信履歴があります"));
     assert!(html.contains("センサーの現在値"));
 }
 

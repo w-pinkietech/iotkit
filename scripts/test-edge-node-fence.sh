@@ -16,12 +16,14 @@ chmod 640 "$root/edge/mosquitto/passwords"
 printf 'IOTKIT_EDGE_ID=edge-test\nIOTKIT_EDGE_USERNAME=edge-archive\n' >"$root/edge/edge.env"
 cat >"$root/edge/mosquitto/acl" <<'EOF'
 user node-01
+topic write iotkit/v1/edge-nodes/node-01/status
 topic write iotkit/v1/edge-nodes/node-01/recovery/result
 topic write iotkit/v1/edge-nodes/node-01/recovery/completion-ack
 topic read iotkit/v1/edge-nodes/node-01/recovery/request
 topic read iotkit/v1/edge-nodes/node-01/recovery/completion
 
 user edge-archive
+topic read iotkit/v1/edge-nodes/+/status
 topic read iotkit/v1/edge-nodes/+/recovery/result
 topic read iotkit/v1/edge-nodes/+/recovery/completion-ack
 topic write iotkit/v1/edge-nodes/+/recovery/request
