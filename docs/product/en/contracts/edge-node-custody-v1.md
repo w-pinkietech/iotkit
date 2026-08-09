@@ -5,7 +5,7 @@ description: "Defines the complete MQTT custody transfer, activation, record fam
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 8
+revision: 9
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -335,6 +335,14 @@ Rust Edge Node publisher and Rust IoTKit Edge decoder.
 - While inactive, Edge Node continues bounded local commissioning collection without creating an R10
   publication backlog.
 - If IoTKit Edge or the network is down, Edge Node continues local collection and retains unacknowledged rows.
+- On SIGINT or SIGTERM, Edge Node enters the same bounded graceful shutdown path. It requests its
+  adapters and control API to stop without manufacturing a target-cursor advance, marking an
+  unacknowledged row as accepted, or purging it; a valid application acknowledgement that completes
+  before the publisher stops retains its normal semantics. Retry resumes from durable state after
+  restart. The cleanup attempt is bounded to 10 seconds. A container or service manager MUST grant
+  at least 15 seconds of stop grace (for example, Docker `stop_grace_period: 15s` or systemd
+  `TimeoutStopSec=15s`) so the process exits cleanly before forced termination. If that cleanup
+  deadline expires, Edge Node exits nonzero rather than reporting a clean shutdown.
 - While subscribed with no application-unacknowledged batch, Edge Node probes the indexed outbox at a
   one-second interval to start rows created after the last acknowledgement. This probe never retransmits
   an inflight batch; the separate 30-second retry remains responsible for inflight retransmission,

@@ -22,6 +22,9 @@ const consoleScriptPrefixes = ["scripts/test-edge-console-"];
 // Heavy Edge integration (custody, durable output). Not the Console lane.
 const edgeIntegrationScriptPrefixes = ["scripts/test-rust-edge-"];
 const edgeIntegrationScriptFiles = new Set(["scripts/test-edge-output.sh"]);
+// `main.rs` owns PID1 signal handling. Its changes must run the real SIGTERM
+// container gate even though most Edge Node sources only need Rust checks.
+const edgeIntegrationSourceFiles = new Set(["edge-node/apps/node/src/main.rs"]);
 
 const trialOnlyFiles = new Set([
   "scripts/iotkit",
@@ -346,6 +349,10 @@ function classify(path) {
 
   if (path.startsWith("edge-node/adapters/trial-sample/")) {
     return { rust: true, console: false, edge: false, trial: true };
+  }
+
+  if (edgeIntegrationSourceFiles.has(path)) {
+    return { rust: true, console: false, edge: true, trial: false };
   }
 
   if (path.startsWith("edge-node/")) {

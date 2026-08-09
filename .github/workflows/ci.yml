@@ -125,6 +125,9 @@ jobs:
       - name: Selective CI routing
         run: node --test scripts/tests/select-ci-jobs.test.mjs
 
+      - name: Rust Edge release-gate contracts
+        run: node --test scripts/tests/rust-edge-release-gates.test.mjs
+
       - name: Local Rust concurrency defaults
         run: node --test scripts/tests/rust-concurrency.test.mjs
 
@@ -255,6 +258,9 @@ jobs:
 
       - name: Durable output delivery
         run: scripts/test-edge-output.sh
+
+      - name: Edge Node SIGTERM shutdown
+        run: scripts/test-edge-node-sigterm.sh
 
   trial:
     name: Trial profile first-run and custody journey

@@ -5,7 +5,7 @@ description: "Starts, reviews, stops, and resets the loopback-only IoTKit trial 
 language: en
 translation_key: operations.trial-profile
 status: draft
-revision: 3
+revision: 4
 ---
 
 # Try IoTKit on this PC
@@ -70,6 +70,10 @@ Stopping and starting the trial does not delete its databases:
 ./scripts/iotkit trial down
 ./scripts/iotkit trial up
 ```
+
+`trial down` gives Edge Node a 15-second graceful-stop window. Pending custody
+records remain durable and retry after a later `up`; an unacknowledged record is
+not treated as delivered.
 
 ## Reset
 
