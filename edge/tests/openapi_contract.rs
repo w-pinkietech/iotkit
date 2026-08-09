@@ -22,7 +22,8 @@ async fn closed_openapi_storage_and_diagnostics_schemas_track_runtime_json() {
     storage.initialize_edge_identity(1).await.unwrap();
 
     let storage_json = serde_json::to_value(storage_status(&storage, 90).await.unwrap()).unwrap();
-    assert!(keys(&storage_json).is_subset(&BTreeSet::from([
+    let storage_keys = keys(&storage_json);
+    assert!(storage_keys.is_subset(&BTreeSet::from([
         "profile".into(),
         "state".into(),
         "filesystem_available".into(),
@@ -95,6 +96,39 @@ async fn closed_openapi_storage_and_diagnostics_schemas_track_runtime_json() {
     }
 
     let schema = include_str!("../openapi/edge-console-v1.yaml");
+    let storage_schema = schema
+        .split_once("    StorageStatus:\n")
+        .expect("StorageStatus schema")
+        .1
+        .split_once("    DiagnosticIssue:\n")
+        .expect("StorageStatus schema end")
+        .0;
+    for required in [
+        "profile",
+        "state",
+        "filesystem_available",
+        "database_bytes",
+        "reclaimable_bytes",
+        "disk_total_bytes",
+        "disk_available_bytes",
+        "disk_used_percent",
+        "warning_percent",
+        "raw_record_count",
+        "semantic_observation_count",
+        "pending_semantic_projection_count",
+        "pending_output_count",
+        "projection_failure_count",
+        "absolute_reserve_state",
+    ] {
+        assert!(
+            storage_keys.contains(required),
+            "runtime StorageStatus is missing {required}"
+        );
+        assert!(
+            storage_schema.contains(&format!("        - {required}\n")),
+            "OpenAPI StorageStatus must require {required}"
+        );
+    }
     for fragment in [
         "StorageStatus:\n      type: object\n      additionalProperties: false",
         "DiagnosticReport:\n      type: object\n      additionalProperties: false",

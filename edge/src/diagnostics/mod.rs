@@ -704,7 +704,7 @@ async fn causal_stages(
         blocked_stage(
             DiagnosticStageKind::Sensor,
             blocked_by,
-            "sensor_no_new_input",
+            "sensor_blocked_by_upstream",
             "上流の状態を確認できないため、センサーから新しい値が届いているかを判定できません。",
             "上流の状態を確認する",
             "/equipment",

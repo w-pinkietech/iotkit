@@ -151,8 +151,10 @@ wait_for_convergence_within_five_seconds() {
 }
 
 wait_for_live_status() {
+  local prior_boot_id=${1:-} current_boot_id current_status_seq
   for _ in $(seq 1 20); do
-    if [[ -n "$(edge_node_live_status)" ]]; then
+    IFS='|' read -r current_boot_id current_status_seq <<<"$(edge_node_live_status)"
+    if [[ -n "$current_boot_id" && "$current_boot_id" != "$prior_boot_id" ]]; then
       return 0
     fi
     sleep 0.25
@@ -388,13 +390,21 @@ if [[ "$central_activation_ready" != true ]]; then
 fi
 restart_edge
 wait_for_live_status
+IFS='|' read -r prior_status_boot_id _ <<<"$(edge_node_live_status)"
+if [[ -z "$prior_status_boot_id" ]]; then
+  diagnostics
+  echo "Edge Node had no live status before the restart assertion" >&2
+  exit 1
+fi
+restart_edge
+wait_for_live_status "$prior_status_boot_id"
 IFS='|' read -r status_boot_id status_seq <<<"$(edge_node_live_status)"
 IFS='|' read -r first_boot_id first_status_seq first_collector_state first_adapter_count \
   <<<"$(edge_node_live_status_detail)"
-if [[ "$first_boot_id" != "$status_boot_id" || "$first_status_seq" != "1" || \
+if [[ "$status_boot_id" == "$prior_status_boot_id" || "$first_boot_id" != "$status_boot_id" || "$first_status_seq" != "1" || \
   "$first_collector_state" != "running" || "$first_adapter_count" != "0" ]]; then
   diagnostics
-  echo "first accepted status did not follow collector initialization: $first_boot_id|$first_status_seq|$first_collector_state|$first_adapter_count" >&2
+  echo "first accepted status did not follow a new boot collector initialization: prior=$prior_status_boot_id current=$first_boot_id|$first_status_seq|$first_collector_state|$first_adapter_count" >&2
   exit 1
 fi
 wait_for_next_status_heartbeat "$status_boot_id" "$status_seq"

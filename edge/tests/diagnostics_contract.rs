@@ -441,6 +441,10 @@ async fn broker_outage_blocks_node_age_and_keeps_one_causal_root() {
         stage(&report, DiagnosticStageKind::Sensor).blocked_by,
         Some(DiagnosticStageKind::Adapter)
     );
+    assert_eq!(
+        stage(&report, DiagnosticStageKind::Sensor).code,
+        "sensor_blocked_by_upstream"
+    );
 }
 
 #[tokio::test]

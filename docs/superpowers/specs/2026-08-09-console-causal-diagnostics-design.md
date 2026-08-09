@@ -193,7 +193,7 @@ downstream incidents.
 
 ## 7. Console and API
 
-The new causal section is server rendered after commissioning state and before
+The new causal section is server-rendered after commissioning state and before
 general metrics. It is a labelled ordered list; every state is written as text
 and never communicated by color alone. The layout stacks at narrow widths and
 keeps the single primary action at least 44 pixels high.
