@@ -1,9 +1,12 @@
-use iotkit_core_publish::wire::{AcceptedThrough, RecordBatch, publication_id};
+use iotkit_core_publish::wire::{AcceptedThrough, RecordBatch, StatusHeartbeat, publication_id};
 
 const BATCH_FIXTURE: &str = include_str!("../../../../testdata/egress/v1/record-batch.json");
 const ACK_FIXTURE: &str = include_str!("../../../../testdata/egress/v1/accepted-through.json");
 const RECORD_FAMILY_CASES: &str =
     include_str!("../../../../testdata/egress/v1/record-family-cases.json");
+const STATUS_FIXTURE: &str = include_str!("../../../../testdata/egress/v1/status-heartbeat.json");
+
+type StatusMutation = Box<dyn Fn(&mut serde_json::Value)>;
 
 #[derive(serde::Deserialize)]
 struct RecordFamilyCases {
@@ -25,6 +28,54 @@ fn rust_decodes_and_validates_v1_batch_fixture() {
     assert_eq!(batch.cursor_start, 1);
     assert_eq!(batch.cursor_end, 1);
     assert_eq!(batch.records.len(), 1);
+}
+
+#[test]
+fn rust_decodes_and_validates_v1_status_heartbeat_fixture() {
+    let heartbeat: StatusHeartbeat = serde_json::from_str(STATUS_FIXTURE).unwrap();
+    heartbeat.validate().unwrap();
+    heartbeat.validate_topic_edge_node("edge-node-01").unwrap();
+    assert_eq!(heartbeat.status_seq, 1);
+}
+
+#[test]
+fn rust_status_heartbeat_has_the_same_strict_boundary_as_edge_ingest() {
+    let original: serde_json::Value = serde_json::from_str(STATUS_FIXTURE).unwrap();
+    let cases: Vec<(&str, StatusMutation)> = vec![
+        (
+            "unknown secret field",
+            Box::new(|value| value["password"] = "must-not-cross-mqtt".into()),
+        ),
+        (
+            "unsafe topic identity",
+            Box::new(|value| value["edge_node_id"] = "edge-node/other".into()),
+        ),
+        (
+            "unsafe ledger identity",
+            Box::new(|value| value["ledger_epoch"] = "epoch\nunsafe".into()),
+        ),
+        (
+            "unsafe boot identity",
+            Box::new(|value| value["boot_id"] = "boot:unsafe".into()),
+        ),
+        (
+            "duplicate adapter",
+            Box::new(|value| {
+                let adapter = value["adapters"][0].clone();
+                value["adapters"].as_array_mut().unwrap().push(adapter);
+            }),
+        ),
+    ];
+
+    for (name, mutate) in cases {
+        let mut value = original.clone();
+        mutate(&mut value);
+        let rejected = match serde_json::from_value::<StatusHeartbeat>(value) {
+            Ok(heartbeat) => heartbeat.validate().is_err(),
+            Err(_) => true,
+        };
+        assert!(rejected, "{name} was accepted");
+    }
 }
 
 #[test]

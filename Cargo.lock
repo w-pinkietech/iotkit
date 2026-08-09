@@ -1646,6 +1646,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trial-sample-adapter",
+ "uuid",
 ]
 
 [[package]]

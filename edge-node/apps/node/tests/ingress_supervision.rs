@@ -714,6 +714,7 @@ async fn listener_supervisor_exit_clears_health_without_stopping_collection() {
     })
     .unwrap();
     let health = Arc::new(Mutex::new(HealthState::new(90)));
+    health.lock().unwrap().collector_alive = true;
     let task = iotkit_edge_node::ingress::spawn_ingress_supervisor(
         db,
         dir.path().to_path_buf(),

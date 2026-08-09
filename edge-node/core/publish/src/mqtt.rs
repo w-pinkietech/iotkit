@@ -8,6 +8,7 @@ pub struct MqttBinding {
     pub username: String,
     pub client_id: String,
     pub records_topic: String,
+    pub status_topic: String,
     pub accepted_through_topic: String,
     pub descriptor_topic: String,
     pub activation_request_topic: String,
@@ -19,6 +20,7 @@ pub struct MqttBinding {
     pub qos: u8,
     pub retain: bool,
     pub descriptor_retain: bool,
+    pub status_retain: bool,
 }
 
 impl MqttBinding {
@@ -29,6 +31,7 @@ impl MqttBinding {
             username: edge_node_id.to_string(),
             client_id: format!("iotkit-edge-node-{edge_node_id}"),
             records_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/records"),
+            status_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/status"),
             accepted_through_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/accepted-through"),
             descriptor_topic: format!("iotkit/v1/edge-nodes/{edge_node_id}/descriptors"),
             activation_request_topic: format!(
@@ -48,6 +51,7 @@ impl MqttBinding {
             qos: 1,
             retain: false,
             descriptor_retain: true,
+            status_retain: true,
         })
     }
 }

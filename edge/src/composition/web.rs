@@ -35,16 +35,18 @@ use crate::{
     },
     composition::registered_output_adapters,
     diagnostics,
+    mqtt::ingest::IngestHealth,
     semantics::{Detector, DetectorMode, RuleSpec, SemanticKind, TriggerMode},
     storage::{
         AuditActor, DescriptorSignal, EdgeNodeState, RawHistoryQuery, Storage, StorageError,
     },
     web::{
         ApiMutation, ApiQuery, ConsoleAccount, ConsoleAudit, ConsoleBinding, ConsoleDevice,
-        ConsoleEdgeNode, ConsoleHistoryChart, ConsoleModeOption, ConsoleOutput,
-        ConsoleOutputSummary, ConsoleRequest, ConsoleRule, ConsoleSignal, ConsoleStorage,
-        ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput, Principal,
-        RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow, WebApplication, WebError,
+        ConsoleDiagnosticStage, ConsoleEdgeNode, ConsoleHistoryChart, ConsoleModeOption,
+        ConsoleOutput, ConsoleOutputSummary, ConsoleRequest, ConsoleRule, ConsoleSignal,
+        ConsoleStorage, ConsoleView, HistoryPage, HistoryQuery, LoginSession, MutationOutput,
+        Principal, RawHistoryRow, SemanticHistoryPage, SemanticHistoryRow, WebApplication,
+        WebError,
         console::{
             commissioning::commissioning_view,
             output::{apply_destination_state, binding_state, summarize},
@@ -141,6 +143,7 @@ pub struct StorageWebApplication {
     mutation_lock: Arc<AsyncMutex<()>>,
     storage_warning_percent: i32,
     broker_certificate_file: Option<PathBuf>,
+    ingest_health: IngestHealth,
 }
 
 impl StorageWebApplication {
@@ -157,6 +160,7 @@ impl StorageWebApplication {
             mutation_lock: Arc::new(AsyncMutex::new(())),
             storage_warning_percent: 85,
             broker_certificate_file: None,
+            ingest_health: IngestHealth::default(),
         }
     }
 
@@ -166,12 +170,28 @@ impl StorageWebApplication {
         storage_warning_percent: i32,
         broker_certificate_file: Option<PathBuf>,
     ) -> Self {
+        Self::with_runtime_settings_and_ingest_health(
+            storage,
+            storage_warning_percent,
+            broker_certificate_file,
+            IngestHealth::default(),
+        )
+    }
+
+    #[must_use]
+    pub fn with_runtime_settings_and_ingest_health(
+        storage: Storage,
+        storage_warning_percent: i32,
+        broker_certificate_file: Option<PathBuf>,
+        ingest_health: IngestHealth,
+    ) -> Self {
         Self {
             storage,
             login_admission: LoginAdmission::new(LoginPolicy::default()),
             mutation_lock: Arc::new(AsyncMutex::new(())),
             storage_warning_percent,
             broker_certificate_file,
+            ingest_health,
         }
     }
 
@@ -186,14 +206,16 @@ impl StorageWebApplication {
         let status = diagnostics::storage_status(&self.storage, self.storage_warning_percent)
             .await
             .map_err(internal)?;
-        let report = diagnostics::diagnostics_with_certificate(
+        let report = diagnostics::diagnostics_with_runtime(
             &self.storage,
             self.storage_warning_percent,
             now(),
             self.broker_certificate_file.as_deref(),
+            self.ingest_health.snapshot(),
         )
         .await
         .map_err(internal)?;
+        let causal_stages = console_diagnostic_stages(&report.stages);
         let mut messages: Vec<String> = report
             .issues
             .into_iter()
@@ -214,6 +236,7 @@ impl StorageWebApplication {
             host_capacity_available: status.filesystem_available,
             retention_note: "rawの自動削除は無効".into(),
             diagnostic_messages: messages,
+            causal_stages,
         })
     }
 
@@ -851,11 +874,12 @@ impl WebApplication for StorageWebApplication {
             )
             .map_err(internal),
             "/api/v1/system/diagnostics" => serde_json::to_value(
-                diagnostics::diagnostics_with_certificate(
+                diagnostics::diagnostics_with_runtime(
                     &self.storage,
                     self.storage_warning_percent,
                     now(),
                     self.broker_certificate_file.as_deref(),
+                    self.ingest_health.snapshot(),
                 )
                 .await
                 .map_err(internal)?,
@@ -2329,6 +2353,69 @@ fn sensor_type_label<'a>(code: &'a str, custom_label: &'a str) -> &'a str {
         "acceleration" => "加速度",
         "custom" if !custom_label.is_empty() => custom_label,
         _ => code,
+    }
+}
+
+fn console_diagnostic_stages(
+    stages: &[diagnostics::DiagnosticStage],
+) -> Vec<ConsoleDiagnosticStage> {
+    // Display order begins with the field input, but an upstream blocked
+    // unknown must never steal the one prominent next action from a known
+    // critical cause. Severity wins, then the causal display order breaks
+    // ties among independently actionable roots.
+    let primary_stage = [
+        diagnostics::DiagnosticStageState::Critical,
+        diagnostics::DiagnosticStageState::Warning,
+        diagnostics::DiagnosticStageState::Unknown,
+    ]
+    .into_iter()
+    .find_map(|state| {
+        stages
+            .iter()
+            .find(|stage| stage.blocked_by.is_none() && stage.state == state)
+            .map(|stage| stage.stage)
+    });
+    stages
+        .iter()
+        .map(|stage| {
+            let label = diagnostic_stage_label(stage.stage);
+            let (state_label, state_class) = diagnostic_stage_state_label(stage.state);
+            ConsoleDiagnosticStage {
+                label: label.into(),
+                state_label: state_label.into(),
+                state_class: state_class.into(),
+                last_success_at: stage.last_success_at,
+                scope: stage.scope.clone(),
+                cause: stage.cause.clone(),
+                action: stage.action.clone(),
+                href: stage.href.clone(),
+                primary: primary_stage == Some(stage.stage),
+            }
+        })
+        .collect()
+}
+
+fn diagnostic_stage_label(stage: diagnostics::DiagnosticStageKind) -> &'static str {
+    match stage {
+        diagnostics::DiagnosticStageKind::Sensor => "センサー入力",
+        diagnostics::DiagnosticStageKind::Adapter => "入力アダプター",
+        diagnostics::DiagnosticStageKind::Node => "収集ノード",
+        diagnostics::DiagnosticStageKind::Broker => "内部Broker経路",
+        diagnostics::DiagnosticStageKind::RawCustody => "IoTKit Edge受信・保管",
+        diagnostics::DiagnosticStageKind::Projection => "計測ルール処理",
+        diagnostics::DiagnosticStageKind::ExternalOutput => "外部出力",
+    }
+}
+
+fn diagnostic_stage_state_label(
+    state: diagnostics::DiagnosticStageState,
+) -> (&'static str, &'static str) {
+    match state {
+        diagnostics::DiagnosticStageState::Ok => ("正常", "healthy"),
+        diagnostics::DiagnosticStageState::Warning => ("確認", "warning"),
+        diagnostics::DiagnosticStageState::Critical => ("重大", "critical"),
+        diagnostics::DiagnosticStageState::Unknown => ("未確認", "unknown"),
+        diagnostics::DiagnosticStageState::NotApplicable => ("対象外", "not-applicable"),
     }
 }
 

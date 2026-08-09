@@ -5,11 +5,11 @@ use serde_json::Value;
 use super::*;
 
 #[test]
-fn profile_migration_requires_the_current_v11_schema() {
+fn profile_migration_requires_the_current_v12_schema() {
     assert!(!migratable_source_schema_version(9));
     assert!(!migratable_source_schema_version(10));
-    assert!(migratable_source_schema_version(11));
-    assert!(!migratable_source_schema_version(12));
+    assert!(!migratable_source_schema_version(11));
+    assert!(migratable_source_schema_version(12));
 }
 
 #[test]

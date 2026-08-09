@@ -7,6 +7,15 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 # shellcheck disable=SC1091
 source "$repo_root/deploy/mosquitto-image.env"
 
+for required_rule in \
+  'topic write iotkit/v1/edge-nodes/edge-node-01/status' \
+  'topic read iotkit/v1/edge-nodes/+/status'; do
+  grep -Fxq "$required_rule" "$repo_root/deploy/mosquitto/dev.acl" || {
+    echo "development Mosquitto ACL is missing status topic rule: $required_rule" >&2
+    exit 1
+  }
+done
+
 for command in docker openssl grep timeout; do
   command -v "$command" >/dev/null || {
     echo "required command not found: $command" >&2
@@ -303,6 +312,25 @@ assert_activation_request_is_nonretained() {
   fi
 }
 
+assert_status_is_retained_and_edge_visible() {
+  local marker="retained-status-probe-$$" status
+  expect_success edge-a-publishes-retained-status mqtt_client edge-a mosquitto_pub \
+    -h localhost -p "$tls_port" -q 1 -r \
+    -t iotkit/v1/edge-nodes/edge-a/status -m "$marker"
+  set +e
+  mqtt_client edge mosquitto_sub -h localhost -p "$tls_port" -W 3 -C 1 \
+    -i edge-status-late-subscriber -t iotkit/v1/edge-nodes/edge-a/status \
+    >"$scratch/edge-status-late-subscriber.stdout" \
+    2>"$scratch/edge-status-late-subscriber.stderr"
+  status=$?
+  set -e
+  if ((status != 0)) \
+    || ! grep -Fxq "$marker" "$scratch/edge-status-late-subscriber.stdout"; then
+    echo "Edge did not receive the retained Edge Node status" >&2
+    exit 1
+  fi
+}
+
 mkdir -p "$scratch/process"
 cat >"$scratch/client-process-probe.sh" <<'EOF'
 #!/bin/sh
@@ -385,6 +413,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 cat >"$scratch/acl" <<'EOF'
 user edge-a
 topic write iotkit/v1/edge-nodes/edge-a/records
+topic write iotkit/v1/edge-nodes/edge-a/status
 topic write iotkit/v1/edge-nodes/edge-a/descriptors
 topic write iotkit/v1/edge-nodes/edge-a/activation/result
 topic write iotkit/v1/edge-nodes/edge-a/recovery/result
@@ -396,6 +425,7 @@ topic read iotkit/v1/edge-nodes/edge-a/recovery/completion
 
 user edge-b
 topic write iotkit/v1/edge-nodes/edge-b/records
+topic write iotkit/v1/edge-nodes/edge-b/status
 topic write iotkit/v1/edge-nodes/edge-b/descriptors
 topic write iotkit/v1/edge-nodes/edge-b/activation/result
 topic write iotkit/v1/edge-nodes/edge-b/recovery/result
@@ -407,6 +437,7 @@ topic read iotkit/v1/edge-nodes/edge-b/recovery/completion
 
 user edge
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/status
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic read iotkit/v1/edge-nodes/+/activation/result
 topic read iotkit/v1/edge-nodes/+/recovery/result
@@ -467,6 +498,9 @@ fi
 expect_success edge-a-own-records mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
+expect_success edge-a-own-status mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 -r \
+  -t iotkit/v1/edge-nodes/edge-a/status -m '{}'
 expect_success edge-own-ack mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/accepted-through -m '{}'
@@ -499,13 +533,22 @@ expect_publish_denied edge-a-writes-edge-b \
   iotkit/v1/edge-nodes/edge-b/records mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-b/records -m '{}'
+expect_publish_denied edge-a-writes-edge-b-status \
+  iotkit/v1/edge-nodes/edge-b/status mqtt_client edge-a mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 -r \
+  -t iotkit/v1/edge-nodes/edge-b/status -m '{}'
 assert_cross_namespace_subscription_isolated
 assert_activation_subscription_isolated
 assert_activation_request_is_nonretained
+assert_status_is_retained_and_edge_visible
 expect_publish_denied edge-writes-edge-records \
   iotkit/v1/edge-nodes/edge-a/records mqtt_client edge mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
   -t iotkit/v1/edge-nodes/edge-a/records -m '{}'
+expect_publish_denied edge-writes-edge-status \
+  iotkit/v1/edge-nodes/edge-a/status mqtt_client edge mosquitto_pub \
+  -h localhost -p "$tls_port" -q 1 -r \
+  -t iotkit/v1/edge-nodes/edge-a/status -m '{}'
 expect_publish_denied edge-a-writes-edge-b-activation-result \
   iotkit/v1/edge-nodes/edge-b/activation/result mqtt_client edge-a mosquitto_pub \
   -h localhost -p "$tls_port" -q 1 \
@@ -570,6 +613,10 @@ awk -F: '
 ' "$scratch/edge-a.next" "$scratch/passwords.db" >"$scratch/passwords.next"
 cp "$scratch/passwords.next" "$scratch/passwords.db"
 docker restart "$broker" >/dev/null
+# Docker may allocate a fresh host port for this dynamic publish on restart.
+# Re-read it before proving the replacement credential rather than probing the
+# now-unbound old port.
+tls_port=$(published_port "$broker")
 write_client_config edge-a-rotated edge-a "$edge_a_rotated_password" ca.pem
 replacement_ready=false
 for _ in $(seq 1 30); do

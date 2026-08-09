@@ -61,6 +61,21 @@ async fn migrator_through_v10(profile: &str) -> Migrator {
     }
 }
 
+async fn migrator_through_v11(profile: &str) -> Migrator {
+    let full = Migrator::new(migrations(profile))
+        .await
+        .expect("load migrations");
+    Migrator {
+        migrations: Cow::Owned(
+            full.iter()
+                .filter(|migration| migration.version <= 11)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+}
+
 fn v10_backfill_records() -> Vec<(i64, Vec<u8>)> {
     [
         (
@@ -187,7 +202,7 @@ async fn sqlite_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect semantic history index");
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert_eq!(column_count, 1);
     assert_eq!(history_index_count, 1);
 }
@@ -269,7 +284,7 @@ async fn sqlite_startup_upgrades_v10_and_backfills_only_valid_measurement_series
     .fetch_one(&inspection)
     .await
     .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert_eq!(
         series_keys,
         vec![
@@ -338,7 +353,157 @@ async fn sqlite_v11_migration_failure_rolls_back_the_new_column() {
 }
 
 #[tokio::test]
-async fn sqlite_to_postgres_requires_v11_startup_upgrade_before_copy() {
+async fn sqlite_v12_status_migration_from_v11_adds_an_empty_latest_only_store() {
+    let directory = TempDir::new_in(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target"),
+    )
+    .expect("temporary directory");
+    let path = directory.path().join("upgrade-v11-status.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("create v11 database");
+    migrator_through_v11("sqlite")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v11");
+    sqlx::query(
+        "INSERT INTO edge_meta(singleton,edge_id,created_at) VALUES(1,'edge-upgrade-v11',1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed identity");
+    pool.close().await;
+
+    let storage = Storage::connect(StorageProfile::Sqlite { path: path.clone() })
+        .await
+        .expect("upgrade v11 database");
+    assert_eq!(storage.edge_id().await.unwrap(), "edge-upgrade-v11");
+    drop(storage);
+
+    let inspection = SqlitePool::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .expect("inspect upgraded database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let status_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='edge_node_status'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let status_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM edge_node_status")
+        .fetch_one(&inspection)
+        .await
+        .unwrap();
+    let status_fk_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_foreign_key_list('edge_node_status') \
+         WHERE \"table\"='edge_node_activations' AND \"from\"='edge_node_id' \
+         AND on_delete='CASCADE'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 12);
+    assert_eq!(status_table_count, 1);
+    assert_eq!(status_rows, 0, "v12 does not invent health history");
+    assert_eq!(status_fk_count, 1);
+    let pending_since_column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('edge_node_status') WHERE name='pending_since_at'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let recovery_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' \
+         AND name='ix_semantic_observation_recovery'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let causal_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN (\
+         'ix_raw_records_diagnostic_epoch_signal_received',\
+         'ix_semantic_observation_diagnostic_latest',\
+         'ix_output_outbox_diagnostic_route_published',\
+         'ix_output_outbox_diagnostic_route_pending')",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(pending_since_column_count, 1);
+    assert_eq!(recovery_index_count, 1);
+    assert_eq!(causal_index_count, 4);
+}
+
+#[tokio::test]
+async fn sqlite_v12_status_migration_failure_rolls_back_the_new_table() {
+    let directory = TempDir::new_in(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target"),
+    )
+    .expect("temporary directory");
+    let path = directory.path().join("upgrade-v11-status-failure.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("create v11 database");
+    migrator_through_v11("sqlite")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v11");
+    // The index name is database-global. Its deliberate collision makes the
+    // second statement of v12 fail after CREATE TABLE, exercising DDL rollback.
+    sqlx::query("CREATE INDEX ix_edge_node_status_live ON raw_records(received_at)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    assert!(
+        Storage::connect(StorageProfile::Sqlite { path: path.clone() })
+            .await
+            .is_err()
+    );
+
+    let inspection = SqlitePool::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .expect("inspect rolled-back database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let status_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='edge_node_status'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 11);
+    assert_eq!(status_table_count, 0);
+}
+
+#[tokio::test]
+async fn sqlite_to_postgres_requires_current_startup_upgrade_before_copy() {
     let directory = TempDir::new_in(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -552,7 +717,7 @@ async fn sqlite_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_ea
     .fetch_one(&inspection)
     .await
     .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert_eq!(history_index_count, 1);
     let queue: Vec<(i64, i64, i64)> = sqlx::query_as(
         "SELECT pub_seq,revision,calibration_revision FROM semantic_projection_queue \
@@ -646,7 +811,7 @@ async fn postgres_startup_upgrades_a_v6_database_without_losing_identity() {
     .fetch_one(&inspection)
     .await
     .expect("inspect semantic history index");
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert_eq!(column_count, 1);
     assert_eq!(history_index_count, 1);
     inspection.close().await;
@@ -722,7 +887,7 @@ async fn postgres_startup_upgrades_v10_and_backfills_only_valid_measurement_seri
     .fetch_one(&inspection)
     .await
     .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert_eq!(
         series_keys,
         vec![
@@ -877,6 +1042,146 @@ async fn postgres_v11_migration_failure_rolls_back_the_new_column() {
             .unwrap();
     assert_eq!(column_count, 0);
     assert_eq!(version, 10);
+    inspection.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires IOTKIT_TEST_POSTGRES_DSN; run scripts/test-edge-postgres.sh"]
+async fn postgres_v12_status_migration_from_v11_adds_an_empty_latest_only_store() {
+    let dsn = match std::env::var("IOTKIT_TEST_POSTGRES_DSN") {
+        Ok(dsn) => dsn,
+        Err(_) if std::env::var_os("IOTKIT_REQUIRE_POSTGRES").is_some() => {
+            panic!("IOTKIT_TEST_POSTGRES_DSN is required")
+        }
+        Err(_) => return,
+    };
+    let pool = PgPool::connect(&dsn).await.expect("create v11 database");
+    migrator_through_v11("postgres")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v11");
+    sqlx::query(
+        "INSERT INTO edge_meta(singleton,edge_id,created_at) VALUES(1,'edge-upgrade-v11',1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed identity");
+    pool.close().await;
+
+    let storage = Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+        .await
+        .expect("upgrade v11 database");
+    assert_eq!(storage.edge_id().await.unwrap(), "edge-upgrade-v11");
+    drop(storage);
+
+    let inspection = PgPool::connect(&dsn)
+        .await
+        .expect("inspect upgraded database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let status_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' \
+         AND table_name='edge_node_status'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let status_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM edge_node_status")
+        .fetch_one(&inspection)
+        .await
+        .unwrap();
+    let pending_since_column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' \
+         AND table_name='edge_node_status' AND column_name='pending_since_at'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let status_fk_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.table_constraints \
+         WHERE table_schema='public' AND table_name='edge_node_status' \
+         AND constraint_type='FOREIGN KEY'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let recovery_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' \
+         AND tablename='semantic_observations' \
+         AND indexname='ix_semantic_observation_recovery'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    let causal_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname IN (\
+         'ix_raw_records_diagnostic_epoch_signal_received',\
+         'ix_semantic_observation_diagnostic_latest',\
+         'ix_output_outbox_diagnostic_route_published',\
+         'ix_output_outbox_diagnostic_route_pending')",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 12);
+    assert_eq!(status_table_count, 1);
+    assert_eq!(status_rows, 0, "v12 does not invent health history");
+    assert_eq!(pending_since_column_count, 1);
+    assert_eq!(status_fk_count, 1);
+    assert_eq!(recovery_index_count, 1);
+    assert_eq!(causal_index_count, 4);
+    inspection.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires IOTKIT_TEST_POSTGRES_DSN; run scripts/test-edge-postgres.sh"]
+async fn postgres_v12_status_migration_failure_rolls_back_the_new_table() {
+    let dsn = match std::env::var("IOTKIT_TEST_POSTGRES_DSN") {
+        Ok(dsn) => dsn,
+        Err(_) if std::env::var_os("IOTKIT_REQUIRE_POSTGRES").is_some() => {
+            panic!("IOTKIT_TEST_POSTGRES_DSN is required")
+        }
+        Err(_) => return,
+    };
+    let pool = PgPool::connect(&dsn).await.expect("create v11 database");
+    migrator_through_v11("postgres")
+        .await
+        .run(&pool)
+        .await
+        .expect("apply migrations through v11");
+    sqlx::query("CREATE INDEX ix_edge_node_status_live ON raw_records(received_at)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    assert!(
+        Storage::connect(StorageProfile::Postgres { dsn: dsn.clone() })
+            .await
+            .is_err()
+    );
+
+    let inspection = PgPool::connect(&dsn)
+        .await
+        .expect("inspect rolled-back database");
+    let version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&inspection)
+            .await
+            .unwrap();
+    let status_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' \
+         AND table_name='edge_node_status'",
+    )
+    .fetch_one(&inspection)
+    .await
+    .unwrap();
+    assert_eq!(version, 11);
+    assert_eq!(status_table_count, 0);
     inspection.close().await;
 }
 
@@ -1054,7 +1359,7 @@ async fn postgres_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_
     .fetch_one(&inspection)
     .await
     .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert_eq!(history_index_count, 1);
     let queue: Vec<(i64, i64, i64)> = sqlx::query_as(
         "SELECT pub_seq,revision,calibration_revision FROM semantic_projection_queue \

@@ -251,6 +251,26 @@ done
 "$cargo_target_dir/debug/iotkit-edge-nodectl" --db "$scratch/edge2.db" init >/dev/null
 "$cargo_target_dir/debug/iotkit-edge-nodectl" --db "$scratch/edge2.db" mqtt-binding \
   >"$scratch/binding2.json"
+edge_archive_username=$(sed -n 's/^IOTKIT_EDGE_USERNAME=//p' "$output/edge.env")
+edge_status_rule='topic read iotkit/v1/edge-nodes/+/status'
+cp "$output/mosquitto/acl" "$scratch/acl-before-status-preflight"
+awk -v edge_user="user $edge_archive_username" -v rule="$edge_status_rule" '
+  $0 == edge_user { active=1; print; next }
+  $1 == "user" { active=0 }
+  active && $0 == rule { next }
+  { print }
+' "$output/mosquitto/acl" >"$scratch/acl-without-edge-status"
+mv "$scratch/acl-without-edge-status" "$output/mosquitto/acl"
+if "$repo_root/scripts/add-edge-node.sh" \
+  --binding "$scratch/binding2.json" --edge-dir "$output" \
+  >"$scratch/add-edge-status-preflight.stdout" \
+  2>"$scratch/add-edge-status-preflight.stderr"; then
+  echo "Edge enrollment accepted an ACL without the Edge status subscription" >&2
+  exit 1
+fi
+grep -Fq 'run scripts/upgrade-edge-node-recovery-acl.sh' \
+  "$scratch/add-edge-status-preflight.stderr"
+mv "$scratch/acl-before-status-preflight" "$output/mosquitto/acl"
 "$repo_root/scripts/add-edge-node.sh" \
   --binding "$scratch/binding2.json" --edge-dir "$output" >/dev/null
 edge_node_id2=$(jq -er '.edge_node_id' "$scratch/binding2.json")
@@ -261,6 +281,7 @@ grep -Fxq "user $edge_node_id2" "$output/mosquitto/acl"
 edge_node_id=$(jq -er '.edge_node_id' "$scratch/binding.json")
 grep -Fxq "user $edge_node_id" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/records" "$output/mosquitto/acl"
+grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/status" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result" "$output/mosquitto/acl"
@@ -269,6 +290,7 @@ grep -Fxq "topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/request" "$out
 grep -Fxq "topic read iotkit/v1/edge-nodes/$edge_node_id/recovery/completion" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/completion-ack" "$output/mosquitto/acl"
 grep -Fxq "topic read iotkit/v1/edge-nodes/+/descriptors" "$output/mosquitto/acl"
+grep -Fxq "topic read iotkit/v1/edge-nodes/+/status" "$output/mosquitto/acl"
 grep -Fxq "topic read iotkit/v1/edge-nodes/+/activation/result" "$output/mosquitto/acl"
 grep -Fxq "topic read iotkit/v1/edge-nodes/+/recovery/result" "$output/mosquitto/acl"
 grep -Fxq "topic write iotkit/v1/edge-nodes/+/activation/request" "$output/mosquitto/acl"
@@ -686,7 +708,7 @@ if [[ "${IOTKIT_TEST_RECOVERY_DRILL:-0}" == 1 ]]; then
     echo "credential fence accepted a legacy ACL" >&2
     exit 1
   fi
-  grep -Fq 'Recovery ACL is not current' "$scratch/fence-preflight.stderr"
+  grep -Fq 'Edge Node ACL is not current' "$scratch/fence-preflight.stderr"
   [[ ! -e "$output/recovery/preflight-must-fail" ]]
 
   "$repo_root/scripts/upgrade-edge-node-recovery-acl.sh" \

@@ -72,17 +72,124 @@ fn prepares_versioned_contiguous_batch_for_edge_node_topic() {
 fn mqtt_client_accepts_the_wire_batch_limit_plus_protocol_overhead() {
     let binding = MqttBinding::for_edge_node("edge-01").unwrap();
     let records_topic = binding.records_topic;
+    let status_topic = binding.status_topic;
     let ack_topic = binding.accepted_through_topic;
     let descriptor_topic = binding.descriptor_topic;
     let mut options = MqttOptions::new("test-client", "localhost", 1883);
 
-    configure_packet_limits(&mut options, &records_topic, &ack_topic, &descriptor_topic);
+    configure_packet_limits(
+        &mut options,
+        &records_topic,
+        &ack_topic,
+        &descriptor_topic,
+        &status_topic,
+    );
 
     assert!(options.max_packet_size() > MAX_BATCH_BYTES);
     assert_eq!(
         options.max_packet_size(),
-        mqtt_packet_limit(&records_topic, &ack_topic, &descriptor_topic)
+        mqtt_packet_limit(&records_topic, &ack_topic, &descriptor_topic, &status_topic)
     );
+}
+
+#[test]
+fn status_heartbeat_maps_only_bounded_operational_health_and_separates_custody() {
+    let mut health = iotkit_edge_node::health::HealthState::new(7);
+    health.collector_alive = false;
+    health.db.watermark_exceeded = true;
+    health.note_adapter_running("running-adapter");
+    health.note_adapter_restarting("restarting-adapter");
+    health.note_adapter_exhausted("exhausted-adapter");
+    health.note_adapter_closed("stopped-adapter");
+    health
+        .publish
+        .push(iotkit_edge_node::health::TargetDeliveryHealth {
+            target_id: "edge".into(),
+            cursor_pub_seq: 999,
+            backlog: 777,
+            last_push_at: Some(1),
+            last_error: Some("must-not-leave-the-host".into()),
+        });
+
+    let heartbeat = build_status_heartbeat(
+        &health,
+        "edge-01".into(),
+        "epoch-01".into(),
+        "boot-0123456789abcdef0123456789abcdef",
+        4,
+        42,
+        3,
+    );
+
+    assert_eq!(heartbeat.collector_state, CollectorState::Stopped);
+    assert_eq!(heartbeat.accepted_through, 42);
+    assert_eq!(heartbeat.pending_publications, 3);
+    assert!(heartbeat.storage_pressure);
+    assert_eq!(
+        heartbeat
+            .adapters
+            .iter()
+            .map(|adapter| (adapter.adapter_id.as_str(), adapter.state))
+            .collect::<Vec<_>>(),
+        vec![
+            ("running-adapter", AdapterState::Running),
+            ("restarting-adapter", AdapterState::Restarting),
+            ("exhausted-adapter", AdapterState::Exhausted),
+            ("stopped-adapter", AdapterState::Stopped),
+        ]
+    );
+    let encoded = serde_json::to_string(&heartbeat).unwrap();
+    assert!(!encoded.contains("must-not-leave-the-host"));
+    assert!(!encoded.contains("last_error"));
+    heartbeat.validate().unwrap();
+}
+
+#[test]
+fn status_heartbeat_refuses_to_hide_an_unbounded_adapter_set() {
+    let mut health = iotkit_edge_node::health::HealthState::new(7);
+    for number in 0..65 {
+        health.note_adapter_running(&format!("adapter-{number}"));
+    }
+    let heartbeat = build_status_heartbeat(
+        &health,
+        "edge-01".into(),
+        "epoch-01".into(),
+        "boot-0123456789abcdef0123456789abcdef",
+        1,
+        0,
+        0,
+    );
+    assert!(heartbeat.validate().is_err());
+}
+
+#[tokio::test]
+async fn failed_status_enqueue_does_not_consume_the_sequence() {
+    let db = test_db();
+    db.with_conn_sync(|conn| {
+        seed_annotation(conn, "edge-01");
+        Ok(())
+    })
+    .unwrap();
+    let health = Arc::new(Mutex::new(iotkit_edge_node::health::HealthState::new(7)));
+    let binding = MqttBinding::for_edge_node("edge-01").unwrap();
+    let (client, event_loop) =
+        AsyncClient::new(MqttOptions::new("test-client", "localhost", 1883), 1);
+    drop(event_loop);
+    let mut sequence = 7;
+
+    assert!(
+        publish_status_heartbeat(
+            &db,
+            &health,
+            &client,
+            &binding,
+            "boot-0123456789abcdef0123456789abcdef",
+            &mut sequence,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(sequence, 7);
 }
 
 #[test]

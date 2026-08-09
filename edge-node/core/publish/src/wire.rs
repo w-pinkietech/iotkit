@@ -1,9 +1,14 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const EGRESS_SCHEMA_VERSION: u32 = 1;
 pub const MAX_BATCH_RECORDS: usize = 256;
 pub const MAX_BATCH_BYTES: usize = 1024 * 1024;
+pub const MAX_STATUS_BYTES: usize = 16 * 1024;
+pub const MAX_STATUS_ADAPTERS: usize = 64;
+pub const MAX_STATUS_ID_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +30,85 @@ pub struct AcceptedThrough {
     pub ledger_epoch: String,
     pub publication_id: String,
     pub accepted_through: i64,
+}
+
+/// Operational heartbeat is separate from record custody. MQTT publication of
+/// it must never advance the durable publication cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusHeartbeat {
+    pub schema_version: u32,
+    pub edge_node_id: String,
+    pub ledger_epoch: String,
+    pub boot_id: String,
+    pub status_seq: u64,
+    pub collector_state: CollectorState,
+    pub adapters: Vec<StatusAdapter>,
+    pub accepted_through: i64,
+    pub pending_publications: i64,
+    pub storage_pressure: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectorState {
+    Running,
+    Stopped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusAdapter {
+    pub adapter_id: String,
+    pub state: AdapterState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterState {
+    Running,
+    Restarting,
+    Exhausted,
+    Stopped,
+}
+
+impl StatusHeartbeat {
+    pub fn validate(&self) -> Result<(), WireError> {
+        if self.schema_version != EGRESS_SCHEMA_VERSION
+            || self.status_seq == 0
+            || self.status_seq > i64::MAX as u64
+            || self.accepted_through < 0
+            || self.pending_publications < 0
+            || self.adapters.len() > MAX_STATUS_ADAPTERS
+        {
+            return invalid("invalid status heartbeat boundary");
+        }
+        validate_status_topic_segment("edge_node_id", &self.edge_node_id)?;
+        validate_status_identity("ledger_epoch", &self.ledger_epoch)?;
+        validate_status_id("boot_id", &self.boot_id)?;
+        let mut adapter_ids = HashSet::new();
+        for adapter in &self.adapters {
+            validate_status_id("adapter_id", &adapter.adapter_id)?;
+            if !adapter_ids.insert(adapter.adapter_id.as_str()) {
+                return invalid("status heartbeat has duplicate adapter_id");
+            }
+        }
+        if serde_json::to_vec(self)
+            .map_err(|error| WireError(format!("status encoding failed: {error}")))?
+            .len()
+            > MAX_STATUS_BYTES
+        {
+            return invalid("status heartbeat exceeds encoded byte limit");
+        }
+        Ok(())
+    }
+
+    pub fn validate_topic_edge_node(&self, edge_node_id: &str) -> Result<(), WireError> {
+        if self.edge_node_id != edge_node_id {
+            return invalid("status heartbeat topic/body edge_node_id mismatch");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,6 +407,43 @@ pub(crate) fn validate_topic_segment(name: &str, value: &str) -> Result<(), Wire
 fn validate_identity_component(name: &str, value: &str) -> Result<(), WireError> {
     if value.is_empty() || value.contains(':') {
         return invalid(&format!("{name} is empty or contains ':'"));
+    }
+    Ok(())
+}
+
+fn validate_status_id(name: &str, value: &str) -> Result<(), WireError> {
+    if value.is_empty()
+        || value.len() > MAX_STATUS_ID_BYTES
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_uppercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.')
+        })
+    {
+        return invalid(&format!("{name} is not a bounded opaque status identity"));
+    }
+    Ok(())
+}
+
+// Keep the producer-side status contract byte-for-byte as strict as the Edge
+// decoder. Existing record helpers predate this bounded heartbeat contract and
+// intentionally retain their compatibility rules.
+fn validate_status_topic_segment(name: &str, value: &str) -> Result<(), WireError> {
+    validate_status_identity(name, value)?;
+    if value.contains(['/', '+', '#']) {
+        return invalid(&format!("{name} is not a safe MQTT topic segment"));
+    }
+    Ok(())
+}
+
+fn validate_status_identity(name: &str, value: &str) -> Result<(), WireError> {
+    if value.is_empty()
+        || value.len() > 255
+        || value.contains(':')
+        || value.chars().any(char::is_control)
+    {
+        return invalid(&format!("{name} is not a valid identity"));
     }
     Ok(())
 }

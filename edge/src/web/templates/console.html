@@ -113,16 +113,36 @@
       {% if view.receiving_signal_count > 0 %}
       <section class="health-banner healthy" aria-label="システムの状態">
         <span class="health-icon" aria-hidden="true">✓</span>
-        <div><strong>センサーデータを受信しています</strong><p>現在値を確認できるセンサーがあります。</p></div>
+        <div><strong>センサーデータの受信履歴があります</strong><p>保存済みの現在値を確認できるセンサーがあります。現在の経路は下の診断で確認してください。</p></div>
       </section>
       {% else %}
       <section class="health-banner" aria-label="システムの状態">
         <span class="health-icon" aria-hidden="true">!</span>
-        <div><strong>受信済みのセンサーデータがありません</strong><p>収集ノードの登録状態と接続を確認してください。</p></div>
+        <div><strong>センサーデータの受信履歴がありません</strong><p>収集ノードの登録状態と現在の経路は下の診断で確認してください。</p></div>
       </section>
       {% endif %}
+      <section class="content-section causal-diagnostics" aria-labelledby="causal-diagnostics-heading">
+        <div class="section-heading"><div><p class="section-kicker">DIAGNOSTICS</p><h2 id="causal-diagnostics-heading">データの流れを確認</h2><p>上流から順に、いま確認できる根拠と次の確認先を示します。</p></div></div>
+        <ol class="causal-stage-list">
+          {% for stage in view.storage.causal_stages %}
+          <li class="causal-stage causal-stage--{{ stage.state_class }}">
+            <div class="causal-stage-main">
+              <div class="causal-stage-heading"><h3>{{ stage.label }}</h3><span class="status-pill causal-stage-state {{ stage.state_class }}">{{ stage.state_label }}</span></div>
+              <p>{{ stage.cause }}</p>
+              <p><strong>最終成功:</strong> {% match stage.last_success_at %}{% when Some with (timestamp) %}<time data-unix-ms="{{ timestamp }}">{{ timestamp }} (Unix ms)</time>{% when None %}まだ確認できません{% endmatch %}</p>
+              <small>{{ stage.scope }}</small>
+            </div>
+            {% if stage.primary %}
+            <a class="button causal-stage-action causal-stage-action--primary" href="{{ stage.href }}">{{ stage.action }}</a>
+            {% else %}
+            <a class="button secondary causal-stage-action" href="{{ stage.href }}">{{ stage.action }}</a>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ol>
+      </section>
       <section class="metric-grid" aria-label="集計">
-        <article class="metric-card"><span class="metric-label">受信中</span><strong>{{ view.receiving_signal_count }}</strong><small>件のセンサー</small></article>
+        <article class="metric-card"><span class="metric-label">現在値あり</span><strong>{{ view.receiving_signal_count }}</strong><small>件のセンサー</small></article>
         <article class="metric-card"><span class="metric-label">登録済みの収集ノード</span><strong>{{ view.registered_edge_node_count }}</strong><small>台</small></article>
       </section>
       <section class="content-section">
@@ -518,6 +538,7 @@
         <div><dt>検出したセンサー</dt><dd>{{ edge_node.descriptor_signal_count }}件</dd></div>
         <div><dt>登録状態</dt><dd>{{ edge_node.state_label }}</dd></div>
       </dl>
+      <p class="equipment-registration-note">登録状態は、IoTKit Edgeでの登録手続きの状態です。オンラインかどうかは示しません。稼働状態は<a href="/status">状態概要の診断</a>で確認してください。</p>
       {% if !next_device_setup_href.is_empty() %}
       {% if is_admin %}
       <section class="equipment-action-card">
@@ -564,9 +585,9 @@
       </section>
       {% when None %}
       <section class="equipment-overview">
-        <div class="section-heading"><div><h2>接続されている収集ノード</h2><p>確認や設定を行う収集ノードを選んでください。</p></div><div class="equipment-overview-count"><strong>{{ view.edge_nodes.len() }}</strong><span>台</span></div></div>
+        <div class="section-heading"><div><h2>収集ノード</h2><p>確認や設定を行う収集ノードを選んでください。</p><p class="equipment-registration-note">ここでの登録状態はオンライン状態ではありません。稼働状態は<a href="/status">状態概要の診断</a>で確認してください。</p></div><div class="equipment-overview-count"><strong>{{ view.edge_nodes.len() }}</strong><span>台</span></div></div>
         <div class="equipment-overview-list">
-        <div class="equipment-row equipment-row--head" aria-hidden="true"><span>収集ノード</span><span>状態</span><span>デバイス</span><span>センサー</span><span></span><span></span></div>
+        <div class="equipment-row equipment-row--head" aria-hidden="true"><span>収集ノード</span><span>登録状態</span><span>デバイス</span><span>センサー</span><span></span><span></span></div>
         {% for edge_node in view.edge_nodes %}
         <a class="equipment-row" href="/equipment/edge-nodes/{{ edge_node.edge_node_ref }}">
           <span class="equipment-row-name"><i aria-hidden="true">◇</i><span><strong>{{ edge_node.name }}</strong><small>{{ edge_node.location }}</small></span></span>

@@ -144,20 +144,27 @@
         "edge/src/web/",
         "edge/frontend/",
         "edge/src/storage/",
-        "edge/src/diagnostics/",
-        "edge-node/apps/node/src/health.rs",
-        "edge-node/apps/node/src/supervision.rs",
-        "scripts/test-edge-console-e2e.sh"
+    "edge/src/diagnostics/",
+    "edge-node/apps/node/src/health.rs",
+    "edge-node/apps/node/src/mqtt_publish_task.rs",
+    "edge-node/apps/node/src/supervision.rs",
+    "edge/tests/diagnostics_contract.rs",
+    "edge/tests/console_contract.rs",
+    "scripts/test-edge-console-e2e.sh",
+    "scripts/test-edge-resilience.sh"
       ],
       "review_question": "Can the Console and local diagnostics distinguish a stale sensor, stopped Input Adapter, stopped Edge Node, Broker path failure, IoTKit Edge ingestion failure, and blocked external output without guessing that the system is healthy?",
       "provenance": [
         "docs/product/ja/operations/installation-and-recovery.md",
         "docs/product/en/operations/installation-and-recovery.md"
       ],
-      "guards": [
-        "scripts/test-edge-console-e2e.sh"
-      ],
-      "coverage_gap": "Automated browser assertions do not replace an operator journey performed by someone unfamiliar with the implementation."
+  "guards": [
+    "edge/tests/diagnostics_contract.rs",
+    "edge/tests/console_contract.rs",
+    "scripts/test-edge-console-e2e.sh",
+    "scripts/test-edge-resilience.sh"
+  ],
+  "coverage_gap": "Automated causal-state and browser checks do not prove that an operator unfamiliar with IoTKit can follow the first-action guidance during a physical sensor, host, or network incident."
     }
   ]
 }

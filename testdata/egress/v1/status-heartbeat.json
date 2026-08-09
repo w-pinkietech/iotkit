@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "edge_node_id": "edge-node-01",
+  "ledger_epoch": "epoch-01",
+  "boot_id": "boot-0123456789abcdef0123456789abcdef",
+  "status_seq": 1,
+  "collector_state": "running",
+  "adapters": [
+    {"adapter_id": "trial-sample", "state": "running"}
+  ],
+  "accepted_through": 42,
+  "pending_publications": 3,
+  "storage_pressure": false
+}

@@ -1,11 +1,11 @@
 ---
 type: Contract
 title: "Edge Node custody contract v1"
-description: "Defines the complete MQTT custody transfer, activation, record families, acknowledgement, retry, and authentication contract."
+description: "Defines MQTT custody transfer plus the separate bounded Edge Node operational-status heartbeat contract."
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 9
+revision: 10
 ---
 
 # Edge Node custody contract v1 (R10 exit)
@@ -34,19 +34,55 @@ part of this contract.
 
 ```text
 iotkit/v1/edge-nodes/{edge_node_id}/records
+iotkit/v1/edge-nodes/{edge_node_id}/status
 iotkit/v1/edge-nodes/{edge_node_id}/accepted-through
 iotkit/v1/edge-nodes/{edge_node_id}/descriptors
 iotkit/v1/edge-nodes/{edge_node_id}/activation/request
 iotkit/v1/edge-nodes/{edge_node_id}/activation/result
 ```
 
-`records` and `accepted-through` use QoS 1 and MUST NOT be retained. `descriptors` uses QoS 1 and
-MUST be retained; it is a complete current-state replica, not a custody stream. `activation/request`
-and `activation/result` use QoS 1 and MUST NOT be retained. IoTKit Edge durably retries an activation
-request until the correlated application result is committed; MQTT PUBACK is never activation
-completion. ACLs restrict each Edge Node to publishing its own records/descriptors/activation result
-and subscribing to its own acknowledgement/activation request. Application-specific topics are
-outside R10.
+`records` and `accepted-through` use QoS 1 and MUST NOT be retained. `descriptors` and `status` use
+QoS 1 and MUST be retained; each is a current-state replica, not a custody stream.
+`activation/request` and `activation/result` use QoS 1 and MUST NOT be retained. IoTKit Edge durably
+retries an activation request until the correlated application result is committed; MQTT PUBACK is
+never activation completion. ACLs restrict each Edge Node to publishing its own
+records/status/descriptors/activation result and subscribing to its own acknowledgement/activation
+request. Application-specific topics are outside R10.
+
+## Operational status heartbeat
+
+`status` is a strict, secret-free v1 operational heartbeat. Its topic identity and payload
+`edge_node_id` MUST match. An Edge Node publishes one after confirmed MQTT subscription
+readiness and then every 30 seconds. There is no last-will message.
+
+```json
+{
+  "schema_version": 1,
+  "edge_node_id": "edge-node-01",
+  "ledger_epoch": "epoch-01",
+  "boot_id": "boot-0123456789abcdef0123456789abcdef",
+  "status_seq": 1,
+  "collector_state": "running",
+  "adapters": [{"adapter_id": "trial-sample", "state": "running"}],
+  "accepted_through": 42,
+  "pending_publications": 3,
+  "storage_pressure": false
+}
+```
+
+The schema version is exactly `1`; `status_seq` is positive and monotonically increases within a
+`boot_id`. `collector_state` is `running` or `stopped`. There are at most 64 unique bounded opaque
+adapter IDs, each with `running`, `restarting`, `exhausted`, or `stopped`. Cursors and pending counts
+are non-negative bounded integers. Payloads reject unknown fields, unsafe identities, duplicate
+adapters, invalid enums, invalid encoding, or an identity mismatch. They contain no producer
+timestamp, endpoint, credential, topic, filesystem path, adapter error text, or raw error.
+
+IoTKit Edge uses its own receipt time as the freshness authority and accepts a live status only for
+the current active `(edge_node_id, ledger_epoch)`. For one boot it accepts only a greater sequence;
+a new boot begins a new sequence. Duplicate or lower live sequences do not refresh freshness. A
+retained replay may fill an absent historical row but never refreshes live status or overwrites a
+newer live row. The heartbeat's `accepted_through` is the Node's observation, not an acknowledgement:
+only IoTKit Edge's validated `accepted-through` topic commits custody and permits normal purge.
 
 ## Edge Node activation and publication admission
 

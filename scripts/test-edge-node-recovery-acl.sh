@@ -49,12 +49,14 @@ PATH="$root/bin:$PATH" "$repo_root/scripts/upgrade-edge-node-recovery-acl.sh" \
   --edge-dir "$root/edge" --edge-node-id node-01
 
 required=(
+  "topic write iotkit/v1/edge-nodes/node-01/status"
   "topic write iotkit/v1/edge-nodes/node-01/recovery/result"
   "topic write iotkit/v1/edge-nodes/node-01/recovery/completion-ack"
   "topic read iotkit/v1/edge-nodes/node-01/recovery/request"
   "topic read iotkit/v1/edge-nodes/node-01/recovery/completion"
   "topic read iotkit/v1/edge-nodes/+/recovery/result"
   "topic read iotkit/v1/edge-nodes/+/recovery/completion-ack"
+  "topic read iotkit/v1/edge-nodes/+/status"
   "topic write iotkit/v1/edge-nodes/+/recovery/request"
   "topic write iotkit/v1/edge-nodes/+/recovery/completion"
 )

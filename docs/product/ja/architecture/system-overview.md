@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 17
+revision: 20
 ---
 
 # Architecture
@@ -46,6 +46,8 @@ IoTKit Edgeの`embedded`と`postgres`は同じ製品契約を満たします。S
 
 Raw custodyではcanonical record JSONとrecord hashを正本として保持します。Schema v11は、有効なmeasurement envelopeだけにnullableの導出`series_key`を追加します。設定のreal-signal previewはsignal referenceを解決し、両profileでindexされた`(edge_node_id, series_key, received_at DESC, ledger_epoch DESC, pub_seq DESC)`順にbounded raw tailを読みます。この読出しで保持済みraw historyのJSON field抽出やsortは行いません。SQLiteはfull keyをindexします。PostgreSQLは固定長の`md5(series_key)` discriminatorをindexし、完全なkeyを再照合します。そのため長い保持keyでもraw-preview B-tree tupleをoverflowせず、digest collisionで別signalのrecordを選びません。
 
+Schema v12は、active epochの最新Edge Node status rowと、current epochのraw receiptおよびactive rule/route診断lookupのindexを追加します。rowのbackfill、保持済みhistoryのcopy、heartbeat historyの作成は行いません。一方でindex構築は対応する保持済みraw、Observation、outbox historyを読むため、upgradeには保持history量に応じた時間と一時的なDB/WAL容量が必要です。
+
 ## Data flow
 
 ```text
@@ -66,6 +68,12 @@ Edge Nodeはledgerとregistryから1 MiB以下のschema-2 complete descriptor sn
 Broker enrollmentはtransport接続許可だけで、activationではありません。Activation前のObservationはlocalに保存し、publication sequenceを与えず送信しません。IoTKit EdgeがdescriptorからEdge Nodeを発見し、admin typed operationでexact ledger epochのrequestを耐久enqueueします。Edge Nodeが検証・耐久適用して境界を固定し、その後のingestだけをoutboxへ入れます。IoTKit Edgeはmatching resultをcommitしてactiveにした後だけ、activation検査、raw保存、cursor更新を同一transactionで行います。
 
 `mqtt_publish_task`が現行production exit bindingです。Broker PUBACKはtransport receiptであり、custody移転ではありません。IoTKit Edgeがraw recordとcursorをcommitし、対応する`accepted-through`をpublishするまでEdge Node outboxを保持します。
+
+### 運用statusと因果診断
+
+Custodyとは別に、Edge Nodeはboundedなv1 `status` heartbeatを自身のretained QoS 1 MQTT topicへ送ります。MQTT subscriptionの確認直後に一度、その後30秒ごとに送ります。これは運用上のevidenceだけです。Nodeが持つ`accepted_through`とpending publicationのviewはcustody cursorをadvanceせず、purgeを許可せず、Broker PUBACKをdurable acceptanceへ変えません。IoTKit Edgeは現在activeなledger epochの最新statusだけを保存します。Retained replayは過去detailを補えますが、Nodeをliveとは判定しません。
+
+IoTKit Edge自身のBroker/subscription状態はNode heartbeatとは別のprocess-local stateです。既存のserver-rendered `/status`は、Sensor input、Input Adapter、Edge Node collector、internal Broker path、raw custody、semantic projection、external outputの順にevidenceを示します。登録済みや古いraw値をonlineの根拠にせず、最初に対処すべき原因を一つ示します。各stageは、確認できる最終成功時刻（不明なら**まだ確認できません**）、boundedな影響範囲、慎重な原因、次の確認を表示します。current durable/process factから再計算し、後続の一致する成功evidenceでactive stateを自動clearします。手動でincidentをdismissする操作はありません。Heartbeatは90秒でwarning、300秒でcriticalです。古いraw値は上流pathがhealthyな場合だけadvisoryであり、停止とは断定しません。IoTKit Edgeのsupervised fatal taskが終了するとservice全体を停止するため、その場合Consoleは利用できず、hostのservice managerとlogで診断します。
 
 ### Semanticとapplication export
 

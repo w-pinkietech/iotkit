@@ -177,3 +177,82 @@ async fn rejects_topic_body_identity_mismatch_without_custody_ack() {
         iotkit_edge::mqtt::ingest::IngestError::Contract(_)
     ));
 }
+
+#[tokio::test]
+async fn accepts_only_new_live_status_heartbeats_and_never_refreshes_retained_replays() {
+    let (_directory, storage, processor) = processor().await;
+    let descriptor = fixture("testdata/egress/v2/descriptor-snapshot.json");
+    processor
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/descriptors",
+            &descriptor,
+            1_720_000_000_000,
+        )
+        .await
+        .expect("process descriptor");
+    let command = storage
+        .request_activation("edge-node-01", 1_720_000_000_100)
+        .await
+        .expect("request activation");
+    let request =
+        ActivationRequest::decode(&command.payload_json).expect("decode activation request");
+    let result = ActivationResult {
+        schema_version: 1,
+        activation_id: request.activation_id,
+        edge_id: request.edge_id,
+        edge_node_id: request.edge_node_id,
+        ledger_epoch: request.expected_ledger_epoch,
+        status: "applied".into(),
+        discard_through_reading_seq: 0,
+        first_publication_seq: 1,
+        applied_at: 1_720_000_000_200,
+    };
+    processor
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/activation/result",
+            &serde_json::to_vec(&result).unwrap(),
+            1_720_000_000_200,
+        )
+        .await
+        .expect("activate Edge Node");
+
+    let topic = "iotkit/v1/edge-nodes/edge-node-01/status";
+    let initial = fixture("testdata/egress/v1/status-heartbeat.json");
+    processor
+        .handle_publication(topic, &initial, 1_720_000_000_300, false)
+        .await
+        .expect("accept first live heartbeat");
+    processor
+        .handle_publication(topic, &initial, 1_720_000_000_400, false)
+        .await
+        .expect("ignore duplicate live heartbeat");
+    let mut next: Value = serde_json::from_slice(&initial).unwrap();
+    next["status_seq"] = 2.into();
+    let next = serde_json::to_vec(&next).unwrap();
+    processor
+        .handle_publication(topic, &next, 1_720_000_000_500, false)
+        .await
+        .expect("accept newer live heartbeat");
+    let mut retained: Value = serde_json::from_slice(&next).unwrap();
+    retained["boot_id"] = "boot-ffffffffffffffffffffffffffffffff".into();
+    retained["status_seq"] = 99.into();
+    processor
+        .handle_publication(
+            topic,
+            &serde_json::to_vec(&retained).unwrap(),
+            1_720_000_000_600,
+            true,
+        )
+        .await
+        .expect("ignore retained replay after a live snapshot");
+
+    let status = storage
+        .edge_node_status("edge-node-01")
+        .await
+        .expect("read status")
+        .expect("current status");
+    assert_eq!(status.status_seq, 2);
+    assert_eq!(status.last_live_received_at, Some(1_720_000_000_500));
+    assert_eq!(status.accepted_through, 42);
+    assert_eq!(status.pending_publications, 3);
+}

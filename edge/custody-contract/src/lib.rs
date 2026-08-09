@@ -10,6 +10,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_BATCH_RECORDS: usize = 256;
 pub const MAX_BATCH_BYTES: usize = 1024 * 1024;
 pub const MAX_DESCRIPTOR_BYTES: usize = 1024 * 1024;
+/// Status heartbeat is intentionally small: it carries only bounded operational
+/// evidence and never carries a local error, endpoint, payload, or credential.
+pub const MAX_STATUS_BYTES: usize = 16 * 1024;
+pub const MAX_STATUS_ADAPTERS: usize = 64;
+pub const MAX_STATUS_ID_BYTES: usize = 128;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ContractError {
@@ -259,6 +264,91 @@ impl AcceptedThrough {
             || self.accepted_through <= prior_cursor
         {
             return Err(invalid("accepted-through does not match batch"));
+        }
+        Ok(())
+    }
+}
+
+/// Latest-only operational evidence from an Edge Node.  It is deliberately
+/// independent from the record custody cursor: MQTT receipt of this message
+/// never accepts, advances, or purges a reading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusHeartbeat {
+    pub schema_version: u32,
+    pub edge_node_id: String,
+    pub ledger_epoch: String,
+    pub boot_id: String,
+    pub status_seq: u64,
+    pub collector_state: CollectorState,
+    pub adapters: Vec<StatusAdapter>,
+    pub accepted_through: i64,
+    pub pending_publications: i64,
+    pub storage_pressure: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectorState {
+    Running,
+    Stopped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusAdapter {
+    pub adapter_id: String,
+    pub state: AdapterState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterState {
+    Running,
+    Restarting,
+    Exhausted,
+    Stopped,
+}
+
+impl StatusHeartbeat {
+    pub fn decode(payload: &[u8]) -> Result<Self, ContractError> {
+        if payload.len() > MAX_STATUS_BYTES {
+            return Err(invalid("status heartbeat exceeds encoded byte limit"));
+        }
+        let heartbeat: Self = serde_json::from_slice(payload)?;
+        heartbeat.validate()?;
+        Ok(heartbeat)
+    }
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.schema_version != SCHEMA_VERSION
+            || self.status_seq == 0
+            || self.status_seq > i64::MAX as u64
+            || self.accepted_through < 0
+            || self.pending_publications < 0
+            || self.adapters.len() > MAX_STATUS_ADAPTERS
+        {
+            return Err(invalid("invalid status heartbeat boundary"));
+        }
+        validate_topic_segment("edge_node_id", &self.edge_node_id)?;
+        validate_identity("ledger_epoch", &self.ledger_epoch)?;
+        validate_status_id("boot_id", &self.boot_id)?;
+        let mut adapter_ids = HashSet::new();
+        for adapter in &self.adapters {
+            validate_status_id("adapter_id", &adapter.adapter_id)?;
+            if !adapter_ids.insert(adapter.adapter_id.as_str()) {
+                return Err(invalid("status heartbeat has duplicate adapter_id"));
+            }
+        }
+        if serde_json::to_vec(self)?.len() > MAX_STATUS_BYTES {
+            return Err(invalid("status heartbeat exceeds encoded byte limit"));
+        }
+        Ok(())
+    }
+
+    pub fn validate_topic_edge_node(&self, edge_node_id: &str) -> Result<(), ContractError> {
+        if self.edge_node_id != edge_node_id {
+            return Err(invalid("status heartbeat topic/body edge_node_id mismatch"));
         }
         Ok(())
     }
@@ -765,6 +855,23 @@ fn validate_identity(field: &str, value: &str) -> Result<(), ContractError> {
         || value.chars().any(char::is_control)
     {
         return Err(invalid(format!("{field} is not a valid identity")));
+    }
+    Ok(())
+}
+
+fn validate_status_id(field: &str, value: &str) -> Result<(), ContractError> {
+    if value.is_empty()
+        || value.len() > MAX_STATUS_ID_BYTES
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_uppercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.')
+        })
+    {
+        return Err(invalid(format!(
+            "{field} is not a bounded opaque status identity"
+        )));
     }
     Ok(())
 }

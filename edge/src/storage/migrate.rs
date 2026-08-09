@@ -25,6 +25,7 @@ const TABLES: &[&str] = &[
     "recovery_command_outbox",
     "raw_records",
     "accepted_cursors",
+    "edge_node_status",
     "edge_backup_events",
     "edge_backup_cursors",
     "edge_restore_events",
@@ -109,7 +110,7 @@ pub async fn migrate_sqlite_to_postgres(
     .await?;
     if !migratable_source_schema_version(schema_version) {
         return Err(StorageError::ProfileMigration(format!(
-            "SQLite migration source schema is {schema_version}, want 11; start current IoTKit Edge \
+            "SQLite migration source schema is {schema_version}, want 12; start current IoTKit Edge \
              against SQLite to complete its schema upgrade before offline migration"
         )));
     }
@@ -220,7 +221,7 @@ pub async fn migrate_sqlite_to_postgres(
 }
 
 fn migratable_source_schema_version(schema_version: i64) -> bool {
-    schema_version == 11
+    schema_version == 12
 }
 
 async fn validate_source_schema(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
@@ -258,7 +259,7 @@ async fn validate_source_schema(pool: &sqlx::SqlitePool) -> Result<(), StorageEr
             .collect::<Vec<_>>();
         return Err(StorageError::ProfileMigration(format!(
             "SQLite migration source is not the exact current Rust schema \
-                 (missing: {}; unexpected: {})",
+                 (missing: {}; unexpected: {}); start current IoTKit Edge to complete its schema upgrade before offline migration",
             missing.join(","),
             unexpected.join(",")
         )));

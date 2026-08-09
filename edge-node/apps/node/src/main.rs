@@ -294,32 +294,6 @@ async fn run(
         db.clone(),
         Duration::from_secs(60),
     );
-    let mut publish_task = if let Some(mqtt_config) = config.mqtt_exit.clone() {
-        match mqtt_publish_task::spawn_mqtt_publish_task(
-            db.clone(),
-            health_state.clone(),
-            mqtt_config,
-        )
-        .await
-        {
-            Ok(task) => {
-                tracing::info!("MQTT exit publisher started");
-                Some(task)
-            }
-            Err(error) => {
-                tracing::error!(error = %error, "failed to start MQTT exit publisher");
-                return false;
-            }
-        }
-    } else {
-        tracing::info!("MQTT exit publisher disabled");
-        None
-    };
-    db.with_conn(|conn| Ok(epoch_start::maybe_enqueue_epoch_start(conn)))
-        .await
-        .expect("epoch_start annotation")
-        .expect("epoch_start annotation");
-
     let mut api_shutdown = None;
     let mut api_join = None;
     if config.api.enabled {
@@ -370,6 +344,10 @@ async fn run(
             std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
             256,
         );
+    health_state
+        .lock()
+        .expect("health state mutex poisoned")
+        .collector_alive = true;
     let ingress_service = iotkit_ingest_http::HttpIngestService::new(
         db.clone(),
         collector.clone(),
@@ -501,6 +479,40 @@ async fn run(
         }
     }
     drop(ingest_exit_tx);
+
+    db.with_conn(|conn| Ok(epoch_start::maybe_enqueue_epoch_start(conn)))
+        .await
+        .expect("epoch_start annotation")
+        .expect("epoch_start annotation");
+    if !may_start_status_publisher(&health_state, config.adapter_instances.len()) {
+        tracing::error!(
+            "collector or configured input adapters were not ready before MQTT startup"
+        );
+        host.shutdown_all().await;
+        return false;
+    }
+    let mut publish_task = if let Some(mqtt_config) = config.mqtt_exit.clone() {
+        match mqtt_publish_task::spawn_mqtt_publish_task(
+            db.clone(),
+            health_state.clone(),
+            mqtt_config,
+        )
+        .await
+        {
+            Ok(task) => {
+                tracing::info!("MQTT exit publisher started");
+                Some(task)
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "failed to start MQTT exit publisher");
+                host.shutdown_all().await;
+                return false;
+            }
+        }
+    } else {
+        tracing::info!("MQTT exit publisher disabled");
+        None
+    };
 
     // R20: アプリレベル監督(責務台帳)。プロセスレベルはsystemdに委譲。
     let mut tracker = supervision::RestartTracker::new(supervision::RestartPolicy::default());
@@ -884,6 +896,19 @@ fn activity_notice_is_current(
     notice: &ActivityNotice,
 ) -> bool {
     active_generations.get(&notice.adapter_id) == Some(&notice.generation)
+}
+
+fn may_start_status_publisher(
+    health: &Arc<Mutex<health::HealthState>>,
+    configured_adapter_count: usize,
+) -> bool {
+    let health = health.lock().expect("health state mutex poisoned");
+    health.collector_alive
+        && health.adapters.len() == configured_adapter_count
+        && health
+            .adapters
+            .iter()
+            .all(|adapter| adapter.status == health::AdapterRuntimeStatus::Running)
 }
 
 fn register_running_adapter(

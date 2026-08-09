@@ -1,7 +1,10 @@
 use iotkit_edge_custody_contract::{
     AcceptedThrough, ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
     RecoveryActivationRequest, RecoveryActivationResult, RecoveryCompletion, RecoveryCompletionAck,
+    StatusHeartbeat,
 };
+
+type StatusMutation = Box<dyn Fn(&mut serde_json::Value)>;
 
 fn fixture(path: &str) -> Vec<u8> {
     std::fs::read(
@@ -25,6 +28,69 @@ fn decodes_the_shared_record_batch_and_ack_fixtures() {
         .expect("decode acknowledgement");
     ack.validate_for(&batch, 0)
         .expect("acknowledgement matches batch");
+}
+
+#[test]
+fn decodes_the_shared_status_heartbeat_fixture_strictly() {
+    let heartbeat = StatusHeartbeat::decode(&fixture("testdata/egress/v1/status-heartbeat.json"))
+        .expect("decode status heartbeat");
+    heartbeat
+        .validate_topic_edge_node("edge-node-01")
+        .expect("topic identity matches");
+    assert_eq!(heartbeat.status_seq, 1);
+    assert_eq!(heartbeat.adapters.len(), 1);
+}
+
+#[test]
+fn status_heartbeat_rejects_secrets_and_noncanonical_boundaries() {
+    let original = fixture("testdata/egress/v1/status-heartbeat.json");
+    let cases: Vec<(&str, StatusMutation)> = vec![
+        (
+            "unknown secret field",
+            Box::new(|value| value["password"] = "must-not-cross-mqtt".into()),
+        ),
+        (
+            "unsafe boot identity",
+            Box::new(|value| value["boot_id"] = "boot:unsafe".into()),
+        ),
+        (
+            "zero sequence",
+            Box::new(|value| value["status_seq"] = 0.into()),
+        ),
+        (
+            "negative custody cursor",
+            Box::new(|value| value["accepted_through"] = (-1).into()),
+        ),
+        (
+            "duplicate adapter",
+            Box::new(|value| {
+                let adapter = value["adapters"][0].clone();
+                value["adapters"].as_array_mut().unwrap().push(adapter);
+            }),
+        ),
+        (
+            "more than 64 adapters",
+            Box::new(|value| {
+                let adapters = value["adapters"].as_array_mut().unwrap();
+                while adapters.len() <= 64 {
+                    let number = adapters.len();
+                    adapters.push(serde_json::json!({
+                        "adapter_id": format!("adapter-{number}"),
+                        "state": "running"
+                    }));
+                }
+            }),
+        ),
+    ];
+
+    for (name, mutate) in cases {
+        let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        mutate(&mut value);
+        assert!(
+            StatusHeartbeat::decode(&serde_json::to_vec(&value).unwrap()).is_err(),
+            "{name} was accepted"
+        );
+    }
 }
 
 #[test]

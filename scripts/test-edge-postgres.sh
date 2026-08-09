@@ -158,6 +158,18 @@ IOTKIT_REQUIRE_POSTGRES=1 \
 reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test schema_upgrade_contract \
+    postgres_v12_status_migration_from_v11_adds_an_empty_latest_only_store \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test schema_upgrade_contract \
+    postgres_v12_status_migration_failure_rolls_back_the_new_table \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test schema_upgrade_contract \
     postgres_startup_upgrades_v8_with_noncontiguous_receipts_and_snapshots_each_pending_pair \
     -- --ignored --exact --nocapture
 
@@ -165,6 +177,36 @@ reset_database
 IOTKIT_REQUIRE_POSTGRES=1 \
   cargo test -p iotkit-edge --test recovery_activation \
     postgres_recovery_freezes_old_admission_and_replays_exactly \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test status_storage_contract \
+    postgres_status_compare_and_set_rejects_a_concurrently_late_lower_sequence \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test status_storage_contract \
+    postgres_concurrent_status_offers_cannot_leave_a_lower_sequence_stored \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test status_storage_contract \
+    postgres_pending_interval_restarts_when_the_current_cursor_advances \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test status_storage_contract \
+    postgres_pending_interval_restarts_when_the_active_epoch_rotates_on_the_same_boot \
+    -- --ignored --exact --nocapture
+
+reset_database
+IOTKIT_REQUIRE_POSTGRES=1 \
+  cargo test -p iotkit-edge --test diagnostics_contract \
+    postgres_causal_queries_keep_per_signal_and_recovery_lookups_index_bounded \
     -- --ignored --exact --nocapture
 
 reset_database

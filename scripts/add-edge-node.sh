@@ -28,12 +28,13 @@ jq -e '
     "accepted_through_topic", "activation_request_topic", "activation_result_topic",
     "client_id", "descriptor_retain", "descriptor_topic", "edge_node_id", "qos",
     "records_topic", "recovery_completion_ack_topic", "recovery_completion_topic", "recovery_request_topic",
-    "recovery_result_topic", "retain", "username"
+    "recovery_result_topic", "retain", "status_retain", "status_topic", "username"
   ]
   and (.edge_node_id | type == "string" and test("^[A-Za-z0-9._-]{1,128}$"))
   and .username == .edge_node_id
   and .client_id == ("iotkit-edge-node-" + .edge_node_id)
   and .records_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/records")
+  and .status_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/status")
   and .accepted_through_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/accepted-through")
   and .descriptor_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/descriptors")
   and .activation_request_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/activation/request")
@@ -42,7 +43,7 @@ jq -e '
   and .recovery_result_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/recovery/result")
   and .recovery_completion_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/recovery/completion")
   and .recovery_completion_ack_topic == ("iotkit/v1/edge-nodes/" + .edge_node_id + "/recovery/completion-ack")
-  and .qos == 1 and .retain == false and .descriptor_retain == true
+  and .qos == 1 and .retain == false and .descriptor_retain == true and .status_retain == true
 ' "$binding" >/dev/null || { echo "binding is not an exact IoTKit Edge Node MQTT binding" >&2; exit 1; }
 
 edge_dir=$(realpath "$edge_dir")
@@ -55,6 +56,33 @@ handoff_root="$edge_dir/edge-handoff"
   exit 1
 }
 edge_node_id=$(jq -er '.edge_node_id' "$binding")
+edge_username=$(awk -F= '
+  $1 == "IOTKIT_EDGE_USERNAME" {
+    if (++found != 1 || $2 == "") exit 2
+    value=substr($0, index($0, "=") + 1)
+  }
+  END {
+    if (found != 1) exit 2
+    print value
+  }
+' "$edge_env") || {
+  echo "Edge archive principal is invalid" >&2
+  exit 1
+}
+[[ "$edge_username" =~ ^[A-Za-z0-9._-]{1,255}$ ]] || {
+  echo "Edge archive principal is unsafe" >&2
+  exit 1
+}
+edge_status_rule='topic read iotkit/v1/edge-nodes/+/status'
+if ! awk -v edge_user="user $edge_username" -v rule="$edge_status_rule" '
+  $0 == edge_user { active=1; next }
+  $1 == "user" { active=0 }
+  active && $0 == rule { count++ }
+  END { exit count == 1 ? 0 : 1 }
+' "$acl"; then
+  echo "Edge status ACL is not current; run scripts/upgrade-edge-node-recovery-acl.sh before enrolling a Node" >&2
+  exit 1
+fi
 
 exec 9>"$edge_dir/.edge-enrollment.lock"
 flock -x 9
@@ -77,6 +105,7 @@ cat >>"$stage/acl" <<EOF
 
 user $edge_node_id
 topic write iotkit/v1/edge-nodes/$edge_node_id/records
+topic write iotkit/v1/edge-nodes/$edge_node_id/status
 topic write iotkit/v1/edge-nodes/$edge_node_id/descriptors
 topic write iotkit/v1/edge-nodes/$edge_node_id/activation/result
 topic write iotkit/v1/edge-nodes/$edge_node_id/recovery/result

@@ -1631,7 +1631,7 @@ fn mqtt_binding_reports_only_non_secret_d9_connection_metadata() {
     ])))
     .unwrap();
 
-    assert_eq!(reported.as_object().unwrap().len(), 15);
+    assert_eq!(reported.as_object().unwrap().len(), 17);
     assert_eq!(reported["edge_node_id"], edge_node_id);
     assert_eq!(reported["username"], edge_node_id);
     assert_eq!(
@@ -1641,6 +1641,10 @@ fn mqtt_binding_reports_only_non_secret_d9_connection_metadata() {
     assert_eq!(
         reported["records_topic"],
         format!("iotkit/v1/edge-nodes/{edge_node_id}/records")
+    );
+    assert_eq!(
+        reported["status_topic"],
+        format!("iotkit/v1/edge-nodes/{edge_node_id}/status")
     );
     assert_eq!(
         reported["accepted_through_topic"],
@@ -1677,6 +1681,7 @@ fn mqtt_binding_reports_only_non_secret_d9_connection_metadata() {
     assert_eq!(reported["qos"], 1);
     assert_eq!(reported["retain"], false);
     assert_eq!(reported["descriptor_retain"], true);
+    assert_eq!(reported["status_retain"], true);
     assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
 }
 

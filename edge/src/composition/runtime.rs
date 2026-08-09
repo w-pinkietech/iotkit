@@ -15,7 +15,9 @@ use crate::{
     application::semantics::Semantics,
     lifecycle::{CriticalTaskError, ExitReason, Supervisor},
     mqtt::{
-        ingest::{IngestProcessor, IngestRuntime, IngestRuntimeConfig, IngestTransport},
+        ingest::{
+            IngestHealth, IngestProcessor, IngestRuntime, IngestRuntimeConfig, IngestTransport,
+        },
         output::{OutputRuntime, OutputRuntimeConfig},
     },
     recovery_control::run_recovery_control,
@@ -38,6 +40,16 @@ pub trait RuntimeFactory: Send + Sync {
         storage_warning_percent: i32,
         broker_certificate_file: Option<&Path>,
     ) -> Result<Arc<dyn WebApplication>, RuntimeError>;
+
+    fn web_application_with_ingest_health(
+        &self,
+        storage: Storage,
+        storage_warning_percent: i32,
+        broker_certificate_file: Option<&Path>,
+        _ingest_health: IngestHealth,
+    ) -> Result<Arc<dyn WebApplication>, RuntimeError> {
+        self.web_application(storage, storage_warning_percent, broker_certificate_file)
+    }
 }
 
 pub struct ProductionRuntimeFactory;
@@ -55,6 +67,23 @@ impl RuntimeFactory for ProductionRuntimeFactory {
             broker_certificate_file.map(Path::to_path_buf),
         )))
     }
+
+    fn web_application_with_ingest_health(
+        &self,
+        storage: Storage,
+        storage_warning_percent: i32,
+        broker_certificate_file: Option<&Path>,
+        ingest_health: IngestHealth,
+    ) -> Result<Arc<dyn WebApplication>, RuntimeError> {
+        Ok(Arc::new(
+            StorageWebApplication::with_runtime_settings_and_ingest_health(
+                storage,
+                storage_warning_percent,
+                broker_certificate_file.map(Path::to_path_buf),
+                ingest_health,
+            ),
+        ))
+    }
 }
 
 pub async fn run_runtime<F>(
@@ -69,17 +98,20 @@ where
     storage
         .ensure_edge_identity(&config.edge_id, unix_millis()?)
         .await?;
-    let web_application = factory.web_application(
+    let ingest_health = IngestHealth::default();
+    let web_application = factory.web_application_with_ingest_health(
         storage.clone(),
         config.storage_warning_percent,
         config.broker_certificate_file.as_deref(),
+        ingest_health.clone(),
     )?;
     let listener = TcpListener::bind(config.http_listen)
         .await
         .map_err(RuntimeError::HttpBind)?;
-    let ingest = IngestRuntime::new(
+    let ingest = IngestRuntime::with_health(
         ingest_config(config.ingest)?,
         IngestProcessor::new(storage.clone()),
+        ingest_health,
     );
     let output = config
         .output

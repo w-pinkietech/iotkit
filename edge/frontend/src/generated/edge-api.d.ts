@@ -181,6 +181,8 @@ export interface components {
         };
         StorageStatus: {
             /** @enum {string} */
+            profile: "embedded" | "postgres";
+            /** @enum {string} */
             state: "healthy" | "warning" | "critical" | "unavailable";
             filesystem_available: boolean;
             /** Format: int64 */
@@ -209,13 +211,8 @@ export interface components {
             last_backup_id?: string;
             /** Format: int64 */
             last_backup_at?: number;
-            /** Format: int64 */
-            last_backup_raw_record_count?: number;
-            /** Format: int64 */
-            backup_protected_raw_count: number;
-            /** Format: int64 */
-            unprotected_raw_count: number;
-            automatic_raw_purge_enabled: boolean;
+            /** @enum {string} */
+            absolute_reserve_state: "adequate" | "warning" | "critical" | "unknown";
         };
         DiagnosticIssue: {
             code: string;
@@ -236,6 +233,32 @@ export interface components {
             issues: components["schemas"]["DiagnosticIssue"][];
             truncated: boolean;
             limitations: string[];
+            stages: components["schemas"]["DiagnosticStage"][];
+            broker_certificate?: components["schemas"]["CertificateStatus"];
+        };
+        DiagnosticStage: {
+            /** @enum {string} */
+            stage: "sensor" | "adapter" | "node" | "broker" | "raw_custody" | "projection" | "external_output";
+            /** @enum {string} */
+            state: "ok" | "warning" | "critical" | "unknown" | "not_applicable";
+            code: string;
+            /** Format: int64 */
+            last_success_at?: number;
+            affected_count: number;
+            scope: string;
+            cause: string;
+            action: string;
+            href: string;
+            /** @enum {string} */
+            blocked_by?: "sensor" | "adapter" | "node" | "broker" | "raw_custody" | "projection" | "external_output";
+        };
+        CertificateStatus: {
+            available: boolean;
+            /** Format: int64 */
+            not_after?: number;
+            /** Format: int64 */
+            days_remaining?: number;
+            needs_action: boolean;
         };
         /** @enum {string} */
         SemanticKind: "numeric" | "boolean" | "cumulative_counter" | "alarm";

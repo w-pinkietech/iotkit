@@ -1,6 +1,6 @@
 use iotkit_edge_custody_contract::{
     AcceptedThrough, ActivationResult, DescriptorSnapshot, RecordBatch, RecoveryActivationResult,
-    RecoveryCompletionAck, SCHEMA_VERSION,
+    RecoveryCompletionAck, SCHEMA_VERSION, StatusHeartbeat,
 };
 
 use crate::storage::{AcceptBatch, RawRecord, Storage, StorageError};
@@ -33,8 +33,29 @@ impl IngestProcessor {
         payload: &[u8],
         received_at: i64,
     ) -> Result<Option<AckPublication>, IngestError> {
+        self.handle_publication(topic, payload, received_at, false)
+            .await
+    }
+
+    /// `retained` is MQTT packet metadata. It must reach the status store so a
+    /// retained replay cannot be treated as proof that this Edge Node is live.
+    pub async fn handle_publication(
+        &self,
+        topic: &str,
+        payload: &[u8],
+        received_at: i64,
+        retained: bool,
+    ) -> Result<Option<AckPublication>, IngestError> {
         let parsed = Topic::parse(topic)?;
         match parsed.kind {
+            TopicKind::Status => {
+                let heartbeat = StatusHeartbeat::decode(payload)?;
+                heartbeat.validate_topic_edge_node(&parsed.edge_node_id)?;
+                self.storage
+                    .apply_edge_node_status(&heartbeat, received_at, retained)
+                    .await?;
+                Ok(None)
+            }
             TopicKind::Descriptor => {
                 let descriptor = DescriptorSnapshot::decode(payload)?;
                 descriptor.validate_topic_edge_node(&parsed.edge_node_id)?;
@@ -127,6 +148,7 @@ impl IngestError {
 }
 
 enum TopicKind {
+    Status,
     Descriptor,
     ActivationResult,
     RecoveryResult,
@@ -143,6 +165,9 @@ impl Topic {
     fn parse(topic: &str) -> Result<Self, IngestError> {
         let parts: Vec<&str> = topic.split('/').collect();
         let (edge_node_id, kind) = match parts.as_slice() {
+            ["iotkit", "v1", "edge-nodes", edge_node_id, "status"] => {
+                (*edge_node_id, TopicKind::Status)
+            }
             ["iotkit", "v1", "edge-nodes", edge_node_id, "descriptors"] => {
                 (*edge_node_id, TopicKind::Descriptor)
             }

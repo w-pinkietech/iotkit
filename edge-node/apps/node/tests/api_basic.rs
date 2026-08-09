@@ -130,6 +130,7 @@ async fn box_setup_session_throttle_and_graceful_shutdown() {
     let db_path = dir.path().join("iotkit.db");
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
     let health = Arc::new(Mutex::new(HealthState::new(90)));
+    health.lock().unwrap().collector_alive = true;
     let cfg = api_config("127.0.0.1:0".parse().unwrap());
     let clock_trust = prepare_owned_clock(&db);
 

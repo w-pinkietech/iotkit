@@ -327,7 +327,9 @@ impl HealthState {
     pub fn new(retention_days: u64) -> Self {
         Self {
             started_at: Instant::now(),
-            collector_alive: true,
+            // The collector is only marked running after the composed task has
+            // started.  A status heartbeat before that point must fail closed.
+            collector_alive: false,
             adapters: Vec::new(),
             db: DbHealth {
                 size_bytes: 0,

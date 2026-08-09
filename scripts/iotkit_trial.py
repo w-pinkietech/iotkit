@@ -323,6 +323,7 @@ def _initialize(repo: Path, state: Path, config: TrialConfig, admin_password: st
 
     acl = f"""user edge
 topic read iotkit/v1/edge-nodes/+/records
+topic read iotkit/v1/edge-nodes/+/status
 topic read iotkit/v1/edge-nodes/+/descriptors
 topic read iotkit/v1/edge-nodes/+/activation/result
 topic read iotkit/v1/edge-nodes/+/recovery/result
@@ -334,6 +335,7 @@ topic write iotkit/v1/edge-nodes/+/recovery/completion
 
 user {edge_node_id}
 topic write iotkit/v1/edge-nodes/{edge_node_id}/records
+topic write iotkit/v1/edge-nodes/{edge_node_id}/status
 topic write iotkit/v1/edge-nodes/{edge_node_id}/descriptors
 topic write iotkit/v1/edge-nodes/{edge_node_id}/activation/result
 topic write iotkit/v1/edge-nodes/{edge_node_id}/recovery/result
