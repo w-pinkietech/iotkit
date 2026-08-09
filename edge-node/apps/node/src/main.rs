@@ -275,6 +275,20 @@ async fn run(
         })
         .await
         .expect("ledger epoch");
+    let prepared_mqtt_runtime = if let Some(mqtt_config) = config.mqtt_exit.clone() {
+        match mqtt_publish_task::prepare_mqtt_publish_runtime(db.clone(), mqtt_config).await {
+            Ok(runtime) => {
+                tracing::info!("MQTT exit publication target prepared");
+                Some(runtime)
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "failed to prepare MQTT exit publication target");
+                return false;
+            }
+        }
+    } else {
+        None
+    };
     let _retention_task = retention::spawn_retention_task(
         db.clone(),
         db_path.clone(),
@@ -491,24 +505,11 @@ async fn run(
         host.shutdown_all().await;
         return false;
     }
-    let mut publish_task = if let Some(mqtt_config) = config.mqtt_exit.clone() {
-        match mqtt_publish_task::spawn_mqtt_publish_task(
-            db.clone(),
-            health_state.clone(),
-            mqtt_config,
-        )
-        .await
-        {
-            Ok(task) => {
-                tracing::info!("MQTT exit publisher started");
-                Some(task)
-            }
-            Err(error) => {
-                tracing::error!(error = %error, "failed to start MQTT exit publisher");
-                host.shutdown_all().await;
-                return false;
-            }
-        }
+    let mut publish_task = if let Some(runtime) = prepared_mqtt_runtime {
+        let task =
+            mqtt_publish_task::spawn_mqtt_publish_task(db.clone(), health_state.clone(), runtime);
+        tracing::info!("MQTT exit publisher started");
+        Some(task)
     } else {
         tracing::info!("MQTT exit publisher disabled");
         None

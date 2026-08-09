@@ -31,7 +31,7 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
 const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-struct RuntimeConfig {
+pub(crate) struct RuntimeConfig {
     connection: MqttExitConfig,
     binding: MqttBinding,
     password: String,
@@ -54,11 +54,13 @@ struct PreparedDescriptor {
     payload: Vec<u8>,
 }
 
-pub(crate) async fn spawn_mqtt_publish_task(
+/// Installs the durable publication target before an adapter can create a
+/// standalone outbox. Starting the MQTT network task remains a later lifecycle
+/// decision so its first status heartbeat reflects the running collector.
+pub(crate) async fn prepare_mqtt_publish_runtime(
     db: DbHandle,
-    health: Arc<Mutex<HealthState>>,
     config: MqttExitConfig,
-) -> Result<tokio::task::JoinHandle<()>, String> {
+) -> Result<RuntimeConfig, String> {
     let password = read_password(&config)?;
     let ca = read_ca(&config)?;
     let expected_endpoint = endpoint(&config);
@@ -74,13 +76,20 @@ pub(crate) async fn spawn_mqtt_publish_task(
         .await
         .map_err(|error| error.to_string())?;
 
-    let runtime = RuntimeConfig {
+    Ok(RuntimeConfig {
         connection: config,
         binding,
         password,
         ca,
-    };
-    Ok(tokio::spawn(run(db, health, runtime)))
+    })
+}
+
+pub(crate) fn spawn_mqtt_publish_task(
+    db: DbHandle,
+    health: Arc<Mutex<HealthState>>,
+    runtime: RuntimeConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(run(db, health, runtime))
 }
 
 async fn run(db: DbHandle, health: Arc<Mutex<HealthState>>, runtime: RuntimeConfig) {

@@ -2,6 +2,7 @@ use super::*;
 use iotkit_core_publish::activation::{
     ActivationRequest, ActivationResult, ActivationState, activation_state,
 };
+use iotkit_core_timeseries::NewReading;
 
 fn test_db() -> DbHandle {
     let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -41,6 +42,106 @@ fn seed_annotation(conn: &Connection, edge_node_id: &str) -> (String, PreparedBa
     .unwrap();
     let prepared = prepare_batch(conn, edge_node_id).unwrap().unwrap();
     (epoch, prepared)
+}
+
+#[tokio::test]
+async fn preparing_target_before_network_spawn_accepts_an_intervening_reading_without_adoption() {
+    let db = test_db();
+    db.with_conn_sync(|conn| {
+        conn.execute(
+            "INSERT INTO ledger_meta(key, value) VALUES('edge_node_id', 'edge-01')",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let password = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(password.path(), "test-password\n").unwrap();
+
+    let _runtime = prepare_mqtt_publish_runtime(
+        db.clone(),
+        MqttExitConfig {
+            host: "broker".into(),
+            port: 1883,
+            password_file: password.path().into(),
+            trust_mode: MqttTrustMode::SystemRoots,
+            ca_file: None,
+            allow_insecure: true,
+        },
+    )
+    .await
+    .expect("durably prepare target before adapters can emit");
+
+    db.with_conn_sync(|conn| {
+        assert_eq!(
+            activation_state(conn).unwrap(),
+            ActivationState::DiscoveryOnly,
+            "preparation has installed the target but has not started network publishing"
+        );
+        let device = iotkit_core_ledger::insert_device(
+            conn,
+            &iotkit_core_ledger::NewDevice {
+                hardware_id: "between-prepare-and-spawn".into(),
+                user_label: None,
+                parent: None,
+                kind: iotkit_core_ledger::DeviceKind::Individual,
+                initial_state: iotkit_core_ledger::DeviceState::Active,
+            },
+        )
+        .unwrap();
+        let series = iotkit_core_ledger::ensure_series(
+            conn,
+            &device,
+            "temperature_c",
+            iotkit_core_ledger::CHANNEL_NA,
+            iotkit_core_ledger::DEFAULT_VARIANT,
+            false,
+            None,
+        )
+        .unwrap();
+        let reading_seq = iotkit_core_timeseries::insert_reading_v3(
+            conn,
+            &NewReading {
+                series_id: series,
+                received_at_ms: 10,
+                device_time_ms: None,
+                time_source: "edge_node".into(),
+                values: vec![21.5],
+                rssi: None,
+                battery_pct: None,
+                quarantined: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            !publication_admitted(conn).unwrap(),
+            "the durable target prevents a pre-activation reading from allocating standalone publication"
+        );
+        let publication_rows: i64 = conn
+            .query_row("SELECT count(*) FROM publication_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(publication_rows, 0);
+
+        let epoch = iotkit_core_ledger::ledger_epoch(conn).unwrap();
+        let result = apply_activation(
+            conn,
+            &ActivationRequest {
+                schema_version: 1,
+                activation_id: "act-0123456789abcdef0123456789abcdef".into(),
+                edge_id: "edge-0123456789abcdef0123456789abcdef".into(),
+                edge_node_id: "edge-01".into(),
+                expected_ledger_epoch: epoch,
+                grant_revision: 1,
+                issued_at: 10,
+            },
+            20,
+        )
+        .expect("intervening durable reading is accepted without standalone-outbox adoption");
+        assert_eq!(result.discard_through_reading_seq, reading_seq);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
